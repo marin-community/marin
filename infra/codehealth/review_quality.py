@@ -60,7 +60,6 @@ from finelog.client import LogClient
 from openai import OpenAI, OpenAIError
 from pydantic import BaseModel, ConfigDict, Field
 
-# Sibling module: the row types for every table this tool reads and writes.
 from .github_review_corpus import is_bot as _is_bot
 from .review_tables import (
     DEFAULT_BOT_LOGINS,

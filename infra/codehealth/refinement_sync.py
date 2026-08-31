@@ -12,6 +12,8 @@ from dataclasses import dataclass
 import click
 from sqlalchemy.engine import Engine
 
+from infra.lint.catalog import LintCatalog, catalog_sha, load_catalog
+
 from .github_review_corpus import GitHubClient, collect_corpus
 from .review_store import (
     DEFAULT_BACKFILL_DAYS,
@@ -22,7 +24,9 @@ from .review_store import (
     fail_sync,
     start_or_resume_sync,
     store_bundle,
+    store_catalog_snapshot,
     store_telemetry,
+    utc_iso,
 )
 from .review_tables import (
     DEFAULT_BOT_LOGINS,
@@ -34,7 +38,7 @@ from .review_tables import (
     query_rows,
 )
 
-SQL_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
+SQL_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S.%f"
 
 
 @dataclass(frozen=True)
@@ -48,10 +52,6 @@ class SyncResult:
     github_usage: dict[str, object]
     lint_invocations: int
     lint_findings: int
-
-
-def _iso(value: dt.datetime) -> str:
-    return value.astimezone(dt.UTC).isoformat().replace("+00:00", "Z")
 
 
 def load_lint_telemetry(
@@ -74,6 +74,30 @@ def load_lint_telemetry(
             FINDINGS_NAMESPACE,
         )
     return invocations, findings
+
+
+def _catalog_record(catalog: LintCatalog) -> dict[str, object]:
+    return {
+        "shared_prompt": catalog.shared_prompt,
+        "lanes": [
+            {
+                "name": lane.name,
+                "prompt": lane.prompt,
+                "include_complexity_leads": lane.include_complexity_leads,
+                "min_diff_lines": lane.min_diff_lines,
+                "rules": [
+                    {
+                        "code": rule.code,
+                        "title": rule.title,
+                        "prompt": rule.prompt,
+                        "minimum_confidence": rule.minimum_confidence,
+                    }
+                    for rule in lane.rules
+                ],
+            }
+            for lane in catalog.lanes
+        ],
+    }
 
 
 def sync_review_activity(
@@ -101,11 +125,18 @@ def sync_review_activity(
             bundle_sink=lambda bundle: store_bundle(engine, run.sync_id, bundle, observed_at=dt.datetime.now(dt.UTC)),
         )
         invocations, findings = telemetry or load_lint_telemetry(deployment, run.window_start, run.window_end)
-        store_telemetry(engine, invocations, findings)
+        store_telemetry(engine, repository, invocations, findings)
+        catalog = load_catalog()
+        store_catalog_snapshot(
+            engine,
+            catalog_sha(catalog),
+            _catalog_record(catalog),
+            observed_at=dt.datetime.now(dt.UTC),
+        )
         watermark = {
             "deployment": deployment,
-            "window_start": _iso(run.window_start),
-            "window_end": _iso(run.window_end),
+            "window_start": utc_iso(run.window_start),
+            "window_end": utc_iso(run.window_end),
         }
         usage = result.usage.model_dump(mode="json")
         complete_sync(
@@ -123,8 +154,8 @@ def sync_review_activity(
     return SyncResult(
         sync_id=run.sync_id,
         repository=repository,
-        window_start=_iso(run.window_start),
-        window_end=_iso(run.window_end),
+        window_start=utc_iso(run.window_start),
+        window_end=utc_iso(run.window_end),
         candidate_pull_requests=result.candidate_pull_requests,
         persisted_pull_requests=len(persisted),
         github_usage=usage,

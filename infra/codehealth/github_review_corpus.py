@@ -65,7 +65,6 @@ class PullRequestRecord(CorpusModel):
     review_comments: int
     issue_comments: int
     commit_shas: tuple[str, ...]
-    diff_path: str | None
 
 
 class ChangedFileRecord(CorpusModel):
@@ -194,6 +193,13 @@ class PullRequestScan:
 class ActorIdentity:
     login: str
     actor_type: str
+
+
+@dataclass(frozen=True)
+class ReviewAuthorState:
+    is_bot: bool
+    is_agent_marked: bool
+    is_human: bool
 
 
 def _is_diff_too_large(response: str) -> bool:
@@ -478,9 +484,14 @@ def is_bot(author: dict | None, bot_logins: AbstractSet[str]) -> bool:
     return not login or actor_type == "Bot" or login in bot_logins or login.endswith("[bot]")
 
 
+def _review_author_state(author: dict | None, body: str, scope: ReviewScope) -> ReviewAuthorState:
+    author_is_bot = is_bot(author, scope.bot_logins)
+    is_agent_marked = body.lstrip().startswith("🤖")
+    return ReviewAuthorState(author_is_bot, is_agent_marked, not author_is_bot and not is_agent_marked)
+
+
 def _is_human_event(node: dict, scope: ReviewScope) -> bool:
-    body = str(node.get("body") or "")
-    return not is_bot(node.get("author"), scope.bot_logins) and not body.lstrip().startswith("🤖")
+    return _review_author_state(node.get("author"), str(node.get("body") or ""), scope).is_human
 
 
 def _event_time(kind: str, node: dict) -> str | None:
@@ -569,9 +580,8 @@ def _rest_seed_prs(
     seeds: dict[int, dict[tuple[EventKind, int], dict]] = {}
     for kind, endpoint in endpoints.items():
         for node in client.rest_records(endpoint):
-            user = node.get("user") or {}
             body = str(node.get("body") or "")
-            if is_bot(user, scope.bot_logins) or body.lstrip().startswith("🤖"):
+            if not _review_author_state(node.get("user"), body, scope).is_human:
                 continue
             timestamps = tuple(value for value in (node.get("created_at"), node.get("updated_at")) if value is not None)
             if not any(_in_window(value, scope) for value in timestamps):
@@ -805,7 +815,7 @@ def _event_record(
     author = _actor_identity(node.get("author"))
     pr_author = _actor_identity(pull.get("author"))
     body = str(node.get("body") or "")
-    author_is_bot = is_bot(node.get("author"), scope.bot_logins)
+    author_state = _review_author_state(node.get("author"), body, scope)
     thread = thread or {}
     resolved_by = _actor_identity(thread.get("resolvedBy"))
     review = node.get("pullRequestReview") or {}
@@ -845,9 +855,9 @@ def _event_record(
         commit_id=commit.get("oid"),
         original_commit_id=original_commit.get("oid"),
         diff_hunk=node.get("diffHunk"),
-        is_bot=author_is_bot,
-        is_agent_marked=body.lstrip().startswith("🤖"),
-        is_human=not author_is_bot and not body.lstrip().startswith("🤖"),
+        is_bot=author_state.is_bot,
+        is_agent_marked=author_state.is_agent_marked,
+        is_human=author_state.is_human,
         in_window=any(_in_window(value, scope) for value in _event_timestamps(kind, node)),
     )
 
@@ -901,7 +911,6 @@ def _pull_request_record(
         review_comments=review_comments,
         issue_comments=int(pull["comments"]["totalCount"]),
         commit_shas=tuple(commit.sha for commit in commits),
-        diff_path=f"diffs/{number}.diff",
     )
 
 
@@ -1008,10 +1017,7 @@ def _hydrate_graphql(
 def _with_diff(client: GitHubClient, repository: str, bundle: PullRequestBundle) -> PullRequestBundle:
     endpoint = f"repos/{repository}/pulls/{bundle.pull_request.number}"
     diff = client.rest_text(endpoint, "application/vnd.github.diff")
-    pull_request = bundle.pull_request
-    if diff is None:
-        pull_request = pull_request.model_copy(update={"diff_path": None})
-    return bundle.model_copy(update={"pull_request": pull_request, "diff": diff})
+    return bundle.model_copy(update={"diff": diff})
 
 
 def _hydrate_pull_requests(

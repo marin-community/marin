@@ -5,9 +5,7 @@
 
 from __future__ import annotations
 
-import argparse
 import hashlib
-import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -70,6 +68,12 @@ class LintCatalog:
         raise KeyError(f"unknown lint rule: {code}")
 
 
+@dataclass(frozen=True)
+class LoadedLane:
+    lane: LintLane
+    rule_paths: frozenset[Path]
+
+
 def _mapping(path: Path) -> dict[str, object]:
     value = yaml.safe_load(path.read_text())
     if not isinstance(value, dict):
@@ -94,6 +98,60 @@ def _integer(value: object, *, path: Path, field: str) -> int:
     return value
 
 
+def _load_rule(rule_path: Path, lane_name: str, declared_code: str, config_path: Path) -> LintRule:
+    if not rule_path.is_file():
+        raise ValueError(f"{config_path}: declared rule does not exist: {rule_path}")
+    value = _mapping(rule_path)
+    _reject_extra_fields(value, RULE_FIELDS, rule_path)
+    if value.get("schema_version") != CATALOG_SCHEMA_VERSION:
+        raise ValueError(f"{rule_path}: unsupported schema_version")
+    code = _text(value.get("code"), path=rule_path, field="code")
+    if RULE_CODE.fullmatch(code) is None:
+        raise ValueError(f"{rule_path}: invalid rule code {code!r}")
+    if code != declared_code:
+        raise ValueError(f"{rule_path}: code {code!r} does not match catalog declaration {declared_code!r}")
+    rule_lane = _text(value.get("lane"), path=rule_path, field="lane")
+    if rule_lane != lane_name:
+        raise ValueError(f"{rule_path}: lane {rule_lane!r} does not match directory {lane_name!r}")
+    if rule_path.stem != code:
+        raise ValueError(f"{rule_path}: filename must be {code}.yaml")
+    confidence = value.get("minimum_confidence", 0.7)
+    if not isinstance(confidence, int | float) or isinstance(confidence, bool) or not 0 <= confidence <= 1:
+        raise ValueError(f"{rule_path}: minimum_confidence must be between 0 and 1")
+    return LintRule(
+        code=code,
+        lane=rule_lane,
+        title=_text(value.get("title"), path=rule_path, field="title"),
+        prompt=_text(value.get("prompt"), path=rule_path, field="prompt"),
+        minimum_confidence=float(confidence),
+        path=rule_path,
+    )
+
+
+def _load_lane(root: Path, config_path: Path, lane_value: object) -> LoadedLane:
+    if not isinstance(lane_value, dict):
+        raise ValueError(f"{config_path}: each lane must be a mapping")
+    _reject_extra_fields(lane_value, LANE_FIELDS, config_path)
+    name = _text(lane_value.get("name"), path=config_path, field="lane.name")
+    prompt = _text(lane_value.get("prompt"), path=config_path, field=f"lanes.{name}.prompt")
+    include_leads = lane_value.get("include_complexity_leads", False)
+    if not isinstance(include_leads, bool):
+        raise ValueError(f"{config_path}: lanes.{name}.include_complexity_leads must be boolean")
+    min_diff_lines = _integer(
+        lane_value.get("min_diff_lines", 0), path=config_path, field=f"lanes.{name}.min_diff_lines"
+    )
+    if min_diff_lines < 0:
+        raise ValueError(f"{config_path}: lanes.{name}.min_diff_lines must be non-negative")
+    rule_codes = lane_value.get("rules")
+    if not isinstance(rule_codes, list) or not rule_codes or not all(isinstance(code, str) for code in rule_codes):
+        raise ValueError(f"{config_path}: lanes.{name}.rules must be a non-empty list of rule codes")
+    if len(set(rule_codes)) != len(rule_codes):
+        raise ValueError(f"{config_path}: lanes.{name}.rules contains duplicates")
+    rule_paths = tuple(root / "rules" / name / f"{code}.yaml" for code in rule_codes)
+    rules = tuple(_load_rule(path, name, code, config_path) for path, code in zip(rule_paths, rule_codes, strict=True))
+    return LoadedLane(LintLane(name, prompt, include_leads, min_diff_lines, rules), frozenset(rule_paths))
+
+
 def load_catalog(root: Path = DEFAULT_CATALOG_DIR) -> LintCatalog:
     """Load the catalog from ``root`` and reject ambiguous or stale files."""
     config_path = root / "catalog.yaml"
@@ -106,79 +164,19 @@ def load_catalog(root: Path = DEFAULT_CATALOG_DIR) -> LintCatalog:
     if not isinstance(lane_values, list) or not lane_values:
         raise ValueError(f"{config_path}: lanes must be a non-empty list")
 
-    lanes: list[LintLane] = []
-    known_lanes: set[str] = set()
-    known_codes: set[str] = set()
-    declared_rule_paths: set[Path] = set()
-    for lane_value in lane_values:
-        if not isinstance(lane_value, dict):
-            raise ValueError(f"{config_path}: each lane must be a mapping")
-        _reject_extra_fields(lane_value, LANE_FIELDS, config_path)
-        name = _text(lane_value.get("name"), path=config_path, field="lane.name")
-        if name in known_lanes:
-            raise ValueError(f"{config_path}: duplicate lane {name}")
-        known_lanes.add(name)
-        lane_prompt = _text(lane_value.get("prompt"), path=config_path, field=f"lanes.{name}.prompt")
-        include_leads = lane_value.get("include_complexity_leads", False)
-        if not isinstance(include_leads, bool):
-            raise ValueError(f"{config_path}: lanes.{name}.include_complexity_leads must be boolean")
-        min_diff_lines = _integer(
-            lane_value.get("min_diff_lines", 0), path=config_path, field=f"lanes.{name}.min_diff_lines"
-        )
-        if min_diff_lines < 0:
-            raise ValueError(f"{config_path}: lanes.{name}.min_diff_lines must be non-negative")
-
-        rule_codes = lane_value.get("rules")
-        if not isinstance(rule_codes, list) or not rule_codes or not all(isinstance(code, str) for code in rule_codes):
-            raise ValueError(f"{config_path}: lanes.{name}.rules must be a non-empty list of rule codes")
-        if len(set(rule_codes)) != len(rule_codes):
-            raise ValueError(f"{config_path}: lanes.{name}.rules contains duplicates")
-
-        lane_dir = root / "rules" / name
-        rules: list[LintRule] = []
-        for declared_code in rule_codes:
-            rule_path = lane_dir / f"{declared_code}.yaml"
-            if not rule_path.is_file():
-                raise ValueError(f"{config_path}: declared rule does not exist: {rule_path}")
-            declared_rule_paths.add(rule_path.resolve())
-            value = _mapping(rule_path)
-            _reject_extra_fields(value, RULE_FIELDS, rule_path)
-            if value.get("schema_version") != CATALOG_SCHEMA_VERSION:
-                raise ValueError(f"{rule_path}: unsupported schema_version")
-            code = _text(value.get("code"), path=rule_path, field="code")
-            if RULE_CODE.fullmatch(code) is None:
-                raise ValueError(f"{rule_path}: invalid rule code {code!r}")
-            if code in known_codes:
-                raise ValueError(f"{rule_path}: duplicate rule code {code}")
-            known_codes.add(code)
-            if code != declared_code:
-                raise ValueError(f"{rule_path}: code {code!r} does not match catalog declaration {declared_code!r}")
-            rule_lane = _text(value.get("lane"), path=rule_path, field="lane")
-            if rule_lane != name:
-                raise ValueError(f"{rule_path}: lane {rule_lane!r} does not match directory {name!r}")
-            if rule_path.stem != code:
-                raise ValueError(f"{rule_path}: filename must be {code}.yaml")
-            confidence = value.get("minimum_confidence", 0.7)
-            if not isinstance(confidence, int | float) or isinstance(confidence, bool) or not 0 <= confidence <= 1:
-                raise ValueError(f"{rule_path}: minimum_confidence must be between 0 and 1")
-            rules.append(
-                LintRule(
-                    code=code,
-                    lane=rule_lane,
-                    title=_text(value.get("title"), path=rule_path, field="title"),
-                    prompt=_text(value.get("prompt"), path=rule_path, field="prompt"),
-                    minimum_confidence=float(confidence),
-                    path=rule_path,
-                )
-            )
-        if not rules:
-            raise ValueError(f"{lane_dir}: lane has no rules")
-        lanes.append(LintLane(name, lane_prompt, include_leads, min_diff_lines, tuple(rules)))
-
+    loaded = tuple(_load_lane(root, config_path, value) for value in lane_values)
+    lanes = tuple(item.lane for item in loaded)
+    lane_names = [lane.name for lane in lanes]
+    if len(set(lane_names)) != len(lane_names):
+        raise ValueError(f"{config_path}: duplicate lane names")
+    rule_codes = [rule.code for lane in lanes for rule in lane.rules]
+    if len(set(rule_codes)) != len(rule_codes):
+        raise ValueError(f"{config_path}: duplicate rule codes")
+    declared_rule_paths = {path.resolve() for item in loaded for path in item.rule_paths}
     actual_rule_paths = {path.resolve() for path in (root / "rules").glob("*/*.yaml")}
     if undeclared := actual_rule_paths - declared_rule_paths:
         raise ValueError(f"rules exist outside declared lanes: {sorted(str(path) for path in undeclared)}")
-    return LintCatalog(root=root, shared_prompt=shared_prompt, lanes=tuple(lanes))
+    return LintCatalog(root=root, shared_prompt=shared_prompt, lanes=lanes)
 
 
 def render_lane(catalog: LintCatalog, lane_name: str) -> str:
@@ -198,39 +196,3 @@ def catalog_sha(catalog: LintCatalog) -> str:
         digest.update(path.read_bytes())
         digest.update(b"\0")
     return digest.hexdigest()
-
-
-def _main() -> None:
-    parser = argparse.ArgumentParser(description="Inspect the structured agentic-lint catalog.")
-    subparsers = parser.add_subparsers(dest="command", required=True)
-    subparsers.add_parser("validate")
-    list_parser = subparsers.add_parser("list")
-    list_parser.add_argument("--lane")
-    get_parser = subparsers.add_parser("get")
-    get_parser.add_argument("code")
-    args = parser.parse_args()
-    catalog = load_catalog()
-    if args.command == "validate":
-        print(catalog_sha(catalog))
-        return
-    if args.command == "list":
-        rules = catalog.lane(args.lane).rules if args.lane else catalog.rules
-        print(json.dumps([{"code": rule.code, "lane": rule.lane, "title": rule.title} for rule in rules], indent=2))
-        return
-    rule = catalog.rule(args.code)
-    print(
-        json.dumps(
-            {
-                "code": rule.code,
-                "lane": rule.lane,
-                "title": rule.title,
-                "prompt": rule.prompt,
-                "minimum_confidence": rule.minimum_confidence,
-            },
-            indent=2,
-        )
-    )
-
-
-if __name__ == "__main__":
-    _main()

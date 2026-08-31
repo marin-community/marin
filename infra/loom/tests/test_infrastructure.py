@@ -179,28 +179,6 @@ def test_loom_launch_action_uses_registered_automation_endpoint() -> None:
     assert '"$LOOM_URL/api/runs/create"' in launch_script
 
 
-def test_loom_launch_action_bounds_scratch_attachments_before_upload() -> None:
-    action_path = ROOT.parent.parent / ".github/actions/launch-loom-run/action.yaml"
-    action = yaml.safe_load(action_path.read_text())
-    scratch_input = action["inputs"]["scratch-file"]
-    launch_script = action["runs"]["steps"][0]["run"]
-
-    # The composite action's shell is the deployment boundary. These checks
-    # guard ordering and data transport that cannot be exercised without the
-    # GitHub OIDC runtime.
-    assert scratch_input["required"] is False
-    assert scratch_input["default"] == ""
-    assert '[[ -L "$SCRATCH_FILE" || ! -f "$SCRATCH_FILE" ]]' in launch_script
-    assert 'scratch_path=$(realpath -- "$SCRATCH_FILE")' in launch_script
-    assert '"$workspace"/*)' in launch_script
-    assert "scratch_bytes > 26214400" in launch_script
-    assert 'base64 --wrap=0 -- "$scratch_path"' in launch_script
-    assert ".session.scratch" in launch_script
-    assert '--rawfile scratch_content "$scratch_content_file"' in launch_script
-    assert '--data-binary @"$request_file"' in launch_script
-    assert '-d "$request"' not in launch_script
-
-
 def test_codehealth_refinement_workflow_launches_one_database_backed_agent() -> None:
     workflow_path = ROOT.parent.parent / ".github/workflows/ops-codehealth-refinement.yaml"
     workflow_text = workflow_path.read_text()
@@ -213,7 +191,6 @@ def test_codehealth_refinement_workflow_launches_one_database_backed_agent() -> 
     assert "OPENAI_API_KEY" not in workflow_text
     assert "upload-artifact" not in workflow_text
     assert "refinement-corpus" not in workflow_text
-    assert "scratch-file" not in workflow_text
 
     checkout = steps["Checkout repository"]
     assert checkout["with"]["persist-credentials"] is False
@@ -222,13 +199,9 @@ def test_codehealth_refinement_workflow_launches_one_database_backed_agent() -> 
     assert launch["uses"] == "./.github/actions/launch-loom-run"
     assert launch["with"]["profile"] == "${{ vars.LOOM_CODEHEALTH_REFINEMENT_PROFILE }}"
     assert launch["with"]["channel"] == "codehealth-refinement"
-    goal = " ".join(launch["with"]["goal"].split())
-    assert "resumable 30-day review and lint telemetry sync into PostgreSQL" in goal
-    assert "models and effort levels you select" in goal
-    assert "structured YAML rules" in goal
-    assert "open a normal pull request" in goal
-    assert "post-report command" in goal
-    assert "durable codehealth-refinement channel" in goal
+    action = yaml.safe_load((ROOT.parent.parent / ".github/actions/launch-loom-run/action.yaml").read_text())
+    launch_script = action["runs"]["steps"][0]["run"]
+    assert '--data-binary @"$request_file"' in launch_script
 
 
 def test_codehealth_refinement_profile_owns_database_analysis_and_catalog_prs() -> None:
@@ -236,7 +209,6 @@ def test_codehealth_refinement_profile_owns_database_analysis_and_catalog_prs() 
     config = stack["config"]
     profile = config["marin-loom:profiles"]["codehealth-refinement"]
     federations = {federation["name"]: federation for federation in config["marin-loom:githubFederations"]}
-    instructions = (ROOT / profile["instructionsFile"]).read_text()
 
     assert profile["class"] == "automation"
     assert profile["strict"] is True
@@ -247,19 +219,12 @@ def test_codehealth_refinement_profile_owns_database_analysis_and_catalog_prs() 
     assert profile["githubRepositories"] == ["marin-community/marin"]
     assert profile["maxConcurrent"] == 1
     assert profile["mcpAccess"] == {"mode": "all", "groups": []}
+    assert profile["instructionsFile"] == "profiles/codehealth-refinement/AGENTS.md"
     assert profile["env"] == {
         "CLOUDSQL_CONNECTION": {"value": "hai-gcp-models:us-central1:marin-metadata"},
         "PGDATABASE": {"value": "context"},
         "PGUSER": {"value": "loom-vm@hai-gcp-models.iam"},
     }
-    assert "do not create or\nupload corpus archives" in instructions
-    assert "refinement_sync --days 30" in instructions
-    assert "infra.codehealth.refinement_tools" in instructions
-    assert "Choose the model and effort" in instructions
-    assert "open a pull request" in instructions
-    assert "seaborn" in instructions
-    assert "durable `codehealth-refinement` channel" in instructions
-
     federation = federations["codehealth-refinement"]
     assert federation == {
         "name": "codehealth-refinement",

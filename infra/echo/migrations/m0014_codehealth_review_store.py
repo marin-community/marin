@@ -14,6 +14,7 @@ CREATE TABLE codehealth_sync_runs (
     started_at TIMESTAMPTZ NOT NULL,
     completed_at TIMESTAMPTZ,
     status TEXT NOT NULL,
+    attempt_count INTEGER NOT NULL,
     candidate_pull_requests INTEGER,
     github_usage JSONB,
     finelog_watermark JSONB,
@@ -135,28 +136,40 @@ CREATE TABLE codehealth_source_contexts (
 );
 
 CREATE TABLE codehealth_lint_invocations (
-    invocation_id TEXT PRIMARY KEY,
+    invocation_id TEXT NOT NULL,
+    repository TEXT NOT NULL,
     ts TIMESTAMPTZ NOT NULL,
     pr_number INTEGER,
     head_sha TEXT,
     catalog_sha TEXT,
     successful BOOLEAN NOT NULL,
     finding_count INTEGER NOT NULL,
-    record JSONB NOT NULL
+    record JSONB NOT NULL,
+    PRIMARY KEY (repository, invocation_id)
 );
 CREATE INDEX ix_codehealth_lint_invocations_pr_ts
-    ON codehealth_lint_invocations (pr_number, ts);
+    ON codehealth_lint_invocations (repository, pr_number, ts);
 
 CREATE TABLE codehealth_lint_findings (
-    finding_id TEXT PRIMARY KEY,
-    invocation_id TEXT REFERENCES codehealth_lint_invocations(invocation_id) ON DELETE CASCADE,
+    finding_id TEXT NOT NULL,
+    invocation_id TEXT NOT NULL,
+    repository TEXT NOT NULL,
     ts TIMESTAMPTZ NOT NULL,
     pr_number INTEGER,
     code TEXT NOT NULL,
-    record JSONB NOT NULL
+    record JSONB NOT NULL,
+    PRIMARY KEY (repository, finding_id),
+    FOREIGN KEY (repository, invocation_id)
+        REFERENCES codehealth_lint_invocations(repository, invocation_id) ON DELETE CASCADE
 );
 CREATE INDEX ix_codehealth_lint_findings_pr_code
-    ON codehealth_lint_findings (pr_number, code);
+    ON codehealth_lint_findings (repository, pr_number, code);
+
+CREATE TABLE codehealth_lint_catalog_snapshots (
+    catalog_sha TEXT PRIMARY KEY,
+    observed_at TIMESTAMPTZ NOT NULL,
+    record JSONB NOT NULL
+);
 
 CREATE TABLE codehealth_rule_probes (
     probe_id TEXT PRIMARY KEY,
@@ -169,10 +182,12 @@ CREATE TABLE codehealth_rule_probes (
     catalog_sha TEXT NOT NULL,
     model TEXT NOT NULL,
     effort TEXT NOT NULL,
-    fired BOOLEAN NOT NULL,
+    status TEXT NOT NULL,
+    fired BOOLEAN,
     confidence DOUBLE PRECISION,
     finding TEXT,
-    raw_output TEXT NOT NULL,
+    raw_output TEXT,
+    error TEXT,
     elapsed DOUBLE PRECISION NOT NULL,
     record JSONB NOT NULL
 );
@@ -191,6 +206,7 @@ GRANT SELECT ON
     codehealth_source_contexts,
     codehealth_lint_invocations,
     codehealth_lint_findings,
+    codehealth_lint_catalog_snapshots,
     codehealth_rule_probes
 TO "eng-all@openathena.ai";
 GRANT SELECT, INSERT, UPDATE ON
@@ -207,9 +223,10 @@ GRANT SELECT, INSERT, UPDATE ON
     codehealth_source_contexts,
     codehealth_lint_invocations,
     codehealth_lint_findings,
+    codehealth_lint_catalog_snapshots,
     codehealth_rule_probes
 TO "loom-vm@hai-gcp-models.iam";
-GRANT DELETE ON codehealth_review_threads, codehealth_changed_files, codehealth_commits
+GRANT DELETE ON codehealth_review_events, codehealth_review_threads, codehealth_changed_files, codehealth_commits
 TO "loom-vm@hai-gcp-models.iam";
 """
 

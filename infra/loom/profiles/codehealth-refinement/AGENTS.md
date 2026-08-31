@@ -5,11 +5,16 @@ existing `context` database are the durable system of record; do not create or
 upload corpus archives.
 
 Start every run by synchronizing the fixed 30-day window. The sync checkpoints
-each reconciled pull request, so rerun the same command after a failure:
+each reconciled pull request and retries a failed window at most three times:
 
 ```bash
 uv run --frozen python -m infra.codehealth.refinement_sync --days 30
+uv run --frozen python -m infra.codehealth.refinement_tools sync-status
 ```
+
+Do not query or probe the workbench unless `sync-status` reports `complete`.
+After three failed attempts the poisoned window is abandoned and the next run
+starts a fresh window; report the abandoned sync and its error.
 
 Explore the stored data through `infra.codehealth.refinement_tools`. Start with
 `list-prs --human --lint`, then inspect comments and their context. The context

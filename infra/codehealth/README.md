@@ -27,12 +27,16 @@ diffs, plus immutable versions of edited pull requests and review events. It
 also stores source windows fetched on demand and the complete provenance of
 rule probes. A sync row freezes the 30-day time window. Each reconciled pull
 request and its checkpoint commit atomically, so rerunning a failed sync resumes
-the same window without refetching completed pull requests.
+the same window without refetching completed pull requests. A window is retried
+at most three times before it is marked abandoned, preventing one permanently
+bad pull request from pinning the weekly job. Exploration commands fail closed
+unless the latest sync is complete.
 
 Run the sync from the repository root:
 
 ```bash
 uv run --frozen python -m infra.codehealth.refinement_sync --days 30
+uv run --frozen python -m infra.codehealth.refinement_tools sync-status
 ```
 
 Collection scans open, merged, and closed pull requests by activity time. It
@@ -72,6 +76,9 @@ thread, pull-request diff, matching lint invocations and findings, and a cached
 ±100-line source window around an inline comment. `probe` runs one selected YAML
 rule against that context with an agent-selected model and reasoning effort.
 Probe output is experimental evidence, not a human label or a recall estimate.
+`rule-activity` reports which historical catalog identities have stored
+snapshots. The current checkout is snapshotted on every successful sync;
+catalogs first observed before this deployment remain explicitly unknown.
 
 The agent writes its own Markdown report and may use seaborn for charts.
 `post-report` publishes a versioned Loom artifact and appends a typed result to

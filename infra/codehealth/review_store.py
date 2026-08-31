@@ -26,6 +26,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     MetaData,
@@ -43,6 +44,7 @@ DEFAULT_CLOUDSQL_CONNECTION = "hai-gcp-models:us-central1:marin-metadata"
 DEFAULT_DATABASE = "context"
 DEFAULT_DATABASE_USER = "loom-vm@hai-gcp-models.iam"
 DEFAULT_BACKFILL_DAYS = 30
+MAX_SYNC_ATTEMPTS = 3
 
 metadata = MetaData()
 json_type = JSON(none_as_null=True).with_variant(JSONB(none_as_null=True), "postgresql")
@@ -54,6 +56,12 @@ class StoreModel(BaseModel):
 
 class SyncStatus(StrEnum):
     RUNNING = "running"
+    COMPLETE = "complete"
+    FAILED = "failed"
+    ABANDONED = "abandoned"
+
+
+class ProbeStatus(StrEnum):
     COMPLETE = "complete"
     FAILED = "failed"
 
@@ -68,6 +76,7 @@ sync_runs = Table(
     Column("started_at", DateTime(timezone=True), nullable=False),
     Column("completed_at", DateTime(timezone=True)),
     Column("status", Text, nullable=False),
+    Column("attempt_count", Integer, nullable=False),
     Column("candidate_pull_requests", Integer),
     Column("github_usage", json_type),
     Column("finelog_watermark", json_type),
@@ -198,6 +207,7 @@ lint_invocations = Table(
     "codehealth_lint_invocations",
     metadata,
     Column("invocation_id", Text, primary_key=True),
+    Column("repository", Text, primary_key=True),
     Column("ts", DateTime(timezone=True), nullable=False),
     Column("pr_number", Integer),
     Column("head_sha", Text),
@@ -205,19 +215,33 @@ lint_invocations = Table(
     Column("successful", Boolean, nullable=False),
     Column("finding_count", Integer, nullable=False),
     Column("record", json_type, nullable=False),
-    Index("ix_codehealth_lint_invocations_pr_ts", "pr_number", "ts"),
+    Index("ix_codehealth_lint_invocations_pr_ts", "repository", "pr_number", "ts"),
 )
 
 lint_findings = Table(
     "codehealth_lint_findings",
     metadata,
     Column("finding_id", Text, primary_key=True),
-    Column("invocation_id", Text, ForeignKey("codehealth_lint_invocations.invocation_id", ondelete="CASCADE")),
+    Column("invocation_id", Text, nullable=False),
+    Column("repository", Text, primary_key=True),
     Column("ts", DateTime(timezone=True), nullable=False),
     Column("pr_number", Integer),
     Column("code", Text, nullable=False),
     Column("record", json_type, nullable=False),
-    Index("ix_codehealth_lint_findings_pr_code", "pr_number", "code"),
+    ForeignKeyConstraint(
+        ("repository", "invocation_id"),
+        ("codehealth_lint_invocations.repository", "codehealth_lint_invocations.invocation_id"),
+        ondelete="CASCADE",
+    ),
+    Index("ix_codehealth_lint_findings_pr_code", "repository", "pr_number", "code"),
+)
+
+lint_catalog_snapshots = Table(
+    "codehealth_lint_catalog_snapshots",
+    metadata,
+    Column("catalog_sha", Text, primary_key=True),
+    Column("observed_at", DateTime(timezone=True), nullable=False),
+    Column("record", json_type, nullable=False),
 )
 
 rule_probes = Table(
@@ -233,10 +257,12 @@ rule_probes = Table(
     Column("catalog_sha", Text, nullable=False),
     Column("model", Text, nullable=False),
     Column("effort", Text, nullable=False),
-    Column("fired", Boolean, nullable=False),
+    Column("status", Text, nullable=False),
+    Column("fired", Boolean),
     Column("confidence", Float),
     Column("finding", Text),
-    Column("raw_output", Text, nullable=False),
+    Column("raw_output", Text),
+    Column("error", Text),
     Column("elapsed", Float, nullable=False),
     Column("record", json_type, nullable=False),
 )
@@ -274,9 +300,63 @@ class ReviewEventSummary(StoreModel):
     lint_findings: int
 
 
+class TelemetryModel(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="allow")
+
+
+class LintInvocationRecord(TelemetryModel):
+    invocation_id: str
+    ts: str
+    pr_number: int | None = None
+    head_sha: str | None = None
+    lint_catalog_sha: str | None = None
+    diff_added_lines: int | None = None
+    diff_removed_lines: int | None = None
+
+
+class LintFindingRecord(TelemetryModel):
+    invocation_id: str
+    ts: str
+    pr_number: int | None = None
+    code: str | None = None
+
+
 class LintActivity(StoreModel):
-    invocations: tuple[dict[str, object], ...]
-    findings: tuple[dict[str, object], ...]
+    invocations: tuple[LintInvocationRecord, ...]
+    findings: tuple[LintFindingRecord, ...]
+
+
+class SyncStatusSummary(StoreModel):
+    sync_id: str
+    repository: str
+    window_start: str
+    window_end: str
+    status: SyncStatus
+    attempt_count: int
+    started_at: str
+    completed_at: str | None
+    candidate_pull_requests: int | None
+    error: str | None
+
+
+class StoredProbe(StoreModel):
+    probe_id: str
+    idempotency_key: str
+    created_at: str
+    event_id: str
+    context_sha: str
+    rule_code: str
+    rule_sha: str
+    catalog_sha: str
+    model: str
+    effort: str
+    status: ProbeStatus
+    fired: bool | None
+    confidence: float | None
+    finding: str | None
+    raw_output: str | None
+    elapsed: float
+    error: str | None
 
 
 class ReviewContext(StoreModel):
@@ -288,8 +368,8 @@ class ReviewContext(StoreModel):
     source_start_line: int | None
     source_end_line: int | None
     source_unavailable_reason: str | None
-    lint_invocations: tuple[dict[str, object], ...]
-    lint_findings: tuple[dict[str, object], ...]
+    lint_invocations: tuple[LintInvocationRecord, ...]
+    lint_findings: tuple[LintFindingRecord, ...]
     context_sha: str
 
 
@@ -299,6 +379,7 @@ class SyncRun:
     repository: str
     window_start: dt.datetime
     window_end: dt.datetime
+    attempt_count: int
 
 
 @dataclass(frozen=True)
@@ -316,6 +397,12 @@ class DatabaseResources:
     def close(self) -> None:
         self.engine.dispose()
         self.connector.close()
+
+
+@dataclass(frozen=True)
+class LintRecordRows:
+    invocations: list[dict[str, object]]
+    findings: list[dict[str, object]]
 
 
 def database_config_from_environment() -> DatabaseConfig:
@@ -378,17 +465,38 @@ def _insert_ignore(conn: Connection, table: Table, values: dict[str, object], ke
     conn.execute(statement.on_conflict_do_nothing(index_elements=[table.c[key] for key in keys]))
 
 
+def _json_value(value: object) -> object:
+    if isinstance(value, dt.datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=dt.UTC)
+        return value.astimezone(dt.UTC).isoformat().replace("+00:00", "Z")
+    if isinstance(value, dt.date):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(key): _json_value(item) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return [_json_value(item) for item in value]
+    return value
+
+
 def _payload(record: BaseModel | dict[str, object]) -> dict[str, object]:
-    return record.model_dump(mode="json") if isinstance(record, BaseModel) else record
+    value = record.model_dump(mode="json") if isinstance(record, BaseModel) else record
+    normalized = _json_value(value)
+    assert isinstance(normalized, dict)
+    return normalized
 
 
 def _record_sha(record: BaseModel | dict[str, object]) -> str:
     return hashlib.sha256(json.dumps(_payload(record), sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-def _timestamp(value: str | None) -> dt.datetime:
+def _timestamp(value: str | dt.datetime | None) -> dt.datetime:
     if value is None:
         return dt.datetime.min.replace(tzinfo=dt.UTC)
+    if isinstance(value, dt.datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=dt.UTC)
+        return value.astimezone(dt.UTC)
     return dt.datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(dt.UTC)
 
 
@@ -403,25 +511,35 @@ def start_or_resume_sync(
     now: dt.datetime,
     days: int = DEFAULT_BACKFILL_DAYS,
 ) -> SyncRun:
-    """Resume the newest incomplete window, or create a fixed new window."""
+    """Resume a bounded number of attempts, then abandon a poisoned window."""
     with engine.begin() as conn:
         row = (
             conn.execute(
                 sqlalchemy.select(sync_runs)
-                .where(sync_runs.c.repository == repository, sync_runs.c.status != SyncStatus.COMPLETE.value)
+                .where(
+                    sync_runs.c.repository == repository,
+                    sync_runs.c.status.in_((SyncStatus.RUNNING.value, SyncStatus.FAILED.value)),
+                )
                 .order_by(sync_runs.c.started_at.desc())
                 .limit(1)
             )
             .mappings()
             .first()
         )
+        if row is not None and int(row["attempt_count"]) < MAX_SYNC_ATTEMPTS:
+            attempt_count = int(row["attempt_count"]) + 1
+            conn.execute(
+                sqlalchemy.update(sync_runs)
+                .where(sync_runs.c.sync_id == row["sync_id"])
+                .values(status=SyncStatus.RUNNING.value, attempt_count=attempt_count, error=None)
+            )
+            return SyncRun(str(row["sync_id"]), repository, row["window_start"], row["window_end"], attempt_count)
         if row is not None:
             conn.execute(
                 sqlalchemy.update(sync_runs)
                 .where(sync_runs.c.sync_id == row["sync_id"])
-                .values(status=SyncStatus.RUNNING.value, error=None)
+                .values(status=SyncStatus.ABANDONED.value)
             )
-            return SyncRun(str(row["sync_id"]), repository, row["window_start"], row["window_end"])
         end = now.astimezone(dt.UTC)
         start = end - dt.timedelta(days=days)
         sync_id = str(uuid.uuid4())
@@ -433,9 +551,52 @@ def start_or_resume_sync(
                 window_end=end,
                 started_at=now,
                 status=SyncStatus.RUNNING.value,
+                attempt_count=1,
             )
         )
-        return SyncRun(sync_id, repository, start, end)
+        return SyncRun(sync_id, repository, start, end, 1)
+
+
+def latest_sync_status(engine: Engine, repository: str) -> SyncStatusSummary | None:
+    """Return the latest fixed-window sync state for one repository."""
+    with engine.begin() as conn:
+        row = (
+            conn.execute(
+                sqlalchemy.select(sync_runs)
+                .where(sync_runs.c.repository == repository)
+                .order_by(sync_runs.c.started_at.desc())
+                .limit(1)
+            )
+            .mappings()
+            .first()
+        )
+    if row is None:
+        return None
+    return SyncStatusSummary(
+        sync_id=str(row["sync_id"]),
+        repository=str(row["repository"]),
+        window_start=utc_iso(row["window_start"]),
+        window_end=utc_iso(row["window_end"]),
+        status=SyncStatus(str(row["status"])),
+        attempt_count=int(row["attempt_count"]),
+        started_at=utc_iso(row["started_at"]),
+        completed_at=None if row["completed_at"] is None else utc_iso(row["completed_at"]),
+        candidate_pull_requests=row["candidate_pull_requests"],
+        error=row["error"],
+    )
+
+
+def require_complete_sync(engine: Engine, repository: str) -> SyncStatusSummary:
+    """Fail closed when the workbench does not represent a completed sync."""
+    status = latest_sync_status(engine, repository)
+    if status is None:
+        raise RuntimeError(f"no review sync exists for {repository}")
+    if status.status != SyncStatus.COMPLETE:
+        raise RuntimeError(
+            f"latest review sync for {repository} is {status.status.value} "
+            f"(attempt {status.attempt_count}/{MAX_SYNC_ATTEMPTS}): {status.error or 'no error recorded'}"
+        )
+    return status
 
 
 def completed_pull_requests(engine: Engine, sync_id: str) -> set[int]:
@@ -483,7 +644,7 @@ def store_bundle(engine: Engine, sync_id: str, bundle: PullRequestBundle, *, obs
             },
             ("repository", "pr_number"),
         )
-        for child_table in (review_threads, changed_files, commits):
+        for child_table in (review_events, review_threads, changed_files, commits):
             conn.execute(
                 child_table.delete().where(
                     child_table.c.repository == repository,
@@ -580,19 +741,22 @@ def store_bundle(engine: Engine, sync_id: str, bundle: PullRequestBundle, *, obs
 
 def store_telemetry(
     engine: Engine,
+    repository: str,
     invocations: Sequence[dict[str, object]],
     findings: Sequence[dict[str, object]],
 ) -> None:
     """Mirror bounded Finelog activity for single-store exploration queries."""
     with engine.begin() as conn:
         for row in invocations:
+            payload = _payload(row)
             invocation_id = str(row["invocation_id"])
             _upsert(
                 conn,
                 lint_invocations,
                 {
                     "invocation_id": invocation_id,
-                    "ts": _timestamp(str(row["ts"])),
+                    "repository": repository,
+                    "ts": _timestamp(row["ts"]),
                     "pr_number": row.get("pr_number"),
                     "head_sha": row.get("head_sha"),
                     "catalog_sha": row.get("lint_catalog_sha"),
@@ -602,25 +766,49 @@ def store_telemetry(
                         and not bool(row.get("timed_out"))
                     ),
                     "finding_count": int(row.get("finding_count") or 0),
-                    "record": row,
+                    "record": payload,
                 },
-                ("invocation_id",),
+                ("repository", "invocation_id"),
             )
         for row in findings:
-            finding_id = _record_sha(row)
+            payload = _payload(row)
+            finding_id = _record_sha(payload)
             _upsert(
                 conn,
                 lint_findings,
                 {
                     "finding_id": finding_id,
                     "invocation_id": str(row["invocation_id"]),
-                    "ts": _timestamp(str(row["ts"])),
+                    "repository": repository,
+                    "ts": _timestamp(row["ts"]),
                     "pr_number": row.get("pr_number"),
                     "code": str(row.get("code") or ""),
-                    "record": row,
+                    "record": payload,
                 },
-                ("finding_id",),
+                ("repository", "finding_id"),
             )
+
+
+def store_catalog_snapshot(
+    engine: Engine,
+    catalog_sha: str,
+    record: dict[str, object],
+    *,
+    observed_at: dt.datetime,
+) -> None:
+    """Persist the catalog used by the checked-out weekly agent."""
+    with engine.begin() as conn:
+        _insert_ignore(
+            conn,
+            lint_catalog_snapshots,
+            {"catalog_sha": catalog_sha, "observed_at": observed_at, "record": _payload(record)},
+            ("catalog_sha",),
+        )
+
+
+def catalog_snapshot_shas(engine: Engine) -> set[str]:
+    with engine.begin() as conn:
+        return set(conn.execute(sqlalchemy.select(lint_catalog_snapshots.c.catalog_sha)).scalars())
 
 
 def complete_sync(
@@ -656,10 +844,46 @@ def fail_sync(engine: Engine, sync_id: str, error: str) -> None:
         )
 
 
-def _iso(value: dt.datetime) -> str:
+def utc_iso(value: dt.datetime) -> str:
+    """Format one timestamp as a UTC ISO-8601 string."""
     if value.tzinfo is None:
         value = value.replace(tzinfo=dt.UTC)
     return value.astimezone(dt.UTC).isoformat().replace("+00:00", "Z")
+
+
+def _successful_lint_rows(
+    conn: Connection,
+    repository: str,
+    *,
+    pr_number: int | None = None,
+    start: dt.datetime | None = None,
+    end: dt.datetime | None = None,
+) -> LintRecordRows:
+    statement = sqlalchemy.select(lint_invocations.c.record).where(
+        lint_invocations.c.repository == repository,
+        lint_invocations.c.successful.is_(True),
+    )
+    if pr_number is not None:
+        statement = statement.where(lint_invocations.c.pr_number == pr_number)
+    if start is not None:
+        statement = statement.where(lint_invocations.c.ts >= start)
+    if end is not None:
+        statement = statement.where(lint_invocations.c.ts < end)
+    invocation_rows = conn.execute(statement.order_by(lint_invocations.c.ts)).scalars().all()
+    invocation_ids = [str(row["invocation_id"]) for row in invocation_rows]
+    finding_rows = (
+        conn.execute(
+            sqlalchemy.select(lint_findings.c.record)
+            .where(
+                lint_findings.c.repository == repository,
+                lint_findings.c.invocation_id.in_(invocation_ids) if invocation_ids else sqlalchemy.false(),
+            )
+            .order_by(lint_findings.c.ts)
+        )
+        .scalars()
+        .all()
+    )
+    return LintRecordRows(invocation_rows, finding_rows)
 
 
 def list_pull_request_activity(
@@ -667,7 +891,7 @@ def list_pull_request_activity(
     *,
     start: dt.datetime,
     end: dt.datetime,
-    repository: str | None = None,
+    repository: str,
     require_human: bool = False,
     require_lint: bool = False,
     limit: int = 100,
@@ -675,6 +899,7 @@ def list_pull_request_activity(
     """List PRs with joined human-review and lint activity in a bounded window."""
     if not 1 <= limit <= 500:
         raise ValueError("limit must be between 1 and 500")
+    require_complete_sync(engine, repository)
     with engine.begin() as conn:
         human_counts = (
             sqlalchemy.select(
@@ -692,15 +917,18 @@ def list_pull_request_activity(
         )
         invocation_counts = (
             sqlalchemy.select(
+                lint_invocations.c.repository,
                 lint_invocations.c.pr_number,
                 sqlalchemy.func.count().label("lint_runs"),
             )
             .where(
+                lint_invocations.c.repository == repository,
+                lint_invocations.c.successful.is_(True),
                 lint_invocations.c.pr_number.is_not(None),
                 lint_invocations.c.ts >= start,
                 lint_invocations.c.ts < end,
             )
-            .group_by(lint_invocations.c.pr_number)
+            .group_by(lint_invocations.c.repository, lint_invocations.c.pr_number)
             .subquery()
         )
         human_count = sqlalchemy.func.coalesce(human_counts.c.human_events, 0)
@@ -716,11 +944,17 @@ def list_pull_request_activity(
                 (human_counts.c.repository == pull_requests.c.repository)
                 & (human_counts.c.pr_number == pull_requests.c.pr_number),
             )
-            .outerjoin(invocation_counts, invocation_counts.c.pr_number == pull_requests.c.pr_number)
-            .where(pull_requests.c.updated_at >= start, pull_requests.c.updated_at < end)
+            .outerjoin(
+                invocation_counts,
+                (invocation_counts.c.repository == pull_requests.c.repository)
+                & (invocation_counts.c.pr_number == pull_requests.c.pr_number),
+            )
+            .where(
+                pull_requests.c.repository == repository,
+                pull_requests.c.updated_at >= start,
+                pull_requests.c.updated_at < end,
+            )
         )
-        if repository is not None:
-            statement = statement.where(pull_requests.c.repository == repository)
         if require_human:
             statement = statement.where(human_count > 0)
         if require_lint:
@@ -734,6 +968,8 @@ def list_pull_request_activity(
                 .select_from(lint_findings.join(lint_invocations))
                 .where(
                     lint_invocations.c.pr_number.in_(pr_numbers),
+                    lint_invocations.c.repository == repository,
+                    lint_invocations.c.successful.is_(True),
                     lint_invocations.c.ts >= start,
                     lint_invocations.c.ts < end,
                 )
@@ -748,7 +984,7 @@ def list_pull_request_activity(
             title=str(row["record"]["title"]),
             author=str(row["author"]),
             state=str(row["state"]),
-            updated_at=_iso(row["updated_at"]),
+            updated_at=utc_iso(row["updated_at"]),
             head_sha=str(row["head_sha"]),
             human_events=int(row["human_events"]),
             lint_runs=int(row["lint_runs"]),
@@ -761,19 +997,9 @@ def list_pull_request_activity(
 
 def list_pr_review_events(engine: Engine, repository: str, pr_number: int) -> tuple[ReviewEventSummary, ...]:
     """List current review events for one PR with its lint totals."""
+    require_complete_sync(engine, repository)
     with engine.begin() as conn:
-        invocations = (
-            conn.execute(
-                sqlalchemy.select(lint_invocations.c.invocation_id).where(lint_invocations.c.pr_number == pr_number)
-            )
-            .scalars()
-            .all()
-        )
-        finding_count = conn.execute(
-            sqlalchemy.select(sqlalchemy.func.count())
-            .select_from(lint_findings)
-            .where(lint_findings.c.invocation_id.in_(invocations) if invocations else sqlalchemy.false())
-        ).scalar_one()
+        lint_rows = _successful_lint_rows(conn, repository, pr_number=pr_number)
         rows = (
             conn.execute(
                 sqlalchemy.select(review_events)
@@ -792,45 +1018,27 @@ def list_pr_review_events(engine: Engine, repository: str, pr_number: int) -> tu
             is_human=bool(row["is_human"]),
             is_agent_marked=bool(row["record"]["is_agent_marked"]),
             body_preview=str(row["record"]["body"])[:300],
-            activity_at=_iso(row["activity_at"]),
+            activity_at=utc_iso(row["activity_at"]),
             source_url=row["record"].get("source_url"),
             path=row["record"].get("path"),
             line=row["record"].get("line") or row["record"].get("original_line"),
             thread_is_resolved=row["record"].get("thread_is_resolved"),
-            lint_runs=len(invocations),
-            lint_findings=int(finding_count),
+            lint_runs=len(lint_rows.invocations),
+            lint_findings=len(lint_rows.findings),
         )
         for row in rows
     )
 
 
-def lint_activity(engine: Engine, *, start: dt.datetime, end: dt.datetime) -> LintActivity:
+def lint_activity(engine: Engine, *, repository: str, start: dt.datetime, end: dt.datetime) -> LintActivity:
     """Return successful invocation and finding rows for a bounded analysis window."""
+    require_complete_sync(engine, repository)
     with engine.begin() as conn:
-        invocation_rows = (
-            conn.execute(
-                sqlalchemy.select(lint_invocations.c.record)
-                .where(
-                    lint_invocations.c.successful.is_(True),
-                    lint_invocations.c.ts >= start,
-                    lint_invocations.c.ts < end,
-                )
-                .order_by(lint_invocations.c.ts)
-            )
-            .scalars()
-            .all()
-        )
-        invocation_ids = [str(row["invocation_id"]) for row in invocation_rows]
-        finding_rows = (
-            conn.execute(
-                sqlalchemy.select(lint_findings.c.record)
-                .where(lint_findings.c.invocation_id.in_(invocation_ids) if invocation_ids else sqlalchemy.false())
-                .order_by(lint_findings.c.ts)
-            )
-            .scalars()
-            .all()
-        )
-    return LintActivity(invocations=tuple(invocation_rows), findings=tuple(finding_rows))
+        rows = _successful_lint_rows(conn, repository, start=start, end=end)
+    return LintActivity(
+        invocations=tuple(LintInvocationRecord.model_validate(row) for row in rows.invocations),
+        findings=tuple(LintFindingRecord.model_validate(row) for row in rows.findings),
+    )
 
 
 def review_context(engine: Engine, event_id: str) -> ReviewContext:
@@ -840,6 +1048,8 @@ def review_context(engine: Engine, event_id: str) -> ReviewContext:
             conn.execute(sqlalchemy.select(review_events).where(review_events.c.event_id == event_id)).mappings().one()
         )
         event = ReviewEventRecord.model_validate(event_row["record"])
+    require_complete_sync(engine, event.repository)
+    with engine.begin() as conn:
         pull_row = (
             conn.execute(
                 sqlalchemy.select(pull_requests).where(
@@ -881,33 +1091,15 @@ def review_context(engine: Engine, event_id: str) -> ReviewContext:
             .mappings()
             .first()
         )
-        invocation_rows = (
-            conn.execute(
-                sqlalchemy.select(lint_invocations.c.record)
-                .where(lint_invocations.c.pr_number == event.pr_number)
-                .order_by(lint_invocations.c.ts)
-            )
-            .scalars()
-            .all()
-        )
-        invocation_ids = [str(row["invocation_id"]) for row in invocation_rows]
-        finding_rows = (
-            conn.execute(
-                sqlalchemy.select(lint_findings.c.record)
-                .where(lint_findings.c.invocation_id.in_(invocation_ids) if invocation_ids else sqlalchemy.false())
-                .order_by(lint_findings.c.ts)
-            )
-            .scalars()
-            .all()
-        )
+        lint_rows = _successful_lint_rows(conn, event.repository, pr_number=event.pr_number)
     identity = {
         "event": event.model_dump(mode="json"),
         "thread": thread_rows,
         "pull_request": pull_row["record"],
         "diff_sha": hashlib.sha256((diff or "").encode()).hexdigest(),
         "source_sha": None if source_row is None else source_row["content_sha"],
-        "lint_invocations": invocation_rows,
-        "lint_findings": finding_rows,
+        "lint_invocations": lint_rows.invocations,
+        "lint_findings": lint_rows.findings,
     }
     return ReviewContext(
         event=event,
@@ -918,8 +1110,8 @@ def review_context(engine: Engine, event_id: str) -> ReviewContext:
         source_start_line=None if source_row is None else source_row["start_line"],
         source_end_line=None if source_row is None else source_row["end_line"],
         source_unavailable_reason=None if source_row is None else source_row["unavailable_reason"],
-        lint_invocations=tuple(invocation_rows),
-        lint_findings=tuple(finding_rows),
+        lint_invocations=tuple(LintInvocationRecord.model_validate(row) for row in lint_rows.invocations),
+        lint_findings=tuple(LintFindingRecord.model_validate(row) for row in lint_rows.findings),
         context_sha=hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
     )
 
@@ -958,36 +1150,39 @@ def store_source_context(
         )
 
 
-def stored_probe(engine: Engine, idempotency_key: str) -> dict[str, object] | None:
+def stored_probe(engine: Engine, idempotency_key: str) -> StoredProbe | None:
     with engine.begin() as conn:
         row = conn.execute(
             sqlalchemy.select(rule_probes.c.record).where(rule_probes.c.idempotency_key == idempotency_key)
         ).scalar_one_or_none()
-    return row
+    return None if row is None else StoredProbe.model_validate(row)
 
 
-def store_probe(engine: Engine, record: dict[str, object]) -> None:
+def store_probe(engine: Engine, record: StoredProbe) -> None:
+    payload = _payload(record)
     with engine.begin() as conn:
         _insert_ignore(
             conn,
             rule_probes,
             {
-                "probe_id": record["probe_id"],
-                "idempotency_key": record["idempotency_key"],
-                "created_at": _timestamp(str(record["created_at"])),
-                "event_id": record["event_id"],
-                "context_sha": record["context_sha"],
-                "rule_code": record["rule_code"],
-                "rule_sha": record["rule_sha"],
-                "catalog_sha": record["catalog_sha"],
-                "model": record["model"],
-                "effort": record["effort"],
-                "fired": record["fired"],
-                "confidence": record.get("confidence"),
-                "finding": record.get("finding"),
-                "raw_output": record["raw_output"],
-                "elapsed": record["elapsed"],
-                "record": record,
+                "probe_id": record.probe_id,
+                "idempotency_key": record.idempotency_key,
+                "created_at": _timestamp(record.created_at),
+                "event_id": record.event_id,
+                "context_sha": record.context_sha,
+                "rule_code": record.rule_code,
+                "rule_sha": record.rule_sha,
+                "catalog_sha": record.catalog_sha,
+                "model": record.model,
+                "effort": record.effort,
+                "status": record.status.value,
+                "fired": record.fired,
+                "confidence": record.confidence,
+                "finding": record.finding,
+                "raw_output": record.raw_output,
+                "error": record.error,
+                "elapsed": record.elapsed,
+                "record": payload,
             },
             ("idempotency_key",),
         )

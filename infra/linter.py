@@ -159,11 +159,9 @@ META_LANE_INSTRUCTIONS = (
 )
 
 
-# The holistic meta lane only runs on larger diffs. Its rules need the whole change, and a small
-# pull request has no aggregate shape to inspect.
 @dataclass(frozen=True)
 class LintLane:
-    """One fan-out lane of the structured lint review."""
+    """One catalog-derived fan-out lane and its execution policy."""
 
     name: str
     include_complexity_leads: bool
@@ -316,10 +314,6 @@ def _review_pr_number() -> int | None:
 def _review_head_sha() -> str | None:
     """The reviewed commit: the harness-supplied head SHA, else local HEAD."""
     return (os.environ.get(REVIEW_HEAD_SHA_ENV) or "").strip() or _git(["rev-parse", "HEAD"])
-
-
-def _lint_catalog_sha() -> str:
-    return catalog_sha(LINT_CATALOG)
 
 
 def _ship_review_stats(event: dict, log_dir: pathlib.Path | None) -> None:
@@ -755,7 +749,7 @@ def _ship_review_event(
                 "head_sha": _review_head_sha(),
                 "pr_number": _review_pr_number(),
                 "marin_user": _git(["config", "user.email"]),
-                "lint_catalog_sha": _lint_catalog_sha(),
+                "lint_catalog_sha": catalog_sha(LINT_CATALOG),
                 "diff_files": diff_files,
                 "diff_added_lines": diff_added,
                 "diff_removed_lines": diff_removed,

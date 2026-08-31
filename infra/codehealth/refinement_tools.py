@@ -20,8 +20,10 @@ from infra.lint.catalog import DEFAULT_CATALOG_DIR, catalog_sha, load_catalog
 
 from .review_store import (
     ReviewContext,
+    catalog_snapshot_shas,
     database_config_from_environment,
     database_engine,
+    latest_sync_status,
     lint_activity,
     list_pr_review_events,
     list_pull_request_activity,
@@ -72,7 +74,10 @@ def ensure_source_context(engine: Engine, context: ReviewContext) -> ReviewConte
         reason = None
     except (OSError, subprocess.SubprocessError, UnicodeDecodeError, ValueError) as error:
         text = None
-        reason = f"{type(error).__name__}: {error}"[:500]
+        detail = str(error)
+        if isinstance(error, subprocess.CalledProcessError) and error.stderr:
+            detail = f"{detail}: {error.stderr.strip()}"
+        reason = f"{type(error).__name__}: {detail}"[:500]
     store_source_context(
         engine,
         event_id=event.event_id,
@@ -91,6 +96,15 @@ def ensure_source_context(engine: Engine, context: ReviewContext) -> ReviewConte
 @click.group()
 def cli() -> None:
     """Explore review data, inspect rules, run probes, and publish reports."""
+
+
+@cli.command("sync-status")
+@click.option("--repository", default=DEFAULT_REPOSITORY, show_default=True)
+def sync_status(repository: str) -> None:
+    """Show whether the latest fixed-window sync is safe to query."""
+    with database_engine(database_config_from_environment()) as engine:
+        status = latest_sync_status(engine, repository)
+        click.echo(_json(None if status is None else status.model_dump(mode="json")))
 
 
 @cli.command("list-prs")
@@ -184,15 +198,17 @@ def validate_rules() -> None:
 
 @cli.command("rule-activity")
 @click.option("--days", type=click.IntRange(min=1, max=365), default=30, show_default=True)
-def rule_activity(days: int) -> None:
+@click.option("--repository", default=DEFAULT_REPOSITORY, show_default=True)
+def rule_activity(days: int, repository: str) -> None:
     """List current-catalog exposure and findings alongside whole-window findings."""
     with database_engine(database_config_from_environment()) as engine:
         end = dt.datetime.now(dt.UTC)
-        activity = lint_activity(engine, start=end - dt.timedelta(days=days), end=end)
+        activity = lint_activity(engine, repository=repository, start=end - dt.timedelta(days=days), end=end)
         catalog = load_catalog()
         current_sha = catalog_sha(catalog)
-        current_runs = [row for row in activity.invocations if row.get("lint_catalog_sha") == current_sha]
-        current_ids = {str(row["invocation_id"]) for row in current_runs}
+        known_catalogs = catalog_snapshot_shas(engine)
+        current_runs = [row for row in activity.invocations if row.lint_catalog_sha == current_sha]
+        current_ids = {row.invocation_id for row in current_runs}
         rows = []
         for rule in catalog.rules:
             lane = catalog.lane(rule.lane)
@@ -200,7 +216,7 @@ def rule_activity(days: int) -> None:
                 row
                 for row in current_runs
                 if lane.min_diff_lines == 0
-                or int(row.get("diff_added_lines") or 0) + int(row.get("diff_removed_lines") or 0) > lane.min_diff_lines
+                or int(row.diff_added_lines or 0) + int(row.diff_removed_lines or 0) > lane.min_diff_lines
             ]
             rows.append(
                 {
@@ -208,11 +224,11 @@ def rule_activity(days: int) -> None:
                     "lane": rule.lane,
                     "current_catalog_eligible_runs": len(eligible),
                     "current_catalog_findings": sum(
-                        finding.get("code") == rule.code and str(finding.get("invocation_id")) in current_ids
+                        finding.code == rule.code and finding.invocation_id in current_ids
                         for finding in activity.findings
                     ),
                     "window_findings_all_catalog_versions": sum(
-                        finding.get("code") == rule.code for finding in activity.findings
+                        finding.code == rule.code for finding in activity.findings
                     ),
                 }
             )
@@ -223,6 +239,14 @@ def rule_activity(days: int) -> None:
                     "catalog_sha": current_sha,
                     "successful_runs_all_catalog_versions": len(activity.invocations),
                     "successful_runs_current_catalog": len(current_runs),
+                    "catalog_versions": [
+                        {
+                            "catalog_sha": sha,
+                            "successful_runs": sum(row.lint_catalog_sha == sha for row in activity.invocations),
+                            "snapshot_available": sha in known_catalogs,
+                        }
+                        for sha in sorted({row.lint_catalog_sha for row in activity.invocations if row.lint_catalog_sha})
+                    ],
                     "rules": rows,
                 }
             )
@@ -265,7 +289,10 @@ def post_report(name: str, title: str, report: Path, summary: str, idempotency_k
         capture_output=True,
         text=True,
     )
-    artifact_url = write.stdout.strip().split()[0]
+    output = write.stdout.strip().split()
+    if not output or not output[0].startswith(("http://", "https://")):
+        raise RuntimeError(f"loom artifact write returned no URL: {write.stdout[:500]}")
+    artifact_url = output[0]
     message = f"{summary.rstrip()}\nReport: {artifact_url}"
     subprocess.run(
         [

@@ -560,5 +560,4 @@ def test_collect_corpus_marks_too_large_diff_as_unavailable() -> None:
 
     bundle = result.bundles[0]
     assert bundle.diff is None
-    assert bundle.pull_request.diff_path is None
     assert [item.filename for item in bundle.files] == ["example.py"]

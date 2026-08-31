@@ -13,9 +13,11 @@ import pytest
 import sqlalchemy
 from sqlalchemy.pool import StaticPool
 
-from infra.codehealth import refinement_tools, review_store, rule_probe
+from infra.codehealth import refinement_sync, refinement_tools, review_store, rule_probe
 from infra.codehealth.github_review_corpus import (
     ChangedFileRecord,
+    CollectionResult,
+    GitHubUsage,
     PullRequestBundle,
     PullRequestRecord,
     ReviewEventRecord,
@@ -66,7 +68,6 @@ def _bundle(pr_number: int, *, body: str = "let exceptions flow") -> PullRequest
         review_comments=1,
         issue_comments=0,
         commit_shas=(),
-        diff_path=f"diffs/{pr_number}.diff",
     )
     event = ReviewEventRecord(
         event_id=f"{REPOSITORY}:inline_comment:{pr_number}01",
@@ -120,6 +121,17 @@ def _sync(engine: sqlalchemy.Engine) -> review_store.SyncRun:
     return review_store.start_or_resume_sync(engine, REPOSITORY, now=NOW)
 
 
+def _complete(engine: sqlalchemy.Engine, run: review_store.SyncRun) -> None:
+    review_store.complete_sync(
+        engine,
+        run.sync_id,
+        candidate_pull_requests=len(review_store.completed_pull_requests(engine, run.sync_id)),
+        github_usage={"graphql_points": 1, "rest_requests": 1},
+        finelog_watermark={"deployment": "test"},
+        completed_at=NOW,
+    )
+
+
 def test_store_preserves_versions_and_joins_human_and_lint_activity(engine: sqlalchemy.Engine) -> None:
     run = _sync(engine)
     first = _bundle(8629).model_copy(
@@ -144,6 +156,7 @@ def test_store_preserves_versions_and_joins_human_and_lint_activity(engine: sqla
     review_store.store_bundle(engine, run.sync_id, second, observed_at=NOW + dt.timedelta(minutes=1))
     review_store.store_telemetry(
         engine,
+        REPOSITORY,
         [
             {
                 "invocation_id": "run-1",
@@ -165,6 +178,7 @@ def test_store_preserves_versions_and_joins_human_and_lint_activity(engine: sqla
             }
         ],
     )
+    _complete(engine, run)
 
     rows = review_store.list_pull_request_activity(
         engine,
@@ -187,6 +201,60 @@ def test_store_preserves_versions_and_joins_human_and_lint_activity(engine: sqla
         current_files = connection.execute(sqlalchemy.select(review_store.changed_files.c.filename)).scalars().all()
     assert versions == 2
     assert current_files == ["new.py"]
+
+
+def test_weekly_sync_publishes_complete_queryable_generation(
+    engine: sqlalchemy.Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle = _bundle(8700)
+
+    def collect(_repository: str, _start: dt.datetime, _end: dt.datetime, **kwargs: object) -> CollectionResult:
+        sink = kwargs["bundle_sink"]
+        assert callable(sink)
+        sink(bundle)
+        return CollectionResult(
+            bundles=(bundle,),
+            candidate_pull_requests=1,
+            usage=GitHubUsage(graphql_requests=2, graphql_points=3, rest_requests=1, projected_rest_requests=151),
+        )
+
+    monkeypatch.setattr(refinement_sync, "collect_corpus", collect)
+    result = refinement_sync.sync_review_activity(
+        engine,
+        repository=REPOSITORY,
+        deployment="test",
+        now=NOW,
+        telemetry=(
+            [
+                {
+                    "invocation_id": "run-8700",
+                    "ts": NOW - dt.timedelta(minutes=1),
+                    "pr_number": 8700,
+                    "head_sha": "head-8700",
+                    "lint_catalog_sha": "historical-catalog",
+                    "agent_exit_code": 0,
+                    "timed_out": False,
+                    "finding_count": 0,
+                }
+            ],
+            [],
+        ),
+    )
+
+    assert result.persisted_pull_requests == 1
+    status = review_store.latest_sync_status(engine, REPOSITORY)
+    assert status is not None
+    assert status.status == review_store.SyncStatus.COMPLETE
+    assert review_store.catalog_snapshot_shas(engine) == {refinement_sync.catalog_sha(load_catalog())}
+    rows = review_store.list_pull_request_activity(
+        engine,
+        start=NOW - dt.timedelta(days=30),
+        end=NOW + dt.timedelta(seconds=1),
+        repository=REPOSITORY,
+        require_human=True,
+        require_lint=True,
+    )
+    assert [(row.number, row.human_events, row.lint_runs) for row in rows] == [(8700, 1, 1)]
 
 
 def test_failed_sync_resumes_same_window_after_last_committed_pull_request(engine: sqlalchemy.Engine) -> None:
@@ -217,12 +285,117 @@ def test_failed_sync_resumes_same_window_after_last_committed_pull_request(engin
     assert review_store.completed_pull_requests(engine, resumed.sync_id) == {1, 2}
 
 
+def test_failed_sync_is_hidden_and_poisoned_window_is_abandoned(engine: sqlalchemy.Engine) -> None:
+    first = _sync(engine)
+    review_store.store_bundle(engine, first.sync_id, _bundle(1), observed_at=NOW)
+    review_store.fail_sync(engine, first.sync_id, "deterministic failure")
+
+    with pytest.raises(RuntimeError, match=r"latest review sync.*failed"):
+        review_store.list_pull_request_activity(
+            engine,
+            start=NOW - dt.timedelta(days=30),
+            end=NOW,
+            repository=REPOSITORY,
+        )
+
+    second = review_store.start_or_resume_sync(engine, REPOSITORY, now=NOW + dt.timedelta(hours=1))
+    review_store.fail_sync(engine, second.sync_id, "deterministic failure")
+    third = review_store.start_or_resume_sync(engine, REPOSITORY, now=NOW + dt.timedelta(hours=2))
+    review_store.fail_sync(engine, third.sync_id, "deterministic failure")
+    replacement = review_store.start_or_resume_sync(engine, REPOSITORY, now=NOW + dt.timedelta(hours=3))
+
+    assert first.sync_id == second.sync_id == third.sync_id
+    assert replacement.sync_id != first.sync_id
+    assert replacement.attempt_count == 1
+    with engine.begin() as connection:
+        abandoned = connection.execute(
+            sqlalchemy.select(review_store.sync_runs.c.status).where(review_store.sync_runs.c.sync_id == first.sync_id)
+        ).scalar_one()
+    assert abandoned == review_store.SyncStatus.ABANDONED.value
+
+
+def test_telemetry_normalizes_datetimes_and_ignores_unsuccessful_runs(engine: sqlalchemy.Engine) -> None:
+    run = _sync(engine)
+    review_store.store_bundle(engine, run.sync_id, _bundle(8), observed_at=NOW)
+    review_store.store_telemetry(
+        engine,
+        REPOSITORY,
+        [
+            {
+                "invocation_id": "successful",
+                "ts": NOW - dt.timedelta(hours=1),
+                "pr_number": 8,
+                "lint_catalog_sha": "catalog-a",
+                "agent_exit_code": 0,
+                "timed_out": False,
+                "finding_count": 1,
+            },
+            {
+                "invocation_id": "failed",
+                "ts": NOW - dt.timedelta(hours=1),
+                "pr_number": 8,
+                "lint_catalog_sha": "catalog-a",
+                "agent_exit_code": 1,
+                "timed_out": False,
+                "finding_count": 1,
+            },
+        ],
+        [
+            {
+                "invocation_id": "successful",
+                "ts": NOW - dt.timedelta(hours=1),
+                "pr_number": 8,
+                "code": "ml-exception-swallow",
+            },
+            {
+                "invocation_id": "failed",
+                "ts": NOW - dt.timedelta(hours=1),
+                "pr_number": 8,
+                "code": "ml-bare-any",
+            },
+        ],
+    )
+    _complete(engine, run)
+
+    rows = review_store.list_pull_request_activity(
+        engine,
+        start=NOW - dt.timedelta(days=30),
+        end=NOW + dt.timedelta(seconds=1),
+        repository=REPOSITORY,
+        require_lint=True,
+    )
+    assert [(row.lint_runs, row.lint_findings, row.rule_codes) for row in rows] == [(1, 1, ("ml-exception-swallow",))]
+    with engine.begin() as connection:
+        records = connection.execute(
+            sqlalchemy.select(review_store.lint_invocations.c.record).order_by(
+                review_store.lint_invocations.c.invocation_id
+            )
+        ).scalars()
+    assert {record["ts"] for record in records} == {"2026-08-31T11:00:00Z"}
+
+
+def test_resync_reconciles_deleted_review_events(engine: sqlalchemy.Engine) -> None:
+    run = _sync(engine)
+    first = _bundle(9)
+    review_store.store_bundle(engine, run.sync_id, first, observed_at=NOW)
+    review_store.store_bundle(engine, run.sync_id, first.model_copy(update={"events": ()}), observed_at=NOW)
+    _complete(engine, run)
+
+    assert review_store.list_pr_review_events(engine, REPOSITORY, 9) == ()
+    with engine.begin() as connection:
+        versions = connection.execute(
+            sqlalchemy.select(sqlalchemy.func.count()).select_from(review_store.review_event_versions)
+        ).scalar_one()
+    assert versions == 1
+
+
 def test_context_fetches_and_caches_bounded_source_window(
     engine: sqlalchemy.Engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     run = _sync(engine)
     bundle = _bundle(10)
     review_store.store_bundle(engine, run.sync_id, bundle, observed_at=NOW)
+    _complete(engine, run)
     source = "\n".join(f"line {line}" for line in range(1, 301))
     calls = 0
 
@@ -245,9 +418,8 @@ def test_context_fetches_and_caches_bounded_source_window(
     assert cached.context_sha == context.context_sha
 
 
-def test_structured_catalog_is_lossless_and_independently_editable(tmp_path: Path) -> None:
+def test_structured_catalog_rule_edits_are_loaded(tmp_path: Path) -> None:
     catalog = load_catalog()
-    assert len(catalog.rules) == 63
     rendered = render_lane(catalog, "robustness")
     assert "`ml-exception-swallow`" in rendered
     assert catalog.shared_prompt not in rendered
@@ -271,9 +443,11 @@ def test_rule_probe_records_model_rule_context_and_idempotent_result(
     run = _sync(engine)
     bundle = _bundle(22)
     review_store.store_bundle(engine, run.sync_id, bundle, observed_at=NOW)
+    _complete(engine, run)
     context = review_store.review_context(engine, bundle.events[0].event_id)
     prompt = rule_probe.build_probe_prompt(load_catalog().rule("ml-exception-swallow"), context)
     assert bundle.events[0].body not in prompt
+    assert "human review" not in prompt
     assert "\\n-old\\n+new" in prompt
     calls: list[list[str]] = []
 
@@ -304,7 +478,63 @@ def test_rule_probe_records_model_rule_context_and_idempotent_result(
     )
 
     assert len(calls) == 1
-    assert "gpt-5.6-luna" in calls[0]
+    args = calls[0]
+    assert args[args.index("--model") + 1] == "gpt-5.6-luna"
+    assert args[args.index("--config") + 1] == 'model_reasoning_effort="low"'
     assert first == second
     assert first.context_sha == context.context_sha
     assert first.catalog_sha
+
+
+def test_rule_probe_records_failure_and_rejects_idempotency_key_reuse(
+    engine: sqlalchemy.Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = _sync(engine)
+    bundle = _bundle(23)
+    review_store.store_bundle(engine, run.sync_id, bundle, observed_at=NOW)
+    _complete(engine, run)
+    context = review_store.review_context(engine, bundle.events[0].event_id)
+    calls = 0
+
+    def fail_run(args: list[str], **_kwargs) -> subprocess.CompletedProcess[str]:
+        nonlocal calls
+        calls += 1
+        raise subprocess.CalledProcessError(1, args, stderr="model unavailable")
+
+    monkeypatch.setattr(rule_probe.subprocess, "run", fail_run)
+    with pytest.raises(subprocess.CalledProcessError):
+        rule_probe.run_rule_probe(
+            engine,
+            load_catalog(),
+            context,
+            rule_code="ml-exception-swallow",
+            model="gpt-5.6-luna",
+            effort="low",
+            idempotency_key="failed-probe-23",
+        )
+    with pytest.raises(RuntimeError, match="previous probe attempt failed"):
+        rule_probe.run_rule_probe(
+            engine,
+            load_catalog(),
+            context,
+            rule_code="ml-exception-swallow",
+            model="gpt-5.6-luna",
+            effort="low",
+            idempotency_key="failed-probe-23",
+        )
+    with pytest.raises(ValueError, match="different probe"):
+        rule_probe.run_rule_probe(
+            engine,
+            load_catalog(),
+            context,
+            rule_code="ml-bare-any",
+            model="gpt-5.6-luna",
+            effort="low",
+            idempotency_key="failed-probe-23",
+        )
+
+    assert calls == 1
+    stored = review_store.stored_probe(engine, "failed-probe-23")
+    assert stored is not None
+    assert stored.status == review_store.ProbeStatus.FAILED
+    assert "model unavailable" in str(stored.error)
