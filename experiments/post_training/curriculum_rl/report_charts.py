@@ -3,17 +3,21 @@
 
 """Render round-3 report charts from W&B histories.
 
-Produces per-validation-bin score charts over steps and generated tokens, the
-grade-weighted end metric and frontier-grade headline charts, curriculum
-weight/pass-rate trajectories per arm, an empirical learning-velocity curve,
-and a JSON summary of per-arm token budgets. Runs locally (W&B access only).
+Produces, per model family (Qwen3-0.6B and Snowball 67B-A2B), a grade-weighted
+headline chart, per-grade validation breakouts over steps and tokens, a
+grade-attainment chart (tokens to first reach the frontier threshold at each
+grade), curriculum weight/pass-rate trajectories per arm, an empirical
+learning-velocity curve, and a JSON summary of per-arm token budgets. Raw eval
+points are drawn faintly under an EMA-smoothed line. Runs locally (W&B access
+only); seaborn is not a workspace dependency, so run with an overlay:
 
-    python -m experiments.post_training.curriculum_rl.report_charts --out /tmp/curriculum-r3
+    uv run --with seaborn python -m experiments.post_training.curriculum_rl.report_charts --out /tmp/curriculum-r3
 """
 
 import itertools
 import json
 import logging
+import math
 from collections import defaultdict
 from pathlib import Path
 
@@ -22,6 +26,8 @@ import matplotlib as mpl
 
 mpl.use("Agg")
 import matplotlib.pyplot as plt
+import pandas as pd
+import seaborn as sns
 import wandb
 
 logger = logging.getLogger(__name__)
@@ -44,6 +50,17 @@ ARM_ORDER = (
     "snowball-learnability-dapo",
     "snowball-grade-prior-dapo",
 )
+# Sampler identity shared across families: the snowball-* arms reuse the Qwen
+# sampler configurations, so cross-family charts keep one color per sampler.
+SAMPLER_ORDER = (
+    "naive",
+    "naive-dapo",
+    "learnability-dapo",
+    "grade-prior-dapo",
+    "grade-adaptive",
+    "grade-prior",
+)
+FAMILY_LABELS = {"qwen": "Qwen3-0.6B", "snowball": "Snowball 67B-A2B SFT"}
 # Validation bin -> ladder grade (pool.py bins). The end metric weights each
 # bin by 1 + grade; the weights are fixed here and never visible to samplers.
 VAL_GRADES = {
@@ -54,8 +71,13 @@ VAL_GRADES = {
     "val-omni": 11,
     "val-theoremqa": 13,
 }
-# Lowest per-bin score treated as "solved at this grade" for the frontier chart.
+BIN_ORDER = sorted(VAL_GRADES, key=VAL_GRADES.__getitem__)
+# Lowest per-bin score treated as "solved at this grade" for grade attainment.
 FRONTIER_THRESHOLD = 0.25
+# EMA coefficients: eval series are sparse (one point per eval interval) and
+# get light softening; per-step curriculum series are dense and get more.
+EVAL_ALPHA = 0.5
+CURRICULUM_ALPHA = 0.3
 STEP_KEY = "trainer/global_step"
 TOKENS_KEY = "generate/avg_num_tokens"
 # Responses per generate call: train_batch_size * n_samples_per_prompt, from the
@@ -64,8 +86,16 @@ QWEN_RESPONSES_PER_GENERATE = 512 * 8
 SNOWBALL_RESPONSES_PER_GENERATE = 128 * 8
 
 
+def family_of(arm: str) -> str:
+    return "snowball" if arm.startswith("snowball-") else "qwen"
+
+
+def sampler_of(arm: str) -> str:
+    return arm.removeprefix("snowball-")
+
+
 def responses_per_generate(arm: str) -> int:
-    return SNOWBALL_RESPONSES_PER_GENERATE if arm.startswith("snowball-") else QWEN_RESPONSES_PER_GENERATE
+    return SNOWBALL_RESPONSES_PER_GENERATE if family_of(arm) == "snowball" else QWEN_RESPONSES_PER_GENERATE
 
 
 def arm_of(run_name: str) -> str | None:
@@ -75,7 +105,7 @@ def arm_of(run_name: str) -> str | None:
     # Snowball checkpoint names carry the scale label (launch.py only drops the
     # suffix for the Qwen FULL preset): snowball-naive-snowball-full -> snowball-naive.
     arm = arm.removesuffix("-snowball-full")
-    tag = SNOWBALL_VERSION_TAG if arm.startswith("snowball-") else VERSION_TAG
+    tag = SNOWBALL_VERSION_TAG if family_of(arm) == "snowball" else VERSION_TAG
     if f"-{tag}-" not in run_name:
         return None
     return arm
@@ -148,6 +178,143 @@ def grade_weighted_score(row: dict[str, float]) -> float | None:
     return sum((1 + VAL_GRADES[v]) * s for v, s in scores.items()) / weight_total
 
 
+def eval_frame(data: dict[str, dict]) -> pd.DataFrame:
+    """Tidy per-eval-point rows: one row per (arm, bin) score, plus grade-weighted.
+
+    ``smoothed`` is an EMA over each (arm, bin) series in token order; raw
+    scores stay in ``score`` so charts can show both.
+    """
+    rows = []
+    for arm, d in data.items():
+        for r in d["evals"].values():
+            base = {
+                "arm": arm,
+                "family": family_of(arm),
+                "sampler": sampler_of(arm),
+                "step": r.get(STEP_KEY),
+                "tokens_m": r["cumulative_tokens"] / 1e6,
+            }
+            for v, grade in VAL_GRADES.items():
+                score = r.get(f"eval/{v}/pass_at_1")
+                if score is not None:
+                    rows.append({**base, "bin": v, "grade": grade, "score": score})
+            weighted = grade_weighted_score(r)
+            if weighted is not None:
+                rows.append({**base, "bin": "grade-weighted", "grade": math.nan, "score": weighted})
+    frame = pd.DataFrame(rows).sort_values("tokens_m")
+    frame["smoothed"] = frame.groupby(["arm", "bin"])["score"].transform(lambda s: s.ewm(alpha=EVAL_ALPHA).mean())
+    return frame
+
+
+def present_samplers(frame: pd.DataFrame) -> list[str]:
+    return [s for s in SAMPLER_ORDER if s in set(frame["sampler"])]
+
+
+def sampler_palette() -> dict[str, tuple]:
+    return dict(zip(SAMPLER_ORDER, sns.color_palette("colorblind", len(SAMPLER_ORDER)), strict=True))
+
+
+def draw_arm_lines(ax, frame: pd.DataFrame, x: str, palette: dict[str, tuple]) -> None:
+    """Raw series faintly under the EMA line, one color per sampler."""
+    for sampler in present_samplers(frame):
+        g = frame[frame["sampler"] == sampler]
+        ax.plot(g[x], g["score"], color=palette[sampler], alpha=0.2, linewidth=1)
+        ax.plot(g[x], g["smoothed"], color=palette[sampler], linewidth=2.2, label=sampler)
+
+
+def plot_headline(frame: pd.DataFrame, family: str, path: Path) -> None:
+    sub = frame[(frame["family"] == family) & (frame["bin"] == "grade-weighted")]
+    fig, ax = plt.subplots(figsize=(9, 5.5))
+    draw_arm_lines(ax, sub, "tokens_m", sampler_palette())
+    ax.set_xlabel("generated tokens (M)")
+    ax.set_ylabel("grade-weighted pass@1")
+    ax.set_title(f"{FAMILY_LABELS[family]}: grade-weighted validation pass@1")
+    ax.legend(fontsize=9)
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+
+
+def plot_grade_breakout(frame: pd.DataFrame, family: str, x: str, xlabel: str, path: Path) -> None:
+    """One panel per validation bin, ordered by grade, shared axes.
+
+    Shared y makes plateaus at the easy grades and floors at the hard grades
+    directly comparable across panels.
+    """
+    sub = frame[(frame["family"] == family) & frame["grade"].notna()]
+    palette = sampler_palette()
+    fig, axes = plt.subplots(2, 3, figsize=(15, 8.5), sharex=True, sharey=True)
+    for ax, bin_name in zip(axes.flat, BIN_ORDER, strict=True):
+        draw_arm_lines(ax, sub[sub["bin"] == bin_name], x, palette)
+        ax.set_title(f"grade {VAL_GRADES[bin_name]}: {bin_name}", fontsize=11)
+        ax.set_ylim(-0.02, 1.02)
+    for ax in axes[-1]:
+        ax.set_xlabel(xlabel)
+    for ax in axes[:, 0]:
+        ax.set_ylabel("pass@1")
+    handles, labels = axes.flat[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="lower center", ncol=len(labels), frameon=False)
+    fig.suptitle(f"{FAMILY_LABELS[family]}: validation pass@1 by grade", y=0.99)
+    fig.tight_layout(rect=(0, 0.05, 1, 1))
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+
+
+def sustained_crossing(g: pd.DataFrame) -> float:
+    """Tokens at the first raw score >= FRONTIER_THRESHOLD held for two
+    consecutive evals (a final-eval crossing has no successor and counts), so a
+    single noisy point is not attainment yet the final frontier grade agrees
+    with the summary. NaN when never crossed."""
+    scores = g["score"].tolist()
+    tokens = g["tokens_m"].tolist()
+    for i, score in enumerate(scores):
+        if score >= FRONTIER_THRESHOLD and (i == len(scores) - 1 or scores[i + 1] >= FRONTIER_THRESHOLD):
+            return tokens[i]
+    return math.nan
+
+
+def attainment_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    """First sustained FRONTIER_THRESHOLD crossing per (arm, bin), in tokens.
+
+    Never-crossing combinations keep a NaN, which barplot renders as an
+    absent bar.
+    """
+    rows = []
+    graded = frame[frame["grade"].notna()]
+    for (family, sampler, bin_name), g in graded.groupby(["family", "sampler", "bin"]):
+        rows.append(
+            {
+                "family": family,
+                "sampler": sampler,
+                "bin": bin_name,
+                "tokens_m": sustained_crossing(g.sort_values("tokens_m")),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def plot_attainment(attainment: pd.DataFrame, family: str, path: Path) -> None:
+    sub = attainment[attainment["family"] == family]
+    fig, ax = plt.subplots(figsize=(11, 5.5))
+    sns.barplot(
+        data=sub,
+        x="bin",
+        y="tokens_m",
+        hue="sampler",
+        order=BIN_ORDER,
+        hue_order=present_samplers(sub),
+        palette=sampler_palette(),
+        ax=ax,
+    )
+    ax.set_xlabel("")
+    ax.set_ylabel("generated tokens (M) to attain grade")
+    ax.set_title(f"{FAMILY_LABELS[family]}: tokens to reach pass@1 >= {FRONTIER_THRESHOLD} (no bar: never reached)")
+    ax.legend(fontsize=9)
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+
+
 def frontier_grade(row: dict[str, float]) -> int | None:
     """Highest validation grade scoring at least FRONTIER_THRESHOLD (0 if none)."""
     scores = {v: row.get(f"eval/{v}/pass_at_1") for v in VAL_GRADES}
@@ -182,6 +349,37 @@ def curriculum_series(runs: list, metric: str) -> dict[str, dict[int, float]]:
     return out
 
 
+def smoothed_points(points: dict[int, float], alpha: float) -> tuple[list[int], list[float]]:
+    xs = sorted(points)
+    ys: list[float] = []
+    for x in xs:
+        ys.append(points[x] if not ys else alpha * points[x] + (1 - alpha) * ys[-1])
+    return xs, ys
+
+
+def plot_curriculum(series: dict[str, dict[int, float]], arm: str, metric: str, path: Path) -> None:
+    """Per-train-bin trajectories colored dark-to-light by grade order.
+
+    Weights use a log scale: the interesting failure mode is starvation at the
+    renormalization floor, invisible on a linear axis next to dominant bins.
+    """
+    bins = sorted(series)
+    colors = sns.color_palette("viridis", len(bins))
+    fig, ax = plt.subplots(figsize=(12, 5.5))
+    for color, bin_name in zip(colors, bins, strict=True):
+        xs, ys = smoothed_points(series[bin_name], CURRICULUM_ALPHA)
+        ax.plot(xs, ys, color=color, linewidth=1.8, label=bin_name)
+    if metric == "weight":
+        ax.set_yscale("log")
+    ax.set_xlabel("training step")
+    ax.set_ylabel(metric)
+    ax.set_title(f"{arm}: curriculum bin {metric}")
+    ax.legend(fontsize=7, loc="center left", bbox_to_anchor=(1.01, 0.5), frameon=False)
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+
+
 def velocity_samples(pass_rates: dict[str, dict[int, float]]) -> list[tuple[float, float]]:
     """(pass_rate, d pass_rate / d step) pairs from consecutive logged points per bin."""
     samples = []
@@ -190,23 +388,6 @@ def velocity_samples(pass_rates: dict[str, dict[int, float]]) -> list[tuple[floa
         for s1, s2 in itertools.pairwise(steps):
             samples.append((points[s1], (points[s2] - points[s1]) / (s2 - s1)))
     return samples
-
-
-def plot_lines(series: dict[str, dict], xlabel: str, ylabel: str, title: str, path: Path) -> None:
-    fig, ax = plt.subplots(figsize=(8, 5))
-    for label, points in series.items():
-        if not points:
-            continue
-        xs = sorted(points)
-        ax.plot(xs, [points[x] for x in xs], label=label, linewidth=1.6)
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel(ylabel)
-    ax.set_title(title)
-    ax.legend(fontsize=8)
-    ax.grid(alpha=0.3)
-    fig.tight_layout()
-    fig.savefig(path, dpi=140)
-    plt.close(fig)
 
 
 def plot_velocity(samples: list[tuple[float, float]], group_size: int, path: Path) -> None:
@@ -223,11 +404,15 @@ def plot_velocity(samples: list[tuple[float, float]], group_size: int, path: Pat
         if bucket:
             mids.append((lo + hi) / 2)
             means.append(sum(bucket) / len(bucket))
-    fig, ax = plt.subplots(figsize=(8, 5))
-    ax.scatter([p for p, _ in samples], [v for _, v in samples], s=4, alpha=0.15, label="bin transitions")
+    fig, ax = plt.subplots(figsize=(9, 5.5))
+    ax.scatter([p for p, _ in samples], [v for _, v in samples], s=5, alpha=0.15, label="bin transitions")
     ax.plot(mids, means, "o-", color="black", linewidth=2, label="binned mean")
     if means:
+        # Rare large per-step jumps stretch the raw scatter over ~20x the
+        # binned-mean range; clip the axis so the mean-vs-reference comparison
+        # stays legible.
         peak = max(means)
+        ax.set_ylim(-peak, 3 * peak)
         grid = [i / 100 for i in range(101)]
         pass_var = [p * (1 - p) for p in grid]
         group_inf = [1 - p**group_size - (1 - p) ** group_size for p in grid]
@@ -238,10 +423,9 @@ def plot_velocity(samples: list[tuple[float, float]], group_size: int, path: Pat
     ax.set_xlabel("bin pass rate")
     ax.set_ylabel("d pass_rate / d step")
     ax.set_title("Learning velocity vs pass rate (all arms, all bins)")
-    ax.legend(fontsize=8)
-    ax.grid(alpha=0.3)
+    ax.legend(fontsize=9)
     fig.tight_layout()
-    fig.savefig(path, dpi=140)
+    fig.savefig(path, dpi=150)
     plt.close(fig)
 
 
@@ -249,6 +433,7 @@ def plot_velocity(samples: list[tuple[float, float]], group_size: int, path: Pat
 @click.option("--out", type=click.Path(path_type=Path), required=True)
 def main(out: Path) -> None:
     logging.basicConfig(level=logging.INFO)
+    sns.set_theme(style="whitegrid", font_scale=1.05)
     out.mkdir(parents=True, exist_ok=True)
     api = wandb.Api()
     by_arm = pick_runs(api)
@@ -266,40 +451,15 @@ def main(out: Path) -> None:
         }
     (out / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True))
 
-    for val in (*VAL_GRADES, "all"):
-        key = f"eval/{val}/pass_at_1"
-        by_steps, by_tokens = {}, {}
-        for arm, d in data.items():
-            by_steps[arm] = {int(r[STEP_KEY]): r[key] for r in d["evals"].values() if key in r and STEP_KEY in r}
-            by_tokens[arm] = {r["cumulative_tokens"] / 1e6: r[key] for r in d["evals"].values() if key in r}
-        plot_lines(by_steps, "training step", "pass@1", f"{val}: pass@1 vs steps", out / f"{val}-steps.png")
-        plot_lines(by_tokens, "generated tokens (M)", "pass@1", f"{val}: pass@1 vs tokens", out / f"{val}-tokens.png")
-
-    weighted_by_tokens, frontier_by_tokens = {}, {}
-    for arm, d in data.items():
-        weighted_by_tokens[arm] = {}
-        frontier_by_tokens[arm] = {}
-        for r in d["evals"].values():
-            weighted = grade_weighted_score(r)
-            if weighted is not None:
-                weighted_by_tokens[arm][r["cumulative_tokens"] / 1e6] = weighted
-            frontier = frontier_grade(r)
-            if frontier is not None:
-                frontier_by_tokens[arm][r["cumulative_tokens"] / 1e6] = frontier
-    plot_lines(
-        weighted_by_tokens,
-        "generated tokens (M)",
-        "grade-weighted avg score",
-        "End metric: grade-weighted validation pass@1 vs tokens",
-        out / "grade-weighted-tokens.png",
-    )
-    plot_lines(
-        frontier_by_tokens,
-        "generated tokens (M)",
-        f"frontier grade (score >= {FRONTIER_THRESHOLD})",
-        "Frontier grade vs tokens",
-        out / "frontier-grade-tokens.png",
-    )
+    frame = eval_frame(data)
+    attainment = attainment_frame(frame)
+    for family in FAMILY_LABELS:
+        if frame[frame["family"] == family].empty:
+            continue
+        plot_headline(frame, family, out / f"{family}-grade-weighted-tokens.png")
+        plot_grade_breakout(frame, family, "tokens_m", "generated tokens (M)", out / f"{family}-grades-tokens.png")
+        plot_grade_breakout(frame, family, "step", "training step", out / f"{family}-grades-steps.png")
+        plot_attainment(attainment, family, out / f"{family}-attainment.png")
 
     all_velocity_samples = []
     for arm, runs in by_arm.items():
@@ -307,9 +467,7 @@ def main(out: Path) -> None:
         all_velocity_samples.extend(velocity_samples(pass_rates))
         for metric, series in (("weight", curriculum_series(runs, "weight")), ("pass_rate", pass_rates)):
             if series:
-                plot_lines(
-                    series, "training step", metric, f"{arm}: bin {metric}", out / f"curriculum-{arm}-{metric}.png"
-                )
+                plot_curriculum(series, arm, metric, out / f"curriculum-{arm}-{metric}.png")
     if all_velocity_samples:
         plot_velocity(all_velocity_samples, group_size=8, path=out / "velocity-vs-pass-rate.png")
 
