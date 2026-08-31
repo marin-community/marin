@@ -29,8 +29,6 @@ from quack.gemm_tvm_ffi_utils import make_scheduler_args, make_varlen_args
 _ACC = cutlass.Float32
 _FALLBACK_MAX_ACTIVE_CLUSTERS = 148
 # Vector width the tensor specs declare to the kernel for the non-grouped (feature) dimensions.
-# This is a fixed requirement of the TMA loads, not a tuning knob: the tuned values are the tile,
-# cluster, and CLC settings, which callers pass in (see `_QUACK_WGRAD_KW` in `sonic_cute`).
 _FEATURE_ALIGNMENT = 8
 _JAX_TO_CUTE = {
     jnp.dtype(jnp.bfloat16): cutlass.BFloat16,
