@@ -13,6 +13,7 @@ import subprocess
 from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 
@@ -26,6 +27,7 @@ from iris.cluster.platforms.types import (
     find_free_port,
     wait_for_port,
 )
+from iris.cluster.platforms.vm_lifecycle import DEFAULT_CONTROLLER_PORT
 from iris.cluster.platforms.vm_lifecycle import restart_controller as vm_restart_controller
 from iris.cluster.platforms.vm_lifecycle import start_controller as vm_start_controller
 from iris.cluster.platforms.vm_lifecycle import stop_controller as vm_stop_controller
@@ -47,7 +49,7 @@ class GcpControllerProvider:
         In LOCAL mode, returns the configured address directly without querying GCP.
         """
         gcp = controller_config.gcp or GcpControllerConfig()
-        port = gcp.port or 10000
+        port = gcp.port or DEFAULT_CONTROLLER_PORT
 
         if self.worker_provider.gcp_service.mode == ServiceMode.LOCAL:
             return f"localhost:{port}"
@@ -113,6 +115,7 @@ class GcpControllerProvider:
             project=self.worker_provider.project_id,
             label_prefix=self.worker_provider.label_prefix,
             ssh_config=self.worker_provider.ssh_config,
+            remote_port=_remote_port(address),
             local_port=local_port,
         )
 
@@ -129,6 +132,17 @@ class GcpControllerProvider:
 # ============================================================================
 # Tunnel
 # ============================================================================
+
+
+def _remote_port(address: str) -> int:
+    """The controller's listening port on the VM, taken from its discovered address.
+
+    Accepts both the bare ``host:port`` form ``discover_controller`` returns and
+    the ``http://host:port`` form the start/restart paths return; an address with
+    no explicit port falls back to the platform default.
+    """
+    parsed = urlparse(address if "://" in address else f"//{address}")
+    return parsed.port or DEFAULT_CONTROLLER_PORT
 
 
 def _check_gcloud_ssh_key(key_file: str | None = None) -> None:
@@ -156,6 +170,7 @@ def _build_tunnel_ssh_cmd(
     project: str,
     zone: str,
     vm_name: str,
+    remote_port: int,
     local_port: int,
     effective_service_account: str | None,
 ) -> list[str]:
@@ -178,7 +193,7 @@ def _build_tunnel_ssh_cmd(
         [
             "--",
             "-L",
-            f"127.0.0.1:{local_port}:localhost:10000",
+            f"127.0.0.1:{local_port}:localhost:{remote_port}",
             "-N",
             "-o",
             "BatchMode=yes",
@@ -216,6 +231,7 @@ def _establish_tunnel(
     project: str,
     zone: str,
     vm_name: str,
+    remote_port: int,
     local_port: int,
     effective_service_account: str | None,
     timeout: float,
@@ -225,6 +241,7 @@ def _establish_tunnel(
         project=project,
         zone=zone,
         vm_name=vm_name,
+        remote_port=remote_port,
         local_port=local_port,
         effective_service_account=effective_service_account,
     )
@@ -250,6 +267,7 @@ def _gcp_tunnel(
     project: str,
     label_prefix: str,
     ssh_config: SshConfig | None,
+    remote_port: int,
     local_port: int | None = None,
     timeout: float = 60.0,
 ) -> Iterator[str]:
@@ -279,6 +297,7 @@ def _gcp_tunnel(
             project=project,
             zone=vm.zone,
             vm_name=vm.name,
+            remote_port=remote_port,
             local_port=local_port,
             effective_service_account=effective_service_account,
             timeout=timeout,
@@ -290,7 +309,7 @@ def _gcp_tunnel(
     )
 
     try:
-        logger.info("Tunnel ready: 127.0.0.1:%d -> %s:10000", local_port, vm.name)
+        logger.info("Tunnel ready: 127.0.0.1:%d -> %s:%d", local_port, vm.name, remote_port)
         yield f"http://127.0.0.1:{local_port}"
     finally:
         proc.terminate()

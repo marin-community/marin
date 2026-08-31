@@ -38,7 +38,7 @@ from iac.config import (
 )
 from iac.coreweave.cluster import CoreweaveCluster, CoreweaveClusterArgs
 from iac.coreweave.dns import FederationDns, FederationDnsArgs
-from iac.coreweave.kueue import KueueAddon, KueueAddonArgs
+from iac.coreweave.kueue import KueueAddon, KueueAddonArgs, accelerator_nominal_quotas
 from iac.coreweave.rbac import GrafanaObserverRbac, GrafanaObserverRbacArgs, IrisRbac, IrisRbacArgs
 from iac.coreweave.traefik import TraefikAddon, TraefikAddonArgs
 from iac.gcp.addresses import GcpStaticAddresses, GcpStaticAddressesArgs
@@ -166,6 +166,7 @@ def _build_coreweave(cluster: str, *, imports: ImportRegistrar) -> None:
             namespace=namespace,
             cluster_queue=kueue_config.cluster_queue,
             spec=coreweave_provisioning.kueue,
+            nominal_quotas=accelerator_nominal_quotas(iris_config),
         ),
         k8s_provider=k8s_provider,
         imports=imports,

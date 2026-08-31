@@ -8,10 +8,13 @@ Dispatch/combine as in ``scatter``, but the expert MLP GEMMs run on QuACK's
 shim. QuACK does all four activation-path grouped GEMMs (gate/up fwd fused with
 SwiGLU, down fwd, and the ``dh``/``dx`` backward matmuls); the SwiGLU backward is
 elementwise in JAX; the two weight-gradient GEMMs (``dw13``/``dw2``) stay on XLA
-``ragged_dot`` (a different varlen-k grouping). QuACK covers ~2/3 of the MoE FLOPs.
+``ragged_dot``, reached through its transpose, which is where the contraction runs over the
+ragged dimension. QuACK covers ~2/3 of the MoE FLOPs.
 
-``_expert_mlp_cudnn`` is the same forward with those two weight gradients moved onto cuDNN
-Frontend grouped Wgrad kernels, which is faster than ``ragged_dot`` at the hero shapes.
+``_expert_mlp_quack_wgrad`` is the same forward with those two weight gradients also on QuACK,
+through its varlen-k grouping, which is faster than ``ragged_dot`` at the hero shapes. That is
+the path the ragged all-to-all EP backend takes, so on the hero every grouped GEMM in the expert
+MLP is one kernel family.
 """
 
 import jax
@@ -29,8 +32,11 @@ from levanter.grug._moe.common import (
     _zero_dropped_assignments,
     _zero_inactive_grouped_rows,
 )
-from levanter.grug._moe.cudnn_wgrad_cute import cudnn_grouped_wgrad
-from levanter.grug._moe.quack_moe_cute import quack_gated_grouped_gemm, quack_grouped_gemm
+from levanter.grug._moe.quack_moe_cute import (
+    quack_gated_grouped_gemm,
+    quack_grouped_gemm,
+    quack_grouped_wgrad,
+)
 
 # QuACK activation-path GEMM configuration, tuned at the i3072 hero shapes on one GB200.
 # Tile (256, 256) beats the (256, 128) default by 1.235x on the gated GEMM and 1.094x on the
@@ -39,7 +45,7 @@ from levanter.grug._moe.quack_moe_cute import quack_gated_grouped_gemm, quack_gr
 # grouped GEMMs -- down forward plus the backward dh/dx matmuls -- gain 1.055x at (2, 2, 1).
 # All of this is scheduling, so none of it changes the computed function.
 #
-# These reach `_expert_mlp_cudnn` only. `_expert_mlp` -- the local FSDP path, used by the
+# These reach `_expert_mlp_quack_wgrad` only. `_expert_mlp` -- the local FSDP path, used by the
 # `fsdp-nodrop` and `fsdp-chunk4` ablation arms -- still calls the GEMMs at their defaults, as it
 # did before this tuning existed, so nothing regressed. It is untuned rather than deliberately
 # tuned differently: the measurements above were taken at the i3072 hero shapes and the FSDP arms
@@ -50,6 +56,14 @@ _QUACK_TILE_MN = (256, 256)
 _QUACK_USE_CLC = True
 _QUACK_GATED_KW = dict(tile_mn=_QUACK_TILE_MN, cluster_mnk=(2, 1, 1), use_clc_persistence=_QUACK_USE_CLC)
 _QUACK_GROUPED_KW = dict(tile_mn=_QUACK_TILE_MN, cluster_mnk=(2, 2, 1), use_clc_persistence=_QUACK_USE_CLC)
+# The weight gradients group over the contraction dimension instead, so they tile a small fixed
+# [M, N] output over a very long K and want their own configuration. `bench_grouped_wgrad.py`
+# picked these values, and re-picks them for another shape. This is the best setting the two
+# calls share. CLC persistence is the one knob that splits them, so it stays off. The kernel's
+# default tile is materially slower here, so the tuning is load-bearing rather than incidental.
+# Like the activation-path settings above, it is all scheduling: none of it changes the computed
+# function.
+_QUACK_WGRAD_KW: dict = dict(tile_mn=(256, 256), cluster_mnk=(2, 2, 1), use_clc_persistence=False)
 
 
 def _interleave_gate_up(moe_w13: jax.Array, moe_dim: int) -> jax.Array:
@@ -105,8 +119,11 @@ _expert_mlp.defvjp(_expert_mlp_fwd, _expert_mlp_bwd)
 
 
 @jax.custom_vjp
-def _expert_mlp_cudnn(x_dispatch, w13_il, moe_w2, group_sizes, cu):
-    """``_expert_mlp`` with the two weight-gradient GEMMs on cuDNN grouped Wgrad kernels.
+def _expert_mlp_quack_wgrad(x_dispatch, w13_il, moe_w2, cu):
+    """``_expert_mlp`` with the two weight-gradient GEMMs on QuACK's varlen-k grouping.
+
+    Every grouped GEMM here is driven by ``cu`` alone, so unlike ``_expert_mlp`` -- whose weight
+    gradients go through ``ragged_dot`` -- this one never needs the per-expert sizes.
 
     The forward output is masked past the last expert group: the grouped GEMMs write only
     the rows inside ``cu``, and those trailing rows flow on through the unpermute and
@@ -117,29 +134,32 @@ def _expert_mlp_cudnn(x_dispatch, w13_il, moe_w2, group_sizes, cu):
     return _zero_inactive_grouped_rows(y, cu)
 
 
-def _expert_mlp_cudnn_fwd(x_dispatch, w13_il, moe_w2, group_sizes, cu):
+def _expert_mlp_quack_wgrad_fwd(x_dispatch, w13_il, moe_w2, cu):
     gu, h = quack_gated_grouped_gemm(x_dispatch, w13_il, cu, return_preact=True, **_QUACK_GATED_KW)
     y = quack_grouped_gemm(h, moe_w2, cu, b_major="n", **_QUACK_GROUPED_KW)
-    return _zero_inactive_grouped_rows(y, cu), (x_dispatch, w13_il, moe_w2, gu, h, group_sizes, cu)
+    return _zero_inactive_grouped_rows(y, cu), (x_dispatch, w13_il, moe_w2, gu, h, cu)
 
 
-def _expert_mlp_cudnn_bwd(res, dy):
-    x_dispatch, w13_il, moe_w2, gu, h, group_sizes, cu = res
-    # The cotangent's trailing rows are whatever the caller's buffer held; the grouped GEMMs
-    # contract every row they are handed, so they have to be cleared here too.
+def _expert_mlp_quack_wgrad_bwd(res, dy):
+    x_dispatch, w13_il, moe_w2, gu, h, cu = res
+    # Both consumers of `dy` below are bounded by `cu` -- the varlen-m GEMM writes only rows
+    # inside it, the varlen-k one contracts only rows inside it -- so this mask is defensive
+    # rather than load-bearing, and it costs a full pass over the receiver buffer. It is kept
+    # because the measured numbers on this path were taken with it; dropping it is a throughput
+    # follow-up that needs its own draw, not a free tidy.
     dy = _zero_inactive_grouped_rows(dy, cu)
     dh = quack_grouped_gemm(dy, moe_w2, cu, b_major="k", **_QUACK_GROUPED_KW)
-    dw2 = cudnn_grouped_wgrad(h, dy, group_sizes)
+    dw2 = quack_grouped_wgrad(h, dy, cu, **_QUACK_WGRAD_KW)
     d_gu = _swiglu_gate_up_backward(gu, dh)
     dx = quack_grouped_gemm(d_gu, w13_il, cu, b_major="k", **_QUACK_GROUPED_KW)
     dx = _zero_inactive_grouped_rows(dx, cu)
-    dw13_il = cudnn_grouped_wgrad(x_dispatch, d_gu, group_sizes)
-    gs_ct = np.zeros(group_sizes.shape, dtype=jax.dtypes.float0)
+    dw13_il = quack_grouped_wgrad(x_dispatch, d_gu, cu, **_QUACK_WGRAD_KW)
+    # the int-typed routing arg gets a float0 zero cotangent
     cu_ct = np.zeros(cu.shape, dtype=jax.dtypes.float0)
-    return dx, dw13_il, dw2, gs_ct, cu_ct
+    return dx, dw13_il, dw2, cu_ct
 
 
-_expert_mlp_cudnn.defvjp(_expert_mlp_cudnn_fwd, _expert_mlp_cudnn_bwd)
+_expert_mlp_quack_wgrad.defvjp(_expert_mlp_quack_wgrad_fwd, _expert_mlp_quack_wgrad_bwd)
 
 
 def _moe_mlp_local_sonic_cute(

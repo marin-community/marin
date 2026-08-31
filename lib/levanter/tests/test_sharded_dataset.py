@@ -3,6 +3,7 @@
 
 import os
 import tempfile
+import warnings
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -10,6 +11,7 @@ import pyarrow.parquet as pq
 from levanter.data.sharded_datasource import (
     ParquetDataSource,
     TextUrlDataSource,
+    _mk_shard_name_mapping,
     _sniff_format_for_dataset,
 )
 
@@ -89,3 +91,26 @@ def test_text_url_data_source_parquet():
         expected_texts = ["line3", "line4", "line5", "line6"]
         assert len(row_data) == len(expected_texts), f"Expected {len(expected_texts)} rows starting from index 2"
         assert row_data == expected_texts, f"Expected texts {expected_texts}, got {row_data}"
+
+
+def test_shard_name_mapping_pairs_each_url_with_its_own_existence(tmp_path):
+    # A glob spec, a named-and-present literal, and a named-but-absent literal in one
+    # call: every shard must appear in the mapping, and only the absent one may be
+    # reported missing.
+    (tmp_path / "a.jsonl").write_text("{}\n")
+    (tmp_path / "b.jsonl").write_text("{}\n")
+    (tmp_path / "named.jsonl").write_text("{}\n")
+    absent = str(tmp_path / "absent.jsonl")
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        mapping = _mk_shard_name_mapping([str(tmp_path / "?.jsonl"), str(tmp_path / "named.jsonl"), absent])
+
+    assert sorted(mapping.values()) == sorted(
+        [str(tmp_path / "a.jsonl"), str(tmp_path / "b.jsonl"), str(tmp_path / "named.jsonl"), absent]
+    )
+    messages = [str(w.message) for w in caught]
+    assert len(messages) == 1
+    assert absent in messages[0]
+    assert "a.jsonl" not in messages[0]
+    assert "named.jsonl" not in messages[0]
