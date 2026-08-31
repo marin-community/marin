@@ -33,6 +33,7 @@ GrugAttentionImplementation = Literal[
     "reference",
     "tpu_splash",
     "gpu_fa4_cute",
+    "gpu_fa4_cute_wide",  # 128x64 forward tile. Measured faster only at the hero shape.
     "gpu_fa4_thd",
 ]
 
@@ -473,10 +474,10 @@ def attention(
 ) -> Float[Array, "B Q Hq D"]:
     if implementation == "reference":
         return reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
-    if implementation == "gpu_fa4_cute":
+    if implementation in ("gpu_fa4_cute", "gpu_fa4_cute_wide"):
         from levanter.grug.attention._fa4_cute import gpu_fa4_cute_attention  # noqa: PLC0415
 
-        return gpu_fa4_cute_attention(q, k, v, mask)
+        return gpu_fa4_cute_attention(q, k, v, mask, wide_forward_tile=implementation == "gpu_fa4_cute_wide")
     if implementation == "gpu_fa4_thd":
         from levanter.grug.attention._fa4_thd import gpu_fa4_thd_attention  # noqa: PLC0415
 

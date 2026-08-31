@@ -251,7 +251,9 @@ def main(
         model = _small_model(
             shape=shape,
             capacity_factor=HERO_MODEL_CONFIG.capacity_factor,
-            attention_implementation=HERO_MODEL_CONFIG.attention_implementation,
+            # The wide forward tile is measured only at the hero shape, so the small
+            # stand-ins keep the plain FA4 name.
+            attention_implementation="gpu_fa4_cute",
             moe_implementation=HERO_MODEL_CONFIG.moe_implementation,
             expert_chunks=HERO_MODEL_CONFIG.expert_chunks,
             seq_len=HERO_MODEL_CONFIG.max_seq_len,

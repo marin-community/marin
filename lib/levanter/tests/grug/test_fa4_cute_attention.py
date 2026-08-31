@@ -140,6 +140,13 @@ def test_simple_causal_lower_bounds_match_full_causal_semantics():
     np.testing.assert_array_equal(valid, np.ones((2, 4), dtype=np.bool_))
 
 
+def test_the_wide_tile_refuses_hardware_where_it_cannot_engage(monkeypatch):
+    monkeypatch.setattr(fa4_cute, "gpu_compute_capability", lambda: 90)
+
+    with pytest.raises(ValueError, match="gpu_fa4_cute_wide changes the forward tile only on sm100"):
+        fa4_cute._segmented_kernel_config(128, wide_forward_tile=True)
+
+
 def test_fa4_frontend_shards_metadata_with_qkv_batch_axis(monkeypatch):
     def fake_forward(q, k, v, lower_bounds, valid, *, sm_scale, kernel_config):
         del k, v, sm_scale, kernel_config
@@ -150,7 +157,7 @@ def test_fa4_frontend_shards_metadata_with_qkv_batch_axis(monkeypatch):
         return q
 
     monkeypatch.setattr(jax, "default_backend", lambda: "gpu")
-    monkeypatch.setattr(fa4_cute, "_segmented_kernel_config", lambda head_dim: object())
+    monkeypatch.setattr(fa4_cute, "_segmented_kernel_config", lambda head_dim, *, wide_forward_tile: object())
     monkeypatch.setattr(fa4_cute, "fa4_cute_attention_forward", fake_forward)
     mesh = AbstractMesh(
         axis_sizes=(1, 2, 8, 1),

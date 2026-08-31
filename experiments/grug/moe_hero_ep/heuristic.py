@@ -104,7 +104,8 @@ HERO_MODEL = GrugModelConfig(
     initializer_std=0.5 / math.sqrt(_HERO_HIDDEN),
     qk_mult=1.3,
     sconv=True,
-    attention_implementation="gpu_fa4_cute",
+    # The wide 128x64 forward tile gains 0.28 MFU at the hero's 24k-restore point (#8317).
+    attention_implementation="gpu_fa4_cute_wide",
     moe_implementation="ragged_all_to_all",
     pooled_transport_capacity_factor=1.15,  # pooled-wave only
     num_expert_waves=3,  # pooled-wave only
