@@ -33,3 +33,11 @@ author: held
 - Result: the aggregate long-document token share is 43.405%, compared with 14.943% at proportional weighting. The resolved output is `gs://marin-us-central2/grug/moe_67b_a2b_d2560_ep1_rep1_ctx4_bs256_seq262144_ctxext_step156k_qk175_longctx_skew8-c06695`.
 - Interpretation: the 8x treatment changes only long-document sampling relative to the qk=1.75 control.
 - Next action: verify the source checkpoint and unused output, then submit with production priority.
+
+### 2026-08-31 - Production launch
+
+- Runtime source: `92514c5358e9cd99c89bdd4a6600ac7bbeddc147`
+- Iris job: `/held/iris-run-job-20260831-170205/grug-train-moe_67b_a2b_d2560_ep1_rep1_ctx4_bs256_seq262144_ctxext_step156k_qk175_longctx_skew8`
+- W&B: https://wandb.ai/held/marin_moe/runs/moe_67b_a2b_d2560_ep1_rep1_ctx4_bs256_seq262144_ctxext_step156k_qk175_longctx_skew8
+- Result: Iris allocated all 256 non-preemptible workers at production priority. W&B initialized the intended run on task 57. At launch verification, the job had no failed or preempted workers.
+- Next action: verify checkpoint restoration and the first completed training step, then monitor training and Paloma metrics.
