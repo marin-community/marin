@@ -110,7 +110,7 @@ VLLM_GPU_RELEASE = VllmGpuRelease(
 
 VLLM_FORK_REQUIREMENT = "vllm @ git+https://github.com/marin-community/vllm.git@d6fa60df67f0b5c2854518992c6663c6198d6dfe"
 TPU_INFERENCE_FORK_REQUIREMENT = (
-    "tpu-inference @ git+https://github.com/marin-community/tpu-inference.git@53418043631a04c2968aefaea2ce4aed122ab964"
+    "tpu-inference @ git+https://github.com/marin-community/tpu-inference.git@f34ab28705afc43dd74561c88ac4a3c78c077bee"
 )
 
 EXTERNAL_DEPENDENCIES = (

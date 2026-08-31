@@ -11,5 +11,5 @@ upstream_base = "f5bb701fa270f5c801f1572e1478b56f292d8dfc"
 
 [tpu-inference]
 repository = "https://github.com/marin-community/tpu-inference.git"
-commit = "53418043631a04c2968aefaea2ce4aed122ab964"
+commit = "f34ab28705afc43dd74561c88ac4a3c78c077bee"
 upstream_base = "e1c03382a5b2d8e296648ead8e4199a324026890"
