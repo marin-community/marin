@@ -146,7 +146,6 @@ def test_scatter_reader_uses_virtual_hosted_coreweave_endpoint(monkeypatch):
             schema,
             {
                 "aws_endpoint_url": "http://marin-us-east-02a.cwlota.com",
-                "aws_allow_http": "true",
                 "aws_virtual_hosted_style_request": "true",
             },
         )
@@ -747,7 +746,6 @@ def test_merge_sorted_frames_reads_coreweave_spills_with_virtual_host_addressing
         storage_options
         == {
             "aws_endpoint_url": "http://marin-us-east-02a.cwlota.com",
-            "aws_allow_http": "true",
             "aws_virtual_hosted_style_request": "true",
         }
         for _, storage_options in scan_calls

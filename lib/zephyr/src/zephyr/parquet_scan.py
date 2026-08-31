@@ -30,11 +30,11 @@ def scan_parquet(path: str, *, schema: pl.Schema | None = None) -> pl.LazyFrame:
     if not hostname.startswith(f"{bucket}."):
         endpoint = parsed_endpoint._replace(netloc=f"{bucket}.{parsed_endpoint.netloc}").geturl()
 
-    storage_options = {"aws_endpoint_url": endpoint}
-    if parsed_endpoint.scheme == "http":
-        # The in-cluster LOTA endpoint is plain http; object_store refuses a non-TLS endpoint
-        # unless told, and an explicit storage_options block does not inherit AWS_ALLOW_HTTP.
-        storage_options["aws_allow_http"] = "true"
-    storage_options["aws_virtual_hosted_style_request"] = "true"
-
-    return pl.scan_parquet(path, schema=schema, storage_options=storage_options)
+    return pl.scan_parquet(
+        path,
+        schema=schema,
+        storage_options={
+            "aws_endpoint_url": endpoint,
+            "aws_virtual_hosted_style_request": "true",
+        },
+    )
