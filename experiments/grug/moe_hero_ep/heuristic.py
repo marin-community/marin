@@ -9,8 +9,8 @@ pairs it with the fixed hero model spec so a launcher gets both configs back fro
 ``(num_train_steps, batch_size)`` call, keeping the hero self-contained.
 
 The hero model is d6144 with 48 layers and 384 routed experts. Each expert has width 3,072, and
-the router selects eight experts per token. The pooled transport uses three static waves. The
-receiver and sender capacity factors are both 1.15.
+the router selects eight experts per token. Expert parallelism moves tokens with the ragged
+all-to-all transport at a 1.15 receiver capacity factor.
 """
 
 import math
@@ -105,9 +105,9 @@ HERO_MODEL = GrugModelConfig(
     qk_mult=1.3,
     sconv=True,
     attention_implementation="gpu_fa4_cute",
-    moe_implementation="fixed_pooled_wave_all_to_all",
-    pooled_transport_capacity_factor=1.15,
-    num_expert_waves=3,
+    moe_implementation="ragged_all_to_all",
+    pooled_transport_capacity_factor=1.15,  # pooled-wave only
+    num_expert_waves=3,  # pooled-wave only
     expert_chunks=1,
     report_capacity_overflow=True,
     rope_fused=True,

@@ -4,6 +4,7 @@
 import dataclasses
 import functools
 import gc
+import importlib.metadata
 import itertools
 import logging
 import os
@@ -31,6 +32,7 @@ from jax.tree_util import register_dataclass
 from jaxtyping import PRNGKeyArray
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
+from levanter.checkpoint_manifest import read_manifest
 from levanter.data.dataset import AsyncDataset
 from levanter.data.loader import DataLoader
 from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_batch_schedule
@@ -49,9 +51,12 @@ from levanter.training_control import TrainingDashboard
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
-from packaging.version import Version
 
-from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
+from experiments.grug.checkpointing import (
+    LEGACY_STATE_KEY,
+    MASTER_PARAMS_KEY,
+    restore_grug_state_from_checkpoint,
+)
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, Transformer
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
@@ -95,12 +100,7 @@ RAGGED_MOE_IMPLEMENTATION = "ragged_all_to_all"
 # command buffers after the CUDA graph failure is fixed.
 XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
 _RAGGED_REQUIRED_XLA_FLAG_NAMES = frozenset(flag.partition("=")[0] for flag in RAGGED_REQUIRED_XLA_FLAGS)
-# First release defining both flags. Older jaxlibs abort at import on an unknown XLA_FLAGS entry,
-# with a message that names the flag but not why it was set, on every rank at once. The GPU extras
-# still pin 0.11.0, so an opt-in ragged run picks up a runtime that cannot honor the flags; fail
-# here instead, where the reason is legible. Bumping the pin is blocked on a jax 0.11.1 sharding
-# change that breaks grug attention (#8715); this guard goes away when that lands.
-RAGGED_MINIMUM_JAX_VERSION = "0.11.1"
+PJRT_DISTRIBUTION = "jax-cuda13-pjrt"
 _FP32_POLICY = jmp.get_policy("params=float32,compute=float32,output=float32")
 
 
@@ -112,9 +112,13 @@ class WatchMode(StrEnum):
 
 
 class MasterParamMode(StrEnum):
-    """Storage mode for optimizer master parameters."""
+    """Where the authoritative fp32 weights live.
 
-    DISABLED = "disabled"
+    DEVICE keeps them as the device params themselves, with no separate master copy;
+    FP32_PINNED_HOST keeps a pinned-host fp32 master while the device params are its bf16 cast.
+    """
+
+    DEVICE = "device"
     FP32_PINNED_HOST = "fp32_pinned_host"
 
 
@@ -141,6 +145,51 @@ def restore_template_from(state):
     jax.tree.map(lambda leaf: leaf.delete() if isinstance(leaf, jax.Array) else None, state)
     gc.collect()
     return template
+
+
+def checkpoint_stores_master(candidate: str) -> bool:
+    """Whether checkpoint ``candidate``'s manifest lists fp32 master parameters.
+
+    A missing manifest raises ``FileNotFoundError``, which restore treats like any other
+    unreadable candidate.
+    """
+    manifest = read_manifest(candidate)
+    if manifest is None:
+        raise FileNotFoundError(f"{candidate} has no manifest.json, so its layout cannot be read")
+    markers = (MASTER_PARAMS_KEY, f"{LEGACY_STATE_KEY}/{MASTER_PARAMS_KEY}")
+    return any(path == marker or path.startswith(marker + "/") for path in manifest.array_paths for marker in markers)
+
+
+def template_for_candidate_layout(
+    state: "GrugTrainState", candidate: str, run_mode: MasterParamMode
+) -> "GrugTrainState":
+    """Pick the template restore reads checkpoint ``candidate`` with.
+
+    Restore reads only the leaves the template names and takes each dtype from storage, checking
+    neither against the checkpoint, so reading a master-bearing checkpoint with the run's own
+    master-less template would silently return the bf16 compute copy. When the layouts match the
+    template is ``state`` itself. A master-bearing checkpoint read by a master-less run migrates
+    in process: the run's device fp32 ``params`` template is presented under ``master_params``, so
+    the checkpoint's authoritative fp32 master loads directly into it and the bf16 copy goes
+    unread; ``take_master_as_params`` then moves it back, and the next save writes the new layout.
+    """
+    has_master = checkpoint_stores_master(candidate)
+    if has_master == (run_mode != MasterParamMode.DEVICE):
+        return state
+    if not has_master:
+        raise ValueError(
+            f"checkpoint {candidate} stores no master parameters, but this run trains with {run_mode}. "
+            "Synthesizing a master from stored weights is not a conversion this supports."
+        )
+    logger.info("Checkpoint %s stores a pinned-host fp32 master; restoring it as the parameters.", candidate)
+    return dataclasses.replace(state, params=None, master_params=state.params)
+
+
+def take_master_as_params(state: "GrugTrainState") -> "GrugTrainState":
+    """Move a master restored through ``template_for_candidate_layout`` into ``params``."""
+    if state.master_params is None:
+        return state
+    return dataclasses.replace(state, params=state.master_params, master_params=None)
 
 
 def _apply_hero_ep_runtime_defaults(
@@ -179,12 +228,6 @@ def _apply_hero_ep_runtime_defaults(
     explicit_names = {flag.partition("=")[0] for flag in xla_flags}
     xla_flags.extend(flag for flag in flag_defaults if flag.partition("=")[0] not in explicit_names)
     if ragged:
-        if Version(jax.__version__) < Version(RAGGED_MINIMUM_JAX_VERSION):
-            raise RuntimeError(
-                f"{RAGGED_MOE_IMPLEMENTATION} needs jax>={RAGGED_MINIMUM_JAX_VERSION} for "
-                f"{', '.join(RAGGED_REQUIRED_XLA_FLAGS)}, got {jax.__version__}. Run it on the "
-                "pinned jax/XLA build."
-            )
         # Unlike the defaults above, these are not overridable. Selecting the host-launched
         # one-shot kernel needs both flags cleared together plus a splits-per-peer count this
         # branch no longer carries, so honoring a partial override would run a configuration
@@ -193,6 +236,23 @@ def _apply_hero_ep_runtime_defaults(
         xla_flags = [f for f in xla_flags if f.partition("=")[0] not in _RAGGED_REQUIRED_XLA_FLAG_NAMES]
         xla_flags.extend(RAGGED_REQUIRED_XLA_FLAGS)
     os.environ["XLA_FLAGS"] = " ".join(xla_flags)
+
+
+def verify_ragged_pjrt() -> None:
+    """Raise unless this process runs Marin's patched GPU PJRT plugin."""
+    try:
+        installed = importlib.metadata.version(PJRT_DISTRIBUTION)
+    except importlib.metadata.PackageNotFoundError as missing:
+        raise RuntimeError(
+            f"{PJRT_DISTRIBUTION} is not installed, so this process has no GPU PJRT plugin at all."
+        ) from missing
+    expected_prefix = f"{jax.__version__}+marin."
+    if not installed.startswith(expected_prefix):
+        raise RuntimeError(
+            f"{RAGGED_MOE_IMPLEMENTATION} needs Marin's patched {PJRT_DISTRIBUTION} "
+            f"({expected_prefix}*), found {installed}. The patched wheel is aarch64-only and the "
+            "expert MLP is SM100-specialized; run the ragged transport on GB200."
+        )
 
 
 @dataclass(frozen=True)
@@ -207,7 +267,7 @@ class GrugTrainerConfig:
     # Keep disabled except on model sizes where Grace-Blackwell host offload has been measured.
     # The d6144 EP64 runs used it; d5120 required a 135 GiB pinned-host arena and regressed.
     offload_opt_state: bool = False
-    master_param_mode: MasterParamMode = MasterParamMode.DISABLED
+    master_param_mode: MasterParamMode = MasterParamMode.DEVICE
     training_data_mode: TrainingDataMode = TrainingDataMode.MIXTURE
     # Inline watch computes statistics on every step and uses the watch interval only for logging.
     # This keeps one training executable resident. A diagnostic watch repeats forward and backward
@@ -613,7 +673,7 @@ def initial_state(
     key: PRNGKeyArray,
     ema_beta: float | None,
     offload_opt_state: bool = False,
-    master_param_mode: MasterParamMode = MasterParamMode.DISABLED,
+    master_param_mode: MasterParamMode = MasterParamMode.DEVICE,
 ) -> GrugTrainState:
     initialized_params = Transformer.init(model_config, key=key)
     num_moe_layers = model_config.num_layers
@@ -728,7 +788,7 @@ def _make_train_step(
     ema_beta: float | None,
     watch_config: WatchConfig | None = None,
     offload_opt_state: bool = False,
-    master_param_mode: MasterParamMode = MasterParamMode.DISABLED,
+    master_param_mode: MasterParamMode = MasterParamMode.DEVICE,
 ):
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
@@ -814,6 +874,8 @@ def _make_train_step(
 
 def _run_grug_local(config: GrugRunConfig) -> None:
     """Entry point for the grug template training loop."""
+    if config.model.moe_implementation == RAGGED_MOE_IMPLEMENTATION:
+        verify_ragged_pjrt()
     if config.tensorstore_cache_bytes is not None:
         set_jagged_array_read_cache_bytes(config.tensorstore_cache_bytes)
 
@@ -893,7 +955,12 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             load_checkpoint_setting=trainer.load_checkpoint,
             mesh=mesh,
             allow_partial=trainer.allow_partial_checkpoint,
+            template_for_candidate=lambda candidate: template_for_candidate_layout(
+                state, candidate, config.trainer.master_param_mode
+            ),
         )
+        if config.trainer.master_param_mode == MasterParamMode.DEVICE:
+            state = take_master_as_params(state)
         if released_initial_state and any(isinstance(leaf, jax.ShapeDtypeStruct) for leaf in jax.tree.leaves(state)):
             state = _init_state(model_key)
         dump_grug_state_sharding_run_artifact(
