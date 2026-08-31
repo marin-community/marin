@@ -3,10 +3,10 @@
 
 """Federation availability inferred from the cached kubectl cluster sync: GPU
 free/total counting on :class:`ClusterState` and its attribution to a backend's
-advertised device variant in ``K8sTaskProvider.resource_capacity``."""
+advertised device variant in the backend observation."""
 
 from iris.cluster.backends.k8s.tasks import ClusterState, K8sTaskProvider, PodConfig
-from iris.cluster.controller.backend import DeviceCapacity
+from iris.cluster.controller.backend import BackendObservationRequest, DeviceCapacity
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.platforms.k8s.types import IRIS_PRIORITY_CLASS_BATCH, IRIS_PRIORITY_CLASS_INTERACTIVE, K8sResource
 from iris.cluster.types import WellKnownAttribute
@@ -129,7 +129,7 @@ def _resource_capacity(advertised: dict[str, set[str]]) -> dict[str, DeviceCapac
     )
     try:
         provider.sync(make_batch())
-        return provider.resource_capacity()
+        return provider.observe(BackendObservationRequest()).resource_capacity
     finally:
         provider.close()
 
