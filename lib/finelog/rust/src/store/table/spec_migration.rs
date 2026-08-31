@@ -340,7 +340,7 @@ async fn backfill(
     // A transition whose universe held no source at all never checkpointed, so
     // it is still in the phase registration left it in.
     let backfilled = migration.catalog.spec_lifecycle(table)?.phase;
-    let verified = migration
+    migration
         .controller
         .commit(|| {
             let verified = migration.catalog.update_migration_phase(
@@ -350,8 +350,7 @@ async fn backfill(
             )?;
             Ok((TableRevision::new(verified.catalog_generation), verified))
         })
-        .await?
-        .output;
+        .await?;
     activate(migration).await?;
     Ok(true)
 }
