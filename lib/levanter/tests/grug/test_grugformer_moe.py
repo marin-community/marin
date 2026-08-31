@@ -1179,19 +1179,23 @@ def test_moe_mlp_ep_backends_match_dense_value_and_gradients_when_available(impl
     w_up_gate_reference = w_up_gate.astype(jnp.float32)
     w_down_reference = w_down.astype(jnp.float32)
     cotangent_reference = cotangent.astype(jnp.float32)
-    expected = _dense_moe_output(
-        x_reference,
-        selected_experts,
-        combine_weights_reference,
-        w_up_gate_reference,
-        w_down_reference,
-    )
-    expected_gradients = jax.grad(
-        lambda x, w_up_gate, w_down: jnp.sum(
-            _dense_moe_output(x, selected_experts, combine_weights_reference, w_up_gate, w_down) * cotangent_reference
-        ),
-        argnums=(0, 1, 2),
-    )(x_reference, w_up_gate_reference, w_down_reference)
+    # TPU contracts fp32 inputs at bfloat16 precision by default, which costs far more than the
+    # tolerance below. Both sides of the comparison have to ask for the precision they are checked at.
+    with jax.default_matmul_precision("highest"):
+        expected = _dense_moe_output(
+            x_reference,
+            selected_experts,
+            combine_weights_reference,
+            w_up_gate_reference,
+            w_down_reference,
+        )
+        expected_gradients = jax.grad(
+            lambda x, w_up_gate, w_down: jnp.sum(
+                _dense_moe_output(x, selected_experts, combine_weights_reference, w_up_gate, w_down)
+                * cotangent_reference
+            ),
+            argnums=(0, 1, 2),
+        )(x_reference, w_up_gate_reference, w_down_reference)
 
     batch_sharding = NamedSharding(mesh, P(("data", "expert"), None))
     expert_sharding = NamedSharding(mesh, P("expert", None, None))
@@ -1215,7 +1219,7 @@ def test_moe_mlp_ep_backends_match_dense_value_and_gradients_when_available(impl
             capacity_factor=2.0,
         )
 
-    with jax.set_mesh(mesh):
+    with jax.set_mesh(mesh), jax.default_matmul_precision("highest"):
         actual, overflow = backend_output(x, w_up_gate, w_down)
         actual_gradients = jax.grad(
             lambda x, w_up_gate, w_down: jnp.sum(backend_output(x, w_up_gate, w_down)[0] * cotangent),
