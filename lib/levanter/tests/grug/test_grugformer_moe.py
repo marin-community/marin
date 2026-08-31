@@ -1078,17 +1078,25 @@ def test_expert_granular_a2a_params_chunked_masking_composes():
 
 
 @pytest.mark.parametrize("implementation", ["ring", "ragged_all_to_all"])
-def test_moe_mlp_ep_backends_match_dense_value_and_gradients_when_available(implementation: MoeImplementation):
+def test_moe_mlp_ep_backends_match_dense_value_and_gradients_when_available(
+    implementation: MoeImplementation,
+    monkeypatch: pytest.MonkeyPatch,
+):
     mesh = _make_ep_mesh_or_none()
     if mesh is None:
         pytest.skip("requires an even number of >=2 devices")
-    if jax.devices()[0].platform == "cpu":
+
+    platform = jax.devices()[0].platform
+    if platform == "cpu":
         pytest.skip("ragged_all_to_all is not implemented on XLA:CPU")
+    if platform == "tpu":
+        monkeypatch.setenv("RAGGED_DOT_IMPL", "megablox")
 
     tokens = len(jax.devices()) * 8
-    gpu_runtime = jax.devices()[0].platform == "gpu"
+    gpu_runtime = platform == "gpu"
     hidden_dim = 16 if gpu_runtime else 128
-    intermediate_dim = 24 if gpu_runtime else 128
+    # Keep the TPU GMM rectangular so its VJP must swap the K and N dimensions.
+    intermediate_dim = 24 if gpu_runtime else 16
     num_experts = 4
     topk = 2
     x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
@@ -1099,7 +1107,7 @@ def test_moe_mlp_ep_backends_match_dense_value_and_gradients_when_available(impl
         num_experts=num_experts,
         topk=topk,
     )
-    dtype = jnp.bfloat16 if gpu_runtime else jnp.float32
+    dtype = jnp.bfloat16 if platform in {"gpu", "tpu"} else jnp.float32
     relative_tolerance = _BF16_MOE_RELATIVE_TOLERANCE if dtype == jnp.bfloat16 else _FP32_MOE_RELATIVE_TOLERANCE
     x = x.astype(dtype)
     combine_weights = combine_weights.astype(dtype)

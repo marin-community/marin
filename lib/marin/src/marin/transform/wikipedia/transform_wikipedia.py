@@ -31,7 +31,6 @@ class WikiExtractionConfig:
     input_path: The path to the Wikipedia dump file or directory containing the dump files in JSONL format
     output_path: The path where the processed text/markdown files will be saved
     revision: The revision identifier of the Wikipedia dump (e.g., "20241201") for versioning and tracking
-    extract_method: The method to use for HTML extraction (e.g., "readability", "resiliparse", "trafilatura")
     extract_config: Configuration object for the extraction method (e.g., ResiliparseConfig, HtmlToMarkdownConfig)
     remove_reference_section: If True, removes reference sections from articles to reduce noise in the extracted text
     max_files: Optional limit on the number of files to process, useful for testing or partial processing
@@ -46,7 +45,6 @@ class WikiExtractionConfig:
     input_path: str
     output_path: str
     revision: str
-    extract_method: str
     extract_config: ExtractionConfig
     remove_reference_section: bool
     max_files: int | None = None
@@ -213,7 +211,6 @@ def clean_wiki_html(html: str, remove_reference_section: bool = True) -> str:
 
 def process_record(
     row: dict,
-    extract_method: str,
     extract_config: ExtractionConfig,
     remove_reference_section: bool = True,
     digit_threshold: int = 50,
@@ -224,7 +221,6 @@ def process_record(
 
     Args:
         row: Record from NDJSON file
-        extract_method: Method to use for HTML extraction
         extract_config: Configuration for the extraction method
         remove_reference_section: Whether to remove reference sections
         digit_threshold: Percentage threshold for filtering pages with excessive digits
@@ -242,7 +238,7 @@ def process_record(
             html_string = row["article_body"]["html"]
 
             filtered_html = clean_wiki_html(html_string, remove_reference_section)
-            content = convert_page(filtered_html, extract_method=extract_method, config=extract_config)["content"]
+            content = convert_page(filtered_html, config=extract_config)["content"]
         else:
             logger.error(f"No content found in the row: {row}")
             return None
@@ -287,7 +283,6 @@ def process_wiki_dump(cfg: WikiExtractionConfig) -> None:
         .map(
             lambda row: process_record(
                 row,
-                cfg.extract_method,
                 cfg.extract_config,
                 cfg.remove_reference_section,
                 cfg.digit_threshold,

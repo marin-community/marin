@@ -45,7 +45,6 @@ class Ar5ivExtractionConfig:
     output_path: str
     revision: str
     remove_reference_section: bool
-    extract_method: str
     extract_config: ExtractionConfig
 
 
@@ -123,7 +122,6 @@ def clean_html(html: str, remove_reference_section: bool = True) -> str:
 
 def process_record(
     row: dict,
-    extract_method: str,
     extract_config: ExtractionConfig,
     remove_reference_section: bool = True,
 ) -> dict[str, str]:
@@ -131,7 +129,6 @@ def process_record(
 
     Args:
         row: Record from JSONL file
-        extract_method: Method to use for HTML extraction
         extract_config: Configuration for the extraction method
         remove_reference_section: Whether to remove reference sections
 
@@ -140,7 +137,7 @@ def process_record(
     """
     try:
         filtered_html = clean_html(row["content"], remove_reference_section)
-        result = convert_page(filtered_html, extract_method=extract_method, config=extract_config)
+        result = convert_page(filtered_html, config=extract_config)
         if remove_reference_section:
             result["content"] = re.sub(r"\s?\\\[(?:\d+(?:,\s*\d+)*)\\\]", "", result["content"])
 
@@ -166,7 +163,6 @@ def process_ar5iv_dump(cfg: Ar5ivExtractionConfig) -> None:
         .map(
             lambda row: process_record(
                 row,
-                cfg.extract_method,
                 cfg.extract_config,
                 cfg.remove_reference_section,
             )
