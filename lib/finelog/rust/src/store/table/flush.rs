@@ -31,9 +31,9 @@ use crate::store::segment::{
 };
 use crate::store::table::controller::TableController;
 use crate::store::table::ingest::IngestBuffer;
-use crate::store::table::runtime_policy::TableRuntimePolicy;
 use crate::store::table::segment_format::SegmentFormat;
 use crate::store::table::segment_view::SegmentView;
+use crate::store::table_spec::TablePolicy;
 use crate::store::table_state::{ArtifactReferences, LocalArtifacts, SegmentDescriptor};
 use crate::store::types::{segment_to_row, LocalSegment, SegmentLocation};
 
@@ -116,7 +116,7 @@ pub fn flush_local(target: FlushTarget<'_>, table_dir: &Path) -> Result<(), Stat
 /// Drain the buffer to immutable objects and commit their descriptors.
 pub async fn flush_to_objects(
     target: FlushTarget<'_>,
-    policy: &TableRuntimePolicy,
+    policy: &TablePolicy,
 ) -> Result<(), StatsError> {
     let Some(sealed) = target.buffer.seal() else {
         return Ok(());
@@ -151,7 +151,7 @@ fn restore(target: &FlushTarget<'_>, error: StatsError) -> StatsError {
 async fn write_sealed_objects(
     target: &FlushTarget<'_>,
     batch: RecordBatch,
-    policy: &TableRuntimePolicy,
+    policy: &TablePolicy,
 ) -> Result<(), SealedCommit> {
     let source_layout = policy.source_layout.clone();
     let max_row_group_rows = source_layout

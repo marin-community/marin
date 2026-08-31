@@ -83,21 +83,12 @@ impl FileCache {
         Ok(None)
     }
 
+    /// Land `bytes` as the cache file for `reference`. Callers hold bytes whose
+    /// hash already matches the reference — a download verified in
+    /// `materialize`, or an upload whose version was computed from this buffer —
+    /// so nothing is re-verified here; on-disk integrity is `verified_path`'s
+    /// job at read time.
     fn write(&self, reference: &ObjectReference, bytes: &[u8]) -> Result<PathBuf, StatsError> {
-        if bytes.len() as u64 != reference.version.byte_size {
-            return Err(StatsError::Internal(format!(
-                "object cache source {:?} has {} bytes, expected {}",
-                reference.id.as_str(),
-                bytes.len(),
-                reference.version.byte_size
-            )));
-        }
-        if Sha256::digest(bytes).as_slice() != reference.version.content_sha256.as_slice() {
-            return Err(StatsError::Internal(format!(
-                "object cache source {:?} failed SHA-256 validation",
-                reference.id.as_str()
-            )));
-        }
         let path = self.path(&reference.id)?;
         atomic_write(&path, bytes)?;
         Ok(path)

@@ -21,7 +21,6 @@ pub mod ingest;
 pub mod maintenance;
 pub mod query_view;
 pub mod runtime;
-pub mod runtime_policy;
 pub mod segment_format;
 pub mod segment_view;
 pub mod spec_migration;

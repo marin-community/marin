@@ -13,7 +13,6 @@ use crate::proto::finelog::stats::{
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{schema_from_proto_view, schema_to_proto_owned, Schema};
 use crate::store::segment::MAX_ROW_GROUP_ROWS;
-use crate::store::table::runtime_policy::{DEFAULT_FLUSH_INTERVAL, SEGMENT_TARGET_BYTES};
 
 pub const DEFAULT_TARGET_OBJECT_BYTES: u64 = 256 * 1024 * 1024;
 pub const DEFAULT_MAX_QUERY_TIME_MS: u64 = 10 * 60 * 1_000;
@@ -22,6 +21,96 @@ pub const DEFAULT_MAX_QUERY_TIME_MS: u64 = 10 * 60 * 1_000;
 /// definition it replaced keeps its retired objects, when a specification does
 /// not state a window of its own.
 pub const DEFAULT_ROLLBACK_WINDOW_MS: u64 = 60 * 60 * 1_000;
+
+/// Buffered-byte size at which an append forces an early flush, short-circuiting
+/// the flush-rate cooldown so a write burst can't buffer unboundedly (and bounds
+/// a single L0's size).
+pub const SEGMENT_TARGET_BYTES: i64 = 100 * 1024 * 1024;
+
+/// Maximum idle gap before a buffer is flushed on age alone. With steady writes
+/// the per-append nudge drives flushes; this is the ceiling for a quiet table.
+pub const DEFAULT_FLUSH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The operating knobs a table's specification resolves to.
+///
+/// Registration materializes every default into the stored specification
+/// ([`normalize_operating_policy`] runs before the spec is persisted), so
+/// resolving a registered specification is plain field reads. The fallbacks
+/// here cover the one real absence: a legacy table with no specification.
+#[derive(Debug, Clone)]
+pub struct TablePolicy {
+    pub l0_mode: L0Mode,
+    pub table_spec_version: u64,
+    pub max_buffer_bytes: i64,
+    pub max_flush_age: std::time::Duration,
+    pub max_query_time_ms: u64,
+    pub rollback_window_ms: u64,
+    pub target_object_bytes: i64,
+    pub source_layout: Option<SourceLayout>,
+}
+
+impl Default for TablePolicy {
+    fn default() -> Self {
+        Self {
+            l0_mode: L0Mode::L0_MODE_LEGACY_LOCAL,
+            table_spec_version: 0,
+            max_buffer_bytes: SEGMENT_TARGET_BYTES,
+            max_flush_age: DEFAULT_FLUSH_INTERVAL,
+            max_query_time_ms: DEFAULT_MAX_QUERY_TIME_MS,
+            rollback_window_ms: DEFAULT_ROLLBACK_WINDOW_MS,
+            target_object_bytes: DEFAULT_TARGET_OBJECT_BYTES as i64,
+            source_layout: None,
+        }
+    }
+}
+
+impl TablePolicy {
+    /// Resolve a specification's operating policy; `None` is a legacy table
+    /// running under the defaults.
+    pub fn resolve(spec: Option<&ProtoTableSpec>) -> Self {
+        let Some(spec) = spec else {
+            return Self::default();
+        };
+        let Some(operating) = spec.operating_policy.as_option() else {
+            return Self::default();
+        };
+        let l0_mode = operating
+            .l0_mode
+            .and_then(|mode| mode.as_known())
+            .filter(|mode| *mode != L0Mode::L0_MODE_UNSPECIFIED)
+            .unwrap_or(L0Mode::L0_MODE_LEGACY_LOCAL);
+        Self {
+            l0_mode,
+            table_spec_version: spec.version.unwrap_or(0),
+            max_buffer_bytes: i64::try_from(
+                operating
+                    .max_buffer_bytes
+                    .unwrap_or(SEGMENT_TARGET_BYTES as u64),
+            )
+            .unwrap_or(i64::MAX),
+            max_flush_age: std::time::Duration::from_millis(
+                operating
+                    .max_flush_age_ms
+                    .unwrap_or(DEFAULT_FLUSH_INTERVAL.as_millis() as u64),
+            ),
+            max_query_time_ms: max_query_time_ms(spec),
+            rollback_window_ms: rollback_window_ms(spec),
+            target_object_bytes: spec
+                .source_layout
+                .as_option()
+                .and_then(|layout| layout.target_object_bytes)
+                .and_then(|bytes| i64::try_from(bytes).ok())
+                .unwrap_or(DEFAULT_TARGET_OBJECT_BYTES as i64),
+            source_layout: spec.source_layout.as_option().cloned(),
+        }
+    }
+
+    /// Whether this table's L0 is written as immutable objects rather than local
+    /// files.
+    pub fn object_backed(&self) -> bool {
+        self.l0_mode == L0Mode::L0_MODE_OBJECT_STORE
+    }
+}
 
 /// How a newly registered definition version differs from the active one.
 ///

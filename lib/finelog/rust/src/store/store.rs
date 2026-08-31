@@ -52,8 +52,8 @@ use crate::store::schema::{
     MAX_WRITE_ROWS_BYTES, MAX_WRITE_ROWS_ROWS,
 };
 use crate::store::table::query_view::SegmentObjectMap;
-use crate::store::table::runtime_policy::TableRuntimePolicy;
 use crate::store::table::{TableManager, TABLE_LIFECYCLE_SHUTDOWN_TIMEOUT};
+use crate::store::table_spec::TablePolicy;
 use crate::store::table_spec::ValidatedTableSpec;
 use crate::store::table_state::{TableRevision, TableSnapshot, WriterFence};
 use crate::store::types::NamespaceStats;
@@ -481,7 +481,7 @@ impl Store {
     async fn claim_legacy_tables(&self) -> Result<(), StatsError> {
         for head in self.legacy_state_store.list().await? {
             let status = self.catalog.table_spec_status(&head.table)?;
-            if TableRuntimePolicy::from_status(&status).object_backed() {
+            if TablePolicy::resolve(status.operative()).object_backed() {
                 continue;
             }
             let Some(selected) = self.legacy_state_store.load(&head.table).await? else {

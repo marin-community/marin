@@ -37,7 +37,7 @@ use crate::store::catalog::{Catalog, ObjectSegmentRecord, TableSpecStatus};
 use crate::store::object_store::{
     ObjectByteStream, ObjectId, ObjectReference, ObjectStore, ObjectVersion,
 };
-use crate::store::table::runtime_policy::TableRuntimePolicy;
+use crate::store::table_spec::TablePolicy;
 use crate::store::table_state::{
     resolve_publication, ArtifactReferences, CommitError, CommitToken, Committed, LocalArtifacts,
     TableRevision, TableSnapshot, TableState, WriterFence,
@@ -226,13 +226,12 @@ impl TableController {
     /// Re-read the table's specification and cache whether it selects
     /// object-store L0, returning the status the read produced.
     ///
-    /// [`TableRuntimePolicy`] is the one place a specification resolves to
-    /// operating knobs, so the flush path and this classification cannot drift
-    /// apart.
+    /// [`TablePolicy`] is the one place a specification resolves to operating
+    /// knobs, so the flush path and this classification cannot drift apart.
     fn refresh_object_backing(&self) -> Result<TableSpecStatus, StatsError> {
         let status = self.catalog.table_spec_status(&self.table)?;
         self.spec_selects_objects.store(
-            TableRuntimePolicy::from_status(&status).object_backed(),
+            TablePolicy::resolve(status.operative()).object_backed(),
             Ordering::SeqCst,
         );
         Ok(status)

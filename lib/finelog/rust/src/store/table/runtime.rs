@@ -36,10 +36,10 @@ use crate::store::table::flush;
 use crate::store::table::index_artifacts::BackfillSkips;
 use crate::store::table::ingest::{FlushDemand, IngestBuffer};
 use crate::store::table::query_view::{plan_visible_segments, SegmentObjectMap};
-use crate::store::table::runtime_policy::TableRuntimePolicy;
 use crate::store::table::segment_format::SegmentFormat;
 use crate::store::table::segment_view::{visible_segments, SegmentSnapshot, SegmentView};
 use crate::store::table::spec_migration::MigrationBlock;
+use crate::store::table_spec::TablePolicy;
 use crate::store::table_state::TableSnapshot;
 use crate::store::types::{segment_to_row, NamespaceStats, SegmentRow};
 
@@ -58,7 +58,7 @@ pub struct TableRuntime {
     pub(super) segments: SegmentView,
     /// The operating policy the table's specification resolves to. Replaced on
     /// re-registration and on migration activation.
-    pub(super) policy: Mutex<TableRuntimePolicy>,
+    pub(super) policy: Mutex<TablePolicy>,
     /// Per-table retention overrides; `None` fields inherit the cluster-wide
     /// [`CompactionConfig`] caps.
     pub(super) storage_policy: Mutex<StoragePolicy>,
@@ -187,7 +187,7 @@ impl TableRuntime {
             };
         let local_recovery_ms = local_recovery_started.elapsed().as_millis() as u64;
 
-        let policy = TableRuntimePolicy::from_status(&catalog.table_spec_status(name)?);
+        let policy = TablePolicy::resolve(catalog.table_spec_status(name)?.operative());
         let runtime = Arc::new(TableRuntime {
             name: name.to_string(),
             buffer: IngestBuffer::new(
@@ -299,7 +299,7 @@ impl TableRuntime {
 
     /// Swap in the operating policy a new specification resolves to.
     pub fn update_table_spec(&self, status: &TableSpecStatus) {
-        *self.policy.lock().unwrap() = TableRuntimePolicy::from_status(status);
+        *self.policy.lock().unwrap() = TablePolicy::resolve(status.operative());
     }
 
     /// Rebuild the query view from the segments visible at definition version
@@ -525,7 +525,7 @@ impl TableRuntime {
     }
 
     /// The table's resolved operating policy.
-    pub(super) fn policy(&self) -> TableRuntimePolicy {
+    pub(super) fn policy(&self) -> TablePolicy {
         self.policy.lock().unwrap().clone()
     }
 

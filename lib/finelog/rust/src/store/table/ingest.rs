@@ -27,7 +27,7 @@ pub const DEFAULT_PERSIST_TIMEOUT: Duration = Duration::from_secs(30);
 /// Hard cap on one table's raw Arrow buffer bytes. When persistence stalls the
 /// force-flush threshold stops draining the buffer, so writes beyond this cap
 /// are rejected instead of accumulating until an Arrow offset overflows.
-pub const MAX_TABLE_RAM_BYTES: i64 = 2 * crate::store::table::runtime_policy::SEGMENT_TARGET_BYTES;
+pub const MAX_TABLE_RAM_BYTES: i64 = 2 * crate::store::table_spec::SEGMENT_TARGET_BYTES;
 
 /// What the maintenance scheduler needs to know about a buffer to time its next
 /// flush.

@@ -119,6 +119,13 @@ impl TableSpecStatus {
             .and_then(|spec| spec.version)
             .unwrap_or(0)
     }
+
+    /// The specification the runtime operates under: the migration target while
+    /// a transition is active, else the active specification. `None` for a
+    /// legacy table with no specification.
+    pub fn operative(&self) -> Option<&ProtoTableSpec> {
+        self.desired.as_ref().or(self.active.as_ref())
+    }
 }
 
 struct CatalogInner {

@@ -1,7 +1,12 @@
 // Copyright The Marin Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Composed failure journeys for an object-backed table.
+//! Composed failure journeys for an object-backed table. Test-only code:
+//! `store/mod.rs` declares this module `#[cfg(test)]`, so nothing here is
+//! compiled into the served binary. It lives in `src/` rather than `tests/`
+//! because the scenarios drive crate-private seams — the fault-injecting
+//! object store and store internals — that an integration-test crate cannot
+//! reach.
 //!
 //! Each test drives a complete [`Store`] — real table manager, controllers,
 //! `ObjectTableStateStore`, compaction, and migration — over a local object
