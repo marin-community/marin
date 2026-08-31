@@ -286,15 +286,15 @@ def _dispatch_ragged_a2a_bwd(
     # The transpose of a ragged all-to-all is the reverse ragged all-to-all: swap the send and
     # recv roles and exchange the offset vectors across shards, exactly as jax's transpose rule
     # does. Source rows that were clipped receive no cotangent and keep the init's zeros.
-    output_offsets_x = jax.lax.all_to_all(output_offsets, "expert", 0, 0, tiled=True)
-    input_offsets_x = jax.lax.all_to_all(input_offsets, "expert", 0, 0, tiled=True)
+    exchanged_output_offsets = jax.lax.all_to_all(output_offsets, "expert", 0, 0, tiled=True)
+    exchanged_input_offsets = jax.lax.all_to_all(input_offsets, "expert", 0, 0, tiled=True)
     # Tie to this side's send_sizes, not recv_sizes: the return path's passthrough fill ties to
     # its own send_sizes, which is the SAME tensor as this dispatch's recv_sizes, and two fills
     # with identical shape and tie CSE back into one value with a destructive consumer --
     # re-minting exactly the copy this construction removes.
     init = _loop_local_zeros(source_rows, cotangent.shape[1], cotangent.dtype, send_sizes, site=2)
     source_ct = jax.lax.ragged_all_to_all(
-        cotangent, init, output_offsets_x, recv_sizes, input_offsets_x, send_sizes, axis_name="expert"
+        cotangent, init, exchanged_output_offsets, recv_sizes, exchanged_input_offsets, send_sizes, axis_name="expert"
     )
     return source_ct, None, None, None, None
 
@@ -345,18 +345,22 @@ def _return_ragged_a2a_bwd(
     cotangent: Float[Array, "TK H"],
 ) -> tuple[Float[Array, "C H"], Float[Array, "TK H"], None, None, None, None]:
     input_offsets, send_sizes, output_offsets, recv_sizes = residuals
-    output_offsets_x = jax.lax.all_to_all(output_offsets, "expert", 0, 0, tiled=True)
-    input_offsets_x = jax.lax.all_to_all(input_offsets, "expert", 0, 0, tiled=True)
+    exchanged_output_offsets = jax.lax.all_to_all(output_offsets, "expert", 0, 0, tiled=True)
+    exchanged_input_offsets = jax.lax.all_to_all(input_offsets, "expert", 0, 0, tiled=True)
     init = _loop_local_zeros(capacity, cotangent.shape[1], cotangent.dtype, recv_sizes, site=3)
     out_dispatch_ct = jax.lax.ragged_all_to_all(
-        cotangent, init, output_offsets_x, recv_sizes, input_offsets_x, send_sizes, axis_name="expert"
+        cotangent, init, exchanged_output_offsets, recv_sizes, exchanged_input_offsets, send_sizes, axis_name="expert"
     )
     # Rows this a2a overwrote took their value from ``out_dispatch``, so the pass-through
     # cotangent to ``returned`` is zeroed on exactly the written intervals. This mirrors jax's
     # transpose rule op for op (interval marks, cumsum, integer select_n) so the behavior is
     # bit-identical, including on degenerate empty-group offset patterns.
     interval_marks = (
-        jnp.zeros(cotangent.shape[0], jnp.int32).at[output_offsets_x].set(1).at[output_offsets_x + recv_sizes].add(-1)
+        jnp.zeros(cotangent.shape[0], jnp.int32)
+        .at[exchanged_output_offsets]
+        .set(1)
+        .at[exchanged_output_offsets + recv_sizes]
+        .add(-1)
     )
     written = jnp.broadcast_to(jnp.cumsum(interval_marks)[:, None], cotangent.shape)
     passthrough_zero = _loop_local_zeros(cotangent.shape[0], cotangent.shape[1], cotangent.dtype, send_sizes, site=4)

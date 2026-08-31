@@ -1422,6 +1422,5 @@ def test_loop_local_zeros_is_not_a_foldable_constant():
         jnp.asarray([1, 7, 0, 3], dtype=jnp.int32)
     )
 
-    assert jaxpr.jaxpr.invars, "the fill takes no traced input, so it can be folded and hoisted"
     consumed = {id(var) for eqn in jaxpr.jaxpr.eqns for var in eqn.invars}
     assert any(id(var) in consumed for var in jaxpr.jaxpr.invars), "the fill ignores its tie, so it can be folded"
