@@ -452,12 +452,14 @@ def test_effective_aime_job_preserves_capability_url_in_live_config_and_redacts_
         "from marin.evaluation.harbor.trial_driver import effective_job_config; "
         f"config=effective_job_config(Path({str(policy_path)!r}), Path({str(overlay_path)!r})); "
         'print(json.dumps({"api_base": config.agents[0].kwargs["api_base"], '
+        '"job_dir": str(config.jobs_dir / config.job_name), '
         '"serialized": config.model_dump(mode="json")}))'
     )
 
     result = json.loads(_external_python("-c", script).stdout)
 
     assert result["api_base"] == capability_url
+    assert result["job_dir"] == str(tmp_path / "jobs" / "runtime-job")
     serialized = result["serialized"]
     assert serialized["agents"][0]["kwargs"]["api_base"] == (
         "https://iris.example/proxy/t/<redacted>/serve.inference-test/v1"
