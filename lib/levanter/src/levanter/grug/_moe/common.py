@@ -18,6 +18,24 @@ from levanter.utils.activation import ActivationFunctionEnum
 _DEFAULT_EP_CAPACITY_FACTOR = 1.25
 # #2710 used 1.25 as the practical EP ring default to avoid over/under-packing.
 
+
+def _interleave_gate_up(moe_w13: jax.Array, moe_dim: int) -> jax.Array:
+    """grug w13 [E,H,2I] gate=[:I], up=[I:] -> interleaved [g0,u0,g1,u1,...] (QuACK layout)."""
+    gate = moe_w13[..., :moe_dim]
+    up = moe_w13[..., moe_dim:]
+    return jnp.stack([gate, up], axis=-1).reshape(moe_w13.shape)
+
+
+def _swiglu_gate_up_backward(gu: jax.Array, dh: jax.Array) -> jax.Array:
+    """Cotangent of the interleaved gate/up pre-activations, given the SwiGLU output's."""
+    gate, up = gu[:, 0::2], gu[:, 1::2]
+    sg = jax.nn.sigmoid(gate)
+    silu = gate * sg
+    dgate = dh * up * (sg + silu * (1.0 - sg))
+    dup = dh * silu
+    return jnp.stack([dgate, dup], axis=-1).reshape(gu.shape)
+
+
 PspecAxis: TypeAlias = str | tuple[str, ...] | None
 MoeActivation: TypeAlias = ActivationFunctionEnum | Callable[[jax.Array], jax.Array]
 MoeImplementation: TypeAlias = Literal[
