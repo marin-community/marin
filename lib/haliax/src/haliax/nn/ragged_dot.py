@@ -85,17 +85,21 @@ def _megablox_tile_size() -> tuple[int, int, int]:
     return _MEGABLOX_TILE_DEFAULT
 
 
+def _megablox_tiling(m: int, k: int, n: int) -> tuple[int, int, int]:
+    """Choose a Megablox tile for the shape of each forward or VJP GMM."""
+    tile_size = _megablox_tile_size()
+    return min(m, tile_size[0]), min(k, tile_size[1]), min(n, tile_size[2])
+
+
 def _ragged_dot_megablox_impl(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
     if _gmm_megablox is None:
         raise NotImplementedError("megablox GMM is not available (TPU-only)")
-    tile_size = _megablox_tile_size()
-    m, k, n = lhs.shape[0], lhs.shape[1], rhs.shape[2]
     return _gmm_megablox(
         lhs,
         rhs,
         group_sizes,
         preferred_element_type=lhs.dtype,
-        tiling=(min(m, tile_size[0]), min(k, tile_size[1]), min(n, tile_size[2])),
+        tiling=_megablox_tiling,
         interpret=jax.default_backend() == "cpu",
     )
 
