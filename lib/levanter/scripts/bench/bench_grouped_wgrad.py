@@ -47,6 +47,10 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+# Both kernel families ship only with the CUDA 13 GPU extra, as does this benchmark's point.
+from levanter.grug._moe.cudnn_wgrad_cute import cudnn_grouped_wgrad
+from levanter.grug._moe.quack_moe_cute import quack_grouped_wgrad
+
 # Hero per-call shapes; see the module docstring.
 _HERO_ROWS = 301_466
 _HERO_EXPERTS = 3
@@ -55,6 +59,9 @@ _HERO_INTERMEDIATE = 3_072
 
 _WARMUP = 3
 _ITERS = 10
+
+# Fixed per case so a rerun draws the same group sizes.
+_CASE_SEEDS = {"dw13": 1, "dw2": 2}
 
 
 @dataclass
@@ -85,15 +92,23 @@ def _group_sizes(rows: int, experts: int, seed: int) -> np.ndarray:
     return sizes
 
 
-def _reference(lhs: np.ndarray, rhs: np.ndarray, sizes: np.ndarray) -> np.ndarray:
-    """Per-group ``lhs.T @ rhs`` in float64, the accuracy target for both kernels."""
-    out = np.zeros((len(sizes), lhs.shape[1], rhs.shape[1]), dtype=np.float64)
+def _reference(lhs: jax.Array, rhs: jax.Array, sizes: np.ndarray) -> np.ndarray:
+    """Per-group ``lhs.T @ rhs`` in float32 on device, the accuracy target for both kernels.
+
+    Takes the same bf16 values the kernels get, upcast, so the error it measures is the
+    kernel's own and not the inputs' rounding. float32 accumulation over ~1e5 rows carries
+    ~1e-5 relative error, two orders below bf16 output rounding, which is enough to separate
+    a correct kernel from one reading a neighbouring group's rows.
+    """
+    out = []
     start = 0
-    for i, size in enumerate(sizes):
+    for size in sizes:
         stop = start + int(size)
-        out[i] = lhs[start:stop].astype(np.float64).T @ rhs[start:stop].astype(np.float64)
+        a = lhs[start:stop].astype(jnp.float32)
+        b = rhs[start:stop].astype(jnp.float32)
+        out.append(np.asarray(jax.block_until_ready(a.T @ b), dtype=np.float64))
         start = stop
-    return out
+    return np.stack(out)
 
 
 def _time(fn, *args) -> float:
@@ -120,20 +135,20 @@ def _run_case(
     n: int,
     sweep: bool,
 ) -> list[Result]:
-    from levanter.grug._moe.cudnn_wgrad_cute import cudnn_grouped_wgrad
-    from levanter.grug._moe.quack_moe_cute import quack_grouped_wgrad
-
-    sizes = _group_sizes(rows, experts, seed=hash(case) % 2**31)
+    sizes = _group_sizes(rows, experts, seed=_CASE_SEEDS[case])
     rng = np.random.default_rng(0)
     lhs = rng.normal(0, 1, size=(rows, m)).astype(np.float32)
     rhs = rng.normal(0, 1, size=(rows, n)).astype(np.float32)
-    # Rows past the last group are live memory the kernels must not read.
+    # Rows past the last group are live memory that neither kernel may read. A NaN there turns
+    # an over-read into a NaN output rather than a small numerical drift, which is how the
+    # cuDNN alignment defect stayed invisible for as long as it did.
     lhs[int(sizes.sum()) :] = np.nan
     rhs[int(sizes.sum()) :] = np.nan
 
-    want = _reference(lhs, rhs, sizes)
     lhs_d = jnp.asarray(lhs, dtype=jnp.bfloat16)
     rhs_d = jnp.asarray(rhs, dtype=jnp.bfloat16)
+    del lhs, rhs
+    want = _reference(lhs_d, rhs_d, sizes)
     group_sizes = jnp.asarray(sizes, dtype=jnp.int32)
     cu = jnp.concatenate([jnp.zeros((1,), jnp.int32), jnp.cumsum(group_sizes).astype(jnp.int32)])
 
@@ -192,10 +207,15 @@ def main() -> int:
     parser.add_argument("--sweep", action="store_true", help="sweep QuACK tile/cluster/CLC settings")
     parser.add_argument("--json", type=str, default=None, help="write results here as JSON")
     parser.add_argument(
-        "--tolerance",
+        "--error-ratio",
         type=float,
-        default=0.05,
-        help="max relative error accepted before the run is called a correctness failure",
+        default=3.0,
+        help=(
+            "how many times the cuDNN kernel's relative error a QuACK variant may show before the "
+            "run is called a correctness failure. Calibrating against the other kernel rather than "
+            "an absolute number keeps the gate meaningful as the shapes change: the two differ "
+            "only in reduction order, so anything beyond a small factor is a real defect."
+        ),
     )
     args = parser.parse_args()
 
@@ -218,9 +238,17 @@ def main() -> int:
         with open(args.json, "w") as fh:
             json.dump([asdict(r) for r in results], fh, indent=2)
 
-    failed = [r for r in results if not np.isfinite(r.max_abs_err) or r.max_abs_err > args.tolerance]
-    for r in failed:
-        print(f"FAIL {r.case} {r.variant}: relative error {r.max_abs_err:.3e} > {args.tolerance}")
+    failed = []
+    for case in {r.case for r in results}:
+        reference = next(r for r in results if r.case == case and r.variant == "cudnn+pad")
+        budget = args.error_ratio * reference.max_abs_err
+        for r in results:
+            if r.case != case or r.variant == "cudnn+pad":
+                continue
+            if not np.isfinite(r.max_abs_err) or r.max_abs_err > budget:
+                failed.append((r, budget))
+    for r, budget in failed:
+        print(f"FAIL {r.case} {r.variant}: relative error {r.max_abs_err:.3e} > {budget:.3e}")
     return 1 if failed else 0
 
 

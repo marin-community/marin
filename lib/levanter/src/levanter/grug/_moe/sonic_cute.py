@@ -56,9 +56,15 @@ _QUACK_USE_CLC = True
 _QUACK_GATED_KW = dict(tile_mn=_QUACK_TILE_MN, cluster_mnk=(2, 1, 1), use_clc_persistence=_QUACK_USE_CLC)
 _QUACK_GROUPED_KW = dict(tile_mn=_QUACK_TILE_MN, cluster_mnk=(2, 2, 1), use_clc_persistence=_QUACK_USE_CLC)
 # The weight gradients group over the contraction dimension instead, so they tile a small fixed
-# [M, N] output over a very long K and want their own configuration. Set from the hero-shape sweep
-# in `bench_grouped_wgrad.py`; see that script's header for the grid and the numbers.
-_QUACK_WGRAD_KW: dict = dict(tile_mn=(128, 128), cluster_mnk=(2, 1, 1), use_clc_persistence=False)
+# [M, N] output over a very long K and want their own configuration. From the hero-shape sweep in
+# `bench_grouped_wgrad.py`: at the (256, 256) tile and a (2, 2, 1) cluster, dw13 runs 7.23 ms and
+# dw2 3.33 ms against 10.15 / 4.68 for the cuDNN kernel this replaced. This is the best setting
+# shared by both calls, and within 0.07 ms of each one's own best. CLC persistence is the one knob
+# that splits them -- it wins dw2 by 0.07 and loses dw13 by 0.51 -- so it stays off.
+# The kernel's default tile LOSES to cuDNN (11.65 / 4.80), so this tuning is load-bearing rather
+# than incidental. Like the activation-path settings above, it is all scheduling: none of it
+# changes the computed function.
+_QUACK_WGRAD_KW: dict = dict(tile_mn=(256, 256), cluster_mnk=(2, 2, 1), use_clc_persistence=False)
 
 
 @jax.custom_vjp
