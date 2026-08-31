@@ -15,7 +15,7 @@ use crate::server::auth::{AuthIdentity, AuthPolicy};
 use crate::server::telemetry::telemetry_schema;
 use crate::server::test_support::{
     client, disk_store, serve, serve_rejecting, serve_schema_conflict, serve_unavailable,
-    stats_client, RequestStats, TestTransport, PRIV_A, PRIV_UNTRUSTED, PUB_A,
+    serve_with_outage, stats_client, RequestStats, TestTransport, PRIV_A, PRIV_UNTRUSTED, PUB_A,
 };
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{Column, Schema};
@@ -1259,4 +1259,235 @@ async fn schema_evolution_is_registered_before_forwarding_new_rows() {
         .2
         .row_count;
     assert_eq!(target_rows, 2);
+}
+
+// -------------------------------------------------------------------------------------
+// Journeys: the forwarding failure points rollouts keep hitting, in a box.
+
+/// A hub outage mid-stream: rounds against the dead hub leave the watermark
+/// untouched, and once the hub returns at the same address the next drain
+/// delivers everything written before and during the outage exactly once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_hub_outage_holds_the_cursor_and_recovery_delivers_every_row_once() {
+    use std::sync::atomic::Ordering;
+
+    let target = disk_store("hub_outage_target");
+    let (target_addr, target_requests, outage) =
+        serve_with_outage(Arc::clone(&target), hub_policy(SOURCE_CLUSTER)).await;
+    let fx = Fixture::with_hub("hub_outage", Some(target), target_addr, target_requests).await;
+    push(&fx.source_client, "/user/job/t", &["before-outage"]).await;
+    fx.forward_from_start(LOG_NAMESPACE_NAME).await;
+
+    outage.store(true, Ordering::SeqCst);
+    let forwarder = fx.forwarder(PRIV_A);
+    let mut progress = Progress::new();
+    let (_stop_tx, mut stop) = watch::channel(false);
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        forwarder.forward_round(&mut progress, &mut stop),
+    )
+    .await
+    .expect("an unreachable hub must yield the round, not wedge it");
+    assert_eq!(
+        fx.cursor(LOG_NAMESPACE_NAME),
+        Some(0),
+        "a failed push must not advance the watermark"
+    );
+
+    // Rows written during the outage queue behind the watermark.
+    push(&fx.source_client, "/user/job/t", &["during-outage"]).await;
+    outage.store(false, Ordering::SeqCst);
+    fx.drain(PRIV_A, LOG_NAMESPACE_NAME).await;
+
+    wait_for_hub_log_rows(
+        &fx,
+        &[
+            ("/user/job/t", "before-outage"),
+            ("/user/job/t", "during-outage"),
+        ],
+    )
+    .await;
+    assert_eq!(
+        fx.cursor(LOG_NAMESPACE_NAME),
+        Some(fx.tip(LOG_NAMESPACE_NAME))
+    );
+}
+
+/// The [`write_id_rows`] schema as a version-1 object-backed spec, for a source
+/// that migrates a forwarded table mid-stream.
+fn id_object_spec() -> crate::store::table_spec::ValidatedTableSpec {
+    use crate::proto::finelog::stats::{
+        L0Mode, OperatingPolicy, RemoteRetentionPolicy, SourceLayout, TableSpec, TableSpecView,
+    };
+    use buffa::{Message, MessageField, MessageView};
+
+    let schema = Schema::new(
+        vec![Column::new("id", ColumnType::COLUMN_TYPE_STRING, false)],
+        "id",
+    );
+    let spec = TableSpec {
+        version: Some(1),
+        logical_schema: MessageField::some(crate::store::schema::schema_to_proto_owned(&schema)),
+        source_layout: MessageField::some(SourceLayout::default()),
+        operating_policy: MessageField::some(OperatingPolicy {
+            l0_mode: Some(L0Mode::L0_MODE_OBJECT_STORE.into()),
+            remote_retention: MessageField::some(RemoteRetentionPolicy {
+                retain_forever: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let encoded = spec.encode_to_vec();
+    let view = TableSpecView::decode_view(&encoded).unwrap();
+    crate::store::table_spec::ValidatedTableSpec::from_view(
+        &view,
+        &schema,
+        &StoragePolicy::default(),
+    )
+    .unwrap()
+}
+
+/// As [`write_id_rows`], but for a store with no background maintenance: one
+/// explicit round makes the rows durable. Returns the last written seq.
+async fn durable_id_rows(store: &Store, namespace: &str, ids: std::ops::Range<usize>) -> i64 {
+    let arrow_schema = Arc::new(ArrowSchema::new(vec![Field::new(
+        "id",
+        DataType::Utf8,
+        false,
+    )]));
+    let batch = RecordBatch::try_new(
+        arrow_schema,
+        vec![Arc::new(StringArray::from(
+            ids.map(|row| row.to_string()).collect::<Vec<_>>(),
+        ))],
+    )
+    .unwrap();
+    let ipc = encode_ipc(&batch.schema(), &[batch]).unwrap();
+    let (_, last_seq) = store.write_rows(namespace, &ipc, None).unwrap();
+    store.maintain_namespace(namespace, false).await.unwrap();
+    store
+        .await_persisted(namespace, last_seq, Duration::from_secs(5))
+        .await
+        .unwrap();
+    last_seq
+}
+
+/// Restarting the forwarding node mid-migration loses nothing: the forward
+/// watermark and the migration checkpoint are both durable, so the reopened
+/// store finishes the migration and resumes shipping from where it stopped,
+/// and the hub converges to every source row exactly once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_restart_mid_migration_resumes_forwarding_from_the_durable_cursor() {
+    const EVENTS: &str = "events";
+    let target = disk_store("restart_migration_target");
+    let (target_addr, _target_requests) =
+        serve(Arc::clone(&target), hub_policy(SOURCE_CLUSTER)).await;
+    let target_url = format!("http://{target_addr}");
+
+    // A source over durable directories, reopened across the restart. Shadow
+    // mode runs no background maintenance, so the migration advances only when
+    // this test says so.
+    let data_dir = crate::test_support::unique_dir("restart_migration_data");
+    let remote_dir = crate::test_support::unique_dir("restart_migration_remote");
+    let open_source = || {
+        Arc::new(
+            Store::new(
+                Some(data_dir.clone()),
+                remote_dir.to_string_lossy().into_owned(),
+                crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+                crate::store::ServeMode::Shadow,
+            )
+            .unwrap(),
+        )
+    };
+    let forwarder_for = |source: &Arc<Store>| {
+        let config = ForwardingConfig {
+            target: target_url.clone(),
+            cluster: SOURCE_CLUSTER.to_string(),
+        };
+        let minter = TokenMinter::new(PRIV_A, config.cluster.clone()).unwrap();
+        Forwarder::with_client(Arc::clone(source), config, minter, stats_client(target_addr))
+    };
+
+    // First life: ship forty rows, land twenty more, then start the object
+    // migration and stop the node before it can activate.
+    let source = open_source();
+    source
+        .register_table(
+            EVENTS,
+            Schema::new(
+                vec![Column::new("id", ColumnType::COLUMN_TYPE_STRING, false)],
+                "id",
+            ),
+            StoragePolicy::default(),
+        )
+        .unwrap();
+    let shipped_tip = durable_id_rows(&source, EVENTS, 0..40).await;
+    source
+        .set_forward_cursor(&target_url, EVENTS, 0)
+        .await
+        .unwrap();
+    forward_until(
+        forwarder_for(&source),
+        &source,
+        &target_url,
+        EVENTS,
+        shipped_tip,
+    )
+    .await;
+    let unshipped_tip = durable_id_rows(&source, EVENTS, 40..60).await;
+
+    source
+        .register_versioned_table(EVENTS, id_object_spec())
+        .unwrap();
+    source.publish_object_catalog(EVENTS).await.unwrap();
+    assert_eq!(
+        source.spec_lifecycle(EVENTS).unwrap().active_version(),
+        0,
+        "the restart must land mid-migration, before activation"
+    );
+    source.shutdown(Duration::from_secs(1)).await;
+    drop(source);
+
+    // Second life: the watermark survived, the migration runs to activation,
+    // and forwarding resumes from it — no gap, no replay.
+    let source = open_source();
+    source.recover_tables().await.unwrap();
+    assert_eq!(
+        source.forward_cursor(&target_url, EVENTS).unwrap(),
+        Some(shipped_tip)
+    );
+    for _ in 0..8 {
+        if source.spec_lifecycle(EVENTS).unwrap().active_version() == 1 {
+            break;
+        }
+        source.maintain_namespace(EVENTS, false).await.unwrap();
+    }
+    assert_eq!(source.spec_lifecycle(EVENTS).unwrap().active_version(), 1);
+    forward_until(
+        forwarder_for(&source),
+        &source,
+        &target_url,
+        EVENTS,
+        unshipped_tip,
+    )
+    .await;
+
+    // The hub ACKs before its async flush seals the rows, so poll the count.
+    let count_sql = format!("SELECT count(*) FROM \"{EVENTS}\"");
+    for _ in 0..200 {
+        if scalar_i64(&target, &count_sql).await == 60 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert_eq!(scalar_i64(&target, &count_sql).await, 60);
+    assert_eq!(
+        scalar_i64(&target, &format!("SELECT count(DISTINCT id) FROM \"{EVENTS}\"")).await,
+        60,
+        "a resumed cursor must not replay shipped rows"
+    );
+    source.shutdown(Duration::from_secs(1)).await;
 }

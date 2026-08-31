@@ -40,7 +40,8 @@ use datafusion::physical_plan::ExecutionPlan;
 
 use crate::indices::{IndexRegistry, SegmentArtifacts};
 use crate::partition_policy::{PhysicalPartitionPolicy, SegmentPartition};
-use crate::store::object_store::ObjectStore;
+use crate::errors::StatsError;
+use crate::store::object_store::{ObjectId, ObjectPrefix, ObjectStore};
 use crate::store::table::query_view::SegmentObjectMap;
 
 /// Tail bytes fetched per remote Parquet file when reading its footer. Large
@@ -112,6 +113,7 @@ impl ObjectSources {
     async fn resolve(&self, paths: &[String]) -> DFResult<ResolvedScan> {
         let external = |error| datafusion::error::DataFusionError::External(Box::new(error));
         let mut resolved = ResolvedScan::default();
+        let mut remote_sources: Vec<ObjectId> = Vec::new();
         for path in paths {
             let Some(objects) = self.segments.get(path) else {
                 continue;
@@ -127,6 +129,7 @@ impl ObjectSources {
                     Some(url) => {
                         self.store.warm(&objects.source);
                         resolved.remote.push(url);
+                        remote_sources.push(objects.source.id.clone());
                     }
                     None => {
                         let local = self
@@ -159,7 +162,44 @@ impl ObjectSources {
                 }
             }
         }
+        self.verify_remote_sources_exist(&remote_sources)
+            .await
+            .map_err(external)?;
         Ok(resolved)
+    }
+
+    /// Fail the scan when an uncached source object is gone from the remote.
+    ///
+    /// The listing table treats a URL whose object does not exist as an empty
+    /// listing, which would silently drop that segment's rows from the answer.
+    /// One listing of the table prefix covers every uncached source at a single
+    /// round trip; a scan served entirely from cache skips it.
+    async fn verify_remote_sources_exist(
+        &self,
+        remote_sources: &[ObjectId],
+    ) -> Result<(), StatsError> {
+        let Some(first) = remote_sources.first() else {
+            return Ok(());
+        };
+        let prefix = ObjectPrefix::table(first.table_name(), "")?;
+        let listed: BTreeSet<String> = self
+            .store
+            .list(&prefix)
+            .await?
+            .into_iter()
+            .map(|metadata| metadata.id.as_str().to_string())
+            .collect();
+        let missing: Vec<&str> = remote_sources
+            .iter()
+            .map(|id| id.as_str())
+            .filter(|id| !listed.contains(*id))
+            .collect();
+        if missing.is_empty() {
+            return Ok(());
+        }
+        Err(StatsError::Internal(format!(
+            "scan sources are missing from the remote object store: {missing:?}"
+        )))
     }
 }
 

@@ -404,6 +404,13 @@ impl Store {
         &self.tables
     }
 
+    /// Fast-forward a migration's observation window, for tests that drive a
+    /// table through retirement without waiting out `rollback_window_ms`.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn expire_migration_observation(&self, namespace: &str) -> Result<(), StatsError> {
+        self.catalog.expire_migration_observation(namespace)
+    }
+
     /// Start the maintenance scheduler. Called once after `new`, before serving.
     ///
     /// The scheduler is the process's only cadence owner: it polls the registry

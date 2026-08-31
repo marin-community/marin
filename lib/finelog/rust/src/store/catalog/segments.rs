@@ -320,7 +320,7 @@ impl Catalog {
             .map_err(sqlite_err)?;
         Ok(())
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     pub(crate) fn expire_migration_observation(&self, namespace: &str) -> Result<(), StatsError> {
         let mut inner = self.inner.lock().unwrap();
         let transaction = inner.conn.transaction().map_err(sqlite_err)?;
