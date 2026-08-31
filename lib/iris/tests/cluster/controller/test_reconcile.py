@@ -58,6 +58,7 @@ from iris.cluster.controller.reconcile.worker import (
 )
 from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.schema import job_config_table, task_attempts_table
+from iris.cluster.controller.task_state import RuntimeReleaseTarget
 from iris.cluster.controller.transition_reader import DbTransitionReader
 from iris.cluster.controller.worker_health import (
     BUILD_FAILURE_THRESHOLD,
@@ -713,6 +714,44 @@ def test_reconcile_rpc_forwards_observations(state):
     assert stub.reconcile_calls[0].worker_id == _W1
     assert [desired.attempt_uid for desired in stub.reconcile_calls[0].desired] == [attempt.attempt_uid]
     assert effects.tasks[task.task_id].state == job_pb2.TASK_STATE_RUNNING
+
+
+def test_reconcile_requires_explicit_runtime_release():
+    """A terminal timestamp is not proof that the exact runtime stopped."""
+    attempt_uid = AttemptUid("1111111111111111")
+    observation = worker_pb2.Worker.AttemptObservation(
+        attempt_uid=attempt_uid,
+        state=job_pb2.TASK_STATE_KILLED,
+    )
+    observation.finished_at.epoch_ms = 1_000
+    stub = _FakeWorkerStub(
+        address=_W1_ADDR,
+        reconcile_response=worker_pb2.Worker.ReconcileResponse(
+            worker_id=_W1,
+            health=worker_pb2.Worker.WorkerHealth(healthy=True),
+            observed=[observation],
+        ),
+    )
+    provider, _ = _provider_with_stub(stub)
+    request = WorkerFleetReconcileRequest(
+        release_targets=(
+            RuntimeReleaseTarget(
+                task_id=_job_id("release").task(0),
+                attempt_id=0,
+                attempt_uid=attempt_uid,
+                worker_id=WorkerId(_W1),
+                worker_address=_W1_ADDR,
+            ),
+        )
+    )
+
+    terminal = provider.reconcile(request)
+    assert stub.reconcile_response is not None
+    stub.reconcile_response.observed[0].runtime_released = True
+    released = provider.reconcile(request)
+
+    assert terminal.released_attempt_uids == frozenset()
+    assert released.released_attempt_uids == {attempt_uid}
 
 
 def test_reconcile_rpc_keeps_inline_workdir_files_scoped_to_their_job(state):
