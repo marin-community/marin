@@ -51,19 +51,6 @@ pub use table_specs::SpecLifecycle;
 /// Sidecar filename.
 pub const CATALOG_DB_FILENAME: &str = "_finelog_catalog.sqlite";
 
-/// Every table keyed by `namespace`, ordered so the `namespaces` row that
-/// defines the namespace is removed last.
-const NAMESPACE_OWNED_TABLES: [&str; 8] = [
-    "segments",
-    "storage_policies",
-    "table_specs",
-    "object_segments",
-    "table_migrations",
-    "table_heads",
-    "forward_state",
-    "namespaces",
-];
-
 struct CatalogInner {
     conn: Connection,
     live: BTreeMap<String, RegisteredNamespace>,

@@ -112,23 +112,9 @@ impl TablePolicy {
     }
 }
 
-/// How a newly registered definition version differs from the active one.
-///
-/// The classification decides the registration's durable effect: whether the
-/// new version becomes active immediately or first has to move the table's
-/// existing rows into its physical layout.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DefinitionChange {
-    /// Nothing in the physical layout changed, or the table holds no rows to
-    /// move. The new version activates in the registration's own state commit.
-    MetadataOnly,
-    /// The physical layout changed over rows that already exist. Registration
-    /// records a pending transition that background maintenance backfills and
-    /// activates.
-    CompatibleRewrite,
-}
-
-/// Classify `next` against the currently active definition.
+/// Whether activating `next` requires rewriting the table's existing rows
+/// into its physical layout; `false` activates it in the registration's own
+/// state commit.
 ///
 /// `active` is `None` for a table's first versioned definition; a table that
 /// already holds rows under it is on version 0 and its history is imported
@@ -139,26 +125,19 @@ pub enum DefinitionChange {
 /// rather than recorded as a transition. Only additive schema changes are
 /// query-compatible: an object written under the old definition must still
 /// answer queries planned against the new one.
-pub fn classify_definition_change(
+pub fn definition_requires_rewrite(
     active: Option<&ProtoTableSpec>,
     next: &ProtoTableSpec,
     has_rows: bool,
-) -> Result<DefinitionChange, StatsError> {
+) -> Result<bool, StatsError> {
     let Some(active) = active else {
         // Version 0 has no recorded definition, so there is nothing to compare
         // against. Its history still has to be rewritten into version 1's
         // layout before that version can answer queries.
-        return Ok(if has_rows {
-            DefinitionChange::CompatibleRewrite
-        } else {
-            DefinitionChange::MetadataOnly
-        });
+        return Ok(has_rows);
     };
     check_logical_compatibility(active, next)?;
-    if !has_rows || active.source_layout == next.source_layout {
-        return Ok(DefinitionChange::MetadataOnly);
-    }
-    Ok(DefinitionChange::CompatibleRewrite)
+    Ok(has_rows && active.source_layout != next.source_layout)
 }
 
 /// Reject a logical schema change that existing objects cannot serve.
@@ -532,27 +511,6 @@ pub fn rollback_window_ms(spec: &ProtoTableSpec) -> u64 {
         .unwrap_or(DEFAULT_ROLLBACK_WINDOW_MS)
 }
 
-/// How long a state a table has superseded, and the objects only that state
-/// references, must survive.
-///
-/// Retired objects serve two independent readers: an in-flight query holding a
-/// pinned snapshot, bounded by `max_query_time_ms`, and a rollback to the prior
-/// definition, bounded by `rollback_window_ms`. Retention is the longer of the
-/// two, so shortening the query bound never shortens the rollback window.
-pub fn retired_object_retention_ms(max_query_time_ms: u64, rollback_window_ms: u64) -> u64 {
-    max_query_time_ms.max(rollback_window_ms)
-}
-
-pub fn migration_phase_for_state(
-    has_desired: bool,
-) -> crate::proto::finelog::stats::MigrationPhase {
-    if has_desired {
-        crate::proto::finelog::stats::MigrationPhase::MIGRATION_PHASE_DUAL_WRITE
-    } else {
-        crate::proto::finelog::stats::MigrationPhase::MIGRATION_PHASE_ACTIVATED
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use buffa::{Message, MessageField, MessageView};
@@ -667,10 +625,7 @@ mod tests {
         next.operating_policy
             .get_or_insert_default()
             .max_query_time_ms = Some(30_000);
-        assert_eq!(
-            classify_definition_change(Some(&active), &next, true).unwrap(),
-            DefinitionChange::MetadataOnly
-        );
+        assert!(!definition_requires_rewrite(Some(&active), &next, true).unwrap());
     }
 
     #[test]
@@ -684,28 +639,16 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert_eq!(
-            classify_definition_change(Some(&active), &next, true).unwrap(),
-            DefinitionChange::CompatibleRewrite
-        );
+        assert!(definition_requires_rewrite(Some(&active), &next, true).unwrap());
         // An empty table has nothing to rewrite.
-        assert_eq!(
-            classify_definition_change(Some(&active), &next, false).unwrap(),
-            DefinitionChange::MetadataOnly
-        );
+        assert!(!definition_requires_rewrite(Some(&active), &next, false).unwrap());
     }
 
     #[test]
     fn version_zero_history_converts_through_the_same_rewrite() {
         let next = spec_for(1, &schema(), SourceLayout::default());
-        assert_eq!(
-            classify_definition_change(None, &next, true).unwrap(),
-            DefinitionChange::CompatibleRewrite
-        );
-        assert_eq!(
-            classify_definition_change(None, &next, false).unwrap(),
-            DefinitionChange::MetadataOnly
-        );
+        assert!(definition_requires_rewrite(None, &next, true).unwrap());
+        assert!(!definition_requires_rewrite(None, &next, false).unwrap());
     }
 
     #[test]
@@ -713,7 +656,7 @@ mod tests {
         let active = spec_for(1, &schema(), SourceLayout::default());
 
         let rekeyed = Schema::new(schema().columns, "worker_id");
-        let error = classify_definition_change(
+        let error = definition_requires_rewrite(
             Some(&active),
             &spec_for(2, &rekeyed, SourceLayout::default()),
             true,
@@ -729,7 +672,7 @@ mod tests {
             )],
             "timestamp_ms",
         );
-        let error = classify_definition_change(
+        let error = definition_requires_rewrite(
             Some(&active),
             &spec_for(2, &dropped, SourceLayout::default()),
             true,
@@ -744,7 +687,7 @@ mod tests {
             ],
             "timestamp_ms",
         );
-        let error = classify_definition_change(
+        let error = definition_requires_rewrite(
             Some(&active),
             &spec_for(2, &retyped, SourceLayout::default()),
             true,
@@ -761,7 +704,7 @@ mod tests {
             ],
             "timestamp_ms",
         );
-        let error = classify_definition_change(
+        let error = definition_requires_rewrite(
             Some(&active),
             &spec_for(2, &required_addition, SourceLayout::default()),
             true,
@@ -782,21 +725,12 @@ mod tests {
             ],
             "timestamp_ms",
         );
-        assert_eq!(
-            classify_definition_change(
-                Some(&active),
-                &spec_for(2, &extended, SourceLayout::default()),
-                true
-            )
-            .unwrap(),
-            DefinitionChange::MetadataOnly
-        );
-    }
-
-    #[test]
-    fn retired_object_retention_takes_the_longer_window() {
-        assert_eq!(retired_object_retention_ms(50, 3_600_000), 3_600_000);
-        assert_eq!(retired_object_retention_ms(3_600_000, 50), 3_600_000);
+        assert!(!definition_requires_rewrite(
+            Some(&active),
+            &spec_for(2, &extended, SourceLayout::default()),
+            true
+        )
+        .unwrap());
     }
 
     #[test]

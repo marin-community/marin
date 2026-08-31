@@ -13,7 +13,7 @@ use rusqlite::OptionalExtension;
 use sha2::{Digest, Sha256};
 
 use super::segments::{remove_segments_in, upsert_segment_in};
-use super::table_specs::{migration_phase_from_str, migration_phase_str, MigrationCheckpoint};
+use super::table_specs::{migration_phase_from_str, migration_phase_str};
 use super::*;
 use crate::errors::StatsError;
 use crate::proto::finelog::stats::{MigrationPhase, NamespaceCatalog, ObjectRef};
@@ -66,6 +66,34 @@ pub(super) fn parse_artifacts(json: Option<&str>) -> Result<ArtifactReferences, 
         .map_err(|error| StatsError::Internal(format!("decode segment artifacts: {error}")))
 }
 
+/// Advance the namespace's catalog generation and return the new revision.
+/// Fails when the namespace has no head row to advance.
+fn advance_generation_in(
+    transaction: &rusqlite::Transaction<'_>,
+    namespace: &str,
+) -> Result<TableRevision, StatsError> {
+    let changed = transaction
+        .execute(
+            "UPDATE table_heads SET catalog_generation = catalog_generation + 1
+             WHERE namespace = ?1",
+            [namespace],
+        )
+        .map_err(sqlite_err)?;
+    if changed != 1 {
+        return Err(StatsError::Internal(format!(
+            "object segments committed for {namespace:?} without a namespace head"
+        )));
+    }
+    let generation: i64 = transaction
+        .query_row(
+            "SELECT catalog_generation FROM table_heads WHERE namespace = ?1",
+            [namespace],
+            |row| row.get(0),
+        )
+        .map_err(sqlite_err)?;
+    Ok(TableRevision::new(generation as u64))
+}
+
 impl Catalog {
     /// Rebuild the complete local projection from a verified remote catalog.
     pub fn replace_with_published_snapshot(
@@ -114,25 +142,16 @@ impl Catalog {
                 .map_err(sqlite_err)?;
         }
         for spec in &snapshot.retained_table_specs {
-            let version = spec.version.unwrap_or(0);
             let spec_bytes = canonical_json_bytes(spec)?;
-            let state = if version == snapshot.desired_table_spec_version.unwrap_or(0) {
-                "DESIRED"
-            } else if version == snapshot.active_table_spec_version.unwrap_or(0) {
-                "ACTIVE"
-            } else {
-                "RETAINED"
-            };
             transaction
                 .execute(
-                    "INSERT INTO table_specs (namespace, version, spec_json, spec_hash, state)
-                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    "INSERT INTO table_specs (namespace, version, spec_json, spec_hash)
+                     VALUES (?1, ?2, ?3, ?4)",
                     rusqlite::params![
                         namespace,
-                        version as i64,
+                        spec.version.unwrap_or(0) as i64,
                         String::from_utf8(spec_bytes.clone()).expect("JSON is UTF-8"),
                         Sha256::digest(&spec_bytes).as_slice(),
-                        state,
                     ],
                 )
                 .map_err(sqlite_err)?;
@@ -214,21 +233,17 @@ impl Catalog {
             transaction
                 .execute(
                     "INSERT INTO table_migrations
-                        (namespace, migration_id, from_version, to_version, phase,
-                         fence_seq, source_generation, rows_total, rows_completed,
-                         phase_updated_at_ms, observation_deadline_ms)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                        (namespace, from_version, to_version, phase,
+                         fence_seq, rows_total, rows_completed, observation_deadline_ms)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                     rusqlite::params![
                         namespace,
-                        migration.migration_id.as_deref().unwrap_or("published"),
                         migration.from_version.unwrap_or(0) as i64,
                         migration.to_version.unwrap_or(0) as i64,
                         migration_phase_str(phase),
                         migration.fence_seq.unwrap_or(-1),
-                        migration.source_generation.unwrap_or(0) as i64,
                         migration.rows_total.unwrap_or(0),
                         migration.rows_completed.unwrap_or(0),
-                        now_ms(),
                         migration.observation_deadline_ms.unwrap_or(0),
                     ],
                 )
@@ -309,29 +324,9 @@ impl Catalog {
                 )
                 .map_err(sqlite_err)?;
         }
-        let changed = transaction
-            .execute(
-                "UPDATE table_heads
-                 SET catalog_generation = catalog_generation + 1
-                 WHERE namespace = ?1",
-                [namespace],
-            )
-            .map_err(sqlite_err)?;
-        if changed != 1 {
-            return Err(StatsError::Internal(format!(
-                "object segment committed for {:?} without a namespace head",
-                namespace
-            )));
-        }
-        let generation: i64 = transaction
-            .query_row(
-                "SELECT catalog_generation FROM table_heads WHERE namespace = ?1",
-                [namespace],
-                |result| result.get(0),
-            )
-            .map_err(sqlite_err)?;
+        let revision = advance_generation_in(&transaction, namespace)?;
         transaction.commit().map_err(sqlite_err)?;
-        Ok(TableRevision::new(generation as u64))
+        Ok(revision)
     }
     /// Replace immutable objects atomically and advance one catalog generation.
     pub fn replace_object_segments(
@@ -381,22 +376,9 @@ impl Catalog {
                 )
                 .map_err(sqlite_err)?;
         }
-        transaction
-            .execute(
-                "UPDATE table_heads SET catalog_generation = catalog_generation + 1
-                 WHERE namespace = ?1",
-                [namespace],
-            )
-            .map_err(sqlite_err)?;
-        let generation: i64 = transaction
-            .query_row(
-                "SELECT catalog_generation FROM table_heads WHERE namespace = ?1",
-                [namespace],
-                |row| row.get(0),
-            )
-            .map_err(sqlite_err)?;
+        let revision = advance_generation_in(&transaction, namespace)?;
         transaction.commit().map_err(sqlite_err)?;
-        Ok(TableRevision::new(generation as u64))
+        Ok(revision)
     }
     /// Commit every output from one migrated source and checkpoint it once.
     pub fn commit_migration_segments(
@@ -415,25 +397,19 @@ impl Catalog {
         let namespace = &segments[0].row.namespace;
         let mut inner = self.inner.lock().unwrap();
         let transaction = inner.conn.transaction().map_err(sqlite_err)?;
-        let migration: MigrationCheckpoint = transaction
+        let (to_version, phase): (i64, String) = transaction
             .query_row(
                 "SELECT to_version, phase FROM table_migrations WHERE namespace = ?1",
                 [namespace],
-                |result| {
-                    Ok(MigrationCheckpoint {
-                        to_version: result.get(0)?,
-                        phase: result.get(1)?,
-                    })
-                },
+                |result| Ok((result.get(0)?, result.get(1)?)),
             )
             .map_err(sqlite_err)?;
-        if migration.to_version as u64 != table_spec_version {
+        if to_version as u64 != table_spec_version {
             return Err(StatsError::SchemaConflict(format!(
-                "migration for {:?} targets version {}, not {table_spec_version}",
-                namespace, migration.to_version
+                "migration for {namespace:?} targets version {to_version}, not {table_spec_version}"
             )));
         }
-        let phase = migration_phase_from_str(&migration.phase)?;
+        let phase = migration_phase_from_str(&phase)?;
         if !matches!(
             phase,
             MigrationPhase::MIGRATION_PHASE_DUAL_WRITE | MigrationPhase::MIGRATION_PHASE_BACKFILL
@@ -486,14 +462,12 @@ impl Catalog {
                 "UPDATE table_migrations
                  SET phase = ?2,
                      rows_completed = rows_completed + ?3,
-                     rows_total = MAX(rows_total, rows_completed + ?3),
-                     phase_updated_at_ms = ?4
+                     rows_total = MAX(rows_total, rows_completed + ?3)
                  WHERE namespace = ?1",
                 rusqlite::params![
                     namespace,
                     migration_phase_str(MigrationPhase::MIGRATION_PHASE_BACKFILL),
                     migration_source_rows,
-                    now_ms(),
                 ],
             )
             .map_err(sqlite_err)?;
@@ -502,22 +476,9 @@ impl Catalog {
                 "migration for {namespace:?} has no progress row to checkpoint"
             )));
         }
-        transaction
-            .execute(
-                "UPDATE table_heads SET catalog_generation = catalog_generation + 1
-                 WHERE namespace = ?1",
-                [namespace],
-            )
-            .map_err(sqlite_err)?;
-        let generation: i64 = transaction
-            .query_row(
-                "SELECT catalog_generation FROM table_heads WHERE namespace = ?1",
-                [namespace],
-                |result| result.get(0),
-            )
-            .map_err(sqlite_err)?;
+        let revision = advance_generation_in(&transaction, namespace)?;
         transaction.commit().map_err(sqlite_err)?;
-        Ok(TableRevision::new(generation as u64))
+        Ok(revision)
     }
     /// Advertise the artifacts an index build produced for one object segment.
     ///
@@ -543,22 +504,9 @@ impl Catalog {
                 "object segment {path:?} in {namespace:?} is no longer live"
             )));
         }
-        transaction
-            .execute(
-                "UPDATE table_heads SET catalog_generation = catalog_generation + 1
-                 WHERE namespace = ?1",
-                [namespace],
-            )
-            .map_err(sqlite_err)?;
-        let generation: i64 = transaction
-            .query_row(
-                "SELECT catalog_generation FROM table_heads WHERE namespace = ?1",
-                [namespace],
-                |row| row.get(0),
-            )
-            .map_err(sqlite_err)?;
+        let revision = advance_generation_in(&transaction, namespace)?;
         transaction.commit().map_err(sqlite_err)?;
-        Ok(TableRevision::new(generation as u64))
+        Ok(revision)
     }
     pub fn object_segments(&self, namespace: &str) -> Result<Vec<ObjectSegmentRecord>, StatsError> {
         let inner = self.inner.lock().unwrap();

@@ -18,8 +18,7 @@ use crate::proto::finelog::stats::{
     MigrationPhase, TableMigrationStatus, TableSpec as ProtoTableSpec,
 };
 use crate::store::table_spec::{
-    canonical_json_bytes, classify_definition_change, migration_phase_for_state,
-    rollback_window_ms, table_spec_from_json, DefinitionChange,
+    canonical_json_bytes, definition_requires_rewrite, rollback_window_ms, table_spec_from_json,
 };
 
 /// Where one table stands in its specification lifecycle: the version queries
@@ -59,23 +58,6 @@ impl SpecLifecycle {
     pub fn operative(&self) -> Option<&ProtoTableSpec> {
         self.desired.as_ref().or(self.active.as_ref())
     }
-}
-
-struct MigrationStatusRow {
-    migration_id: String,
-    from_version: i64,
-    to_version: i64,
-    phase: String,
-    fence_seq: i64,
-    source_generation: i64,
-    rows_total: i64,
-    rows_completed: i64,
-    observation_deadline_ms: i64,
-}
-
-pub(super) struct MigrationCheckpoint {
-    pub(super) to_version: i64,
-    pub(super) phase: String,
 }
 
 pub(super) fn table_spec_for_version(
@@ -129,7 +111,11 @@ pub(super) fn spec_lifecycle_in(
         .as_ref()
         .and_then(|migration| migration.phase)
         .and_then(|phase| phase.as_known())
-        .unwrap_or_else(|| migration_phase_for_state(desired.is_some()));
+        .unwrap_or(if desired.is_some() {
+            MigrationPhase::MIGRATION_PHASE_DUAL_WRITE
+        } else {
+            MigrationPhase::MIGRATION_PHASE_ACTIVATED
+        });
     Ok(SpecLifecycle {
         active,
         phase,
@@ -143,42 +129,41 @@ pub(super) fn migration_status_in(
     conn: &Connection,
     namespace: &str,
 ) -> Result<Option<TableMigrationStatus>, StatsError> {
-    let row: Option<MigrationStatusRow> = conn
+    type Row = (i64, i64, String, i64, i64, i64, i64);
+    let row: Option<Row> = conn
         .query_row(
-            "SELECT migration_id, from_version, to_version, phase, fence_seq,
-                    source_generation, rows_total, rows_completed, observation_deadline_ms
+            "SELECT from_version, to_version, phase, fence_seq,
+                    rows_total, rows_completed, observation_deadline_ms
              FROM table_migrations WHERE namespace = ?1",
             [namespace],
             |row| {
-                Ok(MigrationStatusRow {
-                    migration_id: row.get(0)?,
-                    from_version: row.get(1)?,
-                    to_version: row.get(2)?,
-                    phase: row.get(3)?,
-                    fence_seq: row.get(4)?,
-                    source_generation: row.get(5)?,
-                    rows_total: row.get(6)?,
-                    rows_completed: row.get(7)?,
-                    observation_deadline_ms: row.get(8)?,
-                })
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                ))
             },
         )
         .optional()
         .map_err(sqlite_err)?;
-    row.map(|row| {
-        Ok(TableMigrationStatus {
-            migration_id: Some(row.migration_id),
-            from_version: Some(row.from_version as u64),
-            to_version: Some(row.to_version as u64),
-            phase: Some(migration_phase_from_str(&row.phase)?.into()),
-            fence_seq: Some(row.fence_seq),
-            source_generation: Some(row.source_generation as u64),
-            rows_total: Some(row.rows_total),
-            rows_completed: Some(row.rows_completed),
-            observation_deadline_ms: Some(row.observation_deadline_ms),
-            ..Default::default()
-        })
-    })
+    row.map(
+        |(from_version, to_version, phase, fence_seq, rows_total, rows_completed, deadline_ms)| {
+            Ok(TableMigrationStatus {
+                from_version: Some(from_version as u64),
+                to_version: Some(to_version as u64),
+                phase: Some(migration_phase_from_str(&phase)?.into()),
+                fence_seq: Some(fence_seq),
+                rows_total: Some(rows_total),
+                rows_completed: Some(rows_completed),
+                observation_deadline_ms: Some(deadline_ms),
+                ..Default::default()
+            })
+        },
+    )
     .transpose()
 }
 
@@ -244,6 +229,88 @@ pub(super) fn migratable_source_rows_in(
     .map_err(sqlite_err)
 }
 
+/// Collect the segment paths `sql` selects, in query order.
+fn segment_paths_in(
+    conn: &Connection,
+    sql: &str,
+    params: impl rusqlite::Params,
+) -> Result<Vec<String>, StatsError> {
+    let mut statement = conn.prepare(sql).map_err(sqlite_err)?;
+    let rows = statement
+        .query_map(params, |row| row.get::<_, String>(0))
+        .map_err(sqlite_err)?;
+    let mut paths = Vec::new();
+    for row in rows {
+        paths.push(row.map_err(sqlite_err)?);
+    }
+    Ok(paths)
+}
+
+/// Reject an illegal next definition: a version out of sequence, a conflicting
+/// re-registration, a transition already in progress, or a table still inside
+/// its rollback observation window.
+///
+/// Returns `None` when this exact version and hash is already recorded — an
+/// idempotent retry with nothing to commit — else the lifecycle the
+/// registration commits against and whether it requires a physical rewrite.
+fn validate_registration_in(
+    conn: &Connection,
+    namespace: &str,
+    spec: &ProtoTableSpec,
+    expected_hash: &[u8; 32],
+    has_rows: bool,
+) -> Result<Option<(SpecLifecycle, bool)>, StatsError> {
+    let version = spec.version.unwrap_or(0);
+    let version_i64 = i64::try_from(version).map_err(|_| {
+        StatsError::SchemaValidation(format!(
+            "table_spec.version {version} exceeds the supported range"
+        ))
+    })?;
+    let existing_hash: Option<Vec<u8>> = conn
+        .query_row(
+            "SELECT spec_hash FROM table_specs WHERE namespace = ?1 AND version = ?2",
+            rusqlite::params![namespace, version_i64],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(sqlite_err)?;
+    if let Some(existing_hash) = existing_hash {
+        return if existing_hash.as_slice() == expected_hash {
+            Ok(None)
+        } else {
+            Err(StatsError::SchemaConflict(format!(
+                "table_spec version {version} is already registered with different contents"
+            )))
+        };
+    }
+    let status = spec_lifecycle_in(conn, namespace)?;
+    if status.desired.is_some() {
+        return Err(StatsError::SchemaConflict(format!(
+            "namespace {namespace:?} already has a table specification transition in progress"
+        )));
+    }
+    if status.phase == MigrationPhase::MIGRATION_PHASE_OBSERVING {
+        return Err(StatsError::SchemaConflict(format!(
+            "namespace {namespace:?} is still in the rollback observation window"
+        )));
+    }
+    let highest: i64 = conn
+        .query_row(
+            "SELECT COALESCE(MAX(version), 0) FROM table_specs WHERE namespace = ?1",
+            [namespace],
+            |row| row.get(0),
+        )
+        .map_err(sqlite_err)?;
+    let expected = highest as u64 + 1;
+    if version != expected {
+        return Err(StatsError::SchemaConflict(format!(
+            "table_spec version {version} rejected; expected {expected}"
+        )));
+    }
+    let requires_rewrite = definition_requires_rewrite(status.active.as_ref(), spec, has_rows)?;
+    Ok(Some((status, requires_rewrite)))
+}
+
 impl Catalog {
     pub fn spec_lifecycle(&self, namespace: &str) -> Result<SpecLifecycle, StatsError> {
         let inner = self.inner.lock().unwrap();
@@ -259,57 +326,8 @@ impl Catalog {
         expected_hash: &[u8; 32],
         has_rows: bool,
     ) -> Result<(), StatsError> {
-        let version = spec.version.unwrap_or(0);
-        let version_i64 = i64::try_from(version).map_err(|_| {
-            StatsError::SchemaValidation(format!(
-                "table_spec.version {version} exceeds the supported range"
-            ))
-        })?;
         let inner = self.inner.lock().unwrap();
-        let existing_hash: Option<Vec<u8>> = inner
-            .conn
-            .query_row(
-                "SELECT spec_hash FROM table_specs WHERE namespace = ?1 AND version = ?2",
-                rusqlite::params![namespace, version_i64],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(sqlite_err)?;
-        if let Some(existing_hash) = existing_hash {
-            return if existing_hash.as_slice() == expected_hash {
-                Ok(())
-            } else {
-                Err(StatsError::SchemaConflict(format!(
-                    "table_spec version {version} is already registered with different contents"
-                )))
-            };
-        }
-        let status = spec_lifecycle_in(&inner.conn, namespace)?;
-        if status.desired.is_some() {
-            return Err(StatsError::SchemaConflict(format!(
-                "namespace {namespace:?} already has a table specification transition in progress"
-            )));
-        }
-        if status.phase == MigrationPhase::MIGRATION_PHASE_OBSERVING {
-            return Err(StatsError::SchemaConflict(format!(
-                "namespace {namespace:?} is still in the rollback observation window"
-            )));
-        }
-        let highest: i64 = inner
-            .conn
-            .query_row(
-                "SELECT COALESCE(MAX(version), 0) FROM table_specs WHERE namespace = ?1",
-                [namespace],
-                |row| row.get(0),
-            )
-            .map_err(sqlite_err)?;
-        let expected = highest as u64 + 1;
-        if version != expected {
-            return Err(StatsError::SchemaConflict(format!(
-                "table_spec version {version} rejected; expected {expected}"
-            )));
-        }
-        classify_definition_change(status.active.as_ref(), spec, has_rows)?;
+        validate_registration_in(&inner.conn, namespace, spec, expected_hash, has_rows)?;
         Ok(())
     }
     /// Record `spec` as the namespace's next definition version.
@@ -337,76 +355,28 @@ impl Catalog {
         expected_hash: &[u8; 32],
         has_rows: bool,
     ) -> Result<SpecLifecycle, StatsError> {
-        let version = spec.version.unwrap_or(0);
-        let version_i64 = i64::try_from(version).map_err(|_| {
-            StatsError::SchemaValidation(format!(
-                "table_spec.version {version} exceeds the supported range"
-            ))
-        })?;
         let spec_bytes = canonical_json_bytes(spec)?;
         let spec_json = String::from_utf8(spec_bytes).expect("JSON serialization is UTF-8");
         let mut inner = self.inner.lock().unwrap();
 
-        let existing_hash: Option<Vec<u8>> = inner
-            .conn
-            .query_row(
-                "SELECT spec_hash FROM table_specs WHERE namespace = ?1 AND version = ?2",
-                rusqlite::params![namespace, version_i64],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(sqlite_err)?;
-        if let Some(existing_hash) = existing_hash {
-            if existing_hash.as_slice() != expected_hash {
-                return Err(StatsError::SchemaConflict(format!(
-                    "table_spec version {version} is already registered with different contents"
-                )));
-            }
-            return spec_lifecycle_in(&inner.conn, namespace);
-        }
-
-        let status = spec_lifecycle_in(&inner.conn, namespace)?;
-        if status.desired.is_some() {
-            return Err(StatsError::SchemaConflict(format!(
-                "namespace {namespace:?} already has a table specification transition in progress"
-            )));
-        }
-        let highest: i64 = inner
-            .conn
-            .query_row(
-                "SELECT COALESCE(MAX(version), 0) FROM table_specs WHERE namespace = ?1",
-                [namespace],
-                |row| row.get(0),
-            )
-            .map_err(sqlite_err)?;
-        let expected = highest as u64 + 1;
-        if version != expected {
-            return Err(StatsError::SchemaConflict(format!(
-                "table_spec version {version} rejected; expected {expected}"
-            )));
-        }
-
         // A metadata-only change activates in this commit. A physical rewrite
         // over rows that already exist records the pending transition instead,
         // and background maintenance backfills and activates it.
-        let migrate = matches!(
-            classify_definition_change(status.active.as_ref(), spec, has_rows)?,
-            DefinitionChange::CompatibleRewrite
-        );
+        let Some((status, migrate)) =
+            validate_registration_in(&inner.conn, namespace, spec, expected_hash, has_rows)?
+        else {
+            return spec_lifecycle_in(&inner.conn, namespace);
+        };
+        let version = spec.version.unwrap_or(0);
+        let version_i64 = version as i64;
         let next_generation = status.catalog_generation + 1;
         let active_version = status.active_version();
         let transaction = inner.conn.transaction().map_err(sqlite_err)?;
         transaction
             .execute(
-                "INSERT INTO table_specs (namespace, version, spec_json, spec_hash, state)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                rusqlite::params![
-                    namespace,
-                    version_i64,
-                    spec_json,
-                    expected_hash.as_slice(),
-                    if migrate { "DESIRED" } else { "ACTIVE" },
-                ],
+                "INSERT INTO table_specs (namespace, version, spec_json, spec_hash)
+                 VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![namespace, version_i64, spec_json, expected_hash.as_slice()],
             )
             .map_err(sqlite_err)?;
         if migrate {
@@ -426,33 +396,22 @@ impl Catalog {
             transaction
                 .execute(
                     "INSERT OR REPLACE INTO table_migrations
-                        (namespace, migration_id, from_version, to_version, phase,
-                         fence_seq, source_generation, rows_total, rows_completed,
-                         phase_updated_at_ms, observation_deadline_ms)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, ?9, 0)",
+                        (namespace, from_version, to_version, phase,
+                         fence_seq, rows_total, rows_completed, observation_deadline_ms)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, 0)",
                     rusqlite::params![
                         namespace,
-                        format!("{namespace}-{active_version}-{version}-{next_generation}"),
                         active_version as i64,
                         version_i64,
                         migration_phase_str(MigrationPhase::MIGRATION_PHASE_DUAL_WRITE),
                         fence_seq,
-                        status.catalog_generation as i64,
                         rows_total,
-                        now_ms(),
                     ],
                 )
                 .map_err(sqlite_err)?;
         }
 
         if !migrate && active_version > 0 {
-            transaction
-                .execute(
-                    "UPDATE table_specs SET state = 'RETAINED'
-                     WHERE namespace = ?1 AND version = ?2",
-                    rusqlite::params![namespace, active_version as i64],
-                )
-                .map_err(sqlite_err)?;
             // A metadata-only change leaves every object's physical layout
             // valid, so the same commit that activates the new version carries
             // the existing segments onto it. Nothing is rewritten and nothing
@@ -496,7 +455,6 @@ impl Catalog {
         if desired == 0 {
             return Ok(status);
         }
-        let active = status.active_version();
         let next_generation = status.catalog_generation + 1;
         // The window the prior definition stays rollbackable for is the new
         // definition's own rollback window, not its query-time bound.
@@ -505,35 +463,16 @@ impl Catalog {
             .as_ref()
             .map(rollback_window_ms)
             .unwrap_or(crate::store::table_spec::DEFAULT_ROLLBACK_WINDOW_MS);
-        let activated_at_ms = now_ms();
         let observation_deadline_ms =
-            activated_at_ms.saturating_add(i64::try_from(observation_ms).unwrap_or(i64::MAX));
+            now_ms().saturating_add(i64::try_from(observation_ms).unwrap_or(i64::MAX));
         let transaction = inner.conn.transaction().map_err(sqlite_err)?;
-        if active > 0 {
-            transaction
-                .execute(
-                    "UPDATE table_specs SET state = 'RETAINED'
-                     WHERE namespace = ?1 AND version = ?2",
-                    rusqlite::params![namespace, active as i64],
-                )
-                .map_err(sqlite_err)?;
-        }
         transaction
             .execute(
-                "UPDATE table_specs SET state = 'ACTIVE'
-                 WHERE namespace = ?1 AND version = ?2",
-                rusqlite::params![namespace, desired as i64],
-            )
-            .map_err(sqlite_err)?;
-        transaction
-            .execute(
-                "UPDATE table_migrations SET phase = ?2, phase_updated_at_ms = ?3,
-                    observation_deadline_ms = ?4
+                "UPDATE table_migrations SET phase = ?2, observation_deadline_ms = ?3
                  WHERE namespace = ?1",
                 rusqlite::params![
                     namespace,
                     migration_phase_str(MigrationPhase::MIGRATION_PHASE_OBSERVING),
-                    activated_at_ms,
                     observation_deadline_ms,
                 ],
             )
@@ -572,25 +511,13 @@ impl Catalog {
         let to_version = migration.to_version.unwrap_or(0);
         let next_generation = status.catalog_generation + 1;
         let transaction = inner.conn.transaction().map_err(sqlite_err)?;
-        let backfill_paths = {
-            let mut statement = transaction
-                .prepare(
-                    "SELECT path FROM object_segments
-                     WHERE namespace = ?1 AND table_spec_version = ?2
-                       AND migration_backfill = 1",
-                )
-                .map_err(sqlite_err)?;
-            let rows = statement
-                .query_map(rusqlite::params![namespace, to_version as i64], |row| {
-                    row.get::<_, String>(0)
-                })
-                .map_err(sqlite_err)?;
-            let mut paths = Vec::new();
-            for row in rows {
-                paths.push(row.map_err(sqlite_err)?);
-            }
-            paths
-        };
+        let backfill_paths = segment_paths_in(
+            &transaction,
+            "SELECT path FROM object_segments
+             WHERE namespace = ?1 AND table_spec_version = ?2
+               AND migration_backfill = 1",
+            rusqlite::params![namespace, to_version as i64],
+        )?;
         remove_segments_in(&transaction, namespace, &backfill_paths)?;
         transaction
             .execute(
@@ -609,15 +536,6 @@ impl Catalog {
                 rusqlite::params![namespace, to_version as i64],
             )
             .map_err(sqlite_err)?;
-        if from_version > 0 {
-            transaction
-                .execute(
-                    "UPDATE table_specs SET state = 'ACTIVE'
-                     WHERE namespace = ?1 AND version = ?2",
-                    rusqlite::params![namespace, from_version as i64],
-                )
-                .map_err(sqlite_err)?;
-        }
         transaction
             .execute(
                 "UPDATE table_heads SET catalog_generation = ?2,
@@ -661,9 +579,8 @@ impl Catalog {
         let transaction = inner.conn.transaction().map_err(sqlite_err)?;
         transaction
             .execute(
-                "UPDATE table_migrations SET phase = ?2, phase_updated_at_ms = ?3
-                 WHERE namespace = ?1",
-                rusqlite::params![namespace, migration_phase_str(phase), now_ms()],
+                "UPDATE table_migrations SET phase = ?2 WHERE namespace = ?1",
+                rusqlite::params![namespace, migration_phase_str(phase)],
             )
             .map_err(sqlite_err)?;
         transaction
@@ -748,37 +665,25 @@ impl Catalog {
         let from_version = migration.from_version.unwrap_or(0);
         let fence_seq = migration.fence_seq.unwrap_or(i64::MAX);
         let transaction = inner.conn.transaction().map_err(sqlite_err)?;
-        let retired_paths = {
-            let (sql, version): (&str, Option<i64>) = if from_version == 0 {
-                (
-                    "SELECT segments.path FROM segments
-                     LEFT JOIN object_segments
-                       ON object_segments.namespace = segments.namespace
-                      AND object_segments.path = segments.path
-                     WHERE segments.namespace = ?1
-                       AND segments.max_seq <= ?2
-                       AND object_segments.path IS NULL",
-                    None,
-                )
-            } else {
-                (
-                    "SELECT path FROM object_segments
-                     WHERE namespace = ?1 AND table_spec_version = ?2",
-                    Some(from_version as i64),
-                )
-            };
-            let mut statement = transaction.prepare(sql).map_err(sqlite_err)?;
-            let rows = statement
-                .query_map(
-                    rusqlite::params![namespace, version.unwrap_or(fence_seq)],
-                    |row| row.get::<_, String>(0),
-                )
-                .map_err(sqlite_err)?;
-            let mut paths = Vec::new();
-            for row in rows {
-                paths.push(row.map_err(sqlite_err)?);
-            }
-            paths
+        let retired_paths = if from_version == 0 {
+            segment_paths_in(
+                &transaction,
+                "SELECT segments.path FROM segments
+                 LEFT JOIN object_segments
+                   ON object_segments.namespace = segments.namespace
+                  AND object_segments.path = segments.path
+                 WHERE segments.namespace = ?1
+                   AND segments.max_seq <= ?2
+                   AND object_segments.path IS NULL",
+                rusqlite::params![namespace, fence_seq],
+            )?
+        } else {
+            segment_paths_in(
+                &transaction,
+                "SELECT path FROM object_segments
+                 WHERE namespace = ?1 AND table_spec_version = ?2",
+                rusqlite::params![namespace, from_version as i64],
+            )?
         };
         remove_segments_in(&transaction, namespace, &retired_paths)?;
         transaction
@@ -793,12 +698,10 @@ impl Catalog {
             .map_err(sqlite_err)?;
         transaction
             .execute(
-                "UPDATE table_migrations SET phase = ?2, phase_updated_at_ms = ?3
-                 WHERE namespace = ?1",
+                "UPDATE table_migrations SET phase = ?2 WHERE namespace = ?1",
                 rusqlite::params![
                     namespace,
                     migration_phase_str(MigrationPhase::MIGRATION_PHASE_RETIRED),
-                    now_ms(),
                 ],
             )
             .map_err(sqlite_err)?;

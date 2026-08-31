@@ -20,6 +20,19 @@ pub struct RegisteredNamespace {
     pub policy: StoragePolicy,
 }
 
+/// Every table keyed by `namespace`, ordered so the `namespaces` row that
+/// defines the namespace is removed last.
+const NAMESPACE_OWNED_TABLES: [&str; 8] = [
+    "segments",
+    "storage_policies",
+    "table_specs",
+    "object_segments",
+    "table_migrations",
+    "table_heads",
+    "forward_state",
+    "namespaces",
+];
+
 impl Catalog {
     pub fn contains(&self, name: &str) -> bool {
         self.inner.lock().unwrap().live.contains_key(name)

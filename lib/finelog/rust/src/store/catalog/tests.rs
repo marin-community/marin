@@ -197,7 +197,7 @@ fn aggregate_stats_empty_when_no_segments() {
     cat.upsert("a", &worker_stored()).unwrap();
     assert_eq!(
         cat.aggregate_namespace_stats("a").unwrap(),
-        NamespaceStats::empty()
+        NamespaceStats::default()
     );
     assert!(cat.list_segments("a").unwrap().is_empty());
 }

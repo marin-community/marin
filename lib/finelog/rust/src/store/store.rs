@@ -249,47 +249,6 @@ impl Store {
         index_cache_mb: usize,
         mode: ServeMode,
     ) -> Result<Store, StatsError> {
-        Self::new_with_telemetry_root_write_mode(
-            data_dir,
-            remote_log_dir,
-            index_cache_mb,
-            mode,
-            TelemetryRootWriteMode::SemanticOnly,
-            None,
-        )
-    }
-
-    pub fn new_with_telemetry_root_write_mode(
-        data_dir: Option<PathBuf>,
-        remote_log_dir: String,
-        index_cache_mb: usize,
-        mode: ServeMode,
-        telemetry_root_write_mode: TelemetryRootWriteMode,
-        object_cache_bytes: Option<u64>,
-    ) -> Result<Store, StatsError> {
-        Self::open(
-            data_dir,
-            remote_log_dir,
-            index_cache_mb,
-            mode,
-            telemetry_root_write_mode,
-            object_cache_bytes,
-            None,
-        )
-    }
-
-    /// Build a store whose object operations pass through `interpose` first.
-    ///
-    /// The failure-scenario tests use this to fail, delay, or count individual
-    /// object operations against an otherwise complete composition.
-    #[cfg(any(test, feature = "test-util"))]
-    pub fn new_with_interposed_objects(
-        data_dir: Option<PathBuf>,
-        remote_log_dir: String,
-        index_cache_mb: usize,
-        mode: ServeMode,
-        interpose: ObjectStoreInterposer,
-    ) -> Result<Store, StatsError> {
         Self::open(
             data_dir,
             remote_log_dir,
@@ -297,11 +256,15 @@ impl Store {
             mode,
             TelemetryRootWriteMode::SemanticOnly,
             None,
-            Some(interpose),
+            None,
         )
     }
 
-    fn open(
+    /// Construct the store with every dial exposed. `interpose` wraps each
+    /// object store as it is built; the failure-scenario tests use it to fail,
+    /// delay, or count individual object operations against an otherwise
+    /// complete composition.
+    pub fn open(
         data_dir: Option<PathBuf>,
         remote_log_dir: String,
         index_cache_mb: usize,
@@ -2735,16 +2698,18 @@ mod tests {
         let objects: Arc<std::sync::Mutex<Vec<Arc<FaultInjectingObjectStore>>>> =
             Arc::new(std::sync::Mutex::new(Vec::new()));
         let captured = Arc::clone(&objects);
-        let store = Store::new_with_interposed_objects(
+        let store = Store::open(
             Some(data_dir.clone()),
             remote_dir.to_string_lossy().into_owned(),
             crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
             ServeMode::Shadow,
-            Arc::new(move |inner| {
+            TelemetryRootWriteMode::SemanticOnly,
+            None,
+            Some(Arc::new(move |inner| {
                 let recorder = FaultInjectingObjectStore::new(inner);
                 captured.lock().unwrap().push(Arc::clone(&recorder));
                 recorder as Arc<dyn ObjectStore>
-            }),
+            })),
         )
         .unwrap();
         store
@@ -4004,7 +3969,7 @@ mod tests {
         assert!(names.contains(&"log"));
         assert!(names.contains(&"iris.worker"));
         for (_, _, stats, _) in &entries {
-            assert_eq!(*stats, NamespaceStats::empty());
+            assert_eq!(*stats, NamespaceStats::default());
         }
     }
 

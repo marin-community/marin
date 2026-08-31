@@ -97,25 +97,13 @@ pub fn segment_to_row(namespace: &str, segment: &LocalSegment) -> SegmentRow {
 }
 
 /// Aggregate counters for one namespace's persisted segments.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct NamespaceStats {
     pub row_count: i64,
     pub byte_size: i64,
     pub min_seq: i64,
     pub max_seq: i64,
     pub segment_count: i32,
-}
-
-impl NamespaceStats {
-    pub fn empty() -> NamespaceStats {
-        NamespaceStats {
-            row_count: 0,
-            byte_size: 0,
-            min_seq: 0,
-            max_seq: 0,
-            segment_count: 0,
-        }
-    }
 }
 
 /// Aggregate in-RAM accounting across live namespaces for the diagnostics line:

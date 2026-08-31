@@ -4,6 +4,8 @@ use rusqlite::{Connection, OptionalExtension};
 
 use crate::errors::StatsError;
 
+#[path = "0006_drop_recorded_only_columns.rs"]
+mod drop_recorded_only_columns;
 #[path = "0005_filesystem_adoption.rs"]
 mod filesystem_adoption;
 #[path = "0000_init.rs"]
@@ -26,6 +28,11 @@ const MIGRATIONS: &[(i64, &str, ApplyMigration)] = &[
     (3, "migration_deadline", migration_deadline::apply),
     (4, "segment_artifacts", segment_artifacts::apply),
     (5, "filesystem_adoption", filesystem_adoption::apply),
+    (
+        6,
+        "drop_recorded_only_columns",
+        drop_recorded_only_columns::apply,
+    ),
 ];
 
 fn sqlite_error(error: rusqlite::Error) -> StatsError {
@@ -174,7 +181,7 @@ mod tests {
     fn fresh_database_runs_every_migration() {
         let mut conn = Connection::open_in_memory().unwrap();
         migrate(&mut conn).unwrap();
-        assert_eq!(applied(&conn), vec![0, 1, 2, 3, 4, 5]);
+        assert_eq!(applied(&conn), vec![0, 1, 2, 3, 4, 5, 6]);
         assert!(column_exists(&conn, "segments", "partition_json").unwrap());
         assert!(table_exists(&conn, "object_segments").unwrap());
     }
@@ -184,7 +191,7 @@ mod tests {
         let mut conn = Connection::open_in_memory().unwrap();
         init::apply(&conn).unwrap();
         migrate(&mut conn).unwrap();
-        assert_eq!(applied(&conn), vec![0, 1, 2, 3, 4, 5]);
+        assert_eq!(applied(&conn), vec![0, 1, 2, 3, 4, 5, 6]);
         assert!(column_exists(&conn, "segments", "partition_json").unwrap());
     }
 
@@ -194,7 +201,7 @@ mod tests {
         init::apply(&conn).unwrap();
         segment_partitions::apply(&conn).unwrap();
         migrate(&mut conn).unwrap();
-        assert_eq!(applied(&conn), vec![0, 1, 2, 3, 4, 5]);
+        assert_eq!(applied(&conn), vec![0, 1, 2, 3, 4, 5, 6]);
         assert!(table_exists(&conn, "object_segments").unwrap());
     }
 
@@ -205,7 +212,7 @@ mod tests {
         segment_partitions::apply(&conn).unwrap();
         object_tables::apply(&conn).unwrap();
         migrate(&mut conn).unwrap();
-        assert_eq!(applied(&conn), vec![0, 1, 2, 3, 4, 5]);
+        assert_eq!(applied(&conn), vec![0, 1, 2, 3, 4, 5, 6]);
         assert!(column_exists(&conn, "table_migrations", "observation_deadline_ms").unwrap());
         assert!(column_exists(&conn, "object_segments", "artifacts_json").unwrap());
     }

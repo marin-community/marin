@@ -445,7 +445,7 @@ impl TableRuntime {
         let segments = self.segments.totals();
         let buffered = self.buffer.buffered();
         if segments.count == 0 && buffered.rows == 0 {
-            return NamespaceStats::empty();
+            return NamespaceStats::default();
         }
         let segment_min = segments.min_seq.unwrap_or(0);
         let segment_max = segments.max_seq.unwrap_or(0);

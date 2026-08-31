@@ -42,6 +42,7 @@ use finelog::store::state_store::object::OBJECTS_PREFIX;
 use finelog::store::store::{ServeMode, Store};
 use finelog::store::table_spec::ValidatedTableSpec;
 use finelog::store::table_state::{CommitError, TableRevision};
+use finelog::store::TelemetryRootWriteMode;
 use finelog::test_support::{
     lost_head_response, unique_dir, FaultAction, FaultGate, FaultInjectingObjectStore, ObjectFault,
     ObjectOp, ObjectPattern,
@@ -122,7 +123,7 @@ impl Cluster {
     fn open_from(&self, data_dir: &Path) -> (Store, Arc<FaultInjectingObjectStore>) {
         let seam: Arc<Mutex<Option<Arc<FaultInjectingObjectStore>>>> = Arc::new(Mutex::new(None));
         let captured = Arc::clone(&seam);
-        let store = Store::new_with_interposed_objects(
+        let store = Store::open(
             Some(data_dir.to_path_buf()),
             self.remote_dir.to_string_lossy().into_owned(),
             finelog::indices::cache::DEFAULT_INDEX_CACHE_MB,
@@ -131,11 +132,13 @@ impl Cluster {
             // start it and drive flush and maintenance directly, so a crashed
             // writer performs no work after the process that owned it is gone.
             ServeMode::Shadow,
-            Arc::new(move |inner| {
+            TelemetryRootWriteMode::SemanticOnly,
+            None,
+            Some(Arc::new(move |inner| {
                 let faults = FaultInjectingObjectStore::new(inner);
                 *captured.lock().unwrap() = Some(Arc::clone(&faults));
                 faults as Arc<dyn ObjectStore>
-            }),
+            })),
         )
         .unwrap();
         let faults = seam.lock().unwrap().take().expect("object seam installed");

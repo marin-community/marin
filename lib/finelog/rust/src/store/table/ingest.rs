@@ -104,24 +104,12 @@ impl IngestBuffer {
         if aligned.num_rows == 0 {
             return Ok(-1);
         }
-        let rows = aligned.num_rows as i64;
-        let added_bytes = aligned.byte_size + 8 * rows;
-        let (last_seq, buffered_bytes) = {
-            let mut buffers = self.buffers.lock().unwrap();
-            self.ensure_append_capacity(&buffers, added_bytes)?;
-            let first_seq = buffers.allocate_seq(rows);
-            let stamped = stamp_seq_and_build(aligned, first_seq, &self.arrow_schema);
-            buffers.append_batch(stamped, added_bytes);
-            let last_seq = first_seq + rows - 1;
-            if self.durable_on_append {
-                // No parquet: the rows are durable the instant they land in RAM,
-                // so advance the high-water mark under the append lock.
-                self.persisted_seq.send_replace(last_seq);
-            }
-            (last_seq, buffers.ram_bytes())
-        };
-        self.request_flush(buffered_bytes >= max_buffer_bytes);
-        Ok(last_seq)
+        self.append_built(
+            aligned.num_rows as i64,
+            aligned.byte_size,
+            max_buffer_bytes,
+            |first_seq| stamp_seq_and_build(aligned, first_seq, &self.arrow_schema),
+        )
     }
 
     /// Append already-built log columns (`seq` excluded), returning the last
@@ -141,20 +129,36 @@ impl IngestBuffer {
             return Ok(-1);
         }
         let rows = num_rows as i64;
+        self.append_built(rows, added_bytes, max_buffer_bytes, |first_seq| {
+            let seq_array: Int64Array = (first_seq..first_seq + rows).collect();
+            let mut all: Vec<ArrayRef> = Vec::with_capacity(columns.len() + 1);
+            all.push(Arc::new(seq_array));
+            all.extend(columns);
+            RecordBatch::try_new(Arc::clone(&self.arrow_schema), all)
+                .expect("log columns match the stored log schema")
+        })
+    }
+
+    /// Allocate `rows` seqs under the append lock, append the batch `build`
+    /// stamps with them, and request a flush when the buffer crosses
+    /// `max_buffer_bytes`. `added_bytes` excludes the appended seq column.
+    fn append_built(
+        &self,
+        rows: i64,
+        added_bytes: i64,
+        max_buffer_bytes: i64,
+        build: impl FnOnce(i64) -> RecordBatch,
+    ) -> Result<i64, StatsError> {
         let added_bytes = added_bytes + 8 * rows;
         let (last_seq, buffered_bytes) = {
             let mut buffers = self.buffers.lock().unwrap();
             self.ensure_append_capacity(&buffers, added_bytes)?;
             let first_seq = buffers.allocate_seq(rows);
-            let seq_array: Int64Array = (first_seq..first_seq + rows).collect();
-            let mut all: Vec<ArrayRef> = Vec::with_capacity(columns.len() + 1);
-            all.push(Arc::new(seq_array));
-            all.extend(columns);
-            let batch = RecordBatch::try_new(Arc::clone(&self.arrow_schema), all)
-                .expect("log columns match the stored log schema");
-            buffers.append_batch(batch, added_bytes);
+            buffers.append_batch(build(first_seq), added_bytes);
             let last_seq = first_seq + rows - 1;
             if self.durable_on_append {
+                // No parquet: the rows are durable the instant they land in RAM,
+                // so advance the high-water mark under the append lock.
                 self.persisted_seq.send_replace(last_seq);
             }
             (last_seq, buffers.ram_bytes())

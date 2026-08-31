@@ -327,10 +327,7 @@ async fn collect_objects(runtime: &Arc<TableRuntime>) -> Result<(), StatsError> 
     // snapshot, and a rollback to the definition they belong to. Collection waits
     // for whichever window is longer.
     let policy = runtime.policy();
-    let state_retention_ms = crate::store::table_spec::retired_object_retention_ms(
-        policy.max_query_time_ms,
-        policy.rollback_window_ms,
-    );
+    let state_retention_ms = policy.max_query_time_ms.max(policy.rollback_window_ms);
     let orphan_grace_ms = u64::try_from(OBJECT_ORPHAN_GRACE.as_millis()).unwrap_or(u64::MAX);
     let removed = runtime
         .controller

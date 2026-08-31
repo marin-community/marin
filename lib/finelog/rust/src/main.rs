@@ -161,7 +161,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         TelemetryMigrationMode::DualWrite => TelemetryRootWriteMode::MirrorRoot,
     };
     let store = Arc::new(
-        Store::new_with_telemetry_root_write_mode(
+        Store::open(
             store_dir.clone(),
             args.remote_log_dir.clone(),
             args.index_cache_mb.get(),
@@ -169,6 +169,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             telemetry_root_write_mode,
             args.object_cache_gb
                 .map(|gib| gib.get() as u64 * 1024 * 1024 * 1024),
+            None,
         )
         .map_err(|e| format!("failed to open store: {e}"))?,
     );
