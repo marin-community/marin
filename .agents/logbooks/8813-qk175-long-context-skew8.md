@@ -39,5 +39,5 @@ author: held
 - Runtime source: `92514c5358e9cd99c89bdd4a6600ac7bbeddc147`
 - Iris job: `/held/iris-run-job-20260831-170205/grug-train-moe_67b_a2b_d2560_ep1_rep1_ctx4_bs256_seq262144_ctxext_step156k_qk175_longctx_skew8`
 - W&B: https://wandb.ai/held/marin_moe/runs/moe_67b_a2b_d2560_ep1_rep1_ctx4_bs256_seq262144_ctxext_step156k_qk175_longctx_skew8
-- Result: Iris allocated all 256 non-preemptible workers at production priority. W&B initialized the intended run on task 57. At launch verification, the job had no failed or preempted workers.
-- Next action: verify checkpoint restoration and the first completed training step, then monitor training and Paloma metrics.
+- Result: Iris allocated all 256 non-preemptible workers at production priority. W&B initialized the intended run on task 57, and all workers began loading the step-156000 cooldown checkpoint. At launch verification, the job had no failed or preempted workers.
+- Next action: verify the first completed training step, then monitor training and Paloma metrics.
