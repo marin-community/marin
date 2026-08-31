@@ -30,6 +30,7 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     HERO_EP_EXPERT_AXIS_SIZE,
     HERO_EP_NODES,
     HERO_GPUS_PER_NODE,
+    HERO_MASTER_PARAM_MODE,
     HERO_MODEL_CONFIG,
     HERO_NODE_CPU,
     HERO_NODE_DISK,
@@ -72,7 +73,7 @@ def build_diagnostic_run(
     capacity_factor: float | None = None,
     latent_dim: int | None = None,
     moe_implementation: str | None = None,
-    master_param_mode: MasterParamMode = MasterParamMode.FP32_PINNED_HOST,
+    master_param_mode: MasterParamMode = HERO_MASTER_PARAM_MODE,
     processes_per_task: int = HERO_PROCESSES_PER_TASK,
     eval_every: int = 0,
     save_checkpoints: bool = False,
@@ -109,7 +110,8 @@ def build_diagnostic_run(
         raise ValueError(f"profile_start_step must be non-negative, got {profile_start_step}")
     if profile_steps > 0 and profile_start_step >= num_steps:
         raise ValueError(f"profile_start_step must be less than num_steps={num_steps}, got {profile_start_step}")
-    # `schedule_steps` sets the whole learning-rate schedule; `num_steps` sets how far the run goes.
+    # `schedule_steps` sets the whole learning-rate schedule; `num_steps` is the absolute step the
+    # run stops at (a restore resumes mid-schedule, so it must lie past the restored step).
     # Both matter, and they enter in different places. The optimizer heuristic scales learning rate,
     # adam_lr, and epsilon from a token budget (`num_train_steps * batch * seq`), which fixes the
     # peak. Warmup and decay are *fractions* of `TrainerConfig.num_train_steps`, so that field has to
@@ -300,7 +302,11 @@ def build_diagnostic_run(
     type=click.IntRange(min=1),
     default=DEFAULT_HERO_STEPS,
     show_default=True,
-    help="Number of training steps.",
+    help=(
+        "Number of steps at which training terminates. When restoring from a checkpoint, "
+        "the number of steps taken in this run will be less than --num-steps "
+        "by the number of steps at the checkpoint."
+    ),
 )
 @click.option(
     "--schedule-steps",
@@ -357,9 +363,9 @@ def build_diagnostic_run(
 @click.option(
     "--master-params",
     type=click.Choice([mode.value for mode in MasterParamMode]),
-    default=MasterParamMode.FP32_PINNED_HOST.value,
+    default=HERO_MASTER_PARAM_MODE.value,
     show_default=True,
-    help=("Whether to keep fp32 weights in host pinned memory. Disabling the master keeps them on device."),
+    help=("Where the authoritative fp32 weights live: on device, or as a pinned-host master."),
 )
 @click.option(
     "--processes-per-task",

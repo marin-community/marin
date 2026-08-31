@@ -4,10 +4,10 @@
 """Hero-shape scaling ladder: one recipe, five widths.
 
 Every rung trains the *same* EP hero recipe -- 384 routed experts, top-8, hidden/2-wide experts in a
-hidden/2 latent, pooled-wave transport, the Harrier 2026.08.18 two-phase mixture on the Marin
-tokenizer, offloaded MuonH state on FP32 pinned-host master params, the QB histogram estimator, and
-a dropless held-out eval -- and differs only in width and the rack count it spans. Behaviour is
-uniform across the ladder so a rung predicts the d6144 hero. ``d6144`` is the hero itself.
+hidden/2 latent, ragged all-to-all transport, the Harrier 2026.08.18 two-phase mixture on the
+Marin tokenizer, offloaded MuonH state, the QB histogram estimator, and a dropless held-out eval --
+and differs only in width and the rack count it spans. Behaviour is uniform across the ladder so a
+rung predicts the d6144 hero. ``d6144`` is the hero itself.
 
     size   racks  batch    steps  eval        checkpoints  tokens  active  total   FLOPs
     d768     1     1024    11420  every 5%    final only     48B     61M    1.6B    5.5e19
@@ -120,15 +120,13 @@ def _ladder_model(size: str):
         shape,
         _EP_CAPACITY_FACTOR,
         attention_implementation="gpu_fa4_cute",
-        moe_implementation="fixed_pooled_wave_all_to_all",
+        moe_implementation="ragged_all_to_all",
         expert_chunks=1,
         seq_len=SEQ_LEN,
         num_experts=384,
         num_experts_per_token=8,
         intermediate_dim=None,
         latent_dim=None,
-        pooled_transport_capacity_factor=_EP_CAPACITY_FACTOR,
-        num_expert_waves=3,
         qb_use_histogram=True,
         qb_hist_bins=HERO_QB_HIST_BINS,
     )
@@ -158,8 +156,7 @@ def build_ladder_run(
         raise ValueError(f"size must be one of {sorted(LADDER_RACKS)}, got {size!r}")
 
     dp_racks = LADDER_RACKS[size]
-    # Weak scaling: batch grows with racks so per-rack token load (and the pooled-wave drop dynamics)
-    # stays constant across rungs. Eval batch is one sequence per device (64 per rack).
+    # Weak scaling holds per-rack token load constant; eval is one sequence per device.
     batch_size = HERO_EP_BATCH_SIZE * dp_racks
     eval_batch_size = HERO_EP_EXPERT_AXIS_SIZE * dp_racks
     global_tokens_per_step = batch_size * SEQ_LEN
@@ -200,7 +197,7 @@ def build_ladder_run(
         )
 
     # Uniform hero trainer: expert-parallel within each rack, replicated across racks, MuonH state
-    # offloaded to FP32 pinned host so the pooled all-to-all buffers keep their HBM.
+    # offloaded to FP32 pinned host.
     grug_trainer = hero_grug_trainer_config(
         replica_axis_size=dp_racks,
         training_data_mode=TrainingDataMode.MIXTURE,

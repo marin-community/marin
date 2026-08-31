@@ -444,6 +444,45 @@ async fn forward_until(
     running.finish().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fresh_remote_store_forwarder_registers_progress_without_panicking() {
+    let local_dir = crate::test_support::unique_dir("forwarder_fresh_remote_local");
+    let remote_dir = crate::test_support::unique_dir("forwarder_fresh_remote_archive");
+    let source = Arc::new(
+        Store::new(
+            Some(local_dir),
+            remote_dir.to_string_lossy().into_owned(),
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            crate::store::ServeMode::Live,
+        )
+        .unwrap(),
+    );
+    source.bootstrap_maintenance();
+
+    let target = disk_store("forwarder_fresh_remote_target");
+    let (target_addr, _) = serve(target, hub_policy(SOURCE_CLUSTER)).await;
+    let target_url = format!("http://{target_addr}");
+    let config = ForwardingConfig {
+        target: target_url,
+        cluster: SOURCE_CLUSTER.to_string(),
+    };
+    let minter = TokenMinter::new(PRIV_A, config.cluster.clone()).unwrap();
+    let forwarder = Forwarder::with_client(
+        Arc::clone(&source),
+        config,
+        minter,
+        stats_client(target_addr),
+    );
+
+    let running = RunningForwarder::start(forwarder);
+    poll_until(
+        || source.get_table_schema(FINELOG_NAMESPACE).is_ok(),
+        || "forwarder did not register its progress namespace".to_string(),
+    )
+    .await;
+    running.finish().await;
+}
+
 // -------------------------------------------------------------------------------------
 // Unit tests: the credential, config, and pure helpers.
 
@@ -888,7 +927,7 @@ async fn a_batch_that_conflicts_with_the_hub_schema_stays_owed() {
 async fn forwarding_progress_telemetry_reaches_the_hub() {
     let fx = Fixture::new("forwarding-progress").await;
     let forwarder = fx.forwarder(PRIV_A);
-    forwarder.ensure_progress_namespace().unwrap();
+    forwarder.ensure_progress_namespace().await.unwrap();
     fx.forward_from_start(FINELOG_NAMESPACE).await;
 
     push(&fx.source_client, "/user/job/t", &["hello"]).await;

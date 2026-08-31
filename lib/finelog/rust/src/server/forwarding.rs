@@ -343,7 +343,7 @@ where
             cluster = %self.config.cluster,
             "finelog forwarder: started"
         );
-        if let Err(error) = self.ensure_progress_namespace() {
+        if let Err(error) = self.ensure_progress_namespace().await {
             tracing::warn!(error = %error, "finelog forwarder: registering progress telemetry failed");
         }
         let mut progress = Progress::new();
@@ -592,7 +592,7 @@ where
     /// Persist one interval of delta counters locally. The ordinary forwarder carries
     /// `telemetry_v1.finelog` to the hub on a later sweep.
     async fn emit_progress(&self, deltas: &ForwardingDeltas) -> Result<(), StatsError> {
-        self.ensure_progress_namespace()?;
+        self.ensure_progress_namespace().await?;
         let timestamp_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|error| {
@@ -614,13 +614,18 @@ where
         Ok(())
     }
 
-    fn ensure_progress_namespace(&self) -> Result<(), StatsError> {
-        self.store.register_managed_table(
-            FINELOG_NAMESPACE,
-            telemetry_schema(),
-            storage_policy_for(FINELOG_NAMESPACE)?,
-        )?;
-        Ok(())
+    async fn ensure_progress_namespace(&self) -> Result<(), StatsError> {
+        let store = Arc::clone(&self.store);
+        tokio::task::spawn_blocking(move || {
+            store.register_managed_table(
+                FINELOG_NAMESPACE,
+                telemetry_schema(),
+                storage_policy_for(FINELOG_NAMESPACE)?,
+            )?;
+            Ok(())
+        })
+        .await
+        .map_err(|error| StatsError::Internal(format!("progress namespace task failed: {error}")))?
     }
 
     async fn persist(&self, name: &str, cursor: i64) -> Result<(), StatsError> {

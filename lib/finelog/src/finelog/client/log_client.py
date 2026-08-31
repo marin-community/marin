@@ -241,10 +241,12 @@ class Table:
     LogClient drains every Table.
 
     Registration is deferred to the flush thread: if a ``registrar`` is given,
-    it is invoked before the first send and again when the requested registration
-    changes. A failing registration is treated like any other flush failure
-    (retried with backoff, or the batch dropped on a non-retryable error) and
-    never blocks the caller that created the Table.
+    it is invoked before the first send and again when the requested
+    registration changes or a write reports that the namespace no longer
+    exists (the same batch is retained while the table registers again). A
+    failing registration is treated like any other flush failure (retried with
+    backoff, or the batch dropped on a non-retryable error) and never blocks
+    the caller that created the Table.
     """
 
     def __init__(
@@ -268,9 +270,10 @@ class Table:
         self._flusher = flusher
         self._querier = querier
         # When set, the flush thread registers before sending and repeats the
-        # registration after the requested schema, policy, or TableSpec changes.
-        # The returned effective schema controls Arrow encoding. ``None`` means
-        # the namespace is already registered server-side (e.g. ``log``).
+        # registration after the requested schema, policy, or TableSpec changes
+        # or after WriteRows reports a missing namespace. The returned effective
+        # schema controls Arrow encoding. ``None`` means the namespace is
+        # already registered server-side (e.g. ``log``).
         self._registrar = registrar
         self._registration_key = registration_key
         self._registration_generation = 0
@@ -489,7 +492,16 @@ class Table:
             batch = _rows_to_record_batch(rows, self._arrow_schema, self._schema)
             self._flusher(self._namespace, batch)
         except Exception as exc:
-            retryable = is_retryable_error(exc) or isinstance(exc, (ConnectionError, OSError, TimeoutError))
+            namespace_missing = self._registrar is not None and (
+                isinstance(exc, NamespaceNotFoundError) or (isinstance(exc, ConnectError) and exc.code == Code.NOT_FOUND)
+            )
+            if namespace_missing:
+                # Force _ensure_registered to run again before the retry.
+                with self._cond:
+                    self._registered_generation = -1
+            retryable = (
+                namespace_missing or is_retryable_error(exc) or isinstance(exc, (ConnectionError, OSError, TimeoutError))
+            )
             summary = _format_exc_summary(exc)
             logger.warning(
                 "Table(%s) send failure (%d rows, retryable=%s): %s",

@@ -429,6 +429,53 @@ def test_query_health_only_reports_healthy_without_serving_freshness():
     assert _one(rows, "freshness", "telemetry", "latest_sample_age")["status"] == "no_data"
 
 
+def test_query_marks_positive_failure_without_predecessor_incomplete_without_delta():
+    records = [
+        _record(
+            "a",
+            "prometheus_source_available",
+            1,
+            135_000,
+            _attributes("current_snapshot", metric_source="vllm"),
+        ),
+        _record(
+            "a",
+            "prometheus_stage_failures",
+            1,
+            135_000,
+            _attributes("cumulative_snapshot", metric_source="vllm", stage="process"),
+        ),
+    ]
+
+    health = [row for row in _query_rows(_database(records)) if row["section"] == "telemetry_health"]
+
+    assert [(row["metric"], row["series"], row["value"], row["status"]) for row in health] == [
+        ("collector", "all resources", 1.0, "incomplete"),
+    ]
+
+
+def test_query_counts_positive_failure_after_reset():
+    failure = _attributes("cumulative_snapshot", metric_source="vllm", stage="process")
+    records = [
+        _record(
+            "a",
+            "prometheus_source_available",
+            1,
+            135_000,
+            _attributes("current_snapshot", metric_source="vllm"),
+        ),
+        _record("a", "prometheus_stage_failures", 5, 105_000, failure),
+        _record("a", "prometheus_stage_failures", 1, 135_000, failure),
+    ]
+
+    health = [row for row in _query_rows(_database(records)) if row["section"] == "telemetry_health"]
+
+    assert [(row["metric"], row["series"], row["value"], row["status"]) for row in health] == [
+        ("collector", "all resources", 1.0, "incomplete"),
+        ("collection failures", "process", 1.0, None),
+    ]
+
+
 def test_query_reports_combined_collector_loss_across_replicas():
     current = _attributes("current_snapshot", metric_source="vllm")
     records = [

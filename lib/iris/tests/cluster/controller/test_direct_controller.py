@@ -4,7 +4,6 @@
 """Tests for KubernetesProvider integration with controller and transitions."""
 
 import json
-import threading
 
 import pytest
 from finelog.rpc import logging_pb2
@@ -13,10 +12,16 @@ from iris.cluster.controller.backend import (
     AutoscaleResult,
     BackendDescriptor,
     BackendKind,
-    BackendRuntime,
+    BackendObservation,
+    BackendObservationRequest,
+    BackendRecoveryRequest,
+    BackendRecoveryResult,
+    JobFeasibilityRequest,
     ProviderUnsupportedError,
+    ReconcileObservation,
     ReconcileRequest,
-    ReconcileResult,
+    RemoveCapacityRequest,
+    RemoveCapacityResult,
     ScheduleRequest,
     ScheduleResult,
     TaskTarget,
@@ -24,9 +29,9 @@ from iris.cluster.controller.backend import (
 from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.schema import tasks_table
-from iris.cluster.controller.writes import set_user_budget
-from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, UserBudgetDefaults
-from iris.rpc import controller_pb2, job_pb2
+from iris.cluster.controller.writes import delete_job, set_user_budget
+from iris.cluster.types import DEFAULT_BACKEND_ID, AttemptUid, JobName, UserBudgetDefaults
+from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.testing.controller import (
     make_direct_job_request,
     query_attempt,
@@ -36,16 +41,13 @@ from iris.testing.controller import (
     submit_direct_job,
 )
 from iris.testing.controller_state import ControllerTestState, submit_job_in_tx
-from iris.testing.transitions import commit_dispatch_updates
+from iris.testing.transitions import commit_dispatch_updates, commit_observed_dispatch_updates
 from rigging.timing import RateLimiter, Timestamp
 from sqlalchemy import update as sa_update
 
 
 class FakeDirectProvider:
     """Minimal cluster-view TaskBackend (K8s-like) for testing."""
-
-    autoscaler = None
-    health = None
 
     def __init__(self):
         self.descriptor = BackendDescriptor(
@@ -54,22 +56,21 @@ class FakeDirectProvider:
             kind=BackendKind.KUBERNETES,
         )
         self.sync_calls: list[ReconcileRequest] = []
-        self.sync_result = ReconcileResult()
+        self.sync_result = ReconcileObservation()
         self.closed = False
 
-    def reconcile(self, request: ReconcileRequest) -> ReconcileResult:
+    def initialize(self, request: BackendRecoveryRequest) -> BackendRecoveryResult:
+        return BackendRecoveryResult()
+
+    def observe(self, request: BackendObservationRequest) -> BackendObservation:
+        return BackendObservation()
+
+    def runtime_image(self, requested_image: str) -> str:
+        return requested_image
+
+    def reconcile(self, request: ReconcileRequest) -> ReconcileObservation:
         self.sync_calls.append(request)
         return self.sync_result
-
-    def run_teardown(self) -> None:
-        """No-op: a cluster-view backend tracks no Iris workers to reap."""
-
-    def teardown(self, dead_workers, *, reason: str) -> None:
-        """No-op: a cluster-view backend tracks no Iris workers to reap."""
-
-    def prune_dead_workers(self, *, cutoff_ms: int, stop_event: threading.Event | None, pause: float) -> int:
-        """No-op: a cluster-view backend tracks no Iris workers to garbage-collect."""
-        return 0
 
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
         return ScheduleResult()
@@ -77,13 +78,29 @@ class FakeDirectProvider:
     def autoscale(self, request: AutoscaleRequest) -> AutoscaleResult:
         return AutoscaleResult()
 
-    def bind_runtime(self, runtime: BackendRuntime) -> None:
-        """No-op: a cluster-view backend tracks no Iris workers, so it builds no worker source."""
+    def remove_capacity(self, request: RemoveCapacityRequest) -> RemoveCapacityResult:
+        return RemoveCapacityResult()
 
-    def seed_liveness(self) -> None:
-        """No-op: a cluster-view backend tracks no Iris worker liveness."""
+    def job_feasibility(self, request: JobFeasibilityRequest) -> str | None:
+        return None
 
     def get_process_status(self, target: TaskTarget, request):
+        raise ProviderUnsupportedError("fake k8s")
+
+    def profile_task(
+        self,
+        target: TaskTarget,
+        request: job_pb2.ProfileTaskRequest,
+        timeout_ms: int,
+    ) -> job_pb2.ProfileTaskResponse:
+        raise ProviderUnsupportedError("fake k8s")
+
+    def exec_in_container(
+        self,
+        target: TaskTarget,
+        request: worker_pb2.Worker.ExecInContainerRequest,
+        timeout_seconds: int = 60,
+    ) -> worker_pb2.Worker.ExecInContainerResponse:
         raise ProviderUnsupportedError("fake k8s")
 
     def fetch_live_logs(
@@ -491,7 +508,7 @@ def test_drain_executing_goes_to_running_tasks(state):
 
 
 # =============================================================================
-# Transition-level tests: apply_dispatch_updates
+# Transition-level tests: apply_reconcile_updates
 # =============================================================================
 
 
@@ -653,10 +670,15 @@ def test_apply_ignores_stale_attempt(state):
 
     # Apply with wrong attempt_id.
     with state._db.transaction() as cur:
-        commit_dispatch_updates(
+        commit_observed_dispatch_updates(
             cur,
             [
-                TaskUpdate(task_id=task_id, attempt_id=attempt_id + 99, new_state=job_pb2.TASK_STATE_RUNNING),
+                TaskUpdate(
+                    attempt_uid=AttemptUid(batch.tasks_to_run[0].attempt_uid),
+                    task_id=task_id,
+                    attempt_id=attempt_id + 99,
+                    new_state=job_pb2.TASK_STATE_RUNNING,
+                ),
             ],
             now=Timestamp.now(),
         )
@@ -664,6 +686,38 @@ def test_apply_ignores_stale_attempt(state):
     task = query_task(state, task_id)
     # Should still be ASSIGNED (the update was skipped).
     assert task.state == job_pb2.TASK_STATE_ASSIGNED
+
+
+def test_apply_ignores_observation_from_recreated_job(state):
+    [task_id] = submit_direct_job(state, "recreated-attempt")
+    with state._db.transaction() as cur:
+        original = dispatch.drain_for_dispatch(cur).tasks_to_run[0]
+
+    job_id = task_id.parent
+    assert job_id is not None
+    with state._db.transaction() as cur:
+        delete_job(cur, job_id, record_tombstone=False)
+    [replacement_task_id] = submit_direct_job(state, "recreated-attempt")
+    assert replacement_task_id == task_id
+    with state._db.transaction() as cur:
+        replacement = dispatch.drain_for_dispatch(cur).tasks_to_run[0]
+    assert replacement.attempt_uid != original.attempt_uid
+
+    with state._db.transaction() as cur:
+        commit_observed_dispatch_updates(
+            cur,
+            [
+                TaskUpdate(
+                    attempt_uid=AttemptUid(original.attempt_uid),
+                    task_id=task_id,
+                    attempt_id=0,
+                    new_state=job_pb2.TASK_STATE_SUCCEEDED,
+                )
+            ],
+            now=Timestamp.now(),
+        )
+
+    assert query_task(state, task_id).state == job_pb2.TASK_STATE_ASSIGNED
 
 
 # =============================================================================

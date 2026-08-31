@@ -418,13 +418,22 @@ WITH base AS (
     WHERE timestamp_ms >= {start_ms}
       AND name = 'prometheus_source_available'
       AND json_get(attributes_json, 'metric_source') = 'vllm'
-), collection_failure_totals AS (
+), collection_failure_increments AS (
     SELECT COALESCE(json_get(attributes_json, 'stage'), 'unknown') AS stage,
-           SUM(delta) AS value
-    FROM increments
-    WHERE name = 'prometheus_stage_failures'
+           CASE
+               WHEN previous_value IS NULL THEN NULL
+               WHEN value < previous_value THEN value
+               ELSE value - previous_value
+           END AS delta,
+           CASE WHEN previous_value IS NULL AND value > 0 THEN 1 ELSE 0 END AS uncertain
+    FROM cumulative_samples
+    WHERE timestamp_ms >= {start_ms}
+      AND name = 'prometheus_stage_failures'
       AND json_get(attributes_json, 'metric_source') = 'vllm'
-      AND delta > 0
+), collection_failure_totals AS (
+    SELECT stage, SUM(delta) AS value
+    FROM collection_failure_increments
+    WHERE delta > 0
     GROUP BY 1
 ), dropped_sample_totals AS (
     SELECT COALESCE(json_get(attributes_json, 'drop_reason'), 'unknown') AS drop_reason,
@@ -441,6 +450,7 @@ WITH base AS (
            CASE
                WHEN COALESCE(unavailable_polls, 0) > 0
                  OR failure_stages > 0
+                 OR uncertain_failures > 0
                  OR drop_reasons > 0
                THEN 'incomplete'
                WHEN polls > 0 THEN 'healthy'
@@ -448,6 +458,7 @@ WITH base AS (
            END AS status
     FROM collector_polls
     CROSS JOIN (SELECT COUNT(*) AS failure_stages FROM collection_failure_totals)
+    CROSS JOIN (SELECT COUNT(*) AS uncertain_failures FROM collection_failure_increments WHERE uncertain > 0)
     CROSS JOIN (SELECT COUNT(*) AS drop_reasons FROM dropped_sample_totals)
 ), producer_samples AS (
     SELECT DISTINCT origin_cluster, service, resource_attributes_json, timestamp_ms
