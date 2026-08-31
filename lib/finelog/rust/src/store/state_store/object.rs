@@ -7,16 +7,15 @@
 
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use bytes::Bytes;
 use sha2::{Digest, Sha256};
 
 use crate::errors::StatsError;
 use crate::proto::finelog::stats::{CatalogHead, NamespaceCatalog, ObjectRef};
-use crate::store::object_store::{ObjectId, ObjectMetadata, ObjectPrefix, ObjectStore};
-use crate::store::state_store::{
-    fenced_error, BackendToken, StoredTableState, TableHead, TableStateStore,
+use crate::store::object_store::{
+    ObjectId, ObjectMetadata, ObjectPrefix, ObjectStore, ObjectVersion,
 };
+use crate::store::state_store::{fenced_error, StoredTableState, TableHead};
 use crate::store::table_state::{TableRevision, WriterFence};
 
 pub const TABLE_STATE_FORMAT_VERSION: u64 = 1;
@@ -43,7 +42,7 @@ impl ObjectTableStateStore {
     async fn load_head(
         &self,
         table: &str,
-    ) -> Result<Option<(CatalogHead, BackendToken)>, StatsError> {
+    ) -> Result<Option<(CatalogHead, ObjectVersion)>, StatsError> {
         let head_id = ObjectId::table(table, HEAD_KEY)?;
         let Some(head_object) = self.storage.read(&head_id).await? else {
             return Ok(None);
@@ -52,11 +51,11 @@ impl ObjectTableStateStore {
             StatsError::Internal(format!("decode object HEAD for {table:?}: {error}"))
         })?;
         validate_head(table, &head)?;
-        Ok(Some((head, BackendToken::Head(head_object.version))))
+        Ok(Some((head, head_object.version)))
     }
 
     pub async fn load(&self, table: &str) -> Result<Option<StoredTableState>, StatsError> {
-        let Some((head, token)) = self.load_head(table).await? else {
+        let Some((head, head_version)) = self.load_head(table).await? else {
             return Ok(None);
         };
         let state_ref = head.catalog.as_option().ok_or_else(|| {
@@ -93,7 +92,7 @@ impl ObjectTableStateStore {
         Ok(Some(StoredTableState {
             head,
             catalog,
-            token,
+            head_version,
         }))
     }
 
@@ -131,14 +130,14 @@ impl ObjectTableStateStore {
             .storage
             .compare_and_swap(
                 &ObjectId::table(table, HEAD_KEY)?,
-                selected.head_version(),
+                Some(&selected.head_version),
                 Bytes::from(head_bytes),
             )
             .await?;
         Ok(StoredTableState {
             head,
             catalog: selected.catalog.clone(),
-            token: BackendToken::Head(head_version),
+            head_version,
         })
     }
 
@@ -202,14 +201,14 @@ impl ObjectTableStateStore {
             .storage
             .compare_and_swap(
                 &ObjectId::table(table, HEAD_KEY)?,
-                expected.and_then(StoredTableState::head_version),
+                expected.map(|state| &state.head_version),
                 Bytes::from(head_bytes),
             )
             .await?;
         Ok(StoredTableState {
             head,
             catalog,
-            token: BackendToken::Head(head_version),
+            head_version,
         })
     }
 
@@ -430,64 +429,6 @@ impl ObjectTableStateStore {
                 Ok((key, metadata))
             })
             .collect()
-    }
-}
-
-#[async_trait]
-impl TableStateStore for ObjectTableStateStore {
-    async fn list(&self) -> Result<Vec<TableHead>, StatsError> {
-        ObjectTableStateStore::list(self).await
-    }
-
-    async fn load(&self, table: &str) -> Result<Option<StoredTableState>, StatsError> {
-        ObjectTableStateStore::load(self, table).await
-    }
-
-    async fn claim_writer(
-        &self,
-        table: &str,
-        fence: WriterFence,
-        selected: &StoredTableState,
-    ) -> Result<StoredTableState, StatsError> {
-        ObjectTableStateStore::claim_writer(self, table, fence, selected).await
-    }
-
-    async fn commit(
-        &self,
-        table: &str,
-        fence: WriterFence,
-        expected: Option<&StoredTableState>,
-        next: NamespaceCatalog,
-    ) -> Result<StoredTableState, StatsError> {
-        ObjectTableStateStore::commit(self, table, fence, expected, next).await
-    }
-
-    async fn tombstone(
-        &self,
-        table: &str,
-        fence: WriterFence,
-        expected: &StoredTableState,
-    ) -> Result<StoredTableState, StatsError> {
-        ObjectTableStateStore::tombstone(self, table, fence, expected).await
-    }
-
-    async fn gc_obsolete_states(
-        &self,
-        table: &str,
-        now_ms: i64,
-        state_retention_ms: u64,
-        orphan_grace_ms: u64,
-        fence: WriterFence,
-    ) -> Result<usize, StatsError> {
-        ObjectTableStateStore::gc_obsolete_states(
-            self,
-            table,
-            now_ms,
-            state_retention_ms,
-            orphan_grace_ms,
-            fence,
-        )
-        .await
     }
 }
 

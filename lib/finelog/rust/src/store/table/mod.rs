@@ -4,7 +4,7 @@
 //! state controllers, publishes read snapshots, leases maintenance work, and
 //! drops tables. Everything above it — the RPC services, the forwarder, the
 //! debug admin surface — reaches a table through this type. Nothing above it
-//! constructs a [`TableController`] or talks to a [`TableStateStore`].
+//! constructs a [`TableController`] or talks to the durable state store.
 //!
 //! Each table has two deliberately different paths:
 //!
@@ -42,7 +42,8 @@ use crate::store::catalog::Catalog;
 use crate::store::object_store::ObjectStore;
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{AlignedBatch, Schema};
-use crate::store::state_store::{StoredTableState, TableStateStore};
+use crate::store::state_store::object::ObjectTableStateStore;
+use crate::store::state_store::StoredTableState;
 use crate::store::store::{ServeMode, LOG_NAMESPACE_NAME};
 use crate::store::table_state::{TableSnapshot, WriterFence};
 
@@ -77,7 +78,7 @@ pub struct TableManager {
     legacy_object_store: Option<Arc<dyn ObjectStore>>,
     /// Durable state authority for object-backed tables. Absent when no remote
     /// object store is configured.
-    object_state_store: Option<Arc<dyn TableStateStore>>,
+    object_state_store: Option<Arc<ObjectTableStateStore>>,
     fence: WriterFence,
     runtimes: Mutex<HashMap<String, Arc<TableRuntime>>>,
     /// One controller per table, retained across engine rebuilds so a re-register
@@ -135,7 +136,7 @@ impl TableManager {
         catalog: Arc<Catalog>,
         object_store: Option<Arc<dyn ObjectStore>>,
         legacy_object_store: Option<Arc<dyn ObjectStore>>,
-        object_state_store: Option<Arc<dyn TableStateStore>>,
+        object_state_store: Option<Arc<ObjectTableStateStore>>,
         fence: WriterFence,
         index_cache_mb: usize,
         query_visibility: Arc<RwLock<()>>,
@@ -541,7 +542,7 @@ mod tests {
             Arc::clone(&catalog),
             Some(object_store),
             Some(Arc::new(LegacyObjectStore::new(&provider))),
-            Some(Arc::clone(&state_store) as Arc<dyn TableStateStore>),
+            Some(Arc::clone(&state_store)),
             WriterFence::new(11),
             crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
             Arc::new(RwLock::new(())),

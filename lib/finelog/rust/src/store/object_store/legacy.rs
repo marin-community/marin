@@ -3,8 +3,6 @@
 //! Logical IDs stay canonical and typed. This implementation alone translates
 //! them to the pre-catalog physical layout while legacy tables migrate.
 
-use std::path::PathBuf;
-
 use async_trait::async_trait;
 use futures::StreamExt;
 use object_store::path::Path as OsPath;
@@ -62,19 +60,6 @@ impl LegacyObjectStore {
         OsPath::from_iter(parts)
     }
 
-    fn local_pointer_path(&self, id: &ObjectId) -> Option<PathBuf> {
-        let root = self.provider.local_root()?;
-        let mut path = root.join(id.table_name());
-        for component in id
-            .relative_key()
-            .split('/')
-            .filter(|component| !component.is_empty())
-        {
-            path.push(component);
-        }
-        Some(path)
-    }
-
     async fn list_objects(
         &self,
         prefix: &ObjectPrefix,
@@ -129,23 +114,6 @@ impl ObjectStore for LegacyObjectStore {
         self.provider.get_path(self.path(id), "legacy object").await
     }
 
-    async fn compare_and_swap(
-        &self,
-        id: &ObjectId,
-        expected: Option<&ObjectVersion>,
-        bytes: bytes::Bytes,
-    ) -> Result<ObjectVersion, StatsError> {
-        self.provider
-            .compare_and_swap_path(
-                self.path(id),
-                self.local_pointer_path(id),
-                expected,
-                bytes,
-                "legacy object",
-            )
-            .await
-    }
-
     async fn delete(&self, id: &ObjectId) -> Result<(), StatsError> {
         let path = self.path(id);
         match self.provider.backend().delete(&path).await {
@@ -167,6 +135,12 @@ impl ObjectStore for LegacyObjectStore {
                 })
             })
             .collect()
+    }
+
+    async fn list_tables(&self) -> Result<Vec<String>, StatsError> {
+        Err(StatsError::Internal(
+            "the legacy layout does not enumerate tables".to_string(),
+        ))
     }
 }
 

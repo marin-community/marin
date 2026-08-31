@@ -12,20 +12,18 @@
 //! the store-wide query-visibility write lock so no pinned scan loses a file
 //! mid-read.
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use async_trait::async_trait;
-use futures::StreamExt;
 use sha2::{Digest, Sha256};
 use tokio::sync::{RwLock, Semaphore};
 
 use crate::errors::StatsError;
 use crate::store::object_store::{
-    ObjectByteStream, ObjectId, ObjectMetadata, ObjectPrefix, ObjectReference, ObjectStore,
-    ObjectVersion, StoredObject, FINELOG_ROOT_COMPONENT,
+    ObjectId, ObjectMetadata, ObjectPrefix, ObjectReference, ObjectStore, ObjectVersion,
+    StoredObject, FINELOG_ROOT_COMPONENT,
 };
 
 use super::local_file::atomic_write;
@@ -51,12 +49,14 @@ impl FileCache {
         Ok(Self { root })
     }
 
-    fn path(&self, id: &ObjectId) -> Result<PathBuf, StatsError> {
-        relative_path(&self.root, id.as_str())
+    fn path(&self, id: &ObjectId) -> PathBuf {
+        let mut path = self.root.clone();
+        path.extend(id.as_str().split('/'));
+        path
     }
 
     fn verified_path(&self, reference: &ObjectReference) -> Result<Option<PathBuf>, StatsError> {
-        let path = self.path(&reference.id)?;
+        let path = self.path(&reference.id);
         let bytes = match std::fs::read(&path) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -89,13 +89,13 @@ impl FileCache {
     /// so nothing is re-verified here; on-disk integrity is `verified_path`'s
     /// job at read time.
     fn write(&self, reference: &ObjectReference, bytes: &[u8]) -> Result<PathBuf, StatsError> {
-        let path = self.path(&reference.id)?;
+        let path = self.path(&reference.id);
         atomic_write(&path, bytes)?;
         Ok(path)
     }
 
     fn remove(&self, id: &ObjectId) -> Result<(), StatsError> {
-        let path = self.path(id)?;
+        let path = self.path(id);
         match std::fs::remove_file(&path) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -243,56 +243,6 @@ impl ObjectStore for CachedObjectStore {
         Ok(version)
     }
 
-    async fn write_stream(
-        &self,
-        id: &ObjectId,
-        stream: ObjectByteStream,
-    ) -> Result<ObjectVersion, StatsError> {
-        // Spool the chunks to a cache staging file while they upload, then
-        // publish the spool as the cache entry once the source accepts the
-        // object — the streamed bytes never sit in RAM twice and are never
-        // downloaded back.
-        let path = self.cache.path(id)?;
-        let spool = spool_writer(&path)?;
-        let hasher = Arc::new(Mutex::new(Sha256::new()));
-        let spool_file = Arc::clone(&spool.file);
-        let spool_hasher = Arc::clone(&hasher);
-        let tee = stream.map(move |chunk| {
-            let chunk = chunk?;
-            spool_hasher.lock().unwrap().update(&chunk);
-            spool_file
-                .lock()
-                .unwrap()
-                .write_all(&chunk)
-                .map_err(|error| {
-                    StatsError::Internal(format!("write object cache spool: {error}"))
-                })?;
-            Ok(chunk)
-        });
-        let version = match self.source.write_stream(id, Box::pin(tee)).await {
-            Ok(version) => version,
-            Err(error) => {
-                spool.discard();
-                return Err(error);
-            }
-        };
-        let spooled_sha256: [u8; 32] = Arc::try_unwrap(hasher)
-            .map_err(|_| StatsError::Internal("object cache spool hasher is shared".to_string()))?
-            .into_inner()
-            .unwrap()
-            .finalize()
-            .into();
-        if spooled_sha256 != version.content_sha256 {
-            spool.discard();
-            return Err(StatsError::Internal(format!(
-                "object cache spool for {:?} does not match the uploaded object",
-                id.as_str()
-            )));
-        }
-        spool.publish(&path)?;
-        Ok(version)
-    }
-
     async fn read(&self, id: &ObjectId) -> Result<Option<StoredObject>, StatsError> {
         self.source.read(id).await
     }
@@ -302,7 +252,7 @@ impl ObjectStore for CachedObjectStore {
     }
 
     fn planned_local_path(&self, id: &ObjectId) -> Result<PathBuf, StatsError> {
-        self.cache.path(id)
+        Ok(self.cache.path(id))
     }
 
     fn remote_scan_url(&self, id: &ObjectId) -> Option<String> {
@@ -327,21 +277,15 @@ impl ObjectStore for CachedObjectStore {
         });
     }
 
+    // Mutable pointers are only ever written through CAS and never cached, so
+    // there is no cache entry to invalidate here.
     async fn compare_and_swap(
         &self,
         id: &ObjectId,
         expected: Option<&ObjectVersion>,
         bytes: bytes::Bytes,
     ) -> Result<ObjectVersion, StatsError> {
-        let version = self.source.compare_and_swap(id, expected, bytes).await?;
-        let cache = self.cache.clone();
-        let id = id.clone();
-        tokio::task::spawn_blocking(move || cache.remove(&id))
-            .await
-            .map_err(|error| {
-                StatsError::Internal(format!("object cache CAS cleanup task: {error}"))
-            })??;
-        Ok(version)
+        self.source.compare_and_swap(id, expected, bytes).await
     }
 
     async fn delete(&self, id: &ObjectId) -> Result<(), StatsError> {
@@ -420,7 +364,7 @@ fn scan_cache_files(root: &Path) -> Result<Vec<CacheFile>, StatsError> {
                 pending.push(path);
                 continue;
             }
-            // A staging spool is invisible until its atomic rename publishes it.
+            // A staging file is invisible until its atomic rename publishes it.
             if path
                 .extension()
                 .is_some_and(|extension| extension.to_string_lossy().starts_with("tmp-"))
@@ -435,86 +379,6 @@ fn scan_cache_files(root: &Path) -> Result<Vec<CacheFile>, StatsError> {
         }
     }
     Ok(files)
-}
-
-/// A staging file for one streamed cache entry, published by atomic rename.
-struct SpoolWriter {
-    file: Arc<Mutex<std::fs::File>>,
-    staging: PathBuf,
-}
-
-fn spool_writer(path: &Path) -> Result<SpoolWriter, StatsError> {
-    let parent = path.parent().ok_or_else(|| {
-        StatsError::Internal(format!("object cache {} has no parent", path.display()))
-    })?;
-    std::fs::create_dir_all(parent).map_err(|error| {
-        StatsError::Internal(format!(
-            "create object cache parent {}: {error}",
-            parent.display()
-        ))
-    })?;
-    static SPOOL_NONCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let staging = path.with_extension(format!(
-        "tmp-{}-{}",
-        std::process::id(),
-        SPOOL_NONCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    ));
-    let file = std::fs::OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(&staging)
-        .map_err(|error| {
-            StatsError::Internal(format!(
-                "create object cache spool {}: {error}",
-                staging.display()
-            ))
-        })?;
-    Ok(SpoolWriter {
-        file: Arc::new(Mutex::new(file)),
-        staging,
-    })
-}
-
-impl SpoolWriter {
-    fn publish(self, path: &Path) -> Result<(), StatsError> {
-        let file = Arc::try_unwrap(self.file)
-            .map_err(|_| StatsError::Internal("object cache spool is still shared".to_string()))?
-            .into_inner()
-            .unwrap();
-        file.sync_all().map_err(|error| {
-            StatsError::Internal(format!(
-                "fsync object cache spool {}: {error}",
-                self.staging.display()
-            ))
-        })?;
-        std::fs::rename(&self.staging, path).map_err(|error| {
-            StatsError::Internal(format!(
-                "publish object cache {} -> {}: {error}",
-                self.staging.display(),
-                path.display()
-            ))
-        })
-    }
-
-    fn discard(self) {
-        std::fs::remove_file(&self.staging).ok();
-    }
-}
-
-fn relative_path(root: &Path, relative_key: &str) -> Result<PathBuf, StatsError> {
-    let mut path = root.to_path_buf();
-    for component in relative_key
-        .split('/')
-        .filter(|component| !component.is_empty())
-    {
-        if matches!(component, "." | "..") || component.contains('\\') {
-            return Err(StatsError::Internal(format!(
-                "object key {relative_key:?} is not a safe relative path"
-            )));
-        }
-        path.push(component);
-    }
-    Ok(path)
 }
 
 #[cfg(test)]
@@ -612,28 +476,6 @@ mod tests {
         std::fs::remove_file(remote_copy(&roots[0], &reference)).unwrap();
         let path = store.local_path(&reference).await.unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b"dual-ported");
-        roots.iter().for_each(|root| {
-            std::fs::remove_dir_all(root).ok();
-        });
-    }
-
-    #[tokio::test]
-    async fn a_streamed_write_populates_the_cache() {
-        let (store, roots) = cached_store("object_cache_spool", None);
-        let reference = reference("iris.worker", "indices/spooled.fidx", b"spooled-bytes");
-        let chunks: Vec<Result<bytes::Bytes, StatsError>> = vec![
-            Ok(bytes::Bytes::from_static(b"spooled-")),
-            Ok(bytes::Bytes::from_static(b"bytes")),
-        ];
-        let version = store
-            .write_stream(&reference.id, Box::pin(futures::stream::iter(chunks)))
-            .await
-            .unwrap();
-        assert_eq!(version.content_sha256, reference.version.content_sha256);
-
-        std::fs::remove_file(remote_copy(&roots[0], &reference)).unwrap();
-        let path = store.local_path(&reference).await.unwrap();
-        assert_eq!(std::fs::read(&path).unwrap(), b"spooled-bytes");
         roots.iter().for_each(|root| {
             std::fs::remove_dir_all(root).ok();
         });

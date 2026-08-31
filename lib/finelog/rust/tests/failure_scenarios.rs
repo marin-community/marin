@@ -365,7 +365,7 @@ impl Invariants {
 /// writer that is producing it.
 fn data_object_upload() -> (ObjectOp, ObjectPattern) {
     (
-        ObjectOp::WriteStream,
+        ObjectOp::Write,
         ObjectPattern::Contains("/objects/".to_string()),
     )
 }

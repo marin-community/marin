@@ -100,23 +100,17 @@ impl RemoteObjectStore {
         self.provider.prefix_parts()
     }
 
-    fn canonical_path(&self, id: &ObjectId) -> OsPath {
+    /// The physical backend path for a root-relative key (an [`ObjectId`] or
+    /// [`ObjectPrefix`] rendering), under the configured prefix.
+    fn canonical(&self, key: &str) -> OsPath {
         let parts: Vec<&str> = self
             .prefix_parts()
-            .chain(id.as_str().split('/').filter(|part| !part.is_empty()))
+            .chain(key.split('/').filter(|part| !part.is_empty()))
             .collect();
         OsPath::from_iter(parts)
     }
 
-    fn canonical_prefix(&self, prefix: &ObjectPrefix) -> OsPath {
-        let parts: Vec<&str> = self
-            .prefix_parts()
-            .chain(prefix.as_str().split('/').filter(|part| !part.is_empty()))
-            .collect();
-        OsPath::from_iter(parts)
-    }
-
-    pub async fn list_tables(&self) -> Result<Vec<String>, StatsError> {
+    async fn list_tables_under_root(&self) -> Result<Vec<String>, StatsError> {
         let root = OsPath::from_iter(
             self.prefix_parts()
                 .chain([FINELOG_ROOT_COMPONENT, TABLES_COMPONENT]),
@@ -136,20 +130,19 @@ impl RemoteObjectStore {
         }
         Ok(namespaces.into_iter().collect())
     }
+}
 
-    async fn read_object(&self, id: &ObjectId) -> Result<Option<StoredObject>, StatsError> {
+#[async_trait]
+impl ObjectStore for RemoteObjectStore {
+    async fn read(&self, id: &ObjectId) -> Result<Option<StoredObject>, StatsError> {
         self.provider
-            .get_path(self.canonical_path(id), "object")
+            .get_path(self.canonical(id.as_str()), "object")
             .await
     }
 
     /// Create an immutable object, accepting an identical retry.
-    async fn write_immutable(
-        &self,
-        id: &ObjectId,
-        bytes: bytes::Bytes,
-    ) -> Result<ObjectVersion, StatsError> {
-        let path = self.canonical_path(id);
+    async fn write(&self, id: &ObjectId, bytes: bytes::Bytes) -> Result<ObjectVersion, StatsError> {
+        let path = self.canonical(id.as_str());
         let content_sha256 = Sha256::digest(&bytes).into();
         let byte_size = bytes.len() as u64;
         let result = self
@@ -172,7 +165,7 @@ impl RemoteObjectStore {
                 byte_size,
             }),
             Err(object_store::Error::AlreadyExists { .. }) => {
-                let existing = self.read_object(id).await?.ok_or_else(|| {
+                let existing = self.read(id).await?.ok_or_else(|| {
                     StatsError::Internal(format!("object {path} disappeared after create conflict"))
                 })?;
                 if existing.bytes == bytes {
@@ -189,7 +182,7 @@ impl RemoteObjectStore {
         }
     }
 
-    async fn compare_and_swap_object(
+    async fn compare_and_swap(
         &self,
         id: &ObjectId,
         expected: Option<&ObjectVersion>,
@@ -201,7 +194,7 @@ impl RemoteObjectStore {
             .map(|root| local_object_path(root, id));
         self.provider
             .compare_and_swap_path(
-                self.canonical_path(id),
+                self.canonical(id.as_str()),
                 local_path,
                 expected,
                 bytes,
@@ -210,8 +203,12 @@ impl RemoteObjectStore {
             .await
     }
 
-    async fn list_objects(&self, prefix: &ObjectPrefix) -> Result<Vec<ObjectMetadata>, StatsError> {
-        let path = self.canonical_prefix(prefix);
+    fn remote_scan_url(&self, id: &ObjectId) -> Option<String> {
+        Some(self.scan_url(id))
+    }
+
+    async fn list(&self, prefix: &ObjectPrefix) -> Result<Vec<ObjectMetadata>, StatsError> {
+        let path = self.canonical(prefix.as_str());
         let mut stream = self.provider.backend().list(Some(&path));
         let mut objects = Vec::new();
         while let Some(result) = stream.next().await {
@@ -233,8 +230,8 @@ impl RemoteObjectStore {
         Ok(objects)
     }
 
-    async fn delete_object(&self, id: &ObjectId) -> Result<(), StatsError> {
-        let path = self.canonical_path(id);
+    async fn delete(&self, id: &ObjectId) -> Result<(), StatsError> {
+        let path = self.canonical(id.as_str());
         match self.provider.backend().delete(&path).await {
             Ok(()) | Err(object_store::Error::NotFound { .. }) => Ok(()),
             Err(error) => Err(StatsError::Internal(format!(
@@ -242,41 +239,9 @@ impl RemoteObjectStore {
             ))),
         }
     }
-}
-
-#[async_trait]
-impl ObjectStore for RemoteObjectStore {
-    async fn write(&self, id: &ObjectId, bytes: bytes::Bytes) -> Result<ObjectVersion, StatsError> {
-        self.write_immutable(id, bytes).await
-    }
-
-    fn remote_scan_url(&self, id: &ObjectId) -> Option<String> {
-        Some(self.scan_url(id))
-    }
-
-    async fn read(&self, id: &ObjectId) -> Result<Option<StoredObject>, StatsError> {
-        self.read_object(id).await
-    }
-
-    async fn compare_and_swap(
-        &self,
-        id: &ObjectId,
-        expected: Option<&ObjectVersion>,
-        bytes: bytes::Bytes,
-    ) -> Result<ObjectVersion, StatsError> {
-        self.compare_and_swap_object(id, expected, bytes).await
-    }
-
-    async fn delete(&self, id: &ObjectId) -> Result<(), StatsError> {
-        self.delete_object(id).await
-    }
-
-    async fn list(&self, prefix: &ObjectPrefix) -> Result<Vec<ObjectMetadata>, StatsError> {
-        self.list_objects(prefix).await
-    }
 
     async fn list_tables(&self) -> Result<Vec<String>, StatsError> {
-        RemoteObjectStore::list_tables(self).await
+        self.list_tables_under_root().await
     }
 }
 
@@ -307,7 +272,7 @@ mod tests {
             .unwrap();
         let id = ObjectId::table("ns.a", "seg_L1_0001.parquet").unwrap();
         assert_eq!(
-            store.canonical_path(&id).to_string(),
+            store.canonical(id.as_str()).to_string(),
             "logs/sub/_finelog/tables/ns.a/seg_L1_0001.parquet"
         );
     }
@@ -321,7 +286,7 @@ mod tests {
             .unwrap()
             .unwrap();
         let id = ObjectId::table("iris.worker", "seg_L1_0001.parquet").unwrap();
-        let p = store.canonical_path(&id);
+        let p = store.canonical(id.as_str());
         assert_eq!(
             p.to_string(),
             "finelog/cw-us-east-02a/_finelog/tables/iris.worker/seg_L1_0001.parquet"
@@ -355,30 +320,5 @@ mod tests {
         store.delete(&id).await.unwrap();
         assert!(store.read(&id).await.unwrap().is_none());
         std::fs::remove_dir_all(&remote_dir).ok();
-    }
-
-    #[tokio::test]
-    async fn streamed_write_uses_the_same_object_contract() {
-        use futures::stream;
-
-        let remote_dir = unique_dir("remote_stream");
-        let store = build_remote_object_store(remote_dir.to_str().unwrap())
-            .unwrap()
-            .unwrap();
-        let id = ObjectId::table("iris.worker", "objects/stream.parquet").unwrap();
-        let chunks = stream::iter([
-            Ok(bytes::Bytes::from_static(b"par")),
-            Ok(bytes::Bytes::from_static(b"quet")),
-        ])
-        .boxed();
-
-        let version = store.write_stream(&id, chunks).await.unwrap();
-
-        assert_eq!(version.byte_size, 7);
-        assert_eq!(
-            store.read(&id).await.unwrap().unwrap().bytes,
-            b"parquet"[..]
-        );
-        std::fs::remove_dir_all(remote_dir).ok();
     }
 }

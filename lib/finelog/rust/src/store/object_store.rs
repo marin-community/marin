@@ -17,12 +17,9 @@ pub use remote::{build_remote_object_store, RemoteObjectStore};
 
 use std::path::PathBuf;
 
-use async_trait::async_trait;
-use futures::stream::BoxStream;
-use futures::StreamExt;
-
 use crate::errors::StatsError;
 use crate::proto::finelog::stats::ObjectRef as ProtoObjectRef;
+use async_trait::async_trait;
 
 pub const FINELOG_ROOT_COMPONENT: &str = "_finelog";
 pub const TABLES_COMPONENT: &str = "tables";
@@ -171,24 +168,10 @@ pub struct ObjectMetadata {
     pub modified_at_ms: i64,
 }
 
-pub type ObjectByteStream = BoxStream<'static, Result<bytes::Bytes, StatsError>>;
-
 /// Opaque persistence boundary for immutable data and mutable catalog pointers.
 #[async_trait]
 pub trait ObjectStore: Send + Sync {
     async fn write(&self, id: &ObjectId, bytes: bytes::Bytes) -> Result<ObjectVersion, StatsError>;
-
-    async fn write_stream(
-        &self,
-        id: &ObjectId,
-        mut stream: ObjectByteStream,
-    ) -> Result<ObjectVersion, StatsError> {
-        let mut bytes = bytes::BytesMut::new();
-        while let Some(chunk) = stream.next().await {
-            bytes.extend_from_slice(&chunk?);
-        }
-        self.write(id, bytes.freeze()).await
-    }
 
     async fn read(&self, id: &ObjectId) -> Result<Option<StoredObject>, StatsError>;
 
@@ -230,20 +213,27 @@ pub trait ObjectStore: Send + Sync {
     /// for it. A store without a cache does nothing.
     fn warm(&self, _reference: &ObjectReference) {}
 
+    /// Conditionally replace a mutable pointer object. Stores whose objects
+    /// are all immutable reject this.
     async fn compare_and_swap(
         &self,
         id: &ObjectId,
-        expected: Option<&ObjectVersion>,
-        bytes: bytes::Bytes,
-    ) -> Result<ObjectVersion, StatsError>;
+        _expected: Option<&ObjectVersion>,
+        _bytes: bytes::Bytes,
+    ) -> Result<ObjectVersion, StatsError> {
+        Err(StatsError::Internal(format!(
+            "object store cannot conditionally write {:?}",
+            id.as_str()
+        )))
+    }
 
     async fn delete(&self, id: &ObjectId) -> Result<(), StatsError>;
 
     async fn list(&self, prefix: &ObjectPrefix) -> Result<Vec<ObjectMetadata>, StatsError>;
 
-    async fn list_tables(&self) -> Result<Vec<String>, StatsError> {
-        Ok(Vec::new())
-    }
+    /// Enumerate the tables under `_finelog/tables`. Required so a store that
+    /// cannot enumerate reports so instead of silently discovering nothing.
+    async fn list_tables(&self) -> Result<Vec<String>, StatsError>;
 
     /// Reclaim implementation-owned state. Implementations may retain
     /// everything; `CachedObjectStore` evicts least-recently-used cache files

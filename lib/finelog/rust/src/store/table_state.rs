@@ -123,8 +123,7 @@ impl TableSnapshot {
         Self { state, token }
     }
 
-    /// Adapt the state a [`TableStateStore`](crate::store::state_store::TableStateStore)
-    /// selected.
+    /// Adapt the state the durable state store selected.
     pub fn from_stored(stored: &StoredTableState) -> Self {
         let state = TableState::new(stored.catalog.clone());
         let token = CommitToken::local(stored.revision(), stored.fence());

@@ -11,8 +11,8 @@ use async_trait::async_trait;
 
 use crate::errors::StatsError;
 use crate::store::object_store::{
-    ObjectByteStream, ObjectId, ObjectMetadata, ObjectPrefix, ObjectReference, ObjectStore,
-    ObjectVersion, StoredObject,
+    ObjectId, ObjectMetadata, ObjectPrefix, ObjectReference, ObjectStore, ObjectVersion,
+    StoredObject,
 };
 
 /// A fresh directory under the system temp dir, unique per call.
@@ -32,19 +32,14 @@ pub fn unique_dir(tag: &str) -> std::path::PathBuf {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ObjectOp {
     Write,
-    WriteStream,
     Read,
     LocalPath,
     CompareAndSwap,
-    Delete,
-    List,
 }
 
 /// Which object IDs a fault applies to.
 #[derive(Clone, Debug)]
 pub enum ObjectPattern {
-    /// Every object the matched operation touches.
-    Any,
     /// Object IDs whose key ends with this text, e.g. `"HEAD.json"`.
     EndsWith(String),
     /// Object IDs whose key contains this text, e.g. `"/objects/"`.
@@ -54,7 +49,6 @@ pub enum ObjectPattern {
 impl ObjectPattern {
     fn matches(&self, key: &str) -> bool {
         match self {
-            ObjectPattern::Any => true,
             ObjectPattern::EndsWith(suffix) => key.ends_with(suffix.as_str()),
             ObjectPattern::Contains(text) => key.contains(text.as_str()),
         }
@@ -275,21 +269,6 @@ impl ObjectStore for FaultInjectingObjectStore {
         }
     }
 
-    async fn write_stream(
-        &self,
-        id: &ObjectId,
-        stream: ObjectByteStream,
-    ) -> Result<ObjectVersion, StatsError> {
-        match resolve(self.record(ObjectOp::WriteStream, id.as_str())).await {
-            Proceed::Run => self.inner.write_stream(id, stream).await,
-            Proceed::Reject(error) => Err(error),
-            Proceed::RunThenFail { error, gate } => {
-                self.inner.write_stream(id, stream).await?;
-                Err(lost(error, gate).await)
-            }
-        }
-    }
-
     async fn read(&self, id: &ObjectId) -> Result<Option<StoredObject>, StatsError> {
         match resolve(self.record(ObjectOp::Read, id.as_str())).await {
             Proceed::Run => self.inner.read(id).await,
@@ -348,25 +327,11 @@ impl ObjectStore for FaultInjectingObjectStore {
     }
 
     async fn delete(&self, id: &ObjectId) -> Result<(), StatsError> {
-        match resolve(self.record(ObjectOp::Delete, id.as_str())).await {
-            Proceed::Run => self.inner.delete(id).await,
-            Proceed::Reject(error) => Err(error),
-            Proceed::RunThenFail { error, gate } => {
-                self.inner.delete(id).await?;
-                Err(lost(error, gate).await)
-            }
-        }
+        self.inner.delete(id).await
     }
 
     async fn list(&self, prefix: &ObjectPrefix) -> Result<Vec<ObjectMetadata>, StatsError> {
-        match resolve(self.record(ObjectOp::List, prefix.as_str())).await {
-            Proceed::Run => self.inner.list(prefix).await,
-            Proceed::Reject(error) => Err(error),
-            Proceed::RunThenFail { error, gate } => {
-                self.inner.list(prefix).await?;
-                Err(lost(error, gate).await)
-            }
-        }
+        self.inner.list(prefix).await
     }
 
     async fn list_tables(&self) -> Result<Vec<String>, StatsError> {

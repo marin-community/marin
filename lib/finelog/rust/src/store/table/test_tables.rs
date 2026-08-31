@@ -22,7 +22,6 @@ use crate::store::object_store::{
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{schema_to_arrow, with_implicit_seq, AlignedBatch, Column, Schema};
 use crate::store::state_store::object::ObjectTableStateStore;
-use crate::store::state_store::TableStateStore;
 use crate::store::table::controller::TableController;
 use crate::store::table::runtime::TableRuntime;
 use crate::store::table::ObjectPersistence;
@@ -155,8 +154,7 @@ pub fn open_table_remote(
         .unwrap(),
     ) as Arc<dyn ObjectStore>;
     let legacy_object_store = Arc::new(LegacyObjectStore::new(&provider));
-    let state_store =
-        Arc::new(ObjectTableStateStore::new(object_store.clone())) as Arc<dyn TableStateStore>;
+    let state_store = Arc::new(ObjectTableStateStore::new(object_store.clone()));
     let controller = TableController::start(
         name.to_string(),
         Arc::clone(&catalog),

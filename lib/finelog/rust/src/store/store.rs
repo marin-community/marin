@@ -47,11 +47,8 @@ use crate::store::schema::{
     MAX_WRITE_ROWS_BYTES, MAX_WRITE_ROWS_ROWS,
 };
 use crate::store::state_store::object::ObjectTableStateStore;
-use crate::store::state_store::sqlite::SqliteTableStateStore;
-use crate::store::state_store::TableStateStore;
 use crate::store::table::query_view::SegmentObjectMap;
 use crate::store::table::{TableManager, TABLE_LIFECYCLE_SHUTDOWN_TIMEOUT};
-use crate::store::table_spec::TablePolicy;
 use crate::store::table_spec::ValidatedTableSpec;
 use crate::store::table_state::{ArtifactReferences, TableRevision, TableSnapshot, WriterFence};
 use crate::store::types::NamespaceStats;
@@ -188,9 +185,7 @@ pub struct Store {
     object_store: Option<Arc<dyn ObjectStore>>,
     /// Durable state authority for object-backed tables. Absent when no remote
     /// object store is configured.
-    object_state_store: Option<Arc<dyn TableStateStore>>,
-    /// Durable state authority for legacy tables.
-    legacy_state_store: Arc<dyn TableStateStore>,
+    object_state_store: Option<Arc<ObjectTableStateStore>>,
     fence: WriterFence,
     /// The only table control surface. Owns the live registry, the per-table
     /// durable-state controllers, and the query-visibility lock.
@@ -363,11 +358,9 @@ impl Store {
             (store, _) => store,
         };
         let fence = WriterFence::new(writer_epoch()?);
-        let object_state_store = object_store.clone().map(|storage| {
-            Arc::new(ObjectTableStateStore::new(storage)) as Arc<dyn TableStateStore>
-        });
-        let legacy_state_store = Arc::new(SqliteTableStateStore::new(Arc::clone(&catalog), fence))
-            as Arc<dyn TableStateStore>;
+        let object_state_store = object_store
+            .clone()
+            .map(|storage| Arc::new(ObjectTableStateStore::new(storage)));
         let catalog_open_ms = catalog_open_started.elapsed().as_millis() as u64;
         // Rebuild-from-disk catalog adoption. On a fresh boot over a log_dir an
         // earlier server populated, the sqlite sidecar is empty, so the disk
@@ -398,7 +391,6 @@ impl Store {
             catalog,
             object_store,
             object_state_store,
-            legacy_state_store,
             fence,
             tables,
             scheduler,
@@ -464,30 +456,7 @@ impl Store {
     /// Returns the number of object-backed tables whose local projection was
     /// rebuilt from their durable state.
     pub async fn recover_tables(&self) -> Result<usize, StatsError> {
-        self.claim_legacy_tables().await?;
         self.recover_object_tables().await
-    }
-
-    /// Claim the writer fence for every table whose authority is SQLite.
-    ///
-    /// The claim confirms this process owns the data directory it already
-    /// flocked. A table whose specification keeps its data in objects is
-    /// claimed against its object HEAD instead; a versioned specification that
-    /// still writes local L0 is claimed here like any other legacy table.
-    async fn claim_legacy_tables(&self) -> Result<(), StatsError> {
-        for head in self.legacy_state_store.list().await? {
-            let status = self.catalog.spec_lifecycle(&head.table)?;
-            if TablePolicy::resolve(status.operative()).object_backed() {
-                continue;
-            }
-            let Some(selected) = self.legacy_state_store.load(&head.table).await? else {
-                continue;
-            };
-            self.legacy_state_store
-                .claim_writer(&head.table, self.fence, &selected)
-                .await?;
-        }
-        Ok(())
     }
 
     /// Recover object-backed tables from their durable state before the server

@@ -23,20 +23,17 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use bytes::Bytes;
-use futures::StreamExt;
 use sha2::{Digest, Sha256};
-use tokio::io::AsyncReadExt;
 use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::errors::StatsError;
 use crate::proto::finelog::stats::ObjectRef;
 use crate::store::catalog::projection::namespace_catalog;
 use crate::store::catalog::{Catalog, ObjectSegmentRecord, SpecLifecycle};
-use crate::store::object_store::{
-    ObjectByteStream, ObjectId, ObjectReference, ObjectStore, ObjectVersion,
-};
+use crate::store::object_store::{ObjectId, ObjectReference, ObjectStore, ObjectVersion};
+use crate::store::state_store::object::ObjectTableStateStore;
 use crate::store::state_store::object::OBJECTS_PREFIX;
-use crate::store::state_store::{StoredTableState, TableStateStore};
+use crate::store::state_store::StoredTableState;
 use crate::store::table_spec::TablePolicy;
 use crate::store::table_state::{
     resolve_publication, ArtifactReferences, CommitError, CommitToken, Committed, LocalArtifacts,
@@ -61,7 +58,7 @@ pub struct ObjectPersistence {
     pub table_dir: PathBuf,
     pub store: Arc<dyn ObjectStore>,
     pub legacy_store: Arc<dyn ObjectStore>,
-    pub state_store: Arc<dyn TableStateStore>,
+    pub state_store: Arc<ObjectTableStateStore>,
 }
 
 /// Permission to run one compaction and commit its replacement.
@@ -92,9 +89,6 @@ enum ControllerCommand {
 }
 
 const COMMAND_QUEUE_DEPTH: usize = 32;
-
-/// Chunk size an artifact or compaction output streams to the object store in.
-const UPLOAD_CHUNK_BYTES: usize = 8 * 1024 * 1024;
 
 pub struct TableController {
     table: String,
@@ -548,46 +542,37 @@ impl TableController {
 
     /// Write an immutable content-addressed Parquet object for this table.
     pub async fn write_parquet(&self, bytes: Bytes) -> Result<WrittenObject, StatsError> {
-        let objects = self.require_objects()?;
         let sha256: [u8; 32] = Sha256::digest(&bytes).into();
-        let id = ObjectId::table(
-            &self.table,
-            &format!("{OBJECTS_PREFIX}/{}.parquet", crate::hex::encode(&sha256)),
-        )?;
-        let version = objects.store.write(&id, bytes).await?;
-        let reference = ObjectReference {
-            id: id.clone(),
-            version: version.clone(),
-        };
-        let path = objects.store.local_path(&reference).await?;
-        Ok(WrittenObject {
-            path,
-            source: object_ref(&id, &version),
-            byte_size: i64::try_from(version.byte_size).unwrap_or(i64::MAX),
-        })
+        let key = format!("{OBJECTS_PREFIX}/{}.parquet", crate::hex::encode(&sha256));
+        self.write_content_addressed(&key, bytes).await
     }
 
     /// Upload a staged local file as an immutable content-addressed object.
     ///
     /// `kind` selects the object prefix (`objects`, `indices`, `projections`)
-    /// and `extension` its suffix. The bytes stream from the file rather than
-    /// being buffered whole, so a compaction output never sits in RAM twice.
+    /// and `extension` its suffix.
     pub async fn write_staged_object(
         &self,
         kind: &str,
         extension: &str,
         staged: &Path,
     ) -> Result<WrittenObject, StatsError> {
+        let bytes = Bytes::from(tokio::fs::read(staged).await.map_err(|error| {
+            StatsError::Internal(format!("read staged object {}: {error}", staged.display()))
+        })?);
+        let sha256: [u8; 32] = Sha256::digest(&bytes).into();
+        let key = format!("{kind}/{}.{extension}", crate::hex::encode(&sha256));
+        self.write_content_addressed(&key, bytes).await
+    }
+
+    async fn write_content_addressed(
+        &self,
+        relative_key: &str,
+        bytes: Bytes,
+    ) -> Result<WrittenObject, StatsError> {
         let objects = self.require_objects()?;
-        let sha256 = file_sha256(staged)?;
-        let id = ObjectId::table(
-            &self.table,
-            &format!("{kind}/{}.{extension}", crate::hex::encode(&sha256)),
-        )?;
-        let version = objects
-            .store
-            .write_stream(&id, file_byte_stream(staged).await?)
-            .await?;
+        let id = ObjectId::table(&self.table, relative_key)?;
+        let version = objects.store.write(&id, bytes).await?;
         let reference = ObjectReference {
             id: id.clone(),
             version: version.clone(),
@@ -929,35 +914,6 @@ fn object_ref(id: &ObjectId, version: &ObjectVersion) -> ObjectRef {
     }
 }
 
-/// Stream a staged file in bounded chunks, so an upload never holds the whole
-/// object in RAM.
-async fn file_byte_stream(path: &Path) -> Result<ObjectByteStream, StatsError> {
-    let file = tokio::fs::File::open(path).await.map_err(|error| {
-        StatsError::Internal(format!("open staged object {}: {error}", path.display()))
-    })?;
-    Ok(futures::stream::try_unfold(file, |mut file| async move {
-        let mut chunk = vec![0_u8; UPLOAD_CHUNK_BYTES];
-        let mut filled = 0;
-        while filled < chunk.len() {
-            let read = file
-                .read(&mut chunk[filled..])
-                .await
-                .map_err(|error| StatsError::Internal(format!("read staged object: {error}")))?;
-            if read == 0 {
-                break;
-            }
-            filled += read;
-        }
-        if filled == 0 {
-            return Ok(None);
-        }
-        chunk.truncate(filled);
-        Ok(Some((Bytes::from(chunk), file)))
-    })
-    .boxed())
-}
-
-/// Content SHA-256 of a staged file, read in bounded chunks.
 pub fn file_sha256(path: &Path) -> Result<[u8; 32], StatsError> {
     let mut file = std::fs::File::open(path).map_err(|error| {
         StatsError::Internal(format!("open {} for hashing: {error}", path.display()))
@@ -1029,7 +985,7 @@ mod tests {
         table_dir: PathBuf,
         catalog: Arc<Catalog>,
         store: Arc<dyn ObjectStore>,
-        state_store: Arc<dyn TableStateStore>,
+        state_store: Arc<ObjectTableStateStore>,
         fence: u64,
     ) -> Arc<TableController> {
         TableController::start(

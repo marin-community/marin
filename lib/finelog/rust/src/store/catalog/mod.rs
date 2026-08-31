@@ -19,11 +19,11 @@
 //! - [`migrations`]: the ordered schema migrations the sidecar itself runs
 //!   through at open.
 //!
-//! Durable *table state* is a separate boundary — `store::state_store`
-//! defines the `TableStateStore` trait; its sqlite implementation commits
-//! through this catalog (legacy authority), its object implementation keeps
-//! HEAD and immutable state documents remotely and this catalog holds only
-//! the projection that [`projection`] rebuilds.
+//! Durable *table state* is a separate boundary. For a legacy table this
+//! catalog IS the authority (its writer holds the data-dir flock). For an
+//! object-backed table `store::state_store::object` keeps HEAD and immutable
+//! state documents remotely, and this catalog holds only the projection that
+//! [`projection`] rebuilds.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
