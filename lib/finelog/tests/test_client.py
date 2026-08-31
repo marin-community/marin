@@ -620,6 +620,43 @@ def test_get_table_retries_transient_registration_failure(tracked_clients, monke
         client.close()
 
 
+def test_get_table_reregisters_after_server_loses_namespace(tracked_clients, monkeypatch):
+    """A server-side catalog reset must not strand a long-lived Table handle."""
+    monkeypatch.setattr(log_client_mod, "_BACKOFF_INITIAL", 1e-9)
+    monkeypatch.setattr(log_client_mod, "_BACKOFF_MAX", 1e-9)
+
+    catalog_registered = False
+    real_register = _FakeStatsServiceClient.register_table
+    real_write = _FakeStatsServiceClient.write_rows
+
+    def register(self, request):
+        nonlocal catalog_registered
+        catalog_registered = True
+        return real_register(self, request)
+
+    def require_registration(self, request):
+        if not catalog_registered:
+            raise ConnectError(Code.NOT_FOUND, f'namespace "{request.namespace}" is not registered')
+        return real_write(self, request)
+
+    monkeypatch.setattr(_FakeStatsServiceClient, "register_table", register)
+    monkeypatch.setattr(_FakeStatsServiceClient, "write_rows", require_registration)
+    client = LogClient.connect("http://h:1")
+    try:
+        table = client.get_table("iris.worker", WorkerStat)
+        table.write([WorkerStat(worker_id="w-1", timestamp_ms=1, mem_bytes=128)])
+        assert table.flush(timeout=5.0) == FlushResult.SUCCEEDED
+
+        catalog_registered = False
+        table.write([WorkerStat(worker_id="w-2", timestamp_ms=2, mem_bytes=256)])
+
+        assert table.flush(timeout=5.0) == FlushResult.SUCCEEDED
+        rows = [_decode_ipc_table(request.arrow_ipc) for request in tracked_clients[0].writes]
+        assert pa.concat_tables(rows).column("worker_id").to_pylist() == ["w-1", "w-2"]
+    finally:
+        client.close()
+
+
 def test_table_query_round_trips(tracked_clients):
     client = LogClient.connect("http://h:1")
     try:

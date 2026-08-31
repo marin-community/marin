@@ -93,6 +93,13 @@ permanent rejection or retention eviction. Hub copies can be stale during the fa
 they diagnose, so operators check metric freshness and query the regional namespace
 when the hub or network is unavailable.
 
+Client-owned namespaces register lazily on their first write. A long-lived `Table`
+handle that receives `NOT_FOUND` from `WriteRows` retains the failed batch, registers
+its schema again, and retries. This lets producers recover when a node-local Finelog
+restart replaces the catalog. Producers running a client without this behavior need
+a restart, which creates a new `Table` handle and repeats lazy registration, or a
+manual `RegisterTable` call before their writes resume.
+
 Only the k8s backend can forward — it projects the key through a Secret. The gcp
 backend refuses, because its only channel to the server is world-readable
 startup-script metadata.
