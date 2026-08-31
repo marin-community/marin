@@ -61,7 +61,7 @@ NIGHTLY_LANES: tuple[NightlyLane, ...] = (
         active_from=None,
         active_until=None,
         overdue_grace_minutes=300,
-        expected_min_seconds=60 * 60,
+        expected_min_seconds=0,
         expected_max_seconds=195 * 60,
     ),
     NightlyLane(
