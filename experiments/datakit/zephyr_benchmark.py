@@ -73,9 +73,15 @@ GCP_BENCHMARK_SAMPLE_PREFIX = "gs://marin-eu-west4/datakit/sample_100b_8ae7a94f"
 COREWEAVE_BENCHMARK_SAMPLE_PREFIX = "s3://marin-us-east-02a/marin/datakit/sample_100b_8ae7a94f"
 DECIMAL_GB_BYTES = 1_000_000_000
 MISSING_ARTIFACT_PREVIEW_LIMIT = 10
-BENCHMARK_WORKER_RESOURCES = ResourceConfig(cpu=8, ram="64g", disk="32g")
-BENCHMARK_MAP_TASK_RESOURCES = ResourceConfig(cpu=1, ram="8g", disk="4g")
-BENCHMARK_REDUCE_TASK_RESOURCES = ResourceConfig(cpu=3, ram="30g", disk="8g")
+DEFAULT_POOL_CPU = 8.0
+DEFAULT_POOL_RAM = "64g"
+DEFAULT_POOL_DISK = "32g"
+DEFAULT_MAP_TASK_CPU = 1.0
+DEFAULT_MAP_TASK_RAM = "8g"
+DEFAULT_MAP_TASK_DISK = "4g"
+DEFAULT_REDUCE_TASK_CPU = 3.0
+DEFAULT_REDUCE_TASK_RAM = "30g"
+DEFAULT_REDUCE_TASK_DISK = "8g"
 
 
 class BenchmarkTarget(StrEnum):
@@ -129,7 +135,7 @@ def _source_shard_stats(sample_prefix: str) -> dict[str, SourceShardStats]:
     can't discover it, so a selection here could otherwise pick a name it later
     rejects.
     """
-    root = StoragePath(sample_prefix.rstrip("/"))
+    root = StoragePath(sample_prefix)
     if root.scheme not in ("gs", "s3") or not root.bucket:
         raise ValueError(f"sample prefix must be a gs:// or s3:// URL: {sample_prefix}")
     fs, root_key = url_to_fs(str(root))
@@ -278,7 +284,7 @@ def _benchmark_steps(
     )
 
 
-def main() -> None:
+def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--sample-prefix",
@@ -298,15 +304,15 @@ def main() -> None:
     )
     parser.add_argument("--run-tag", required=True, help="Fresh identity tag that forces uncached benchmark stages.")
     parser.add_argument("--pool-workers", required=True, type=int)
-    parser.add_argument("--pool-cpu", type=float, default=BENCHMARK_WORKER_RESOURCES.cpu)
-    parser.add_argument("--pool-ram", default=BENCHMARK_WORKER_RESOURCES.ram)
-    parser.add_argument("--pool-disk", default=BENCHMARK_WORKER_RESOURCES.disk)
-    parser.add_argument("--map-task-cpu", type=float, default=BENCHMARK_MAP_TASK_RESOURCES.cpu)
-    parser.add_argument("--map-task-ram", default=BENCHMARK_MAP_TASK_RESOURCES.ram)
-    parser.add_argument("--map-task-disk", default=BENCHMARK_MAP_TASK_RESOURCES.disk)
-    parser.add_argument("--reduce-task-cpu", type=float, default=BENCHMARK_REDUCE_TASK_RESOURCES.cpu)
-    parser.add_argument("--reduce-task-ram", default=BENCHMARK_REDUCE_TASK_RESOURCES.ram)
-    parser.add_argument("--reduce-task-disk", default=BENCHMARK_REDUCE_TASK_RESOURCES.disk)
+    parser.add_argument("--pool-cpu", type=float, default=DEFAULT_POOL_CPU)
+    parser.add_argument("--pool-ram", default=DEFAULT_POOL_RAM)
+    parser.add_argument("--pool-disk", default=DEFAULT_POOL_DISK)
+    parser.add_argument("--map-task-cpu", type=float, default=DEFAULT_MAP_TASK_CPU)
+    parser.add_argument("--map-task-ram", default=DEFAULT_MAP_TASK_RAM)
+    parser.add_argument("--map-task-disk", default=DEFAULT_MAP_TASK_DISK)
+    parser.add_argument("--reduce-task-cpu", type=float, default=DEFAULT_REDUCE_TASK_CPU)
+    parser.add_argument("--reduce-task-ram", default=DEFAULT_REDUCE_TASK_RAM)
+    parser.add_argument("--reduce-task-disk", default=DEFAULT_REDUCE_TASK_DISK)
     parser.add_argument("--target", required=True, type=BenchmarkTarget, choices=list(BenchmarkTarget))
     parser.add_argument("--max-concurrent", required=True, type=int)
     parser.add_argument("--dedup-max-parallelism", required=True, type=int)
@@ -321,14 +327,14 @@ def main() -> None:
             "without adding representative signal."
         ),
     )
-    args = parser.parse_args()
+    return parser.parse_args()
 
-    configure_logging(logging.INFO)
-    selected_sources = _resolve_sources(args.sample_prefix, args.sources, args.source_fraction, args.pool_workers)
+
+def _scale_from_args(args: argparse.Namespace) -> PipelineScale:
     worker = ResourceConfig(cpu=args.pool_cpu, ram=args.pool_ram, disk=args.pool_disk)
     map_task = ResourceConfig(cpu=args.map_task_cpu, ram=args.map_task_ram, disk=args.map_task_disk)
     reduce_task = ResourceConfig(cpu=args.reduce_task_cpu, ram=args.reduce_task_ram, disk=args.reduce_task_disk)
-    scale = replace(
+    return replace(
         SMOKE_SCALE,
         pool=replace(
             SMOKE_SCALE.pool,
@@ -340,6 +346,11 @@ def main() -> None:
         dedup_max_parallelism=args.dedup_max_parallelism,
         cc_max_iterations=args.dedup_cc_max_iterations,
     )
+
+
+def _run_benchmark(args: argparse.Namespace) -> None:
+    selected_sources = _resolve_sources(args.sample_prefix, args.sources, args.source_fraction, args.pool_workers)
+    scale = _scale_from_args(args)
     zephyr_context = benchmark_zephyr_context(
         "zephyr-benchmark",
         scale,
@@ -358,6 +369,12 @@ def main() -> None:
             _target_steps(steps, args.target),
             max_concurrent=args.max_concurrent,
         )
+
+
+def main() -> None:
+    args = _parse_args()
+    configure_logging(logging.INFO)
+    _run_benchmark(args)
 
 
 if __name__ == "__main__":
