@@ -5,25 +5,11 @@ catalog. Each row contains a minimal diff, its lane, the rule codes expected to
 fire, and label provenance. Cases with no expected rules are hard negatives.
 
 The corpus has one positive case for each of the 63 catalog rules and three
-hard negatives for each lane. The review-corpus exporter rejects missing rule
-coverage, unknown or cross-lane labels, duplicate case IDs, and fewer than
-three hard negatives per lane.
-
-The exporter does not copy `corpus.jsonl` into a refinement archive. It writes
-two files under `benchmark/`:
-
-- `cases.jsonl` contains `alias`, `lane`, `diff`, and `changed_lines`. Prediction
-  workers read this file and the catalog.
-- `labels.jsonl` maps each alias to the source ID, description, expected rules,
-  provenance, and optional source metadata. Evaluation reads this file after
-  predictions are complete.
-
-Aliases use `case-NNN`. The exporter hashes the model-visible case content,
-sorts by that hash, and assigns aliases in order. The split and
-`manifest.json:benchmark_sha` therefore remain stable when source rows or JSON
-keys are reordered. `benchmark_sha` covers normalized cases and labels. Corpus
-validation checks both split files, alias ordering, catalog coverage, and the
-normalized hash.
+hard negatives for each lane. It is not loaded into the weekly PostgreSQL
+workbench and does not gate the agent's ordinary catalog pull request. It is a
+starting point for the separate agent-workbench evaluation: that harness should
+hide `expected_rules` and provenance from the agent, score the returned codes,
+and report its catalog and corpus identities.
 
 ## Adding cases
 
@@ -40,8 +26,7 @@ normalized hash.
   `human-review` for a labeled review example, and
   `synthetic-hard-negative` for a constructed near miss.
 
-Candidate discovery evidence is development data. Candidate adoption requires
-independently labeled fixed cases in this corpus and human approval of the
-catalog change. Discovery requires evidence from three distinct PRs. A report
-scores the fixed benchmark once for a catalog/corpus identity; its 7-day and
-30-day evidence views do not produce separate benchmark baselines.
+Candidate discovery evidence is development data. Human review remains the
+catalog merge gate. Add automated probe and benchmark guardrails only after the
+weekly workflow has produced enough real catalog pull requests to establish
+which checks reject useful changes or catch overbroad ones.
