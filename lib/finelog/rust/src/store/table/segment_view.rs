@@ -253,7 +253,7 @@ pub fn visible_segments(
     version: u64,
     store: Option<&dyn ObjectStore>,
 ) -> Result<VecDeque<LocalSegment>, StatsError> {
-    let status = catalog.table_spec_status(table)?;
+    let status = catalog.spec_lifecycle(table)?;
     let rollback_alias = status.migration.as_ref().and_then(|migration| {
         (status.active_version() == version && migration.from_version == Some(version))
             .then_some(migration.to_version.unwrap_or(0))

@@ -10,8 +10,8 @@ use crate::proto::finelog::stats::{
     CatalogSegment, MigrationPhase, NamespaceCatalog, ObjectRef, ProjectionArtifact,
     TableVersionSegments,
 };
-use crate::store::catalog::object_state_store::TABLE_STATE_FORMAT_VERSION;
 use crate::store::catalog::Catalog;
+use crate::store::state_store::object::TABLE_STATE_FORMAT_VERSION;
 use crate::store::table_state::ArtifactReferences;
 use crate::store::types::{basename, segment_relative_key, SegmentLocation};
 
@@ -21,7 +21,7 @@ pub fn namespace_catalog(
     namespace: &str,
     namespace_dir: &Path,
 ) -> Result<NamespaceCatalog, StatsError> {
-    let status = catalog.table_spec_status(namespace)?;
+    let status = catalog.spec_lifecycle(namespace)?;
     if status.catalog_generation == 0 {
         return Err(StatsError::SchemaValidation(format!(
             "namespace {namespace:?} has no versioned table specification"

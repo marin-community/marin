@@ -38,11 +38,11 @@ use crate::errors::StatsError;
 use crate::indices::cache::IndexCache;
 use crate::indices::IndexRegistry;
 use crate::maintenance::MaintenanceLimits;
-use crate::store::catalog::state_store::{StoredTableState, TableStateStore};
 use crate::store::catalog::Catalog;
 use crate::store::object_store::ObjectStore;
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{AlignedBatch, Schema};
+use crate::store::state_store::{StoredTableState, TableStateStore};
 use crate::store::store::{ServeMode, LOG_NAMESPACE_DIR, LOG_NAMESPACE_NAME};
 use crate::store::table_state::{TableSnapshot, WriterFence};
 
@@ -453,11 +453,11 @@ mod tests {
     use crate::proto::finelog::stats::{
         ColumnType, L0Mode, OperatingPolicy, SourceLayout, TableSpec as ProtoTableSpec,
     };
-    use crate::store::catalog::object_state_store::ObjectTableStateStore;
     use crate::store::object_store::{
         build_remote_object_store, CachedObjectStore, LegacyObjectStore,
     };
     use crate::store::schema::{schema_to_proto_owned, with_implicit_seq, AlignedBatch, Column};
+    use crate::store::state_store::object::ObjectTableStateStore;
     use crate::test_support::{
         FaultAction, FaultGate, FaultInjectingObjectStore, ObjectFault, ObjectOp, ObjectPattern,
     };

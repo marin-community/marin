@@ -113,7 +113,7 @@ fn table_spec_state_persists_across_catalog_reopen() {
             .unwrap();
     }
     let catalog = Catalog::open(Some(&dir)).unwrap();
-    let status = catalog.table_spec_status("a").unwrap();
+    let status = catalog.spec_lifecycle("a").unwrap();
     assert_eq!(status.active.as_ref(), Some(&v1));
     assert_eq!(status.catalog_generation, 1);
     std::fs::remove_dir_all(&dir).ok();
@@ -304,7 +304,7 @@ fn a_failing_delete_leaves_every_namespace_row_in_place() {
 
     assert_eq!(cat.list_segments("a").unwrap().len(), 1);
     assert_eq!(cat.get_policy("a").unwrap().max_segments, Some(3));
-    assert_eq!(cat.table_spec_status("a").unwrap().active_version(), 1);
+    assert_eq!(cat.spec_lifecycle("a").unwrap().active_version(), 1);
     assert_eq!(cat.forward_cursor("hub", "a").unwrap(), Some(3));
     assert!(cat.list_all().unwrap().iter().any(|(name, _)| name == "a"));
 }

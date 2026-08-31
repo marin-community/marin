@@ -34,11 +34,11 @@ use finelog::proto::finelog::stats::{
     TableSpec, TableSpecView,
 };
 use finelog::query::{make_ctx, run_query_over};
-use finelog::store::catalog::object_state_store::ObjectTableStateStore;
-use finelog::store::catalog::object_state_store::OBJECTS_PREFIX;
 use finelog::store::object_store::{build_remote_object_store, ObjectId, ObjectStore};
 use finelog::store::policy::StoragePolicy;
 use finelog::store::schema::{schema_to_arrow, schema_to_proto_owned, Column, Schema};
+use finelog::store::state_store::object::ObjectTableStateStore;
+use finelog::store::state_store::object::OBJECTS_PREFIX;
 use finelog::store::store::{ServeMode, Store};
 use finelog::store::table_spec::ValidatedTableSpec;
 use finelog::store::table_state::{CommitError, TableRevision};
@@ -524,11 +524,11 @@ async fn a_crash_during_migration_backfill_resumes_and_rejects_the_stale_lease()
     for _ in 0..4 {
         restarted.maintain_namespace(TABLE, false).await.unwrap();
         invariants.check(&restarted).await;
-        if restarted.table_spec_status(TABLE).unwrap().active_version() == 2 {
+        if restarted.spec_lifecycle(TABLE).unwrap().active_version() == 2 {
             break;
         }
     }
-    let status = restarted.table_spec_status(TABLE).unwrap();
+    let status = restarted.spec_lifecycle(TABLE).unwrap();
     assert_eq!(status.active_version(), 2, "the migration must activate");
 
     // The lease belongs to the fence the crashed process held, so its commit is

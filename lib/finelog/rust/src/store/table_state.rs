@@ -19,8 +19,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::errors::StatsError;
 use crate::proto::finelog::stats::{NamespaceCatalog, ObjectRef};
-use crate::store::catalog::state_store::{BackendToken, StoredTableState};
 use crate::store::object_store::ObjectVersion;
+use crate::store::state_store::{BackendToken, StoredTableState};
 use crate::store::types::SegmentRow;
 
 /// Monotonic durable revision of one table's state.
@@ -149,7 +149,7 @@ impl TableSnapshot {
         Self { state, token }
     }
 
-    /// Adapt the state a [`TableStateStore`](crate::store::catalog::state_store::TableStateStore)
+    /// Adapt the state a [`TableStateStore`](crate::store::state_store::TableStateStore)
     /// selected.
     pub fn from_stored(stored: &StoredTableState) -> Self {
         let state = TableState::new(stored.catalog.clone());
@@ -340,7 +340,7 @@ pub fn resolve_publication(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::catalog::object_state_store::TABLE_STATE_FORMAT_VERSION;
+    use crate::store::state_store::object::TABLE_STATE_FORMAT_VERSION;
 
     fn state(revision: u64, active_version: u64) -> TableState {
         TableState::new(NamespaceCatalog {

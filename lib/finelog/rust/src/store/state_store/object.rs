@@ -13,10 +13,10 @@ use sha2::{Digest, Sha256};
 
 use crate::errors::StatsError;
 use crate::proto::finelog::stats::{CatalogHead, NamespaceCatalog, ObjectRef};
-use crate::store::catalog::state_store::{
+use crate::store::object_store::{ObjectId, ObjectMetadata, ObjectPrefix, ObjectStore};
+use crate::store::state_store::{
     fenced_error, BackendToken, StoredTableState, TableHead, TableStateStore,
 };
-use crate::store::object_store::{ObjectId, ObjectMetadata, ObjectPrefix, ObjectStore};
 use crate::store::table_state::{TableRevision, WriterFence};
 
 pub const TABLE_STATE_FORMAT_VERSION: u64 = 1;

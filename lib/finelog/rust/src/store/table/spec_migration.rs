@@ -27,13 +27,13 @@ use tokio::sync::RwLock;
 use crate::errors::StatsError;
 use crate::partition_policy::{PartitionedBatches, PhysicalPartitionPolicy, SegmentPartition};
 use crate::proto::finelog::stats::{MigrationPhase, SourceLayout, TableMigrationStatus};
-use crate::store::catalog::object_state_store::OBJECTS_PREFIX;
-use crate::store::catalog::{Catalog, ObjectSegmentRecord, TableSpecStatus};
+use crate::store::catalog::{Catalog, ObjectSegmentRecord, SpecLifecycle};
 use crate::store::compaction::config::CompactionJob;
 use crate::store::compaction::executor::{
     run_job_with_partition_policy, CompactionExecution, CompactionLayout, OutputPolicy,
 };
 use crate::store::compaction::staging::StagingDir;
+use crate::store::state_store::object::OBJECTS_PREFIX;
 use crate::store::table::controller::{file_sha256, TableController};
 use crate::store::table::flush::partition_object_batch;
 use crate::store::table::index_artifacts::publish_segment_artifacts;
@@ -117,7 +117,7 @@ pub struct SpecMigration<'a> {
     pub blocked: &'a std::sync::Mutex<MigrationBlock>,
     /// Applied when an activation moves the table to a new version, so the
     /// runtime's cached policy and query view follow the commit.
-    pub on_activated: &'a (dyn Fn(&TableSpecStatus) -> Result<(), StatsError> + Send + Sync),
+    pub on_activated: &'a (dyn Fn(&SpecLifecycle) -> Result<(), StatsError> + Send + Sync),
 }
 
 /// Advance an automatic transition by one tick, recording whether it is stuck.
@@ -148,7 +148,7 @@ fn report_failure(migration: &SpecMigration<'_>, error: &StatsError) {
     if failures < BLOCKED_FAILURE_THRESHOLD {
         return;
     }
-    let status = migration.catalog.table_spec_status(migration.table).ok();
+    let status = migration.catalog.spec_lifecycle(migration.table).ok();
     let progress = status.as_ref().and_then(|status| status.migration.as_ref());
     tracing::error!(
         namespace = %migration.table,
@@ -162,7 +162,7 @@ fn report_failure(migration: &SpecMigration<'_>, error: &StatsError) {
 }
 
 async fn advance_phase(migration: &SpecMigration<'_>) -> Result<bool, StatsError> {
-    let status = migration.catalog.table_spec_status(migration.table)?;
+    let status = migration.catalog.spec_lifecycle(migration.table)?;
     let Some(pending) = status.migration.clone() else {
         return Ok(false);
     };
@@ -209,7 +209,7 @@ async fn advance_phase(migration: &SpecMigration<'_>) -> Result<bool, StatsError
 
 /// Publish the verified target version in one state commit and swap the query
 /// view onto it.
-async fn activate(migration: &SpecMigration<'_>) -> Result<TableSpecStatus, StatsError> {
+async fn activate(migration: &SpecMigration<'_>) -> Result<SpecLifecycle, StatsError> {
     let _visibility_guard = migration.query_visibility.write().await;
     // The in-memory query view swaps only after the activation revision is known
     // to be published, so queries never see a version whose state no reader can
@@ -256,7 +256,7 @@ async fn activate(migration: &SpecMigration<'_>) -> Result<TableSpecStatus, Stat
 /// universe that is actually left.
 async fn backfill(
     migration: &SpecMigration<'_>,
-    status: &TableSpecStatus,
+    status: &SpecLifecycle,
     pending: &TableMigrationStatus,
 ) -> Result<bool, StatsError> {
     let _flush_guard = migration.flush_gate.lock().await;
@@ -339,7 +339,7 @@ async fn backfill(
     }
     // A transition whose universe held no source at all never checkpointed, so
     // it is still in the phase registration left it in.
-    let backfilled = migration.catalog.table_spec_status(table)?.phase;
+    let backfilled = migration.catalog.spec_lifecycle(table)?.phase;
     let verified = migration
         .controller
         .commit(|| {

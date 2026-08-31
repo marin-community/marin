@@ -20,7 +20,6 @@ use tokio::sync::RwLock;
 
 use crate::errors::StatsError;
 use crate::indices::SegmentIndexConfig;
-use crate::store::catalog::object_state_store::OBJECTS_PREFIX;
 use crate::store::catalog::Catalog;
 use crate::store::compaction::config::{CompactionConfig, CompactionJob};
 use crate::store::compaction::executor::{
@@ -28,6 +27,7 @@ use crate::store::compaction::executor::{
 };
 use crate::store::compaction::planner::plan;
 use crate::store::compaction::staging::StagingDir;
+use crate::store::state_store::object::OBJECTS_PREFIX;
 use crate::store::table::controller::{MaintenanceLease, TableController};
 use crate::store::table::index_artifacts::publish_segment_artifacts;
 use crate::store::table::segment_format::SegmentFormat;
@@ -66,7 +66,7 @@ pub async fn compact_once(
 ) -> Result<bool, StatsError> {
     let active_version = compaction
         .catalog
-        .table_spec_status(compaction.table)?
+        .spec_lifecycle(compaction.table)?
         .active_version();
     if active_version == 0 {
         return Ok(false);

@@ -18,7 +18,7 @@ use crate::errors::StatsError;
 use crate::indices::SegmentIndexConfig;
 use crate::maintenance::{OBJECT_GC_INTERVAL, OBJECT_ORPHAN_GRACE, REWRITE_LAYOUT_BUDGET};
 use crate::policies::{physical_partition_policy_for, segment_indexes_enabled_for};
-use crate::store::catalog::TableSpecStatus;
+use crate::store::catalog::SpecLifecycle;
 use crate::store::compaction::local_driver::{self, LocalCompaction};
 use crate::store::compaction::object_driver::{self, ObjectCompaction};
 use crate::store::legacy::archive::{self, LegacyArchive};
@@ -98,7 +98,7 @@ async fn run_one(runtime: &Arc<TableRuntime>, work: TableWork) -> Result<WorkOut
             Ok(WorkOutcome::done())
         }
         TableWork::SpecMigration => {
-            let activated = |status: &TableSpecStatus| -> Result<(), StatsError> {
+            let activated = |status: &SpecLifecycle| -> Result<(), StatsError> {
                 runtime.activate_query_version(status.active_version())?;
                 runtime.update_table_spec(status);
                 Ok(())

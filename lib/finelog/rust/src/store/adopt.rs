@@ -600,7 +600,7 @@ pub fn adopt_local_segments(
 
     discard_staging_files(dir, namespace);
 
-    let status = catalog.table_spec_status(namespace)?;
+    let status = catalog.spec_lifecycle(namespace)?;
     let object_records: HashMap<_, _> = catalog
         .object_segments(namespace)?
         .into_iter()

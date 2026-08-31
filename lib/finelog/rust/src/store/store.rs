@@ -33,12 +33,7 @@ use crate::policies::{
 use crate::proto::finelog::stats::{ColumnType, L0Mode, SchemaView};
 use crate::query::provider::NamespaceProvider;
 use crate::query::RegisteredProvider;
-use crate::store::catalog::object_state_store::ObjectTableStateStore;
-use crate::store::catalog::sqlite_state_store::SqliteTableStateStore;
-use crate::store::catalog::state_store::TableStateStore;
-use crate::store::catalog::{
-    Catalog, PublishedObjectSegment, RegisteredNamespace, TableSpecStatus,
-};
+use crate::store::catalog::{Catalog, PublishedObjectSegment, RegisteredNamespace, SpecLifecycle};
 use crate::store::ipc::decode_one_record_batch;
 use crate::store::namespace_name::validate_namespace_name;
 use crate::store::object_store::{
@@ -51,6 +46,9 @@ use crate::store::schema::{
     validate_and_align_forwarded_batch, validate_index_policies, AlignedBatch, Column, Schema,
     MAX_WRITE_ROWS_BYTES, MAX_WRITE_ROWS_ROWS,
 };
+use crate::store::state_store::object::ObjectTableStateStore;
+use crate::store::state_store::sqlite::SqliteTableStateStore;
+use crate::store::state_store::TableStateStore;
 use crate::store::table::query_view::SegmentObjectMap;
 use crate::store::table::{TableManager, TABLE_LIFECYCLE_SHUTDOWN_TIMEOUT};
 use crate::store::table_spec::TablePolicy;
@@ -92,7 +90,7 @@ pub struct ForwardedWrite {
 pub struct VersionedRegistration {
     pub schema: Schema,
     pub policy: StoragePolicy,
-    pub table_spec_status: TableSpecStatus,
+    pub spec_lifecycle: SpecLifecycle,
     pub object_backed: bool,
 }
 
@@ -480,7 +478,7 @@ impl Store {
     /// still writes local L0 is claimed here like any other legacy table.
     async fn claim_legacy_tables(&self) -> Result<(), StatsError> {
         for head in self.legacy_state_store.list().await? {
-            let status = self.catalog.table_spec_status(&head.table)?;
+            let status = self.catalog.spec_lifecycle(&head.table)?;
             if TablePolicy::resolve(status.operative()).object_backed() {
                 continue;
             }
@@ -580,10 +578,7 @@ impl Store {
         state: crate::proto::finelog::stats::NamespaceCatalog,
     ) -> Result<bool, StatsError> {
         let remote_revision = state.catalog_generation.unwrap_or(0);
-        let local_revision = self
-            .catalog
-            .table_spec_status(namespace)?
-            .catalog_generation;
+        let local_revision = self.catalog.spec_lifecycle(namespace)?.catalog_generation;
         if local_revision > remote_revision {
             self.tables.controller(namespace).mark_publication_owed();
             tracing::info!(
@@ -863,7 +858,7 @@ impl Store {
         }
         let schema = validated.schema.clone();
         let policy = validated.cache_policy.clone();
-        let (schema, table_spec_status) = self.register_table_with(
+        let (schema, spec_lifecycle) = self.register_table_with(
             name,
             schema,
             policy.clone(),
@@ -874,7 +869,7 @@ impl Store {
         Ok(VersionedRegistration {
             schema,
             policy,
-            table_spec_status: table_spec_status.expect("versioned registration returns status"),
+            spec_lifecycle: spec_lifecycle.expect("versioned registration returns status"),
             object_backed: validated.l0_mode == L0Mode::L0_MODE_OBJECT_STORE,
         })
     }
@@ -898,7 +893,7 @@ impl Store {
         policy: StoragePolicy,
         registration: SchemaRegistration,
         table_spec: Option<&ValidatedTableSpec>,
-    ) -> Result<(Schema, Option<TableSpecStatus>), StatsError> {
+    ) -> Result<(Schema, Option<SpecLifecycle>), StatsError> {
         // Validate the name (and fence the `log` dir special-case) first.
         self.namespace_dir(name)?;
         validate_index_policies(&schema)?;
@@ -983,7 +978,7 @@ impl Store {
         // owed to the table's maintenance loop, which publishes it or a later
         // revision containing it.
         let controller = self.tables.controller(name);
-        let table_spec_status = table_spec
+        let spec_lifecycle = table_spec
             .map(|table_spec| {
                 controller
                     .commit_owing_publication(|| {
@@ -1000,12 +995,12 @@ impl Store {
                     .map_err(StatsError::from)
             })
             .transpose()?;
-        if let Some(status) = &table_spec_status {
+        if let Some(status) = &spec_lifecycle {
             if let Some(table) = self.tables.get(name) {
                 table.update_table_spec(status);
             }
         }
-        Ok((effective_schema, table_spec_status))
+        Ok((effective_schema, spec_lifecycle))
     }
 
     /// Append a routed batch and return its row count and durability target.
@@ -1343,9 +1338,9 @@ impl Store {
         self.catalog.get_policy(name)
     }
 
-    pub fn table_spec_status(&self, name: &str) -> Result<TableSpecStatus, StatsError> {
+    pub fn spec_lifecycle(&self, name: &str) -> Result<SpecLifecycle, StatsError> {
         self.catalog.require_live(name)?;
-        self.catalog.table_spec_status(name)
+        self.catalog.spec_lifecycle(name)
     }
 
     /// The repeated error `name`'s specification transition is stuck on, or
@@ -1356,7 +1351,7 @@ impl Store {
             .and_then(|table| table.blocked_migration_error())
     }
 
-    pub async fn abort_table_migration(&self, name: &str) -> Result<TableSpecStatus, StatsError> {
+    pub async fn abort_table_migration(&self, name: &str) -> Result<SpecLifecycle, StatsError> {
         self.catalog.require_live(name)?;
         let _visibility_guard = self.tables.query_visibility().write().await;
         let table = self.tables.require(name)?;
@@ -1369,15 +1364,11 @@ impl Store {
             })
             .await?
             .output;
-        self.apply_table_spec_status(name, &status)?;
+        self.apply_spec_lifecycle(name, &status)?;
         Ok(status)
     }
 
-    fn apply_table_spec_status(
-        &self,
-        name: &str,
-        status: &TableSpecStatus,
-    ) -> Result<(), StatsError> {
+    fn apply_spec_lifecycle(&self, name: &str, status: &SpecLifecycle) -> Result<(), StatsError> {
         let table = self.tables.require(name)?;
         table.activate_query_version(status.active_version())?;
         table.update_table_spec(status);
@@ -1779,7 +1770,7 @@ mod tests {
         } = fixture;
         assert_eq!(
             store
-                .table_spec_status("iris.worker")
+                .spec_lifecycle("iris.worker")
                 .unwrap()
                 .active_version(),
             1
@@ -1880,7 +1871,7 @@ mod tests {
         let unpublished = store
             .register_versioned_table("iris.worker", partitioned_object_backed_spec(2))
             .unwrap();
-        assert_eq!(unpublished.table_spec_status.desired_version(), 2);
+        assert_eq!(unpublished.spec_lifecycle.desired_version(), 2);
 
         store.shutdown(Duration::from_secs(1)).await;
         drop(store);
@@ -1896,7 +1887,7 @@ mod tests {
 
         // The local revision is ahead of HEAD, so nothing is rebuilt from it.
         assert_eq!(reopened.recover_tables().await.unwrap(), 0);
-        let recovered_status = reopened.table_spec_status("iris.worker").unwrap();
+        let recovered_status = reopened.spec_lifecycle("iris.worker").unwrap();
         assert_eq!(recovered_status.active_version(), 1);
         assert_eq!(recovered_status.desired_version(), 2);
         // Recovery localized nothing: the query view names the segments the
@@ -2040,7 +2031,7 @@ mod tests {
         assert_eq!(recovered_store.recover_tables().await.unwrap(), 1);
         assert_eq!(
             recovered_store
-                .table_spec_status("iris.worker")
+                .spec_lifecycle("iris.worker")
                 .unwrap()
                 .active_version(),
             1
@@ -2119,8 +2110,8 @@ mod tests {
         let registration = store
             .register_versioned_table("iris.worker", retargeted_object_backed_spec(2))
             .unwrap();
-        assert_eq!(registration.table_spec_status.active_version(), 1);
-        assert_eq!(registration.table_spec_status.desired_version(), 2);
+        assert_eq!(registration.spec_lifecycle.active_version(), 1);
+        assert_eq!(registration.spec_lifecycle.desired_version(), 2);
         let transition = store.publish_object_catalog("iris.worker").await.unwrap();
         let active = transition
             .state()
@@ -2135,7 +2126,7 @@ mod tests {
             .await
             .unwrap();
 
-        let status = store.table_spec_status("iris.worker").unwrap();
+        let status = store.spec_lifecycle("iris.worker").unwrap();
         assert_eq!(status.active_version(), 2);
         let snapshot = store.query_snapshot("iris.worker").unwrap();
         assert_eq!(snapshot.paths.len(), 2);
@@ -2175,7 +2166,7 @@ mod tests {
             .maintain_namespace("iris.worker", false)
             .await
             .unwrap();
-        let retired = store.table_spec_status("iris.worker").unwrap();
+        let retired = store.spec_lifecycle("iris.worker").unwrap();
         assert_eq!(
             retired.phase,
             crate::proto::finelog::stats::MigrationPhase::MIGRATION_PHASE_RETIRED
@@ -2247,15 +2238,15 @@ mod tests {
                 ObjectSpec::new(1).max_query_time_ms(1).validated(),
             )
             .unwrap();
-        assert_eq!(registration.table_spec_status.active_version(), 0);
-        assert_eq!(registration.table_spec_status.desired_version(), 1);
+        assert_eq!(registration.spec_lifecycle.active_version(), 0);
+        assert_eq!(registration.spec_lifecycle.desired_version(), 1);
         store.publish_object_catalog("iris.worker").await.unwrap();
 
         store
             .maintain_namespace("iris.worker", false)
             .await
             .unwrap();
-        let activated = store.table_spec_status("iris.worker").unwrap();
+        let activated = store.spec_lifecycle("iris.worker").unwrap();
         assert_eq!(activated.active_version(), 1);
         assert_eq!(activated.desired_version(), 0);
         assert_eq!(
@@ -2358,7 +2349,7 @@ mod tests {
         let before = store.query_snapshot("iris.worker").unwrap().paths;
         assert_eq!(before.len(), 1);
         let generation_before = store
-            .table_spec_status("iris.worker")
+            .spec_lifecycle("iris.worker")
             .unwrap()
             .catalog_generation;
 
@@ -2369,11 +2360,11 @@ mod tests {
                 ObjectSpec::new(2).max_query_time_ms(30_000).validated(),
             )
             .unwrap();
-        assert_eq!(registration.table_spec_status.active_version(), 2);
-        assert_eq!(registration.table_spec_status.desired_version(), 0);
-        assert!(registration.table_spec_status.migration.is_none());
+        assert_eq!(registration.spec_lifecycle.active_version(), 2);
+        assert_eq!(registration.spec_lifecycle.desired_version(), 0);
+        assert!(registration.spec_lifecycle.migration.is_none());
         assert_eq!(
-            registration.table_spec_status.catalog_generation,
+            registration.spec_lifecycle.catalog_generation,
             generation_before + 1
         );
 
@@ -2438,7 +2429,7 @@ mod tests {
         assert!(matches!(error, StatsError::SchemaConflict(_)), "{error}");
 
         // The rejected version left no transition behind.
-        let status = store.table_spec_status("iris.worker").unwrap();
+        let status = store.spec_lifecycle("iris.worker").unwrap();
         assert_eq!(status.active_version(), 1);
         assert_eq!(status.desired_version(), 0);
 
@@ -2509,7 +2500,7 @@ mod tests {
             .maintain_namespace("iris.worker", false)
             .await
             .unwrap();
-        let activated = store.table_spec_status("iris.worker").unwrap();
+        let activated = store.spec_lifecycle("iris.worker").unwrap();
         assert_eq!(activated.active_version(), 2);
         assert_eq!(
             activated.phase,
@@ -2533,7 +2524,7 @@ mod tests {
             .maintain_namespace("iris.worker", false)
             .await
             .unwrap();
-        let observing = store.table_spec_status("iris.worker").unwrap();
+        let observing = store.spec_lifecycle("iris.worker").unwrap();
         assert_eq!(
             observing.phase,
             crate::proto::finelog::stats::MigrationPhase::MIGRATION_PHASE_OBSERVING
@@ -2623,7 +2614,7 @@ mod tests {
             .maintain_namespace("iris.worker", false)
             .await
             .unwrap();
-        let retired = store.table_spec_status("iris.worker").unwrap();
+        let retired = store.spec_lifecycle("iris.worker").unwrap();
         assert_eq!(
             retired.phase,
             crate::proto::finelog::stats::MigrationPhase::MIGRATION_PHASE_RETIRED
@@ -2839,7 +2830,7 @@ mod tests {
         let registration = store
             .register_versioned_table("iris.worker", imported_spec())
             .unwrap();
-        let pending = registration.table_spec_status.migration.unwrap();
+        let pending = registration.spec_lifecycle.migration.unwrap();
         assert_eq!(
             pending.rows_total,
             Some(1),
@@ -2850,7 +2841,7 @@ mod tests {
             .maintain_namespace("iris.worker", false)
             .await
             .unwrap();
-        let activated = store.table_spec_status("iris.worker").unwrap();
+        let activated = store.spec_lifecycle("iris.worker").unwrap();
         assert_eq!(activated.active_version(), 1);
         assert_eq!(
             activated.phase,
@@ -2905,7 +2896,7 @@ mod tests {
             .register_versioned_table("iris.worker", imported_spec())
             .unwrap();
         assert_eq!(
-            registration.table_spec_status.migration.unwrap().rows_total,
+            registration.spec_lifecycle.migration.unwrap().rows_total,
             Some(1)
         );
 
@@ -2933,7 +2924,7 @@ mod tests {
             .maintain_namespace("iris.worker", false)
             .await
             .unwrap();
-        let activated = store.table_spec_status("iris.worker").unwrap();
+        let activated = store.spec_lifecycle("iris.worker").unwrap();
         assert_eq!(activated.active_version(), 1);
         assert_eq!(
             activated.phase,
@@ -3017,7 +3008,7 @@ mod tests {
             .register_versioned_table("iris.worker", object_backed_spec(1))
             .unwrap();
         assert_eq!(
-            registration.table_spec_status.migration.unwrap().rows_total,
+            registration.spec_lifecycle.migration.unwrap().rows_total,
             Some(11),
             "the frozen total still counts the unserveable row"
         );
@@ -3025,7 +3016,7 @@ mod tests {
             .maintain_namespace("iris.worker", false)
             .await
             .unwrap();
-        let activated = store.table_spec_status("iris.worker").unwrap();
+        let activated = store.spec_lifecycle("iris.worker").unwrap();
         assert_eq!(activated.active_version(), 1);
         assert_eq!(
             activated.phase,
@@ -3079,7 +3070,7 @@ mod tests {
             .maintain_namespace("iris.worker", false)
             .await
             .unwrap();
-        let retired = store.table_spec_status("iris.worker").unwrap();
+        let retired = store.spec_lifecycle("iris.worker").unwrap();
         assert_eq!(
             retired.phase,
             crate::proto::finelog::stats::MigrationPhase::MIGRATION_PHASE_RETIRED
@@ -3136,7 +3127,7 @@ mod tests {
         let pending = store
             .register_versioned_table("iris.worker", object_backed_spec(1))
             .unwrap();
-        assert_eq!(pending.table_spec_status.desired_version(), 1);
+        assert_eq!(pending.spec_lifecycle.desired_version(), 1);
         store.publish_object_catalog("iris.worker").await.unwrap();
         let aborted = store.abort_table_migration("iris.worker").await.unwrap();
 
@@ -3200,7 +3191,7 @@ mod tests {
             .await
             .unwrap();
         store.abort_table_migration("iris.worker").await.unwrap();
-        let aborted = store.table_spec_status("iris.worker").unwrap();
+        let aborted = store.spec_lifecycle("iris.worker").unwrap();
         assert_eq!(aborted.active_version(), 0);
 
         let table_prefix = remote_dir.join("_finelog/tables/iris.worker");
@@ -3295,7 +3286,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             store
-                .table_spec_status("iris.worker")
+                .spec_lifecycle("iris.worker")
                 .unwrap()
                 .active_version(),
             1
@@ -3414,7 +3405,7 @@ mod tests {
         // The aborted table's authority is the legacy path, which the object
         // layout does not carry: the cold server neither recovers nor fails it,
         // and the retained head does not block re-creating the table.
-        let missing = recovered.table_spec_status("iris.worker").unwrap_err();
+        let missing = recovered.spec_lifecycle("iris.worker").unwrap_err();
         assert!(matches!(missing, StatsError::NamespaceNotFound(_)));
         recovered
             .register_table("iris.worker", worker_schema(), StoragePolicy::default())
@@ -3677,7 +3668,7 @@ mod tests {
             .await
             .unwrap();
 
-        let status = store.table_spec_status("iris.worker").unwrap();
+        let status = store.spec_lifecycle("iris.worker").unwrap();
         assert_eq!(status.active_version(), 1);
         let snapshot = store.publish_object_catalog("iris.worker").await.unwrap();
         let version = snapshot

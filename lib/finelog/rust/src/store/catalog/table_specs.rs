@@ -6,7 +6,7 @@
 //! Owns the durable answer to "which definition version does this table run,
 //! and where is its transition": registration classifies a new version against
 //! the active one, activation/abort/retire move the migration phase, and
-//! [`TableSpecStatus`] is the read surface the runtime resolves its operating
+//! [`SpecLifecycle`] is the read surface the runtime resolves its operating
 //! policy from.
 
 use rusqlite::{Connection, OptionalExtension};
@@ -22,8 +22,13 @@ use crate::store::table_spec::{
     rollback_window_ms, table_spec_from_json, DefinitionChange,
 };
 
+/// Where one table stands in its specification lifecycle: the version queries
+/// run against (`active`), the version a registration asked for (`desired`,
+/// equal to or ahead of active), and the phase and progress of the transition
+/// between them. [`SpecLifecycle::operative`] picks the spec the runtime
+/// operates under.
 #[derive(Debug, Clone)]
-pub struct TableSpecStatus {
+pub struct SpecLifecycle {
     pub active: Option<ProtoTableSpec>,
     pub desired: Option<ProtoTableSpec>,
     pub phase: MigrationPhase,
@@ -31,7 +36,7 @@ pub struct TableSpecStatus {
     pub migration: Option<TableMigrationStatus>,
 }
 
-impl TableSpecStatus {
+impl SpecLifecycle {
     /// Return the query-visible TableSpec version, or zero for a legacy table.
     pub fn active_version(&self) -> u64 {
         self.active
@@ -92,10 +97,10 @@ pub(super) fn table_spec_for_version(
     json.as_deref().map(table_spec_from_json).transpose()
 }
 
-pub(super) fn table_spec_status_in(
+pub(super) fn spec_lifecycle_in(
     conn: &Connection,
     namespace: &str,
-) -> Result<TableSpecStatus, StatsError> {
+) -> Result<SpecLifecycle, StatsError> {
     let head: Option<(i64, i64, Option<i64>)> = conn
         .query_row(
             "SELECT catalog_generation, active_table_spec_version, desired_table_spec_version
@@ -106,7 +111,7 @@ pub(super) fn table_spec_status_in(
         .optional()
         .map_err(sqlite_err)?;
     let Some((generation, active_version, desired_version)) = head else {
-        return Ok(TableSpecStatus {
+        return Ok(SpecLifecycle {
             active: None,
             desired: None,
             phase: MigrationPhase::MIGRATION_PHASE_UNSPECIFIED,
@@ -125,7 +130,7 @@ pub(super) fn table_spec_status_in(
         .and_then(|migration| migration.phase)
         .and_then(|phase| phase.as_known())
         .unwrap_or_else(|| migration_phase_for_state(desired.is_some()));
-    Ok(TableSpecStatus {
+    Ok(SpecLifecycle {
         active,
         phase,
         desired,
@@ -240,9 +245,9 @@ pub(super) fn migratable_source_rows_in(
 }
 
 impl Catalog {
-    pub fn table_spec_status(&self, namespace: &str) -> Result<TableSpecStatus, StatsError> {
+    pub fn spec_lifecycle(&self, namespace: &str) -> Result<SpecLifecycle, StatsError> {
         let inner = self.inner.lock().unwrap();
-        table_spec_status_in(&inner.conn, namespace)
+        spec_lifecycle_in(&inner.conn, namespace)
     }
     /// Check that `spec` is a legal next definition for `namespace` without
     /// committing anything, so registration rejects an impossible version
@@ -279,7 +284,7 @@ impl Catalog {
                 )))
             };
         }
-        let status = table_spec_status_in(&inner.conn, namespace)?;
+        let status = spec_lifecycle_in(&inner.conn, namespace)?;
         if status.desired.is_some() {
             return Err(StatsError::SchemaConflict(format!(
                 "namespace {namespace:?} already has a table specification transition in progress"
@@ -331,7 +336,7 @@ impl Catalog {
         spec: &ProtoTableSpec,
         expected_hash: &[u8; 32],
         has_rows: bool,
-    ) -> Result<TableSpecStatus, StatsError> {
+    ) -> Result<SpecLifecycle, StatsError> {
         let version = spec.version.unwrap_or(0);
         let version_i64 = i64::try_from(version).map_err(|_| {
             StatsError::SchemaValidation(format!(
@@ -357,10 +362,10 @@ impl Catalog {
                     "table_spec version {version} is already registered with different contents"
                 )));
             }
-            return table_spec_status_in(&inner.conn, namespace);
+            return spec_lifecycle_in(&inner.conn, namespace);
         }
 
-        let status = table_spec_status_in(&inner.conn, namespace)?;
+        let status = spec_lifecycle_in(&inner.conn, namespace)?;
         if status.desired.is_some() {
             return Err(StatsError::SchemaConflict(format!(
                 "namespace {namespace:?} already has a table specification transition in progress"
@@ -479,14 +484,14 @@ impl Catalog {
             )
             .map_err(sqlite_err)?;
         transaction.commit().map_err(sqlite_err)?;
-        table_spec_status_in(&inner.conn, namespace)
+        spec_lifecycle_in(&inner.conn, namespace)
     }
     pub fn activate_desired_table_spec(
         &self,
         namespace: &str,
-    ) -> Result<TableSpecStatus, StatsError> {
+    ) -> Result<SpecLifecycle, StatsError> {
         let mut inner = self.inner.lock().unwrap();
-        let status = table_spec_status_in(&inner.conn, namespace)?;
+        let status = spec_lifecycle_in(&inner.conn, namespace)?;
         let desired = status.desired_version();
         if desired == 0 {
             return Ok(status);
@@ -543,16 +548,16 @@ impl Catalog {
             )
             .map_err(sqlite_err)?;
         transaction.commit().map_err(sqlite_err)?;
-        table_spec_status_in(&inner.conn, namespace)
+        spec_lifecycle_in(&inner.conn, namespace)
     }
     /// Abort the one in-flight migration and restore its source version.
     ///
     /// Backfill-only target objects become unreachable; writes accepted during
     /// the migration are reassigned to the source version so abort never drops
     /// rows. Published snapshots retain remote bytes until catalog GC.
-    pub fn abort_table_migration(&self, namespace: &str) -> Result<TableSpecStatus, StatsError> {
+    pub fn abort_table_migration(&self, namespace: &str) -> Result<SpecLifecycle, StatsError> {
         let mut inner = self.inner.lock().unwrap();
-        let status = table_spec_status_in(&inner.conn, namespace)?;
+        let status = spec_lifecycle_in(&inner.conn, namespace)?;
         let migration = status.migration.as_ref().ok_or_else(|| {
             StatsError::SchemaConflict(format!(
                 "namespace {namespace:?} has no table migration to abort"
@@ -634,16 +639,16 @@ impl Catalog {
             )
             .map_err(sqlite_err)?;
         transaction.commit().map_err(sqlite_err)?;
-        table_spec_status_in(&inner.conn, namespace)
+        spec_lifecycle_in(&inner.conn, namespace)
     }
     pub fn update_migration_phase(
         &self,
         namespace: &str,
         expected: MigrationPhase,
         phase: MigrationPhase,
-    ) -> Result<TableSpecStatus, StatsError> {
+    ) -> Result<SpecLifecycle, StatsError> {
         let mut inner = self.inner.lock().unwrap();
-        let status = table_spec_status_in(&inner.conn, namespace)?;
+        let status = spec_lifecycle_in(&inner.conn, namespace)?;
         if status.phase == phase {
             return Ok(status);
         }
@@ -669,7 +674,7 @@ impl Catalog {
             )
             .map_err(sqlite_err)?;
         transaction.commit().map_err(sqlite_err)?;
-        table_spec_status_in(&inner.conn, namespace)
+        spec_lifecycle_in(&inner.conn, namespace)
     }
     /// Restate the pending migration's row total as the universe it can still
     /// rewrite.
@@ -718,12 +723,9 @@ impl Catalog {
     /// listing it, so archived history stays queryable with or without a
     /// catalog row, while the imported table stops carrying rows it can no
     /// longer serve or rewrite.
-    pub fn retire_observed_migration(
-        &self,
-        namespace: &str,
-    ) -> Result<TableSpecStatus, StatsError> {
+    pub fn retire_observed_migration(&self, namespace: &str) -> Result<SpecLifecycle, StatsError> {
         let mut inner = self.inner.lock().unwrap();
-        let status = table_spec_status_in(&inner.conn, namespace)?;
+        let status = spec_lifecycle_in(&inner.conn, namespace)?;
         if status.phase != MigrationPhase::MIGRATION_PHASE_OBSERVING {
             return Ok(status);
         }
@@ -813,7 +815,7 @@ impl Catalog {
             )
             .map_err(sqlite_err)?;
         transaction.commit().map_err(sqlite_err)?;
-        table_spec_status_in(&inner.conn, namespace)
+        spec_lifecycle_in(&inner.conn, namespace)
     }
     /// Whether `namespace` has completed its version-0 import and must no
     /// longer be rebuilt from the parquet files on disk.

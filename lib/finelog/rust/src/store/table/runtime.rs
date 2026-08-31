@@ -26,7 +26,7 @@ use crate::errors::StatsError;
 use crate::indices::IndexRegistry;
 use crate::maintenance::MaintenanceLimits;
 use crate::store::adopt::adopt_local_segments;
-use crate::store::catalog::{Catalog, TableSpecStatus};
+use crate::store::catalog::{Catalog, SpecLifecycle};
 use crate::store::compaction::config::CompactionConfig;
 use crate::store::legacy::layout::LayoutTracker;
 use crate::store::policy::StoragePolicy;
@@ -44,6 +44,13 @@ use crate::store::table_state::TableSnapshot;
 use crate::store::types::{segment_to_row, NamespaceStats, SegmentRow};
 
 /// A single table's live runtime, disk-backed or in-memory.
+///
+/// Owns the table's concurrency envelope — the append fast path into the
+/// ingest buffer, the flush/observation locks that serialize seal-and-commit
+/// against each other, the resolved policy cells, and tracked background
+/// tasks. Durable transitions and heavy work stay with their owners: the
+/// controller publishes state, and flush/compaction/migration modules borrow
+/// this runtime's pieces through narrow views like [`flush::FlushTarget`].
 pub struct TableRuntime {
     pub(super) name: String,
     pub(super) format: SegmentFormat,
@@ -187,7 +194,7 @@ impl TableRuntime {
             };
         let local_recovery_ms = local_recovery_started.elapsed().as_millis() as u64;
 
-        let policy = TablePolicy::resolve(catalog.table_spec_status(name)?.operative());
+        let policy = TablePolicy::resolve(catalog.spec_lifecycle(name)?.operative());
         let runtime = Arc::new(TableRuntime {
             name: name.to_string(),
             buffer: IngestBuffer::new(
@@ -227,7 +234,7 @@ impl TableRuntime {
         // is not consulted.
         if runtime.controller.is_object_backed() {
             runtime.controller.seed_local_snapshot();
-            let active = catalog.table_spec_status(name)?.active_version();
+            let active = catalog.spec_lifecycle(name)?.active_version();
             runtime.activate_query_version(active)?;
         }
 
@@ -298,7 +305,7 @@ impl TableRuntime {
     }
 
     /// Swap in the operating policy a new specification resolves to.
-    pub fn update_table_spec(&self, status: &TableSpecStatus) {
+    pub fn update_table_spec(&self, status: &SpecLifecycle) {
         *self.policy.lock().unwrap() = TablePolicy::resolve(status.operative());
     }
 

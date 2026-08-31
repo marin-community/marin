@@ -17,6 +17,7 @@ pub mod policy;
 pub mod ram_buffer;
 pub mod schema;
 pub mod segment;
+pub mod state_store;
 pub(crate) mod string_column;
 pub mod table;
 pub mod table_spec;

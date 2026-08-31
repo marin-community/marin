@@ -30,13 +30,13 @@ use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::errors::StatsError;
 use crate::proto::finelog::stats::ObjectRef;
-use crate::store::catalog::object_state_store::OBJECTS_PREFIX;
 use crate::store::catalog::projection::namespace_catalog;
-use crate::store::catalog::state_store::{StoredTableState, TableStateStore};
-use crate::store::catalog::{Catalog, ObjectSegmentRecord, TableSpecStatus};
+use crate::store::catalog::{Catalog, ObjectSegmentRecord, SpecLifecycle};
 use crate::store::object_store::{
     ObjectByteStream, ObjectId, ObjectReference, ObjectStore, ObjectVersion,
 };
+use crate::store::state_store::object::OBJECTS_PREFIX;
+use crate::store::state_store::{StoredTableState, TableStateStore};
 use crate::store::table_spec::TablePolicy;
 use crate::store::table_state::{
     resolve_publication, ArtifactReferences, CommitError, CommitToken, Committed, LocalArtifacts,
@@ -228,8 +228,8 @@ impl TableController {
     ///
     /// [`TablePolicy`] is the one place a specification resolves to operating
     /// knobs, so the flush path and this classification cannot drift apart.
-    fn refresh_object_backing(&self) -> Result<TableSpecStatus, StatsError> {
-        let status = self.catalog.table_spec_status(&self.table)?;
+    fn refresh_object_backing(&self) -> Result<SpecLifecycle, StatsError> {
+        let status = self.catalog.spec_lifecycle(&self.table)?;
         self.spec_selects_objects.store(
             TablePolicy::resolve(status.operative()).object_backed(),
             Ordering::SeqCst,
@@ -514,10 +514,7 @@ impl TableController {
         }
         Ok(MaintenanceLease {
             fence: self.fence,
-            definition_version: self
-                .catalog
-                .table_spec_status(&self.table)?
-                .active_version(),
+            definition_version: self.catalog.spec_lifecycle(&self.table)?.active_version(),
             inputs,
         })
     }
@@ -544,7 +541,7 @@ impl TableController {
         }
         let active = self
             .catalog
-            .table_spec_status(&self.table)
+            .spec_lifecycle(&self.table)
             .map_err(CommitError::NotCommitted)?
             .active_version();
         if active != lease.definition_version {
@@ -891,7 +888,7 @@ async fn run_controller(
 /// rows were written after the migration fence, and under an in-flight migration
 /// aliasing the source version onto the target.
 pub fn object_segment_is_query_visible(
-    status: &TableSpecStatus,
+    status: &SpecLifecycle,
     record: &ObjectSegmentRecord,
 ) -> bool {
     record.table_spec_version == status.active_version()
@@ -995,9 +992,9 @@ mod tests {
     use crate::proto::finelog::stats::{
         ColumnType, L0Mode, OperatingPolicy, SourceLayout, TableSpec as ProtoTableSpec,
     };
-    use crate::store::catalog::object_state_store::ObjectTableStateStore;
     use crate::store::object_store::build_remote_object_store;
     use crate::store::schema::{schema_to_proto_owned, with_implicit_seq, Column, Schema};
+    use crate::store::state_store::object::ObjectTableStateStore;
     use crate::store::table_spec::canonical_json_bytes;
     use crate::test_support::{
         lost_head_response, FaultAction, FaultInjectingObjectStore, ObjectFault, ObjectOp,
@@ -1141,7 +1138,7 @@ mod tests {
         assert_eq!(
             controller
                 .catalog
-                .table_spec_status(TABLE)
+                .spec_lifecycle(TABLE)
                 .unwrap()
                 .catalog_generation,
             1

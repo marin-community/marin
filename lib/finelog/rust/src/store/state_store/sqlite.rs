@@ -20,11 +20,11 @@ use async_trait::async_trait;
 
 use crate::errors::StatsError;
 use crate::proto::finelog::stats::{CatalogHead, NamespaceCatalog};
-use crate::store::catalog::object_state_store::TABLE_STATE_FORMAT_VERSION;
-use crate::store::catalog::state_store::{
+use crate::store::catalog::Catalog;
+use crate::store::state_store::object::TABLE_STATE_FORMAT_VERSION;
+use crate::store::state_store::{
     fenced_error, BackendToken, StoredTableState, TableHead, TableStateStore,
 };
-use crate::store::catalog::Catalog;
 use crate::store::table_state::{TableRevision, WriterFence};
 
 pub struct SqliteTableStateStore {
@@ -38,7 +38,7 @@ impl SqliteTableStateStore {
     }
 
     fn state(&self, table: &str) -> Result<StoredTableState, StatsError> {
-        let status = self.catalog.table_spec_status(table)?;
+        let status = self.catalog.spec_lifecycle(table)?;
         let stats = self.catalog.aggregate_namespace_stats(table)?;
         let catalog = NamespaceCatalog {
             format_version: Some(TABLE_STATE_FORMAT_VERSION),
@@ -72,7 +72,7 @@ impl TableStateStore for SqliteTableStateStore {
             .list_all()?
             .into_iter()
             .map(|(table, _)| {
-                let revision = self.catalog.table_spec_status(&table)?.catalog_generation;
+                let revision = self.catalog.spec_lifecycle(&table)?.catalog_generation;
                 Ok(TableHead {
                     table,
                     revision: TableRevision::new(revision),

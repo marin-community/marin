@@ -27,7 +27,7 @@ use crate::query::{
 };
 use crate::server::auth::{request_identity, AuthIdentity};
 use crate::server::MAX_MESSAGE_BYTES;
-use crate::store::catalog::TableSpecStatus;
+use crate::store::catalog::SpecLifecycle;
 use crate::store::ipc::encode_ipc;
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{
@@ -49,7 +49,7 @@ struct RegistrationOutcome {
     schema: Schema,
     policy: StoragePolicy,
     ignored_columns: Vec<String>,
-    table_spec_status: TableSpecStatus,
+    spec_lifecycle: SpecLifecycle,
     object_backed: bool,
 }
 
@@ -178,13 +178,13 @@ impl StatsService for StatsServiceImpl {
                     Ok(effective) => {
                         let ignored = ignored_forwarded_schema_columns(&schema, &effective)?;
                         let effective_policy = store.get_policy(&ns)?;
-                        let table_spec_status = store.table_spec_status(&ns)?;
+                        let spec_lifecycle = store.spec_lifecycle(&ns)?;
                         return Ok(RegistrationOutcome {
                             namespace: ns,
                             schema: effective,
                             policy: effective_policy,
                             ignored_columns: ignored,
-                            table_spec_status,
+                            spec_lifecycle,
                             object_backed: false,
                         });
                     }
@@ -205,19 +205,19 @@ impl StatsService for StatsServiceImpl {
                     schema: registration.schema,
                     policy: registration.policy,
                     ignored_columns: Vec::new(),
-                    table_spec_status: registration.table_spec_status,
+                    spec_lifecycle: registration.spec_lifecycle,
                     object_backed: registration.object_backed,
                 });
             }
             let effective = store.register_table(&ns, schema, policy)?;
             let effective_policy = store.get_policy(&ns)?;
-            let table_spec_status = store.table_spec_status(&ns)?;
+            let spec_lifecycle = store.spec_lifecycle(&ns)?;
             Ok(RegistrationOutcome {
                 namespace: ns,
                 schema: effective,
                 policy: effective_policy,
                 ignored_columns: Vec::new(),
-                table_spec_status,
+                spec_lifecycle,
                 object_backed: false,
             })
         })
@@ -232,9 +232,9 @@ impl StatsService for StatsServiceImpl {
         connectrpc::Response::ok(RegisterTableResponse {
             effective_schema: MessageField::some(schema_to_proto_owned(&outcome.schema)),
             effective_policy: MessageField::some(outcome.policy.to_proto_owned()),
-            active_table_spec_version: Some(outcome.table_spec_status.active_version()),
-            desired_table_spec_version: Some(outcome.table_spec_status.desired_version()),
-            transition_phase: Some(outcome.table_spec_status.phase.into()),
+            active_table_spec_version: Some(outcome.spec_lifecycle.active_version()),
+            desired_table_spec_version: Some(outcome.spec_lifecycle.desired_version()),
+            transition_phase: Some(outcome.spec_lifecycle.phase.into()),
             ..Default::default()
         })
     }
@@ -437,7 +437,7 @@ impl StatsService for StatsServiceImpl {
             .to_string();
         let store = Arc::clone(&self.store);
         let blocked_error = store.blocked_migration_error(&namespace);
-        let status = run_blocking(move || store.table_spec_status(&namespace)).await?;
+        let status = run_blocking(move || store.spec_lifecycle(&namespace)).await?;
         connectrpc::Response::ok(GetTableStatusResponse {
             migration_blocked: Some(blocked_error.is_some()),
             migration_error: Some(blocked_error.unwrap_or_default()),

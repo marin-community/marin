@@ -9,7 +9,7 @@
 //! - [`namespaces`]: the live namespace registry (which tables exist) and the
 //!   drop fence.
 //! - [`table_specs`]: durable table specifications and the migration
-//!   lifecycle; [`TableSpecStatus`] is what the runtime resolves policy from.
+//!   lifecycle; [`SpecLifecycle`] is what the runtime resolves policy from.
 //! - [`segments`]: legacy segment rows, storage policy, and eviction — the
 //!   authority for local-L0 tables.
 //! - [`object_segments`]: the derived projection of an object-backed table's
@@ -19,12 +19,11 @@
 //! - [`migrations`]: the ordered schema migrations the sidecar itself runs
 //!   through at open.
 //!
-//! Durable *table state* is a separate boundary: [`state_store`] defines the
-//! `TableStateStore` trait, implemented by [`sqlite_state_store`] (legacy
-//! tables — this catalog is the backing authority) and
-//! [`object_state_store`] (object tables — HEAD and immutable state documents
-//! in the object store, with this catalog holding only the projection that
-//! [`projection`] rebuilds).
+//! Durable *table state* is a separate boundary — `store::state_store`
+//! defines the `TableStateStore` trait; its sqlite implementation commits
+//! through this catalog (legacy authority), its object implementation keeps
+//! HEAD and immutable state documents remotely and this catalog holds only
+//! the projection that [`projection`] rebuilds.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
@@ -39,18 +38,15 @@ mod cursors;
 pub(crate) mod migrations;
 mod namespaces;
 mod object_segments;
-pub mod object_state_store;
 pub(crate) mod projection;
 mod segments;
-pub(crate) mod sqlite_state_store;
-pub(crate) mod state_store;
 mod table_specs;
 #[cfg(test)]
 mod tests;
 
 pub use namespaces::RegisteredNamespace;
 pub use object_segments::{ObjectSegmentRecord, PublishedObjectSegment};
-pub use table_specs::TableSpecStatus;
+pub use table_specs::SpecLifecycle;
 
 /// Sidecar filename.
 pub const CATALOG_DB_FILENAME: &str = "_finelog_catalog.sqlite";

@@ -14,7 +14,7 @@ flowchart TB
 
     subgraph table["store/table/ — per-table core"]
         TM[mod.rs: TableManager<br/>registry, routing, run_work]
-        RT[runtime.rs: TableRuntime<br/>thin glue, no work]
+        RT[runtime.rs: TableRuntime<br/>append path, locks, policy]
         IB[ingest.rs: IngestBuffer<br/>short-lock append + seq]
         SV[segment_view.rs: SegmentView]
         FL[flush.rs: flush_local / flush_to_objects]
@@ -24,12 +24,15 @@ flowchart TB
         TC[controller.rs: TableController<br/>fence, revisions, publication]
     end
 
-    subgraph state["store/catalog/ — durable state"]
-        SS[state_store.rs: TableStateStore trait]
-        OSS[object_state_store.rs<br/>states + HEAD CAS]
-        SQS[sqlite_state_store.rs<br/>legacy authority]
+    subgraph state["store/catalog/ — local metadata"]
         DB[Catalog: the only SQL speaker<br/>namespaces / table_specs / segments<br/>object_segments / cursors]
         PJ[projection.rs]
+    end
+
+    subgraph durable["store/state_store/ — durable authority"]
+        SS[mod.rs: TableStateStore trait]
+        OSS[object.rs<br/>states + HEAD CAS]
+        SQS[sqlite.rs<br/>legacy authority]
     end
 
     subgraph objects["store/object_store/ — bytes"]
@@ -99,7 +102,7 @@ flowchart TB
     Cached -->|wraps| Remote
 ```
 
-The ownership rule: `ObjectStore` owns bytes and localization; `TableController` owns liveness and allocates revisions; `TableStateStore` durably checks fenced revisions; the compaction drivers own transformation; `IndexRegistry` owns derived artifacts; the query engine owns planning; `MaintenanceScheduler` owns all cadence. `TableRuntime` composes and implements nothing; `Store` is the composition root.
+The ownership rule: `ObjectStore` owns bytes and localization; `TableController` owns liveness and allocates revisions; `TableStateStore` durably checks fenced revisions; the compaction drivers own transformation; `IndexRegistry` owns derived artifacts; the query engine owns planning; `MaintenanceScheduler` owns all cadence. `TableRuntime` owns one table's concurrency envelope (append fast path, flush serialization, policy cells) while durable transitions stay with the controller; `Store` is the composition root and the service facade the RPC layer calls.
 
 ## Durable state
 

@@ -15,14 +15,14 @@ use tokio::sync::{Notify, RwLock};
 
 use crate::levanter_metrics_policy::levanter_metrics_schema;
 use crate::proto::finelog::stats::ColumnType;
-use crate::store::catalog::object_state_store::ObjectTableStateStore;
-use crate::store::catalog::state_store::TableStateStore;
 use crate::store::catalog::Catalog;
 use crate::store::object_store::{
     build_remote_object_store, CachedObjectStore, LegacyObjectStore, ObjectStore,
 };
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{schema_to_arrow, with_implicit_seq, AlignedBatch, Column, Schema};
+use crate::store::state_store::object::ObjectTableStateStore;
+use crate::store::state_store::TableStateStore;
 use crate::store::table::controller::TableController;
 use crate::store::table::runtime::TableRuntime;
 use crate::store::table::ObjectPersistence;

@@ -12,6 +12,9 @@
 
 use async_trait::async_trait;
 
+pub mod object;
+pub mod sqlite;
+
 use crate::errors::StatsError;
 use crate::proto::finelog::stats::{CatalogHead, NamespaceCatalog};
 use crate::store::object_store::ObjectVersion;
