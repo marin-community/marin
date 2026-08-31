@@ -58,7 +58,7 @@ from experiments.grug.checkpointing import (
     restore_grug_state_from_checkpoint,
 )
 from experiments.grug.dispatch import dispatch_grug_training_run
-from experiments.grug.moe_hero_ep.model import GrugModelConfig, Transformer
+from experiments.grug.moe_hero_ep.model import GrugModelConfig, RematMode, Transformer
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
@@ -89,12 +89,13 @@ DEFAULT_DROPLESS_MOE_IMPLEMENTATION: MoeImplementation = "sonic_cute"
 INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT = 1
 # The ragged transport wants the opposite scheduling posture from the fixed and pooled ones. Its
 # dispatch and combine form one long dependent chain, so admitting several concurrent collectives
-# only contends for the SMs the transport itself needs. The latency-hiding scheduler stays off for
-# a memory reason, not a scheduling one: its longer buffer live ranges push the step past the HBM
-# budget and NCCL's first-step allocations fail. With the layer activations offloaded to pinned
-# host the freed ~36 GiB fits those live ranges and the scheduler measures ~0.9 MFU faster
-# (#8317); a follow-up lands that offload and turns the scheduler on.
+# only contends for the SMs the transport itself needs.
 RAGGED_COLLECTIVE_OVERLAP_LIMIT = 1
+# The layer-carry offload, the latency-hiding scheduler, and an overlap limit above 1 corrupt
+# training together. No pair of the three does. The reloaded residual races its consumer in the
+# backward pass (#8317). A higher limit gains too little to accept that risk, so the offload
+# forces this value.
+OFFLOAD_CARRY_COLLECTIVE_OVERLAP_LIMIT = 1
 RAGGED_MOE_IMPLEMENTATION = "ragged_all_to_all"
 # TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU
 # command buffers after the CUDA graph failure is fixed.
@@ -193,7 +194,11 @@ def take_master_as_params(state: "GrugTrainState") -> "GrugTrainState":
 
 
 def _apply_hero_ep_runtime_defaults(
-    *, inline_watch_enabled: bool, moe_implementation: MoeImplementation | None, processes_per_task: int = 1
+    *,
+    inline_watch_enabled: bool,
+    moe_implementation: MoeImplementation | None,
+    remat_mode: RematMode,
+    processes_per_task: int = 1,
 ) -> None:
     env_defaults = dict(HERO_EP_RUNTIME_ENV)
     if processes_per_task > 1:
@@ -211,9 +216,12 @@ def _apply_hero_ep_runtime_defaults(
         overlap_limit = INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT
     else:
         overlap_limit = DEFAULT_COLLECTIVE_OVERLAP_LIMIT
+    # The scheduler's longer buffer live ranges fit on the ragged transport only once the layer
+    # carry leaves HBM. Without that offload its first-step NCCL allocations fail.
+    latency_hiding = not ragged or remat_mode == "offload_carry"
     flag_defaults = (
         f"{XLA_COLLECTIVE_OVERLAP_FLAG}={overlap_limit}",
-        f"--xla_gpu_enable_latency_hiding_scheduler={'false' if ragged else 'true'}",
+        f"--xla_gpu_enable_latency_hiding_scheduler={'true' if latency_hiding else 'false'}",
         # The scheduler sizes the single `jit_train_step` temp arena against this percentage of
         # its memory budget, roughly `133.6 GiB x percentage`. The pool holds 138.2 GiB and
         # persistent state occupies 18.1 GiB of it, so an arena above 120.2 GiB cannot be served
@@ -227,6 +235,11 @@ def _apply_hero_ep_runtime_defaults(
     )
     explicit_names = {flag.partition("=")[0] for flag in xla_flags}
     xla_flags.extend(flag for flag in flag_defaults if flag.partition("=")[0] not in explicit_names)
+    if remat_mode == "offload_carry":
+        # A wrong overlap limit corrupts training silently, so the offload takes the flag
+        # away from the caller instead of defaulting it.
+        xla_flags = [f for f in xla_flags if f.partition("=")[0] != XLA_COLLECTIVE_OVERLAP_FLAG]
+        xla_flags.append(f"{XLA_COLLECTIVE_OVERLAP_FLAG}={OFFLOAD_CARRY_COLLECTIVE_OVERLAP_LIMIT}")
     if ragged:
         # Unlike the defaults above, these are not overridable. Selecting the host-launched
         # one-shot kernel needs both flags cleared together plus a splits-per-peer count this
@@ -1238,6 +1251,7 @@ def run_grug(config: GrugRunConfig) -> None:
         inline_watch_enabled=inline_watch_enabled,
         processes_per_task=config.processes_per_task,
         moe_implementation=config.model.moe_implementation,
+        remat_mode=config.model.remat_mode,
     )
     dispatch_grug_training_run(
         run_id=trainer.id,

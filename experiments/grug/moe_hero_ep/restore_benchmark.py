@@ -314,6 +314,7 @@ def main(
     _apply_hero_ep_runtime_defaults(
         inline_watch_enabled=False,
         moe_implementation=model.moe_implementation,
+        remat_mode=model.remat_mode,
         processes_per_task=HERO_GPUS_PER_NODE,
     )
     dispatch_grug_training_run(
