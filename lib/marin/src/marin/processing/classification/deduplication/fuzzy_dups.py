@@ -393,30 +393,43 @@ def compute_fuzzy_dups_attrs_step(
     *,
     name: str,
     minhash_steps: list[StepSpec],
-    cc_max_iterations: int = DEFAULT_CC_MAX_ITERATIONS,
+    cc_max_iterations: int | None = None,
+    cc_resume: bool = False,
     max_parallelism: int,
     worker_resources: ResourceConfig | None = None,
     coordinator_resources: ResourceConfig | None = None,
+    map_task_resources: ResourceConfig | None = None,
+    reduce_task_resources: ResourceConfig | None = None,
+    zephyr_context: ZephyrContext | None = None,
     override_output_path: str | None = None,
 ) -> StepSpec:
     """Create a StepSpec that computes fuzzy duplicate attrs from ``MinHashAttrData`` step outputs."""
+    resolved_cc_max_iterations = DEFAULT_CC_MAX_ITERATIONS if cc_max_iterations is None else cc_max_iterations
     return StepSpec(
         name=name,
         deps=list(minhash_steps),
         fn=lambda output_path: compute_fuzzy_dups_attrs(
             inputs=[read_artifact(s.output_path, MinHashAttrData) for s in minhash_steps],
             output_path=output_path,
-            cc_max_iterations=cc_max_iterations,
+            cc_max_iterations=resolved_cc_max_iterations,
+            cc_resume=cc_resume,
             max_parallelism=max_parallelism,
             worker_resources=worker_resources,
             coordinator_resources=coordinator_resources,
+            map_task_resources=map_task_resources,
+            reduce_task_resources=reduce_task_resources,
+            zephyr_context=zephyr_context,
         ),
         # Match the identity the Datakit DAG builds, so a step created here
         # resolves to the artifacts that graph already produced. The MinHash
         # content parameters reach this hash through the dependency IDs.
         hash_attrs={
             "v": FUZZY_DUPS_ATTR_DATA_VERSION,
-            **({"cc_max_iterations": cc_max_iterations} if cc_max_iterations != DEFAULT_CC_MAX_ITERATIONS else {}),
+            **(
+                {"cc_max_iterations": resolved_cc_max_iterations}
+                if resolved_cc_max_iterations != DEFAULT_CC_MAX_ITERATIONS
+                else {}
+            ),
         },
         override_output_path=override_output_path,
     )

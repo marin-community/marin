@@ -51,8 +51,10 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
 from zephyr.context import ZephyrContext
 
-from experiments.datakit.benchmark_sample import (
+from experiments.datakit.materialize_zephyr_benchmark_sample import (
     BENCHMARK_SAMPLE_INPUTS_DIR,
+    GCP_BENCHMARK_SAMPLE_PREFIX,
+    benchmark_datakit_steps,
     benchmark_sample_fuzzy_steps,
     benchmark_zephyr_context,
 )
@@ -62,15 +64,12 @@ from experiments.datakit.reference_pipeline import (
     PipelineScale,
     ZephyrDatakitSteps,
     sample_sources,
-    zephyr_datakit_steps,
 )
 
 logger = logging.getLogger(__name__)
 
 BENCHMARK_OUTPUT_TTL_DAYS = 7
 BENCHMARK_OUTPUT_PREFIX = "zephyr-benchmark"
-GCP_BENCHMARK_SAMPLE_PREFIX = "gs://marin-eu-west4/datakit/sample_100b_8ae7a94f"
-COREWEAVE_BENCHMARK_SAMPLE_PREFIX = "s3://marin-us-east-02a/marin/datakit/sample_100b_8ae7a94f"
 DECIMAL_GB_BYTES = 1_000_000_000
 MISSING_ARTIFACT_PREVIEW_LIMIT = 10
 DEFAULT_POOL_CPU = 8.0
@@ -253,7 +252,7 @@ def _benchmark_steps(
 ) -> ZephyrDatakitSteps:
     output_prefix = _benchmark_output_prefix(sample_prefix, run_tag)
     sources = sample_sources(sample_prefix, selected_sources, run_tag)
-    steps = zephyr_datakit_steps(sources, scale, zephyr_context, output_path_prefix=output_prefix)
+    steps = benchmark_datakit_steps(sources, scale, zephyr_context, output_prefix)
 
     if target not in (BenchmarkTarget.SHUFFLE, BenchmarkTarget.FUZZY):
         return steps

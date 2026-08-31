@@ -10,9 +10,13 @@ bucket-qualified, scheme-stripped keys.
 
 import pytest
 from marin.execution.step_spec import StepSpec
+from marin.processing.classification.deduplication import fuzzy_dups
 
 from experiments.datakit import reference_pipeline, zephyr_benchmark
-from experiments.datakit.benchmark_sample import BENCHMARK_SAMPLE_INPUTS_DIR, benchmark_zephyr_context
+from experiments.datakit.materialize_zephyr_benchmark_sample import (
+    BENCHMARK_SAMPLE_INPUTS_DIR,
+    benchmark_zephyr_context,
+)
 from experiments.datakit.reference_pipeline import SMOKE_SCALE, SOURCE_DISCOVERY_DEPTHS
 from experiments.datakit.zephyr_benchmark import (
     BenchmarkTarget,
@@ -192,12 +196,8 @@ def test_shuffle_target_reads_sample_minhash_and_writes_fresh_output(monkeypatch
     _patch_benchmark_graph(monkeypatch)
     monkeypatch.setattr(zephyr_benchmark, "step_is_built", lambda _step: True)
     requested_paths: list[str] = []
-    monkeypatch.setattr(
-        reference_pipeline,
-        "read_artifact",
-        lambda path, _cls: requested_paths.append(path),
-    )
-    monkeypatch.setattr(reference_pipeline, "compute_fuzzy_dups_attrs", lambda **kwargs: kwargs["inputs"])
+    monkeypatch.setattr(fuzzy_dups, "read_artifact", lambda path, _cls: requested_paths.append(path))
+    monkeypatch.setattr(fuzzy_dups, "compute_fuzzy_dups_attrs", lambda **kwargs: kwargs["inputs"])
 
     context = benchmark_zephyr_context("test-benchmark", SMOKE_SCALE, 8)
     steps = _benchmark_steps(
@@ -235,7 +235,7 @@ def test_shuffle_target_requires_every_sample_minhash_artifact(monkeypatch):
 
 def test_map_and_shuffle_targets_select_disjoint_stage_families():
     sources = {"a": StepSpec(name="sample/a")}
-    steps = reference_pipeline.zephyr_datakit_steps(sources, output_path_prefix="gs://marin-test/benchmark")
+    steps = reference_pipeline.zephyr_datakit_steps(sources)
 
     assert _target_steps(steps, BenchmarkTarget.MAP) == [steps.tokenize["a"], steps.minhash["a"]]
     assert _target_steps(steps, BenchmarkTarget.SHUFFLE) == [steps.exact_dedup, steps.fuzzy_dedup]

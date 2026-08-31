@@ -16,7 +16,7 @@ and cost caveats.
 
 import argparse
 import logging
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from enum import StrEnum
 
 from fray.types import ResourceConfig
@@ -25,22 +25,29 @@ from marin.datakit.sources import all_sources
 from marin.execution.artifact import read_artifact
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
+from marin.processing.classification.deduplication.fuzzy_dups import compute_fuzzy_dups_attrs_step
 from rigging.filesystem.cluster_config import data_config, use_data_config
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
+from zephyr.context import ZephyrContext
+from zephyr.runners import SubprocessRunner
 
-from experiments.datakit.benchmark_sample import benchmark_sample_fuzzy_steps, benchmark_zephyr_context
-from experiments.datakit.reference_pipeline import SMOKE_SCALE, sample_sources
-from experiments.datakit.testbed.sampler import proportional_sample_fractions, sample_normalized_shards
-from experiments.datakit.zephyr_benchmark import (
-    COREWEAVE_BENCHMARK_SAMPLE_PREFIX,
-    GCP_BENCHMARK_SAMPLE_PREFIX,
+from experiments.datakit.reference_pipeline import (
+    SMOKE_SCALE,
+    PipelineScale,
+    ZephyrDatakitSteps,
+    sample_sources,
+    zephyr_datakit_steps,
 )
+from experiments.datakit.testbed.sampler import proportional_sample_fractions, sample_normalized_shards
 
 DEFAULT_MAX_CONCURRENT = 4
 MATERIALIZE_STEP_PREFIX = "datakit/benchmark_sample"
 DEFAULT_TARGET_TOTAL_TOKENS_B = 100.0
+BENCHMARK_SAMPLE_INPUTS_DIR = "_benchmark_inputs"
+GCP_BENCHMARK_SAMPLE_PREFIX = "gs://marin-eu-west4/datakit/sample_100b_8ae7a94f"
+COREWEAVE_BENCHMARK_SAMPLE_PREFIX = "s3://marin-us-east-02a/marin/datakit/sample_100b_8ae7a94f"
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +58,79 @@ class SampleMode(StrEnum):
     COPY = "copy"
     REGENERATE = "regenerate"
     MINHASH = "minhash"
+
+
+@dataclass(frozen=True)
+class BenchmarkSampleFuzzySteps:
+    """Sample-owned MinHash steps and the fuzzy step that consumes them."""
+
+    minhash: dict[str, StepSpec]
+    fuzzy_dedup: StepSpec
+
+
+def benchmark_sample_inputs_prefix(sample_prefix: str) -> str:
+    return prefix_join(sample_prefix, BENCHMARK_SAMPLE_INPUTS_DIR)
+
+
+def benchmark_zephyr_context(
+    name: str,
+    scale: PipelineScale,
+    max_concurrent_pipelines: int,
+) -> ZephyrContext:
+    """Build the shared worker pool used by benchmark jobs."""
+    return ZephyrContext(
+        name=name,
+        resources=scale.pool.worker,
+        coordinator_resources=scale.pool.coordinator,
+        max_workers=scale.pool.n_workers,
+        max_concurrent_pipelines=max_concurrent_pipelines,
+        stage_runner_factory=SubprocessRunner,
+    )
+
+
+def benchmark_datakit_steps(
+    sources: dict[str, StepSpec],
+    scale: PipelineScale,
+    zephyr_context: ZephyrContext,
+    output_path_prefix: str,
+) -> ZephyrDatakitSteps:
+    """Build Datakit stages with all generated outputs under one benchmark prefix."""
+    steps = zephyr_datakit_steps(sources, scale, zephyr_context)
+    tokenize = {name: replace(step, output_path_prefix=output_path_prefix) for name, step in steps.tokenize.items()}
+    minhash = {name: replace(step, output_path_prefix=output_path_prefix) for name, step in steps.minhash.items()}
+    fuzzy_dedup = compute_fuzzy_dups_attrs_step(
+        name=steps.fuzzy_dedup.name,
+        minhash_steps=list(minhash.values()),
+        max_parallelism=scale.dedup_max_parallelism,
+        cc_max_iterations=scale.cc_max_iterations,
+        cc_resume=True,
+        worker_resources=scale.pool.worker,
+        map_task_resources=scale.pool.map_task,
+        reduce_task_resources=scale.pool.reduce_task,
+        zephyr_context=zephyr_context,
+    )
+    return ZephyrDatakitSteps(
+        exact_dedup=replace(steps.exact_dedup, output_path_prefix=output_path_prefix),
+        tokenize=tokenize,
+        minhash=minhash,
+        fuzzy_dedup=replace(fuzzy_dedup, output_path_prefix=output_path_prefix),
+    )
+
+
+def benchmark_sample_fuzzy_steps(
+    sample_prefix: str,
+    sources: dict[str, StepSpec],
+    scale: PipelineScale,
+    zephyr_context: ZephyrContext,
+) -> BenchmarkSampleFuzzySteps:
+    """Build canonical MinHash inputs and their fuzzy-dedup consumer."""
+    steps = benchmark_datakit_steps(
+        sources,
+        scale,
+        zephyr_context,
+        output_path_prefix=benchmark_sample_inputs_prefix(sample_prefix),
+    )
+    return BenchmarkSampleFuzzySteps(minhash=steps.minhash, fuzzy_dedup=steps.fuzzy_dedup)
 
 
 def _sample_main_output_step(

@@ -101,10 +101,8 @@ from marin.execution.remote import remote
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.fuzzy_dups import (
-    DEFAULT_CC_MAX_ITERATIONS,
-    FUZZY_DUPS_ATTR_DATA_VERSION,
     FuzzyDupsAttrData,
-    compute_fuzzy_dups_attrs,
+    compute_fuzzy_dups_attrs_step,
 )
 from marin.processing.classification.deduplication.fuzzy_minhash import (
     MINHASH_ATTR_DATA_VERSION,
@@ -323,9 +321,6 @@ class PipelineScale:
     # stage's coordinator; kept modest so it isn't overwhelmed.
     sample_parallel_sources: int = 4
     dedup_max_parallelism: int = 4096
-    # Both datakit ferries pin this to 3 (see datakit_ferry.py /
-    # datakit_nemotron_ferry.py). None uses the library default and preserves
-    # the default fuzzy-dedup cache identity.
     cc_max_iterations: int | None = None
     # Centroid training is single-process FAISS K-means, not a pool stage.
     train_centroids_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig.with_cpu(cpu=32, ram="64g"))
@@ -580,19 +575,13 @@ def zephyr_datakit_steps(
     sources: dict[str, StepSpec],
     scale: PipelineScale = DEFAULT_SCALE,
     zephyr_context: ZephyrContext | None = None,
-    output_path_prefix: str | None = None,
 ) -> ZephyrDatakitSteps:
-    """Build exact-dedup, tokenize, MinHash, and fuzzy-dedup stages.
-
-    ``output_path_prefix``, when set, routes every generated step and its
-    dependency reads under that prefix instead of ``marin_prefix()``.
-    """
+    """Build exact-dedup, tokenize, MinHash, and fuzzy-dedup stages."""
     source_names = sorted(sources)
     exact_dedup = StepSpec(
         name="datakit/global_exact_dedup",
         deps=[sources[name] for name in source_names],
         hash_attrs={"sources": source_names, "v": GLOBAL_EXACT_DEDUP_DATA_VERSION},
-        output_path_prefix=output_path_prefix,
         fn=lambda output_path: global_exact_deduplicate(
             sources={name: read_artifact(sources[name].output_path, NormalizedData) for name in source_names},
             output_path=output_path,
@@ -609,19 +598,16 @@ def zephyr_datakit_steps(
     tokenize_steps: dict[str, StepSpec] = {}
     minhash_steps: dict[str, StepSpec] = {}
     for name, normalize_step in sources.items():
-        tokenize_steps[name] = replace(
-            tokenize_attributes_step(
-                name=f"datakit/tokenize/{name}",
-                train_normalize=normalize_step,
-                tokenizer=TOKENIZER,
-                tokenizer_backend=TOKENIZER_BACKEND,
-                tokenizer_revision=TOKENIZER_REVISION,
-                max_workers=scale.pool.n_workers,
-                worker_resources=scale.pool.worker,
-                map_task_resources=scale.pool.map_task,
-                zephyr_context=zephyr_context,
-            ),
-            output_path_prefix=output_path_prefix,
+        tokenize_steps[name] = tokenize_attributes_step(
+            name=f"datakit/tokenize/{name}",
+            train_normalize=normalize_step,
+            tokenizer=TOKENIZER,
+            tokenizer_backend=TOKENIZER_BACKEND,
+            tokenizer_revision=TOKENIZER_REVISION,
+            max_workers=scale.pool.n_workers,
+            worker_resources=scale.pool.worker,
+            map_task_resources=scale.pool.map_task,
+            zephyr_context=zephyr_context,
         )
         minhash_steps[name] = StepSpec(
             name=f"datakit/minhash/{name}",
@@ -634,7 +620,6 @@ def zephyr_datakit_steps(
                 "seed": mh.seed,
                 "v": MINHASH_ATTR_DATA_VERSION,
             },
-            output_path_prefix=output_path_prefix,
             fn=lambda output_path, n=normalize_step: compute_minhash_attrs(
                 source=read_artifact(n.output_path, NormalizedData),
                 output_path=output_path,
@@ -650,29 +635,16 @@ def zephyr_datakit_steps(
             ),
         )
 
-    cc_max_iterations = scale.cc_max_iterations
-    if cc_max_iterations is None:
-        cc_max_iterations = DEFAULT_CC_MAX_ITERATIONS
-    hash_attrs = {"v": FUZZY_DUPS_ATTR_DATA_VERSION}
-    if scale.cc_max_iterations is not None:
-        hash_attrs["cc_max_iterations"] = scale.cc_max_iterations
-
-    fuzzy_dedup = StepSpec(
+    fuzzy_dedup = compute_fuzzy_dups_attrs_step(
         name="datakit/dedup",
-        deps=list(minhash_steps.values()),
-        hash_attrs=hash_attrs,
-        output_path_prefix=output_path_prefix,
-        fn=lambda output_path: compute_fuzzy_dups_attrs(
-            inputs=[read_artifact(step.output_path, MinHashAttrData) for step in minhash_steps.values()],
-            output_path=output_path,
-            max_parallelism=scale.dedup_max_parallelism,
-            cc_max_iterations=cc_max_iterations,
-            cc_resume=True,
-            worker_resources=scale.pool.worker,
-            map_task_resources=scale.pool.map_task,
-            reduce_task_resources=scale.pool.reduce_task,
-            zephyr_context=zephyr_context,
-        ),
+        minhash_steps=list(minhash_steps.values()),
+        max_parallelism=scale.dedup_max_parallelism,
+        cc_max_iterations=scale.cc_max_iterations,
+        cc_resume=True,
+        worker_resources=scale.pool.worker,
+        map_task_resources=scale.pool.map_task,
+        reduce_task_resources=scale.pool.reduce_task,
+        zephyr_context=zephyr_context,
     )
     return ZephyrDatakitSteps(
         exact_dedup=exact_dedup,

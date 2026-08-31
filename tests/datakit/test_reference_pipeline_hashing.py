@@ -66,36 +66,6 @@ def test_global_exact_dedup_filters_only_the_store():
     assert _depends_on(steps["datakit/store"], exact_dedup)
 
 
-def test_benchmark_routes_every_stage_under_one_prefix():
-    routed = reference_pipeline.zephyr_datakit_steps(_sources(), output_path_prefix="gs://temp/benchmark")
-    steps = [routed.exact_dedup, *routed.tokenize.values(), *routed.minhash.values(), routed.fuzzy_dedup]
-
-    assert all(step.output_path.startswith("gs://temp/benchmark/") for step in steps)
-
-
-def test_fuzzy_dedup_reads_minhash_artifacts_from_the_routed_prefix(monkeypatch):
-    # Rerouting deps alone (e.g. a caller patching the returned StepSpecs after
-    # construction, as this benchmark used to) can leave fuzzy_dedup.fn reading
-    # each minhash step's artifact from the unrouted default path even though
-    # deps and output_path look correctly routed. Fake read_artifact and
-    # compute_fuzzy_dups_attrs -- the I/O and heavy-compute boundaries fn calls
-    # through -- to observe what path fn actually requests.
-    routed = reference_pipeline.zephyr_datakit_steps(_sources(), output_path_prefix="gs://temp/benchmark")
-    requested_paths: list[str] = []
-    monkeypatch.setattr(
-        reference_pipeline,
-        "read_artifact",
-        lambda path, _cls: requested_paths.append(path),
-    )
-    monkeypatch.setattr(reference_pipeline, "compute_fuzzy_dups_attrs", lambda **kwargs: kwargs["inputs"])
-
-    assert routed.fuzzy_dedup.fn is not None
-    routed.fuzzy_dedup.fn("gs://temp/benchmark/datakit/dedup_test")
-
-    assert len(requested_paths) == len(routed.minhash)
-    assert all(path.startswith("gs://temp/benchmark/") for path in requested_paths)
-
-
 def test_no_region_path_in_hash_attrs_except_known_bloom_gap():
     # A region-specific gs:// path in a hash means byte-identical data gets a
     # different output path per region. The only remaining leak is the decontam
