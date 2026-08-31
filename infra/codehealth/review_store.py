@@ -10,7 +10,8 @@ import hashlib
 import json
 import os
 import uuid
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -36,7 +37,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection, Engine
 
-from .github_review_corpus import PullRequestBundle, ReviewEventRecord
+from .github_review_corpus import PullRequestBundle, PullRequestRecord, ReviewEventRecord
 
 DEFAULT_CLOUDSQL_CONNECTION = "hai-gcp-models:us-central1:marin-metadata"
 DEFAULT_DATABASE = "context"
@@ -281,7 +282,7 @@ class LintActivity(StoreModel):
 class ReviewContext(StoreModel):
     event: ReviewEventRecord
     thread: tuple[ReviewEventRecord, ...]
-    pull_request: dict[str, object]
+    pull_request: PullRequestRecord
     diff: str | None
     source: str | None
     source_start_line: int | None
@@ -300,18 +301,57 @@ class SyncRun:
     window_end: dt.datetime
 
 
-def create_engine_from_environment() -> tuple[Engine, Connector]:
-    """Connect to Marin's existing metadata database with IAM authentication."""
+@dataclass(frozen=True)
+class DatabaseConfig:
+    instance: str
+    database: str
+    user: str
+
+
+@dataclass(frozen=True)
+class DatabaseResources:
+    engine: Engine
+    connector: Connector
+
+    def close(self) -> None:
+        self.engine.dispose()
+        self.connector.close()
+
+
+def database_config_from_environment() -> DatabaseConfig:
+    """Resolve the CLI process environment once at its boundary."""
+    return DatabaseConfig(
+        instance=os.environ.get("CLOUDSQL_CONNECTION", DEFAULT_CLOUDSQL_CONNECTION),
+        database=os.environ.get("PGDATABASE", DEFAULT_DATABASE),
+        user=os.environ.get("PGUSER", DEFAULT_DATABASE_USER),
+    )
+
+
+def create_database_resources(config: DatabaseConfig) -> DatabaseResources:
+    """Connect to Marin's metadata database with the supplied IAM identity."""
     connector = Connector(refresh_strategy="lazy")
-    instance = os.environ.get("CLOUDSQL_CONNECTION", DEFAULT_CLOUDSQL_CONNECTION)
-    database = os.environ.get("PGDATABASE", DEFAULT_DATABASE)
-    user = os.environ.get("PGUSER", DEFAULT_DATABASE_USER)
     engine = sqlalchemy.create_engine(
         "postgresql+pg8000://",
-        creator=lambda: connector.connect(instance, "pg8000", user=user, db=database, enable_iam_auth=True),
+        creator=lambda: connector.connect(
+            config.instance,
+            "pg8000",
+            user=config.user,
+            db=config.database,
+            enable_iam_auth=True,
+        ),
         pool_pre_ping=True,
     )
-    return engine, connector
+    return DatabaseResources(engine, connector)
+
+
+@contextmanager
+def database_engine(config: DatabaseConfig) -> Iterator[Engine]:
+    """Own a database engine and connector for one CLI operation."""
+    resources = create_database_resources(config)
+    try:
+        yield resources.engine
+    finally:
+        resources.close()
 
 
 def create_schema(engine: Engine) -> None:
@@ -872,7 +912,7 @@ def review_context(engine: Engine, event_id: str) -> ReviewContext:
     return ReviewContext(
         event=event,
         thread=tuple(ReviewEventRecord.model_validate(row) for row in thread_rows),
-        pull_request=pull_row["record"],
+        pull_request=PullRequestRecord.model_validate(pull_row["record"]),
         diff=diff,
         source=None if source_row is None else source_row["text"],
         source_start_line=None if source_row is None else source_row["start_line"],

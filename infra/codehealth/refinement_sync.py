@@ -17,7 +17,8 @@ from .review_store import (
     DEFAULT_BACKFILL_DAYS,
     complete_sync,
     completed_pull_requests,
-    create_engine_from_environment,
+    database_config_from_environment,
+    database_engine,
     fail_sync,
     start_or_resume_sync,
     store_bundle,
@@ -138,13 +139,9 @@ def sync_review_activity(
 @click.option("--days", type=click.IntRange(min=1), default=DEFAULT_BACKFILL_DAYS, show_default=True)
 def cli(repository: str, deployment: str, days: int) -> None:
     """Synchronize review activity into Marin's existing metadata database."""
-    engine, connector = create_engine_from_environment()
-    try:
+    with database_engine(database_config_from_environment()) as engine:
         result = sync_review_activity(engine, repository=repository, deployment=deployment, days=days)
         click.echo(json.dumps(result.__dict__, indent=2))
-    finally:
-        engine.dispose()
-        connector.close()
 
 
 if __name__ == "__main__":

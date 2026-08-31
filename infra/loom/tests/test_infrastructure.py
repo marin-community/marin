@@ -201,16 +201,11 @@ def test_loom_launch_action_bounds_scratch_attachments_before_upload() -> None:
     assert '-d "$request"' not in launch_script
 
 
-def _codehealth_refinement_workflow() -> tuple[dict, str, dict[str, dict]]:
+def test_codehealth_refinement_workflow_launches_one_database_backed_agent() -> None:
     workflow_path = ROOT.parent.parent / ".github/workflows/ops-codehealth-refinement.yaml"
     workflow_text = workflow_path.read_text()
     workflow = yaml.safe_load(workflow_text)
     steps = {step["name"]: step for step in workflow["jobs"]["refine"]["steps"]}
-    return workflow, workflow_text, steps
-
-
-def test_codehealth_refinement_workflow_launches_one_database_backed_agent() -> None:
-    workflow, workflow_text, steps = _codehealth_refinement_workflow()
     trigger = workflow.get("on", workflow.get(True))
 
     assert set(trigger) == {"schedule", "workflow_dispatch"}

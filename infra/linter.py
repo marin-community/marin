@@ -319,7 +319,6 @@ def _review_head_sha() -> str | None:
 
 
 def _lint_catalog_sha() -> str:
-    """Fingerprint the exact structured catalog used by this process."""
     return catalog_sha(LINT_CATALOG)
 
 

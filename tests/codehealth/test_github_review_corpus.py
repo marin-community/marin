@@ -243,7 +243,7 @@ class FakeGitHub(github.GitHubClient):
             return {"nodes": nodes, "rateLimit": {"cost": 1}}
         raise AssertionError("unexpected GraphQL query")
 
-    def rest_pages(self, endpoint: str) -> list[dict]:
+    def rest_records(self, endpoint: str) -> list[dict]:
         self._record_rest_requests(1)
         if "/pulls/comments?" in endpoint:
             return [deepcopy(self.seed)] if self.seed and "pull_request_url" in self.seed else []

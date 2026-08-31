@@ -20,7 +20,8 @@ from infra.lint.catalog import DEFAULT_CATALOG_DIR, catalog_sha, load_catalog
 
 from .review_store import (
     ReviewContext,
-    create_engine_from_environment,
+    database_config_from_environment,
+    database_engine,
     lint_activity,
     list_pr_review_events,
     list_pull_request_activity,
@@ -100,8 +101,7 @@ def cli() -> None:
 @click.option("--limit", type=click.IntRange(min=1, max=500), default=100, show_default=True)
 def list_prs(days: int, repository: str, require_human: bool, require_lint: bool, limit: int) -> None:
     """List PRs with joined human-review and lint activity."""
-    engine, connector = create_engine_from_environment()
-    try:
+    with database_engine(database_config_from_environment()) as engine:
         end = dt.datetime.now(dt.UTC)
         rows = list_pull_request_activity(
             engine,
@@ -113,9 +113,6 @@ def list_prs(days: int, repository: str, require_human: bool, require_lint: bool
             limit=limit,
         )
         click.echo(_json([row.model_dump(mode="json") for row in rows]))
-    finally:
-        engine.dispose()
-        connector.close()
 
 
 @cli.command("list-comments")
@@ -123,26 +120,18 @@ def list_prs(days: int, repository: str, require_human: bool, require_lint: bool
 @click.option("--pr", "pr_number", type=click.IntRange(min=1), required=True)
 def list_comments(repository: str, pr_number: int) -> None:
     """List review events and lint totals for one PR."""
-    engine, connector = create_engine_from_environment()
-    try:
+    with database_engine(database_config_from_environment()) as engine:
         rows = list_pr_review_events(engine, repository, pr_number)
         click.echo(_json([row.model_dump(mode="json") for row in rows]))
-    finally:
-        engine.dispose()
-        connector.close()
 
 
 @cli.command("context")
 @click.option("--event-id", required=True)
 def context_command(event_id: str) -> None:
     """Fetch one comment's thread, diff, source window, and lint activity."""
-    engine, connector = create_engine_from_environment()
-    try:
+    with database_engine(database_config_from_environment()) as engine:
         context = ensure_source_context(engine, review_context(engine, event_id))
         click.echo(_json(context))
-    finally:
-        engine.dispose()
-        connector.close()
 
 
 @cli.command("list-rules")
@@ -197,8 +186,7 @@ def validate_rules() -> None:
 @click.option("--days", type=click.IntRange(min=1, max=365), default=30, show_default=True)
 def rule_activity(days: int) -> None:
     """List current-catalog exposure and findings alongside whole-window findings."""
-    engine, connector = create_engine_from_environment()
-    try:
+    with database_engine(database_config_from_environment()) as engine:
         end = dt.datetime.now(dt.UTC)
         activity = lint_activity(engine, start=end - dt.timedelta(days=days), end=end)
         catalog = load_catalog()
@@ -239,9 +227,6 @@ def rule_activity(days: int) -> None:
                 }
             )
         )
-    finally:
-        engine.dispose()
-        connector.close()
 
 
 @cli.command("probe")
@@ -252,8 +237,7 @@ def rule_activity(days: int) -> None:
 @click.option("--idempotency-key", required=True)
 def probe(event_id: str, rule_code: str, model: str, effort: str, idempotency_key: str) -> None:
     """Probe one rule against one stored comment context."""
-    engine, connector = create_engine_from_environment()
-    try:
+    with database_engine(database_config_from_environment()) as engine:
         context = ensure_source_context(engine, review_context(engine, event_id))
         result = run_rule_probe(
             engine,
@@ -265,9 +249,6 @@ def probe(event_id: str, rule_code: str, model: str, effort: str, idempotency_ke
             idempotency_key=idempotency_key,
         )
         click.echo(_json(result))
-    finally:
-        engine.dispose()
-        connector.close()
 
 
 @cli.command("post-report")

@@ -245,7 +245,7 @@ class GitHubClient:
         self._record_graphql_request(int((payload.get("data") or {}).get("rateLimit", {}).get("cost", 1)))
         return payload["data"]
 
-    def rest_pages(self, endpoint: str) -> list[dict]:
+    def rest_records(self, endpoint: str) -> list[dict]:
         result = subprocess.run(
             ["gh", "api", endpoint, "--paginate", "--slurp"],
             check=True,
@@ -471,14 +471,14 @@ def _repo_parts(repository: str) -> tuple[str, str]:
 
 
 def is_bot(author: dict | None, bot_logins: AbstractSet[str]) -> bool:
-    """Return whether a REST or GraphQL author represents automation."""
+    """Treat automation identities and missing author identities as non-human."""
     author = author or {}
     login = str(author.get("login") or "").lower()
     actor_type = author.get("__typename") or author.get("type")
     return not login or actor_type == "Bot" or login in bot_logins or login.endswith("[bot]")
 
 
-def _human_event(node: dict, scope: ReviewScope) -> bool:
+def _is_human_event(node: dict, scope: ReviewScope) -> bool:
     body = str(node.get("body") or "")
     return not is_bot(node.get("author"), scope.bot_logins) and not body.lstrip().startswith("🤖")
 
@@ -507,7 +507,7 @@ def _page_has_human(
     scope: ReviewScope,
 ) -> bool:
     return any(
-        _human_event(node, scope) and any(_in_window(value, scope) for value in _event_timestamps(kind, node))
+        _is_human_event(node, scope) and any(_in_window(value, scope) for value in _event_timestamps(kind, node))
         for node in nodes
     )
 
@@ -568,7 +568,7 @@ def _rest_seed_prs(
     }
     seeds: dict[int, dict[tuple[EventKind, int], dict]] = {}
     for kind, endpoint in endpoints.items():
-        for node in client.rest_pages(endpoint):
+        for node in client.rest_records(endpoint):
             user = node.get("user") or {}
             body = str(node.get("body") or "")
             if is_bot(user, scope.bot_logins) or body.lstrip().startswith("🤖"):
