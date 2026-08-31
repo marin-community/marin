@@ -108,7 +108,7 @@ def _confirmed_runtime_releases(
         for obs in result.observations
         if obs.attempt_uid in requested
         and (obs.state in TERMINAL_TASK_STATES or obs.state == job_pb2.TASK_STATE_MISSING)
-        and (obs.runtime_released or obs.state == job_pb2.TASK_STATE_MISSING or obs.HasField("finished_at"))
+        and (obs.runtime_released or obs.state == job_pb2.TASK_STATE_MISSING)
     }
 
 
