@@ -45,8 +45,8 @@ workflow to open a pull request. Start from
 `infra/codehealth/refinement_pr_template.md`; add the `agent-generated` label.
 Do not open a pull request merely to report that no change was warranted.
 
-The agent is the report generator. Write a self-contained Markdown report with
-links and exact denominators. Charts may be generated with seaborn when useful.
+Write a self-contained Markdown report with links and exact denominators.
+Generate charts with seaborn when they materially clarify the findings.
 Publish the report through `post-report`; it writes the Loom artifact and sends
 the typed result to the durable `codehealth-refinement` channel. Include any
 catalog pull-request URL in both the report and the result summary.
