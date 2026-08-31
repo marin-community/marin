@@ -189,6 +189,25 @@ def test_aggregate_262k_builder_uses_matched_qk_trajectory_and_context_paralleli
         build_default_steps("aggregate_262k")
 
 
+def test_aggregate_262k_sampling_builder_compares_distinct_long_context_skews():
+    steps = build_default_steps("aggregate_262k_sampling", tpu_variant="v4-64-cp8-ep4")
+
+    assert [step.name.split("/")[2] for step in steps] == [
+        "qk175-longctx-skew2-step157000",
+        "qk175-longctx-skew4-step157000",
+    ]
+    assert [step.config.evaluation.run_id for step in steps] == [
+        "mrcr-67b-step157000-qk175-longctx-skew2-cap262144-two_shot-oracle4-v464cp8ep4",
+        "mrcr-67b-step157000-qk175-longctx-skew4-cap262144-two_shot-oracle4-v464cp8ep4",
+    ]
+    assert [step.config.evaluation.checkpoint_path.name for step in steps] == [
+        "grug/moe_67b_a2b_d2560_ep1_rep1_ctx4_bs256_seq262144_ctxext_step156k_qk175_longctx_skew2-ec6741/"
+        "checkpoints/step-157000",
+        "grug/moe_67b_a2b_d2560_ep1_rep1_ctx4_bs256_seq262144_ctxext_step156k_qk175_longctx_skew4-102e3c/"
+        "checkpoints/step-157000",
+    ]
+
+
 def test_summary_computes_adaptation_arm_qk_and_difference_in_differences(tmp_path: Path):
     artifacts = (
         _artifact(tmp_path, "step-156000-source-qk157", MrcrPromptVariant.TWO_SHOT, (0.0, 0.0)),

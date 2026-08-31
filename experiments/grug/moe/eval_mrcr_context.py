@@ -65,6 +65,7 @@ class MrcrCheckpointPackage:
     checkpoint_step: int
     training_offset: int
     baseline_package_name: str | None
+    run_id_suffix: str | None = None
 
 
 SOURCE_QK157 = MrcrCheckpointPackage("step-156000-source-qk157", 1.57, SOURCE_STEP, 0, None)
@@ -101,7 +102,28 @@ PRIMARY_CHECKPOINT_PACKAGES: tuple[MrcrCheckpointPackage, ...] = (
         for offset in TRAINING_OFFSETS
     ),
 )
-PACKAGE_BY_NAME = {package.name: package for package in (*PRIMARY_CHECKPOINT_PACKAGES, PRE_EXTENSION_QK157)}
+DATA_SAMPLING_CHECKPOINT_PACKAGES = (
+    MrcrCheckpointPackage(
+        "qk175-longctx-skew2-step157000",
+        1.75,
+        FINAL_STEP,
+        FINAL_STEP - SOURCE_STEP,
+        SOURCE_QK175.name,
+        "longctx-skew2",
+    ),
+    MrcrCheckpointPackage(
+        "qk175-longctx-skew4-step157000",
+        1.75,
+        FINAL_STEP,
+        FINAL_STEP - SOURCE_STEP,
+        SOURCE_QK175.name,
+        "longctx-skew4",
+    ),
+)
+PACKAGE_BY_NAME = {
+    package.name: package
+    for package in (*PRIMARY_CHECKPOINT_PACKAGES, *DATA_SAMPLING_CHECKPOINT_PACKAGES, PRE_EXTENSION_QK157)
+}
 FINAL_PACKAGE_NAMES = ("qk157-step157000", "qk175-step157000")
 SENSITIVITY_PACKAGE_NAMES = (SOURCE_QK157.name, SOURCE_QK175.name, *FINAL_PACKAGE_NAMES)
 
@@ -150,6 +172,14 @@ QK157_FINAL_CHECKPOINT = InputName.hardcoded(
 QK175_FINAL_CHECKPOINT = InputName.hardcoded(
     "grug/moe_67b_a2b_d2560_ep1_rep1_ctx4_bs256_seq262144_ctxext_step156k-711f8e/checkpoints/step-157000"
 )
+QK175_LONGCTX_SKEW2_FINAL_CHECKPOINT = InputName.hardcoded(
+    "grug/moe_67b_a2b_d2560_ep1_rep1_ctx4_bs256_seq262144_ctxext_step156k_qk175_longctx_skew2-ec6741/"
+    "checkpoints/step-157000"
+)
+QK175_LONGCTX_SKEW4_FINAL_CHECKPOINT = InputName.hardcoded(
+    "grug/moe_67b_a2b_d2560_ep1_rep1_ctx4_bs256_seq262144_ctxext_step156k_qk175_longctx_skew4-102e3c/"
+    "checkpoints/step-157000"
+)
 
 
 @dataclass(frozen=True)
@@ -163,7 +193,11 @@ class MrcrEvaluationCell:
     @property
     def run_id(self) -> str:
         qk_name = str(self.package.qk_mult).replace(".", "")
-        return f"mrcr-67b-step{self.package.checkpoint_step}-qk{qk_name}-cap{self.context_cap}-{self.prompt_variant}"
+        suffix = f"-{self.package.run_id_suffix}" if self.package.run_id_suffix is not None else ""
+        return (
+            f"mrcr-67b-step{self.package.checkpoint_step}-qk{qk_name}{suffix}"
+            f"-cap{self.context_cap}-{self.prompt_variant}"
+        )
 
 
 def primary_evaluation_cells() -> tuple[MrcrEvaluationCell, ...]:
@@ -222,6 +256,11 @@ def evaluation_cells(selection: str) -> tuple[MrcrEvaluationCell, ...]:
         packages = (PACKAGE_BY_NAME["qk157-step157000"], PACKAGE_BY_NAME["qk175-step157000"])
         return tuple(
             MrcrEvaluationCell(package, AGGREGATE_CONTEXT_CAP, MrcrPromptVariant.TWO_SHOT) for package in packages
+        )
+    if selection == "aggregate_262k_sampling":
+        return tuple(
+            MrcrEvaluationCell(package, AGGREGATE_CONTEXT_CAP, MrcrPromptVariant.TWO_SHOT)
+            for package in DATA_SAMPLING_CHECKPOINT_PACKAGES
         )
     if selection == "primary":
         return primary_evaluation_cells()
@@ -338,6 +377,8 @@ def default_checkpoint_paths() -> dict[str, InputName]:
         PRE_EXTENSION_QK157.name: PRE_EXTENSION_CHECKPOINT,
         SOURCE_QK157.name: SOURCE_CHECKPOINT,
         SOURCE_QK175.name: SOURCE_CHECKPOINT,
+        DATA_SAMPLING_CHECKPOINT_PACKAGES[0].name: QK175_LONGCTX_SKEW2_FINAL_CHECKPOINT,
+        DATA_SAMPLING_CHECKPOINT_PACKAGES[1].name: QK175_LONGCTX_SKEW4_FINAL_CHECKPOINT,
     }
     for package in PRIMARY_CHECKPOINT_PACKAGES:
         if package.training_offset == 0:
@@ -448,6 +489,7 @@ def build_default_steps(
         "aggregate_262k_extension",
         "aggregate_262k_deployable_final",
         "aggregate_262k_final_pair",
+        "aggregate_262k_sampling",
     )
     if selection in bounded_262k_selections and tpu_variant not in CONTEXT_PARALLEL_TPU_SHAPES:
         raise ValueError(f"{selection} requires a context-parallel TPU shape")
