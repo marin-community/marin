@@ -261,12 +261,11 @@ enum MigrationPhase {
 }
 
 message TableMigrationStatus {
-  string migration_id = 1;
+  reserved 1, 6;  // migration_id, source_generation: recorded but never read
   uint64 from_version = 2;
   uint64 to_version = 3;
   MigrationPhase phase = 4;
   int64 fence_seq = 5;
-  uint64 source_generation = 6;
   int64 rows_total = 7;
   int64 rows_completed = 8;
   int64 observation_deadline_ms = 9;

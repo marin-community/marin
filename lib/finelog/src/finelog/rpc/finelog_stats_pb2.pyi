@@ -307,26 +307,22 @@ class TableVersionSegments(_message.Message):
     def __init__(self, table_spec_version: _Optional[int] = ..., live_segments: _Optional[_Iterable[_Union[CatalogSegment, _Mapping]]] = ..., retired_segments: _Optional[_Iterable[_Union[CatalogSegment, _Mapping]]] = ...) -> None: ...
 
 class TableMigrationStatus(_message.Message):
-    __slots__ = ("migration_id", "from_version", "to_version", "phase", "fence_seq", "source_generation", "rows_total", "rows_completed", "observation_deadline_ms")
-    MIGRATION_ID_FIELD_NUMBER: _ClassVar[int]
+    __slots__ = ("from_version", "to_version", "phase", "fence_seq", "rows_total", "rows_completed", "observation_deadline_ms")
     FROM_VERSION_FIELD_NUMBER: _ClassVar[int]
     TO_VERSION_FIELD_NUMBER: _ClassVar[int]
     PHASE_FIELD_NUMBER: _ClassVar[int]
     FENCE_SEQ_FIELD_NUMBER: _ClassVar[int]
-    SOURCE_GENERATION_FIELD_NUMBER: _ClassVar[int]
     ROWS_TOTAL_FIELD_NUMBER: _ClassVar[int]
     ROWS_COMPLETED_FIELD_NUMBER: _ClassVar[int]
     OBSERVATION_DEADLINE_MS_FIELD_NUMBER: _ClassVar[int]
-    migration_id: str
     from_version: int
     to_version: int
     phase: MigrationPhase
     fence_seq: int
-    source_generation: int
     rows_total: int
     rows_completed: int
     observation_deadline_ms: int
-    def __init__(self, migration_id: _Optional[str] = ..., from_version: _Optional[int] = ..., to_version: _Optional[int] = ..., phase: _Optional[_Union[MigrationPhase, str]] = ..., fence_seq: _Optional[int] = ..., source_generation: _Optional[int] = ..., rows_total: _Optional[int] = ..., rows_completed: _Optional[int] = ..., observation_deadline_ms: _Optional[int] = ...) -> None: ...
+    def __init__(self, from_version: _Optional[int] = ..., to_version: _Optional[int] = ..., phase: _Optional[_Union[MigrationPhase, str]] = ..., fence_seq: _Optional[int] = ..., rows_total: _Optional[int] = ..., rows_completed: _Optional[int] = ..., observation_deadline_ms: _Optional[int] = ...) -> None: ...
 
 class ForwardCursor(_message.Message):
     __slots__ = ("target", "cursor")
