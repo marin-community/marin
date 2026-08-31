@@ -80,10 +80,21 @@ GSM8K_ENV = "gsm8k"
 ANSWER_LINE_ENV = "aime"
 REASONING_GYM_ENV = "reasoning_gym"
 
-GSM8K_INSTRUCTION = ' Let\'s think step by step and output the final answer after "####".'
+# Round-4 instruction strength, picked by a 4-variant A/B on the served
+# Snowball base model (issue #8765): the round-3 suffixes elicited 0.00
+# rule-graded pass on gsm8k (correct math, \boxed final line); restating the
+# contract with "the grader reads only that line; do not use \boxed" plus the
+# system message below lifted it to 0.55 before any RL.
+GSM8K_INSTRUCTION = (
+    " Let's think step by step. End your response with one final line of the exact form"
+    ' "#### <number>". The automated grader reads only that line; do not use \\boxed{}.'
+)
 # The aime env verifies with the Minerva "Answer: ..." extraction (not \boxed),
 # so the instruction must elicit a final Answer line.
-ANSWER_LINE_INSTRUCTION = " Please reason step by step, and end your response with a final line 'Answer: <answer>'."
+ANSWER_LINE_INSTRUCTION = (
+    " Please reason step by step. End your response with one final line of the exact form"
+    " 'Answer: <answer>'. The automated grader reads only that line; do not use \\boxed{}."
+)
 
 # Round-4 system message: the round-3 Snowball arms showed a trailing user
 # instruction loses to the SFT answer style (\boxed) on every bin whose grader

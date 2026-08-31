@@ -340,6 +340,9 @@ SNOWBALL_FULL = ScalePreset(
 SNOWBALL_R4_OVERRIDES = (
     "trainer.policy.optimizer_config.optimizer=MuonH",
     "trainer.policy.optimizer_config.lr=1.0e-5",
+    # MuonH validates weight_decay=0 (every group is decay-free by recipe); the
+    # base config's AdamW default of 1e-2 must be overridden explicitly.
+    "trainer.policy.optimizer_config.weight_decay=0.0",
     "data.sampling.reversion_mass=2.0",
 )
 
