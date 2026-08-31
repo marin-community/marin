@@ -1,1 +1,5 @@
 rid	commit	version	moe_impl	data	master_params	schedule_steps	timeout	restore_from	extra	xla_flags	mem_fraction	dk_ctas	dk_ctas_total
+ceg-wg-c1p-42000-20260831	33abad46a2	2026.08.31.2	ragged_all_to_all	mixture	device	4470000	3600	s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-42000	none	none	0.75	none	none
+ceg-wg-t1p-42000-20260831	1bd73f6f26	2026.08.31.3	ragged_all_to_all	mixture	device	4470000	3600	s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-42000	none	none	0.75	none	none
+ceg-wg-c2p-42000-20260831	33abad46a2	2026.08.31.4	ragged_all_to_all	mixture	device	4470000	3600	s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-42000	none	none	0.75	none	none
+ceg-wg-t2p-42000-20260831	1bd73f6f26	2026.08.31.5	ragged_all_to_all	mixture	device	4470000	3600	s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-42000	none	none	0.75	none	none

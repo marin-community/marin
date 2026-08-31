@@ -18,7 +18,6 @@ from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, PartitionS
 from haliax.nn.ragged_dot import ragged_dot
 
 import levanter.grug.grug_moe as grug_moe
-from levanter.grug._moe.cudnn_wgrad_cute import _GROUP_ALIGNMENT, pad_grouped_rows
 from levanter.grug._moe.common import (
     _interleave_gate_up,
     _interleave_halves,
@@ -183,43 +182,6 @@ def _skip_without_sonic_gpu_runtime() -> None:
         pytest.skip("raw Sonic optional dependencies are not installed")
     if not any(device.platform == "gpu" for device in jax.devices()):
         pytest.skip("raw Sonic triton_call tests require a GPU")
-
-
-@pytest.mark.parametrize(
-    "capacity,sizes",
-    [(1024, [300, 400, 200]), (256, [33, 32, 38, 25]), (100, [100]), (700, [0, 700, 0])],
-)
-def test_wgrad_padding_satisfies_both_halves_of_the_kernel_contract(capacity, sizes):
-    """Every extent divides the alignment AND the final offset is the buffer's row count.
-
-    Checking the padder against the kernel's contract, rather than against the transport's idea
-    of the same layout, is the property the old self-consistency tests were missing: they passed
-    at alignment 8 while the kernel required 256.
-    """
-    values = jnp.arange(capacity * 2, dtype=jnp.bfloat16).reshape(capacity, 2)
-    padded, offsets = pad_grouped_rows(values, jnp.array(sizes, dtype=jnp.int32))
-
-    extents = np.diff(np.concatenate([[0], np.asarray(offsets)]))
-    assert all(int(extent) % _GROUP_ALIGNMENT == 0 for extent in extents)
-    assert int(offsets[-1]) == padded.shape[0]
-    assert all(int(extent) >= size for extent, size in zip(extents, sizes, strict=True))
-
-
-def test_the_wgrad_group_alignment_matches_the_installed_cudnn_kernel():
-    """The padding constant must equal the kernel's own requirement.
-
-    The kernel does not validate its group sizes and returns silently wrong gradients when they
-    are misaligned, so this is the only thing standing between a refactor and corrupted expert
-    weight gradients (issue #8339: the constant read 8 against a 256-row contract). Asserting the
-    two against each other, rather than against a literal, is what makes it non-regressable.
-    """
-    assert _GROUP_ALIGNMENT == 256, "cuDNN Frontend's grouped-Wgrad contract requires 256-row groups"
-
-    try:
-        kernel_module = importlib.import_module("cudnn.gemm.cutedsl.grouped.wgrad.moe_grouped_gemm_wgrad")
-    except ImportError:
-        pytest.skip("cuDNN Frontend is only installed with the GPU extra")
-    assert _GROUP_ALIGNMENT == kernel_module.MoEGroupedGemmWgradBF16Kernel.FIX_PAD_SIZE
 
 
 def test_interleaved_receiver_ranks_allocate_capacity_round_robin_over_sources():

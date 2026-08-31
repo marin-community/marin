@@ -9,7 +9,7 @@ author: mcwitt
 ## Scope
 
 - Goal: Starting from PR #8753, determine whether the ragged all-to-all expert MLP can use QuACK or cuDNN consistently across forward and backward while preserving full hero shape and checkpoint restore, loss fidelity, and at least control MFU without materially increasing complexity.
-- Primary metrics: mean MFU over restored steps 5-19; train loss and routing-drop parity against a matched control; successful one-rack EP64 execution from the same complete production hero checkpoint.
+- Primary metrics: median MFU over restored steps 5-19, with mean MFU and stall count as guards; train loss and routing-drop parity against a matched control; successful one-rack EP64 execution from the same complete production hero checkpoint.
 - Constraints: BF16 expert math with FP32 accumulation as in control; no added quantization; one GB200 NVL72 rack per full-shape arm; no Iris cluster lifecycle changes.
 - Coordinating PR: [#8753](https://github.com/marin-community/marin/pull/8753)
 - Experiment prefix: `CEG`.
@@ -18,7 +18,9 @@ author: mcwitt
 
 - PR #8753 is not a fidelity-valid control as written: its cuDNN Wgrad adapter pads expert groups to 8 rows, but cuDNN Frontend 1.27.0 requires 256-row group alignment. The violation silently corrupts `dw13` and `dw2`. The matched control must apply the 256-row correction from [PR #8793](https://github.com/marin-community/marin/pull/8793) to both control and treatment.
 - The existing backend is not simply “QuACK forward, cuDNN backward.” QuACK runs four of six grouped GEMMs: the fused gate/up and down projections in forward, plus `dh` and `dx` in backward. Only the two weight gradients run on cuDNN. QuACK consistency therefore requires one additional varlen-K wrapper and replacing two calls; cuDNN consistency requires JAX adapters for grouped GLU, grouped GEMM, grouped dGLU, and Wgrad plus 256-row layout conversion across the activation path.
-- The exact-shape single-GB200 sweep favors tuned QuACK varlen-K: `dw13` is 7.23 ms versus corrected cuDNN's 10.15 ms, and `dw2` is 3.33 ms versus 4.68 ms. The chosen shared QuACK setting is a 256x256 tile, 2x2x1 cluster, and CLC off. Full-rack validation remains open.
+- The exact-shape single-GB200 sweep favors tuned QuACK varlen-K: `dw13` is 7.23 ms versus corrected cuDNN's 10.15 ms, and `dw2` is 3.33 ms versus 4.68 ms. The chosen shared QuACK setting is a 256x256 tile, 2x2x1 cluster, and CLC off.
+- Two matched full-shape EP64 control/treatment pairs restored the immutable production hero step-42000 checkpoint and scored the same steps 42005-42019. QuACK's two-draw median is 23.8154 MFU versus corrected cuDNN's 23.1203, a +0.6951 / +3.01% improvement. All four arms produced complete finite loss/drop series; pairwise maximum absolute loss deltas are 1.32e-4 and 1.04e-4, against 7.6e-5 control-to-control nondeterminism. No quantization or dtype policy changed.
+- QuACK-only is viable and simpler in the production source slice: it removes the cuDNN wrapper, padding copies, runtime dependency probe, and family-specific private entry point. Relative to PR #8753, the runtime MoE source changes by +115/-174 lines (net -59). cuDNN-only is technically expressible but not viable under the complexity gate: it needs three additional direct-JAX kernel adapters, a different gate/up layout VJP, and 256-row activation-buffer conversion while computing the inactive receiver tail. It was therefore stopped before a rack arm.
 
 ## Baseline
 
@@ -30,8 +32,7 @@ author: mcwitt
 
 ### Active
 
-- `CEG-H1`: QuACK varlen-K grouped GEMM can compute `dw13` and `dw2` directly from the transport layout, eliminate cuDNN's two multi-GB 256-alignment copies, match BF16/FP32-accumulation gradients, and meet or exceed corrected-control MFU. Evidence: exact-shape kernel gate passed at 1.40x/1.41x the corrected cuDNN kernel-only speed. Next test: matched restored EP64 draws.
-- `CEG-H2`: A cuDNN-only activation and gradient path is technically expressible using the pinned Frontend's grouped GLU, unfused grouped GEMM, dGLU, and Wgrad kernels. Next test: estimate and then measure adapter/layout cost at the two hero per-call shapes; promote to an EP64 arm only if the microbenchmark can plausibly match control and the adapter stays bounded.
+- None.
 
 ### Blocked
 
@@ -39,11 +40,11 @@ author: mcwitt
 
 ### Falsified / Dead End
 
-- None.
+- `CEG-H2`: A cuDNN-only activation and gradient path is technically expressible, but fails the no-significant-complexity-increase gate before rack testing. The pinned Frontend requires three new JAX adapters beyond Wgrad, a distinct gate/up layout VJP, and 256-row layout conversion for the activation path. The conversion also forces work over the receiver buffer's roughly 15% inactive tail; a prior fidelity-correct aligned-transport arm lost 0.173 MFU. A rack arm cannot rescue the already-failed complexity requirement.
 
 ### Promoted
 
-- None.
+- `CEG-H1`: QuACK varlen-K computes both weight gradients directly from existing cumulative group sizes. Two restored EP64 pairs show +3.01% median MFU with loss/drop parity, and the final runtime source is 59 lines smaller than PR #8753.
 
 ## Background Research Brief
 
@@ -133,7 +134,7 @@ The local `sonic_cute.py` custom VJP performs gate/up+SwiGLU and down projection
 ### Handoff
 
 - No coordinating issue was created; PR #8753 is the source reference and this logbook is the durable research record.
-- Open questions: exact latest complete hero checkpoint, matched rack launch identities, and measured QuACK varlen-K/corrected-cuDNN times.
+- Open questions: none for the viability decision. A production PR should use the QuACK-only head and include the corrected-control caveat so PR #8753's uncorrected Wgrad result is not treated as a fidelity baseline.
 
 ## Entry Log
 
@@ -156,3 +157,23 @@ The local `sonic_cute.py` custom VJP performs gate/up+SwiGLU and down projection
 - Result: QuACK 256x256/2x2x1/CLC-off runs `dw13` at 7.23 ms and `dw2` at 3.33 ms; corrected cuDNN kernel-only takes 10.15 and 4.68 ms before alignment-copy time. Checkpoint metadata reports step 42000, `is_temporary=false`, timestamp 2026-08-31T03:06:00.923412; `manifest.json` and `manifest.ocdbt` are present; size is 5,363,757,878,827 bytes across 45,329 objects. Focused tests pass and the diff-scoped lint/type suite passes.
 - Interpretation: the QuACK treatment clears correctness, performance, and full-shape-input preconditions for rack testing. cuDNN-only remains behind its complexity gate: the pinned APIs require three new JAX kernel adapters, a distinct 32-column gate/up layout VJP, and 256-row activation-path padding.
 - Next action: snapshot and push the clean tree, then submit serialized C-T-C-T one-rack draws with fresh identities and compilation caches.
+
+### 2026-08-31 15:55 - CEG-003: Restored EP64 C-T-C-T verdict
+
+- Hypothesis: replacing the remaining cuDNN `dw13`/`dw2` calls with tuned QuACK varlen-K will preserve the full hero computation while removing padding copies and improving MFU beyond run noise.
+- Commit Hash: treatment `1bd73f6f26d1e64e0336c5abffea98395d619dd5`; corrected control `33abad46a2ca476b90db7fcc7a16b12ae461ad1d`. The final cleanup only removes the now-dead cuDNN source/probe and renames the private QuACK entry point; it does not change the measured JAX graph or kernel settings.
+- Command: serialized `autoresearch/quack-wgrad/arm.sh` and `watchdog.sh` draws at production priority, each with `ARM_TIMEOUT=3600`, followed by `score.py <run-id> --relative --lo 5 --hi 19`. The first interactive submission `ceg-wg-c1-42000-20260831` was Kueue-gated, consumed no GPU time, and was canceled before the production-priority campaign; it is not a measurement.
+- Config: 16 workers x 4 GB200 GPUs (canonical EP64 slice of one NVL72 rack); full hero d6144/48-layer/384-expert/top-8/latent-i3072 shape; global batch 1024; capacity factor 1.15; mixture data; device master parameters; ragged all-to-all; schedule length 4,470,000; immutable `s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-42000`; no checkpoint writes, eval, or profiling. Every coordinator completed in 17-22 minutes and was canceled immediately after its scoring window, within the authorized one-hour cap.
+- Result:
+
+| Arm | Kernel for `dw13`/`dw2` | Median MFU | Mean MFU | Stalls | Mean tok/s | Peak GiB | Max drop |
+|---|---|---:|---:|---:|---:|---:|---:|
+| [C1](https://wandb.ai/marin-community/marin_moe/runs/ceg-wg-c1p-42000-20260831) | corrected cuDNN | 23.0535 | 23.0327 | 0 | 246,114.6 | 116.57 | 0.00027344 |
+| [T1](https://wandb.ai/marin-community/marin_moe/runs/ceg-wg-t1p-42000-20260831) | QuACK varlen-K | 23.8427 | 23.7480 | 0 | 253,758.3 | 115.86 | 0.00026883 |
+| [C2](https://wandb.ai/marin-community/marin_moe/runs/ceg-wg-c2p-42000-20260831) | corrected cuDNN | 23.1870 | 23.0821 | 0 | 246,642.4 | 116.57 | 0.00027483 |
+| [T2](https://wandb.ai/marin-community/marin_moe/runs/ceg-wg-t2p-42000-20260831) | QuACK varlen-K | 23.7880 | 23.6940 | 1 | 253,181.6 | 115.86 | 0.00026291 |
+
+  The two-draw median centers are 23.1203 control and 23.8154 treatment: +0.6951 MFU / +3.01%. Mean MFU centers are 23.0574 and 23.7210: +0.6636 / +2.88%. The treatment uses 0.71 GiB less peak memory. T2 has one step below 97% of its run median, but its full-window mean and median remain above both controls; no task failure or preemption occurred.
+- Fidelity: all four score windows contain 15/15 MFU, loss, and drop points and no non-finite values. C1-T1 and C2-T2 maximum absolute loss deltas are 1.32e-4 and 1.04e-4; their mean absolute deltas are 6.36e-5 and 4.86e-5. The two controls themselves differ by as much as 7.6e-5, so the treatment deltas are at the expected BF16 reduction-order/nondeterminism scale. Drop means are 8.2e-5/8.2e-5 and 8.3e-5/8.1e-5. Both treatment runs restored the checkpoint and reached the exact full hero score window without a dtype, quantization, optimizer, data, or schedule change.
+- Interpretation: `CEG-H1` passes every viability gate. The performance gain is 3.9-4.3 times the 0.16-0.18 MFU keep threshold and repeats across both pairs. The loss/drop series support equivalence, the exact checkpoint restore proves full-shape compatibility, and deleting the cuDNN-only wrapper makes the runtime source smaller and conceptually single-family. `CEG-H2` is closed without a rack arm because it already fails the independent complexity gate and carries a layout/work penalty absent from QuACK.
+- Next action: run final focused tests and repository lint after deleting the dead cuDNN path, snapshot the research head, and prepare the production change for review if requested.

@@ -99,22 +99,22 @@ def _cute_expert_mlp(
     active_group_sizes: Int[Array, "Echunk"],
     activation_fn: Callable[[jax.Array], jax.Array],
 ) -> Float[Array, "C H"]:
-    """Expert MLP on QuACK's SM100 grouped GEMMs plus cuDNN grouped weight gradients.
+    """Expert MLP with all grouped GEMMs on QuACK's SM100 kernels.
 
     The grouped kernels are driven by segment boundaries, so they take the active sizes and
     mask the receiver buffer's trailing padding rather than charging it to the last expert.
     """
     del activation_fn, physical_group_sizes
 
-    # QuACK, cuDNN Frontend, and CUTLASS DSL are installed only with the CUDA 13 GPU extra.
-    from levanter.grug._moe.sonic_cute import _expert_mlp_cudnn  # noqa: PLC0415
+    # QuACK and CUTLASS DSL are installed only with the CUDA 13 GPU extra.
+    from levanter.grug._moe.sonic_cute import _expert_mlp_quack  # noqa: PLC0415
 
     moe_dim = moe_w2_local.shape[1]
     w13_interleaved = _interleave_gate_up(moe_w13_local, moe_dim)
     cumulative_group_sizes = jnp.concatenate(
         [jnp.zeros((1,), jnp.int32), jnp.cumsum(active_group_sizes).astype(jnp.int32)]
     )
-    return _expert_mlp_cudnn(x_dispatch, w13_interleaved, moe_w2_local, active_group_sizes, cumulative_group_sizes)
+    return _expert_mlp_quack(x_dispatch, w13_interleaved, moe_w2_local, active_group_sizes, cumulative_group_sizes)
 
 
 @functools.cache
@@ -125,12 +125,9 @@ def _quack_grouped_gemm_available() -> bool:
         return False
     try:
         import levanter.grug._moe.sonic_cute  # noqa: F401,PLC0415
-        from levanter.grug._moe.cudnn_wgrad_cute import _cudnn_modules  # noqa: PLC0415
-
-        _ = _cudnn_modules()  # check if compatible cudnn is available
     except (ImportError, AttributeError) as exc:
         logger.warning(
-            "SM100 GPU present but the QuACK/cuDNN grouped-GEMM kernels did not import (%s). "
+            "SM100 GPU present but the QuACK grouped-GEMM kernels did not import (%s). "
             "The ragged expert MLP falls back to ragged_dot, which computes the same function "
             "more slowly. Install levanter's `gpu` extra to use them.",
             exc,

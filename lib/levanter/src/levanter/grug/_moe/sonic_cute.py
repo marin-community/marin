@@ -1,17 +1,14 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Local Grug MoE backend using Tri Dao's QuACK SM100 kernels (SonicMoE) on B200.
+"""Grug MoE expert kernels using Tri Dao's QuACK SM100 kernels on B200.
 
 Dispatch/combine as in ``scatter``, but the expert MLP GEMMs run on QuACK's
 ``GemmGatedSm100`` / ``GemmDefaultSm100`` via the vendored ``cutlass.jax.cutlass_call``
-shim. QuACK does all four activation-path grouped GEMMs (gate/up fwd fused with
-SwiGLU, down fwd, and the ``dh``/``dx`` backward matmuls); the SwiGLU backward is
-elementwise in JAX; the two weight-gradient GEMMs (``dw13``/``dw2``) stay on XLA
-``ragged_dot`` (a different varlen-k grouping). QuACK covers ~2/3 of the MoE FLOPs.
-
-``_expert_mlp_cudnn`` is the same forward with those two weight gradients moved onto cuDNN
-Frontend grouped Wgrad kernels, which is faster than ``ragged_dot`` at the hero shapes.
+shim. The local FSDP path uses XLA ``ragged_dot`` for its two weight gradients. The ragged
+all-to-all path uses QuACK for all six grouped GEMMs: gate/up and down in the forward pass,
+and ``dh``, ``dx``, ``dw13``, and ``dw2`` in the backward pass. The SwiGLU backward remains
+elementwise JAX.
 """
 
 import jax
@@ -44,7 +41,7 @@ from levanter.grug._moe.quack_moe_cute import (
 # grouped GEMMs -- down forward plus the backward dh/dx matmuls -- gain 1.055x at (2, 2, 1).
 # All of this is scheduling, so none of it changes the computed function.
 #
-# These reach `_expert_mlp_cudnn` only. `_expert_mlp` -- the local FSDP path, used by the
+# These reach `_expert_mlp_quack` only. `_expert_mlp` -- the local FSDP path, used by the
 # `fsdp-nodrop` and `fsdp-chunk4` ablation arms -- still calls the GEMMs at their defaults, as it
 # did before this tuning existed, so nothing regressed. It is untuned rather than deliberately
 # tuned differently: the measurements above were taken at the i3072 hero shapes and the FSDP arms
@@ -56,8 +53,8 @@ _QUACK_USE_CLC = True
 _QUACK_GATED_KW = dict(tile_mn=_QUACK_TILE_MN, cluster_mnk=(2, 1, 1), use_clc_persistence=_QUACK_USE_CLC)
 _QUACK_GROUPED_KW = dict(tile_mn=_QUACK_TILE_MN, cluster_mnk=(2, 2, 1), use_clc_persistence=_QUACK_USE_CLC)
 # The weight gradients group over the contraction dimension instead, so they tile a small fixed
-# [M, N] output over a very long K and want their own configuration. From the hero-shape sweep in
-# `bench_grouped_wgrad.py`: at the (256, 256) tile and a (2, 2, 1) cluster, dw13 runs 7.23 ms and
+# [M, N] output over a very long K and want their own configuration. In the hero-shape sweep,
+# at the (256, 256) tile and a (2, 2, 1) cluster, dw13 runs 7.23 ms and
 # dw2 3.33 ms against 10.15 / 4.68 for the cuDNN kernel this replaced. This is the best setting
 # shared by both calls, and within 0.07 ms of each one's own best. CLC persistence is the one knob
 # that splits them -- it wins dw2 by 0.07 and loses dw13 by 0.51 -- so it stays off.
@@ -103,8 +100,8 @@ _expert_mlp.defvjp(_expert_mlp_fwd, _expert_mlp_bwd)
 
 
 @jax.custom_vjp
-def _expert_mlp_cudnn(x_dispatch, w13_il, moe_w2, group_sizes, cu):
-    """``_expert_mlp`` with the two weight-gradient GEMMs on cuDNN grouped Wgrad kernels.
+def _expert_mlp_quack(x_dispatch, w13_il, moe_w2, group_sizes, cu):
+    """Expert MLP with every grouped GEMM on QuACK.
 
     The forward output is masked past the last expert group: the grouped GEMMs write only
     the rows inside ``cu``, and those trailing rows flow on through the unpermute and
@@ -115,13 +112,13 @@ def _expert_mlp_cudnn(x_dispatch, w13_il, moe_w2, group_sizes, cu):
     return _zero_inactive_grouped_rows(y, cu)
 
 
-def _expert_mlp_cudnn_fwd(x_dispatch, w13_il, moe_w2, group_sizes, cu):
+def _expert_mlp_quack_fwd(x_dispatch, w13_il, moe_w2, group_sizes, cu):
     gu, h = quack_gated_grouped_gemm(x_dispatch, w13_il, cu, return_preact=True, **_QUACK_GATED_KW)
     y = quack_grouped_gemm(h, moe_w2, cu, b_major="n", **_QUACK_GROUPED_KW)
     return _zero_inactive_grouped_rows(y, cu), (x_dispatch, w13_il, moe_w2, gu, h, group_sizes, cu)
 
 
-def _expert_mlp_cudnn_bwd(res, dy):
+def _expert_mlp_quack_bwd(res, dy):
     x_dispatch, w13_il, moe_w2, gu, h, group_sizes, cu = res
     # The cotangent's trailing rows are whatever the caller's buffer held; the grouped GEMMs
     # contract every row they are handed, so they have to be cleared here too.
@@ -137,7 +134,7 @@ def _expert_mlp_cudnn_bwd(res, dy):
     return dx, dw13_il, dw2, gs_ct, cu_ct
 
 
-_expert_mlp_cudnn.defvjp(_expert_mlp_cudnn_fwd, _expert_mlp_cudnn_bwd)
+_expert_mlp_quack.defvjp(_expert_mlp_quack_fwd, _expert_mlp_quack_bwd)
 
 
 def _moe_mlp_local_sonic_cute(
