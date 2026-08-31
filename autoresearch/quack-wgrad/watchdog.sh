@@ -30,9 +30,9 @@ COMPILE_CEILING="${COMPILE_CEILING:-1800}"
 SCORE_MAX_STEP="${SCORE_MAX_STEP:-19}"
 POLL="${POLL:-20}"
 STEP_POLL_EVERY="${STEP_POLL_EVERY:-3}"
-# A campaign arm restores from step-30000; a first step below this means restore silently fell
+# A campaign arm restores from step-42000; a first step below this means restore silently fell
 # back to scratch (or the wrong checkpoint) and the whole measurement is invalid.
-EXPECTED_MIN_FIRST_STEP="${EXPECTED_MIN_FIRST_STEP:-30000}"
+EXPECTED_MIN_FIRST_STEP="${EXPECTED_MIN_FIRST_STEP:-42000}"
 
 LOOP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "${LOOP_DIR}/../.." && pwd)"
