@@ -246,7 +246,7 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise ValueError(f"target total tokens must be positive: {args.target_total_tokens_b}")
 
 
-def _materialize_normalized_sources(args: argparse.Namespace) -> set[str]:
+def _materialized_source_names(args: argparse.Namespace) -> set[str]:
     if args.destination_prefix.startswith("s3://") or (
         args.mode is not SampleMode.MINHASH and args.source_prefix.startswith("s3://")
     ):
@@ -321,7 +321,7 @@ def main() -> None:
     args = _parse_args()
     configure_logging(logging.INFO)
     _validate_args(args)
-    source_names = _materialize_normalized_sources(args)
+    source_names = _materialized_source_names(args)
     _materialize_minhash(args, source_names)
 
 

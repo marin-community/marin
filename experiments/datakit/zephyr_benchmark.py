@@ -128,8 +128,8 @@ def _source_shard_stats(sample_prefix: str) -> dict[str, SourceShardStats]:
 
     Reads object metadata only (no shard contents), grouping every
     ``<source>/outputs/main/*.parquet`` file by its source name. Parquet found
-    anywhere else in the sample tree means an unexpected layout, so it's an error
-    rather than a bogus source entry. A source name deeper than
+    anywhere else in the sample tree means an unexpected layout, except for the
+    reserved ``_benchmark_inputs`` subtree. A source name deeper than
     ``SOURCE_DISCOVERY_DEPTHS`` allows is also an error: :func:`sample_sources`
     can't discover it, so a selection here could otherwise pick a name it later
     rejects.
