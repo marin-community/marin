@@ -15,9 +15,7 @@ Example (the full preset from the `ab-test-zephyr` skill):
 
     python -m experiments.datakit.zephyr_benchmark \
         --sources all --run-tag zephyr-100b-v1 \
-        --pool-workers 12 --pool-cpu 8 --pool-ram 64g --pool-disk 32g \
-        --map-task-cpu 1 --map-task-ram 8g --map-task-disk 4g \
-        --reduce-task-cpu 3 --reduce-task-ram 30g --reduce-task-disk 8g \
+        --pool-workers 12 \
         --target all --max-concurrent 128 \
         --dedup-max-parallelism 1000 --dedup-cc-max-iterations 3
 
@@ -27,9 +25,7 @@ the reduced ``--pool-workers`` still has enough parquet shards to fill:
 
     python -m experiments.datakit.zephyr_benchmark \
         --source-fraction 0.1 --run-tag zephyr-100b-light-v1 \
-        --pool-workers 12 --pool-cpu 8 --pool-ram 64g --pool-disk 32g \
-        --map-task-cpu 1 --map-task-ram 8g --map-task-disk 4g \
-        --reduce-task-cpu 3 --reduce-task-ram 30g --reduce-task-disk 8g \
+        --pool-workers 12 \
         --target all --max-concurrent 80 \
         --dedup-max-parallelism 500 --dedup-cc-max-iterations 3
 
@@ -58,13 +54,13 @@ from zephyr.context import ZephyrContext
 from experiments.datakit.benchmark_sample import (
     BENCHMARK_SAMPLE_INPUTS_DIR,
     benchmark_sample_fuzzy_steps,
+    benchmark_zephyr_context,
 )
 from experiments.datakit.reference_pipeline import (
     SMOKE_SCALE,
     SOURCE_DISCOVERY_DEPTHS,
     PipelineScale,
     ZephyrDatakitSteps,
-    pool_zephyr_context,
     sample_sources,
     zephyr_datakit_steps,
 )
@@ -77,6 +73,9 @@ GCP_BENCHMARK_SAMPLE_PREFIX = "gs://marin-eu-west4/datakit/sample_100b_8ae7a94f"
 COREWEAVE_BENCHMARK_SAMPLE_PREFIX = "s3://marin-us-east-02a/marin/datakit/sample_100b_8ae7a94f"
 DECIMAL_GB_BYTES = 1_000_000_000
 MISSING_ARTIFACT_PREVIEW_LIMIT = 10
+BENCHMARK_WORKER_RESOURCES = ResourceConfig(cpu=8, ram="64g", disk="32g")
+BENCHMARK_MAP_TASK_RESOURCES = ResourceConfig(cpu=1, ram="8g", disk="4g")
+BENCHMARK_REDUCE_TASK_RESOURCES = ResourceConfig(cpu=3, ram="30g", disk="8g")
 
 
 class BenchmarkTarget(StrEnum):
@@ -299,15 +298,15 @@ def main() -> None:
     )
     parser.add_argument("--run-tag", required=True, help="Fresh identity tag that forces uncached benchmark stages.")
     parser.add_argument("--pool-workers", required=True, type=int)
-    parser.add_argument("--pool-cpu", required=True, type=float)
-    parser.add_argument("--pool-ram", required=True)
-    parser.add_argument("--pool-disk", required=True)
-    parser.add_argument("--map-task-cpu", required=True, type=float)
-    parser.add_argument("--map-task-ram", required=True)
-    parser.add_argument("--map-task-disk", required=True)
-    parser.add_argument("--reduce-task-cpu", required=True, type=float)
-    parser.add_argument("--reduce-task-ram", required=True)
-    parser.add_argument("--reduce-task-disk", required=True)
+    parser.add_argument("--pool-cpu", type=float, default=BENCHMARK_WORKER_RESOURCES.cpu)
+    parser.add_argument("--pool-ram", default=BENCHMARK_WORKER_RESOURCES.ram)
+    parser.add_argument("--pool-disk", default=BENCHMARK_WORKER_RESOURCES.disk)
+    parser.add_argument("--map-task-cpu", type=float, default=BENCHMARK_MAP_TASK_RESOURCES.cpu)
+    parser.add_argument("--map-task-ram", default=BENCHMARK_MAP_TASK_RESOURCES.ram)
+    parser.add_argument("--map-task-disk", default=BENCHMARK_MAP_TASK_RESOURCES.disk)
+    parser.add_argument("--reduce-task-cpu", type=float, default=BENCHMARK_REDUCE_TASK_RESOURCES.cpu)
+    parser.add_argument("--reduce-task-ram", default=BENCHMARK_REDUCE_TASK_RESOURCES.ram)
+    parser.add_argument("--reduce-task-disk", default=BENCHMARK_REDUCE_TASK_RESOURCES.disk)
     parser.add_argument("--target", required=True, type=BenchmarkTarget, choices=list(BenchmarkTarget))
     parser.add_argument("--max-concurrent", required=True, type=int)
     parser.add_argument("--dedup-max-parallelism", required=True, type=int)
@@ -341,10 +340,10 @@ def main() -> None:
         dedup_max_parallelism=args.dedup_max_parallelism,
         cc_max_iterations=args.dedup_cc_max_iterations,
     )
-    zephyr_context = pool_zephyr_context(
+    zephyr_context = benchmark_zephyr_context(
         "zephyr-benchmark",
         scale,
-        max_concurrent_pipelines=args.max_concurrent,
+        args.max_concurrent,
     )
     steps = _benchmark_steps(
         sample_prefix=args.sample_prefix,

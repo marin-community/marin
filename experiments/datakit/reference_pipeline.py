@@ -324,11 +324,9 @@ class PipelineScale:
     sample_parallel_sources: int = 4
     dedup_max_parallelism: int = 4096
     # Both datakit ferries pin this to 3 (see datakit_ferry.py /
-    # datakit_nemotron_ferry.py); a caller benchmarking against ferry behavior
-    # should match that rather than inherit the library's default of 10, which
-    # runs the full iteration budget -- each iteration a full scatter/reduce
-    # pass -- on graphs that don't converge early.
-    cc_max_iterations: int = DEFAULT_CC_MAX_ITERATIONS
+    # datakit_nemotron_ferry.py). None uses the library default and preserves
+    # the default fuzzy-dedup cache identity.
+    cc_max_iterations: int | None = None
     # Centroid training is single-process FAISS K-means, not a pool stage.
     train_centroids_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig.with_cpu(cpu=32, ram="64g"))
 
@@ -578,30 +576,6 @@ class ZephyrDatakitSteps:
     fuzzy_dedup: StepSpec
 
 
-def pool_zephyr_context(
-    name: str,
-    scale: PipelineScale,
-    *,
-    max_concurrent_pipelines: int | None = None,
-) -> ZephyrContext:
-    """Build the shared pool for subprocess-compatible stages in this DAG.
-
-    Enter the returned context around any runner that executes steps built with
-    it. ``max_concurrent_pipelines=None`` uses Zephyr's default pipeline limit.
-    """
-    kwargs: dict[str, int] = {}
-    if max_concurrent_pipelines is not None:
-        kwargs["max_concurrent_pipelines"] = max_concurrent_pipelines
-    return ZephyrContext(
-        name=name,
-        resources=scale.pool.worker,
-        coordinator_resources=scale.pool.coordinator,
-        max_workers=scale.pool.n_workers,
-        stage_runner_factory=SubprocessRunner,
-        **kwargs,
-    )
-
-
 def zephyr_datakit_steps(
     sources: dict[str, StepSpec],
     scale: PipelineScale = DEFAULT_SCALE,
@@ -676,26 +650,23 @@ def zephyr_datakit_steps(
             ),
         )
 
+    cc_max_iterations = scale.cc_max_iterations
+    if cc_max_iterations is None:
+        cc_max_iterations = DEFAULT_CC_MAX_ITERATIONS
+    hash_attrs = {"v": FUZZY_DUPS_ATTR_DATA_VERSION}
+    if scale.cc_max_iterations is not None:
+        hash_attrs["cc_max_iterations"] = scale.cc_max_iterations
+
     fuzzy_dedup = StepSpec(
         name="datakit/dedup",
         deps=list(minhash_steps.values()),
-        # Omit cc_max_iterations at its default to match compute_fuzzy_dups_attrs_step's
-        # identity convention -- a step built there for the same inputs must resolve to
-        # the artifacts this graph already produced, not recompute under a fresh hash.
-        hash_attrs={
-            "v": FUZZY_DUPS_ATTR_DATA_VERSION,
-            **(
-                {"cc_max_iterations": scale.cc_max_iterations}
-                if scale.cc_max_iterations != DEFAULT_CC_MAX_ITERATIONS
-                else {}
-            ),
-        },
+        hash_attrs=hash_attrs,
         output_path_prefix=output_path_prefix,
         fn=lambda output_path: compute_fuzzy_dups_attrs(
             inputs=[read_artifact(step.output_path, MinHashAttrData) for step in minhash_steps.values()],
             output_path=output_path,
             max_parallelism=scale.dedup_max_parallelism,
-            cc_max_iterations=scale.cc_max_iterations,
+            cc_max_iterations=cc_max_iterations,
             cc_resume=True,
             worker_resources=scale.pool.worker,
             map_task_resources=scale.pool.map_task,
@@ -1184,7 +1155,13 @@ def main() -> None:
     scale = _apply_pool_overrides(SMOKE_SCALE if args.mode == "sample" else DEFAULT_SCALE, args)
     sources = _select_pipeline_sources(args)
 
-    with pool_zephyr_context("datakit-reference", scale) as zephyr_context:
+    with ZephyrContext(
+        name="datakit-reference",
+        resources=scale.pool.worker,
+        coordinator_resources=scale.pool.coordinator,
+        max_workers=scale.pool.n_workers,
+        stage_runner_factory=SubprocessRunner,
+    ) as zephyr_context:
         result = reference_datakit_steps(
             sources,
             quality_model=args.quality_model,

@@ -30,8 +30,8 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
 
-from experiments.datakit.benchmark_sample import benchmark_sample_fuzzy_steps
-from experiments.datakit.reference_pipeline import SMOKE_SCALE, pool_zephyr_context, sample_sources
+from experiments.datakit.benchmark_sample import benchmark_sample_fuzzy_steps, benchmark_zephyr_context
+from experiments.datakit.reference_pipeline import SMOKE_SCALE, sample_sources
 from experiments.datakit.testbed.sampler import proportional_sample_fractions, sample_normalized_shards
 from experiments.datakit.zephyr_benchmark import (
     COREWEAVE_BENCHMARK_SAMPLE_PREFIX,
@@ -215,10 +215,10 @@ def _materialize_minhash(args: argparse.Namespace, source_names: set[str]) -> No
             map_task=map_task,
         ),
     )
-    zephyr_context = pool_zephyr_context(
+    zephyr_context = benchmark_zephyr_context(
         "zephyr-benchmark-sample-minhash",
         scale,
-        max_concurrent_pipelines=args.minhash_max_concurrent,
+        args.minhash_max_concurrent,
     )
     sources = sample_sources(args.destination_prefix, sorted(source_names))
     minhash_steps = benchmark_sample_fuzzy_steps(

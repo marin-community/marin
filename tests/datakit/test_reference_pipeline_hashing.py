@@ -242,3 +242,11 @@ def test_dedup_step_builders_match_the_datakit_graph_identity():
         name: step.hash_id for name, step in graph.minhash.items()
     }
     assert dedup.hash_id == graph.fuzzy_dedup.hash_id
+
+
+def test_fuzzy_dedup_iterations_rekey_dedup():
+    base = zephyr_datakit_steps(_sources(), SMOKE_SCALE).fuzzy_dedup
+    three_rounds = dataclasses.replace(SMOKE_SCALE, cc_max_iterations=3)
+    changed = zephyr_datakit_steps(_sources(), three_rounds).fuzzy_dedup
+
+    assert changed.hash_id != base.hash_id

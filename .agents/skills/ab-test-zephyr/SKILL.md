@@ -140,6 +140,10 @@ worker. Global exact dedup and tokenization accept the same task sizing as
 MinHash and fuzzy dedup, so no benchmark stage silently falls back to one task
 per worker.
 
+`zephyr_benchmark.py` uses the worker and task resource shapes in the preset
+table by default. Pass the resource flags only when the comparison intentionally
+changes those shapes, and record every override in the workload fingerprint.
+
 Both presets use the same 12-worker pool, exposing up to 96 concurrent map
 tasks or 24 concurrent reduce tasks. Keeping compute fixed exposes the full
 sample's 9.57x byte increase in wall time. A 256-worker full run completed in
@@ -237,15 +241,6 @@ uv run iris --config=lib/iris/config/marin.yaml job run --no-wait \
     `# or --source-fraction <FRACTION> for the light preset, in place of --sources` \
     --run-tag <FRESH_RUN_TAG>-<ARM> \
     --pool-workers <WORKERS> \
-    --pool-cpu <CPU_PER_WORKER> \
-    --pool-ram <RAM_PER_WORKER> \
-    --pool-disk <DISK_PER_WORKER> \
-    --map-task-cpu <CPU_PER_MAP_TASK> \
-    --map-task-ram <RAM_PER_MAP_TASK> \
-    --map-task-disk <DISK_PER_MAP_TASK> \
-    --reduce-task-cpu <CPU_PER_REDUCE_TASK> \
-    --reduce-task-ram <RAM_PER_REDUCE_TASK> \
-    --reduce-task-disk <DISK_PER_REDUCE_TASK> \
     --target <all|map|shuffle|exact|tokenize|minhash|fuzzy> \
     --max-concurrent <PIPELINES> \
     --dedup-max-parallelism <SHARDS> \
