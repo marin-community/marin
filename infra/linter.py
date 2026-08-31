@@ -3,7 +3,7 @@
 
 """Agentic lint-review runner (lanes + composer) invoked by `pre-commit.py --review`.
 
-Fans out one headless agent per "lane" (rules in infra/lint/*.md) over the branch's
+Fans out one headless agent per structured rule lane under ``infra/lint/`` over the branch's
 changes and merges the per-lane findings with a composer agent (or a deterministic
 dedupe-and-concat). Each lane is handed the changed-file inventory (`git diff --stat`)
 and read-only git access, and probes each file itself rather than reading a pasted
@@ -12,7 +12,6 @@ on its own. This subsystem is self-contained and used only by the `--review` pat
 pre-commit.py.
 """
 
-import hashlib
 import json
 import os
 import pathlib
@@ -29,13 +28,13 @@ from dataclasses import dataclass
 
 import click
 
-# codehealth/ holds stdlib-only helpers imported by path (it is not an installed package).
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent / "codehealth"))
-import complexity as complexity_leads
-
 ROOT_DIR = pathlib.Path(__file__).parent.parent
+sys.path.insert(0, str(ROOT_DIR))
+from infra.codehealth import complexity as complexity_leads  # noqa: E402
+from infra.lint.catalog import catalog_sha, load_catalog, render_lane  # noqa: E402
+
 LINT_DIR = ROOT_DIR / "infra/lint"
-LINT_SHARED = LINT_DIR / "shared.md"
+LINT_CATALOG = load_catalog(LINT_DIR)
 
 
 LINT_REVIEW_AGENT_DEFAULT = "claude -p"
@@ -159,15 +158,12 @@ META_LANE_INSTRUCTIONS = (
     "each file's diff and reading into the surrounding code is exactly this lane's job."
 )
 
-# The holistic meta lane only runs on larger diffs — its rules need the whole change, and on a
-# small PR there is no aggregate shape to see. This is the lane's only volume gate (findings are
-# advisory and read only by agents, so there is no per-PR finding cap).
-META_LANE_MIN_DIFF_LINES = 100
 
-
+# The holistic meta lane only runs on larger diffs. Its rules need the whole change, and a small
+# pull request has no aggregate shape to inspect.
 @dataclass(frozen=True)
 class LintLane:
-    """One fan-out lane of the lint review: a rule file under infra/lint/."""
+    """One fan-out lane of the structured lint review."""
 
     name: str
     include_complexity_leads: bool
@@ -178,14 +174,15 @@ class LintLane:
     min_diff_lines: int = 0
 
 
-# Coarse lanes — one headless agent each. Keep this aligned with infra/lint/*.md.
-LINT_LANES = (
-    LintLane("complexity", True),
-    LintLane("interfaces", False),
-    LintLane("robustness", False),
-    LintLane("cruft", False),
-    LintLane("prose", False),
-    LintLane("meta", False, META_LANE_INSTRUCTIONS, META_LANE_MIN_DIFF_LINES),
+# Coarse lanes — one headless agent each, derived from the structured catalog.
+LINT_LANES = tuple(
+    LintLane(
+        lane.name,
+        lane.include_complexity_leads,
+        META_LANE_INSTRUCTIONS if lane.name == "meta" else LINT_LANE_INSTRUCTIONS,
+        lane.min_diff_lines,
+    )
+    for lane in LINT_CATALOG.lanes
 )
 
 # The composer merges the lanes' outputs. Authored to never silently drop a real
@@ -242,7 +239,7 @@ LINT_REVIEW_STRIPPED_ENV = (
 )
 
 
-# Output format the agent emits, per infra/lint/shared.md "Output format":
+# Output format the agent emits, per infra/lint/catalog.yaml "Output format":
 #   <path>:<line>: <code> (<confidence>) <message>
 _FINDING_RE = re.compile(r"^(?P<path>[^:\s]+):(?P<line>\d+): (?P<code>ml-[\w-]+) \((?P<conf>[\d.]+)\) (?P<msg>.*)$")
 
@@ -321,19 +318,9 @@ def _review_head_sha() -> str | None:
     return (os.environ.get(REVIEW_HEAD_SHA_ENV) or "").strip() or _git(["rev-parse", "HEAD"])
 
 
-def _lint_catalog_sha() -> str | None:
-    """Fingerprint the multi-file lint catalog: sha1 over the sorted lane files.
-
-    Mirrors infra/codehealth/log_stats.py so the `lint_catalog_sha` stat is
-    comparable across the local review and the stats aggregator.
-    """
-    files = sorted(LINT_DIR.glob("*.md"))
-    if not files:
-        return None
-    h = hashlib.sha1()
-    for f in files:
-        h.update(f.read_bytes())
-    return h.hexdigest()
+def _lint_catalog_sha() -> str:
+    """Fingerprint the exact structured catalog used by this process."""
+    return catalog_sha(LINT_CATALOG)
 
 
 def _ship_review_stats(event: dict, log_dir: pathlib.Path | None) -> None:
@@ -530,7 +517,7 @@ def _change_context(merge_base: str, stat: str) -> str:
 
 
 def _lane_prompt(shared_text: str, lane: LintLane, merge_base: str, stat: str, leads: str) -> str:
-    parts = [READ_ONLY_MANDATE, shared_text, (LINT_DIR / f"{lane.name}.md").read_text()]
+    parts = [READ_ONLY_MANDATE, shared_text, render_lane(LINT_CATALOG, lane.name)]
     if lane.include_complexity_leads and leads:
         parts.append(leads)
     parts.append(lane.instructions)
@@ -840,7 +827,7 @@ def run_lint_review(agent_command: str, lane_names: list[str] | None = None, com
     if not lanes:
         return 0
 
-    shared_text = LINT_SHARED.read_text()
+    shared_text = LINT_CATALOG.shared_prompt
     leads = ""
     if any(lane.include_complexity_leads for lane in lanes):
         leads = complexity_leads.compute_leads(_read_worktree, _changed_py_files(merge_base))

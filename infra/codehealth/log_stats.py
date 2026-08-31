@@ -29,7 +29,6 @@ Expected stdin payload:
 
 import argparse
 import datetime as dt
-import hashlib
 import json
 import os
 import pathlib
@@ -39,8 +38,9 @@ import uuid
 
 from finelog.client import LogClient
 
-# Run as a script, so its own directory is sys.path[0] and siblings import bare.
-from review_tables import (
+ROOT_DIR = pathlib.Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(ROOT_DIR))
+from infra.codehealth.review_tables import (  # noqa: E402
     DEFAULT_DEPLOYMENT,
     FINDINGS_NAMESPACE,
     INVOCATIONS_NAMESPACE,
@@ -50,8 +50,8 @@ from review_tables import (
     open_tables_client,
     parse_utc,
 )
+from infra.lint.catalog import catalog_sha, load_catalog  # noqa: E402
 
-ROOT_DIR = pathlib.Path(__file__).resolve().parent.parent
 LINT_DIR = ROOT_DIR / "infra" / "lint"
 
 # Bounds the detached writer so a wedged connection does not leave it running.
@@ -67,14 +67,10 @@ def _git(args: list[str]) -> str | None:
 
 
 def _lint_catalog_sha() -> str | None:
-    """Fingerprint the multi-file lint catalog: sha1 over the sorted lane files."""
-    files = sorted(LINT_DIR.glob("*.md"))
-    if not files:
+    """Fingerprint the validated structured lint catalog."""
+    if not (LINT_DIR / "catalog.yaml").is_file():
         return None
-    h = hashlib.sha1()
-    for f in files:
-        h.update(f.read_bytes())
-    return h.hexdigest()
+    return catalog_sha(load_catalog(LINT_DIR))
 
 
 def _parse_ts(value: str | None) -> dt.datetime:

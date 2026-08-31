@@ -209,78 +209,34 @@ def _codehealth_refinement_workflow() -> tuple[dict, str, dict[str, dict]]:
     return workflow, workflow_text, steps
 
 
-def test_codehealth_refinement_workflow_collects_one_complete_corpus() -> None:
+def test_codehealth_refinement_workflow_launches_one_database_backed_agent() -> None:
     workflow, workflow_text, steps = _codehealth_refinement_workflow()
     trigger = workflow.get("on", workflow.get(True))
 
     assert set(trigger) == {"schedule", "workflow_dispatch"}
-    assert workflow["permissions"] == {
-        "contents": "read",
-        "issues": "read",
-        "pull-requests": "read",
-        "id-token": "write",
-    }
+    assert workflow["permissions"] == {"contents": "read", "id-token": "write"}
     assert "OPENAI_API_KEY" not in workflow_text
-    assert "NIGHTSHIFT" not in workflow_text
+    assert "upload-artifact" not in workflow_text
+    assert "refinement-corpus" not in workflow_text
+    assert "scratch-file" not in workflow_text
 
     checkout = steps["Checkout repository"]
     assert checkout["with"]["persist-credentials"] is False
-    setup = steps["Set up code-health environment"]
-    assert setup["uses"] == "./.github/actions/codehealth-setup"
-    assert setup["with"] == {"gcp-credentials-json": "${{ secrets.IRIS_CI_GCP_SA_KEY }}"}
-    setup_action = yaml.safe_load((ROOT.parent.parent / ".github/actions/codehealth-setup/action.yaml").read_text())
-    assert set(setup_action["inputs"]) == {"gcp-credentials-json"}
-    export_step = steps["Export frozen review corpus"]
-    assert export_step["env"] == {"GH_TOKEN": "${{ github.token }}"}
-    export = export_step["run"]
-    assert "infra.codehealth.review_corpus export" in export
-    assert "--days 30" in export
-    assert "--github-concurrency" not in export
-    validate = steps["Validate corpus"]["run"]
-    assert "infra.codehealth.review_corpus validate refinement-corpus" in validate
-
-
-def test_codehealth_refinement_workflow_removes_credentials_before_handoff() -> None:
-    workflow, workflow_text, steps = _codehealth_refinement_workflow()
-    step_names = [step["name"] for step in workflow["jobs"]["refine"]["steps"]]
-    remove_credentials = steps["Remove export credentials"]["run"]
-    assert '"$GITHUB_WORKSPACE"/*)' in remove_credentials
-    assert 'rm -f -- "$CREDENTIAL_PATH"' in remove_credentials
-    archive = steps["Archive corpus"]
-    assert "env" not in archive
-    assert "tar --create --gzip --file refinement-corpus.tar.gz refinement-corpus" in archive["run"]
-    assert step_names.index("Remove export credentials") < step_names.index("Archive corpus")
-    assert step_names.index("Archive corpus") < step_names.index("Launch refinement analysis")
-
-    upload = steps["Upload frozen corpus"]
-    assert upload["with"]["path"] == "refinement-corpus.tar.gz"
-    launch = steps["Launch refinement analysis"]
+    assert set(steps) == {"Checkout repository", "Launch refinement agent"}
+    launch = steps["Launch refinement agent"]
     assert launch["uses"] == "./.github/actions/launch-loom-run"
-    assert "env" not in launch
     assert launch["with"]["profile"] == "${{ vars.LOOM_CODEHEALTH_REFINEMENT_PROFILE }}"
     assert launch["with"]["channel"] == "codehealth-refinement"
-    assert launch["with"]["scratch-file"] == "refinement-corpus.tar.gz"
-    assert "IRIS_CI_GCP_SSH_KEY" not in workflow_text
-    assert "google_compute_engine" not in workflow_text
-
-
-def test_codehealth_refinement_workflow_delegates_read_only_analysis() -> None:
-    _, _, steps = _codehealth_refinement_workflow()
-    launch = steps["Launch refinement analysis"]
     goal = " ".join(launch["with"]["goal"].split())
-    assert "Do not query live GitHub, Finelog, or any other network source" in goal
-    assert "at most five subagents" in goal
-    assert "three distinct pull requests" in goal
-    assert "benchmark labels hidden" in goal
-    assert "no production findings" in goal
-    assert "not production recall" in goal
-    assert "codehealth-refinement-analysis" in goal
-    assert "codehealth-refinement-benchmark-predictions" in goal
-    assert "compact Slack rendering" in goal
-    assert "typed result" in goal
+    assert "resumable 30-day review and lint telemetry sync into PostgreSQL" in goal
+    assert "models and effort levels you select" in goal
+    assert "structured YAML rules" in goal
+    assert "open a normal pull request" in goal
+    assert "post-report command" in goal
+    assert "durable codehealth-refinement channel" in goal
 
 
-def test_codehealth_refinement_profile_is_read_only_and_credential_free() -> None:
+def test_codehealth_refinement_profile_owns_database_analysis_and_catalog_prs() -> None:
     stack = yaml.safe_load((ROOT / "Pulumi.marin-loom.yaml").read_text())
     config = stack["config"]
     profile = config["marin-loom:profiles"]["codehealth-refinement"]
@@ -291,22 +247,23 @@ def test_codehealth_refinement_profile_is_read_only_and_credential_free() -> Non
     assert profile["strict"] is True
     assert profile["envClear"] is True
     assert profile["ambientAllowlist"] == []
-    assert profile["mode"] == "plan"
-    # Loom's restricted profiles remove the Agent tool. Codex plan mode keeps
-    # the required subagents while enforcing a read-only runtime.
+    assert profile["mode"] == "auto"
     assert profile["restricted"] is False
-    assert profile["githubRepositories"] == []
+    assert profile["githubRepositories"] == ["marin-community/marin"]
     assert profile["maxConcurrent"] == 1
-    assert profile["mcpAccess"] == {"mode": "groups", "groups": ["artifact", "channel"]}
-    assert "Do not query GitHub, Finelog" in instructions
-    assert "same frozen archive" in instructions
-    assert "tar -xOzf" in instructions
-    assert "`benchmark/labels.jsonl`" in instructions
-    assert "synthetic regression check" in instructions
-    assert "infra/codehealth/refinement_report.py" in instructions
-    assert "codehealth-refinement-analysis" in instructions
-    assert "codehealth-refinement-benchmark-predictions" in instructions
-    assert "only permitted writes" in instructions
+    assert profile["mcpAccess"] == {"mode": "all", "groups": []}
+    assert profile["env"] == {
+        "CLOUDSQL_CONNECTION": {"value": "hai-gcp-models:us-central1:marin-metadata"},
+        "PGDATABASE": {"value": "context"},
+        "PGUSER": {"value": "loom-vm@hai-gcp-models.iam"},
+    }
+    assert "do not create or\nupload corpus archives" in instructions
+    assert "refinement_sync --days 30" in instructions
+    assert "infra.codehealth.refinement_tools" in instructions
+    assert "Choose the model and effort" in instructions
+    assert "open a pull request" in instructions
+    assert "seaborn" in instructions
+    assert "durable `codehealth-refinement` channel" in instructions
 
     federation = federations["codehealth-refinement"]
     assert federation == {

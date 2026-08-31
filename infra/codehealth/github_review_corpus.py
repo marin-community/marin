@@ -8,6 +8,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import subprocess
+from collections.abc import Callable
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from itertools import batched
@@ -1046,6 +1047,25 @@ def _changed_pull_request_numbers(
     ]
 
 
+def _validate_seed_events(bundle: PullRequestBundle, expected: dict[tuple[EventKind, int], dict]) -> None:
+    actual = {(event.kind, event.database_id): event for event in bundle.events}
+    missing = sorted(set(expected) - set(actual))
+    if missing:
+        raise RuntimeError(
+            f"PR #{bundle.pull_request.number} is missing seeded review events: {missing[:DIAGNOSTIC_EVENT_LIMIT]}"
+        )
+    changed = [
+        key
+        for key, seed in expected.items()
+        if actual[key].body != str(seed.get("body") or "") or actual[key].updated_at != seed.get("updated_at")
+    ]
+    if changed:
+        raise RuntimeError(
+            f"PR #{bundle.pull_request.number} changed between REST seeding and GraphQL hydration: "
+            f"{changed[:DIAGNOSTIC_EVENT_LIMIT]}"
+        )
+
+
 def collect_corpus(
     repository: str,
     start: dt.datetime,
@@ -1054,8 +1074,15 @@ def collect_corpus(
     bot_logins: set[str],
     limit: int | None = None,
     client: GitHubClient | None = None,
+    skip_pr_numbers: AbstractSet[int] = frozenset(),
+    bundle_sink: Callable[[PullRequestBundle], None] | None = None,
 ) -> CollectionResult:
-    """Collect matching PRs, or a bounded and intentionally incomplete probe when limit is set."""
+    """Collect matching PRs and checkpoint reconciled hydration batches through ``bundle_sink``.
+
+    ``skip_pr_numbers`` supports retrying a fixed sync window after earlier bundles were
+    committed. The activity scan still runs so the candidate count and GitHub edit seeds
+    describe the same window, while completed PRs are not hydrated again.
+    """
     client = client or GitHubClient()
     scope = ReviewScope(start=start, end=end, bot_logins=frozenset(bot_logins))
     seeds = _rest_seed_prs(client, repository, scope)
@@ -1071,7 +1098,7 @@ def collect_corpus(
     )
     if oversized:
         raise RuntimeError(f"PR #{oversized[0]} exceeds GitHub's {MAX_GITHUB_CHANGED_FILES:,}-file API cap")
-    numbers = [int(pull["number"]) for pull in scan.relevant]
+    numbers = [int(pull["number"]) for pull in scan.relevant if int(pull["number"]) not in skip_pr_numbers]
     projected_rest = client.rest_requests + len(numbers) + REST_RETRY_RESERVE
     client.projected_rest_requests = projected_rest
     if projected_rest > MAX_REST_REQUESTS:
@@ -1079,39 +1106,29 @@ def collect_corpus(
             f"GitHub context collection projects {projected_rest} REST requests, above the "
             f"{MAX_REST_REQUESTS}-request safety budget"
         )
-    snapshots = _hydrate_pull_requests(client, repository, numbers, scope)
-    changed_numbers = _changed_pull_request_numbers(client, snapshots)
-    if len(changed_numbers) > REST_RETRY_RESERVE:
-        raise RuntimeError(
-            f"GitHub changed {len(changed_numbers)} PRs during collection, above the "
-            f"{REST_RETRY_RESERVE}-request retry reserve"
-        )
-    if changed_numbers:
-        retries = _hydrate_pull_requests(client, repository, changed_numbers, scope)
-        changed_twice = _changed_pull_request_numbers(client, retries)
-        if changed_twice:
-            raise RuntimeError(f"PR #{changed_twice[0]} changed during both collection attempts")
-        snapshots.update(retries)
-    bundles = [snapshots[number][0] for number in numbers]
-    for bundle in bundles:
-        expected = seeds.get(bundle.pull_request.number, {})
-        actual = {(event.kind, event.database_id): event for event in bundle.events}
-        missing = sorted(set(expected) - set(actual))
-        if missing:
+    bundles: list[PullRequestBundle] = []
+    changed_count = 0
+    for number_batch in batched(numbers, HYDRATION_BATCH_SIZE):
+        batch = list(number_batch)
+        snapshots = _hydrate_pull_requests(client, repository, batch, scope)
+        changed_numbers = _changed_pull_request_numbers(client, snapshots)
+        changed_count += len(changed_numbers)
+        if changed_count > REST_RETRY_RESERVE:
             raise RuntimeError(
-                f"PR #{bundle.pull_request.number} is missing seeded review events: "
-                f"{missing[:DIAGNOSTIC_EVENT_LIMIT]}"
+                f"GitHub changed more than {REST_RETRY_RESERVE} PRs during collection, above the retry reserve"
             )
-        changed = [
-            key
-            for key, seed in expected.items()
-            if actual[key].body != str(seed.get("body") or "") or actual[key].updated_at != seed.get("updated_at")
-        ]
-        if changed:
-            raise RuntimeError(
-                f"PR #{bundle.pull_request.number} changed between REST seeding and GraphQL hydration: "
-                f"{changed[:DIAGNOSTIC_EVENT_LIMIT]}"
-            )
+        if changed_numbers:
+            retries = _hydrate_pull_requests(client, repository, changed_numbers, scope)
+            changed_twice = _changed_pull_request_numbers(client, retries)
+            if changed_twice:
+                raise RuntimeError(f"PR #{changed_twice[0]} changed during both collection attempts")
+            snapshots.update(retries)
+        for number in batch:
+            bundle = snapshots[number][0]
+            _validate_seed_events(bundle, seeds.get(number, {}))
+            if bundle_sink is not None:
+                bundle_sink(bundle)
+            bundles.append(bundle)
     return CollectionResult(
         bundles=tuple(sorted(bundles, key=lambda bundle: bundle.pull_request.number)),
         candidate_pull_requests=scan.candidate_count,

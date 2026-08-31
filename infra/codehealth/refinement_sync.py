@@ -1,0 +1,151 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Resumable weekly synchronization of review and lint activity into PostgreSQL."""
+
+from __future__ import annotations
+
+import datetime as dt
+import json
+from dataclasses import dataclass
+
+import click
+from sqlalchemy.engine import Engine
+
+from .github_review_corpus import GitHubClient, collect_corpus
+from .review_store import (
+    DEFAULT_BACKFILL_DAYS,
+    complete_sync,
+    completed_pull_requests,
+    create_engine_from_environment,
+    fail_sync,
+    start_or_resume_sync,
+    store_bundle,
+    store_telemetry,
+)
+from .review_tables import (
+    DEFAULT_BOT_LOGINS,
+    DEFAULT_DEPLOYMENT,
+    DEFAULT_REPOSITORY,
+    FINDINGS_NAMESPACE,
+    INVOCATIONS_NAMESPACE,
+    open_tables_client,
+    query_rows,
+)
+
+SQL_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+
+@dataclass(frozen=True)
+class SyncResult:
+    sync_id: str
+    repository: str
+    window_start: str
+    window_end: str
+    candidate_pull_requests: int
+    persisted_pull_requests: int
+    github_usage: dict[str, object]
+    lint_invocations: int
+    lint_findings: int
+
+
+def _iso(value: dt.datetime) -> str:
+    return value.astimezone(dt.UTC).isoformat().replace("+00:00", "Z")
+
+
+def load_lint_telemetry(
+    deployment: str, start: dt.datetime, end: dt.datetime
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """Read the exact Finelog window mirrored into the review store."""
+    start_sql = start.astimezone(dt.UTC).strftime(SQL_TIMESTAMP_FORMAT)
+    end_sql = end.astimezone(dt.UTC).strftime(SQL_TIMESTAMP_FORMAT)
+    with open_tables_client(deployment) as client:
+        invocations = query_rows(
+            client,
+            f'SELECT * FROM "{INVOCATIONS_NAMESPACE}" '
+            f"WHERE ts >= TIMESTAMP '{start_sql}' AND ts < TIMESTAMP '{end_sql}'",
+            INVOCATIONS_NAMESPACE,
+        )
+        findings = query_rows(
+            client,
+            f'SELECT * FROM "{FINDINGS_NAMESPACE}" '
+            f"WHERE ts >= TIMESTAMP '{start_sql}' AND ts < TIMESTAMP '{end_sql}'",
+            FINDINGS_NAMESPACE,
+        )
+    return invocations, findings
+
+
+def sync_review_activity(
+    engine: Engine,
+    *,
+    repository: str,
+    deployment: str,
+    days: int = DEFAULT_BACKFILL_DAYS,
+    now: dt.datetime | None = None,
+    github_client: GitHubClient | None = None,
+    telemetry: tuple[list[dict[str, object]], list[dict[str, object]]] | None = None,
+) -> SyncResult:
+    """Run or resume one fixed review window and checkpoint every reconciled PR batch."""
+    current = now or dt.datetime.now(dt.UTC)
+    run = start_or_resume_sync(engine, repository, now=current, days=days)
+    completed = completed_pull_requests(engine, run.sync_id)
+    try:
+        result = collect_corpus(
+            repository,
+            run.window_start,
+            run.window_end,
+            bot_logins=set(DEFAULT_BOT_LOGINS),
+            client=github_client,
+            skip_pr_numbers=completed,
+            bundle_sink=lambda bundle: store_bundle(engine, run.sync_id, bundle, observed_at=dt.datetime.now(dt.UTC)),
+        )
+        invocations, findings = telemetry or load_lint_telemetry(deployment, run.window_start, run.window_end)
+        store_telemetry(engine, invocations, findings)
+        watermark = {
+            "deployment": deployment,
+            "window_start": _iso(run.window_start),
+            "window_end": _iso(run.window_end),
+        }
+        usage = result.usage.model_dump(mode="json")
+        complete_sync(
+            engine,
+            run.sync_id,
+            candidate_pull_requests=result.candidate_pull_requests,
+            github_usage=usage,
+            finelog_watermark=watermark,
+            completed_at=dt.datetime.now(dt.UTC),
+        )
+    except Exception as error:
+        fail_sync(engine, run.sync_id, str(error))
+        raise
+    persisted = completed_pull_requests(engine, run.sync_id)
+    return SyncResult(
+        sync_id=run.sync_id,
+        repository=repository,
+        window_start=_iso(run.window_start),
+        window_end=_iso(run.window_end),
+        candidate_pull_requests=result.candidate_pull_requests,
+        persisted_pull_requests=len(persisted),
+        github_usage=usage,
+        lint_invocations=len(invocations),
+        lint_findings=len(findings),
+    )
+
+
+@click.command()
+@click.option("--repository", default=DEFAULT_REPOSITORY, show_default=True)
+@click.option("--deployment", default=DEFAULT_DEPLOYMENT, show_default=True)
+@click.option("--days", type=click.IntRange(min=1), default=DEFAULT_BACKFILL_DAYS, show_default=True)
+def cli(repository: str, deployment: str, days: int) -> None:
+    """Synchronize review activity into Marin's existing metadata database."""
+    engine, connector = create_engine_from_environment()
+    try:
+        result = sync_review_activity(engine, repository=repository, deployment=deployment, days=days)
+        click.echo(json.dumps(result.__dict__, indent=2))
+    finally:
+        engine.dispose()
+        connector.close()
+
+
+if __name__ == "__main__":
+    cli()
