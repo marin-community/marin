@@ -40,7 +40,7 @@ VERSION_TAG = "2026.08.31"
 SNOWBALL_VERSION_TAG = "2026.08.31.1"
 # Round 4: MuonH at 1e-5, 120 steps x 64 prompts, system-prompted pool,
 # reversion_mass=2. Charted as its own family so round-3 series stay intact.
-SNOWBALL_R4_VERSION_TAG = "2026.09.01"
+SNOWBALL_R4_VERSION_TAG = "2026.09.01.1"
 ARM_ORDER = (
     "naive",
     "naive-dapo",

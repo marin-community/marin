@@ -384,8 +384,8 @@ SNOWBALL_FULL_R4 = ScalePreset(
         inference_engine_tensor_parallel_size=1,
         train_batch_size=64,
         policy_mini_batch_size=64,
-        # Bumped to 8 if the smoke probe fits; 4 is the round-3 known-safe value.
-        micro_train_batch_size_per_gpu=4,
+        # micro=8 halves all-gather count vs round 3; validated by the r4 smoke run.
+        micro_train_batch_size_per_gpu=8,
         n_samples_per_prompt=8,
     ),
     max_steps=120,
