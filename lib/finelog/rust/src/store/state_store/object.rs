@@ -13,7 +13,8 @@ use sha2::{Digest, Sha256};
 use crate::errors::StatsError;
 use crate::proto::finelog::stats::{CatalogHead, NamespaceCatalog, ObjectRef};
 use crate::store::object_store::{
-    ObjectId, ObjectMetadata, ObjectPrefix, ObjectStore, ObjectVersion,
+    ObjectId, ObjectMetadata, ObjectPrefix, ObjectStore, ObjectVersion, INDICES_PREFIX,
+    OBJECTS_PREFIX, PROJECTIONS_PREFIX,
 };
 use crate::store::state_store::{fenced_error, StoredTableState, TableHead};
 use crate::store::table_state::{TableRevision, WriterFence};
@@ -21,12 +22,6 @@ use crate::store::table_state::{TableRevision, WriterFence};
 pub const TABLE_STATE_FORMAT_VERSION: u64 = 1;
 const HEAD_KEY: &str = "HEAD.json";
 const STATES_PREFIX: &str = "catalogs";
-/// Key prefix under a table for the data objects its states reference.
-pub const OBJECTS_PREFIX: &str = "objects";
-/// Key prefix under a table for segment index bundles.
-pub(crate) const INDICES_PREFIX: &str = "indices";
-/// Key prefix under a table for covering-projection artifacts.
-pub(crate) const PROJECTIONS_PREFIX: &str = "projections";
 
 #[derive(Clone)]
 pub struct ObjectTableStateStore {

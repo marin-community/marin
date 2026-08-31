@@ -235,7 +235,7 @@ async fn write_sealed_objects(
 
 /// Sort a sealed batch into the order the source layout declares, always ending
 /// with `seq` so equal keys stay in ingest order.
-pub fn sorted_object_batch(
+fn sorted_object_batch(
     batch: &RecordBatch,
     source_layout: Option<&SourceLayout>,
 ) -> Result<RecordBatch, StatsError> {

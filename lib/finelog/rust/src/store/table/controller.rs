@@ -30,14 +30,14 @@ use crate::errors::StatsError;
 use crate::proto::finelog::stats::ObjectRef;
 use crate::store::catalog::projection::namespace_catalog;
 use crate::store::catalog::{Catalog, ObjectSegmentRecord, SpecLifecycle};
+use crate::store::object_store::OBJECTS_PREFIX;
 use crate::store::object_store::{ObjectId, ObjectReference, ObjectStore, ObjectVersion};
 use crate::store::state_store::object::ObjectTableStateStore;
-use crate::store::state_store::object::OBJECTS_PREFIX;
 use crate::store::state_store::StoredTableState;
 use crate::store::table_spec::TablePolicy;
 use crate::store::table_state::{
-    resolve_publication, ArtifactReferences, CommitError, CommitToken, Committed, LocalArtifacts,
-    TableRevision, TableSnapshot, TableState, WriterFence,
+    resolve_publication, CommitError, CommitToken, Committed, TableRevision, TableSnapshot,
+    TableState, WriterFence,
 };
 use crate::store::types::{segment_relative_key, SegmentRow};
 
@@ -850,57 +850,6 @@ async fn run_controller(
             }
         }
     }
-}
-
-/// Whether a committed object segment belongs to the version a query reads.
-///
-/// A segment is visible under the active version, under a desired version whose
-/// rows were written after the migration fence, and under an in-flight migration
-/// aliasing the source version onto the target.
-pub fn object_segment_is_query_visible(
-    status: &SpecLifecycle,
-    record: &ObjectSegmentRecord,
-) -> bool {
-    record.table_spec_version == status.active_version()
-        || (status.desired_version() == record.table_spec_version && !record.migration_backfill)
-        || (status.migration.as_ref().is_some_and(|migration| {
-            migration.from_version == Some(status.active_version())
-                && migration.to_version == Some(record.table_spec_version)
-                && !record.migration_backfill
-        }))
-}
-
-/// Resolve the local files one object-backed segment's artifact references
-/// name.
-///
-/// Each path comes from the artifact object's own identity, so an empty cache
-/// resolves the same filenames a warm one does without consulting the local
-/// directory.
-pub fn local_artifacts(
-    store: &dyn ObjectStore,
-    references: &ArtifactReferences,
-) -> Result<LocalArtifacts, StatsError> {
-    let mut local = LocalArtifacts {
-        binding: references.binding.clone(),
-        ..Default::default()
-    };
-    if let Some(bundle) = references.bundle.as_ref() {
-        local.bundle = Some(planned_path(store, bundle)?);
-    }
-    for (name, object) in &references.projections {
-        local
-            .projections
-            .insert(name.clone(), planned_path(store, object)?);
-    }
-    Ok(local)
-}
-
-fn planned_path(store: &dyn ObjectStore, reference: &ObjectRef) -> Result<PathBuf, StatsError> {
-    let id =
-        ObjectId::parse(reference.object_id.as_deref().ok_or_else(|| {
-            StatsError::Internal("artifact reference has no object ID".to_string())
-        })?)?;
-    store.planned_local_path(&id)
 }
 
 fn object_ref(id: &ObjectId, version: &ObjectVersion) -> ObjectRef {

@@ -23,8 +23,8 @@ use crate::indices::{
 use crate::maintenance::MaintenanceLimits;
 use crate::store::catalog::Catalog;
 use crate::store::compaction::executor::read_segment_projected;
+use crate::store::object_store::{INDICES_PREFIX, PROJECTIONS_PREFIX};
 use crate::store::segment::segment_id;
-use crate::store::state_store::object::{INDICES_PREFIX, PROJECTIONS_PREFIX};
 use crate::store::table::controller::{TableController, WrittenObject};
 use crate::store::table::segment_view::SegmentView;
 use crate::store::table_state::{ArtifactReferences, LocalArtifacts, SourceBinding};

@@ -27,7 +27,7 @@ use crate::store::compaction::executor::{
 };
 use crate::store::compaction::planner::plan;
 use crate::store::compaction::staging::StagingDir;
-use crate::store::state_store::object::OBJECTS_PREFIX;
+use crate::store::object_store::OBJECTS_PREFIX;
 use crate::store::table::controller::{MaintenanceLease, TableController};
 use crate::store::table::index_artifacts::publish_segment_artifacts;
 use crate::store::table::segment_format::SegmentFormat;

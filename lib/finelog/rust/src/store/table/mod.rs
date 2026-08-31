@@ -48,8 +48,7 @@ use crate::store::store::{ServeMode, LOG_NAMESPACE_NAME};
 use crate::store::table_state::{TableSnapshot, WriterFence};
 
 pub use controller::{
-    file_sha256, local_artifacts, object_segment_is_query_visible, MaintenanceLease,
-    ObjectPersistence, TableController, WrittenObject,
+    file_sha256, MaintenanceLease, ObjectPersistence, TableController, WrittenObject,
 };
 pub use maintenance::{TableWork, WorkOutcome};
 pub use runtime::TableRuntime;

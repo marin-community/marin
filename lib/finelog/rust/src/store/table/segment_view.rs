@@ -7,16 +7,16 @@
 //! share a path.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::errors::StatsError;
 use crate::indices::{local_sidecar_artifacts, SegmentArtifacts};
 use crate::partition_policy::SegmentPartition;
+use crate::proto::finelog::stats::ObjectRef;
 use crate::store::catalog::{Catalog, ObjectSegmentRecord};
-use crate::store::object_store::ObjectStore;
-use crate::store::table::controller::local_artifacts;
+use crate::store::object_store::{ObjectId, ObjectStore};
 use crate::store::table::query_view::SegmentObjectMap;
-use crate::store::table_state::LocalArtifacts;
+use crate::store::table_state::{ArtifactReferences, LocalArtifacts};
 use crate::store::types::{segment_to_row, LocalSegment, SegmentRow};
 
 /// A table's readable segments as one consistent observation: the files a scan
@@ -319,4 +319,37 @@ pub fn segment_artifacts(
         ))
     })?;
     local_artifacts(store, &record.artifacts)
+}
+
+/// Resolve the local files one object-backed segment's artifact references
+/// name.
+///
+/// Each path comes from the artifact object's own identity, so an empty cache
+/// resolves the same filenames a warm one does without consulting the local
+/// directory.
+pub fn local_artifacts(
+    store: &dyn ObjectStore,
+    references: &ArtifactReferences,
+) -> Result<LocalArtifacts, StatsError> {
+    let mut local = LocalArtifacts {
+        binding: references.binding.clone(),
+        ..Default::default()
+    };
+    if let Some(bundle) = references.bundle.as_ref() {
+        local.bundle = Some(planned_path(store, bundle)?);
+    }
+    for (name, object) in &references.projections {
+        local
+            .projections
+            .insert(name.clone(), planned_path(store, object)?);
+    }
+    Ok(local)
+}
+
+fn planned_path(store: &dyn ObjectStore, reference: &ObjectRef) -> Result<PathBuf, StatsError> {
+    let id =
+        ObjectId::parse(reference.object_id.as_deref().ok_or_else(|| {
+            StatsError::Internal("artifact reference has no object ID".to_string())
+        })?)?;
+    store.planned_local_path(&id)
 }

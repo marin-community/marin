@@ -16,6 +16,7 @@ use std::collections::BTreeMap;
 use crate::errors::StatsError;
 use crate::partition_policy::SegmentPartition;
 use crate::proto::finelog::stats::CatalogSegment;
+use crate::store::catalog::{ObjectSegmentRecord, SpecLifecycle};
 use crate::store::object_store::{ObjectReference, ObjectStore};
 use crate::store::table_state::{ArtifactReferences, LocalArtifacts, TableSnapshot};
 
@@ -100,7 +101,7 @@ fn plan_segment(
         max_seq: segment.max_seq.unwrap_or(i64::MAX),
         key_bounds: key_bounds(segment),
         partition,
-        artifacts: crate::store::table::local_artifacts(store, &artifacts)?,
+        artifacts: crate::store::table::segment_view::local_artifacts(store, &artifacts)?,
         objects: SegmentObjects {
             source: reference,
             artifacts,
@@ -112,4 +113,22 @@ fn key_bounds(segment: &CatalogSegment) -> Option<(i64, i64)> {
     let minimum: i64 = segment.min_key_value.as_deref()?.parse().ok()?;
     let maximum: i64 = segment.max_key_value.as_deref()?.parse().ok()?;
     Some((minimum, maximum))
+}
+
+/// Whether a committed object segment belongs to the version a query reads.
+///
+/// A segment is visible under the active version, under a desired version whose
+/// rows were written after the migration fence, and under an in-flight migration
+/// aliasing the source version onto the target.
+pub fn object_segment_is_query_visible(
+    status: &SpecLifecycle,
+    record: &ObjectSegmentRecord,
+) -> bool {
+    record.table_spec_version == status.active_version()
+        || (status.desired_version() == record.table_spec_version && !record.migration_backfill)
+        || (status.migration.as_ref().is_some_and(|migration| {
+            migration.from_version == Some(status.active_version())
+                && migration.to_version == Some(record.table_spec_version)
+                && !record.migration_backfill
+        }))
 }

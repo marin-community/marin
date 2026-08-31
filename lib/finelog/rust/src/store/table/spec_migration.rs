@@ -33,7 +33,7 @@ use crate::store::compaction::executor::{
     run_job_with_partition_policy, CompactionExecution, CompactionLayout, OutputPolicy,
 };
 use crate::store::compaction::staging::StagingDir;
-use crate::store::state_store::object::OBJECTS_PREFIX;
+use crate::store::object_store::OBJECTS_PREFIX;
 use crate::store::table::controller::{file_sha256, TableController};
 use crate::store::table::flush::partition_object_batch;
 use crate::store::table::index_artifacts::publish_segment_artifacts;

@@ -34,11 +34,11 @@ use finelog::proto::finelog::stats::{
     TableSpec, TableSpecView,
 };
 use finelog::query::{make_ctx, run_query_over};
+use finelog::store::object_store::OBJECTS_PREFIX;
 use finelog::store::object_store::{build_remote_object_store, ObjectId, ObjectStore};
 use finelog::store::policy::StoragePolicy;
 use finelog::store::schema::{schema_to_arrow, schema_to_proto_owned, Column, Schema};
 use finelog::store::state_store::object::ObjectTableStateStore;
-use finelog::store::state_store::object::OBJECTS_PREFIX;
 use finelog::store::store::{ServeMode, Store};
 use finelog::store::table_spec::ValidatedTableSpec;
 use finelog::store::table_state::{CommitError, TableRevision};

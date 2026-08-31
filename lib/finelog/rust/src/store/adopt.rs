@@ -86,7 +86,7 @@ use crate::store::schema::{
     IMPLICIT_SEQ_COLUMN,
 };
 use crate::store::segment::{discover_files, discover_segments, read_segment_footer};
-use crate::store::table::object_segment_is_query_visible;
+use crate::store::table::query_view::object_segment_is_query_visible;
 use crate::store::table::segment_view::{debug_assert_unique_paths, segment_artifacts};
 use crate::store::types::{LocalSegment, SegmentLocation, SegmentRow};
 
