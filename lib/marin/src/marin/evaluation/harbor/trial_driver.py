@@ -288,7 +288,7 @@ def _effective_config(config: JobConfig, overlay: RuntimeOverlay) -> JobConfig:
             "datasets": [dataset],
         }
     )
-    return JobConfig.model_validate(effective.model_dump(mode="json"), extra="forbid")
+    return effective
 
 
 def _stable_config(config: JobConfig) -> JobConfig:

@@ -427,6 +427,46 @@ def test_effective_job_applies_runtime_precedence_and_validates_nested_updates(t
     }
 
 
+def test_effective_aime_job_preserves_capability_url_in_live_config_and_redacts_dump(tmp_path, checked_policies):
+    capability_token = "dummy-capability-token"
+    capability_url = f"https://iris.example/proxy/t/{capability_token}/serve.inference-test/v1"
+    policy_path = tmp_path / "policy.json"
+    policy_path.write_text(checked_policies["aime-smoke.yaml"]["stable_policy_json"])
+    overlay_path = tmp_path / "overlay.json"
+    overlay_path.write_text(
+        json.dumps(
+            {
+                "job_name": "runtime-job",
+                "jobs_dir": str(tmp_path / "jobs"),
+                "dataset_path": str(tmp_path / "tasks"),
+                "endpoint_url": capability_url,
+                "served_model": "served-qwen",
+                "task_limit": 3,
+                "model_agent_kwargs": {},
+            }
+        )
+    )
+    script = (
+        "import json; "
+        "from pathlib import Path; "
+        "from marin.evaluation.harbor.trial_driver import effective_job_config; "
+        f"config=effective_job_config(Path({str(policy_path)!r}), Path({str(overlay_path)!r})); "
+        'print(json.dumps({"api_base": config.agents[0].kwargs["api_base"], '
+        '"serialized": config.model_dump(mode="json")}))'
+    )
+
+    result = json.loads(_external_python("-c", script).stdout)
+
+    assert result["api_base"] == capability_url
+    serialized = result["serialized"]
+    assert serialized["agents"][0]["kwargs"]["api_base"] == (
+        "https://iris.example/proxy/t/<redacted>/serve.inference-test/v1"
+    )
+    serialized_json = json.dumps(serialized)
+    assert capability_token not in serialized_json
+    assert "<redacted>" in serialized_json
+
+
 @pytest.mark.parametrize(
     "document",
     _INVALID_SOURCE_DOCUMENTS.values(),
