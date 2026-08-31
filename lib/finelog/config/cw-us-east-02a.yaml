@@ -9,12 +9,10 @@ deployment:
     namespace: iris
     kubeconfig: ~/.kube/coreweave-iris
     kube_context: marin-gpu_US-EAST-02A
-    # storage_class omitted -> cluster default (shared-vast, VAST CSI); sized
-    # generously to absorb ingest bursts before offload to R2.
+    # The regional cache is disposable once rows reach the hub. Keep it on the
+    # node's local disk so VAST availability cannot block Finelog persistence.
+    cache_storage: node-local
     storage_gb: 250
-    # Mount the recovery claim after removing the affected canonical claim.
-    # Incident record: https://echo.oa.dev/wiki/285
-    cache_pvc_name: finelog-cw-use02a-cache-20260830
     # R2 endpoint for the s3:// archive.
     object_storage_endpoint: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
     # Control-plane priority owned by the cluster substrate stack.
