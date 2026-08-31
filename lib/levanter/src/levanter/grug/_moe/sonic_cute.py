@@ -31,8 +31,11 @@ from levanter.grug._moe.common import (
     _zero_dropped_assignments,
     _zero_inactive_grouped_rows,
 )
-from levanter.grug._moe.cudnn_wgrad_cute import cudnn_grouped_wgrad
-from levanter.grug._moe.quack_moe_cute import quack_gated_grouped_gemm, quack_grouped_gemm
+from levanter.grug._moe.quack_moe_cute import (
+    quack_gated_grouped_gemm,
+    quack_grouped_gemm,
+    quack_grouped_wgrad,
+)
 
 # QuACK activation-path GEMM configuration, tuned at the i3072 hero shapes on one GB200.
 # Tile (256, 256) beats the (256, 128) default by 1.235x on the gated GEMM and 1.094x on the
@@ -52,6 +55,10 @@ _QUACK_TILE_MN = (256, 256)
 _QUACK_USE_CLC = True
 _QUACK_GATED_KW = dict(tile_mn=_QUACK_TILE_MN, cluster_mnk=(2, 1, 1), use_clc_persistence=_QUACK_USE_CLC)
 _QUACK_GROUPED_KW = dict(tile_mn=_QUACK_TILE_MN, cluster_mnk=(2, 2, 1), use_clc_persistence=_QUACK_USE_CLC)
+# The weight gradients group over the contraction dimension instead, so they tile a small fixed
+# [M, N] output over a very long K and want their own configuration. Set from the hero-shape sweep
+# in `bench_grouped_wgrad.py`; see that script's header for the grid and the numbers.
+_QUACK_WGRAD_KW: dict = dict(tile_mn=(128, 128), cluster_mnk=(2, 1, 1), use_clc_persistence=False)
 
 
 @jax.custom_vjp
@@ -114,11 +121,11 @@ def _expert_mlp_cudnn_bwd(res, dy):
     # contract every row they are handed, so they have to be cleared here too.
     dy = _zero_inactive_grouped_rows(dy, cu)
     dh = quack_grouped_gemm(dy, moe_w2, cu, b_major="k", **_QUACK_GROUPED_KW)
-    dw2 = cudnn_grouped_wgrad(h, dy, group_sizes)
+    dw2 = quack_grouped_wgrad(h, dy, cu, **_QUACK_WGRAD_KW)
     d_gu = _swiglu_gate_up_backward(gu, dh)
     dx = quack_grouped_gemm(d_gu, w13_il, cu, b_major="k", **_QUACK_GROUPED_KW)
     dx = _zero_inactive_grouped_rows(dx, cu)
-    dw13_il = cudnn_grouped_wgrad(x_dispatch, d_gu, group_sizes)
+    dw13_il = quack_grouped_wgrad(x_dispatch, d_gu, cu, **_QUACK_WGRAD_KW)
     gs_ct = np.zeros(group_sizes.shape, dtype=jax.dtypes.float0)
     cu_ct = np.zeros(cu.shape, dtype=jax.dtypes.float0)
     return dx, dw13_il, dw2, gs_ct, cu_ct

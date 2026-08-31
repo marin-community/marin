@@ -195,3 +195,85 @@ def quack_grouped_gemm(
         use_static_tensors=False,
     )
     return call(a, w, cu_seqlens.astype(jnp.int32))
+
+
+@cute_launcher_factory
+def _build_wgrad_launcher(
+    *, a_dtype, tile_mn, cluster_mnk, max_active_clusters, max_swizzle, use_clc_persistence=False
+):
+    """Return a ``@cute.jit`` grouped weight-gradient launcher (varlen_k)."""
+
+    @cute.jit
+    def launcher(stream, mA, mB, mCuSeqlens, mD):
+        gemm = GemmDefaultSm100(
+            _ACC, a_dtype, tile_mn, cluster_mnk, gather_A=False, use_clc_persistence=use_clc_persistence
+        )
+        epi_args = GemmDefaultEpiMixin.EpilogueArguments()
+        scheduler_args = make_scheduler_args(max_active_clusters, max_swizzle, None)
+        # Grouping over the contraction dimension, not over rows: `cu_seqlens` is the K split.
+        varlen_args = make_varlen_args(None, mCuSeqlens, None)
+        gemm(mA, mB, mD, None, epi_args, scheduler_args, varlen_args, stream)
+
+    return launcher
+
+
+def quack_grouped_wgrad(
+    lhs,
+    rhs,
+    cu_seqlens,
+    *,
+    tile_mn=(128, 128),
+    cluster_mnk=(2, 1, 1),
+    max_swizzle=8,
+    use_clc_persistence=False,
+):
+    """Per-expert ``lhs.T @ rhs`` over contiguous ragged row groups, on QuACK's varlen-k GEMM.
+
+    ``lhs`` is [total_rows, M], ``rhs`` is [total_rows, N], and ``cu_seqlens`` [E+1] splits the
+    rows into expert groups; the result is [E, M, N]. The rows are the contraction dimension, so
+    this is the varlen-k grouping (``cu_seqlens_k``) rather than the varlen-m one the activation
+    -path GEMMs use.
+
+    The kernel reads each group through a coordinate offset into a descriptor spanning the whole
+    buffer, so the group boundaries need no alignment and rows past ``cu_seqlens[-1]`` are never
+    read. An empty group clears its accumulator and yields a zero gradient.
+    """
+    if lhs.ndim != 2 or rhs.ndim != 2:
+        raise ValueError(f"lhs and rhs must be rank 2, got lhs={lhs.shape}, rhs={rhs.shape}")
+    if lhs.shape[0] != rhs.shape[0]:
+        raise ValueError(f"lhs and rhs row counts must match, got lhs={lhs.shape}, rhs={rhs.shape}")
+    if lhs.dtype != rhs.dtype:
+        raise ValueError(f"lhs and rhs dtypes must match, got lhs={lhs.dtype}, rhs={rhs.dtype}")
+
+    M = lhs.shape[1]
+    N = rhs.shape[1]
+    groups = cu_seqlens.shape[0] - 1
+    a_dtype = _cute_dtype(lhs.dtype)
+    if jax.default_backend() == "cpu":
+        mac = _FALLBACK_MAX_ACTIVE_CLUSTERS
+    else:
+        mac = get_max_active_clusters(cluster_mnk[0] * cluster_mnk[1])
+    launcher = _build_wgrad_launcher(
+        a_dtype=a_dtype,
+        tile_mn=tile_mn,
+        cluster_mnk=cluster_mnk,
+        max_active_clusters=mac,
+        max_swizzle=max_swizzle,
+        use_clc_persistence=use_clc_persistence,
+    )
+    ts = cjax.TensorSpec
+    # Logical order is (M, K) for A, (N, K) for B, (M, N, L) for D; `mode` maps each logical axis
+    # to the physical one it comes from, and `divisibility` stays in physical order. varlen_k wants
+    # A m-major and B n-major, which is what [rows, M] and [rows, N] already are.
+    a_spec = ts(mode=(1, 0), divisibility=(1, 8), static=False)
+    b_spec = ts(mode=(1, 0), divisibility=(1, 8), static=False)
+    cu_spec = ts(static=False)
+    d_spec = ts(mode=(1, 2, 0), divisibility=(1, 1, 8), static=False)
+    call = cutlass_call(
+        launcher,
+        output_shape_dtype=jax.ShapeDtypeStruct((groups, M, N), lhs.dtype),
+        input_spec=(a_spec, b_spec, cu_spec),
+        output_spec=(d_spec,),
+        use_static_tensors=False,
+    )
+    return call(lhs, rhs, cu_seqlens.astype(jnp.int32))
