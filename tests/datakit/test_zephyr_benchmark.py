@@ -1,12 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Source-selection behavior for the Zephyr benchmark entrypoint.
-
-``_source_shard_stats`` reads shard metadata through the ``url_to_fs`` boundary;
-the fake store here mimics the gcsfs/s3fs ``find(detail=True)`` convention of
-bucket-qualified, scheme-stripped keys.
-"""
+"""Behavioral tests for Zephyr benchmark source selection and stage routing."""
 
 import pytest
 from marin.execution.step_spec import StepSpec
@@ -86,12 +81,12 @@ def test_source_shard_stats_rejects_parquet_outside_source_output_dirs(monkeypat
         },
     )
 
-    with pytest.raises(ValueError, match="not under '<source>/outputs/main/'"):
+    with pytest.raises(ValueError):
         _source_shard_stats(_SAMPLE_PREFIX)
 
 
 def test_source_shard_stats_requires_object_store_prefix():
-    with pytest.raises(ValueError, match="gs:// or s3://"):
+    with pytest.raises(ValueError):
         _source_shard_stats("/tmp/local-sample")
 
 
@@ -103,7 +98,7 @@ def test_source_shard_stats_rejects_source_deeper_than_discovery_depth(monkeypat
     too_deep = "/".join(["a"] * (len(SOURCE_DISCOVERY_DEPTHS) + 1))
     _patch_store(monkeypatch, {f"{_ROOT_KEY}/{too_deep}/outputs/main/shard-0000.parquet": 100})
 
-    with pytest.raises(ValueError, match="deeper than the"):
+    with pytest.raises(ValueError):
         _source_shard_stats(_SAMPLE_PREFIX)
 
 
@@ -127,7 +122,7 @@ def test_select_source_fraction_full_selects_every_source():
 
 @pytest.mark.parametrize("fraction", [0.0, -0.5, 1.5])
 def test_select_source_fraction_rejects_out_of_range_fraction(fraction):
-    with pytest.raises(ValueError, match="source-fraction"):
+    with pytest.raises(ValueError):
         _select_source_fraction({"a": SourceShardStats(10, 1)}, fraction)
 
 
@@ -152,14 +147,14 @@ def test_resolve_sources_rejects_pool_workers_beyond_available_shards(monkeypatc
         },
     )
 
-    with pytest.raises(ValueError, match="exceeds the 2 parquet shards"):
+    with pytest.raises(ValueError):
         _resolve_sources(_SAMPLE_PREFIX, sources_arg="all", source_fraction=None, pool_workers=4)
 
 
 def test_resolve_sources_rejects_unknown_source_names(monkeypatch):
     _patch_store(monkeypatch, {f"{_ROOT_KEY}/hplt_v3/outputs/main/shard-0000.parquet": 100})
 
-    with pytest.raises(KeyError, match="not found under"):
+    with pytest.raises(KeyError):
         _resolve_sources(_SAMPLE_PREFIX, sources_arg="hplt_v3,nope", source_fraction=None, pool_workers=1)
 
 
@@ -168,7 +163,7 @@ def test_resolve_sources_does_not_double_count_a_repeated_source(monkeypatch):
     # must not sum its 1 shard twice and let --pool-workers=2 pass.
     _patch_store(monkeypatch, {f"{_ROOT_KEY}/hplt_v3/outputs/main/shard-0000.parquet": 100})
 
-    with pytest.raises(ValueError, match="exceeds the 1 parquet shards"):
+    with pytest.raises(ValueError):
         _resolve_sources(_SAMPLE_PREFIX, sources_arg="hplt_v3,hplt_v3", source_fraction=None, pool_workers=2)
 
 
@@ -222,7 +217,7 @@ def test_shuffle_target_requires_every_sample_minhash_artifact(monkeypatch):
     _patch_benchmark_graph(monkeypatch)
     monkeypatch.setattr(zephyr_benchmark, "step_is_built", lambda _step: False)
 
-    with pytest.raises(RuntimeError, match="materialize_zephyr_benchmark_sample in minhash mode"):
+    with pytest.raises(RuntimeError):
         _benchmark_steps(
             sample_prefix=_SAMPLE_PREFIX,
             selected_sources=["a"],

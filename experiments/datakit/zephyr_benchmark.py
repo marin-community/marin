@@ -21,7 +21,7 @@ Example (the full preset from the `ab-test-zephyr` skill):
 
 The "light" preset uses ``--source-fraction`` instead of ``--sources`` to
 auto-select a byte-budgeted subset of sources, favoring shard-dense sources so
-the reduced ``--pool-workers`` still has enough parquet shards to fill:
+the smaller workload still has enough parquet shards to fill the pool:
 
     python -m experiments.datakit.zephyr_benchmark \
         --source-fraction 0.1 --run-tag zephyr-100b-light-v1 \
