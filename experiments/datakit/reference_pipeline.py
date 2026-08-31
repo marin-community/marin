@@ -571,6 +571,25 @@ class ZephyrDatakitSteps:
     fuzzy_dedup: StepSpec
 
 
+def fuzzy_dedup_step(
+    minhash_steps: list[StepSpec],
+    scale: PipelineScale,
+    zephyr_context: ZephyrContext | None,
+) -> StepSpec:
+    """Build fuzzy dedup with the reference pipeline's execution settings."""
+    return compute_fuzzy_dups_attrs_step(
+        name="datakit/dedup",
+        minhash_steps=minhash_steps,
+        max_parallelism=scale.dedup_max_parallelism,
+        cc_max_iterations=scale.cc_max_iterations,
+        cc_resume=True,
+        worker_resources=scale.pool.worker,
+        map_task_resources=scale.pool.map_task,
+        reduce_task_resources=scale.pool.reduce_task,
+        zephyr_context=zephyr_context,
+    )
+
+
 def zephyr_datakit_steps(
     sources: dict[str, StepSpec],
     scale: PipelineScale = DEFAULT_SCALE,
@@ -635,17 +654,7 @@ def zephyr_datakit_steps(
             ),
         )
 
-    fuzzy_dedup = compute_fuzzy_dups_attrs_step(
-        name="datakit/dedup",
-        minhash_steps=list(minhash_steps.values()),
-        max_parallelism=scale.dedup_max_parallelism,
-        cc_max_iterations=scale.cc_max_iterations,
-        cc_resume=True,
-        worker_resources=scale.pool.worker,
-        map_task_resources=scale.pool.map_task,
-        reduce_task_resources=scale.pool.reduce_task,
-        zephyr_context=zephyr_context,
-    )
+    fuzzy_dedup = fuzzy_dedup_step(list(minhash_steps.values()), scale, zephyr_context)
     return ZephyrDatakitSteps(
         exact_dedup=exact_dedup,
         tokenize=tokenize_steps,

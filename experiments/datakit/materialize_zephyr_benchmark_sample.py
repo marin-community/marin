@@ -25,7 +25,6 @@ from marin.datakit.sources import all_sources
 from marin.execution.artifact import read_artifact
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
-from marin.processing.classification.deduplication.fuzzy_dups import compute_fuzzy_dups_attrs_step
 from rigging.filesystem.cluster_config import data_config, use_data_config
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
@@ -37,6 +36,7 @@ from experiments.datakit.reference_pipeline import (
     SMOKE_SCALE,
     PipelineScale,
     ZephyrDatakitSteps,
+    fuzzy_dedup_step,
     sample_sources,
     zephyr_datakit_steps,
 )
@@ -77,7 +77,6 @@ def benchmark_zephyr_context(
     scale: PipelineScale,
     max_concurrent_pipelines: int,
 ) -> ZephyrContext:
-    """Build the shared worker pool used by benchmark jobs."""
     return ZephyrContext(
         name=name,
         resources=scale.pool.worker,
@@ -98,17 +97,7 @@ def benchmark_datakit_steps(
     steps = zephyr_datakit_steps(sources, scale, zephyr_context)
     tokenize = {name: replace(step, output_path_prefix=output_path_prefix) for name, step in steps.tokenize.items()}
     minhash = {name: replace(step, output_path_prefix=output_path_prefix) for name, step in steps.minhash.items()}
-    fuzzy_dedup = compute_fuzzy_dups_attrs_step(
-        name=steps.fuzzy_dedup.name,
-        minhash_steps=list(minhash.values()),
-        max_parallelism=scale.dedup_max_parallelism,
-        cc_max_iterations=scale.cc_max_iterations,
-        cc_resume=True,
-        worker_resources=scale.pool.worker,
-        map_task_resources=scale.pool.map_task,
-        reduce_task_resources=scale.pool.reduce_task,
-        zephyr_context=zephyr_context,
-    )
+    fuzzy_dedup = fuzzy_dedup_step(list(minhash.values()), scale, zephyr_context)
     return ZephyrDatakitSteps(
         exact_dedup=replace(steps.exact_dedup, output_path_prefix=output_path_prefix),
         tokenize=tokenize,

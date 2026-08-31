@@ -8,11 +8,11 @@ StepSpec graph and runs it as a single iris job, in one of two modes:
 - `--mode sample`: a pre-built testbed sample registered as already-normalized
   sources (`--sample-prefix`), K=64 — a true end-to-end run on real data.
 
-All worker CPU/RAM is one `PoolConfig` (`n_workers` x `worker`, overridable with
-`--pool-workers/--pool-cpu/--pool-ram`) shared across the stages. Each stage runs
-its pipeline on its own dedicated Zephyr coordinator + worker fleet (vanilla
-`ZephyrContext`), sized by that config; `--max-concurrent` bounds how many stages
-the StepRunner walks at once.
+All Zephyr-backed stages share one `ZephyrContext` coordinator and worker fleet
+for the full run. `PoolConfig` sizes that fleet (`n_workers` x `worker`,
+overridable with `--pool-workers/--pool-cpu/--pool-ram`), while
+`--max-concurrent` bounds how many pipelines the StepRunner submits to it at
+once. Inline stages continue to run in the parent Iris job.
 
 Most stages keep one step per source with its own output dir
 (`datakit/<stage>/<source>_<hash>/`). Global exact dedup, fuzzy candidate

@@ -15,7 +15,7 @@ Example (the full preset from the `ab-test-zephyr` skill):
 
     python -m experiments.datakit.zephyr_benchmark \
         --sources all --run-tag zephyr-100b-v1 \
-        --pool-workers 12 \
+        --pool-workers 48 \
         --target all --max-concurrent 128 \
         --dedup-max-parallelism 1000 --dedup-cc-max-iterations 3
 
@@ -25,7 +25,7 @@ the reduced ``--pool-workers`` still has enough parquet shards to fill:
 
     python -m experiments.datakit.zephyr_benchmark \
         --source-fraction 0.1 --run-tag zephyr-100b-light-v1 \
-        --pool-workers 12 \
+        --pool-workers 48 \
         --target all --max-concurrent 80 \
         --dedup-max-parallelism 500 --dedup-cc-max-iterations 3
 
@@ -59,6 +59,7 @@ from experiments.datakit.materialize_zephyr_benchmark_sample import (
     benchmark_zephyr_context,
 )
 from experiments.datakit.reference_pipeline import (
+    DEFAULT_SCALE,
     SMOKE_SCALE,
     SOURCE_DISCOVERY_DEPTHS,
     PipelineScale,
@@ -72,15 +73,6 @@ BENCHMARK_OUTPUT_TTL_DAYS = 7
 BENCHMARK_OUTPUT_PREFIX = "zephyr-benchmark"
 DECIMAL_GB_BYTES = 1_000_000_000
 MISSING_ARTIFACT_PREVIEW_LIMIT = 10
-DEFAULT_POOL_CPU = 8.0
-DEFAULT_POOL_RAM = "64g"
-DEFAULT_POOL_DISK = "32g"
-DEFAULT_MAP_TASK_CPU = 1.0
-DEFAULT_MAP_TASK_RAM = "8g"
-DEFAULT_MAP_TASK_DISK = "4g"
-DEFAULT_REDUCE_TASK_CPU = 3.0
-DEFAULT_REDUCE_TASK_RAM = "30g"
-DEFAULT_REDUCE_TASK_DISK = "8g"
 
 
 class BenchmarkTarget(StrEnum):
@@ -124,16 +116,7 @@ class SourceShardStats(NamedTuple):
 
 
 def _source_shard_stats(sample_prefix: str) -> dict[str, SourceShardStats]:
-    """Map each source under ``sample_prefix`` to its shard stats.
-
-    Reads object metadata only (no shard contents), grouping every
-    ``<source>/outputs/main/*.parquet`` file by its source name. Parquet found
-    anywhere else in the sample tree means an unexpected layout, except for the
-    reserved ``_benchmark_inputs`` subtree. A source name deeper than
-    ``SOURCE_DISCOVERY_DEPTHS`` allows is also an error: :func:`sample_sources`
-    can't discover it, so a selection here could otherwise pick a name it later
-    rejects.
-    """
+    """Return shard counts and byte sizes, rejecting unsupported sample layouts."""
     root = StoragePath(sample_prefix)
     if root.scheme not in ("gs", "s3") or not root.bucket:
         raise ValueError(f"sample prefix must be a gs:// or s3:// URL: {sample_prefix}")
@@ -166,14 +149,7 @@ def _source_shard_stats(sample_prefix: str) -> dict[str, SourceShardStats]:
 
 
 def _select_source_fraction(stats: dict[str, SourceShardStats], fraction: float) -> list[str]:
-    """Select sources totaling roughly ``fraction`` of the sample's bytes.
-
-    Orders sources by average shard size, ascending, so the selection favors
-    shard-dense sources: that keeps the resulting shard count as high as
-    possible for the chosen byte budget, which matters because
-    ``compute_minhash_attrs`` and ``tokenize_attributes_step`` schedule one
-    Zephyr task per existing parquet file rather than splitting large ones.
-    """
+    """Select whole sources meeting a byte fraction while favoring shard density."""
     if not 0.0 < fraction <= 1.0:
         raise ValueError(f"--source-fraction must be in (0.0, 1.0]; got {fraction}")
     target_bytes = sum(s.total_bytes for s in stats.values()) * fraction
@@ -303,15 +279,15 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--run-tag", required=True, help="Fresh identity tag that forces uncached benchmark stages.")
     parser.add_argument("--pool-workers", required=True, type=int)
-    parser.add_argument("--pool-cpu", type=float, default=DEFAULT_POOL_CPU)
-    parser.add_argument("--pool-ram", default=DEFAULT_POOL_RAM)
-    parser.add_argument("--pool-disk", default=DEFAULT_POOL_DISK)
-    parser.add_argument("--map-task-cpu", type=float, default=DEFAULT_MAP_TASK_CPU)
-    parser.add_argument("--map-task-ram", default=DEFAULT_MAP_TASK_RAM)
-    parser.add_argument("--map-task-disk", default=DEFAULT_MAP_TASK_DISK)
-    parser.add_argument("--reduce-task-cpu", type=float, default=DEFAULT_REDUCE_TASK_CPU)
-    parser.add_argument("--reduce-task-ram", default=DEFAULT_REDUCE_TASK_RAM)
-    parser.add_argument("--reduce-task-disk", default=DEFAULT_REDUCE_TASK_DISK)
+    parser.add_argument("--pool-cpu", type=float, default=DEFAULT_SCALE.pool.worker.cpu)
+    parser.add_argument("--pool-ram", default=DEFAULT_SCALE.pool.worker.ram)
+    parser.add_argument("--pool-disk", default=DEFAULT_SCALE.pool.worker.disk)
+    parser.add_argument("--map-task-cpu", type=float, help="Override map-task CPU; omitted uses the whole worker.")
+    parser.add_argument("--map-task-ram", help="Override map-task RAM; omitted uses the whole worker.")
+    parser.add_argument("--map-task-disk", help="Override map-task disk; omitted uses the whole worker.")
+    parser.add_argument("--reduce-task-cpu", type=float, help="Override reduce-task CPU; omitted uses the whole worker.")
+    parser.add_argument("--reduce-task-ram", help="Override reduce-task RAM; omitted uses the whole worker.")
+    parser.add_argument("--reduce-task-disk", help="Override reduce-task disk; omitted uses the whole worker.")
     parser.add_argument("--target", required=True, type=BenchmarkTarget, choices=list(BenchmarkTarget))
     parser.add_argument("--max-concurrent", required=True, type=int)
     parser.add_argument("--dedup-max-parallelism", required=True, type=int)
@@ -329,10 +305,26 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _task_resources(
+    worker: ResourceConfig,
+    cpu: float | None,
+    ram: str | None,
+    disk: str | None,
+) -> ResourceConfig | None:
+    if cpu is None and ram is None and disk is None:
+        return None
+    return replace(
+        worker,
+        cpu=worker.cpu if cpu is None else cpu,
+        ram=worker.ram if ram is None else ram,
+        disk=worker.disk if disk is None else disk,
+    )
+
+
 def _scale_from_args(args: argparse.Namespace) -> PipelineScale:
     worker = ResourceConfig(cpu=args.pool_cpu, ram=args.pool_ram, disk=args.pool_disk)
-    map_task = ResourceConfig(cpu=args.map_task_cpu, ram=args.map_task_ram, disk=args.map_task_disk)
-    reduce_task = ResourceConfig(cpu=args.reduce_task_cpu, ram=args.reduce_task_ram, disk=args.reduce_task_disk)
+    map_task = _task_resources(worker, args.map_task_cpu, args.map_task_ram, args.map_task_disk)
+    reduce_task = _task_resources(worker, args.reduce_task_cpu, args.reduce_task_ram, args.reduce_task_disk)
     return replace(
         SMOKE_SCALE,
         pool=replace(

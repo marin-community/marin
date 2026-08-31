@@ -112,8 +112,8 @@ treatments.
 
 | Preset | Input | Workers | Map task | Reduce task | Pipelines | Dedup shards | CC rounds |
 |---|---|---|---|---|---:|---:|---:|
-| Full | `--sources all`: 256 GB, 768 parquet shards, 115 sources | 12 × 8 CPU / 64 GiB RAM / 32 GiB disk | 1 CPU / 8 GiB RAM / 4 GiB disk | 3 CPU / 30 GiB RAM / 8 GiB disk | 128 | 1000 | 3 |
-| Light | `--source-fraction 0.1`: 26.8 GB, 165 parquet shards, 77 sources | 12 × 8 CPU / 64 GiB RAM / 32 GiB disk | 1 CPU / 8 GiB RAM / 4 GiB disk | 3 CPU / 30 GiB RAM / 8 GiB disk | 80 | 500 | 3 |
+| Full | `--sources all`: 256 GB, 768 parquet shards, 115 sources | 48 × 2 CPU / 16 GiB RAM / 16 GiB disk | Whole worker | Whole worker | 128 | 1000 | 3 |
+| Light | `--source-fraction 0.1`: 26.8 GB, 165 parquet shards, 77 sources | 48 × 2 CPU / 16 GiB RAM / 16 GiB disk | Whole worker | Whole worker | 80 | 500 | 3 |
 
 Use the full preset for a change that could regress the shared pool at
 production scale (shuffle, partitioning, spill, buffer, or scheduling
@@ -135,33 +135,33 @@ parquet shard count of the selected sources (whether from `--sources` or
 ### Worker and task sizing
 
 The worker is a scheduling unit; the task is the subprocess capacity reserved
-inside it. Each preset packs up to eight map tasks or two reduce tasks onto one
-worker. Global exact dedup and tokenization accept the same task sizing as
-MinHash and fuzzy dedup, so no benchmark stage silently falls back to one task
-per worker.
+inside it. The presets use the reference pipeline's default worker with 2 CPU,
+16 GiB RAM, and 16 GiB disk, and let both map and reduce tasks inherit that
+whole worker. Global exact dedup, tokenization, MinHash, and fuzzy dedup
+therefore all use the same one-task-per-worker shape as the reference pipeline.
 
 `zephyr_benchmark.py` uses the worker and task resource shapes in the preset
 table by default. Pass the resource flags only when the comparison intentionally
 changes those shapes, and record every override in the workload fingerprint.
 
-Both presets use the same 12-worker pool, exposing up to 96 concurrent map
-tasks or 24 concurrent reduce tasks. Keeping compute fixed exposes the full
-sample's 9.57x byte increase in wall time. A 256-worker full run completed in
-23m41s, ramped to 512 concurrent reduce tasks, and triggered GCS `429 SlowDown`
-responses.
+Both presets use the same 48-worker pool, exposing up to 48 concurrent map or
+reduce tasks. This keeps the previous presets' aggregate 96 CPU and 768 GiB RAM
+while matching the reference pipeline's worker shape. A 256-worker full run
+completed in 23m41s, ramped to 512 concurrent reduce tasks, and triggered GCS
+`429 SlowDown` responses.
 
-The calibrated 12-worker presets completed without shard retries, GCS 429s,
+The earlier 12-worker packed presets completed without shard retries, GCS 429s,
 Iris failures, or preemptions. The light run processed 26.8 GB in 27m25s and
 used 16.91 CPU-hours. The full run processed 256.4 GB in 2h54m28s and used
 182.83 CPU-hours; Finelog recorded 18,970 completed shards and a 6.61 GiB
 maximum stage memory peak. These measurements include all benchmark stages and
-three connected-components rounds.
+three connected-components rounds but do not validate the current 48-worker
+reference-shaped preset.
 
-An 8 CPU / 64 GiB worker is below half of even the smallest Iris TPU host
-(v5e: 112 CPU / 192 GiB). Iris can place up to three such workers on a v5e host
-and more on larger TPU hosts when their remaining capacity permits. Keep the
-task memory at or above the ferry-tested 8 GiB map and 30 GiB reduce shapes;
-reducing the worker further would prevent two reducers from sharing it.
+The 2 CPU / 16 GiB worker is the reference pipeline default. Forty-eight of
+them fit within the same aggregate CPU and RAM budget as the earlier packed
+shape, while scheduling and task admission remain representative of the
+pipeline being benchmarked.
 
 ### Pipeline and connected-components limits
 
