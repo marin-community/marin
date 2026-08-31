@@ -216,6 +216,9 @@ class ScalePreset:
     max_new_tokens: int
     micro_forward_batch_size_per_gpu: int
     evals: str
+    # Round-scoped hydra overrides applied to every arm at this scale point
+    # (optimizer recipe, sampler knobs); inert keys are harmless per-arm.
+    extra_overrides: tuple[str, ...] = ()
 
 
 SMOKE = ScalePreset(
@@ -325,7 +328,76 @@ SNOWBALL_FULL = ScalePreset(
     evals="math500,gsm8k-0shot",
 )
 
-SCALES = {preset.label: preset for preset in (SMOKE, FULL, SNOWBALL_SMOKE, SNOWBALL_FULL)}
+# Round-4 Snowball recipe. Optimizer: MuonH (grug_moe_muonh_v1, the recipe the
+# base model pretrained and SFT'd under: FP32 master weights, orthogonalized
+# matrix updates, zero weight decay) at 1e-5, 1/5 of the SFT peak; round 3's
+# AdamW at 2e-6 barely moved validation and its one destabilizing update
+# damaged every bin despite max_grad_norm=1.0. Batch: half prompts at double
+# steps -- the FSDP all-gather cost per token is fixed by the micro batch, so
+# smaller steps buy 2x-fresher rollouts and 2x-faster sampler adaptation for
+# ~1% wall time (sync_weights 10.8s + generate 36.8s of a 534s round-3 step).
+# reversion_mass keeps starved bins re-probeable (inert for the naive arm).
+SNOWBALL_R4_OVERRIDES = (
+    "trainer.policy.optimizer_config.optimizer=MuonH",
+    "trainer.policy.optimizer_config.lr=1.0e-5",
+    "data.sampling.reversion_mass=2.0",
+)
+
+# Memory probe for the round-4 recipe: same 4-node FSDP sharding as the full
+# preset so per-GPU headroom is representative, micro_train raised to 8 to
+# halve the all-gather passes if MuonH's FP32 master weights leave room.
+SNOWBALL_SMOKE_R4 = ScalePreset(
+    label="snowball-smoke-r4",
+    num_nodes=5,
+    role_plan=SkyRLRolePlan(
+        colocate_all=False,
+        policy_num_nodes=4,
+        policy_num_gpus_per_node=GPUS_PER_NODE,
+        num_inference_engines=1,
+        inference_engine_tensor_parallel_size=1,
+        train_batch_size=64,
+        policy_mini_batch_size=64,
+        micro_train_batch_size_per_gpu=8,
+        n_samples_per_prompt=8,
+    ),
+    max_steps=4,
+    eval_interval=-1,
+    ckpt_interval=4,
+    request_window_tokens=3072,
+    max_new_tokens=2048,
+    micro_forward_batch_size_per_gpu=2,
+    evals="gsm8k-smoke",
+    extra_overrides=SNOWBALL_R4_OVERRIDES,
+)
+
+SNOWBALL_FULL_R4 = ScalePreset(
+    label="snowball-full-r4",
+    num_nodes=8,
+    role_plan=SkyRLRolePlan(
+        colocate_all=False,
+        policy_num_nodes=4,
+        policy_num_gpus_per_node=GPUS_PER_NODE,
+        num_inference_engines=4,
+        inference_engine_tensor_parallel_size=1,
+        train_batch_size=64,
+        policy_mini_batch_size=64,
+        # Bumped to 8 if the smoke probe fits; 4 is the round-3 known-safe value.
+        micro_train_batch_size_per_gpu=4,
+        n_samples_per_prompt=8,
+    ),
+    max_steps=120,
+    eval_interval=10,
+    ckpt_interval=10,
+    request_window_tokens=3072,
+    max_new_tokens=2048,
+    micro_forward_batch_size_per_gpu=2,
+    evals="math500,gsm8k-0shot",
+    extra_overrides=SNOWBALL_R4_OVERRIDES,
+)
+
+SCALES = {
+    preset.label: preset for preset in (SMOKE, FULL, SNOWBALL_SMOKE, SNOWBALL_FULL, SNOWBALL_SMOKE_R4, SNOWBALL_FULL_R4)
+}
 
 # The pool filter must keep every retained prompt under each preset's
 # max_input_length (request window minus generation budget), or retained rows
@@ -524,7 +596,7 @@ def build_arm(
             ),
             retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
             seed=SEED,
-            overrides=arm_overrides(spec, policy),
+            overrides=(*arm_overrides(spec, policy), *preset.extra_overrides),
         ),
         IrisSkyRLExecution(
             cluster=policy.cluster,

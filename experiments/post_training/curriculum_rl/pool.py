@@ -85,6 +85,20 @@ GSM8K_INSTRUCTION = ' Let\'s think step by step and output the final answer afte
 # so the instruction must elicit a final Answer line.
 ANSWER_LINE_INSTRUCTION = " Please reason step by step, and end your response with a final line 'Answer: <answer>'."
 
+# Round-4 system message: the round-3 Snowball arms showed a trailing user
+# instruction loses to the SFT answer style (\boxed) on every bin whose grader
+# wants a different final line, so the format contract moves into a system turn
+# (validated against the served base model before the pool bump; see #8765).
+SYSTEM_PROMPT = (
+    "You are a careful mathematical problem solver. Work through each problem step by step, "
+    "verify intermediate results, and keep the reasoning focused on the given problem. When "
+    "you are done reasoning, state the final answer exactly once.\n\n"
+    "Each problem statement specifies the exact format of the final answer line (for example, "
+    "a line starting with 'Answer:' or a line starting with '####'). An automated grader reads "
+    "only that format: end your response with the requested final-answer line, and do not wrap "
+    "the final answer in \\boxed{} or add any text after it."
+)
+
 GSM8K_TRAIN_ROWS = 2000
 GSM8K_VALIDATION_ROWS = 256
 
@@ -267,7 +281,10 @@ def _pool_record(
     source = data_source or pool_bin.name
     return {
         "data_source": source,
-        "prompt": [{"role": "user", "content": f"{question}{instruction}"}],
+        "prompt": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": f"{question}{instruction}"},
+        ],
         "env_class": pool_bin.env_class,
         # The gsm8k env reads reward_spec.ground_truth; the aime env reads
         # reward_model.ground_truth. Every row carries both.
