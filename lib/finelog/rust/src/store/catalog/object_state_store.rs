@@ -23,7 +23,7 @@ pub const TABLE_STATE_FORMAT_VERSION: u64 = 1;
 const HEAD_KEY: &str = "HEAD.json";
 const STATES_PREFIX: &str = "catalogs";
 /// Key prefix under a table for the data objects its states reference.
-pub(crate) const OBJECTS_PREFIX: &str = "objects";
+pub const OBJECTS_PREFIX: &str = "objects";
 /// Key prefix under a table for segment index bundles.
 pub(crate) const INDICES_PREFIX: &str = "indices";
 /// Key prefix under a table for covering-projection artifacts.

@@ -20,5 +20,5 @@ pub(crate) mod storage_policy;
 pub mod store;
 pub(crate) mod telemetry_policy;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 pub mod test_support;

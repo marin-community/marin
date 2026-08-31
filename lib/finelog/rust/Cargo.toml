@@ -153,6 +153,14 @@ connectrpc-build = "0.6"
 # `edition = "2023"`, which requires protoc >= 27.
 protoc-bin-vendored = "3"
 
+[features]
+# Compiles the deterministic fault-injection harness (`test_support`) and the
+# interposed store constructor so integration tests under `tests/` can drive
+# failure journeys. Never enabled by the served binary.
+test-util = []
+
 [dev-dependencies]
 # `test-util` gives the maintenance scheduler tests a deterministic clock.
 tokio = { version = "1", features = ["full", "test-util"] }
+# Integration tests exercise the crate with its own test seams compiled in.
+finelog = { path = ".", features = ["test-util"] }

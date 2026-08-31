@@ -291,8 +291,8 @@ impl Store {
     ///
     /// The failure-scenario tests use this to fail, delay, or count individual
     /// object operations against an otherwise complete composition.
-    #[cfg(test)]
-    pub(crate) fn new_with_interposed_objects(
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn new_with_interposed_objects(
         data_dir: Option<PathBuf>,
         remote_log_dir: String,
         index_cache_mb: usize,
@@ -448,8 +448,8 @@ impl Store {
 
     /// The table control surface, for tests that lease maintenance work
     /// directly instead of going through a maintenance cycle.
-    #[cfg(test)]
-    pub(crate) fn tables(&self) -> &Arc<TableManager> {
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn tables(&self) -> &Arc<TableManager> {
         &self.tables
     }
 

@@ -1,12 +1,9 @@
 // Copyright The Marin Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Composed failure journeys for an object-backed table. Test-only code:
-//! `store/mod.rs` declares this module `#[cfg(test)]`, so nothing here is
-//! compiled into the served binary. It lives in `src/` rather than `tests/`
-//! because the scenarios drive crate-private seams — the fault-injecting
-//! object store and store internals — that an integration-test crate cannot
-//! reach.
+//! Composed failure journeys for an object-backed table, driven through the
+//! crate's public surface plus the `test-util` seams (`test_support`, the
+//! interposed-store constructor).
 //!
 //! Each test drives a complete [`Store`] — real table manager, controllers,
 //! `ObjectTableStateStore`, compaction, and migration — over a local object
@@ -32,20 +29,20 @@ use arrow::array::{Int64Array, StringArray};
 use arrow::record_batch::RecordBatch;
 use buffa::{Message, MessageField, MessageView};
 
-use crate::proto::finelog::stats::{
+use finelog::proto::finelog::stats::{
     ColumnType, L0Mode, NamespaceCatalog, OperatingPolicy, RemoteRetentionPolicy, SourceLayout,
     TableSpec, TableSpecView,
 };
-use crate::query::{make_ctx, run_query_over};
-use crate::store::catalog::object_state_store::ObjectTableStateStore;
-use crate::store::catalog::object_state_store::OBJECTS_PREFIX;
-use crate::store::object_store::{build_remote_object_store, ObjectId, ObjectStore};
-use crate::store::policy::StoragePolicy;
-use crate::store::schema::{schema_to_arrow, schema_to_proto_owned, Column, Schema};
-use crate::store::store::{ServeMode, Store};
-use crate::store::table_spec::ValidatedTableSpec;
-use crate::store::table_state::{CommitError, TableRevision};
-use crate::test_support::{
+use finelog::query::{make_ctx, run_query_over};
+use finelog::store::catalog::object_state_store::ObjectTableStateStore;
+use finelog::store::catalog::object_state_store::OBJECTS_PREFIX;
+use finelog::store::object_store::{build_remote_object_store, ObjectId, ObjectStore};
+use finelog::store::policy::StoragePolicy;
+use finelog::store::schema::{schema_to_arrow, schema_to_proto_owned, Column, Schema};
+use finelog::store::store::{ServeMode, Store};
+use finelog::store::table_spec::ValidatedTableSpec;
+use finelog::store::table_state::{CommitError, TableRevision};
+use finelog::test_support::{
     lost_head_response, unique_dir, FaultAction, FaultGate, FaultInjectingObjectStore, ObjectFault,
     ObjectOp, ObjectPattern,
 };
@@ -128,7 +125,7 @@ impl Cluster {
         let store = Store::new_with_interposed_objects(
             Some(data_dir.to_path_buf()),
             self.remote_dir.to_string_lossy().into_owned(),
-            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            finelog::indices::cache::DEFAULT_INDEX_CACHE_MB,
             // The scheduler owns a store's cadence but not its lifetime: it keeps
             // polling a dropped store's tables. Crash scenarios therefore never
             // start it and drive flush and maintenance directly, so a crashed
@@ -188,7 +185,7 @@ async fn write_row(store: &Store, worker: &str, mem_bytes: i64) -> i64 {
         ],
     )
     .unwrap();
-    let ipc = crate::store::ipc::encode_ipc(&batch_schema, &[batch]).unwrap();
+    let ipc = finelog::store::ipc::encode_ipc(&batch_schema, &[batch]).unwrap();
     let (_, seq) = store.write_rows(TABLE, &ipc, None).unwrap();
     store.maintain_namespace(TABLE, false).await.unwrap();
     store
@@ -541,7 +538,7 @@ async fn a_crash_during_migration_backfill_resumes_and_rejects_the_stale_lease()
         .controller(TABLE)
         .commit_maintenance(
             &lease,
-            || -> Result<(TableRevision, ()), crate::errors::StatsError> {
+            || -> Result<(TableRevision, ()), finelog::errors::StatsError> {
                 unreachable!("a lease from a dead writer must not run its mutation")
             },
         )
@@ -616,7 +613,7 @@ async fn a_fence_steal_during_an_ambiguous_flush_commit_leaves_one_writer() {
         ],
     )
     .unwrap();
-    let ipc = crate::store::ipc::encode_ipc(&batch_schema, &[batch]).unwrap();
+    let ipc = finelog::store::ipc::encode_ipc(&batch_schema, &[batch]).unwrap();
     let (_, ambiguous_seq) = original.write_rows(TABLE, &ipc, None).unwrap();
     let flushing = {
         let tables = original.tables().clone();
@@ -637,7 +634,7 @@ async fn a_fence_steal_during_an_ambiguous_flush_commit_leaves_one_writer() {
     // stops accepting writes.
     let rejected = original.write_rows(TABLE, &ipc, None).unwrap_err();
     assert!(
-        matches!(rejected, crate::errors::StatsError::SchemaConflict(_)),
+        matches!(rejected, finelog::errors::StatsError::SchemaConflict(_)),
         "the fenced writer must refuse writes, got {rejected:?}"
     );
     assert!(

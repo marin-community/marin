@@ -28,7 +28,7 @@ flowchart TB
         SS[state_store.rs: TableStateStore trait]
         OSS[object_state_store.rs<br/>states + HEAD CAS]
         SQS[sqlite_state_store.rs<br/>legacy authority]
-        DB[database.rs: SQLite<br/>projection + registry]
+        DB[Catalog: the only SQL speaker<br/>namespaces / table_specs / segments<br/>object_segments / cursors]
         PJ[projection.rs]
     end
 
@@ -259,7 +259,7 @@ Separately, `finelog-migrate` (in the image) is the older one-off `telemetry_v1`
 
 ### Local
 
-1. **Unit + composed failure scenarios** (no credentials, deterministic): `cargo test` in `lib/finelog/rust` covers the fenced-commit, tombstone, recovery, lease-rebase, and migration contracts pointwise, and `store/failure_scenarios.rs` drives a real `Store` over a local object directory through crash-during-backfill-with-open-lease, fence-steal-with-ambiguous-CAS, and cold-restart-from-objects-alone, with per-step invariants (monotonic revisions, HEAD consistency, referenced-object existence, gap-free sequences). `FaultInjectingObjectStore` in `test_support.rs` is the reusable fault seam. The Python e2e suite (`uv run pytest tests` in `lib/finelog`) exercises the embedded server end to end.
+1. **Unit + composed failure scenarios** (no credentials, deterministic): `cargo test` in `lib/finelog/rust` covers the fenced-commit, tombstone, recovery, lease-rebase, and migration contracts pointwise, and `tests/failure_scenarios.rs` drives a real `Store` through the public surface plus the `test-util` seams over a local object directory through crash-during-backfill-with-open-lease, fence-steal-with-ambiguous-CAS, and cold-restart-from-objects-alone, with per-step invariants (monotonic revisions, HEAD consistency, referenced-object existence, gap-free sequences). `FaultInjectingObjectStore` in `test_support` (compiled under the `test-util` feature, never in the served binary) is the reusable fault seam. The Python e2e suite (`uv run pytest tests` in `lib/finelog`) exercises the embedded server end to end.
 2. **Shadow mode over a copied store**: copy a real store's *local* directory (catalog SQLite + newest segments + `.fidx` sidecars — not the bucket, which holds no index bundles), then boot `finelog-server --mode shadow --log-dir <copy>`. Shadow runs no maintenance — nothing compacts, evicts, migrates, or publishes — so the copy is a pure read rehearsal. The server refuses shadow with a `gs://`/`s3://` remote or forwarding configured. The benchmark harnesses (`finelog.benchmarks.query_measurement`, `log_query_bench`, `grafana_dashboard_bench`) run result-digest and latency comparisons against such a copy; `--debug-admin` additionally exposes `/debug/maintain`, `/debug/segments`, and `/debug/backdate` for parity harnesses (never in production).
 3. **Migration rehearsal on the copy**: boot the copy in *live* mode with `--remote-log-dir` pointing at a disposable prefix (a local directory or a `ttl=1d` GCS path), register the object-backed TableSpec, and let maintenance run the version-0 import end to end — backfill, activation, observation, retirement — comparing row counts, sequence coverage, and order-independent per-column query digests against the shadow baseline before migration, after migration, after compaction, and again from a second server cold-recovering the remote layout into an empty local store.
 
