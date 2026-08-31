@@ -66,9 +66,9 @@ The external configurations intentionally model only what Marin needs:
 - `evalchemy` resolves the endpoint client core. Benchmark extras are selected
   by each evaluation at runtime.
 - `harbor` resolves the Git checkout and pinned Daytona SDK used only by the
-  isolated evaluation driver. The `harbor_config` modules are installed from
-  that same checkout rather than a second package source, so runtime and error
-  taxonomy advance atomically. Harbor is absent from Marin's workspace lock.
+  isolated evaluation driver. Harbor's configuration models are installed from
+  that same checkout, so its runtime and error taxonomy advance atomically.
+  Harbor is absent from Marin's workspace lock.
 - `MarinSkyRL` tracks the repository-root `marinskyrl` distribution. The
   external lock resolves its CPU-safe base for the isolated launcher. The
   launcher synchronizes the selected `fsdp` or `megatron` profile from that
@@ -77,8 +77,8 @@ The external configurations intentionally model only what Marin needs:
   fork pins (`tpu.toml`). Neither is a workspace dependency.
 
 Evaluation provenance stores the generated commit-pinned runtime requirement.
-For Evalchemy it identifies the exact Evalchemy checkout; for Harbor the one
-Harbor commit identifies both the runtime and its `harbor_config` modules.
+For Evalchemy it identifies the exact Evalchemy checkout; for Harbor one commit
+identifies both the runtime and its configuration models.
 
 `migration.toml` describes how to migrate each fork toward upstream — the base to
 select, the Marin e2e that validates it, and the constraints to respect. It holds

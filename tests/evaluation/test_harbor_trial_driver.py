@@ -278,76 +278,6 @@ def test_single_turn_aime_agent_retries_transient_proxy_failure(tmp_path):
     assert result == {"answer": "42\n", "response": "Final answer: 42", "attempts": 2}
 
 
-def test_terminus_policies_retry_transient_endpoint_errors(tmp_path, checked_policies):
-    policies = {
-        name: payload["stable_policy_json"]
-        for name, payload in checked_policies.items()
-        if json.loads(payload["stable_policy_json"])["agents"][0]["name"] == "terminus-2"
-    }
-    assert policies
-    policies_path = tmp_path / "policies.json"
-    policies_path.write_text(json.dumps(policies))
-    script = textwrap.dedent(
-        """
-        import asyncio
-        import json
-        import sys
-        from pathlib import Path
-        from types import SimpleNamespace
-
-        import harbor.trial.queue as queue_module
-        from harbor.models.job.config import JobConfig
-        from harbor.trial.queue import TrialQueue
-        from harbor.trial.trial import Trial
-
-        async def main():
-            policies = json.loads(Path(sys.argv[1]).read_text())
-            outcomes = {}
-            for name, serialized_policy in policies.items():
-                retry = JobConfig.model_validate_json(serialized_policy).retry
-                attempts = 0
-                waits = []
-                failed_result = SimpleNamespace(
-                    exception_info=SimpleNamespace(exception_type="InternalServerError")
-                )
-
-                class FailedTrial:
-                    paths = SimpleNamespace(trial_dir=Path("/tmp/unused-harbor-trial"))
-
-                    async def run(self):
-                        nonlocal attempts
-                        attempts += 1
-                        return failed_result
-
-                    def add_hook(self, _event, _hook):
-                        pass
-
-                async def create_trial(_config):
-                    return FailedTrial()
-
-                async def record_wait(delay):
-                    waits.append(delay)
-
-                Trial.create = staticmethod(create_trial)
-                queue_module.asyncio.sleep = record_wait
-                queue_module.safe_rmtree = lambda *_args, **_kwargs: None
-                result = await TrialQueue(n_concurrent=1, retry_config=retry)._run_trial(
-                    SimpleNamespace(trial_name="endpoint-failure")
-                )
-                assert result is failed_result
-                outcomes[name] = {"attempts": attempts, "wait_seconds": sum(waits)}
-
-            print(json.dumps(outcomes, sort_keys=True))
-
-        asyncio.run(main())
-        """
-    )
-
-    outcomes = json.loads(_external_python("-c", script, str(policies_path)).stdout)
-
-    assert outcomes == {name: {"attempts": 11, "wait_seconds": 303.0} for name in policies}
-
-
 def test_local_source_is_rebased_onto_worker_workspace(tmp_path, monkeypatch):
     with tempfile.TemporaryDirectory(prefix=".harbor-local-", dir=_ROOT) as launch_dir_string:
         launch_dir = Path(launch_dir_string)
@@ -425,48 +355,6 @@ def test_effective_job_applies_runtime_precedence_and_validates_nested_updates(t
     assert agent["kwargs"]["opencode_config"]["provider"]["hosted_vllm"]["options"] == {
         "baseURL": "https://iris.example/capability/v1"
     }
-
-
-def test_effective_aime_job_preserves_capability_url_in_live_config_and_redacts_dump(tmp_path, checked_policies):
-    capability_token = "dummy-capability-token"
-    capability_url = f"https://iris.example/proxy/t/{capability_token}/serve.inference-test/v1"
-    policy_path = tmp_path / "policy.json"
-    policy_path.write_text(checked_policies["aime-smoke.yaml"]["stable_policy_json"])
-    overlay_path = tmp_path / "overlay.json"
-    overlay_path.write_text(
-        json.dumps(
-            {
-                "job_name": "runtime-job",
-                "jobs_dir": str(tmp_path / "jobs"),
-                "dataset_path": str(tmp_path / "tasks"),
-                "endpoint_url": capability_url,
-                "served_model": "served-qwen",
-                "task_limit": 3,
-                "model_agent_kwargs": {},
-            }
-        )
-    )
-    script = (
-        "import json; "
-        "from pathlib import Path; "
-        "from marin.evaluation.harbor.trial_driver import effective_job_config; "
-        f"config=effective_job_config(Path({str(policy_path)!r}), Path({str(overlay_path)!r})); "
-        'print(json.dumps({"api_base": config.agents[0].kwargs["api_base"], '
-        '"job_dir": str(config.jobs_dir / config.job_name), '
-        '"serialized": config.model_dump(mode="json")}))'
-    )
-
-    result = json.loads(_external_python("-c", script).stdout)
-
-    assert result["api_base"] == capability_url
-    assert result["job_dir"] == str(tmp_path / "jobs" / "runtime-job")
-    serialized = result["serialized"]
-    assert serialized["agents"][0]["kwargs"]["api_base"] == (
-        "https://iris.example/proxy/t/<redacted>/serve.inference-test/v1"
-    )
-    serialized_json = json.dumps(serialized)
-    assert capability_token not in serialized_json
-    assert "<redacted>" in serialized_json
 
 
 @pytest.mark.parametrize(

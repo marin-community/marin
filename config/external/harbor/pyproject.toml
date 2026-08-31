@@ -16,4 +16,5 @@ package = false
 prerelease = "allow"
 
 [tool.uv.sources]
-harbor = { git = "https://github.com/marin-community/harbor.git", branch = "main" }
+# The refresh PR returns this to main after an admin promotes the staged SHA.
+harbor = { git = "https://github.com/marin-community/harbor.git", branch = "main-next" }
