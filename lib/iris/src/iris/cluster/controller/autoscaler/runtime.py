@@ -43,7 +43,7 @@ from iris.cluster.controller.autoscaler.provisioning import (
     classify_create_failure,
 )
 from iris.cluster.controller.autoscaler.recovery import (
-    load_autoscaler_checkpoint,
+    AutoscalerCheckpoint,
     restore_autoscaler_state,
 )
 from iris.cluster.controller.autoscaler.routing import (
@@ -59,7 +59,6 @@ from iris.cluster.controller.autoscaler.scaling_group import (
 from iris.cluster.controller.autoscaler.state import AutoscalerState, GroupPersist, SlicePersist
 from iris.cluster.controller.autoscaler.status import PendingHint, build_job_pending_hints, routing_decision_to_proto
 from iris.cluster.controller.autoscaler.worker_registry import TrackedWorker, WorkerRegistry
-from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.worker_health import CONSECUTIVE_FAILURE_THRESHOLD
 from iris.cluster.platforms.protocols import WorkerInfraProvider
 from iris.cluster.platforms.types import (
@@ -855,15 +854,14 @@ class Autoscaler:
         """Restore tracked worker state from a snapshot. Called before loops start."""
         self._worker_registry.restore(workers)
 
-    def restore_from_db(self, db: ControllerDB, platform: WorkerInfraProvider) -> None:
-        """Reconcile DB-checkpointed autoscaler state against live cloud.
-
-        Reads scaling group and slice rows from proper DB tables,
-        reconciles each group against the cloud in parallel, and restores
-        tracked workers. Call at startup before loops begin.
-        """
-        checkpoint = load_autoscaler_checkpoint(db)
-        restored_workers = restore_autoscaler_state(self._groups, checkpoint, platform, self._make_draining_group)
+    def restore(self, checkpoint: AutoscalerCheckpoint) -> None:
+        """Reconcile a controller-supplied checkpoint against live capacity."""
+        restored_workers = restore_autoscaler_state(
+            self._groups,
+            checkpoint,
+            self._platform,
+            self._make_draining_group,
+        )
         self.restore_tracked_workers(restored_workers)
         logger.info("Restored %d tracked workers", len(restored_workers))
 

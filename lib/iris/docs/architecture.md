@@ -117,46 +117,44 @@ groups. Federation connects controllers when work can execute on another
 cluster.
 
 The controller owns the database and loop cadences. It builds a complete,
-single-use `ScheduleRequest` from one read snapshot, including pending tasks,
-running attempts, worker state, and the user budget. `schedule` is a DB-less
-decision. Reconcile and autoscale
-use `BackendRuntime`/`DbBackendWorkerStore` and are not DB-less. The controller
-stores worker records and task assignments; the backend owns the provider-specific
-observation and actuation that produces task-state effects.
+single-use request for every phase. These include scheduling facts, exact
+desired attempts and worker addresses, status/capacity facts, residual demand,
+and recovery checkpoints. The controller also owns worker liveness and all Iris
+persistence. A backend receives no database, transaction, transition reader, or
+liveness tracker. It owns provider-specific decisions, observation, and
+actuation; the controller folds returned observations into Iris state.
 Both backend implementations expose the same phase methods (plus on-demand
 `get_process_status`/`profile_task`/`exec_in_container`):
 
+- `initialize(BackendRecoveryRequest) -> BackendRecoveryResult` — reconcile a
+  persisted checkpoint with the provider before loops start.
 - `schedule(ScheduleRequest) -> ScheduleResult` — a placement decision.
-- `reconcile(ReconcileRequest) -> ReconcileResult` — converge the substrate and
-  author task-state `effects` for the controller to commit. A worker-daemon
-  backend also folds the liveness it observed into its **own**
-  `WorkerHealthTracker` and stashes the workers its fold reaped.
-- `run_teardown()` — fail the reaped workers, tear down their slices and healthy
-  siblings, and forget them from the backend's own tracker. Called after the
-  tick's effects are committed; no worker identity is passed in.
+- `reconcile(ReconcileRequest) -> ReconcileObservation` — converge the external
+  substrate and return exact task updates plus optional worker reachability.
+- `observe(BackendObservationRequest) -> BackendObservation` — publish provider
+  status, capacity, and pending hints from controller-owned facts.
 - `autoscale(AutoscaleRequest) -> AutoscaleResult` — provision capacity.
-- `status() -> BackendStatus` — author this backend's dashboard status.
+- `remove_capacity(RemoveCapacityRequest) -> RemoveCapacityResult` — remove
+  controller-fenced capacity and report affected siblings.
 
-Each method returns its own frozen result type (`ScheduleResult` /
-`ReconcileResult` / `AutoscaleResult`). `reconcile` returns `effects` only —
-uniform across backend kinds — so the controller commits the projection without
-branching on the concrete backend class.
+Each phase returns a frozen result record. Every reconcile result has the same
+shape: exact task-attempt updates plus optional worker-health events. The
+controller loads a fresh post-I/O snapshot, validates Attempt UIDs, applies one
+state-machine path, accounts for worker health, commits effects, and only then
+requests physical capacity removal. It never asks a backend to mutate Iris state.
 
-`BackendDescriptor.kind` is `WORKER` for Iris worker-daemon clusters or
-`KUBERNETES` for Kueue-backed clusters. Kubernetes reconcile receives the
-controller-owned dispatch drain; worker reconcile sources its worker snapshot
-through `DbBackendWorkerStore`. Dashboard capability strings are derived from
-the kind and the presence of an Iris autoscaler.
+`BackendDescriptor.kind` is presentation metadata. Its capabilities declare one
+reconciliation mechanism: `WORKER_FLEET` or `DIRECT_DISPATCH`; `AUTOSCALER` is
+optional for worker fleets. Kubernetes reconcile receives the controller-owned
+dispatch drain. Worker reconcile receives a complete list pairing every desired
+worker plan with its address. Dashboard capability strings are derived from the
+descriptor.
 
-Worker health is authored by a worker backend. It constructs and owns its
-`WorkerHealthTracker`,
-folds the liveness it observed during `reconcile` (REACHED / UNREACHABLE, plus
-BUILD_FAILED synthesized from its effects), and reaps over-threshold workers in
-its own `run_teardown`. There is no ping loop and no separate liveness channel —
-the reconcile RPC outcome is the only liveness signal. The controller reaches
-per-worker liveness through the backend (`liveness_for_worker`, `all_liveness`).
-Kubernetes backends have no Iris workers: they hold no tracker, and pod status
-flows back as task `effects`.
+The controller owns `WorkerHealthTracker`, applies REACHED / UNREACHABLE plus
+kernel-derived BUILD_FAILED events, and collects workers that cross the reap
+threshold. There is no ping loop: reconcile RPC outcomes are the only liveness
+signal. Kubernetes reports no worker events; exact Pod observations are resolved
+entirely in the controller.
 
 **Entry points.** `cluster/client/` is the low-level RPC client
 (`RemoteClusterClient`); `client/` is the high-level user SDK (`IrisClient`,

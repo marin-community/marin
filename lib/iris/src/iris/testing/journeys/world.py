@@ -17,7 +17,6 @@ from iris.cluster.controller.checkpoint import CheckpointResult, download_checkp
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.log_stack import build_log_stack
-from iris.cluster.controller.transition_reader import DbTransitionReader
 from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.log_keys import task_log_key
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, TaskAttempt
@@ -108,7 +107,6 @@ class JourneyWorld:
         )
         backend_type = UnavailableTaskBackend if not self._capacity_available else ScriptedTaskBackend
         backend = backend_type(
-            DbTransitionReader(db),
             backend_id=DEFAULT_BACKEND_ID,
             advertised_attributes={"region": {"us-central1"}},
         )
@@ -297,7 +295,7 @@ class JourneyWorld:
         exit_code: int | None = None,
         attempt_id: int | None = None,
     ) -> None:
-        self.backend.observe(
+        self.backend.queue_observation(
             task.wire_id,
             ScriptedObservation(state, error=error, exit_code=exit_code, attempt_id=attempt_id),
         )

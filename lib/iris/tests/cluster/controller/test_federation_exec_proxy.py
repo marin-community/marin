@@ -109,7 +109,7 @@ def _make_service(
 ) -> tuple[ControllerServiceImpl, ControllerTestState]:
     state = stack.enter_context(make_controller_state())
     mock = MockController()
-    mock.backend.health = state._health
+    mock.worker_health = state._health
     service = ControllerServiceImpl(
         controller=mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / subdir / "bundles")),
