@@ -158,13 +158,16 @@ def frontier_grade(row: dict[str, float]) -> int | None:
 
 
 def curriculum_series(runs: list, metric: str) -> dict[str, dict[int, float]]:
-    """Per-bin trajectories of one curriculum metric (weight or pass_rate)."""
+    """Per-bin trajectories of one curriculum metric (weight or pass_rate).
+
+    Bin keys come from run summaries; sampling the history for discovery can
+    miss per-step curriculum rows among the much denser engine metrics.
+    """
     bin_keys = sorted(
         {
             key
             for run in runs
-            for row in run.history(samples=50, pandas=False)
-            for key in row
+            for key in run.summary.keys()
             if key.startswith("curriculum/") and key.endswith(f"/{metric}")
         }
     )
