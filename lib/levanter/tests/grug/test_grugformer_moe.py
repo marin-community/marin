@@ -25,6 +25,7 @@ from levanter.grug._moe.common import (
 )
 from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
 from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
+from levanter.grug._moe.ep_ragged_all_to_all import _loop_local_zeros
 from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import (
     _moe_mlp_ep_fixed_pooled_wave_a2a_local,
     _interleaved_receiver_ranks,
@@ -1383,3 +1384,44 @@ def test_ragged_a2a_receiver_clipping_respects_capacity():
         ),
     )
     assert int(jnp.sum(clipped)) < int(jnp.sum(group_sizes))
+
+
+@pytest.mark.parametrize("site", [0, 1, 2, 3, 4, 5])
+@pytest.mark.parametrize(
+    "tie",
+    [
+        np.array([0, 0, 0, 0], dtype=np.int32),
+        np.array([1, 7, 0, 3], dtype=np.int32),
+        np.array([2**20, 5, 5, 5], dtype=np.int32),
+    ],
+    ids=["all-empty-groups", "mixed", "large-first-group"],
+)
+def test_loop_local_zeros_fills_exact_zeros(site: int, tie: np.ndarray):
+    """The ragged-a2a output inits must be exactly zero at every call site the backend uses.
+
+    Dropped source rows, and receiver rows no peer writes, keep this init; the combine reads them
+    as zero contributions. A non-zero fill corrupts training without raising. ``site=0`` is the
+    boundary case: its value is zero only because ``tie`` is non-negative, which an all-zero
+    ``tie`` exercises tightest.
+    """
+    filled = _loop_local_zeros(4, 3, jnp.float32, jnp.asarray(tie), site=site)
+
+    assert filled.shape == (4, 3)
+    np.testing.assert_array_equal(np.asarray(filled), np.zeros((4, 3), dtype=np.float32))
+
+
+def test_loop_local_zeros_is_not_a_foldable_constant():
+    """The fill must stay a function of a traced value so it lowers inside the layer scan.
+
+    XLA hoists a constant-foldable fill out of the loop, and CopyInsertion then mints a fresh
+    multi-GB copy into the in-place ``ragged_all_to_all`` output slot every iteration. Reading
+    ``tie`` prevents the fold, so a refactor that produced the zeros without it would keep the
+    zero-value test above passing while restoring that copy.
+    """
+    jaxpr = jax.make_jaxpr(lambda tie: _loop_local_zeros(4, 3, jnp.float32, tie, site=1))(
+        jnp.asarray([1, 7, 0, 3], dtype=jnp.int32)
+    )
+
+    assert jaxpr.jaxpr.invars, "the fill takes no traced input, so it can be folded and hoisted"
+    consumed = {id(var) for eqn in jaxpr.jaxpr.eqns for var in eqn.invars}
+    assert any(id(var) in consumed for var in jaxpr.jaxpr.invars), "the fill ignores its tie, so it can be folded"
