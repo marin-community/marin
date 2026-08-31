@@ -63,6 +63,7 @@ from iris.cluster.controller.task_state import (
     DISPATCHED_TASK_STATES,
     ActiveTaskRow,
     RunningTaskEntry,
+    RuntimeReleaseTarget,
     TaskDetailRow,
     task_row_can_be_scheduled,
 )
@@ -1887,17 +1888,6 @@ class ControlSnapshot:
     running_tasks: list[RunningTaskEntry] = field(default_factory=list)
 
 
-@dataclass(frozen=True, slots=True)
-class RuntimeReleaseRow:
-    """Controller coordinates for one terminal runtime awaiting confirmation."""
-
-    task_id: JobName
-    attempt_id: int
-    attempt_uid: AttemptUid
-    worker_id: WorkerId | None
-    worker_address: str | None
-
-
 _RUNTIME_RELEASE_TARGETS_STMT = (
     select(
         task_attempts_table.c.task_id,
@@ -1922,18 +1912,9 @@ _RUNTIME_RELEASE_TARGETS_STMT = (
 )
 
 
-def runtime_release_rows(tx: Tx, *, include_workerless: bool) -> list[RuntimeReleaseRow]:
-    """Return terminal runtimes that this backend can still address.
-
-    Direct backends address runtimes by task identity and therefore include
-    rows with no worker. Worker backends omit orphaned rows after worker teardown;
-    no endpoint remains from which they could obtain an absence observation.
-    """
-    stmt = _RUNTIME_RELEASE_TARGETS_STMT
-    if not include_workerless:
-        stmt = stmt.where(task_attempts_table.c.worker_id.is_not(None))
+def _runtime_release_targets(tx: Tx, stmt) -> list[RuntimeReleaseTarget]:
     return [
-        RuntimeReleaseRow(
+        RuntimeReleaseTarget(
             task_id=row.task_id,
             attempt_id=int(row.attempt_id),
             attempt_uid=AttemptUid(str(row.attempt_uid)),
@@ -1942,6 +1923,23 @@ def runtime_release_rows(tx: Tx, *, include_workerless: bool) -> list[RuntimeRel
         )
         for row in tx.execute(stmt).all()
     ]
+
+
+def direct_runtime_release_targets(tx: Tx) -> list[RuntimeReleaseTarget]:
+    """Return every terminal runtime awaiting direct-provider confirmation."""
+    return _runtime_release_targets(tx, _RUNTIME_RELEASE_TARGETS_STMT)
+
+
+def worker_runtime_release_targets(tx: Tx) -> list[RuntimeReleaseTarget]:
+    """Return terminal runtimes still addressable through an Iris worker.
+
+    An orphaned worker runtime remains unconfirmed after its worker row is
+    removed because no endpoint remains from which Iris can prove absence.
+    """
+    return _runtime_release_targets(
+        tx,
+        _RUNTIME_RELEASE_TARGETS_STMT.where(task_attempts_table.c.worker_id.is_not(None)),
+    )
 
 
 def load_control_snapshot(

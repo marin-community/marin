@@ -8,7 +8,7 @@ from typing import NamedTuple, Protocol
 
 from rigging.timing import Deadline, Duration, Timestamp
 
-from iris.cluster.types import JobName, WorkerId
+from iris.cluster.types import AttemptUid, JobName, WorkerId
 from iris.rpc import job_pb2
 
 ACTIVE_TASK_STATES: frozenset[int] = frozenset(
@@ -52,6 +52,17 @@ class RunningTaskEntry(NamedTuple):
     attempt_id: int
     attempt_uid: str = ""
     state: int = job_pb2.TASK_STATE_RUNNING
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeReleaseTarget:
+    """Exact external runtime awaiting backend release confirmation."""
+
+    task_id: JobName
+    attempt_id: int
+    attempt_uid: AttemptUid
+    worker_id: WorkerId | None = None
+    worker_address: str | None = None
 
 
 def task_is_finished(

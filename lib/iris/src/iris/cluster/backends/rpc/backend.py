@@ -84,6 +84,34 @@ _T = TypeVar("_T")
 _R = TypeVar("_R")
 
 
+def _state_observations(
+    result: WorkerReconcileResult,
+    release_only_uids: frozenset[AttemptUid],
+) -> WorkerReconcileResult:
+    """Remove release-only observations before translating task state."""
+    return WorkerReconcileResult(
+        worker_id=result.worker_id,
+        observations=[obs for obs in result.observations if obs.attempt_uid not in release_only_uids],
+        error=result.error,
+        self_healthy=result.self_healthy,
+        responder_worker_id=result.responder_worker_id,
+    )
+
+
+def _confirmed_runtime_releases(
+    result: WorkerReconcileResult,
+    requested: frozenset[AttemptUid],
+) -> set[AttemptUid]:
+    """Return requested exact runtimes that a trusted response proves absent."""
+    return {
+        AttemptUid(obs.attempt_uid)
+        for obs in result.observations
+        if obs.attempt_uid in requested
+        and (obs.state in TERMINAL_TASK_STATES or obs.state == job_pb2.TASK_STATE_MISSING)
+        and (obs.runtime_released or obs.state == job_pb2.TASK_STATE_MISSING or obs.HasField("finished_at"))
+    }
+
+
 def _targets_with_runtime_releases(
     request: WorkerFleetReconcileRequest,
 ) -> tuple[list[WorkerReconcileTarget], dict[WorkerId, frozenset[AttemptUid]]]:
@@ -315,19 +343,16 @@ class RpcTaskBackend:
             releases = releases_by_worker.get(plan.worker_id, frozenset())
             regular_attempt_uids = {row.attempt_uid for row in plan.attempts}
             release_only_uids = releases - regular_attempt_uids
-            state_result = WorkerReconcileResult(
-                worker_id=result.worker_id,
-                observations=[obs for obs in result.observations if obs.attempt_uid not in release_only_uids],
-                error=result.error,
-                self_healthy=result.self_healthy,
-                responder_worker_id=result.responder_worker_id,
+            state_result = _state_observations(result, frozenset(release_only_uids))
+            response_is_trusted = result.error is None and (
+                result.responder_worker_id is None or result.responder_worker_id == str(plan.worker_id)
             )
             if result.error is not None:
                 logger.warning("Reconcile RPC failed for worker %s at %s: %s", plan.worker_id, address, result.error)
                 worker_health_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.UNREACHABLE))
                 self.stub_factory.evict(address)
                 task_updates.extend(task_updates_from_result(plan, state_result, observed_at=observed_at))
-            elif result.responder_worker_id is not None and result.responder_worker_id != str(plan.worker_id):
+            elif not response_is_trusted:
                 # Misrouted reconcile: a *different* live worker answered at this
                 # address. GCP recycles a deleted worker's internal IP onto a new
                 # VM, so the controller's stale address for the dead worker now
@@ -350,16 +375,8 @@ class RpcTaskBackend:
             else:
                 worker_health_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.REACHED))
                 task_updates.extend(task_updates_from_result(plan, state_result, observed_at=observed_at))
-            if result.error is None and (
-                result.responder_worker_id is None or result.responder_worker_id == str(plan.worker_id)
-            ):
-                released_attempt_uids.update(
-                    AttemptUid(obs.attempt_uid)
-                    for obs in result.observations
-                    if obs.attempt_uid in releases
-                    and (obs.state in TERMINAL_TASK_STATES or obs.state == job_pb2.TASK_STATE_MISSING)
-                    and (obs.runtime_released or obs.state == job_pb2.TASK_STATE_MISSING or obs.HasField("finished_at"))
-                )
+            if response_is_trusted:
+                released_attempt_uids.update(_confirmed_runtime_releases(result, releases))
         return ReconcileObservation(
             task_updates=task_updates,
             worker_health_events=worker_health_events,

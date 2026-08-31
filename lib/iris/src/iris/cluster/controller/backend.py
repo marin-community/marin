@@ -54,7 +54,7 @@ from iris.cluster.controller.scheduling.scheduler import (
     SchedulingContext,
     WorkerSnapshot,
 )
-from iris.cluster.controller.task_state import RunningTaskEntry
+from iris.cluster.controller.task_state import RunningTaskEntry, RuntimeReleaseTarget
 from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerLiveness
 from iris.cluster.types import AttemptUid, JobName, PendingTask, WorkerId, WorkerStatusMap
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
@@ -183,17 +183,6 @@ class TaskTarget:
     worker_id: WorkerId | None
     address: str | None
     attempt_uid: str = ""
-
-
-@dataclass(frozen=True, slots=True)
-class RuntimeReleaseTarget:
-    """Exact external runtime that the backend must stop or prove absent."""
-
-    task_id: JobName
-    attempt_id: int
-    attempt_uid: AttemptUid
-    worker_id: WorkerId | None = None
-    worker_address: str | None = None
 
 
 @dataclass(frozen=True)

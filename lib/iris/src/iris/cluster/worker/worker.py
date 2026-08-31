@@ -1038,11 +1038,12 @@ class Worker:
         ).start()
 
     def kill_task(self, task_id: str, term_timeout_ms: int = 5000) -> bool:
-        """Kill the current (most recent) attempt of a task."""
+        """Request a stop for the current attempt and report whether it exists."""
         current = self.current_attempt(task_id)
         if not current:
             return False
-        return current.kill(term_timeout_ms)
+        current.kill(term_timeout_ms)
+        return True
 
     def _run_profile_loop(self, stop_event: threading.Event) -> None:
         """Tick at ``profile_interval`` and capture a CPU profile per running attempt.
