@@ -101,10 +101,9 @@ def _cute_expert_mlp(
 ) -> Float[Array, "C H"]:
     """Expert MLP on QuACK's SM100 grouped GEMMs plus cuDNN grouped weight gradients.
 
-    The QuACK GEMMs take the active group sizes. They ignore the receiver buffer's trailing
-    padding. The cuDNN weight gradients need padded groups instead. `pad_grouped_rows` extends the
-    last expert's group to the end of the buffer and fills the extra rows with zeros. Zero rows add
-    nothing to a weight gradient, so the result is unchanged.
+    The QuACK GEMMs take the active group sizes. The cuDNN weight gradients need groups padded to
+    a fixed alignment, which `pad_grouped_rows` applies. Trailing padding in the receiver buffer
+    changes neither the output nor the weight gradients.
     """
     del activation_fn, physical_group_sizes
 
