@@ -7,7 +7,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use arrow::array::{Float64Array, Int64Array, StringArray};
 use arrow::datatypes::{DataType, Field};
@@ -81,14 +81,7 @@ pub fn metrics_aligned(run_ids: &[&str]) -> AlignedBatch {
 }
 
 pub fn tempdir() -> PathBuf {
-    let mut p = std::env::temp_dir();
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    p.push(format!("finelog_table_test_{nanos}"));
-    std::fs::create_dir_all(&p).unwrap();
-    p
+    crate::test_support::unique_dir("table_test")
 }
 
 /// Open a table with default wiring (a fresh shared query-visibility lock, no

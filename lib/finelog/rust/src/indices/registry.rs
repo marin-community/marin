@@ -27,11 +27,6 @@ use crate::store::table_state::LocalArtifacts;
 /// pinned and never re-derives an artifact filename while scanning.
 pub type SegmentArtifacts = BTreeMap<String, LocalArtifacts>;
 
-/// A localized immutable Parquet segment.
-pub struct LocalObject {
-    pub path: PathBuf,
-}
-
 /// One segment's artifact build: the batches it holds and the policy to apply.
 pub struct IndexBuildRequest<'a> {
     /// The local Parquet the artifacts bind to. Its footer supplies the segment
@@ -102,9 +97,9 @@ impl IndexRegistry {
     /// Returns `None` — and the caller scans the source Parquet — when the
     /// segment advertises no bundle, the bundle file is missing or corrupt, or
     /// it is bound to a different physical segment than the one on disk.
-    pub fn open(&self, source: &LocalObject, artifacts: &LocalArtifacts) -> Option<OpenedIndexes> {
+    pub fn open(&self, source: &Path, artifacts: &LocalArtifacts) -> Option<OpenedIndexes> {
         let bundle = artifacts.bundle.as_ref()?;
-        let (source_id, row_group_rows) = segment_id_and_row_group_rows(&source.path)?;
+        let (source_id, row_group_rows) = segment_id_and_row_group_rows(source)?;
         let source_rows = row_group_rows.iter().sum::<usize>() as u64;
         let header = self.cache.get_header(bundle, source_id, source_rows)?;
         Some(OpenedIndexes {
@@ -121,12 +116,7 @@ impl IndexRegistry {
         artifacts: &SegmentArtifacts,
     ) -> Option<OpenedIndexes> {
         let references = artifacts.get(parquet_path.to_str()?)?;
-        self.open(
-            &LocalObject {
-                path: parquet_path.to_path_buf(),
-            },
-            references,
-        )
+        self.open(parquet_path, references)
     }
 
     /// The local covering-projection file `name` resolves to for the segment at

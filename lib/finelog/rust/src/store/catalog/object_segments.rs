@@ -66,6 +66,91 @@ pub(super) fn parse_artifacts(json: Option<&str>) -> Result<ArtifactReferences, 
         .map_err(|error| StatsError::Internal(format!("decode segment artifacts: {error}")))
 }
 
+/// How a descriptor insert treats an existing `(namespace, path)` row.
+enum SegmentInsert {
+    /// A flush retry may re-commit the same content-addressed path: take the
+    /// newer descriptor and clear any migration provenance.
+    Upsert,
+    /// A replacement or checkpoint must never collide: content-addressed
+    /// outputs conflict exactly when the same source is committed twice.
+    CreateOnly {
+        source_id: Option<String>,
+        source_rows: Option<i64>,
+    },
+}
+
+/// Insert each descriptor's segment row and `object_segments` projection,
+/// rejecting a descriptor from another namespace.
+fn insert_object_segments_in(
+    transaction: &rusqlite::Transaction<'_>,
+    namespace: &str,
+    segments: &[SegmentDescriptor],
+    table_spec_version: u64,
+    migration_backfill: bool,
+    mode: &SegmentInsert,
+) -> Result<(), StatsError> {
+    for descriptor in segments {
+        let SegmentDescriptor {
+            row,
+            source,
+            artifacts,
+        } = descriptor;
+        if row.namespace != namespace {
+            return Err(StatsError::Internal(
+                "one object commit cannot span namespaces".to_string(),
+            ));
+        }
+        let source_json = serde_json::to_string(source).map_err(|error| {
+            StatsError::Internal(format!("serialize object segment source: {error}"))
+        })?;
+        upsert_segment_in(transaction, row)?;
+        let (sql, source_id, source_rows) = match mode {
+            SegmentInsert::Upsert => (
+                "INSERT INTO object_segments
+                    (namespace, path, table_spec_version, source_json, artifacts_json,
+                     migration_backfill, migration_source_id, migration_source_rows)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                 ON CONFLICT(namespace, path) DO UPDATE SET
+                    table_spec_version = excluded.table_spec_version,
+                    source_json = excluded.source_json,
+                    artifacts_json = excluded.artifacts_json,
+                    migration_backfill = excluded.migration_backfill,
+                    migration_source_id = NULL,
+                    migration_source_rows = NULL",
+                None,
+                None,
+            ),
+            SegmentInsert::CreateOnly {
+                source_id,
+                source_rows,
+            } => (
+                "INSERT INTO object_segments
+                    (namespace, path, table_spec_version, source_json, artifacts_json,
+                     migration_backfill, migration_source_id, migration_source_rows)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                source_id.clone(),
+                *source_rows,
+            ),
+        };
+        transaction
+            .execute(
+                sql,
+                rusqlite::params![
+                    row.namespace,
+                    row.path,
+                    table_spec_version as i64,
+                    source_json,
+                    artifacts_json(artifacts)?,
+                    migration_backfill,
+                    source_id,
+                    source_rows,
+                ],
+            )
+            .map_err(sqlite_err)?;
+    }
+    Ok(())
+}
+
 /// Advance the namespace's catalog generation and return the new revision.
 /// Fails when the namespace has no head row to advance.
 fn advance_generation_in(
@@ -284,47 +369,16 @@ impl Catalog {
         }
         let mut inner = self.inner.lock().unwrap();
         let transaction = inner.conn.transaction().map_err(sqlite_err)?;
-        let namespace = &segments[0].row.namespace;
-        for descriptor in segments {
-            let SegmentDescriptor {
-                row,
-                source,
-                artifacts,
-            } = descriptor;
-            if &row.namespace != namespace {
-                return Err(StatsError::Internal(
-                    "one object commit cannot span namespaces".to_string(),
-                ));
-            }
-            let source_json = serde_json::to_string(source).map_err(|error| {
-                StatsError::Internal(format!("serialize object segment source: {error}"))
-            })?;
-            upsert_segment_in(&transaction, row)?;
-            transaction
-                .execute(
-                    "INSERT INTO object_segments
-                        (namespace, path, table_spec_version, source_json, artifacts_json,
-                         migration_backfill, migration_source_id, migration_source_rows)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, NULL)
-                     ON CONFLICT(namespace, path) DO UPDATE SET
-                        table_spec_version = excluded.table_spec_version,
-                        source_json = excluded.source_json,
-                        artifacts_json = excluded.artifacts_json,
-                        migration_backfill = excluded.migration_backfill,
-                        migration_source_id = NULL,
-                        migration_source_rows = NULL",
-                    rusqlite::params![
-                        row.namespace,
-                        row.path,
-                        table_spec_version as i64,
-                        source_json,
-                        artifacts_json(artifacts)?,
-                        migration_backfill,
-                    ],
-                )
-                .map_err(sqlite_err)?;
-        }
-        let revision = advance_generation_in(&transaction, namespace)?;
+        let namespace = segments[0].row.namespace.clone();
+        insert_object_segments_in(
+            &transaction,
+            &namespace,
+            segments,
+            table_spec_version,
+            migration_backfill,
+            &SegmentInsert::Upsert,
+        )?;
+        let revision = advance_generation_in(&transaction, &namespace)?;
         transaction.commit().map_err(sqlite_err)?;
         Ok(revision)
     }
@@ -345,37 +399,17 @@ impl Catalog {
         let mut inner = self.inner.lock().unwrap();
         let transaction = inner.conn.transaction().map_err(sqlite_err)?;
         remove_segments_in(&transaction, namespace, removed_paths)?;
-        for descriptor in segments {
-            let SegmentDescriptor {
-                row,
-                source,
-                artifacts,
-            } = descriptor;
-            if row.namespace != namespace {
-                return Err(StatsError::Internal(
-                    "one object replacement cannot span namespaces".to_string(),
-                ));
-            }
-            upsert_segment_in(&transaction, row)?;
-            transaction
-                .execute(
-                    "INSERT INTO object_segments
-                        (namespace, path, table_spec_version, source_json, artifacts_json,
-                         migration_backfill, migration_source_id, migration_source_rows)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, NULL)",
-                    rusqlite::params![
-                        namespace,
-                        row.path,
-                        table_spec_version as i64,
-                        serde_json::to_string(source).map_err(|error| {
-                            StatsError::Internal(format!("serialize replacement source: {error}"))
-                        })?,
-                        artifacts_json(artifacts)?,
-                        migration_backfill,
-                    ],
-                )
-                .map_err(sqlite_err)?;
-        }
+        insert_object_segments_in(
+            &transaction,
+            namespace,
+            segments,
+            table_spec_version,
+            migration_backfill,
+            &SegmentInsert::CreateOnly {
+                source_id: None,
+                source_rows: None,
+            },
+        )?;
         let revision = advance_generation_in(&transaction, namespace)?;
         transaction.commit().map_err(sqlite_err)?;
         Ok(revision)
@@ -419,39 +453,17 @@ impl Catalog {
                 namespace, phase
             )));
         }
-        for descriptor in segments {
-            let SegmentDescriptor {
-                row,
-                source,
-                artifacts,
-            } = descriptor;
-            if &row.namespace != namespace {
-                return Err(StatsError::Internal(
-                    "one migration checkpoint cannot span namespaces".to_string(),
-                ));
-            }
-            let source_json = serde_json::to_string(source).map_err(|error| {
-                StatsError::Internal(format!("serialize migrated segment source: {error}"))
-            })?;
-            upsert_segment_in(&transaction, row)?;
-            transaction
-                .execute(
-                    "INSERT INTO object_segments
-                        (namespace, path, table_spec_version, source_json, artifacts_json,
-                         migration_backfill, migration_source_id, migration_source_rows)
-                     VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6, ?7)",
-                    rusqlite::params![
-                        row.namespace,
-                        row.path,
-                        table_spec_version as i64,
-                        source_json,
-                        artifacts_json(artifacts)?,
-                        migration_source_id,
-                        migration_source_rows,
-                    ],
-                )
-                .map_err(sqlite_err)?;
-        }
+        insert_object_segments_in(
+            &transaction,
+            namespace,
+            segments,
+            table_spec_version,
+            true,
+            &SegmentInsert::CreateOnly {
+                source_id: Some(migration_source_id.to_string()),
+                source_rows: Some(migration_source_rows),
+            },
+        )?;
         // The total is the universe as it was last measured, so progress can
         // pass it: a source rewritten before an eviction removed it from that
         // universe is done, and the total rises to say so rather than rejecting

@@ -38,6 +38,8 @@ class CatalogPin:
 
 
 _OBJECT_CATALOG_ROOT = ("_finelog", "tables")
+# Mirrors the server's TABLE_STATE_FORMAT_VERSION.
+_SUPPORTED_CATALOG_FORMAT = 1
 
 
 class ObjectQueryClient:
@@ -125,7 +127,7 @@ class ObjectQueryClient:
 
         head_format = _integer(head.get("formatVersion"), "HEAD.formatVersion")
         catalog_format = _integer(catalog.get("formatVersion"), "catalog.formatVersion")
-        if head_format != 1 or catalog_format != 1:
+        if head_format != _SUPPORTED_CATALOG_FORMAT or catalog_format != _SUPPORTED_CATALOG_FORMAT:
             raise StatsError(
                 f"unsupported object catalog format for namespace {namespace!r}: "
                 f"HEAD={head_format}, catalog={catalog_format}"
@@ -264,7 +266,7 @@ def _table_object_id(value: object, namespace: str, field: str) -> str:
     if path.is_absolute() or str(path) != value or ".." in path.parts or "\\" in value or "://" in value:
         raise StatsError(f"{field} must be a canonical relative object ID")
     expected = (*_OBJECT_CATALOG_ROOT, namespace)
-    if path.parts[:3] != expected or len(path.parts) < 4:
+    if path.parts[: len(expected)] != expected or len(path.parts) < len(expected) + 1:
         raise StatsError(f"{field} must identify an object in table {namespace!r}")
     return str(path)
 

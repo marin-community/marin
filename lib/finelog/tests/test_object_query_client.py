@@ -20,10 +20,8 @@ from finelog.errors import QueryTimeoutError, StatsError
 def _write_catalog(
     root: Path,
     *,
-    catalog_bytes_override: bytes | None = None,
     active_version: int = 1,
     l0_mode: str = "L0_MODE_OBJECT_STORE",
-    max_query_time_ms: int = 600_000,
     object_id_override: str | None = None,
 ) -> Path:
     namespace = "iris.worker"
@@ -49,7 +47,7 @@ def _write_catalog(
         "catalogGeneration": "7",
         "activeTableSpecVersion": str(active_version),
         "desiredTableSpecVersion": "0",
-        "maxQueryTimeMs": str(max_query_time_ms),
+        "maxQueryTimeMs": "600000",
         "directQueryHighWater": "2",
         "retainedTableSpecs": [
             {
@@ -87,7 +85,7 @@ def _write_catalog(
             }
         ],
     }
-    catalog_bytes = catalog_bytes_override or json.dumps(catalog, separators=(",", ":")).encode()
+    catalog_bytes = json.dumps(catalog, separators=(",", ":")).encode()
     catalog_key = "catalogs/00000000000000000007-test.json"
     catalog_id = f"_finelog/tables/{namespace}/{catalog_key}"
     catalog_path = root / catalog_id

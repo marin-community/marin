@@ -644,14 +644,7 @@ mod tests {
     use crate::store::segment::write_segment_to_dir;
 
     fn tempdir(tag: &str) -> std::path::PathBuf {
-        let mut p = std::env::temp_dir();
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        p.push(format!("finelog_provider_{tag}_{nanos}"));
-        std::fs::create_dir_all(&p).unwrap();
-        p
+        crate::test_support::unique_dir(tag)
     }
 
     /// Store-form worker arrow schema: seq, worker_id, mem_bytes.

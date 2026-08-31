@@ -133,7 +133,6 @@ enum L0Mode {
   L0_MODE_UNSPECIFIED = 0;
   L0_MODE_LEGACY_LOCAL = 1;
   L0_MODE_OBJECT_STORE = 2;
-  L0_MODE_LOCAL_EPHEMERAL = 3;
 }
 
 message IdentityTransform {}

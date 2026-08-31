@@ -30,9 +30,7 @@ flowchart TB
     end
 
     subgraph durable["store/state_store/ — durable authority"]
-        SS[mod.rs: TableStateStore trait]
-        OSS[object.rs<br/>states + HEAD CAS]
-        SQS[sqlite.rs<br/>legacy authority]
+        OSS[object.rs: ObjectTableStateStore<br/>states + HEAD CAS]
     end
 
     subgraph objects["store/object_store/ — bytes"]
@@ -102,7 +100,7 @@ flowchart TB
     Cached -->|wraps| Remote
 ```
 
-The ownership rule: `ObjectStore` owns bytes and localization; `TableController` owns liveness and allocates revisions; `TableStateStore` durably checks fenced revisions; the compaction drivers own transformation; `IndexRegistry` owns derived artifacts; the query engine owns planning; `MaintenanceScheduler` owns all cadence. `TableRuntime` owns one table's concurrency envelope (append fast path, flush serialization, policy cells) while durable transitions stay with the controller; `Store` is the composition root and the service facade the RPC layer calls.
+The ownership rule: `ObjectStore` owns bytes and localization; `TableController` owns liveness and allocates revisions; `ObjectTableStateStore` durably checks fenced revisions; the compaction drivers own transformation; `IndexRegistry` owns derived artifacts; the query engine owns planning; `MaintenanceScheduler` owns all cadence. `TableRuntime` owns one table's concurrency envelope (append fast path, flush serialization, policy cells) while durable transitions stay with the controller; `Store` is the composition root and the service facade the RPC layer calls.
 
 ## Durable state
 
@@ -116,7 +114,7 @@ Each object-backed table has one authority: an immutable, complete state documen
 <remote>/_finelog/tables/<table>/projections/<sha256>.parquet immutable covering-projection artifacts
 ```
 
-Every durable mutation — flush, compaction, index backfill, registration, activation, abort, retire, forward cursor, tombstone — is a controller commit that allocates the next monotonic `TableRevision` and carries the process's `WriterFence`. SQLite is a rebuildable projection for object-backed tables (and the single authority, via `SqliteTableStateStore`, only for legacy tables). Dropping a table publishes a durable tombstone revision; HEAD is never deleted, so a missing HEAD unambiguously means "never published".
+Every durable mutation — flush, compaction, index backfill, registration, activation, abort, retire, forward cursor, tombstone — is a controller commit that allocates the next monotonic `TableRevision` and carries the process's `WriterFence`. SQLite is a rebuildable projection for object-backed tables; for legacy tables it is the single authority, guarded by the data-dir flock rather than a durable state store. Dropping a table publishes a durable tombstone revision; HEAD is never deleted, so a missing HEAD unambiguously means "never published".
 
 The published `persisted_high_water` carries the table's sequence allocator watermark, not just the max seq in published segments: a legacy import excludes archive-only rows and retirement deletes legacy catalog rows, so published segments can top out below sequence numbers the table already issued. Publishes clamp the mark monotone across revisions, and recovery seeds the allocator past it, so a recovered writer never reissues a sequence number.
 
@@ -133,7 +131,7 @@ sequenceDiagram
     participant FL as flush.rs
     participant OS as ObjectStore
     participant TC as TableController
-    participant SS as TableStateStore
+    participant SS as ObjectTableStateStore
 
     W->>TM: append(table, batch)
     TM->>IB: validate, assign seq, append (short lock)
@@ -225,7 +223,7 @@ Recovery is metadata-only: load each table's durable state, claim the fence, reb
 
 The only trigger is a `RegisterTable` RPC carrying a `TableSpec` (`server/stats_service.rs`). There is no migration service, no activation RPC, and no startup automation. A table opts in via `operating_policy.l0_mode = L0_MODE_OBJECT_STORE`; the default remains `LEGACY_LOCAL`.
 
-Registration classifies the change (`store/table_spec.rs::classify_definition_change`):
+Registration classifies the change (`store/table_spec.rs::definition_requires_rewrite`):
 
 - **Metadata-only** (same physical layout, or an empty table): activates in one state commit, carrying existing segments.
 - **Compatible rewrite** (layout/sort/partition change over existing rows — including *version 0*, a legacy table with no recorded definition): records a pending transition; background maintenance does the rest.
@@ -280,9 +278,9 @@ Separately, `finelog-migrate` (in the image) is the older one-off `telemetry_v1`
 
 1. **Order**: hub before senders (`OPS.md` rule) — `safe_deploy rollout marin` for the GCE hub, then per CoreWeave cluster `finelog deploy sync-secret <cluster>` + `uv run marin-deploy finelog rollout <cluster>` (captures the Deployment revision, `pulumi up`, verifies ingest health, restores the ReplicaSet on failure; `Recreate` strategy keeps the single-writer invariant).
 2. **Binary first, migration second.** The new binary serves legacy tables unchanged; nothing migrates until a TableSpec is registered. Roll the fleet, observe, then canary the object-backed spec on one production table.
-3. **Canary gates**: the fencing design makes a botched rollout safe by construction — an old pod that comes back cannot advance HEAD once the new pod claims the fence. Keep cache GC and remote object deletion disabled (their current state) through the first observation window; `retain_orphans` already suppresses legacy-archive orphan deletion while a version-0 import is in flight.
+3. **Canary gates**: the fencing design makes a botched rollout safe by construction — an old pod that comes back cannot advance HEAD once the new pod claims the fence. `retain_orphans` suppresses legacy-archive orphan deletion while a version-0 import is in flight.
 4. **Rollback**: `safe_deploy rollback` / `marin-deploy finelog rollback --to-revision N` for the binary; `AbortTableMigration` or the observation-window rollback for a table-level retreat. Binary rollback is safe only before the new binary's first boot applies its ordered catalog schema migrations — an older binary refuses a newer catalog version — so after first boot the binary path is roll-forward. Table-level retreat stays available through each table's observation window either way.
 
 ### What retires when
 
-`store/legacy/` (flat-key archive sync, eviction, layout rewriting), `SqliteTableStateStore`, filesystem adoption, and the process-wide query-visibility lock all exist for legacy tables only. Each table that completes its version-0 import stops using them; when the last legacy table converts, they are deleted. The deferred engineering work is the fuller journey-test catalog and provider-native multipart streaming for compaction outputs; neither gates the rollout.
+`store/legacy/` (flat-key archive sync, eviction, layout rewriting), filesystem adoption, and the process-wide query-visibility lock all exist for legacy tables only. Each table that completes its version-0 import stops using them; when the last legacy table converts, they are deleted. The deferred engineering work is the fuller journey-test catalog and provider-native multipart streaming for compaction outputs; neither gates the rollout.

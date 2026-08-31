@@ -518,7 +518,8 @@ class Table:
             self._cond.notify_all()
 
     def _ensure_registered(self) -> None:
-        """Register the namespace on first send, adopting its effective schema.
+        """Register the namespace whenever the registration generation has
+        advanced past the last registered one, adopting its effective schema.
 
         Runs on the flush thread only, so the (re)assignment of ``_schema`` /
         ``_arrow_schema`` does not race the Arrow encode that follows. A raised

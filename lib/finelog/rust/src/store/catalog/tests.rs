@@ -4,7 +4,6 @@
 //! Catalog behavior tests, spanning every facet.
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use buffa::MessageField;
 use sha2::{Digest, Sha256};
@@ -106,7 +105,7 @@ fn source_layout_change_queues_activation_and_supports_abort() {
 
 #[test]
 fn table_spec_state_persists_across_catalog_reopen() {
-    let dir = tempdir();
+    let dir = crate::test_support::unique_dir("catalog_test");
     let v1 = table_spec(1, 128);
     {
         let catalog = Catalog::open(Some(&dir)).unwrap();
@@ -313,7 +312,7 @@ fn a_failing_delete_leaves_every_namespace_row_in_place() {
 
 #[test]
 fn on_disk_catalog_persists_across_reopen() {
-    let dir = tempdir();
+    let dir = crate::test_support::unique_dir("catalog_test");
     {
         let cat = Catalog::open(Some(&dir)).unwrap();
         cat.upsert("a", &worker_stored()).unwrap();
@@ -327,7 +326,7 @@ fn on_disk_catalog_persists_across_reopen() {
 
 #[test]
 fn segment_partition_persists_across_catalog_reopen() {
-    let dir = tempdir();
+    let dir = crate::test_support::unique_dir("catalog_test");
     let partition = SegmentPartition {
         spec_id: 1,
         values: BTreeMap::from([("name_bucket".to_string(), "6".to_string())]),
@@ -362,7 +361,7 @@ fn segment_partition_persists_across_catalog_reopen() {
 
 #[test]
 fn opening_an_old_catalog_adds_partition_metadata_without_losing_segments() {
-    let dir = tempdir();
+    let dir = crate::test_support::unique_dir("catalog_test");
     let path = dir.join(CATALOG_DB_FILENAME);
     let connection = Connection::open(&path).unwrap();
     connection
@@ -486,17 +485,4 @@ fn published_snapshot_rebuild_preserves_segment_artifacts() {
     let records = catalog.object_segments("a").unwrap();
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].artifacts, artifacts);
-}
-
-fn tempdir() -> std::path::PathBuf {
-    static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
-    let mut p = std::env::temp_dir();
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let ordinal = NEXT_TEMP_DIR.fetch_add(1, Ordering::Relaxed);
-    p.push(format!("finelog_catalog_test_{nanos}_{ordinal}"));
-    std::fs::create_dir_all(&p).unwrap();
-    p
 }

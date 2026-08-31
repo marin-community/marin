@@ -685,17 +685,6 @@ mod tests {
 
     use super::*;
 
-    fn tempdir() -> PathBuf {
-        let mut p = std::env::temp_dir();
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        p.push(format!("finelog_segment_test_{nanos}"));
-        std::fs::create_dir_all(&p).unwrap();
-        p
-    }
-
     /// Build a seq-stamped batch with a `key` Int64 column (non-monotonic to
     /// prove UNSORTED writes preserve row order).
     fn batch_with_keys(first_seq: i64, keys: Vec<i64>) -> RecordBatch {
@@ -722,7 +711,7 @@ mod tests {
     /// path written again is re-read.
     #[test]
     fn row_group_layout_is_reread_when_the_file_changes() {
-        let dir = tempdir();
+        let dir = crate::test_support::unique_dir("segment_test");
         let path = dir.join("seg_L1_0000000000000000001.parquet");
 
         let one_group = batch_with_keys(1, (0..10).collect());
@@ -746,7 +735,7 @@ mod tests {
 
     #[test]
     fn write_and_read_footer_round_trips_seq_window_and_key_bounds() {
-        let dir = tempdir();
+        let dir = crate::test_support::unique_dir("segment_test");
         // non-monotonic keys: 30, 10, 20.
         let batch = batch_with_keys(1, vec![30, 10, 20]);
         let (path, size) = write_segment_to_dir(&dir, 0, 1, &batch).unwrap();
@@ -804,7 +793,7 @@ mod tests {
 
     #[test]
     fn physical_stats_report_the_footer_a_query_would_read() {
-        let dir = tempdir();
+        let dir = crate::test_support::unique_dir("segment_test");
         let batch = batch_with_keys(1, (0..500).collect());
         let (path, size) = write_segment_to_dir(&dir, 1, 1, &batch).unwrap();
 
@@ -832,7 +821,7 @@ mod tests {
 
     #[test]
     fn layout_stamp_distinguishes_current_from_legacy_segments() {
-        let dir = tempdir();
+        let dir = crate::test_support::unique_dir("segment_test");
         let batch = batch_with_keys(1, (0..100).collect());
 
         let legacy = dir.join("seg_L1_0000000000000000001.parquet");
@@ -847,7 +836,7 @@ mod tests {
 
     #[test]
     fn segment_identity_is_unique_and_survives_layout_rewrite() {
-        let dir = tempdir();
+        let dir = crate::test_support::unique_dir("segment_test");
         let batch = batch_with_keys(1, vec![30, 10, 20]);
         let (first, _) = write_segment_to_dir(&dir, 1, 1, &batch).unwrap();
         let (second, _) = write_segment_to_dir(&dir, 1, 10, &batch).unwrap();
@@ -863,7 +852,7 @@ mod tests {
 
     #[test]
     fn legacy_segment_identity_survives_rename_and_changes_on_replacement() {
-        let dir = tempdir();
+        let dir = crate::test_support::unique_dir("segment_test");
         let first_path = dir.join("seg_L1_0000000000000000001.parquet");
         let renamed_path = dir.join("seg_L2_0000000000000000001.parquet");
         let replacement = dir.join("replacement.parquet");
@@ -895,7 +884,7 @@ mod tests {
 
     #[test]
     fn rewrite_reencodes_in_place_keeping_rows_and_filename() {
-        let dir = tempdir();
+        let dir = crate::test_support::unique_dir("segment_test");
         // Non-monotonic keys, so a reordering rewrite would be visible.
         let batch = batch_with_keys(1, (0..400).map(|i| (i * 7919) % 400).collect());
         let path = dir.join("seg_L1_0000000000000000001.parquet");
@@ -930,7 +919,7 @@ mod tests {
 
     #[test]
     fn segments_carry_no_bloom_filters() {
-        let dir = tempdir();
+        let dir = crate::test_support::unique_dir("segment_test");
         let batch = batch_with_keys(1, vec![30, 10, 20]);
         let (path, _) = write_segment_to_dir(&dir, 0, 1, &batch).unwrap();
         assert!(bloom_columns(&path).is_empty());
@@ -939,7 +928,7 @@ mod tests {
 
     #[test]
     fn l0_write_is_unsorted_preserving_row_order() {
-        let dir = tempdir();
+        let dir = crate::test_support::unique_dir("segment_test");
         let batch = batch_with_keys(1, vec![30, 10, 20]);
         let (path, _) = write_segment_to_dir(&dir, 0, 1, &batch).unwrap();
         // Read the rows back; their key order must be the on-write order.
@@ -967,7 +956,7 @@ mod tests {
 
     #[test]
     fn discover_segments_includes_nested_physical_directories() {
-        let dir = tempdir();
+        let dir = crate::test_support::unique_dir("segment_test");
         let nested = dir.join("run_id/07");
         std::fs::create_dir_all(&nested).unwrap();
         std::fs::write(dir.join(seg_filename(0, 1)), b"l0").unwrap();

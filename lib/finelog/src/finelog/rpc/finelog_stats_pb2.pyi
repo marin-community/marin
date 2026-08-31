@@ -26,7 +26,6 @@ class L0Mode(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     L0_MODE_UNSPECIFIED: _ClassVar[L0Mode]
     L0_MODE_LEGACY_LOCAL: _ClassVar[L0Mode]
     L0_MODE_OBJECT_STORE: _ClassVar[L0Mode]
-    L0_MODE_LOCAL_EPHEMERAL: _ClassVar[L0Mode]
 
 class MigrationPhase(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -51,7 +50,6 @@ COLUMN_TYPE_INT64_LIST: ColumnType
 L0_MODE_UNSPECIFIED: L0Mode
 L0_MODE_LEGACY_LOCAL: L0Mode
 L0_MODE_OBJECT_STORE: L0Mode
-L0_MODE_LOCAL_EPHEMERAL: L0Mode
 MIGRATION_PHASE_UNSPECIFIED: MigrationPhase
 MIGRATION_PHASE_DUAL_WRITE: MigrationPhase
 MIGRATION_PHASE_BACKFILL: MigrationPhase

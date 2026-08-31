@@ -24,7 +24,7 @@ pub mod trigram;
 #[cfg(test)]
 pub use registry::{sidecar_artifacts, test_index_registry};
 pub use registry::{
-    BuiltArtifacts, IndexBuildRequest, IndexRegistry, LocalObject, OpenedIndexes, SegmentArtifacts,
+    BuiltArtifacts, IndexBuildRequest, IndexRegistry, OpenedIndexes, SegmentArtifacts,
 };
 
 use std::collections::{BTreeMap, BTreeSet};

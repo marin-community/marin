@@ -434,20 +434,17 @@ fn normalize_operating_policy(
     request_policy: &StoragePolicy,
 ) -> Result<(StoragePolicy, L0Mode), StatsError> {
     let policy = spec.operating_policy.get_or_insert_default();
-    let configured_mode = policy
-        .l0_mode
-        .and_then(|value| value.as_known())
-        .unwrap_or(L0Mode::L0_MODE_LEGACY_LOCAL);
+    let configured_mode = match policy.l0_mode {
+        None => L0Mode::L0_MODE_LEGACY_LOCAL,
+        Some(value) => value.as_known().ok_or_else(|| {
+            StatsError::SchemaValidation(format!("table_spec l0_mode {value:?} is not supported"))
+        })?,
+    };
     let l0_mode = if configured_mode == L0Mode::L0_MODE_UNSPECIFIED {
         L0Mode::L0_MODE_LEGACY_LOCAL
     } else {
         configured_mode
     };
-    if l0_mode == L0Mode::L0_MODE_LOCAL_EPHEMERAL {
-        return Err(StatsError::SchemaValidation(
-            "table_spec local-ephemeral L0 is not supported in format version 1".to_string(),
-        ));
-    }
     policy.l0_mode = Some(l0_mode.into());
 
     if policy.local_cache.is_unset() {
@@ -734,12 +731,13 @@ mod tests {
     }
 
     #[test]
-    fn validation_rejects_unimplemented_ephemeral_l0() {
+    fn validation_rejects_an_unknown_l0_mode() {
         let spec = ProtoTableSpec {
             version: Some(1),
             logical_schema: MessageField::some(schema_to_proto_owned(&schema())),
             operating_policy: MessageField::some(crate::proto::finelog::stats::OperatingPolicy {
-                l0_mode: Some(L0Mode::L0_MODE_LOCAL_EPHEMERAL.into()),
+                // A wire value this build does not define, e.g. from a newer client.
+                l0_mode: Some(buffa::EnumValue::from(1729)),
                 ..Default::default()
             }),
             ..Default::default()
