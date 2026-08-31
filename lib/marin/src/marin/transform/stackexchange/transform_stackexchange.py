@@ -28,7 +28,6 @@ logger = logging.getLogger(__name__)
 class StackExchangeExtractionConfig:
     input_path: str
     output_path: str
-    extract_method: str
     extract_config: ExtractionConfig
     max_files: int | None = None
     shuffle_answers_template: bool = True
@@ -40,7 +39,6 @@ def prepare_md_template(
     question: str,
     answers: list[dict],
     tags: list[str],
-    extract_method: str,
     extract_config: ExtractionConfig,
     prepend_vote_count: bool = True,
 ) -> str:
@@ -48,11 +46,11 @@ def prepare_md_template(
     Prepares a markdown template for a stackexchange question and answer.
     """
 
-    md_question = convert_page(question, extract_method=extract_method, config=extract_config)["content"]
+    md_question = convert_page(question, config=extract_config)["content"]
     template = f"# Question\nTitle: {title}\n{md_question}"
 
     for answer in answers:
-        md_answer = convert_page(answer["body"], extract_method=extract_method, config=extract_config)["content"]
+        md_answer = convert_page(answer["body"], config=extract_config)["content"]
         if prepend_vote_count:
             template += f"\n\n# Answer\n{md_answer}\n> {answer['votes']} votes"
         else:
@@ -66,7 +64,6 @@ def prepare_md_template(
 
 def process_record(
     row: dict,
-    extract_method: str,
     extract_config: ExtractionConfig,
     shuffle_answers_template: bool = True,
     seed: int | None = None,
@@ -75,7 +72,6 @@ def process_record(
 
     Args:
         row: Record from JSONL file
-        extract_method: Method to use for HTML extraction
         extract_config: Configuration for the extraction method
         shuffle_answers_template: Whether to shuffle answer template format
         seed: Random seed for reproducibility
@@ -99,7 +95,6 @@ def process_record(
             question,
             answers,
             tags,
-            extract_method,
             extract_config,
             prepend_vote_count,
         )
@@ -140,7 +135,6 @@ def process_stackexchange_dump(cfg: StackExchangeExtractionConfig) -> None:
         .map(
             lambda row: process_record(
                 row,
-                cfg.extract_method,
                 cfg.extract_config,
                 cfg.shuffle_answers_template,
                 cfg.seed,
