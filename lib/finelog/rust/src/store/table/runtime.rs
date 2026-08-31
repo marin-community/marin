@@ -98,11 +98,8 @@ pub struct TableRuntime {
     /// maintenance ticks.
     pub(super) migration_block: Mutex<MigrationBlock>,
     pub(super) last_object_gc: Mutex<Option<Instant>>,
-    pub(super) stop: Arc<Notify>,
     /// Latched stop flag the dispatched work checks at the top of each loop
-    /// iteration, in addition to selecting on `stop`. `Notify` stores no permit
-    /// for `notify_waiters`, so work that is mid-flush when `stop` fires would
-    /// otherwise re-subscribe after the wake and park forever, hanging the join.
+    /// iteration.
     pub(super) stopped: AtomicBool,
     /// Handles for the maintenance work the scheduler dispatched against this
     /// table. Retained so a re-register replacement, a drop, or store shutdown
@@ -223,7 +220,6 @@ impl TableRuntime {
             index_skips: Mutex::new(BackfillSkips::default()),
             migration_block: Mutex::new(MigrationBlock::default()),
             last_object_gc: Mutex::new(None),
-            stop: Arc::new(Notify::new()),
             stopped: AtomicBool::new(false),
             task_handles: Mutex::new(Vec::new()),
         });
@@ -514,8 +510,9 @@ impl TableRuntime {
         }
     }
 
-    /// Backdate one segment's `created_at_ms` in the catalog. Test-only seam
-    /// (`/debug/backdate`) so age-eviction tests stay RPC-only (no sleep).
+    /// Backdate one segment's `created_at_ms` in the catalog. Serves the
+    /// flag-gated `/debug/backdate` admin route so age-eviction tests stay
+    /// RPC-only (no sleep).
     pub fn backdate_segment(
         &self,
         path_basename: &str,
@@ -588,6 +585,7 @@ impl TableRuntime {
 
     /// How many background tasks the scheduler currently has in flight against
     /// this table.
+    #[cfg(test)]
     pub fn background_task_count(&self) -> usize {
         self.task_handles.lock().unwrap().len()
     }
@@ -597,11 +595,7 @@ impl TableRuntime {
     /// this can never hang). Does NOT flush — callers sequence durability
     /// (`shutdown`) or pre-delete teardown themselves.
     pub async fn stop_and_join(&self, timeout: Duration) {
-        // Latch the stop flag FIRST so a task that is mid-flush when the Notify
-        // fires still sees the stop on its next loop iteration (the Notify alone
-        // stores no permit for notify_waiters), then wake any parked waiters.
         self.stopped.store(true, Ordering::SeqCst);
-        self.stop.notify_waiters();
         let handles: Vec<tokio::task::JoinHandle<()>> =
             std::mem::take(&mut *self.task_handles.lock().unwrap());
         // Keep an abort handle for each task so a wedged task that misses the
@@ -636,7 +630,6 @@ impl TableRuntime {
     /// `drop_table` for in-memory tables, which spawn no background tasks.
     pub fn request_stop(&self) {
         self.stopped.store(true, Ordering::SeqCst);
-        self.stop.notify_waiters();
     }
 
     /// Cooperatively shut the table down.

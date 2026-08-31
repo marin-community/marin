@@ -28,18 +28,13 @@ use crate::store::object_store::{
     FINELOG_ROOT_COMPONENT, TABLES_COMPONENT,
 };
 
-use super::provider::{is_remote_url, Provider};
+use super::provider::Provider;
 
 /// A configured remote object store plus the bucket-relative prefix the store
 /// is rooted under (empty for a `LocalFileSystem` rooted at the remote dir).
 #[derive(Clone)]
 pub struct RemoteObjectStore {
     provider: Provider,
-}
-
-/// Whether `remote_log_dir` names an object store rather than a local directory.
-pub fn is_object_store(remote_log_dir: &str) -> bool {
-    is_remote_url(remote_log_dir)
 }
 
 /// Build the remote store from `remote_log_dir`, or `None` when sync is

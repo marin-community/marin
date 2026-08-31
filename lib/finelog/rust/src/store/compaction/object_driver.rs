@@ -102,12 +102,10 @@ pub async fn compact_once(
         return Ok(false);
     };
 
-    // The lease pins the definition version and the exact inputs. Merging,
+    // The lease pins the writer fence and definition version. Merging,
     // encoding, and uploading then run outside the controller; only the
     // replacement commit is serialized against concurrent flushes.
-    let lease = compaction
-        .controller
-        .begin_compaction(job.inputs.iter().map(|row| row.path.clone()).collect())?;
+    let lease = compaction.controller.begin_compaction()?;
     for input in &job.inputs {
         let record = object_records.get(&input.path).ok_or_else(|| {
             StatsError::Internal(format!("object compaction lost input {}", input.path))

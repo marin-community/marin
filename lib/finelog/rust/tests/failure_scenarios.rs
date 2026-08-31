@@ -464,7 +464,7 @@ async fn a_crash_during_migration_backfill_resumes_and_rejects_the_stale_lease()
     // compaction would have uploaded before its commit.
     let inputs = store.query_snapshot(TABLE).unwrap().paths;
     assert_eq!(inputs.len(), 3);
-    let lease = store.tables().begin_compaction(TABLE, inputs).unwrap();
+    let lease = store.tables().begin_compaction(TABLE).unwrap();
     let staging = unique_dir("scenario_migration_crash_staging");
     let staged = staging.join("compaction-output.parquet");
     std::fs::write(&staged, b"compaction output that never commits").unwrap();

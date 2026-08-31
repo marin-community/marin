@@ -32,6 +32,7 @@ impl Catalog {
             StatsError::NamespaceNotFound(format!("namespace {name:?} is not registered"))
         })
     }
+    #[cfg(test)]
     pub fn is_dropping(&self, name: &str) -> bool {
         self.inner.lock().unwrap().dropping.contains(name)
     }
@@ -164,8 +165,6 @@ impl Catalog {
         }
         Ok(())
     }
-
-    // ----- storage_policies table ---------------------------------------
 }
 
 impl CatalogInner {

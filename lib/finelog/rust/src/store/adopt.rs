@@ -75,7 +75,6 @@ use std::path::{Path, PathBuf};
 use std::time::{Instant, UNIX_EPOCH};
 
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-use serde::{Deserialize, Serialize};
 
 use crate::errors::StatsError;
 use crate::indices::local_sidecar_artifacts;
@@ -91,12 +90,11 @@ use crate::store::table::object_segment_is_query_visible;
 use crate::store::table::segment_view::{debug_assert_unique_paths, segment_artifacts};
 use crate::store::types::{LocalSegment, SegmentLocation, SegmentRow};
 
-/// Sentinel filename for the catalog-adoption state machine (the disk->catalog
-/// rebuild).
-pub const SENTINEL_FILENAME: &str = ".finelog-rust-catalog";
-
-/// Sentinel schema version.
-pub const SENTINEL_VERSION: u32 = 1;
+/// Marker stamped after a completed disk->catalog adoption scan. Content
+/// `done` fast-paths every later boot; anything else — missing, torn, or the
+/// JSON sentinel older binaries wrote — re-runs the idempotent scan.
+const SENTINEL_FILENAME: &str = ".finelog-rust-catalog";
+const SENTINEL_DONE: &str = "done";
 
 /// The privileged log namespace name + dir (kept local to avoid a store->adopt
 /// dependency cycle; the value is fixed by the proto contract).
@@ -109,66 +107,16 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-// ---------------------------------------------------------------------------
-// Sentinel state machine.
-// ---------------------------------------------------------------------------
-
-/// Adoption progress states. `in-progress` means a scan started (or crashed
-/// mid-scan); `done` is the steady state that fast-paths every later boot.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum AdoptionState {
-    #[serde(rename = "in-progress")]
-    InProgress,
-    #[serde(rename = "done")]
-    Done,
+fn adoption_done(data_dir: &Path) -> bool {
+    std::fs::read_to_string(data_dir.join(SENTINEL_FILENAME))
+        .is_ok_and(|content| content.trim() == SENTINEL_DONE)
 }
 
-/// The sentinel payload (single-line JSON, atomic tmp+rename).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AdoptionSentinel {
-    pub version: u32,
-    pub state: AdoptionState,
-    pub started_at: i64,
-    pub finished_at: Option<i64>,
-}
-
-/// Read the sentinel `state`, or `None` if missing/malformed.
-///
-/// A malformed sentinel is treated as `None` (re-run adoption — the scan is
-/// idempotent, so a re-run is safe and rewrites the sentinel on completion).
-pub fn read_sentinel_state(data_dir: &Path) -> Option<AdoptionState> {
-    let path = data_dir.join(SENTINEL_FILENAME);
-    let raw = std::fs::read_to_string(&path).ok()?;
-    match serde_json::from_str::<AdoptionSentinel>(&raw) {
-        Ok(s) => Some(s.state),
-        Err(_) => {
-            tracing::warn!(
-                path = %path.display(),
-                "catalog adoption: malformed sentinel; treating as missing"
-            );
-            None
-        }
-    }
-}
-
-/// Atomically write the sentinel via a sibling `.tmp` + rename.
-pub fn write_sentinel(
-    data_dir: &Path,
-    state: AdoptionState,
-    started_at: i64,
-    finished_at: Option<i64>,
-) -> Result<(), StatsError> {
-    let sentinel = AdoptionSentinel {
-        version: SENTINEL_VERSION,
-        state,
-        started_at,
-        finished_at,
-    };
-    let line = serde_json::to_string(&sentinel)
-        .map_err(|e| StatsError::Internal(format!("sentinel json: {e}")))?;
+/// Atomically stamp the done marker via a sibling `.tmp` + rename.
+fn stamp_adoption_done(data_dir: &Path) -> Result<(), StatsError> {
     let final_path = data_dir.join(SENTINEL_FILENAME);
     let tmp_path = data_dir.join(format!("{SENTINEL_FILENAME}.tmp"));
-    std::fs::write(&tmp_path, format!("{line}\n"))
+    std::fs::write(&tmp_path, format!("{SENTINEL_DONE}\n"))
         .map_err(|e| StatsError::Internal(format!("write sentinel tmp: {e}")))?;
     std::fs::rename(&tmp_path, &final_path)
         .map_err(|e| StatsError::Internal(format!("rename sentinel: {e}")))?;
@@ -201,11 +149,7 @@ pub fn recover_next_seq(segments: &[SegmentRow]) -> i64 {
 /// bites on already-unreadable data (the rows are lost regardless) and never
 /// affects `next_seq` (re-derived from healthy footers at engine open) — a
 /// genuinely empty *readable* 0-row segment is adopted normally.
-pub fn adopt_namespace_from_disk(
-    ns_dir: &Path,
-    namespace: &str,
-    schema: &Schema,
-) -> Vec<SegmentRow> {
+fn adopt_namespace_from_disk(ns_dir: &Path, namespace: &str, schema: &Schema) -> Vec<SegmentRow> {
     let key_column = resolve_key_column(schema).ok();
     let mut rows: Vec<SegmentRow> = Vec::new();
     for path in discover_segments(ns_dir) {
@@ -256,7 +200,7 @@ pub fn adopt_namespace_from_disk(
 ///
 /// Returns `None` when the directory has no readable segment (a namespace dir
 /// with no parquet contributes nothing — the caller skips it).
-pub fn recover_schema_from_segments(ns_dir: &Path) -> Option<Schema> {
+fn recover_schema_from_segments(ns_dir: &Path) -> Option<Schema> {
     let newest = discover_segments(ns_dir)
         .into_iter()
         .filter_map(|path| {
@@ -394,7 +338,7 @@ fn assert_namespaced_layout(data_dir: &Path) -> Result<(), StatsError> {
 ///
 /// Does NOT touch the live registry — the caller's `rehydrate_from_catalog`
 /// reads these persisted rows back and builds the engines.
-pub fn adopt_store_from_disk(data_dir: &Path, catalog: &Catalog) -> Result<(), StatsError> {
+pub(crate) fn adopt_store_from_disk(data_dir: &Path, catalog: &Catalog) -> Result<(), StatsError> {
     assert_namespaced_layout(data_dir)?;
     for (namespace, ns_dir) in enumerate_namespace_dirs(data_dir)? {
         adopt_one_namespace_dir(catalog, &namespace, &ns_dir)?;
@@ -505,12 +449,11 @@ fn adopt_missing_namespaces(data_dir: &Path, catalog: &Catalog) -> Result<(), St
 /// Boot orchestrator: ensure the catalog has been adopted from disk, exactly
 /// once, before the server binds.
 ///
-/// Sentinel state machine (`{data_dir}/.finelog-rust-catalog`):
-/// - `done` -> fast path, the sqlite sidecar is authoritative; skip the scan.
-/// - missing / `in-progress` / malformed -> (re)run the scan. The scan is
-///   idempotent (the (dir, footer) -> row mapping is a pure function of the
-///   on-disk files), so a crash mid-scan re-converges on the next boot — the
-///   directory IS the journal.
+/// A `done` marker (`{data_dir}/.finelog-rust-catalog`) fast-paths the boot:
+/// the sqlite sidecar is authoritative and the scan is skipped. Any other
+/// marker state re-runs the scan, which is idempotent (the (dir, footer) ->
+/// row mapping is a pure function of the on-disk files), so a crash mid-scan
+/// re-converges on the next boot — the directory IS the journal.
 ///
 /// In-memory mode (`data_dir = None`) is a no-op (no disk to adopt).
 pub fn ensure_catalog_adopted(
@@ -520,7 +463,7 @@ pub fn ensure_catalog_adopted(
     let Some(data_dir) = data_dir else {
         return Ok(());
     };
-    if read_sentinel_state(data_dir) == Some(AdoptionState::Done) {
+    if adoption_done(data_dir) {
         tracing::debug!("catalog adoption: done sentinel; skipping full disk scan");
         // The sidecar is authoritative for known namespaces, but still
         // reconcile any namespace dir on disk that the catalog doesn't know
@@ -530,15 +473,8 @@ pub fn ensure_catalog_adopted(
         adopt_missing_namespaces(data_dir, catalog)?;
         return Ok(());
     }
-    // Cheap top-level pre-flight BEFORE stamping in-progress: a flat (legacy)
-    // layout is a hard error, and we don't want to leave a dangling
-    // `in-progress` sentinel on a dir we never actually adopt. `adopt_store_
-    // from_disk` re-asserts this (defense in depth + its direct-call test).
-    assert_namespaced_layout(data_dir)?;
-    let started_at = now_ms();
-    write_sentinel(data_dir, AdoptionState::InProgress, started_at, None)?;
     adopt_store_from_disk(data_dir, catalog)?;
-    write_sentinel(data_dir, AdoptionState::Done, started_at, Some(now_ms()))?;
+    stamp_adoption_done(data_dir)?;
     tracing::info!("catalog adoption: rebuilt from disk and stamped done");
     Ok(())
 }
@@ -967,9 +903,9 @@ mod tests {
 
         let catalog = Catalog::open(Some(&data_dir)).unwrap();
         // Cold start: sentinel missing.
-        assert_eq!(read_sentinel_state(&data_dir), None);
+        assert!(!adoption_done(&data_dir));
         ensure_catalog_adopted(Some(&data_dir), &catalog).unwrap();
-        assert_eq!(read_sentinel_state(&data_dir), Some(AdoptionState::Done));
+        assert!(adoption_done(&data_dir));
         let after_first = catalog.aggregate_namespace_stats("iris.worker").unwrap();
         assert_eq!(after_first.segment_count, 2);
 
@@ -999,7 +935,7 @@ mod tests {
         // First boot: adopts iris.worker, stamps done.
         let catalog = Catalog::open(Some(&data_dir)).unwrap();
         ensure_catalog_adopted(Some(&data_dir), &catalog).unwrap();
-        assert_eq!(read_sentinel_state(&data_dir), Some(AdoptionState::Done));
+        assert!(adoption_done(&data_dir));
 
         // A namespace dir the catalog never learned about appears on disk.
         let probes_dir = data_dir.join("infra.canary.probes");
@@ -1052,36 +988,26 @@ mod tests {
     }
 
     #[test]
-    fn ensure_catalog_adopted_in_progress_reruns_idempotently() {
-        let data_dir = tempdir("inprogress");
+    fn a_non_done_sentinel_reruns_the_idempotent_scan() {
+        let data_dir = tempdir("nondone");
         let ns_dir = data_dir.join("iris.worker");
         std::fs::create_dir_all(&ns_dir).unwrap();
         write_segment_to_dir(&ns_dir, 0, 1, &worker_batch(1, vec![10, 20, 30])).unwrap();
 
-        // Simulate a crash mid-scan: stamp in-progress, no catalog rows.
-        write_sentinel(&data_dir, AdoptionState::InProgress, now_ms(), None).unwrap();
+        // The JSON sentinel an older binary wrote (or a torn write) is not
+        // `done`, so the boot re-runs the scan and restamps the marker.
+        std::fs::write(
+            data_dir.join(SENTINEL_FILENAME),
+            b"{\"version\":1,\"state\":\"in-progress\",\"started_at\":1}",
+        )
+        .unwrap();
+        assert!(!adoption_done(&data_dir));
         let catalog = Catalog::open(Some(&data_dir)).unwrap();
         ensure_catalog_adopted(Some(&data_dir), &catalog).unwrap();
-        assert_eq!(read_sentinel_state(&data_dir), Some(AdoptionState::Done));
+        assert!(adoption_done(&data_dir));
         let stats = catalog.aggregate_namespace_stats("iris.worker").unwrap();
         assert_eq!(stats.segment_count, 1);
         assert_eq!(stats.row_count, 3);
-
-        std::fs::remove_dir_all(&data_dir).ok();
-    }
-
-    #[test]
-    fn ensure_catalog_adopted_malformed_sentinel_treated_as_missing() {
-        let data_dir = tempdir("malformed");
-        let ns_dir = data_dir.join("iris.worker");
-        std::fs::create_dir_all(&ns_dir).unwrap();
-        write_segment_to_dir(&ns_dir, 0, 1, &worker_batch(1, vec![10])).unwrap();
-        std::fs::write(data_dir.join(SENTINEL_FILENAME), b"{not json").unwrap();
-        assert_eq!(read_sentinel_state(&data_dir), None);
-
-        let catalog = Catalog::open(Some(&data_dir)).unwrap();
-        ensure_catalog_adopted(Some(&data_dir), &catalog).unwrap();
-        assert_eq!(read_sentinel_state(&data_dir), Some(AdoptionState::Done));
 
         std::fs::remove_dir_all(&data_dir).ok();
     }

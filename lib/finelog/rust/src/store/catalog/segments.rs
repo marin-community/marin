@@ -215,7 +215,7 @@ impl Catalog {
             .map_err(sqlite_err)?;
         Ok(row)
     }
-    /// Set `created_at_ms` for one segment row. Used only by the test-only
+    /// Set `created_at_ms` for one segment row, serving the flag-gated
     /// `--debug-admin` `/debug/backdate` route (age tests, no sleep).
     pub fn set_created_at_ms(
         &self,
@@ -251,16 +251,6 @@ impl Catalog {
         for row in rows {
             upsert_segment_in(&tx, row)?;
         }
-        tx.commit().map_err(sqlite_err)
-    }
-    /// Remove a set of namespace segment rows in one durable transaction.
-    pub fn remove_segments(&self, namespace: &str, paths: &[String]) -> Result<(), StatsError> {
-        if paths.is_empty() {
-            return Ok(());
-        }
-        let mut inner = self.inner.lock().unwrap();
-        let tx = inner.conn.transaction().map_err(sqlite_err)?;
-        remove_segments_in(&tx, namespace, paths)?;
         tx.commit().map_err(sqlite_err)
     }
     /// Atomically swap `removed_paths` for `added` rows in one transaction.

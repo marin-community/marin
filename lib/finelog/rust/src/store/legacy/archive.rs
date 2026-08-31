@@ -30,7 +30,6 @@ pub struct LegacyArchive<'a> {
     pub table_dir: &'a std::path::Path,
     pub catalog: &'a Catalog,
     pub segments: &'a SegmentView,
-    pub query_visibility: &'a Arc<RwLock<()>>,
     pub remote: &'a Arc<dyn ObjectStore>,
     /// An object-backed table keeps its archive: the legacy objects are outside
     /// the object catalog's MVCC lifetime, so orphan deletion must not run while

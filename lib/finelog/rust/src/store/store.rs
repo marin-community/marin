@@ -57,10 +57,8 @@ use crate::store::table_state::{ArtifactReferences, TableRevision, TableSnapshot
 use crate::store::types::NamespaceStats;
 use crate::telemetry_policy::{TelemetryRootWriteMode, TELEMETRY_NAMESPACE};
 
-/// The privileged log namespace name.
+/// The privileged log namespace name, which is also its on-disk subdirectory.
 pub const LOG_NAMESPACE_NAME: &str = "log";
-/// Its on-disk subdirectory.
-pub const LOG_NAMESPACE_DIR: &str = "log";
 const STORE_LOCK_FILENAME: &str = ".finelog-store.lock";
 
 fn writer_epoch() -> Result<u64, StatsError> {
@@ -804,7 +802,7 @@ impl Store {
             }
             Some(dir) => {
                 if name == LOG_NAMESPACE_NAME {
-                    return Ok(Some(dir.join(LOG_NAMESPACE_DIR)));
+                    return Ok(Some(dir.join(LOG_NAMESPACE_NAME)));
                 }
                 validate_namespace_name(name, Some(dir))
             }
@@ -1004,7 +1002,10 @@ impl Store {
         Ok((effective_schema, spec_lifecycle))
     }
 
-    /// Append a routed batch and return its row count and durability target.
+    /// Append a pre-routed batch and return its row count and durability
+    /// target. Test-only seam: the ingest RPCs route through
+    /// [`Store::write_ingestion_rows`] / [`Store::write_forwarded_telemetry_rows`].
+    #[cfg(any(test, feature = "test-util"))]
     pub fn write_rows(
         &self,
         name: &str,
@@ -1135,6 +1136,7 @@ impl Store {
         self.policies.route_ingestion_batch(source, batch)
     }
 
+    #[cfg(any(test, feature = "test-util"))]
     fn write_physical_rows(
         &self,
         name: &str,

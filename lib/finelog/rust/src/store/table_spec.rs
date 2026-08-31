@@ -474,12 +474,10 @@ fn normalize_operating_policy(
     if policy.local_cache.is_unset() {
         policy.local_cache = MessageField::some(request_policy.to_proto_owned());
     }
-    let cache_policy = StoragePolicy::from_proto_owned(
-        policy
-            .local_cache
-            .as_option()
-            .expect("local cache policy was initialized"),
-    );
+    let cache_policy = match policy.local_cache.as_option() {
+        Some(proto) => StoragePolicy::from_proto_owned(proto),
+        None => request_policy.clone(),
+    };
     if !request_policy.is_empty() && &cache_policy != request_policy {
         return Err(StatsError::SchemaValidation(
             "table_spec.operating_policy.local_cache must equal register_table.storage_policy during mixed-version rollout"

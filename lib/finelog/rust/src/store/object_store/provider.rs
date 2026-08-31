@@ -192,7 +192,8 @@ impl Provider {
     }
 }
 
-pub(super) fn is_remote_url(value: &str) -> bool {
+/// Whether `value` names an object store rather than a local directory.
+pub fn is_object_store(value: &str) -> bool {
     let value = value.trim();
     value.starts_with(GCS_SCHEME) || value.starts_with(S3_SCHEME)
 }

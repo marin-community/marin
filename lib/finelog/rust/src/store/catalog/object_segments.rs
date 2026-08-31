@@ -590,6 +590,4 @@ impl Catalog {
         }
         Ok(records)
     }
-
-    // ----- forward watermark ---------------------------------------------
 }

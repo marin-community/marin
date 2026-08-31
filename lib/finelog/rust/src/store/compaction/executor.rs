@@ -37,9 +37,7 @@ use crate::store::compaction::config::CompactionJob;
 use crate::store::compaction::merge::{
     kway_merge, project_to_schema, sort_batch_by, sort_col_indices,
 };
-use crate::store::segment::{
-    read_segment_footer, segment_bounds, segment_writer_properties_with_partition,
-};
+use crate::store::segment::{read_segment_footer, segment_writer_properties_with_partition};
 use crate::store::table_state::LocalArtifacts;
 use crate::store::types::{seg_filename, LocalSegment, SegmentLocation, SegmentRow};
 
@@ -309,7 +307,7 @@ fn apply_merge(
         // corrupt file past the merge by rename and drops a missing one. Only the
         // READ is forgiven — a projection or sort failure is a schema bug and still
         // propagates.
-        let raw = match read_segment_batches(Path::new(&inp.path)) {
+        let raw = match read_segment_projected(Path::new(&inp.path), None) {
             Ok(raw) => raw,
             Err(e) => {
                 if must_rewrite {
@@ -473,12 +471,6 @@ fn apply_merge(
 }
 
 /// Read all `RecordBatch`es from the parquet file at `path` (sync reader).
-/// Wrapped in `spawn_blocking` by the maintenance task; the body is sync so
-/// `run_job` can also be exercised directly in unit tests.
-pub fn read_segment_batches(path: &Path) -> Result<Vec<RecordBatch>, StatsError> {
-    read_segment_projected(path, None)
-}
-
 /// Read `path`, keeping only the columns named in `columns`; `None` reads every
 /// column.
 ///
@@ -564,12 +556,6 @@ fn batch_int64_bounds(
         }
     }
     Ok(minimum.zip(maximum))
-}
-
-/// Footer-only `row_count` for a written segment (verification helper for the
-/// caller / tests). Returns `None` on an unreadable footer.
-pub fn segment_row_count(path: &Path) -> Option<i64> {
-    segment_bounds(path, None).map(|(n, _, _)| n)
 }
 
 #[cfg(test)]
@@ -665,7 +651,7 @@ mod tests {
         assert_eq!(partial[0].num_columns(), 1);
 
         // No projection still reads everything.
-        let full = read_segment_batches(&path).unwrap();
+        let full = read_segment_projected(&path, None).unwrap();
         assert_eq!(full[0].num_columns(), 3);
     }
 
@@ -764,7 +750,7 @@ mod tests {
             out.file_name().unwrap().to_str().unwrap(),
             seg_filename(1, 1)
         );
-        let batches = read_segment_batches(&out).unwrap();
+        let batches = read_segment_projected(&out, None).unwrap();
         let mut keyed: Vec<(i64, i64)> = Vec::new();
         for b in &batches {
             let seqs = b.column(0).as_any().downcast_ref::<Int64Array>().unwrap();
@@ -838,7 +824,7 @@ mod tests {
         .unwrap();
 
         let output = PathBuf::from(&added_seg(&swap).path);
-        let rows: Vec<(String, i64, i64)> = read_segment_batches(&output)
+        let rows: Vec<(String, i64, i64)> = read_segment_projected(&output, None)
             .unwrap()
             .iter()
             .flat_map(|batch| {
@@ -906,7 +892,7 @@ mod tests {
     }
 
     fn decoded_bytes(path: &Path) -> i64 {
-        read_segment_batches(path)
+        read_segment_projected(path, None)
             .unwrap()
             .iter()
             .map(|b| b.get_array_memory_size() as i64)
@@ -1222,7 +1208,7 @@ mod tests {
         // Reading `big` back yields many row-group-bounded batches, not one array
         // — the condition under which the old concat path overflowed.
         assert!(
-            read_segment_batches(&p_big).unwrap().len() > 1,
+            read_segment_projected(&p_big, None).unwrap().len() > 1,
             "large input must span multiple reader batches"
         );
 
@@ -1254,7 +1240,7 @@ mod tests {
         assert_eq!(added_seg(&swap).row_count, n + 1, "no row loss");
         let out = PathBuf::from(&added_seg(&swap).path);
         let mut keyed: Vec<(i64, i64)> = Vec::new();
-        for b in &read_segment_batches(&out).unwrap() {
+        for b in &read_segment_projected(&out, None).unwrap() {
             let seqs = b.column(0).as_any().downcast_ref::<Int64Array>().unwrap();
             let keys = b.column(1).as_any().downcast_ref::<Int64Array>().unwrap();
             for i in 0..b.num_rows() {
@@ -1501,7 +1487,7 @@ mod tests {
             |_| (None, None),
         )
         .unwrap();
-        let batches = read_segment_batches(Path::new(&added_seg(&swap).path)).unwrap();
+        let batches = read_segment_projected(Path::new(&added_seg(&swap).path), None).unwrap();
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
         assert_eq!(total_rows, 2);
         // note column exists and the first (old) row is null.

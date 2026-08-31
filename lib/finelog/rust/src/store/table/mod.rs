@@ -32,7 +32,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use tokio::sync::{watch, RwLock};
+use tokio::sync::RwLock;
 
 use crate::errors::StatsError;
 use crate::indices::cache::IndexCache;
@@ -43,7 +43,7 @@ use crate::store::object_store::ObjectStore;
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{AlignedBatch, Schema};
 use crate::store::state_store::{StoredTableState, TableStateStore};
-use crate::store::store::{ServeMode, LOG_NAMESPACE_DIR, LOG_NAMESPACE_NAME};
+use crate::store::store::{ServeMode, LOG_NAMESPACE_NAME};
 use crate::store::table_state::{TableSnapshot, WriterFence};
 
 pub use controller::{
@@ -185,7 +185,7 @@ impl TableManager {
     pub fn table_dir(&self, name: &str) -> Option<PathBuf> {
         self.data_dir.as_ref().map(|dir| {
             if name == LOG_NAMESPACE_NAME {
-                dir.join(LOG_NAMESPACE_DIR)
+                dir.join(LOG_NAMESPACE_NAME)
             } else {
                 dir.join(name)
             }
@@ -346,11 +346,6 @@ impl TableManager {
             .and_then(|controller| controller.snapshot())
     }
 
-    /// Follow `name`'s published state.
-    pub fn watch_snapshot(&self, name: &str) -> watch::Receiver<Option<Arc<TableSnapshot>>> {
-        self.controller(name).watch_snapshot()
-    }
-
     /// Publish the revision a synchronous caller committed, so direct readers
     /// see it before the RPC returns.
     pub async fn publish(&self, name: &str) -> Result<Arc<TableSnapshot>, StatsError> {
@@ -363,13 +358,9 @@ impl TableManager {
         Ok(controller.publish_state().await?)
     }
 
-    /// Take a lease over `inputs` for one compaction of `name`.
-    pub fn begin_compaction(
-        &self,
-        name: &str,
-        inputs: Vec<String>,
-    ) -> Result<MaintenanceLease, StatsError> {
-        self.controller(name).begin_compaction(inputs)
+    /// Take a lease for one compaction of `name`.
+    pub fn begin_compaction(&self, name: &str) -> Result<MaintenanceLease, StatsError> {
+        self.controller(name).begin_compaction()
     }
 
     /// Run one full maintenance cycle for `name`.
@@ -391,12 +382,6 @@ impl TableManager {
         work: TableWork,
     ) -> Result<WorkOutcome, StatsError> {
         maintenance::run(runtime, work).await
-    }
-
-    /// Whether `runtime` still owes legacy placement work, which the scheduler
-    /// polls at a faster cadence than an ordinary cycle.
-    pub fn placement_is_pending(&self, runtime: &Arc<TableRuntime>) -> bool {
-        maintenance::placement_is_pending(runtime)
     }
 
     /// Remove `name`'s runtime and controller from the registry.

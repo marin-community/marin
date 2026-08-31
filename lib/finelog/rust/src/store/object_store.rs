@@ -12,7 +12,8 @@ mod remote;
 
 pub use cached::CachedObjectStore;
 pub use legacy::LegacyObjectStore;
-pub use remote::{build_remote_object_store, is_object_store, RemoteObjectStore};
+pub use provider::is_object_store;
+pub use remote::{build_remote_object_store, RemoteObjectStore};
 
 use std::path::PathBuf;
 

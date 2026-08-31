@@ -352,7 +352,6 @@ async fn backfill(
         })
         .await?
         .output;
-    debug_assert_eq!(verified.phase, MigrationPhase::MIGRATION_PHASE_VERIFY);
     activate(migration).await?;
     Ok(true)
 }

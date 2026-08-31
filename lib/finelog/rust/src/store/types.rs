@@ -1,8 +1,6 @@
-//! Leaf vocabulary for the store layer.
-//!
-//! Metadata types (`SegmentRow` / `SegmentLocation` / `LocalSegment`) plus the
-//! segment-filename helpers (`seg_filename` / `parse_seg_filename`) used by the
-//! flush path and the rebuild-from-disk catalog scan.
+//! Leaf vocabulary for the store layer: segment metadata types, per-namespace
+//! aggregate stats, and the segment filename/key helpers shared by the flush
+//! path and the rebuild-from-disk catalog scan.
 
 use std::sync::OnceLock;
 

@@ -91,6 +91,4 @@ impl Catalog {
         transaction.commit().map_err(sqlite_err)?;
         Ok(TableRevision::new(generation.unwrap_or(0) as u64))
     }
-
-    // ----- live namespace registry --------------------------------------
 }

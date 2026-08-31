@@ -371,17 +371,14 @@ fn batch_seq_bounds(batch: &RecordBatch) -> Result<(i64, i64), StatsError> {
         .column_by_name("seq")
         .and_then(|column| column.as_any().downcast_ref::<Int64Array>())
         .ok_or_else(|| StatsError::Internal("object-backed batch has no Int64 seq".to_string()))?;
-    let min = (0..seq.len())
+    (0..seq.len())
         .filter(|index| !seq.is_null(*index))
         .map(|index| seq.value(index))
-        .min()
+        .fold(None, |bounds: Option<(i64, i64)>, value| {
+            let (min, max) = bounds.unwrap_or((value, value));
+            Some((min.min(value), max.max(value)))
+        })
         .ok_or_else(|| {
             StatsError::Internal("object-backed batch has no sequence values".to_string())
-        })?;
-    let max = (0..seq.len())
-        .filter(|index| !seq.is_null(*index))
-        .map(|index| seq.value(index))
-        .max()
-        .expect("non-empty sequence iterator");
-    Ok((min, max))
+        })
 }

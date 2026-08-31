@@ -19,8 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::errors::StatsError;
 use crate::proto::finelog::stats::{CatalogSegment, NamespaceCatalog, ObjectRef};
-use crate::store::object_store::ObjectVersion;
-use crate::store::state_store::{BackendToken, StoredTableState};
+use crate::store::state_store::StoredTableState;
 use crate::store::types::SegmentRow;
 
 /// Monotonic durable revision of one table's state.
@@ -76,31 +75,11 @@ impl std::fmt::Display for WriterFence {
 pub struct CommitToken {
     revision: TableRevision,
     fence: WriterFence,
-    /// CAS token of the published HEAD naming this revision. Absent while the
-    /// revision lives only in the local catalog.
-    head_version: Option<ObjectVersion>,
 }
 
 impl CommitToken {
-    /// A revision that is durable locally and not published.
     pub fn local(revision: TableRevision, fence: WriterFence) -> Self {
-        Self {
-            revision,
-            fence,
-            head_version: None,
-        }
-    }
-
-    pub fn published(
-        revision: TableRevision,
-        fence: WriterFence,
-        head_version: ObjectVersion,
-    ) -> Self {
-        Self {
-            revision,
-            fence,
-            head_version: Some(head_version),
-        }
+        Self { revision, fence }
     }
 
     pub fn revision(&self) -> TableRevision {
@@ -109,11 +88,6 @@ impl CommitToken {
 
     pub fn fence(&self) -> WriterFence {
         self.fence
-    }
-
-    /// The backend CAS token a fenced commit presents as its expected version.
-    pub fn head_version(&self) -> Option<&ObjectVersion> {
-        self.head_version.as_ref()
     }
 }
 
@@ -153,12 +127,7 @@ impl TableSnapshot {
     /// selected.
     pub fn from_stored(stored: &StoredTableState) -> Self {
         let state = TableState::new(stored.catalog.clone());
-        let token = match stored.token() {
-            BackendToken::Head(version) => {
-                CommitToken::published(stored.revision(), stored.fence(), version.clone())
-            }
-            BackendToken::Local(revision) => CommitToken::local(*revision, stored.fence()),
-        };
+        let token = CommitToken::local(stored.revision(), stored.fence());
         Self { state, token }
     }
 

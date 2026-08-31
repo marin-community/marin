@@ -60,8 +60,8 @@ pub fn compact_once(compaction: &LocalCompaction<'_>) -> Result<bool, StatsError
 /// Synthesize and apply a single L0->L1 merge of every L0 segment that fits
 /// `max_merge_arrow_bytes` (all of them, at test data sizes).
 ///
-/// Tests use this to land L1 state without configuring tiny `level_targets`.
-/// Production never calls it. No-op when there are no L0 segments.
+/// Serves the flag-gated `/debug/maintain?compact=l0` route and tests that
+/// need L1 state without tiny `level_targets`. No-op with no L0 segments.
 pub fn promote_all_l0(compaction: &LocalCompaction<'_>) -> Result<(), StatsError> {
     let mut inputs: Vec<SegmentRow> = compaction
         .segments

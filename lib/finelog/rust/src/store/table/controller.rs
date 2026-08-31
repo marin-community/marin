@@ -66,23 +66,15 @@ pub struct ObjectPersistence {
 
 /// Permission to run one compaction and commit its replacement.
 ///
-/// The lease pins the definition version and the exact inputs the work reads.
-/// It does not pin the table revision, so ordinary flushes and cursor advances
-/// commit freely while the work runs; the commit is rebased onto whatever state
-/// is current and rejected only when an input stopped being live, the definition
-/// version moved, or this writer was fenced.
+/// The lease pins the writer fence and the definition version. It does not pin
+/// the table revision, so ordinary flushes and cursor advances commit freely
+/// while the work runs; the commit is rebased onto whatever state is current
+/// and rejected only when the definition version moved or this writer was
+/// fenced. Input liveness is checked by the commit mutation itself.
 #[derive(Clone, Debug)]
 pub struct MaintenanceLease {
     fence: WriterFence,
     definition_version: u64,
-    inputs: Vec<String>,
-}
-
-impl MaintenanceLease {
-    /// The exact immutable inputs this lease replaces.
-    pub fn inputs(&self) -> &[String] {
-        &self.inputs
-    }
 }
 
 /// Work only the controller task performs.
@@ -501,11 +493,11 @@ impl TableController {
         .await?
     }
 
-    /// Take a lease over `inputs` for one compaction.
+    /// Take a lease for one compaction.
     ///
     /// The merge and encode run outside the controller; only the lease and the
     /// eventual commit are serialized here.
-    pub fn begin_compaction(&self, inputs: Vec<String>) -> Result<MaintenanceLease, StatsError> {
+    pub fn begin_compaction(&self) -> Result<MaintenanceLease, StatsError> {
         if !self.writes_ready() {
             return Err(StatsError::SchemaConflict(format!(
                 "table {:?} is fenced by another writer",
@@ -515,7 +507,6 @@ impl TableController {
         Ok(MaintenanceLease {
             fence: self.fence,
             definition_version: self.catalog.spec_lifecycle(&self.table)?.active_version(),
-            inputs,
         })
     }
 
@@ -615,12 +606,6 @@ impl TableController {
     pub async fn localize(&self, reference: &ObjectRef) -> Result<PathBuf, StatsError> {
         let objects = self.require_objects()?;
         let reference = ObjectReference::try_from(reference)?;
-        reference.id.table_relative(&self.table).ok_or_else(|| {
-            StatsError::Internal(format!(
-                "object {:?} belongs to another table",
-                reference.id.as_str()
-            ))
-        })?;
         objects.store.local_path(&reference).await
     }
 
@@ -1224,9 +1209,7 @@ mod tests {
             11,
         );
         stale.publish_state().await.unwrap();
-        let lease = stale
-            .begin_compaction(vec!["a.parquet".to_string()])
-            .unwrap();
+        let lease = stale.begin_compaction().unwrap();
 
         let replacement = object_controller(
             remote_dir,
@@ -1245,7 +1228,7 @@ mod tests {
             .await
             .map(|committed| committed.token.revision());
         assert!(matches!(rejected, Err(CommitError::Fenced(_))));
-        assert!(stale.begin_compaction(Vec::new()).is_err());
+        assert!(stale.begin_compaction().is_err());
     }
 
     /// The local projection is rebuildable; losing it never disturbs the state

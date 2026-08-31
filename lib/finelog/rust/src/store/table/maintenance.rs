@@ -298,7 +298,6 @@ pub async fn sync_archive(runtime: &Arc<TableRuntime>) -> Result<(), StatsError>
         table_dir: table_dir(runtime),
         catalog: &runtime.catalog,
         segments: &runtime.segments,
-        query_visibility: &runtime.query_visibility,
         remote: &remote,
         // The legacy archive is outside the object-backed catalog's MVCC
         // lifetime, so an object-backed table retains archive objects when their
