@@ -1410,17 +1410,28 @@ def test_loop_local_zeros_fills_exact_zeros(site: int, tie: np.ndarray):
     np.testing.assert_array_equal(np.asarray(filled), np.zeros((4, 3), dtype=np.float32))
 
 
-def test_loop_local_zeros_is_not_a_foldable_constant():
-    """The fill must stay a function of a traced value so it lowers inside the layer scan.
+def _fill_survives_xla_constant_folding(fill_fn) -> bool:
+    """Whether the compiled fill still reads its input, judged on the post-optimization HLO.
 
-    XLA hoists a constant-foldable fill out of the loop, and CopyInsertion then mints a fresh
-    multi-GB copy into the in-place ``ragged_all_to_all`` output slot every iteration. Reading
-    ``tie`` prevents the fold, so a refactor that produced the zeros without it would keep the
-    zero-value test above passing while restoring that copy.
+    XLA's simplifier is what folds a fill into a constant, so a jaxpr-level check cannot see the
+    property: ``tie[0] * 0`` consumes ``tie`` in the jaxpr and still folds. Reading the optimized
+    entry computation instead, a folded fill leaves its parameter dead.
     """
-    jaxpr = jax.make_jaxpr(lambda tie: _loop_local_zeros(4, 3, jnp.float32, tie, site=1))(
-        jnp.asarray([1, 7, 0, 3], dtype=jnp.int32)
-    )
+    tie = jnp.asarray([1, 7, 0, 3], dtype=jnp.int32)
+    entry = jax.jit(fill_fn).lower(tie).compile().as_text().split("ENTRY ")[-1]
+    parameter = next(line.split("=")[0].strip() for line in entry.splitlines() if "parameter(0)" in line)
+    return entry.count(parameter) > 1
 
-    consumed = {id(var) for eqn in jaxpr.jaxpr.eqns for var in eqn.invars}
-    assert any(id(var) in consumed for var in jaxpr.jaxpr.invars), "the fill ignores its tie, so it can be folded"
+
+def test_loop_local_zeros_is_not_a_foldable_constant():
+    """The fill must still read its tie after XLA optimizes, which is what keeps it in the scan.
+
+    XLA hoists a constant-foldable fill out of the layer loop, and CopyInsertion then mints a
+    fresh multi-GB copy into the in-place ``ragged_all_to_all`` output slot every iteration.
+    ``min(tie[0], -site) + site`` resists the fold because XLA cannot prove ``tie`` is
+    non-negative; an arithmetic identity such as ``tie[0] * 0`` would not.
+    """
+    assert _fill_survives_xla_constant_folding(lambda tie: _loop_local_zeros(4, 3, jnp.float32, tie, site=1))
+    assert not _fill_survives_xla_constant_folding(
+        lambda tie: jnp.broadcast_to((tie.reshape(-1)[0] * 0).astype(jnp.float32), (4, 3))
+    ), "the folding probe no longer folds, so this test can no longer detect a foldable fill"
