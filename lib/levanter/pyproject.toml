@@ -90,10 +90,10 @@ gpu = [
   # 2.29.3 carries the upstream aarch64 proxy freeOps CAS leak fix, which a Grace host needs.
   "nvidia-nccl-cu13>=2.29.3; sys_platform == 'linux'",
   # FA4 CuTe/THD attention backends.
-  "nvidia-cutlass-dsl[cu13]==4.6.0; sys_platform == 'linux'",
-  "flash-attn-4[cu13]>=4.0.0b16,<4.1; sys_platform == 'linux'",
-  # Quack 0.5 uses CUTLASS APIs removed in 4.6; 0.6.1 pins the matching DSL.
-  "quack-kernels[cu13]==0.6.1; sys_platform == 'linux'",
+  "nvidia-cutlass-dsl[cu13]==4.6.2; sys_platform == 'linux'",
+  "flash-attn-4[cu13]>=4.0.0b27,<4.1; sys_platform == 'linux'",
+  # Quack 0.5 uses CUTLASS APIs removed in 4.6; 0.6.4 pins the matching DSL.
+  "quack-kernels[cu13]==0.6.4; sys_platform == 'linux'",
   # Blackwell grouped weight gradients for the ragged all-to-all expert backend.
   "nvidia-cudnn-frontend==1.27.0; sys_platform == 'linux'",
   # Optional raw Sonic MoE gather/combine backend. Keep jax-triton exact:

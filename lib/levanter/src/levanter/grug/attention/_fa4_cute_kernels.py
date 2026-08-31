@@ -1016,7 +1016,7 @@ def segmented_flash_attention_backward_launcher(
         head_dim_v,
         tile_m,
         num_threads=postprocess_threads,
-        use_padded_offsets=False,
+        use_padded_offsets=True,
     )
     dq_postprocess = FlashAttentionBackwardPostprocess(
         cute_dtype,
@@ -1110,7 +1110,22 @@ def segmented_flash_attention_backward_launcher(
         *,
         softmax_scale: cutlass.Float32,
     ):
-        preprocess(out, dout, dpsum, lse, lse_log2, dq_accum, None, None, None, stream)
+        preprocess(
+            out,
+            dout,
+            dpsum,
+            lse,
+            lse_log2,
+            dq_accum,
+            None,
+            None,
+            None,
+            None,
+            None,
+            softmax_scale,
+            None,
+            stream,
+        )
         if cutlass.const_expr(qhead_per_kvhead == 1):
             backward(
                 q,
@@ -1138,7 +1153,7 @@ def segmented_flash_attention_backward_launcher(
                 None,
                 stream,
             )
-            dq_postprocess(dq_accum, dq, softmax_scale, None, None, stream)
+            dq_postprocess(dq_accum, dq, softmax_scale, None, None, None, None, stream)
             return
 
         if cutlass.const_expr(qhead_per_kvhead > 1):
@@ -1170,9 +1185,9 @@ def segmented_flash_attention_backward_launcher(
             None,
             stream,
         )
-        dq_postprocess(dq_accum, dq, softmax_scale, None, None, stream)
-        dk_postprocess(dk_accum, dk, softmax_scale, None, None, stream)
-        dv_postprocess(dv_accum, dv, cutlass.Float32(1.0), None, None, stream)
+        dq_postprocess(dq_accum, dq, softmax_scale, None, None, None, None, stream)
+        dk_postprocess(dk_accum, dk, softmax_scale, None, None, None, None, stream)
+        dv_postprocess(dv_accum, dv, cutlass.Float32(1.0), None, None, None, None, stream)
 
     return _launch_segmented_flash_attention_backward
 
@@ -1215,8 +1230,8 @@ def segmented_flash_attention_backward_sm90_launcher(
 
     FlashAttentionBackwardSm90 = flash_bwd_sm90_module.FlashAttentionBackwardSm90
     BlockSparseTensors = block_sparsity_module.BlockSparseTensors
+    AuxData = utils_module.AuxData
     _patch_jax_array_list_tvm_ffi_converter()
-    _allow_tuple_aux_tensors_for_nested_sm90(FlashAttentionBackwardSm90)
 
     @cute.jit
     def _grug_segment_mask_mod(
@@ -1267,7 +1282,7 @@ def segmented_flash_attention_backward_sm90_launcher(
         score_mod_bwd=None,
         mask_mod=None if use_builtin_sliding_window else _grug_segment_mask_mod,
         has_aux_tensors=not use_builtin_sliding_window,
-        subtile_factor=1,
+        q_subtile_factor=1,
         dQ_single_wg=config.dq_single_wg,
     )
 
@@ -1364,7 +1379,7 @@ def segmented_flash_attention_backward_sm90_launcher(
                 dk_accum_gmem,
                 dv_accum_gmem,
                 softmax_scale,
-                aux_tensors=(lower_bounds, valid),
+                aux_data=AuxData(tensors=(lower_bounds, valid)),
                 blocksparse_tensors=blocksparse_tensors,
                 stream=stream,
             )
@@ -1402,7 +1417,7 @@ def segmented_flash_attention_backward_sm90_preprocess_launcher(
         head_dim_v,
         tile_m,
         num_threads=128,
-        use_padded_offsets=False,
+        use_padded_offsets=True,
     )
 
     @cute.jit
@@ -1414,8 +1429,25 @@ def segmented_flash_attention_backward_sm90_preprocess_launcher(
         dpsum: cute.Tensor,
         lse_log2: cute.Tensor,
         dq_accum: cute.Tensor,
+        *,
+        softmax_scale: cutlass.Float32,
     ):
-        preprocess(out, dout, dpsum, lse, lse_log2, dq_accum, None, None, None, stream)
+        preprocess(
+            out,
+            dout,
+            dpsum,
+            lse,
+            lse_log2,
+            dq_accum,
+            None,
+            None,
+            None,
+            None,
+            None,
+            softmax_scale,
+            None,
+            stream,
+        )
 
     return _launch_flash_attention_backward_sm90_preprocess
 
@@ -1484,29 +1516,9 @@ def flash_attention_backward_postprocess_launcher(
     ):
         if cutlass.const_expr(accum_is_gmem):
             accum = _as_gmem_tensor(accum)
-        postprocess(accum, out, softmax_scale, None, None, stream)
+        postprocess(accum, out, softmax_scale, None, None, None, None, stream)
 
     return _launch_flash_attention_backward_postprocess
-
-
-def _allow_tuple_aux_tensors_for_nested_sm90(backward_cls: Any) -> None:
-    """Let nested CuTe JIT calls pass aux tensors after list literals become tuples."""
-    # The installed upstream SM90 kernel annotates aux_tensors as a CuTe list
-    # type. CUTLASS JAX lowers Python list literals through TVM-FFI as tuples,
-    # then the nested CuTe JIT type-checks that value against the annotation and
-    # rejects the Grug lower_bounds/valid pair before codegen. Relaxing only this
-    # annotation keeps upstream's kernel body intact while allowing the two aux
-    # arrays to flow through the nested mask_mod call.
-    patched = False
-    for method_name in ("__call__", "kernel"):
-        method = getattr(backward_cls, method_name, None)
-        for target in (method, getattr(method, "__wrapped__", None)):
-            annotations = getattr(target, "__annotations__", None)
-            if annotations is not None and "aux_tensors" in annotations:
-                annotations["aux_tensors"] = Any
-                patched = True
-    if not patched:
-        raise RuntimeError("Installed SM90 backward kernel no longer exposes an aux_tensors annotation to patch.")
 
 
 def _patch_jax_array_list_tvm_ffi_converter() -> None:
