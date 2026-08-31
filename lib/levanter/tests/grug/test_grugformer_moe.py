@@ -18,12 +18,14 @@ from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, PartitionS
 from haliax.nn.ragged_dot import ragged_dot
 
 import levanter.grug.grug_moe as grug_moe
+from levanter.grug._moe.cudnn_wgrad_cute import cudnn_grouped_wgrad, pad_grouped_rows
 from levanter.grug._moe.common import (
     _prepare_moe_dispatch,
     _prepare_moe_dispatch_indices_with_assignment_ids,
     CapacityOverflow,
 )
 from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
+from levanter.grug._moe.ep_ragged_all_to_all import _quack_grouped_gemm_available
 from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
 from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import (
     _moe_mlp_ep_fixed_pooled_wave_a2a_local,
@@ -179,6 +181,71 @@ def _skip_without_sonic_gpu_runtime() -> None:
         pytest.skip("raw Sonic optional dependencies are not installed")
     if not any(device.platform == "gpu" for device in jax.devices()):
         pytest.skip("raw Sonic triton_call tests require a GPU")
+
+
+def _wgrad_padding_reference(values: np.ndarray, sizes: list[int], offsets: list[int]) -> np.ndarray:
+    """Each group's rows copied to the start named by ``offsets``, every other row zero."""
+    padded = np.zeros((offsets[-1], values.shape[1]), dtype=values.dtype)
+    source = 0
+    for start, size in zip([0, *offsets[:-1]], sizes, strict=True):
+        padded[start : start + size] = values[source : source + size]
+        source += size
+    return padded
+
+
+@pytest.mark.parametrize(
+    "capacity,sizes,expected_offsets",
+    [
+        (1024, [300, 400, 200], [512, 1024, 1536]),
+        (256, [33, 32, 38, 25], [256, 512, 768, 1024]),
+        (100, [100], [256]),
+        (700, [0, 700, 0], [0, 768, 1280]),
+        (512, [256, 256], [256, 768]),
+    ],
+)
+def test_wgrad_padding_satisfies_both_halves_of_the_kernel_contract(capacity, sizes, expected_offsets):
+    """Every extent is a multiple of 256, the final offset is the buffer's row count, and each
+    group holds its own rows with zeros in the gaps.
+
+    The offsets are spelled out rather than derived from ``_GROUP_ALIGNMENT`` so that lowering the
+    constant -- the regression this padding exists to prevent -- fails here on CPU.
+    """
+    values = np.arange(1, capacity * 2 + 1, dtype=np.float32).reshape(capacity, 2)
+    padded, offsets = pad_grouped_rows(jnp.asarray(values), jnp.array(sizes, dtype=jnp.int32))
+
+    assert list(np.asarray(offsets)) == expected_offsets
+    assert int(offsets[-1]) == padded.shape[0]
+    np.testing.assert_array_equal(np.asarray(padded), _wgrad_padding_reference(values, sizes, expected_offsets))
+
+
+def test_cudnn_grouped_wgrad_matches_a_per_group_reference_on_gpu():
+    """The kernel must equal per-group ``lhs.T @ rhs`` when no group's token count is a multiple of
+    the alignment.
+
+    That is the case the padding exists for: a misaligned group addresses past its own rows and
+    contracts its successor's. The padding tests above pin the offsets and the zero fill, but they
+    never multiply anything, so only this comparison sees a wrong weight gradient.
+    """
+    if not _quack_grouped_gemm_available():
+        pytest.skip("cuDNN grouped Wgrad needs an SM100 GPU and levanter's gpu extra")
+
+    group_sizes = [300, 400, 200, 124]
+    rows = sum(group_sizes)
+    lhs = jax.random.normal(jax.random.key(0), (rows, 128), dtype=jnp.bfloat16)
+    rhs = jax.random.normal(jax.random.key(1), (rows, 64), dtype=jnp.bfloat16)
+
+    actual = jax.jit(cudnn_grouped_wgrad)(lhs, rhs, jnp.array(group_sizes, dtype=jnp.int32))
+
+    lhs_reference = np.asarray(lhs, dtype=np.float32)
+    rhs_reference = np.asarray(rhs, dtype=np.float32)
+    actual = np.asarray(actual, dtype=np.float32)
+    assert actual.shape == (len(group_sizes), lhs.shape[1], rhs.shape[1])
+    start = 0
+    for expert, size in enumerate(group_sizes):
+        expected = lhs_reference[start : start + size].T @ rhs_reference[start : start + size]
+        error = np.max(np.abs(actual[expert] - expected)) / np.max(np.abs(expected))
+        assert error < _BF16_MOE_RELATIVE_TOLERANCE, f"expert {expert} relative error {error}"
+        start += size
 
 
 def test_interleaved_receiver_ranks_allocate_capacity_round_robin_over_sources():

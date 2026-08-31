@@ -101,8 +101,10 @@ def _cute_expert_mlp(
 ) -> Float[Array, "C H"]:
     """Expert MLP on QuACK's SM100 grouped GEMMs plus cuDNN grouped weight gradients.
 
-    The grouped kernels are driven by segment boundaries, so they take the active sizes and
-    mask the receiver buffer's trailing padding rather than charging it to the last expert.
+    The QuACK GEMMs take the active group sizes. They ignore the receiver buffer's trailing
+    padding. The cuDNN weight gradients need padded groups instead. `pad_grouped_rows` extends the
+    last expert's group to the end of the buffer and fills the extra rows with zeros. Zero rows add
+    nothing to a weight gradient, so the result is unchanged.
     """
     del activation_fn, physical_group_sizes
 
@@ -125,9 +127,12 @@ def _quack_grouped_gemm_available() -> bool:
         return False
     try:
         import levanter.grug._moe.sonic_cute  # noqa: F401,PLC0415
-        from levanter.grug._moe.cudnn_wgrad_cute import _cudnn_modules  # noqa: PLC0415
+        from levanter.grug._moe.cudnn_wgrad_cute import _assert_group_alignment_compatible_with_kernel  # noqa: PLC0415
 
-        _ = _cudnn_modules()  # check if compatible cudnn is available
+        # Imports the kernel and pins its padding requirement in one step. A padding mismatch
+        # raises RuntimeError past the handler below, which is the point: it has to surface while
+        # the path is still being chosen, not from inside the expert MLP's backward pass.
+        _assert_group_alignment_compatible_with_kernel()
     except (ImportError, AttributeError) as exc:
         logger.warning(
             "SM100 GPU present but the QuACK/cuDNN grouped-GEMM kernels did not import (%s). "

@@ -12,12 +12,15 @@ import jax.numpy as jnp
 
 from levanter.cutlass_kernel_cache import cute_launcher_factory, cutlass_call
 
-# Row count each expert group is padded up to, so every group starts where the kernel's
-# tile loads expect it to.
-_GROUP_ALIGNMENT = 8
+# Token count each expert group is padded up to.
+# Per https://docs.nvidia.com/deeplearning/cudnn/latest/fe-oss-apis/gemm_fusions/grouped_gemm_wgrad.html#bf16-contract,
+# every expert token count must be a multiple of `FIX_PAD_SIZE` (= 256).
+_GROUP_ALIGNMENT = 256
+
 # Vector width the feature (non-grouped) dimensions must divide, which is what the tensor
 # specs below declare to the kernel.
 _FEATURE_ALIGNMENT = 8
+
 _MMA_TILER_MN = (256, 256)
 _CLUSTER_SHAPE_MN = (2, 1)
 
@@ -47,6 +50,17 @@ def _cudnn_modules() -> _CudnnModules:
     )
 
 
+def _assert_group_alignment_compatible_with_kernel() -> None:
+    """Assert `_GROUP_ALIGNMENT` is a multiple of the installed kernel's `FIX_PAD_SIZE`."""
+    kernel_type = _cudnn_modules().kernel_type
+    if _GROUP_ALIGNMENT % kernel_type.FIX_PAD_SIZE != 0:
+        raise RuntimeError(
+            f"cuDNN grouped Wgrad pads groups to {_GROUP_ALIGNMENT} tokens, which is not a multiple "
+            f"of the installed kernel's FIX_PAD_SIZE of {kernel_type.FIX_PAD_SIZE}. See "
+            "https://docs.nvidia.com/deeplearning/cudnn/latest/fe-oss-apis/gemm_fusions/grouped_gemm_wgrad.html#bf16-contract"
+        )
+
+
 @cute_launcher_factory
 def _build_launcher(
     modules,
@@ -72,7 +86,10 @@ def _build_launcher(
 
 
 def pad_grouped_rows(values: jax.Array, group_sizes: jax.Array) -> tuple[jax.Array, jax.Array]:
-    """Insert zero rows so each contiguous expert group ends on an eight-row boundary."""
+    """Insert zero rows so each expert group's token count is a multiple of `_GROUP_ALIGNMENT`.
+
+    Returns the padded rows and the groups' cumulative end offsets.
+    """
     if values.ndim != 2:
         raise ValueError(f"values must be rank 2, got shape={values.shape}")
     if values.shape[0] == 0:
@@ -81,21 +98,21 @@ def pad_grouped_rows(values: jax.Array, group_sizes: jax.Array) -> tuple[jax.Arr
         raise ValueError(f"group_sizes must be a nonempty vector, got shape={group_sizes.shape}")
 
     group_sizes = group_sizes.astype(jnp.int32)
-    padded_group_sizes = ((group_sizes + _GROUP_ALIGNMENT - 1) // _GROUP_ALIGNMENT) * _GROUP_ALIGNMENT
+    aligned_capacity = ((values.shape[0] + _GROUP_ALIGNMENT - 1) // _GROUP_ALIGNMENT) * _GROUP_ALIGNMENT
+    padded_capacity = aligned_capacity + _GROUP_ALIGNMENT * (group_sizes.shape[0] - 1)
+    head_sizes = ((group_sizes[:-1] + _GROUP_ALIGNMENT - 1) // _GROUP_ALIGNMENT) * _GROUP_ALIGNMENT
+    padded_offsets = jnp.concatenate(
+        [jnp.cumsum(head_sizes, dtype=jnp.int32), jnp.full((1,), padded_capacity, jnp.int32)]
+    )
     active_offsets = jnp.cumsum(group_sizes, dtype=jnp.int32)
-    padded_offsets = jnp.cumsum(padded_group_sizes, dtype=jnp.int32)
     active_starts = jnp.concatenate([jnp.zeros((1,), jnp.int32), active_offsets[:-1]])
     padded_starts = jnp.concatenate([jnp.zeros((1,), jnp.int32), padded_offsets[:-1]])
 
-    # At most seven rows are inserted per group. Keep a static worst-case tail so the output shape
-    # does not depend on the runtime routing counts.
-    padded_capacity = values.shape[0] + (_GROUP_ALIGNMENT - 1) * group_sizes.shape[0]
     padded_rows = jnp.arange(padded_capacity, dtype=jnp.int32)
     expert_ids = jnp.sum(padded_rows[:, None] >= padded_offsets[None, :], axis=1, dtype=jnp.int32)
-    safe_expert_ids = jnp.minimum(expert_ids, group_sizes.shape[0] - 1)
-    rows_within_group = padded_rows - padded_starts[safe_expert_ids]
-    source_rows = active_starts[safe_expert_ids] + rows_within_group
-    valid = (expert_ids < group_sizes.shape[0]) & (rows_within_group < group_sizes[safe_expert_ids])
+    rows_within_group = padded_rows - padded_starts[expert_ids]
+    source_rows = active_starts[expert_ids] + rows_within_group
+    valid = rows_within_group < group_sizes[expert_ids]
     source_rows = jnp.clip(source_rows, 0, values.shape[0] - 1)
     padded = jnp.where(valid[:, None], values[source_rows], jnp.zeros((), dtype=values.dtype))
     return padded, padded_offsets
