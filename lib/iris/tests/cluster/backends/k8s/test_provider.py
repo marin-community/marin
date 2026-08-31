@@ -32,12 +32,12 @@ from iris.cluster.backends.k8s.tasks import (
     _task_hash,
 )
 from iris.cluster.config import TaskOutputPolicy
-from iris.cluster.controller.backend import ProviderError, TaskTarget
+from iris.cluster.controller.backend import DirectReconcileRequest, ProviderError, RuntimeReleaseTarget, TaskTarget
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.platforms.k8s.coreweave_topology import RACK_SIZE
 from iris.cluster.platforms.k8s.types import ExecResult, K8sResource, KubectlError
 from iris.cluster.stats.tables import ProfileTrigger
-from iris.cluster.types import JobName
+from iris.cluster.types import AttemptUid, JobName
 from iris.rpc import job_pb2
 from iris.test_util import FakeStatsTable, wait_for_condition
 from iris.testing.k8s import (
@@ -67,6 +67,20 @@ def test_sync_applies_pods_for_tasks_to_run(provider, k8s):
     assert len(pods) == 1
     assert pods[0]["kind"] == "Pod"
     assert result == []
+
+
+def test_reconcile_confirms_release_only_after_a_fresh_absence_scan(provider, k8s):
+    task_id = JobName.from_wire("/job/cancelled/0")
+    attempt_uid = AttemptUid("0123456789abcdef")
+    request = make_run_req(task_id.to_wire(), attempt_uid=attempt_uid)
+    provider.sync(make_batch(tasks_to_run=[request]))
+
+    release = RuntimeReleaseTarget(task_id=task_id, attempt_id=0, attempt_uid=attempt_uid)
+    first = provider.reconcile(DirectReconcileRequest(release_targets=(release,)))
+    second = provider.reconcile(DirectReconcileRequest(release_targets=(release,)))
+
+    assert first.released_attempt_uids == frozenset()
+    assert second.released_attempt_uids == {attempt_uid}
 
 
 def test_sync_releases_output_uploader_after_task_container_exits(k8s):

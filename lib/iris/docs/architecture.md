@@ -130,7 +130,8 @@ Both backend implementations expose the same phase methods (plus on-demand
   persisted checkpoint with the provider before loops start.
 - `schedule(ScheduleRequest) -> ScheduleResult` — a placement decision.
 - `reconcile(ReconcileRequest) -> ReconcileObservation` — converge the external
-  substrate and return exact task updates plus optional worker reachability.
+  substrate and return exact task updates, optional worker reachability, and
+  confirmed absence of terminal runtimes.
 - `observe(BackendObservationRequest) -> BackendObservation` — publish provider
   status, capacity, and pending hints from controller-owned facts.
 - `autoscale(AutoscaleRequest) -> AutoscaleResult` — provision capacity.
@@ -138,10 +139,12 @@ Both backend implementations expose the same phase methods (plus on-demand
   controller-fenced capacity and report affected siblings.
 
 Each phase returns a frozen result record. Every reconcile result has the same
-shape: exact task-attempt updates plus optional worker-health events. The
-controller loads a fresh post-I/O snapshot, validates Attempt UIDs, applies one
-state-machine path, accounts for worker health, commits effects, and only then
-requests physical capacity removal. It never asks a backend to mutate Iris state.
+shape: exact task-attempt updates, optional worker-health events, and exact
+Attempt UIDs whose runtimes were observed stopped or absent. The controller
+loads a fresh post-I/O snapshot, validates Attempt UIDs, applies one state-machine
+path, accounts for worker health, and persists release observations with the
+other effects. It only then requests physical capacity removal. It never asks a
+backend to mutate Iris state.
 
 `BackendDescriptor.kind` is presentation metadata. Its capabilities declare one
 reconciliation mechanism: `WORKER_FLEET` or `DIRECT_DISPATCH`; `AUTOSCALER` is

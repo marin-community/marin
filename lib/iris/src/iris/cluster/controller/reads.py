@@ -24,7 +24,7 @@ from dataclasses import dataclass, field, replace
 from typing import Protocol
 
 from rigging.timing import Timestamp
-from sqlalchemy import Integer, Row, bindparam, case, exists, func, literal_column, select, tuple_
+from sqlalchemy import Integer, Row, bindparam, case, exists, func, literal_column, or_, select, tuple_
 from sqlalchemy.sql.selectable import FromClause
 
 from iris.cluster.constraints import AttributeValue
@@ -73,6 +73,7 @@ from iris.cluster.types import (
     LOCAL_ADMIN_SUBMITTER,
     LOCAL_CLUSTER,
     TERMINAL_JOB_STATES,
+    TERMINAL_TASK_STATES,
     AttemptUid,
     EndpointAccess,
     JobName,
@@ -1884,6 +1885,63 @@ class ControlSnapshot:
     job_specs: dict[JobName, job_pb2.RunTaskRequest] = field(default_factory=dict)
     tasks_to_run: list[job_pb2.RunTaskRequest] = field(default_factory=list)
     running_tasks: list[RunningTaskEntry] = field(default_factory=list)
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeReleaseRow:
+    """Controller coordinates for one terminal runtime awaiting confirmation."""
+
+    task_id: JobName
+    attempt_id: int
+    attempt_uid: AttemptUid
+    worker_id: WorkerId | None
+    worker_address: str | None
+
+
+_RUNTIME_RELEASE_TARGETS_STMT = (
+    select(
+        task_attempts_table.c.task_id,
+        task_attempts_table.c.attempt_id,
+        task_attempts_table.c.attempt_uid,
+        task_attempts_table.c.worker_id,
+        workers_table.c.address.label("worker_address"),
+    )
+    .select_from(
+        task_attempts_table.join(local_tasks, local_tasks.c.task_id == task_attempts_table.c.task_id).outerjoin(
+            workers_table, workers_table.c.worker_id == task_attempts_table.c.worker_id
+        )
+    )
+    .where(
+        task_attempts_table.c.runtime_released_at_ms.is_(None),
+        or_(
+            task_attempts_table.c.state.in_(list(TERMINAL_TASK_STATES)),
+            local_tasks.c.state.in_(list(TERMINAL_TASK_STATES)),
+        ),
+    )
+    .order_by(task_attempts_table.c.attempt_uid)
+)
+
+
+def runtime_release_rows(tx: Tx, *, include_workerless: bool) -> list[RuntimeReleaseRow]:
+    """Return terminal runtimes that this backend can still address.
+
+    Direct backends address runtimes by task identity and therefore include
+    rows with no worker. Worker backends omit orphaned rows after worker teardown;
+    no endpoint remains from which they could obtain an absence observation.
+    """
+    stmt = _RUNTIME_RELEASE_TARGETS_STMT
+    if not include_workerless:
+        stmt = stmt.where(task_attempts_table.c.worker_id.is_not(None))
+    return [
+        RuntimeReleaseRow(
+            task_id=row.task_id,
+            attempt_id=int(row.attempt_id),
+            attempt_uid=AttemptUid(str(row.attempt_uid)),
+            worker_id=row.worker_id,
+            worker_address=str(row.worker_address) if row.worker_address is not None else None,
+        )
+        for row in tx.execute(stmt).all()
+    ]
 
 
 def load_control_snapshot(

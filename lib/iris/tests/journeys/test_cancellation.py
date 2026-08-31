@@ -28,3 +28,21 @@ def test_pending_job_when_cancelled_never_reaches_the_backend(journey):
 
     assert journey.job(job).state == job_pb2.JOB_STATE_KILLED
     assert journey.backend_events(kind="launched") == []
+
+
+def test_runtime_release_confirmation_survives_controller_restart(journey):
+    job = journey.submit("cancel-release")
+    journey.settle()
+
+    journey.backend.acknowledge_releases = False
+    journey.cancel(job)
+    journey.step()
+    assert len(journey.backend_events(kind="release-requested")) == 1
+
+    journey.restart()
+    journey.settle()
+    assert len(journey.backend_events(kind="release-requested")) == 2
+
+    journey.restart()
+    journey.settle()
+    assert len(journey.backend_events(kind="release-requested")) == 2

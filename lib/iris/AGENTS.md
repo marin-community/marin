@@ -153,13 +153,14 @@ Kubernetes reconcile receives the dispatch queue drain; worker reconcile
 receives a target list pairing each exact plan with its address. Dashboard
 capability strings are derived presentation data.
 
-Backends return one neutral `ReconcileObservation`: exact task updates and
-optional worker-health events, never controller effects. After backend I/O,
-`ops/reconcile.py` reloads current state, fences exact Attempt UIDs, runs one
-lifecycle-policy path, and applies liveness events. The controller then commits
-the effects. There is no ping loop: reconcile RPC outcomes are the worker
-liveness signal. Kubernetes backends report exact Pod observations and no worker
-liveness events.
+Backends return one neutral `ReconcileObservation`: exact task updates,
+optional worker-health events, and exact Attempt UIDs whose runtimes are
+confirmed stopped or absent. After backend I/O, `ops/reconcile.py` reloads
+current state, fences exact Attempt UIDs, runs one lifecycle-policy path, and
+applies liveness events. The controller commits those effects and persists the
+release observations. There is no ping loop: reconcile RPC outcomes are the
+worker liveness signal. Kubernetes backends report exact Pod observations and
+no worker liveness events.
 
 Two implementations satisfy it: `RpcTaskBackend` (`backends/rpc/backend.py`,
 kind `WORKER`, owns the `Scheduler` and optional `Autoscaler`) for

@@ -56,7 +56,7 @@ from iris.cluster.controller.scheduling.scheduler import (
 )
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerLiveness
-from iris.cluster.types import JobName, PendingTask, WorkerId, WorkerStatusMap
+from iris.cluster.types import AttemptUid, JobName, PendingTask, WorkerId, WorkerStatusMap
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 
 logger = logging.getLogger(__name__)
@@ -185,6 +185,17 @@ class TaskTarget:
     attempt_uid: str = ""
 
 
+@dataclass(frozen=True, slots=True)
+class RuntimeReleaseTarget:
+    """Exact external runtime that the backend must stop or prove absent."""
+
+    task_id: JobName
+    attempt_id: int
+    attempt_uid: AttemptUid
+    worker_id: WorkerId | None = None
+    worker_address: str | None = None
+
+
 @dataclass(frozen=True)
 class ScheduleResult:
     """What :meth:`TaskBackend.schedule` decides for one scheduling tick.
@@ -213,12 +224,15 @@ class ReconcileObservation:
 
     Every backend reports exact task-attempt state through ``task_updates``.
     Backends that communicate with Iris workers may additionally report worker
-    reachability through ``worker_health_events``. The controller applies both
-    collections without inspecting the backend implementation or kind.
+    reachability through ``worker_health_events``. ``released_attempt_uids``
+    confirms that exact terminal runtimes are stopped or absent. The controller
+    folds all three without inspecting the backend implementation or kind.
     """
 
     task_updates: list[TaskUpdate] = field(default_factory=list)
     worker_health_events: list[WorkerHealthEvent] = field(default_factory=list)
+    released_attempt_uids: frozenset[AttemptUid] = frozenset()
+    """Exact runtimes observed as stopped or absent during this pass."""
 
 
 @dataclass(frozen=True)
@@ -259,17 +273,19 @@ class WorkerReconcileTarget:
 
 @dataclass(frozen=True)
 class WorkerFleetReconcileRequest:
-    """Complete worker-daemon fan-out for one reconcile pass."""
+    """Complete worker-daemon fan-out and exact release work for one pass."""
 
     targets: list[WorkerReconcileTarget] = field(default_factory=list)
+    release_targets: tuple[RuntimeReleaseTarget, ...] = ()
 
 
 @dataclass(frozen=True)
 class DirectReconcileRequest:
-    """Complete desired execution view for a placement-owning backend."""
+    """Complete desired execution and release view for a direct backend."""
 
     tasks_to_run: list[job_pb2.RunTaskRequest] = field(default_factory=list)
     running_tasks: list[RunningTaskEntry] = field(default_factory=list)
+    release_targets: tuple[RuntimeReleaseTarget, ...] = ()
 
 
 ReconcileRequest = WorkerFleetReconcileRequest | DirectReconcileRequest
