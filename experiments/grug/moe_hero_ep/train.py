@@ -96,9 +96,8 @@ INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT = 1
 # (#8317); a follow-up lands that offload and turns the scheduler on.
 RAGGED_COLLECTIVE_OVERLAP_LIMIT = 1
 RAGGED_MOE_IMPLEMENTATION = "ragged_all_to_all"
-# TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU
-# command buffers after the CUDA graph failure is fixed.
-XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
+XLA_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer"
+XLA_DEFAULT_GPU_COMMAND_BUFFER_CAPTURE_SET = "CONDITIONAL,CUBLAS,CUBLASLT,CUDNN,CUSTOM_CALL,DYNAMIC_SLICE_FUSION,FUSION"
 _RAGGED_REQUIRED_XLA_FLAG_NAMES = frozenset(flag.partition("=")[0] for flag in RAGGED_REQUIRED_XLA_FLAGS)
 PJRT_DISTRIBUTION = "jax-cuda13-pjrt"
 _FP32_POLICY = jmp.get_policy("params=float32,compute=float32,output=float32")
@@ -120,6 +119,13 @@ class MasterParamMode(StrEnum):
 
     DEVICE = "device"
     FP32_PINNED_HOST = "fp32_pinned_host"
+
+
+class GpuCommandBufferMode(StrEnum):
+    """GPU operation classes captured in XLA command buffers."""
+
+    DISABLED = "disabled"
+    DEFAULT = "default"
 
 
 class TrainingDataMode(StrEnum):
@@ -193,7 +199,11 @@ def take_master_as_params(state: "GrugTrainState") -> "GrugTrainState":
 
 
 def _apply_hero_ep_runtime_defaults(
-    *, inline_watch_enabled: bool, moe_implementation: MoeImplementation | None, processes_per_task: int = 1
+    *,
+    inline_watch_enabled: bool,
+    moe_implementation: MoeImplementation | None,
+    processes_per_task: int = 1,
+    gpu_command_buffer_mode: GpuCommandBufferMode = GpuCommandBufferMode.DISABLED,
 ) -> None:
     env_defaults = dict(HERO_EP_RUNTIME_ENV)
     if processes_per_task > 1:
@@ -205,12 +215,20 @@ def _apply_hero_ep_runtime_defaults(
         os.environ.setdefault(name, value)
     xla_flags = os.environ.get("XLA_FLAGS", "").split()
     ragged = moe_implementation == RAGGED_MOE_IMPLEMENTATION
+    if ragged and gpu_command_buffer_mode != GpuCommandBufferMode.DISABLED:
+        raise ValueError(f"{RAGGED_MOE_IMPLEMENTATION} requires disabled GPU command buffers")
     if ragged:
         overlap_limit = RAGGED_COLLECTIVE_OVERLAP_LIMIT
     elif inline_watch_enabled:
         overlap_limit = INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT
     else:
         overlap_limit = DEFAULT_COLLECTIVE_OVERLAP_LIMIT
+    if gpu_command_buffer_mode == GpuCommandBufferMode.DISABLED:
+        command_buffer_flag = f"{XLA_GPU_COMMAND_BUFFER_FLAG}="
+    elif gpu_command_buffer_mode == GpuCommandBufferMode.DEFAULT:
+        command_buffer_flag = f"{XLA_GPU_COMMAND_BUFFER_FLAG}={XLA_DEFAULT_GPU_COMMAND_BUFFER_CAPTURE_SET}"
+    else:
+        raise AssertionError(f"unknown GPU command-buffer mode: {gpu_command_buffer_mode}")
     flag_defaults = (
         f"{XLA_COLLECTIVE_OVERLAP_FLAG}={overlap_limit}",
         f"--xla_gpu_enable_latency_hiding_scheduler={'false' if ragged else 'true'}",
@@ -223,7 +241,7 @@ def _apply_hero_ep_runtime_defaults(
         # lower percentage costs throughput, because a smaller arena makes `HloRematerialization`
         # recompute more of the step.
         "--xla_gpu_memory_limit_slop_factor=85",
-        XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG,
+        command_buffer_flag,
     )
     explicit_names = {flag.partition("=")[0] for flag in xla_flags}
     xla_flags.extend(flag for flag in flag_defaults if flag.partition("=")[0] not in explicit_names)
@@ -273,6 +291,7 @@ class GrugTrainerConfig:
     # This keeps one training executable resident. A diagnostic watch repeats forward and backward
     # in a separate executable, which costs compute but shortens gradient liveness.
     watch_mode: WatchMode = WatchMode.INLINE
+    gpu_command_buffer_mode: GpuCommandBufferMode = GpuCommandBufferMode.DISABLED
     # A short throughput gate leaves this off. A compute-optimal run needs it: the loop already
     # restores from the latest committed checkpoint, so without a writer an interrupted run
     # restarts at step 0.
@@ -1238,6 +1257,7 @@ def run_grug(config: GrugRunConfig) -> None:
         inline_watch_enabled=inline_watch_enabled,
         processes_per_task=config.processes_per_task,
         moe_implementation=config.model.moe_implementation,
+        gpu_command_buffer_mode=config.trainer.gpu_command_buffer_mode,
     )
     dispatch_grug_training_run(
         run_id=trainer.id,
@@ -1251,6 +1271,7 @@ def run_grug(config: GrugRunConfig) -> None:
 
 
 __all__ = [
+    "GpuCommandBufferMode",
     "GrugEvalConfig",
     "GrugRunConfig",
     "GrugTrainState",

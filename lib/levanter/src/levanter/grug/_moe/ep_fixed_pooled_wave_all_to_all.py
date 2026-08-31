@@ -282,14 +282,13 @@ def _expand_compacted_fwd(compacted_output, receiver_linear_indices, receiver_ke
 
 
 def _expand_compacted_bwd(residual, cotangent):
-    receiver_linear_indices, receiver_keep, compacted_shape = residual
-    compact_size = compacted_shape[0] * compacted_shape[1]
-    compacted_grad = (
-        jnp.zeros((compact_size + 1, compacted_shape[2]), dtype=cotangent.dtype)
-        .at[receiver_linear_indices]
-        .set(jnp.where(receiver_keep[:, None], cotangent, 0), mode="drop")
-    )
-    return compacted_grad[:compact_size].reshape(compacted_shape), None, None
+    receiver_linear_indices, _receiver_keep, compacted_shape = residual
+    compact_size = math.prod(compacted_shape[:-1])
+    source_indices = _assignment_sources(receiver_linear_indices, send_size=compact_size)
+    source_valid = source_indices < cotangent.shape[0]
+    source_indices = jnp.minimum(source_indices, cotangent.shape[0] - 1)
+    compacted_grad = jnp.where(source_valid[:, None], cotangent[source_indices], 0)
+    return compacted_grad.reshape(compacted_shape), None, None
 
 
 _expand_compacted.defvjp(_expand_compacted_fwd, _expand_compacted_bwd)
@@ -449,14 +448,14 @@ def _dispatch_pooled(
 def _compute_pooled(
     dispatch: _PooledDispatch,
     *,
-    moe_w13_local: Float[Array, "Elocal H I2"],
+    moe_w_gate_local: Float[Array, "Elocal H I"],
+    moe_w_up_local: Float[Array, "Elocal H I"],
     moe_w2_local: Float[Array, "Elocal I H"],
     activation_fn: Callable[[jax.Array], jax.Array],
 ) -> _PooledOutput:
     with jax.named_scope("moe_up_down"):
-        moe_dim = moe_w2_local.shape[1]
-        hidden = jnp.einsum("erh,ehi->eri", dispatch.compacted_x, moe_w13_local)
-        gate, up = jnp.split(hidden, [moe_dim], axis=-1)
+        gate = jnp.einsum("erh,ehi->eri", dispatch.compacted_x, moe_w_gate_local)
+        up = jnp.einsum("erh,ehi->eri", dispatch.compacted_x, moe_w_up_local)
         compacted_output = jnp.einsum("eri,eih->erh", activation_fn(gate) * up, moe_w2_local)
 
     return _PooledOutput(
@@ -505,7 +504,8 @@ def _moe_mlp_ep_fixed_pooled_wave_a2a_local(
     x_local: Float[Array, "Tlocal H"],
     selected_experts_local: Int[Array, "Tlocal K"],
     combine_weights_local: Float[Array, "Tlocal K"],
-    moe_w13_local: Float[Array, "Elocal H I2"],
+    moe_w_gate_local: Float[Array, "Elocal H I"],
+    moe_w_up_local: Float[Array, "Elocal H I"],
     moe_w2_local: Float[Array, "Elocal I H"],
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
@@ -515,7 +515,7 @@ def _moe_mlp_ep_fixed_pooled_wave_a2a_local(
     num_expert_waves: int,
 ) -> tuple[Float[Array, "Tlocal H"], CapacityOverflow]:
     """Stripe each destination pool over fixed waves and report drops at each transport stage."""
-    local_experts = moe_w13_local.shape[0]
+    local_experts = moe_w_gate_local.shape[0]
     if num_experts % local_experts != 0:
         raise ValueError(f"num_experts={num_experts} must be divisible by local expert count={local_experts}")
     if capacity_factor <= 0:
@@ -578,7 +578,8 @@ def _moe_mlp_ep_fixed_pooled_wave_a2a_local(
         )
         compute = partial(
             _compute_pooled,
-            moe_w13_local=moe_w13_local,
+            moe_w_gate_local=moe_w_gate_local,
+            moe_w_up_local=moe_w_up_local,
             moe_w2_local=moe_w2_local,
             activation_fn=activation_fn,
         )

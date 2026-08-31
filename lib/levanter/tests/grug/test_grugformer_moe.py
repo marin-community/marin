@@ -26,6 +26,7 @@ from levanter.grug._moe.common import (
 from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
 from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
 from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import (
+    _expand_compacted,
     _moe_mlp_ep_fixed_pooled_wave_a2a_local,
     _interleaved_receiver_ranks,
     _receiver_ranks,
@@ -739,7 +740,11 @@ def test_fixed_pooled_wave_all_to_all_matches_dense_value_and_gradients():
             x,
             selected_experts,
             combine_weights,
-            w_up_gate,
+            *grug_moe.split_moe_w13_output(
+                w_up_gate,
+                intermediate_dim=w_down.shape[1],
+                interleaved=False,
+            ),
             w_down,
             activation_fn=jax.nn.silu,
             num_experts=num_experts,
@@ -795,6 +800,21 @@ def test_fixed_pooled_wave_all_to_all_matches_dense_value_and_gradients():
     assert _count_jaxpr_primitives(gradient_jaxpr, "all_to_all") == 6 * num_expert_waves
 
 
+def test_expand_compacted_routes_cotangents_with_dropped_and_unused_rows():
+    compacted = jnp.arange(12.0, dtype=jnp.float32).reshape(2, 3, 2)
+    receiver_linear_indices = jnp.array([0, 6, 2, 4, 6], dtype=jnp.int32)
+    receiver_keep = receiver_linear_indices < 6
+    cotangent = jnp.arange(10.0, dtype=jnp.float32).reshape(5, 2)
+
+    gradient = jax.grad(
+        lambda values: jnp.sum(_expand_compacted(values, receiver_linear_indices, receiver_keep) * cotangent)
+    )(compacted)
+
+    expected = jnp.zeros_like(compacted).reshape(6, 2).at[jnp.array([0, 2, 4])].set(cotangent[jnp.array([0, 2, 3])])
+    np.testing.assert_array_equal(np.asarray(gradient), np.asarray(expected.reshape(compacted.shape)))
+
+
+@pytest.mark.timeout(180)
 def test_fixed_pooled_wave_all_to_all_reports_sender_and_receiver_drops():
     mesh = _make_single_expert_mesh()
     tokens = 6
@@ -817,7 +837,11 @@ def test_fixed_pooled_wave_all_to_all_reports_sender_and_receiver_drops():
             x,
             selected_experts,
             combine_weights,
-            w_up_gate,
+            *grug_moe.split_moe_w13_output(
+                w_up_gate,
+                intermediate_dim=w_down.shape[1],
+                interleaved=False,
+            ),
             w_down,
             activation_fn=jax.nn.silu,
             num_experts=num_experts,

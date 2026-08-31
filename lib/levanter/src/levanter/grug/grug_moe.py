@@ -239,6 +239,7 @@ def moe_mlp(
         if num_experts % expert_axis_size != 0:
             raise ValueError(f"num_experts={num_experts} must be divisible by expert axis size={expert_axis_size}")
 
+        separate_gate_up = resolved_implementation == "fixed_pooled_wave_all_to_all"
         if resolved_implementation == "ring":
             shard_local_fn = _moe_mlp_ep_ring_local
         elif resolved_implementation == "ragged_all_to_all":
@@ -258,14 +259,27 @@ def moe_mlp(
         else:
             raise AssertionError(f"Unhandled MoE implementation {resolved_implementation!r}")
 
-        w_up_gate_spec = P("expert", None, None)
+        w_gate_up_spec = P("expert", None, None)
         w_down_spec = P("expert", None, None)
 
         x = _reshard_for_shard_map(x, mesh, batch_spec)
         selected_experts = _reshard_for_shard_map(selected_experts, mesh, batch_spec)
         combine_weights = _reshard_for_shard_map(combine_weights, mesh, batch_spec)
-        w_up_gate = _reshard_for_shard_map(w_up_gate, mesh, w_up_gate_spec)
-        w_down = _reshard_for_shard_map(w_down, mesh, w_down_spec)
+        if separate_gate_up:
+            w_gate, w_up = split_moe_w13_output(
+                w_up_gate,
+                intermediate_dim=w_down.shape[1],
+                interleaved=False,
+            )
+            weight_values = (w_gate, w_up, w_down)
+            weight_specs = (w_gate_up_spec, w_gate_up_spec, w_down_spec)
+        else:
+            weight_values = (w_up_gate, w_down)
+            weight_specs = (w_gate_up_spec, w_down_spec)
+        weight_values = tuple(
+            _reshard_for_shard_map(weight, mesh, spec)
+            for weight, spec in zip(weight_values, weight_specs, strict=True)
+        )
 
         shard_fn = shard_map(
             partial(
@@ -279,13 +293,12 @@ def moe_mlp(
                 batch_spec,
                 batch_spec,
                 batch_spec,
-                w_up_gate_spec,
-                w_down_spec,
+                *weight_specs,
             ),
             out_specs=(batch_spec, CapacityOverflow(sender=P(), receiver=P())),
             check_vma=False,
         )
-        out, overflow = shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
+        out, overflow = shard_fn(x, selected_experts, combine_weights, *weight_values)
         if report_capacity_overflow:
             return out, overflow
         return out
