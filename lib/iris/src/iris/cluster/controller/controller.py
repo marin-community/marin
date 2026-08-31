@@ -58,7 +58,6 @@ from iris.cluster.controller.backend import (
     DirectReconcileRequest,
     ReconcileRequest,
     RemoveCapacityRequest,
-    RuntimeReleaseTarget,
     ScheduleRequest,
     ScheduleResult,
     TaskBackend,
@@ -105,6 +104,7 @@ from iris.cluster.controller.scheduling.scheduler import (
     worker_snapshot_from_row,
 )
 from iris.cluster.controller.service import CapabilityUrlConfig, ControllerServiceImpl, PendingKick
+from iris.cluster.controller.task_state import RuntimeReleaseTarget
 from iris.cluster.controller.task_state_stats import TaskStateCollector
 from iris.cluster.controller.transition_reader import DbTransitionReader
 from iris.cluster.controller.worker_health import WorkerHealthTracker, WorkerLiveness
@@ -1013,16 +1013,10 @@ class Controller:
         # slow dashboard read for a connection.
         with self._db.control_read_snapshot() as snap:
             if run_reconcile:
-                release_targets = tuple(
-                    RuntimeReleaseTarget(
-                        task_id=row.task_id,
-                        attempt_id=row.attempt_id,
-                        attempt_uid=row.attempt_uid,
-                        worker_id=row.worker_id,
-                        worker_address=row.worker_address,
-                    )
-                    for row in reads.runtime_release_rows(snap, include_workerless=direct_dispatch)
-                )
+                if direct_dispatch:
+                    release_targets = tuple(reads.direct_runtime_release_targets(snap))
+                else:
+                    release_targets = tuple(reads.worker_runtime_release_targets(snap))
             if run_schedule:
                 scheduling = self._scheduling_inputs(snap, now)
                 inputs.scheduling_context = scheduling.context
