@@ -15,7 +15,7 @@ import threading
 import time
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
 import uvicorn
@@ -58,6 +58,7 @@ from iris.cluster.controller.backend import (
     DirectReconcileRequest,
     ReconcileRequest,
     RemoveCapacityRequest,
+    RuntimeReleaseTarget,
     ScheduleRequest,
     ScheduleResult,
     TaskBackend,
@@ -118,6 +119,7 @@ from iris.cluster.federation.peer import FederationPeer, build_peers
 from iris.cluster.log_keys import CONTROLLER_LOG_KEY
 from iris.cluster.platforms.types import resolve_external_host
 from iris.cluster.types import (
+    AttemptUid,
     JobName,
     PendingTask,
     UserBudgetDefaults,
@@ -1002,6 +1004,7 @@ class Controller:
         scan_timeouts = run_reconcile and (force_timeout_scan or self._timeout_rate_limiter.should_run())
 
         inputs = _TickInputs()
+        release_targets: tuple[RuntimeReleaseTarget, ...] = ()
         direct_dispatch = BackendCapability.DIRECT_DISPATCH in self.backend.descriptor.capabilities
         if run_reconcile and direct_dispatch:
             inputs.reconcile_request = self._direct_reconcile_request()
@@ -1009,17 +1012,31 @@ class Controller:
         # Dedicated control pool: the tick's snapshot must not queue behind a
         # slow dashboard read for a connection.
         with self._db.control_read_snapshot() as snap:
+            if run_reconcile:
+                release_targets = tuple(
+                    RuntimeReleaseTarget(
+                        task_id=row.task_id,
+                        attempt_id=row.attempt_id,
+                        attempt_uid=row.attempt_uid,
+                        worker_id=row.worker_id,
+                        worker_address=row.worker_address,
+                    )
+                    for row in reads.runtime_release_rows(snap, include_workerless=direct_dispatch)
+                )
             if run_schedule:
                 scheduling = self._scheduling_inputs(snap, now)
                 inputs.scheduling_context = scheduling.context
                 inputs.queued_federation = scheduling.queued_federation
                 inputs.expired_queued_federation = scheduling.expired_queued_federation
             if run_reconcile and not direct_dispatch:
-                inputs.reconcile_request = self._worker_reconcile_request(snap)
+                inputs.reconcile_request = self._worker_reconcile_request(snap, release_targets=release_targets)
             if run_autoscale:
                 inputs.worker_status = self._worker_status(snap)
             if scan_timeouts:
                 inputs.timeout_rows = reads.scan_execution_timeout_rows(snap)
+        if run_reconcile and direct_dispatch:
+            assert inputs.reconcile_request is not None
+            inputs.reconcile_request = replace(inputs.reconcile_request, release_targets=release_targets)
 
         sched_result: ScheduleResult | None = None
         backend_pins: list[tuple[JobName, str]] = []
@@ -1037,12 +1054,15 @@ class Controller:
             federation_promotions = self._federation.plan_federation(inputs.queued_federation)
 
         recon_effects: ControllerEffects | None = None
+        released_attempt_uids: frozenset[AttemptUid] = frozenset()
         reaped_workers: list[WorkerId] = []
         timeout_decisions: list[TerminalDecision] = []
         if run_reconcile:
             timeout_decisions = self._timeout_decisions(inputs.timeout_rows, now.epoch_ms())
             assert inputs.reconcile_request is not None
             observation = self.backend.reconcile(inputs.reconcile_request)
+            requested_release_uids = {target.attempt_uid for target in release_targets}
+            released_attempt_uids = frozenset(observation.released_attempt_uids & requested_release_uids)
             application = apply_observation(
                 DbTransitionReader(self._db),
                 observation.task_updates,
@@ -1066,6 +1086,7 @@ class Controller:
             recon_effects=recon_effects,
             timeout_decisions=timeout_decisions,
             pending_kicks=pending_kicks,
+            released_attempt_uids=released_attempt_uids,
             auto_result=auto_result,
             federation_promotions=federation_promotions,
             expired_queued_federation=inputs.expired_queued_federation,
@@ -1126,7 +1147,12 @@ class Controller:
             expired_queued_federation=expired,
         )
 
-    def _worker_reconcile_request(self, snap: Tx) -> WorkerFleetReconcileRequest:
+    def _worker_reconcile_request(
+        self,
+        snap: Tx,
+        *,
+        release_targets: tuple[RuntimeReleaseTarget, ...] = (),
+    ) -> WorkerFleetReconcileRequest:
         control = reads.load_control_snapshot(snap, self._worker_health, scan_timeouts=False)
         templates: dict[JobName, job_pb2.RunTaskRequest | None] = {}
         for row in control.reconcile_rows:
@@ -1144,7 +1170,8 @@ class Controller:
             targets=[
                 WorkerReconcileTarget(plan=plan, address=worker_snapshot.worker_addresses[plan.worker_id])
                 for plan in plans_from_snapshot(worker_snapshot)
-            ]
+            ],
+            release_targets=release_targets,
         )
 
     def _schedule_phase(self, inputs: _TickInputs) -> SchedulePhaseResult:
@@ -1204,6 +1231,7 @@ class Controller:
         recon_effects: ControllerEffects | None,
         timeout_decisions: list[TerminalDecision],
         pending_kicks: list[PendingKick],
+        released_attempt_uids: frozenset[AttemptUid],
         auto_result: AutoscaleResult | None,
         federation_promotions: list[Promotion],
         expired_queued_federation: list[JobName],
@@ -1231,6 +1259,7 @@ class Controller:
             or has_recon
             or timeout_decisions
             or pending_kicks
+            or released_attempt_uids
             or autoscaler_state is not None
             or federation_promotions
             or expired_queued_federation
@@ -1264,6 +1293,8 @@ class Controller:
                 if kick_decisions:
                     finalize(cur, kick_decisions, now=now)
                     logger.info("Admin kick: finalized %d task attempt(s)", len(kick_decisions))
+            if released_attempt_uids:
+                writes.mark_attempt_runtimes_released(cur, released_attempt_uids, observed_at=Timestamp.now())
             if autoscaler_state is not None:
                 persist_autoscaler_state(cur, autoscaler_state)
         return confirmed
