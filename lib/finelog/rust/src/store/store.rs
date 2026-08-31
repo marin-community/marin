@@ -1856,6 +1856,58 @@ mod tests {
         std::fs::remove_dir_all(remote_dir).ok();
     }
 
+    /// A data directory whose catalog references object segments refuses its
+    /// first publication into a remote root that does not hold them: the two
+    /// belong to different histories (the root was wiped or the server
+    /// repointed), and a catalog published there would be unservable.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_first_publication_into_a_foreign_remote_root_is_refused() {
+        let PublishedObjectTableFixture {
+            store,
+            data_dir,
+            remote_dir,
+            ..
+        } = published_object_table("foreign_remote_root").await;
+        store.shutdown(Duration::from_secs(1)).await;
+        drop(store);
+
+        let repointed_dir = crate::test_support::unique_dir("foreign_remote_root_repointed");
+        let reopened = Store::new(
+            Some(data_dir.clone()),
+            repointed_dir.to_string_lossy().into_owned(),
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Shadow,
+        )
+        .unwrap();
+        reopened.bootstrap_maintenance();
+        // The repointed root has no HEAD to recover.
+        assert_eq!(reopened.recover_tables().await.unwrap(), 0);
+
+        let error = reopened
+            .publish_object_catalog("iris.worker")
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("different histories"),
+            "unexpected error: {error}"
+        );
+        // The refusal published nothing: the repointed root still has no HEAD.
+        assert!(ObjectTableStateStore::new(Arc::new(
+            build_remote_object_store(repointed_dir.to_str().unwrap())
+                .unwrap()
+                .unwrap(),
+        ))
+        .load("iris.worker")
+        .await
+        .unwrap()
+        .is_none());
+
+        reopened.shutdown(Duration::from_secs(1)).await;
+        std::fs::remove_dir_all(data_dir).ok();
+        std::fs::remove_dir_all(remote_dir).ok();
+        std::fs::remove_dir_all(repointed_dir).ok();
+    }
+
     /// Object recovery reads durable state only. Files left in the local object
     /// cache are never evidence that a segment is live.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

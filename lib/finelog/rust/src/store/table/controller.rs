@@ -18,6 +18,7 @@
 //! its caller. The controller serializes lease creation and the short commit
 //! only. Appends never reach it: the RAM buffer's short lock is the ingest path.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
@@ -27,11 +28,13 @@ use sha2::{Digest, Sha256};
 use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::errors::StatsError;
-use crate::proto::finelog::stats::ObjectRef;
+use crate::proto::finelog::stats::{NamespaceCatalog, ObjectRef};
 use crate::store::catalog::projection::namespace_catalog;
 use crate::store::catalog::{Catalog, ObjectSegmentRecord, SpecLifecycle};
 use crate::store::object_store::OBJECTS_PREFIX;
-use crate::store::object_store::{ObjectId, ObjectReference, ObjectStore, ObjectVersion};
+use crate::store::object_store::{
+    ObjectId, ObjectPrefix, ObjectReference, ObjectStore, ObjectVersion,
+};
 use crate::store::state_store::object::ObjectTableStateStore;
 use crate::store::state_store::StoredTableState;
 use crate::store::table_spec::TablePolicy;
@@ -695,6 +698,11 @@ impl TableController {
         let mut catalog = namespace_catalog(&self.catalog, &self.table, &objects.table_dir)
             .map_err(CommitError::PublicationDeferred)?;
         let expected = self.selected.lock().unwrap().clone();
+        if expected.is_none() {
+            self.verify_first_publication_objects(&catalog)
+                .await
+                .map_err(CommitError::PublicationDeferred)?;
+        }
         // The high-water mark is monotone across revisions: the local aggregate
         // it is computed from shrinks when retirement deletes legacy rows, and
         // a shrunken mark would let a later recovery reissue sequence numbers.
@@ -738,6 +746,58 @@ impl TableController {
         let published = Arc::new(published);
         self.snapshot.send_replace(Some(Arc::clone(&published)));
         Ok(published)
+    }
+
+    /// Refuse a first publication whose remote root is missing referenced data
+    /// objects.
+    ///
+    /// The local catalog records an object segment only after its bytes were
+    /// written through to the remote, so on the crash-before-first-publish
+    /// recovery path every reference resolves and this check passes. A
+    /// reference the root cannot resolve means the data directory and the
+    /// remote root belong to different histories — the root was wiped or the
+    /// server was repointed — and publishing would install a catalog no
+    /// recovery or cold reader can serve.
+    async fn verify_first_publication_objects(
+        &self,
+        catalog: &NamespaceCatalog,
+    ) -> Result<(), StatsError> {
+        let data_object_prefix = format!("{OBJECTS_PREFIX}/");
+        let referenced: HashSet<String> = catalog
+            .version_segments
+            .iter()
+            .flat_map(|version| version.live_segments.iter())
+            .filter_map(|segment| segment.source.object_id.as_deref())
+            .filter_map(|id| ObjectId::parse(id).ok())
+            .filter_map(|id| id.table_relative(&self.table).map(str::to_string))
+            .filter(|key| key.starts_with(&data_object_prefix))
+            .collect();
+        if referenced.is_empty() {
+            return Ok(());
+        }
+        let objects = self.require_objects()?;
+        let present: HashSet<String> = objects
+            .store
+            .list(&ObjectPrefix::table(&self.table, OBJECTS_PREFIX)?)
+            .await?
+            .into_iter()
+            .map(|metadata| metadata.id.relative_key().to_string())
+            .collect();
+        let mut missing: Vec<&String> = referenced
+            .iter()
+            .filter(|key| !present.contains(*key))
+            .collect();
+        if missing.is_empty() {
+            return Ok(());
+        }
+        missing.sort();
+        Err(StatsError::Internal(format!(
+            "table {:?} first publication references {} data objects its remote root does not hold \
+             (first missing: {:?}); the local catalog and the remote log dir describe different histories",
+            self.table,
+            missing.len(),
+            missing[0],
+        )))
     }
 
     /// Settle a commit whose outcome the state store did not report against the
