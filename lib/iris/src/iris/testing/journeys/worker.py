@@ -154,13 +154,13 @@ class WorkerJourney:
                 kind=BackendKind.WORKER,
             ),
             stub_factory=self.fleet,
-            unreachable_grace=Duration.from_ms(100),
         )
         state_dir = root / "controller"
         config = ControllerConfig(
             cluster_id="worker-journey",
             remote_state_dir=f"file://{root / 'remote'}",
             local_state_dir=state_dir,
+            worker_unreachable_grace=Duration.from_ms(100),
         )
         self.controller = Controller(
             config=config,
