@@ -125,6 +125,21 @@ def test_checkpoint_path_defaults_under_the_step_output_path():
     assert config.trainer.trainer.checkpointer.base_path == f"{ctx.output_path}/checkpoints"
 
 
+def test_restore_from_requires_the_named_checkpoint():
+    source = "s3://hero-checkpoints/step-42000"
+    step = launch.build_diagnostic_run(
+        run_id="restore-source",
+        restore_from=source,
+        dp_racks=1,
+        num_steps=42_001,
+        version="dev",
+    )
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert config.trainer.trainer.load_checkpoint_path == source
+    assert config.trainer.trainer.load_checkpoint is True
+
+
 def test_checkpoint_interval_must_be_positive():
     with pytest.raises(ValueError, match="checkpoint_interval must be positive"):
         launch.build_diagnostic_run(

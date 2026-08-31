@@ -63,6 +63,7 @@ HERO_CHECKPOINT_INTERVAL = timedelta(minutes=15)
 def build_diagnostic_run(
     *,
     run_id: str,
+    restore_from: str | None = None,
     dp_racks: int,
     num_steps: int,
     schedule_steps: int | None = None,
@@ -197,6 +198,9 @@ def build_diagnostic_run(
             train_batch_size=batch_size,
             num_train_steps=total_schedule_steps,
             master_param_mode=master_param_mode,
+            load_checkpoint_path=restore_from,
+            # An explicit source must fail instead of silently starting at step zero.
+            load_checkpoint=True if restore_from else None,
             profiler=ProfilerConfig(
                 enabled=profile_steps > 0,
                 start_step=profile_start_step,
@@ -455,9 +459,15 @@ def build_diagnostic_run(
     show_default=True,
     help="Override the pooled receiver capacity factor.",
 )
+@click.option(
+    "--restore-from",
+    default=None,
+    help="Initialize from another run's checkpoint directory, read-only.",
+)
 @build_options
 def main(
     run_id: str,
+    restore_from: str | None,
     dp_racks: int,
     num_steps: int,
     schedule_steps: int | None,
@@ -484,6 +494,7 @@ def main(
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_diagnostic_run(
         run_id=run_id,
+        restore_from=restore_from,
         dp_racks=dp_racks,
         num_steps=num_steps,
         schedule_steps=schedule_steps,

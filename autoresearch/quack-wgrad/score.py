@@ -45,7 +45,7 @@ def main() -> None:
     parser.add_argument(
         "--expect-min-first-step",
         type=int,
-        default=30000,
+        default=42000,
         help="Fail unless the run's first logged step is at least this. A restore that silently "
         "fell back to scratch logs from step 1 and would otherwise score as a valid window.",
     )
@@ -87,9 +87,7 @@ def main() -> None:
         # stall steps swing the mean by >2x the keep bar while medians hold; stall count guards
         # the median's blind spot (a treatment that CAUSES stalls must not hide behind it).
         "mfu_median": round(statistics.median(mfu), 4) if mfu else None,
-        "stall_steps": (
-            sum(1 for v in mfu if v < statistics.median(mfu) * 0.97) if mfu else None
-        ),
+        "stall_steps": sum(1 for v in mfu if v < statistics.median(mfu) * 0.97) if mfu else None,
         "mfu_mean": round(statistics.fmean(mfu), 4) if mfu else None,
         "mfu_stdev": round(statistics.stdev(mfu), 4) if len(mfu) > 1 else None,
         "tokens_per_second_mean": round(statistics.fmean(tokens), 1) if tokens else None,
@@ -116,7 +114,7 @@ def main() -> None:
     # that makes the window not the window the loop agreed to compare -- a scratch fallback, a
     # hole in any guard series, a NaN -- fails the arm here, not downstream.
     expected_points = hi - lo + 1
-    numeric = [x for x in (mfu + drops + [v for _, v in losses] + peaks) if x is not None]
+    numeric = [x for x in mfu + drops + [v for _, v in losses] + peaks if x is not None]
     problems = []
     if first_step < args.expect_min_first_step:
         problems.append(f"first_step {first_step} < {args.expect_min_first_step}: restore fell back to scratch")

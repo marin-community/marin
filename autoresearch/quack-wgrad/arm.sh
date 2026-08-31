@@ -10,11 +10,12 @@
 # silently wrong would mean nothing.
 #
 # Protocol is inherited verbatim from the 8753-mfu campaign so the numbers are comparable:
-#   - one NVL72 rack on cw-us-east-08a, restore from the live hero's step-30000 checkpoint,
+#   - one EP64 slice of an NVL72 rack on cw-us-east-08a, restore from the live hero's latest
+#     durable step-42000 checkpoint,
 #     mixture data; NUM_STEPS is the ABSOLUTE stop step, never a relative count
 #   - score the run median of throughput/mfu over restore steps +5..+19, with drops and the
 #     pointwise loss series as fidelity guards
-#   - same-night interleaved draws only: rack placement varies +/-2.8% night to night
+#   - same-session interleaved draws only
 #   - no checkpoints, no eval, profiler off on scored arms
 #   - JAX_COMPILATION_CACHE_DIR rotated per run id (clique-init deadlock dodge); a RESUBMITTED
 #     arm must use a fresh RID and VERSION
@@ -89,17 +90,17 @@ if [ -f "${LOOP_DIR}/arms.tsv" ] && awk -F'\t' -v rid="$RID" -v ver="$VERSION" \
   exit 1
 fi
 
-PRIORITY="${PRIORITY:-production}"
+PRIORITY="${PRIORITY:-interactive}"
 # Covers Kueue queue wait PLUS the run: same-band gangs queue FIFO behind whatever holds the
 # rack, and the coordinator's timeout clock runs while its child sits in the gate. Occupancy
 # after admission is intrinsically bounded by NUM_STEPS (~30 steps past restore); the watchdog
 # enforces the <1h-runtime rule from admission.
 ARM_TIMEOUT="${ARM_TIMEOUT:-28800}"
-NUM_STEPS="${NUM_STEPS:-30030}"
+NUM_STEPS="${NUM_STEPS:-42030}"
 TRAINING_DATA="${TRAINING_DATA:-mixture}"
 MASTER_PARAMS="${MASTER_PARAMS:-device}"
 MOE_IMPL="${MOE_IMPL:-ragged_all_to_all}"
-RESTORE_FROM="${RESTORE_FROM:-s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-30000}"
+RESTORE_FROM="${RESTORE_FROM:-s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-42000}"
 RESTORE_ARGS=()
 if [ -n "$RESTORE_FROM" ]; then
   RESTORE_ARGS=(--restore-from "$RESTORE_FROM")
@@ -121,7 +122,7 @@ uv run iris --config lib/iris/config/marin.yaml job run \
   -e MARIN_PREFIX s3://marin-us-east-02a/marin \
   -e IRIS_PORT_JAX "${PORT:-32711}" \
   -e AWS_MAX_ATTEMPTS 25 -e AWS_RETRY_MODE adaptive \
-  -e JAX_COMPILATION_CACHE_DIR "s3://marin-us-east-02a/marin/tmp/ttl=30d/jaxcache/${RID}" \
+  -e JAX_COMPILATION_CACHE_DIR "s3://hero-checkpoints/tmp/ttl=30d/jaxcache/${RID}" \
   -e XLA_FLAGS "${ARM_XLA_FLAGS:-}" \
   -e XLA_PYTHON_CLIENT_MEM_FRACTION "${MEM_FRACTION:-0.75}" \
   -e XLA_RAGGED_A2A_DK_CTAS_PER_SM "${DK_CTAS_PER_SM:-}" \
@@ -136,7 +137,7 @@ uv run iris --config lib/iris/config/marin.yaml job run \
      --processes-per-task 4 \
      --master-params "${MASTER_PARAMS}" \
      --training-data "${TRAINING_DATA}" \
-     --profile-steps "${PROFILE_STEPS:-0}" --profile-start-step "${PROFILE_START_STEP:-30021}" \
+     --profile-steps "${PROFILE_STEPS:-0}" --profile-start-step "${PROFILE_START_STEP:-42021}" \
      --watch-interval 0 --eval-every 0 \
      --no-save-checkpoints \
      "${RESTORE_ARGS[@]}" \
