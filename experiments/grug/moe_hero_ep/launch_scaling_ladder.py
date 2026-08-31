@@ -67,6 +67,7 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     hero_grug_trainer_config,
     hero_trainer_config,
     validation_datasets,
+    with_transport_remat_mode,
 )
 from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic, build_hero_configs
 from experiments.grug.moe_hero_ep.small_scale_abl_launch import (
@@ -114,7 +115,8 @@ LADDER_MAX_TASK_FAILURES = 1000
 def _ladder_model(size: str):
     """The GrugModelConfig for ``size`` at the hero routing geometry with the QB histogram estimator."""
     if size == "d6144":
-        return HERO_MODEL_CONFIG
+        # Only the hero rung is measured with the layer-carry offload.
+        return with_transport_remat_mode(HERO_MODEL_CONFIG)
     shape = SMALL_SHAPES[size]
     return _small_model(
         shape,

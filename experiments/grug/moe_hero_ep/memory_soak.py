@@ -52,6 +52,7 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     HERO_NODE_RAM,
     HERO_QB_HIST_BINS,
     HeroThroughputResult,
+    with_transport_remat_mode,
 )
 from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic
 from experiments.grug.moe_hero_ep.small_scale_abl_launch import (
@@ -164,6 +165,7 @@ def build_memory_soak_run(
         qb_use_histogram=True,
         qb_hist_bins=HERO_QB_HIST_BINS,
     )
+    model = with_transport_remat_mode(model)
     local_experts = num_experts // expert_axis
     if local_experts % model.num_expert_waves != 0:
         raise ValueError(f"local expert count={local_experts} must divide num_expert_waves={model.num_expert_waves}")
