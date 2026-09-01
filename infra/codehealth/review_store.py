@@ -639,7 +639,7 @@ def require_complete_sync(engine: Engine, repository: str) -> SyncStatusSummary:
     return status
 
 
-def completed_pull_requests(engine: Engine, sync_id: str) -> set[int]:
+def completed_pull_request_numbers(engine: Engine, sync_id: str) -> set[int]:
     with engine.begin() as conn:
         return set(
             conn.execute(

@@ -216,7 +216,6 @@ def _format_batch(items: list[CommentToClassify]) -> str:
     return "\n\n".join(blocks)
 
 
-# Per-batch wall-clock ceiling for one model request.
 CLASSIFIER_TIMEOUT = 300
 
 

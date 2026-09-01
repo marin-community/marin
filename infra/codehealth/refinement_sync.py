@@ -24,7 +24,7 @@ from .review_store import (
     cached_review_event_fingerprints,
     checkpoint_reused_pull_requests,
     complete_sync,
-    completed_pull_requests,
+    completed_pull_request_numbers,
     database_config_from_environment,
     database_engine,
     fail_sync,
@@ -122,7 +122,7 @@ def sync_review_activity(
     """Run or resume one fixed review window and checkpoint every reconciled PR batch."""
     current = now or dt.datetime.now(dt.UTC)
     run = start_or_resume_sync(engine, repository, now=current, days=days)
-    completed = completed_pull_requests(engine, run.sync_id)
+    completed = completed_pull_request_numbers(engine, run.sync_id)
     cached_fingerprints = cached_pull_request_fingerprints(engine, repository)
     cached_event_fingerprints = cached_review_event_fingerprints(engine, repository)
     try:
@@ -170,7 +170,7 @@ def sync_review_activity(
     except Exception as error:
         fail_sync(engine, run.sync_id, str(error))
         raise
-    persisted = completed_pull_requests(engine, run.sync_id)
+    persisted = completed_pull_request_numbers(engine, run.sync_id)
     return SyncResult(
         sync_id=run.sync_id,
         repository=repository,

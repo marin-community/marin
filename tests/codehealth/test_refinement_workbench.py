@@ -126,7 +126,7 @@ def _complete(engine: sqlalchemy.Engine, run: review_store.SyncRun) -> None:
     review_store.complete_sync(
         engine,
         run.sync_id,
-        candidate_pull_requests=len(review_store.completed_pull_requests(engine, run.sync_id)),
+        candidate_pull_requests=len(review_store.completed_pull_request_numbers(engine, run.sync_id)),
         reused_pull_requests=0,
         github_usage=GitHubUsage(
             graphql_requests=1,
@@ -268,7 +268,7 @@ def test_weekly_sync_publishes_complete_queryable_generation(
     assert status is not None
     assert status.status == review_store.SyncStatus.COMPLETE
     assert status.reused_pull_requests == 1
-    assert review_store.completed_pull_requests(engine, result.sync_id) == {8700, 8701, 8702}
+    assert review_store.completed_pull_request_numbers(engine, result.sync_id) == {8700, 8701, 8702}
     assert review_store.catalog_snapshot_shas(engine) == {refinement_sync.catalog_sha(load_catalog())}
     rows = review_store.list_pull_request_activity(
         engine,
@@ -290,7 +290,7 @@ def test_failed_sync_resumes_same_window_after_last_committed_pull_request(engin
     assert resumed.sync_id == first.sync_id
     assert resumed.window_start == first.window_start.replace(tzinfo=None)
     assert resumed.window_end == first.window_end.replace(tzinfo=None)
-    assert review_store.completed_pull_requests(engine, resumed.sync_id) == {1}
+    assert review_store.completed_pull_request_numbers(engine, resumed.sync_id) == {1}
 
     review_store.store_bundles(engine, resumed.sync_id, (_bundle(2),), observed_at=NOW + dt.timedelta(hours=1))
     review_store.complete_sync(
@@ -312,7 +312,7 @@ def test_failed_sync_resumes_same_window_after_last_committed_pull_request(engin
     assert len(runs) == 1
     assert runs[0]["status"] == review_store.SyncStatus.COMPLETE.value
     assert runs[0]["window_start"] == (NOW - dt.timedelta(days=30)).replace(tzinfo=None)
-    assert review_store.completed_pull_requests(engine, resumed.sync_id) == {1, 2}
+    assert review_store.completed_pull_request_numbers(engine, resumed.sync_id) == {1, 2}
 
 
 def test_failed_sync_is_hidden_and_poisoned_window_is_abandoned(engine: sqlalchemy.Engine) -> None:

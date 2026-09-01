@@ -88,7 +88,7 @@ model and reasoning effort.
 Probe output is experimental evidence, not a human label or a recall estimate.
 `rule-activity` reports which historical catalog identities have stored
 snapshots. The current checkout is snapshotted on every successful sync;
-catalogs first observed before this deployment remain explicitly unknown.
+catalog identities without a stored snapshot remain explicitly unknown.
 
 The agent writes its own Markdown report and may use seaborn for charts.
 `post-report` publishes a versioned Loom artifact and appends a typed result to

@@ -31,6 +31,7 @@ FINGERPRINT_BATCH_SIZE = 100
 REST_RETRY_RESERVE = 150
 REST_PAGE_SIZE = 100
 DIAGNOSTIC_EVENT_LIMIT = 10
+UNKNOWN_ACTOR_LOGIN = "unknown"
 
 EventKind = Literal["inline_comment", "review", "issue_comment"]
 ReviewEventKey = tuple[int, EventKind, int]
@@ -841,7 +842,7 @@ def _fingerprint_nodes(client: GitHubClient, node_ids: list[str]) -> dict[str, P
 def _actor_identity(actor: dict | None) -> ActorIdentity:
     actor = actor or {}
     return ActorIdentity(
-        login=str(actor.get("login") or "unknown"),
+        login=str(actor.get("login") or UNKNOWN_ACTOR_LOGIN),
         actor_type=str(actor.get("__typename") or "Unknown"),
     )
 
@@ -885,7 +886,7 @@ def _event_record(
         parent_comment_id=(node.get("replyTo") or {}).get("databaseId"),
         thread_is_resolved=thread.get("isResolved"),
         thread_is_outdated=thread.get("isOutdated"),
-        thread_resolved_by=None if resolved_by.login == "unknown" else resolved_by.login,
+        thread_resolved_by=None if resolved_by.login == UNKNOWN_ACTOR_LOGIN else resolved_by.login,
         path=node.get("path") or thread.get("path"),
         side=thread.get("diffSide"),
         line=node.get("line"),
@@ -1010,7 +1011,7 @@ def _hydrate_graphql(
                 comment_ids=tuple(int(comment["databaseId"]) for comment in comments),
                 is_resolved=bool(thread["isResolved"]),
                 is_outdated=bool(thread["isOutdated"]),
-                resolved_by=None if resolved_by.login == "unknown" else resolved_by.login,
+                resolved_by=None if resolved_by.login == UNKNOWN_ACTOR_LOGIN else resolved_by.login,
             )
         )
 
