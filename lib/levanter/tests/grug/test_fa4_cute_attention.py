@@ -176,6 +176,18 @@ def test_fa4_frontend_shards_metadata_with_qkv_batch_axis(monkeypatch):
     assert out.sharding.spec == qkv_sharding.spec
 
 
+def test_fa4_wide_attention_rejects_unsupported_hardware(monkeypatch):
+    q = jnp.zeros((1, 1, 2, 128), dtype=jnp.bfloat16)
+    k = jnp.zeros((1, 1, 1, 128), dtype=jnp.bfloat16)
+    v = jnp.zeros((1, 1, 1, 128), dtype=jnp.bfloat16)
+    monkeypatch.setattr(jax, "default_backend", lambda: "gpu")
+    monkeypatch.setattr(fa4_cute, "gpu_compute_capability", lambda: 90)
+    monkeypatch.setattr(fa4_cute, "fa4_cute_attention_forward", lambda q, *_args, **_kwargs: q)
+
+    with pytest.raises(ValueError):
+        attention(q, k, v, AttentionMask.causal(), implementation="gpu_fa4_cute_wide")
+
+
 def _assert_real_gpu_fa4_cute_matches_reference(
     q,
     k,
