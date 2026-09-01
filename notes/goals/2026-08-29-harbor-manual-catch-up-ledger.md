@@ -6,7 +6,7 @@ Frozen reconstruction refs:
 - merge base: `684f46c91aaf4737bcd15f755a2405285205f2fe`
 - old fork `main`: `da38231dcc60cdf70ca7a09aa8cdf66f9a5a0424`
 - frozen upstream base: `8b23ff0aececdb72199e6a53e536504875bcf0ca`
-- rebuilt candidate: `860f39fb6a35aa22ad4123e65971517ef75be842`
+- rebuilt candidate: `720c877b2efb17576cf7f6f9de14ff1ac1e9a263`
 
 Non-merge summary: **9 carry, 67 fix, 76 drop; 152 total.** All nine merge commits are dropped because the candidate is a linear replay.
 The replacement column uses short hashes from the rebuilt candidate above. `upstream` means the behavior is already owned by the frozen upstream base.
@@ -184,9 +184,9 @@ The replacement column uses short hashes from the rebuilt candidate above. `upst
 
 ## Reconstruction checks
 
-- Candidate ancestry is exactly `8b23ff0a` plus 39 linear, non-merge commits.
-- Every retained candidate commit explains when its fork-only behavior can be dropped. Thirty-three use a `Drop when:` label; six say `Drop it when` in prose.
+- Candidate ancestry is exactly `8b23ff0a` plus 40 linear, non-merge commits.
+- Every retained candidate commit explains when its fork-only behavior can be dropped. Thirty-four use a `Drop when:` label; six say `Drop it when` in prose.
 - A `range-diff` against the earlier 36-commit replay maps 35 commits exactly. The final difference is commit-message formatting only; its tree is unchanged.
-- `99dab736` and `b6b54863` each represent their stable-fork behavior once. `860f39fb` is a staged-only SQLAlchemy CI constraint with its own removal condition.
+- `99dab736` and `b6b54863` each represent their stable-fork behavior once. `860f39fb` is a staged-only SQLAlchemy CI constraint. `720c877b` is a review follow-up that roots Windows setup-file paths on the Windows drive. Each has its own removal condition.
 - Upstream advanced by six commits after the base was frozen. Those commits belong to the next routine refresh, not this one-time catch-up.
 - Exact-candidate hosted Harbor CI is green. Final refetch, marker sweep, Marin checks, and the live AIME smoke are recorded in the draft PR evidence.
