@@ -336,37 +336,11 @@ def build_ladder_run(
     "the rung (6000 at d6144, final only elsewhere). Resume uses the rolling temporary checkpoint "
     "and is not affected by this option.",
 )
-@click.option(
-    "--gate-router-weight-decay",
-    type=click.FloatRange(min=0.0),
-    default=0.0,
-    show_default=True,
-    help="Decoupled weight decay on attn_gate and the router weight, annealed linearly to 0 over "
-    "num_train_steps. 0 disables it.",
-)
-@click.option(
-    "--source-checkpoint-path",
-    default=None,
-    help="Fork from this pinned checkpoint (e.g. another run's step directory) under this run's own "
-    "id: a cold start restores it (full state, including step); retries use this run's own checkpoints.",
-)
 @build_options
 def main(
-    run_id: str,
-    size: str,
-    num_steps: int | None,
-    checkpoint_every: int | None,
-    gate_router_weight_decay: float,
-    source_checkpoint_path: str | None,
+    run_id: str, size: str, num_steps: int | None, checkpoint_every: int | None
 ) -> ArtifactStep[HeroThroughputResult]:
-    return build_ladder_run(
-        run_id=run_id,
-        size=size,
-        num_steps=num_steps,
-        checkpoint_every=checkpoint_every,
-        gate_router_weight_decay=gate_router_weight_decay,
-        source_checkpoint_path=source_checkpoint_path,
-    )
+    return build_ladder_run(run_id=run_id, size=size, num_steps=num_steps, checkpoint_every=checkpoint_every)
 
 
 if __name__ == "__main__":
