@@ -22,6 +22,7 @@ import functools
 import logging
 import math
 from collections.abc import Callable
+from enum import auto, IntEnum, unique
 from typing import Protocol
 
 import jax
@@ -209,8 +210,17 @@ def _gather_dispatch_rows_bwd(
 _gather_dispatch_rows.defvjp(_gather_dispatch_rows_fwd, _gather_dispatch_rows_bwd)
 
 
+@unique
+class _LoopLocalZeroSite(IntEnum):
+    DISPATCH_OUTPUT = auto()
+    DISPATCH_COTANGENT = auto()
+    RETURN_COTANGENT = auto()
+    RETURN_PASSTHROUGH = auto()
+    RETURN_OUTPUT = auto()
+
+
 def _loop_local_zeros(
-    rows: int, hidden_dim: int, dtype, tie: Int[Array, "..."], site: int = 0
+    rows: int, hidden_dim: int, dtype, tie: Int[Array, "..."], site: _LoopLocalZeroSite
 ) -> Float[Array, "rows H"]:
     """Zero buffer for an in-place ``ragged_all_to_all`` output slot, built so XLA never copies it.
 
@@ -225,10 +235,11 @@ def _loop_local_zeros(
     ``tie`` must be a non-negative integer array (group or transfer sizes): with ``site >= 0``,
     ``min(tie[0], -site) + site`` is exactly zero at runtime but not foldable at compile time.
 
-    ``site`` must be distinct per call site. Two sites can hold the SAME tie tensor without it
-    being obvious (dispatch send_sizes and return recv_sizes are one tensor in ep_common), and
-    same-shape same-tie fills CSE into one value with two destructive in-place a2a consumers --
-    which makes CopyInsertion mint back the multi-GB copy this helper exists to prevent.
+    Each ``site`` enum member identifies one call site. Two sites can hold the SAME tie tensor
+    without it being obvious (dispatch send_sizes and return recv_sizes are one tensor in
+    ep_common), and same-shape same-tie fills CSE into one value with two destructive in-place a2a
+    consumers -- which makes CopyInsertion mint back the multi-GB copy this helper exists to
+    prevent.
     """
     zero = (jnp.minimum(tie.reshape(-1)[0], -site) + site).astype(dtype)
     return jax.lax.broadcast(zero, (rows, hidden_dim))
@@ -254,7 +265,9 @@ def _dispatch_ragged_a2a(
     read 0 downstream, and dropped source rows must read a 0 cotangent in the backward.
     """
     del source_rows
-    output_init = _loop_local_zeros(capacity, chunk_source.shape[1], chunk_source.dtype, send_sizes, site=1)
+    output_init = _loop_local_zeros(
+        capacity, chunk_source.shape[1], chunk_source.dtype, send_sizes, site=_LoopLocalZeroSite.DISPATCH_OUTPUT
+    )
     return jax.lax.ragged_all_to_all(
         chunk_source, output_init, input_offsets, send_sizes, output_offsets, recv_sizes, axis_name="expert"
     )
@@ -292,7 +305,9 @@ def _dispatch_ragged_a2a_bwd(
     # its own send_sizes, which is the SAME tensor as this dispatch's recv_sizes, and two fills
     # with identical shape and tie CSE back into one value with a destructive consumer --
     # re-minting exactly the copy this construction removes.
-    init = _loop_local_zeros(source_rows, cotangent.shape[1], cotangent.dtype, send_sizes, site=2)
+    init = _loop_local_zeros(
+        source_rows, cotangent.shape[1], cotangent.dtype, send_sizes, site=_LoopLocalZeroSite.DISPATCH_COTANGENT
+    )
     source_ct = jax.lax.ragged_all_to_all(
         cotangent, init, exchanged_output_offsets, recv_sizes, exchanged_input_offsets, send_sizes, axis_name="expert"
     )
@@ -347,7 +362,9 @@ def _return_ragged_a2a_bwd(
     input_offsets, send_sizes, output_offsets, recv_sizes = residuals
     exchanged_output_offsets = jax.lax.all_to_all(output_offsets, "expert", 0, 0, tiled=True)
     exchanged_input_offsets = jax.lax.all_to_all(input_offsets, "expert", 0, 0, tiled=True)
-    init = _loop_local_zeros(capacity, cotangent.shape[1], cotangent.dtype, recv_sizes, site=3)
+    init = _loop_local_zeros(
+        capacity, cotangent.shape[1], cotangent.dtype, recv_sizes, site=_LoopLocalZeroSite.RETURN_COTANGENT
+    )
     out_dispatch_ct = jax.lax.ragged_all_to_all(
         cotangent, init, exchanged_output_offsets, recv_sizes, exchanged_input_offsets, send_sizes, axis_name="expert"
     )
@@ -363,7 +380,13 @@ def _return_ragged_a2a_bwd(
         .add(-1)
     )
     written = jnp.broadcast_to(jnp.cumsum(interval_marks)[:, None], cotangent.shape)
-    passthrough_zero = _loop_local_zeros(cotangent.shape[0], cotangent.shape[1], cotangent.dtype, send_sizes, site=4)
+    passthrough_zero = _loop_local_zeros(
+        cotangent.shape[0],
+        cotangent.shape[1],
+        cotangent.dtype,
+        send_sizes,
+        site=_LoopLocalZeroSite.RETURN_PASSTHROUGH,
+    )
     returned_ct = jax.lax.select_n(written, cotangent, passthrough_zero)
     return out_dispatch_ct, returned_ct, None, None, None, None
 
@@ -418,7 +441,9 @@ def _moe_mlp_ep_ragged_a2a_local(
     # Built per-iteration (not jnp.zeros) so the layer scan does not re-copy a hoisted
     # constant into the in-place return a2a's output slot every step; see _loop_local_zeros.
     # The zeros are load-bearing: rows no peer writes back must read 0 in the combine.
-    returned = _loop_local_zeros(assignments_per_shard, hidden_dim, x_local.dtype, group_sizes, site=5)  # [TK, H]
+    returned = _loop_local_zeros(
+        assignments_per_shard, hidden_dim, x_local.dtype, group_sizes, site=_LoopLocalZeroSite.RETURN_OUTPUT
+    )  # [TK, H]
     accepted_local = jnp.zeros((), dtype=jnp.int32)
     for chunk_index in range(chunks):
         with jax.named_scope(f"moe_chunk_{chunk_index}"):

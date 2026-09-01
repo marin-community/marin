@@ -25,7 +25,7 @@ from levanter.grug._moe.common import (
 )
 from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
 from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
-from levanter.grug._moe.ep_ragged_all_to_all import _loop_local_zeros
+from levanter.grug._moe.ep_ragged_all_to_all import _loop_local_zeros, _LoopLocalZeroSite
 from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import (
     _moe_mlp_ep_fixed_pooled_wave_a2a_local,
     _interleaved_receiver_ranks,
@@ -1386,7 +1386,7 @@ def test_ragged_a2a_receiver_clipping_respects_capacity():
     assert int(jnp.sum(clipped)) < int(jnp.sum(group_sizes))
 
 
-@pytest.mark.parametrize("site", [0, 1, 2, 3, 4, 5])
+@pytest.mark.parametrize("site", list(_LoopLocalZeroSite))
 @pytest.mark.parametrize(
     "tie",
     [
@@ -1396,13 +1396,11 @@ def test_ragged_a2a_receiver_clipping_respects_capacity():
     ],
     ids=["all-empty-groups", "mixed", "large-first-group"],
 )
-def test_loop_local_zeros_fills_exact_zeros(site: int, tie: np.ndarray):
+def test_loop_local_zeros_fills_exact_zeros(site: _LoopLocalZeroSite, tie: np.ndarray):
     """The ragged-a2a output inits must be exactly zero at every call site the backend uses.
 
     Dropped source rows, and receiver rows no peer writes, keep this init; the combine reads them
-    as zero contributions. A non-zero fill corrupts training without raising. ``site=0`` is the
-    boundary case: its value is zero only because ``tie`` is non-negative, which an all-zero
-    ``tie`` exercises tightest.
+    as zero contributions. A non-zero fill corrupts training without raising.
     """
     filled = _loop_local_zeros(4, 3, jnp.float32, jnp.asarray(tie), site=site)
 
@@ -1434,7 +1432,13 @@ def test_loop_local_zeros_is_not_a_foldable_constant():
     ``min(tie[0], -site) + site`` resists the fold because XLA cannot prove ``tie`` is
     non-negative; an arithmetic identity such as ``tie[0] * 0`` would not.
     """
-    assert _optimized_hlo_opcode_count(lambda tie: _loop_local_zeros(4, 3, jnp.float32, tie, site=1), "kMinimum") == 1
+    assert (
+        _optimized_hlo_opcode_count(
+            lambda tie: _loop_local_zeros(4, 3, jnp.float32, tie, site=_LoopLocalZeroSite.DISPATCH_OUTPUT),
+            "kMinimum",
+        )
+        == 1
+    )
     assert (
         _optimized_hlo_opcode_count(
             lambda tie: jnp.broadcast_to((tie.reshape(-1)[0] * 0).astype(jnp.float32), (4, 3)), "kMinimum"
@@ -1446,12 +1450,12 @@ def test_loop_local_zeros_is_not_a_foldable_constant():
 def test_loop_local_zeros_sites_prevent_cse():
     def distinct_sites(tie):
         return (
-            _loop_local_zeros(4, 3, jnp.float32, tie, site=1),
-            _loop_local_zeros(4, 3, jnp.float32, tie, site=2),
+            _loop_local_zeros(4, 3, jnp.float32, tie, site=_LoopLocalZeroSite.DISPATCH_OUTPUT),
+            _loop_local_zeros(4, 3, jnp.float32, tie, site=_LoopLocalZeroSite.DISPATCH_COTANGENT),
         )
 
     def repeated_site(tie):
-        fill = _loop_local_zeros(4, 3, jnp.float32, tie, site=1)
+        fill = _loop_local_zeros(4, 3, jnp.float32, tie, site=_LoopLocalZeroSite.DISPATCH_OUTPUT)
         return fill, fill
 
     assert _optimized_hlo_opcode_count(distinct_sites, "kMinimum") == 2
