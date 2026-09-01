@@ -398,8 +398,73 @@ SNOWBALL_FULL_R4 = ScalePreset(
     extra_overrides=SNOWBALL_R4_OVERRIDES,
 )
 
+# Round-5 Snowball recipe: round 4's binding constraint was the generation cap
+# (40-48% of rollouts truncated at 2048 tokens; AIME/Omni/TheoremQA near-total),
+# so the response budget rises to 8192 over the same 1024-token prompt budget.
+# micro_train drops to 2: micro=8 was marginal at 3072-token sequences (two
+# OOMs in the round-4 naive arm), and activation memory tracks tokens per
+# micro batch (2x9216 stays under the 8x3072 that OOMed). Optimizer and
+# sampler knobs are unchanged from round 4.
+SNOWBALL_SMOKE_R5 = ScalePreset(
+    label="snowball-smoke-r5",
+    num_nodes=5,
+    role_plan=SkyRLRolePlan(
+        colocate_all=False,
+        policy_num_nodes=4,
+        policy_num_gpus_per_node=GPUS_PER_NODE,
+        num_inference_engines=1,
+        inference_engine_tensor_parallel_size=1,
+        train_batch_size=64,
+        policy_mini_batch_size=64,
+        micro_train_batch_size_per_gpu=2,
+        n_samples_per_prompt=8,
+    ),
+    max_steps=4,
+    eval_interval=-1,
+    ckpt_interval=4,
+    request_window_tokens=9216,
+    max_new_tokens=8192,
+    micro_forward_batch_size_per_gpu=2,
+    evals="gsm8k-smoke",
+    extra_overrides=SNOWBALL_R4_OVERRIDES,
+)
+
+SNOWBALL_FULL_R5 = ScalePreset(
+    label="snowball-full-r5",
+    num_nodes=8,
+    role_plan=SkyRLRolePlan(
+        colocate_all=False,
+        policy_num_nodes=4,
+        policy_num_gpus_per_node=GPUS_PER_NODE,
+        num_inference_engines=4,
+        inference_engine_tensor_parallel_size=1,
+        train_batch_size=64,
+        policy_mini_batch_size=64,
+        micro_train_batch_size_per_gpu=2,
+        n_samples_per_prompt=8,
+    ),
+    max_steps=120,
+    eval_interval=10,
+    ckpt_interval=10,
+    request_window_tokens=9216,
+    max_new_tokens=8192,
+    micro_forward_batch_size_per_gpu=2,
+    evals="math500,gsm8k-0shot",
+    extra_overrides=SNOWBALL_R4_OVERRIDES,
+)
+
 SCALES = {
-    preset.label: preset for preset in (SMOKE, FULL, SNOWBALL_SMOKE, SNOWBALL_FULL, SNOWBALL_SMOKE_R4, SNOWBALL_FULL_R4)
+    preset.label: preset
+    for preset in (
+        SMOKE,
+        FULL,
+        SNOWBALL_SMOKE,
+        SNOWBALL_FULL,
+        SNOWBALL_SMOKE_R4,
+        SNOWBALL_FULL_R4,
+        SNOWBALL_SMOKE_R5,
+        SNOWBALL_FULL_R5,
+    )
 }
 
 # The pool filter must keep every retained prompt under each preset's

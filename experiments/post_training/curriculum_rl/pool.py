@@ -96,18 +96,16 @@ ANSWER_LINE_INSTRUCTION = (
     " 'Answer: <answer>'. The automated grader reads only that line; do not use \\boxed{}."
 )
 
-# Round-4 system message: the round-3 Snowball arms showed a trailing user
-# instruction loses to the SFT answer style (\boxed) on every bin whose grader
-# wants a different final line, so the format contract moves into a system turn
-# (validated against the served base model before the pool bump; see #8765).
+# The round-3 Snowball arms showed a trailing user instruction loses to the
+# SFT answer style (\boxed) on every bin whose grader wants a different final
+# line, so the format contract also lives in a system turn. Round 5 compressed
+# the round-4 wording from 111 to 37 tokens after a served-model A/B (100-250
+# rows per variant, temp 1.0): rule-graded compliance was flat across the
+# 111/66/37-token variants and pass rates tied or favored the shortest, so the
+# extra words bought nothing (#8765).
 SYSTEM_PROMPT = (
-    "You are a careful mathematical problem solver. Work through each problem step by step, "
-    "verify intermediate results, and keep the reasoning focused on the given problem. When "
-    "you are done reasoning, state the final answer exactly once.\n\n"
-    "Each problem statement specifies the exact format of the final answer line (for example, "
-    "a line starting with 'Answer:' or a line starting with '####'). An automated grader reads "
-    "only that format: end your response with the requested final-answer line, and do not wrap "
-    "the final answer in \\boxed{} or add any text after it."
+    "Solve the problem step by step. End with the exact final-answer line the problem "
+    "requests; an automated grader reads only that line. No \\boxed{}, no text after it."
 )
 
 GSM8K_TRAIN_ROWS = 2000

@@ -41,6 +41,9 @@ SNOWBALL_VERSION_TAG = "2026.08.31.1"
 # Round 4: MuonH at 1e-5, 120 steps x 64 prompts, system-prompted pool,
 # reversion_mass=2. Charted as its own family so round-3 series stay intact.
 SNOWBALL_R4_VERSION_TAG = "2026.09.01.1"
+# Round 5: round-4 recipe with an 8192-token response budget and the
+# tightened system prompt.
+SNOWBALL_R5_VERSION_TAG = "2026.09.02.1"
 ARM_ORDER = (
     "naive",
     "naive-dapo",
@@ -54,6 +57,8 @@ ARM_ORDER = (
     "snowball-grade-prior-dapo",
     "snowball-r4-naive",
     "snowball-r4-grade-prior-dapo",
+    "snowball-r5-naive",
+    "snowball-r5-grade-prior-dapo",
 )
 # Sampler identity shared across families: the snowball-* arms reuse the Qwen
 # sampler configurations, so cross-family charts keep one color per sampler.
@@ -69,6 +74,7 @@ FAMILY_LABELS = {
     "qwen": "Qwen3-0.6B",
     "snowball": "Snowball 67B-A2B SFT",
     "snowball-r4": "Snowball 67B-A2B SFT (round 4: MuonH + system prompt)",
+    "snowball-r5": "Snowball 67B-A2B SFT (round 5: 8192-token budget)",
 }
 # Validation bin -> ladder grade (pool.py bins). The end metric weights each
 # bin by 1 + grade; the weights are fixed here and never visible to samplers.
@@ -94,25 +100,35 @@ TOKENS_KEY = "generate/avg_num_tokens"
 QWEN_RESPONSES_PER_GENERATE = 512 * 8
 SNOWBALL_RESPONSES_PER_GENERATE = 128 * 8
 SNOWBALL_R4_RESPONSES_PER_GENERATE = 64 * 8
+SNOWBALL_R5_RESPONSES_PER_GENERATE = 64 * 8
 
 
 def family_of(arm: str) -> str:
+    if arm.startswith("snowball-r5-"):
+        return "snowball-r5"
     if arm.startswith("snowball-r4-"):
         return "snowball-r4"
     return "snowball" if arm.startswith("snowball-") else "qwen"
 
 
 def sampler_of(arm: str) -> str:
-    return arm.removeprefix("snowball-r4-").removeprefix("snowball-")
+    return arm.removeprefix("snowball-r5-").removeprefix("snowball-r4-").removeprefix("snowball-")
 
 
 def responses_per_generate(arm: str) -> int:
+    if family_of(arm) == "snowball-r5":
+        return SNOWBALL_R5_RESPONSES_PER_GENERATE
     if family_of(arm) == "snowball-r4":
         return SNOWBALL_R4_RESPONSES_PER_GENERATE
     return SNOWBALL_RESPONSES_PER_GENERATE if family_of(arm) == "snowball" else QWEN_RESPONSES_PER_GENERATE
 
 
-FAMILY_TAGS = {"qwen": VERSION_TAG, "snowball": SNOWBALL_VERSION_TAG, "snowball-r4": SNOWBALL_R4_VERSION_TAG}
+FAMILY_TAGS = {
+    "qwen": VERSION_TAG,
+    "snowball": SNOWBALL_VERSION_TAG,
+    "snowball-r4": SNOWBALL_R4_VERSION_TAG,
+    "snowball-r5": SNOWBALL_R5_VERSION_TAG,
+}
 
 
 def arm_of(run_name: str) -> str | None:
@@ -122,6 +138,8 @@ def arm_of(run_name: str) -> str | None:
     # Snowball checkpoint names carry the scale label (launch.py only drops the
     # suffix for the Qwen FULL preset): snowball-naive-snowball-full -> snowball-naive,
     # snowball-naive-snowball-full-r4 -> snowball-r4-naive.
+    if arm.endswith("-snowball-full-r5"):
+        arm = "snowball-r5-" + arm.removeprefix("snowball-").removesuffix("-snowball-full-r5")
     if arm.endswith("-snowball-full-r4"):
         arm = "snowball-r4-" + arm.removeprefix("snowball-").removesuffix("-snowball-full-r4")
     arm = arm.removesuffix("-snowball-full")
