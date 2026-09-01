@@ -157,9 +157,9 @@ with no shard retries, GCS 429s, Iris failures, or preemptions. The earlier
 The clean full-preset measurement still comes from the earlier packed shape. It
 processed 256.4 GB in 2h54m28s and used 182.83 CPU-hours; Finelog recorded
 18,970 completed shards and a 6.61 GiB maximum stage memory peak. A 48-worker
-full attempt encountered 27 Iris worker-pool preemptions and is not valid
-performance evidence, even if the pipeline eventually completes. Run a clean
-48-worker full preset before citing a current full-preset duration.
+full attempt completed in 3h13m, but its child worker pool accumulated 75 Iris
+preemptions. It demonstrates recovery, not valid performance evidence. Run a
+clean 48-worker full preset before citing a current full-preset duration.
 
 The 2 CPU / 16 GiB worker is the reference pipeline default. Forty-eight of
 them fit within the same aggregate CPU and RAM budget as the earlier packed
