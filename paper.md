@@ -66,13 +66,9 @@ grade-adaptive finished 0.010 below naive on 62% of naive's measured tokens (144
 | naive | 0.289 | 0.232 | 5 | 64M |
 | learnability-dapo | 0.166 | 0.181 | 5 | 75M |
 
-![Snowball grade-weighted pass@1 vs tokens](https://raw.githubusercontent.com/marin-community/marin/assets/curriculum-rl-paper/snowball-grade-weighted-tokens.png)
-
 The final ordering overstates the steady-state gap between the top two arms: naive tracked at or slightly above grade-prior-dapo for most of the run, peaked at 0.315 near 46M tokens, and slid to 0.289, while grade-prior-dapo ended at its maximum and was still rising at cutoff. All three arms touched grade 13 during the run (TheoremQA ≥ 0.25); only grade-prior-dapo still held it at the final eval (0.277). With one seed we read the result as "grade-prior-dapo matches naive and degrades less", supported by the failure analysis below rather than by the 0.021 final gap. The without-gsm8k column removes the validation bin whose grader is mis-specified for this model (next section); it widens grade-prior-dapo's margin over naive to 0.024 and shows learnability-dapo's deficit is not explained by that bin alone.
 
-![Snowball pass@1 by grade](https://raw.githubusercontent.com/marin-community/marin/assets/curriculum-rl-paper/snowball-grades-tokens.png)
-
-![Snowball tokens to attain each grade](https://raw.githubusercontent.com/marin-community/marin/assets/curriculum-rl-paper/snowball-attainment.png)
+Round-3 Snowball trajectory charts (all three arms, including the learnability collapse analyzed in §4) are on the [assets branch](https://github.com/marin-community/marin/tree/assets/curriculum-rl-paper); the chart treatment of the surviving naive-vs-curriculum comparison is in §7, under the corrected round-4 recipe.
 
 ## 4. Analysis
 
@@ -121,10 +117,20 @@ Final evals (round-3 values in parentheses; "metered" excludes DAPO redraw gener
 | naive | 0.285 (0.289) | 5 (5) | 89M |
 | grade-prior-dapo | **0.292** (0.310) | **13** (13) | 81M |
 
+![Snowball round-4 grade-weighted pass@1 vs tokens](https://raw.githubusercontent.com/marin-community/marin/assets/curriculum-rl-paper/snowball-r4-grade-weighted-tokens.png)
+
 1. **Prompting ate most of the curriculum's round-3 margin.** With the contract in the prompt, both arms scored ≥ 0.89 on val-gsm8k at the first eval (step 10) — compliance that round 3's naive arm spent half its run learning and the learnability arm never achieved. The naive-vs-curriculum composite gap shrank from +0.021 to +0.007. The correct reading of round 3 is that most of the curriculum's margin there was guaranteed exposure to a format-deceptive bin, and a two-paragraph prompt buys the same thing for free.
 2. **The frontier edge survives.** grade-prior-dapo was again the only arm to sustain the grade-13 bin (val-theoremqa 0.268 final, sustained crossing at ~75M tokens; naive peaked at 0.232 without a sustained crossing) — the same 13-vs-5 frontier split as round 3, reproduced under a different optimizer, batch shape, and prompt. Frontier attainment, not the composite, is the durable value of the curriculum.
+
+   ![Snowball round-4 pass@1 by grade](https://raw.githubusercontent.com/marin-community/marin/assets/curriculum-rl-paper/snowball-r4-grades-tokens.png)
+
+   ![Snowball round-4 tokens to attain each grade](https://raw.githubusercontent.com/marin-community/marin/assets/curriculum-rl-paper/snowball-r4-attainment.png)
+
 3. **MuonH at 5× the round-3 lr was stable end to end.** Raw gradient norms held at 0.17–0.47 under the 1.0 clip with no late-run destabilization in either arm; the dapo arm finished 120 steps in one attempt. The naive arm hit two CUDA OOMs at micro batch 8 — uniform sampling occasionally packs eight near-cap sequences into one micro batch (no sample packing) — and resumed cleanly from checkpoint both times; its 89M metered tokens include the retraced steps.
 4. **Reversion worked mechanically.** All 19 bin weights stayed within a ~3× band for the whole run, where round 3's starved bins pinned to the epsilon floor within ~15 steps; hard bins dip early and drift back as decay plus pseudo-evidence erode the pessimistic estimate.
+
+   ![Round-4 grade-prior-dapo bin weights](https://raw.githubusercontent.com/marin-community/marin/assets/curriculum-rl-paper/curriculum-snowball-r4-grade-prior-dapo-weight.png)
+
 5. **A real regression: peak val-math500 fell from 0.656 to 0.562**, in both arms equally. Candidate causes we cannot separate at one seed each: half the per-step rollout count, lr-driven drift, or interaction between the anti-`\boxed{}` contract and the model's native math register. This is the main open question for round 5.
 6. **The binding constraint is now generation budget, not sampling.** Retained-trajectory analysis (`trajectory_stats.py`; failures and truncations are retained exhaustively, successes sampled) shows 40–48% of rollouts still hit the 2048-token cap at end of training, and frontier bins truncate almost totally: AIME 98%, Omni-MATH 99%, TheoremQA 88%. Successful rollouts are short (~500–700 tokens), carry canonical think-token structure 85–100% of the time (rising to ~100% by step 100), and always end with the graded answer line; RL ground `\boxed{}` out of successful responses entirely (0.39 → 0.00 over the run). Grades 11+ (except theoremqa) are budget-starved, not merely hard — the model cannot finish its reasoning inside the cap. Raising the generation budget on high grades, or shaping for brevity, is the highest-leverage round-5 change.
 
