@@ -214,6 +214,7 @@ def _runtime_env_config(
     watch_mode=train.WatchMode.INLINE,
     watch_interval=1,
     moe_implementation="fixed_pooled_wave_all_to_all",
+    remat_mode="recompute_all",
 ):
     """A stand-in for GrugRunConfig holding only the fields ``run_grug``'s env setup and dispatch read."""
     return SimpleNamespace(
@@ -221,7 +222,7 @@ def _runtime_env_config(
             trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=watch_interval)),
             watch_mode=watch_mode,
         ),
-        model=SimpleNamespace(moe_implementation=moe_implementation),
+        model=SimpleNamespace(moe_implementation=moe_implementation, remat_mode=remat_mode),
         resources=ResourceConfig.with_gpu("GB200", count=4),
         processes_per_task=processes_per_task,
         max_retries_failure=0,
@@ -431,6 +432,56 @@ def test_a_master_bearing_checkpoint_migrates_in_process_into_a_master_less_rest
     assert all(leaf.dtype == jnp.float32 for leaf in got)
     for want, have in zip(jax.tree.leaves(written.master_params), got, strict=True):
         np.testing.assert_array_equal(np.asarray(want), np.asarray(have))
+
+
+def test_the_carry_offload_overrides_an_inherited_collective_overlap_limit(monkeypatch):
+    inherited = f"{train.XLA_COLLECTIVE_OVERLAP_FLAG}={train.DEFAULT_COLLECTIVE_OVERLAP_LIMIT}"
+    monkeypatch.setenv("XLA_FLAGS", inherited)
+    config = _runtime_env_config(
+        moe_implementation=train.RAGGED_MOE_IMPLEMENTATION,
+        remat_mode=model.OFFLOAD_CARRY_REMAT_MODE,
+    )
+
+    with patch.object(train, "dispatch_grug_training_run"):
+        train.run_grug(config)
+
+    flags = os.environ["XLA_FLAGS"].split()
+    assert inherited not in flags
+    assert f"{train.XLA_COLLECTIVE_OVERLAP_FLAG}=1" in flags
+    assert "--xla_gpu_enable_latency_hiding_scheduler=true" in flags
+
+
+def test_a_ragged_run_without_the_offload_keeps_the_scheduler_off(monkeypatch):
+    # The scheduler's longer live ranges do not fit until the carry leaves HBM, so an arm that
+    # skips the offload has to keep the posture it was measured under.
+    monkeypatch.delenv("XLA_FLAGS", raising=False)
+    config = _runtime_env_config(moe_implementation=train.RAGGED_MOE_IMPLEMENTATION)
+
+    with patch.object(train, "dispatch_grug_training_run"):
+        train.run_grug(config)
+
+    assert "--xla_gpu_enable_latency_hiding_scheduler=false" in os.environ["XLA_FLAGS"].split()
+
+
+@pytest.mark.parametrize(
+    ("moe_implementation", "expected_remat_mode"),
+    [
+        (train.RAGGED_MOE_IMPLEMENTATION, model.OFFLOAD_CARRY_REMAT_MODE),
+        ("fixed_pooled_wave_all_to_all", "recompute_all"),
+    ],
+)
+def test_only_the_ragged_transport_offloads_the_layer_carry(moe_implementation, expected_remat_mode):
+    step = launch.build_diagnostic_run(
+        run_id="carry-offload",
+        dp_racks=1,
+        num_steps=1,
+        version="dev",
+        moe_implementation=moe_implementation,
+        processes_per_task=4,
+    )
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert config.model.remat_mode == expected_remat_mode
 
 
 def test_ep_newton_schulz_returns_to_expert_sharding():
