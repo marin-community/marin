@@ -21,10 +21,11 @@ device). Tokens/steps hold 791 tokens per active parameter (18T at d6144); FLOPs
 analytic estimate (forward+backward, including attention and the latent-MoE correction).
 
 Changelog:
-    2026-09-01: decoupled weight decay on the attn_gate and router weights is on by default (0.05,
-        annealed linearly to 0 over training and read from the Adam step count so it resumes at the
-        right step). A hero resumed from a no-decay checkpoint therefore continues with decay rather
-        than reverting to the no-decay recipe; pass ``--gate-router-weight-decay 0`` to opt out.
+    2026-09-01 (#8818, PR #8833): decoupled weight decay on the attn_gate and router weights is on by
+        default (0.05, annealed linearly to 0 over training and read from the Adam step count so it
+        resumes at the right step). A hero resumed from a no-decay checkpoint therefore continues with
+        decay rather than reverting to the no-decay recipe; pass ``--gate-router-weight-decay 0`` to
+        opt out.
 """
 
 import dataclasses
