@@ -40,6 +40,12 @@ const CACHE_GC_INTERVAL: Duration = Duration::from_secs(300);
 #[derive(Clone)]
 struct FileCache {
     root: PathBuf,
+    /// Paths whose on-disk bytes hashed to their reference in this process.
+    ///
+    /// Object keys are content-addressed, so a path names exactly one byte
+    /// string; once a file has verified, later lookups only re-check its
+    /// size. Entries drop on remove/eviction so a re-created file re-verifies.
+    verified: Arc<Mutex<HashSet<PathBuf>>>,
 }
 
 impl FileCache {
@@ -47,7 +53,10 @@ impl FileCache {
         std::fs::create_dir_all(&root).map_err(|error| {
             StatsError::Internal(format!("create object cache {}: {error}", root.display()))
         })?;
-        Ok(Self { root })
+        Ok(Self {
+            root,
+            verified: Arc::new(Mutex::new(HashSet::new())),
+        })
     }
 
     fn path(&self, id: &ObjectId) -> PathBuf {
@@ -58,6 +67,19 @@ impl FileCache {
 
     fn verified_path(&self, reference: &ObjectReference) -> Result<Option<PathBuf>, StatsError> {
         let path = self.path(&reference.id);
+        if self.verified.lock().unwrap().contains(&path) {
+            match std::fs::metadata(&path) {
+                Ok(meta) if meta.len() == reference.version.byte_size => {
+                    touch(&path)?;
+                    return Ok(Some(path));
+                }
+                // Vanished or truncated behind our back: fall through to the
+                // full check, which removes the entry and the file.
+                _ => {
+                    self.verified.lock().unwrap().remove(&path);
+                }
+            }
+        }
         let bytes = match std::fs::read(&path) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -73,6 +95,7 @@ impl FileCache {
             Sha256::digest(&bytes).as_slice() == reference.version.content_sha256.as_slice();
         if valid_size && valid_hash {
             touch(&path)?;
+            self.verified.lock().unwrap().insert(path.clone());
             return Ok(Some(path));
         }
         std::fs::remove_file(&path).map_err(|error| {
@@ -92,11 +115,13 @@ impl FileCache {
     fn write(&self, reference: &ObjectReference, bytes: &[u8]) -> Result<PathBuf, StatsError> {
         let path = self.path(&reference.id);
         atomic_write(&path, bytes)?;
+        self.verified.lock().unwrap().insert(path.clone());
         Ok(path)
     }
 
     fn remove(&self, id: &ObjectId) -> Result<(), StatsError> {
         let path = self.path(id);
+        self.verified.lock().unwrap().remove(&path);
         match std::fs::remove_file(&path) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -212,6 +237,12 @@ impl CachedObjectStore {
         // No scan may hold any of these paths: eviction waits out every pinned
         // read before the first unlink.
         let _visibility = self.query_visibility.write().await;
+        {
+            let mut verified = self.cache.verified.lock().unwrap();
+            for path in &victims {
+                verified.remove(path);
+            }
+        }
         tokio::task::spawn_blocking(move || {
             for path in victims {
                 match std::fs::remove_file(&path) {
@@ -484,6 +515,28 @@ mod tests {
         assert!(!path.exists());
         std::fs::remove_dir_all(remote_root).ok();
         std::fs::remove_dir_all(cache_root).ok();
+    }
+
+    #[test]
+    fn verification_runs_once_until_removal_revokes_trust() {
+        let root = unique_dir("object_cache_trust");
+        let cache = FileCache::new(root.clone()).unwrap();
+        let reference = reference("iris.worker", "objects/trusted.parquet", b"real");
+        let path = cache.write(&reference, b"real").unwrap();
+
+        // A write records trust, so same-size disk corruption afterwards is
+        // served without re-hashing — the deliberate trade that keeps hot
+        // queries from hashing every object on every scan.
+        std::fs::write(&path, b"fake").unwrap();
+        assert_eq!(cache.verified_path(&reference).unwrap(), Some(path.clone()));
+
+        // Removal revokes trust: the recreated file re-hashes, fails, and is
+        // deleted rather than served.
+        cache.remove(&reference.id).unwrap();
+        std::fs::write(&path, b"fake").unwrap();
+        assert_eq!(cache.verified_path(&reference).unwrap(), None);
+        assert!(!path.exists());
+        std::fs::remove_dir_all(root).ok();
     }
 
     fn cached_store(
