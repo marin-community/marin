@@ -56,6 +56,9 @@ from transformers import PretrainedConfig as HfConfig
 
 _GATED_NORM_RANK = 128
 _ROUTING_RENORM_SUM = 2.5
+MOE_DROPPED_ASSIGNMENTS_METRIC = "moe/dropped_assignments"
+MOE_PRE_TRANSPORT_DROPPED_ASSIGNMENTS_METRIC = "moe/pre_transport_dropped_assignments"
+MOE_POST_TRANSPORT_DROPPED_ASSIGNMENTS_METRIC = "moe/post_transport_dropped_assignments"
 # Large-vocab CE via the plain-XLA path (no shared-memory tiling, so v_block can be large).
 # v=4096 is the dominant MFU lever for the 128k vocab; the SMEM-tiled batched_xla kernel caps the
 # h*v weight tile at ~99KB and cannot take v=4096.
@@ -1389,11 +1392,11 @@ class Transformer(eqx.Module):
                 # the host in int64. Summing here with jnp.sum overflows int32 at large batch (e.g. batch
                 # 4096: 4096*4096*8*48 ~ 6.4e9 assignments > 2.1e9) and breaks the total accounting check,
                 # since jax_enable_x64 is off so an in-device int64 sum silently downcasts.
-                summarized_metrics["moe/dropped_assignments"] = router_metrics["capacity_overflow_per_layer"]
-                summarized_metrics["moe/pre_transport_dropped_assignments"] = router_metrics[
+                summarized_metrics[MOE_DROPPED_ASSIGNMENTS_METRIC] = router_metrics["capacity_overflow_per_layer"]
+                summarized_metrics[MOE_PRE_TRANSPORT_DROPPED_ASSIGNMENTS_METRIC] = router_metrics[
                     "pre_transport_capacity_overflow_per_layer"
                 ]
-                summarized_metrics["moe/post_transport_dropped_assignments"] = router_metrics[
+                summarized_metrics[MOE_POST_TRANSPORT_DROPPED_ASSIGNMENTS_METRIC] = router_metrics[
                     "post_transport_capacity_overflow_per_layer"
                 ]
             return loss, summarized_metrics

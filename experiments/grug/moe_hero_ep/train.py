@@ -58,7 +58,15 @@ from experiments.grug.checkpointing import (
     restore_grug_state_from_checkpoint,
 )
 from experiments.grug.dispatch import dispatch_grug_training_run
-from experiments.grug.moe_hero_ep.model import OFFLOAD_CARRY_REMAT_MODE, GrugModelConfig, RematMode, Transformer
+from experiments.grug.moe_hero_ep.model import (
+    MOE_DROPPED_ASSIGNMENTS_METRIC,
+    MOE_POST_TRANSPORT_DROPPED_ASSIGNMENTS_METRIC,
+    MOE_PRE_TRANSPORT_DROPPED_ASSIGNMENTS_METRIC,
+    OFFLOAD_CARRY_REMAT_MODE,
+    GrugModelConfig,
+    RematMode,
+    Transformer,
+)
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
@@ -731,11 +739,11 @@ def _drop_metrics(
     total_assignments = batch_size * sequence_length * top_k * num_layers
     post_transport_assignments = total_assignments - pre_transport_dropped_assignments_host
     return {
-        "moe/dropped_assignments": dropped_assignments_host,
+        MOE_DROPPED_ASSIGNMENTS_METRIC: dropped_assignments_host,
         "moe/drop_fraction": dropped_assignments_host / total_assignments,
-        "moe/pre_transport_dropped_assignments": pre_transport_dropped_assignments_host,
+        MOE_PRE_TRANSPORT_DROPPED_ASSIGNMENTS_METRIC: pre_transport_dropped_assignments_host,
         "moe/pre_transport_drop_fraction": pre_transport_dropped_assignments_host / total_assignments,
-        "moe/post_transport_dropped_assignments": post_transport_dropped_assignments_host,
+        MOE_POST_TRANSPORT_DROPPED_ASSIGNMENTS_METRIC: post_transport_dropped_assignments_host,
         "moe/post_transport_drop_fraction": post_transport_dropped_assignments_host / total_assignments,
         "moe/post_transport_drop_fraction_of_received": (
             post_transport_dropped_assignments_host / max(post_transport_assignments, 1)
@@ -1193,11 +1201,11 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                             {"train/cross_entropy_loss": metrics["train/cross_entropy_loss"]},
                             step=step,
                         )
-                    if "moe/dropped_assignments" in metrics:
+                    if MOE_DROPPED_ASSIGNMENTS_METRIC in metrics:
                         drop_metrics = _drop_metrics(
-                            metrics["moe/dropped_assignments"],
-                            metrics["moe/pre_transport_dropped_assignments"],
-                            metrics["moe/post_transport_dropped_assignments"],
+                            metrics[MOE_DROPPED_ASSIGNMENTS_METRIC],
+                            metrics[MOE_PRE_TRANSPORT_DROPPED_ASSIGNMENTS_METRIC],
+                            metrics[MOE_POST_TRANSPORT_DROPPED_ASSIGNMENTS_METRIC],
                             batch_size=batch.tokens.shape[0],
                             sequence_length=batch.tokens.shape[1],
                             top_k=config.model.num_experts_per_token,

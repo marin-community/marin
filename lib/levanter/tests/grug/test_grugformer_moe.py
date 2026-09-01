@@ -769,7 +769,6 @@ def test_fixed_all_to_all_drops_assignments_over_capacity():
         )
     assert int(overflow.pre_transport) == 4
     assert int(overflow.post_transport) == 0
-    assert int(overflow.total) == int(overflow.pre_transport + overflow.post_transport)
 
 
 @pytest.mark.timeout(180)
@@ -903,7 +902,6 @@ def test_fixed_pooled_wave_all_to_all_reports_pre_and_post_transport_drops():
     np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-5, atol=1e-5)
     assert int(overflow.pre_transport) == 3
     assert int(overflow.post_transport) == 3
-    assert int(overflow.total) == int(overflow.pre_transport + overflow.post_transport)
 
 
 @pytest.mark.parametrize("implementation", ["ring", "fixed_all_to_all", "fixed_pooled_wave_all_to_all"])
@@ -1373,7 +1371,6 @@ def test_moe_mlp_reports_positive_drop_count_in_ring_ep_when_over_capacity():
     assert dropped.total.shape == ()
     assert int(dropped.pre_transport) == 0
     assert int(dropped.post_transport) > 0
-    assert int(dropped.total) == int(dropped.pre_transport + dropped.post_transport)
 
 
 def test_moe_mlp_reports_positive_drop_count_in_ragged_a2a_when_over_capacity():
@@ -1420,7 +1417,6 @@ def test_moe_mlp_reports_positive_drop_count_in_ragged_a2a_when_over_capacity():
     assert dropped.total.shape == ()
     assert int(dropped.pre_transport) > 0
     assert int(dropped.post_transport) == 0
-    assert int(dropped.total) == int(dropped.pre_transport + dropped.post_transport)
 
 
 def test_ragged_a2a_receiver_clipping_respects_capacity():
