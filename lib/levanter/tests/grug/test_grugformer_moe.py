@@ -442,8 +442,11 @@ def test_the_interleave_transpose_de_interleaves_the_cotangent(dtype):
     np.testing.assert_array_equal(np.asarray(up_ct), np.asarray(cotangent[..., 1::2]))
 
 
-@pytest.mark.parametrize("dtype", [jnp.bfloat16, jnp.float32])
-def test_swiglu_backward_matches_autodiff_of_the_forward(dtype):
+@pytest.mark.parametrize(
+    ("dtype", "max_abs_error", "mean_abs_error"),
+    [(jnp.bfloat16, 8e-3, 5e-4), (jnp.float32, 2e-7, 2e-8)],
+)
+def test_swiglu_backward_matches_autodiff_of_the_forward(dtype, max_abs_error, mean_abs_error):
     tokens, moe_dim = 5, 4
     gu = jnp.linspace(-2.0, 2.0, tokens * 2 * moe_dim, dtype=jnp.float32).reshape(tokens, 2 * moe_dim).astype(dtype)
     dh = jnp.linspace(1.0, -1.0, tokens * moe_dim, dtype=jnp.float32).reshape(tokens, moe_dim).astype(dtype)
@@ -457,12 +460,9 @@ def test_swiglu_backward_matches_autodiff_of_the_forward(dtype):
     actual = _swiglu_gate_up_backward(gu, dh)
 
     assert actual.dtype == gu.dtype
-    # The reference rounds once, at the end. `_swiglu_gate_up_backward` rounds after each
-    # operation in the storage dtype. The tolerance covers that difference: one bfloat16 unit
-    # in the last place at these magnitudes is about 1e-3.
-    np.testing.assert_allclose(
-        np.asarray(actual, dtype=np.float32), np.asarray(expected, dtype=np.float32), rtol=1e-2, atol=1e-3
-    )
+    error = np.abs(np.asarray(actual, dtype=np.float32) - np.asarray(expected, dtype=np.float32))
+    assert np.max(error) <= max_abs_error
+    assert np.mean(error) <= mean_abs_error
 
 
 def test_moe_expert_mlp_init_matches_across_backends():
