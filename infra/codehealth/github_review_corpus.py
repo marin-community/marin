@@ -8,7 +8,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from itertools import batched
@@ -155,6 +155,7 @@ class GitHubUsage(CorpusModel):
 class CollectionResult(CorpusModel):
     bundles: tuple[PullRequestBundle, ...]
     candidate_pull_requests: int
+    reused_pull_requests: int = 0
     usage: GitHubUsage
 
 
@@ -165,6 +166,17 @@ class ReviewScope:
     start: dt.datetime
     end: dt.datetime
     bot_logins: frozenset[str]
+
+
+@dataclass(frozen=True)
+class CollectionContext:
+    """GitHub endpoint and review window shared by one collection."""
+
+    client: GitHubClient
+    repository: str
+    owner: str
+    name: str
+    scope: ReviewScope
 
 
 @dataclass(frozen=True)
@@ -187,6 +199,14 @@ class PullRequestScan:
 
     relevant: tuple[dict, ...]
     candidate_count: int
+
+
+@dataclass(frozen=True)
+class CollectionPlan:
+    seeds: dict[int, dict[tuple[EventKind, int], dict]]
+    scan: PullRequestScan
+    reusable: frozenset[int]
+    hydrate_numbers: tuple[int, ...]
 
 
 @dataclass(frozen=True)
@@ -534,57 +554,57 @@ def _needs_older_page(kind: str, connection: dict, scope: ReviewScope) -> bool:
 
 
 def _scan_older(
-    client: GitHubClient,
-    repository: str,
+    context: CollectionContext,
     number: int,
     kind: Literal["issue_comment", "review"],
     connection: dict,
-    scope: ReviewScope,
     *,
     exhaustive: bool,
 ) -> bool:
     """Return True on an older in-window human event, or False after eligible pages are exhausted."""
-    owner, name = _repo_parts(repository)
     seen_cursors: set[str] = set()
-    while connection["pageInfo"]["hasPreviousPage"] and (exhaustive or _needs_older_page(kind, connection, scope)):
+    while connection["pageInfo"]["hasPreviousPage"] and (
+        exhaustive or _needs_older_page(kind, connection, context.scope)
+    ):
         cursor = connection["pageInfo"].get("startCursor")
         if not cursor or cursor in seen_cursors:
             raise RuntimeError(f"PR #{number} {kind} pagination cursor did not advance")
         seen_cursors.add(cursor)
         query = SCAN_COMMENTS_QUERY if kind == "issue_comment" else SCAN_REVIEWS_QUERY
         field = "comments" if kind == "issue_comment" else "reviews"
-        data = client.graphql(query, {"owner": owner, "name": name, "number": number, "before": cursor})
+        data = context.client.graphql(
+            query,
+            {"owner": context.owner, "name": context.name, "number": number, "before": cursor},
+        )
         pull_request = data["repository"]["pullRequest"]
         if pull_request is None:
             raise RuntimeError(f"GitHub GraphQL could not find PR #{number}")
         connection = pull_request[field]
-        if _page_has_human(kind, connection["nodes"], scope):
+        if _page_has_human(kind, connection["nodes"], context.scope):
             return True
     return False
 
 
 def _rest_seed_prs(
-    client: GitHubClient,
-    repository: str,
-    scope: ReviewScope,
+    context: CollectionContext,
 ) -> dict[int, dict[tuple[EventKind, int], dict]]:
-    since = scope.start.astimezone(dt.UTC).isoformat().replace("+00:00", "Z")
+    since = context.scope.start.astimezone(dt.UTC).isoformat().replace("+00:00", "Z")
     endpoints: dict[EventKind, str] = {
         "inline_comment": (
-            f"repos/{repository}/pulls/comments?sort=updated&direction=asc&since={since}&per_page={REST_PAGE_SIZE}"
+            f"repos/{context.repository}/pulls/comments?sort=updated&direction=asc&since={since}&per_page={REST_PAGE_SIZE}"
         ),
         "issue_comment": (
-            f"repos/{repository}/issues/comments?sort=updated&direction=asc&since={since}&per_page={REST_PAGE_SIZE}"
+            f"repos/{context.repository}/issues/comments?sort=updated&direction=asc&since={since}&per_page={REST_PAGE_SIZE}"
         ),
     }
     seeds: dict[int, dict[tuple[EventKind, int], dict]] = {}
     for kind, endpoint in endpoints.items():
-        for node in client.rest_records(endpoint):
+        for node in context.client.rest_records(endpoint):
             body = str(node.get("body") or "")
-            if not _review_author_state(node.get("user"), body, scope).is_human:
+            if not _review_author_state(node.get("user"), body, context.scope).is_human:
                 continue
             timestamps = tuple(value for value in (node.get("created_at"), node.get("updated_at")) if value is not None)
-            if not any(_in_window(value, scope) for value in timestamps):
+            if not any(_in_window(value, context.scope) for value in timestamps):
                 continue
             source = node.get("pull_request_url") if kind == "inline_comment" else node.get("issue_url")
             if not source:
@@ -595,13 +615,10 @@ def _rest_seed_prs(
 
 
 def _scan_pull_requests(
-    client: GitHubClient,
-    repository: str,
-    scope: ReviewScope,
+    context: CollectionContext,
     limit: int | None,
     seed_prs: set[int],
 ) -> PullRequestScan:
-    owner, name = _repo_parts(repository)
     after: str | None = None
     relevant: list[dict] = []
     candidates = 0
@@ -609,11 +626,14 @@ def _scan_pull_requests(
     seen_cursors: set[str] = set()
     reached_old_tail = False
     while not reached_old_tail:
-        data = client.graphql(SCAN_QUERY, {"owner": owner, "name": name, "after": after})
+        data = context.client.graphql(
+            SCAN_QUERY,
+            {"owner": context.owner, "name": context.name, "after": after},
+        )
         connection = data["repository"]["pullRequests"]
         nodes = connection["nodes"]
         for pull in nodes:
-            if parse_utc(pull["updatedAt"]) < scope.start:
+            if parse_utc(pull["updatedAt"]) < context.scope.start:
                 reached_old_tail = True
                 break
             number = int(pull["number"])
@@ -624,28 +644,24 @@ def _scan_pull_requests(
             issue = pull["comments"]
             reviews = pull["reviews"]
             include = number in seed_prs
-            include = include or _page_has_human("issue_comment", issue["nodes"], scope)
-            include = include or _page_has_human("review", reviews["nodes"], scope)
+            include = include or _page_has_human("issue_comment", issue["nodes"], context.scope)
+            include = include or _page_has_human("review", reviews["nodes"], context.scope)
             if not include:
                 include = _scan_older(
-                    client,
-                    repository,
+                    context,
                     number,
                     "issue_comment",
                     issue,
-                    scope,
                     exhaustive=False,
                 )
             if not include:
                 # Reviews are ordered by submission, so an old review edited in
                 # the window can only be found by exhausting this connection.
                 include = _scan_older(
-                    client,
-                    repository,
+                    context,
                     number,
                     "review",
                     reviews,
-                    scope,
                     exhaustive=True,
                 )
             if include:
@@ -664,9 +680,9 @@ def _scan_pull_requests(
     # instead of expanding it with every repository-wide seed after the scan.
     unmatched_seeds = () if limit is not None else sorted(seed_prs - seen_numbers)
     for number in unmatched_seeds:
-        data = client.graphql(
+        data = context.client.graphql(
             SEED_PULL_REQUEST_QUERY,
-            {"owner": owner, "name": name, "number": number},
+            {"owner": context.owner, "name": context.name, "number": number},
         )
         pull = data["repository"]["candidate"]
         if pull is None or pull["__typename"] != "PullRequest":
@@ -686,19 +702,22 @@ class _ConnectionState:
     seen_cursors: set[str]
 
 
+def _validate_record_identities(label: str, expected: int, identities: list[object]) -> None:
+    if len(identities) != expected:
+        raise RuntimeError(f"{label} expected {expected} records, fetched {len(identities)}")
+    if len(identities) != len(set(identities)):
+        raise RuntimeError(f"{label} contains duplicate records")
+
+
 def _validate_connection_nodes(number: int, name: str, expected: int, nodes: list[dict]) -> None:
     ids = [
         node.get("databaseId") or node.get("id") or (node.get("commit") or {}).get("oid") or node.get("path")
         for node in nodes
     ]
-    if len(nodes) != expected:
-        raise RuntimeError(f"PR #{number} {name} expected {expected} records, fetched {len(nodes)}")
-    if len(ids) != len(set(ids)):
-        raise RuntimeError(f"PR #{number} {name} contains duplicate records")
+    _validate_record_identities(f"PR #{number} {name}", expected, ids)
 
 
-def _paginate_pull_connections(client: GitHubClient, repository: str, pulls: list[dict]) -> None:
-    owner, name = _repo_parts(repository)
+def _paginate_pull_connections(context: CollectionContext, pulls: list[dict]) -> None:
     states = [
         _ConnectionState(
             number=int(pull["number"]),
@@ -714,7 +733,7 @@ def _paginate_pull_connections(client: GitHubClient, repository: str, pulls: lis
     while active := [state for state in states if state.page_info["hasNextPage"]]:
         for state_batch in batched(active, HYDRATION_BATCH_SIZE):
             batch = list(state_batch)
-            variables: dict[str, object] = {"owner": owner, "name": name}
+            variables: dict[str, object] = {"owner": context.owner, "name": context.name}
             for index, state in enumerate(batch):
                 cursor = state.page_info.get("endCursor")
                 if not cursor or cursor in state.seen_cursors:
@@ -722,7 +741,7 @@ def _paginate_pull_connections(client: GitHubClient, repository: str, pulls: lis
                 state.seen_cursors.add(cursor)
                 variables[f"number{index}"] = state.number
                 variables[f"after{index}"] = cursor
-            data = client.graphql(_connections_query([state.name for state in batch]), variables)
+            data = context.client.graphql(_connections_query([state.name for state in batch]), variables)
             for index, state in enumerate(batch):
                 pull_request = data["repository"][f"pr{index}"]
                 if pull_request is None:
@@ -760,11 +779,11 @@ def _thread_comment_nodes(client: GitHubClient, thread: dict) -> list[dict]:
         if int(connection["totalCount"]) != expected:
             raise RuntimeError(f"review thread {thread['id']} count changed during pagination")
         nodes.extend(connection["nodes"])
-    ids = [node["databaseId"] for node in nodes]
-    if len(nodes) != expected:
-        raise RuntimeError(f"review thread {thread['id']} expected {expected} comments, fetched {len(nodes)}")
-    if len(ids) != len(set(ids)):
-        raise RuntimeError(f"review thread {thread['id']} contains duplicate comments")
+    _validate_record_identities(
+        f"review thread {thread['id']} comments",
+        expected,
+        [node["databaseId"] for node in nodes],
+    )
     return nodes
 
 
@@ -805,17 +824,16 @@ def _actor_identity(actor: dict | None) -> ActorIdentity:
 
 
 def _event_record(
-    repository: str,
+    context: CollectionContext,
     pull: dict,
     kind: EventKind,
     node: dict,
-    scope: ReviewScope,
     thread: dict | None = None,
 ) -> ReviewEventRecord:
     author = _actor_identity(node.get("author"))
     pr_author = _actor_identity(pull.get("author"))
     body = str(node.get("body") or "")
-    author_state = _review_author_state(node.get("author"), body, scope)
+    author_state = _review_author_state(node.get("author"), body, context.scope)
     thread = thread or {}
     resolved_by = _actor_identity(thread.get("resolvedBy"))
     review = node.get("pullRequestReview") or {}
@@ -823,11 +841,11 @@ def _event_record(
     original_commit = node.get("originalCommit") or {}
     database_id = int(node["databaseId"])
     return ReviewEventRecord(
-        event_id=f"{repository}:{kind}:{database_id}",
+        event_id=f"{context.repository}:{kind}:{database_id}",
         kind=kind,
         database_id=database_id,
         node_id=node.get("id"),
-        repository=repository,
+        repository=context.repository,
         pr_number=int(pull["number"]),
         pr_author=pr_author.login,
         author=author.login,
@@ -858,7 +876,7 @@ def _event_record(
         is_bot=author_state.is_bot,
         is_agent_marked=author_state.is_agent_marked,
         is_human=author_state.is_human,
-        in_window=any(_in_window(value, scope) for value in _event_timestamps(kind, node)),
+        in_window=any(_in_window(value, context.scope) for value in _event_timestamps(kind, node)),
     )
 
 
@@ -927,14 +945,13 @@ def _changed_file(pr_number: int, item: dict) -> ChangedFileRecord:
     )
 
 
-def _hydration_roots(client: GitHubClient, repository: str, numbers: list[int]) -> list[dict]:
-    owner, name = _repo_parts(repository)
+def _hydration_roots(context: CollectionContext, numbers: list[int]) -> list[dict]:
     roots: list[dict] = []
     for number_batch in batched(numbers, HYDRATION_BATCH_SIZE):
         batch = list(number_batch)
-        variables: dict[str, object] = {"owner": owner, "name": name}
+        variables: dict[str, object] = {"owner": context.owner, "name": context.name}
         variables.update((f"number{index}", number) for index, number in enumerate(batch))
-        data = client.graphql(_hydration_query(len(batch)), variables)
+        data = context.client.graphql(_hydration_query(len(batch)), variables)
         repository_data = data["repository"]
         for index, number in enumerate(batch):
             pull = repository_data[f"pr{index}"]
@@ -947,10 +964,8 @@ def _hydration_roots(client: GitHubClient, repository: str, numbers: list[int]) 
 
 
 def _hydrate_graphql(
-    client: GitHubClient,
-    repository: str,
+    context: CollectionContext,
     pull: dict,
-    scope: ReviewScope,
 ) -> tuple[PullRequestBundle, PullRequestFingerprint]:
     number = int(pull["number"])
     issue_nodes = pull["comments"]["nodes"]
@@ -962,7 +977,7 @@ def _hydrate_graphql(
     thread_comments: list[tuple[dict, dict]] = []
     thread_records: list[ReviewThreadRecord] = []
     for thread in thread_nodes:
-        comments = _thread_comment_nodes(client, thread)
+        comments = _thread_comment_nodes(context.client, thread)
         thread_comments.extend((thread, comment) for comment in comments)
         resolved_by = _actor_identity(thread.get("resolvedBy"))
         thread_records.append(
@@ -992,19 +1007,16 @@ def _hydrate_graphql(
             )
 
     events = [
-        *(_event_record(repository, pull, "issue_comment", node, scope) for node in issue_nodes),
-        *(_event_record(repository, pull, "review", node, scope) for node in review_nodes),
-        *(
-            _event_record(repository, pull, "inline_comment", comment, scope, thread)
-            for thread, comment in thread_comments
-        ),
+        *(_event_record(context, pull, "issue_comment", node) for node in issue_nodes),
+        *(_event_record(context, pull, "review", node) for node in review_nodes),
+        *(_event_record(context, pull, "inline_comment", comment, thread) for thread, comment in thread_comments),
     ]
     event_ids = [event.event_id for event in events]
     if len(event_ids) != len(set(event_ids)):
         raise RuntimeError(f"PR #{number} contains duplicate review event ids")
     commits = [_commit_record(number, node) for node in commit_nodes]
     bundle = PullRequestBundle(
-        pull_request=_pull_request_record(repository, pull, commits, len(thread_comments)),
+        pull_request=_pull_request_record(context.repository, pull, commits, len(thread_comments)),
         events=tuple(sorted(events, key=lambda event: (event.kind, event.database_id))),
         threads=tuple(sorted(thread_records, key=lambda thread: thread.thread_id)),
         files=tuple(sorted((_changed_file(number, item) for item in file_nodes), key=lambda item: item.filename)),
@@ -1014,38 +1026,36 @@ def _hydrate_graphql(
     return bundle, _fingerprint(pull)
 
 
-def _with_diff(client: GitHubClient, repository: str, bundle: PullRequestBundle) -> PullRequestBundle:
-    endpoint = f"repos/{repository}/pulls/{bundle.pull_request.number}"
-    diff = client.rest_text(endpoint, "application/vnd.github.diff")
+def _with_diff(context: CollectionContext, bundle: PullRequestBundle) -> PullRequestBundle:
+    endpoint = f"repos/{context.repository}/pulls/{bundle.pull_request.number}"
+    diff = context.client.rest_text(endpoint, "application/vnd.github.diff")
     return bundle.model_copy(update={"diff": diff})
 
 
 def _hydrate_pull_requests(
-    client: GitHubClient,
-    repository: str,
+    context: CollectionContext,
     numbers: list[int],
-    scope: ReviewScope,
 ) -> dict[int, tuple[PullRequestBundle, PullRequestFingerprint]]:
     snapshots: dict[int, tuple[PullRequestBundle, PullRequestFingerprint]] = {}
-    pulls = _hydration_roots(client, repository, numbers)
-    _paginate_pull_connections(client, repository, pulls)
+    pulls = _hydration_roots(context, numbers)
+    _paginate_pull_connections(context, pulls)
     for pull in pulls:
-        bundle, fingerprint = _hydrate_graphql(client, repository, pull, scope)
+        bundle, fingerprint = _hydrate_graphql(context, pull)
         number = bundle.pull_request.number
         if number in snapshots:
             raise RuntimeError(f"GitHub hydration returned duplicate PR #{number}")
-        snapshots[number] = (_with_diff(client, repository, bundle), fingerprint)
+        snapshots[number] = (_with_diff(context, bundle), fingerprint)
     if set(snapshots) != set(numbers):
         raise RuntimeError("GitHub hydration returned an incomplete pull-request set")
     return snapshots
 
 
 def _changed_pull_request_numbers(
-    client: GitHubClient,
+    context: CollectionContext,
     snapshots: dict[int, tuple[PullRequestBundle, PullRequestFingerprint]],
 ) -> list[int]:
     node_ids = [snapshots[number][0].pull_request.node_id for number in sorted(snapshots)]
-    current = _fingerprint_nodes(client, node_ids)
+    current = _fingerprint_nodes(context.client, node_ids)
     return [
         number
         for number in sorted(snapshots)
@@ -1072,6 +1082,86 @@ def _validate_seed_events(bundle: PullRequestBundle, expected: dict[tuple[EventK
         )
 
 
+def _collection_plan(
+    context: CollectionContext,
+    *,
+    limit: int | None,
+    checkpointed_pr_numbers: AbstractSet[int],
+    cached_fingerprints: Mapping[int, PullRequestFingerprint],
+) -> CollectionPlan:
+    seeds = _rest_seed_prs(context)
+    scan = _scan_pull_requests(context, limit, set(seeds))
+    oversized = sorted(
+        int(pull["number"]) for pull in scan.relevant if int(pull["changedFiles"]) > MAX_GITHUB_CHANGED_FILES
+    )
+    if oversized:
+        raise RuntimeError(f"PR #{oversized[0]} exceeds GitHub's {MAX_GITHUB_CHANGED_FILES:,}-file API cap")
+    relevant = {int(pull["number"]): pull for pull in scan.relevant}
+    checkpointed = checkpointed_pr_numbers & relevant.keys()
+    reusable_candidates = {
+        number: pull
+        for number, pull in relevant.items()
+        if number not in checkpointed
+        and number not in seeds
+        and number in cached_fingerprints
+        and cached_fingerprints[number] == _fingerprint(pull)
+    }
+    current_fingerprints = _fingerprint_nodes(
+        context.client,
+        [pull["id"] for _, pull in sorted(reusable_candidates.items())],
+    )
+    reusable = set(checkpointed)
+    reusable.update(
+        number
+        for number, pull in reusable_candidates.items()
+        if cached_fingerprints[number] == current_fingerprints[pull["id"]]
+    )
+    hydrate_numbers = tuple(number for number in sorted(relevant) if number not in reusable)
+    context.client.projected_rest_requests = context.client.rest_requests + len(hydrate_numbers) + REST_RETRY_RESERVE
+    if context.client.projected_rest_requests > MAX_REST_REQUESTS:
+        raise RuntimeError(
+            f"GitHub context collection projects {context.client.projected_rest_requests} REST requests, above the "
+            f"{MAX_REST_REQUESTS}-request safety budget"
+        )
+    return CollectionPlan(
+        seeds=seeds,
+        scan=scan,
+        reusable=frozenset(reusable),
+        hydrate_numbers=hydrate_numbers,
+    )
+
+
+def _hydrate_collection(
+    context: CollectionContext,
+    plan: CollectionPlan,
+    bundle_sink: Callable[[PullRequestBundle], None] | None,
+) -> list[PullRequestBundle]:
+    bundles: list[PullRequestBundle] = []
+    changed_count = 0
+    for number_batch in batched(plan.hydrate_numbers, HYDRATION_BATCH_SIZE):
+        batch = list(number_batch)
+        snapshots = _hydrate_pull_requests(context, batch)
+        changed_numbers = _changed_pull_request_numbers(context, snapshots)
+        changed_count += len(changed_numbers)
+        if changed_count > REST_RETRY_RESERVE:
+            raise RuntimeError(
+                f"GitHub changed more than {REST_RETRY_RESERVE} PRs during collection, above the retry reserve"
+            )
+        if changed_numbers:
+            retries = _hydrate_pull_requests(context, changed_numbers)
+            changed_twice = _changed_pull_request_numbers(context, retries)
+            if changed_twice:
+                raise RuntimeError(f"PR #{changed_twice[0]} changed during both collection attempts")
+            snapshots.update(retries)
+        for number in batch:
+            bundle = snapshots[number][0]
+            _validate_seed_events(bundle, plan.seeds.get(number, {}))
+            if bundle_sink is not None:
+                bundle_sink(bundle)
+            bundles.append(bundle)
+    return bundles
+
+
 def collect_corpus(
     repository: str,
     start: dt.datetime,
@@ -1080,63 +1170,35 @@ def collect_corpus(
     bot_logins: set[str],
     limit: int | None = None,
     client: GitHubClient | None = None,
-    skip_pr_numbers: AbstractSet[int] = frozenset(),
+    checkpointed_pr_numbers: AbstractSet[int] = frozenset(),
+    cached_fingerprints: Mapping[int, PullRequestFingerprint] = MappingProxyType({}),
     bundle_sink: Callable[[PullRequestBundle], None] | None = None,
+    reused_pull_request_sink: Callable[[int], None] | None = None,
 ) -> CollectionResult:
     """Collect matching PRs and checkpoint reconciled hydration batches through ``bundle_sink``.
 
-    ``skip_pr_numbers`` supports retrying a fixed sync window after earlier bundles were
-    committed. The activity scan still runs so the candidate count and GitHub edit seeds
-    describe the same window, while completed PRs are not hydrated again.
+    The activity scan still runs so the candidate count and GitHub edit seeds describe the
+    current window. A pull request already checkpointed in this fixed window is trusted.
+    Cross-window reuse requires its stored fingerprint to match both scan and recheck state,
+    and an edited-event seed always forces fresh hydration.
     """
     client = client or GitHubClient()
     scope = ReviewScope(start=start, end=end, bot_logins=frozenset(bot_logins))
-    seeds = _rest_seed_prs(client, repository, scope)
-    scan = _scan_pull_requests(
-        client,
-        repository,
-        scope,
-        limit,
-        set(seeds),
+    owner, name = _repo_parts(repository)
+    context = CollectionContext(client, repository, owner, name, scope)
+    plan = _collection_plan(
+        context,
+        limit=limit,
+        checkpointed_pr_numbers=checkpointed_pr_numbers,
+        cached_fingerprints=cached_fingerprints,
     )
-    oversized = sorted(
-        int(pull["number"]) for pull in scan.relevant if int(pull["changedFiles"]) > MAX_GITHUB_CHANGED_FILES
-    )
-    if oversized:
-        raise RuntimeError(f"PR #{oversized[0]} exceeds GitHub's {MAX_GITHUB_CHANGED_FILES:,}-file API cap")
-    numbers = [int(pull["number"]) for pull in scan.relevant if int(pull["number"]) not in skip_pr_numbers]
-    projected_rest = client.rest_requests + len(numbers) + REST_RETRY_RESERVE
-    client.projected_rest_requests = projected_rest
-    if projected_rest > MAX_REST_REQUESTS:
-        raise RuntimeError(
-            f"GitHub context collection projects {projected_rest} REST requests, above the "
-            f"{MAX_REST_REQUESTS}-request safety budget"
-        )
-    bundles: list[PullRequestBundle] = []
-    changed_count = 0
-    for number_batch in batched(numbers, HYDRATION_BATCH_SIZE):
-        batch = list(number_batch)
-        snapshots = _hydrate_pull_requests(client, repository, batch, scope)
-        changed_numbers = _changed_pull_request_numbers(client, snapshots)
-        changed_count += len(changed_numbers)
-        if changed_count > REST_RETRY_RESERVE:
-            raise RuntimeError(
-                f"GitHub changed more than {REST_RETRY_RESERVE} PRs during collection, above the retry reserve"
-            )
-        if changed_numbers:
-            retries = _hydrate_pull_requests(client, repository, changed_numbers, scope)
-            changed_twice = _changed_pull_request_numbers(client, retries)
-            if changed_twice:
-                raise RuntimeError(f"PR #{changed_twice[0]} changed during both collection attempts")
-            snapshots.update(retries)
-        for number in batch:
-            bundle = snapshots[number][0]
-            _validate_seed_events(bundle, seeds.get(number, {}))
-            if bundle_sink is not None:
-                bundle_sink(bundle)
-            bundles.append(bundle)
+    for number in sorted(plan.reusable):
+        if reused_pull_request_sink is not None:
+            reused_pull_request_sink(number)
+    bundles = _hydrate_collection(context, plan, bundle_sink)
     return CollectionResult(
         bundles=tuple(sorted(bundles, key=lambda bundle: bundle.pull_request.number)),
-        candidate_pull_requests=scan.candidate_count,
+        candidate_pull_requests=plan.scan.candidate_count,
+        reused_pull_requests=len(plan.reusable),
         usage=client.usage(),
     )

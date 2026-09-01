@@ -26,11 +26,13 @@ The store keeps current pull requests, comments, threads, files, commits, and
 diffs, plus immutable versions of edited pull requests and review events. It
 also stores source windows fetched on demand and the complete provenance of
 rule probes. A sync row freezes the 30-day time window. Each reconciled pull
-request and its checkpoint commit atomically, so rerunning a failed sync resumes
-the same window without refetching completed pull requests. A window is retried
-at most three times before it is marked abandoned, preventing one permanently
-bad pull request from pinning the weekly job. Exploration commands fail closed
-unless the latest sync is complete.
+request and its checkpoint commit atomically. Later runs compare the lightweight
+GitHub scan fingerprint with the stored snapshot and hydrate only new or changed
+pull requests; edited-event seeds always force a refresh. A failed run resumes
+the same window from its committed checkpoints. A window is retried at most
+three times before it is marked abandoned, preventing one permanently bad pull
+request from pinning the weekly job. Exploration commands fail closed unless the
+latest sync is complete.
 
 Run the sync from the repository root:
 
@@ -45,6 +47,10 @@ connections, verifies that pull-request fingerprints remain stable during
 hydration, and bounds GitHub GraphQL and REST usage. GitHub does not expose
 deleted comments or prior edited bodies. Raw diffs can be absent when GitHub
 returns its oversized-diff response; per-file metadata remains available.
+Every sync still performs the bounded GitHub activity scan, edited-comment
+seed queries, fingerprint rechecks, and Finelog query. PostgreSQL reuse avoids
+the expensive per-PR hydration and diff fetch for unchanged pull requests; it
+does not turn synchronization into an offline operation.
 
 ## Agent tools
 
@@ -73,8 +79,10 @@ uv run --frozen python -m infra.codehealth.refinement_tools post-report \
 
 `list-prs` joins human-review and lint activity. `context` returns the complete
 thread, pull-request diff, matching lint invocations and findings, and a cached
-±100-line source window around an inline comment. `probe` runs one selected YAML
-rule against that context with an agent-selected model and reasoning effort.
+±100-line source window around an inline comment. Unavailable source windows are
+negative-cached; pass `context --refresh-source` to retry one deliberately.
+`probe` runs one selected YAML rule against that context with an agent-selected
+model and reasoning effort.
 Probe output is experimental evidence, not a human label or a recall estimate.
 `rule-activity` reports which historical catalog identities have stored
 snapshots. The current checkout is snapshotted on every successful sync;

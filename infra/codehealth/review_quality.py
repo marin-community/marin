@@ -602,10 +602,13 @@ def resolve_classifications(
     batch_size: int,
     concurrency: int,
 ) -> list[CommentClassification]:
-    """Classify `comments`, returning one verdict per comment aligned with the
-    input. A comment is reused from `cache` when the same (comment_type,
-    comment_id) was seen before with identical (truncated) text; the rest are
-    sent to `classifier` in parallel batches."""
+    """Classify comments and apply the reporting confidence gate.
+
+    A comment is reused from ``cache`` when the same comment identity was seen
+    before with identical truncated text; the rest are sent to ``classifier``
+    in parallel batches. Catchability is cleared from both cached and fresh
+    classifications below the reporting confidence floor.
+    """
     resolved: dict[int, CommentClassification] = {}
     pending: list[tuple[int, Comment]] = []
     for i, c in enumerate(comments):
@@ -629,10 +632,10 @@ def resolve_classifications(
     fresh = classify_comments(classifier, items, batch_size, concurrency)
     for j, (i, _) in enumerate(pending):
         resolved[i] = fresh[j]
-    return [classification_for_outcome(resolved[i]) for i in range(len(comments))]
+    return [_classification_with_confidence_gate(resolved[i]) for i in range(len(comments))]
 
 
-def classification_for_outcome(classification: CommentClassification) -> CommentClassification:
+def _classification_with_confidence_gate(classification: CommentClassification) -> CommentClassification:
     """Clear catchability claims below the reporting confidence threshold."""
     if classification.confidence >= MIN_CLASSIFICATION_CONFIDENCE:
         return classification

@@ -19,6 +19,8 @@ from sqlalchemy.engine import Engine
 from infra.lint.catalog import DEFAULT_CATALOG_DIR, catalog_sha, load_catalog
 
 from .review_store import (
+    DEFAULT_BACKFILL_DAYS,
+    MAX_ACTIVITY_RESULTS,
     ReviewContext,
     catalog_snapshot_shas,
     database_config_from_environment,
@@ -29,6 +31,7 @@ from .review_store import (
     list_pull_request_activity,
     review_context,
     store_source_context,
+    stored_error_message,
 )
 from .review_tables import DEFAULT_REPOSITORY
 from .rule_probe import run_rule_probe
@@ -56,10 +59,12 @@ def _fetch_github_file(repository: str, path: str, commit_sha: str) -> str:
     return base64.b64decode(payload["content"].replace("\n", "")).decode("utf-8")
 
 
-def ensure_source_context(engine: Engine, context: ReviewContext) -> ReviewContext:
+def ensure_source_context(engine: Engine, context: ReviewContext, *, refresh: bool = False) -> ReviewContext:
     """Fetch and persist a missing ±100-line source window for one inline event."""
     event = context.event
-    if context.source is not None or event.path is None:
+    if not refresh and (context.source is not None or context.source_unavailable_reason is not None):
+        return context
+    if event.path is None:
         return context
     commit_sha = event.original_commit_id or event.commit_id
     anchor_line = event.original_line or event.line
@@ -74,10 +79,7 @@ def ensure_source_context(engine: Engine, context: ReviewContext) -> ReviewConte
         reason = None
     except (OSError, subprocess.SubprocessError, UnicodeDecodeError, ValueError) as error:
         text = None
-        detail = str(error)
-        if isinstance(error, subprocess.CalledProcessError) and error.stderr:
-            detail = f"{detail}: {error.stderr.strip()}"
-        reason = f"{type(error).__name__}: {detail}"[:500]
+        reason = stored_error_message(error)
     store_source_context(
         engine,
         event_id=event.event_id,
@@ -108,11 +110,11 @@ def sync_status(repository: str) -> None:
 
 
 @cli.command("list-prs")
-@click.option("--days", type=click.IntRange(min=1, max=365), default=30, show_default=True)
+@click.option("--days", type=click.IntRange(min=1, max=365), default=DEFAULT_BACKFILL_DAYS, show_default=True)
 @click.option("--repository", default=DEFAULT_REPOSITORY, show_default=True)
 @click.option("--human", "require_human", is_flag=True)
 @click.option("--lint", "require_lint", is_flag=True)
-@click.option("--limit", type=click.IntRange(min=1, max=500), default=100, show_default=True)
+@click.option("--limit", type=click.IntRange(min=1, max=MAX_ACTIVITY_RESULTS), default=100, show_default=True)
 def list_prs(days: int, repository: str, require_human: bool, require_lint: bool, limit: int) -> None:
     """List PRs with joined human-review and lint activity."""
     with database_engine(database_config_from_environment()) as engine:
@@ -141,10 +143,11 @@ def list_comments(repository: str, pr_number: int) -> None:
 
 @cli.command("context")
 @click.option("--event-id", required=True)
-def context_command(event_id: str) -> None:
+@click.option("--refresh-source", is_flag=True, help="Refetch the GitHub source window.")
+def context_command(event_id: str, refresh_source: bool) -> None:
     """Fetch one comment's thread, diff, source window, and lint activity."""
     with database_engine(database_config_from_environment()) as engine:
-        context = ensure_source_context(engine, review_context(engine, event_id))
+        context = ensure_source_context(engine, review_context(engine, event_id), refresh=refresh_source)
         click.echo(_json(context))
 
 
@@ -197,7 +200,7 @@ def validate_rules() -> None:
 
 
 @cli.command("rule-activity")
-@click.option("--days", type=click.IntRange(min=1, max=365), default=30, show_default=True)
+@click.option("--days", type=click.IntRange(min=1, max=365), default=DEFAULT_BACKFILL_DAYS, show_default=True)
 @click.option("--repository", default=DEFAULT_REPOSITORY, show_default=True)
 def rule_activity(days: int, repository: str) -> None:
     """List current-catalog exposure and findings alongside whole-window findings."""

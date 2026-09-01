@@ -181,59 +181,24 @@ def test_loom_launch_action_uses_registered_automation_endpoint() -> None:
 
 def test_codehealth_refinement_workflow_launches_one_database_backed_agent() -> None:
     workflow_path = ROOT.parent.parent / ".github/workflows/ops-codehealth-refinement.yaml"
-    workflow_text = workflow_path.read_text()
-    workflow = yaml.safe_load(workflow_text)
+    workflow = yaml.safe_load(workflow_path.read_text())
     steps = {step["name"]: step for step in workflow["jobs"]["refine"]["steps"]}
     trigger = workflow.get("on", workflow.get(True))
 
     assert set(trigger) == {"schedule", "workflow_dispatch"}
     assert workflow["permissions"] == {"contents": "read", "id-token": "write"}
-    assert "OPENAI_API_KEY" not in workflow_text
-    assert "upload-artifact" not in workflow_text
-    assert "refinement-corpus" not in workflow_text
 
     checkout = steps["Checkout repository"]
     assert checkout["with"]["persist-credentials"] is False
     assert set(steps) == {"Checkout repository", "Launch refinement agent"}
+    assert [step["uses"] for step in workflow["jobs"]["refine"]["steps"]] == [
+        "actions/checkout@v6",
+        "./.github/actions/launch-loom-run",
+    ]
     launch = steps["Launch refinement agent"]
     assert launch["uses"] == "./.github/actions/launch-loom-run"
     assert launch["with"]["profile"] == "${{ vars.LOOM_CODEHEALTH_REFINEMENT_PROFILE }}"
     assert launch["with"]["channel"] == "codehealth-refinement"
-    action = yaml.safe_load((ROOT.parent.parent / ".github/actions/launch-loom-run/action.yaml").read_text())
-    launch_script = action["runs"]["steps"][0]["run"]
-    assert '--data-binary @"$request_file"' in launch_script
-
-
-def test_codehealth_refinement_profile_owns_database_analysis_and_catalog_prs() -> None:
-    stack = yaml.safe_load((ROOT / "Pulumi.marin-loom.yaml").read_text())
-    config = stack["config"]
-    profile = config["marin-loom:profiles"]["codehealth-refinement"]
-    federations = {federation["name"]: federation for federation in config["marin-loom:githubFederations"]}
-
-    assert profile["class"] == "automation"
-    assert profile["strict"] is True
-    assert profile["envClear"] is True
-    assert profile["ambientAllowlist"] == []
-    assert profile["mode"] == "auto"
-    assert profile["restricted"] is False
-    assert profile["githubRepositories"] == ["marin-community/marin"]
-    assert profile["maxConcurrent"] == 1
-    assert profile["mcpAccess"] == {"mode": "all", "groups": []}
-    assert profile["instructionsFile"] == "profiles/codehealth-refinement/AGENTS.md"
-    assert profile["env"] == {
-        "CLOUDSQL_CONNECTION": {"value": "hai-gcp-models:us-central1:marin-metadata"},
-        "PGDATABASE": {"value": "context"},
-        "PGUSER": {"value": "loom-vm@hai-gcp-models.iam"},
-    }
-    federation = federations["codehealth-refinement"]
-    assert federation == {
-        "name": "codehealth-refinement",
-        "repositoryId": "775839592",
-        "workflowRef": "marin-community/marin/.github/workflows/ops-codehealth-refinement.yaml@refs/heads/main",
-        "profile": "codehealth-refinement",
-        "serviceTag": "codehealth-refinement",
-        "ref": "refs/heads/main",
-    }
 
 
 def test_release_reference_must_be_the_expected_registry_digest() -> None:

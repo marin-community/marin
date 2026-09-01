@@ -6,12 +6,12 @@
 from __future__ import annotations
 
 import datetime as dt
-import hashlib
 import json
 import subprocess
 import tempfile
 import time
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -19,7 +19,16 @@ from sqlalchemy.engine import Engine
 
 from infra.lint.catalog import LintCatalog, LintRule, catalog_sha
 
-from .review_store import ProbeStatus, ReviewContext, StoredProbe, store_probe, stored_probe, utc_iso
+from .review_store import (
+    ProbeStatus,
+    ReviewContext,
+    StoredProbe,
+    record_sha,
+    store_probe,
+    stored_error_message,
+    stored_probe,
+    utc_iso,
+)
 
 PROBE_TIMEOUT = 300
 MAX_CONTEXT_CHARACTERS = 60_000
@@ -36,10 +45,7 @@ class ProbeDecision(ProbeModel):
     finding: str | None = None
 
 
-class RuleProbeResult(ProbeDecision):
-    probe_id: str
-    idempotency_key: str
-    created_at: str
+class ProbeIdentity(ProbeModel):
     event_id: str
     context_sha: str
     rule_code: str
@@ -47,10 +53,14 @@ class RuleProbeResult(ProbeDecision):
     catalog_sha: str
     model: str
     effort: str
-    status: str
-    raw_output: str
+
+
+@dataclass(frozen=True)
+class ProbeAttempt:
+    decision: ProbeDecision | None
+    raw_output: str | None
     elapsed: float
-    error: None = None
+    error: Exception | None
 
 
 def _rule_sha(rule: LintRule) -> str:
@@ -61,7 +71,7 @@ def _rule_sha(rule: LintRule) -> str:
         "prompt": rule.prompt,
         "minimum_confidence": rule.minimum_confidence,
     }
-    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    return record_sha(payload)
 
 
 def build_probe_prompt(rule: LintRule, context: ReviewContext) -> str:
@@ -118,42 +128,45 @@ def _validate_decision(decision: ProbeDecision, rule: LintRule) -> None:
         raise ValueError("a negative probe must have null confidence and finding")
 
 
-def run_rule_probe(
-    engine: Engine,
+def _probe_identity(
     catalog: LintCatalog,
     context: ReviewContext,
     *,
     rule_code: str,
     model: str,
     effort: str,
-    idempotency_key: str,
-) -> RuleProbeResult:
-    """Run an idempotent Codex probe with caller-selected model and effort."""
+) -> tuple[LintRule, ProbeIdentity]:
     if not model.strip():
         raise ValueError("model must be non-empty")
     if effort not in SUPPORTED_EFFORTS:
         raise ValueError(f"unsupported effort {effort!r}; choose from {sorted(SUPPORTED_EFFORTS)}")
     rule = catalog.rule(rule_code)
-    identity = {
-        "event_id": context.event.event_id,
-        "context_sha": context.context_sha,
-        "rule_code": rule.code,
-        "rule_sha": _rule_sha(rule),
-        "catalog_sha": catalog_sha(catalog),
-        "model": model,
-        "effort": effort,
-    }
-    if stored := stored_probe(engine, idempotency_key):
-        mismatched = [field for field, value in identity.items() if getattr(stored, field) != value]
-        if mismatched:
-            raise ValueError(f"idempotency key belongs to a different probe: {', '.join(mismatched)}")
-        if stored.status != ProbeStatus.COMPLETE:
-            raise RuntimeError(f"previous probe attempt failed: {stored.error or 'unknown error'}")
-        return RuleProbeResult.model_validate(stored.model_dump(mode="json"))
+    return rule, ProbeIdentity(
+        event_id=context.event.event_id,
+        context_sha=context.context_sha,
+        rule_code=rule.code,
+        rule_sha=_rule_sha(rule),
+        catalog_sha=catalog_sha(catalog),
+        model=model,
+        effort=effort,
+    )
+
+
+def _replayed_probe(engine: Engine, idempotency_key: str, identity: ProbeIdentity) -> StoredProbe | None:
+    stored = stored_probe(engine, idempotency_key)
+    if stored is None:
+        return None
+    mismatched = [field for field, value in identity.model_dump().items() if getattr(stored, field) != value]
+    if mismatched:
+        raise ValueError(f"idempotency key belongs to a different probe: {', '.join(mismatched)}")
+    if stored.status != ProbeStatus.COMPLETE:
+        raise RuntimeError(f"previous probe attempt failed: {stored.error or 'unknown error'}")
+    return stored
+
+
+def _execute_probe(rule: LintRule, context: ReviewContext, *, model: str, effort: str) -> ProbeAttempt:
     prompt = build_probe_prompt(rule, context)
     started = time.monotonic()
-    probe_id = str(uuid.uuid4())
-    created_at = utc_iso(dt.datetime.now(dt.UTC))
     raw_output: str | None = None
     try:
         with tempfile.TemporaryDirectory(prefix="marin-lint-probe-") as temporary:
@@ -191,41 +204,80 @@ def run_rule_probe(
             raw_output = output_path.read_text()
         decision = ProbeDecision.model_validate_json(raw_output)
         _validate_decision(decision, rule)
-    except Exception as error:
-        elapsed = time.monotonic() - started
-        stderr = error.stderr.strip() if isinstance(error, subprocess.CalledProcessError) and error.stderr else ""
-        message = f"{type(error).__name__}: {error}"
-        if stderr:
-            message = f"{message}: {stderr}"
-        store_probe(
-            engine,
-            StoredProbe.model_validate(
-                {
-                    **identity,
-                    "probe_id": probe_id,
-                    "idempotency_key": idempotency_key,
-                    "created_at": created_at,
-                    "status": ProbeStatus.FAILED,
-                    "fired": None,
-                    "confidence": None,
-                    "finding": None,
-                    "raw_output": raw_output,
-                    "elapsed": elapsed,
-                    "error": message[:4000],
-                }
-            ),
+        return ProbeAttempt(
+            decision=decision,
+            raw_output=raw_output,
+            elapsed=time.monotonic() - started,
+            error=None,
         )
-        raise
-    elapsed = time.monotonic() - started
-    record = RuleProbeResult(
-        **decision.model_dump(),
+    except Exception as error:
+        return ProbeAttempt(
+            decision=None,
+            raw_output=raw_output,
+            elapsed=time.monotonic() - started,
+            error=error,
+        )
+
+
+def _stored_probe_record(
+    identity: ProbeIdentity,
+    attempt: ProbeAttempt,
+    *,
+    probe_id: str,
+    idempotency_key: str,
+    created_at: str,
+) -> StoredProbe:
+    if attempt.error is None:
+        assert attempt.decision is not None
+    else:
+        assert attempt.decision is None
+    decision = attempt.decision
+    return StoredProbe(
+        **identity.model_dump(),
         probe_id=probe_id,
         idempotency_key=idempotency_key,
         created_at=created_at,
-        **identity,
-        status=ProbeStatus.COMPLETE.value,
-        raw_output=raw_output,
-        elapsed=elapsed,
+        status=ProbeStatus.COMPLETE if decision is not None else ProbeStatus.FAILED,
+        fired=None if decision is None else decision.fired,
+        confidence=None if decision is None else decision.confidence,
+        finding=None if decision is None else decision.finding,
+        raw_output=attempt.raw_output,
+        elapsed=attempt.elapsed,
+        error=None if attempt.error is None else stored_error_message(attempt.error),
     )
-    store_probe(engine, StoredProbe.model_validate(record.model_dump(mode="json")))
+
+
+def run_rule_probe(
+    engine: Engine,
+    catalog: LintCatalog,
+    context: ReviewContext,
+    *,
+    rule_code: str,
+    model: str,
+    effort: str,
+    idempotency_key: str,
+) -> StoredProbe:
+    """Run an idempotent Codex probe with caller-selected model and effort."""
+    rule, identity = _probe_identity(
+        catalog,
+        context,
+        rule_code=rule_code,
+        model=model,
+        effort=effort,
+    )
+    if replayed := _replayed_probe(engine, idempotency_key, identity):
+        return replayed
+    probe_id = str(uuid.uuid4())
+    created_at = utc_iso(dt.datetime.now(dt.UTC))
+    attempt = _execute_probe(rule, context, model=model, effort=effort)
+    record = _stored_probe_record(
+        identity,
+        attempt,
+        probe_id=probe_id,
+        idempotency_key=idempotency_key,
+        created_at=created_at,
+    )
+    store_probe(engine, record)
+    if attempt.error is not None:
+        raise attempt.error
     return record

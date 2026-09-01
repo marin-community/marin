@@ -9,6 +9,7 @@ import datetime as dt
 import hashlib
 import json
 import os
+import subprocess
 import uuid
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
@@ -38,13 +39,21 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection, Engine
 
-from .github_review_corpus import PullRequestBundle, PullRequestRecord, ReviewEventRecord
+from .github_review_corpus import (
+    GitHubUsage,
+    PullRequestBundle,
+    PullRequestFingerprint,
+    PullRequestRecord,
+    ReviewEventRecord,
+)
 
 DEFAULT_CLOUDSQL_CONNECTION = "hai-gcp-models:us-central1:marin-metadata"
 DEFAULT_DATABASE = "context"
 DEFAULT_DATABASE_USER = "loom-vm@hai-gcp-models.iam"
 DEFAULT_BACKFILL_DAYS = 30
 MAX_SYNC_ATTEMPTS = 3
+MAX_ACTIVITY_RESULTS = 500
+STORED_ERROR_MAX_LENGTH = 4_000
 
 metadata = MetaData()
 json_type = JSON(none_as_null=True).with_variant(JSONB(none_as_null=True), "postgresql")
@@ -78,6 +87,7 @@ sync_runs = Table(
     Column("status", Text, nullable=False),
     Column("attempt_count", Integer, nullable=False),
     Column("candidate_pull_requests", Integer),
+    Column("reused_pull_requests", Integer),
     Column("github_usage", json_type),
     Column("finelog_watermark", json_type),
     Column("error", Text),
@@ -306,7 +316,7 @@ class TelemetryModel(BaseModel):
 
 class LintInvocationRecord(TelemetryModel):
     invocation_id: str
-    ts: str
+    ts: str | dt.datetime
     pr_number: int | None = None
     head_sha: str | None = None
     lint_catalog_sha: str | None = None
@@ -316,7 +326,7 @@ class LintInvocationRecord(TelemetryModel):
 
 class LintFindingRecord(TelemetryModel):
     invocation_id: str
-    ts: str
+    ts: str | dt.datetime
     pr_number: int | None = None
     code: str | None = None
 
@@ -336,6 +346,7 @@ class SyncStatusSummary(StoreModel):
     started_at: str
     completed_at: str | None
     candidate_pull_requests: int | None
+    reused_pull_requests: int | None
     error: str | None
 
 
@@ -401,12 +412,12 @@ class DatabaseResources:
 
 @dataclass(frozen=True)
 class LintRecordRows:
-    invocations: list[dict[str, object]]
-    findings: list[dict[str, object]]
+    invocations: list[LintInvocationRecord]
+    findings: list[LintFindingRecord]
 
 
 def database_config_from_environment() -> DatabaseConfig:
-    """Resolve the CLI process environment once at its boundary."""
+    """Read Cloud SQL instance, database, and IAM user settings from the process environment."""
     return DatabaseConfig(
         instance=os.environ.get("CLOUDSQL_CONNECTION", DEFAULT_CLOUDSQL_CONNECTION),
         database=os.environ.get("PGDATABASE", DEFAULT_DATABASE),
@@ -466,10 +477,10 @@ def _insert_ignore(conn: Connection, table: Table, values: dict[str, object], ke
 
 
 def _json_value(value: object) -> object:
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json")
     if isinstance(value, dt.datetime):
-        if value.tzinfo is None:
-            value = value.replace(tzinfo=dt.UTC)
-        return value.astimezone(dt.UTC).isoformat().replace("+00:00", "Z")
+        return utc_iso(value)
     if isinstance(value, dt.date):
         return value.isoformat()
     if isinstance(value, dict):
@@ -486,8 +497,18 @@ def _payload(record: BaseModel | dict[str, object]) -> dict[str, object]:
     return normalized
 
 
-def _record_sha(record: BaseModel | dict[str, object]) -> str:
+def record_sha(record: BaseModel | dict[str, object]) -> str:
+    """Return the canonical SHA-256 identity for a persisted JSON record."""
     return hashlib.sha256(json.dumps(_payload(record), sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def stored_error_message(error: Exception) -> str:
+    """Format one exception for a bounded persisted error field."""
+    stderr = error.stderr.strip() if isinstance(error, subprocess.CalledProcessError) and error.stderr else ""
+    message = f"{type(error).__name__}: {error}"
+    if stderr:
+        message = f"{message}: {stderr}"
+    return message[:STORED_ERROR_MAX_LENGTH]
 
 
 def _timestamp(value: str | dt.datetime | None) -> dt.datetime:
@@ -582,6 +603,7 @@ def latest_sync_status(engine: Engine, repository: str) -> SyncStatusSummary | N
         started_at=utc_iso(row["started_at"]),
         completed_at=None if row["completed_at"] is None else utc_iso(row["completed_at"]),
         candidate_pull_requests=row["candidate_pull_requests"],
+        reused_pull_requests=row["reused_pull_requests"],
         error=row["error"],
     )
 
@@ -608,12 +630,66 @@ def completed_pull_requests(engine: Engine, sync_id: str) -> set[int]:
         )
 
 
+def cached_pull_request_fingerprints(engine: Engine, repository: str) -> dict[int, PullRequestFingerprint]:
+    """Return complete stored fingerprints suitable for avoiding unchanged hydration."""
+    with engine.begin() as conn:
+        pull_rows = conn.execute(
+            sqlalchemy.select(pull_requests.c.pr_number, pull_requests.c.record).where(
+                pull_requests.c.repository == repository
+            )
+        ).all()
+        review_counts = dict(
+            conn.execute(
+                sqlalchemy.select(review_events.c.pr_number, sqlalchemy.func.count())
+                .where(review_events.c.repository == repository, review_events.c.kind == "review")
+                .group_by(review_events.c.pr_number)
+            ).all()
+        )
+        thread_counts = dict(
+            conn.execute(
+                sqlalchemy.select(review_threads.c.pr_number, sqlalchemy.func.count())
+                .where(review_threads.c.repository == repository)
+                .group_by(review_threads.c.pr_number)
+            ).all()
+        )
+    fingerprints: dict[int, PullRequestFingerprint] = {}
+    for pr_number, record in pull_rows:
+        fingerprints[int(pr_number)] = PullRequestFingerprint(
+            updated_at=str(record["updated_at"]),
+            head_sha=str(record["head_sha"]),
+            base_sha=str(record["base_sha"]),
+            changed_files=int(record["changed_files"]),
+            commits=int(record["commits"]),
+            reviews=int(review_counts.get(pr_number, 0)),
+            review_threads=int(thread_counts.get(pr_number, 0)),
+            issue_comments=int(record["issue_comments"]),
+        )
+    return fingerprints
+
+
+def checkpoint_reused_pull_request(
+    engine: Engine,
+    sync_id: str,
+    pr_number: int,
+    *,
+    observed_at: dt.datetime,
+) -> None:
+    """Record that an unchanged stored pull request belongs to the current sync."""
+    with engine.begin() as conn:
+        _insert_ignore(
+            conn,
+            sync_pull_requests,
+            {"sync_id": sync_id, "pr_number": pr_number, "synced_at": observed_at},
+            ("sync_id", "pr_number"),
+        )
+
+
 def store_bundle(engine: Engine, sync_id: str, bundle: PullRequestBundle, *, observed_at: dt.datetime) -> None:
     """Commit one reconciled PR bundle and its resume checkpoint atomically."""
     pull = bundle.pull_request
     repository = pull.repository
     pull_payload = _payload(pull)
-    pull_sha = _record_sha(pull)
+    pull_sha = record_sha(pull)
     with engine.begin() as conn:
         _insert_ignore(
             conn,
@@ -653,11 +729,11 @@ def store_bundle(engine: Engine, sync_id: str, bundle: PullRequestBundle, *, obs
             )
         for event in bundle.events:
             payload = _payload(event)
-            record_sha = _record_sha(event)
+            event_sha = record_sha(event)
             _insert_ignore(
                 conn,
                 review_event_versions,
-                {"event_id": event.event_id, "record_sha": record_sha, "record": payload, "observed_at": observed_at},
+                {"event_id": event.event_id, "record_sha": event_sha, "record": payload, "observed_at": observed_at},
                 ("event_id", "record_sha"),
             )
             _upsert(
@@ -672,7 +748,7 @@ def store_bundle(engine: Engine, sync_id: str, bundle: PullRequestBundle, *, obs
                     "author": event.author,
                     "is_human": event.is_human,
                     "activity_at": _event_activity(event),
-                    "record_sha": record_sha,
+                    "record_sha": event_sha,
                     "record": payload,
                     "observed_at": observed_at,
                 },
@@ -686,7 +762,7 @@ def store_bundle(engine: Engine, sync_id: str, bundle: PullRequestBundle, *, obs
                     "repository": repository,
                     "thread_id": thread.thread_id,
                     "pr_number": thread.pr_number,
-                    "record_sha": _record_sha(thread),
+                    "record_sha": record_sha(thread),
                     "record": _payload(thread),
                     "observed_at": observed_at,
                 },
@@ -742,47 +818,47 @@ def store_bundle(engine: Engine, sync_id: str, bundle: PullRequestBundle, *, obs
 def store_telemetry(
     engine: Engine,
     repository: str,
-    invocations: Sequence[dict[str, object]],
-    findings: Sequence[dict[str, object]],
+    invocations: Sequence[LintInvocationRecord],
+    findings: Sequence[LintFindingRecord],
 ) -> None:
     """Mirror bounded Finelog activity for single-store exploration queries."""
     with engine.begin() as conn:
         for row in invocations:
             payload = _payload(row)
-            invocation_id = str(row["invocation_id"])
+            invocation_id = row.invocation_id
             _upsert(
                 conn,
                 lint_invocations,
                 {
                     "invocation_id": invocation_id,
                     "repository": repository,
-                    "ts": _timestamp(row["ts"]),
-                    "pr_number": row.get("pr_number"),
-                    "head_sha": row.get("head_sha"),
-                    "catalog_sha": row.get("lint_catalog_sha"),
+                    "ts": _timestamp(row.ts),
+                    "pr_number": row.pr_number,
+                    "head_sha": row.head_sha,
+                    "catalog_sha": row.lint_catalog_sha,
                     "successful": (
-                        row.get("agent_exit_code") is not None
-                        and int(row["agent_exit_code"]) == 0
-                        and not bool(row.get("timed_out"))
+                        payload.get("agent_exit_code") is not None
+                        and int(payload["agent_exit_code"]) == 0
+                        and not bool(payload.get("timed_out"))
                     ),
-                    "finding_count": int(row.get("finding_count") or 0),
+                    "finding_count": int(payload.get("finding_count") or 0),
                     "record": payload,
                 },
                 ("repository", "invocation_id"),
             )
         for row in findings:
             payload = _payload(row)
-            finding_id = _record_sha(payload)
+            finding_id = record_sha(payload)
             _upsert(
                 conn,
                 lint_findings,
                 {
                     "finding_id": finding_id,
-                    "invocation_id": str(row["invocation_id"]),
+                    "invocation_id": row.invocation_id,
                     "repository": repository,
-                    "ts": _timestamp(row["ts"]),
-                    "pr_number": row.get("pr_number"),
-                    "code": str(row.get("code") or ""),
+                    "ts": _timestamp(row.ts),
+                    "pr_number": row.pr_number,
+                    "code": row.code or "",
                     "record": payload,
                 },
                 ("repository", "finding_id"),
@@ -816,7 +892,8 @@ def complete_sync(
     sync_id: str,
     *,
     candidate_pull_requests: int,
-    github_usage: dict[str, object],
+    reused_pull_requests: int,
+    github_usage: GitHubUsage,
     finelog_watermark: dict[str, object],
     completed_at: dt.datetime,
 ) -> None:
@@ -828,7 +905,8 @@ def complete_sync(
                 status=SyncStatus.COMPLETE.value,
                 completed_at=completed_at,
                 candidate_pull_requests=candidate_pull_requests,
-                github_usage=github_usage,
+                reused_pull_requests=reused_pull_requests,
+                github_usage=_payload(github_usage),
                 finelog_watermark=finelog_watermark,
                 error=None,
             )
@@ -840,7 +918,7 @@ def fail_sync(engine: Engine, sync_id: str, error: str) -> None:
         conn.execute(
             sqlalchemy.update(sync_runs)
             .where(sync_runs.c.sync_id == sync_id)
-            .values(status=SyncStatus.FAILED.value, error=error[:4000])
+            .values(status=SyncStatus.FAILED.value, error=error[:STORED_ERROR_MAX_LENGTH])
         )
 
 
@@ -883,7 +961,10 @@ def _successful_lint_rows(
         .scalars()
         .all()
     )
-    return LintRecordRows(invocation_rows, finding_rows)
+    return LintRecordRows(
+        [LintInvocationRecord.model_validate(row) for row in invocation_rows],
+        [LintFindingRecord.model_validate(row) for row in finding_rows],
+    )
 
 
 def list_pull_request_activity(
@@ -897,8 +978,8 @@ def list_pull_request_activity(
     limit: int = 100,
 ) -> tuple[PullRequestActivity, ...]:
     """List PRs with joined human-review and lint activity in a bounded window."""
-    if not 1 <= limit <= 500:
-        raise ValueError("limit must be between 1 and 500")
+    if not 1 <= limit <= MAX_ACTIVITY_RESULTS:
+        raise ValueError(f"limit must be between 1 and {MAX_ACTIVITY_RESULTS}")
     require_complete_sync(engine, repository)
     with engine.begin() as conn:
         human_counts = (
@@ -1112,7 +1193,7 @@ def review_context(engine: Engine, event_id: str) -> ReviewContext:
         source_unavailable_reason=None if source_row is None else source_row["unavailable_reason"],
         lint_invocations=tuple(LintInvocationRecord.model_validate(row) for row in lint_rows.invocations),
         lint_findings=tuple(LintFindingRecord.model_validate(row) for row in lint_rows.findings),
-        context_sha=hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
+        context_sha=record_sha(identity),
     )
 
 

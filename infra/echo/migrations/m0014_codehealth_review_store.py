@@ -16,6 +16,7 @@ CREATE TABLE codehealth_sync_runs (
     status TEXT NOT NULL,
     attempt_count INTEGER NOT NULL,
     candidate_pull_requests INTEGER,
+    reused_pull_requests INTEGER,
     github_usage JSONB,
     finelog_watermark JSONB,
     error TEXT

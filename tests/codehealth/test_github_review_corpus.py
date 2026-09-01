@@ -272,6 +272,26 @@ def _hydrated_pull(*, review: dict, thread: dict | None, changed_files: int = 1)
     return pull
 
 
+def _scan_pull(
+    reviews: list[dict],
+    *,
+    changed_files: int = 1,
+    review_thread_count: int = 0,
+    review_total: int | None = None,
+    previous_reviews: bool = False,
+) -> dict:
+    pull = _pull(changed_files=changed_files)
+    pull.update(
+        {
+            "comments": _page([]),
+            "reviews": _page(reviews, total=review_total, previous=previous_reviews),
+            "reviewThreads": {"totalCount": review_thread_count},
+            "commits": {"totalCount": 1},
+        }
+    )
+    return pull
+
+
 def test_collect_corpus_discovers_edited_old_inline_comment_and_retains_full_context() -> None:
     review = _review(55, _actor("reviewer"), "2026-07-01T00:00:00Z")
     review["comments"]["totalCount"] = 1
@@ -310,15 +330,7 @@ def test_collect_corpus_discovers_edited_old_inline_comment_and_retains_full_con
 def test_collect_corpus_scans_past_ten_newer_bots_for_human_review() -> None:
     bots = [_review(index, _actor("bot", "Bot"), f"2026-08-{index:02d}T00:00:00Z") for index in range(10, 20)]
     human = _review(1, _actor("reviewer"), "2026-08-01T00:00:00Z", body="Please simplify this.")
-    scan = _pull()
-    scan.update(
-        {
-            "comments": _page([]),
-            "reviews": _page(bots, total=11, previous=True),
-            "reviewThreads": {"totalCount": 0},
-            "commits": {"totalCount": 1},
-        }
-    )
+    scan = _scan_pull(bots, review_total=11, previous_reviews=True)
     hydrated = _hydrated_pull(review=human, thread=None)
     hydrated["reviews"] = _page([human, bots[0]])
     client = FakeGitHub(scan, hydrated)
@@ -331,6 +343,67 @@ def test_collect_corpus_scans_past_ten_newer_bots_for_human_review() -> None:
     assert result.usage.graphql_requests == 4
 
 
+def test_collect_corpus_reuses_unchanged_stored_pull_request() -> None:
+    review = _review(55, _actor("reviewer"), "2026-08-01T00:00:00Z", body="Review this.")
+    scan = _scan_pull([review])
+    hydrated = _hydrated_pull(review=review, thread=None)
+    client = FakeGitHub(scan, hydrated)
+    cached = github.PullRequestFingerprint(
+        updated_at="2026-08-28T00:00:00Z",
+        head_sha="head",
+        base_sha="base",
+        changed_files=1,
+        commits=1,
+        reviews=1,
+        review_threads=0,
+        issue_comments=0,
+    )
+    reused: list[int] = []
+
+    result = github.collect_corpus(
+        REPOSITORY,
+        START,
+        END,
+        bot_logins=set(),
+        client=client,
+        cached_fingerprints={7: cached},
+        reused_pull_request_sink=reused.append,
+    )
+
+    assert result.bundles == ()
+    assert result.reused_pull_requests == 1
+    assert reused == [7]
+    assert client.text_calls == 0
+    assert result.usage.rest_requests == 2
+
+
+def test_collect_corpus_trusts_same_window_checkpoint_over_edited_event_seed() -> None:
+    review = _review(55, _actor("reviewer"), "2026-08-01T00:00:00Z", body="Review this.")
+    scan = _scan_pull([review])
+    seed = {
+        "id": 101,
+        "body": "edited comment",
+        "created_at": "2026-08-01T00:00:00Z",
+        "updated_at": "2026-08-20T00:00:00Z",
+        "pull_request_url": "https://api.github.test/repos/owner/repo/pulls/7",
+        "user": {"login": "reviewer", "type": "User"},
+    }
+    client = FakeGitHub(scan, _hydrated_pull(review=review, thread=None), seed=seed)
+
+    result = github.collect_corpus(
+        REPOSITORY,
+        START,
+        END,
+        bot_logins=set(),
+        client=client,
+        checkpointed_pr_numbers={7},
+    )
+
+    assert result.bundles == ()
+    assert result.reused_pull_requests == 1
+    assert client.text_calls == 0
+
+
 def test_collect_corpus_paginates_complete_review_threads() -> None:
     review = _review(55, _actor("reviewer"), "2026-08-01T00:00:00Z", body="Review this.")
     review["comments"]["totalCount"] = 2
@@ -338,15 +411,7 @@ def test_collect_corpus_paginates_complete_review_threads() -> None:
     old = _thread_comment(101, 55, updated="2026-07-01T00:00:00Z")
     thread = _thread(recent)
     thread["comments"] = _page([recent], total=2, next_=True)
-    scan = _pull()
-    scan.update(
-        {
-            "comments": _page([]),
-            "reviews": _page([review]),
-            "reviewThreads": {"totalCount": 1},
-            "commits": {"totalCount": 1},
-        }
-    )
+    scan = _scan_pull([review], review_thread_count=1)
     hydrated = _hydrated_pull(review=review, thread=thread)
     client = FakeGitHub(scan, hydrated)
     client.thread_comment_page = _page([old], total=2)
@@ -363,15 +428,7 @@ def test_collect_corpus_rejects_thread_comment_without_review() -> None:
     review["comments"]["totalCount"] = 1
     comment = _thread_comment(101, 55, updated="2026-08-20T00:00:00Z")
     comment["pullRequestReview"] = None
-    scan = _pull()
-    scan.update(
-        {
-            "comments": _page([]),
-            "reviews": _page([review]),
-            "reviewThreads": {"totalCount": 1},
-            "commits": {"totalCount": 1},
-        }
-    )
+    scan = _scan_pull([review], review_thread_count=1)
     hydrated = _hydrated_pull(review=review, thread=_thread(comment))
 
     with pytest.raises(RuntimeError, match="thread comment 101 has no review"):
@@ -380,15 +437,7 @@ def test_collect_corpus_rejects_thread_comment_without_review() -> None:
 
 def test_collect_corpus_paginates_exact_changed_file_metadata() -> None:
     review = _review(1, _actor("reviewer"), "2026-08-01T00:00:00Z", body="Review this.")
-    scan = _pull(changed_files=2)
-    scan.update(
-        {
-            "comments": _page([]),
-            "reviews": _page([review]),
-            "reviewThreads": {"totalCount": 0},
-            "commits": {"totalCount": 1},
-        }
-    )
+    scan = _scan_pull([review], changed_files=2)
     hydrated = _hydrated_pull(review=review, thread=None, changed_files=2)
     hydrated["files"] = _page([_file("first.py")], total=2, next_=True)
     client = FakeGitHub(scan, hydrated)
@@ -402,15 +451,7 @@ def test_collect_corpus_paginates_exact_changed_file_metadata() -> None:
 
 def test_collect_corpus_rejects_changed_file_cap_before_rest_context() -> None:
     review = _review(1, _actor("reviewer"), "2026-08-01T00:00:00Z", body="Review this.")
-    scan = _pull(changed_files=3_001)
-    scan.update(
-        {
-            "comments": _page([]),
-            "reviews": _page([review]),
-            "reviewThreads": {"totalCount": 0},
-            "commits": {"totalCount": 1},
-        }
-    )
+    scan = _scan_pull([review], changed_files=3_001)
     hydrated = _hydrated_pull(review=review, thread=None, changed_files=3_001)
     client = FakeGitHub(scan, hydrated)
 
@@ -422,15 +463,7 @@ def test_collect_corpus_rejects_changed_file_cap_before_rest_context() -> None:
 
 def test_collect_corpus_rejects_duplicate_records_across_hydration_pages() -> None:
     review = _review(1, _actor("reviewer"), "2026-08-01T00:00:00Z", body="Review this.")
-    scan = _pull()
-    scan.update(
-        {
-            "comments": _page([]),
-            "reviews": _page([review]),
-            "reviewThreads": {"totalCount": 0},
-            "commits": {"totalCount": 1},
-        }
-    )
+    scan = _scan_pull([review])
     hydrated = _hydrated_pull(review=review, thread=None)
     hydrated["reviews"] = _page([review], total=2, next_=True)
     client = FakeGitHub(scan, hydrated)
@@ -442,15 +475,7 @@ def test_collect_corpus_rejects_duplicate_records_across_hydration_pages() -> No
 
 def test_collect_corpus_rejects_nonadvancing_hydration_cursor() -> None:
     review = _review(1, _actor("reviewer"), "2026-08-01T00:00:00Z", body="Review this.")
-    scan = _pull()
-    scan.update(
-        {
-            "comments": _page([]),
-            "reviews": _page([review]),
-            "reviewThreads": {"totalCount": 0},
-            "commits": {"totalCount": 1},
-        }
-    )
+    scan = _scan_pull([review])
     hydrated = _hydrated_pull(review=review, thread=None)
     hydrated["reviews"] = _page([review], total=3, next_=True)
     client = FakeGitHub(scan, hydrated)
@@ -460,17 +485,9 @@ def test_collect_corpus_rejects_nonadvancing_hydration_cursor() -> None:
         github.collect_corpus(REPOSITORY, START, END, bot_logins=set(), client=client)
 
 
-def test_limited_probe_does_not_expand_with_seed_only_pull_requests() -> None:
+def test_limited_collection_does_not_expand_with_seed_only_pull_requests() -> None:
     bot_review = _review(1, _actor("bot", "Bot"), "2026-08-01T00:00:00Z")
-    scan = _pull()
-    scan.update(
-        {
-            "comments": _page([]),
-            "reviews": _page([bot_review]),
-            "reviewThreads": {"totalCount": 0},
-            "commits": {"totalCount": 1},
-        }
-    )
+    scan = _scan_pull([bot_review])
     hydrated = _hydrated_pull(review=bot_review, thread=None)
     seed = {
         "id": 201,
@@ -490,16 +507,8 @@ def test_limited_probe_does_not_expand_with_seed_only_pull_requests() -> None:
 
 def test_collect_corpus_ignores_issue_comment_seed_without_pull_request() -> None:
     bot_review = _review(1, _actor("bot", "Bot"), "2026-07-01T00:00:00Z")
-    scan = _pull()
+    scan = _scan_pull([bot_review])
     scan["updatedAt"] = "2026-07-01T00:00:00Z"
-    scan.update(
-        {
-            "comments": _page([]),
-            "reviews": _page([bot_review]),
-            "reviewThreads": {"totalCount": 0},
-            "commits": {"totalCount": 1},
-        }
-    )
     hydrated = _hydrated_pull(review=bot_review, thread=None)
     seed = {
         "id": 201,
@@ -521,15 +530,7 @@ def test_collect_corpus_ignores_issue_comment_seed_without_pull_request() -> Non
 
 def test_collect_corpus_retries_one_mutated_pull_request_snapshot() -> None:
     review = _review(1, _actor("reviewer"), "2026-08-01T00:00:00Z", body="Review this.")
-    scan = _pull()
-    scan.update(
-        {
-            "comments": _page([]),
-            "reviews": _page([review]),
-            "reviewThreads": {"totalCount": 0},
-            "commits": {"totalCount": 1},
-        }
-    )
+    scan = _scan_pull([review])
     hydrated = _hydrated_pull(review=review, thread=None)
     client = FakeGitHub(scan, hydrated)
     client.mutate_once = True
@@ -543,15 +544,7 @@ def test_collect_corpus_retries_one_mutated_pull_request_snapshot() -> None:
 
 def test_collect_corpus_marks_too_large_diff_as_unavailable() -> None:
     review = _review(1, _actor("reviewer"), "2026-08-01T00:00:00Z", body="Review this.")
-    scan = _pull()
-    scan.update(
-        {
-            "comments": _page([]),
-            "reviews": _page([review]),
-            "reviewThreads": {"totalCount": 0},
-            "commits": {"totalCount": 1},
-        }
-    )
+    scan = _scan_pull([review])
     hydrated = _hydrated_pull(review=review, thread=None)
     client = FakeGitHub(scan, hydrated)
     client.diff = None

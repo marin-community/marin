@@ -31,7 +31,7 @@ import click
 ROOT_DIR = pathlib.Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT_DIR))
 from infra.codehealth import complexity as complexity_leads  # noqa: E402
-from infra.lint.catalog import catalog_sha, load_catalog, render_lane  # noqa: E402
+from infra.lint.catalog import LintLane, catalog_sha, load_catalog, render_lane  # noqa: E402
 
 LINT_DIR = ROOT_DIR / "infra/lint"
 LINT_CATALOG = load_catalog(LINT_DIR)
@@ -128,60 +128,9 @@ READ_ONLY_MANDATE = (
     "helpfulness. If you cannot complete the review read-only, emit nothing and stop."
 )
 
-LINT_LANE_INSTRUCTIONS = (
-    "You are ONE lane of the review. Apply ONLY the rules in the lane catalog above "
-    'to the change described below. Follow the shared "Detector usage" and "Output format" '
-    "exactly: emit one finding per line in the format it specifies, and emit nothing at "
-    "all when there are no findings. Resolve overlap precedence within your lane; leave "
-    "cross-lane duplicates to the composer. You are handed the changed-file inventory, not a "
-    "pasted diff: inspect each file yourself with read-only git and Read (see 'The change' below)."
-)
-
-# The meta lane is holistic: it reasons over the whole change, may read beyond the diff,
-# and owns only its own (meta) codes. It replaces the per-hunk framing above.
-META_LANE_INSTRUCTIONS = (
-    "You are the META lane — the holistic reviewer. Unlike the other lanes, which scan "
-    "added/modified hunks for a known local shape, you reason over the change as a UNIT: "
-    "model what this PR is trying to do, then judge whether the means are the cleanest path "
-    "to that end. Apply ONLY the meta rules in the catalog above.\n\n"
-    "Diff scope is WIDE, rule scope is NARROW. You MAY read beyond the diff — open the whole "
-    "file, follow the call graph, check a sibling module or an existing helper, grep the tree "
-    "for a symbol — to confirm a finding (several rules require it). But you OWN only the meta "
-    "ml- codes: if you notice a local smell (a bad name, one overloaded function, a swallowed "
-    "exception), stay SILENT and let its lane catch it. Fire only where a hunk-scoped pass "
-    "structurally CANNOT see the problem — it spans files, lives in an unchanged file, or is a "
-    "property of the whole change. If a single hunk would let a local lane flag it, defer.\n\n"
-    "Precision is the whole game. Honor each rule's confidence floor and its suppressors; where "
-    "a rule says so, phrase the finding as a question to confirm rather than an assertion. "
-    'Follow the shared "Output format" exactly: one finding per line, nothing at all when there '
-    "are no findings. You are handed only the changed-file inventory, not a pasted diff — pulling "
-    "each file's diff and reading into the surrounding code is exactly this lane's job."
-)
-
-
-@dataclass(frozen=True)
-class LintLane:
-    """One catalog-derived fan-out lane and its execution policy."""
-
-    name: str
-    include_complexity_leads: bool
-    # Instruction block appended after the lane catalog; the holistic meta lane overrides the
-    # default per-hunk framing with its own wide-diff-scope framing.
-    instructions: str = LINT_LANE_INSTRUCTIONS
-    # Run this lane only when the diff has more than this many changed lines (0 = always run).
-    min_diff_lines: int = 0
-
 
 # Coarse lanes — one headless agent each, derived from the structured catalog.
-LINT_LANES = tuple(
-    LintLane(
-        lane.name,
-        lane.include_complexity_leads,
-        META_LANE_INSTRUCTIONS if lane.name == "meta" else LINT_LANE_INSTRUCTIONS,
-        lane.min_diff_lines,
-    )
-    for lane in LINT_CATALOG.lanes
-)
+LINT_LANES = LINT_CATALOG.lanes
 
 # The composer merges the lanes' outputs. Authored to never silently drop a real
 # finding — it may only collapse true duplicates and drop overlap-precedence losers.
@@ -513,7 +462,6 @@ def _lane_prompt(shared_text: str, lane: LintLane, merge_base: str, stat: str, l
     parts = [READ_ONLY_MANDATE, shared_text, render_lane(LINT_CATALOG, lane.name)]
     if lane.include_complexity_leads and leads:
         parts.append(leads)
-    parts.append(lane.instructions)
     parts.append(_change_context(merge_base, stat))
     return "\n\n".join(parts) + "\n"
 

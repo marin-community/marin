@@ -126,7 +126,13 @@ def _complete(engine: sqlalchemy.Engine, run: review_store.SyncRun) -> None:
         engine,
         run.sync_id,
         candidate_pull_requests=len(review_store.completed_pull_requests(engine, run.sync_id)),
-        github_usage={"graphql_points": 1, "rest_requests": 1},
+        reused_pull_requests=0,
+        github_usage=GitHubUsage(
+            graphql_requests=1,
+            graphql_points=1,
+            rest_requests=1,
+            projected_rest_requests=151,
+        ),
         finelog_watermark={"deployment": "test"},
         completed_at=NOW,
     )
@@ -158,24 +164,28 @@ def test_store_preserves_versions_and_joins_human_and_lint_activity(engine: sqla
         engine,
         REPOSITORY,
         [
-            {
-                "invocation_id": "run-1",
-                "ts": "2026-08-30T02:00:00Z",
-                "pr_number": 8629,
-                "head_sha": "head-8629",
-                "lint_catalog_sha": "catalog-a",
-                "agent_exit_code": 0,
-                "timed_out": False,
-                "finding_count": 1,
-            }
+            review_store.LintInvocationRecord.model_validate(
+                {
+                    "invocation_id": "run-1",
+                    "ts": "2026-08-30T02:00:00Z",
+                    "pr_number": 8629,
+                    "head_sha": "head-8629",
+                    "lint_catalog_sha": "catalog-a",
+                    "agent_exit_code": 0,
+                    "timed_out": False,
+                    "finding_count": 1,
+                }
+            )
         ],
         [
-            {
-                "invocation_id": "run-1",
-                "ts": "2026-08-30T02:00:00Z",
-                "pr_number": 8629,
-                "code": "ml-exception-swallow",
-            }
+            review_store.LintFindingRecord.model_validate(
+                {
+                    "invocation_id": "run-1",
+                    "ts": "2026-08-30T02:00:00Z",
+                    "pr_number": 8629,
+                    "code": "ml-exception-swallow",
+                }
+            )
         ],
     )
     _complete(engine, run)
@@ -194,6 +204,10 @@ def test_store_preserves_versions_and_joins_human_and_lint_activity(engine: sqla
     context = review_store.review_context(engine, second.events[0].event_id)
     assert context.event.body == "this try/catch doesn't add anything"
     assert context.diff == second.diff
+    fingerprints = review_store.cached_pull_request_fingerprints(engine, REPOSITORY)
+    assert fingerprints[8629].reviews == 0
+    assert fingerprints[8629].review_threads == 0
+    assert fingerprints[8629].head_sha == "head-8629"
     with engine.begin() as connection:
         versions = connection.execute(
             sqlalchemy.select(sqlalchemy.func.count()).select_from(review_store.review_event_versions)
@@ -224,20 +238,22 @@ def test_weekly_sync_publishes_complete_queryable_generation(
         repository=REPOSITORY,
         deployment="test",
         now=NOW,
-        telemetry=(
-            [
-                {
-                    "invocation_id": "run-8700",
-                    "ts": NOW - dt.timedelta(minutes=1),
-                    "pr_number": 8700,
-                    "head_sha": "head-8700",
-                    "lint_catalog_sha": "historical-catalog",
-                    "agent_exit_code": 0,
-                    "timed_out": False,
-                    "finding_count": 0,
-                }
+        telemetry=review_store.LintRecordRows(
+            invocations=[
+                review_store.LintInvocationRecord.model_validate(
+                    {
+                        "invocation_id": "run-8700",
+                        "ts": NOW - dt.timedelta(minutes=1),
+                        "pr_number": 8700,
+                        "head_sha": "head-8700",
+                        "lint_catalog_sha": "historical-catalog",
+                        "agent_exit_code": 0,
+                        "timed_out": False,
+                        "finding_count": 0,
+                    }
+                )
             ],
-            [],
+            findings=[],
         ),
     )
 
@@ -245,6 +261,7 @@ def test_weekly_sync_publishes_complete_queryable_generation(
     status = review_store.latest_sync_status(engine, REPOSITORY)
     assert status is not None
     assert status.status == review_store.SyncStatus.COMPLETE
+    assert status.reused_pull_requests == 0
     assert review_store.catalog_snapshot_shas(engine) == {refinement_sync.catalog_sha(load_catalog())}
     rows = review_store.list_pull_request_activity(
         engine,
@@ -273,7 +290,13 @@ def test_failed_sync_resumes_same_window_after_last_committed_pull_request(engin
         engine,
         resumed.sync_id,
         candidate_pull_requests=2,
-        github_usage={"graphql_points": 4, "rest_requests": 2},
+        reused_pull_requests=0,
+        github_usage=GitHubUsage(
+            graphql_requests=2,
+            graphql_points=4,
+            rest_requests=2,
+            projected_rest_requests=152,
+        ),
         finelog_watermark={"deployment": "test"},
         completed_at=NOW + dt.timedelta(hours=1),
     )
@@ -321,38 +344,46 @@ def test_telemetry_normalizes_datetimes_and_ignores_unsuccessful_runs(engine: sq
         engine,
         REPOSITORY,
         [
-            {
-                "invocation_id": "successful",
-                "ts": NOW - dt.timedelta(hours=1),
-                "pr_number": 8,
-                "lint_catalog_sha": "catalog-a",
-                "agent_exit_code": 0,
-                "timed_out": False,
-                "finding_count": 1,
-            },
-            {
-                "invocation_id": "failed",
-                "ts": NOW - dt.timedelta(hours=1),
-                "pr_number": 8,
-                "lint_catalog_sha": "catalog-a",
-                "agent_exit_code": 1,
-                "timed_out": False,
-                "finding_count": 1,
-            },
+            review_store.LintInvocationRecord.model_validate(
+                {
+                    "invocation_id": "successful",
+                    "ts": NOW - dt.timedelta(hours=1),
+                    "pr_number": 8,
+                    "lint_catalog_sha": "catalog-a",
+                    "agent_exit_code": 0,
+                    "timed_out": False,
+                    "finding_count": 1,
+                }
+            ),
+            review_store.LintInvocationRecord.model_validate(
+                {
+                    "invocation_id": "failed",
+                    "ts": NOW - dt.timedelta(hours=1),
+                    "pr_number": 8,
+                    "lint_catalog_sha": "catalog-a",
+                    "agent_exit_code": 1,
+                    "timed_out": False,
+                    "finding_count": 1,
+                }
+            ),
         ],
         [
-            {
-                "invocation_id": "successful",
-                "ts": NOW - dt.timedelta(hours=1),
-                "pr_number": 8,
-                "code": "ml-exception-swallow",
-            },
-            {
-                "invocation_id": "failed",
-                "ts": NOW - dt.timedelta(hours=1),
-                "pr_number": 8,
-                "code": "ml-bare-any",
-            },
+            review_store.LintFindingRecord.model_validate(
+                {
+                    "invocation_id": "successful",
+                    "ts": NOW - dt.timedelta(hours=1),
+                    "pr_number": 8,
+                    "code": "ml-exception-swallow",
+                }
+            ),
+            review_store.LintFindingRecord.model_validate(
+                {
+                    "invocation_id": "failed",
+                    "ts": NOW - dt.timedelta(hours=1),
+                    "pr_number": 8,
+                    "code": "ml-bare-any",
+                }
+            ),
         ],
     )
     _complete(engine, run)
@@ -416,6 +447,32 @@ def test_context_fetches_and_caches_bounded_source_window(
     assert "    50  line 50" in context.source
     assert "   250  line 250" in context.source
     assert cached.context_sha == context.context_sha
+
+
+def test_context_negative_caches_unavailable_source_until_explicit_refresh(
+    engine: sqlalchemy.Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = _sync(engine)
+    bundle = _bundle(11)
+    review_store.store_bundle(engine, run.sync_id, bundle, observed_at=NOW)
+    _complete(engine, run)
+    calls = 0
+
+    def unavailable(_repository: str, _path: str, _commit_sha: str) -> str:
+        nonlocal calls
+        calls += 1
+        raise OSError("source unavailable")
+
+    monkeypatch.setattr(refinement_tools, "_fetch_github_file", unavailable)
+    stored = review_store.review_context(engine, bundle.events[0].event_id)
+    unavailable_context = refinement_tools.ensure_source_context(engine, stored)
+    cached = refinement_tools.ensure_source_context(engine, unavailable_context)
+    refreshed = refinement_tools.ensure_source_context(engine, cached, refresh=True)
+
+    assert calls == 2
+    assert unavailable_context.source_unavailable_reason is not None
+    assert cached.context_sha == unavailable_context.context_sha
+    assert refreshed.source_unavailable_reason is not None
 
 
 def test_structured_catalog_rule_edits_are_loaded(tmp_path: Path) -> None:

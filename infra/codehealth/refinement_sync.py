@@ -7,16 +7,21 @@ from __future__ import annotations
 
 import datetime as dt
 import json
-from dataclasses import dataclass
 
 import click
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.engine import Engine
 
 from infra.lint.catalog import LintCatalog, catalog_sha, load_catalog
 
-from .github_review_corpus import GitHubClient, collect_corpus
+from .github_review_corpus import GitHubClient, GitHubUsage, collect_corpus
 from .review_store import (
     DEFAULT_BACKFILL_DAYS,
+    LintFindingRecord,
+    LintInvocationRecord,
+    LintRecordRows,
+    cached_pull_request_fingerprints,
+    checkpoint_reused_pull_request,
     complete_sync,
     completed_pull_requests,
     database_config_from_environment,
@@ -41,22 +46,22 @@ from .review_tables import (
 SQL_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S.%f"
 
 
-@dataclass(frozen=True)
-class SyncResult:
+class SyncResult(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
     sync_id: str
     repository: str
     window_start: str
     window_end: str
     candidate_pull_requests: int
     persisted_pull_requests: int
-    github_usage: dict[str, object]
+    reused_pull_requests: int
+    github_usage: GitHubUsage
     lint_invocations: int
     lint_findings: int
 
 
-def load_lint_telemetry(
-    deployment: str, start: dt.datetime, end: dt.datetime
-) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+def load_lint_telemetry(deployment: str, start: dt.datetime, end: dt.datetime) -> LintRecordRows:
     """Read the exact Finelog window mirrored into the review store."""
     start_sql = start.astimezone(dt.UTC).strftime(SQL_TIMESTAMP_FORMAT)
     end_sql = end.astimezone(dt.UTC).strftime(SQL_TIMESTAMP_FORMAT)
@@ -73,7 +78,10 @@ def load_lint_telemetry(
             f"WHERE ts >= TIMESTAMP '{start_sql}' AND ts < TIMESTAMP '{end_sql}'",
             FINDINGS_NAMESPACE,
         )
-    return invocations, findings
+    return LintRecordRows(
+        invocations=[LintInvocationRecord.model_validate(row) for row in invocations],
+        findings=[LintFindingRecord.model_validate(row) for row in findings],
+    )
 
 
 def _catalog_record(catalog: LintCatalog) -> dict[str, object]:
@@ -108,12 +116,13 @@ def sync_review_activity(
     days: int = DEFAULT_BACKFILL_DAYS,
     now: dt.datetime | None = None,
     github_client: GitHubClient | None = None,
-    telemetry: tuple[list[dict[str, object]], list[dict[str, object]]] | None = None,
+    telemetry: LintRecordRows | None = None,
 ) -> SyncResult:
     """Run or resume one fixed review window and checkpoint every reconciled PR batch."""
     current = now or dt.datetime.now(dt.UTC)
     run = start_or_resume_sync(engine, repository, now=current, days=days)
     completed = completed_pull_requests(engine, run.sync_id)
+    cached_fingerprints = cached_pull_request_fingerprints(engine, repository)
     try:
         result = collect_corpus(
             repository,
@@ -121,11 +130,18 @@ def sync_review_activity(
             run.window_end,
             bot_logins=set(DEFAULT_BOT_LOGINS),
             client=github_client,
-            skip_pr_numbers=completed,
+            checkpointed_pr_numbers=completed,
+            cached_fingerprints=cached_fingerprints,
             bundle_sink=lambda bundle: store_bundle(engine, run.sync_id, bundle, observed_at=dt.datetime.now(dt.UTC)),
+            reused_pull_request_sink=lambda pr_number: checkpoint_reused_pull_request(
+                engine,
+                run.sync_id,
+                pr_number,
+                observed_at=dt.datetime.now(dt.UTC),
+            ),
         )
-        invocations, findings = telemetry or load_lint_telemetry(deployment, run.window_start, run.window_end)
-        store_telemetry(engine, repository, invocations, findings)
+        lint_rows = telemetry or load_lint_telemetry(deployment, run.window_start, run.window_end)
+        store_telemetry(engine, repository, lint_rows.invocations, lint_rows.findings)
         catalog = load_catalog()
         store_catalog_snapshot(
             engine,
@@ -138,11 +154,12 @@ def sync_review_activity(
             "window_start": utc_iso(run.window_start),
             "window_end": utc_iso(run.window_end),
         }
-        usage = result.usage.model_dump(mode="json")
+        usage = result.usage
         complete_sync(
             engine,
             run.sync_id,
             candidate_pull_requests=result.candidate_pull_requests,
+            reused_pull_requests=result.reused_pull_requests,
             github_usage=usage,
             finelog_watermark=watermark,
             completed_at=dt.datetime.now(dt.UTC),
@@ -158,9 +175,10 @@ def sync_review_activity(
         window_end=utc_iso(run.window_end),
         candidate_pull_requests=result.candidate_pull_requests,
         persisted_pull_requests=len(persisted),
+        reused_pull_requests=result.reused_pull_requests,
         github_usage=usage,
-        lint_invocations=len(invocations),
-        lint_findings=len(findings),
+        lint_invocations=len(lint_rows.invocations),
+        lint_findings=len(lint_rows.findings),
     )
 
 
@@ -172,7 +190,7 @@ def cli(repository: str, deployment: str, days: int) -> None:
     """Synchronize review activity into Marin's existing metadata database."""
     with database_engine(database_config_from_environment()) as engine:
         result = sync_review_activity(engine, repository=repository, deployment=deployment, days=days)
-        click.echo(json.dumps(result.__dict__, indent=2))
+        click.echo(json.dumps(result.model_dump(mode="json"), indent=2))
 
 
 if __name__ == "__main__":
