@@ -28,6 +28,22 @@ def _array_stacked_layer_in_axes(stacked: Any, num_layers: int) -> Any:
     )
 
 
+def _stacked_leaves(stacked: Any) -> list[tuple[str, Any]]:
+    """(key path, leaf) for each array leaf of a scan module's stacked body.
+
+    Keyed as the non-split path keys them so the whole-stack norm, taken over each original leaf,
+    stays comparable to non-split logging (and is correct for leaves shared across layers).
+    """
+    key_paths = jax_utils.leaf_key_paths(stacked, is_leaf=is_named_array)
+    return list(
+        zip(
+            jax.tree.leaves(key_paths, is_leaf=is_named_array),
+            jax.tree.leaves(stacked, is_leaf=is_named_array),
+            strict=True,
+        )
+    )
+
+
 def summary_statistics_for_tree(
     prefix: str,
     tree: Any,
@@ -80,8 +96,9 @@ def summary_statistics_for_tree(
                     for i in range(g.Block.size):
                         hists[f"{key_path}.{i}.{k}"] = jax.tree.map(lambda x: x[i] if is_jax_array_like(x) else x, v)
 
-                for k, v in vmapped_norms.items():
-                    norms[f"{key_path}.stacked.{k}"] = optax.global_norm(v)
+                if include_norms:
+                    for sub_key, leaf in _stacked_leaves(g.stacked):
+                        norms[f"{key_path}.stacked.{sub_key}"] = optax.global_norm(leaf)
 
             elif split_scan_layers and isinstance(g, haliax.nn.ArrayStacked):
                 num_layers = g.num_layers
@@ -98,8 +115,9 @@ def summary_statistics_for_tree(
                     for i in range(num_layers):
                         hists[f"{key_path}.{i}.{k}"] = jax.tree.map(lambda x: x[i] if is_jax_array_like(x) else x, v)
 
-                for k, v in vmapped_norms.items():
-                    norms[f"{key_path}.stacked.{k}"] = optax.global_norm(v)
+                if include_norms:
+                    for sub_key, leaf in _stacked_leaves(g.stacked):
+                        norms[f"{key_path}.stacked.{sub_key}"] = optax.global_norm(leaf)
 
             elif isinstance(g, NamedArray):
                 if include_norms:
