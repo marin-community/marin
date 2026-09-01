@@ -663,6 +663,7 @@ def _signals(now: datetime, metrics: dict[str, dict], run_id: str = "hero-a") ->
             latest=values["latest"],
             observed_at=values.get("observed_at", now - timedelta(seconds=30)),
             previous=values.get("previous"),
+            two_samples_ago=values.get("two_samples_ago"),
             recent_samples=values.get("recent_samples", 0),
             recent_total=values.get("recent_total", 0.0),
             recent_below_floor=values.get("recent_below_floor", 0),
@@ -890,6 +891,48 @@ def test_health_alert_reads_routing_throughput_and_evaluation():
     }
 
 
+@pytest.mark.parametrize(
+    ("latest", "previous", "two_samples_ago"),
+    [
+        (2.01, 2.00, 1.99),
+        (2.05, 2.00, 2.10),
+    ],
+)
+def test_eval_regression_alerts_on_a_sustained_rise_or_a_two_percent_jump(
+    latest: float, previous: float, two_samples_ago: float
+):
+    now = datetime(2026, 8, 21, 12, tzinfo=UTC)
+    evaluation = {
+        "latest": latest,
+        "previous": previous,
+        "two_samples_ago": two_samples_ago,
+    }
+    signals = _signals(now, {"eval_paloma_macro_loss": evaluation})
+
+    assert _reasons(health_alert_rows((_watched(),), signals, pa.table({}), now)) == {"eval_regressed"}
+
+
+@pytest.mark.parametrize(
+    ("latest", "previous", "two_samples_ago"),
+    [
+        (2.01, 2.00, 2.02),
+        (2.04, 2.00, 2.05),
+    ],
+)
+def test_eval_regression_ignores_a_small_or_exactly_two_percent_one_step_rise(
+    latest: float, previous: float, two_samples_ago: float
+):
+    now = datetime(2026, 8, 21, 12, tzinfo=UTC)
+    evaluation = {
+        "latest": latest,
+        "previous": previous,
+        "two_samples_ago": two_samples_ago,
+    }
+    signals = _signals(now, {"eval_paloma_macro_loss": evaluation})
+
+    assert _reasons(health_alert_rows((_watched(),), signals, pa.table({}), now)) == set()
+
+
 def test_throughput_floor_needs_most_of_the_window_below_it():
     # One restart step at zero is not a slow run, and a window too short to have
     # a median says nothing.
@@ -988,7 +1031,8 @@ def test_signal_query_reduces_the_newest_sample_and_the_health_window():
             ("attempt-1", "throughput_tokens_per_second", 0.1e6, now - timedelta(minutes=40), 0),
             ("attempt-1", "optim_skipped_step", 1.0, now - timedelta(minutes=9), 4),
             ("attempt-1", "optim_skipped_step", 1.0, now - timedelta(minutes=2), 5),
-            # Hours apart, so only the eval lookback keeps the previous value.
+            # Hours apart, so only the eval lookback keeps the comparison history.
+            ("attempt-1", "eval_paloma_macro_loss", 2.19, now - timedelta(hours=12), 9),
             ("attempt-1", "eval_paloma_macro_loss", 2.17, now - timedelta(hours=6), 6),
             ("attempt-1", "eval_paloma_macro_loss", 2.31, now - timedelta(minutes=12), 7),
         ]
@@ -1002,7 +1046,7 @@ def test_signal_query_reduces_the_newest_sample_and_the_health_window():
     assert (throughput.latest, throughput.recent_samples, throughput.recent_below_floor) == (2.6e6, 3, 2)
     assert signals["optim_skipped_step"].recent_total == 2.0
     evaluation = signals["eval_paloma_macro_loss"]
-    assert (evaluation.latest, evaluation.previous) == (2.31, 2.17)
+    assert (evaluation.latest, evaluation.previous, evaluation.two_samples_ago) == (2.31, 2.17, 2.19)
 
 
 def test_signal_query_reduces_one_task_attempt_at_a_time():
