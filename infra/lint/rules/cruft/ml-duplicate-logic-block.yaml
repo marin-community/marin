@@ -1,0 +1,38 @@
+schema_version: 1
+code: ml-duplicate-logic-block
+lane: cruft
+title: Same logic block in two+ places
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** Do not create parallel implementations. Two copies drift:
+  a fix to one is silently absent in the other.
+
+  **When allowed:** Two sites in deliberately isolated modules (experiment
+  scripts, one-off tools) where coupling them would create worse
+  dependencies. Three+ copies are never acceptable.
+
+  **Bad example:**
+  ```python
+  def merge_a(rows):
+      seen = {}
+      for r in rows:
+          if r.key in seen: ...
+      ...
+
+  def merge_b(rows):
+      seen = {}
+      for r in rows:
+          if r.key in seen: ...   # same algorithm; extract _dedupe(rows).
+      ...
+  ```
+
+  A common shape in this repo: N methods on one class sharing an identical loop +
+  rate-limiter + cancellation-check + error-log + thread-lifecycle scaffold that
+  differs only in the inner call they wrap — consolidate into one runner that takes
+  the inner step as a parameter.
+
+  ```python
+  def _run_autoscaler_loop(self): ...   # loop + rate-limit + cancel-check + error-log
+  def _run_ping_loop(self): ...         # same scaffold, only the wrapped call differs
+  def _run_checkpoint_loop(self): ...   # → one _run_loop(step, interval) runner.
+  ```
