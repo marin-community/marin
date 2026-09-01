@@ -11,7 +11,7 @@ how Marin pins a fork and how the refresh runs.
 Every fork is pinned under `config/external/`. The pins feed
 `config/update-external.py`, which regenerates
 `lib/marin/src/marin/external_dependencies.py`; nothing else imports a fork
-revision directly. There are two pin kinds:
+revision directly. There are three pin kinds:
 
 - Isolated uv lock (`evalchemy`, `harbor`, `MarinSkyRL`): the fork is a git
   dependency in `config/external/<fork>/uv.lock`. `uv run
@@ -33,8 +33,9 @@ one Weaver session for that unit. The `fork-ferry` Loom profile admits all four
 scheduled units; a test keeps its concurrency limit at or above the matrix size.
 There is no stored PAT.
 
-`MarinSkyRL` is pinned and refreshable through the skill on demand, but is not yet
-in the weekly rotation. A human runs the skill for a single fork the same way.
+`MarinSkyRL` is intentionally excluded from the weekly rotation. Refresh it only
+when a caller explicitly requests that on-demand path; its current one-time
+re-fork blocker still applies.
 
 The session runs the `refresh-fork` skill
 (`.agents/skills/refresh-fork/SKILL.md`), which owns the migration procedure:

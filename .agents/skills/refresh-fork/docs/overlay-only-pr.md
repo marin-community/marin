@@ -10,7 +10,7 @@ and what upstream change will let us drop it.
 
 For a TPU vLLM or tpu-inference overlay, do not put a temporary source SHA in
 Marin. Freeze the exact reviewed fork commit and use it as one source input to the
-TPU release procedure in `../SKILL.md`. Marin changes only after that procedure
+TPU release procedure in `vllm.md`. Marin changes only after that procedure
 selects one public vLLM requirement. A later source edit invalidates the release
 receipt and must be reviewed before any rebuild.
 

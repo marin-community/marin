@@ -117,6 +117,6 @@ e2e = "experiments/post_training/iceball_micro.py"
 blocker_assignee = "yonromai"
 nuances = [
     "Shares history with NovaSky-AI/SkyRL (merge-base 8e132edc, Dec 2025), but NovaSky's later monolith->package restructure (skyrl-train/ -> skyrl/) moved or deleted 684 of the 718 files Marin touched, so a mechanical rebase is intractable.",
-    "Needs a one-time re-fork onto current NovaSky main with Marin's work re-homed into the new package layout (#7920) before it can auto-migrate; until then a refresh files a blocker.",
+    "Needs a one-time re-fork onto current NovaSky main with Marin's work re-homed into the new package layout (#7920). Until that lands, any explicitly requested on-demand refresh is blocked.",
     "Marin consumes only the root marinskyrl package; the forked skyrl-train is unused. The GitHub compare API 404s because the repo was pushed as a standalone (its fork network is unlinked), which does not affect git-level rebasing.",
 ]
