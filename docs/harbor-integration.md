@@ -120,8 +120,8 @@ secret source declarations in `experiments/evaluation/evals.py`.
 
 ## Ownership boundary
 
-Marin does not install or import Harbor, `harbor_config`, Daytona, or Harbor's path runtime. The
-root workspace lock contains none of those packages. `marin.external_dependencies.HARBOR` identifies
+Marin does not install or import Harbor, Daytona, or Harbor's path runtime. The root workspace lock
+contains none of those packages. `marin.external_dependencies.HARBOR` identifies
 the exact Git revision used by two isolated calls:
 
 1. Preflight parses YAML or JSON with Harbor's Pydantic models, rejects unsupported launch shapes,

@@ -16,4 +16,4 @@ package = false
 prerelease = "allow"
 
 [tool.uv.sources]
-harbor = { git = "https://github.com/marin-community/harbor.git", branch = "main" }
+harbor = { git = "https://github.com/marin-community/harbor.git", branch = "main-next" }
