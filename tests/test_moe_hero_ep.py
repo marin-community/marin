@@ -437,7 +437,10 @@ def test_a_master_bearing_checkpoint_migrates_in_process_into_a_master_less_rest
 def test_the_carry_offload_overrides_an_inherited_collective_overlap_limit(monkeypatch):
     inherited = f"{train.XLA_COLLECTIVE_OVERLAP_FLAG}={train.DEFAULT_COLLECTIVE_OVERLAP_LIMIT}"
     monkeypatch.setenv("XLA_FLAGS", inherited)
-    config = _runtime_env_config(moe_implementation=train.RAGGED_MOE_IMPLEMENTATION, remat_mode="offload_carry")
+    config = _runtime_env_config(
+        moe_implementation=train.RAGGED_MOE_IMPLEMENTATION,
+        remat_mode=model.OFFLOAD_CARRY_REMAT_MODE,
+    )
 
     with patch.object(train, "dispatch_grug_training_run"):
         train.run_grug(config)
@@ -462,7 +465,10 @@ def test_a_ragged_run_without_the_offload_keeps_the_scheduler_off(monkeypatch):
 
 @pytest.mark.parametrize(
     ("moe_implementation", "expected_remat_mode"),
-    [(train.RAGGED_MOE_IMPLEMENTATION, "offload_carry"), ("fixed_pooled_wave_all_to_all", "recompute_all")],
+    [
+        (train.RAGGED_MOE_IMPLEMENTATION, model.OFFLOAD_CARRY_REMAT_MODE),
+        ("fixed_pooled_wave_all_to_all", "recompute_all"),
+    ],
 )
 def test_only_the_ragged_transport_offloads_the_layer_carry(moe_implementation, expected_remat_mode):
     step = launch.build_diagnostic_run(

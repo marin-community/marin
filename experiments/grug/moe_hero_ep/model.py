@@ -94,6 +94,7 @@ def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> i
 
 
 RematMode = Literal["recompute_all", "save_moe", "offload_carry"]
+OFFLOAD_CARRY_REMAT_MODE: RematMode = "offload_carry"
 
 # The per-layer residual-stream input. Plain remat holds it as the checkpoint argument, which
 # pins about 39 GiB of HBM across the hero's 48 layers.
@@ -1246,7 +1247,7 @@ class Transformer(eqx.Module):
 
         if cfg.remat_mode == "save_moe":
             remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
-        elif cfg.remat_mode == "offload_carry":
+        elif cfg.remat_mode == OFFLOAD_CARRY_REMAT_MODE:
             # XLA stacks each offloaded name's scan residuals into one pinned allocation.
             # Adding names is therefore not free. The carry alone fits. The carry plus the
             # attention residuals exceeds the host memory the run has.

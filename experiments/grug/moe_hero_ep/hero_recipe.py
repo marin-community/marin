@@ -18,7 +18,7 @@ from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.datasets.paloma import paloma_datasets
 from experiments.grug.moe_hero_ep.heuristic import HERO_MODEL
-from experiments.grug.moe_hero_ep.model import GrugModelConfig, QbEstimator
+from experiments.grug.moe_hero_ep.model import OFFLOAD_CARRY_REMAT_MODE, GrugModelConfig, QbEstimator
 from experiments.grug.moe_hero_ep.train import (
     RAGGED_MOE_IMPLEMENTATION,
     GrugTrainerConfig,
@@ -60,7 +60,7 @@ HERO_MODEL_CONFIG = dataclasses.replace(
 def with_transport_remat_mode(model: GrugModelConfig) -> GrugModelConfig:
     if model.moe_implementation != RAGGED_MOE_IMPLEMENTATION:
         return model
-    return dataclasses.replace(model, remat_mode="offload_carry")
+    return dataclasses.replace(model, remat_mode=OFFLOAD_CARRY_REMAT_MODE)
 
 
 class HeroThroughputResult(Artifact):

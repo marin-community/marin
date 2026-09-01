@@ -58,7 +58,7 @@ from experiments.grug.checkpointing import (
     restore_grug_state_from_checkpoint,
 )
 from experiments.grug.dispatch import dispatch_grug_training_run
-from experiments.grug.moe_hero_ep.model import GrugModelConfig, RematMode, Transformer
+from experiments.grug.moe_hero_ep.model import OFFLOAD_CARRY_REMAT_MODE, GrugModelConfig, RematMode, Transformer
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
@@ -215,7 +215,7 @@ def _apply_hero_ep_runtime_defaults(
         overlap_limit = DEFAULT_COLLECTIVE_OVERLAP_LIMIT
     # The scheduler's longer buffer live ranges fit on the ragged transport only once the layer
     # carry leaves HBM. Without that offload its first-step NCCL allocations fail.
-    latency_hiding = not ragged or remat_mode == "offload_carry"
+    latency_hiding = not ragged or remat_mode == OFFLOAD_CARRY_REMAT_MODE
     flag_defaults = (
         f"{XLA_COLLECTIVE_OVERLAP_FLAG}={overlap_limit}",
         f"--xla_gpu_enable_latency_hiding_scheduler={'true' if latency_hiding else 'false'}",
@@ -232,7 +232,7 @@ def _apply_hero_ep_runtime_defaults(
     )
     explicit_names = {flag.partition("=")[0] for flag in xla_flags}
     xla_flags.extend(flag for flag in flag_defaults if flag.partition("=")[0] not in explicit_names)
-    if remat_mode == "offload_carry":
+    if remat_mode == OFFLOAD_CARRY_REMAT_MODE:
         # A wrong overlap limit corrupts training silently, so the offload takes the flag
         # away from the caller instead of defaulting it.
         xla_flags = [f for f in xla_flags if f.partition("=")[0] != XLA_COLLECTIVE_OVERLAP_FLAG]
