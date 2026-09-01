@@ -80,6 +80,9 @@ def summary_statistics_for_tree(
                     for i in range(g.Block.size):
                         hists[f"{key_path}.{i}.{k}"] = jax.tree.map(lambda x: x[i] if is_jax_array_like(x) else x, v)
 
+                for k, v in vmapped_norms.items():
+                    norms[f"{key_path}.stacked.{k}"] = optax.global_norm(v)
+
             elif split_scan_layers and isinstance(g, haliax.nn.ArrayStacked):
                 num_layers = g.num_layers
                 in_axes = _array_stacked_layer_in_axes(g.stacked, num_layers)
@@ -94,6 +97,9 @@ def summary_statistics_for_tree(
                 for k, v in vmapped_hists.items():
                     for i in range(num_layers):
                         hists[f"{key_path}.{i}.{k}"] = jax.tree.map(lambda x: x[i] if is_jax_array_like(x) else x, v)
+
+                for k, v in vmapped_norms.items():
+                    norms[f"{key_path}.stacked.{k}"] = optax.global_norm(v)
 
             elif isinstance(g, NamedArray):
                 if include_norms:
