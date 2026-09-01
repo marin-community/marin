@@ -49,7 +49,7 @@ a training run with no signal that it happened. That is what `iris_state_stale` 
 | `router_bias` | Newest bound over 400 from zero | `train_router_bias_max`, `train_router_bias_min` |
 | `throughput_low` | Most of 15 minutes below 2.0M tokens per second | `throughput_tokens_per_second` |
 | `mfu_low` | Most of 15 minutes below 15% | `throughput_mfu` |
-| `eval_regressed` | Newest evaluation, within 30 minutes, worse than the one before it | `eval_paloma_macro_loss` |
+| `eval_regressed` | Newest evaluation, within 30 minutes, worse than two evaluations ago or over 2% worse than the preceding evaluation | `eval_paloma_macro_loss` |
 | `iris_state_stale` | Newest `iris.task_state` row for the root over 5 minutes old | `iris.task_state` |
 | `task_retried` | A controller retry or gang requeue in the last 15 minutes | `iris.task_event` |
 
@@ -63,7 +63,8 @@ attempt. `loss_jump` reads its two loss windows against each other, so it filter
 execution. A retry keeps the run ID and takes a new `execution_uid`, so partitioning on the run alone
 would sum one attempt's skipped steps into the next and compare evaluations across a restore that
 redid steps. Process zero is the stable choice because Levanter publishes tracker metrics only from
-it. A check reads a newest sample only while it is under 15 minutes old.
+it. The evaluation check retains the newest three samples from that execution. A check reads a newest
+sample only while it is under 15 minutes old, except evaluations, which remain fresh for 30 minutes.
 
 The throughput checks count how much of the window sat below the floor rather than averaging it —
 the median comparison the Pushover monitor makes, which keeps one restart step at zero from reading
