@@ -11,12 +11,6 @@ import pytest
 from marin.execution.lazy import StepContext
 
 from experiments.grug.moe_hero_ep.launch_diagnostics import build_diagnostic_run
-from experiments.grug.moe_hero_ep.launch_hero_wd_continuation import (
-    GATE_ROUTER_WEIGHT_DECAY,
-    RUN_ID,
-    SOURCE_CHECKPOINT_PATH,
-    build_hero_wd_continuation,
-)
 from experiments.grug.moe_hero_ep.launch_scaling_ladder import build_ladder_run
 from experiments.grug.moe_hero_ep.optimizer import _gate_router_decay_mask, _scale_by_adam_gate_router_decay
 
@@ -74,23 +68,20 @@ def test_gate_router_decay_mask_selects_only_gate_and_router():
     assert bool(mask["token_embed"]) is False
 
 
-def test_hero_wd_continuation_forks_from_source_with_gate_router_decay(monkeypatch):
-    monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin")
-    monkeypatch.setenv("MARIN_TEMP_PREFIX", "s3://hero-checkpoints")
-    step = build_hero_wd_continuation(version="2026.08.18")
-    output_path = f"s3://marin-us-east-02a/marin/grug/{RUN_ID}/v"
-    ctx = dataclasses.replace(
-        StepContext.for_fingerprint(runtime_arg_keys=step.runtime_args, deps=step.deps),
-        output_path=output_path,
+def test_ladder_defaults_gate_router_weight_decay_on_with_opt_out():
+    # Weight decay is on by default for the hero recipe, so a resume can never silently continue
+    # without it; passing 0 is the explicit opt-out.
+    default_step = build_ladder_run(run_id="test-wd-default", size="d6144", num_steps=1, version="2026.08.18")
+    opt_out_step = build_ladder_run(
+        run_id="test-wd-off", size="d6144", num_steps=1, gate_router_weight_decay=0.0, version="2026.08.18"
     )
-    config = step.build_config(ctx)
 
-    assert config.optimizer.gate_router_weight_decay == GATE_ROUTER_WEIGHT_DECAY == 0.05
-    search_paths = config.trainer.trainer.checkpoint_search_paths(RUN_ID)
-    # Own output root is searched first (retries prefer this run's own checkpoint); the pinned source
-    # is the last resort, so a cold start forks from it.
-    assert search_paths[0] == f"{output_path}/checkpoints"
-    assert search_paths[-1] == SOURCE_CHECKPOINT_PATH
+    def optimizer_of(step):
+        ctx = StepContext.for_fingerprint(runtime_arg_keys=step.runtime_args, deps=step.deps)
+        return step.build_config(ctx).optimizer
+
+    assert optimizer_of(default_step).gate_router_weight_decay == 0.05
+    assert optimizer_of(opt_out_step).gate_router_weight_decay == 0.0
 
 
 def test_diagnostic_run_matches_the_d6144_rack_local_recipe():

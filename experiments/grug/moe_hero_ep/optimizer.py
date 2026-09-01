@@ -85,8 +85,12 @@ def _scale_invariant_hyperball_updates(params, direction_updates, learning_rate:
 
 
 def _is_gate_or_router_weight(path_lower: str) -> bool:
-    """True for the ``attn_gate`` and ``router`` weight leaves (``router_bias`` excluded)."""
-    return "router_bias" not in path_lower and (path_lower.endswith(".attn_gate") or ".router" in path_lower)
+    """True for exactly the ``attn_gate`` and MoE ``router`` weight leaves.
+
+    Matches the leaf attribute name at the end of the path, so it selects ``...attn.attn_gate`` and
+    ``...mlp.router`` but not the separate ``...mlp.router_bias`` leaf.
+    """
+    return path_lower.endswith(".attn_gate") or path_lower.endswith(".router")
 
 
 def _gate_router_decay_mask(params):
@@ -104,15 +108,10 @@ def _gate_router_decay_mask(params):
 def _scale_by_adam_gate_router_decay(
     b1: float, b2: float, eps: float, weight_decay: float, total_steps: int
 ) -> optax.GradientTransformation:
-    """``optax.scale_by_adam`` plus decoupled (AdamW-style) weight decay on ``attn_gate`` and the
-    ``router`` weight, annealed linearly from ``weight_decay`` to 0 across ``total_steps``.
-
-    The decay coefficient is read from the Adam step ``count`` rather than a separate schedule, so on
-    a checkpoint resume it evaluates at the restored global step. The state stays
-    ``optax.ScaleByAdamState`` -- byte-for-byte the plain ``scale_by_adam`` structure -- so a
-    checkpoint written without weight decay restores unchanged (moments and count preserved), and the
-    decay simply switches on from the resumed step.
-    """
+    """``scale_by_adam`` plus decoupled weight decay on ``attn_gate`` and the ``router`` weight,
+    annealed linearly to 0 over ``total_steps``. The coefficient reads the Adam ``count`` and the
+    state stays ``ScaleByAdamState``, so a checkpoint written without decay resumes at the right step
+    with its moments intact."""
     adam = optax.scale_by_adam(b1, b2, eps)
 
     def init_fn(params):
@@ -121,7 +120,7 @@ def _scale_by_adam_gate_router_decay(
     def update_fn(updates, state, params=None):
         if params is None:
             raise ValueError("_scale_by_adam_gate_router_decay requires params for decoupled decay")
-        step = state.count  # incremented once per update, so it holds the current global step
+        step = state.count
         updates, next_state = adam.update(updates, state, params)
         wd = weight_decay * jnp.clip(1.0 - step / total_steps, 0.0, None)
         mask = _gate_router_decay_mask(params)
@@ -175,11 +174,6 @@ class GrugMoeMuonHConfig(OptimizerConfig):
       and the tiny SConv kernels.
 
     ``use_syrk`` routes the 4D expert-stack Newton-Schulz through QuACK's symmetric GEMM.
-
-    ``gate_router_weight_decay`` (0 disables) applies decoupled weight decay to ``attn_gate`` and the
-    ``router`` weight only, annealed linearly from the given value to 0 over training. It is folded
-    into the ``adam`` group's transform (state unchanged), so it can be switched on when continuing
-    from a checkpoint trained without it.
     """
 
     adam_lr: float = 6e-4
