@@ -138,6 +138,8 @@ def build_ladder_run(
     size: str,
     num_steps: int | None = None,
     checkpoint_every: int | None = None,
+    gate_router_weight_decay: float = 0.0,
+    source_checkpoint_path: str | None = None,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """One scaling-ladder rung at width ``size`` on ``LADDER_RACKS[size]`` GB200 racks.
@@ -195,6 +197,7 @@ def build_ladder_run(
             ),
             use_syrk=True,  # GB200 SM100 symmetric GEMM for MuonH Newton-Schulz
         )
+    optimizer = dataclasses.replace(optimizer, gate_router_weight_decay=gate_router_weight_decay)
 
     # Uniform hero trainer: expert-parallel within each rack, replicated across racks, MuonH state
     # offloaded to FP32 pinned host.
@@ -251,11 +254,15 @@ def build_ladder_run(
                 process_timeout=HERO_PROCESS_STALL_TIMEOUT,
                 startup_timeout=HERO_STARTUP_TIMEOUT,
             ),
-            # Existing 02A temporaries remain valid resume candidates for this lineage.
+            # Existing 02A temporaries remain valid resume candidates for this lineage. A
+            # ``source_checkpoint_path`` (a pinned checkpoint from another run) goes last: a cold
+            # start finds only it and forks from it, while every retry prefers this run's own newer
+            # checkpoint from the paths above.
             load_checkpoint_path=[
                 permanent_checkpoint_path,
                 temporary_checkpoint_path,
                 data_local_checkpoint_path,
+                *([source_checkpoint_path] if source_checkpoint_path else []),
             ],
             # load_checkpoint stays None: the trainer resumes from the newest checkpoint that
             # exists, so a retry after a hardware or memory fault continues the run.
@@ -329,11 +336,37 @@ def build_ladder_run(
     "the rung (6000 at d6144, final only elsewhere). Resume uses the rolling temporary checkpoint "
     "and is not affected by this option.",
 )
+@click.option(
+    "--gate-router-weight-decay",
+    type=click.FloatRange(min=0.0),
+    default=0.0,
+    show_default=True,
+    help="Decoupled weight decay on attn_gate and the router weight, annealed linearly to 0 over "
+    "num_train_steps. 0 disables it.",
+)
+@click.option(
+    "--source-checkpoint-path",
+    default=None,
+    help="Fork from this pinned checkpoint (e.g. another run's step directory) under this run's own "
+    "id: a cold start restores it (full state, including step); retries use this run's own checkpoints.",
+)
 @build_options
 def main(
-    run_id: str, size: str, num_steps: int | None, checkpoint_every: int | None
+    run_id: str,
+    size: str,
+    num_steps: int | None,
+    checkpoint_every: int | None,
+    gate_router_weight_decay: float,
+    source_checkpoint_path: str | None,
 ) -> ArtifactStep[HeroThroughputResult]:
-    return build_ladder_run(run_id=run_id, size=size, num_steps=num_steps, checkpoint_every=checkpoint_every)
+    return build_ladder_run(
+        run_id=run_id,
+        size=size,
+        num_steps=num_steps,
+        checkpoint_every=checkpoint_every,
+        gate_router_weight_decay=gate_router_weight_decay,
+        source_checkpoint_path=source_checkpoint_path,
+    )
 
 
 if __name__ == "__main__":

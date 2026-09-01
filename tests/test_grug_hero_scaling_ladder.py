@@ -3,11 +3,96 @@
 
 import dataclasses
 
+import jax
+import jax.numpy as jnp
+import jax.tree_util as tu
+import optax
 import pytest
 from marin.execution.lazy import StepContext
 
 from experiments.grug.moe_hero_ep.launch_diagnostics import build_diagnostic_run
 from experiments.grug.moe_hero_ep.launch_scaling_ladder import build_ladder_run
+from experiments.grug.moe_hero_ep.optimizer import _gate_router_decay_mask, _scale_by_adam_gate_router_decay
+
+# A miniature stacked-hero parameter tree: the two decay targets plus leaves that must be left alone.
+_MOCK_PARAMS = {
+    "token_embed": jnp.ones((5, 4)),
+    "stacked_blocks": {
+        "stacked": {
+            "attn": {"attn_gate": jnp.ones((2, 4, 3))},
+            "mlp": {"router": jnp.ones((2, 4, 6)), "router_bias": jnp.ones((2, 6))},
+            "rms_attn": {"weight": jnp.ones((2, 4))},
+        }
+    },
+}
+
+
+def test_gate_router_decay_state_matches_plain_adam():
+    # The decay must not change the optimizer-state tree, so a checkpoint written without it restores
+    # unchanged (moments + step count preserved) when the decay is switched on for a continuation.
+    plain = optax.scale_by_adam(0.9, 0.95, 1e-8).init(_MOCK_PARAMS)
+    decayed = _scale_by_adam_gate_router_decay(0.9, 0.95, 1e-8, 0.05, 390_251).init(_MOCK_PARAMS)
+    assert type(decayed) is type(plain)
+    assert tu.tree_structure(decayed) == tu.tree_structure(plain)
+
+
+@pytest.mark.parametrize(("count", "expected_wd"), [(0, 0.05), (54_000, 0.05 * (1 - 54_000 / 390_251)), (390_251, 0.0)])
+def test_gate_router_decay_anneals_from_the_step_count(count, expected_wd):
+    total_steps = 390_251
+    adam = optax.scale_by_adam(0.9, 0.95, 1e-8)
+    decay = _scale_by_adam_gate_router_decay(0.9, 0.95, 1e-8, 0.05, total_steps)
+    grads = jax.tree.map(lambda x: jnp.full_like(x, 0.01), _MOCK_PARAMS)
+
+    def state_at_count(transform):
+        return transform.init(_MOCK_PARAMS)._replace(count=jnp.asarray(count, jnp.int32))
+
+    decayed_updates, _ = decay.update(grads, state_at_count(decay), _MOCK_PARAMS)
+    adam_updates, _ = adam.update(grads, state_at_count(adam), _MOCK_PARAMS)
+    # Decoupled decay adds wd * param (param == 1) on top of the identical Adam step for the router.
+    applied_wd = float(
+        (
+            decayed_updates["stacked_blocks"]["stacked"]["mlp"]["router"]
+            - adam_updates["stacked_blocks"]["stacked"]["mlp"]["router"]
+        ).mean()
+    )
+    assert applied_wd == pytest.approx(expected_wd, abs=1e-6)
+
+
+def test_gate_router_decay_mask_selects_only_gate_and_router():
+    mask = _gate_router_decay_mask(_MOCK_PARAMS)
+    stacked = mask["stacked_blocks"]["stacked"]
+    assert bool(stacked["attn"]["attn_gate"]) is True
+    assert bool(stacked["mlp"]["router"]) is True
+    assert bool(stacked["mlp"]["router_bias"]) is False
+    assert bool(stacked["rms_attn"]["weight"]) is False
+    assert bool(mask["token_embed"]) is False
+
+
+def test_ladder_forks_from_source_checkpoint_with_gate_router_decay(monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin")
+    monkeypatch.setenv("MARIN_TEMP_PREFIX", "s3://hero-checkpoints")
+    source = "s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-54000"
+    step = build_ladder_run(
+        run_id="test-fork",
+        size="d6144",
+        num_steps=1,
+        gate_router_weight_decay=0.05,
+        source_checkpoint_path=source,
+        version="2026.08.18",
+    )
+    output_path = "s3://marin-us-east-02a/marin/grug/test-fork/v"
+    ctx = dataclasses.replace(
+        StepContext.for_fingerprint(runtime_arg_keys=step.runtime_args, deps=step.deps),
+        output_path=output_path,
+    )
+    config = step.build_config(ctx)
+
+    assert config.optimizer.gate_router_weight_decay == 0.05
+    search_paths = config.trainer.trainer.checkpoint_search_paths("test-fork")
+    # Own output root is searched first (retries prefer this run's own checkpoint); the pinned source
+    # is the last resort, so a cold start forks from it.
+    assert search_paths[0] == f"{output_path}/checkpoints"
+    assert search_paths[-1] == source
 
 
 def test_diagnostic_run_matches_the_d6144_rack_local_recipe():

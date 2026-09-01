@@ -84,6 +84,50 @@ def _scale_invariant_hyperball_updates(params, direction_updates, learning_rate:
     return jax.tree.map(scale_invariant_update, params, direction_updates, is_leaf=lambda x: x is None)
 
 
+def _gate_router_decay_mask(params):
+    """Boolean pytree that is True on ``attn_gate`` and the ``router`` weight -- the leaves that
+    receive decoupled weight decay -- and False everywhere else (``router_bias`` included)."""
+    paths = leaf_key_paths(params)
+
+    def is_target(_, path):
+        path_lower = (".".join(path) if isinstance(path, (list, tuple)) else str(path)).lower()
+        if "router_bias" in path_lower:
+            return False
+        return path_lower.endswith(".attn_gate") or ".router" in path_lower
+
+    return jax.tree.map(is_target, params, paths)
+
+
+def _scale_by_adam_gate_router_decay(
+    b1: float, b2: float, eps: float, weight_decay: float, total_steps: int
+) -> optax.GradientTransformation:
+    """``optax.scale_by_adam`` plus decoupled (AdamW-style) weight decay on ``attn_gate`` and the
+    ``router`` weight, annealed linearly from ``weight_decay`` to 0 across ``total_steps``.
+
+    The decay coefficient is read from the Adam step ``count`` rather than a separate schedule, so on
+    a checkpoint resume it evaluates at the restored global step. The state stays
+    ``optax.ScaleByAdamState`` -- byte-for-byte the plain ``scale_by_adam`` structure -- so a
+    checkpoint written without weight decay restores unchanged (moments and count preserved), and the
+    decay simply switches on from the resumed step.
+    """
+    adam = optax.scale_by_adam(b1, b2, eps)
+
+    def init_fn(params):
+        return adam.init(params)
+
+    def update_fn(updates, state, params=None):
+        if params is None:
+            raise ValueError("_scale_by_adam_gate_router_decay requires params for decoupled decay")
+        step = state.count  # incremented once per update, so it holds the current global step
+        updates, next_state = adam.update(updates, state, params)
+        wd = weight_decay * jnp.clip(1.0 - step / total_steps, 0.0, None)
+        mask = _gate_router_decay_mask(params)
+        updates = jax.tree.map(lambda u, p, keep: u + wd * p if keep else u, updates, params, mask)
+        return updates, next_state
+
+    return optax.GradientTransformation(init_fn, update_fn)
+
+
 def scale_with_grug_muonh(
     momentum: float = 0.95,
     nesterov: bool = True,
@@ -128,6 +172,11 @@ class GrugMoeMuonHConfig(OptimizerConfig):
       and the tiny SConv kernels.
 
     ``use_syrk`` routes the 4D expert-stack Newton-Schulz through QuACK's symmetric GEMM.
+
+    ``gate_router_weight_decay`` (0 disables) applies decoupled weight decay to ``attn_gate`` and the
+    ``router`` weight only, annealed linearly from the given value to 0 over training. It is folded
+    into the ``adam`` group's transform (state unchanged), so it can be switched on when continuing
+    from a checkpoint trained without it.
     """
 
     adam_lr: float = 6e-4
@@ -141,6 +190,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     max_grad_norm: float | None = None
     coefficient_type: CoefficientType = "quintic"
     use_syrk: bool = True
+    gate_router_weight_decay: float = 0.0
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
@@ -176,7 +226,14 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 components = []
                 if self.max_grad_norm:
                     components.append(optax.clip_by_global_norm(self.max_grad_norm))
-                components.append(optax.scale_by_adam(self.beta1, self.beta2, self.epsilon))
+                if self.gate_router_weight_decay > 0.0:
+                    components.append(
+                        _scale_by_adam_gate_router_decay(
+                            self.beta1, self.beta2, self.epsilon, self.gate_router_weight_decay, num_train_steps
+                        )
+                    )
+                else:
+                    components.append(optax.scale_by_adam(self.beta1, self.beta2, self.epsilon))
                 components.append(optax.scale(-lr))
                 return optax.chain(*components)
 
