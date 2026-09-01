@@ -1397,11 +1397,6 @@ def test_ragged_a2a_receiver_clipping_respects_capacity():
     ids=["all-empty-groups", "mixed", "large-first-group"],
 )
 def test_loop_local_zeros_fills_exact_zeros(site: _LoopLocalZeroSite, tie: np.ndarray):
-    """The ragged-a2a output inits must be exactly zero at every call site the backend uses.
-
-    Dropped source rows, and receiver rows no peer writes, keep this init; the combine reads them
-    as zero contributions. A non-zero fill corrupts training without raising.
-    """
     filled = _loop_local_zeros(4, 3, jnp.float32, jnp.asarray(tie), site=site)
 
     assert filled.shape == (4, 3)
@@ -1409,11 +1404,6 @@ def test_loop_local_zeros_fills_exact_zeros(site: _LoopLocalZeroSite, tie: np.nd
 
 
 def _optimized_hlo_opcode_count(fill_fn, opcode_name: str) -> int:
-    """Count an opcode in the optimized HLO produced for ``fill_fn``.
-
-    XLA's simplifier is what folds a fill into a constant, so a jaxpr-level check cannot see the
-    property: ``tie[0] * 0`` consumes ``tie`` in the jaxpr and still folds.
-    """
     tie = jnp.asarray([1, 7, 0, 3], dtype=jnp.int32)
     executable = jax.jit(fill_fn).lower(tie).compile().runtime_executable()
     return sum(
@@ -1425,13 +1415,6 @@ def _optimized_hlo_opcode_count(fill_fn, opcode_name: str) -> int:
 
 
 def test_loop_local_zeros_is_not_a_foldable_constant():
-    """The fill must still read its tie after XLA optimizes, which is what keeps it in the scan.
-
-    XLA hoists a constant-foldable fill out of the layer loop, and CopyInsertion then mints a
-    fresh multi-GB copy into the in-place ``ragged_all_to_all`` output slot every iteration.
-    ``min(tie[0], -site) + site`` resists the fold because XLA cannot prove ``tie`` is
-    non-negative; an arithmetic identity such as ``tie[0] * 0`` would not.
-    """
     assert (
         _optimized_hlo_opcode_count(
             lambda tie: _loop_local_zeros(4, 3, jnp.float32, tie, site=_LoopLocalZeroSite.DISPATCH_OUTPUT),

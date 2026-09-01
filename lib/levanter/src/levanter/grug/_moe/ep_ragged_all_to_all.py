@@ -16,6 +16,7 @@ Axis names used in the shape annotations:
     Echunk  experts in one sequential chunk, Elocal / chunks
     C       rows in one chunk's receiver buffer, the per-chunk capacity
     S       shards on the expert axis
+    U       expert-granular transfers on the expert axis
 """
 
 import functools
@@ -222,29 +223,17 @@ class _LoopLocalZeroSite(IntEnum):
 def _loop_local_zeros(
     rows: int, hidden_dim: int, dtype, tie: Int[Array, "..."], site: _LoopLocalZeroSite
 ) -> Float[Array, "rows H"]:
-    """Zero buffer for an in-place ``ragged_all_to_all`` output slot, built so XLA never copies it.
+    """Return an exact-zero output init for an in-place collective.
 
-    ``ragged_all_to_all`` writes its result in place into the output-init operand. A literal
-    ``jnp.zeros`` init is a trace-time constant: it gets hoisted out of the layer scan (and
-    identical inits CSE together), so CopyInsertion must mint a fresh multi-GB device copy of
-    the pristine zeros into the a2a's output slot on every scan iteration. Deriving the zeros
-    from ``tie`` -- a per-site, per-iteration traced value -- keeps each init inside the loop
-    body and distinct from every other init, so it lowers to one write-only fill kernel whose
-    buffer the a2a updates directly.
-
-    ``tie`` must be a non-negative integer array (group or transfer sizes): with ``site >= 0``,
-    ``min(tie[0], -site) + site`` is exactly zero at runtime but not foldable at compile time.
-
-    Each ``site`` enum member identifies one call site. Two sites can hold the SAME tie tensor
-    without it being obvious (dispatch send_sizes and return recv_sizes are one tensor in
-    ep_common), and same-shape same-tie fills CSE into one value with two destructive in-place a2a
-    consumers -- which makes CopyInsertion mint back the multi-GB copy this helper exists to
-    prevent.
+    ``tie`` must contain non-negative integers. ``site`` must identify the call site.
     """
+    # The traced minimum keeps the fill inside the loop; unique site values keep separate
+    # collective output buffers from merging under CSE.
     zero = (jnp.minimum(tie.reshape(-1)[0], -site) + site).astype(dtype)
     return jax.lax.broadcast(zero, (rows, hidden_dim))
 
 
+# JAX's transpose rule uses hoisted zero inits, so these wrappers reproduce it with loop-local buffers.
 @functools.partial(jax.custom_vjp, nondiff_argnums=(0, 1))
 def _dispatch_ragged_a2a(
     capacity: int,
@@ -255,15 +244,6 @@ def _dispatch_ragged_a2a(
     output_offsets: Int[Array, "U"],
     recv_sizes: Int[Array, "U"],
 ) -> Float[Array, "C H"]:
-    """Dispatch-direction ``ragged_all_to_all`` into a freshly zeroed receiver buffer.
-
-    Owning the output-init here (instead of taking a caller-built ``jnp.zeros``) lets both the
-    primal and the transposed direction build their inits with `_loop_local_zeros`. jax's
-    built-in transpose rule inits the swapped a2a with plain zeros, which XLA hoists out of
-    the layer loop and re-copies every iteration; the custom vjp below is that same rule with
-    the init construction replaced. Zeros stay load-bearing: receiver rows no peer writes must
-    read 0 downstream, and dropped source rows must read a 0 cotangent in the backward.
-    """
     del source_rows
     output_init = _loop_local_zeros(
         capacity, chunk_source.shape[1], chunk_source.dtype, send_sizes, site=_LoopLocalZeroSite.DISPATCH_OUTPUT
@@ -296,15 +276,9 @@ def _dispatch_ragged_a2a_bwd(
 ) -> tuple[Float[Array, "TK H"], None, None, None, None]:
     del capacity
     input_offsets, send_sizes, output_offsets, recv_sizes = residuals
-    # The transpose of a ragged all-to-all is the reverse ragged all-to-all: swap the send and
-    # recv roles and exchange the offset vectors across shards, exactly as jax's transpose rule
-    # does. Source rows that were clipped receive no cotangent and keep the init's zeros.
+    # Reverse the collective with exchanged offsets, matching JAX's transpose rule.
     exchanged_output_offsets = jax.lax.all_to_all(output_offsets, "expert", 0, 0, tiled=True)
     exchanged_input_offsets = jax.lax.all_to_all(input_offsets, "expert", 0, 0, tiled=True)
-    # Tie to this side's send_sizes, not recv_sizes: the return path's passthrough fill ties to
-    # its own send_sizes, which is the SAME tensor as this dispatch's recv_sizes, and two fills
-    # with identical shape and tie CSE back into one value with a destructive consumer --
-    # re-minting exactly the copy this construction removes.
     init = _loop_local_zeros(
         source_rows, cotangent.shape[1], cotangent.dtype, send_sizes, site=_LoopLocalZeroSite.DISPATCH_COTANGENT
     )
@@ -327,12 +301,6 @@ def _return_ragged_a2a(
     output_offsets: Int[Array, "U"],
     recv_sizes: Int[Array, "U"],
 ) -> Float[Array, "TK H"]:
-    """Return-direction ``ragged_all_to_all``: write expert outputs back over ``returned``.
-
-    Same construction as `_dispatch_ragged_a2a`: the primal is unchanged, and the custom vjp
-    replicates jax's transpose rule operation for operation, replacing only the transposed
-    a2a's zero init so it is built per-iteration instead of hoisted and copied.
-    """
     del capacity
     return jax.lax.ragged_all_to_all(
         out_dispatch, returned, input_offsets, send_sizes, output_offsets, recv_sizes, axis_name="expert"
@@ -368,10 +336,7 @@ def _return_ragged_a2a_bwd(
     out_dispatch_ct = jax.lax.ragged_all_to_all(
         cotangent, init, exchanged_output_offsets, recv_sizes, exchanged_input_offsets, send_sizes, axis_name="expert"
     )
-    # Rows this a2a overwrote took their value from ``out_dispatch``, so the pass-through
-    # cotangent to ``returned`` is zeroed on exactly the written intervals. This mirrors jax's
-    # transpose rule op for op (interval marks, cumsum, integer select_n) so the behavior is
-    # bit-identical, including on degenerate empty-group offset patterns.
+    # Match JAX's transpose rule when masking rows overwritten in the primal.
     interval_marks = (
         jnp.zeros(cotangent.shape[0], jnp.int32)
         .at[exchanged_output_offsets]
@@ -438,9 +403,7 @@ def _moe_mlp_ep_ragged_a2a_local(
 
     expert_mlp = _select_expert_mlp(activation_fn)
     chunk_of_expert = (jnp.arange(num_experts, dtype=jnp.int32) % local_experts) // chunk_experts  # [E]
-    # Built per-iteration (not jnp.zeros) so the layer scan does not re-copy a hoisted
-    # constant into the in-place return a2a's output slot every step; see _loop_local_zeros.
-    # The zeros are load-bearing: rows no peer writes back must read 0 in the combine.
+    # Unwritten rows remain zero for the final combine.
     returned = _loop_local_zeros(
         assignments_per_shard, hidden_dim, x_local.dtype, group_sizes, site=_LoopLocalZeroSite.RETURN_OUTPUT
     )  # [TK, H]
