@@ -10,8 +10,6 @@
 //! drivers below — [`write_row`], [`content_digest`], [`drive_to_phase`] —
 //! keep each journey a short script over a real store.
 
-#![allow(dead_code)]
-
 use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
