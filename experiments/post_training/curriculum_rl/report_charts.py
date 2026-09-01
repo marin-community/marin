@@ -1,9 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Render round-3 report charts from W&B histories.
+"""Render report charts from W&B histories.
 
-Produces, per model family (Qwen3-0.6B and Snowball 67B-A2B), a grade-weighted
+Produces, per model family (Qwen3-0.6B plus the Snowball 67B-A2B rounds), a grade-weighted
 headline chart, per-grade validation breakouts over steps and tokens, a
 grade-attainment chart (tokens to first reach the frontier threshold at each
 grade), curriculum weight/pass-rate trajectories per arm, an empirical
@@ -11,7 +11,7 @@ learning-velocity curve, and a JSON summary of per-arm token budgets. Raw eval
 points are drawn faintly under an EMA-smoothed line. Runs locally (W&B access
 only); seaborn is not a workspace dependency, so run with an overlay:
 
-    uv run --with seaborn python -m experiments.post_training.curriculum_rl.report_charts --out /tmp/curriculum-r3
+    uv run --with seaborn python -m experiments.post_training.curriculum_rl.report_charts --out /tmp/curriculum-charts
 """
 
 import itertools

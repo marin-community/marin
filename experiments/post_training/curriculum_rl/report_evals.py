@@ -19,7 +19,7 @@ from experiments.post_training.curriculum_rl.launch import EXPERIMENT_NAME
 @click.command(help=__doc__)
 def main() -> None:
     for record in list_records(CW_RECORDS_PREFIX):
-        # Round-1 model names start with the experiment name; round-2 names are
+        # Model names either start with the experiment name or are
         # owner-prefixed (e.g. "power-curriculum-rl-naive").
         if f"{EXPERIMENT_NAME}-" not in record.model.name:
             continue

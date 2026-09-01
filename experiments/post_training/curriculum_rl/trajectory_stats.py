@@ -24,6 +24,8 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 MAX_ARCHIVES = 80
 STEP_BUCKET = 20
+# Graded answer lines and \boxed{} both live at the very end of a response.
+TAIL_CHARS = 400
 THINK_TOKENS = ("<|start_think|>", "<|end_think|>", "<think>", "</think>")
 ANSWER_LINE = re.compile(r"(####\s*\S+|Answer:\s*\S+)")
 BIN_TOKENS = ("gsm8k", "svamp", "asdiv", "math", "numina", "omni", "aime", "theoremqa", "hardmath", "rg-sum", "putnam")
@@ -43,8 +45,8 @@ def record_stats(rec: dict, reasons: tuple[str, ...]) -> dict:
         "sampled": None if not reasons else "mandatory" not in reasons,
         "truncated": resp.get("stop_reason") == "length",
         "think": any(t in text for t in THINK_TOKENS),
-        "answer_line": bool(ANSWER_LINE.search(text[-400:])),
-        "boxed": "\\boxed{" in text[-400:],
+        "answer_line": bool(ANSWER_LINE.search(text[-TAIL_CHARS:])),
+        "boxed": "\\boxed{" in text[-TAIL_CHARS:],
         "chars": len(text),
     }
 

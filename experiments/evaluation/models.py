@@ -18,6 +18,8 @@ from marin.evaluation.model_config import (
 )
 from marin.inference.backend import CONCAT_CHAT_TEMPLATE
 
+from experiments.models import SNOWBALL_SFT_EXPORT_URI
+
 MODEL_CATALOG_DIR = Path(__file__).parent / "serve" / "models"
 
 # The 256-expert Grug MoE fork serves data-parallel + expert-parallel with tensor_parallel_size=1; the
@@ -127,7 +129,7 @@ _FACTORY_MODELS: tuple[ModelConfig, ...] = (
     # (it otherwise scores 0), and a light repetition penalty curbs the thinking loops.
     _snowball(
         "snowball-sft",
-        "s3://marin-us-east-02a/marin/exports/grug/june-67b-a2b-sft-s2-thinking/step-630/hf-bf16-vllm/",
+        SNOWBALL_SFT_EXPORT_URI,
         generation=GenerationConfig(extra_gen_kwargs={"skip_special_tokens": "false", "repetition_penalty": "1.1"}),
     ),
 )

@@ -10,12 +10,12 @@ parquet schema with a per-row ``env_class`` so one training run mixes verifier
 environments freely; ``extra_info`` carries the bin name and grade for
 curriculum samplers and per-source metrics.
 
-Round 3 arranges bins on one 0-13 ladder from single-digit sums to graduate
-mathematics, anchored to school grade and contest tier. Grades come from the
-strongest available signal per source: explicit per-problem school grades
-(ASDiv), dataset difficulty metadata (MATH levels, Omni-MATH AoPS ratings),
-contest or curriculum provenance (GSM8K, NuminaMath source tags, AIME), or
-generator knobs re-anchored to round-2 measured pass rates (reasoning-gym
+Bins sit on one 0-13 ladder from single-digit sums to graduate mathematics,
+anchored to school grade and contest tier. Grades come from the strongest
+available signal per source: explicit per-problem school grades (ASDiv),
+dataset difficulty metadata (MATH levels, Omni-MATH AoPS ratings), contest or
+curriculum provenance (GSM8K, NuminaMath source tags, AIME), or generator
+knobs anchored to measured pass rates (reasoning-gym
 arithmetic). The top rungs are university/graduate applied math with plain
 verifiable answers (TheoremQA, HARDMath).
 """
@@ -80,11 +80,9 @@ GSM8K_ENV = "gsm8k"
 ANSWER_LINE_ENV = "aime"
 REASONING_GYM_ENV = "reasoning_gym"
 
-# Round-4 instruction strength, picked by a 4-variant A/B on the served
-# Snowball base model (issue #8765): the round-3 suffixes elicited 0.00
-# rule-graded pass on gsm8k (correct math, \boxed final line); restating the
-# contract with "the grader reads only that line; do not use \boxed" plus the
-# system message below lifted it to 0.55 before any RL.
+# Each instruction restates the grader's exact final-line contract, including
+# the anti-\boxed clause: without it the SFT answer style (\boxed) wins and
+# correct math rule-grades to zero.
 GSM8K_INSTRUCTION = (
     " Let's think step by step. End your response with one final line of the exact form"
     ' "#### <number>". The automated grader reads only that line; do not use \\boxed{}.'
@@ -96,13 +94,11 @@ ANSWER_LINE_INSTRUCTION = (
     " 'Answer: <answer>'. The automated grader reads only that line; do not use \\boxed{}."
 )
 
-# The round-3 Snowball arms showed a trailing user instruction loses to the
-# SFT answer style (\boxed) on every bin whose grader wants a different final
-# line, so the format contract also lives in a system turn. Round 5 compressed
-# the round-4 wording from 111 to 37 tokens after a served-model A/B (100-250
-# rows per variant, temp 1.0): rule-graded compliance was flat across the
-# 111/66/37-token variants and pass rates tied or favored the shortest, so the
-# extra words bought nothing (#8765).
+# The format contract also lives in a system turn: a trailing user
+# instruction alone loses to the SFT answer style (\boxed) on every bin whose
+# grader wants a different final line. Kept to 37 tokens; longer wordings of
+# the same contract measured no better on served-model compliance or pass, so
+# resist re-expanding it.
 SYSTEM_PROMPT = (
     "Solve the problem step by step. End with the exact final-answer line the problem "
     "requests; an automated grader reads only that line. No \\boxed{}, no text after it."
@@ -210,11 +206,11 @@ class ReasoningGymBin:
 RG_TRAIN_ROWS = 1200
 RG_VALIDATION_ROWS = 128
 
-# Procedural arithmetic anchors the bottom of the ladder ("2+2"). Round 2
-# graded these families by knob guesses that overshot badly (3-4-term sums
-# passed at ~0.97 while graded 3), so round 3 re-anchors the chain_sum grades
-# to those measured rates and drops the non-math spelling/base-conversion
-# families from the realistic math ladder.
+# Procedural arithmetic anchors the bottom of the ladder ("2+2"). chain_sum
+# grades are anchored to measured pass rates rather than generator knobs
+# (knob-guessed grades overshot badly: 3-4-term sums passed at ~0.97 while
+# graded 3), and the non-math spelling/base-conversion families are excluded
+# from the math ladder.
 REASONING_GYM_BINS = (
     ReasoningGymBin(
         PoolBin("g00-rg-sum-easy", grade=0, env_class=REASONING_GYM_ENV),

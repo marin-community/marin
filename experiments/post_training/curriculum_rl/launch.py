@@ -126,8 +126,8 @@ POLICIES = {policy.label: policy for policy in (QWEN_POLICY, SNOWBALL_POLICY)}
 class SamplerKind(StrEnum):
     """How each step's rollout prompts are drawn from the graded pool.
 
-    Round 1 also ran a ``grade-uniform`` arm (equal budget per grade); it
-    trailed every other curriculum arm and was dropped from the catalog.
+    A ``grade-uniform`` kind (equal budget per grade) is intentionally absent:
+    it trailed every other curriculum arm when measured.
     """
 
     NAIVE = "naive"
@@ -272,8 +272,8 @@ FULL = ScalePreset(
 
 # The 67B-A2B smoke: four FSDP2 policy nodes hold the sharded parameters and
 # AdamW state (~34GB/GPU), one node-sized expert-parallel engine generates.
-# The #7786 campaign's NCCL rank-drop failure mode appeared only at 32k
-# contexts; this preset stays at the 2k window.
+# NCCL rank-drop failures on this stack appeared only at 32k contexts; this
+# preset stays at the 2k window.
 SNOWBALL_SMOKE = ScalePreset(
     label="snowball-smoke",
     num_nodes=5,
@@ -328,16 +328,13 @@ SNOWBALL_FULL = ScalePreset(
     evals="math500,gsm8k-0shot",
 )
 
-# Round-4 Snowball recipe. Optimizer: MuonH (grug_moe_muonh_v1, the recipe the
-# base model pretrained and SFT'd under: FP32 master weights, orthogonalized
-# matrix updates, zero weight decay) at 1e-5, 1/5 of the SFT peak; round 3's
-# AdamW at 2e-6 barely moved validation and its one destabilizing update
-# damaged every bin despite max_grad_norm=1.0. Batch: half prompts at double
-# steps -- the FSDP all-gather cost per token is fixed by the micro batch, so
-# smaller steps buy 2x-fresher rollouts and 2x-faster sampler adaptation for
-# ~1% wall time (sync_weights 10.8s + generate 36.8s of a 534s round-3 step).
-# reversion_mass keeps starved bins re-probeable (inert for the naive arm).
-SNOWBALL_R4_OVERRIDES = (
+# Shared Snowball RL recipe. Optimizer: MuonH (grug_moe_muonh_v1, the recipe
+# the base model pretrained and SFT'd under: FP32 master weights,
+# orthogonalized matrix updates, zero weight decay) at 1e-5, 1/5 of the SFT
+# peak; AdamW at GRPO-typical rates barely moves validation on this model and
+# destabilized one run despite max_grad_norm=1.0. reversion_mass keeps starved
+# bins re-probeable (inert for the naive arm).
+SNOWBALL_MUONH_OVERRIDES = (
     "trainer.policy.optimizer_config.optimizer=MuonH",
     "trainer.policy.optimizer_config.lr=1.0e-5",
     # MuonH validates weight_decay=0 (every group is decay-free by recipe); the
@@ -370,7 +367,7 @@ SNOWBALL_SMOKE_R4 = ScalePreset(
     max_new_tokens=2048,
     micro_forward_batch_size_per_gpu=2,
     evals="gsm8k-smoke",
-    extra_overrides=SNOWBALL_R4_OVERRIDES,
+    extra_overrides=SNOWBALL_MUONH_OVERRIDES,
 )
 
 SNOWBALL_FULL_R4 = ScalePreset(
@@ -395,16 +392,15 @@ SNOWBALL_FULL_R4 = ScalePreset(
     max_new_tokens=2048,
     micro_forward_batch_size_per_gpu=2,
     evals="math500,gsm8k-0shot",
-    extra_overrides=SNOWBALL_R4_OVERRIDES,
+    extra_overrides=SNOWBALL_MUONH_OVERRIDES,
 )
 
-# Round-5 Snowball recipe: round 4's binding constraint was the generation cap
-# (40-48% of rollouts truncated at 2048 tokens; AIME/Omni/TheoremQA near-total),
-# so the response budget rises to 8192 over the same 1024-token prompt budget.
-# micro_train drops to 2: micro=8 was marginal at 3072-token sequences (two
-# OOMs in the round-4 naive arm), and activation memory tracks tokens per
-# micro batch (2x9216 stays under the 8x3072 that OOMed). Optimizer and
-# sampler knobs are unchanged from round 4.
+# The long-budget Snowball presets: an 8192-token response budget over the
+# same 1024-token prompt budget, sized so frontier-grade reasoning can finish
+# instead of truncating (at 2048, 40-48% of rollouts hit the cap and the
+# hardest bins truncated near-totally). Activation memory tracks tokens per
+# micro batch, and 8x3072-token micro batches sit at the OOM edge on these
+# nodes; micro_train=2 keeps 2x9216 safely below that.
 SNOWBALL_SMOKE_R5 = ScalePreset(
     label="snowball-smoke-r5",
     num_nodes=5,
@@ -426,7 +422,7 @@ SNOWBALL_SMOKE_R5 = ScalePreset(
     max_new_tokens=8192,
     micro_forward_batch_size_per_gpu=2,
     evals="gsm8k-smoke",
-    extra_overrides=SNOWBALL_R4_OVERRIDES,
+    extra_overrides=SNOWBALL_MUONH_OVERRIDES,
 )
 
 SNOWBALL_FULL_R5 = ScalePreset(
@@ -450,7 +446,7 @@ SNOWBALL_FULL_R5 = ScalePreset(
     max_new_tokens=8192,
     micro_forward_batch_size_per_gpu=2,
     evals="math500,gsm8k-0shot",
-    extra_overrides=SNOWBALL_R4_OVERRIDES,
+    extra_overrides=SNOWBALL_MUONH_OVERRIDES,
 )
 
 SCALES = {
@@ -637,8 +633,8 @@ def build_arm(
     pool: ArtifactStep,
 ) -> CurriculumArm:
     suffix = "" if preset is FULL else f"-{preset.label}"
-    # Qwen arm names predate the policy axis and stay unprefixed so round-2
-    # artifacts keep their addresses.
+    # Qwen arm names predate the policy axis and stay unprefixed so existing
+    # artifact addresses remain valid.
     policy_prefix = "" if policy is QWEN_POLICY else f"{policy.label}-"
     cluster_config = f"lib/iris/config/{policy.cluster}.yaml"
     rl_base_name = f"checkpoints/{EXPERIMENT_NAME}/{policy_prefix}{spec.name}{suffix}"
