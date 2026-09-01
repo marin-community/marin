@@ -287,45 +287,129 @@ def test_terminus_policies_retry_transient_endpoint_errors(tmp_path, checked_pol
     assert policies
     policies_path = tmp_path / "policies.json"
     policies_path.write_text(json.dumps(policies))
+    module_path = tmp_path / "retry_fakes.py"
+    module_path.write_text(
+        textwrap.dedent(
+            """
+            from harbor.agents.base import BaseAgent
+            from harbor.environments.base import BaseEnvironment, ExecResult
+            from harbor.environments.capabilities import EnvironmentCapabilities
+            from harbor.models.environment_type import EnvironmentType
+
+
+            class InternalServerError(Exception):
+                pass
+
+
+            class FailingAgent(BaseAgent):
+                attempts = 0
+
+                @staticmethod
+                def name():
+                    return "failing-agent"
+
+                def version(self):
+                    return "1.0"
+
+                async def setup(self, environment):
+                    pass
+
+                async def run(self, instruction, environment, context):
+                    type(self).attempts += 1
+                    raise InternalServerError("transient endpoint failure")
+
+
+            class MountedEnvironment(BaseEnvironment):
+                @staticmethod
+                def type():
+                    return EnvironmentType.DOCKER
+
+                @property
+                def capabilities(self):
+                    return EnvironmentCapabilities(mounted=True)
+
+                def _validate_definition(self):
+                    pass
+
+                async def start(self, force_build):
+                    pass
+
+                async def stop(self, delete):
+                    pass
+
+                async def upload_file(self, source_path, target_path):
+                    pass
+
+                async def upload_dir(self, source_dir, target_dir):
+                    pass
+
+                async def download_file(self, source_path, target_path):
+                    pass
+
+                async def download_dir(self, source_dir, target_dir):
+                    pass
+
+                async def exec(self, command, cwd=None, env=None, timeout_sec=None, user=None):
+                    return ExecResult(stdout="", stderr="", return_code=0)
+            """
+        )
+    )
+    task_path = tmp_path / "retry-task"
+    task_path.mkdir()
+    (task_path / "task.toml").write_text("[agent]\ntimeout_sec = 10.0\n[verifier]\ntimeout_sec = 10.0\n[environment]\n")
+    (task_path / "instruction.md").write_text("Exercise retry handling.")
+    (task_path / "environment").mkdir()
+    (task_path / "environment" / "Dockerfile").write_text("FROM scratch\n")
     script = textwrap.dedent(
         """
         import asyncio
         import json
         import sys
         from pathlib import Path
-        from types import SimpleNamespace
 
         import harbor.trial.queue as queue_module
         from harbor.models.job.config import JobConfig
+        from harbor.models.trial.config import (
+            AgentConfig,
+            EnvironmentConfig,
+            TaskConfig,
+            TrialConfig,
+            VerifierConfig,
+        )
         from harbor.trial.queue import TrialQueue
+        from retry_fakes import FailingAgent
 
         async def main():
             policies = json.loads(Path(sys.argv[1]).read_text())
+            task_path = Path(sys.argv[2])
+            trials_dir = Path(sys.argv[3])
             outcomes = {}
-            for name, serialized_policy in policies.items():
+            for index, (name, serialized_policy) in enumerate(policies.items()):
                 retry = JobConfig.model_validate_json(serialized_policy).retry
-                attempts = 0
+                FailingAgent.attempts = 0
                 waits = []
-                failed_result = SimpleNamespace(
-                    exception_info=SimpleNamespace(exception_type="InternalServerError")
-                )
-
-                async def run_failed_attempt(_config, _attempt):
-                    nonlocal attempts
-                    attempts += 1
-                    return failed_result
 
                 async def record_wait(delay):
                     waits.append(delay)
 
                 queue_module.asyncio.sleep = record_wait
-                queue = TrialQueue(n_concurrent=1, retry_config=retry)
-                queue._run_admitted_attempt = run_failed_attempt
-                result = await queue._run_trial(
-                    SimpleNamespace(trial_name="endpoint-failure")
+                result = await TrialQueue(n_concurrent=1, retry_config=retry).submit(
+                    TrialConfig(
+                        task=TaskConfig(path=task_path),
+                        trial_name=f"endpoint-failure-{index}",
+                        trials_dir=trials_dir,
+                        agent=AgentConfig(import_path="retry_fakes:FailingAgent"),
+                        environment=EnvironmentConfig(
+                            import_path="retry_fakes:MountedEnvironment"
+                        ),
+                        verifier=VerifierConfig(disable=True),
+                    )
                 )
-                assert result is failed_result
-                outcomes[name] = {"attempts": attempts, "wait_seconds": sum(waits)}
+                assert result.exception_info.exception_type == "InternalServerError"
+                outcomes[name] = {
+                    "attempts": FailingAgent.attempts,
+                    "wait_seconds": sum(waits),
+                }
 
             print(json.dumps(outcomes, sort_keys=True))
 
@@ -333,7 +417,16 @@ def test_terminus_policies_retry_transient_endpoint_errors(tmp_path, checked_pol
         """
     )
 
-    outcomes = json.loads(_external_python("-c", script, str(policies_path)).stdout)
+    outcomes = json.loads(
+        _external_python(
+            "-c",
+            script,
+            str(policies_path),
+            str(task_path),
+            str(tmp_path / "trials"),
+            extra_python_path=tmp_path,
+        ).stdout
+    )
 
     assert outcomes == {name: {"attempts": 11, "wait_seconds": 303.0} for name in policies}
 
