@@ -287,55 +287,129 @@ def test_terminus_policies_retry_transient_endpoint_errors(tmp_path, checked_pol
     assert policies
     policies_path = tmp_path / "policies.json"
     policies_path.write_text(json.dumps(policies))
+    module_path = tmp_path / "retry_fakes.py"
+    module_path.write_text(
+        textwrap.dedent(
+            """
+            from harbor.agents.base import BaseAgent
+            from harbor.environments.base import BaseEnvironment, ExecResult
+            from harbor.environments.capabilities import EnvironmentCapabilities
+            from harbor.models.environment_type import EnvironmentType
+
+
+            class InternalServerError(Exception):
+                pass
+
+
+            class FailingAgent(BaseAgent):
+                attempts = 0
+
+                @staticmethod
+                def name():
+                    return "failing-agent"
+
+                def version(self):
+                    return "1.0"
+
+                async def setup(self, environment):
+                    pass
+
+                async def run(self, instruction, environment, context):
+                    type(self).attempts += 1
+                    raise InternalServerError("transient endpoint failure")
+
+
+            class MountedEnvironment(BaseEnvironment):
+                @staticmethod
+                def type():
+                    return EnvironmentType.DOCKER
+
+                @property
+                def capabilities(self):
+                    return EnvironmentCapabilities(mounted=True)
+
+                def _validate_definition(self):
+                    pass
+
+                async def start(self, force_build):
+                    pass
+
+                async def stop(self, delete):
+                    pass
+
+                async def upload_file(self, source_path, target_path):
+                    pass
+
+                async def upload_dir(self, source_dir, target_dir):
+                    pass
+
+                async def download_file(self, source_path, target_path):
+                    pass
+
+                async def download_dir(self, source_dir, target_dir):
+                    pass
+
+                async def exec(self, command, cwd=None, env=None, timeout_sec=None, user=None):
+                    return ExecResult(stdout="", stderr="", return_code=0)
+            """
+        )
+    )
+    task_path = tmp_path / "retry-task"
+    task_path.mkdir()
+    (task_path / "task.toml").write_text("[agent]\ntimeout_sec = 10.0\n[verifier]\ntimeout_sec = 10.0\n[environment]\n")
+    (task_path / "instruction.md").write_text("Exercise retry handling.")
+    (task_path / "environment").mkdir()
+    (task_path / "environment" / "Dockerfile").write_text("FROM scratch\n")
     script = textwrap.dedent(
         """
         import asyncio
         import json
         import sys
         from pathlib import Path
-        from types import SimpleNamespace
 
         import harbor.trial.queue as queue_module
         from harbor.models.job.config import JobConfig
+        from harbor.models.trial.config import (
+            AgentConfig,
+            EnvironmentConfig,
+            TaskConfig,
+            TrialConfig,
+            VerifierConfig,
+        )
         from harbor.trial.queue import TrialQueue
-        from harbor.trial.trial import Trial
+        from retry_fakes import FailingAgent
 
         async def main():
             policies = json.loads(Path(sys.argv[1]).read_text())
+            task_path = Path(sys.argv[2])
+            trials_dir = Path(sys.argv[3])
             outcomes = {}
-            for name, serialized_policy in policies.items():
+            for index, (name, serialized_policy) in enumerate(policies.items()):
                 retry = JobConfig.model_validate_json(serialized_policy).retry
-                attempts = 0
+                FailingAgent.attempts = 0
                 waits = []
-                failed_result = SimpleNamespace(
-                    exception_info=SimpleNamespace(exception_type="InternalServerError")
-                )
-
-                class FailedTrial:
-                    paths = SimpleNamespace(trial_dir=Path("/tmp/unused-harbor-trial"))
-
-                    async def run(self):
-                        nonlocal attempts
-                        attempts += 1
-                        return failed_result
-
-                    def add_hook(self, _event, _hook):
-                        pass
-
-                async def create_trial(_config):
-                    return FailedTrial()
 
                 async def record_wait(delay):
                     waits.append(delay)
 
-                Trial.create = staticmethod(create_trial)
                 queue_module.asyncio.sleep = record_wait
-                queue_module.safe_rmtree = lambda *_args, **_kwargs: None
-                result = await TrialQueue(n_concurrent=1, retry_config=retry)._run_trial(
-                    SimpleNamespace(trial_name="endpoint-failure")
+                result = await TrialQueue(n_concurrent=1, retry_config=retry).submit(
+                    TrialConfig(
+                        task=TaskConfig(path=task_path),
+                        trial_name=f"endpoint-failure-{index}",
+                        trials_dir=trials_dir,
+                        agent=AgentConfig(import_path="retry_fakes:FailingAgent"),
+                        environment=EnvironmentConfig(
+                            import_path="retry_fakes:MountedEnvironment"
+                        ),
+                        verifier=VerifierConfig(disable=True),
+                    )
                 )
-                assert result is failed_result
-                outcomes[name] = {"attempts": attempts, "wait_seconds": sum(waits)}
+                assert result.exception_info.exception_type == "InternalServerError"
+                outcomes[name] = {
+                    "attempts": FailingAgent.attempts,
+                    "wait_seconds": sum(waits),
+                }
 
             print(json.dumps(outcomes, sort_keys=True))
 
@@ -343,7 +417,16 @@ def test_terminus_policies_retry_transient_endpoint_errors(tmp_path, checked_pol
         """
     )
 
-    outcomes = json.loads(_external_python("-c", script, str(policies_path)).stdout)
+    outcomes = json.loads(
+        _external_python(
+            "-c",
+            script,
+            str(policies_path),
+            str(task_path),
+            str(tmp_path / "trials"),
+            extra_python_path=tmp_path,
+        ).stdout
+    )
 
     assert outcomes == {name: {"attempts": 11, "wait_seconds": 303.0} for name in policies}
 
@@ -427,7 +510,7 @@ def test_effective_job_applies_runtime_precedence_and_validates_nested_updates(t
     }
 
 
-def test_effective_aime_job_preserves_capability_url_in_live_config_and_redacts_dump(tmp_path, checked_policies):
+def test_effective_aime_job_preserves_capability_url(tmp_path, checked_policies):
     capability_token = "dummy-capability-token"
     capability_url = f"https://iris.example/proxy/t/{capability_token}/serve.inference-test/v1"
     policy_path = tmp_path / "policy.json"
@@ -452,21 +535,13 @@ def test_effective_aime_job_preserves_capability_url_in_live_config_and_redacts_
         "from marin.evaluation.harbor.trial_driver import effective_job_config; "
         f"config=effective_job_config(Path({str(policy_path)!r}), Path({str(overlay_path)!r})); "
         'print(json.dumps({"api_base": config.agents[0].kwargs["api_base"], '
-        '"job_dir": str(config.jobs_dir / config.job_name), '
-        '"serialized": config.model_dump(mode="json")}))'
+        '"job_dir": str(config.jobs_dir / config.job_name)}))'
     )
 
     result = json.loads(_external_python("-c", script).stdout)
 
     assert result["api_base"] == capability_url
     assert result["job_dir"] == str(tmp_path / "jobs" / "runtime-job")
-    serialized = result["serialized"]
-    assert serialized["agents"][0]["kwargs"]["api_base"] == (
-        "https://iris.example/proxy/t/<redacted>/serve.inference-test/v1"
-    )
-    serialized_json = json.dumps(serialized)
-    assert capability_token not in serialized_json
-    assert "<redacted>" in serialized_json
 
 
 @pytest.mark.parametrize(

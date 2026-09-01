@@ -21,12 +21,10 @@ import yaml
 from harbor.agents.factory import AgentFactory  # pyrefly: ignore[missing-import]  # installed by external driver
 from harbor.environments.factory import _load_environment_class  # pyrefly: ignore[missing-import]
 from harbor.job import Job  # pyrefly: ignore[missing-import]  # installed by external driver
-from harbor_config import JobConfig  # pyrefly: ignore[missing-import]  # installed by external driver
-from harbor_config.models.agent.name import AgentName  # pyrefly: ignore[missing-import]
-from harbor_config.models.job.config import DatasetConfig  # pyrefly: ignore[missing-import]
-from harbor_config.models.trial.config import AgentConfig  # pyrefly: ignore[missing-import]
+from harbor.models.agent.name import AgentName  # pyrefly: ignore[missing-import]
+from harbor.models.job.config import DatasetConfig, JobConfig  # pyrefly: ignore[missing-import]
+from harbor.models.trial.config import AgentConfig  # pyrefly: ignore[missing-import]
 from pydantic import BaseModel, ConfigDict, ValidationError
-from upath import UPath  # pyrefly: ignore[missing-import]  # installed by external driver
 
 _HOSTED_VLLM_PROVIDER = "hosted_vllm"
 _HOSTED_VLLM_DISPLAY_NAME = "Hosted vLLM"
@@ -284,12 +282,12 @@ def _effective_config(config: JobConfig, overlay: RuntimeOverlay) -> JobConfig:
     effective = config.model_copy(
         update={
             "job_name": overlay.job_name,
-            "jobs_dir": UPath(overlay.jobs_dir),
+            "jobs_dir": overlay.jobs_dir,
             "agents": [agent],
             "datasets": [dataset],
         }
     )
-    return effective
+    return JobConfig.model_validate(effective.model_dump(mode="json"), extra="forbid")
 
 
 def _stable_config(config: JobConfig) -> JobConfig:

@@ -242,7 +242,7 @@ The launcher records the workspace-relative path so the submitted worker resolve
 under its unpacked workspace. Absolute paths, unknown fields, malformed provider kwargs, and unsupported
 file extensions fail before Iris submission.
 
-Harbor and `harbor_config` are absent from Marin's environment and root lock. Both preflight and execution
+Harbor is absent from Marin's environment and root lock. Both preflight and execution
 install the exact `marin.external_dependencies.HARBOR` revision in an isolated uv environment. Every
 Harbor record stores the deterministic source-policy digest in `eval.harbor.config_digest` and any
 Marin runtime task cap in `eval.harbor.task_limit`. A policy's own `n_tasks` remains represented by

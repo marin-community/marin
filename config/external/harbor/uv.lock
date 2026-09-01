@@ -780,17 +780,20 @@ wheels = [
 
 [[package]]
 name = "harbor"
-version = "0.8.1"
-source = { git = "https://github.com/marin-community/harbor.git?branch=main#da38231dcc60cdf70ca7a09aa8cdf66f9a5a0424" }
+version = "0.22.0"
+source = { git = "https://github.com/marin-community/harbor.git?branch=main-next#720c877b2efb17576cf7f6f9de14ff1ac1e9a263" }
 dependencies = [
     { name = "dirhash" },
     { name = "fastapi" },
+    { name = "filelock" },
     { name = "httpx" },
     { name = "jinja2" },
     { name = "litellm" },
     { name = "packaging" },
     { name = "pathspec" },
+    { name = "platformdirs" },
     { name = "pydantic" },
+    { name = "pyjwt" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
     { name = "requests" },
@@ -1042,7 +1045,7 @@ dependencies = [
 requires-dist = [
     { name = "daytona", specifier = "==0.200.2" },
     { name = "gcsfs" },
-    { name = "harbor", git = "https://github.com/marin-community/harbor.git?branch=main" },
+    { name = "harbor", git = "https://github.com/marin-community/harbor.git?branch=main-next" },
     { name = "pydantic-settings" },
     { name = "s3fs" },
 ]
@@ -1312,6 +1315,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/5a/82/42f767fc1c1143d6fd36efb827202a2d997a375e160a71eb2888a925aac1/pathspec-1.1.1.tar.gz", hash = "sha256:17db5ecd524104a120e173814c90367a96a98d07c45b2e10c2f3919fff91bf5a", size = 135180, upload-time = "2026-04-27T01:46:08.907Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f1/d9/7fb5aa316bc299258e68c73ba3bddbc499654a07f151cba08f6153988714/pathspec-1.1.1-py3-none-any.whl", hash = "sha256:a00ce642f577bf7f473932318056212bc4f8bfdf53128c78bbd5af0b9b20b189", size = 57328, upload-time = "2026-04-27T01:46:07.06Z" },
+]
+
+[[package]]
+name = "platformdirs"
+version = "4.11.5"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ea/06/cf1564dcc2e2261c8c8c6c05628dc8b418943bdae2a4e58640ceb2f770fa/platformdirs-4.11.5.tar.gz", hash = "sha256:e8b31f4f8bcbbedef91a6b57a706255e4f148d2a4e01648382a0a47342539173", size = 34823, upload-time = "2026-08-27T21:36:37.46Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c7/12/6f3fcd5067a9cbf4f8664b32957973498da8b083455203c8d9cab83a725c/platformdirs-4.11.5-py3-none-any.whl", hash = "sha256:89f8d42695853b89c7170bd49bc3dc593f98a71e695ede88e06a3b247bc4563b", size = 23900, upload-time = "2026-08-27T21:36:36.227Z" },
 ]
 
 [[package]]
