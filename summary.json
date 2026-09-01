@@ -160,5 +160,41 @@
     "final_grade_weighted": 0.2890130208333333,
     "run_entries": 2,
     "total_tokens": 64097004.0
+  },
+  "snowball-r4-grade-prior-dapo": {
+    "final_evals": {
+      "_step": 120,
+      "cumulative_tokens": 81491255.0,
+      "eval/all/pass_at_1": 0.5763135946622185,
+      "eval/val-amc/pass_at_1": 0.1015625,
+      "eval/val-gsm8k/pass_at_1": 0.94140625,
+      "eval/val-math500/pass_at_1": 0.562,
+      "eval/val-omni/pass_at_1": 0.013333333333333334,
+      "eval/val-rg-sum/pass_at_1": 0.9765625,
+      "eval/val-theoremqa/pass_at_1": 0.26785714285714285,
+      "trainer/global_step": 120
+    },
+    "final_frontier_grade": 13,
+    "final_grade_weighted": 0.2920078125,
+    "run_entries": 1,
+    "total_tokens": 81491255.0
+  },
+  "snowball-r4-naive": {
+    "final_evals": {
+      "_step": 10,
+      "cumulative_tokens": 89447986.0,
+      "eval/all/pass_at_1": 0.5704753961634695,
+      "eval/val-amc/pass_at_1": 0.125,
+      "eval/val-gsm8k/pass_at_1": 0.93359375,
+      "eval/val-math500/pass_at_1": 0.552,
+      "eval/val-omni/pass_at_1": 0.013333333333333334,
+      "eval/val-rg-sum/pass_at_1": 0.984375,
+      "eval/val-theoremqa/pass_at_1": 0.23214285714285715,
+      "trainer/global_step": 120
+    },
+    "final_frontier_grade": 5,
+    "final_grade_weighted": 0.2848984375,
+    "run_entries": 3,
+    "total_tokens": 89447986.0
   }
 }
