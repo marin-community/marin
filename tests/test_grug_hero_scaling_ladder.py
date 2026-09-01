@@ -5,7 +5,7 @@ import dataclasses
 
 import jax
 import jax.numpy as jnp
-import jax.tree_util as tu
+import jax.tree_util as jtu
 import optax
 import pytest
 from marin.execution.lazy import StepContext
@@ -33,7 +33,7 @@ def test_gate_router_decay_state_matches_plain_adam():
     plain = optax.scale_by_adam(0.9, 0.95, 1e-8).init(_MOCK_PARAMS)
     decayed = _scale_by_adam_gate_router_decay(0.9, 0.95, 1e-8, 0.05, 390_251).init(_MOCK_PARAMS)
     assert type(decayed) is type(plain)
-    assert tu.tree_structure(decayed) == tu.tree_structure(plain)
+    assert jtu.tree_structure(decayed) == jtu.tree_structure(plain)
 
 
 @pytest.mark.parametrize(("count", "expected_wd"), [(0, 0.05), (54_000, 0.05 * (1 - 54_000 / 390_251)), (390_251, 0.0)])

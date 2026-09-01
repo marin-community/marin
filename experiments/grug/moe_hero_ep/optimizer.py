@@ -84,16 +84,19 @@ def _scale_invariant_hyperball_updates(params, direction_updates, learning_rate:
     return jax.tree.map(scale_invariant_update, params, direction_updates, is_leaf=lambda x: x is None)
 
 
+def _is_gate_or_router_weight(path_lower: str) -> bool:
+    """True for the ``attn_gate`` and ``router`` weight leaves (``router_bias`` excluded)."""
+    return "router_bias" not in path_lower and (path_lower.endswith(".attn_gate") or ".router" in path_lower)
+
+
 def _gate_router_decay_mask(params):
-    """Boolean pytree that is True on ``attn_gate`` and the ``router`` weight -- the leaves that
-    receive decoupled weight decay -- and False everywhere else (``router_bias`` included)."""
+    """Boolean pytree that is True on the ``attn_gate`` and ``router`` weight leaves -- the ones that
+    receive decoupled weight decay -- and False everywhere else."""
     paths = leaf_key_paths(params)
 
     def is_target(_, path):
-        path_lower = (".".join(path) if isinstance(path, (list, tuple)) else str(path)).lower()
-        if "router_bias" in path_lower:
-            return False
-        return path_lower.endswith(".attn_gate") or ".router" in path_lower
+        path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
+        return _is_gate_or_router_weight(path_str.lower())
 
     return jax.tree.map(is_target, params, paths)
 
@@ -255,12 +258,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
         def mask_fn(param, path):
             path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
             path_lower = path_str.lower()
-            if (
-                "token_embed" in path_lower
-                or "router_bias" in path_lower
-                or path_lower.endswith(".attn_gate")
-                or ".router" in path_lower
-            ):
+            if "token_embed" in path_lower or "router_bias" in path_lower or _is_gate_or_router_weight(path_lower):
                 return "adam"
             if "output_proj" in path_lower or "lm_head" in path_lower:
                 return "adamh"
