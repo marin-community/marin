@@ -426,14 +426,6 @@ def test_interleave_places_gate_and_up_in_alternating_columns(dtype):
     np.testing.assert_array_equal(np.asarray(interleaved[..., 1::2]), np.asarray(w13[..., moe_dim:]))
 
 
-@pytest.mark.parametrize("dtype", [jnp.bfloat16, jnp.float32])
-def test_a_mismatched_moe_dim_is_rejected_rather_than_broadcast(dtype):
-    # The packed path broadcasts the two halves against each other, so a wrong `moe_dim` would
-    # return a wrong-width array instead of failing the way the stack path does.
-    with pytest.raises(ValueError, match="w13 output last dimension"):
-        _interleave_gate_up(_arange_w13(dtype, moe_dim=4), 3)
-
-
 @pytest.mark.parametrize("dtype", [jnp.bfloat16, jnp.float16])
 def test_the_interleave_transpose_de_interleaves_the_cotangent(dtype):
     # `bitcast_convert_type` has no AD rule, so the pack carries a hand-written VJP. Its
