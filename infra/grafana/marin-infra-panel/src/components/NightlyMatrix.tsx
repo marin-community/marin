@@ -21,7 +21,7 @@ function formatDuration(seconds?: number): string {
 
 function status(cell: NightlyCell): { icon: string; tone: string; label: string; summary?: string } {
   if (cell.state === 'run') {
-    if (cell.runStatus === 'queued' || cell.runStatus === 'in_progress') {
+    if (cell.runStatus && cell.runStatus !== 'completed') {
       return { icon: '↻', tone: '#1d4ed8', label: 'Running', summary: 'running' };
     }
     if (!cell.healthy) {
