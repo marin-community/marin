@@ -67,7 +67,6 @@ def _git(args: list[str]) -> str | None:
 
 
 def _lint_catalog_sha() -> str | None:
-    """Fingerprint the validated structured lint catalog."""
     if not (LINT_DIR / "catalog.yaml").is_file():
         return None
     return catalog_sha(load_catalog(LINT_DIR))

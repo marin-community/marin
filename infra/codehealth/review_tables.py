@@ -39,11 +39,13 @@ DEFAULT_DEPLOYMENT = "marin"
 DEFAULT_REPOSITORY = "marin-community/marin"
 DEFAULT_BOT_LOGINS = frozenset(
     {
-        "github-actions",
-        "dependabot",
         "claude",
         "claude-review",
+        "dependabot",
+        "github-actions",
         "loom-oa-dev",
+        "mcwitt-agent",
+        "ravwojdyla-agent",
         "renovate",
         "weaverbot",
     }

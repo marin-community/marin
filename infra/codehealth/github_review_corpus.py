@@ -496,7 +496,7 @@ def _repo_parts(repository: str) -> tuple[str, str]:
     return parts[0], parts[1]
 
 
-def is_bot(author: dict | None, bot_logins: AbstractSet[str]) -> bool:
+def is_non_human_author(author: dict | None, bot_logins: AbstractSet[str]) -> bool:
     """Treat automation identities and missing author identities as non-human."""
     author = author or {}
     login = str(author.get("login") or "").lower()
@@ -505,9 +505,13 @@ def is_bot(author: dict | None, bot_logins: AbstractSet[str]) -> bool:
 
 
 def _review_author_state(author: dict | None, body: str, scope: ReviewScope) -> ReviewAuthorState:
-    author_is_bot = is_bot(author, scope.bot_logins)
+    author_is_non_human = is_non_human_author(author, scope.bot_logins)
     is_agent_marked = body.lstrip().startswith("🤖")
-    return ReviewAuthorState(author_is_bot, is_agent_marked, not author_is_bot and not is_agent_marked)
+    return ReviewAuthorState(
+        is_bot=author_is_non_human,
+        is_agent_marked=is_agent_marked,
+        is_human=not author_is_non_human and not is_agent_marked,
+    )
 
 
 def _is_human_event(node: dict, scope: ReviewScope) -> bool:

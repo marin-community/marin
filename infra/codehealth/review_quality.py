@@ -60,7 +60,7 @@ from finelog.client import LogClient
 from openai import OpenAI, OpenAIError
 from pydantic import BaseModel, ConfigDict, Field
 
-from .github_review_corpus import is_bot as _is_bot
+from .github_review_corpus import is_non_human_author
 from .review_tables import (
     DEFAULT_BOT_LOGINS,
     DEFAULT_DEPLOYMENT,
@@ -435,7 +435,7 @@ def fetch_pr_comments(repo: str, pr: dict, bot_logins: set[str]) -> list[Comment
                 comment_id=c["id"],
                 comment_type="inline",
                 author=u.get("login") or "unknown",
-                is_bot=_is_bot(u, bot_logins),
+                is_bot=is_non_human_author(u, bot_logins),
                 file=c.get("path"),
                 line=c.get("line") or c.get("original_line"),
                 body=c.get("body") or "",
@@ -462,7 +462,7 @@ def fetch_pr_comments(repo: str, pr: dict, bot_logins: set[str]) -> list[Comment
                 comment_id=r["id"],
                 comment_type="review_body",
                 author=u.get("login") or "unknown",
-                is_bot=_is_bot(u, bot_logins),
+                is_bot=is_non_human_author(u, bot_logins),
                 file=None,
                 line=None,
                 body=body,
@@ -486,7 +486,7 @@ def fetch_pr_comments(repo: str, pr: dict, bot_logins: set[str]) -> list[Comment
                 comment_id=c["id"],
                 comment_type="issue",
                 author=u.get("login") or "unknown",
-                is_bot=_is_bot(u, bot_logins),
+                is_bot=is_non_human_author(u, bot_logins),
                 file=None,
                 line=None,
                 body=c.get("body") or "",

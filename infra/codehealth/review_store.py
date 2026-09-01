@@ -316,7 +316,7 @@ class TelemetryModel(BaseModel):
 
 class LintInvocationRecord(TelemetryModel):
     invocation_id: str
-    ts: str | dt.datetime
+    ts: dt.datetime
     pr_number: int | None = None
     head_sha: str | None = None
     lint_catalog_sha: str | None = None
@@ -326,7 +326,7 @@ class LintInvocationRecord(TelemetryModel):
 
 class LintFindingRecord(TelemetryModel):
     invocation_id: str
-    ts: str | dt.datetime
+    ts: dt.datetime
     pr_number: int | None = None
     code: str | None = None
 
@@ -417,7 +417,6 @@ class LintRecordRows:
 
 
 def database_config_from_environment() -> DatabaseConfig:
-    """Read Cloud SQL instance, database, and IAM user settings from the process environment."""
     return DatabaseConfig(
         instance=os.environ.get("CLOUDSQL_CONNECTION", DEFAULT_CLOUDSQL_CONNECTION),
         database=os.environ.get("PGDATABASE", DEFAULT_DATABASE),
@@ -511,13 +510,15 @@ def stored_error_message(error: Exception) -> str:
     return message[:STORED_ERROR_MAX_LENGTH]
 
 
-def _timestamp(value: str | dt.datetime | None) -> dt.datetime:
+def _utc_datetime(value: dt.datetime) -> dt.datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=dt.UTC)
+    return value.astimezone(dt.UTC)
+
+
+def _timestamp(value: str | None) -> dt.datetime:
     if value is None:
         return dt.datetime.min.replace(tzinfo=dt.UTC)
-    if isinstance(value, dt.datetime):
-        if value.tzinfo is None:
-            return value.replace(tzinfo=dt.UTC)
-        return value.astimezone(dt.UTC)
     return dt.datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(dt.UTC)
 
 
@@ -832,7 +833,7 @@ def store_telemetry(
                 {
                     "invocation_id": invocation_id,
                     "repository": repository,
-                    "ts": _timestamp(row.ts),
+                    "ts": _utc_datetime(row.ts),
                     "pr_number": row.pr_number,
                     "head_sha": row.head_sha,
                     "catalog_sha": row.lint_catalog_sha,
@@ -856,7 +857,7 @@ def store_telemetry(
                     "finding_id": finding_id,
                     "invocation_id": row.invocation_id,
                     "repository": repository,
-                    "ts": _timestamp(row.ts),
+                    "ts": _utc_datetime(row.ts),
                     "pr_number": row.pr_number,
                     "code": row.code or "",
                     "record": payload,
@@ -923,10 +924,7 @@ def fail_sync(engine: Engine, sync_id: str, error: str) -> None:
 
 
 def utc_iso(value: dt.datetime) -> str:
-    """Format one timestamp as a UTC ISO-8601 string."""
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=dt.UTC)
-    return value.astimezone(dt.UTC).isoformat().replace("+00:00", "Z")
+    return _utc_datetime(value).isoformat().replace("+00:00", "Z")
 
 
 def _successful_lint_rows(
