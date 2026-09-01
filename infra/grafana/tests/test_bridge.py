@@ -892,14 +892,16 @@ def test_health_alert_reads_routing_throughput_and_evaluation():
 
 
 @pytest.mark.parametrize(
-    ("latest", "previous", "two_samples_ago"),
+    ("latest", "previous", "two_samples_ago", "should_alert"),
     [
-        (2.01, 2.00, 1.99),
-        (2.05, 2.00, 2.10),
+        pytest.param(2.01, 2.00, 1.99, True, id="higher-than-two-evals-ago"),
+        pytest.param(2.05, 2.00, 2.10, True, id="one-step-rise-over-two-percent"),
+        pytest.param(2.01, 2.00, 2.02, False, id="small-one-step-rise"),
+        pytest.param(2.04, 2.00, 2.05, False, id="exactly-two-percent-one-step-rise"),
     ],
 )
-def test_eval_regression_alerts_on_a_sustained_rise_or_a_two_percent_jump(
-    latest: float, previous: float, two_samples_ago: float
+def test_eval_regression_uses_two_eval_history_and_two_percent_jump(
+    latest: float, previous: float, two_samples_ago: float, should_alert: bool
 ):
     now = datetime(2026, 8, 21, 12, tzinfo=UTC)
     evaluation = {
@@ -909,28 +911,8 @@ def test_eval_regression_alerts_on_a_sustained_rise_or_a_two_percent_jump(
     }
     signals = _signals(now, {"eval_paloma_macro_loss": evaluation})
 
-    assert _reasons(health_alert_rows((_watched(),), signals, pa.table({}), now)) == {"eval_regressed"}
-
-
-@pytest.mark.parametrize(
-    ("latest", "previous", "two_samples_ago"),
-    [
-        (2.01, 2.00, 2.02),
-        (2.04, 2.00, 2.05),
-    ],
-)
-def test_eval_regression_ignores_a_small_or_exactly_two_percent_one_step_rise(
-    latest: float, previous: float, two_samples_ago: float
-):
-    now = datetime(2026, 8, 21, 12, tzinfo=UTC)
-    evaluation = {
-        "latest": latest,
-        "previous": previous,
-        "two_samples_ago": two_samples_ago,
-    }
-    signals = _signals(now, {"eval_paloma_macro_loss": evaluation})
-
-    assert _reasons(health_alert_rows((_watched(),), signals, pa.table({}), now)) == set()
+    reasons = _reasons(health_alert_rows((_watched(),), signals, pa.table({}), now))
+    assert ("eval_regressed" in reasons) is should_alert
 
 
 def test_throughput_floor_needs_most_of_the_window_below_it():

@@ -49,6 +49,7 @@ ROUTER_BIAS_MAX = 400.0
 TOKENS_PER_SECOND_MIN = 2.0e6
 MFU_MIN = 15.0
 EVAL_LOSS_RELATIVE_INCREASE = 0.02
+EVAL_HISTORY_SAMPLES = 3
 
 _GRAD_NORM = "grad_norm_total"
 _SKIPPED_STEP = "optim_skipped_step"
@@ -170,8 +171,9 @@ def signal_query(now: datetime, runs: tuple[WatchedRun, ...]) -> str:
         "MAX(CASE WHEN rn = 1 THEN value END) AS latest_value, "
         "MAX(CASE WHEN rn = 1 THEN timestamp_ms END) AS latest_at, "
         "MAX(CASE WHEN rn = 2 THEN value END) AS previous_value, "
-        "MAX(CASE WHEN rn = 3 THEN value END) AS two_samples_ago_value "
-        "FROM ranked WHERE rn <= 3 GROUP BY origin_cluster, run_id, execution_uid, name"
+        f"MAX(CASE WHEN rn = {EVAL_HISTORY_SAMPLES} THEN value END) AS two_samples_ago_value "
+        f"FROM ranked WHERE rn <= {EVAL_HISTORY_SAMPLES} "
+        "GROUP BY origin_cluster, run_id, execution_uid, name"
         "), health_window AS ("
         "SELECT origin_cluster, run_id, name, COUNT(*) AS recent_samples, "
         "SUM(value) AS recent_total, "
