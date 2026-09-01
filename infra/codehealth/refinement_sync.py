@@ -21,14 +21,15 @@ from .review_store import (
     LintInvocationRecord,
     LintRecordRows,
     cached_pull_request_fingerprints,
-    checkpoint_reused_pull_request,
+    cached_review_event_fingerprints,
+    checkpoint_reused_pull_requests,
     complete_sync,
     completed_pull_requests,
     database_config_from_environment,
     database_engine,
     fail_sync,
     start_or_resume_sync,
-    store_bundle,
+    store_bundles,
     store_catalog_snapshot,
     store_telemetry,
     utc_iso,
@@ -123,6 +124,7 @@ def sync_review_activity(
     run = start_or_resume_sync(engine, repository, now=current, days=days)
     completed = completed_pull_requests(engine, run.sync_id)
     cached_fingerprints = cached_pull_request_fingerprints(engine, repository)
+    cached_event_fingerprints = cached_review_event_fingerprints(engine, repository)
     try:
         result = collect_corpus(
             repository,
@@ -132,13 +134,14 @@ def sync_review_activity(
             client=github_client,
             checkpointed_pr_numbers=completed,
             cached_fingerprints=cached_fingerprints,
-            bundle_sink=lambda bundle: store_bundle(engine, run.sync_id, bundle, observed_at=dt.datetime.now(dt.UTC)),
-            reused_pull_request_sink=lambda pr_number: checkpoint_reused_pull_request(
-                engine,
-                run.sync_id,
-                pr_number,
-                observed_at=dt.datetime.now(dt.UTC),
-            ),
+            cached_event_fingerprints=cached_event_fingerprints,
+            bundle_sink=lambda bundles: store_bundles(engine, run.sync_id, bundles, observed_at=dt.datetime.now(dt.UTC)),
+        )
+        checkpoint_reused_pull_requests(
+            engine,
+            run.sync_id,
+            result.reused_pull_request_numbers,
+            observed_at=dt.datetime.now(dt.UTC),
         )
         lint_rows = telemetry or load_lint_telemetry(deployment, run.window_start, run.window_end)
         store_telemetry(engine, repository, lint_rows.invocations, lint_rows.findings)

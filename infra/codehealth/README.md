@@ -25,14 +25,15 @@ of lint telemetry in the existing `context` PostgreSQL database on the shared
 The store keeps current pull requests, comments, threads, files, commits, and
 diffs, plus immutable versions of edited pull requests and review events. It
 also stores source windows fetched on demand and the complete provenance of
-rule probes. A sync row freezes the 30-day time window. Each reconciled pull
-request and its checkpoint commit atomically. Later runs compare the lightweight
-GitHub scan fingerprint with the stored snapshot and hydrate only new or changed
-pull requests; edited-event seeds always force a refresh. A failed run resumes
-the same window from its committed checkpoints. A window is retried at most
-three times before it is marked abandoned, preventing one permanently bad pull
-request from pinning the weekly job. Exploration commands fail closed unless the
-latest sync is complete.
+rule probes. A sync row freezes the 30-day time window. Each reconciled
+hydration batch and its checkpoints commit atomically. Later runs compare the
+lightweight GitHub scan fingerprint with the stored snapshot. Repository-wide
+comment streams are also compared with the stored event body and update
+timestamp. The collector hydrates only new or changed pull requests and events.
+A failed run resumes the same window from its committed checkpoints. A window
+is retried at most three times before it is marked abandoned, preventing one
+permanently bad pull request from pinning the weekly job. Exploration commands
+fail closed unless the latest sync is complete.
 
 Run the sync from the repository root:
 
@@ -47,10 +48,11 @@ connections, verifies that pull-request fingerprints remain stable during
 hydration, and bounds GitHub GraphQL and REST usage. GitHub does not expose
 deleted comments or prior edited bodies. Raw diffs can be absent when GitHub
 returns its oversized-diff response; per-file metadata remains available.
-Every sync still performs the bounded GitHub activity scan, edited-comment
-seed queries, fingerprint rechecks, and Finelog query. PostgreSQL reuse avoids
-the expensive per-PR hydration and diff fetch for unchanged pull requests; it
-does not turn synchronization into an offline operation.
+Every sync still performs the bounded GitHub activity scan, edited-comment seed
+queries, fingerprint rechecks, and Finelog query. Matching event seeds reuse the
+stored pull request after the scan fingerprint passes both observations. New or
+edited events, changed pull-request fingerprints, and missing cache entries
+trigger full hydration and a diff fetch.
 
 ## Agent tools
 

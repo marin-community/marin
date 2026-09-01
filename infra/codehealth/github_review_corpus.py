@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 import subprocess
 from collections.abc import Callable, Mapping
@@ -32,6 +33,7 @@ REST_PAGE_SIZE = 100
 DIAGNOSTIC_EVENT_LIMIT = 10
 
 EventKind = Literal["inline_comment", "review", "issue_comment"]
+ReviewEventKey = tuple[int, EventKind, int]
 
 
 class CorpusModel(BaseModel):
@@ -155,8 +157,12 @@ class GitHubUsage(CorpusModel):
 class CollectionResult(CorpusModel):
     bundles: tuple[PullRequestBundle, ...]
     candidate_pull_requests: int
-    reused_pull_requests: int = 0
+    reused_pull_request_numbers: tuple[int, ...] = ()
     usage: GitHubUsage
+
+    @property
+    def reused_pull_requests(self) -> int:
+        return len(self.reused_pull_request_numbers)
 
 
 @dataclass(frozen=True)
@@ -191,6 +197,19 @@ class PullRequestFingerprint:
     reviews: int
     review_threads: int
     issue_comments: int
+
+
+@dataclass(frozen=True)
+class ReviewEventFingerprint:
+    """Stored fields exposed by GitHub's repository-wide event streams."""
+
+    body_sha: str
+    updated_at: str | None
+
+
+def review_event_fingerprint(body: str, updated_at: str | None) -> ReviewEventFingerprint:
+    """Return the compact identity used to reconcile a REST activity seed."""
+    return ReviewEventFingerprint(hashlib.sha256(body.encode()).hexdigest(), updated_at)
 
 
 @dataclass(frozen=True)
@@ -1092,6 +1111,7 @@ def _collection_plan(
     limit: int | None,
     checkpointed_pr_numbers: AbstractSet[int],
     cached_fingerprints: Mapping[int, PullRequestFingerprint],
+    cached_event_fingerprints: Mapping[ReviewEventKey, ReviewEventFingerprint],
 ) -> CollectionPlan:
     seeds = _rest_seed_prs(context)
     scan = _scan_pull_requests(context, limit, set(seeds))
@@ -1102,11 +1122,20 @@ def _collection_plan(
         raise RuntimeError(f"PR #{oversized[0]} exceeds GitHub's {MAX_GITHUB_CHANGED_FILES:,}-file API cap")
     relevant = {int(pull["number"]): pull for pull in scan.relevant}
     checkpointed = checkpointed_pr_numbers & relevant.keys()
+    changed_seed_pr_numbers = {
+        number
+        for number, events in seeds.items()
+        if any(
+            cached_event_fingerprints.get((number, kind, database_id))
+            != review_event_fingerprint(str(seed.get("body") or ""), seed.get("updated_at"))
+            for (kind, database_id), seed in events.items()
+        )
+    }
     reusable_candidates = {
         number: pull
         for number, pull in relevant.items()
         if number not in checkpointed
-        and number not in seeds
+        and number not in changed_seed_pr_numbers
         and number in cached_fingerprints
         and cached_fingerprints[number] == _fingerprint(pull)
     }
@@ -1138,7 +1167,7 @@ def _collection_plan(
 def _hydrate_collection(
     context: CollectionContext,
     plan: CollectionPlan,
-    bundle_sink: Callable[[PullRequestBundle], None] | None,
+    bundle_sink: Callable[[tuple[PullRequestBundle, ...]], None] | None,
 ) -> list[PullRequestBundle]:
     bundles: list[PullRequestBundle] = []
     changed_count = 0
@@ -1157,12 +1186,13 @@ def _hydrate_collection(
             if changed_twice:
                 raise RuntimeError(f"PR #{changed_twice[0]} changed during both collection attempts")
             snapshots.update(retries)
-        for number in batch:
-            bundle = snapshots[number][0]
+        batch_bundles = tuple(snapshots[number][0] for number in batch)
+        for bundle in batch_bundles:
+            number = bundle.pull_request.number
             _validate_seed_events(bundle, plan.seeds.get(number, {}))
-            if bundle_sink is not None:
-                bundle_sink(bundle)
-            bundles.append(bundle)
+        if bundle_sink is not None:
+            bundle_sink(batch_bundles)
+        bundles.extend(batch_bundles)
     return bundles
 
 
@@ -1176,15 +1206,15 @@ def collect_corpus(
     client: GitHubClient | None = None,
     checkpointed_pr_numbers: AbstractSet[int] = frozenset(),
     cached_fingerprints: Mapping[int, PullRequestFingerprint] = MappingProxyType({}),
-    bundle_sink: Callable[[PullRequestBundle], None] | None = None,
-    reused_pull_request_sink: Callable[[int], None] | None = None,
+    cached_event_fingerprints: Mapping[ReviewEventKey, ReviewEventFingerprint] = MappingProxyType({}),
+    bundle_sink: Callable[[tuple[PullRequestBundle, ...]], None] | None = None,
 ) -> CollectionResult:
     """Collect matching PRs and checkpoint reconciled hydration batches through ``bundle_sink``.
 
     The activity scan still runs so the candidate count and GitHub edit seeds describe the
     current window. A pull request already checkpointed in this fixed window is trusted.
     Cross-window reuse requires its stored fingerprint to match both scan and recheck state,
-    and an edited-event seed always forces fresh hydration.
+    while a REST activity seed forces hydration only when its stored event changed.
     """
     client = client or GitHubClient()
     scope = ReviewScope(start=start, end=end, bot_logins=frozenset(bot_logins))
@@ -1195,14 +1225,12 @@ def collect_corpus(
         limit=limit,
         checkpointed_pr_numbers=checkpointed_pr_numbers,
         cached_fingerprints=cached_fingerprints,
+        cached_event_fingerprints=cached_event_fingerprints,
     )
-    for number in sorted(plan.reusable):
-        if reused_pull_request_sink is not None:
-            reused_pull_request_sink(number)
     bundles = _hydrate_collection(context, plan, bundle_sink)
     return CollectionResult(
         bundles=tuple(sorted(bundles, key=lambda bundle: bundle.pull_request.number)),
         candidate_pull_requests=plan.scan.candidate_count,
-        reused_pull_requests=len(plan.reusable),
+        reused_pull_request_numbers=tuple(sorted(plan.reusable)),
         usage=client.usage(),
     )

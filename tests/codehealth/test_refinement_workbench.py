@@ -21,6 +21,7 @@ from infra.codehealth.github_review_corpus import (
     PullRequestBundle,
     PullRequestRecord,
     ReviewEventRecord,
+    review_event_fingerprint,
 )
 from infra.lint.catalog import DEFAULT_CATALOG_DIR, load_catalog, render_lane
 
@@ -158,8 +159,8 @@ def test_store_preserves_versions_and_joins_human_and_lint_activity(engine: sqla
             )
         }
     )
-    review_store.store_bundle(engine, run.sync_id, first, observed_at=NOW)
-    review_store.store_bundle(engine, run.sync_id, second, observed_at=NOW + dt.timedelta(minutes=1))
+    review_store.store_bundles(engine, run.sync_id, (first,), observed_at=NOW)
+    review_store.store_bundles(engine, run.sync_id, (second,), observed_at=NOW + dt.timedelta(minutes=1))
     review_store.store_telemetry(
         engine,
         REPOSITORY,
@@ -208,6 +209,10 @@ def test_store_preserves_versions_and_joins_human_and_lint_activity(engine: sqla
     assert fingerprints[8629].reviews == 0
     assert fingerprints[8629].review_threads == 0
     assert fingerprints[8629].head_sha == "head-8629"
+    event_fingerprints = review_store.cached_review_event_fingerprints(engine, REPOSITORY)
+    assert event_fingerprints[(8629, "inline_comment", 862901)] == review_event_fingerprint(
+        "this try/catch doesn't add anything", "2026-08-30T01:00:00Z"
+    )
     with engine.begin() as connection:
         versions = connection.execute(
             sqlalchemy.select(sqlalchemy.func.count()).select_from(review_store.review_event_versions)
@@ -220,15 +225,16 @@ def test_store_preserves_versions_and_joins_human_and_lint_activity(engine: sqla
 def test_weekly_sync_publishes_complete_queryable_generation(
     engine: sqlalchemy.Engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    bundle = _bundle(8700)
+    bundles = (_bundle(8700), _bundle(8701))
 
     def collect(_repository: str, _start: dt.datetime, _end: dt.datetime, **kwargs: object) -> CollectionResult:
         sink = kwargs["bundle_sink"]
         assert callable(sink)
-        sink(bundle)
+        sink(bundles)
         return CollectionResult(
-            bundles=(bundle,),
-            candidate_pull_requests=1,
+            bundles=bundles,
+            candidate_pull_requests=3,
+            reused_pull_request_numbers=(8702,),
             usage=GitHubUsage(graphql_requests=2, graphql_points=3, rest_requests=1, projected_rest_requests=151),
         )
 
@@ -257,11 +263,12 @@ def test_weekly_sync_publishes_complete_queryable_generation(
         ),
     )
 
-    assert result.persisted_pull_requests == 1
+    assert result.persisted_pull_requests == 3
     status = review_store.latest_sync_status(engine, REPOSITORY)
     assert status is not None
     assert status.status == review_store.SyncStatus.COMPLETE
-    assert status.reused_pull_requests == 0
+    assert status.reused_pull_requests == 1
+    assert review_store.completed_pull_requests(engine, result.sync_id) == {8700, 8701, 8702}
     assert review_store.catalog_snapshot_shas(engine) == {refinement_sync.catalog_sha(load_catalog())}
     rows = review_store.list_pull_request_activity(
         engine,
@@ -276,7 +283,7 @@ def test_weekly_sync_publishes_complete_queryable_generation(
 
 def test_failed_sync_resumes_same_window_after_last_committed_pull_request(engine: sqlalchemy.Engine) -> None:
     first = _sync(engine)
-    review_store.store_bundle(engine, first.sync_id, _bundle(1), observed_at=NOW)
+    review_store.store_bundles(engine, first.sync_id, (_bundle(1),), observed_at=NOW)
     review_store.fail_sync(engine, first.sync_id, "transient GitHub failure")
 
     resumed = review_store.start_or_resume_sync(engine, REPOSITORY, now=NOW + dt.timedelta(hours=1))
@@ -285,7 +292,7 @@ def test_failed_sync_resumes_same_window_after_last_committed_pull_request(engin
     assert resumed.window_end == first.window_end.replace(tzinfo=None)
     assert review_store.completed_pull_requests(engine, resumed.sync_id) == {1}
 
-    review_store.store_bundle(engine, resumed.sync_id, _bundle(2), observed_at=NOW + dt.timedelta(hours=1))
+    review_store.store_bundles(engine, resumed.sync_id, (_bundle(2),), observed_at=NOW + dt.timedelta(hours=1))
     review_store.complete_sync(
         engine,
         resumed.sync_id,
@@ -310,7 +317,7 @@ def test_failed_sync_resumes_same_window_after_last_committed_pull_request(engin
 
 def test_failed_sync_is_hidden_and_poisoned_window_is_abandoned(engine: sqlalchemy.Engine) -> None:
     first = _sync(engine)
-    review_store.store_bundle(engine, first.sync_id, _bundle(1), observed_at=NOW)
+    review_store.store_bundles(engine, first.sync_id, (_bundle(1),), observed_at=NOW)
     review_store.fail_sync(engine, first.sync_id, "deterministic failure")
 
     with pytest.raises(RuntimeError, match=r"latest review sync.*failed"):
@@ -339,7 +346,7 @@ def test_failed_sync_is_hidden_and_poisoned_window_is_abandoned(engine: sqlalche
 
 def test_telemetry_normalizes_datetimes_and_ignores_unsuccessful_runs(engine: sqlalchemy.Engine) -> None:
     run = _sync(engine)
-    review_store.store_bundle(engine, run.sync_id, _bundle(8), observed_at=NOW)
+    review_store.store_bundles(engine, run.sync_id, (_bundle(8),), observed_at=NOW)
     review_store.store_telemetry(
         engine,
         REPOSITORY,
@@ -408,8 +415,8 @@ def test_telemetry_normalizes_datetimes_and_ignores_unsuccessful_runs(engine: sq
 def test_resync_reconciles_deleted_review_events(engine: sqlalchemy.Engine) -> None:
     run = _sync(engine)
     first = _bundle(9)
-    review_store.store_bundle(engine, run.sync_id, first, observed_at=NOW)
-    review_store.store_bundle(engine, run.sync_id, first.model_copy(update={"events": ()}), observed_at=NOW)
+    review_store.store_bundles(engine, run.sync_id, (first,), observed_at=NOW)
+    review_store.store_bundles(engine, run.sync_id, (first.model_copy(update={"events": ()}),), observed_at=NOW)
     _complete(engine, run)
 
     assert review_store.list_pr_review_events(engine, REPOSITORY, 9) == ()
@@ -425,7 +432,7 @@ def test_context_fetches_and_caches_bounded_source_window(
 ) -> None:
     run = _sync(engine)
     bundle = _bundle(10)
-    review_store.store_bundle(engine, run.sync_id, bundle, observed_at=NOW)
+    review_store.store_bundles(engine, run.sync_id, (bundle,), observed_at=NOW)
     _complete(engine, run)
     source = "\n".join(f"line {line}" for line in range(1, 301))
     calls = 0
@@ -454,7 +461,7 @@ def test_context_negative_caches_unavailable_source_until_explicit_refresh(
 ) -> None:
     run = _sync(engine)
     bundle = _bundle(11)
-    review_store.store_bundle(engine, run.sync_id, bundle, observed_at=NOW)
+    review_store.store_bundles(engine, run.sync_id, (bundle,), observed_at=NOW)
     _complete(engine, run)
     calls = 0
 
@@ -499,7 +506,7 @@ def test_rule_probe_records_model_rule_context_and_idempotent_result(
 ) -> None:
     run = _sync(engine)
     bundle = _bundle(22)
-    review_store.store_bundle(engine, run.sync_id, bundle, observed_at=NOW)
+    review_store.store_bundles(engine, run.sync_id, (bundle,), observed_at=NOW)
     _complete(engine, run)
     context = review_store.review_context(engine, bundle.events[0].event_id)
     prompt = rule_probe.build_probe_prompt(load_catalog().rule("ml-exception-swallow"), context)
@@ -548,7 +555,7 @@ def test_rule_probe_canonicalizes_negative_model_output(
 ) -> None:
     run = _sync(engine)
     bundle = _bundle(24)
-    review_store.store_bundle(engine, run.sync_id, bundle, observed_at=NOW)
+    review_store.store_bundles(engine, run.sync_id, (bundle,), observed_at=NOW)
     _complete(engine, run)
     context = review_store.review_context(engine, bundle.events[0].event_id)
 
@@ -590,7 +597,7 @@ def test_rule_probe_records_failure_and_rejects_idempotency_key_reuse(
 ) -> None:
     run = _sync(engine)
     bundle = _bundle(23)
-    review_store.store_bundle(engine, run.sync_id, bundle, observed_at=NOW)
+    review_store.store_bundles(engine, run.sync_id, (bundle,), observed_at=NOW)
     _complete(engine, run)
     context = review_store.review_context(engine, bundle.events[0].event_id)
     calls = 0

@@ -15,6 +15,7 @@ from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import StrEnum
+from itertools import batched
 
 import sqlalchemy
 from google.cloud.sql.connector import Connector
@@ -44,7 +45,10 @@ from .github_review_corpus import (
     PullRequestBundle,
     PullRequestFingerprint,
     PullRequestRecord,
+    ReviewEventFingerprint,
+    ReviewEventKey,
     ReviewEventRecord,
+    review_event_fingerprint,
 )
 
 DEFAULT_CLOUDSQL_CONNECTION = "hai-gcp-models:us-central1:marin-metadata"
@@ -54,6 +58,7 @@ DEFAULT_BACKFILL_DAYS = 30
 MAX_SYNC_ATTEMPTS = 3
 MAX_ACTIVITY_RESULTS = 500
 STORED_ERROR_MAX_LENGTH = 4_000
+DATABASE_WRITE_BATCH_SIZE = 100
 
 metadata = MetaData()
 json_type = JSON(none_as_null=True).with_variant(JSONB(none_as_null=True), "postgresql")
@@ -464,15 +469,27 @@ def _dialect_insert(conn: Connection, table: Table):
     raise ValueError(f"unsupported review-store database dialect: {conn.dialect.name}")
 
 
-def _upsert(conn: Connection, table: Table, values: dict[str, object], keys: Sequence[str]) -> None:
-    statement = _dialect_insert(conn, table).values(values)
-    updates = {column.name: statement.excluded[column.name] for column in table.columns if column.name not in keys}
-    conn.execute(statement.on_conflict_do_update(index_elements=[table.c[key] for key in keys], set_=updates))
+def _upsert_many(
+    conn: Connection,
+    table: Table,
+    values: Sequence[dict[str, object]],
+    keys: Sequence[str],
+) -> None:
+    for value_batch in batched(values, DATABASE_WRITE_BATCH_SIZE):
+        statement = _dialect_insert(conn, table).values(list(value_batch))
+        updates = {column.name: statement.excluded[column.name] for column in table.columns if column.name not in keys}
+        conn.execute(statement.on_conflict_do_update(index_elements=[table.c[key] for key in keys], set_=updates))
 
 
-def _insert_ignore(conn: Connection, table: Table, values: dict[str, object], keys: Sequence[str]) -> None:
-    statement = _dialect_insert(conn, table).values(values)
-    conn.execute(statement.on_conflict_do_nothing(index_elements=[table.c[key] for key in keys]))
+def _insert_ignore_many(
+    conn: Connection,
+    table: Table,
+    values: Sequence[dict[str, object]],
+    keys: Sequence[str],
+) -> None:
+    for value_batch in batched(values, DATABASE_WRITE_BATCH_SIZE):
+        statement = _dialect_insert(conn, table).values(list(value_batch))
+        conn.execute(statement.on_conflict_do_nothing(index_elements=[table.c[key] for key in keys]))
 
 
 def _json_value(value: object) -> object:
@@ -668,45 +685,83 @@ def cached_pull_request_fingerprints(engine: Engine, repository: str) -> dict[in
     return fingerprints
 
 
-def checkpoint_reused_pull_request(
+def cached_review_event_fingerprints(engine: Engine, repository: str) -> dict[ReviewEventKey, ReviewEventFingerprint]:
+    """Return current event identities used to reconcile GitHub activity seeds."""
+    with engine.begin() as conn:
+        rows = (
+            conn.execute(sqlalchemy.select(review_events.c.record).where(review_events.c.repository == repository))
+            .scalars()
+            .all()
+        )
+    fingerprints: dict[ReviewEventKey, ReviewEventFingerprint] = {}
+    for record in rows:
+        event = ReviewEventRecord.model_validate(record)
+        fingerprints[(event.pr_number, event.kind, event.database_id)] = review_event_fingerprint(
+            event.body, event.updated_at
+        )
+    return fingerprints
+
+
+def checkpoint_reused_pull_requests(
     engine: Engine,
     sync_id: str,
-    pr_number: int,
+    pr_numbers: Sequence[int],
     *,
     observed_at: dt.datetime,
 ) -> None:
-    """Record that an unchanged stored pull request belongs to the current sync."""
+    """Record unchanged stored pull requests in the current sync."""
+    rows = [{"sync_id": sync_id, "pr_number": pr_number, "synced_at": observed_at} for pr_number in pr_numbers]
+    if not rows:
+        return
     with engine.begin() as conn:
-        _insert_ignore(
+        _insert_ignore_many(
             conn,
             sync_pull_requests,
-            {"sync_id": sync_id, "pr_number": pr_number, "synced_at": observed_at},
+            rows,
             ("sync_id", "pr_number"),
         )
 
 
-def store_bundle(engine: Engine, sync_id: str, bundle: PullRequestBundle, *, observed_at: dt.datetime) -> None:
-    """Commit one reconciled PR bundle and its resume checkpoint atomically."""
-    pull = bundle.pull_request
-    repository = pull.repository
-    pull_payload = _payload(pull)
-    pull_sha = record_sha(pull)
-    with engine.begin() as conn:
-        _insert_ignore(
-            conn,
-            pull_request_versions,
+def store_bundles(
+    engine: Engine,
+    sync_id: str,
+    bundles: Sequence[PullRequestBundle],
+    *,
+    observed_at: dt.datetime,
+) -> None:
+    """Commit one reconciled hydration batch and its resume checkpoints atomically."""
+    if not bundles:
+        return
+    repository = bundles[0].pull_request.repository
+    if any(bundle.pull_request.repository != repository for bundle in bundles):
+        raise ValueError("one review-store batch cannot span repositories")
+    pull_numbers = [bundle.pull_request.number for bundle in bundles]
+    if len(pull_numbers) != len(set(pull_numbers)):
+        raise ValueError("one review-store batch cannot contain a pull request twice")
+
+    pull_version_rows: list[dict[str, object]] = []
+    pull_rows: list[dict[str, object]] = []
+    event_version_rows: list[dict[str, object]] = []
+    event_rows: list[dict[str, object]] = []
+    thread_rows: list[dict[str, object]] = []
+    file_rows: list[dict[str, object]] = []
+    commit_rows: list[dict[str, object]] = []
+    diff_rows: list[dict[str, object]] = []
+    checkpoint_rows: list[dict[str, object]] = []
+    for bundle in bundles:
+        pull = bundle.pull_request
+        pull_payload = _payload(pull)
+        pull_sha = record_sha(pull)
+        pull_version_rows.append(
             {
                 "repository": repository,
                 "pr_number": pull.number,
                 "record_sha": pull_sha,
                 "record": pull_payload,
                 "observed_at": observed_at,
-            },
-            ("repository", "pr_number", "record_sha"),
+            }
         )
-        _upsert(
-            conn,
-            pull_requests,
+        pull_rows.append(
             {
                 "repository": repository,
                 "pr_number": pull.number,
@@ -718,28 +773,15 @@ def store_bundle(engine: Engine, sync_id: str, bundle: PullRequestBundle, *, obs
                 "record_sha": pull_sha,
                 "record": pull_payload,
                 "observed_at": observed_at,
-            },
-            ("repository", "pr_number"),
+            }
         )
-        for child_table in (review_events, review_threads, changed_files, commits):
-            conn.execute(
-                child_table.delete().where(
-                    child_table.c.repository == repository,
-                    child_table.c.pr_number == pull.number,
-                )
-            )
         for event in bundle.events:
             payload = _payload(event)
             event_sha = record_sha(event)
-            _insert_ignore(
-                conn,
-                review_event_versions,
-                {"event_id": event.event_id, "record_sha": event_sha, "record": payload, "observed_at": observed_at},
-                ("event_id", "record_sha"),
+            event_version_rows.append(
+                {"event_id": event.event_id, "record_sha": event_sha, "record": payload, "observed_at": observed_at}
             )
-            _upsert(
-                conn,
-                review_events,
+            event_rows.append(
                 {
                     "event_id": event.event_id,
                     "repository": repository,
@@ -752,68 +794,68 @@ def store_bundle(engine: Engine, sync_id: str, bundle: PullRequestBundle, *, obs
                     "record_sha": event_sha,
                     "record": payload,
                     "observed_at": observed_at,
-                },
-                ("event_id",),
+                }
             )
-        for thread in bundle.threads:
-            _upsert(
-                conn,
-                review_threads,
-                {
-                    "repository": repository,
-                    "thread_id": thread.thread_id,
-                    "pr_number": thread.pr_number,
-                    "record_sha": record_sha(thread),
-                    "record": _payload(thread),
-                    "observed_at": observed_at,
-                },
-                ("repository", "thread_id"),
-            )
-        for file in bundle.files:
-            _upsert(
-                conn,
-                changed_files,
-                {
-                    "repository": repository,
-                    "pr_number": file.pr_number,
-                    "filename": file.filename,
-                    "record": _payload(file),
-                    "observed_at": observed_at,
-                },
-                ("repository", "pr_number", "filename"),
-            )
-        for position, commit in enumerate(bundle.commits):
-            _upsert(
-                conn,
-                commits,
-                {
-                    "repository": repository,
-                    "pr_number": commit.pr_number,
-                    "sha": commit.sha,
-                    "position": position,
-                    "record": _payload(commit),
-                    "observed_at": observed_at,
-                },
-                ("repository", "pr_number", "sha"),
-            )
-        _upsert(
-            conn,
-            pull_request_diffs,
+        thread_rows.extend(
+            {
+                "repository": repository,
+                "thread_id": thread.thread_id,
+                "pr_number": thread.pr_number,
+                "record_sha": record_sha(thread),
+                "record": _payload(thread),
+                "observed_at": observed_at,
+            }
+            for thread in bundle.threads
+        )
+        file_rows.extend(
+            {
+                "repository": repository,
+                "pr_number": file.pr_number,
+                "filename": file.filename,
+                "record": _payload(file),
+                "observed_at": observed_at,
+            }
+            for file in bundle.files
+        )
+        commit_rows.extend(
+            {
+                "repository": repository,
+                "pr_number": commit.pr_number,
+                "sha": commit.sha,
+                "position": position,
+                "record": _payload(commit),
+                "observed_at": observed_at,
+            }
+            for position, commit in enumerate(bundle.commits)
+        )
+        diff_rows.append(
             {
                 "repository": repository,
                 "pr_number": pull.number,
                 "head_sha": pull.head_sha,
                 "diff": bundle.diff,
                 "observed_at": observed_at,
-            },
-            ("repository", "pr_number", "head_sha"),
+            }
         )
-        _insert_ignore(
-            conn,
-            sync_pull_requests,
-            {"sync_id": sync_id, "pr_number": pull.number, "synced_at": observed_at},
-            ("sync_id", "pr_number"),
-        )
+        checkpoint_rows.append({"sync_id": sync_id, "pr_number": pull.number, "synced_at": observed_at})
+
+    with engine.begin() as conn:
+        _insert_ignore_many(conn, pull_request_versions, pull_version_rows, ("repository", "pr_number", "record_sha"))
+        _upsert_many(conn, pull_requests, pull_rows, ("repository", "pr_number"))
+        for child_table in (review_events, review_threads, changed_files, commits):
+            conn.execute(
+                child_table.delete().where(
+                    child_table.c.repository == repository,
+                    child_table.c.pr_number.in_(pull_numbers),
+                )
+            )
+        _insert_ignore_many(conn, review_event_versions, event_version_rows, ("event_id", "record_sha"))
+        _upsert_many(conn, review_events, event_rows, ("event_id",))
+        _upsert_many(conn, review_threads, thread_rows, ("repository", "thread_id"))
+        _upsert_many(conn, changed_files, file_rows, ("repository", "pr_number", "filename"))
+        _upsert_many(conn, commits, commit_rows, ("repository", "pr_number", "sha"))
+        _upsert_many(conn, pull_request_diffs, diff_rows, ("repository", "pr_number", "head_sha"))
+        _insert_ignore_many(conn, sync_pull_requests, checkpoint_rows, ("sync_id", "pr_number"))
 
 
 def store_telemetry(
@@ -823,47 +865,43 @@ def store_telemetry(
     findings: Sequence[LintFindingRecord],
 ) -> None:
     """Mirror bounded Finelog activity for single-store exploration queries."""
+    invocation_rows: list[dict[str, object]] = []
+    for row in invocations:
+        payload = _payload(row)
+        invocation_rows.append(
+            {
+                "invocation_id": row.invocation_id,
+                "repository": repository,
+                "ts": _utc_datetime(row.ts),
+                "pr_number": row.pr_number,
+                "head_sha": row.head_sha,
+                "catalog_sha": row.lint_catalog_sha,
+                "successful": (
+                    payload.get("agent_exit_code") is not None
+                    and int(payload["agent_exit_code"]) == 0
+                    and not bool(payload.get("timed_out"))
+                ),
+                "finding_count": int(payload.get("finding_count") or 0),
+                "record": payload,
+            }
+        )
+    finding_rows: list[dict[str, object]] = []
+    for row in findings:
+        payload = _payload(row)
+        finding_rows.append(
+            {
+                "finding_id": record_sha(payload),
+                "invocation_id": row.invocation_id,
+                "repository": repository,
+                "ts": _utc_datetime(row.ts),
+                "pr_number": row.pr_number,
+                "code": row.code or "",
+                "record": payload,
+            }
+        )
     with engine.begin() as conn:
-        for row in invocations:
-            payload = _payload(row)
-            invocation_id = row.invocation_id
-            _upsert(
-                conn,
-                lint_invocations,
-                {
-                    "invocation_id": invocation_id,
-                    "repository": repository,
-                    "ts": _utc_datetime(row.ts),
-                    "pr_number": row.pr_number,
-                    "head_sha": row.head_sha,
-                    "catalog_sha": row.lint_catalog_sha,
-                    "successful": (
-                        payload.get("agent_exit_code") is not None
-                        and int(payload["agent_exit_code"]) == 0
-                        and not bool(payload.get("timed_out"))
-                    ),
-                    "finding_count": int(payload.get("finding_count") or 0),
-                    "record": payload,
-                },
-                ("repository", "invocation_id"),
-            )
-        for row in findings:
-            payload = _payload(row)
-            finding_id = record_sha(payload)
-            _upsert(
-                conn,
-                lint_findings,
-                {
-                    "finding_id": finding_id,
-                    "invocation_id": row.invocation_id,
-                    "repository": repository,
-                    "ts": _utc_datetime(row.ts),
-                    "pr_number": row.pr_number,
-                    "code": row.code or "",
-                    "record": payload,
-                },
-                ("repository", "finding_id"),
-            )
+        _upsert_many(conn, lint_invocations, invocation_rows, ("repository", "invocation_id"))
+        _upsert_many(conn, lint_findings, finding_rows, ("repository", "finding_id"))
 
 
 def store_catalog_snapshot(
@@ -875,10 +913,10 @@ def store_catalog_snapshot(
 ) -> None:
     """Persist the catalog used by the checked-out weekly agent."""
     with engine.begin() as conn:
-        _insert_ignore(
+        _insert_ignore_many(
             conn,
             lint_catalog_snapshots,
-            {"catalog_sha": catalog_sha, "observed_at": observed_at, "record": _payload(record)},
+            ({"catalog_sha": catalog_sha, "observed_at": observed_at, "record": _payload(record)},),
             ("catalog_sha",),
         )
 
@@ -1210,21 +1248,23 @@ def store_source_context(
 ) -> None:
     identity = text if text is not None else f"unavailable:{unavailable_reason or 'unknown'}"
     with engine.begin() as conn:
-        _upsert(
+        _upsert_many(
             conn,
             source_contexts,
-            {
-                "event_id": event_id,
-                "commit_sha": commit_sha,
-                "path": path,
-                "anchor_line": anchor_line,
-                "start_line": start_line,
-                "end_line": end_line,
-                "text": text,
-                "unavailable_reason": unavailable_reason,
-                "content_sha": hashlib.sha256(identity.encode()).hexdigest(),
-                "fetched_at": fetched_at,
-            },
+            (
+                {
+                    "event_id": event_id,
+                    "commit_sha": commit_sha,
+                    "path": path,
+                    "anchor_line": anchor_line,
+                    "start_line": start_line,
+                    "end_line": end_line,
+                    "text": text,
+                    "unavailable_reason": unavailable_reason,
+                    "content_sha": hashlib.sha256(identity.encode()).hexdigest(),
+                    "fetched_at": fetched_at,
+                },
+            ),
             ("event_id", "commit_sha"),
         )
 
@@ -1240,28 +1280,30 @@ def stored_probe(engine: Engine, idempotency_key: str) -> StoredProbe | None:
 def store_probe(engine: Engine, record: StoredProbe) -> None:
     payload = _payload(record)
     with engine.begin() as conn:
-        _insert_ignore(
+        _insert_ignore_many(
             conn,
             rule_probes,
-            {
-                "probe_id": record.probe_id,
-                "idempotency_key": record.idempotency_key,
-                "created_at": _timestamp(record.created_at),
-                "event_id": record.event_id,
-                "context_sha": record.context_sha,
-                "rule_code": record.rule_code,
-                "rule_sha": record.rule_sha,
-                "catalog_sha": record.catalog_sha,
-                "model": record.model,
-                "effort": record.effort,
-                "status": record.status.value,
-                "fired": record.fired,
-                "confidence": record.confidence,
-                "finding": record.finding,
-                "raw_output": record.raw_output,
-                "error": record.error,
-                "elapsed": record.elapsed,
-                "record": payload,
-            },
+            (
+                {
+                    "probe_id": record.probe_id,
+                    "idempotency_key": record.idempotency_key,
+                    "created_at": _timestamp(record.created_at),
+                    "event_id": record.event_id,
+                    "context_sha": record.context_sha,
+                    "rule_code": record.rule_code,
+                    "rule_sha": record.rule_sha,
+                    "catalog_sha": record.catalog_sha,
+                    "model": record.model,
+                    "effort": record.effort,
+                    "status": record.status.value,
+                    "fired": record.fired,
+                    "confidence": record.confidence,
+                    "finding": record.finding,
+                    "raw_output": record.raw_output,
+                    "error": record.error,
+                    "elapsed": record.elapsed,
+                    "record": payload,
+                },
+            ),
             ("idempotency_key",),
         )

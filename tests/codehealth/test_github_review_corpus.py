@@ -358,8 +358,6 @@ def test_collect_corpus_reuses_unchanged_stored_pull_request() -> None:
         review_threads=0,
         issue_comments=0,
     )
-    reused: list[int] = []
-
     result = github.collect_corpus(
         REPOSITORY,
         START,
@@ -367,14 +365,98 @@ def test_collect_corpus_reuses_unchanged_stored_pull_request() -> None:
         bot_logins=set(),
         client=client,
         cached_fingerprints={7: cached},
-        reused_pull_request_sink=reused.append,
     )
 
     assert result.bundles == ()
     assert result.reused_pull_requests == 1
-    assert reused == [7]
+    assert result.reused_pull_request_numbers == (7,)
     assert client.text_calls == 0
     assert result.usage.rest_requests == 2
+
+
+def test_collect_corpus_reuses_pull_request_when_rest_seed_matches_stored_event() -> None:
+    review = _review(55, _actor("reviewer"), "2026-08-01T00:00:00Z", body="Review this.")
+    comment = _thread_comment(101, 55, updated="2026-08-20T00:00:00Z")
+    hydrated = _hydrated_pull(review=review, thread=_thread(comment))
+    scan = _scan_pull([review], review_thread_count=1)
+    seed = {
+        "id": 101,
+        "body": "edited old comment",
+        "created_at": "2026-07-01T00:00:00Z",
+        "updated_at": "2026-08-20T00:00:00Z",
+        "pull_request_url": "https://api.github.test/repos/owner/repo/pulls/7",
+        "user": {"login": "reviewer", "type": "User"},
+    }
+    client = FakeGitHub(scan, hydrated, seed=seed)
+    cached_pull = github.PullRequestFingerprint(
+        updated_at="2026-08-28T00:00:00Z",
+        head_sha="head",
+        base_sha="base",
+        changed_files=1,
+        commits=1,
+        reviews=1,
+        review_threads=1,
+        issue_comments=0,
+    )
+
+    result = github.collect_corpus(
+        REPOSITORY,
+        START,
+        END,
+        bot_logins=set(),
+        client=client,
+        cached_fingerprints={7: cached_pull},
+        cached_event_fingerprints={
+            (7, "inline_comment", 101): github.review_event_fingerprint("edited old comment", "2026-08-20T00:00:00Z")
+        },
+    )
+
+    assert result.bundles == ()
+    assert result.reused_pull_request_numbers == (7,)
+    assert client.text_calls == 0
+
+
+def test_collect_corpus_hydrates_pull_request_when_rest_seed_changed() -> None:
+    review = _review(55, _actor("reviewer"), "2026-08-01T00:00:00Z", body="Review this.")
+    review["comments"]["totalCount"] = 1
+    comment = _thread_comment(101, 55, updated="2026-08-20T00:00:00Z")
+    hydrated = _hydrated_pull(review=review, thread=_thread(comment))
+    scan = _scan_pull([review], review_thread_count=1)
+    seed = {
+        "id": 101,
+        "body": "edited old comment",
+        "created_at": "2026-07-01T00:00:00Z",
+        "updated_at": "2026-08-20T00:00:00Z",
+        "pull_request_url": "https://api.github.test/repos/owner/repo/pulls/7",
+        "user": {"login": "reviewer", "type": "User"},
+    }
+    client = FakeGitHub(scan, hydrated, seed=seed)
+    cached_pull = github.PullRequestFingerprint(
+        updated_at="2026-08-28T00:00:00Z",
+        head_sha="head",
+        base_sha="base",
+        changed_files=1,
+        commits=1,
+        reviews=1,
+        review_threads=1,
+        issue_comments=0,
+    )
+
+    result = github.collect_corpus(
+        REPOSITORY,
+        START,
+        END,
+        bot_logins=set(),
+        client=client,
+        cached_fingerprints={7: cached_pull},
+        cached_event_fingerprints={
+            (7, "inline_comment", 101): github.review_event_fingerprint("previous body", "2026-08-19T00:00:00Z")
+        },
+    )
+
+    assert [bundle.pull_request.number for bundle in result.bundles] == [7]
+    assert result.reused_pull_request_numbers == ()
+    assert client.text_calls == 1
 
 
 def test_collect_corpus_trusts_same_window_checkpoint_over_edited_event_seed() -> None:
@@ -401,6 +483,7 @@ def test_collect_corpus_trusts_same_window_checkpoint_over_edited_event_seed() -
 
     assert result.bundles == ()
     assert result.reused_pull_requests == 1
+    assert result.reused_pull_request_numbers == (7,)
     assert client.text_calls == 0
 
 
