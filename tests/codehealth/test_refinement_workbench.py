@@ -543,6 +543,48 @@ def test_rule_probe_records_model_rule_context_and_idempotent_result(
     assert first.catalog_sha
 
 
+def test_rule_probe_canonicalizes_negative_model_output(
+    engine: sqlalchemy.Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = _sync(engine)
+    bundle = _bundle(24)
+    review_store.store_bundle(engine, run.sync_id, bundle, observed_at=NOW)
+    _complete(engine, run)
+    context = review_store.review_context(engine, bundle.events[0].event_id)
+
+    def fake_run(args: list[str], **_kwargs) -> subprocess.CompletedProcess[str]:
+        output = Path(args[args.index("--output-last-message") + 1])
+        output.write_text(
+            json.dumps(
+                {
+                    "fired": False,
+                    "confidence": 0.82,
+                    "finding": "The rule does not apply to this context.",
+                }
+            )
+        )
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(rule_probe.subprocess, "run", fake_run)
+    result = rule_probe.run_rule_probe(
+        engine,
+        load_catalog(),
+        context,
+        rule_code="ml-exception-swallow",
+        model="gpt-5.6-luna",
+        effort="low",
+        idempotency_key="negative-probe-24",
+    )
+
+    assert result.status == review_store.ProbeStatus.COMPLETE
+    assert result.fired is False
+    assert result.confidence is None
+    assert result.finding is None
+    assert result.raw_output == (
+        '{"fired": false, "confidence": 0.82, "finding": "The rule does not apply to this context."}'
+    )
+
+
 def test_rule_probe_records_failure_and_rejects_idempotency_key_reuse(
     engine: sqlalchemy.Engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
