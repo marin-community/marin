@@ -58,12 +58,7 @@ HERO_MODEL_CONFIG = dataclasses.replace(
 
 
 def with_transport_remat_mode(model: GrugModelConfig) -> GrugModelConfig:
-    """Give the ragged transport the layer-carry offload that its scheduling posture depends on.
-
-    Staging the carry on pinned host lowers the measured HBM peak by 36 GiB. That headroom is
-    what lets the latency-hiding scheduler fit. Only the ragged transport is measured with the
-    offload, so the other transports keep plain remat.
-    """
+    """Select carry-offload rematerialization for the ragged transport."""
     if model.moe_implementation != RAGGED_MOE_IMPLEMENTATION:
         return model
     return dataclasses.replace(model, remat_mode="offload_carry")
