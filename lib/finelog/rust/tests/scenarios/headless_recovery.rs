@@ -1,19 +1,14 @@
 // Copyright The Marin Authors
 // SPDX-License-Identifier: Apache-2.0
 
-use std::sync::Arc;
 use std::time::Duration;
 
-use arrow::array::{Int64Array, StringArray};
-use arrow::record_batch::RecordBatch;
-
 use finelog::store::object_store::ObjectId;
-use finelog::store::schema::schema_to_arrow;
 use finelog::test_support::unique_dir;
 
 use crate::support::{
-    assert_metadata_only_bootstrap, register_v1, run_sql, seq_column, worker_schema, write_row,
-    Cluster, PERSIST_BUDGET, TABLE,
+    assert_metadata_only_bootstrap, register_v1, run_sql, seq_column, write_row,
+    write_row_despite_deferral, Cluster, TABLE,
 };
 
 /// A remote root that lost its HEAD — a bucket lifecycle rule or human error;
@@ -46,24 +41,9 @@ async fn a_missing_head_degrades_the_table_without_starting_a_new_history() {
 
     // Writes still accumulate and acknowledge on local durability, and reads
     // serve them; the publish attempt inside maintenance stays refused.
-    let batch_schema = schema_to_arrow(&worker_schema());
-    let batch = RecordBatch::try_new(
-        batch_schema.clone(),
-        vec![
-            Arc::new(StringArray::from(vec!["w-2"])),
-            Arc::new(Int64Array::from(vec![20])),
-            Arc::new(Int64Array::from(vec![20])),
-        ],
-    )
-    .unwrap();
-    let ipc = finelog::store::ipc::encode_ipc(&batch_schema, &[batch]).unwrap();
-    let (_, seq) = degraded.write_rows(TABLE, &ipc, None).unwrap();
+    write_row_despite_deferral(&degraded, "w-2", 20).await;
     let deferred = degraded.maintain_namespace(TABLE, false).await;
     assert!(deferred.is_err(), "maintenance must report the deferral");
-    degraded
-        .await_persisted(TABLE, seq, PERSIST_BUDGET)
-        .await
-        .unwrap();
     let seqs = seq_column(&run_sql(&degraded, &format!("SELECT seq FROM \"{TABLE}\"")).await);
     assert_eq!(seqs, vec![1, 2]);
     assert!(

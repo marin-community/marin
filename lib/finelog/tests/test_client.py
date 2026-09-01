@@ -116,6 +116,7 @@ class _FakeStatsServiceClient:
         self.registration_requests: list[stats_pb2.RegisterTableRequest] = []
         self.writes: list[stats_pb2.WriteRowsRequest] = []
         self.drops: list[str] = []
+        self.aborts: list[str] = []
         self.queries: list[str] = []
         self.errors: list[Exception] = []
         self.query_handler = None
@@ -172,6 +173,7 @@ class _FakeStatsServiceClient:
         return stats_pb2.GetTableStatusResponse(active_table_spec=spec, catalog_generation=7)
 
     def abort_table_migration(self, request):
+        self.aborts.append(request.namespace)
         spec = self.registered_specs[request.namespace]
         return stats_pb2.AbortTableMigrationResponse(
             catalog_generation=8,
@@ -606,6 +608,7 @@ def test_table_status_and_abort_use_versioned_contract(tracked_clients):
         assert status.catalog_generation == 7
 
         aborted = client.abort_table_migration("iris.worker")
+        assert tracked_clients[0].aborts == ["iris.worker"]
         assert aborted.active_version == 2
     finally:
         client.close()

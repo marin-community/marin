@@ -4,15 +4,11 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use arrow::array::{Int64Array, StringArray};
-use arrow::record_batch::RecordBatch;
-
-use finelog::store::schema::schema_to_arrow;
 use finelog::test_support::{
     lost_head_response, unique_dir, FaultAction, FaultGate, ObjectFault, ObjectOp, ObjectPattern,
 };
 
-use crate::support::{register_v1, worker_schema, write_row, Cluster, Invariants, TABLE};
+use crate::support::{encode_worker_row, register_v1, write_row, Cluster, Invariants, TABLE};
 
 /// A replacement writer that claims the fence while the original writer's HEAD
 /// swap has applied but not been reported leaves exactly one writer standing.
@@ -42,17 +38,7 @@ async fn a_fence_steal_during_an_ambiguous_flush_commit_leaves_one_writer() {
             gate: Some(Arc::clone(&ambiguous)),
         },
     ));
-    let batch_schema = schema_to_arrow(&worker_schema());
-    let batch = RecordBatch::try_new(
-        batch_schema.clone(),
-        vec![
-            Arc::new(StringArray::from(vec!["w-2"])),
-            Arc::new(Int64Array::from(vec![20])),
-            Arc::new(Int64Array::from(vec![20])),
-        ],
-    )
-    .unwrap();
-    let ipc = finelog::store::ipc::encode_ipc(&batch_schema, &[batch]).unwrap();
+    let ipc = encode_worker_row("w-2", 20);
     let (_, ambiguous_seq) = original.write_rows(TABLE, &ipc, None).unwrap();
     let flushing = {
         let tables = original.tables().clone();

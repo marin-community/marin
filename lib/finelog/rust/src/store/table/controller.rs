@@ -572,13 +572,6 @@ impl TableController {
         self.commit(mutation).await
     }
 
-    /// Write an immutable content-addressed Parquet object for this table.
-    pub async fn write_parquet(&self, bytes: Bytes) -> Result<WrittenObject, StatsError> {
-        let sha256: [u8; 32] = Sha256::digest(&bytes).into();
-        let key = format!("{OBJECTS_PREFIX}/{}.parquet", crate::hex::encode(&sha256));
-        self.write_content_addressed(&key, bytes).await
-    }
-
     /// Stage an immutable content-addressed Parquet object locally.
     ///
     /// The bytes are durable on local disk when this returns; publication

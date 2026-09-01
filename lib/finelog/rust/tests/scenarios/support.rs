@@ -171,9 +171,8 @@ pub async fn register_v1(store: &Store) {
     store.publish_object_catalog(TABLE).await.unwrap();
 }
 
-/// Append one row and seal it, so the returned sequence number is acknowledged
-/// durable before the caller proceeds.
-pub async fn write_row(store: &Store, worker: &str, mem_bytes: i64) -> i64 {
+/// Encode one worker row as an IPC payload for [`TABLE`].
+pub fn encode_worker_row(worker: &str, mem_bytes: i64) -> Vec<u8> {
     let batch_schema = schema_to_arrow(&worker_schema());
     let batch = RecordBatch::try_new(
         batch_schema.clone(),
@@ -184,7 +183,12 @@ pub async fn write_row(store: &Store, worker: &str, mem_bytes: i64) -> i64 {
         ],
     )
     .unwrap();
-    let ipc = finelog::store::ipc::encode_ipc(&batch_schema, &[batch]).unwrap();
+    finelog::store::ipc::encode_ipc(&batch_schema, &[batch]).unwrap()
+}
+
+/// Write one row, run a maintenance round, and wait for the ack.
+pub async fn write_row(store: &Store, worker: &str, mem_bytes: i64) -> i64 {
+    let ipc = encode_worker_row(worker, mem_bytes);
     let (_, seq) = store.write_rows(TABLE, &ipc, None).unwrap();
     store.maintain_namespace(TABLE, false).await.unwrap();
     store
@@ -194,20 +198,10 @@ pub async fn write_row(store: &Store, worker: &str, mem_bytes: i64) -> i64 {
     seq
 }
 
-/// As [`write_row`], but tolerant of a maintenance round that reports a
-/// deferred publication — a remote outage. The ack is local durability.
+/// As [`write_row`], for a store whose publication is expected to defer:
+/// the maintenance outcome is discarded, the local ack is still awaited.
 pub async fn write_row_despite_deferral(store: &Store, worker: &str, mem_bytes: i64) -> i64 {
-    let batch_schema = schema_to_arrow(&worker_schema());
-    let batch = RecordBatch::try_new(
-        batch_schema.clone(),
-        vec![
-            Arc::new(StringArray::from(vec![worker])),
-            Arc::new(Int64Array::from(vec![mem_bytes])),
-            Arc::new(Int64Array::from(vec![mem_bytes])),
-        ],
-    )
-    .unwrap();
-    let ipc = finelog::store::ipc::encode_ipc(&batch_schema, &[batch]).unwrap();
+    let ipc = encode_worker_row(worker, mem_bytes);
     let (_, seq) = store.write_rows(TABLE, &ipc, None).unwrap();
     let _ = store.maintain_namespace(TABLE, false).await;
     store

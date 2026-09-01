@@ -52,6 +52,9 @@ from finelog.schema import (
 from finelog.table_spec import TableSpec, TableStatus, table_status_from_proto
 from finelog.types import is_retryable_error
 
+# The identity a Table registers under; registration re-runs when it changes.
+RegistrationKey = tuple[Schema, StoragePolicy, "TableSpec | None"]
+
 
 class _QuietStreamHandler(logging.StreamHandler):
     # The flush thread is a daemon that outlives pytest's stderr capture (and
@@ -257,7 +260,7 @@ class Table:
         flusher: Callable[[str, pa.RecordBatch], None],
         querier: Callable[[str], pa.Table] | None = None,
         registrar: Callable[[], Schema] | None = None,
-        registration_key: object | None = None,
+        registration_key: RegistrationKey | None = None,
         flush_interval: float = DEFAULT_FLUSH_INTERVAL,
         batch_rows: int = DEFAULT_BATCH_ROWS,
         max_buffer_bytes: int = DEFAULT_MAX_BUFFER_BYTES,
@@ -517,7 +520,7 @@ class Table:
             return 0, items, 0
         return items[-1].seq, [], 0
 
-    def _update_registration(self, registration_key: object, registrar: Callable[[], Schema]) -> None:
+    def _update_registration(self, registration_key: RegistrationKey, registrar: Callable[[], Schema]) -> None:
         """Schedule a changed registration before this handle's next send."""
         with self._cond:
             if self._closing or self._closed:

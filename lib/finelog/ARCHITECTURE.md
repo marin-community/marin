@@ -59,7 +59,7 @@ flowchart TB
     Store -. constructs .-> TM
     Store -. constructs .-> MS
     Store -. constructs .-> OS
-    Store -. constructs .-> SS
+    Store -. constructs .-> OSS
 
     TM --> RT
     RT --> IB
@@ -73,12 +73,9 @@ flowchart TB
     MW --> CP
     MW --> LG
 
-    TC --> SS
+    TC --> OSS
     TC --> OS
-    SS -. impl .-> OSS
-    SS -. impl .-> SQS
     OSS --> OS
-    SQS --> DB
     TC -->|rebuild projection| DB
 
     FL --> TC
@@ -188,9 +185,9 @@ flowchart LR
     MW -->|Flush| FL[flush.rs]
     MW -->|SpecMigration| SM[spec_migration.rs::advance]
     MW -->|Compaction| OD[compaction::object_driver /<br/>local_driver::compact_once]
-    MW -->|IndexBackfill| IA[index_artifacts.rs::maintain]
-    MW -->|LegacySync| LG[legacy::archive / layout]
-    MW -->|Gc| TC[controller: state GC,<br/>owed publications]
+    MW -->|IndexArtifacts| IA[index_artifacts.rs::maintain]
+    MW -->|LegacyArchive| LG[legacy::archive / layout]
+    MW -->|ObjectCollection| TC[controller: state GC,<br/>owed publications]
 ```
 
 The scheduler owns cadence only; it names a `TableWork` kind and one call dispatches into the owning module. While a spec migration is pending it owns the whole cycle, because compaction or eviction would destroy its sources. Compaction runs under a `MaintenanceLease` that pins the definition version and exact inputs and rebases at commit time, so concurrent flushes commit freely; a lost lease leaves outputs as unreferenced objects for GC.
@@ -287,4 +284,4 @@ Separately, `finelog-migrate` (in the image) is the older one-off `telemetry_v1`
 
 ### What retires when
 
-`store/legacy/` (flat-key archive sync, eviction, layout rewriting), filesystem adoption, and the process-wide query-visibility lock all exist for legacy tables only. Each table that completes its version-0 import stops using them; when the last legacy table converts, they are deleted. The deferred engineering work is the fuller journey-test catalog and provider-native multipart streaming for compaction outputs; neither gates the rollout.
+`store/legacy/` (flat-key archive sync, eviction, layout rewriting), filesystem adoption, and the process-wide query-visibility lock all exist for legacy tables only. Each table that completes its version-0 import stops using them; when the last legacy table converts, they are deleted. The remaining deferred engineering work is provider-native multipart streaming for compaction outputs.
