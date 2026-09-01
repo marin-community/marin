@@ -5,15 +5,10 @@ description: Refresh a named Marin external fork pin onto a newer upstream base 
 
 # Refresh a fork
 
-Read `AGENTS.md`. Rebase the fork overlay onto `<branch>-next`, validate that
-staged tip, re-pin Marin, and prepare protected-branch promotion. An unattended
-run opens a draft Marin PR and names the required admin promotion; it never
-force-moves the stable branch.
-
-Refresh a `group` as one unit and one PR. Per-fork guidance lives beside this
-file: `docs/vllm.md` covers the `vllm`/`tpu-inference` group and the GPU release
-pipeline, and `docs/xla.md` covers the XLA PJRT fork, which is pinned outside
-`migration.toml` entirely.
+Read `AGENTS.md`. Refresh a `group` as one unit and one PR. Per-fork guidance
+lives beside this file: `docs/vllm.md` covers the `vllm`/`tpu-inference` group
+and the GPU release pipeline, and `docs/xla.md` covers the XLA PJRT fork, which
+is pinned outside `migration.toml` entirely.
 
 In local mode, ask before pushing fork branches, opening the PR, or filing an
 issue. The required end-to-end test needs no extra confirmation.
@@ -22,16 +17,19 @@ issue. The required end-to-end test needs no extra confirmation.
 
 Read the target fork's section in `config/external/migration.toml`. It gives:
 
+- `repository` — the Marin fork cloned as `origin`. When omitted, derive it from
+  the pin source.
 - `upstream` — the repo we rebase onto. Every fork has one.
 - `group` — if present, refresh every section in the group together in one PR
   (read them all now); if absent, this pin refreshes alone.
 - `base_select` (+ `derived_from`) — how to choose the new upstream base.
-- `pin` — where the resolved pin is recorded (`isolated_project` uv.lock,
-  `descriptor:<path>#<section>` SHA, or `release:<path>` prebuilt wheel); drives the
-  re-pin step.
-- `branch` — the fork branch this pin tracks (`main` for a single-pin fork and for the
-  vllm GPU pin; `tpu` for the vllm fork's TPU pin). The refresh stages on `<branch>-next`;
-  an admin promotes that validated tip after reviewing the draft Marin PR.
+- `pin` — where the resolved pin is recorded (`isolated_project` uv.lock or
+  `release:<path>` public wheel); drives the re-pin step. Two grouped source
+  sections may name the same release descriptor when one artifact selects the
+  complete environment.
+- `branch` — for a branch-based refresh, the stable fork branch. The refresh
+  stages on `<branch>-next`; an admin promotes that validated tip after reviewing
+  the draft Marin PR.
 - `e2e` — the Marin end-to-end that validates the refresh.
 - `blocker_assignee` — who owns the "can't migrate" issue.
 - `nuances` — constraints a human must respect (torch pins, known-good ceilings).
@@ -43,13 +41,12 @@ revision.
 
 - If no newer base is selected and no pin metadata needs repair, exit successfully
   with a no-op summary.
-- On success, create the rollback and date tags described in
-  `docs/promotion-protocol.md`, then open exactly one draft PR in
-  `marin-community/marin` for the fork or group after the e2e passes. A grouped
-  refresh re-pins every group section at its staged tip in that single PR. State the
-  exact `<branch>-next` to `<branch>` admin promotion still required, request the
-  descriptor's `blocker_assignee` as reviewer, and monitor the PR per
-  `.agents/skills/commit/SKILL.md`.
+- On a successful branch-staged refresh, create the rollback and date tags described in
+  `docs/promotion-protocol.md`, then open exactly one draft Marin PR after the e2e
+  passes. State the exact `<branch>-next` to `<branch>` admin promotion still
+  required and request the descriptor's `blocker_assignee` as reviewer.
+- For a fork-specific release workflow, follow its guide, then return here for
+  the common review and draft-PR closeout.
 - On an unresolved blocker, do not open a PR. Create or update one
   `marin-community/marin` issue assigned to `blocker_assignee`, titled
   `Fork refresh blocked: <fork> — <short reason>`, with current pins, the selected
@@ -61,11 +58,10 @@ revision.
 - Scratch dir: `/tmp/marin-fork-refresh/<run-id>` (run id:
   `${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}` in Actions, else a UTC timestamp plus a
   short label).
-- Clone the fork and add its `upstream` remote. The fork URL is `repository` in the
-  pin source (`vllm/tpu.toml` for descriptor pins, the `[tool.uv.sources]` git
-  entry for isolated projects, the release-asset host in `vllm/gpu.toml` for the
-  `vllm-gpu` release pin — the same `marin-community/vllm` repo); `<upstream>` is this
-  section's `upstream`.
+- Clone the section's `repository` as `origin` and add the section's canonical
+  `upstream` as a separate remote. If `repository` is omitted, derive it from the
+  `[tool.uv.sources]` git entry for isolated projects or the release-asset host
+  for release pins.
 
 ```sh
 git clone <repository> <fork>
@@ -79,17 +75,13 @@ git -C <fork> remote set-head upstream -a                # so upstream/HEAD reso
 
 ## Select the base
 
-- `base_select = upstream_main` (`evalchemy`, `harbor`, `MarinSkyRL`, `vllm-gpu`): the base is the
-  tip of the `upstream` default branch. These pins rebase onto upstream `main`; there is no
-  release to gate on. `vllm-gpu` tracks vLLM head this way, distinct from the TPU `vllm` pin's
-  tpu-inference-blessed base.
-- `base_select = latest_release` (`tpu-inference`): use GitHub Releases of the
-  fork's `upstream`; do not use raw tags or branches. Select the newest release
-  where `draft == false`, `prerelease == false`, and the tag is exactly
-  `vMAJOR.MINOR.PATCH`. Resolve it to a commit SHA.
-- `base_select = derived` (`vllm`): read the SHA at `derived_from` from the
-  release it names, verify it resolves in the fork's `upstream`, and use it as
-  the base. See `docs/vllm.md` for the vllm-specific derivation detail.
+- `base_select = upstream_main`: use the tip of the `upstream` default branch.
+- `base_select = latest_release`: use GitHub Releases of the fork's `upstream`;
+  do not use raw tags or branches. Select the newest stable release matching the
+  descriptor's constraints and resolve it to a commit SHA.
+- `base_select = derived`: read the SHA at `derived_from` from the release it
+  names, verify it resolves in the fork's `upstream`, and use it as the base.
+  Read the fork-specific guide for derivation details.
 
 If the selected base matches the current one and no pin metadata needs repair, exit
 no-op. Do not walk back to older releases when the latest eligible one fails; fix
@@ -103,19 +95,18 @@ there is a newer upstream base to rebase onto.
 
 ## Rebase the overlay
 
+This section applies to branch-staged refreshes. A fork-specific release guide
+may replace it with its own source replay.
+
 Branch from the selected base as `<branch>-next` (the pin's `branch` with a `-next`
-suffix). Use `tpu-next` for the vllm TPU pin and `main-next` otherwise; single-pin
-forks and the vllm GPU pin both track `main`. This staging branch is disposable — a re-run
+suffix). A pin on `main` uses `main-next`. This staging branch is disposable — a re-run
 force-updates it — and is distinct from the protected stable `<branch>`, which the
 unattended refresh leaves unchanged.
 
-Find the base our commits currently sit on: `old_base` is the descriptor's
-`upstream_base` (descriptor pins) or `git merge-base <fork>/<branch> upstream/HEAD`
-(isolated and release pins, where it is not recorded). `old_tip` is the head of our
-patches: the fork's `main` for isolated pins (Marin's recorded pin may lag `main`, so
-rebase from `main` to cover the full patch set), or the pin's stable `<branch>` tip for
-descriptor and release pins (the descriptor's `commit`, or `gpu.toml`'s
-`source_commit`). Then, onto `new_base`:
+Find the base our commits currently sit on. For an isolated pin, `old_tip` is the
+fork's `main` because Marin's recorded lock may lag the fork. For the `vllm-gpu`
+release pin, `old_tip` is `gpu.toml`'s `source_commit`. Resolve `old_base` with
+`git merge-base <old_tip> upstream/HEAD`. Then, onto `new_base`:
 
 1. Inventory our commits in order: `git log --reverse --no-merges old_base..old_tip`.
    Merge commits (especially merges of `upstream` into a feature branch) are not
@@ -161,6 +152,9 @@ blocker issue.
 
 ## Pin at the staged tip
 
+This section applies to branch-staged refreshes. A fork-specific release guide
+may replace it with its own pinning step.
+
 Point Marin at `<branch>-next` so the e2e runs against the replayed code, then run
 `uv run config/update-external.py` to regenerate
 `lib/marin/src/marin/external_dependencies.py`; confirm only the intended pins change.
@@ -168,9 +162,6 @@ The stable `<branch>` remains at the old tip until an admin hard-swaps it after 
 the draft PR. Because `<branch>-next` and the eventual `<branch>` are the same commit,
 the pin set here needs no change after that promotion.
 
-- `pin = descriptor:<path>#<section>` (`vllm`, `tpu-inference`): push `<branch>-next` to
-  the fork and record its tip and the selected base in the descriptor file. The
-  section-by-section mechanics are in `docs/vllm.md`.
 - `pin = release:<path>` (`vllm-gpu`): the pin is a prebuilt wheel, so the refresh builds
   and promotes one through the fork's own release pipeline, then re-pins from the promoted
   manifest. The candidate/promote/re-pin commands and the CUDA/torch ABI-boundary caveat
@@ -249,15 +240,15 @@ uv run python -m experiments.evaluation.cli launch --model qwen3-0.6b --limit 8 
 uv run python -m experiments.post_training.iceball_micro --stage evaluation --version dev --run
 ```
 
-When an e2e fails, rerun the same workload against Marin's current pins on the old
-fork stack, same target and priority. Fix only failures that pass on the old stack
-and fail on the refreshed one. If the old stack is already broken, the fork's e2e
-cannot gate this refresh: do not open a PR on an unvalidated pin — file or link a
-blocker for the broken e2e and hold the refresh until it is fixed.
+When an e2e fails, rerun the same workload against Marin's current pin on the old
+stack, with the same target and priority. Fix only failures that pass on the old
+stack and regress on the refreshed one. A fork-specific guide may define stricter
+rules for reusing or invalidating an existing physical receipt.
 
 ## Prepare the protected-branch promotion
 
-Once the e2e passes on `<branch>-next`, create the rollback tag for the current stable
+This section applies to branch-staged refreshes. Once the e2e passes on
+`<branch>-next`, create the rollback tag for the current stable
 tip and the date tag for the validated staged tip per `docs/promotion-protocol.md`.
 Push and verify those tags, then leave the protected stable `<branch>` unchanged. The
 draft Marin PR must identify each `<branch>-next` to `<branch>` hard swap that an admin
@@ -275,10 +266,14 @@ fix or answer every finding. Check that each retained patch has a reason and a d
 condition, each dropped patch is truly obsolete, Marin edits are scoped to the
 refresh, and no text overclaims validation evidence.
 
-Open one draft `marin-community/marin` PR via `.agents/skills/commit/SKILL.md`,
-request the descriptor's `blocker_assignee` as reviewer, and follow the commit
-skill's monitoring loop to an exit condition. PR body: above the fold, the fork,
-selected base, the staged tip SHA, its rollback and date tags, the pending admin
-promotion (and the wheel release tag for `vllm-gpu`), e2e outcome, and unresolved
-risks; in `<details>`, the base-selection evidence and the carry/drop/fix table with
-dropped-patch reasons.
+Open one draft `marin-community/marin` PR via `.agents/skills/commit/SKILL.md` and
+request the descriptor's `blocker_assignee` as reviewer. For a newly opened draft,
+verify its title, body, labels, base, head, and draft state. Take one non-blocking
+snapshot of CI, issue comments, inline comments, and submitted reviews; address
+anything already actionable; then return. Run the commit skill's monitoring loop
+only when the caller explicitly requests monitoring, waiting, or babysitting.
+
+Use the fork-specific guide for any additional body fields. Otherwise put the
+fork, selected base, staged tip SHA, rollback and date tags, pending admin
+promotion, e2e outcome, and unresolved risks above the fold; put detailed
+base-selection evidence and the carry/drop/fix table in `<details>`.

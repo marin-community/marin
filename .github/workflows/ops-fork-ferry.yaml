@@ -60,7 +60,13 @@ jobs:
           title: Fork ferry ${{ matrix.unit }}
           goal: >-
             Use the refresh-fork skill to refresh ${{ matrix.forks }} toward
-            upstream: stage the refresh, pin Marin as the descriptor directs (a
-            fork branch tip, or a promoted release wheel re-pinned from its
-            manifest), run the fork's e2e, and on green open the Marin pin PR
-            (or file the descriptor's blocker issue on a real external blocker).
+            upstream. For tpu-vllm, select compatible upstream bases, replay
+            and review every retained Marin overlay to produce two exact fork
+            source tips, then publish one public vLLM wheel whose metadata
+            selects its companion. For another unit, follow its existing branch
+            or release pin. Run the declared e2e and on green open one draft
+            Marin PR, or file the descriptor's blocker issue for a real external
+            blocker. Finish with exactly one visible result in the final Loom
+            response: link the draft PR after a green e2e; link the blocker
+            issue; or report an explicit no-op naming the current and selected
+            upstream SHAs when no newer base or metadata repair exists.

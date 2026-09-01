@@ -11,8 +11,10 @@ therefore a **hard swap** (a backed-up force-update), not a merge or fast-forwar
 PR/merge would splice two upstream bases into a merge commit and break the linear
 history the fork depends on.
 
-Marin pins exact SHAs and wheels, never a bare branch name, so the branch pointer can
-move without changing what Marin resolves. That is what makes the swap safe.
+Branch-based Marin pins resolve an exact SHA, never a bare branch name, so the
+branch pointer can move without changing what Marin resolves. That is what makes
+the swap safe. The TPU vLLM group selects a public release instead and does not
+use this protocol.
 
 ## Prepare the refs
 
@@ -46,21 +48,15 @@ promotes each pin:
 - Verify remote `<branch>` resolves to the validated tip. Delete `<branch>-next` or
   leave it for the next cycle; the next refresh force-updates it.
 
-Descriptor and release pins need no edit after this swap because they already record
-the exact validated SHA or wheel. For an `isolated_project`, restore the uv source
+Release pins need no edit after this swap because they already record the exact
+validated wheel. For an `isolated_project`, restore the uv source
 from `main-next` to `main`, rerun `uv run config/update-external.py <fork>`, and verify
 the lock still records the validated SHA. Commit and push that follow-up to the draft
 Marin PR before marking it ready or merging it.
 
-## The two-branch vllm fork
-
-The vllm fork carries two pins on different upstream bases, so they cannot share one
-branch. It splits them across two stable branches: the GPU wheel builds from `main`
-(the release candidate triggers on `push: main`), and the TPU source pin lives on
-`tpu`. Each promotes on its own: `main-next` to `main` for the GPU pin, `tpu-next` to
-`tpu` for the TPU pin. A partial failure leaves the other pin correct because Marin
-resolves an exact wheel or SHA either way. Single-pin forks track `main` directly, so
-for them `<branch>` is `main`.
+The vLLM GPU overlay uses this protocol on `main`. The TPU release selects its
+exact source commits independently and records them in release evidence, so it
+does not expose a source branch or promotion state through Marin.
 
 ## Partial failure
 
