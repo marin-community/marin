@@ -19,6 +19,12 @@ rung predicts the d6144 hero. ``d6144`` is the hero itself.
 Train batch is 1024 x racks (constant per-rack load); eval batch is 64 x racks (one sequence per
 device). Tokens/steps hold 791 tokens per active parameter (18T at d6144); FLOPs are the levanter
 analytic estimate (forward+backward, including attention and the latent-MoE correction).
+
+Changelog:
+    2026-09-01: decoupled weight decay on the attn_gate and router weights is on by default (0.05,
+        annealed linearly to 0 over training and read from the Adam step count so it resumes at the
+        right step). A hero resumed from a no-decay checkpoint therefore continues with decay rather
+        than reverting to the no-decay recipe; pass ``--gate-router-weight-decay 0`` to opt out.
 """
 
 import dataclasses
@@ -138,8 +144,7 @@ def build_ladder_run(
     size: str,
     num_steps: int | None = None,
     checkpoint_every: int | None = None,
-    gate_router_weight_decay: float = 0.0,
-    source_checkpoint_path: str | None = None,
+    gate_router_weight_decay: float = 0.05,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """One scaling-ladder rung at width ``size`` on ``LADDER_RACKS[size]`` GB200 racks.
@@ -151,6 +156,10 @@ def build_ladder_run(
     ``checkpoint_every`` overrides that cadence for any rung. A rolling temporary checkpoint every
     ``RESUME_SAVE_INTERVAL`` on region-local storage covers a crash or a preemption, and a rung
     resumes from the newest checkpoint it finds.
+
+    ``gate_router_weight_decay`` is on by default (see ``GrugMoeMuonHConfig``): the recipe decays the
+    attn_gate and router weights, and because the decay reads the Adam step count it also applies at
+    the right point when a run resumes an existing checkpoint. Pass 0 to opt out.
     """
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
@@ -254,15 +263,11 @@ def build_ladder_run(
                 process_timeout=HERO_PROCESS_STALL_TIMEOUT,
                 startup_timeout=HERO_STARTUP_TIMEOUT,
             ),
-            # Existing 02A temporaries remain valid resume candidates for this lineage. A
-            # ``source_checkpoint_path`` (a pinned checkpoint from another run) goes last: a cold
-            # start finds only it and forks from it, while every retry prefers this run's own newer
-            # checkpoint from the paths above.
+            # Existing 02A temporaries remain valid resume candidates for this lineage.
             load_checkpoint_path=[
                 permanent_checkpoint_path,
                 temporary_checkpoint_path,
                 data_local_checkpoint_path,
-                *([source_checkpoint_path] if source_checkpoint_path else []),
             ],
             # load_checkpoint stays None: the trainer resumes from the newest checkpoint that
             # exists, so a retry after a hardware or memory fault continues the run.
@@ -336,11 +341,25 @@ def build_ladder_run(
     "the rung (6000 at d6144, final only elsewhere). Resume uses the rolling temporary checkpoint "
     "and is not affected by this option.",
 )
+@click.option(
+    "--gate-router-weight-decay",
+    type=click.FloatRange(min=0.0),
+    default=0.05,
+    show_default=True,
+    help="Decoupled weight decay on attn_gate and the router weight, annealed linearly to 0 over "
+    "training. Defaults on for the hero recipe; pass 0 to opt out.",
+)
 @build_options
 def main(
-    run_id: str, size: str, num_steps: int | None, checkpoint_every: int | None
+    run_id: str, size: str, num_steps: int | None, checkpoint_every: int | None, gate_router_weight_decay: float
 ) -> ArtifactStep[HeroThroughputResult]:
-    return build_ladder_run(run_id=run_id, size=size, num_steps=num_steps, checkpoint_every=checkpoint_every)
+    return build_ladder_run(
+        run_id=run_id,
+        size=size,
+        num_steps=num_steps,
+        checkpoint_every=checkpoint_every,
+        gate_router_weight_decay=gate_router_weight_decay,
+    )
 
 
 if __name__ == "__main__":
