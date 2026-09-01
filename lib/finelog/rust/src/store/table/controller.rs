@@ -122,6 +122,18 @@ pub struct TableController {
     writes_ready: AtomicBool,
     /// Set while a locally committed revision is not known to be published.
     publication_owed: AtomicBool,
+    /// Objects staged locally whose upload has not completed, by object id.
+    /// Publication uploads them before it swaps HEAD; a crash repopulates the
+    /// missing entries through the once-per-boot reconcile below.
+    staged: Mutex<std::collections::HashMap<String, ObjectReference>>,
+    /// Set after the first publication this process runs has verified — by one
+    /// remote listing — that every referenced data object is remotely durable,
+    /// re-uploading any the local cache still holds.
+    boot_reconciled: AtomicBool,
+    /// Set while the table's durable state needs an operator — e.g. its remote
+    /// root holds catalog history but no HEAD. The table keeps serving reads
+    /// and accumulating local writes; publication stays deferred.
+    degraded: Mutex<Option<String>>,
     /// The latest committed state, republished after every transition.
     snapshot: watch::Sender<Option<Arc<TableSnapshot>>>,
     commands: Option<mpsc::Sender<ControllerCommand>>,
@@ -154,6 +166,9 @@ impl TableController {
             claimed: AtomicBool::new(false),
             writes_ready: AtomicBool::new(true),
             publication_owed: AtomicBool::new(false),
+            staged: Mutex::new(std::collections::HashMap::new()),
+            boot_reconciled: AtomicBool::new(false),
+            degraded: Mutex::new(None),
             snapshot,
             commands: object_persistence.then(|| sender.clone()),
         });
@@ -229,6 +244,20 @@ impl TableController {
     /// Whether this writer still owns the table's durable state.
     pub fn writes_ready(&self) -> bool {
         self.writes_ready.load(Ordering::SeqCst)
+    }
+
+    /// Flag durable state that needs an operator, without stopping writes:
+    /// rows keep accumulating locally while publication stays deferred.
+    pub fn mark_degraded(&self, reason: &str) {
+        let mut degraded = self.degraded.lock().unwrap();
+        if degraded.as_deref() != Some(reason) {
+            tracing::error!(table = %self.table, fence = %self.fence, reason, "table is degraded");
+        }
+        *degraded = Some(reason.to_string());
+    }
+
+    pub fn degraded_reason(&self) -> Option<String> {
+        self.degraded.lock().unwrap().clone()
     }
 
     /// Stop accepting writes for this table until a restart recovers it.
@@ -550,6 +579,32 @@ impl TableController {
         self.write_content_addressed(&key, bytes).await
     }
 
+    /// Stage an immutable content-addressed Parquet object locally.
+    ///
+    /// The bytes are durable on local disk when this returns; publication
+    /// uploads them before HEAD names the revision that references them.
+    pub async fn stage_parquet(&self, bytes: Bytes) -> Result<WrittenObject, StatsError> {
+        let objects = self.require_objects()?;
+        let sha256: [u8; 32] = Sha256::digest(&bytes).into();
+        let key = format!("{OBJECTS_PREFIX}/{}.parquet", crate::hex::encode(&sha256));
+        let id = ObjectId::table(&self.table, &key)?;
+        let version = objects.store.stage(&id, bytes).await?;
+        let reference = ObjectReference {
+            id: id.clone(),
+            version: version.clone(),
+        };
+        let path = objects.store.planned_local_path(&id)?;
+        self.staged
+            .lock()
+            .unwrap()
+            .insert(id.as_str().to_string(), reference);
+        Ok(WrittenObject {
+            path,
+            source: object_ref(&id, &version),
+            byte_size: i64::try_from(version.byte_size).unwrap_or(i64::MAX),
+        })
+    }
+
     /// Upload a staged local file as an immutable content-addressed object.
     ///
     /// `kind` selects the object prefix (`objects`, `indices`, `projections`)
@@ -698,11 +753,33 @@ impl TableController {
         let mut catalog = namespace_catalog(&self.catalog, &self.table, &objects.table_dir)
             .map_err(CommitError::PublicationDeferred)?;
         let expected = self.selected.lock().unwrap().clone();
-        if expected.is_none() {
-            self.verify_first_publication_objects(&catalog)
+        // A root that holds catalog history without a HEAD is an external
+        // anomaly (the software never deletes HEAD). Creating a fresh HEAD
+        // would start a second history over the first, so publication defers
+        // until an operator restores HEAD from the newest catalog document.
+        if expected.is_none()
+            && objects
+                .state_store
+                .catalog_history_exists(&self.table)
                 .await
-                .map_err(CommitError::PublicationDeferred)?;
+                .map_err(CommitError::PublicationDeferred)?
+        {
+            let reason = format!(
+                "table {:?} remote root holds catalog history but no HEAD; refusing to start a \
+                 new history — restore HEAD.json from the newest catalog document and restart",
+                self.table
+            );
+            self.mark_degraded(&reason);
+            return Err(CommitError::PublicationDeferred(StatsError::Internal(
+                reason,
+            )));
         }
+        // HEAD must never name a state whose data objects are not remotely
+        // durable: acknowledgement is local, so the upload happens here, on
+        // the publication path, before the swap.
+        self.sync_referenced_objects(&catalog)
+            .await
+            .map_err(CommitError::PublicationDeferred)?;
         // The high-water mark is monotone across revisions: the local aggregate
         // it is computed from shrinks when retirement deletes legacy rows, and
         // a shrunken mark would let a later recovery reissue sequence numbers.
@@ -743,61 +820,115 @@ impl TableController {
         // its specification later moves.
         self.head_published.store(true, Ordering::SeqCst);
         self.publication_owed.store(false, Ordering::SeqCst);
+        *self.degraded.lock().unwrap() = None;
         let published = Arc::new(published);
         self.snapshot.send_replace(Some(Arc::clone(&published)));
         Ok(published)
     }
 
-    /// Refuse a first publication whose remote root is missing referenced data
-    /// objects.
+    /// Make every data object the state references remotely durable before
+    /// HEAD names it.
     ///
-    /// The local catalog records an object segment only after its bytes were
-    /// written through to the remote, so on the crash-before-first-publish
-    /// recovery path every reference resolves and this check passes. A
-    /// reference the root cannot resolve means the data directory and the
-    /// remote root belong to different histories — the root was wiped or the
-    /// server was repointed — and publishing would install a catalog no
-    /// recovery or cold reader can serve.
-    async fn verify_first_publication_objects(
-        &self,
-        catalog: &NamespaceCatalog,
-    ) -> Result<(), StatsError> {
-        let data_object_prefix = format!("{OBJECTS_PREFIX}/");
-        let referenced: HashSet<String> = catalog
-            .version_segments
-            .iter()
-            .flat_map(|version| version.live_segments.iter())
-            .filter_map(|segment| segment.source.object_id.as_deref())
-            .filter_map(|id| ObjectId::parse(id).ok())
-            .filter_map(|id| id.table_relative(&self.table).map(str::to_string))
-            .filter(|key| key.starts_with(&data_object_prefix))
-            .collect();
-        if referenced.is_empty() {
+    /// The fast path uploads the objects this process staged — no remote round
+    /// trip beyond the uploads themselves. The first publication after a boot
+    /// additionally reconciles against one remote listing: a crash between a
+    /// local commit and its upload leaves objects the staged map cannot know
+    /// about, and their cache files hold the only bytes. A live reference
+    /// whose bytes exist neither remotely nor locally is refused — the local
+    /// catalog and the remote root describe different histories. A retired
+    /// reference in that state is rollback bookkeeping and is logged instead.
+    async fn sync_referenced_objects(&self, catalog: &NamespaceCatalog) -> Result<(), StatsError> {
+        let objects = self.require_objects()?;
+        let staged: Vec<ObjectReference> = self.staged.lock().unwrap().values().cloned().collect();
+        for reference in staged {
+            objects.store.upload_staged(&reference).await?;
+            self.staged.lock().unwrap().remove(reference.id.as_str());
+        }
+        if self.boot_reconciled.load(Ordering::SeqCst) {
             return Ok(());
         }
-        let objects = self.require_objects()?;
+        let data_object_prefix = format!("{OBJECTS_PREFIX}/");
+        let mut live = Vec::new();
+        let mut retired = Vec::new();
+        for version in &catalog.version_segments {
+            let segments = version
+                .live_segments
+                .iter()
+                .map(|segment| (segment, true))
+                .chain(
+                    version
+                        .retired_segments
+                        .iter()
+                        .map(|segment| (segment, false)),
+                );
+            for (segment, is_live) in segments {
+                let Some(source) = segment.source.as_option() else {
+                    continue;
+                };
+                let in_object_layout = source
+                    .object_id
+                    .as_deref()
+                    .and_then(|id| ObjectId::parse(id).ok())
+                    .and_then(|id| id.table_relative(&self.table).map(str::to_string))
+                    .is_some_and(|key| key.starts_with(&data_object_prefix));
+                if !in_object_layout {
+                    continue;
+                }
+                let Ok(reference) = ObjectReference::try_from(source) else {
+                    continue;
+                };
+                if is_live {
+                    live.push(reference);
+                } else {
+                    retired.push(reference);
+                }
+            }
+        }
+        if live.is_empty() && retired.is_empty() {
+            self.boot_reconciled.store(true, Ordering::SeqCst);
+            return Ok(());
+        }
         let present: HashSet<String> = objects
             .store
             .list(&ObjectPrefix::table(&self.table, OBJECTS_PREFIX)?)
             .await?
             .into_iter()
-            .map(|metadata| metadata.id.relative_key().to_string())
+            .map(|metadata| metadata.id.as_str().to_string())
             .collect();
-        let mut missing: Vec<&String> = referenced
-            .iter()
-            .filter(|key| !present.contains(*key))
-            .collect();
-        if missing.is_empty() {
-            return Ok(());
+        let mut unservable = Vec::new();
+        for reference in live {
+            if present.contains(reference.id.as_str()) {
+                continue;
+            }
+            if let Err(error) = objects.store.upload_staged(&reference).await {
+                unservable.push((reference, error));
+            }
         }
-        missing.sort();
-        Err(StatsError::Internal(format!(
-            "table {:?} first publication references {} data objects its remote root does not hold \
-             (first missing: {:?}); the local catalog and the remote log dir describe different histories",
-            self.table,
-            missing.len(),
-            missing[0],
-        )))
+        if let Some((reference, error)) = unservable.first() {
+            return Err(StatsError::Internal(format!(
+                "table {:?} publication references {} data objects that are neither remotely \
+                 durable nor locally staged (first: {:?}: {error}); the local catalog and the \
+                 remote log dir describe different histories",
+                self.table,
+                unservable.len(),
+                reference.id.as_str(),
+            )));
+        }
+        for reference in retired {
+            if present.contains(reference.id.as_str()) {
+                continue;
+            }
+            if let Err(error) = objects.store.upload_staged(&reference).await {
+                tracing::warn!(
+                    table = %self.table,
+                    object = %reference.id.as_str(),
+                    %error,
+                    "retired object is not remotely durable and cannot be re-uploaded"
+                );
+            }
+        }
+        self.boot_reconciled.store(true, Ordering::SeqCst);
+        Ok(())
     }
 
     /// Settle a commit whose outcome the state store did not report against the

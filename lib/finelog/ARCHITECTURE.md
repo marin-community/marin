@@ -114,7 +114,7 @@ Each object-backed table has one authority: an immutable, complete state documen
 <remote>/_finelog/tables/<table>/projections/<sha256>.parquet immutable covering-projection artifacts
 ```
 
-Every durable mutation — flush, compaction, index backfill, registration, activation, abort, retire, forward cursor, tombstone — is a controller commit that allocates the next monotonic `TableRevision` and carries the process's `WriterFence`. SQLite is a rebuildable projection for object-backed tables; for legacy tables it is the single authority, guarded by the data-dir flock rather than a durable state store. Dropping a table publishes a durable tombstone revision; HEAD is never deleted, so a missing HEAD unambiguously means "never published".
+Every durable mutation — flush, compaction, index backfill, registration, activation, abort, retire, forward cursor, tombstone — is a controller commit that allocates the next monotonic `TableRevision` and carries the process's `WriterFence`. SQLite is a rebuildable projection for object-backed tables; for legacy tables it is the single authority, guarded by the data-dir flock rather than a durable state store. Dropping a table publishes a durable tombstone revision; HEAD is never deleted, so a missing HEAD with no catalog documents unambiguously means "never published", while a missing HEAD *over surviving catalogs* is external damage (a bucket lifecycle rule, human error). Recovery flags such a table **degraded**: it keeps serving reads and accumulating locally durable writes, but every publication is refused rather than starting a second history over the surviving catalogs. The repair is to restore `HEAD.json` (pointing at the newest catalog document) and restart; the revisions committed while degraded then roll forward and publish.
 
 The published `persisted_high_water` carries the table's sequence allocator watermark, not just the max seq in published segments: a legacy import excludes archive-only rows and retirement deletes legacy catalog rows, so published segments can top out below sequence numbers the table already issued. Publishes clamp the mark monotone across revisions, and recovery seeds the allocator past it, so a recovered writer never reissues a sequence number.
 
@@ -139,15 +139,18 @@ sequenceDiagram
     MS->>TM: TableWork::Flush (aged or full buffer)
     TM->>FL: flush_to_objects
     FL->>IB: seal batch
-    FL->>OS: upload immutable Parquet (content-addressed)
-    FL->>TC: commit(next TableState)
-    TC->>SS: fenced CAS commit
+    FL->>OS: stage immutable Parquet locally (content-addressed, verified, pinned)
+    FL->>TC: commit_owing_publication(next TableState)
+    TC-->>IB: advance persisted watermark (ACK)
+    TC->>OS: upload staged objects
+    TC->>SS: fenced CAS commit (publication; retried by maintenance)
     SS-->>TC: new CommitToken
     TC->>TC: publish Arc<TableSnapshot>; rebuild SQLite projection
-    TC-->>IB: advance durable watermark
 ```
 
-The append fast path never waits on durable I/O or the controller. Acknowledgement means object write plus fenced state commit. On an ambiguous CAS (response lost), the controller re-reads HEAD and compares revision, fence, and state hash: the commit is durable, still owed (re-publish the same revision), or fenced — never rolled back.
+The append fast path never waits on durable I/O or the controller, and the flush path is **local-first**: staging the Parquet into the verified cache layout plus the local catalog commit is what acknowledges the write, and the committed revision is *owed* to HEAD from that moment. Publication — uploading the staged objects, then the fenced CAS — is attempted immediately after the ack and retried by maintenance until it lands, so a remote outage delays publication without blocking ingest (the sustained-outage scenario drives days' worth of rounds through a dead remote and drains them in one round when it returns). The trade-off is deliberate: between local ack and publication, that tail exists only on this node's disk, so a fence steal or total node loss can drop acknowledged-but-unpublished rows. On an ambiguous CAS (response lost), the controller re-reads HEAD and compares revision, fence, and state hash: the commit is durable, still owed (re-publish the same revision), or fenced — never rolled back.
+
+Before its first publication after boot, a controller reconciles once against the remote: one listing of the table's `objects/` prefix, re-uploading any live referenced object that exists only in the verified local cache (a crash between ack and upload), and refusing to publish when a referenced object exists in neither place — that root and this catalog describe different histories. Every later publish uploads just the staged set it is carrying, with no listing.
 
 ### Read path
 
@@ -174,7 +177,7 @@ sequenceDiagram
 
 Reads plan from immutable pinned snapshots and touch only what pruning selected. Each selected segment scans from its verified cache file when one exists; otherwise the scan reads the object's remote URL directly (the provider's backend is registered with DataFusion's runtime at store open) while a background fetch warms the cache for the next query — a cold cache never blocks a read. Index artifacts are opened by the content-addressed references the state advertises — never by deriving a sidecar path — and an uncached artifact is warmed in the background while this scan reads the source Parquet. Direct clients (Python/DuckDB) read HEAD and the published projection from object storage without the server.
 
-The cache itself (`cached.rs`): a verified hit (size + SHA-256, corrupt files self-heal) returns the local file and refreshes its recency; a fill downloads under a store-wide concurrency bound and lands the file by atomic rename. Writes are dual-ported — an upload's bytes also seed the cache, streamed uploads spool to the cache file while they transfer — so the flush → query path never re-downloads its own output. With `FINELOG_OBJECT_CACHE_GB` set, maintenance evicts least-recently-used cache files beyond the capacity, unlinking only behind the query-visibility write lock; unset retains everything.
+The cache itself (`cached.rs`): a verified hit (size + SHA-256, corrupt files self-heal) returns the local file and refreshes its recency; a fill downloads under a store-wide concurrency bound and lands the file by atomic rename. Writes are dual-ported — an upload's bytes also seed the cache, streamed uploads spool to the cache file while they transfer — so the flush → query path never re-downloads its own output. With `FINELOG_OBJECT_CACHE_GB` set, maintenance evicts least-recently-used cache files beyond the capacity, unlinking only behind the query-visibility write lock; unset retains everything. Staged files — written locally but not yet uploaded — are pinned and never evicted, because until publication they are the only copy.
 
 ### Maintenance dispatch
 
@@ -218,6 +221,7 @@ Recovery is metadata-only: load each table's durable state, claim the fence, reb
 
 - A durable state whose active and desired versions are both the legacy version 0 (an aborted first migration) selects the legacy path as authority. Recovery keeps the claimed fence, rebuilds nothing, and the retained HEAD neither blocks the boot nor prevents re-registering the table.
 - A version-0 segment entry whose source points into the legacy archive rather than the object layout (an archive-only row retained until retirement) is rollback bookkeeping; cold recovery skips it, because its bytes are not in the object layout.
+- A remote root holding catalog documents but no HEAD marks the table degraded (see "Durable state" above): serving and local accumulation continue, publication is refused until an operator restores HEAD and restarts.
 
 ## Migration: legacy table → object-native
 
@@ -260,7 +264,7 @@ Separately, `finelog-migrate` (in the image) is the older one-off `telemetry_v1`
 
 ### Local
 
-1. **Unit + composed scenarios** (no credentials, deterministic): `cargo test` in `lib/finelog/rust` covers the fenced-commit, tombstone, recovery, lease-rebase, and migration contracts pointwise, and `tests/scenarios/` holds one file per failure case, each driving a real `Store` through the public surface plus the `test-util` seams over a local object directory. Protocol scenarios (crash-during-backfill-with-open-lease, fence-steal-with-ambiguous-CAS, cold-restart-from-objects-alone) check per-step invariants (monotonic revisions, HEAD consistency, referenced-object existence, gap-free sequences); incident journeys (legacy-import rehearsal, registration race, missing remote object) reproduce rollout failure points and validate the operator-visible outcome. New failure cases get their own module under `tests/scenarios/` over the shared `support` fixture. `FaultInjectingObjectStore` in `test_support` (compiled under the `test-util` feature, never in the served binary) is the reusable fault seam. The Python e2e suite (`uv run pytest tests` in `lib/finelog`) exercises the embedded server end to end.
+1. **Unit + composed scenarios** (no credentials, deterministic): `cargo test` in `lib/finelog/rust` covers the fenced-commit, tombstone, recovery, lease-rebase, and migration contracts pointwise, and `tests/scenarios/` holds one file per failure case, each driving a real `Store` through the public surface plus the `test-util` seams over a local object directory. Protocol scenarios (crash-during-backfill-with-open-lease, fence-steal-with-ambiguous-CAS, cold-restart-from-objects-alone) check per-step invariants (monotonic revisions, HEAD consistency, referenced-object existence, gap-free sequences); incident journeys (legacy-import rehearsal, registration race, missing remote object, sustained remote outage, headless HEAD-restore repair, additive schema evolution across a migration) reproduce rollout failure points and validate the operator-visible outcome. New failure cases get their own module under `tests/scenarios/` over the shared `support` fixture. `FaultInjectingObjectStore` in `test_support` (compiled under the `test-util` feature, never in the served binary) is the reusable fault seam. The Python e2e suite (`uv run pytest tests` in `lib/finelog`) exercises the embedded server end to end.
 2. **Shadow mode over a copied store**: copy a real store's *local* directory (catalog SQLite + newest segments + `.fidx` sidecars — not the bucket, which holds no index bundles), then boot `finelog-server --mode shadow --log-dir <copy>`. Shadow runs no maintenance — nothing compacts, evicts, migrates, or publishes — so the copy is a pure read rehearsal. The server refuses shadow with a `gs://`/`s3://` remote or forwarding configured. The benchmark harnesses (`finelog.benchmarks.query_measurement`, `log_query_bench`, `grafana_dashboard_bench`) run result-digest and latency comparisons against such a copy; `--debug-admin` additionally exposes `/debug/maintain`, `/debug/segments`, and `/debug/backdate` for parity harnesses (never in production).
 3. **Migration rehearsal on the copy**: boot the copy in *live* mode with `--remote-log-dir` pointing at a disposable prefix (a local directory or a `ttl=1d` GCS path), register the object-backed TableSpec, and let maintenance run the version-0 import end to end — backfill, activation, observation, retirement — comparing row counts, sequence coverage, and order-independent per-column query digests against the shadow baseline before migration, after migration, after compaction, and again from a second server cold-recovering the remote layout into an empty local store.
 

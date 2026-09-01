@@ -1408,7 +1408,12 @@ async fn a_restart_mid_migration_resumes_forwarding_from_the_durable_cursor() {
             cluster: SOURCE_CLUSTER.to_string(),
         };
         let minter = TokenMinter::new(PRIV_A, config.cluster.clone()).unwrap();
-        Forwarder::with_client(Arc::clone(source), config, minter, stats_client(target_addr))
+        Forwarder::with_client(
+            Arc::clone(source),
+            config,
+            minter,
+            stats_client(target_addr),
+        )
     };
 
     // First life: ship forty rows, land twenty more, then start the object
@@ -1485,9 +1490,100 @@ async fn a_restart_mid_migration_resumes_forwarding_from_the_durable_cursor() {
     }
     assert_eq!(scalar_i64(&target, &count_sql).await, 60);
     assert_eq!(
-        scalar_i64(&target, &format!("SELECT count(DISTINCT id) FROM \"{EVENTS}\"")).await,
+        scalar_i64(
+            &target,
+            &format!("SELECT count(DISTINCT id) FROM \"{EVENTS}\"")
+        )
+        .await,
         60,
         "a resumed cursor must not replay shipped rows"
     );
     source.shutdown(Duration::from_secs(1)).await;
+}
+
+/// The hub-side flip: a forwarded table migrates to object-backed storage on
+/// the hub while its source cluster keeps pushing. Forwarded writes land
+/// through the same write path organic ones do, so the migration activates
+/// under live traffic and the hub converges to every source row exactly once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_hub_migration_under_live_forwarding_loses_nothing() {
+    const EVENTS: &str = "events";
+    // An object-capable hub in live mode: its own maintenance drives the
+    // migration while forwarded writes keep landing.
+    let hub_data = crate::test_support::unique_dir("hub_migration_data");
+    let hub_remote = crate::test_support::unique_dir("hub_migration_remote");
+    let hub = Arc::new(
+        Store::new(
+            Some(hub_data),
+            hub_remote.to_string_lossy().into_owned(),
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            crate::store::ServeMode::Live,
+        )
+        .unwrap(),
+    );
+    hub.bootstrap_maintenance();
+    let (hub_addr, hub_requests) = serve(Arc::clone(&hub), hub_policy(SOURCE_CLUSTER)).await;
+    let fx = Fixture::with_hub(
+        "hub_migration",
+        Some(Arc::clone(&hub)),
+        hub_addr,
+        hub_requests,
+    )
+    .await;
+
+    let ids = |range: std::ops::Range<usize>| range.map(|id| id.to_string()).collect::<Vec<_>>();
+    write_string_rows(&fx.source, EVENTS, ids(0..100)).await;
+    fx.forward_from_start(EVENTS).await;
+    fx.drain(PRIV_A, EVENTS).await;
+
+    // The operator registers the object spec on the hub; rows keep arriving
+    // while the version-0 import backfills.
+    let spec_hub = Arc::clone(&hub);
+    tokio::task::spawn_blocking(move || {
+        spec_hub.register_versioned_table(EVENTS, id_object_spec())
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    write_string_rows(&fx.source, EVENTS, ids(100..200)).await;
+    fx.drain(PRIV_A, EVENTS).await;
+    // Drive maintenance rather than waiting out the scheduler cadence; the
+    // forwarded traffic above keeps landing between rounds either way.
+    for _ in 0..40 {
+        if hub.spec_lifecycle(EVENTS).unwrap().active_version() == 1 {
+            break;
+        }
+        hub.maintain_namespace(EVENTS, false).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert_eq!(
+        hub.spec_lifecycle(EVENTS).unwrap().active_version(),
+        1,
+        "the hub migration never activated (phase: {:?})",
+        hub.spec_lifecycle(EVENTS).unwrap().phase
+    );
+
+    // Post-activation traffic lands in the object-backed table.
+    write_string_rows(&fx.source, EVENTS, ids(200..250)).await;
+    fx.drain(PRIV_A, EVENTS).await;
+
+    // Exactly once, before and after the flip. The hub ACKs before its async
+    // flush seals rows for queries, so poll the count.
+    let count_sql = format!("SELECT count(*) FROM \"{EVENTS}\"");
+    for _ in 0..200 {
+        if scalar_i64(&hub, &count_sql).await == 250 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert_eq!(scalar_i64(&hub, &count_sql).await, 250);
+    assert_eq!(
+        scalar_i64(
+            &hub,
+            &format!("SELECT count(DISTINCT id) FROM \"{EVENTS}\"")
+        )
+        .await,
+        250,
+        "a hub migration under live forwarding must not duplicate or drop rows"
+    );
 }

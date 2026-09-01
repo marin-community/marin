@@ -176,7 +176,11 @@ pub async fn serve(store: Arc<Store>, policy: AuthPolicy) -> (SocketAddr, Arc<Re
 pub async fn serve_with_outage(
     store: Arc<Store>,
     policy: AuthPolicy,
-) -> (SocketAddr, Arc<RequestStats>, Arc<std::sync::atomic::AtomicBool>) {
+) -> (
+    SocketAddr,
+    Arc<RequestStats>,
+    Arc<std::sync::atomic::AtomicBool>,
+) {
     let down = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let outage = Arc::clone(&down);
     let requests = Arc::new(RequestStats::default());

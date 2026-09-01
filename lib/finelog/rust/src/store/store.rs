@@ -19,7 +19,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use buffa::{Message, MessageView};
+use buffa::{Message, MessageField, MessageView};
 use clap::ValueEnum;
 
 use crate::errors::StatsError;
@@ -30,7 +30,7 @@ use crate::policies::{
     physical_partition_policy_for, schema_for_namespace, segment_indexes_enabled_for,
     storage_policy_for, PolicyRegistry,
 };
-use crate::proto::finelog::stats::{ColumnType, L0Mode, SchemaView};
+use crate::proto::finelog::stats::{ColumnType, L0Mode, SchemaView, TableSpecView};
 use crate::query::provider::NamespaceProvider;
 use crate::query::RegisteredProvider;
 use crate::store::catalog::{Catalog, PublishedObjectSegment, RegisteredNamespace, SpecLifecycle};
@@ -42,9 +42,9 @@ use crate::store::object_store::{
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{
     merge_managed_schema, merge_schemas, resolve_key_column, schema_from_proto_view,
-    stamp_cluster_column, stored_form, validate_and_align_batch,
+    schema_to_proto_owned, stamp_cluster_column, stored_form, validate_and_align_batch,
     validate_and_align_forwarded_batch, validate_index_policies, AlignedBatch, Column, Schema,
-    MAX_WRITE_ROWS_BYTES, MAX_WRITE_ROWS_ROWS,
+    IMPLICIT_SEQ_COLUMN, MAX_WRITE_ROWS_BYTES, MAX_WRITE_ROWS_ROWS,
 };
 use crate::store::state_store::object::ObjectTableStateStore;
 use crate::store::table::query_view::SegmentObjectMap;
@@ -481,7 +481,30 @@ impl Store {
                 }
             }
         }
+        // A root with catalog history but no HEAD is an external anomaly (the
+        // software never deletes HEAD). The table keeps serving from its local
+        // projection and keeps taking writes; publication defers until an
+        // operator restores HEAD, and the degraded flag says why.
+        for namespace in state_store.headless_tables().await? {
+            let reason = format!(
+                "table {namespace:?} remote root holds catalog history but no HEAD; restore \
+                 HEAD.json from the newest catalog document and restart"
+            );
+            tracing::error!(namespace, reason, "recovered a headless table");
+            if self.catalog.contains(&namespace) {
+                self.tables.controller(&namespace).mark_degraded(&reason);
+            }
+        }
         Ok(loaded_count)
+    }
+
+    /// The operator-attention reason for `namespace`, when its durable state
+    /// is confused — e.g. catalog history without a HEAD. A degraded table
+    /// keeps serving reads and accumulating local writes.
+    pub fn table_degraded_reason(&self, namespace: &str) -> Option<String> {
+        self.tables
+            .get(namespace)
+            .and_then(|_| self.tables.controller(namespace).degraded_reason())
     }
 
     /// Drop the local projection of a table whose durable state is tombstoned.
@@ -824,6 +847,86 @@ impl Store {
         Ok((*self.tables.publish(namespace).await?).clone())
     }
 
+    /// A schema-changing legacy registration on a table governed by a table
+    /// spec must evolve the spec, not just the local catalog: recovery rebuilds
+    /// schemas from retained specs, so a spec-silent evolution would be dropped
+    /// by the next cold boot while flushed objects still carry the column.
+    ///
+    /// Returns the table's next spec version — the retained spec with the
+    /// merged schema — for a settled table, `None` when the table has no spec
+    /// or the registration changes nothing, and an error while a spec
+    /// transition is in flight (the caller retries after it settles; the
+    /// forwarder holds its cursor on this refusal).
+    fn spec_for_legacy_schema_evolution(
+        &self,
+        name: &str,
+        stored: &Schema,
+        registration: SchemaRegistration,
+    ) -> Result<Option<ValidatedTableSpec>, StatsError> {
+        let lifecycle = self.catalog.spec_lifecycle(name)?;
+        if lifecycle.active.is_none() && lifecycle.desired.is_none() {
+            return Ok(None);
+        }
+        let Some(existing) = self.catalog.get_live(name) else {
+            return Ok(None);
+        };
+        let merged = match registration {
+            SchemaRegistration::Additive => merge_schemas(&existing.schema, stored),
+            SchemaRegistration::Managed => merge_managed_schema(&existing.schema, stored),
+        }?;
+        if merged == existing.schema {
+            return Ok(None);
+        }
+        if lifecycle.desired.is_some() {
+            return Err(StatsError::SchemaConflict(format!(
+                "namespace {name:?} is migrating between table specification versions; \
+                 retry the schema change after the transition settles"
+            )));
+        }
+        let next_version = lifecycle.active_version() + 1;
+        let active = lifecycle
+            .active
+            .expect("a lifecycle without a transition has an active spec");
+        let active_bytes = active.encode_to_vec();
+        let active_view = TableSpecView::decode_view(&active_bytes).map_err(|error| {
+            StatsError::Internal(format!("decode retained table spec for {name:?}: {error}"))
+        })?;
+        let logical_view = active_view.logical_schema.as_option().ok_or_else(|| {
+            StatsError::Internal(format!(
+                "retained table spec for {name:?} has no logical schema"
+            ))
+        })?;
+        let active_logical = schema_from_proto_view(logical_view)?;
+        // The spec declares the pre-implicit schema. `stored_form` prepends the
+        // implicit `seq` and appends `cluster` only when absent, so declaring
+        // `merged` with the implicit `seq` removed — `cluster` kept explicit —
+        // reproduces `merged` exactly under `stored_form`, column order
+        // included.
+        let mut next_logical = merged.clone();
+        if !active_logical
+            .columns
+            .iter()
+            .any(|column| column.name == IMPLICIT_SEQ_COLUMN)
+        {
+            next_logical
+                .columns
+                .retain(|column| column.name != IMPLICIT_SEQ_COLUMN);
+        }
+        let mut next = active.clone();
+        next.version = Some(next_version);
+        next.logical_schema = MessageField::some(schema_to_proto_owned(&next_logical));
+        let next_bytes = next.encode_to_vec();
+        let next_view = TableSpecView::decode_view(&next_bytes).map_err(|error| {
+            StatsError::Internal(format!("encode evolved table spec for {name:?}: {error}"))
+        })?;
+        let policy = self.catalog.get_policy(name)?;
+        Ok(Some(ValidatedTableSpec::from_view(
+            &next_view,
+            &next_logical,
+            &policy,
+        )?))
+    }
+
     fn register_table_with(
         &self,
         name: &str,
@@ -839,6 +942,11 @@ impl Store {
         let stored = stored_form(schema);
         let registration_lock = self.tables.registration_lock(name);
         let _registration_guard = registration_lock.lock().unwrap();
+        let evolved_spec = match table_spec {
+            Some(_) => None,
+            None => self.spec_for_legacy_schema_evolution(name, &stored, registration)?,
+        };
+        let table_spec = table_spec.or(evolved_spec.as_ref());
         if let Some(table_spec) = table_spec {
             self.catalog.validate_table_spec_registration(
                 name,
@@ -1863,22 +1971,23 @@ mod tests {
         std::fs::remove_dir_all(remote_dir).ok();
     }
 
-    /// A data directory whose catalog references object segments refuses its
-    /// first publication into a remote root that does not hold them: the two
-    /// belong to different histories (the root was wiped or the server
-    /// repointed), and a catalog published there would be unservable.
+    /// A first publication into an empty remote root re-uploads every
+    /// referenced data object from the local bytes before HEAD is created:
+    /// acknowledgement is local, so a wiped or repointed-to-empty root is
+    /// restored from the machine that owns the bytes, exactly like the
+    /// crash-before-first-upload recovery path.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_first_publication_into_a_foreign_remote_root_is_refused() {
+    async fn a_publication_into_an_empty_remote_root_reuploads_local_bytes() {
         let PublishedObjectTableFixture {
             store,
             data_dir,
             remote_dir,
             ..
-        } = published_object_table("foreign_remote_root").await;
+        } = published_object_table("empty_remote_root").await;
         store.shutdown(Duration::from_secs(1)).await;
         drop(store);
 
-        let repointed_dir = crate::test_support::unique_dir("foreign_remote_root_repointed");
+        let repointed_dir = crate::test_support::unique_dir("empty_remote_root_repointed");
         let reopened = Store::new(
             Some(data_dir.clone()),
             repointed_dir.to_string_lossy().into_owned(),
@@ -1888,6 +1997,81 @@ mod tests {
         .unwrap();
         reopened.bootstrap_maintenance();
         // The repointed root has no HEAD to recover.
+        assert_eq!(reopened.recover_tables().await.unwrap(), 0);
+
+        let published = reopened
+            .publish_object_catalog("iris.worker")
+            .await
+            .unwrap();
+        // The root now holds HEAD and every data object the state references.
+        let restored = ObjectTableStateStore::new(Arc::new(
+            build_remote_object_store(repointed_dir.to_str().unwrap())
+                .unwrap()
+                .unwrap(),
+        ))
+        .load("iris.worker")
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(&restored.catalog, published.state().catalog());
+        for segments in &restored.catalog.version_segments {
+            for segment in &segments.live_segments {
+                let object_id = segment
+                    .source
+                    .as_option()
+                    .unwrap()
+                    .object_id
+                    .as_deref()
+                    .unwrap();
+                let relative = crate::store::object_store::ObjectId::parse(object_id)
+                    .unwrap()
+                    .table_relative("iris.worker")
+                    .unwrap()
+                    .to_string();
+                assert!(
+                    repointed_dir
+                        .join("_finelog/tables/iris.worker")
+                        .join(&relative)
+                        .exists(),
+                    "publication must re-upload {relative}"
+                );
+            }
+        }
+
+        reopened.shutdown(Duration::from_secs(1)).await;
+        std::fs::remove_dir_all(data_dir).ok();
+        std::fs::remove_dir_all(remote_dir).ok();
+        std::fs::remove_dir_all(repointed_dir).ok();
+    }
+
+    /// A publication whose referenced data objects exist neither remotely nor
+    /// locally is refused before HEAD is created: the catalog and the remote
+    /// root describe different histories, and a catalog published there would
+    /// be unservable.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_publication_with_no_local_or_remote_bytes_is_refused() {
+        let PublishedObjectTableFixture {
+            store,
+            data_dir,
+            remote_dir,
+            paths,
+            ..
+        } = published_object_table("unservable_publication").await;
+        store.shutdown(Duration::from_secs(1)).await;
+        drop(store);
+        for path in &paths {
+            std::fs::remove_file(path).unwrap();
+        }
+
+        let repointed_dir = crate::test_support::unique_dir("unservable_publication_repointed");
+        let reopened = Store::new(
+            Some(data_dir.clone()),
+            repointed_dir.to_string_lossy().into_owned(),
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Shadow,
+        )
+        .unwrap();
+        reopened.bootstrap_maintenance();
         assert_eq!(reopened.recover_tables().await.unwrap(), 0);
 
         let error = reopened
@@ -2432,6 +2616,118 @@ mod tests {
         let status = store.spec_lifecycle("iris.worker").unwrap();
         assert_eq!(status.active_version(), 1);
         assert_eq!(status.desired_version(), 0);
+
+        store.shutdown(Duration::from_secs(1)).await;
+        std::fs::remove_dir_all(data_dir).ok();
+        std::fs::remove_dir_all(remote_dir).ok();
+    }
+
+    /// A legacy additive registration on a settled object-backed table folds
+    /// the new column into the table's next spec version — a spec-silent
+    /// evolution would be dropped by the next cold recovery, which rebuilds
+    /// schemas from retained specs while the flushed objects still carry the
+    /// column.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_legacy_additive_registration_evolves_the_object_spec() {
+        let PublishedObjectTableFixture {
+            store,
+            data_dir,
+            remote_dir,
+            ..
+        } = published_object_table("legacy_evolution").await;
+
+        let mut evolved = worker_schema();
+        evolved
+            .columns
+            .push(Column::new("gpu_id", ColumnType::COLUMN_TYPE_STRING, true));
+        tokio::task::block_in_place(|| {
+            store.register_table("iris.worker", evolved.clone(), StoragePolicy::default())
+        })
+        .unwrap();
+
+        // An unchanged layout makes the evolution metadata-only: version 2 is
+        // active in the registration commit, and its spec declares the column.
+        let lifecycle = store.spec_lifecycle("iris.worker").unwrap();
+        assert_eq!(lifecycle.active_version(), 2);
+        assert_eq!(lifecycle.desired_version(), 0);
+        let declared: Vec<String> = lifecycle
+            .active
+            .unwrap()
+            .logical_schema
+            .columns
+            .iter()
+            .filter_map(|column| column.name.clone())
+            .collect();
+        assert!(declared.contains(&"gpu_id".to_string()), "{declared:?}");
+
+        // Re-registering the same schema is a no-op, not another version.
+        tokio::task::block_in_place(|| {
+            store.register_table("iris.worker", evolved, StoragePolicy::default())
+        })
+        .unwrap();
+        assert_eq!(
+            store
+                .spec_lifecycle("iris.worker")
+                .unwrap()
+                .active_version(),
+            2
+        );
+
+        // A cold store recovering from the published state keeps the column.
+        store.publish_object_catalog("iris.worker").await.unwrap();
+        store.shutdown(Duration::from_secs(1)).await;
+        drop(store);
+        std::fs::remove_dir_all(&data_dir).unwrap();
+        let cold = Store::new(
+            Some(data_dir.clone()),
+            remote_dir.to_string_lossy().into_owned(),
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Shadow,
+        )
+        .unwrap();
+        cold.recover_tables().await.unwrap();
+        let recovered = cold.get_table_schema("iris.worker").unwrap();
+        assert!(
+            recovered
+                .columns
+                .iter()
+                .any(|column| column.name == "gpu_id"),
+            "cold recovery dropped the evolved column"
+        );
+
+        cold.shutdown(Duration::from_secs(1)).await;
+        std::fs::remove_dir_all(data_dir).ok();
+        std::fs::remove_dir_all(remote_dir).ok();
+    }
+
+    /// While a spec transition is in flight, a schema-changing legacy
+    /// registration is refused — the forwarder holds its cursor and retries —
+    /// while an identical re-registration stays idempotent.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_schema_change_is_refused_while_a_spec_transition_is_in_flight() {
+        let PublishedObjectTableFixture {
+            store,
+            data_dir,
+            remote_dir,
+            ..
+        } = published_object_table("evolution_mid_transition").await;
+        store
+            .register_versioned_table("iris.worker", retargeted_object_backed_spec(2))
+            .unwrap();
+
+        store
+            .register_table("iris.worker", worker_schema(), StoragePolicy::default())
+            .unwrap();
+
+        let mut evolved = worker_schema();
+        evolved
+            .columns
+            .push(Column::new("gpu_id", ColumnType::COLUMN_TYPE_STRING, true));
+        let error = store
+            .register_table("iris.worker", evolved, StoragePolicy::default())
+            .unwrap_err();
+        assert!(matches!(error, StatsError::SchemaConflict(_)), "{error}");
+        assert!(error.to_string().contains("transition settles"), "{error}");
 
         store.shutdown(Duration::from_secs(1)).await;
         std::fs::remove_dir_all(data_dir).ok();

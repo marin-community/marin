@@ -23,11 +23,16 @@ async fn concurrent_registrations_are_idempotent_and_divergent_specs_are_refused
 
     // Producer and operator submit the same version-1 spec concurrently.
     let outcomes = std::thread::scope(|scope| {
-        [scope.spawn(|| {
-            store.register_versioned_table(TABLE, object_backed_spec(1, SourceLayout::default()))
-        }), scope.spawn(|| {
-            store.register_versioned_table(TABLE, object_backed_spec(1, SourceLayout::default()))
-        })]
+        [
+            scope.spawn(|| {
+                store
+                    .register_versioned_table(TABLE, object_backed_spec(1, SourceLayout::default()))
+            }),
+            scope.spawn(|| {
+                store
+                    .register_versioned_table(TABLE, object_backed_spec(1, SourceLayout::default()))
+            }),
+        ]
         .map(|handle| handle.join().unwrap())
     });
     for outcome in outcomes {

@@ -107,6 +107,28 @@ impl ObjectTableStateStore {
         Ok(heads)
     }
 
+    /// Whether `table`'s root holds any catalog revision documents.
+    pub async fn catalog_history_exists(&self, table: &str) -> Result<bool, StatsError> {
+        Ok(!self.table_objects(table, STATES_PREFIX).await?.is_empty())
+    }
+
+    /// Tables whose root holds catalog history but no HEAD.
+    ///
+    /// The software never deletes HEAD, so this state is always external —
+    /// human error or a bucket lifecycle rule — and each such table needs an
+    /// operator to restore HEAD from the newest catalog document.
+    pub async fn headless_tables(&self) -> Result<Vec<String>, StatsError> {
+        let mut headless = Vec::new();
+        for table in self.storage.list_tables().await? {
+            if self.load_head(&table).await?.is_none()
+                && self.catalog_history_exists(&table).await?
+            {
+                headless.push(table);
+            }
+        }
+        Ok(headless)
+    }
+
     pub async fn claim_writer(
         &self,
         table: &str,

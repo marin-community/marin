@@ -12,6 +12,7 @@
 //! the store-wide query-visibility write lock so no pinned scan loses a file
 //! mid-read.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
@@ -119,6 +120,9 @@ pub struct CachedObjectStore {
     /// query that localized a file keeps it until the scan drops the read side.
     query_visibility: Arc<RwLock<()>>,
     last_gc: Arc<Mutex<Option<Instant>>>,
+    /// Objects staged locally whose upload has not completed. Their cache files
+    /// are the only copy of the bytes, so eviction never selects them.
+    staged: Arc<Mutex<HashSet<PathBuf>>>,
 }
 
 impl CachedObjectStore {
@@ -135,6 +139,7 @@ impl CachedObjectStore {
             capacity_bytes,
             query_visibility,
             last_gc: Arc::new(Mutex::new(None)),
+            staged: Arc::new(Mutex::new(HashSet::new())),
         })
     }
 
@@ -188,11 +193,17 @@ impl CachedObjectStore {
             return Ok(());
         }
         entries.sort_by_key(|entry| entry.modified);
+        let staged = self.staged.lock().unwrap().clone();
         let mut excess = total - capacity_bytes;
         let mut victims = Vec::new();
         for entry in entries {
             if excess == 0 {
                 break;
+            }
+            // A staged file is the only copy of its bytes until its upload
+            // completes; evicting it would lose acknowledged rows.
+            if staged.contains(&entry.path) {
+                continue;
             }
             excess = excess.saturating_sub(entry.bytes);
             victims.push(entry.path);
@@ -241,6 +252,46 @@ impl ObjectStore for CachedObjectStore {
             .await
             .map_err(|error| StatsError::Internal(format!("object cache write task: {error}")))??;
         Ok(version)
+    }
+
+    /// Land the bytes in the cache only, pinned against eviction until
+    /// [`Self::upload_staged`] makes them remotely durable. The version is
+    /// computed from the buffer; content addressing makes the eventual upload
+    /// produce the same object.
+    async fn stage(&self, id: &ObjectId, bytes: bytes::Bytes) -> Result<ObjectVersion, StatsError> {
+        let version = ObjectVersion {
+            e_tag: None,
+            provider_version: None,
+            content_sha256: Sha256::digest(&bytes).into(),
+            byte_size: bytes.len() as u64,
+        };
+        let cache = self.cache.clone();
+        let reference = ObjectReference {
+            id: id.clone(),
+            version: version.clone(),
+        };
+        let path = tokio::task::spawn_blocking(move || cache.write(&reference, &bytes))
+            .await
+            .map_err(|error| StatsError::Internal(format!("object stage task: {error}")))??;
+        self.staged.lock().unwrap().insert(path);
+        Ok(version)
+    }
+
+    async fn upload_staged(&self, reference: &ObjectReference) -> Result<(), StatsError> {
+        let Some(path) = self.lookup(reference).await? else {
+            return Err(StatsError::Internal(format!(
+                "staged object {:?} has no verified local bytes to upload",
+                reference.id.as_str()
+            )));
+        };
+        let bytes = tokio::fs::read(&path).await.map_err(|error| {
+            StatsError::Internal(format!("read staged object {}: {error}", path.display()))
+        })?;
+        self.source
+            .write(&reference.id, bytes::Bytes::from(bytes))
+            .await?;
+        self.staged.lock().unwrap().remove(&path);
+        Ok(())
     }
 
     async fn read(&self, id: &ObjectId) -> Result<Option<StoredObject>, StatsError> {

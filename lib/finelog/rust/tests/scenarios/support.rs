@@ -194,6 +194,29 @@ pub async fn write_row(store: &Store, worker: &str, mem_bytes: i64) -> i64 {
     seq
 }
 
+/// As [`write_row`], but tolerant of a maintenance round that reports a
+/// deferred publication — a remote outage. The ack is local durability.
+pub async fn write_row_despite_deferral(store: &Store, worker: &str, mem_bytes: i64) -> i64 {
+    let batch_schema = schema_to_arrow(&worker_schema());
+    let batch = RecordBatch::try_new(
+        batch_schema.clone(),
+        vec![
+            Arc::new(StringArray::from(vec![worker])),
+            Arc::new(Int64Array::from(vec![mem_bytes])),
+            Arc::new(Int64Array::from(vec![mem_bytes])),
+        ],
+    )
+    .unwrap();
+    let ipc = finelog::store::ipc::encode_ipc(&batch_schema, &[batch]).unwrap();
+    let (_, seq) = store.write_rows(TABLE, &ipc, None).unwrap();
+    let _ = store.maintain_namespace(TABLE, false).await;
+    store
+        .await_persisted(TABLE, seq, PERSIST_BUDGET)
+        .await
+        .unwrap();
+    seq
+}
+
 pub async fn run_sql(store: &Store, sql: &str) -> Vec<RecordBatch> {
     try_run_sql(store, sql).await.unwrap()
 }

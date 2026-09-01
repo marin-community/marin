@@ -182,6 +182,20 @@ pub trait ObjectStore: Send + Sync {
 
     async fn read(&self, id: &ObjectId) -> Result<Option<StoredObject>, StatsError>;
 
+    /// Make `bytes` locally durable under `id` for a later
+    /// [`ObjectStore::upload_staged`]. A store without local staging uploads
+    /// immediately instead, so callers get remote durability either way.
+    async fn stage(&self, id: &ObjectId, bytes: bytes::Bytes) -> Result<ObjectVersion, StatsError> {
+        self.write(id, bytes).await
+    }
+
+    /// Make a staged object remotely durable. A store without local staging
+    /// already uploaded it at [`ObjectStore::stage`].
+    async fn upload_staged(&self, reference: &ObjectReference) -> Result<(), StatsError> {
+        let _ = reference;
+        Ok(())
+    }
+
     /// Return a verified local file usable by DataFusion.
     async fn local_path(&self, reference: &ObjectReference) -> Result<PathBuf, StatsError> {
         Err(StatsError::Internal(format!(

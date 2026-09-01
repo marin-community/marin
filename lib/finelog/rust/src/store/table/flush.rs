@@ -2,13 +2,16 @@
 //!
 //! Two destinations share one shape. A legacy table writes a local L0 file and
 //! upserts its catalog row. An object-backed table sorts and partitions the
-//! sealed batch as its source layout declares, writes one immutable object per
-//! partition, and commits their descriptors as a new table revision.
+//! sealed batch as its source layout declares, stages one immutable object per
+//! partition on local disk, and commits their descriptors as a new table
+//! revision.
 //!
-//! Both are durability-before-ack: the caller advances the durability high-water
-//! mark only after this returns success. On failure the sealed rows go back to
-//! the buffer, except when the rows are already committed and only the HEAD
-//! publication is unresolved — re-flushing those would duplicate committed data.
+//! Both acknowledge on local durability: the sealed rows are on disk and their
+//! catalog rows are committed before the durability high-water mark advances.
+//! An object-backed table then owes the revision to publication, which uploads
+//! the staged objects and swaps HEAD — attempted immediately after the ack and
+//! retried by maintenance, so a remote outage delays HEAD, never the ack. On
+//! failure before the local commit the sealed rows go back to the buffer.
 //!
 //! Callers serialize flushes; this module takes no locks of its own beyond the
 //! short buffer and view locks.
@@ -48,15 +51,6 @@ pub struct FlushTarget<'a> {
     pub segments: &'a SegmentView,
     pub catalog: &'a Catalog,
     pub controller: &'a TableController,
-}
-
-/// Why one sealed buffer did not reach a published table revision.
-enum SealedCommit {
-    /// Nothing was committed. The sealed rows return to the RAM buffer.
-    NotCommitted(StatsError),
-    /// The rows are committed to durable local state but HEAD does not name
-    /// that revision yet. Re-flushing them would duplicate committed data.
-    PublicationUnresolved(StatsError),
 }
 
 /// Drain the buffer to one local L0 segment under `table_dir`.
@@ -113,7 +107,8 @@ pub fn flush_local(target: FlushTarget<'_>, table_dir: &Path) -> Result<(), Stat
     Ok(())
 }
 
-/// Drain the buffer to immutable objects and commit their descriptors.
+/// Drain the buffer to locally staged immutable objects, commit their
+/// descriptors, and acknowledge; then attempt the owed publication.
 pub async fn flush_to_objects(
     target: FlushTarget<'_>,
     policy: &TablePolicy,
@@ -122,24 +117,21 @@ pub async fn flush_to_objects(
         return Ok(());
     };
     let max_seq = sealed.max_seq;
-    match write_sealed_objects(&target, sealed.batch.clone(), policy).await {
-        Ok(()) => {
-            target.buffer.publish_persisted(max_seq);
-            Ok(())
-        }
-        Err(SealedCommit::NotCommitted(error)) => {
-            target.buffer.restore_sealed();
-            tracing::warn!(namespace = %target.table, %error, "object-backed flush failed; restored RAM buffer");
-            Err(error)
-        }
-        Err(SealedCommit::PublicationUnresolved(error)) => {
-            // The rows are durable in the local catalog. Republishing that
-            // revision is the only repair; re-flushing would duplicate it, and
-            // the high-water mark waits for HEAD to name it.
-            tracing::warn!(namespace = %target.table, %error, "object-backed flush committed without a published revision");
-            Err(error)
-        }
+    if let Err(error) = write_sealed_objects(&target, sealed.batch.clone(), policy).await {
+        target.buffer.restore_sealed();
+        tracing::warn!(namespace = %target.table, %error, "object-backed flush failed; restored RAM buffer");
+        return Err(error);
     }
+    // Local durability is the ack: staged objects and catalog rows are on
+    // disk. HEAD is owed, not waited on.
+    target.buffer.publish_persisted(max_seq);
+    // Publish immediately so HEAD lags the ack by one round trip in the
+    // common case. A failure — a remote outage — leaves the revision owed;
+    // maintenance retries it, and the ack above stands either way.
+    if let Err(error) = target.controller.publish_owed().await {
+        tracing::warn!(namespace = %target.table, %error, "flush publication deferred; revision stays owed to maintenance");
+    }
+    Ok(())
 }
 
 fn restore(target: &FlushTarget<'_>, error: StatsError) -> StatsError {
@@ -152,7 +144,7 @@ async fn write_sealed_objects(
     target: &FlushTarget<'_>,
     batch: RecordBatch,
     policy: &TablePolicy,
-) -> Result<(), SealedCommit> {
+) -> Result<(), StatsError> {
     let source_layout = policy.source_layout.clone();
     let max_row_group_rows = source_layout
         .as_ref()
@@ -172,17 +164,15 @@ async fn write_sealed_objects(
     })
     .await
     .map_err(|error| StatsError::Internal(format!("object-backed parquet task panicked: {error}")))
-    .and_then(|encoded| encoded)
-    .map_err(SealedCommit::NotCommitted)?;
+    .and_then(|encoded| encoded)?;
 
     let mut segments = Vec::with_capacity(encoded.len());
     let mut descriptors = Vec::with_capacity(encoded.len());
     for (partition, batch, parquet, min_seq, max_seq) in encoded {
         let stored = target
             .controller
-            .write_parquet(Bytes::from(parquet))
-            .await
-            .map_err(SealedCommit::NotCommitted)?;
+            .stage_parquet(Bytes::from(parquet))
+            .await?;
         let (min_key, max_key) = target.format.key_bounds(&batch);
         let segment = LocalSegment {
             path: stored.path.to_string_lossy().into_owned(),
@@ -208,29 +198,21 @@ async fn write_sealed_objects(
     }
 
     let table_spec_version = policy.table_spec_version;
-    // A committed revision owns these objects whether or not HEAD names it yet,
-    // so the sealed rows are never re-flushed.
-    let committed = match target
+    // The local commit owns these objects; the revision is owed to publication
+    // from the moment it is durable here.
+    target
         .controller
-        .commit(|| {
+        .commit_owing_publication(|| {
             let revision =
                 target
                     .catalog
                     .commit_object_segments(&descriptors, table_spec_version, false)?;
             Ok((revision, ()))
         })
-        .await
-    {
-        Err(error) if !error.is_committed() => {
-            return Err(SealedCommit::NotCommitted(error.into()))
-        }
-        outcome => outcome,
-    };
+        .map_err(StatsError::from)?;
     target.segments.extend(segments);
     target.buffer.commit_sealed();
-    committed
-        .map(|_| ())
-        .map_err(|error| SealedCommit::PublicationUnresolved(error.into()))
+    Ok(())
 }
 
 /// Sort a sealed batch into the order the source layout declares, always ending

@@ -45,7 +45,11 @@ async fn a_legacy_import_preserves_content_through_retirement_and_cold_boot() {
         tokio::spawn(async move { tables.maintain(TABLE, false).await })
     };
     mid_backfill.entered().await;
-    assert_eq!(content_digest(&store, baseline_seq).await, pre, "mid-backfill");
+    assert_eq!(
+        content_digest(&store, baseline_seq).await,
+        pre,
+        "mid-backfill"
+    );
     mid_backfill.release();
     backfilling.await.unwrap().unwrap();
 

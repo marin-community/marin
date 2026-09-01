@@ -182,6 +182,11 @@ impl FaultInjectingObjectStore {
         self.calls.lock().unwrap().clear();
     }
 
+    /// Disarm every armed fault — the outage ends.
+    pub fn clear_faults(&self) {
+        self.faults.lock().unwrap().clear();
+    }
+
     /// The object IDs `op` was called with, in order.
     pub fn keys_for(&self, op: ObjectOp) -> Vec<String> {
         self.calls()
@@ -275,6 +280,24 @@ impl ObjectStore for FaultInjectingObjectStore {
             Proceed::Reject(error) => Err(error),
             Proceed::RunThenFail { error, gate } => {
                 self.inner.read(id).await?;
+                Err(lost(error, gate).await)
+            }
+        }
+    }
+
+    /// Staging is a local write; faults model the remote, so it always runs.
+    async fn stage(&self, id: &ObjectId, bytes: bytes::Bytes) -> Result<ObjectVersion, StatsError> {
+        self.inner.stage(id, bytes).await
+    }
+
+    /// The upload half of a staged write is a remote write: `Write` faults
+    /// apply, so an outage scenario fails uploads while staging succeeds.
+    async fn upload_staged(&self, reference: &ObjectReference) -> Result<(), StatsError> {
+        match resolve(self.record(ObjectOp::Write, reference.id.as_str())).await {
+            Proceed::Run => self.inner.upload_staged(reference).await,
+            Proceed::Reject(error) => Err(error),
+            Proceed::RunThenFail { error, gate } => {
+                self.inner.upload_staged(reference).await?;
                 Err(lost(error, gate).await)
             }
         }

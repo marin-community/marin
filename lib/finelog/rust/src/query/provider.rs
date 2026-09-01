@@ -38,9 +38,9 @@ use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableType};
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::ExecutionPlan;
 
+use crate::errors::StatsError;
 use crate::indices::{IndexRegistry, SegmentArtifacts};
 use crate::partition_policy::{PhysicalPartitionPolicy, SegmentPartition};
-use crate::errors::StatsError;
 use crate::store::object_store::{ObjectId, ObjectPrefix, ObjectStore};
 use crate::store::table::query_view::SegmentObjectMap;
 
