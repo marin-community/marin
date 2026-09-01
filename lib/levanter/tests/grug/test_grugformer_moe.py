@@ -1410,17 +1410,20 @@ def test_loop_local_zeros_fills_exact_zeros(site: int, tie: np.ndarray):
     np.testing.assert_array_equal(np.asarray(filled), np.zeros((4, 3), dtype=np.float32))
 
 
-def _fill_survives_xla_constant_folding(fill_fn) -> bool:
-    """Whether the compiled fill still reads its input, judged on the post-optimization HLO.
+def _optimized_hlo_opcode_count(fill_fn, opcode_name: str) -> int:
+    """Count an opcode in the optimized HLO produced for ``fill_fn``.
 
     XLA's simplifier is what folds a fill into a constant, so a jaxpr-level check cannot see the
-    property: ``tie[0] * 0`` consumes ``tie`` in the jaxpr and still folds. Reading the optimized
-    entry computation instead, a folded fill leaves its parameter dead.
+    property: ``tie[0] * 0`` consumes ``tie`` in the jaxpr and still folds.
     """
     tie = jnp.asarray([1, 7, 0, 3], dtype=jnp.int32)
-    entry = jax.jit(fill_fn).lower(tie).compile().as_text().split("ENTRY ")[-1]
-    parameter = next(line.split("=")[0].strip() for line in entry.splitlines() if "parameter(0)" in line)
-    return entry.count(parameter) > 1
+    executable = jax.jit(fill_fn).lower(tie).compile().runtime_executable()
+    return sum(
+        instruction.opcode.name == opcode_name
+        for module in executable.hlo_modules()
+        for computation in module.computations()
+        for instruction in computation.instructions()
+    )
 
 
 def test_loop_local_zeros_is_not_a_foldable_constant():
@@ -1431,7 +1434,27 @@ def test_loop_local_zeros_is_not_a_foldable_constant():
     ``min(tie[0], -site) + site`` resists the fold because XLA cannot prove ``tie`` is
     non-negative; an arithmetic identity such as ``tie[0] * 0`` would not.
     """
-    assert _fill_survives_xla_constant_folding(lambda tie: _loop_local_zeros(4, 3, jnp.float32, tie, site=1))
-    assert not _fill_survives_xla_constant_folding(
-        lambda tie: jnp.broadcast_to((tie.reshape(-1)[0] * 0).astype(jnp.float32), (4, 3))
+    assert _optimized_hlo_opcode_count(lambda tie: _loop_local_zeros(4, 3, jnp.float32, tie, site=1), "kMinimum") == 1
+    assert (
+        _optimized_hlo_opcode_count(
+            lambda tie: jnp.broadcast_to((tie.reshape(-1)[0] * 0).astype(jnp.float32), (4, 3)), "kMinimum"
+        )
+        == 0
     ), "the folding probe no longer folds, so this test can no longer detect a foldable fill"
+
+
+def test_loop_local_zeros_sites_prevent_cse():
+    def distinct_sites(tie):
+        return (
+            _loop_local_zeros(4, 3, jnp.float32, tie, site=1),
+            _loop_local_zeros(4, 3, jnp.float32, tie, site=2),
+        )
+
+    def repeated_site(tie):
+        fill = _loop_local_zeros(4, 3, jnp.float32, tie, site=1)
+        return fill, fill
+
+    assert _optimized_hlo_opcode_count(distinct_sites, "kMinimum") == 2
+    assert (
+        _optimized_hlo_opcode_count(repeated_site, "kMinimum") == 1
+    ), "the CSE probe no longer merges repeated sites, so this test can no longer detect a site collision"
