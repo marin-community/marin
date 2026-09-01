@@ -104,7 +104,7 @@ def _forced(candidate: Candidate):
     selection = fa4_cute_kernels._BackwardArchSelection(
         path_arch=candidate.backward_path, postprocess_arch=candidate.backward_path
     )
-    with patch.object(fa4_cute, "_segmented_kernel_config", lambda head_dim, *, wide_forward_tile: candidate.config):
+    with patch.object(fa4_cute, "_segmented_kernel_config", lambda head_dim: candidate.config):
         with patch.object(fa4_cute_kernels, "_segmented_backward_arches", lambda **_: selection):
             yield
 

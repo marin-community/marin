@@ -281,16 +281,8 @@ def _fa4_cute_attention_forward_sharded(
     return _local_fa4_attention(q, k, v, lower_bounds, valid)
 
 
-def _segmented_kernel_config(head_dim: int, *, wide_forward_tile: bool):
+def _segmented_kernel_config(head_dim: int) -> Flash4CuteKernelConfig:
     arch = gpu_compute_capability()
-    if wide_forward_tile and not (arch // 10 == 10 and head_dim == 128):
-        # Refusing beats silently running the plain config, which would let a tile A/B
-        # measure a no-op and report a false null.
-        raise ValueError(
-            f"gpu_fa4_cute_wide changes the forward tile only on sm100 at head_dim=128."
-            f" On sm{arch} at head_dim={head_dim} it selects the same kernel configuration"
-            " as gpu_fa4_cute, so use that name."
-        )
     kernel_config = flash4_cute_kernel_config(head_dim, arch=arch)
 
     # Upstream flash-attn-4 4.0.0b15 dense SM100 FA4 uses 128x128 tiles in
@@ -298,28 +290,27 @@ def _segmented_kernel_config(head_dim: int, *, wide_forward_tile: bool):
     # kernel: it carries dynamic lower-bound metadata through the SM80/SM120
     # segmented fork. On B200 d5120 Grug shapes, 64x64 fwd/bwd is consistently
     # faster than both the prior 128x64/64x64 config and dense-upstream 128x128.
-    # Some workloads measure faster with a 128x64 forward tile. Tile preference does
-    # not follow from any shape the kernel can see, so the caller selects it through the
-    # "gpu_fa4_cute_wide" implementation name. The backward tile stays at 64x64, because
-    # the SM120 kernel raises on 128.
     if arch // 10 == 10 and head_dim == 128:
-        forward_tile = (128, 64) if wide_forward_tile else (64, 64)
-        return replace(kernel_config, forward_tile=forward_tile, backward_tile=(64, 64), num_threads=128)
+        return replace(kernel_config, forward_tile=(64, 64), backward_tile=(64, 64), num_threads=128)
     return kernel_config
 
 
-def gpu_fa4_cute_attention(
+def _wide_segmented_kernel_config(head_dim: int) -> Flash4CuteKernelConfig:
+    arch = gpu_compute_capability()
+    if arch // 10 != 10 or head_dim != 128:
+        raise ValueError(f"gpu_fa4_cute_wide requires sm100 and head_dim=128, got sm{arch} and head_dim={head_dim}.")
+    kernel_config = flash4_cute_kernel_config(head_dim, arch=arch)
+    return replace(kernel_config, forward_tile=(128, 64), backward_tile=(64, 64), num_threads=128)
+
+
+def _gpu_fa4_cute_attention(
     q: Float[Array, "B Q Hq D"],
     k: Float[Array, "B K Hkv D"],
     v: Float[Array, "B K Hkv D"],
     mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
     *,
-    wide_forward_tile: bool = False,
+    kernel_config: Flash4CuteKernelConfig,
 ) -> Float[Array, "B Q Hq D"]:
-    """Run causal self-attention through a FlashAttention-4/CuTe JAX FFI backend."""
-    if jax.default_backend() != "gpu":
-        raise RuntimeError("gpu_fa4_cute_attention requires the JAX GPU backend.")
-
     _validate_head_layout(q, k, backend_name="gpu_fa4_cute_attention")
     if isinstance(mask, AttentionMask) and mask.fa4_bounds is not None:
         # The caller precomputed and selected the per-token metadata outside any per-layer scan/cond
@@ -332,7 +323,6 @@ def gpu_fa4_cute_attention(
             mask,
             backend_name="gpu_fa4_cute_attention",
         )
-    kernel_config = _segmented_kernel_config(q.shape[-1], wide_forward_tile=wide_forward_tile)
 
     return _fa4_cute_attention_forward_sharded(
         q,
@@ -343,6 +333,30 @@ def gpu_fa4_cute_attention(
         sm_scale=1.0 / math.sqrt(q.shape[-1]),
         kernel_config=kernel_config,
     )
+
+
+def gpu_fa4_cute_attention(
+    q: Float[Array, "B Q Hq D"],
+    k: Float[Array, "B K Hkv D"],
+    v: Float[Array, "B K Hkv D"],
+    mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+) -> Float[Array, "B Q Hq D"]:
+    """Run causal self-attention through the segmented FA4/CuTe kernel."""
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("gpu_fa4_cute_attention requires the JAX GPU backend.")
+    return _gpu_fa4_cute_attention(q, k, v, mask, kernel_config=_segmented_kernel_config(q.shape[-1]))
+
+
+def gpu_fa4_cute_wide_attention(
+    q: Float[Array, "B Q Hq D"],
+    k: Float[Array, "B K Hkv D"],
+    v: Float[Array, "B K Hkv D"],
+    mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+) -> Float[Array, "B Q Hq D"]:
+    """Run segmented FA4/CuTe attention with the SM100 128x64 forward tile."""
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("gpu_fa4_cute_wide_attention requires the JAX GPU backend.")
+    return _gpu_fa4_cute_attention(q, k, v, mask, kernel_config=_wide_segmented_kernel_config(q.shape[-1]))
 
 
 def fa4_cute_segment_bounds(
