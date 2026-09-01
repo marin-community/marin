@@ -91,10 +91,7 @@ INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT = 1
 # dispatch and combine form one long dependent chain, so admitting several concurrent collectives
 # only contends for the SMs the transport itself needs.
 RAGGED_COLLECTIVE_OVERLAP_LIMIT = 1
-# The layer-carry offload, the latency-hiding scheduler, and an overlap limit above 1 corrupt
-# training together. No pair of the three does. The reloaded residual races its consumer in the
-# backward pass (#8317). A higher limit gains too little to accept that risk, so the offload
-# forces this value.
+# Offload and latency hiding race the reloaded residual with its consumer when overlap exceeds 1.
 OFFLOAD_CARRY_COLLECTIVE_OVERLAP_LIMIT = 1
 RAGGED_MOE_IMPLEMENTATION = "ragged_all_to_all"
 # TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU

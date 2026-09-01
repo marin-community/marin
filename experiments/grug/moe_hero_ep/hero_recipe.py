@@ -58,7 +58,6 @@ HERO_MODEL_CONFIG = dataclasses.replace(
 
 
 def with_transport_remat_mode(model: GrugModelConfig) -> GrugModelConfig:
-    """Select carry-offload rematerialization for the ragged transport."""
     if model.moe_implementation != RAGGED_MOE_IMPLEMENTATION:
         return model
     return dataclasses.replace(model, remat_mode="offload_carry")

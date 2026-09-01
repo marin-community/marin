@@ -435,7 +435,6 @@ def test_a_master_bearing_checkpoint_migrates_in_process_into_a_master_less_rest
 
 
 def test_the_carry_offload_overrides_an_inherited_collective_overlap_limit(monkeypatch):
-    """An inherited overlap limit reaches the corrupting combination unchosen (#8317)."""
     inherited = f"{train.XLA_COLLECTIVE_OVERLAP_FLAG}={train.DEFAULT_COLLECTIVE_OVERLAP_LIMIT}"
     monkeypatch.setenv("XLA_FLAGS", inherited)
     config = _runtime_env_config(moe_implementation=train.RAGGED_MOE_IMPLEMENTATION, remat_mode="offload_carry")

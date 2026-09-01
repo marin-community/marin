@@ -20,11 +20,7 @@ _DEFAULT_EP_CAPACITY_FACTOR = 1.25
 
 
 def _pack_pairs_u32(a: jax.Array, b: jax.Array) -> jax.Array:
-    """``[..., F]`` x2 of a 16-bit dtype -> ``[..., 2F]`` holding ``a0, b0, a1, b1, ...``.
-
-    XLA caps the equivalent ``stack``/``reshape`` near 1.9 TB/s, because its innermost
-    dimension is 2. The packed form is elementwise and reaches 7.13 TB/s on GB200.
-    """
+    """Interleave two 16-bit ``[..., F]`` arrays as ``[..., 2F]``."""
     ai = jax.lax.bitcast_convert_type(a, jnp.uint16).astype(jnp.uint32)
     bi = jax.lax.bitcast_convert_type(b, jnp.uint16).astype(jnp.uint32)
     packed = ai | (bi << jnp.uint32(16))
