@@ -114,4 +114,4 @@ def _moe_mlp_ep_ring_local(
         # reducing contributions from experts across the EP mesh.
         out_local = jax.lax.psum_scatter(out_global, "expert", scatter_dimension=0, tiled=True)
         dropped_total = jax.lax.psum(dropped_local, _batch_axes(jax.sharding.get_abstract_mesh()))
-    return out_local, CapacityOverflow(sender=jnp.zeros_like(dropped_total), receiver=dropped_total)
+    return out_local, CapacityOverflow(pre_transport=jnp.zeros_like(dropped_total), post_transport=dropped_total)

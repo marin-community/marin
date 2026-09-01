@@ -596,5 +596,5 @@ def _moe_mlp_ep_fixed_pooled_wave_a2a_local(
     sender_dropped = assignments_per_shard - jnp.sum(sender_keep, dtype=jnp.int32)
     dropped_by_stage_local = jnp.stack((sender_dropped, receiver_dropped))
     dropped_by_stage = jax.lax.psum(dropped_by_stage_local, _batch_axes(jax.sharding.get_abstract_mesh()))
-    overflow = CapacityOverflow(sender=dropped_by_stage[0], receiver=dropped_by_stage[1])
+    overflow = CapacityOverflow(pre_transport=dropped_by_stage[0], post_transport=dropped_by_stage[1])
     return out_local.astype(x_local.dtype), overflow

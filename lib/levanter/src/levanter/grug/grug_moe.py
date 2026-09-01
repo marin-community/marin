@@ -165,8 +165,8 @@ def moe_mlp(
     precomputed token-to-expert assignments. Routing logits/top-k selection
     stays in the caller (e.g. model MLP block).
 
-    Set `report_capacity_overflow=True` to also return sender and receiver
-    counts for expert assignments dropped by EP capacity clipping.
+    Set `report_capacity_overflow=True` to also return pre-transport and
+    post-transport counts for expert assignments dropped by EP capacity clipping.
 
     `expert_chunks` applies only to the local `sonic_cute` FSDP path. Values
     greater than one split the expert bank into equal, statically sized chunks.
@@ -222,7 +222,7 @@ def moe_mlp(
             expert_chunks=expert_chunks,
         )
         if report_capacity_overflow:
-            return out, CapacityOverflow(sender=dropped, receiver=jnp.zeros_like(dropped))
+            return out, CapacityOverflow(pre_transport=dropped, post_transport=jnp.zeros_like(dropped))
         return out
 
     batch_spec = _batch_spec_from_x(x, mesh)
@@ -282,7 +282,7 @@ def moe_mlp(
                 w_up_gate_spec,
                 w_down_spec,
             ),
-            out_specs=(batch_spec, CapacityOverflow(sender=P(), receiver=P())),
+            out_specs=(batch_spec, CapacityOverflow(pre_transport=P(), post_transport=P())),
             check_vma=False,
         )
         out, overflow = shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
@@ -352,7 +352,7 @@ def moe_mlp(
     )
     out, dropped = shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
     if report_capacity_overflow:
-        return out, CapacityOverflow(sender=dropped, receiver=jnp.zeros_like(dropped))
+        return out, CapacityOverflow(pre_transport=dropped, post_transport=jnp.zeros_like(dropped))
     return out
 
 

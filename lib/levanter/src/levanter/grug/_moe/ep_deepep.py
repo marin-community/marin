@@ -194,6 +194,6 @@ def _moe_mlp_ep_deepep_local(
             )
         dropped_total = jnp.array(0, dtype=jnp.int32)
     return out_local.astype(x_local.dtype), CapacityOverflow(
-        sender=dropped_total,
-        receiver=jnp.zeros_like(dropped_total),
+        pre_transport=dropped_total,
+        post_transport=jnp.zeros_like(dropped_total),
     )

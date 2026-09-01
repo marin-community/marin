@@ -130,12 +130,12 @@ MOE_REMAT_SAVE_NAMES = (
 class CapacityOverflow(NamedTuple):
     """Expert assignments dropped before and after transport."""
 
-    sender: Int[Array, ""]
-    receiver: Int[Array, ""]
+    pre_transport: Int[Array, ""]
+    post_transport: Int[Array, ""]
 
     @property
     def total(self) -> Int[Array, ""]:
-        return self.sender + self.receiver
+        return self.pre_transport + self.post_transport
 
 
 @dataclass(frozen=True)

@@ -178,4 +178,4 @@ def _moe_mlp_ep_fixed_a2a_local(
         ).astype(x_local.dtype)
         dropped_local = assignments_per_shard - jnp.sum(keep, dtype=jnp.int32)
         dropped_total = jax.lax.psum(dropped_local, _batch_axes(jax.sharding.get_abstract_mesh()))
-    return out_local, CapacityOverflow(sender=dropped_total, receiver=jnp.zeros_like(dropped_total))
+    return out_local, CapacityOverflow(pre_transport=dropped_total, post_transport=jnp.zeros_like(dropped_total))

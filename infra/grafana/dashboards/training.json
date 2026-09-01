@@ -1801,7 +1801,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "WITH telemetry AS (SELECT * FROM \"levanter.metrics\") SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, AVG(CASE WHEN name = 'moe_drop_fraction' THEN value END) AS drop_fraction, AVG(CASE WHEN name = 'moe_sender_drop_fraction' THEN value END) AS sender_drop_fraction, AVG(CASE WHEN name = 'moe_receiver_drop_fraction' THEN value END) AS receiver_drop_fraction, CAST(0.07 AS DOUBLE) AS alert_threshold FROM telemetry WHERE name IN ('moe_drop_fraction', 'moe_sender_drop_fraction', 'moe_receiver_drop_fraction') AND run_id IN (${run:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
+                "value": "WITH telemetry AS (SELECT * FROM \"levanter.metrics\") SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, AVG(CASE WHEN name = 'moe_drop_fraction' THEN value END) AS drop_fraction, AVG(CASE WHEN name = 'moe_pre_transport_drop_fraction' THEN value END) AS pre_transport_drop_fraction, AVG(CASE WHEN name = 'moe_post_transport_drop_fraction' THEN value END) AS post_transport_drop_fraction, CAST(0.07 AS DOUBLE) AS alert_threshold FROM telemetry WHERE name IN ('moe_drop_fraction', 'moe_pre_transport_drop_fraction', 'moe_post_transport_drop_fraction') AND run_id IN (${run:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
               },
               {
                 "key": "from",
@@ -1825,13 +1825,13 @@
               "type": "number"
             },
             {
-              "selector": "sender_drop_fraction",
-              "text": "sender drop",
+              "selector": "pre_transport_drop_fraction",
+              "text": "pre-transport drop",
               "type": "number"
             },
             {
-              "selector": "receiver_drop_fraction",
-              "text": "receiver drop",
+              "selector": "post_transport_drop_fraction",
+              "text": "post-transport drop",
               "type": "number"
             },
             {

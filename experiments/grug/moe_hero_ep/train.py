@@ -710,8 +710,8 @@ def initial_state(
 
 def _drop_metrics(
     dropped_assignments: jax.Array,
-    sender_dropped_assignments: jax.Array,
-    receiver_dropped_assignments: jax.Array,
+    pre_transport_dropped_assignments: jax.Array,
+    post_transport_dropped_assignments: jax.Array,
     *,
     batch_size: int,
     sequence_length: int,
@@ -724,20 +724,22 @@ def _drop_metrics(
         return int(np.asarray(per_layer).astype(np.int64).sum())
 
     dropped_assignments_host = _sum_int64(dropped_assignments)
-    sender_dropped_assignments_host = _sum_int64(sender_dropped_assignments)
-    receiver_dropped_assignments_host = _sum_int64(receiver_dropped_assignments)
-    if dropped_assignments_host != sender_dropped_assignments_host + receiver_dropped_assignments_host:
-        raise ValueError("total dropped assignments must equal sender plus receiver dropped assignments")
+    pre_transport_dropped_assignments_host = _sum_int64(pre_transport_dropped_assignments)
+    post_transport_dropped_assignments_host = _sum_int64(post_transport_dropped_assignments)
+    if dropped_assignments_host != pre_transport_dropped_assignments_host + post_transport_dropped_assignments_host:
+        raise ValueError("total dropped assignments must equal pre-transport plus post-transport dropped assignments")
     total_assignments = batch_size * sequence_length * top_k * num_layers
-    receiver_assignments = total_assignments - sender_dropped_assignments_host
+    post_transport_assignments = total_assignments - pre_transport_dropped_assignments_host
     return {
         "moe/dropped_assignments": dropped_assignments_host,
         "moe/drop_fraction": dropped_assignments_host / total_assignments,
-        "moe/sender_dropped_assignments": sender_dropped_assignments_host,
-        "moe/sender_drop_fraction": sender_dropped_assignments_host / total_assignments,
-        "moe/receiver_dropped_assignments": receiver_dropped_assignments_host,
-        "moe/receiver_drop_fraction": receiver_dropped_assignments_host / total_assignments,
-        "moe/receiver_drop_fraction_of_received": receiver_dropped_assignments_host / max(receiver_assignments, 1),
+        "moe/pre_transport_dropped_assignments": pre_transport_dropped_assignments_host,
+        "moe/pre_transport_drop_fraction": pre_transport_dropped_assignments_host / total_assignments,
+        "moe/post_transport_dropped_assignments": post_transport_dropped_assignments_host,
+        "moe/post_transport_drop_fraction": post_transport_dropped_assignments_host / total_assignments,
+        "moe/post_transport_drop_fraction_of_received": (
+            post_transport_dropped_assignments_host / max(post_transport_assignments, 1)
+        ),
     }
 
 
@@ -1194,8 +1196,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     if "moe/dropped_assignments" in metrics:
                         drop_metrics = _drop_metrics(
                             metrics["moe/dropped_assignments"],
-                            metrics["moe/sender_dropped_assignments"],
-                            metrics["moe/receiver_dropped_assignments"],
+                            metrics["moe/pre_transport_dropped_assignments"],
+                            metrics["moe/post_transport_dropped_assignments"],
                             batch_size=batch.tokens.shape[0],
                             sequence_length=batch.tokens.shape[1],
                             top_k=config.model.num_experts_per_token,

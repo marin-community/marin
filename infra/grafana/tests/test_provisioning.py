@@ -1159,8 +1159,8 @@ def test_training_moe_health_queries_show_routing_signals():
         "INSERT INTO telemetry_v1 VALUES ('levanter', 'hero-run', ?, ?, ?)",
         [
             ("moe_drop_fraction", 0.04, at),
-            ("moe_sender_drop_fraction", 0.03, at),
-            ("moe_receiver_drop_fraction", 0.02, at),
+            ("moe_pre_transport_drop_fraction", 0.03, at),
+            ("moe_post_transport_drop_fraction", 0.02, at),
             ("train_router_routing_entropy_mean", 5.93, at),
             ("train_router_bias_max", 390.0, at),
             ("train_router_bias_min", -380.0, at),

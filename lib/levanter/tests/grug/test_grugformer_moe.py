@@ -733,7 +733,7 @@ def test_fixed_all_to_all_drops_assignments_over_capacity():
         fixed_a2a,
         mesh=mesh,
         in_specs=(P(), P(), P(), P(), P()),
-        out_specs=(P(), CapacityOverflow(sender=P(), receiver=P())),
+        out_specs=(P(), CapacityOverflow(pre_transport=P(), post_transport=P())),
         check_vma=False,
     )
     with jax.set_mesh(mesh), jax.default_matmul_precision("highest"):
@@ -767,8 +767,9 @@ def test_fixed_all_to_all_drops_assignments_over_capacity():
             rtol=1e-5,
             atol=1e-5,
         )
-    assert int(overflow.sender) == 4
-    assert int(overflow.receiver) == 0
+    assert int(overflow.pre_transport) == 4
+    assert int(overflow.post_transport) == 0
+    assert int(overflow.total) == int(overflow.pre_transport + overflow.post_transport)
 
 
 @pytest.mark.timeout(180)
@@ -855,7 +856,7 @@ def test_fixed_pooled_wave_all_to_all_matches_dense_value_and_gradients():
     assert _count_jaxpr_primitives(gradient_jaxpr, "all_to_all") == 6 * num_expert_waves
 
 
-def test_fixed_pooled_wave_all_to_all_reports_sender_and_receiver_drops():
+def test_fixed_pooled_wave_all_to_all_reports_pre_and_post_transport_drops():
     mesh = _make_single_expert_mesh()
     tokens = 6
     hidden_dim = 4
@@ -890,7 +891,7 @@ def test_fixed_pooled_wave_all_to_all_reports_sender_and_receiver_drops():
         pooled_output,
         mesh=mesh,
         in_specs=(P(), P(), P(), P()),
-        out_specs=(P(), CapacityOverflow(sender=P(), receiver=P())),
+        out_specs=(P(), CapacityOverflow(pre_transport=P(), post_transport=P())),
         check_vma=False,
     )
     with jax.set_mesh(mesh):
@@ -900,8 +901,9 @@ def test_fixed_pooled_wave_all_to_all_reports_sender_and_receiver_drops():
     expected = _dense_moe_output(x, selected_experts, combine_weights * keep, w_up_gate, w_down)
 
     np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-5, atol=1e-5)
-    assert int(overflow.sender) == 3
-    assert int(overflow.receiver) == 3
+    assert int(overflow.pre_transport) == 3
+    assert int(overflow.post_transport) == 3
+    assert int(overflow.total) == int(overflow.pre_transport + overflow.post_transport)
 
 
 @pytest.mark.parametrize("implementation", ["ring", "fixed_all_to_all", "fixed_pooled_wave_all_to_all"])
@@ -1369,7 +1371,9 @@ def test_moe_mlp_reports_positive_drop_count_in_ring_ep_when_over_capacity():
 
     assert out.shape == (tokens, hidden_dim)
     assert dropped.total.shape == ()
-    assert int(dropped.total) > 0
+    assert int(dropped.pre_transport) == 0
+    assert int(dropped.post_transport) > 0
+    assert int(dropped.total) == int(dropped.pre_transport + dropped.post_transport)
 
 
 def test_moe_mlp_reports_positive_drop_count_in_ragged_a2a_when_over_capacity():
@@ -1414,7 +1418,9 @@ def test_moe_mlp_reports_positive_drop_count_in_ragged_a2a_when_over_capacity():
 
     assert out.shape == (tokens, hidden_dim)
     assert dropped.total.shape == ()
-    assert int(dropped.total) > 0
+    assert int(dropped.pre_transport) > 0
+    assert int(dropped.post_transport) == 0
+    assert int(dropped.total) == int(dropped.pre_transport + dropped.post_transport)
 
 
 def test_ragged_a2a_receiver_clipping_respects_capacity():

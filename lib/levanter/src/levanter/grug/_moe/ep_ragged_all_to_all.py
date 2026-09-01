@@ -325,4 +325,4 @@ def _moe_mlp_ep_ragged_a2a_local(
         ).astype(x_local.dtype)
         dropped_local = jnp.sum(group_sizes, dtype=jnp.int32) - accepted_local
         dropped_total = jax.lax.psum(dropped_local, _batch_axes(jax.sharding.get_abstract_mesh()))
-    return out_local, CapacityOverflow(sender=dropped_total, receiver=jnp.zeros_like(dropped_total))
+    return out_local, CapacityOverflow(pre_transport=dropped_total, post_transport=jnp.zeros_like(dropped_total))

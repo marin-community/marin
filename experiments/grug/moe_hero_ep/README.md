@@ -69,15 +69,15 @@ paired hero. Pooled-wave needed the master to fit at all.
 
 These ran before the ragged transport, at capacity and process settings the recipe no longer uses.
 
-The 1.10 sender and 1.15 receiver configuration completed a 20-step, one-rack gate. Median
+The 1.10 pre-transport pool and 1.15 post-transport expert configuration completed a 20-step, one-rack gate. Median
 throughput over steps 2 through 19 was 250,691 tokens/s, and final throughput was 246,947 tokens/s.
-The final loss was 6.3224. The final total drop rate was 19.33%: 7.14% at the sender and 12.19% at
-the receiver. The receiver dropped 13.12% of assignments that reached it. This short gate validates
-memory use and metric reporting. It does not estimate the steady drop rate. All 16 workers completed
+The final loss was 6.3224. The final total drop rate was 19.33%: 7.14% before transport and 12.19%
+after transport. Post-transport clipping dropped 13.12% of assignments that reached that stage. This
+short gate validates memory use and metric reporting. It does not estimate the steady drop rate. All 16 workers completed
 without an OOM, nonfinite value, failure, or preemption. See the
 [W&B run](https://wandb.ai/marin-community/rav_moe/runs/mhep-118-recv-metrics-send110-recv115-smoke).
 
-The prior 1.05 sender and 1.33 receiver configuration completed 200 steps on one rack. Over steps
+The prior 1.05 pre-transport pool and 1.33 post-transport expert configuration completed 200 steps on one rack. Over steps
 150 through 199, median throughput was 256,818 tokens/s and median MFU was 24.03%. Median routing
 drop rate was 2.41%, and the final drop rate was 2.21%. The final loss was 3.2510. All 16 workers
 completed without an OOM, nonfinite value, failure, or preemption. See the

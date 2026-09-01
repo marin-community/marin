@@ -1081,7 +1081,7 @@ def test_fp32_host_master_preserves_float32_initialization(monkeypatch):
     )
 
 
-def test_drop_metrics_reports_sender_and_receiver_fractions():
+def test_drop_metrics_reports_pre_and_post_transport_fractions():
     metrics = train._drop_metrics(
         jnp.array(5, dtype=jnp.int32),
         jnp.array(2, dtype=jnp.int32),
@@ -1095,37 +1095,50 @@ def test_drop_metrics_reports_sender_and_receiver_fractions():
     assert metrics == {
         "moe/dropped_assignments": 5,
         "moe/drop_fraction": 5 / 16,
-        "moe/sender_dropped_assignments": 2,
-        "moe/sender_drop_fraction": 2 / 16,
-        "moe/receiver_dropped_assignments": 3,
-        "moe/receiver_drop_fraction": 3 / 16,
-        "moe/receiver_drop_fraction_of_received": 3 / 14,
+        "moe/pre_transport_dropped_assignments": 2,
+        "moe/pre_transport_drop_fraction": 2 / 16,
+        "moe/post_transport_dropped_assignments": 3,
+        "moe/post_transport_drop_fraction": 3 / 16,
+        "moe/post_transport_drop_fraction_of_received": 3 / 14,
     }
 
 
 def test_drop_metrics_sums_per_layer_counts_in_int64_without_overflow():
     # Per-layer int32 counts whose 48-layer sum exceeds int32 (jax_enable_x64 is off, so an in-device
-    # jnp.sum would wrap and break the total==sender+receiver check). The host sum must stay exact.
+    # jnp.sum would wrap and break the total==pre-transport+post-transport check). The host sum must stay exact.
     num_layers = 48
-    per_layer_sender = jnp.full((num_layers,), 40_000_000, dtype=jnp.int32)  # 48 * 40M = 1.92e9
-    per_layer_receiver = jnp.full((num_layers,), 60_000_000, dtype=jnp.int32)  # 48 * 60M = 2.88e9 > int32
-    per_layer_total = per_layer_sender + per_layer_receiver
-    sender_total = 48 * 40_000_000
-    receiver_total = 48 * 60_000_000
+    per_layer_pre_transport = jnp.full((num_layers,), 40_000_000, dtype=jnp.int32)  # 48 * 40M = 1.92e9
+    per_layer_post_transport = jnp.full((num_layers,), 60_000_000, dtype=jnp.int32)  # 48 * 60M = 2.88e9 > int32
+    per_layer_total = per_layer_pre_transport + per_layer_post_transport
+    pre_transport_total = 48 * 40_000_000
+    post_transport_total = 48 * 60_000_000
 
     metrics = train._drop_metrics(
         per_layer_total,
-        per_layer_sender,
-        per_layer_receiver,
+        per_layer_pre_transport,
+        per_layer_post_transport,
         batch_size=4096,
         sequence_length=4096,
         top_k=8,
         num_layers=num_layers,
     )
 
-    assert metrics["moe/dropped_assignments"] == sender_total + receiver_total  # no int32 wrap
-    assert metrics["moe/sender_dropped_assignments"] == sender_total
-    assert metrics["moe/receiver_dropped_assignments"] == receiver_total
+    assert metrics["moe/dropped_assignments"] == pre_transport_total + post_transport_total  # no int32 wrap
+    assert metrics["moe/pre_transport_dropped_assignments"] == pre_transport_total
+    assert metrics["moe/post_transport_dropped_assignments"] == post_transport_total
+
+
+def test_drop_metrics_rejects_inconsistent_total():
+    with pytest.raises(ValueError):
+        train._drop_metrics(
+            jnp.array(6, dtype=jnp.int32),
+            jnp.array(2, dtype=jnp.int32),
+            jnp.array(3, dtype=jnp.int32),
+            batch_size=2,
+            sequence_length=4,
+            top_k=2,
+            num_layers=1,
+        )
 
 
 def test_baseline_eval_hook_runs_once_after_the_first_step():
