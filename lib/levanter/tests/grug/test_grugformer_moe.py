@@ -1434,7 +1434,7 @@ def test_loop_local_zeros_sites_prevent_cse():
     def distinct_sites(tie):
         return (
             _loop_local_zeros(4, 3, jnp.float32, tie, site=_LoopLocalZeroSite.DISPATCH_OUTPUT),
-            _loop_local_zeros(4, 3, jnp.float32, tie, site=_LoopLocalZeroSite.DISPATCH_COTANGENT),
+            _loop_local_zeros(4, 3, jnp.float32, tie, site=_LoopLocalZeroSite.OPERAND_COTANGENT),
         )
 
     def repeated_site(tie):
