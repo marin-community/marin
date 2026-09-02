@@ -223,10 +223,11 @@ async fn advance_phase(migration: &SpecMigration<'_>) -> Result<bool, StatsError
 /// Publish the verified target version in one state commit and swap the query
 /// view onto it.
 async fn activate(migration: &SpecMigration<'_>) -> Result<SpecLifecycle, StatsError> {
-    let _visibility_guard = migration.query_visibility.write().await;
     // The in-memory query view swaps only after the activation revision is known
     // to be published, so queries never see a version whose state no reader can
-    // recover.
+    // recover. The commit and its publication run before the visibility lock is
+    // taken: publication is a network round trip, and queries keep planning
+    // against the old view until the swap.
     let status = migration
         .controller
         .commit(|| {
@@ -237,6 +238,7 @@ async fn activate(migration: &SpecMigration<'_>) -> Result<SpecLifecycle, StatsE
         })
         .await?
         .output;
+    let _visibility_guard = migration.query_visibility.write().await;
     (migration.on_activated)(&status)?;
     // No further backfill tick runs after activation, so the identity cache
     // has nothing left to serve.

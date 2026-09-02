@@ -506,18 +506,23 @@ impl TableRuntime {
             let _flush_guard = self.object_flush_lock.lock().await;
             flush::flush_to_objects(self.flush_target(), &policy).await?;
         }
-        // Publication runs outside the flush gate: HEAD CAS is a network round
-        // trip GCS rate-limits per object, and holding the gate through its
-        // backoff stalls the next flush and every write ack waiting on it. The
-        // committed revision is owed from the moment it is locally durable, so
-        // a failure here just leaves it owed to maintenance.
-        if let Err(error) = self.controller.publish_owed().await {
-            tracing::warn!(
-                namespace = %self.name,
-                %error,
-                "flush publication deferred; revision stays owed to maintenance"
-            );
-        }
+        // Publication leaves the flush entirely: a flush occupies one of the
+        // process's few flush permits, every object-backed table flushes on
+        // the same cadence, and a network publication inside that window
+        // oversubscribes the pool until every table's acks queue behind it.
+        // The committed revision is owed from the moment it is locally
+        // durable; publications serialize in the per-table controller mailbox
+        // where bursts coalesce, and a failure stays owed to maintenance.
+        let runtime = Arc::clone(self);
+        Arc::clone(self).spawn_tracked(async move {
+            if let Err(error) = runtime.controller.publish_owed().await {
+                tracing::warn!(
+                    namespace = %runtime.name,
+                    %error,
+                    "flush publication deferred; revision stays owed to maintenance"
+                );
+            }
+        });
         Ok(())
     }
 
