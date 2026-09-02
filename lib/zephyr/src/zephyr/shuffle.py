@@ -271,13 +271,14 @@ class _Sidecar:
     ``(_SHARD_COL, _SORT_KEY_COL)``.
     ``shard_bytes`` and ``shard_rows`` map target shard index to the exact
     payload bytes and row count written for that shard across all files, used
-    by reducers to size the merge-memory plan. ``path`` is the mapper output
-    directory the sidecar lives under.
+    by reducers to size the merge-memory plan. ``shard_bytes is None`` means
+    the sidecar predates those measurements and must not be treated as zero.
+    ``path`` is the mapper output directory the sidecar lives under.
     """
 
     path: str
     files: list[_ChunkFile]
-    shard_bytes: dict[int, int]
+    shard_bytes: dict[int, int] | None
     shard_rows: dict[int, int]
 
     _encoder: ClassVar[msgspec.msgpack.Encoder] = msgspec.msgpack.Encoder()
@@ -290,7 +291,15 @@ class _Sidecar:
     def meta_path(data_path: str) -> str:
         return f"{data_path}{_SCATTER_METADATA_FILENAME}"
 
-    def target_bytes(self, target_shard: int) -> int:
+    def target_bytes(self, target_shard: int) -> int | None:
+        """Payload bytes this mapper wrote for ``target_shard``.
+
+        ``None`` means the sidecar has no ``shard_bytes`` map, which is not
+        the same as an explicit zero. When the map is present, a missing key
+        is an empty shard (0).
+        """
+        if self.shard_bytes is None:
+            return None
         return self.shard_bytes.get(target_shard, 0)
 
     def target_rows(self, target_shard: int) -> int:
@@ -302,7 +311,7 @@ class _Sidecar:
         payload = self._encoder.encode(
             {
                 self._files_field: [file.to_metadata() for file in self.files],
-                self._shard_bytes_field: {str(k): v for k, v in self.shard_bytes.items()},
+                self._shard_bytes_field: {str(k): v for k, v in (self.shard_bytes or {}).items()},
                 self._shard_rows_field: {str(k): v for k, v in self.shard_rows.items()},
             }
         )
@@ -318,12 +327,13 @@ class _Sidecar:
         files = data.get(cls._files_field, [])
         if not files:
             return None
-        raw_shard_bytes = data.get(cls._shard_bytes_field, {})
+        # Absent map is unmeasured; present map (including {}) is authoritative.
+        raw_shard_bytes = data[cls._shard_bytes_field] if cls._shard_bytes_field in data else None
         raw_shard_rows = data.get(cls._shard_rows_field, {})
         return cls(
             path=data_path,
             files=[_ChunkFile.from_metadata(file) for file in files],
-            shard_bytes={int(k): int(v) for k, v in raw_shard_bytes.items()},
+            shard_bytes=None if raw_shard_bytes is None else {int(k): int(v) for k, v in raw_shard_bytes.items()},
             shard_rows={int(k): int(v) for k, v in raw_shard_rows.items()},
         )
 
@@ -453,9 +463,11 @@ def _merge_sorted_frames(
 class ScatterReader:
     """All scatter chunks for one target shard, across all source shards.
 
-    ``_chunk_files`` lists every combined Parquet file the mappers wrote. Each
-    file holds rows for *all* target shards, so :meth:`get_frames` filters each
-    scan down to ``_target_shard``.
+    ``_chunk_files`` lists combined Parquet files that may contain this
+    target. Mappers that recorded ``shard_bytes[target] == 0`` are omitted
+    before any Parquet scan. Each remaining file still holds rows for *all*
+    target shards, so :meth:`get_frames` filters each scan down to
+    ``_target_shard``.
 
     Construct via :meth:`from_sidecars` for production use, or pass fields
     directly for testing.
@@ -466,7 +478,7 @@ class ScatterReader:
         chunk_files: list[_ChunkFile],
         target_shard: int,
         avg_item_bytes: float,
-        shard_payload_bytes: float = 0.0,
+        shard_payload_bytes: float | None = 0.0,
     ) -> None:
         self._chunk_files = chunk_files
         self._target_shard = target_shard
@@ -483,8 +495,10 @@ class ScatterReader:
         thousands of mappers.
         """
         chunk_files: list[_ChunkFile] = []
-        shard_payload_bytes = 0.0
-        shard_payload_rows = 0
+        measured_payload_bytes = 0
+        measured_payload_rows = 0
+        payload_is_measured = True
+        contributing_sidecars = 0
 
         with log_time(
             f"Building ScatterReader for target shard {target_shard} "
@@ -492,23 +506,37 @@ class ScatterReader:
         ):
             sidecars = _Sidecar.read_all(scatter_paths)
             for sidecar in sidecars:
+                target_bytes = sidecar.target_bytes(target_shard)
+                # Explicit zero: this mapper has no rows for the shard. Skip
+                # its files before scan_parquet / footer reads. Unmeasured
+                # sidecars (target_bytes is None) keep every chunk.
+                if target_bytes == 0:
+                    continue
+                contributing_sidecars += 1
                 chunk_files.extend(sidecar.files)
-                shard_payload_bytes += sidecar.target_bytes(target_shard)
-                shard_payload_rows += sidecar.target_rows(target_shard)
+                if target_bytes is None:
+                    payload_is_measured = False
+                    continue
+                measured_payload_bytes += target_bytes
+                measured_payload_rows += sidecar.target_rows(target_shard)
 
         # Computed from this target's own exact bytes and row count, not a
         # mapper-wide average, so row width that varies by target (e.g. a
         # skewed shuffle key) doesn't bias the merge-memory prediction.
-        avg_item_bytes = shard_payload_bytes / shard_payload_rows if shard_payload_rows > 0 else 0.0
+        if payload_is_measured:
+            shard_payload_bytes: float | None = float(measured_payload_bytes)
+            avg_item_bytes = shard_payload_bytes / measured_payload_rows if measured_payload_rows > 0 else 0.0
+        else:
+            shard_payload_bytes = None
+            avg_item_bytes = 0.0
 
         logger.info(
-            "ScatterReader for shard %d: %d source shards, %d total chunks, "
-            "avg_item_bytes=%.1f, shard_payload_bytes=%.0f",
+            "ScatterReader for shard %d: %d source shards, %d total chunks, avg_item_bytes=%.1f, shard_payload_bytes=%s",
             target_shard,
-            len(sidecars),
+            contributing_sidecars,
             len(chunk_files),
             avg_item_bytes,
-            shard_payload_bytes,
+            "unknown" if shard_payload_bytes is None else f"{shard_payload_bytes:.0f}",
         )
         return cls(
             chunk_files=chunk_files,
@@ -555,28 +583,42 @@ class ScatterReader:
                 return
 
             frames = self.get_frames()
-            memory_bytes = _task_memory_bytes()
             baseline_rss_bytes = _process_rss_bytes()
             polars_threads = pl.thread_pool_size()
-            fan_in = memory_budget.read_merge_fan_in(
-                memory_bytes,
-                baseline_rss_bytes,
-                self.avg_item_bytes,
-                self.total_chunks,
-                self.shard_payload_bytes,
-                polars_threads,
-            )
-            logger.info(
-                "[shard %d] Merging %d chunks with fan_in=%d "
-                "(baseline_rss=%s, shard_payload_bytes=%s, avg_item_bytes=%.1f, polars_threads=%d)",
-                self._target_shard,
-                self.total_chunks,
-                fan_in,
-                humanfriendly.format_size(baseline_rss_bytes, binary=True),
-                humanfriendly.format_size(self.shard_payload_bytes, binary=True),
-                self.avg_item_bytes,
-                polars_threads,
-            )
+            if self.shard_payload_bytes is None:
+                # Unmeasured payload: do not treat as empty, and do not size an
+                # unbounded in-memory merge. Conservative fan-in spills.
+                fan_in = memory_budget.MIN_MERGE_FAN_IN
+                logger.info(
+                    "[shard %d] Merging %d chunks with fan_in=%d "
+                    "(baseline_rss=%s, shard_payload_bytes=unknown, avg_item_bytes=%.1f, polars_threads=%d)",
+                    self._target_shard,
+                    self.total_chunks,
+                    fan_in,
+                    humanfriendly.format_size(baseline_rss_bytes, binary=True),
+                    self.avg_item_bytes,
+                    polars_threads,
+                )
+            else:
+                fan_in = memory_budget.read_merge_fan_in(
+                    _task_memory_bytes(),
+                    baseline_rss_bytes,
+                    self.avg_item_bytes,
+                    self.total_chunks,
+                    self.shard_payload_bytes,
+                    polars_threads,
+                )
+                logger.info(
+                    "[shard %d] Merging %d chunks with fan_in=%d "
+                    "(baseline_rss=%s, shard_payload_bytes=%s, avg_item_bytes=%.1f, polars_threads=%d)",
+                    self._target_shard,
+                    self.total_chunks,
+                    fan_in,
+                    humanfriendly.format_size(baseline_rss_bytes, binary=True),
+                    humanfriendly.format_size(self.shard_payload_bytes, binary=True),
+                    self.avg_item_bytes,
+                    polars_threads,
+                )
 
             batches = _merge_sorted_frames(
                 frames=frames,

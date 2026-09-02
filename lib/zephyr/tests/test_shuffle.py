@@ -21,6 +21,7 @@ from fsspec.implementations.local import LocalFileSystem
 from iris.env_resources import TaskResources
 from rigging.filesystem.storage_path import StoragePath
 from zephyr import memory_budget
+from zephyr.parquet_scan import scan_parquet
 from zephyr.runners import _InProcessWorkerContext
 from zephyr.shard_keys import deterministic_hash
 from zephyr.shuffle import (
@@ -78,6 +79,46 @@ def _build_shard(tmp_path, items, num_output_shards=4, source_shard=0):
     )
     scatter_paths = list(list_shard)
     return scatter_paths
+
+
+def _sidecar_meta_path(data_path: str) -> str:
+    if not data_path.endswith("/"):
+        data_path = f"{data_path}/"
+    return _Sidecar.meta_path(data_path)
+
+
+def _load_sidecar_payload(data_path: str) -> dict:
+    return _Sidecar._decoder.decode(StoragePath(_sidecar_meta_path(data_path)).read_bytes())
+
+
+def _store_sidecar_payload(data_path: str, payload: dict) -> None:
+    StoragePath(_sidecar_meta_path(data_path)).write_bytes(_Sidecar._encoder.encode(payload))
+
+
+def _drop_shard_bytes_measurement(data_path: str) -> None:
+    payload = _load_sidecar_payload(data_path)
+    payload.pop(_Sidecar._shard_bytes_field, None)
+    payload.pop(_Sidecar._shard_rows_field, None)
+    _store_sidecar_payload(data_path, payload)
+
+
+def _set_explicit_shard_bytes(data_path: str, shard_bytes: dict[int, int]) -> None:
+    payload = _load_sidecar_payload(data_path)
+    payload[_Sidecar._shard_bytes_field] = {str(k): v for k, v in shard_bytes.items()}
+    _store_sidecar_payload(data_path, payload)
+
+
+def _write_mapper(tmp_path, source_shard: int, items: list, *, flushes: int | None = None) -> str:
+    data_path = f"{tmp_path}/shard-{source_shard:04d}/scatter/"
+    writer = ScatterWriter(data_path=data_path, key_fn=_key, source_shard=source_shard)
+    if flushes is None:
+        writer.write(_items_to_dataframe(items, _key, None, 1))
+    else:
+        writer._flush_threshold_bytes = 0
+        for i in range(flushes):
+            writer.write(_items_to_dataframe([items[i % len(items)]], _key, None, 1))
+    writer.close()
+    return data_path
 
 
 # ---------------------------------------------------------------------------
@@ -351,20 +392,136 @@ def test_merge_sorted_chunks_external_trigger(tmp_path):
     assert list(external_dir.iterdir()) == []
 
 
-def test_merge_sorted_chunks_skips_empty_target_shard(tmp_path):
+def test_merge_sorted_chunks_skips_empty_target_shard(tmp_path, monkeypatch):
     key = "only-key"
     populated_shard = _target(key, 2)
     empty_shard = 1 - populated_shard
     scatter_paths = _build_shard(tmp_path, [{"k": key, "v": 1}], num_output_shards=2)
     reader = ScatterReader.from_sidecars(scatter_paths, empty_shard)
 
-    assert reader.total_chunks > 0
-    assert reader.shard_payload_bytes == 0
+    assert reader.total_chunks == 0
+    assert reader.shard_payload_bytes == 0.0
+
+    scanned = []
+
+    def scan_and_record(path, *, schema=None):
+        scanned.append(path)
+        return scan_parquet(path, schema=schema)
+
+    monkeypatch.setattr("zephyr.shuffle.scan_parquet", scan_and_record)
     with patch(
         "zephyr.shuffle.memory_budget.read_merge_fan_in",
         side_effect=AssertionError("empty target shards do not need memory planning"),
     ):
         assert list(reader.merge_sorted_chunks(external_sort_dir=str(tmp_path / "sort"))) == []
+    assert scanned == []
+
+
+# ---------------------------------------------------------------------------
+# Empty-shard skip vs missing shard_bytes (#8352)
+# ---------------------------------------------------------------------------
+
+
+def test_from_sidecars_skips_explicit_zero_byte_shard_before_parquet_scan(tmp_path, monkeypatch):
+    data_path = _write_mapper(tmp_path, 0, [{"k": "a", "v": 1}])
+    _set_explicit_shard_bytes(data_path, {0: 0})
+
+    scanned = []
+
+    def scan_and_record(path, *, schema=None):
+        scanned.append(path)
+        return scan_parquet(path, schema=schema)
+
+    monkeypatch.setattr("zephyr.shuffle.scan_parquet", scan_and_record)
+
+    reader = ScatterReader.from_sidecars([data_path], target_shard=0)
+    assert reader.total_chunks == 0
+    assert reader.shard_payload_bytes == 0.0
+    assert reader.get_frames() == []
+    assert list(reader.merge_sorted_chunks(external_sort_dir=str(tmp_path / "sort"))) == []
+    assert scanned == []
+
+
+def test_from_sidecars_retains_positive_shard_bytes(tmp_path, monkeypatch):
+    data_path = _write_mapper(tmp_path, 0, [{"k": "a", "v": 1}, {"k": "a", "v": 2}])
+
+    scanned = []
+
+    def scan_and_record(path, *, schema=None):
+        scanned.append(path)
+        return scan_parquet(path, schema=schema)
+
+    monkeypatch.setattr("zephyr.shuffle.scan_parquet", scan_and_record)
+
+    reader = ScatterReader.from_sidecars([data_path], target_shard=0)
+    assert reader.total_chunks == 1
+    assert reader.shard_payload_bytes is not None and reader.shard_payload_bytes > 0
+    recovered = _read_shard(reader)
+    assert sorted(row["v"] for row in recovered) == [1, 2]
+    assert scanned == [f"{data_path}c0000.parquet"]
+
+
+def test_from_sidecars_missing_shard_bytes_keeps_chunks_and_external_sorts(tmp_path, monkeypatch):
+    items = [{"k": i, "v": i} for i in range(5)]
+    data_path = _write_mapper(tmp_path, 0, items, flushes=5)
+    _drop_shard_bytes_measurement(data_path)
+
+    scanned = []
+
+    def scan_and_record(path, *, schema=None):
+        scanned.append(path)
+        return scan_parquet(path, schema=schema)
+
+    monkeypatch.setattr("zephyr.shuffle.scan_parquet", scan_and_record)
+
+    reader = ScatterReader.from_sidecars([data_path], target_shard=0)
+    assert reader.total_chunks == 5
+    assert reader.shard_payload_bytes is None
+
+    captured_fan_in: list[int] = []
+    real_merge = _merge_sorted_frames
+
+    def merge_and_record(*args, **kwargs):
+        captured_fan_in.append(kwargs["fan_in"])
+        return real_merge(*args, **kwargs)
+
+    monkeypatch.setattr("zephyr.shuffle._merge_sorted_frames", merge_and_record)
+    with patch(
+        "zephyr.shuffle.memory_budget.read_merge_fan_in",
+        side_effect=AssertionError("unmeasured payload must not use in-memory fan-in sizing"),
+    ):
+        merged = list(reader.merge_sorted_chunks(external_sort_dir=str(tmp_path / "sort")))
+
+    assert [item["v"] for item in merged] == list(range(5))
+    assert captured_fan_in == [memory_budget.MIN_MERGE_FAN_IN]
+    chunk_paths = {f"{data_path}c{i:04d}.parquet" for i in range(5)}
+    assert chunk_paths <= set(scanned)
+
+
+def test_from_sidecars_mixed_mappers_skip_only_explicit_zeros(tmp_path, monkeypatch):
+    zero_path = _write_mapper(tmp_path, 0, [{"k": "a", "v": 0}])
+    positive_path = _write_mapper(tmp_path, 1, [{"k": "a", "v": 1}])
+    missing_path = _write_mapper(tmp_path, 2, [{"k": "a", "v": 2}])
+    _set_explicit_shard_bytes(zero_path, {0: 0})
+    _drop_shard_bytes_measurement(missing_path)
+
+    scanned = []
+
+    def scan_and_record(path, *, schema=None):
+        scanned.append(path)
+        return scan_parquet(path, schema=schema)
+
+    monkeypatch.setattr("zephyr.shuffle.scan_parquet", scan_and_record)
+
+    reader = ScatterReader.from_sidecars([zero_path, positive_path, missing_path], target_shard=0)
+    assert reader.total_chunks == 2
+    assert reader.shard_payload_bytes is None
+
+    recovered = _read_shard(reader)
+    assert sorted(row["v"] for row in recovered) == [1, 2]
+    assert f"{zero_path}c0000.parquet" not in scanned
+    assert f"{positive_path}c0000.parquet" in scanned
+    assert f"{missing_path}c0000.parquet" in scanned
 
 
 def test_scatter_null_keys(tmp_path):
