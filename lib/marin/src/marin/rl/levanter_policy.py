@@ -142,15 +142,21 @@ def _action_log_probs(
     attention_mask: jax.Array,
     action_count: int,
 ) -> jax.Array:
+    sequence_length = sequences.shape[1]
+    if sequence_length > model.Pos.size:
+        raise ValueError(f"sequence length {sequence_length} exceeds model context length {model.Pos.size}")
+    pad_width = model.Pos.size - sequence_length
+    sequences = jnp.pad(sequences, ((0, 0), (0, pad_width)))
+    attention_mask = jnp.pad(attention_mask, ((0, 0), (0, pad_width)), constant_values=False)
     batch_axis = hax.Axis("batch", sequences.shape[0])
-    position_axis = model.Pos.resize(sequences.shape[1])
+    position_axis = model.Pos
     tokens = hax.named(sequences, (batch_axis, position_axis))
     segment_ids = hax.named(jnp.where(attention_mask, 0, -1), (batch_axis, position_axis))
     logits = model(tokens, AttentionMask.causal().with_segment_ids(segment_ids)).array
     token_log_probs = jax.nn.log_softmax(logits[:, :-1, :], axis=-1)
     targets = sequences[:, 1:]
     selected = jnp.take_along_axis(token_log_probs, targets[..., None], axis=-1)[..., 0]
-    return selected[:, -action_count:]
+    return selected[:, sequence_length - action_count - 1 : sequence_length - 1]
 
 
 class LevanterPolicy:
