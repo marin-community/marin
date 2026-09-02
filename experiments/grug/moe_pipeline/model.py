@@ -35,7 +35,7 @@ from levanter.grug.grug_moe import (
 )
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import Pembed_vocab, Plm_head
-from levanter.tracker.histogram import Histogram, SummaryStats
+from levanter.tracker.histogram import SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 from transformers import PretrainedConfig as HfConfig
 
@@ -52,6 +52,8 @@ from experiments.grug.moe.model import GatedNorm as GatedNorm
 from experiments.grug.moe.model import GrugMoeHfConfig as GrugMoeHfConfig
 from experiments.grug.moe.model import MoEMLP as MoEMLP
 from experiments.grug.moe.model import RMSNorm as RMSNorm
+from experiments.grug.moe.model import _summarize_router_metrics as _summarize_router_metrics
+from experiments.grug.moe.model import grugmoe_inference_state_dict as grugmoe_inference_state_dict
 
 RematMode = Literal["recompute_all", "save_moe"]
 
@@ -223,60 +225,6 @@ class GrugModelConfig:
         if config_overrides is not None:
             config.update(config_overrides)
         return GrugMoeHfConfig(**config)
-
-
-def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str, jax.Array | SummaryStats]:
-    routing_entropy = router_metrics["routing_entropy_per_layer"]
-    routing_counts = router_metrics["routing_counts_per_layer"]
-    load_balancing_loss = router_metrics["load_balancing_loss_per_layer"]
-    router_z_loss = router_metrics["router_z_loss_per_layer"]
-    capacity_overflow = router_metrics["capacity_overflow_per_layer"]
-    num_layers = int(routing_entropy.shape[0])
-
-    # Per-layer total assignments = sum of routing_counts over experts (= tokens * k).
-    assignments_per_layer = jnp.sum(routing_counts.astype(jnp.float32), axis=-1)
-    capacity_overflow_rate = capacity_overflow.astype(jnp.float32) / jnp.maximum(assignments_per_layer, 1.0)
-
-    out: dict[str, jax.Array | SummaryStats] = {
-        "train/router/routing_entropy_mean": jnp.mean(routing_entropy),
-        "train/router/load_balancing_loss": jnp.mean(load_balancing_loss),
-        "train/router/router_z_loss": jnp.mean(router_z_loss),
-        "train/router/routing_counts_per_layer": routing_counts,
-        "train/router/capacity_overflow_rate_mean": jnp.mean(capacity_overflow_rate),
-        "qb_beta_per_layer": router_metrics.get("qb_beta_per_layer"),
-    }
-    for i in range(num_layers):
-        out[f"train/router/layer_{i}/routing_entropy"] = routing_entropy[i]
-        out[f"train/router/layer_{i}/load_balancing_loss"] = load_balancing_loss[i]
-        out[f"train/router/layer_{i}/router_z_loss"] = router_z_loss[i]
-        out[f"train/router/layer_{i}/routing_hist"] = _histogram_from_expert_counts(routing_counts[i])
-        out[f"train/router/layer_{i}/capacity_overflow_rate"] = capacity_overflow_rate[i]
-    return out
-
-
-def _histogram_from_expert_counts(expert_counts: jax.Array) -> SummaryStats:
-    counts = jnp.asarray(expert_counts, dtype=jnp.float32)
-    num_experts = counts.shape[0]
-    expert_ids = jnp.arange(num_experts, dtype=jnp.float32)
-    num = jnp.sum(counts)
-    sum_values = jnp.sum(counts * expert_ids)
-    sum_squares = jnp.sum(counts * expert_ids * expert_ids)
-    nonzero = counts > 0
-    min_value = jnp.where(nonzero, expert_ids, jnp.inf).min()
-    max_value = jnp.where(nonzero, expert_ids, -jnp.inf).max()
-    min_value = jnp.where(num > 0, min_value, 0.0)
-    max_value = jnp.where(num > 0, max_value, 0.0)
-    bucket_limits = jnp.arange(num_experts + 1, dtype=jnp.float32)
-    histogram = Histogram(bucket_limits=bucket_limits, bucket_counts=counts)
-    return SummaryStats.from_reduced_values(
-        min=min_value,
-        max=max_value,
-        num=num,
-        nonzero_count=jnp.sum(nonzero),
-        sum=sum_values,
-        sum_squares=sum_squares,
-        histogram=histogram,
-    )
 
 
 class LayerAttentionMode(StrEnum):
@@ -507,62 +455,6 @@ def debug_mesh_and_token_pspec(num_devices: int) -> tuple[jax.sharding.AbstractM
         ),
     )
     return mesh, P(BATCH_AXES, None)
-
-
-def _with_state_dict_prefix(prefix: str | None, name: str) -> str:
-    return name if prefix is None else f"{prefix}.{name}"
-
-
-def _linear_inference_tensor(value: jax.Array) -> jax.Array:
-    return jnp.swapaxes(value, -1, -2)
-
-
-def grugmoe_inference_state_dict(model: Transformer, prefix: str | None = None) -> dict[str, jax.Array]:
-    tensors: dict[str, jax.Array] = {
-        "model.embed_tokens.weight": model.token_embed,
-        "model.embed_norm.weight": model.embed_norm.weight,
-        "model.embed_gated_norm.down_proj.weight": _linear_inference_tensor(model.embed_gated_norm.w_down),
-        "model.embed_gated_norm.up_proj.weight": _linear_inference_tensor(model.embed_gated_norm.w_up),
-        "model.norm.weight": model.final_norm.weight,
-        "model.final_gated_norm.down_proj.weight": _linear_inference_tensor(model.final_gated_norm.w_down),
-        "model.final_gated_norm.up_proj.weight": _linear_inference_tensor(model.final_gated_norm.w_up),
-        "lm_head.weight": _linear_inference_tensor(model.output_proj),
-    }
-
-    for layer_index, block in enumerate(model.blocks):
-        layer_prefix = f"model.layers.{layer_index}"
-        tensors.update(
-            {
-                f"{layer_prefix}.input_layernorm.weight": block.rms_attn.weight,
-                f"{layer_prefix}.attn_gated_norm.down_proj.weight": _linear_inference_tensor(
-                    block.attn_gated_norm.w_down
-                ),
-                f"{layer_prefix}.attn_gated_norm.up_proj.weight": _linear_inference_tensor(block.attn_gated_norm.w_up),
-                f"{layer_prefix}.self_attn.q_proj.weight": _linear_inference_tensor(block.attn.w_q),
-                f"{layer_prefix}.self_attn.k_proj.weight": _linear_inference_tensor(block.attn.w_k),
-                f"{layer_prefix}.self_attn.v_proj.weight": _linear_inference_tensor(block.attn.w_v),
-                f"{layer_prefix}.self_attn.o_proj.weight": _linear_inference_tensor(block.attn.w_o),
-                f"{layer_prefix}.self_attn.attn_gate.weight": _linear_inference_tensor(block.attn.attn_gate),
-                f"{layer_prefix}.post_attention_layernorm.weight": block.rms_mlp.weight,
-                f"{layer_prefix}.mlp_gated_norm.down_proj.weight": _linear_inference_tensor(block.mlp_gated_norm.w_down),
-                f"{layer_prefix}.mlp_gated_norm.up_proj.weight": _linear_inference_tensor(block.mlp_gated_norm.w_up),
-                f"{layer_prefix}.mlp.router.weight": _linear_inference_tensor(block.mlp.router),
-                f"{layer_prefix}.mlp.router.bias": block.mlp.router_bias,
-                f"{layer_prefix}.mlp.experts.gate_proj.weight": _linear_inference_tensor(block.mlp.expert_mlp.w_gate),
-                f"{layer_prefix}.mlp.experts.up_proj.weight": _linear_inference_tensor(block.mlp.expert_mlp.w_up),
-                f"{layer_prefix}.mlp.experts.down_proj.weight": _linear_inference_tensor(block.mlp.expert_mlp.w_down),
-            }
-        )
-        if block.shared is not None:
-            tensors.update(
-                {
-                    f"{layer_prefix}.shared_expert.gate_proj.weight": _linear_inference_tensor(block.shared.w_gate),
-                    f"{layer_prefix}.shared_expert.up_proj.weight": _linear_inference_tensor(block.shared.w_up),
-                    f"{layer_prefix}.shared_expert.down_proj.weight": _linear_inference_tensor(block.shared.w_down),
-                }
-            )
-
-    return {_with_state_dict_prefix(prefix, name): value for name, value in tensors.items()}
 
 
 __all__ = [
