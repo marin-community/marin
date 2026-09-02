@@ -35,3 +35,4 @@ mod missing_remote_object;
 mod registration_race;
 mod remote_outage;
 mod schema_evolution;
+mod write_during_backfill;

@@ -113,8 +113,9 @@ pub struct SpecMigration<'a> {
     pub controller: &'a TableController,
     pub segments: &'a SegmentView,
     pub query_visibility: &'a Arc<RwLock<()>>,
-    /// The table's object-flush gate. A backfill rewrites the very sources a
-    /// concurrent flush would commit against, so the two never overlap.
+    /// The table's object-flush gate. A backfill tick holds it only while
+    /// assembling its batch from one consistent catalog snapshot; the rewrite
+    /// and commit run outside it so concurrent writes keep acking.
     pub flush_gate: &'a tokio::sync::Mutex<()>,
     pub max_merge_arrow_bytes: i64,
     /// Most sources one backfill batch coalesces
@@ -267,73 +268,83 @@ async fn backfill(
     status: &SpecLifecycle,
     pending: &TableMigrationStatus,
 ) -> Result<bool, StatsError> {
-    let _flush_guard = migration.flush_gate.lock().await;
     let table = migration.table;
     let from_version = pending.from_version.unwrap_or(0);
     let to_version = pending.to_version.unwrap_or(0);
     let fence_seq = pending.fence_seq.unwrap_or(-1);
-    let object_records: HashMap<_, _> = migration
-        .catalog
-        .object_segments(table)?
-        .into_iter()
-        .map(|record| (record.path.clone(), record))
-        .collect();
-    let rows = migration.catalog.list_segments(table)?;
-    let covered: HashSet<_> = object_records
-        .values()
-        .filter(|record| record.table_spec_version == to_version && record.migration_backfill)
-        .filter_map(|record| record.migration_source_id.as_deref())
-        .flat_map(|ids| ids.split(SOURCE_ID_SEPARATOR).map(str::to_string))
-        .collect();
-    let mut sources: Vec<_> = rows
-        .iter()
-        .filter(|row| row.max_seq <= fence_seq)
-        .filter(|row| match object_records.get(&row.path) {
-            None => from_version == 0 && row.location != SegmentLocation::Remote,
-            Some(record) => record.table_spec_version == from_version,
-        })
-        .cloned()
-        .collect();
-    sources.sort_by_key(|row| row.min_seq);
     let target_layout = status
         .desired
         .as_ref()
         .and_then(|spec| spec.source_layout.as_option())
         .cloned();
     let batch_byte_cap = MIN_BATCH_SOURCE_BYTES.max(migration.max_merge_arrow_bytes / 4);
-    let mut batch: Vec<BatchSource> = Vec::new();
-    let mut batch_bytes: i64 = 0;
-    let mut unexamined = false;
-    for row in &sources {
-        if batch.len() >= migration.migration_batch_sources || batch_bytes >= batch_byte_cap {
-            unexamined = true;
-            break;
+    // Only batch assembly holds the flush gate, so the tick reads one
+    // consistent catalog snapshot. The gate drops before the rewrite: every
+    // assembled source is fence-frozen and immutable, a concurrent flush
+    // commits only post-fence rows at the target version, and both commits
+    // serialize in the controller — while a WriteRows ack waits on this very
+    // gate, so holding it through a minutes-long rewrite would stall every
+    // write to the table for the whole batch.
+    let (batch, mut unexamined) = {
+        let _flush_guard = migration.flush_gate.lock().await;
+        let object_records: HashMap<_, _> = migration
+            .catalog
+            .object_segments(table)?
+            .into_iter()
+            .map(|record| (record.path.clone(), record))
+            .collect();
+        let rows = migration.catalog.list_segments(table)?;
+        let covered: HashSet<_> = object_records
+            .values()
+            .filter(|record| record.table_spec_version == to_version && record.migration_backfill)
+            .filter_map(|record| record.migration_source_id.as_deref())
+            .flat_map(|ids| ids.split(SOURCE_ID_SEPARATOR).map(str::to_string))
+            .collect();
+        let mut sources: Vec<_> = rows
+            .iter()
+            .filter(|row| row.max_seq <= fence_seq)
+            .filter(|row| match object_records.get(&row.path) {
+                None => from_version == 0 && row.location != SegmentLocation::Remote,
+                Some(record) => record.table_spec_version == from_version,
+            })
+            .cloned()
+            .collect();
+        sources.sort_by_key(|row| row.min_seq);
+        let mut batch: Vec<BatchSource> = Vec::new();
+        let mut batch_bytes: i64 = 0;
+        let mut unexamined = false;
+        for row in &sources {
+            if batch.len() >= migration.migration_batch_sources || batch_bytes >= batch_byte_cap {
+                unexamined = true;
+                break;
+            }
+            let record = object_records.get(&row.path);
+            let Some(localized) = migration.controller.localize_source(row, record).await? else {
+                // The row's bytes exist neither locally nor in the archive: no
+                // reader can serve them and no source can supply them. Drop the
+                // row so the restated universe stops owing rows nothing holds.
+                tracing::warn!(
+                    namespace = %table,
+                    path = %row.path,
+                    rows = row.row_count,
+                    "dropping a legacy migration source whose bytes are unrecoverable"
+                );
+                migration.catalog.remove_segment(table, &row.path)?;
+                continue;
+            };
+            let source_id = source_identity(row, record, &localized).await?;
+            if covered.contains(&source_id) {
+                continue;
+            }
+            batch_bytes += row.byte_size;
+            batch.push(BatchSource {
+                row: row.clone(),
+                localized,
+                source_id,
+            });
         }
-        let record = object_records.get(&row.path);
-        let Some(localized) = migration.controller.localize_source(row, record).await? else {
-            // The row's bytes exist neither locally nor in the archive: no
-            // reader can serve them and no source can supply them. Drop the
-            // row so the restated universe stops owing rows nothing holds.
-            tracing::warn!(
-                namespace = %table,
-                path = %row.path,
-                rows = row.row_count,
-                "dropping a legacy migration source whose bytes are unrecoverable"
-            );
-            migration.catalog.remove_segment(table, &row.path)?;
-            continue;
-        };
-        let source_id = source_identity(row, record, &localized).await?;
-        if covered.contains(&source_id) {
-            continue;
-        }
-        batch_bytes += row.byte_size;
-        batch.push(BatchSource {
-            row: row.clone(),
-            localized,
-            source_id,
-        });
-    }
+        (batch, unexamined)
+    };
     if !batch.is_empty() {
         let staging = StagingDir::create(migration.table_dir)?;
         let outcome = rewrite_batch(
