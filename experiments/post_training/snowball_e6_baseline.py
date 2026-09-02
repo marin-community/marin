@@ -342,6 +342,7 @@ def build_workflow(
     spans_synchronize: bool = True,
     smoke: bool = False,
     debug_distributed: bool = False,
+    label: str = "",
 ) -> ArtifactStep[SkyRLModel]:
     """Compose the E6 baseline as one inspectable artifact step."""
     role_plan = (
@@ -354,8 +355,23 @@ def build_workflow(
         else E6_ROLE_PLAN
     )
     num_nodes = role_plan.policy_num_nodes + role_plan.num_inference_engines
-    # A distinct artifact name: a smoke run must never be mistaken for, or cached as, the baseline.
-    base_name = f"checkpoints/{E6_MODEL_NAME}{'-smoke' if smoke else ''}"
+    # The artifact name IS the telemetry identity, so it has to separate every variant we intend to
+    # compare. run_id is f"{step_name}-{version}" (marin/rl/skyrl.py) and is passed through to
+    # SKYRL_RUN_ID, which becomes the `run_id` resource attribute on every row. Override strings
+    # change the FINGERPRINT but not the name -- so without this, a spans-on and a spans-off run at
+    # the same version publish into the same run_id and their rows are indistinguishable.
+    variant = "-smoke" if smoke else ""
+    if not policy_train_spans:
+        variant += "-nospans"
+    if policy_train_spans and not spans_synchronize:
+        variant += "-nosync"
+    if debug_distributed:
+        variant += "-nccldbg"
+    if bf16_update_mode != "stochastic":
+        variant += f"-{bf16_update_mode}"
+    if label:
+        variant += f"-{label}"
+    base_name = f"checkpoints/{E6_MODEL_NAME}{variant}"
     data = ExternalDataSource(uri=E6_DATA_PREFIX, identity=E6_DATA_IDENTITY)
     train_data = replace(data, relative_path=E6_TRAIN_FILENAME)
     validation_data = replace(data, relative_path=E6_VALIDATION_FILENAME)
@@ -473,6 +489,13 @@ def build_workflow(
     "explicitly because inheriting it silently attributes an optimizer change to the model.",
 )
 @click.option(
+    "--label",
+    default="",
+    help="Extra suffix on the artifact name, and therefore on run_id. The flags that change "
+    "behaviour already encode themselves; use this to separate two runs that are otherwise "
+    "identical (a repeat, or a different cluster).",
+)
+@click.option(
     "--smoke",
     is_flag=True,
     default=False,
@@ -522,6 +545,7 @@ def main(
     spans_synchronize: bool,
     smoke: bool,
     debug_distributed: bool,
+    label: str,
 ) -> ArtifactStep[SkyRLModel]:
     return build_workflow(
         wandb_entity=wandb_entity,
@@ -532,6 +556,7 @@ def main(
         spans_synchronize=spans_synchronize,
         smoke=smoke,
         debug_distributed=debug_distributed,
+        label=label,
     )
 
 
