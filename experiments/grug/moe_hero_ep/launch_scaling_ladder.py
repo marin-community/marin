@@ -273,7 +273,9 @@ def build_ladder_run(
             # Existing 02A temporaries remain valid resume candidates for this lineage.
             load_checkpoint_path=load_checkpoint_path,
             # load_checkpoint stays None: the trainer resumes from the newest checkpoint that
-            # exists, so a retry after a hardware or memory fault continues the run.
+            # exists, so a retry after a hardware or memory fault continues the run. Continuing
+            # another run requires a checkpoint, so a wrong path fails instead of starting fresh.
+            load_checkpoint=True if initialize_from_path is not None else None,
             checkpointer=CheckpointerConfig(
                 base_path=permanent_checkpoint_path,
                 # Rolling resume checkpoints go to region-local temp storage with a lifecycle TTL.
