@@ -43,6 +43,15 @@ goes stale on the next commit.
 - Purpose: canonical Mixture-of-Experts variant; carries its own model, optimizer, train loop, and launch wiring so it can iterate independently of the dense template.
 - Issue: https://github.com/marin-community/marin/pull/3046
 
+### grug-moe-pallas-sconv
+- Path: `experiments/grug/moe_pallas_sconv/`
+- Origin: `moe` at `1b7f389d47`
+- Introduced: 07c6833f4d
+- Last known-good: fca2870b85
+- Status: active
+- Purpose: v5p-8 integration smoke for the four-site Inkling SConv using the Pallas TPU kernel from #8331.
+- Issue: https://github.com/marin-community/marin/issues/8377
+
 ### grug-moe-hero-ep
 - Path: `experiments/grug/moe_hero_ep/`
 - Origin: `moe_hero_fsdp` at PR 7876
