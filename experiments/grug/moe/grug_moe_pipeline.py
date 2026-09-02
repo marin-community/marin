@@ -6,10 +6,8 @@
 Supports standard 1F1B, explicit and automatic zero-bubble schedules, and
 automatic DualPipeV with two logical stages on each physical pipeline rank.
 Standard 1F1B supports any positive microbatch count, including counts smaller
-than the number of stages. Zero-bubble requires at least one microbatch per
-stage and retains stage-local VJP residual arrays between its input- and
-weight-gradient tasks. DualPipeV also requires at least one microbatch per
-logical stage.
+than the number of stages. Zero-bubble and DualPipeV require at least one
+microbatch per logical stage.
 """
 
 from __future__ import annotations
@@ -64,6 +62,7 @@ except ModuleNotFoundError:
 
 TRAIN_LOSS_KEY = "train/loss"
 _QB_BETA_PER_LAYER_KEY = "qb_beta_per_layer"
+_PIPELINE_AXIS = "pipeline"
 
 type _ArrayValue = jax.Array | jax.ShapeDtypeStruct | jaxpp.MpmdArray
 type _StagePullback = Callable[[tuple[jax.Array, jax.Array]], tuple[GrugMoePipelineStage, jax.Array]]
@@ -118,14 +117,14 @@ def make_pipeline_mesh(
 
     data_axis_size = jax.device_count() // fixed_axes
     shape = (config.mpmd_stages, replica_axis_size, data_axis_size, expert_axis_size, 1)
-    axis_names = ("pipeline", "replica_dcn", "data", "expert", "model")
+    axis_names = (_PIPELINE_AXIS, "replica_dcn", "data", "expert", "model")
     devices = np.asarray(jax.devices(), dtype=object).reshape(shape)
     mesh = Mesh(devices, axis_names, axis_types=(AxisType.Explicit,) * len(axis_names))
     if mesh.is_multi_process:
         local_stages = {int(np.argwhere(devices == device)[0][0]) for device in jax.local_devices()}
         if len(local_stages) != 1:
             raise ValueError(f"each JAX process must own exactly one pipeline stage; got {sorted(local_stages)}")
-    return mesh, pp.MpmdMesh(mesh, "pipeline")
+    return mesh, pp.MpmdMesh(mesh, _PIPELINE_AXIS)
 
 
 class GrugMoePipelineStage(eqx.Module):
@@ -343,6 +342,12 @@ def split_automatic_stages(
     num_stages: int,
     layer_counts: tuple[int, ...] | None = None,
 ) -> tuple[tuple[GrugMoePipelineStage, ...], tuple[GrugMoePipelineStage, ...]]:
+    """Partition automatic-schedule stages into trainable and static pytrees.
+
+    Returns:
+        The trainable and static stage tuples. Router biases remain static
+        because the pending QB update supplies them separately.
+    """
     stages = split_transformer(model, num_stages, layer_counts=layer_counts)
     trainable_stages = []
     static_stages = []
@@ -622,13 +627,11 @@ def stage_forward_with_pullback(
 
 
 def stage_pullback_input_gradient(pullback, hidden_cotangent: jax.Array) -> jax.Array:
-    """Evaluate only the activation-gradient output of a reusable stage pullback."""
     router_loss_cotangent = jnp.ones((), dtype=jnp.float32)
     return pullback((hidden_cotangent, router_loss_cotangent))[1]
 
 
 def stage_pullback_weight_gradient(pullback, hidden_cotangent: jax.Array) -> GrugMoePipelineStage:
-    """Evaluate only the parameter-gradient output of a reusable stage pullback."""
     router_loss_cotangent = jnp.ones((), dtype=jnp.float32)
     return pullback((hidden_cotangent, router_loss_cotangent))[0]
 
@@ -1067,6 +1070,26 @@ def _make_explicit_step(
 
         return jax.grad(projected_loss, argnums=(0, 1))(params, hidden)
 
+    def last_stage_loss(
+        params: GrugMoePipelineStage,
+        qb_betas: jax.Array,
+        hidden: jax.Array,
+        batch: GrugLmExample,
+        loss_denominator: jax.Array,
+    ):
+        params = mp_policy.cast_to_compute(_apply_qb_betas(params, qb_betas))
+        hidden, metrics = params.run_blocks(hidden, batch.attn_mask)
+        hidden = params.finish(hidden)
+        loss = params.cross_entropy_loss(
+            hidden,
+            batch.tokens,
+            batch.loss_weight,
+            logsumexp_weight=logsumexp_weight,
+            reduction="sum",
+        )
+        loss = jnp.where(loss_denominator != 0, loss / loss_denominator, jnp.zeros_like(loss))
+        return loss + params.local_router_loss(metrics) / config.microbatches, metrics[_QB_BETA_PER_LAYER_KEY]
+
     def last_stage_loss_and_grads(
         params: GrugMoePipelineStage,
         qb_betas: jax.Array,
@@ -1075,19 +1098,7 @@ def _make_explicit_step(
         loss_denominator: jax.Array,
     ):
         def loss_fn(stage_params, stage_hidden):
-            stage_params = mp_policy.cast_to_compute(_apply_qb_betas(stage_params, qb_betas))
-            stage_hidden, metrics = stage_params.run_blocks(stage_hidden, batch.attn_mask)
-            stage_hidden = stage_params.finish(stage_hidden)
-            loss = stage_params.cross_entropy_loss(
-                stage_hidden,
-                batch.tokens,
-                batch.loss_weight,
-                logsumexp_weight=logsumexp_weight,
-                reduction="sum",
-            )
-            loss = jnp.where(loss_denominator != 0, loss / loss_denominator, jnp.zeros_like(loss))
-            loss = loss + stage_params.local_router_loss(metrics) / config.microbatches
-            return loss, metrics[_QB_BETA_PER_LAYER_KEY]
+            return last_stage_loss(stage_params, qb_betas, stage_hidden, batch, loss_denominator)
 
         (loss, next_qb_betas), (grads, hidden_cotangent) = jax.value_and_grad(
             loss_fn,
@@ -1104,18 +1115,7 @@ def _make_explicit_step(
         loss_denominator: jax.Array,
     ):
         def loss_fn(stage_params, stage_hidden):
-            stage_params = mp_policy.cast_to_compute(_apply_qb_betas(stage_params, qb_betas))
-            stage_hidden, metrics = stage_params.run_blocks(stage_hidden, batch.attn_mask)
-            stage_hidden = stage_params.finish(stage_hidden)
-            loss = stage_params.cross_entropy_loss(
-                stage_hidden,
-                batch.tokens,
-                batch.loss_weight,
-                logsumexp_weight=logsumexp_weight,
-                reduction="sum",
-            )
-            loss = jnp.where(loss_denominator != 0, loss / loss_denominator, jnp.zeros_like(loss))
-            return loss + stage_params.local_router_loss(metrics) / config.microbatches, metrics[_QB_BETA_PER_LAYER_KEY]
+            return last_stage_loss(stage_params, qb_betas, stage_hidden, batch, loss_denominator)
 
         loss, pullback, next_qb_betas = jax.vjp(loss_fn, params, hidden, has_aux=True)
         return loss, next_qb_betas, pullback

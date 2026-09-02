@@ -14,8 +14,6 @@ from enum import StrEnum
 from types import SimpleNamespace
 from typing import cast
 
-H100_BF16_PEAK_FLOPS = 989e12
-
 
 class PipelineSchedule(StrEnum):
     ONE_F_ONE_B = "1f1b"
@@ -169,6 +167,7 @@ def _run_benchmark(config: BenchmarkConfig) -> None:
     import jmp  # noqa: PLC0415
     import numpy as np  # noqa: PLC0415
     import optax  # noqa: PLC0415
+    from fray.device_flops import device_flops  # noqa: PLC0415
     from jax.sharding import NamedSharding  # noqa: PLC0415
     from jax.sharding import PartitionSpec as P  # noqa: PLC0415
     from jaxpp.array import MpmdArray  # noqa: PLC0415
@@ -236,6 +235,9 @@ def _run_benchmark(config: BenchmarkConfig) -> None:
         replica_axis_size=1,
     )
     optimizer = optax.adamw(learning_rate=1e-4, b1=0.9, b2=0.95, weight_decay=0.1)
+    peak_flops_per_device = device_flops("h100")
+    if peak_flops_per_device is None:
+        raise ValueError("Fray does not define H100 BF16 peak FLOP/s")
 
     _log(
         "PIPELINE_CONFIG",
@@ -448,9 +450,9 @@ def _run_benchmark(config: BenchmarkConfig) -> None:
         num_shared_experts=1 if model_config.shared_expert_intermediate_dim > 0 else 0,
         num_experts_per_tok=model_config.num_experts_per_token,
     )
-    analytic_mfu = 3 * forward_flops_per_token * tokens_per_second / (jax.device_count() * H100_BF16_PEAK_FLOPS)
+    analytic_mfu = 3 * forward_flops_per_token * tokens_per_second / (jax.device_count() * peak_flops_per_device)
     median_analytic_mfu = (
-        3 * forward_flops_per_token * median_tokens_per_second / (jax.device_count() * H100_BF16_PEAK_FLOPS)
+        3 * forward_flops_per_token * median_tokens_per_second / (jax.device_count() * peak_flops_per_device)
     )
     if loss is not None:
         _log(
