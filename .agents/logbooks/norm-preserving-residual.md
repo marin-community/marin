@@ -224,3 +224,17 @@ the `softplus(0)` initialization, shared attention/MoE parameters, or Marin's
 - Next action: monitor at the normal capacity cadence; verify finite loss,
   advancing steps, W&B config, throughput, and learned beta values after TPU
   allocation.
+
+### 2026-09-02 13:19 - Gate 1 awaiting capacity
+
+- Result: after nearly one hour in Iris, both child jobs remain pending with
+  zero attempts, failures, or preemptions. The scheduler reason is unchanged:
+  no worker currently matches the `v5p-8` constraints with sufficient
+  capacity. The CPU parent remains running and healthy.
+- Interpretation: this is an external capacity wait, not evidence against the
+  implementation or launch recipe. Changing accelerator topology or zone at
+  this point would weaken the throughput comparison with the July baseline.
+- Next action: leave both children queued. After allocation, confirm finite
+  loss and `train/residual/beta_mean = softplus(0) = log(2)` at initialization,
+  then monitor W&B steps, throughput, learned per-layer beta values, and final
+  Paloma loss.
