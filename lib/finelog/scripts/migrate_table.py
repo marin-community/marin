@@ -47,9 +47,6 @@ LATENCY_REPS = 3
 DEFAULT_WINDOW = 2_000_000
 DEFAULT_REQUEST_TIMEOUT = 30.0
 WATCH_POLL_SECONDS = 15.0
-# One unbounded count(*) over a multi-billion-row table exceeds the server's
-# 10s query deadline; disjoint seq windows keep each scan under it.
-FULL_COUNT_CHUNK_SEQS = 200_000_000
 
 NUMERIC_TYPES = {
     stats_pb2.COLUMN_TYPE_INT32,
@@ -87,15 +84,27 @@ def _scalar(client: LogClient, sql: str):
 
 
 def _full_count(client: LogClient, namespace: str, min_seq: int, frozen: int) -> int:
-    """Count rows with ``seq <= frozen``, chunked so each scan fits the deadline."""
-    total = 0
-    for start in range(min_seq - 1, frozen, FULL_COUNT_CHUNK_SEQS):
-        end = min(start + FULL_COUNT_CHUNK_SEQS, frozen)
-        total += _scalar(
+    """Count rows with ``min_seq <= seq <= frozen``, bisecting on deadline.
+
+    One count over a multi-billion-row table exceeds the server's query
+    deadline, and fixed-size seq chunks are hopeless against sparse seq spaces
+    (telemetry namespaces carry sentinel min_seqs quintillions below their
+    data). Try the whole range; when the server reports a deadline, split it
+    and recurse — empty halves prune by segment metadata and return fast.
+    """
+    lo, hi = min_seq - 1, frozen
+    if lo >= hi:
+        return 0
+    try:
+        return _scalar(
             client,
-            f"SELECT count(*) FROM {_quoted(namespace)} WHERE seq > {start} AND seq <= {end}",
+            f"SELECT count(*) FROM {_quoted(namespace)} WHERE seq > {lo} AND seq <= {hi}",
         )
-    return total
+    except Exception as error:
+        if "deadline" not in str(error).lower() or hi - lo <= 1:
+            raise
+    mid = lo + (hi - lo) // 2
+    return _full_count(client, namespace, lo + 1, mid) + _full_count(client, namespace, mid + 1, hi)
 
 
 def _column_digests(
