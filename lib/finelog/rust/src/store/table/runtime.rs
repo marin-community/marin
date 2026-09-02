@@ -97,6 +97,11 @@ pub struct TableRuntime {
     /// How this table's specification transition is failing, carried across
     /// maintenance ticks.
     pub(super) migration_block: Mutex<MigrationBlock>,
+    /// Source identities the running migration already computed, keyed by path
+    /// with the byte size the hash covered. Legacy identities hash the whole
+    /// file, and every backfill tick revisits every source, so an uncached
+    /// migration would re-hash the covered prefix of the table each tick.
+    pub(super) migration_identities: Mutex<std::collections::HashMap<String, (i64, String)>>,
     pub(super) last_object_gc: Mutex<Option<Instant>>,
     /// Latched stop flag the dispatched work checks at the top of each loop
     /// iteration.
@@ -220,6 +225,7 @@ impl TableRuntime {
             layout_tracker: LayoutTracker::default(),
             index_skips: Mutex::new(BackfillSkips::default()),
             migration_block: Mutex::new(MigrationBlock::default()),
+            migration_identities: Mutex::new(std::collections::HashMap::new()),
             last_object_gc: Mutex::new(None),
             stopped: AtomicBool::new(false),
             task_handles: Mutex::new(Vec::new()),

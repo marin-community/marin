@@ -124,6 +124,10 @@ pub struct SpecMigration<'a> {
     /// How this table's transition is failing, carried across ticks so a
     /// permanently stuck transition becomes visible.
     pub blocked: &'a std::sync::Mutex<MigrationBlock>,
+    /// Already-computed source identities, keyed by path with the byte size
+    /// each hash covered, carried across ticks so covered sources are not
+    /// re-hashed every tick.
+    pub identities: &'a std::sync::Mutex<HashMap<String, (i64, String)>>,
     /// Applied when an activation moves the table to a new version, so the
     /// runtime's cached policy and query view follow the commit.
     pub on_activated: &'a (dyn Fn(&SpecLifecycle) -> Result<(), StatsError> + Send + Sync),
@@ -234,6 +238,9 @@ async fn activate(migration: &SpecMigration<'_>) -> Result<SpecLifecycle, StatsE
         .await?
         .output;
     (migration.on_activated)(&status)?;
+    // No further backfill tick runs after activation, so the identity cache
+    // has nothing left to serve.
+    migration.identities.lock().unwrap().clear();
     tracing::info!(
         namespace = %migration.table,
         table_spec_version = status.active_version(),
@@ -278,14 +285,14 @@ async fn backfill(
         .and_then(|spec| spec.source_layout.as_option())
         .cloned();
     let batch_byte_cap = MIN_BATCH_SOURCE_BYTES.max(migration.max_merge_arrow_bytes / 4);
-    // Only batch assembly holds the flush gate, so the tick reads one
-    // consistent catalog snapshot. The gate drops before the rewrite: every
-    // assembled source is fence-frozen and immutable, a concurrent flush
-    // commits only post-fence rows at the target version, and both commits
-    // serialize in the controller — while a WriteRows ack waits on this very
-    // gate, so holding it through a minutes-long rewrite would stall every
-    // write to the table for the whole batch.
-    let (batch, mut unexamined) = {
+    // Only the catalog snapshot holds the flush gate, so the tick reads one
+    // consistent view of segments and checkpoints. Everything after — identity
+    // hashing, the rewrite, the commit — runs outside it: every candidate
+    // source is fence-frozen and immutable, a concurrent flush commits only
+    // post-fence rows at the target version, and both commits serialize in the
+    // controller. A WriteRows ack waits on this very gate, so any expensive
+    // work held under it stalls every write to the table.
+    let (object_records, sources, covered) = {
         let _flush_guard = migration.flush_gate.lock().await;
         let object_records: HashMap<_, _> = migration
             .catalog
@@ -310,41 +317,41 @@ async fn backfill(
             .cloned()
             .collect();
         sources.sort_by_key(|row| row.min_seq);
-        let mut batch: Vec<BatchSource> = Vec::new();
-        let mut batch_bytes: i64 = 0;
-        let mut unexamined = false;
-        for row in &sources {
-            if batch.len() >= migration.migration_batch_sources || batch_bytes >= batch_byte_cap {
-                unexamined = true;
-                break;
-            }
-            let record = object_records.get(&row.path);
-            let Some(localized) = migration.controller.localize_source(row, record).await? else {
-                // The row's bytes exist neither locally nor in the archive: no
-                // reader can serve them and no source can supply them. Drop the
-                // row so the restated universe stops owing rows nothing holds.
-                tracing::warn!(
-                    namespace = %table,
-                    path = %row.path,
-                    rows = row.row_count,
-                    "dropping a legacy migration source whose bytes are unrecoverable"
-                );
-                migration.catalog.remove_segment(table, &row.path)?;
-                continue;
-            };
-            let source_id = source_identity(row, record, &localized).await?;
-            if covered.contains(&source_id) {
-                continue;
-            }
-            batch_bytes += row.byte_size;
-            batch.push(BatchSource {
-                row: row.clone(),
-                localized,
-                source_id,
-            });
-        }
-        (batch, unexamined)
+        (object_records, sources, covered)
     };
+    let mut batch: Vec<BatchSource> = Vec::new();
+    let mut batch_bytes: i64 = 0;
+    let mut unexamined = false;
+    for row in &sources {
+        if batch.len() >= migration.migration_batch_sources || batch_bytes >= batch_byte_cap {
+            unexamined = true;
+            break;
+        }
+        let record = object_records.get(&row.path);
+        let Some(localized) = migration.controller.localize_source(row, record).await? else {
+            // The row's bytes exist neither locally nor in the archive: no
+            // reader can serve them and no source can supply them. Drop the
+            // row so the restated universe stops owing rows nothing holds.
+            tracing::warn!(
+                namespace = %table,
+                path = %row.path,
+                rows = row.row_count,
+                "dropping a legacy migration source whose bytes are unrecoverable"
+            );
+            migration.catalog.remove_segment(table, &row.path)?;
+            continue;
+        };
+        let source_id = cached_source_identity(migration, row, record, &localized).await?;
+        if covered.contains(&source_id) {
+            continue;
+        }
+        batch_bytes += row.byte_size;
+        batch.push(BatchSource {
+            row: row.clone(),
+            localized,
+            source_id,
+        });
+    }
     if !batch.is_empty() {
         let staging = StagingDir::create(migration.table_dir)?;
         let outcome = rewrite_batch(
@@ -560,6 +567,30 @@ async fn rewrite_batch(
 /// It binds the source's content to the exact rows it covers: an object-backed
 /// source is already named by its content SHA-256, and a version-0 file is hashed
 /// where it lies.
+/// [`source_identity`] through the migration's cross-tick cache. A legacy
+/// identity hashes the whole file and every tick revisits every source, so
+/// the cache is what keeps later ticks from re-hashing the covered prefix of
+/// the table.
+async fn cached_source_identity(
+    migration: &SpecMigration<'_>,
+    row: &SegmentRow,
+    object_record: Option<&ObjectSegmentRecord>,
+    localized: &Path,
+) -> Result<String, StatsError> {
+    if let Some((size, id)) = migration.identities.lock().unwrap().get(&row.path) {
+        if *size == row.byte_size {
+            return Ok(id.clone());
+        }
+    }
+    let id = source_identity(row, object_record, localized).await?;
+    migration
+        .identities
+        .lock()
+        .unwrap()
+        .insert(row.path.clone(), (row.byte_size, id.clone()));
+    Ok(id)
+}
+
 async fn source_identity(
     row: &SegmentRow,
     object_record: Option<&ObjectSegmentRecord>,
