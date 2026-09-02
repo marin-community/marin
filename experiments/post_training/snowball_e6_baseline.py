@@ -301,6 +301,8 @@ def build_workflow(
     max_steps: int = 4,
     ckpt_interval: int | None = None,
     bf16_update_mode: str = "stochastic",
+    policy_train_spans: bool = True,
+    spans_synchronize: bool = True,
 ) -> ArtifactStep[SkyRLModel]:
     """Compose the E6 baseline as one inspectable artifact step."""
     base_name = f"checkpoints/{E6_MODEL_NAME}"
@@ -353,6 +355,11 @@ def build_workflow(
                 # TerminalPolicyExport carries no repo id, so checkpoint_export.hf_hub_repo_id
                 # resolves to null and hub_publisher returns None.
                 "++trainer.hf_save_interval=0",
+                # Worker-side decomposition of policy_train. `++` because these keys are
+                # declared in the pinned MarinSkyRL but not in every base config revision, and
+                # an undeclared key fails Hydra's struct check after the gang has started.
+                f"++trainer.policy_train_spans={str(policy_train_spans).lower()}",
+                f"++trainer.policy_train_spans_synchronize={str(spans_synchronize).lower()}",
             ),
             retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
             seed=17,
@@ -408,6 +415,21 @@ def build_workflow(
     "explicitly because inheriting it silently attributes an optimizer change to the model.",
 )
 @click.option(
+    "--policy-train-spans/--no-policy-train-spans",
+    default=True,
+    show_default=True,
+    help="Decompose policy_train from inside the policy worker. On by default: policy_train is 90.4% "
+    "of the step and a run without this produces the same single opaque number we already have.",
+)
+@click.option(
+    "--spans-synchronize/--no-spans-synchronize",
+    default=True,
+    show_default=True,
+    help="Synchronise CUDA at span boundaries. On attributes time to the right span; off measures "
+    "end-to-end without serialising the pipeline. A spans-on run is for ATTRIBUTION -- do not use it "
+    "as an unbiased whole-step baseline against a spans-off run.",
+)
+@click.option(
     "--ckpt-interval",
     type=int,
     default=None,
@@ -416,12 +438,21 @@ def build_workflow(
     "missing marker and the whole 80-GPU run reports a failed artifact. See _rl_config.",
 )
 @build_options
-def main(wandb_entity: str, max_steps: int, ckpt_interval: int, bf16_update_mode: str) -> ArtifactStep[SkyRLModel]:
+def main(
+    wandb_entity: str,
+    max_steps: int,
+    ckpt_interval: int,
+    bf16_update_mode: str,
+    policy_train_spans: bool,
+    spans_synchronize: bool,
+) -> ArtifactStep[SkyRLModel]:
     return build_workflow(
         wandb_entity=wandb_entity,
         max_steps=max_steps,
         ckpt_interval=ckpt_interval,
         bf16_update_mode=bf16_update_mode,
+        policy_train_spans=policy_train_spans,
+        spans_synchronize=spans_synchronize,
     )
 
 
