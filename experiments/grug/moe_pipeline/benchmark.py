@@ -177,6 +177,7 @@ def _run_benchmark(config: BenchmarkConfig) -> None:
     from levanter.pipeline import reshape_batch_into_microbatches  # noqa: PLC0415
     from levanter.utils.flop_utils import lm_flops_per_token  # noqa: PLC0415
 
+    from experiments.grug.moe_pipeline.model import BATCH_AXES, GrugModelConfig, Transformer  # noqa: PLC0415
     from experiments.grug.moe_pipeline.pipeline import (  # noqa: PLC0415
         TRAIN_LOSS_KEY,
         GrugMoePipelineConfig,
@@ -186,7 +187,6 @@ def _run_benchmark(config: BenchmarkConfig) -> None:
         make_pipeline_mesh,
         prepare_automatic_mpmd_step,
     )
-    from experiments.grug.moe_pipeline.model import BATCH_AXES, GrugModelConfig, Transformer  # noqa: PLC0415
 
     mp_policy = jmp.get_policy(config.mp_policy_string)
     pipeline_config = GrugMoePipelineConfig(
