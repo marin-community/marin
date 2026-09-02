@@ -174,13 +174,14 @@ The Loom VM service account runs interactive agent sessions. Its project, secret
 grants are declared in `infra/pulumi/src/iac/gcp/loom.py` and applied by the `marin`
 infrastructure stack. `Pulumi.marin-loom.yaml` contains runtime configuration only; do not add
 IAM bindings to this application stack or deployment scripts. Loom reaches Echo through its IAP-gated HTTP API on Marina (`infra/marina`), which is
-why the Loom VM account is an IAP accessor there; it holds no database login.
+why the Loom VM account is an IAP accessor there. Its Cloud SQL login and the `context`
+database the codehealth workbench writes to are declared by the `marin-marina` stack.
 
 A stack cannot bootstrap access to its own secrets-provider key. An identity that already has
 key access must apply the central KMS grant before Loom needs it.
 
-Previewing Echo requires read access to its resources, Pulumi state objects, and
-secrets-provider key. Deploying Echo also requires mutation access for Cloud Run,
+Previewing Marina requires read access to its resources, Pulumi state objects, and
+secrets-provider key. Deploying Marina also requires mutation access for Cloud Run,
 Cloud Scheduler, Cloud SQL, Artifact Registry, service accounts, and IAP settings, plus
 payload access to
 `cloudsql-pulumi-admin-password`. Prefer the existing project custom IAP IAM role and

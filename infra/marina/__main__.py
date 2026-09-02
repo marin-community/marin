@@ -3,6 +3,10 @@
 
 """Pulumi entry point for Marina: one Cloud Run service serving every app under infra/marina/apps.
 
+The stack also carries the ``context`` database and the Loom VM's Cloud SQL login, which the
+codehealth review workbench (infra/codehealth) uses directly; they predate Marina and are
+adopted from the retired echo stack with ``pulumi import``.
+
 The stack owns what the apps share: the ``marina`` database on the ``marin-metadata`` Cloud
 SQL instance (one schema per Python app, all owned by the service account), the
 ``marin-marina`` bucket the data root points at, the service, and two Cloud Run jobs that
@@ -33,6 +37,9 @@ DATA_BUCKET = "marin-marina"
 # IAM database user is the principal minus the ".gserviceaccount.com" suffix.
 SERVICE_ACCOUNT = f"{SERVICE}@{PROJECT}.iam.gserviceaccount.com"
 DATABASE_USER = SERVICE_ACCOUNT.removesuffix(".gserviceaccount.com")
+# The codehealth workbench's database and its writer (infra/codehealth/review_store.py).
+CODEHEALTH_DATABASE = "context"
+LOOM_DATABASE_USER = "loom-vm@hai-gcp-models.iam"
 MIGRATE_JOB = "marina-migrate"
 ECHO_SYNC_JOB = "marina-echo-sync"
 # marinmirror bearer token: a GitHub PAT (read:org) of an Open-Athena member.
@@ -105,6 +112,15 @@ def main() -> None:
     ).number
 
     database = gcp.sql.Database("database", name=DATABASE, instance=INSTANCE, project=PROJECT, opts=child)
+    gcp.sql.Database("codehealth-database", name=CODEHEALTH_DATABASE, instance=INSTANCE, project=PROJECT, opts=child)
+    gcp.sql.User(
+        "loom-db-user",
+        name=LOOM_DATABASE_USER,
+        instance=INSTANCE,
+        project=PROJECT,
+        type="CLOUD_IAM_SERVICE_ACCOUNT",
+        opts=child,
+    )
     bucket = gcp.storage.Bucket(
         "data",
         name=DATA_BUCKET,
