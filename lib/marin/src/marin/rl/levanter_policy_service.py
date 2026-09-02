@@ -44,7 +44,7 @@ class LevanterPolicyServiceConfig:
     clip_epsilon: float = 0.2
     tensor_parallel_size: int | None = None
     timeout_hours: float = 24.0
-    port_name: str = "http"
+    port_name: str | None = "http"
 
 
 @dataclass(frozen=True)
@@ -133,7 +133,7 @@ def run_iris_levanter_policy_service(config: LevanterPolicyServiceConfig) -> Non
             return TorchDistributedWeightPublisher(process_group, announce, complete)
 
         ctx = iris_ctx()
-        port = ctx.get_port(config.port_name)
+        port = ctx.get_port(config.port_name) if config.port_name is not None else 0
         socket = bind_serving_socket(job_info.advertise_host, port)
         address = f"http://{job_info.advertise_host}:{port}"
         metadata = {
