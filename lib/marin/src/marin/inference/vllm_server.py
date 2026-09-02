@@ -63,6 +63,7 @@ _UPSTREAM_CUDA_TORCH_BACKEND = "cu130"
 _CUDA_TOOLCHAIN_REQUIREMENTS = (
     "nvidia-cuda-nvcc==13.0.88",
     "nvidia-cuda-crt==13.0.88",
+    "nvidia-cuda-nvrtc==13.0.88",
     "nvidia-nvvm==13.0.88",
 )
 _CUDA_NVCC_BOOTSTRAP = """\
@@ -83,6 +84,10 @@ cudart = cuda_lib / "libcudart.so.13"
 cudart_link = cuda_lib / "libcudart.so"
 if cudart.is_file() and not cudart_link.exists():
     cudart_link.symlink_to(cudart.name)
+nvrtc = cuda_lib / "libnvrtc.so.13"
+nvrtc_link = cuda_lib / "libnvrtc.so"
+if nvrtc.is_file() and not nvrtc_link.exists():
+    nvrtc_link.symlink_to(nvrtc.name)
 os.environ["CUDA_HOME"] = str(cuda_home)
 os.environ["PATH"] = os.pathsep.join((str(nvcc.parent), os.environ["PATH"]))
 os.execvp(sys.argv[1], sys.argv[1:])
