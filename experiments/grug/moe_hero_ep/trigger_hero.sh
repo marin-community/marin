@@ -20,12 +20,10 @@ short_uuid=${short_uuid:0:8}
 launch_commit=$(git rev-parse HEAD)
 if [[ -n $(git status --porcelain --untracked-files=all) ]]; then
   launch_tree_dirty=true
-  launch_tree_state=dirty
 else
   launch_tree_dirty=false
-  launch_tree_state=clean
 fi
-launch_job_name="${RUN_ID}-coord-${launch_commit:0:8}-${launch_tree_state}-${short_uuid}"
+launch_job_name="${RUN_ID}-coord-${short_uuid}"
 launch_record=$(printf 'Hero launch requested.\n\n- Run ID: `%s`\n- Commit: `%s`\n- Tree dirty: `%s`\n- Coordinator job: `%s`\n- Target: `%s` (%s)' \
   "$RUN_ID" "$launch_commit" "$launch_tree_dirty" "$launch_job_name" "$TARGET_CLUSTER" "$TARGET_DESCRIPTION")
 
@@ -36,15 +34,13 @@ echo "Launching hero from commit ${launch_commit}; tree_dirty=${launch_tree_dirt
 uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources \
   --target-cluster "$TARGET_CLUSTER" \
   --priority system \
-  --system-reason "hero run; commit=${launch_commit}; tree_dirty=${launch_tree_dirty}" \
+  --system-reason "hero run" \
   --cpu 1 \
   --memory 4g \
   --max-retries 1000 \
   --job-name "$launch_job_name" \
   -e WANDB_API_KEY "$WANDB_API_KEY" \
   -e WANDB_PROJECT marin_moe \
-  -e GIT_COMMIT "$launch_commit" \
-  -e HERO_LAUNCH_TREE_DIRTY "$launch_tree_dirty" \
   -e IRIS_PORT_JAX 32614 \
   -e XLA_PYTHON_CLIENT_MEM_FRACTION 0.75 \
   -e XLA_FLAGS "--xla_gpu_memory_limit_slop_factor=85" \

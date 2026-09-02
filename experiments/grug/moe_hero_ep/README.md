@@ -267,11 +267,9 @@ retries 1000 times on failure and 100 times on preemption.
 Launch or resume the production d6144 hero with `trigger_hero.sh`. The trigger first comments on
 [issue #8506](https://github.com/marin-community/marin/issues/8506) with the full `HEAD` commit,
 whether the tree has staged, unstaged, or untracked changes, and the coordinator job name. A
-missing GitHub CLI login or failed comment aborts the trigger before Iris submission. The same
-commit and dirty bit appear in the Iris system reason and coordinator environment, and the job
-name carries the short commit and `clean`/`dirty` state. These values describe the source bundle
-submitted by that invocation; the run ID continues to identify the checkpoint and output lineage
-across resumptions.
+missing GitHub CLI login or failed comment aborts the trigger before Iris submission. Iris also
+captures its standard launch provenance in `MARIN_PROVENANCE`. The run ID continues to identify
+the checkpoint and output lineage across resumptions.
 
 ```bash
 WANDB_API_KEY=... ./experiments/grug/moe_hero_ep/trigger_hero.sh

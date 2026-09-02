@@ -97,7 +97,7 @@ def test_scaling_ladder_searches_cluster_and_data_local_temp_roots(monkeypatch):
     ("dirty", "comment_succeeds"),
     [(False, True), (True, True), (False, False)],
 )
-def test_hero_trigger_records_the_submitted_commit_and_tree_state(tmp_path, dirty, comment_succeeds):
+def test_hero_trigger_records_launch_provenance_on_the_tracking_issue(tmp_path, dirty, comment_succeeds):
     repo = tmp_path / "repo"
     repo.mkdir()
     trigger = repo / "trigger_hero.sh"
@@ -156,8 +156,7 @@ def test_hero_trigger_records_the_submitted_commit_and_tree_state(tmp_path, dirt
     result = subprocess.run([str(trigger)], cwd=repo, env=env, check=False, capture_output=True, text=True)
 
     expected_dirty = str(dirty).lower()
-    expected_state = "dirty" if dirty else "clean"
-    expected_job_name = f"hero-12d8b6f0-dee637-coord-{commit[:8]}-{expected_state}-12345678"
+    expected_job_name = "hero-12d8b6f0-dee637-coord-12345678"
     gh_argv = json.loads(gh_capture.read_text())
     assert gh_argv[:4] == [
         "issue",
@@ -178,7 +177,7 @@ def test_hero_trigger_records_the_submitted_commit_and_tree_state(tmp_path, dirt
     submitted = json.loads(capture.read_text())
     argv = submitted["argv"]
     assert argv[argv.index("--target-cluster") + 1] == "cw-us-east-08a"
-    assert argv[argv.index("--system-reason") + 1] == (f"hero run; commit={commit}; tree_dirty={expected_dirty}")
+    assert argv[argv.index("--system-reason") + 1] == "hero run"
     assert argv[argv.index("--job-name") + 1] == expected_job_name
-    assert argv[argv.index("GIT_COMMIT") + 1] == commit
-    assert argv[argv.index("HERO_LAUNCH_TREE_DIRTY") + 1] == expected_dirty
+    assert "GIT_COMMIT" not in argv
+    assert "HERO_LAUNCH_TREE_DIRTY" not in argv
