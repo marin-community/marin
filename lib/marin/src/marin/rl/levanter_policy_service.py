@@ -5,6 +5,7 @@
 
 import contextlib
 import logging
+import os
 import socket
 import time
 import uuid
@@ -74,6 +75,7 @@ class RemoteLevanterPolicySession:
 
 def run_iris_levanter_policy_service(config: LevanterPolicyServiceConfig) -> None:
     """Load a Levanter policy and register one private API endpoint per gang process."""
+    os.environ.setdefault("TF_GPU_ALLOCATOR", "cuda_malloc_async")
     trainer_config = TrainerConfig(require_accelerator=True, tracker=NoopConfig())
     trainer_config.initialize()
 

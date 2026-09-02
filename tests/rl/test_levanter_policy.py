@@ -166,23 +166,26 @@ def test_levanter_policy_http_client_runs_forward_and_training() -> None:
             initial = client.forward(
                 PolicyBatch(sequences, action_count=2, attention_mask=attention_mask)
             ).action_log_probs
-            trained = client.ppo_train(
-                PolicyBatch(
-                    sequences,
-                    action_count=2,
-                    attention_mask=attention_mask,
-                    old_action_log_probs=initial,
-                    advantages=np.ones_like(initial),
+            old_log_probs = initial
+            for _ in range(3):
+                trained = client.ppo_train(
+                    PolicyBatch(
+                        sequences,
+                        action_count=2,
+                        attention_mask=attention_mask,
+                        old_action_log_probs=old_log_probs,
+                        advantages=np.ones_like(old_log_probs),
+                    )
                 )
-            )
-            updated = client.forward(
-                PolicyBatch(sequences, action_count=2, attention_mask=attention_mask)
-            ).action_log_probs
+                old_log_probs = client.forward(
+                    PolicyBatch(sequences, action_count=2, attention_mask=attention_mask)
+                ).action_log_probs
+            updated = old_log_probs
             published_step = client.broadcast_weights()
 
-    assert trained.step == 1
-    assert published_step == 1
-    assert publisher.step == 1
+    assert trained.step == 3
+    assert published_step == 3
+    assert publisher.step == 3
     assert rendezvous.json() == {"master_addr": "10.0.0.7", "master_port": 23456}
     assert not np.allclose(initial, updated)
     assert updated.shape == (1, 2)

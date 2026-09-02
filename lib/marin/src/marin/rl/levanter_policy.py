@@ -203,6 +203,25 @@ def _packed_token_log_probs(model: LmHeadModel, sequences: jax.Array, segment_id
     return selected[0]
 
 
+@eqx.filter_jit(donate="all-except-first")
+def _accumulate_gradients(update, total):
+    return jax.tree.map(
+        lambda update_leaf, total_leaf: None if total_leaf is None else total_leaf + update_leaf,
+        update,
+        total,
+        is_leaf=lambda value: value is None,
+    )
+
+
+@eqx.filter_jit(donate="all-except-first")
+def _scale_gradients(denominator: float, grads):
+    return jax.tree.map(
+        lambda grad: None if grad is None else grad / denominator,
+        grads,
+        is_leaf=lambda value: value is None,
+    )
+
+
 class LevanterPolicy:
     """A deliberately small stateful policy implementation for SkyRL calls."""
 
@@ -282,25 +301,17 @@ class LevanterPolicy:
             if accumulated_grads is None:
                 accumulated_grads = grads
             else:
-                accumulated_grads = jax.tree.map(
-                    lambda total, update: None if total is None else total + update,
-                    accumulated_grads,
-                    grads,
-                    is_leaf=lambda value: value is None,
-                )
+                accumulated_grads = jax.block_until_ready(_accumulate_gradients(grads, accumulated_grads))
 
         assert accumulated_grads is not None
-        grads = jax.tree.map(
-            lambda grad: None if grad is None else grad / denominator,
-            accumulated_grads,
-            is_leaf=lambda value: value is None,
-        )
+        grads = jax.block_until_ready(_scale_gradients(denominator, accumulated_grads))
         updates, self.opt_state = self.optimizer.update(
             grads,
             self.opt_state,
             eqx.filter(self.model, eqx.is_inexact_array),
         )
         self.model = eqx.apply_updates(self.model, updates)
+        jax.block_until_ready(self.model)
         self.step += 1
         return PolicyTrainOutput(action_log_probs, loss_numerator / denominator, self.step)
 
