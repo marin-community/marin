@@ -150,7 +150,7 @@ E6_ROLE_PLAN = SkyRLRolePlan(
 )
 
 
-def _rl_config(*, max_steps: int, ckpt_interval: int, bf16_update_mode: str) -> str:
+def _rl_config(*, max_steps: int, ckpt_interval: int) -> str:
     """Render the SkyRL config.
 
     ``ckpt_interval`` must be **0** for a timing run, and 0 is not merely "an interval past the end".
@@ -258,7 +258,6 @@ trainer:
     optimizer_config:
       lr: 1.0e-5
       max_grad_norm: 0.5
-      bf16_update_mode: {bf16_update_mode}
     fsdp_config:
       cpu_offload: false
       reshard_after_forward: true
@@ -315,7 +314,7 @@ def build_workflow(
         SkyRLSpec(
             name=user_owned_name(base_name),
             version=version or resolve_version(base_name, None),
-            config_yaml=_rl_config(max_steps=max_steps, ckpt_interval=ckpt_interval, bf16_update_mode=bf16_update_mode),
+            config_yaml=_rl_config(max_steps=max_steps, ckpt_interval=ckpt_interval),
             runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.FSDP),
             model=ExternalModel(
                 uri=SNOWBALL_SFT_MIRROR,
@@ -336,7 +335,16 @@ def build_workflow(
             # overrides are appended AFTER the launcher's own, and later Hydra overrides win, so this
             # is the only place the setting actually takes. A resumed timing run appends a second
             # attempt, on possibly different hardware, to what reads as one run.
-            overrides=("++trainer.resume_mode=none",),
+            overrides=(
+                "++trainer.resume_mode=none",
+                # `++`, and an override rather than a config key, because BOTH matter. The key is
+                # absent from optimizer_config's schema at this pin -- fsdp_strategy reads it with
+                # .get(), but the schema never declares it -- and rl_config_translation emits config
+                # body keys with NO prefix unless they match _OPTIONAL_HYDRA_PATTERNS. A plain
+                # override of an undeclared key fails Hydra's struct check, which would abort the run
+                # after the 80-GPU gang had already started.
+                f"++trainer.policy.optimizer_config.bf16_update_mode={bf16_update_mode}",
+            ),
             retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
             seed=17,
         ),

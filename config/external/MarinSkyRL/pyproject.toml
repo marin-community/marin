@@ -8,4 +8,7 @@ dependencies = ["marinskyrl"]
 package = false
 
 [tool.uv.sources]
-marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", branch = "main" }
+# Temporarily tracking our own branch, not main: it carries the preemption-retry budget the
+# baseline measurement run needs (MarinSkyRL 50fc2bf3). Restore `branch = "main"` once that
+# lands upstream.
+marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", branch = "atqamar/rlperf-preemption-retries" }
