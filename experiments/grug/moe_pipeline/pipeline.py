@@ -34,7 +34,6 @@ from experiments.grug.moe_pipeline.model import (
     Block,
     GatedNorm,
     GrugModelConfig,
-    LayerAttentionMode,
     RMSNorm,
     Transformer,
 )
@@ -166,7 +165,8 @@ class GrugMoePipelineStage(eqx.Module):
             hidden, metrics = eqx.filter_checkpoint(block, policy=remat_policy)(
                 hidden,
                 layer_mask,
-                LayerAttentionMode.LONG if is_long else LayerAttentionMode.SHORT,
+                use_pko=is_long and not cfg.disable_pko,
+                disable_rope=is_long and cfg.disable_long_rope,
             )
             block_metrics.append(metrics)
 

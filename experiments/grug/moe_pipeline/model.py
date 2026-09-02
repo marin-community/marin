@@ -9,7 +9,6 @@ No load-balancing loss; router z-loss only. All layers are MoE (no dense layers)
 
 import dataclasses
 from dataclasses import dataclass
-from enum import StrEnum
 from typing import Any, Literal
 
 import equinox as eqx
@@ -36,7 +35,6 @@ from levanter.grug.grug_moe import (
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import Pembed_vocab, Plm_head
 from levanter.tracker.histogram import SummaryStats
-from levanter.utils.activation import ActivationFunctionEnum
 from transformers import PretrainedConfig as HfConfig
 
 from experiments.grug.moe.model import _BATCH_AXES as BATCH_AXES
@@ -46,6 +44,7 @@ from experiments.grug.moe.model import (
     GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY as GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY,
 )
 from experiments.grug.moe.model import GRUG_MOE_MODEL_TYPE as GRUG_MOE_MODEL_TYPE
+from experiments.grug.moe.model import Block as Block
 from experiments.grug.moe.model import CausalSelfAttention as CausalSelfAttention
 from experiments.grug.moe.model import DenseMLP as DenseMLP
 from experiments.grug.moe.model import GatedNorm as GatedNorm
@@ -227,64 +226,6 @@ class GrugModelConfig:
         return GrugMoeHfConfig(**config)
 
 
-class LayerAttentionMode(StrEnum):
-    SHORT = "short"
-    LONG = "long"
-
-
-class Block(eqx.Module):
-    rms_attn: RMSNorm
-    attn_gated_norm: GatedNorm
-    attn: CausalSelfAttention
-    rms_mlp: RMSNorm
-    mlp_gated_norm: GatedNorm
-    mlp: MoEMLP
-    shared: DenseMLP | None
-
-    @staticmethod
-    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Block":
-        attn_key, mlp_key, shared_key, gn_attn_key, gn_mlp_key = random.split(key, 5)
-        shared = None
-        if cfg.shared_expert_intermediate_dim > 0:
-            shared = DenseMLP.init(
-                cfg.hidden_dim, cfg.shared_expert_intermediate_dim, cfg.initializer_std, key=shared_key
-            )
-        return Block(
-            rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-            attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key),
-            attn=CausalSelfAttention.init(cfg, key=attn_key),
-            rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-            mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
-            mlp=MoEMLP.init(cfg, key=mlp_key),
-            shared=shared,
-        )
-
-    @named_call
-    def __call__(
-        self,
-        x: Float[Array, "B S D"],
-        mask: AttentionMask | jax.Array,
-        attention_mode: LayerAttentionMode,
-    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        is_long = attention_mode == LayerAttentionMode.LONG
-        with jax.named_scope("attention"):
-            attn_in = self.attn_gated_norm(self.rms_attn(x))
-            x = x + self.attn(
-                attn_in,
-                mask,
-                use_pko=is_long and not self.attn.cfg.disable_pko,
-                disable_rope=is_long and self.attn.cfg.disable_long_rope,
-            )
-        with jax.named_scope("routed_moe"):
-            mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
-            mlp_out, router_stats = self.mlp(mlp_in)
-        if self.shared is not None:
-            with jax.named_scope("shared_expert"):
-                mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
-        x = x + mlp_out
-        return x, router_stats
-
-
 class Transformer(eqx.Module):
     token_embed: jax.Array
     embed_norm: RMSNorm
@@ -369,7 +310,8 @@ class Transformer(eqx.Module):
             hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(
                 hidden,
                 layer_mask,
-                LayerAttentionMode.LONG if is_long else LayerAttentionMode.SHORT,
+                use_pko=is_long and not cfg.disable_pko,
+                disable_rope=is_long and cfg.disable_long_rope,
             )
             moe_router_stats.append(router_stats)
 
