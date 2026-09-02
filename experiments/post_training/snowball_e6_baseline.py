@@ -153,19 +153,16 @@ E6_ROLE_PLAN = SkyRLRolePlan(
 def _rl_config(*, max_steps: int, ckpt_interval: int) -> str:
     """Render the SkyRL config.
 
-    ``ckpt_interval`` must be **0** for a timing run, and 0 is not merely "an interval past the end".
-    Setting it past the end does NOT stop a checkpoint: any positive interval installs
-    ``CheckpointCallback`` (callbacks/builtin.py), whose ``save_on_train_end`` defaults to True, so a
-    ~539 GB checkpoint is written when training ends no matter how large the interval is. 0 skips
-    the callback entirely.
+    ``ckpt_interval`` defaults to ``max_steps + 1``: no periodic checkpoint, but one terminal
+    checkpoint at train end. That terminal write is **required**, not incidental. On a successful
+    launch ``cloud/iris/job.py`` unconditionally runs ``export_terminal_policy``, which reads the
+    checkpoint marker and raises ``"Successful Iris job did not commit a checkpoint marker"``
+    (``cloud/iris/artifacts.py``) when there is none -- so ``ckpt_interval: 0`` trains all four steps
+    on 80 GPUs and then reports a failed artifact with no terminal manifest.
 
-    0 also closes the Hugging Face upload path, which is the more dangerous one.
-    ``config/callbacks.py`` enables the Hub callback only when ``hf_hub_repo_id`` is truthy **and**
-    ``hf_save_interval > 0``; ``hf_save_interval`` defaults to ``${trainer.ckpt_interval}``. That
-    matters because the launcher auto-defaults ``hf_hub_repo_id`` to **``laion/<job_name>``** when it
-    is unset (cloud/iris/rl_config_translation.py) -- an org we do not own -- and the publisher
-    explicitly turns HF_HUB_OFFLINE back off before uploading (skyrl_train/hf_publisher.py), so the
-    ``HF_HUB_OFFLINE=1`` set in ``extra_env`` below does NOT protect against it.
+    The Hugging Face upload is closed at its own lever instead, ``trainer.hf_save_interval``, as an
+    override in ``build_workflow``. Conflating the two is easy and wrong: ``hf_save_interval`` only
+    *defaults* to ``${trainer.ckpt_interval}``.
     """
 
     # Notes on the values that are NOT simply the gist's, and on the ones that look like oversights
@@ -302,7 +299,7 @@ def build_workflow(
     version: str | None = None,
     wandb_entity: str = "dogml",
     max_steps: int = 4,
-    ckpt_interval: int = 0,
+    ckpt_interval: int | None = None,
     bf16_update_mode: str = "stochastic",
 ) -> ArtifactStep[SkyRLModel]:
     """Compose the E6 baseline as one inspectable artifact step."""
@@ -314,7 +311,10 @@ def build_workflow(
         SkyRLSpec(
             name=user_owned_name(base_name),
             version=version or resolve_version(base_name, None),
-            config_yaml=_rl_config(max_steps=max_steps, ckpt_interval=ckpt_interval),
+            config_yaml=_rl_config(
+                max_steps=max_steps,
+                ckpt_interval=max_steps + 1 if ckpt_interval is None else ckpt_interval,
+            ),
             runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.FSDP),
             model=ExternalModel(
                 uri=SNOWBALL_SFT_MIRROR,
@@ -344,6 +344,15 @@ def build_workflow(
                 # override of an undeclared key fails Hydra's struct check, which would abort the run
                 # after the 80-GPU gang had already started.
                 f"++trainer.policy.optimizer_config.bf16_update_mode={bf16_update_mode}",
+                # The Hugging Face upload gate, and it is NOT ckpt_interval. The Hub callback
+                # needs `trainer.hf_hub_repo_id` truthy AND `trainer.hf_save_interval > 0`
+                # (skyrl_train/config/callbacks.py); hf_save_interval merely DEFAULTS to
+                # ${trainer.ckpt_interval}. The launcher force-sets hf_hub_repo_id to
+                # laion/<job_name> when unset -- an org we do not own -- so this interval is
+                # the only lever we control. The separate terminal export never uploads:
+                # TerminalPolicyExport carries no repo id, so checkpoint_export.hf_hub_repo_id
+                # resolves to null and hub_publisher returns None.
+                "++trainer.hf_save_interval=0",
             ),
             retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
             seed=17,
@@ -400,10 +409,11 @@ def build_workflow(
 )
 @click.option(
     "--ckpt-interval",
-    default=0,
-    show_default=True,
-    help="0 disables checkpointing AND the Hugging Face upload path. Any positive value writes a "
-    "~539 GB checkpoint at train end regardless of how large it is. See _rl_config.",
+    type=int,
+    default=None,
+    help="Checkpoint interval. Default is max_steps + 1: no periodic checkpoint, one terminal "
+    "checkpoint. Do not set 0 -- the launcher's unconditional terminal export then fails on the "
+    "missing marker and the whole 80-GPU run reports a failed artifact. See _rl_config.",
 )
 @build_options
 def main(wandb_entity: str, max_steps: int, ckpt_interval: int, bf16_update_mode: str) -> ArtifactStep[SkyRLModel]:
