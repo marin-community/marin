@@ -108,7 +108,7 @@ def make_pipeline_mesh(
 
     data_axis_size = jax.device_count() // fixed_axes
     shape = (config.mpmd_stages, replica_axis_size, data_axis_size, expert_axis_size, 1)
-    axis_names = (_PIPELINE_AXIS, "replica_dcn", "data", "expert", "model")
+    axis_names = (_PIPELINE_AXIS, *BATCH_AXES, "model")
     devices = np.asarray(jax.devices(), dtype=object).reshape(shape)
     mesh = Mesh(devices, axis_names, axis_types=(AxisType.Explicit,) * len(axis_names))
     if mesh.is_multi_process:

@@ -49,6 +49,13 @@ from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 from transformers import PretrainedConfig as HfConfig
 
+from experiments.grug.moe.model import BATCH_AXES as BATCH_AXES
+from experiments.grug.moe.model import GRUG_MOE_ARCHITECTURE as GRUG_MOE_ARCHITECTURE
+from experiments.grug.moe.model import GRUG_MOE_ARTIFACT_SCHEMA_VERSION as GRUG_MOE_ARTIFACT_SCHEMA_VERSION
+from experiments.grug.moe.model import (
+    GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY as GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY,
+)
+from experiments.grug.moe.model import GRUG_MOE_MODEL_TYPE as GRUG_MOE_MODEL_TYPE
 from experiments.grug.moe.model import CausalSelfAttention as CausalSelfAttention
 from experiments.grug.moe.model import DenseMLP as DenseMLP
 from experiments.grug.moe.model import GatedNorm as GatedNorm
@@ -56,13 +63,6 @@ from experiments.grug.moe.model import GrugMoeHfConfig as GrugMoeHfConfig
 from experiments.grug.moe.model import RMSNorm as RMSNorm
 
 _ROUTING_RENORM_SUM = 2.5
-GRUG_MOE_MODEL_TYPE = "grug_moe"
-GRUG_MOE_ARCHITECTURE = "GrugMoeForCausalLM"
-GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY = "grugmoe_artifact_schema_version"
-GRUG_MOE_ARTIFACT_SCHEMA_VERSION = 1
-
-
-BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
 
 
 def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> int:
