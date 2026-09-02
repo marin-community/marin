@@ -49,10 +49,10 @@ from iris.cluster.types import (
 )
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
+from iris.testing.config import DEFAULT_CONFIG
 
 MARIN_ROOT = Path(__file__).resolve().parents[5]  # repo root
 IRIS_ROOT = MARIN_ROOT / "lib" / "iris"
-DEFAULT_CONFIG = IRIS_ROOT / "config" / "ci-test.yaml"
 
 
 def ensure_dashboard_built(tmp_path_factory) -> None:

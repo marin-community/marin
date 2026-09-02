@@ -83,3 +83,18 @@ def test_scaling_ladder_searches_cluster_and_data_local_temp_roots(monkeypatch):
         "s3://hero-checkpoints/tmp/ttl=14d/checkpoints-temp/marin-us-east-02a/marin/grug/test-d6144/v/checkpoints",
         "s3://marin-us-east-02a/tmp/ttl=14d/checkpoints-temp/marin-us-east-02a/marin/grug/test-d6144/v/checkpoints",
     ]
+
+
+def test_d6144_pins_permanent_checkpoint_at_55000_alongside_the_6000_cadence():
+    step = build_ladder_run(run_id="test-d6144-ckpt", size="d6144", num_steps=390_251, version="2026.08.18")
+    ctx = StepContext.for_fingerprint(runtime_arg_keys=step.runtime_args, deps=step.deps)
+    keep = step.build_config(ctx).trainer.trainer.checkpointer.keep
+
+    # Modular per-`until` ranges: the 6000 cadence holds up to 54000, the middle range pins exactly
+    # 55000, and the open-ended range restores the 6000 cadence for every step past it. Building the
+    # step already runs CheckpointerConfig's monotonic-interval validation.
+    assert keep == [
+        {"until": 54_000, "every": 6_000},
+        {"until": 55_000, "every": 55_000},
+        {"until": None, "every": 6_000},
+    ]

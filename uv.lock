@@ -4247,7 +4247,7 @@ requires-dist = [
     { name = "humanfriendly", specifier = ">=10.0" },
     { name = "kubernetes", marker = "extra == 'controller'", specifier = ">=31.0.0,!=36.0.0,<37" },
     { name = "marin-finelog", editable = "lib/finelog" },
-    { name = "marin-finelog-server", specifier = ">=0.2.31.dev32323413989" },
+    { name = "marin-finelog-server", specifier = ">=0.2.46.dev33324331711" },
     { name = "marin-finestore", editable = "lib/finestore" },
     { name = "marin-iris-native", specifier = ">=0.1.6.dev31131847556" },
     { name = "marin-rigging", editable = "lib/rigging" },
