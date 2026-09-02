@@ -68,6 +68,23 @@ class GrugPipelineTrainConfig:
     moe_implementation: str
     schedule: PipelineSchedule
 
+    def __post_init__(self) -> None:
+        if self.schedule == PipelineSchedule.ZERO_BUBBLE and self.stages != self.physical_stages:
+            raise ValueError(
+                "automatic_zero_bubble requires one logical stage per physical stage; "
+                f"got {self.stages} logical and {self.physical_stages} physical stages"
+            )
+        if self.schedule == PipelineSchedule.DUALPIPE_V:
+            if self.stages != 2 * self.physical_stages:
+                raise ValueError(
+                    "automatic_dualpipe_v requires two logical stages per physical stage; "
+                    f"got {self.stages} logical and {self.physical_stages} physical stages"
+                )
+            if self.microbatches < self.stages:
+                raise ValueError(
+                    f"automatic_dualpipe_v requires at least {self.stages} microbatches, got {self.microbatches}"
+                )
+
 
 @dataclass(frozen=True)
 class GrugRunConfig:

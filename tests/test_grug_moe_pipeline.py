@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import replace
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -8,6 +10,7 @@ import pytest
 from jax.sharding import AxisType, Mesh
 from levanter.data.text.examples import GrugLmExample
 
+from experiments.grug.moe_pipeline.benchmark import _resolve_benchmark_config
 from experiments.grug.moe_pipeline.model import GrugModelConfig, Transformer
 from experiments.grug.moe_pipeline.pipeline import (
     AutomaticPipelineSchedule,
@@ -16,7 +19,7 @@ from experiments.grug.moe_pipeline.pipeline import (
     split_automatic_stages,
     split_transformer,
 )
-from experiments.grug.moe_pipeline.train import _validate_local_mesh
+from experiments.grug.moe_pipeline.train import PipelineSchedule, _validate_local_mesh
 
 
 def _tiny_model(*, num_layers: int = 2) -> tuple[Mesh, Transformer]:
@@ -150,4 +153,26 @@ def test_pipeline_mesh_validation_uses_full_stage_shard_count():
             expert_axis_size=4,
             batch_size=16,
             microbatches=4,
+        )
+
+
+def test_pipeline_train_config_rejects_schedule_topology_mismatch():
+    zero_bubble = _resolve_benchmark_config({})
+
+    with pytest.raises(ValueError, match="one logical stage per physical stage"):
+        replace(zero_bubble, physical_stages=2)
+
+    with pytest.raises(ValueError, match="two logical stages per physical stage"):
+        replace(zero_bubble, schedule=PipelineSchedule.DUALPIPE_V)
+
+
+def test_dualpipe_v_train_config_rejects_too_few_microbatches():
+    zero_bubble = _resolve_benchmark_config({})
+
+    with pytest.raises(ValueError, match="requires at least 4 microbatches"):
+        replace(
+            zero_bubble,
+            physical_stages=2,
+            microbatches=3,
+            schedule=PipelineSchedule.DUALPIPE_V,
         )
