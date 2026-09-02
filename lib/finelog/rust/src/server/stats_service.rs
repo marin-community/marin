@@ -160,18 +160,21 @@ impl StatsService for StatsServiceImpl {
             .ok_or_else(|| ConnectError::invalid_argument("schema required"))?;
         let schema: Schema = schema_from_proto_view(schema_view)?;
         let requested_policy = StoragePolicy::from_proto_view(request.storage_policy.as_option());
+        // Managed namespaces own their storage policy; validate the table spec
+        // against the managed policy, not the client's copy, which may lag the
+        // current policy rules (e.g. a legacy table registered under an older
+        // cap). An explicit conflicting local_cache in the spec still fails.
+        let ns = registration_namespace_for(&namespace)?;
+        let policy = managed_storage_policy_for(&ns)?.unwrap_or(requested_policy);
         let validated_table_spec = request
             .table_spec
             .as_option()
-            .map(|view| ValidatedTableSpec::from_view(view, &schema, &requested_policy))
+            .map(|view| ValidatedTableSpec::from_view(view, &schema, &policy))
             .transpose()?;
         let forwarded_telemetry = is_forwarded_telemetry(&ctx, &namespace);
 
         let store = Arc::clone(&self.store);
-        let requested_namespace = namespace.clone();
         let outcome = run_blocking(move || {
-            let ns = registration_namespace_for(&requested_namespace)?;
-            let policy = managed_storage_policy_for(&ns)?.unwrap_or(requested_policy);
             if forwarded_telemetry {
                 if validated_table_spec.is_some() {
                     return Err(StatsError::SchemaValidation(

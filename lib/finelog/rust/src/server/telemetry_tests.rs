@@ -1260,3 +1260,125 @@ async fn telemetry_route_uses_existing_default_deny_auth_policy() {
     assert_eq!(response.status, StatusCode::UNAUTHORIZED);
     assert_eq!(response.payload["error"]["code"], "unauthorized");
 }
+
+fn local_ctx() -> connectrpc::RequestContext {
+    let mut extensions = http::Extensions::new();
+    extensions.insert(crate::server::auth::AuthIdentity::Network);
+    connectrpc::RequestContext::new(HeaderMap::new()).with_extensions(extensions)
+}
+
+#[tokio::test]
+async fn a_stale_client_policy_registers_a_spec_on_a_managed_namespace() {
+    // Semantic telemetry namespaces carry a server-managed storage policy, and
+    // a legacy table's stored policy can predate the current rules. A migration
+    // client can only echo the stored policy it observes, so the spec validates
+    // against the managed policy rather than the client's copy.
+    use crate::proto::finelog::stats::{
+        OwnedRegisterTableRequestView, RegisterTableRequest, StatsService, TableSpec,
+    };
+    use crate::server::stats_service::StatsServiceImpl;
+    use crate::store::schema::schema_to_proto_owned;
+    use buffa::MessageField;
+
+    let store = disk_store("managed-policy-stale-spec");
+    let namespace = "telemetry_v1.iris";
+    let stale = StoragePolicy {
+        max_bytes: Some(20 * GIBIBYTE),
+        ..StoragePolicy::default()
+    };
+    store
+        .register_table(
+            namespace,
+            super::telemetry::telemetry_schema(),
+            stale.clone(),
+        )
+        .unwrap();
+
+    let schema_proto = schema_to_proto_owned(&store.get_table_schema(namespace).unwrap());
+    let request = RegisterTableRequest {
+        namespace: Some(namespace.to_string()),
+        schema: MessageField::some(schema_proto.clone()),
+        storage_policy: MessageField::some(stale.to_proto_owned()),
+        table_spec: MessageField::some(TableSpec {
+            version: Some(1),
+            logical_schema: MessageField::some(schema_proto),
+            ..TableSpec::default()
+        }),
+        ..RegisterTableRequest::default()
+    };
+    let service = StatsServiceImpl::new(Arc::clone(&store));
+    let response = service
+        .register_table(
+            local_ctx(),
+            OwnedRegisterTableRequestView::from_owned(&request).unwrap(),
+        )
+        .await
+        .unwrap()
+        .body;
+
+    let effective = StoragePolicy::from_proto_owned(response.effective_policy.as_option().unwrap());
+    assert_eq!(effective.max_bytes, Some(2 * GIBIBYTE));
+    assert_eq!(
+        store.get_policy(namespace).unwrap().max_bytes,
+        Some(2 * GIBIBYTE),
+        "the managed policy replaces the stale stored policy",
+    );
+}
+
+#[tokio::test]
+async fn an_explicit_local_cache_conflicting_with_the_managed_policy_is_rejected() {
+    // The managed-policy fold covers an unset local_cache; a spec that
+    // explicitly declares a conflicting cache policy is still refused even
+    // when it matches the request's storage_policy.
+    use crate::proto::finelog::stats::{
+        OperatingPolicy, OwnedRegisterTableRequestView, RegisterTableRequest, StatsService,
+        TableSpec,
+    };
+    use crate::server::stats_service::StatsServiceImpl;
+    use crate::store::schema::schema_to_proto_owned;
+    use buffa::MessageField;
+
+    let store = disk_store("managed-policy-conflicting-spec");
+    let namespace = "telemetry_v1.iris";
+    let stale = StoragePolicy {
+        max_bytes: Some(20 * GIBIBYTE),
+        ..StoragePolicy::default()
+    };
+    store
+        .register_table(
+            namespace,
+            super::telemetry::telemetry_schema(),
+            stale.clone(),
+        )
+        .unwrap();
+
+    let schema_proto = schema_to_proto_owned(&store.get_table_schema(namespace).unwrap());
+    let request = RegisterTableRequest {
+        namespace: Some(namespace.to_string()),
+        schema: MessageField::some(schema_proto.clone()),
+        storage_policy: MessageField::some(stale.to_proto_owned()),
+        table_spec: MessageField::some(TableSpec {
+            version: Some(1),
+            logical_schema: MessageField::some(schema_proto),
+            operating_policy: MessageField::some(OperatingPolicy {
+                local_cache: MessageField::some(stale.to_proto_owned()),
+                ..OperatingPolicy::default()
+            }),
+            ..TableSpec::default()
+        }),
+        ..RegisterTableRequest::default()
+    };
+    let service = StatsServiceImpl::new(Arc::clone(&store));
+    let error = service
+        .register_table(
+            local_ctx(),
+            OwnedRegisterTableRequestView::from_owned(&request).unwrap(),
+        )
+        .await
+        .err()
+        .expect("a conflicting explicit local_cache must be refused");
+    assert!(
+        error.to_string().contains("local_cache"),
+        "unexpected error: {error}",
+    );
+}
