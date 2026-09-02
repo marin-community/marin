@@ -176,7 +176,14 @@ def build_ladder_run(
     # `keep_permanent=None` still writes the final checkpoint; restore is not used (see run_grug).
     if size == "d6144":
         steps_per_eval = 3000
-        keep_permanent: list[dict[str, int]] | None = [{"every": 6000}]
+        # Permanent checkpoint every 6000 steps, plus a one-off at step 55000 for the post-handoff
+        # weight-decay comparison (#8818). Interval keeps are modular within each `until` range, so
+        # the 6000 cadence brackets the pinned 55000 range on both sides.
+        keep_permanent: list[dict[str, int | None]] | None = [
+            {"until": 54000, "every": 6000},
+            {"until": 55000, "every": 55000},
+            {"until": None, "every": 6000},
+        ]
     else:
         steps_per_eval = max(1, round(num_steps / 20))
         keep_permanent = None
