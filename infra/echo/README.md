@@ -114,17 +114,22 @@ case-insensitive literal substring scan over activity, newest first.
 
 The API runs four ONNX inference threads on each 4-vCPU Cloud Run instance. Request-based
 billing retains one warm instance, admits one request per instance, and scales concurrent
-searches out to at most four instances. Startup CPU boost reduces model initialization time
-for burst instances without allocating CPU to idle instances continuously.
+searches out to at most four instances. The production dashboard bundles its JavaScript,
+styles, and fonts into the HTML response so an uncached page load does not consume that
+single-request capacity with parallel static assets. Startup CPU boost reduces model
+initialization time for burst instances without allocating CPU to idle instances continuously.
 
-CLI search prints one result block with an execution-specific grading key, title,
-source ID, and one primary source excerpt of at most 240 characters. File results use
-their highest-ranked `path:line` reference, wiki results use `use_when`, and activity
-results use the matching source excerpt. The detail line is independent of terminal
+CLI search prints one block per result with a grading key tied to the stored search
+result, title, source ID, and one primary source excerpt of at most 240 characters. Pass
+the source ID to `get`; the grading key is for `feedback`. `get` also accepts a file
+grading key with a numeric suffix, such as `file:20849`, and looks up the retained source
+ID. File results use the `path:line` reference ranked highest by search, wiki results use
+the contents of their `use_when` field, and activity results use the matching source
+excerpt. The detail line is independent of terminal
 width, so long source IDs do not consume its display budget. Grading keys use
 `<domain>:<numeric-key>` and remain attached
 to the stored row even when a later corpus sync replaces an activity chunk ID.
-Run `uv run infra/echo/cli.py get <domain:id>` to fetch the full indexed wiki body,
+Run `uv run infra/echo/cli.py get <source-id>` to fetch the full indexed wiki body,
 repository file, pull request or issue chunk, or Discord message and its canonical URL.
 File IDs have the form `file:<owner>/<repository>@main:<path>`; the repository is part
 of the identity, so `file:marin-community/marin@main:README.md` and

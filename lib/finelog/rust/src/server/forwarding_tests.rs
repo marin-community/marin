@@ -14,13 +14,14 @@ use crate::proto::finelog::stats::ColumnType;
 use crate::server::auth::{AuthIdentity, AuthPolicy};
 use crate::server::telemetry::telemetry_schema;
 use crate::server::test_support::{
-    client, disk_store, serve, serve_rejecting, serve_unavailable, stats_client, RequestStats,
-    TestTransport, PRIV_A, PRIV_UNTRUSTED, PUB_A,
+    client, disk_store, serve, serve_rejecting, serve_schema_conflict, serve_unavailable,
+    stats_client, RequestStats, TestTransport, PRIV_A, PRIV_UNTRUSTED, PUB_A,
 };
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{Column, Schema};
 use crate::store::store::LOG_NAMESPACE_NAME;
 use crate::store::Store;
+use crate::telemetry_policy::TELEMETRY_NAMESPACE;
 
 use super::*;
 
@@ -28,6 +29,8 @@ use crate::proto::finelog::logging::LogServiceClient;
 
 const SOURCE_CLUSTER: &str = "cw-test";
 const TELEMETRY_ROW_BYTES: usize = 450;
+const UNSEEN_TELEMETRY_SERVICE: &str = "marinskyrl";
+const UNSEEN_TELEMETRY_NAMESPACE: &str = "telemetry_v1.marinskyrl";
 
 fn jwt_policy(cluster: &str) -> AuthPolicy {
     AuthPolicy::parse(
@@ -90,6 +93,11 @@ impl Fixture {
 
     async fn with_unavailable_hub(tag: &str) -> Self {
         let (target_addr, target_requests) = serve_unavailable().await;
+        Self::with_hub(tag, None, target_addr, target_requests).await
+    }
+
+    async fn with_schema_conflict_hub(tag: &str) -> Self {
+        let (target_addr, target_requests) = serve_schema_conflict().await;
         Self::with_hub(tag, None, target_addr, target_requests).await
     }
 
@@ -227,6 +235,55 @@ async fn write_string_rows(store: &Store, namespace: &str, ids: Vec<String>) {
         .unwrap();
 }
 
+fn root_telemetry_batch(batch_id: &str, service: &str, name: &str) -> RecordBatch {
+    RecordBatch::try_new(
+        Arc::new(ArrowSchema::new(vec![
+            Field::new("schema_version", DataType::Int32, false),
+            Field::new("timestamp_ms", DataType::Int64, false),
+            Field::new("batch_id", DataType::Utf8, false),
+            Field::new("record_index", DataType::Int64, false),
+            Field::new("service", DataType::Utf8, false),
+            Field::new("kind", DataType::Utf8, false),
+            Field::new("name", DataType::Utf8, false),
+            Field::new("resource_attributes_json", DataType::Utf8, false),
+            Field::new("attributes_json", DataType::Utf8, false),
+        ])),
+        vec![
+            Arc::new(arrow::array::Int32Array::from(vec![1])),
+            Arc::new(arrow::array::Int64Array::from(vec![1])),
+            Arc::new(StringArray::from(vec![batch_id])),
+            Arc::new(arrow::array::Int64Array::from(vec![0])),
+            Arc::new(StringArray::from(vec![service])),
+            Arc::new(StringArray::from(vec!["gauge"])),
+            Arc::new(StringArray::from(vec![name])),
+            Arc::new(StringArray::from(vec!["{}"])),
+            Arc::new(StringArray::from(vec!["{}"])),
+        ],
+    )
+    .unwrap()
+}
+
+async fn write_root_telemetry(store: &Arc<Store>, batch_id: &str, name: &str) {
+    let register_store = Arc::clone(store);
+    tokio::task::spawn_blocking(move || {
+        register_store.register_table(
+            TELEMETRY_NAMESPACE,
+            telemetry_schema(),
+            StoragePolicy::default(),
+        )
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    let batch = root_telemetry_batch(batch_id, UNSEEN_TELEMETRY_SERVICE, name);
+    let ipc = encode_ipc(&batch.schema(), &[batch]).unwrap();
+    let (_, last_seq) = store.write_rows(TELEMETRY_NAMESPACE, &ipc, None).unwrap();
+    store
+        .await_persisted(TELEMETRY_NAMESPACE, last_seq, Duration::from_secs(5))
+        .await
+        .unwrap();
+}
+
 /// Every value of `column` the hub holds for `namespace`, read straight off the hub
 /// store. Lets a test assert on a column a log reader never surfaces — notably the
 /// stamped origin `cluster` on a generic stat table. Holds the query-visibility read
@@ -242,6 +299,16 @@ async fn hub_column(store: &Store, namespace: &str, column: &str) -> Vec<Option<
         values.extend(col.iter().map(|v| v.map(str::to_string)));
     }
     values
+}
+
+async fn scalar_i64(store: &Store, sql: &str) -> i64 {
+    let _guard = store.query_visibility().read().await;
+    let providers = store.query_providers().unwrap();
+    let result = run_query_over(&make_ctx(), providers, sql).await.unwrap();
+    result.batches[0]
+        .column(0)
+        .as_primitive::<Int64Type>()
+        .value(0)
 }
 
 /// Every log row the server behind `client` holds, newest last, as `(key, data)` — read
@@ -373,6 +440,45 @@ async fn forward_until(
 ) {
     let running = RunningForwarder::start(forwarder);
     wait_for_cursor(store, target, namespace, expected).await;
+    running.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fresh_remote_store_forwarder_registers_progress_without_panicking() {
+    let local_dir = crate::test_support::unique_dir("forwarder_fresh_remote_local");
+    let remote_dir = crate::test_support::unique_dir("forwarder_fresh_remote_archive");
+    let source = Arc::new(
+        Store::new(
+            Some(local_dir),
+            remote_dir.to_string_lossy().into_owned(),
+            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            crate::store::ServeMode::Live,
+        )
+        .unwrap(),
+    );
+    source.bootstrap_maintenance();
+
+    let target = disk_store("forwarder_fresh_remote_target");
+    let (target_addr, _) = serve(target, hub_policy(SOURCE_CLUSTER)).await;
+    let target_url = format!("http://{target_addr}");
+    let config = ForwardingConfig {
+        target: target_url,
+        cluster: SOURCE_CLUSTER.to_string(),
+    };
+    let minter = TokenMinter::new(PRIV_A, config.cluster.clone()).unwrap();
+    let forwarder = Forwarder::with_client(
+        Arc::clone(&source),
+        config,
+        minter,
+        stats_client(target_addr),
+    );
+
+    let running = RunningForwarder::start(forwarder);
+    poll_until(
+        || source.get_table_schema(FINELOG_NAMESPACE).is_ok(),
+        || "forwarder did not register its progress namespace".to_string(),
+    )
+    .await;
     running.finish().await;
 }
 
@@ -642,33 +748,17 @@ async fn forwarded_telemetry_ignores_candidate_only_nullable_columns() {
     .await
     .unwrap()
     .unwrap();
-    let batch = RecordBatch::try_new(
-        Arc::new(ArrowSchema::new(vec![
-            Field::new("schema_version", DataType::Int32, false),
-            Field::new("timestamp_ms", DataType::Int64, false),
-            Field::new("batch_id", DataType::Utf8, false),
-            Field::new("record_index", DataType::Int64, false),
-            Field::new("service", DataType::Utf8, false),
-            Field::new("kind", DataType::Utf8, false),
-            Field::new("name", DataType::Utf8, false),
-            Field::new("resource_attributes_json", DataType::Utf8, false),
-            Field::new("attributes_json", DataType::Utf8, false),
-            Field::new("candidate", DataType::Utf8, true),
-        ])),
-        vec![
-            Arc::new(arrow::array::Int32Array::from(vec![1])),
-            Arc::new(arrow::array::Int64Array::from(vec![1])),
-            Arc::new(StringArray::from(vec!["batch"])),
-            Arc::new(arrow::array::Int64Array::from(vec![0])),
-            Arc::new(StringArray::from(vec!["service"])),
-            Arc::new(StringArray::from(vec!["gauge"])),
-            Arc::new(StringArray::from(vec!["accepted"])),
-            Arc::new(StringArray::from(vec!["{}"])),
-            Arc::new(StringArray::from(vec!["{}"])),
-            Arc::new(StringArray::from(vec![Some("ignored")])),
-        ],
-    )
-    .unwrap();
+    let batch = root_telemetry_batch("batch", "service", "accepted");
+    let mut fields: Vec<Field> = batch
+        .schema()
+        .fields()
+        .iter()
+        .map(|field| field.as_ref().clone())
+        .collect();
+    fields.push(Field::new("candidate", DataType::Utf8, true));
+    let mut columns = batch.columns().to_vec();
+    columns.push(Arc::new(StringArray::from(vec![Some("ignored")])));
+    let batch = RecordBatch::try_new(Arc::new(ArrowSchema::new(fields)), columns).unwrap();
     let ipc = encode_ipc(&batch.schema(), &[batch]).unwrap();
     let (_, last_seq) = fx.source.write_rows(namespace, &ipc, None).unwrap();
     fx.source
@@ -686,6 +776,61 @@ async fn forwarded_telemetry_ignores_candidate_only_nullable_columns() {
         vec![Some("accepted".to_string())]
     );
     assert_eq!(fx.cursor(namespace), Some(fx.tip(namespace)));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn forwarded_root_telemetry_registers_an_unseen_semantic_namespace() {
+    let fx = Fixture::new("telemetry-unseen-service").await;
+    write_root_telemetry(&fx.source, "batch", "queue_depth").await;
+    fx.forward_from_start(TELEMETRY_NAMESPACE);
+
+    fx.drain(PRIV_A, TELEMETRY_NAMESPACE).await;
+
+    assert_eq!(
+        hub_column(fx.target_store(), UNSEEN_TELEMETRY_NAMESPACE, "name").await,
+        vec![Some("queue_depth".to_string())]
+    );
+    assert_eq!(
+        fx.cursor(TELEMETRY_NAMESPACE),
+        Some(fx.tip(TELEMETRY_NAMESPACE))
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_forwarders_share_one_unseen_semantic_namespace_engine() {
+    let target = disk_store("telemetry-concurrent-target");
+    let (target_addr, target_requests) =
+        serve(Arc::clone(&target), hub_policy(SOURCE_CLUSTER)).await;
+    let fx_a = Fixture::with_hub(
+        "telemetry-concurrent-a",
+        Some(Arc::clone(&target)),
+        target_addr,
+        Arc::clone(&target_requests),
+    )
+    .await;
+    let fx_b = Fixture::with_hub(
+        "telemetry-concurrent-b",
+        Some(target),
+        target_addr,
+        target_requests,
+    )
+    .await;
+    write_root_telemetry(&fx_a.source, "batch-a", "queue_a").await;
+    write_root_telemetry(&fx_b.source, "batch-b", "queue_b").await;
+    fx_a.forward_from_start(TELEMETRY_NAMESPACE);
+    fx_b.forward_from_start(TELEMETRY_NAMESPACE);
+
+    tokio::join!(
+        fx_a.drain(PRIV_A, TELEMETRY_NAMESPACE),
+        fx_b.drain(PRIV_A, TELEMETRY_NAMESPACE)
+    );
+
+    let mut names = hub_column(fx_a.target_store(), UNSEEN_TELEMETRY_NAMESPACE, "name").await;
+    names.sort();
+    assert_eq!(
+        names,
+        vec![Some("queue_a".to_string()), Some("queue_b".to_string())]
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -711,8 +856,56 @@ async fn a_bearer_the_hub_does_not_trust_forwards_nothing_and_loses_nothing() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_batch_the_hub_calls_malformed_preserves_its_cursor_for_retry() {
+async fn a_batch_the_hub_calls_malformed_is_dropped() {
     let fx = Fixture::with_rejecting_hub("poison").await;
+    push(&fx.source_client, "/user/job/t", &["hello"]).await;
+    fx.forward_from_start(LOG_NAMESPACE_NAME);
+
+    let forwarder = fx.forwarder(PRIV_A);
+    let mut progress = Progress::new();
+    progress.last_report = Instant::now() - PROGRESS_INTERVAL;
+    let (_stop_tx, mut stop) = watch::channel(false);
+    forwarder.forward_round(&mut progress, &mut stop).await;
+
+    assert_eq!(
+        fx.cursor(LOG_NAMESPACE_NAME),
+        Some(fx.tip(LOG_NAMESPACE_NAME)),
+        "a permanently rejected batch must not wedge every later row in the namespace"
+    );
+    assert_eq!(
+        scalar_i64(
+            &fx.source,
+            r#"SELECT CAST(sum(value) AS BIGINT)
+               FROM "telemetry_v1.finelog"
+               WHERE name = 'forwarding_batches'
+                 AND json_get(attributes_json, 'namespace') = 'log'
+                 AND json_get(attributes_json, 'outcome') = 'permanent_rejection'"#,
+        )
+        .await,
+        1,
+    );
+    assert_eq!(
+        scalar_i64(
+            &fx.source,
+            r#"SELECT CAST(sum(value) AS BIGINT)
+               FROM "telemetry_v1.finelog"
+               WHERE name = 'forwarding_seq_positions'
+                 AND json_get(attributes_json, 'namespace') = 'log'
+                 AND json_get(attributes_json, 'outcome') = 'permanent_rejection'"#,
+        )
+        .await,
+        fx.tip(LOG_NAMESPACE_NAME),
+    );
+    assert_eq!(
+        fx.requests(),
+        1,
+        "one namespace receives only one attempt in a forwarding sweep"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_batch_that_conflicts_with_the_hub_schema_stays_owed() {
+    let fx = Fixture::with_schema_conflict_hub("schema-conflict").await;
     push(&fx.source_client, "/user/job/t", &["hello"]).await;
     fx.forward_from_start(LOG_NAMESPACE_NAME);
 
@@ -724,12 +917,40 @@ async fn a_batch_the_hub_calls_malformed_preserves_its_cursor_for_retry() {
     assert_eq!(
         fx.cursor(LOG_NAMESPACE_NAME),
         Some(0),
-        "a rejected batch stays owed because a later schema registration may make it valid"
+        "a schema-state rejection may clear after registration or a hub upgrade"
     );
+    assert_eq!(fx.requests(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn forwarding_progress_telemetry_reaches_the_hub() {
+    let fx = Fixture::new("forwarding-progress").await;
+    let forwarder = fx.forwarder(PRIV_A);
+    forwarder.ensure_progress_namespace().await.unwrap();
+    fx.forward_from_start(FINELOG_NAMESPACE);
+
+    push(&fx.source_client, "/user/job/t", &["hello"]).await;
+    fx.forward_from_start(LOG_NAMESPACE_NAME);
+    let mut progress = Progress::new();
+    progress.last_report = Instant::now() - PROGRESS_INTERVAL;
+    let (_stop_tx, mut stop) = watch::channel(false);
+    forwarder.forward_round(&mut progress, &mut stop).await;
+    forwarder.forward_round(&mut progress, &mut stop).await;
+
     assert_eq!(
-        fx.requests(),
+        scalar_i64(
+            fx.target_store(),
+            &format!(
+                r#"SELECT CAST(sum(value) AS BIGINT)
+                   FROM "telemetry_v1.finelog"
+                   WHERE cluster = '{SOURCE_CLUSTER}'
+                     AND name = 'forwarding_batches'
+                     AND json_get(attributes_json, 'namespace') = 'log'
+                     AND json_get(attributes_json, 'outcome') = 'accepted'"#
+            ),
+        )
+        .await,
         1,
-        "one namespace receives only one attempt in a forwarding sweep"
     );
 }
 

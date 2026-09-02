@@ -3,7 +3,7 @@
 
 """Compose deploy-target IAM declarations into the global IAM stack."""
 
-from iac.gcp import echo, evaldash, grafana, loom
+from iac.gcp import echo, evaldash, grafana, iris, loom
 from iac.gcp.iam import GcpEncryptedMember, GcpIamArgs, merge_iam_grant_sets
 from iac.gcp.iam_config import GcpIamConfig
 
@@ -24,12 +24,14 @@ def global_iam_args(project: str, config: GcpIamConfig) -> GcpIamArgs:
         buckets=config.buckets,
         artifact_repositories=config.artifact_repositories,
         service_accounts=config.service_accounts,
+        backend_service_iap=(),
         cloud_run_iap=(),
     )
     return merge_iam_grant_sets(
         args,
         (
-            echo.iam_grants(project),
+            iris.iam_grants(project, principals),
+            echo.iam_grants(project, principals),
             evaldash.iam_grants(project, principals),
             grafana.iam_grants(project, principals),
             loom.iam_grants(project),

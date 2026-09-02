@@ -30,6 +30,7 @@ def test_cks_values_disable_tas_balanced_placement():
     # stay ON.
     assert _gate(gates, "TopologyAwareScheduling") is True
     assert _gate(gates, "TASMultiLayerTopology") is True
+    assert _gate(gates, "TASRecomputeAssignmentWithinSchedulingCycle") is True
 
 
 def test_upstream_values_never_enable_tas_balanced_placement():
@@ -38,13 +39,23 @@ def test_upstream_values_never_enable_tas_balanced_placement():
     gates = build_upstream_values(["iris"])["controllerManager"]["featureGates"]
     assert _gate(gates, "TASBalancedPlacement") in (None, False)
     assert _gate(gates, "TopologyAwareScheduling") is True
+    assert _gate(gates, "TASRecomputeAssignmentWithinSchedulingCycle") is True
 
 
 def test_resource_flavor_and_cluster_queue_use_one_all_node_tas_flavor():
     flavor = build_resource_flavor()
-    queue = build_cluster_queue("iris-cq")
+    queue = build_cluster_queue(
+        "iris-cq",
+        nominal_quotas={"nvidia.com/gpu": "512", "rdma/ib": "512"},
+    )
 
     assert flavor["metadata"]["name"] == "cw-tas"
     assert flavor["spec"]["nodeLabels"] == {"iris.kueue": "true"}
     assert [entry["name"] for entry in queue["spec"]["resourceGroups"][0]["flavors"]] == ["cw-tas"]
     assert queue["spec"]["preemption"] == {"withinClusterQueue": "LowerPriority"}
+    resources = {
+        resource["name"]: resource["nominalQuota"]
+        for resource in queue["spec"]["resourceGroups"][0]["flavors"][0]["resources"]
+    }
+    assert resources["nvidia.com/gpu"] == "512"
+    assert resources["rdma/ib"] == "512"

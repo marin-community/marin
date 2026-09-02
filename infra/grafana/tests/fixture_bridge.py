@@ -44,6 +44,7 @@ def _nightlies() -> list[dict]:
                     "group": group,
                     "subgroup": subgroup,
                     "state": "run",
+                    "status": "completed",
                     "duration_state": "slow" if slow else "normal",
                     "duration_seconds": 1800 + lane_order * 137 + offset * 83,
                     "conclusion": "failure" if failed else "success",

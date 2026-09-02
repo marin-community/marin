@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Shared GCP IAM declaration for hai-gcp-models. Deploy-target grants live in
-# the adjacent echo.py, evaldash.py, grafana.py, and loom.py modules. The
+# the adjacent echo.py, evaldash.py, grafana.py, iap.py, and loom.py modules. The
 # `marin` stack composes every declaration and is their sole owner. Resources
 # use role-authoritative IAM bindings. Human user principals are KMS ciphertexts
 # declared once under `principals`; grants reference their opaque IDs so one
@@ -91,6 +91,8 @@ principals:
   human-070: CiQAKk3j6fgMf61FVEtp0V9YlyIoV1cTlbQfsX3SUjkVvhqAlp8SOQCdtF6iWgYGtbPiXHphalp6BT4zzVcGCml7SGl/0WrrOv4xvqyA/cWaE4XCV9ShI1mROr681jsQEg==
   human-071: CiQAKk3j6cD5Sn3yMtL/TWv5wzcr/lNOmiC5fJKYNkU6t3ovHcUSTgCdtF6i2hQWfJcp+NOEds/fZ7CgpqViU7mgNXSd9TgLlzLJTO3eQO+gddA9WkKSbpFY++pbI0MfTUcoA4H/0Z0SL1IyltZRilV6h0mcuQ==
   human-072: CiQAKk3j6ZQLD7r1vaRwiSHTnivaFUvKNXMMqXYuKdc5Js6e41ISQgCdtF6iUVQYgRvAP6ktihBwriBkTiNYuHkN8N8n0gulAVVONh2eQROrZyLGaXpHLm6LZtzXdBRKa45h17J8c7brDw==
+  human-073: CiQAKk3j6XhHG0zB0wc8wvTpRg+a917RHbGNiKEfMOjUg5U7wooSNgCdtF6ixFHhqzu9HE/B1BG+tZfnvFdja1vsa5ENcA6A9Ct91HlL1KEVF0TRQWLh335BYvlk3A==
+  human-074: CiQAKk3j6W8EielHZX+VY4OE/tK1Zc0tTB/84c649DRvFAwwwQESPQCdtF6igaZrKkU6Wq7Fq0aRWFHIGIteuC2LRt52Ed271Fk+01IgyGf7sI5qZEPFwgYCHVr4Rgz1V7ivtT0=
 custom_roles:
 - role_id: marinGcpResourcePreviewer
   title: Marin GCP Resource Previewer
@@ -1174,6 +1176,7 @@ project_grants:
 - role: roles/iam.serviceAccountAdmin
   members:
   - principal: human-070
+  - principal: human-007
 - role: roles/iam.serviceAccountCreator
   members:
   - principal: human-019
@@ -1192,17 +1195,6 @@ project_grants:
 - role: roles/iap.admin
   members:
   - serviceAccount:ravwojdyla@rav-openathena.iam.gserviceaccount.com
-- role: roles/iap.httpsResourceAccessor
-  members:
-  - serviceAccount:iris-controller@hai-gcp-models.iam.gserviceaccount.com
-  - serviceAccount:ravwojdyla@rav-openathena.iam.gserviceaccount.com
-  - principal: human-014
-  - principal: human-032
-  - principal: human-024
-  - principal: human-012
-  - principal: human-067
-  - principal: human-021
-  - principal: human-006
 - role: roles/iap.tunnelResourceAccessor
   members:
   - principal: human-032

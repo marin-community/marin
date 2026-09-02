@@ -548,11 +548,11 @@ def test_drop_table_unknown_is_no_op(tracked_clients, monkeypatch):
 
 
 def test_get_table_registration_conflict_drops_batch(tracked_clients, monkeypatch):
-    """A non-retryable registration failure is handled as a flush failure.
+    """A non-retryable registration failure resolves the flush as DROPPED.
 
     Registration happens on the flush thread, so a schema conflict cannot
-    propagate to the caller of get_table. The offending batch is dropped (the
-    error is non-retryable) and the Table stays usable without crashing.
+    propagate to the caller of get_table. The offending batch is dropped and
+    the Table stays usable, but the flush must not claim the rows landed.
     """
 
     def conflict(self, request):
@@ -563,9 +563,12 @@ def test_get_table_registration_conflict_drops_batch(tracked_clients, monkeypatc
     try:
         table = client.get_table("iris.worker", WorkerStat)
         table.write([WorkerStat(worker_id="w-1", timestamp_ms=1, mem_bytes=1)])
-        # Non-retryable: the batch is dropped, the flush resolves, nothing raises.
-        assert table.flush(timeout=5.0) == FlushResult.SUCCEEDED
+        assert table.flush(timeout=5.0) == FlushResult.DROPPED
         assert tracked_clients[0].writes == []
+        # The verdict is per-flush: a later write that lands reports SUCCEEDED.
+        monkeypatch.undo()
+        table.write([WorkerStat(worker_id="w-2", timestamp_ms=2, mem_bytes=2)])
+        assert table.flush(timeout=5.0) == FlushResult.SUCCEEDED
     finally:
         client.close()
 
@@ -613,6 +616,43 @@ def test_get_table_retries_transient_registration_failure(tracked_clients, monke
         assert calls["n"] >= 2
         landed = any(w.namespace == "iris.worker" for c in tracked_clients for w in c.writes)
         assert landed
+    finally:
+        client.close()
+
+
+def test_get_table_reregisters_after_server_loses_namespace(tracked_clients, monkeypatch):
+    """A server-side catalog reset must not strand a long-lived Table handle."""
+    monkeypatch.setattr(log_client_mod, "_BACKOFF_INITIAL", 1e-9)
+    monkeypatch.setattr(log_client_mod, "_BACKOFF_MAX", 1e-9)
+
+    catalog_registered = False
+    real_register = _FakeStatsServiceClient.register_table
+    real_write = _FakeStatsServiceClient.write_rows
+
+    def register(self, request):
+        nonlocal catalog_registered
+        catalog_registered = True
+        return real_register(self, request)
+
+    def require_registration(self, request):
+        if not catalog_registered:
+            raise ConnectError(Code.NOT_FOUND, f'namespace "{request.namespace}" is not registered')
+        return real_write(self, request)
+
+    monkeypatch.setattr(_FakeStatsServiceClient, "register_table", register)
+    monkeypatch.setattr(_FakeStatsServiceClient, "write_rows", require_registration)
+    client = LogClient.connect("http://h:1")
+    try:
+        table = client.get_table("iris.worker", WorkerStat)
+        table.write([WorkerStat(worker_id="w-1", timestamp_ms=1, mem_bytes=128)])
+        assert table.flush(timeout=5.0) == FlushResult.SUCCEEDED
+
+        catalog_registered = False
+        table.write([WorkerStat(worker_id="w-2", timestamp_ms=2, mem_bytes=256)])
+
+        assert table.flush(timeout=5.0) == FlushResult.SUCCEEDED
+        rows = [_decode_ipc_table(request.arrow_ipc) for request in tracked_clients[0].writes]
+        assert pa.concat_tables(rows).column("worker_id").to_pylist() == ["w-1", "w-2"]
     finally:
         client.close()
 

@@ -17,12 +17,10 @@ Two variants share one code path (``--variant``):
     clusters. TAS is enabled via ``controllerManager`` feature gates. The smoke
     harness (tests/e2e/gpu_gang_smoke.py) drives this variant on kind.
 
-Neither variant uses cks-kueue's ``topologies:`` values templating: the chart
-(1.3.0) renders Topology CRs at ``kueue.x-k8s.io/v1alpha1`` while the CRD it
-itself installs serves only v1beta1+, so any helm pass carrying ``topologies``
-fails with 'no matches for kind "Topology"'. Instead both variants apply the
-Topology CRs with kubectl after install, at the apiVersion the installed CRD
-actually serves.
+Neither variant uses cks-kueue's ``topologies:`` values templating. Both apply
+the same Topology manifests with kubectl after install, at an apiVersion the
+installed CRD actually serves. This keeps the CoreWeave and upstream smoke paths
+on one manifest implementation across Kueue API-version changes.
 
 Both variants:
   1. Install the operator into ``kueue-system`` (``helm upgrade --install``).
@@ -42,16 +40,20 @@ Both variants:
      ResourceFlavor + ClusterQueue. The flavor selects ``iris.kueue=true`` and every
      Iris Pod requests TAS, so lower-priority CPU reservations are reclaimable during
      GPU topology fit. The ClusterQueue enables priority preemption within the queue
-     (``preemption.withinClusterQueue: LowerPriority``). Quota stays non-binding, so
-     the pressure signal is TAS, not quota. The namespaced LocalQueue is NOT created here:
-     Iris reconciles its own (``{label_prefix}-lq``) at controller start
+     (``preemption.withinClusterQueue: LowerPriority``). Production supplies binding
+     GPU and RDMA quotas from the configured fleet maximum; other resources retain a
+     non-binding sentinel. Quota pressure starts preemption, then TAS verifies that
+     the selected victims make a compatible topology available. The namespaced
+     LocalQueue is NOT created here: Iris reconciles its own
+     (``{label_prefix}-lq``) at controller start
      (``K8sControllerProvider.ensure_kueue_queues``), binding it to this ClusterQueue
      via ``kubernetes_provider.kueue.cluster_queue``.
 
-NB on Kueue version: TAS-aware preemption is version-sensitive. On too-old a Kueue
-a ClusterQueue that combines a topology-bound flavor with a ``preemption`` stanza
-can be marked Inactive, which breaks all gang admission. Validate on the target
-version (kind smoke first) before applying to a shared cluster.
+NB on Kueue version: TAS-aware preemption is version-sensitive. Kueue 0.18.2
+introduced same-scheduling-cycle TAS assignment recomputation, which prevents a
+later workload from retaining a hostname assignment consumed by an earlier
+admission in that cycle. Validate the pinned version and binding-quota preemption
+on the kind smoke before applying to a shared cluster.
 
 NB on the topology levels / flavor node-labels: to Kueue these are just node-label
 *keys* and a node selector. The ``upstream`` variant reuses the CoreWeave level
@@ -112,8 +114,10 @@ _WEBHOOK_WARMUP_DELAY = 5.0
 # Upstream Kueue OCI helm chart (kind / generic clusters). Pinned >= 0.13 for the PodSet-slice
 # TAS feature (multi-rack GB200 nvlink.domain.sliced placement); 0.18 also carries the
 # IsTAS()-recognition fix for slice-only pod groups (upstream #10282, patched in 0.16/0.17).
+# 0.18.2 fixes conflicting same-cycle TAS nominations:
+# https://github.com/kubernetes-sigs/kueue/pull/12521
 UPSTREAM_CHART = "oci://registry.k8s.io/kueue/charts/kueue"
-UPSTREAM_DEFAULT_VERSION = "0.18.0"
+UPSTREAM_DEFAULT_VERSION = "0.18.3"
 
 
 # --------------------------------------------------------------------------
@@ -225,6 +229,7 @@ def run_install(
     release: str = RELEASE_DEFAULT,
     with_queues: bool = False,
     cluster_queue: str = "iris-cq",
+    nominal_quotas: dict[str, str] | None = None,
     flavor_topology: str = INFINIBAND_TOPOLOGY_NAME,
     pod_namespaces: Sequence[str] = DEFAULT_POD_NAMESPACES,
     apply: bool = False,
@@ -235,6 +240,7 @@ def run_install(
     ``apply`` is set. ``flavor_topology`` selects the Topology the ResourceFlavor
     binds (default InfiniBand; the kind smoke passes multinode-nvlink-ib).
     ``--with-queues`` provisions one ``cw-tas`` ResourceFlavor for all nodes.
+    ``nominal_quotas`` makes selected resources binding for quota-driven preemption.
     ``pod_namespaces`` scopes the plain-Pod admission webhook (default: the ``iris``
     namespace) — never widen this to system namespaces on a shared cluster.
     """
@@ -246,7 +252,7 @@ def run_install(
     if with_queues:
         queue_docs = [
             build_resource_flavor(flavor_topology),
-            build_cluster_queue(cluster_queue),
+            build_cluster_queue(cluster_queue, nominal_quotas=nominal_quotas),
         ]
     else:
         queue_docs = []
@@ -421,6 +427,13 @@ def _apply(
 )
 @click.option("--cluster-queue", default="iris-cq", help="ClusterQueue name for --with-queues (default: iris-cq).")
 @click.option(
+    "--nominal-quota",
+    "nominal_quota_items",
+    multiple=True,
+    metavar="RESOURCE=QUANTITY",
+    help="Binding nominal quota for a covered resource. Repeatable; omitted resources stay non-binding.",
+)
+@click.option(
     "--flavor-topology",
     type=click.Choice([INFINIBAND_TOPOLOGY_NAME, MULTINODE_TOPOLOGY_NAME]),
     default=INFINIBAND_TOPOLOGY_NAME,
@@ -443,11 +456,18 @@ def main(
     release: str,
     with_queues: bool,
     cluster_queue: str,
+    nominal_quota_items: tuple[str, ...],
     flavor_topology: str,
     pod_namespaces: tuple[str, ...],
     apply: bool,
 ) -> None:
     """Install + configure Kueue (coreweave or upstream) for Iris gang admission."""
+    nominal_quotas: dict[str, str] = {}
+    for item in nominal_quota_items:
+        resource, separator, quantity = item.partition("=")
+        if not separator or not resource or not quantity:
+            raise click.BadParameter(f"expected RESOURCE=QUANTITY, got {item!r}", param_hint="--nominal-quota")
+        nominal_quotas[resource] = quantity
     run_install(
         variant=variant,
         kubeconfig=kubeconfig,
@@ -456,6 +476,7 @@ def main(
         release=release,
         with_queues=with_queues,
         cluster_queue=cluster_queue,
+        nominal_quotas=nominal_quotas,
         flavor_topology=flavor_topology,
         pod_namespaces=pod_namespaces,
         apply=apply,

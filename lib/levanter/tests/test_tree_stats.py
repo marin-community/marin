@@ -46,6 +46,33 @@ def test_array_stacked_split_emits_per_layer_norms():
             assert jnp.allclose(stats[key], optax.global_norm(expected))
 
 
+def test_array_stacked_split_also_keeps_whole_stack_norm():
+    num_layers, width = 4, 3
+    model = _make_model(num_layers, width)
+
+    stats = summary_statistics_for_tree("grad", model, split_scan_layers=True)
+
+    # Splitting still logs the whole-stack norm under the non-split key, so runs stay comparable to
+    # those logged before per-layer splitting.
+    for name, expected in (("weight", model.blocks.stacked.weight), ("bias", model.blocks.stacked.bias)):
+        key = f"grad/norm/blocks.stacked.{name}"
+        assert key in stats, f"missing {key}; got {sorted(stats)}"
+        assert jnp.allclose(stats[key], optax.global_norm(expected))
+
+
+def test_array_stacked_split_whole_stack_norm_handles_shared_leaves():
+    num_layers, width = 4, 3
+    model = _make_model(num_layers, width)
+    # A leaf shared across layers has no leading num_layers axis, so its aggregate must be its own
+    # norm, not sqrt(num_layers) times it.
+    shared_bias = jax.random.normal(jax.random.PRNGKey(2), (width,))
+    model = eqx.tree_at(lambda m: m.blocks.stacked.bias, model, shared_bias)
+
+    stats = summary_statistics_for_tree("grad", model, split_scan_layers=True)
+
+    assert jnp.allclose(stats["grad/norm/blocks.stacked.bias"], optax.global_norm(shared_bias))
+
+
 def test_array_stacked_split_distinguishes_divergent_layers():
     # A single layer with a blown-up weight must be identifiable by its own key.
     num_layers, width = 4, 3

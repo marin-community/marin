@@ -33,6 +33,10 @@ from marin.profiling.schema import (
 )
 from marin.profiling.semantics import canonical_op_name
 from marin.profiling.trace_summary import (
+    DEFAULT_BREAKDOWN_MODE,
+    DEFAULT_HOT_OP_LIMIT,
+    DEFAULT_WARMUP_STEPS,
+    BreakdownMode,
     TraceEvent,
     TraceEventArgs,
     TraceEventTrack,
@@ -147,6 +151,9 @@ def export_xplane_tables(
             continue
         target = output_dir / f"{tool}.json"
         encoded = _tool_data_to_bytes(data)
+        if not encoded.strip():
+            target.unlink(missing_ok=True)
+            continue
         target.write_bytes(encoded)
         sizes[tool] = len(encoded)
 
@@ -159,10 +166,10 @@ def summarize_xplane(
     *,
     output_dir: Path | None = None,
     run_metadata: RunMetadata | None = None,
-    warmup_steps: int = 5,
-    hot_op_limit: int = 25,
+    warmup_steps: int = DEFAULT_WARMUP_STEPS,
+    hot_op_limit: int = DEFAULT_HOT_OP_LIMIT,
     count_trace_events: bool = False,
-    breakdown_mode: str = "exclusive_per_track",
+    breakdown_mode: BreakdownMode = DEFAULT_BREAKDOWN_MODE,
 ) -> ProfileSummary:
     """Summarize an XPlane protobuf into the normalized profile summary schema."""
     timeline_summary = summarize_xplane_timeline(
@@ -189,9 +196,9 @@ def summarize_xplane_timeline(
     xplane_path: Path,
     *,
     run_metadata: RunMetadata | None = None,
-    warmup_steps: int = 5,
-    hot_op_limit: int = 25,
-    breakdown_mode: str = "exclusive_per_track",
+    warmup_steps: int = DEFAULT_WARMUP_STEPS,
+    hot_op_limit: int = DEFAULT_HOT_OP_LIMIT,
+    breakdown_mode: BreakdownMode = DEFAULT_BREAKDOWN_MODE,
 ) -> ProfileSummary:
     """Summarize directly parsed XPlane timeline events."""
     timeline = parse_xplane_timeline(xplane_path, breakdown_mode=breakdown_mode)
@@ -214,7 +221,9 @@ def summarize_xplane_timeline(
     )
 
 
-def parse_xplane_timeline(xplane_path: Path, *, breakdown_mode: str = "exclusive_per_track") -> XPlaneTimeline:
+def parse_xplane_timeline(
+    xplane_path: Path, *, breakdown_mode: BreakdownMode = DEFAULT_BREAKDOWN_MODE
+) -> XPlaneTimeline:
     """Parse XPlane protobuf metadata and lazily expose its timeline tracks."""
     if not xplane_path.exists():
         raise FileNotFoundError(f"XPlane protobuf does not exist: {xplane_path}")
@@ -248,7 +257,7 @@ def parse_xplane_timeline(xplane_path: Path, *, breakdown_mode: str = "exclusive
     )
 
 
-def _xplane_tracks(xspace: Any, *, breakdown_mode: str) -> Iterator[TraceEventTrack | TraceTrackAggregate]:
+def _xplane_tracks(xspace: Any, *, breakdown_mode: BreakdownMode) -> Iterator[TraceEventTrack | TraceTrackAggregate]:
     for plane_index, plane in enumerate(xspace.planes):
         pid = plane_index + 1
         process_name = str(plane.name or f"xplane:{plane_index}")
@@ -260,7 +269,8 @@ def _xplane_tracks(xspace: Any, *, breakdown_mode: str) -> Iterator[TraceEventTr
             thread_name = str(line.display_name or line.name or f"xline:{line_index}")
             device_process = process_name.startswith("/device:")
             detailed_timeline = device_process and (
-                is_device_op_thread(thread_name) or (breakdown_mode == "exclusive_global" and thread_name != "Steps")
+                is_device_op_thread(thread_name)
+                or (breakdown_mode == BreakdownMode.EXCLUSIVE_GLOBAL and thread_name != "Steps")
             )
             if not detailed_timeline:
                 yield _aggregate_xplane_track(
@@ -438,8 +448,8 @@ def summarize_xplane_tables(
     *,
     xplane_path: Path,
     run_metadata: RunMetadata | None = None,
-    warmup_steps: int = 5,
-    hot_op_limit: int = 25,
+    warmup_steps: int = DEFAULT_WARMUP_STEPS,
+    hot_op_limit: int = DEFAULT_HOT_OP_LIMIT,
     trace_event_count: int | None = None,
 ) -> ProfileSummary:
     """Build a profile summary from xprof table JSON already exported from XPlane."""

@@ -260,21 +260,7 @@ jobs:
           wandb-project: ${{ env.WANDB_PROJECT }}
           wandb-api-key: ${{ secrets.WANDB_API_KEY }}
           gha-run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          # CoreWeave lane needs kubectl plus filesystem tools the GCP lane skips.
-          allowed-tools: 'Bash(kubectl:*),Bash(gh:*),Bash(.venv/bin/iris:*),Bash(.venv/bin/python:*),Bash(cat:*),Bash(jq:*),Bash(head:*),Bash(tail:*),Bash(grep:*),Bash(ls:*),Bash(wc:*),Bash(find:*),Bash(awk:*),Bash(sed:*),Bash(date:*),Bash(echo:*),Bash(tr:*),Bash(sort:*),Bash(uniq:*),Bash(curl:*),Write,Read,Edit'
-
-      # claude-code-action writes the full agent trace (prompt, tool calls,
-      # tool results, final message) to this path. Uploading it is the only
-      # way to see *what Claude actually did* after the fact — the step log
-      # hides the transcript with "full output hidden for security".
-      - name: Upload Claude triage log
-        if: (failure() || cancelled()) && github.event_name == 'schedule'
-        uses: actions/upload-artifact@v7
-        with:
-          name: claude-triage-log-${{ github.run_id }}
-          path: /home/runner/work/_temp/claude-execution-output.json
-          retention-days: 30
-          if-no-files-found: warn
+          extra-allowed-tools: 'Bash(kubectl:*),Bash(ls:*),Bash(wc:*),Bash(find:*),Bash(awk:*),Bash(sed:*),Bash(echo:*),Bash(tr:*),Bash(sort:*),Bash(uniq:*),Bash(curl:*),Edit'
 
       # Upload Claude's Slack message (if it was written) so the separate
       # notify-slack job can pick it up. We run Slack notify in a separate
@@ -302,7 +288,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
       - name: Notify Slack
-        uses: marin-community/marin-style/actions/notify-slack@main
+        uses: marin-community/marin-style/actions/notify-slack@4b2fc2b0ec0bb9ad1304ef76936eb68e97f893cb  # main 2026-08-24
         with:
           webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
           fallback-text: ":red_circle: *GPU Canary failed*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

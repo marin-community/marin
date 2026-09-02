@@ -69,6 +69,7 @@ export function nightlyCells(frame: DataFrame): NightlyCell[] {
       group: requiredString(row, 'group'),
       subgroup: requiredString(row, 'subgroup'),
       state: requiredString(row, 'state'),
+      runStatus: optionalString(row, 'status'),
       durationState: requiredString(row, 'duration_state'),
       durationSeconds: optionalNumber(row, 'duration_seconds'),
       conclusion: optionalString(row, 'conclusion'),

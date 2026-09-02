@@ -216,7 +216,7 @@ def _write(client: LogClient, samples: list[StorageUsage]) -> None:
     table.write(samples)
     result = table.flush(timeout=FLUSH_TIMEOUT)
     if result is not FlushResult.SUCCEEDED:
-        raise RuntimeError(f"Finelog flush did not complete within {FLUSH_TIMEOUT:.0f} seconds: {result}")
+        raise RuntimeError(f"Finelog did not record {len(samples)} usage rows: {result}")
 
 
 @click.command(help=__doc__)

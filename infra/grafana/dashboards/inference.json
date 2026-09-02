@@ -117,7 +117,7 @@
       },
       "gridPos": {
         "h": 5,
-        "w": 10,
+        "w": 8,
         "x": 0,
         "y": 0
       },
@@ -198,6 +198,92 @@
       ]
     },
     {
+      "id": 10,
+      "type": "table",
+      "title": "Collector telemetry health",
+      "description": "Reports known collection loss in the selected window. Incomplete means any observed resource reported an unavailable source, a positive collection-stage failure delta, or dropped samples. Healthy means only that collector polls reported none of those signals; unknown means no collector-poll evidence. Serving freshness and metric-family completeness are separate.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 8,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/v1/vllm/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "identity_kind",
+                "value": "${identity_kind}"
+              },
+              {
+                "key": "identity",
+                "value": "${identity}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "telemetry_health"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "string"
+            },
+            {
+              "selector": "metric",
+              "text": "signal",
+              "type": "string"
+            },
+            {
+              "selector": "series",
+              "text": "stage / reason",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "window value",
+              "type": "number"
+            },
+            {
+              "selector": "unit",
+              "text": "unit",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": 9,
       "type": "table",
       "title": "Replica freshness detail",
@@ -208,8 +294,8 @@
       },
       "gridPos": {
         "h": 5,
-        "w": 14,
-        "x": 10,
+        "w": 8,
+        "x": 16,
         "y": 0
       },
       "fieldConfig": {
