@@ -10,8 +10,9 @@ import pytest
 from jax.sharding import AxisType, Mesh
 from levanter.data.text.examples import GrugLmExample
 
-from experiments.grug.moe.benchmark_grug_moe_pipeline import _validate_local_mesh
-from experiments.grug.moe.grug_moe_pipeline import (
+from experiments.grug.moe_pipeline.benchmark import _validate_local_mesh
+from experiments.grug.moe_pipeline.model import GrugModelConfig, Transformer
+from experiments.grug.moe_pipeline.pipeline import (
     AutomaticPipelineSchedule,
     GrugMoePipelineConfig,
     automatic_stage_to_mpmd_indices,
@@ -21,7 +22,6 @@ from experiments.grug.moe.grug_moe_pipeline import (
     split_transformer,
     staged_loss,
 )
-from experiments.grug.moe.model import GrugModelConfig, Transformer
 
 
 def _tiny_model(*, num_layers: int = 2) -> tuple[Mesh, Transformer]:

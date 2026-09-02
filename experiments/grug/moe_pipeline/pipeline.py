@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Automatic pipeline-parallel training for Grug MoE."""
+"""Automatic pipeline-parallel training for the Grug MoE pipeline variant."""
 
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ from levanter.grug.grug_moe import MOE_REMAT_SAVE_NAMES
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.pipeline import evenly_partition_layers, split_batch_into_microbatches
 
-from experiments.grug.moe.model import (
+from experiments.grug.moe_pipeline.model import (
     BATCH_AXES,
     Block,
     GatedNorm,

@@ -1,10 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Configurable multi-host H100 benchmark for the canonical Grug MoE pipeline."""
+"""Configurable multi-host H100 runner for the Grug MoE pipeline variant."""
 
-import dataclasses
 import json
+import math
 import os
 import statistics
 import time
@@ -21,7 +21,7 @@ class PipelineSchedule(StrEnum):
 
     @property
     def automatic_schedule(self):
-        from experiments.grug.moe.grug_moe_pipeline import AutomaticPipelineSchedule  # noqa: PLC0415
+        from experiments.grug.moe_pipeline.pipeline import AutomaticPipelineSchedule  # noqa: PLC0415
 
         if self == self.DUALPIPE_V:
             return AutomaticPipelineSchedule.DUALPIPE_V
@@ -73,9 +73,14 @@ def _env_float(environ: Mapping[str, str], name: str, default: float) -> float:
     return default if not value else float(value)
 
 
-def _resolve_benchmark_config(environ: Mapping[str, str]) -> BenchmarkConfig:
-    from experiments.grug.moe.heuristic import MoeHeuristic  # noqa: PLC0415
+def _default_num_kv_heads(num_heads: int) -> int:
+    for candidate in range(num_heads // 4, 0, -1):
+        if num_heads % candidate == 0:
+            return candidate
+    return 1
 
+
+def _resolve_benchmark_config(environ: Mapping[str, str]) -> BenchmarkConfig:
     stages = _env_int(environ, "PIPELINE_STAGES", 4)
     physical_stages = _env_int(environ, "PIPELINE_PHYSICAL_STAGES", stages)
     seq_len = _env_int(environ, "PIPELINE_SEQ_LEN", 4096)
@@ -95,7 +100,10 @@ def _resolve_benchmark_config(environ: Mapping[str, str]) -> BenchmarkConfig:
     layer_counts = None if not layer_counts_value else tuple(int(value) for value in layer_counts_value.split(","))
     memory_threshold_value = environ.get("PIPELINE_RESHARD_THRESHOLD_BYTES")
     memory_threshold = None if not memory_threshold_value else int(memory_threshold_value)
-    base_model_config = MoeHeuristic().build_model_config(hidden_dim, seq_len=seq_len)
+    if hidden_dim % 128 != 0:
+        raise ValueError(f"PIPELINE_HIDDEN_DIM must be divisible by 128, got {hidden_dim}")
+    num_heads = hidden_dim // 128
+    num_kv_heads = _default_num_kv_heads(num_heads)
     return BenchmarkConfig(
         stages=stages,
         physical_stages=physical_stages,
@@ -103,21 +111,21 @@ def _resolve_benchmark_config(environ: Mapping[str, str]) -> BenchmarkConfig:
         batch_size=_env_int(environ, "PIPELINE_BATCH", 256),
         seq_len=seq_len,
         hidden_dim=hidden_dim,
-        intermediate_dim=_env_int(environ, "PIPELINE_INTERMEDIATE_DIM", base_model_config.intermediate_dim),
+        intermediate_dim=_env_int(environ, "PIPELINE_INTERMEDIATE_DIM", math.ceil(hidden_dim / 256) * 128),
         shared_expert_intermediate_dim=_env_int(
             environ,
             "PIPELINE_SHARED_EXPERT_INTERMEDIATE_DIM",
-            base_model_config.shared_expert_intermediate_dim,
+            hidden_dim,
         ),
         num_layers=_env_int(environ, "PIPELINE_LAYERS", 24),
         num_experts=_env_int(environ, "PIPELINE_EXPERTS", 256),
         top_k=_env_int(environ, "PIPELINE_TOP_K", 4),
         expert_axis_size=_env_int(environ, "PIPELINE_EXPERT_AXIS", 8),
-        vocab_size=_env_int(environ, "PIPELINE_VOCAB_SIZE", base_model_config.vocab_size),
-        num_heads=_env_int(environ, "PIPELINE_HEADS", base_model_config.num_heads),
-        num_kv_heads=_env_int(environ, "PIPELINE_KV_HEADS", base_model_config.num_kv_heads),
-        sliding_window=_env_int(environ, "PIPELINE_SLIDING_WINDOW", base_model_config.sliding_window),
-        qk_mult=_env_float(environ, "PIPELINE_QK_MULT", base_model_config.qk_mult),
+        vocab_size=_env_int(environ, "PIPELINE_VOCAB_SIZE", 128_256),
+        num_heads=_env_int(environ, "PIPELINE_HEADS", num_heads),
+        num_kv_heads=_env_int(environ, "PIPELINE_KV_HEADS", num_kv_heads),
+        sliding_window=_env_int(environ, "PIPELINE_SLIDING_WINDOW", 2048),
+        qk_mult=_env_float(environ, "PIPELINE_QK_MULT", 1.3),
         steps=steps,
         warmup_steps=warmup_steps,
         profile_start_step=profile_start_step,
@@ -169,7 +177,7 @@ def _run_benchmark(config: BenchmarkConfig) -> None:
     from levanter.pipeline import reshape_batch_into_microbatches  # noqa: PLC0415
     from levanter.utils.flop_utils import lm_flops_per_token  # noqa: PLC0415
 
-    from experiments.grug.moe.grug_moe_pipeline import (  # noqa: PLC0415
+    from experiments.grug.moe_pipeline.pipeline import (  # noqa: PLC0415
         TRAIN_LOSS_KEY,
         GrugMoePipelineConfig,
         automatic_stage_to_mpmd_indices,
@@ -178,8 +186,7 @@ def _run_benchmark(config: BenchmarkConfig) -> None:
         make_pipeline_mesh,
         prepare_automatic_mpmd_step,
     )
-    from experiments.grug.moe.heuristic import MoeHeuristic  # noqa: PLC0415
-    from experiments.grug.moe.model import BATCH_AXES, Transformer  # noqa: PLC0415
+    from experiments.grug.moe_pipeline.model import BATCH_AXES, GrugModelConfig, Transformer  # noqa: PLC0415
 
     mp_policy = jmp.get_policy(config.mp_policy_string)
     pipeline_config = GrugMoePipelineConfig(
@@ -199,10 +206,9 @@ def _run_benchmark(config: BenchmarkConfig) -> None:
         microbatches=config.microbatches,
     )
 
-    base_model_config = MoeHeuristic().build_model_config(config.hidden_dim, seq_len=config.seq_len)
-    model_config = dataclasses.replace(
-        base_model_config,
+    model_config = GrugModelConfig(
         vocab_size=config.vocab_size,
+        hidden_dim=config.hidden_dim,
         intermediate_dim=config.intermediate_dim,
         shared_expert_intermediate_dim=config.shared_expert_intermediate_dim,
         num_layers=config.num_layers,
@@ -210,6 +216,7 @@ def _run_benchmark(config: BenchmarkConfig) -> None:
         num_experts_per_token=config.top_k,
         num_heads=config.num_heads,
         num_kv_heads=config.num_kv_heads,
+        max_seq_len=config.seq_len,
         sliding_window=config.sliding_window,
         qk_mult=config.qk_mult,
         router_z_loss_coef=0.0,
