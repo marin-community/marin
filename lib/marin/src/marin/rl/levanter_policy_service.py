@@ -17,6 +17,7 @@ from fray.current_client import current_client
 from fray.types import Entrypoint, EnvironmentConfig, JobRequest, JobStatus, ResourceConfig
 from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
+from levanter.tracker import NoopConfig
 from levanter.trainer import TrainerConfig
 from marin.inference.backend import ModelSpec
 from marin.inference.config import LevanterEngineConfig, ServedModelConfig
@@ -72,7 +73,7 @@ class RemoteLevanterPolicySession:
 
 def run_iris_levanter_policy_service(config: LevanterPolicyServiceConfig) -> None:
     """Load a Levanter policy and register one private API endpoint per gang process."""
-    trainer_config = TrainerConfig(require_accelerator=True)
+    trainer_config = TrainerConfig(require_accelerator=True, tracker=NoopConfig())
     trainer_config.initialize()
 
     job_info = get_job_info()
