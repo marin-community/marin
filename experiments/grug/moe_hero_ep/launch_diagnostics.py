@@ -268,6 +268,8 @@ def build_diagnostic_run(
                 GrugEvalConfig(
                     steps_per_eval=eval_every,
                     eval_batch_size=HERO_EP_EXPERT_AXIS_SIZE * dp_racks,
+                    # Matches the ladder; see `GrugEvalConfig.eval_current`.
+                    eval_current=False,
                     eval_ema=False,
                     compute_bpb=True,
                     dropless_eval=True,

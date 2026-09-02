@@ -308,6 +308,11 @@ class GrugEvalConfig:
     steps_per_eval: int | None = 1000
     max_eval_batches: int | None = None
     prefix: str = "eval"
+    # Evaluate with the training MoE backend (capacity-limited, with drops). Under the ragged
+    # all-to-all backend this compiles a second ragged program on the training clique whose
+    # smaller all-to-all buffers leave NCCL symmetric-memory windows registered at addresses the
+    # train step reuses; the next train step then fails with `ncclGroupEnd() invalid argument`
+    # at hero width. Ragged runs set this False and keep `dropless_eval`, which has no all-to-all.
     eval_current: bool = True
     eval_ema: bool = True
     compute_bpb: bool = True
@@ -1091,14 +1096,17 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         if evaluator is not None and eval_cfg is not None:
             interval = eval_cfg.steps_per_eval
             eval_ema = eval_cfg.eval_ema and config.trainer.ema_beta is not None
-            if eval_cfg.eval_current or eval_ema:
-                tagged_eval_hook = cb_tagged_evaluate(
-                    evaluator,
-                    prefix=eval_cfg.prefix,
-                    eval_current=eval_cfg.eval_current,
-                    eval_ema=eval_ema,
-                )
-                eval_hooks: list[Callable[..., None]] = [tagged_eval_hook]
+            if eval_cfg.eval_current or eval_ema or dropless_evaluator is not None:
+                eval_hooks: list[Callable[..., None]] = []
+                if eval_cfg.eval_current or eval_ema:
+                    eval_hooks.append(
+                        cb_tagged_evaluate(
+                            evaluator,
+                            prefix=eval_cfg.prefix,
+                            eval_current=eval_cfg.eval_current,
+                            eval_ema=eval_ema,
+                        )
+                    )
                 if dropless_evaluator is not None and dropless_eval_mesh is not None:
                     # The training loop runs under `set_mesh(mesh)` (expert-parallel). The dropless
                     # evaluator runs under the expert-collapsed mesh, so the model params -- sharded on

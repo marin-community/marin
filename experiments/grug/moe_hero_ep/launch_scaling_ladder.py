@@ -290,6 +290,9 @@ def build_ladder_run(
             eval=GrugEvalConfig(
                 steps_per_eval=steps_per_eval,
                 eval_batch_size=eval_batch_size,
+                # The capacity-limited eval breaks the ragged train step's NCCL windows at d6144;
+                # see `GrugEvalConfig.eval_current`. The dropless eval is the reported metric.
+                eval_current=False,
                 eval_ema=False,
                 compute_bpb=True,
                 dropless_eval=True,
