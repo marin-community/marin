@@ -19,14 +19,7 @@ import jax.scipy as jsp
 from einops import rearrange
 from haliax import Axis
 from haliax.jax_utils import named_call
-from jax import random
-
-try:
-    from jax.shard_map import shard_map
-except ModuleNotFoundError as error:
-    if error.name != "jax.shard_map":
-        raise
-    from jax.experimental.shard_map import shard_map
+from jax import random, shard_map
 from jax.sharding import PartitionSpec as P
 from jax.sharding import get_abstract_mesh, reshard
 from jaxtyping import Array, Float, Int, PRNGKeyArray
