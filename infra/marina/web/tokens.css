@@ -24,7 +24,7 @@
    * run, so Latin is answered by `ui-sans-serif` before the list reaches them and
    * only kana and kanji fall through. Without them the system picks a Japanese
    * face per platform, and the one it picks sits on a different optical baseline
-   * from the Latin beside it — visible in every mixed line kaku sets. */
+   * from the Latin beside it. */
   --font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Hiragino Sans",
     "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic Medium", "Yu Gothic",
     Meiryo, sans-serif;

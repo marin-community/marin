@@ -41,15 +41,13 @@ class MarinaConfig:
     iap_audience: str | None
 
     @classmethod
-    def from_env(cls) -> "MarinaConfig":
+    def from_env(cls, default_apps_dir: Path) -> "MarinaConfig":
         """Resolve the process configuration once; refuse to start on Cloud Run without IAP."""
-        apps_dir = os.environ.get(APPS_DIR_ENV)
-        if not apps_dir:
-            raise ValueError(f"{APPS_DIR_ENV} is not set")
+        apps_dir = Path(os.environ.get(APPS_DIR_ENV) or default_apps_dir)
         audience = os.environ.get(IAP_AUDIENCE_ENV) or None
         if os.environ.get(CLOUD_RUN_SERVICE_ENV) and not audience:
             raise ValueError(f"{IAP_AUDIENCE_ENV} must be set when running on Cloud Run")
-        return cls(apps_dir=Path(apps_dir), iap_audience=audience)
+        return cls(apps_dir=apps_dir, iap_audience=audience)
 
 
 def content_security_policy(app: AppManifest) -> str:
@@ -151,4 +149,4 @@ def create_app(config: MarinaConfig) -> RouteAuthMiddleware:
 
 def asgi() -> RouteAuthMiddleware:
     """Uvicorn factory entry point: ``uvicorn --factory marina.server:asgi``."""
-    return create_app(MarinaConfig.from_env())
+    return create_app(MarinaConfig.from_env(Path.cwd() / "apps"))

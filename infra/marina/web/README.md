@@ -1,17 +1,13 @@
 # The Marina front-end kit
 
 What every Marina app holds in common: the tokens, the class layer, the shell
-around the page, a URN, and a client for the APIs on this origin. Import it; do
-not copy it. The kit has no `package.json` — an app's own `node_modules`
+around the page, and a Markdown renderer. Import it; do not copy it. The kit has no `package.json` — an app's own `node_modules`
 supplies Vue.
 
 ```
 tokens.css   the colours, the fonts, the reset, the phone rules
 parts.css    the class layer: .scroll .num .chip .pill .facts .record
 Shell.vue    the top bar every app renders inside
-client.ts    a call to another app's API on this origin
-urn.ts       marin:{app}:{kind}:{id}, and the path that shows it
-Linked.vue   a run of prose, with the URNs in it as links
 markdown.ts  a Markdown subset, parsed to a tree rather than to HTML
 Prose.vue    that tree, drawn through `{{ }}` so markup stays text
 ```
@@ -69,14 +65,3 @@ One Cloud Run service serves every app from one origin.
 - The kernel sends a Content-Security-Policy per app whose `connect-src` is
   `'self'` plus that app's `connect_src` from its `app.toml`. A fetch to a host
   not on that list is refused by the browser.
-
-`client.ts` posts: `marina.echo.search.query({ q })` is
-`POST /api/echo/search/query` with a JSON body, and throws on a non-2xx with the
-response text. The two kernel GETs above are plain `fetch`.
-
-## A URN is a link
-
-`marin:{app}:{kind}:{id}` names one row. `path()` in `urn.ts` turns it into
-`/{app}/{kind}/{id}` with no lookup, so an app makes its rows linkable by giving
-that kind a route. `Linked.vue` renders a paragraph with its URNs as anchors,
-both bare and in markdown's `[words](urn)` shape.

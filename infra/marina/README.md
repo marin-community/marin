@@ -12,7 +12,7 @@ in) lives in the kernel and the shared kit in `web/`.
 ```
 infra/marina/
   src/marina/      the kernel: manifest loading, auth, the FastAPI process, the CLI
-  web/             the shared Vue kit apps import as @marina (tokens, Shell, client)
+  web/             the shared Vue kit apps import as @marina (tokens, Shell, Prose)
   apps/<name>/     one app: app.toml, web/ (Vue + rsbuild), dist/ after a build
   Dockerfile       node stage builds every apps/*/web; python stage runs `marina serve`
   __main__.py      Pulumi: one CloudRunService for the whole thing
@@ -27,13 +27,11 @@ infra/marina/
    ```toml
    title = "TaskTrove"
    description = "Browse the TaskTrove task collection."
-   class = "static"          # "python" once the app registers ops
    connect_src = []          # extra origins the page may fetch; 'self' is implied
    build_command = "cd web && npm ci && npm run build"
    ```
 
-   Unknown keys are rejected. `schedules` (a list of `{op, cron}`) is reserved
-   for Python apps and becomes a Cloud Scheduler job per entry.
+   Unknown keys are rejected.
 2. Put a Vue + rsbuild app in `apps/<name>/web/`, aliasing `@marina` to
    `../../../web`, emitting to `../dist` with asset prefix `/<name>/`, and
    rendering inside `<Shell app="<name>">`. Copy `apps/tasktrove/web` as the

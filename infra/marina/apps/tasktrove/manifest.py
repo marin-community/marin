@@ -1,12 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Write the parquet manifest the browser reads before it touches Hugging Face.
+"""Write the source manifest the browser reads before it touches Hugging Face.
 
-One footer read per source file. The page reads a footer itself when it opens
-a source; this is what it shows before that: how many tasks each source holds,
-how the file is cut into row groups, and how large the largest group's task
-column is, which is what opening one task from that source downloads.
+One parquet footer read per source file, from which the page gets the list of
+sources and how many tasks each holds. The row-group figures describe the file's
+layout for anyone sizing a direct download; the page itself reads rows from
+Hugging Face's datasets-server.
 
 Usage:
     uv run --with pyarrow --with huggingface_hub manifest.py

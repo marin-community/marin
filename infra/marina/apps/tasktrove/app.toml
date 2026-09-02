@@ -1,12 +1,10 @@
 # A browser for open-thoughts/TaskTrove, the Harbor task collection on Hugging
-# Face. The page reads the dataset's parquet files from where they are
-# published, one byte range at a time, so it holds no copy of the data: the
-# list of sources, the audit that reviewed each one, and the labels for the
-# tasks the audit sampled are the whole of what this app carries.
+# Face. The page reads task rows from Hugging Face's datasets-server as it needs
+# them, so it holds no copy of the data: the list of sources, the audit that
+# reviewed each one, and the labels for the tasks the audit sampled are the
+# whole of what this app carries.
 title = "TaskTrove"
 description = "Browse the TaskTrove task collection: every source, every task's files, and what the shellsim audit made of them."
-class = "static"
-# The page fetches parquet byte ranges from Hugging Face itself. The kernel
-# appends these to `connect-src`; without them the browser refuses the fetch.
-connect_src = ["https://datasets-server.huggingface.co", "https://huggingface.co", "https://cdn-lfs-us-1.hf.co", "https://cdn-lfs.hf.co", "https://*.hf.co"]
+# The kernel appends this to `connect-src`; without it the browser refuses the fetch.
+connect_src = ["https://datasets-server.huggingface.co"]
 build_command = "cd web && npm ci && npm run build"

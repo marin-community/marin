@@ -11,7 +11,7 @@ import click
 import uvicorn
 
 from marina.manifest import discover_apps
-from marina.server import APPS_DIR_ENV, MarinaConfig, create_app
+from marina.server import MarinaConfig, create_app
 
 DEFAULT_APPS_DIR = Path(__file__).resolve().parents[2] / "apps"
 DEFAULT_PORT = 8080
@@ -28,7 +28,7 @@ def check(apps_dir: Path) -> None:
     """Parse every app manifest and print what would be served."""
     for app in discover_apps(apps_dir):
         built = "built" if (app.dist / "index.html").is_file() else "not built"
-        click.echo(f"{app.name:16} {app.app_class:8} {built:10} {app.title}")
+        click.echo(f"{app.name:16} {built:10} {app.title}")
 
 
 @cli.command()
@@ -58,8 +58,7 @@ def dev(apps_dir: Path, port: int, host: str) -> None:
 @cli.command()
 def serve() -> None:
     """Serve for production: configuration from the environment, bound on all interfaces."""
-    os.environ.setdefault(APPS_DIR_ENV, str(DEFAULT_APPS_DIR))
-    config = MarinaConfig.from_env()
+    config = MarinaConfig.from_env(DEFAULT_APPS_DIR)
     click.echo(f"marina: apps from {config.apps_dir}, IAP audience {config.iap_audience or 'unset'}")
     uvicorn.run(create_app(config), host="0.0.0.0", port=int(os.environ.get("PORT", DEFAULT_PORT)))
 

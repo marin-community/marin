@@ -12,7 +12,6 @@ from starlette.testclient import TestClient
 TASKTROVE_MANIFEST = """
 title = "TaskTrove"
 description = "Browse tasks."
-class = "static"
 connect_src = ["https://huggingface.co"]
 build_command = "true"
 """

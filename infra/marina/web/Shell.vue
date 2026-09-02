@@ -6,8 +6,7 @@
 // kernel's; everything below it is the app's, and the app's own navigation goes
 // in the `nav` slot beside the switcher rather than in a second bar under it.
 //
-// `/api/marina/apps` and `/api/marina/me` are the kernel's two GETs, so they are
-// fetched directly rather than through `client.ts`, which posts.
+// `/api/marina/apps` and `/api/marina/me` are the kernel's two GETs.
 
 import { computed, onMounted, ref } from 'vue'
 
@@ -67,7 +66,6 @@ onMounted(async () => {
     </nav>
     <span v-if="who" class="who" :title="user">{{ who }}</span>
   </header>
-  <!-- ask panel slot: phase 4 -->
   <!-- The page below the bar is the app's: it owns its own width and padding. -->
   <main>
     <slot />

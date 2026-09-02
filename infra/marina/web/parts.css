@@ -123,9 +123,7 @@ code { font: 0.86em var(--mono); }
 /* The one thing the screen is for.
  *
  * Every control here wears the same outline, which is right for a screen of
- * equals and wrong for a screen with an answer on it. `Mark my answers` sat in
- * that outline beside `Upload a photo of the printed one` in a heavier one, so
- * the page recommended the wrong thing.
+ * equals and wrong for a screen with an answer on it.
  *
  * One per screen. A second filled button is two answers to a question that has
  * one, and the reader then has to decide which is the real one.
