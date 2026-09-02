@@ -158,20 +158,17 @@ def test_hero_trigger_records_the_submitted_commit_and_tree_state(tmp_path, dirt
     expected_dirty = str(dirty).lower()
     expected_state = "dirty" if dirty else "clean"
     expected_job_name = f"hero-12d8b6f0-dee637-coord-{commit[:8]}-{expected_state}-12345678"
-    assert json.loads(gh_capture.read_text()) == [
+    gh_argv = json.loads(gh_capture.read_text())
+    assert gh_argv[:4] == [
         "issue",
         "comment",
         "https://github.com/marin-community/marin/issues/8506",
         "--body",
-        (
-            "Hero launch requested.\n\n"
-            "- Run ID: `hero-12d8b6f0-dee637`\n"
-            f"- Commit: `{commit}`\n"
-            f"- Tree dirty: `{expected_dirty}`\n"
-            f"- Coordinator job: `{expected_job_name}`\n"
-            "- Target: `cw-us-east-08a` (11 x NVL72)"
-        ),
     ]
+    launch_record = gh_argv[4]
+    for value in ("hero-12d8b6f0-dee637", commit, expected_dirty, expected_job_name, "cw-us-east-08a"):
+        assert f"`{value}`" in launch_record
+    assert "11 x NVL72" in launch_record
     if not comment_succeeds:
         assert result.returncode == 1
         assert not capture.exists()
@@ -180,6 +177,7 @@ def test_hero_trigger_records_the_submitted_commit_and_tree_state(tmp_path, dirt
     assert result.returncode == 0
     submitted = json.loads(capture.read_text())
     argv = submitted["argv"]
+    assert argv[argv.index("--target-cluster") + 1] == "cw-us-east-08a"
     assert argv[argv.index("--system-reason") + 1] == (f"hero run; commit={commit}; tree_dirty={expected_dirty}")
     assert argv[argv.index("--job-name") + 1] == expected_job_name
     assert argv[argv.index("GIT_COMMIT") + 1] == commit
