@@ -17,6 +17,7 @@ import fsspec
 import polars as pl
 import pyarrow.parquet as pq
 import pytest
+from botocore.exceptions import EndpointConnectionError
 from fsspec.implementations.local import LocalFileSystem
 from iris.env_resources import TaskResources
 from rigging.filesystem.storage_path import StoragePath
@@ -806,6 +807,42 @@ class _CountingFileSystem(LocalFileSystem):
     @classmethod
     def _strip_protocol(cls, path):
         return super()._strip_protocol(str(path).removeprefix("counting://"))
+
+
+class _SequencedSidecarFileSystem:
+    def __init__(self, responses: list[bytes | Exception]):
+        self._responses = responses
+        self.reads: list[str] = []
+
+    @staticmethod
+    def _strip_protocol(path: str) -> str:
+        return path.removeprefix("s3://")
+
+    def cat_file(self, path: str) -> bytes:
+        self.reads.append(path)
+        response = self._responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+
+def test_sidecar_read_retries_transient_s3_error(monkeypatch):
+    monkeypatch.setattr("rigging.timing.time.sleep", lambda _: None)
+    payload = _Sidecar._encoder.encode({"files": [], "shard_bytes": {}, "shard_rows": {}})
+    fs = _SequencedSidecarFileSystem([EndpointConnectionError(endpoint_url="https://bucket.example.com"), payload])
+
+    assert _Sidecar.read(fs, "s3://bucket/shard/") is None
+    assert fs.reads == ["bucket/shard/metadata.msgpack"] * 2
+
+
+def test_sidecar_read_does_not_retry_permanent_error():
+    fs = _SequencedSidecarFileSystem([FileNotFoundError("missing")])
+
+    with pytest.raises(FileNotFoundError, match="missing") as exc_info:
+        _Sidecar.read(fs, "s3://bucket/shard/")
+
+    assert fs.reads == ["bucket/shard/metadata.msgpack"]
+    assert "s3://bucket/shard/metadata.msgpack" in "\n".join(getattr(exc_info.value, "__notes__", []))
 
 
 def test_sidecar_reads_build_one_client(tmp_path):

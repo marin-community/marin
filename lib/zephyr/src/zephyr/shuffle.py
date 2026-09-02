@@ -51,8 +51,9 @@ import psutil
 import pyarrow as pa
 from iris.env_resources import TaskResources
 from rigging.filesystem.factory import open_url, url_to_fs
+from rigging.filesystem.s3_errors import is_transient_s3_error
 from rigging.filesystem.storage_path import StoragePath
-from rigging.timing import RateLimiter, log_time
+from rigging.timing import RateLimiter, log_time, retry_with_backoff
 
 from zephyr import memory_budget
 from zephyr.parquet_scan import scan_parquet
@@ -312,9 +313,20 @@ class _Sidecar:
     @classmethod
     def read(cls, fs: _SidecarFilesystem, data_path: str) -> "_Sidecar | None":
         """Load one non-empty sidecar, returning ``None`` for an empty writer."""
-        meta_path = fs._strip_protocol(cls.meta_path(data_path))
+        source_path = cls.meta_path(data_path)
+        meta_path = fs._strip_protocol(source_path)
         # Avoid buffered-file overhead for these small payloads.
-        data = cls._decoder.decode(fs.cat_file(meta_path))
+        try:
+            payload = retry_with_backoff(
+                lambda: fs.cat_file(meta_path),
+                retryable=is_transient_s3_error,
+                max_attempts=4,
+                operation=f"read scatter sidecar {source_path}",
+            )
+        except Exception as error:
+            error.add_note(f"while reading scatter sidecar {source_path}")
+            raise
+        data = cls._decoder.decode(payload)
         files = data.get(cls._files_field, [])
         if not files:
             return None
