@@ -1146,7 +1146,7 @@ wheels = [
 [[package]]
 name = "marinskyrl"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/MarinSkyRL.git?branch=atqamar%2Frlperf-preemption-retries#eabbd694098ebba14c6d4d406f5156ccac4bb004" }
+source = { git = "https://github.com/marin-community/MarinSkyRL.git?branch=atqamar%2Frlperf-preemption-retries#0a82220dba3758dac42187d6c4428bb9af560f28" }
 dependencies = [
     { name = "boto3" },
     { name = "datasets" },
