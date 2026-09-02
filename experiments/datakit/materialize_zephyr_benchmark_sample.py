@@ -32,12 +32,12 @@ from rigging.log_setup import configure_logging
 from zephyr.context import ZephyrContext
 
 from experiments.datakit.reference_pipeline import (
+    DEFAULT_SCALE,
     SMOKE_SCALE,
     PipelineScale,
-    ZephyrDatakitSteps,
     datakit_zephyr_context,
-    fuzzy_dedup_step,
     sample_sources,
+    scale_with_pool,
     zephyr_datakit_steps,
 )
 from experiments.datakit.testbed.sampler import proportional_sample_fractions, sample_normalized_shards
@@ -72,25 +72,6 @@ def benchmark_sample_inputs_prefix(sample_prefix: str) -> str:
     return prefix_join(sample_prefix, BENCHMARK_SAMPLE_INPUTS_DIR)
 
 
-def benchmark_datakit_steps(
-    sources: dict[str, StepSpec],
-    scale: PipelineScale,
-    zephyr_context: ZephyrContext,
-    output_path_prefix: str,
-) -> ZephyrDatakitSteps:
-    """Build Datakit stages with all generated outputs under one benchmark prefix."""
-    steps = zephyr_datakit_steps(sources, scale, zephyr_context)
-    tokenize = {name: replace(step, output_path_prefix=output_path_prefix) for name, step in steps.tokenize.items()}
-    minhash = {name: replace(step, output_path_prefix=output_path_prefix) for name, step in steps.minhash.items()}
-    fuzzy_dedup = fuzzy_dedup_step(list(minhash.values()), scale, zephyr_context)
-    return ZephyrDatakitSteps(
-        exact_dedup=replace(steps.exact_dedup, output_path_prefix=output_path_prefix),
-        tokenize=tokenize,
-        minhash=minhash,
-        fuzzy_dedup=replace(fuzzy_dedup, output_path_prefix=output_path_prefix),
-    )
-
-
 def benchmark_sample_fuzzy_steps(
     sample_prefix: str,
     sources: dict[str, StepSpec],
@@ -98,7 +79,7 @@ def benchmark_sample_fuzzy_steps(
     zephyr_context: ZephyrContext,
 ) -> BenchmarkSampleFuzzySteps:
     """Build canonical MinHash inputs and their fuzzy-dedup consumer."""
-    steps = benchmark_datakit_steps(
+    steps = zephyr_datakit_steps(
         sources,
         scale,
         zephyr_context,
@@ -200,12 +181,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--max-concurrent", type=int, default=DEFAULT_MAX_CONCURRENT)
     parser.add_argument("--minhash-max-concurrent", required=True, type=int)
     parser.add_argument("--pool-workers", required=True, type=int)
-    parser.add_argument("--pool-cpu", required=True, type=float)
-    parser.add_argument("--pool-ram", required=True)
-    parser.add_argument("--pool-disk", required=True)
-    parser.add_argument("--map-task-cpu", required=True, type=float)
-    parser.add_argument("--map-task-ram", required=True)
-    parser.add_argument("--map-task-disk", required=True)
+    parser.add_argument("--pool-cpu", type=float, default=DEFAULT_SCALE.pool.worker.cpu)
+    parser.add_argument("--pool-ram", default=DEFAULT_SCALE.pool.worker.ram)
+    parser.add_argument("--pool-disk", default=DEFAULT_SCALE.pool.worker.disk)
     return parser.parse_args()
 
 
@@ -220,7 +198,7 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise ValueError(f"target total tokens must be positive: {args.target_total_tokens_b}")
 
 
-def _materialize_sources(args: argparse.Namespace) -> set[str]:
+def _prepare_sample_sources(args: argparse.Namespace) -> set[str]:
     if args.destination_prefix.startswith("s3://") or (
         args.mode is not SampleMode.MINHASH and args.source_prefix.startswith("s3://")
     ):
@@ -259,16 +237,7 @@ def _materialize_sources(args: argparse.Namespace) -> set[str]:
 
 def _materialize_minhash(args: argparse.Namespace, source_names: set[str]) -> None:
     worker = ResourceConfig(cpu=args.pool_cpu, ram=args.pool_ram, disk=args.pool_disk)
-    map_task = ResourceConfig(cpu=args.map_task_cpu, ram=args.map_task_ram, disk=args.map_task_disk)
-    scale = replace(
-        SMOKE_SCALE,
-        pool=replace(
-            SMOKE_SCALE.pool,
-            n_workers=args.pool_workers,
-            worker=worker,
-            map_task=map_task,
-        ),
-    )
+    scale = scale_with_pool(SMOKE_SCALE, args.pool_workers, worker)
     zephyr_context = datakit_zephyr_context(
         "zephyr-benchmark-sample-minhash",
         scale,
@@ -295,7 +264,7 @@ def main() -> None:
     args = _parse_args()
     configure_logging(logging.INFO)
     _validate_args(args)
-    source_names = _materialize_sources(args)
+    source_names = _prepare_sample_sources(args)
     _materialize_minhash(args, source_names)
 
 

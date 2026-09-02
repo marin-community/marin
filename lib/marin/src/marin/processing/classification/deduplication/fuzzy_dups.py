@@ -398,8 +398,6 @@ def compute_fuzzy_dups_attrs_step(
     max_parallelism: int,
     worker_resources: ResourceConfig | None = None,
     coordinator_resources: ResourceConfig | None = None,
-    map_task_resources: ResourceConfig | None = None,
-    reduce_task_resources: ResourceConfig | None = None,
     zephyr_context: ZephyrContext | None = None,
     override_output_path: str | None = None,
 ) -> StepSpec:
@@ -416,8 +414,6 @@ def compute_fuzzy_dups_attrs_step(
             max_parallelism=max_parallelism,
             worker_resources=worker_resources,
             coordinator_resources=coordinator_resources,
-            map_task_resources=map_task_resources,
-            reduce_task_resources=reduce_task_resources,
             zephyr_context=zephyr_context,
         ),
         # Match the identity the Datakit DAG builds, so a step created here

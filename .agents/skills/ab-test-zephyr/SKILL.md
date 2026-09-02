@@ -5,88 +5,32 @@ description: Run an explicitly requested Zephyr control/treatment benchmark on t
 
 # A/B test Zephyr changes
 
-## Signals
+Use this workflow only when the requester explicitly asks for a Zephyr A/B
+benchmark. Compare one control at the branch merge base with one treatment at
+the branch head unless the requester names additional commits or
+configurations.
 
-The coordinator writes one `zephyr.stage` row per completed stage and
-`execution_id`. Use these fields:
+## Define the comparison
 
-| Field | Aggregation across executions | Interpretation |
-|---|---|---|
-| `cpu_time_total` | sum | Primary efficiency and compute-cost signal |
-| `elapsed` | sum, labeled as summed stage elapsed | Secondary latency signal; sensitive to scheduling and stragglers |
-| `items` | sum | Workload-equivalence check |
-| `bytes_processed` | sum | Workload-equivalence check |
-| `mem_peak_bytes_max` | max | Worst observed shard RSS and OOM guardrail |
-| `mem_bytes_avg` | weighted interpretation only | Typical shard RSS context |
-| `cpu_pct_avg` | weighted interpretation only | CPU saturation context |
-| `item_rate`, `byte_rate` | do not aggregate | Derived from noisy elapsed time |
-
-`cpu_time_total` sums process user and system CPU-seconds across completed
-shards, so worker count and queue delay do not directly change it. Use it as the
-primary efficiency signal and normalize per item or byte when accepted workload
-sizes differ. `elapsed` measures the stage barrier and includes startup, I/O,
-concurrency, queueing, and stragglers; repeat an elapsed-only result under
-comparable scheduling conditions.
-
-Keep CPU and elapsed time as separate outcomes:
-
-- CPU flat or lower and elapsed lower: latency or topology win without added
-  compute cost.
-- CPU higher and elapsed lower: faster and more expensive.
-- CPU lower and elapsed higher: cheaper and slower.
-- Wall-only change from one comparison: inconclusive until repeated.
-- Topology or batching change: report the latency/compute tradeoff; do not
-  describe wall-time gains as equivalent per-core efficiency gains.
-
-Calibrate thresholds from same-code repeats for the selected sample and pool
-shape. A new OOM, application failure, or memory peak above the worker limit is
-a regression regardless of CPU.
-
-## Choose the comparison
-
-### Existing runs
-
-Start at [Collect execution IDs](#collect-execution-ids) when control and
-treatment jobs already exist. Confirm that the control and every treatment used
-the same immutable sample, stage range, sources, worker resources, concurrency,
-parallelism, cluster, region, and priority.
-
-A scheduled baseline is usable only when its report contains the same workload
-fingerprint and its Finelog execution IDs remain queryable. Otherwise, launch a
-matching control. Do not compare a standalone benchmark treatment with a
-differently shaped ferry baseline.
-
-### New runs
-
-Default to one control at the branch/PR merge base and one treatment at the
-branch/PR head. Add treatments only when the requester explicitly names each
-additional commit or configuration. Record a stable name plus the exact SHA and
-configuration difference for every extra arm; do not infer or invent arms.
-
-Run on GCP in `europe-west4` with
-`gs://marin-eu-west4/datakit/sample_100b_8ae7a94f` unless the requester
-selects another sample or backend. The us-central1 GCS sample is available for
-us-central1 runs. CoreWeave remains available for S3-local runs; select it
-explicitly with the matching S3 sample and target cluster.
-
-For a PR, read the diff and select the smallest stage range that exercises the
-changed behavior:
+Before launching, record the exact SHAs and choose the smallest target that
+exercises the change:
 
 | Change | Minimum coverage |
 |---|---|
-| Stage-local map, serialization, or tokenization path | The affected stage on enough shards to amortize startup |
-| Shuffle, partitioning, spill, merge, or buffer behavior | Exact or MinHash through fuzzy dedup on skewed or production-shaped data |
+| Map, serialization, or tokenization | Affected stage on enough shards to amortize startup |
+| Shuffle, partitioning, spill, merge, or buffers | Exact or MinHash through fuzzy dedup on skewed or production-shaped data |
 | Shared-pool lifecycle, scheduling, or pipeline concurrency | All affected stages with representative concurrent sources |
-| Documentation, tests, types, or log text only | Skip the remote benchmark with reviewer agreement |
+| Documentation, tests, types, or log text only | Skip the remote run with reviewer agreement |
 
-Confirm the sample size, pool shape, stage range, cluster, and expected cost
-before launching an expensive or production-scale comparison. Run local Zephyr
-and Datakit tests before paying for remote workers.
+Existing jobs are reusable only when the control and every treatment have the
+same immutable sample, sources, target, worker shape, concurrency, logical
+parallelism, cluster, region, priority, and preemptibility. A scheduled ferry
+is not a control for a differently shaped standalone benchmark.
 
-## Prepare worktrees
+Confirm the sample, preset, target, expected cost, and launch authority before
+an expensive run. Run local Zephyr and Datakit tests first.
 
-For a PR, use the merge base as the control and the PR head as the first
-treatment:
+For a PR, prepare detached worktrees:
 
 ```bash
 git fetch origin main
@@ -97,140 +41,73 @@ git worktree add --detach "$WORKTREE_ROOT/control" "$BASELINE_SHA"
 git worktree add --detach "$WORKTREE_ROOT/treatment" "$TREATMENT_SHA"
 ```
 
-Record both SHAs. Preserve configuration-only arms in separate worktrees or
-commits. Add arms only when explicitly requested.
+Keep configuration-only arms in separate commits or worktrees. Do not infer
+unnamed variants.
 
-## Launch the download-free benchmark
+## Launch
 
-`experiments.datakit.zephyr_benchmark` accepts an existing normalized sample
-and routes outputs to a seven-day temporary prefix. Use an immutable,
-region-local sample. Its default input is the GCS 100B sample in `europe-west4`.
-All arguments except fresh output run tags must match across the control and
-treatments.
+`experiments.datakit.zephyr_benchmark` reads an existing normalized sample and
+writes to a seven-day temporary prefix. Use the same immutable, region-local
+sample for every arm.
 
-### Choose a benchmark scale preset
+### Presets
 
-| Preset | Input | Workers | Map task | Reduce task | Pipelines | Dedup shards | CC rounds |
-|---|---|---|---|---|---:|---:|---:|
-| Full | `--sources all`: 256 GB, 768 parquet shards, 115 sources | 48 × 2 CPU / 16 GiB RAM / 16 GiB disk | Whole worker | Whole worker | 128 | 1000 | 3 |
-| Light | `--source-fraction 0.1`: 26.8 GB, 165 parquet shards, 77 sources | 48 × 2 CPU / 16 GiB RAM / 16 GiB disk | Whole worker | Whole worker | 80 | 500 | 3 |
+| Preset | Selection | Expected workload | Workers | Pipelines | Dedup shards | CC rounds |
+|---|---|---|---|---:|---:|---:|
+| Full | `--sources all` | 115 sources, 256 GB, 768 shards | 48 | 128 | 1000 | 3 |
+| Light | `--source-fraction 0.1` | 77 sources, 26.8 GB, 165 shards | 48 | 80 | 500 | 3 |
 
-Use the full preset for a change that could regress the shared pool at
-production scale (shuffle, partitioning, spill, buffer, or scheduling
-changes). Use the light preset for a quicker, cheaper signal on a
-stage-local change.
+Both presets use the reference worker default: 2 CPU, 16 GiB RAM, and 16 GiB
+disk. Datakit stages use their normal task-resource defaults; the benchmark
+does not configure map or reduce task shapes. Override worker resources only
+when worker shape is the treatment, and record the override.
 
-The full sample is the closest pre-built workload to the nemotron ferry's
-measured ~350 GB shape. There is no pre-built sample near 10% of that size, so
-`zephyr_benchmark.py` builds the light preset's data at launch time:
-`--source-fraction 0.1` lists every source's parquet shards, greedily selects
-whole sources ordered by ascending average shard size (favoring shard-dense
-sources) until their combined size reaches ~10% of the full sample, and logs
-the resulting source count, bytes, and shard count.
+The light selector greedily adds whole sources by ascending average shard size
+until it reaches the byte target. The launcher logs the resolved source, byte,
+and shard counts and rejects a pool larger than the selected parquet shard
+count. Treat the table counts as an expected fingerprint and investigate a
+material mismatch.
 
-`zephyr_benchmark.py` fails with a clear error if `--pool-workers` exceeds the
-parquet shard count of the selected sources (whether from `--sources` or
-`--source-fraction`), rather than silently leaving workers idle.
+Use the full preset for shared-pool, shuffle, spill, buffer, or scheduling
+changes. Use light for a quicker stage-local signal.
 
-### Worker and task sizing
+### Targets
 
-The worker is a scheduling unit; the task is the subprocess capacity reserved
-inside it. The presets use the reference pipeline's default worker with 2 CPU,
-16 GiB RAM, and 16 GiB disk, and let both map and reduce tasks inherit that
-whole worker. Global exact dedup, tokenization, MinHash, and fuzzy dedup
-therefore all use the same one-task-per-worker shape as the reference pipeline.
+- `all`: exact dedup, tokenization, MinHash, and fuzzy dedup.
+- `map`: tokenization and MinHash.
+- `shuffle`: exact and fuzzy dedup using permanent sample-owned MinHash inputs.
+- `exact`, `tokenize`, `minhash`, or `fuzzy`: one stage family.
 
-`zephyr_benchmark.py` uses the worker and task resource shapes in the preset
-table by default. Pass the resource flags only when the comparison intentionally
-changes those shapes, and record every override in the workload fingerprint.
+Before a `shuffle` or `fuzzy` run, the launcher verifies every selected
+source's MinHash artifact. If one is missing, follow
+`experiments/datakit/README.md` to run the sample materializer in `minhash`
+mode. Map benchmark outputs are temporary and cannot feed a later shuffle run.
 
-Both presets use the same 48-worker pool, exposing up to 48 concurrent map or
-reduce tasks. This keeps the previous presets' aggregate 96 CPU and 768 GiB RAM
-while matching the reference pipeline's worker shape. A 256-worker full run
-completed in 23m41s, ramped to 512 concurrent reduce tasks, and triggered GCS
-`429 SlowDown` responses.
+### Data locality
 
-The current 48-worker light preset completed in 27m55s and used 15.32 CPU-hours,
-with no shard retries, GCS 429s, Iris failures, or preemptions. The earlier
-12-worker packed light preset completed in 27m25s and used 16.91 CPU-hours.
-
-The clean full-preset measurement still comes from the earlier packed shape. It
-processed 256.4 GB in 2h54m28s and used 182.83 CPU-hours; Finelog recorded
-18,970 completed shards and a 6.61 GiB maximum stage memory peak. A 48-worker
-full attempt completed in 3h13m, but its child worker pool accumulated 75 Iris
-preemptions. It demonstrates recovery, not valid performance evidence. Run a
-clean 48-worker full preset before citing a current full-preset duration.
-
-The 2 CPU / 16 GiB worker is the reference pipeline default. Forty-eight of
-them fit within the same aggregate CPU and RAM budget as the earlier packed
-shape, while scheduling and task admission remain representative of the
-pipeline being benchmarked.
-
-### Pipeline and connected-components limits
-
-The previous light benchmark took 2h20m with four concurrent pipelines, one
-task admitted per worker, and the default connected-components budget. Finelog
-(`zephyr.stage`) and Iris job logs identified both bottlenecks:
-
-- **`--max-concurrent`** limits StepRunner fan-out and concurrent pipelines in
-  the shared pool; worker count and per-task resources separately bound shard
-  concurrency. During the tokenize/MinHash phase, each source contributes
-  two independent pipelines, so low values strand most of the pool. Zephyr
-  sizes the coordinator actor's call budget to
-  `max(100, 2 * workers + max_concurrent_pipelines)`: long-lived pipeline waits
-  cannot occupy the slots workers need for polling and heartbeats. Keep the two
-  concurrency limits equal; the coordinator rejects excess pipelines instead
-  of queueing them. Fray must pass this actor setting through to Iris's
-  `ActorServer`; otherwise Iris's 32-call default can starve worker heartbeats
-  even though Zephyr requested a larger budget.
-- **`--dedup-cc-max-iterations`** bounds fuzzy dedup's connected-components
-  rounds. Each round is a full scatter/reduce pass over the whole bucket graph
-  regardless of how little remains to resolve; the earlier run showed 11
-  sequential rounds at ~350s each — about 65 of the 140 minutes after
-  tokenize/minhash finished — because `zephyr_datakit_steps` left
-  `cc_max_iterations` at the library default of 10 instead of the 3 both
-  datakit ferries use. Set it to 3 to match ferry behavior and cut this phase
-  by roughly 3x; dedup completeness in the benchmark's output does not matter
-  for a performance comparison.
-
-### Select map or shuffle work
-
-`--target all` runs exact dedup, tokenization, MinHash, and fuzzy dedup. For a
-map-only comparison, use `--target map`; it runs tokenization and MinHash with a
-fresh run tag.
-
-A shuffle comparison reads the permanent MinHash inputs stored under the
-normalized sample's `_benchmark_inputs/` subtree. Use `--target shuffle` with a
-fresh run tag; no preparatory map benchmark is required. The benchmark checks
-every selected source's MinHash artifact before starting the pool and directs
-the operator to `materialize_zephyr_benchmark_sample --mode minhash` if the
-sample needs a backfill. `shuffle` runs global exact and fuzzy dedup; `exact`,
-`tokenize`, `minhash`, and `fuzzy` are also available for a single-stage run.
-Map-only outputs remain temporary benchmark results and are not inputs to a
-later shuffle run.
-
-Set exactly one data-locality argument before launching:
+Set one matching sample and compute location:
 
 ```bash
-# Default: GCS input and GCP compute in europe-west4.
+# Default GCP run.
 SAMPLE_PREFIX=gs://marin-eu-west4/datakit/sample_100b_8ae7a94f
 DATA_LOCALITY_ARGS=(--region europe-west4)
 
-# GCP opt-in: use the existing us-central1 sample with us-central1 compute.
+# GCP us-central1 alternative.
 # SAMPLE_PREFIX=gs://marin-us-central1/datakit/sample_100b_8ae7a94f
 # DATA_LOCALITY_ARGS=(--region us-central1)
 
-# CoreWeave opt-in: S3 input and CoreWeave compute in cw-us-east-02a.
+# CoreWeave alternative.
 # SAMPLE_PREFIX=s3://marin-us-east-02a/marin/datakit/sample_100b_8ae7a94f
 # DATA_LOCALITY_ARGS=(--target-cluster cw-us-east-02a)
 ```
 
-Set the cluster or region from the actual sample prefix. If the mapping is
-unknown, stop before launching. The benchmark passes `source_prefix` to
-`marin_temp_bucket`, which keeps temporary outputs with the sample. Do not
-override the output location or launch compute in a different region.
+Stop if the sample's storage location is unknown. Do not override the output
+location or run compute in another region.
 
-Launch each arm from its worktree:
+### Command
+
+Run the same command from each worktree, changing only the arm, SHA, and fresh
+run tag:
 
 ```bash
 cd <CONTROL_OR_TREATMENT_WORKTREE>
@@ -241,7 +118,7 @@ uv run iris --config=lib/iris/config/marin.yaml job run --no-wait \
   -- python -m experiments.datakit.zephyr_benchmark \
     --sample-prefix "$SAMPLE_PREFIX" \
     --sources <COMMA_SEPARATED_SOURCES_OR_ALL> \
-    `# or --source-fraction <FRACTION> for the light preset, in place of --sources` \
+    `# use --source-fraction <FRACTION> instead for a fractional preset` \
     --run-tag <FRESH_RUN_TAG>-<ARM> \
     --pool-workers <WORKERS> \
     --target <all|map|shuffle|exact|tokenize|minhash|fuzzy> \
@@ -252,28 +129,21 @@ uv run iris --config=lib/iris/config/marin.yaml job run --no-wait \
 
 Record this workload fingerprint for every arm:
 
-- commit SHA and Iris job ID
-- sample prefix and source selection
-- benchmark target
-- pool worker and per-task CPU, RAM, and disk
-- maximum concurrent pipelines, dedup parallelism, and dedup CC max iterations
-- Iris controller, data-local target cluster or region, priority, and preemptibility
-- run tag
+- commit SHA, Iris job ID, and run tag
+- sample prefix, source selection, and benchmark target
+- worker count, CPU, RAM, and disk
+- maximum pipelines, dedup parallelism, and connected-components rounds
+- Iris controller, region or target cluster, priority, and preemptibility
 
-Use fresh run tags so no arm cache-hits. One matching control can be reused for
-explicitly requested treatments launched in the same scheduling window. If the
-decision depends on elapsed time, interleave additional control trials among
-the treatments to measure scheduling noise.
+Fresh run tags prevent cache hits. If elapsed time drives the decision, repeat
+and interleave control trials to measure scheduling noise.
 
-If the request includes continuous monitoring, use `babysit-zephyr`. A failed
-or preempted arm measures infrastructure reliability and carries no performance
-result. Use `debug` only for a stated repeated fault.
+Use `babysit-zephyr` when continuous monitoring is requested. A failed or
+preempted arm has no performance result. Use `debug` only for a repeated fault.
 
-## Collect execution IDs
+## Collect and validate results
 
-A benchmark job can run many Zephyr pipelines on one shared pool. Collect every
-`YYYYMMDD-HHMMSS-<hex>` execution ID from the control and each treatment's root
-job and descendant logs:
+Collect every execution ID from the root and descendant logs:
 
 ```bash
 uv run iris --cluster marin job logs <IRIS_JOB_ID> \
@@ -281,14 +151,11 @@ uv run iris --cluster marin job logs <IRIS_JOB_ID> \
   rg -o '[0-9]{8}-[0-9]{6}-[0-9a-f]{8}' | sort -u
 ```
 
-See `lib/zephyr/OPS.md` for child-job naming when a missing execution needs a
-specific coordinator log. Preserve the control and treatment ID lists with the
-workload fingerprint.
+See `lib/zephyr/OPS.md` for child-job naming. Preserve each arm's ID list with
+its workload fingerprint.
 
-## Query Finelog
-
-Authenticate with `uv run iris --cluster marin login` when needed. Query the
-`zephyr.stage` namespace through the cluster's Finelog deployment:
+Query Finelog's `zephyr.stage` rows after authenticating with
+`uv run iris --cluster marin login` when necessary:
 
 ```bash
 uv run finelog query marin --format table '
@@ -299,12 +166,10 @@ uv run finelog query marin --format table '
   ORDER BY execution_id, stage_name'
 ```
 
-Every expected row must have `status = 'END'`. A `FAILED` row invalidates that
-arm. Missing rows usually mean an execution ID was omitted or Finelog emission
-failed; resolve the gap before reporting a pass.
+Every expected row must have `status = 'END'`. Resolve missing rows and exclude
+arms with failed stages before interpreting deltas.
 
-Aggregate all executions in the control and one treatment, then compare by
-`stage_name`:
+Aggregate each arm by stage:
 
 ```sql
 WITH tagged AS (
@@ -317,101 +182,96 @@ WITH tagged AS (
   FROM "zephyr.stage"
   WHERE status = 'END'
     AND execution_id IN (<CONTROL_AND_TREATMENT_IDS>)
-), aggregated AS (
+), totals AS (
   SELECT arm, stage_name,
-         SUM(cpu_time_total) AS cpu_time_total,
+         SUM(cpu_time_total) AS cpu,
          SUM(elapsed) AS elapsed,
          SUM(items) AS items,
-         SUM(bytes_processed) AS bytes_processed,
-         MAX(mem_peak_bytes_max) AS mem_peak_bytes_max
+         SUM(bytes_processed) AS bytes,
+         MAX(mem_peak_bytes_max) AS mem_peak
   FROM tagged
   GROUP BY arm, stage_name
 )
-SELECT b.stage_name,
-       b.cpu_time_total AS control_cpu,
-       t.cpu_time_total AS treatment_cpu,
-       (t.cpu_time_total - b.cpu_time_total) / NULLIF(b.cpu_time_total, 0) AS cpu_delta,
-       b.elapsed AS control_elapsed,
-       t.elapsed AS treatment_elapsed,
-       (t.elapsed - b.elapsed) / NULLIF(b.elapsed, 0) AS elapsed_delta,
-       t.items - b.items AS items_delta,
-       t.bytes_processed - b.bytes_processed AS bytes_delta,
-       b.mem_peak_bytes_max AS control_mem_peak,
-       t.mem_peak_bytes_max AS treatment_mem_peak
-FROM aggregated b
-JOIN aggregated t USING (stage_name)
-WHERE b.arm = 'control' AND t.arm = 'treatment'
+SELECT c.stage_name,
+       c.cpu AS control_cpu, t.cpu AS treatment_cpu,
+       (t.cpu - c.cpu) / NULLIF(c.cpu, 0) AS cpu_delta,
+       c.elapsed AS control_elapsed, t.elapsed AS treatment_elapsed,
+       (t.elapsed - c.elapsed) / NULLIF(c.elapsed, 0) AS elapsed_delta,
+       t.items - c.items AS items_delta,
+       t.bytes - c.bytes AS bytes_delta,
+       c.mem_peak AS control_mem_peak, t.mem_peak AS treatment_mem_peak
+FROM totals c JOIN totals t USING (stage_name)
+WHERE c.arm = 'control' AND t.arm = 'treatment'
 ORDER BY cpu_delta DESC;
 ```
 
-Use this SQL once per treatment, reusing the same control IDs. Replace each ID
-placeholder with comma-separated, single-quoted execution IDs. Keep each raw
-query output with the report. Keep repeated trials separate; do not merge
-different variants or unequal trial counts into one ID set.
+Run the aggregate once per treatment and retain the raw output. Keep repeated
+trials separate.
 
-## Validate comparability
+Interpret the signals as follows:
 
-Before interpreting deltas:
+| Signal | Use |
+|---|---|
+| Sum of `cpu_time_total` | Primary efficiency and compute-cost result |
+| Sum of `elapsed` | Secondary stage latency; includes startup, I/O, queueing, and stragglers |
+| Sum of `items` and `bytes_processed` | Workload-equivalence check |
+| Max of `mem_peak_bytes_max` | Worst shard RSS and OOM guardrail |
+| `mem_bytes_avg`, `cpu_pct_avg` | Weighted diagnostic context only |
+| `item_rate`, `byte_rate` | Do not aggregate |
 
-1. Confirm the control and treatment workload fingerprints match except for
-   SHA, arm, and run tag.
-2. Confirm each stage has matching `items` and `bytes_processed`, within a
-   fraction of a percent. Explain and normalize any accepted mismatch.
-3. Confirm the control and treatment completed the same execution and stage
-   set.
-4. Inspect `iris job describe <IRIS_JOB_ID>` for OOMs and peak task memory.
-5. Check job logs for retries, preemptions, hardware faults, and stragglers.
-6. Run the change's semantic validation separately. Matching item counts do not
-   prove output equivalence.
+CPU and elapsed are separate outcomes. Lower elapsed with higher CPU is a
+latency/cost tradeoff, not an efficiency win. Treat a wall-only result from one
+comparison as inconclusive. Normalize CPU per item or byte for an accepted
+workload mismatch. A new OOM, application failure, or memory peak above the
+worker limit is a regression.
 
-Different work, a failed stage, or material infrastructure churn makes the
-comparison inconclusive. Re-run before assigning a performance verdict.
+Before assigning a verdict:
 
-## Report
+1. Match fingerprints except for SHA, arm, and run tag.
+2. Match execution and stage sets.
+3. Match items and bytes within a fraction of a percent, or explain and
+   normalize the difference.
+4. Inspect `iris job describe <IRIS_JOB_ID>` for failures, preemptions, and
+   memory peaks.
+5. Check logs for retries, hardware faults, and stragglers.
+6. Validate semantics separately; equal counts do not prove equal output.
 
-For a PR, update one sentinel-marked comment so reruns do not accumulate stale
-verdicts:
+Different work or material infrastructure churn makes the comparison
+inconclusive and requires a clean rerun.
+
+## Report and clean up
+
+Update one sentinel-marked PR comment:
 
 ```markdown
 <!-- zephyr-ab-test -->
 🤖 ## Zephyr A/B test
 
 Verdict: pass | regression | tradeoff | inconclusive
+Workload: <sample, target, sources, pool, concurrency, cluster>
+Control: <sha, job, execution count>
+Treatments: <name, sha, job, execution count>
 
-Workload: <sample, stage range, sources, pool shape, concurrency, cluster>
-Control: <sha>, <job>, <execution count>
-Treatments: <name, sha, job, and execution count for each>
+| Treatment | Stage | CPU change | Summed elapsed change | Peak memory change |
+|---|---|---:|---:|---:|
+| ... | ... | ... | ... | ... |
 
-| Treatment | Stage | CPU control | CPU treatment | CPU change | Elapsed control | Elapsed treatment | Elapsed change | Peak memory change |
-|---|---|---:|---:|---:|---:|---:|---:|---:|
-| ... | ... | ... | ... | ... | ... | ... | ... | ... |
-
-Data check: <items and bytes comparison>
+Data check: <items and bytes>
 Infrastructure: <preemptions, retries, failures, stragglers, or none>
-Interpretation: <efficiency result, latency result, and any tradeoff>
+Interpretation: <CPU result, latency result, and tradeoff>
 ```
 
-Lead with CPU change, then elapsed time and memory. State whether elapsed came
-from one comparison or repeated interleaved trials and label summed stage
-elapsed. Launcher duration and task wall time do not replace stage metrics.
+Lead with CPU, then elapsed and memory. State whether elapsed comes from one
+comparison or repeated trials. Launcher duration does not replace stage
+metrics.
 
-## Clean up
-
-Remove temporary worktrees after preserving the SHAs, job IDs, execution IDs,
-workload fingerprints, and Finelog output. Repeat the treatment command for
-each additional worktree:
+After preserving SHAs, job IDs, execution IDs, fingerprints, and query output:
 
 ```bash
 git worktree remove "$WORKTREE_ROOT/control"
 git worktree remove "$WORKTREE_ROOT/treatment"
 ```
 
-Benchmark outputs expire under their seven-day temporary prefix.
-
-## Related guidance
-
-- `babysit-zephyr` monitors every control and treatment job through terminal
-  state.
-- `debug` investigates repeated failures or unexplained infrastructure churn.
-- `lib/zephyr/OPS.md` documents coordinator queries and straggler diagnosis.
-- `lib/iris/OPS.md` documents job summaries, task attempts, and Finelog access.
+Benchmark outputs expire with their seven-day temporary prefix. Use
+`lib/zephyr/OPS.md` for coordinator diagnostics and `lib/iris/OPS.md` for job,
+task-attempt, and Finelog operations.

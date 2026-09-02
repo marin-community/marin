@@ -54,7 +54,6 @@ from zephyr.context import ZephyrContext
 from experiments.datakit.materialize_zephyr_benchmark_sample import (
     BENCHMARK_SAMPLE_INPUTS_DIR,
     GCP_BENCHMARK_SAMPLE_PREFIX,
-    benchmark_datakit_steps,
     benchmark_sample_fuzzy_steps,
 )
 from experiments.datakit.reference_pipeline import (
@@ -65,6 +64,8 @@ from experiments.datakit.reference_pipeline import (
     ZephyrDatakitSteps,
     datakit_zephyr_context,
     sample_sources,
+    scale_with_pool,
+    zephyr_datakit_steps,
 )
 
 logger = logging.getLogger(__name__)
@@ -228,7 +229,7 @@ def _benchmark_steps(
 ) -> ZephyrDatakitSteps:
     output_prefix = _benchmark_output_prefix(sample_prefix, run_tag)
     sources = sample_sources(sample_prefix, selected_sources, run_tag)
-    steps = benchmark_datakit_steps(sources, scale, zephyr_context, output_prefix)
+    steps = zephyr_datakit_steps(sources, scale, zephyr_context, output_path_prefix=output_prefix)
 
     if target not in (BenchmarkTarget.SHUFFLE, BenchmarkTarget.FUZZY):
         return steps
@@ -282,12 +283,6 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--pool-cpu", type=float, default=DEFAULT_SCALE.pool.worker.cpu)
     parser.add_argument("--pool-ram", default=DEFAULT_SCALE.pool.worker.ram)
     parser.add_argument("--pool-disk", default=DEFAULT_SCALE.pool.worker.disk)
-    parser.add_argument("--map-task-cpu", type=float, help="Override map-task CPU; omitted uses the whole worker.")
-    parser.add_argument("--map-task-ram", help="Override map-task RAM; omitted uses the whole worker.")
-    parser.add_argument("--map-task-disk", help="Override map-task disk; omitted uses the whole worker.")
-    parser.add_argument("--reduce-task-cpu", type=float, help="Override reduce-task CPU; omitted uses the whole worker.")
-    parser.add_argument("--reduce-task-ram", help="Override reduce-task RAM; omitted uses the whole worker.")
-    parser.add_argument("--reduce-task-disk", help="Override reduce-task disk; omitted uses the whole worker.")
     parser.add_argument("--target", required=True, type=BenchmarkTarget, choices=list(BenchmarkTarget))
     parser.add_argument("--max-concurrent", required=True, type=int)
     parser.add_argument("--dedup-max-parallelism", required=True, type=int)
@@ -305,35 +300,11 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _task_resources(
-    worker: ResourceConfig,
-    cpu: float | None,
-    ram: str | None,
-    disk: str | None,
-) -> ResourceConfig | None:
-    if cpu is None and ram is None and disk is None:
-        return None
-    return replace(
-        worker,
-        cpu=worker.cpu if cpu is None else cpu,
-        ram=worker.ram if ram is None else ram,
-        disk=worker.disk if disk is None else disk,
-    )
-
-
 def _scale_from_args(args: argparse.Namespace) -> PipelineScale:
     worker = ResourceConfig(cpu=args.pool_cpu, ram=args.pool_ram, disk=args.pool_disk)
-    map_task = _task_resources(worker, args.map_task_cpu, args.map_task_ram, args.map_task_disk)
-    reduce_task = _task_resources(worker, args.reduce_task_cpu, args.reduce_task_ram, args.reduce_task_disk)
+    scale = scale_with_pool(SMOKE_SCALE, args.pool_workers, worker)
     return replace(
-        SMOKE_SCALE,
-        pool=replace(
-            SMOKE_SCALE.pool,
-            n_workers=args.pool_workers,
-            worker=worker,
-            map_task=map_task,
-            reduce_task=reduce_task,
-        ),
+        scale,
         dedup_max_parallelism=args.dedup_max_parallelism,
         cc_max_iterations=args.dedup_cc_max_iterations,
     )

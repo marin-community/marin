@@ -89,8 +89,6 @@ def test_store_hash_tracks_content_not_resources():
         pool=PoolConfig(
             n_workers=999,
             worker=ResourceConfig(cpu=8, ram="64g", disk="32g"),
-            map_task=ResourceConfig(cpu=1, ram="8g", disk="4g"),
-            reduce_task=ResourceConfig(cpu=3, ram="30g", disk="8g"),
             coordinator=ResourceConfig(cpu=1, ram="8g", preemptible=False),
         ),
     )

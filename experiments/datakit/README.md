@@ -182,8 +182,7 @@ uv run iris --cluster=marin job run --no-wait \
     --destination-prefix gs://marin-eu-west4/datakit/sample_100b_8ae7a94f \
     --max-concurrent 4 \
     --minhash-max-concurrent 80 \
-    --pool-workers 12 --pool-cpu 8 --pool-ram 64g --pool-disk 32g \
-    --map-task-cpu 1 --map-task-ram 8g --map-task-disk 4g
+    --pool-workers 48
 ```
 
 To copy from the legacy CoreWeave S3 sample instead, replace `--source-prefix`
@@ -211,8 +210,7 @@ uv run iris --cluster=marin job run --no-wait \
     --target-total-tokens-b 100 \
     --max-concurrent 4 \
     --minhash-max-concurrent 80 \
-    --pool-workers 12 --pool-cpu 8 --pool-ram 64g --pool-disk 32g \
-    --map-task-cpu 1 --map-task-ram 8g --map-task-disk 4g
+    --pool-workers 48
 ```
 
 To add the reusable MinHash artifacts to an existing regional sample without
@@ -226,8 +224,7 @@ uv run iris --cluster=marin job run --no-wait \
     --mode minhash \
     --destination-prefix gs://marin-eu-west4/datakit/sample_100b_8ae7a94f \
     --minhash-max-concurrent 80 \
-    --pool-workers 12 --pool-cpu 8 --pool-ram 64g --pool-disk 32g \
-    --map-task-cpu 1 --map-task-ram 8g --map-task-disk 4g
+    --pool-workers 48
 ```
 
 The MinHash artifacts live under `_benchmark_inputs/` inside the sample. The

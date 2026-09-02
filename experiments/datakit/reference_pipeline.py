@@ -33,7 +33,7 @@ exact dedup, fuzzy dedup, the decontamination DF filter, and the store combine s
 Worker fleet: subprocess-compatible stages share one Zephyr coordinator and
 worker group. Steps that require process-local model caches use dedicated
 ``InlineRunner`` contexts. One :class:`PoolConfig` sets the worker count and
-worker, task, and coordinator shapes. ``--max-concurrent`` limits concurrent
+worker and coordinator shapes. ``--max-concurrent`` limits concurrent
 StepRunner steps.
 
 Public API: :func:`reference_datakit_steps`. Pass ``sources`` (a ``{name:
@@ -252,18 +252,14 @@ DRIVER_RESOURCES = ResourceConfig(cpu=1, ram="2g")
 class PoolConfig:
     """The Zephyr worker fleet for the reference pipeline.
 
-    ``n_workers`` sets the shared pool size. ``worker`` sets each worker shape.
-    ``map_task`` sets the resources admitted for one map task; ``None`` uses the
-    whole worker. ``reduce_task`` sets the reduce task resources; ``None`` reuses
-    the resolved map task shape. ``coordinator`` sizes the shared coordinator.
-    Subprocess-compatible stages share this pool. Inline stages create a
-    dedicated pool with the worker settings.
+    ``n_workers`` sets the shared pool size. ``worker`` sets each worker shape,
+    and ``coordinator`` sizes the shared coordinator. Subprocess-compatible
+    stages share this pool. Inline stages create a dedicated pool with the
+    worker settings.
     """
 
     n_workers: int = 512
     worker: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=2, ram="16g", disk="16g"))
-    map_task: ResourceConfig | None = None
-    reduce_task: ResourceConfig | None = None
     coordinator: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=1, ram="4g", preemptible=False))
 
 
@@ -358,6 +354,11 @@ def datakit_zephyr_context(
         max_concurrent_pipelines=max_concurrent_pipelines,
         stage_runner_factory=SubprocessRunner,
     )
+
+
+def scale_with_pool(scale: PipelineScale, n_workers: int, worker: ResourceConfig) -> PipelineScale:
+    """Return ``scale`` with a resized worker pool."""
+    return replace(scale, pool=replace(scale.pool, n_workers=n_workers, worker=worker))
 
 
 def select_sources(names: list[str] | None = None) -> dict[str, StepSpec]:
@@ -587,34 +588,17 @@ class ZephyrDatakitSteps:
     fuzzy_dedup: StepSpec
 
 
-def fuzzy_dedup_step(
-    minhash_steps: list[StepSpec],
-    scale: PipelineScale,
-    zephyr_context: ZephyrContext | None,
-) -> StepSpec:
-    """Build fuzzy dedup with the reference pipeline's execution settings."""
-    return compute_fuzzy_dups_attrs_step(
-        name="datakit/dedup",
-        minhash_steps=minhash_steps,
-        max_parallelism=scale.dedup_max_parallelism,
-        cc_max_iterations=scale.cc_max_iterations,
-        cc_resume=True,
-        worker_resources=scale.pool.worker,
-        map_task_resources=scale.pool.map_task,
-        reduce_task_resources=scale.pool.reduce_task,
-        zephyr_context=zephyr_context,
-    )
-
-
 def zephyr_datakit_steps(
     sources: dict[str, StepSpec],
     scale: PipelineScale = DEFAULT_SCALE,
     zephyr_context: ZephyrContext | None = None,
+    output_path_prefix: str | None = None,
 ) -> ZephyrDatakitSteps:
     """Build exact-dedup, tokenize, MinHash, and fuzzy-dedup stages."""
     source_names = sorted(sources)
     exact_dedup = StepSpec(
         name="datakit/global_exact_dedup",
+        output_path_prefix=output_path_prefix,
         deps=[sources[name] for name in source_names],
         hash_attrs={"sources": source_names, "v": GLOBAL_EXACT_DEDUP_DATA_VERSION},
         fn=lambda output_path: global_exact_deduplicate(
@@ -623,8 +607,6 @@ def zephyr_datakit_steps(
             worker_resources=scale.pool.worker,
             max_workers=scale.pool.n_workers,
             max_parallelism=scale.dedup_max_parallelism,
-            map_task_resources=scale.pool.map_task,
-            reduce_task_resources=scale.pool.reduce_task,
             zephyr_context=zephyr_context,
         ),
     )
@@ -633,19 +615,22 @@ def zephyr_datakit_steps(
     tokenize_steps: dict[str, StepSpec] = {}
     minhash_steps: dict[str, StepSpec] = {}
     for name, normalize_step in sources.items():
-        tokenize_steps[name] = tokenize_attributes_step(
-            name=f"datakit/tokenize/{name}",
-            train_normalize=normalize_step,
-            tokenizer=TOKENIZER,
-            tokenizer_backend=TOKENIZER_BACKEND,
-            tokenizer_revision=TOKENIZER_REVISION,
-            max_workers=scale.pool.n_workers,
-            worker_resources=scale.pool.worker,
-            map_task_resources=scale.pool.map_task,
-            zephyr_context=zephyr_context,
+        tokenize_steps[name] = replace(
+            tokenize_attributes_step(
+                name=f"datakit/tokenize/{name}",
+                train_normalize=normalize_step,
+                tokenizer=TOKENIZER,
+                tokenizer_backend=TOKENIZER_BACKEND,
+                tokenizer_revision=TOKENIZER_REVISION,
+                max_workers=scale.pool.n_workers,
+                worker_resources=scale.pool.worker,
+                zephyr_context=zephyr_context,
+            ),
+            output_path_prefix=output_path_prefix,
         )
         minhash_steps[name] = StepSpec(
             name=f"datakit/minhash/{name}",
+            output_path_prefix=output_path_prefix,
             deps=[normalize_step],
             hash_attrs={
                 "num_perms": mh.num_perms,
@@ -664,13 +649,22 @@ def zephyr_datakit_steps(
                 text_cap_chars=mh.text_cap_chars,
                 seed=mh.seed,
                 worker_resources=scale.pool.worker,
-                map_task_resources=scale.pool.map_task,
-                reduce_task_resources=scale.pool.reduce_task,
                 zephyr_context=zephyr_context,
             ),
         )
 
-    fuzzy_dedup = fuzzy_dedup_step(list(minhash_steps.values()), scale, zephyr_context)
+    fuzzy_dedup = replace(
+        compute_fuzzy_dups_attrs_step(
+            name="datakit/dedup",
+            minhash_steps=list(minhash_steps.values()),
+            max_parallelism=scale.dedup_max_parallelism,
+            cc_max_iterations=scale.cc_max_iterations,
+            cc_resume=True,
+            worker_resources=scale.pool.worker,
+            zephyr_context=zephyr_context,
+        ),
+        output_path_prefix=output_path_prefix,
+    )
     return ZephyrDatakitSteps(
         exact_dedup=exact_dedup,
         tokenize=tokenize_steps,
@@ -1086,14 +1080,14 @@ def _select_pipeline_sources(args: argparse.Namespace) -> dict[str, StepSpec]:
     return select_sources(names)
 
 
-def _apply_pool_overrides(scale: PipelineScale, args: argparse.Namespace) -> PipelineScale:
-    """Override the scale's worker fleet from ``--pool-*`` flags."""
+def _scale_from_args(scale: PipelineScale, args: argparse.Namespace) -> PipelineScale:
+    """Apply the reference CLI's worker-pool overrides."""
     worker = replace(
         scale.pool.worker,
         **{k: v for k, v in (("cpu", args.pool_cpu), ("ram", args.pool_ram), ("disk", args.pool_disk)) if v is not None},
     )
     n_workers = args.pool_workers if args.pool_workers is not None else scale.pool.n_workers
-    return replace(scale, pool=PoolConfig(n_workers=n_workers, worker=worker))
+    return scale_with_pool(scale, n_workers, worker)
 
 
 def main() -> None:
@@ -1149,7 +1143,7 @@ def main() -> None:
 
     configure_logging(logging.INFO)
 
-    scale = _apply_pool_overrides(SMOKE_SCALE if args.mode == "sample" else DEFAULT_SCALE, args)
+    scale = _scale_from_args(SMOKE_SCALE if args.mode == "sample" else DEFAULT_SCALE, args)
     sources = _select_pipeline_sources(args)
 
     with datakit_zephyr_context("datakit-reference", scale, args.max_concurrent) as zephyr_context:
