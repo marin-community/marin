@@ -48,6 +48,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Keep this CUDA stack separate from marin-levanter[gpu] while JaxPP requires
+# JAX <=0.11.0 and Levanter GPU pins 0.11.1. Once those versions align, make
+# this extra depend on marin-levanter[gpu] instead of listing its GPU packages.
 pipeline = [
     "jaxpp",
     "marin-levanter",
