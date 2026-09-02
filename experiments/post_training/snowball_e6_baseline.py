@@ -342,6 +342,7 @@ def build_workflow(
     spans_synchronize: bool = True,
     smoke: bool = False,
     debug_distributed: bool = False,
+    collective_diagnostics: bool = False,
     telemetry_only: bool = False,
     label: str = "",
 ) -> ArtifactStep[SkyRLModel]:
@@ -368,6 +369,8 @@ def build_workflow(
         variant += "-nosync"
     if debug_distributed:
         variant += "-nccldbg"
+    if collective_diagnostics:
+        variant += "-colldiag"
     if telemetry_only:
         variant += "-telonly"
     if bf16_update_mode != "stochastic":
@@ -441,6 +444,11 @@ def build_workflow(
                 # policy_train. ⚠️ It is also a timing contaminant: enable it in BOTH cells of a
                 # comparison, or in a separate diagnostic attempt.
                 *(("++trainer.debug_mode=distributed",) if debug_distributed else ()),
+                # Per-micro-batch, per-rank NCCL sequence numbers and mesh coordinates, at exactly
+                # the seams the spans use. What it adds over a wall-clock span is WHICH process group
+                # a straggler is behind on -- FSDP _ALLGATHER_BASE versus EP ALLTOALL_BASE. It reads
+                # existing counters and issues no collectives of its own.
+                *(("++trainer.collective_phase_diagnostics=true",) if collective_diagnostics else ()),
             ),
             retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
             seed=17,
@@ -494,6 +502,14 @@ def build_workflow(
     help="Which AdamW implementation runs. `stochastic` is the stack's own default and measures "
     "today's code; `nearest` falls through to torch.optim.AdamW, which is what E6 ran. Stated "
     "explicitly because inheriting it silently attributes an optimizer change to the model.",
+)
+@click.option(
+    "--collective-diagnostics",
+    is_flag=True,
+    default=False,
+    help="trainer.collective_phase_diagnostics: per-micro-batch, per-rank NCCL sequence numbers and "
+    "mesh coordinates at the same seams the spans use. Tells you which process group a straggler is "
+    "behind on, which wall-clock spans cannot. Reads existing counters, issues no collectives.",
 )
 @click.option(
     "--telemetry-only",
@@ -563,6 +579,7 @@ def main(
     spans_synchronize: bool,
     smoke: bool,
     debug_distributed: bool,
+    collective_diagnostics: bool,
     telemetry_only: bool,
     label: str,
 ) -> ArtifactStep[SkyRLModel]:
@@ -575,6 +592,7 @@ def main(
         spans_synchronize=spans_synchronize,
         smoke=smoke,
         debug_distributed=debug_distributed,
+        collective_diagnostics=collective_diagnostics,
         telemetry_only=telemetry_only,
         label=label,
     )
