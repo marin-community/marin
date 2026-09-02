@@ -2,12 +2,20 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+import json
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 from marin.execution.lazy import StepContext
 
 from experiments.grug.moe_hero_ep.launch_diagnostics import build_diagnostic_run
 from experiments.grug.moe_hero_ep.launch_scaling_ladder import build_ladder_run
+
+HERO_TRIGGER = Path(__file__).resolve().parents[1] / "experiments/grug/moe_hero_ep/trigger_hero.sh"
 
 
 def test_diagnostic_run_matches_the_d6144_rack_local_recipe():
@@ -83,3 +91,60 @@ def test_scaling_ladder_searches_cluster_and_data_local_temp_roots(monkeypatch):
         "s3://hero-checkpoints/tmp/ttl=14d/checkpoints-temp/marin-us-east-02a/marin/grug/test-d6144/v/checkpoints",
         "s3://marin-us-east-02a/tmp/ttl=14d/checkpoints-temp/marin-us-east-02a/marin/grug/test-d6144/v/checkpoints",
     ]
+
+
+@pytest.mark.parametrize("dirty", [False, True])
+def test_hero_trigger_records_the_submitted_commit_and_tree_state(tmp_path, dirty):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    trigger = repo / "trigger_hero.sh"
+    shutil.copy2(HERO_TRIGGER, trigger)
+
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+    subprocess.run(["git", "add", trigger.name], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "-c", "commit.gpgsign=false", "commit", "-qm", "test trigger"],
+        cwd=repo,
+        check=True,
+    )
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    if dirty:
+        (repo / "untracked.txt").write_text("dirty\n")
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_uv = fake_bin / "uv"
+    fake_uv.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, sys\n"
+        "from pathlib import Path\n"
+        "Path(os.environ['HERO_TRIGGER_CAPTURE']).write_text(json.dumps({\n"
+        "    'argv': sys.argv[1:],\n"
+        "}))\n"
+    )
+    fake_uv.chmod(0o755)
+    fake_uuidgen = fake_bin / "uuidgen"
+    fake_uuidgen.write_text("#!/bin/sh\necho 12345678-1234-1234-1234-123456789abc\n")
+    fake_uuidgen.chmod(0o755)
+
+    capture = tmp_path / "capture.json"
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+        "WANDB_API_KEY": "test-key",
+        "HERO_TRIGGER_CAPTURE": str(capture),
+    }
+    subprocess.run([str(trigger)], cwd=repo, env=env, check=True, capture_output=True, text=True)
+
+    submitted = json.loads(capture.read_text())
+    argv = submitted["argv"]
+    expected_dirty = str(dirty).lower()
+    expected_state = "dirty" if dirty else "clean"
+    assert argv[argv.index("--system-reason") + 1] == (f"hero run; commit={commit}; tree_dirty={expected_dirty}")
+    assert argv[argv.index("--job-name") + 1] == (f"hero-12d8b6f0-dee637-coord-{commit[:8]}-{expected_state}-12345678")
+    assert argv[argv.index("GIT_COMMIT") + 1] == commit
+    assert argv[argv.index("HERO_LAUNCH_TREE_DIRTY") + 1] == expected_dirty

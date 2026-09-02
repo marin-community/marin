@@ -264,6 +264,16 @@ storage with the shared 14-day lifecycle TTL. One temporary checkpoint is kept. 
 host out-of-memory, or a preemption thus costs at most one hour of training. The training job
 retries 1000 times on failure and 100 times on preemption.
 
+Launch or resume the production d6144 hero with `trigger_hero.sh`. The trigger records the full
+`HEAD` commit and whether the tree has staged, unstaged, or untracked changes in the Iris system
+reason and coordinator environment. The coordinator job name carries the short commit and
+`clean`/`dirty` state. These values describe the source bundle submitted by that invocation; the
+run ID continues to identify the checkpoint and output lineage across resumptions.
+
+```bash
+WANDB_API_KEY=... ./experiments/grug/moe_hero_ep/trigger_hero.sh
+```
+
 ```bash
 python -m experiments.grug.moe_hero_ep.launch_scaling_ladder \
   --run-id ladder-d768 --size d768 --version dev
