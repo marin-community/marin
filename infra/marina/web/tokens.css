@@ -1,0 +1,102 @@
+/* What every Marina app holds in common: seven colours, two fonts, two
+ * measurements, and the handful of rules a control needs to behave the same in
+ * one app as in the next.
+ *
+ * Every app on this origin imports this file through the `@marina` alias, so a
+ * fix reaches all of them at once. An app writes its own layout on top. To look
+ * different, redefine the tokens after importing; do not restate the rules. The
+ * layer under this is `parts.css`, which is opted into separately.
+ */
+:root {
+  color-scheme: light dark;
+  --ink: #17181c;
+  --paper: #fcfbf8;
+  --panel: #ffffff;
+  --edge: #e2ded2;
+  --muted: #6d6a60;
+  --mark: #1f5c4a;
+  --warn: #8a3324;
+
+  --gap: 0.75rem;
+  --radius: 0.35rem;
+  /* The Japanese faces sit behind the Latin ones and cost nothing to a site that
+   * shows no Japanese. A browser resolves a font per character rather than per
+   * run, so Latin is answered by `ui-sans-serif` before the list reaches them and
+   * only kana and kanji fall through. Without them the system picks a Japanese
+   * face per platform, and the one it picks sits on a different optical baseline
+   * from the Latin beside it — visible in every mixed line kaku sets. */
+  --font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Hiragino Sans",
+    "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic Medium", "Yu Gothic",
+    Meiryo, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink: #ece9e1;
+    --paper: #15171a;
+    --panel: #1c1f22;
+    --edge: #2f3336;
+    --muted: #9a978d;
+    --mark: #6cc4a5;
+    --warn: #e08a76;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font: var(--font);
+  color: var(--ink);
+  background: var(--paper);
+}
+
+button, input, textarea, select {
+  font: inherit;
+  color: inherit;
+  background: var(--panel);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius);
+  padding: 0.4rem 0.6rem;
+}
+
+button { cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--mark); }
+button:disabled { opacity: 0.5; cursor: default; }
+
+:focus-visible { outline: 2px solid var(--mark); outline-offset: 1px; }
+
+/* Phones.
+ *
+ * Three rules, each for a failure a desktop browser does not have. A site's own
+ * stylesheet decides its layout; these are the ones every site needs and none
+ * should have to remember.
+ *
+ * `text-size-adjust` stops iOS Safari from inflating body text when the phone
+ * turns, which reflows a page that was measured for the width it had.
+ *
+ * A control whose text is under 16px makes iOS Safari zoom the page in when the
+ * control takes focus, and it does not zoom back out afterwards. The rule
+ * raises only what is smaller, so a control that already asked for more keeps
+ * it.
+ *
+ * A control is hit with a fingertip rather than pointed at, so on a coarse
+ * pointer it needs a target rather than a box the height of its label.
+ */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  /* Reserve the vertical scrollbar track, so a tall screen and a short one
+   * frame their content at the same width. Without it a centered page slides
+   * sideways by the scrollbar width each time the scrollbar appears or goes. */
+  scrollbar-gutter: stable;
+}
+
+@media (max-width: 40rem) {
+  button, input, textarea, select { font-size: max(1rem, 1em); }
+}
+
+@media (pointer: coarse) {
+  button, input, textarea, select, summary { min-height: 2.75rem; }
+}

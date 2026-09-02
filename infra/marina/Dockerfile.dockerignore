@@ -1,0 +1,9 @@
+# Allowlist: the build context is the repository root.
+*
+!lib/rigging
+!infra/marina
+**/node_modules
+**/dist
+**/__pycache__
+**/.venv
+**/tests

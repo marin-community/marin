@@ -32,6 +32,9 @@ dependencies = [
     # marin-ducky is the ad-hoc DuckDB SQL service (dashboard + runner + deploy),
     # a workspace member so service fixes land without a wheel republish.
     "marin-ducky",
+    # marin-marina is the multi-app web kernel (infra/marina), a workspace member so
+    # `uv run marina dev` serves the apps from this checkout.
+    "marin-marina",
     # top level deps. try to keep these small.
     "watchdog",
     # marin-dupekit is the pure-Python text-dedup surface, a workspace member
@@ -139,6 +142,7 @@ members = [
     "infra/pulumi",
     "infra/buckets",
     "infra/deploy",
+    "infra/marina",
 ]
 # Native maturin packages are excluded from uv workspace discovery because each
 # owns its own build backend and package metadata. The path sources below build
@@ -156,6 +160,7 @@ marin-finelog = { workspace = true }
 marin-deploy = { workspace = true }
 marin-dupekit = { workspace = true }
 marin-ducky = { workspace = true }
+marin-marina = { workspace = true }
 marin-haliax = { workspace = true }
 marin-levanter = { workspace = true }
 marin-core = { workspace = true }

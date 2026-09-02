@@ -49,6 +49,7 @@ PULUMI_SERVICES = (
     PulumiService(name="echo", stack="marin-echo", secret_environment=(CLOUDFLARE_API_TOKEN,)),
     PulumiService(name="evaldash", stack="marin-evaldash", secret_environment=(CLOUDFLARE_API_TOKEN,)),
     PulumiService(name="grafana", stack="marin-grafana", secret_environment=(CLOUDFLARE_API_TOKEN,)),
+    PulumiService(name="marina", stack="marin-marina"),
     PulumiService(name="loom", stack="marin-loom", secret_environment=(CLOUDFLARE_API_TOKEN,)),
     PulumiService(name="xprof", stack="xprof-marin"),
 )

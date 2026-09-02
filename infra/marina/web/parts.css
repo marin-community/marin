@@ -1,0 +1,179 @@
+/* The layer under the tokens: the parts every screen repeats.
+ *
+ * Separate from `tokens.css` because the two are opted into separately. An app
+ * takes the tokens always — they are what makes a control in one app behave
+ * like a control in the next. It takes this when its screens are lists and
+ * facts and states; an app with a look of its own styles its own tables and
+ * would only have to undo these.
+ *
+ * A class here is one that more than one screen needs and that carries a
+ * meaning rather than a measurement: `.pill[data-good]` says a state is good,
+ * and the colour it picks is the stylesheet's business.
+ */
+
+/* A row of data. Always inside `.scroll`: tables have their own width, and
+ * a page that scrolls sideways moves the whole layout out from under a thumb.
+ *
+ * A phone's scrollbar is an overlay that only appears under a finger already
+ * touching it, so a table clipped at the right edge looked finished rather
+ * than cut off. These gradients stand in for it: a shadow fixed to each edge,
+ * covered by a gradient that scrolls with the content and so hides the edge
+ * it sits over once nothing is scrolled out of view past it. Nothing here
+ * reads the scroll position; the two layers do that by moving against each
+ * other.
+ *
+ * The shadow layer tiles down the edge at a fixed height rather than
+ * stretching across the element's own height: `.scroll` on a long table has
+ * no height limit of its own, so a shadow sized to it centers on the
+ * table's midpoint and fades out before reaching a row a phone ever shows. */
+.scroll {
+  overflow-x: auto;
+  background-image:
+    linear-gradient(to right, var(--panel) 30%, transparent),
+    linear-gradient(to left, var(--panel) 30%, transparent),
+    radial-gradient(farthest-side at 0 50%, var(--edge), transparent),
+    radial-gradient(farthest-side at 100% 50%, var(--edge), transparent);
+  background-repeat: no-repeat, no-repeat, repeat-y, repeat-y;
+  background-color: var(--panel);
+  background-position: left, right, left, right;
+  background-size: 24px 100%, 24px 100%, 10px 48px, 10px 48px;
+  background-attachment: local, local, scroll, scroll;
+}
+
+table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+th {
+  text-align: left;
+  font-size: 0.72rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border-bottom: 1px solid var(--edge);
+  padding: 0 0.6rem 0.35rem 0;
+  white-space: nowrap;
+}
+td { padding: 0.4rem 0.6rem 0.4rem 0; border-bottom: 1px solid var(--edge); vertical-align: top; }
+tbody tr:hover { background: color-mix(in srgb, var(--mark) 7%, transparent); }
+tbody tr[aria-current='true'] { background: color-mix(in srgb, var(--mark) 12%, transparent); }
+
+/* A number a reader compares down a column. */
+.num { font-variant-numeric: tabular-nums; color: var(--muted); white-space: nowrap; }
+
+/* What opens something. An anchor and not a button: middle click, ⌘-click and
+ * "copy link" are the behaviours a table row is expected to have, and none of
+ * them can be added back to a button afterwards. */
+a, .link {
+  color: var(--mark);
+  text-decoration: none;
+  border: 0;
+  background: none;
+  padding: 0;
+}
+a:hover, .link:hover { text-decoration: underline; }
+
+code { font: 0.86em var(--mono); }
+
+/* State, as a shape as well as a word. `.chip` labels; `.pill` judges. */
+.chip, .pill {
+  display: inline-block;
+  font: 0.74rem var(--mono);
+  border: 1px solid var(--edge);
+  border-radius: 999px;
+  padding: 0.05rem 0.45rem;
+  white-space: nowrap;
+  color: var(--muted);
+}
+.pill[data-good='true'] {
+  color: var(--mark);
+  border-color: color-mix(in srgb, var(--mark) 50%, transparent);
+}
+.pill[data-good='false'],
+.pill[data-warn='true'] {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 50%, transparent);
+}
+
+/* A sentence explaining a screen, above the screen. */
+.note { color: var(--muted); font-size: 0.88rem; margin: 0 0 0.8rem; max-width: 44rem; }
+.problem { color: var(--warn); font-size: 0.88rem; margin: 0 0 0.6rem; }
+
+/* An anchor that is a control.
+ *
+ * Every page a site has is an address, and the way to reach one kept being a
+ * `<button>` with a click handler: it could not be copied, middle-clicked,
+ * opened in a second tab or bookmarked, and it read to a screen reader as an
+ * action rather than a destination. This is what an anchor wears when the
+ * design wanted a button. */
+.button {
+  display: inline-block;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius);
+  padding: 0.35rem 0.7rem;
+  color: var(--ink);
+  text-decoration: none;
+  font-size: 0.9em;
+  white-space: nowrap;
+}
+.button:hover { border-color: var(--mark); color: var(--ink); }
+
+/* A button that is not the point of the screen it is on. */
+.quiet { border-color: transparent; color: var(--muted); }
+.quiet:hover { color: var(--mark); }
+.quiet[aria-pressed='true'] { color: var(--ink); border-color: var(--edge); }
+
+/* The one thing the screen is for.
+ *
+ * Every control here wears the same outline, which is right for a screen of
+ * equals and wrong for a screen with an answer on it. `Mark my answers` sat in
+ * that outline beside `Upload a photo of the printed one` in a heavier one, so
+ * the page recommended the wrong thing.
+ *
+ * One per screen. A second filled button is two answers to a question that has
+ * one, and the reader then has to decide which is the real one.
+ *
+ * `--paper` rather than white for the label: `--mark` inverts with the palette,
+ * and its dark-mode value is a pale green that black text reads on and white
+ * text does not. */
+.primary {
+  background: var(--mark);
+  border-color: var(--mark);
+  color: var(--paper);
+  font-weight: 600;
+}
+.primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--mark) 85%, var(--ink));
+  border-color: color-mix(in srgb, var(--mark) 85%, var(--ink));
+}
+/* The disabled state is the shape of the answer without the invitation. Opacity
+ * alone on a filled control leaves it the loudest thing on the screen while it
+ * is refusing to be pressed. */
+.primary:disabled {
+  background: transparent;
+  border-color: var(--edge);
+  color: var(--muted);
+  font-weight: 400;
+}
+
+/* Facts about one thing, read down rather than across. */
+.facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.3rem 0.9rem; }
+.facts dt {
+  font-size: 0.72rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding-top: 0.12rem;
+}
+.facts dd { margin: 0; overflow-wrap: anywhere; }
+
+/* A recorded blob: a payload, a result, a patch. */
+.record {
+  margin: 0;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius);
+  background: var(--panel);
+  font: 0.78rem var(--mono);
+  max-height: 24rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

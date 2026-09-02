@@ -1,0 +1,38 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "marin-marina"
+version = "0.1.0"
+description = "Marina: one Cloud Run service hosting many small Marin web apps behind one login."
+requires-python = ">=3.12"
+dependencies = [
+    "marin-rigging",
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "click>=8.3.1",
+]
+
+[project.scripts]
+marina = "marina.cli:cli"
+
+[dependency-groups]
+test = [
+    "pytest>=8.4",
+    "pytest-timeout",
+    "httpx>=0.27",
+]
+
+# `uv run pytest` from this directory (what CI runs) needs the test group installed.
+[tool.uv]
+default-groups = ["test"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/marina"]
+
+[tool.pytest.ini_options]
+timeout = 30
+timeout_method = "thread"
+addopts = "--durations=10 -v"
+log_level = "INFO"

@@ -75,6 +75,13 @@ ROLLOUTS = (
         test_path="infra/grafana",
     ),
     Rollout(
+        name="marina",
+        work_dir="infra/marina",
+        service_account=CLOUD_RUN_DEPLOY_SERVICE_ACCOUNT,
+        source_roots=(*CLOUD_RUN_SOURCE_ROOTS, "lib/rigging"),
+        test_path="infra/marina",
+    ),
+    Rollout(
         name="xprof",
         work_dir="infra/xprof",
         service_account=IRIS_DEPLOY_SERVICE_ACCOUNT,

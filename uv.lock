@@ -121,6 +121,7 @@ members = [
     "marin-iac",
     "marin-iris",
     "marin-levanter",
+    "marin-marina",
     "marin-rigging",
     "marin-root",
     "marin-zephyr",
@@ -4459,6 +4460,39 @@ test = [
 ]
 
 [[package]]
+name = "marin-marina"
+version = "0.1.0"
+source = { editable = "infra/marina" }
+dependencies = [
+    { name = "click" },
+    { name = "fastapi" },
+    { name = "marin-rigging" },
+    { name = "uvicorn" },
+]
+
+[package.dev-dependencies]
+test = [
+    { name = "httpx" },
+    { name = "pytest" },
+    { name = "pytest-timeout" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "click", specifier = ">=8.3.1" },
+    { name = "fastapi", specifier = ">=0.115" },
+    { name = "marin-rigging", editable = "lib/rigging" },
+    { name = "uvicorn", specifier = ">=0.30" },
+]
+
+[package.metadata.requires-dev]
+test = [
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "pytest", specifier = ">=8.4" },
+    { name = "pytest-timeout" },
+]
+
+[[package]]
 name = "marin-rigging"
 version = "0.2.0"
 source = { editable = "lib/rigging" }
@@ -4564,6 +4598,7 @@ dependencies = [
     { name = "marin-haliax" },
     { name = "marin-iris" },
     { name = "marin-levanter" },
+    { name = "marin-marina" },
     { name = "marin-rigging", extra = ["secrets"] },
     { name = "marin-zephyr" },
     { name = "watchdog" },
@@ -4580,6 +4615,7 @@ requires-dist = [
     { name = "marin-haliax", editable = "lib/haliax" },
     { name = "marin-iris", editable = "lib/iris" },
     { name = "marin-levanter", editable = "lib/levanter" },
+    { name = "marin-marina", editable = "infra/marina" },
     { name = "marin-rigging", extras = ["secrets"], editable = "lib/rigging" },
     { name = "marin-zephyr", editable = "lib/zephyr" },
     { name = "watchdog" },
