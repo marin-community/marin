@@ -1,8 +1,8 @@
-# Error-aware Muon on Qwen3 130M
+# Error-aware Muon on Qwen3 130M and 300M
 
 ## TL;DR
 
-A single-seed, 40-run sweep found that Hessian-corrected Muon with gain `0.1` improved C4-en BPB at four of five learning rates relative to a fresh Muon control. The best run used learning rate `0.020` and reached `1.164666` BPB, compared with `1.165484` for Muon at the same learning rate. The mean paired improvement was `0.000587` BPB. Native speedrun training time increased by 4.33% on average. These results justify a multi-seed replication; they do not establish a stable improvement yet.
+A single-seed, 40-run 130M sweep found that Hessian-corrected Muon with gain `0.1` improved C4-en BPB at four of five learning rates relative to a fresh Muon control. A stabilized 15-cell 300M follow-up then completed every Hesscorr cell. Gains `0.1` and `0.3` each beat paired Muon at all five learning rates, with mean improvements of `0.000449` and `0.000589` BPB. However, neither beat the simpler blend gain `0.05` at any learning rate, and Hesscorr increased native training time by about 90%. The best Hesscorr result was `1.057701` BPB at gain `0.3`, learning rate `0.012`; the paired Muon and blend results were `1.058626` and `1.056606`. The evidence supports a small, consistent improvement over plain Muon, but not the correction's added complexity and cost under this single-seed 300M setup.
 
 ## Method
 
@@ -75,28 +75,53 @@ The archived PRISM-Berkeley result from PR #4933 reached `1.170267` BPB at learn
 
 This sweep used one seed and selected a winner from 40 runs. A clean follow-up should pair Hesscorr `0.1` with fresh Muon at learning rate `0.020` across multiple seeds, then add an exact historical-Muon configuration on the same v5p-8 hardware.
 
-## 300M spectral/Sylvester follow-up
+## 300M stabilized spectral/Sylvester follow-up
 
-The 300M continuation completed 23 of 40 cells. The best completed cell was blend gain `0.05` at learning rate `0.012`, reaching `1.056606` C4-en BPB. The paired Muon control reached `1.058626`, a delta of `-0.002020` BPB. This is a single completed comparison, not evidence for the Hessian correction at 300M: all 15 Hesscorr cells failed at global step 0 with `Loss is NaN`.
+### Stabilization and source
 
-The 300M sweep estimates the spectral norm with five power iterations, divides the cubic Newton--Schulz input by `1.1` times that estimate, and uses 15 cubic steps. The correction uses the SVD-free polar/Sylvester identity: a 400-step damped fixed-point solve of `H S + S H = C` plus a 60-step Newton--Hotelling inverse. It does not use JVP.
+The original 300M spectral/Sylvester launch failed all 15 Hesscorr cells at global step 0. A first warmup-only retry stayed finite through step 50 and failed on step 51, the first update with an enabled correction. This localized the numerical failure to the Sylvester correction rather than the ordinary Muon path.
 
-The model is Qwen3 ~300M, trained for 11,444 steps with batch size 128 and sequence length 4,096 on one v5p-8 slice. Each completed cell processed 5,999,951,872 tokens. The learning rates are `0.004`, `0.006`, `0.008`, `0.010`, and `0.012`; momentum is `0.98`.
+The stabilized implementation makes four changes:
 
-Final Paloma C4-en BPB; lower is better. A dash means the cell did not produce a final result.
+- use ordinary quintic Muon for the first `round(1 / (1 - momentum)) = 50` optimizer updates;
+- run the polar-Hessian, Sylvester, and inverse matrix products with explicit highest matmul precision;
+- form the polar Hessian from one product and its transpose so it is exactly symmetric after rounding;
+- use a scale-safe Frobenius norm and return a zero correction when the Sylvester solve or its norm is non-finite.
+
+The implementation is in [`muon_error_feedback_optimizer.py`](../../experiments/speedrun/prism_berkeley_qwen3_scaling/muon_error_feedback_optimizer.py), the exact 100-step TPU gate is in [`muon_error_feedback_stability_gate.py`](../../experiments/speedrun/prism_berkeley_qwen3_scaling/muon_error_feedback_stability_gate.py), and the 15-cell launcher is in [`muon_error_feedback_sweep.py`](../../experiments/speedrun/prism_berkeley_qwen3_scaling/muon_error_feedback_sweep.py). The v5p launch used commit `3bcd661` plus the optimizer and gate changes now published in those files. The launcher's default v5p path is unchanged; a later optional TPU-variant argument also records the unsuccessful v4 experiment.
+
+The stabilized path passed the 100-step TPU gate, including the first corrected update, then completed all 15 cells. Each run trained Qwen3 ~300M for 11,444 steps with batch size 128 and sequence length 4,096 on one preemptible v5p-8 slice in `us-central1`, processing 5,999,951,872 tokens. The grid crossed learning rates `{0.004, 0.006, 0.008, 0.010, 0.012}` with correction gains `{0.1, 0.3, 1.0}` and momentum `0.98`. Iris recorded 124 aggregate preemptions but no failed cells; every run reached global step 11,443 with finite final loss and final checkpoint metadata.
+
+### Held-out C4-en quality
+
+Final Paloma C4-en BPB is materialized from each cell's `speedrun_results.json`; lower is better. Muon and blend `0.05` are the completed, same-geometry `2026.07.23.4` references.
 
 | Variant | LR 0.004 | LR 0.006 | LR 0.008 | LR 0.010 | LR 0.012 |
 |---|---:|---:|---:|---:|---:|
 | Muon | 1.067245 | 1.062251 | 1.060028 | 1.059351 | 1.058626 |
 | Blend 0.05 | 1.066771 | 1.061070 | 1.059204 | 1.057656 | **1.056606** |
-| Blend 0.15 | 1.071553 | 1.064368 | — | 1.059578 | 1.058150 |
-| Blend 0.3 | 1.080248 | 1.070832 | 1.065348 | 1.064243 | 1.063211 |
-| Blend 0.5 | 1.091561 | 1.077783 | — | 1.069972 | 1.068790 |
-| Hesscorr 0.1 | — | — | — | — | — |
-| Hesscorr 0.3 | — | — | — | — | — |
-| Hesscorr 1.0 | — | — | — | — | — |
+| Hesscorr 0.1 | 1.066853 | 1.062055 | 1.059515 | 1.058882 | 1.057950 |
+| Hesscorr 0.3 | 1.067066 | 1.061869 | 1.059530 | 1.058388 | **1.057701** |
+| Hesscorr 1.0 | 1.067755 | 1.062778 | 1.060028 | 1.058927 | 1.058036 |
 
-All five Muon cells and 18 of 20 blend cells reached global step 11,443. Blend `0.5` at learning rate `0.008` became NaN at step 5,393. Blend `0.15` at learning rate `0.008` did not produce a usable final W&B summary. The 15 Hesscorr cells all failed before their first logged training step, so this sweep does not establish whether the 130M Hesscorr `0.1` result transfers to 300M.
+Paired differences below subtract the reference at the same learning rate. Negative values favor Hesscorr.
+
+| Variant | Reference | LR 0.004 | LR 0.006 | LR 0.008 | LR 0.010 | LR 0.012 | Mean | Wins |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| Hesscorr 0.1 | Muon | -0.000392 | -0.000196 | -0.000513 | -0.000469 | -0.000676 | -0.000449 | 5/5 |
+| Hesscorr 0.3 | Muon | -0.000179 | -0.000383 | -0.000497 | -0.000963 | -0.000925 | -0.000589 | 5/5 |
+| Hesscorr 1.0 | Muon | +0.000511 | +0.000527 | +0.000001 | -0.000423 | -0.000590 | +0.000005 | 2/5 |
+| Hesscorr 0.1 | Blend 0.05 | +0.000082 | +0.000986 | +0.000310 | +0.001226 | +0.001344 | +0.000790 | 0/5 |
+| Hesscorr 0.3 | Blend 0.05 | +0.000295 | +0.000799 | +0.000326 | +0.000732 | +0.001095 | +0.000649 | 0/5 |
+| Hesscorr 1.0 | Blend 0.05 | +0.000984 | +0.001709 | +0.000824 | +0.001272 | +0.001430 | +0.001244 | 0/5 |
+
+Gains `0.1` and `0.3` therefore transfer the small directionally consistent improvement over plain Muon to 300M. Gain `1.0` is neutral on average. None of the Hesscorr settings improves on blend `0.05`, including the best Hesscorr cell: at learning rate `0.012`, Hesscorr `0.3` is `0.000925` better than Muon but `0.001095` worse than blend.
+
+### Cost and decision
+
+Native speedrun `training_time` averaged about 33,582 seconds for Hesscorr versus 17,671 seconds for paired Muon. Mean overhead was 90.03% for gain `0.1`, 90.05% for gain `0.3`, and 90.05% for gain `1.0`. Queue time is excluded, while repeated logged work after a preemption is included.
+
+This is a single-seed grid, so the sub-millibit differences should not be treated as a definitive optimizer ranking. Even so, the observed tradeoff is unfavorable: the stabilized Hesscorr path roughly doubles native training time and adds a fragile iterative solve, while the cheaper blend `0.05` is better at every paired learning rate. Further Hesscorr scaling is not justified by this result alone. If the method is revisited, the next useful experiment is a multi-seed comparison focused on Hesscorr `0.3`, Muon, and blend `0.05` at learning rates `0.010` and `0.012`, with an optimized Sylvester implementation or an explicit quality-per-compute target.
 
 ## Artifacts
 
@@ -108,3 +133,4 @@ All five Muon cells and 18 of 20 blend cells reached global step 11,443. Blend `
 - [PRISM-Berkeley baseline](https://wandb.ai/understanding-sam/marin/runs/qwen3_130m_prism_berkeley_o5_4096_lrx1-2fd229)
 - [Best completed 300M blend run](https://wandb.ai/understanding-sam/marin/runs/qwen3_300m_error_aware_muon_blend-g0p05_lr0p012-2026.07.23.4)
 - [Paired 300M Muon control](https://wandb.ai/understanding-sam/marin/runs/qwen3_300m_error_aware_muon_muon_lr0p012-2026.07.23.4)
+- [Best stabilized 300M Hesscorr run](https://wandb.ai/understanding-sam/marin/runs/qwen3_300m_error_aware_muon_hesscorr-g0p3_lr0p012-2026.08.28.3)

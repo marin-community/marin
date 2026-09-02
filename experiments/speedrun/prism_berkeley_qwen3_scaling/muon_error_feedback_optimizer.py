@@ -37,6 +37,7 @@ DEFAULT_SYLVESTER_STEPS = 400
 DEFAULT_INVERSE_NEWTON_STEPS = 60
 SPECTRAL_NORM_SAFETY_FACTOR = 1.1
 ROUNDING_ERROR_MULTIPLIER = 32.0
+NUCLEAR_HESSIAN_MATMUL_PRECISION = "highest"
 
 
 @dataclass(frozen=True)
@@ -50,6 +51,13 @@ class NuclearHessianSettings:
 
 
 DEFAULT_NUCLEAR_HESSIAN_SETTINGS = NuclearHessianSettings()
+
+
+def momentum_timescale_steps(momentum: float) -> int:
+    """Return the nearest integer momentum time constant in optimizer steps."""
+    if not 0.0 <= momentum < 1.0:
+        raise ValueError(f"momentum must be in [0, 1), got {momentum}.")
+    return max(1, round(1.0 / (1.0 - momentum)))
 
 
 def _compute_dtype(array: jax.Array) -> jnp.dtype:
@@ -85,7 +93,8 @@ def _cubic_iteration(matrix: jax.Array, *, steps: int) -> jax.Array:
 
 def _regularized_polar_hessian(polar: jax.Array, matrix: jax.Array, *, eps: float) -> jax.Array:
     """Return the SPD polar factor with a float32-scale eigenvalue floor."""
-    hessian = 0.5 * (polar.T @ matrix + matrix.T @ polar)
+    polar_hessian = polar.T @ matrix
+    hessian = 0.5 * (polar_hessian + polar_hessian.T)
     dimension = hessian.shape[0]
     scale = jnp.maximum(
         jnp.linalg.norm(hessian, ord="fro") / jnp.sqrt(jnp.asarray(dimension, hessian.dtype)),
@@ -183,29 +192,53 @@ def _nuclear_hessian_sylvester(
     settings: NuclearHessianSettings,
 ) -> jax.Array:
     """Apply the nuclear-norm Hessian through the SVD-free Sylvester identity."""
-    if matrix.shape[0] < matrix.shape[1]:
-        return _nuclear_hessian_sylvester(
-            matrix.T,
-            tangent.T,
-            settings=settings,
-        ).T
+    with jax.default_matmul_precision(NUCLEAR_HESSIAN_MATMUL_PRECISION):
+        if matrix.shape[0] < matrix.shape[1]:
+            return _nuclear_hessian_sylvester(
+                matrix.T,
+                tangent.T,
+                settings=settings,
+            ).T
 
-    polar = cubic_newton_schulz(matrix, steps=settings.cubic_steps, eps=settings.eps)
-    polar_hessian = _regularized_polar_hessian(polar, matrix, eps=settings.eps)
-    skew_term = polar.T @ tangent - tangent.T @ polar
-    skew_solution = _solve_sylvester_fixed_point(
-        polar_hessian,
-        skew_term,
-        steps=settings.sylvester_steps,
-        eps=settings.eps,
-    )
-    inverse_hessian = _inverse_spd_newton(
-        polar_hessian,
-        steps=settings.inverse_steps,
-        eps=settings.eps,
-    )
-    normal_complement = tangent - polar @ (polar.T @ tangent)
-    return polar @ skew_solution + normal_complement @ inverse_hessian
+        polar = cubic_newton_schulz(matrix, steps=settings.cubic_steps, eps=settings.eps)
+        polar_hessian = _regularized_polar_hessian(polar, matrix, eps=settings.eps)
+        skew_term = polar.T @ tangent - tangent.T @ polar
+        skew_solution = _solve_sylvester_fixed_point(
+            polar_hessian,
+            skew_term,
+            steps=settings.sylvester_steps,
+            eps=settings.eps,
+        )
+        inverse_hessian = _inverse_spd_newton(
+            polar_hessian,
+            steps=settings.inverse_steps,
+            eps=settings.eps,
+        )
+        normal_complement = tangent - polar @ (polar.T @ tangent)
+        return polar @ skew_solution + normal_complement @ inverse_hessian
+
+
+def _clip_finite_correction(correction: jax.Array, *, cap: jax.Array, eps: float) -> jax.Array:
+    """Cap a finite correction, or skip the correction if the solve broke down."""
+
+    def zero_correction(_):
+        return jnp.zeros_like(correction)
+
+    def clip_correction(_):
+        max_magnitude = jnp.max(jnp.abs(correction))
+        norm_denominator = jnp.maximum(max_magnitude, jnp.asarray(eps, correction.dtype))
+        correction_norm = norm_denominator * jnp.linalg.norm(correction / norm_denominator, ord="fro")
+
+        def apply_clip(_):
+            clip_scale = jnp.minimum(
+                1.0,
+                cap / jnp.maximum(correction_norm, jnp.asarray(eps, correction.dtype)),
+            )
+            return correction * clip_scale
+
+        return jax.lax.cond(jnp.isfinite(correction_norm), apply_clip, zero_correction, operand=None)
+
+    return jax.lax.cond(jnp.all(jnp.isfinite(correction)), clip_correction, zero_correction, operand=None)
 
 
 def _tangent_without_radial_component(
@@ -256,12 +289,7 @@ def clipped_nuclear_hessian(
             settings=settings,
         )
         cap = jnp.sqrt(jnp.asarray(min(matrix.shape), dtype=correction.dtype))
-        correction_norm = jnp.linalg.norm(correction, ord="fro")
-        clip_scale = jnp.minimum(
-            1.0,
-            cap / jnp.maximum(correction_norm, jnp.asarray(settings.eps, correction.dtype)),
-        )
-        return correction * clip_scale
+        return _clip_finite_correction(correction, cap=cap, eps=settings.eps)
 
     return jax.lax.cond(is_effectively_radial, zero_correction, hessian_correction, operand=None)
 
@@ -306,6 +334,7 @@ def error_aware_muon_step(
 class ScaleByErrorAwareMuonState(NamedTuple):
     """State for normalized-EMA error-aware Muon."""
 
+    count: chex.Array
     momentum_buffer: optax.Updates
 
 
@@ -327,6 +356,7 @@ def scale_with_error_aware_muon(
     policy: ErrorAwareMuonPolicy = "hesscorr",
     blend_gain: float = 0.0,
     correction_gain: float = 1.0,
+    correction_warmup_steps: int | None = None,
     quintic_steps: int = 5,
     hessian_settings: NuclearHessianSettings = DEFAULT_NUCLEAR_HESSIAN_SETTINGS,
     muon_eps: float = 1e-12,
@@ -334,9 +364,17 @@ def scale_with_error_aware_muon(
 ):
     """Build the Optax transform for error-aware Muon matrix updates."""
     quintic_steps = int(quintic_steps)
+    if correction_warmup_steps is None:
+        correction_warmup_steps = momentum_timescale_steps(momentum)
+    correction_warmup_steps = int(correction_warmup_steps)
+    if correction_warmup_steps < 0:
+        raise ValueError(f"correction_warmup_steps must be non-negative, got {correction_warmup_steps}.")
 
     def init_fn(params):
-        return ScaleByErrorAwareMuonState(momentum_buffer=_tree_zeros_like_float32(params))
+        return ScaleByErrorAwareMuonState(
+            count=jnp.zeros([], dtype=jnp.int32),
+            momentum_buffer=_tree_zeros_like_float32(params),
+        )
 
     def update_fn(updates, state, params=None):
         del params
@@ -380,16 +418,27 @@ def scale_with_error_aware_muon(
                     f"got {momentum_array.shape} and {gradient_array.shape}."
                 )
 
-            transformed = error_aware_muon_step(
-                momentum_array,
-                gradient_array,
-                policy=policy,
-                blend_gain=blend_gain,
-                correction_gain=correction_gain,
-                quintic_steps=quintic_steps,
-                hessian_settings=hessian_settings,
-                eps=muon_eps,
-            )
+            def configured_step(_):
+                return error_aware_muon_step(
+                    momentum_array,
+                    gradient_array,
+                    policy=policy,
+                    blend_gain=blend_gain,
+                    correction_gain=correction_gain,
+                    quintic_steps=quintic_steps,
+                    hessian_settings=hessian_settings,
+                    eps=muon_eps,
+                )
+
+            if policy == "hesscorr" and correction_warmup_steps > 0:
+                transformed = jax.lax.cond(
+                    state.count >= correction_warmup_steps,
+                    configured_step,
+                    lambda _: quintic_newton_schulz(momentum_array, steps=quintic_steps, eps=muon_eps),
+                    operand=None,
+                )
+            else:
+                transformed = configured_step(None)
             if use_kimi_scaling:
                 scale = 0.2 * jnp.sqrt(jnp.maximum(transformed.shape[0], transformed.shape[1]))
             else:
@@ -406,7 +455,10 @@ def scale_with_error_aware_muon(
             policy_momentum,
             raw_gradients,
         )
-        return transformed_updates, ScaleByErrorAwareMuonState(momentum_buffer=momentum_buffer)
+        return transformed_updates, ScaleByErrorAwareMuonState(
+            count=optax.safe_int32_increment(state.count),
+            momentum_buffer=momentum_buffer,
+        )
 
     return optax.GradientTransformation(init_fn, update_fn)
 
@@ -422,6 +474,7 @@ class ErrorAwareMuonConfig(OptimizerConfig):
     policy: ErrorAwareMuonPolicy = "hesscorr"
     blend_gain: float = 0.0
     correction_gain: float = 1.0
+    correction_warmup_steps: int | None = None
     quintic_steps: int = 5
     cubic_steps: int = 15
     sylvester_steps: int = DEFAULT_SYLVESTER_STEPS
@@ -445,6 +498,8 @@ class ErrorAwareMuonConfig(OptimizerConfig):
             raise ValueError(f"blend_gain must be in [0, 1], got {self.blend_gain}.")
         if self.correction_gain < 0.0:
             raise ValueError(f"correction_gain must be non-negative, got {self.correction_gain}.")
+        if self.correction_warmup_steps is not None and self.correction_warmup_steps < 0:
+            raise ValueError(f"correction_warmup_steps must be non-negative, got {self.correction_warmup_steps}.")
         if min(self.quintic_steps, self.cubic_steps, self.sylvester_steps, self.inverse_steps) <= 0:
             raise ValueError("All Newton-Schulz, Sylvester, and inverse iteration counts must be positive.")
         if self.muon_epsilon <= 0.0:
@@ -484,6 +539,7 @@ class ErrorAwareMuonConfig(OptimizerConfig):
                     policy=self.policy,
                     blend_gain=self.blend_gain,
                     correction_gain=self.correction_gain,
+                    correction_warmup_steps=self.correction_warmup_steps,
                     quintic_steps=self.quintic_steps,
                     hessian_settings=hessian_settings,
                     muon_eps=self.muon_epsilon,

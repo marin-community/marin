@@ -120,7 +120,115 @@ Frobenius clipping cap under the prior implementation. The corrected path
 returns the exact Muon direction for the same radial update. The focused
 optimizer and speedrun suite passes after the change.
 
-## Future work
+## Hypothesis 6
 
-- [ ] Launch the 15-cell Hesscorr-only 300M retry and verify that each run
-  advances beyond the first optimizer update.
+The radial-component guard only handles the exact first-update geometry. During
+the first momentum time constant, about `1 / (1 - momentum)` optimizer updates,
+the EMA matrix remains close to zero and can still have many small singular
+values. Applying the Sylvester correction during that stage inverts its
+ill-conditioned polar factor. Delay the correction until the momentum buffer
+has accumulated for one time constant, while continuing to apply the ordinary
+Muon direction from the first update.
+
+## Changes to make
+
+- Track the optimizer update count in the error-aware Muon transform.
+- Skip the Hessian correction for the first `round(1 / (1 - momentum))`
+  updates, using a JIT-safe conditional so the unstable Sylvester branch is not
+  evaluated.
+- Add a regression test that observes ordinary Muon updates throughout the
+  delay and a nonzero Hessian correction on the following update.
+
+## Results
+
+Before the scheduling change, the regression diverged from the plain-Muon
+reference on the second update, inside the two-step momentum time constant for
+`momentum=0.5`. With the update counter and conditional in place, both warmup
+updates match Muon and the third update matches the independent SVD Hessian
+reference. The full error-aware Muon test module passes (21 tests). The 300M
+sweep now records a 50-update correction warmup for `momentum=0.98`.
+
+The CPU launch gate repeated the boundary test with the exact 300M momentum:
+updates 1 through 50 matched the independent plain-Muon reference, and update
+51 matched the independent SVD Hessian reference. A separate 100-update,
+bfloat16 stress probe used near-zero, nearly rank-one gradients; the minimum
+momentum singular value at correction activation was `1.612e-8`, all 100
+updates remained finite, the warmup was exactly equal to Muon, and the active
+correction was nonzero. The full 21-test module passes with `JAX_PLATFORMS=cpu`,
+and the changed-files lint, formatting, and Pyrefly checks pass.
+
+## Hypothesis 7
+
+The 50-step delay addresses the near-zero EMA stage but not TPU dot-product
+rounding inside the first Sylvester solve. The solver promotes its inputs to
+float32, but TPU matrix products can still use reduced internal precision unless
+the dot precision is explicit. An almost singular polar Hessian is particularly
+sensitive to that rounding, and the existing Frobenius clip cannot recover once
+the solver has produced a non-finite matrix.
+
+## Changes to make
+
+- Run the polar-Hessian, Sylvester, and inverse matrix products at explicit
+  highest precision.
+- Form the polar Hessian from one product and its transpose so it is exactly
+  symmetric after rounding.
+- Treat a non-finite Sylvester result as an unusable correction and use the
+  ordinary Muon direction for that layer; use a scaled Frobenius norm when
+  clipping finite corrections so the norm calculation cannot overflow first.
+
+## Results
+
+The first warmup retry reached TPU training. The learning-rate 0.004 and 0.006
+cells logged finite loss, gradient norms, and parameter norms through global
+step 50, then both raised `RuntimeError: Loss is NaN` on the following update.
+This pins the failure to the first enabled Sylvester correction rather than the
+ordinary Muon warmup. The parent job was cancelled after the two failures so
+the remaining cells would not consume scarce v5p capacity with the same code
+snapshot.
+
+With explicit highest-precision products and the finite fallback in place, all
+21 focused tests pass on the CPU backend. A 100-update bfloat16 stress probe
+with a nearly rank-deficient normalized EMA also remained finite throughout;
+the first active correction differed from ordinary Muon by a Frobenius norm of
+`0.4004`, confirming that the CPU gate did not pass merely by disabling the
+correction.
+
+## Gate and full-sweep result
+
+The 100-step TPU gate
+`/kaiyuew/muon-error-feedback-300m-hesscorr-stability-gate-flex-20260829-110500`
+completed with `global_step=99`, finite loss, and no NaN or traceback. It crossed
+the first corrected update at step 51, so the gate exercised the path that had
+failed in the preceding warmup retry.
+
+The full stabilized parent
+`/kaiyuew/muon-error-feedback-300m-hesscorr-stable-20260828-222720`
+then completed all 15 Hesscorr cells on preemptible v5p-8 workers in
+`us-central1`. Every run reached `global_step=11443`, wrote final checkpoint
+metadata, and produced finite held-out Paloma C4-en BPB. Iris reported zero
+failed children and 124 aggregate preemptions.
+
+| Variant | LR 0.004 | LR 0.006 | LR 0.008 | LR 0.010 | LR 0.012 |
+|---|---:|---:|---:|---:|---:|
+| Muon | 1.067245 | 1.062251 | 1.060028 | 1.059351 | 1.058626 |
+| Blend 0.05 | 1.066771 | 1.061070 | 1.059204 | 1.057656 | 1.056606 |
+| Hesscorr 0.1 | 1.066853 | 1.062055 | 1.059515 | 1.058882 | 1.057950 |
+| Hesscorr 0.3 | 1.067066 | 1.061869 | 1.059530 | 1.058388 | 1.057701 |
+| Hesscorr 1.0 | 1.067755 | 1.062778 | 1.060028 | 1.058927 | 1.058036 |
+
+Hesscorr gains `0.1` and `0.3` beat paired Muon in all five learning-rate
+comparisons, with mean BPB deltas `-0.000449` and `-0.000589`. Neither beat
+blend `0.05` at any learning rate. The best Hesscorr cell, gain `0.3` at
+learning rate `0.012`, reached `1.057701`: `0.000925` below Muon and `0.001095`
+above blend. Hesscorr native training time was about 90% higher than Muon for
+all three gains.
+
+The stabilization fixes the numerical failure, but the quality-per-compute
+result does not support scaling this Hesscorr implementation beyond the current
+single-seed study. The complete per-run records, checkpoint metadata paths, and
+paired summaries are in
+`experiments/speedrun/prism_berkeley_qwen3_scaling/muon_error_feedback_results.json`.
+
+A separate v4-8 launch in `us-central2` failed before W&B initialization when
+the workers rejected the `us-central1` FineWeb cache. It was not retried and is
+not evidence about optimizer stability or quality.

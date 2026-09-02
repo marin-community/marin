@@ -12,7 +12,9 @@ import pytest
 from marin.execution.lazy import materialized_config
 
 from experiments.speedrun.prism_berkeley_qwen3_scaling.materialize_muon_error_feedback_results import (
+    FollowupRun,
     SweepRun,
+    build_300m_payload,
     build_payload,
 )
 from experiments.speedrun.prism_berkeley_qwen3_scaling.muon_error_feedback_optimizer import (
@@ -22,6 +24,11 @@ from experiments.speedrun.prism_berkeley_qwen3_scaling.muon_error_feedback_optim
     error_aware_muon_step,
     quintic_newton_schulz,
     scale_with_error_aware_muon,
+)
+from experiments.speedrun.prism_berkeley_qwen3_scaling.muon_error_feedback_stability_gate import (
+    GATE_STEPS,
+    GATE_TPU_VARIANTS,
+    build_gate_config,
 )
 from experiments.speedrun.prism_berkeley_qwen3_scaling.muon_error_feedback_sweep import (
     ADAM_LR_RATIO,
@@ -258,7 +265,7 @@ def test_optimizer_config_jit_update_matches_policy_and_adam_branches():
     np.testing.assert_allclose(updates["norm"], -config.adam_lr, atol=1e-6, rtol=1e-6)
 
 
-def test_optimizer_config_applies_nonzero_hessian_feedback_after_normalized_ema():
+def test_optimizer_config_delays_300m_hessian_feedback_for_fifty_updates():
     linear = hax.nn.Linear.init(
         hax.Axis("feedback_in", 8),
         hax.Axis("feedback_out", 16),
@@ -273,12 +280,11 @@ def test_optimizer_config_applies_nonzero_hessian_feedback_after_normalized_ema(
             params,
         )
 
-    first_gradient = random_gradient(jax.random.key(14))
-    second_gradient = random_gradient(jax.random.key(15))
+    gradients = [random_gradient(jax.random.fold_in(jax.random.key(14), step)) for step in range(51)]
     config = ErrorAwareMuonConfig(
         learning_rate=0.02,
         adam_lr=0.001,
-        momentum=0.5,
+        momentum=0.98,
         policy="hesscorr",
         correction_gain=0.3,
         cubic_steps=15,
@@ -290,16 +296,23 @@ def test_optimizer_config_applies_nonzero_hessian_feedback_after_normalized_ema(
     )
     optimizer = config.build(num_train_steps=10)
     state = optimizer.init(params)
-    _, state = optimizer.update(first_gradient, state, params)
+    update = jax.jit(lambda gradient, opt_state: optimizer.update(gradient, opt_state, params))
 
-    updates, _ = jax.jit(lambda gradient, opt_state: optimizer.update(gradient, opt_state, params))(
-        second_gradient, state
-    )
+    momentum = np.zeros_like(np.asarray(gradients[0]["hidden"].weight.array))
+    for gradient in gradients[:50]:
+        updates, state = update(gradient, state)
+        gradient_array = np.asarray(gradient["hidden"].weight.array)
+        momentum = 0.98 * momentum + 0.02 * gradient_array
+        expected = _constant_quintic_reference(momentum)
+        expected *= np.sqrt(momentum.shape[0] / momentum.shape[1])
+        expected *= -config.learning_rate
+        np.testing.assert_allclose(updates["hidden"].weight.array, expected, atol=3e-5, rtol=3e-5)
 
-    first_array = np.asarray(first_gradient["hidden"].weight.array)
-    second_array = np.asarray(second_gradient["hidden"].weight.array)
-    momentum = 0.25 * first_array + 0.5 * second_array
-    correction = _nuclear_hessian_svd(momentum, second_array - momentum)
+    first_corrected_gradient = gradients[50]
+    updates, _ = update(first_corrected_gradient, state)
+    gradient_array = np.asarray(first_corrected_gradient["hidden"].weight.array)
+    momentum = 0.98 * momentum + 0.02 * gradient_array
+    correction = _nuclear_hessian_svd(momentum, gradient_array - momentum)
     cap = np.sqrt(min(momentum.shape))
     correction *= min(1.0, cap / np.linalg.norm(correction))
     expected = _constant_quintic_reference(momentum) + config.correction_gain * correction
@@ -365,6 +378,7 @@ def test_130m_sweep_crosses_archived_learning_rates_with_deduplicated_gain_grid(
         assert optimizer.learning_rate == config.train_config.learning_rate
         assert optimizer.adam_lr == pytest.approx(ADAM_LR_RATIO * optimizer.learning_rate)
         assert optimizer.nesterov is False
+        assert optimizer.correction_warmup_steps == 20
         assert optimizer.cubic_steps == 15
         assert config.train_config.train_batch_size == 128
         assert config.train_config.num_train_steps == 4959
@@ -399,6 +413,7 @@ def test_300m_sweep_uses_archived_learning_rates_and_speedrun_geometry():
         assert optimizer.adam_lr == pytest.approx(0.3 * optimizer.learning_rate)
         assert optimizer.momentum == 0.98
         assert optimizer.nesterov is False
+        assert optimizer.correction_warmup_steps == 50
         assert optimizer.muon_epsilon == 1e-12
         assert optimizer.cubic_steps == 15
         assert optimizer.sylvester_steps == 400
@@ -418,11 +433,35 @@ def test_300m_sweep_uses_archived_learning_rates_and_speedrun_geometry():
     }
 
 
+def test_300m_stability_gate_accepts_same_size_v4_and_v5p_slices():
+    _, config = build_gate_config()
+    resources = config.train_config.resources
+
+    assert config.train_config.num_train_steps == GATE_STEPS
+    assert resources.device.variant == GATE_TPU_VARIANTS[0]
+    assert resources.device_alternatives == list(GATE_TPU_VARIANTS[1:])
+    assert resources.chip_count() == 4
+
+
 def test_300m_hesscorr_retry_builds_only_the_unfinished_cells():
     sweep = build_sweep_configs(size="300m", variants=SWEEP_VARIANT_GROUPS["hesscorr"])
 
     assert len(sweep) == 15
     assert all(config.train_config.optimizer_config.policy == "hesscorr" for _, config in sweep)
+
+
+def test_300m_hesscorr_sweep_can_target_v4_slices_without_changing_cell_identity():
+    default_sweep = build_sweep_configs(size="300m", variants=SWEEP_VARIANT_GROUPS["hesscorr"])
+    v4_sweep = build_sweep_configs(
+        size="300m",
+        variants=SWEEP_VARIANT_GROUPS["hesscorr"],
+        tpu_variants=("v4-8",),
+    )
+
+    assert [name for name, _ in v4_sweep] == [name for name, _ in default_sweep]
+    assert all(config.train_config.resources.device.variant == "v4-8" for _, config in v4_sweep)
+    assert all(config.train_config.resources.device_alternatives is None for _, config in v4_sweep)
+    assert all(config.train_config.resources.chip_count() == 4 for _, config in v4_sweep)
 
 
 def test_checked_in_results_cover_the_completed_grid_and_recompute_selection():
@@ -438,3 +477,23 @@ def test_checked_in_results_cover_the_completed_grid_and_recompute_selection():
     assert rebuilt["best_observed_run"]["run_name"] == ("qwen3_130m_error_aware_muon_hesscorr-g0p1_lr0p02-72a859")
     assert rebuilt["best_observed_run"]["c4_en_bpb"] == pytest.approx(1.164665699005127)
     assert all(run.source_results_path.endswith("/speedrun_results.json") for run in runs)
+
+
+def test_checked_in_results_cover_stabilized_300m_hesscorr_and_paired_references():
+    results = json.loads(RESULTS_PATH.read_text())["three_hundred_million_hesscorr_followup"]
+    runs = [FollowupRun(**run) for run in results["runs"]]
+    reference_runs = [FollowupRun(**run) for run in results["paired_reference_runs"]]
+
+    rebuilt = build_300m_payload(runs, reference_runs)
+
+    assert len(runs) == 15
+    assert len(reference_runs) == 10
+    assert all(run.state == "finished" and run.global_step == 11_443 for run in runs)
+    assert rebuilt["best_observed_hesscorr_run"] == results["best_observed_hesscorr_run"]
+    assert rebuilt["comparison_summary"] == results["comparison_summary"]
+    assert rebuilt["best_observed_hesscorr_run"]["run_name"] == (
+        "qwen3_300m_error_aware_muon_hesscorr-g0p3_lr0p012-2026.08.28.3"
+    )
+    assert rebuilt["best_observed_hesscorr_run"]["c4_en_bpb"] == pytest.approx(1.0577012300491333)
+    assert all(run.source_results_path.endswith("/speedrun_results.json") for run in runs)
+    assert all(run.checkpoint_metadata_path.endswith("/checkpoints/step-11443/metadata.json") for run in runs)

@@ -1,5 +1,7 @@
 # Error-aware Muon in the Qwen3 130M speedrun
 
+Coordinating issue: [#4919](https://github.com/marin-community/marin/issues/4919)
+
 ## TL;DR
 
 Add `blend` and `hesscorr` Muon policies to the standalone Qwen3 speedrun from PR #4933. Both policies use a normalized momentum EMA and the constant-coefficient five-step Muon iteration. `hesscorr` differentiates a separate convergent cubic iteration with `jax.jvp`. The 130M experiment crosses five archived learning rates with the handoff's nonzero feedback gains, plus one Muon baseline, for 40 runs. The completed sweep used 30 cubic steps for `hesscorr`; gain `0.1` improved C4-en BPB at four of five paired learning rates.
@@ -63,3 +65,17 @@ Each archived 130M run processes 2.60B tokens and used 4 TPU chips for 4,621 sec
 All 40 training runs and all 40 result steps succeeded. Hesscorr gain `0.1` won four of five paired learning-rate comparisons against fresh Muon, with mean C4-en BPB delta `-0.000587`. The best run used learning rate `0.020` and reached `1.164666`, compared with `1.165484` for Muon at the same learning rate. Native speedrun training time increased by 4.33% on average across the five paired learning rates.
 
 The full grid, baseline caveats, and next experiment are recorded in [`docs/reports/error-aware-muon-speedrun.md`](../../docs/reports/error-aware-muon-speedrun.md). The completed executor manifest is `gs://marin-us-central1/experiments/muon_error_feedback_sweep-d76bb7.json`.
+
+## 300M Hesscorr stability rerun
+
+The stabilized 300M Hesscorr path passed a 100-step gate and then completed the full 15-cell grid on preemptible `v5p-8` workers in `us-central1`. The grid crossed correction gains `{0.1, 0.3, 1.0}` with learning rates `{0.004, 0.006, 0.008, 0.010, 0.012}` using artifact version `2026.08.28.3`.
+
+All 15 cells reached `global_step=11443` (6.0B tokens per cell). Final `train/loss` values were finite and ranged from `2.927471` to `2.962276`. Iris reported 15 successful children, zero failures, and 124 aggregate preemptions. Every cell wrote `checkpoints/step-11443/metadata.json`, and the completion logs contained no traceback, NaN, non-finite loss, OOM, or HBM exhaustion.
+
+Held-out Paloma C4-en BPB was materialized from all 15 `speedrun_results.json` artifacts. Hesscorr gain `0.1` beat paired Muon at all five learning rates with mean delta `-0.000449`; gain `0.3` also won 5/5 with mean delta `-0.000589`. Gain `1.0` won 2/5 and was neutral on average (`+0.000005`). The best Hesscorr result was gain `0.3`, learning rate `0.012`, at `1.057701`, compared with `1.058626` for Muon and `1.056606` for blend `0.05`.
+
+All three Hesscorr gains lost to blend `0.05` at every paired learning rate. Hesscorr also increased native speedrun training time by about 90% relative to Muon. The stability work therefore recovered a usable algorithm and demonstrated a small, consistent improvement over plain Muon at gains `0.1` and `0.3`, but the simpler blend remains better and much cheaper in this single-seed 300M grid. Further scaling is not justified without reducing the Sylvester cost or defining a result that blend cannot match.
+
+The launched workspace used base commit [`3bcd661`](https://github.com/marin-community/marin/commit/3bcd661840b28da7e06995975ccceccf3eaac5f8) plus the now-published stabilization changes: a 50-update correction warmup, highest-precision Sylvester products, exact post-rounding symmetry, and a finite scale-safe correction fallback. The launcher retains the exact default v5p behavior; its later optional `--tpu-variant` argument records the separate v4 experiment. That `v4-8` copy in `us-central2` failed before W&B initialization because the VMs rejected the `us-central1` FineWeb cache; it was not retried or used as numerical evidence.
+
+The complete records are in `experiments/speedrun/prism_berkeley_qwen3_scaling/muon_error_feedback_results.json`, including all 15 W&B identities, C4-en BPB values, final losses, training times, checkpoint metadata paths, and paired Muon/blend comparisons. The narrative analysis is in `docs/reports/error-aware-muon-speedrun.md`.

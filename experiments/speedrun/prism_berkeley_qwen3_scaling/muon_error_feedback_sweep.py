@@ -11,6 +11,7 @@ import logging
 import os
 from dataclasses import dataclass
 
+from fray.cluster import ResourceConfig
 from marin.execution.step_runner import StepRunner
 
 from experiments.speedrun.prism_berkeley_qwen3_scaling.muon_error_feedback_optimizer import (
@@ -18,6 +19,7 @@ from experiments.speedrun.prism_berkeley_qwen3_scaling.muon_error_feedback_optim
     DEFAULT_SYLVESTER_STEPS,
     ErrorAwareMuonConfig,
     ErrorAwareMuonPolicy,
+    momentum_timescale_steps,
 )
 from experiments.speedrun.prism_berkeley_qwen3_scaling.prism_berkeley_sweep import build_config
 from experiments.speedrun.prism_berkeley_qwen3_scaling.submission_support import SpeedrunConfig, default_speedrun
@@ -95,6 +97,7 @@ def build_optimizer(
         policy=variant.policy,
         blend_gain=variant.gain if variant.policy == "blend" else 0.0,
         correction_gain=variant.gain if variant.policy == "hesscorr" else 0.0,
+        correction_warmup_steps=momentum_timescale_steps(momentum),
         quintic_steps=5,
         cubic_steps=SPECTRAL_CUBIC_STEPS,
         sylvester_steps=DEFAULT_SYLVESTER_STEPS,
@@ -122,6 +125,7 @@ def build_sweep_configs(
     size: str = "130m",
     learning_rates: tuple[float, ...] | None = None,
     variants: tuple[FeedbackVariant, ...] = FEEDBACK_VARIANTS,
+    tpu_variants: tuple[str, ...] | None = None,
 ) -> list[tuple[str, SpeedrunConfig]]:
     """Build the deduplicated handoff gain grid crossed with the archived LR grid."""
     try:
@@ -131,13 +135,22 @@ def build_sweep_configs(
 
     learning_rates = learning_rates if learning_rates is not None else settings.learning_rates
     _, base_config = build_config(size)
-    resources = dataclasses.replace(
-        base_config.train_config.resources,
-        cpu=ARCHIVED_HOST_CPU,
-        ram=ARCHIVED_HOST_RAM,
-        disk=ARCHIVED_HOST_DISK,
-        preemptible=True,
-    )
+    if tpu_variants is None:
+        resources = dataclasses.replace(
+            base_config.train_config.resources,
+            cpu=ARCHIVED_HOST_CPU,
+            ram=ARCHIVED_HOST_RAM,
+            disk=ARCHIVED_HOST_DISK,
+            preemptible=True,
+        )
+    else:
+        resources = ResourceConfig.with_tpu(
+            tpu_variants,
+            cpu=ARCHIVED_HOST_CPU,
+            ram=ARCHIVED_HOST_RAM,
+            disk=ARCHIVED_HOST_DISK,
+            preemptible=True,
+        )
     sweep_configs = []
     for variant in variants:
         for learning_rate in learning_rates:
@@ -173,13 +186,14 @@ def main(
     version: str = "dev",
     max_concurrent: int = 8,
     variants: tuple[FeedbackVariant, ...] = FEEDBACK_VARIANTS,
+    tpu_variants: tuple[str, ...] | None = None,
 ) -> None:
     if os.getenv("CI") is not None:
         logger.info("Skipping experiment execution on CI environment, needs HF access.")
         return
 
     result_steps = []
-    for name, config in build_sweep_configs(size=size, variants=variants):
+    for name, config in build_sweep_configs(size=size, variants=variants, tpu_variants=tpu_variants):
         config.print_run_info()
         _, result_step = default_speedrun(
             name,
@@ -198,6 +212,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--version", default="dev")
     parser.add_argument("--max-concurrent", type=int, default=8)
     parser.add_argument("--variant-group", choices=tuple(SWEEP_VARIANT_GROUPS), default="all")
+    parser.add_argument(
+        "--tpu-variant",
+        action="append",
+        dest="tpu_variants",
+        help="TPU slice to request. Repeat to add same-chip-count fallback variants.",
+    )
     return parser.parse_args()
 
 
@@ -208,4 +228,5 @@ if __name__ == "__main__":
         version=args.version,
         max_concurrent=args.max_concurrent,
         variants=SWEEP_VARIANT_GROUPS[args.variant_group],
+        tpu_variants=tuple(args.tpu_variants) if args.tpu_variants else None,
     )
