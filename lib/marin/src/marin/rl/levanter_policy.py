@@ -19,6 +19,7 @@ import optax
 import requests
 from haliax._src.state_dict import flatten_modules_for_export, to_state_dict
 from haliax.jax_utils import is_jax_array_like
+from levanter.data.packing import pack_documents
 from levanter.layers.attention import AttentionMask
 from levanter.models.lm_model import LmHeadModel
 from starlette.applications import Starlette
@@ -136,27 +137,70 @@ def hf_named_jax_weights(model: LmHeadModel) -> dict[str, jax.Array]:
     return {name: value for name, value in to_state_dict(flattened).items() if isinstance(value, jax.Array)}
 
 
-def _action_log_probs(
-    model: LmHeadModel,
-    sequences: jax.Array,
-    attention_mask: jax.Array,
-    action_count: int,
-) -> jax.Array:
-    sequence_length = sequences.shape[1]
-    if sequence_length > model.Pos.size:
-        raise ValueError(f"sequence length {sequence_length} exceeds model context length {model.Pos.size}")
-    pad_width = model.Pos.size - sequence_length
-    sequences = jnp.pad(sequences, ((0, 0), (0, pad_width)))
-    attention_mask = jnp.pad(attention_mask, ((0, 0), (0, pad_width)), constant_values=False)
-    batch_axis = hax.Axis("batch", sequences.shape[0])
+@dataclass(frozen=True)
+class _PackedPolicyBlock:
+    tokens: np.ndarray
+    segment_ids: np.ndarray
+    output_rows: np.ndarray
+    output_columns: np.ndarray
+    prediction_positions: np.ndarray
+
+
+def _pack_policy_batch(batch: PolicyBatch, context_length: int) -> list[_PackedPolicyBlock]:
+    """Pack valid rollout tokens and retain a map back to SkyRL's padded action layout."""
+    sequences = np.asarray(batch.sequences)
+    attention_mask = np.asarray(batch.attention_mask, dtype=bool)
+    action_start = sequences.shape[1] - batch.action_count
+    valid_indices = [np.flatnonzero(row) for row in attention_mask]
+    lengths = np.asarray([len(indices) for indices in valid_indices], dtype=np.int32)
+    if np.any(lengths < 2):
+        raise ValueError("Each policy sequence must contain at least two valid tokens")
+
+    blocks: list[_PackedPolicyBlock] = []
+    for row_range in pack_documents(lengths, context_length, slice_strategy="raise"):
+        tokens = np.zeros(context_length, dtype=np.int32)
+        segment_ids = np.full(context_length, -1, dtype=np.int32)
+        output_rows: list[int] = []
+        output_columns: list[int] = []
+        prediction_positions: list[int] = []
+        offset = 0
+        for row in row_range:
+            indices = valid_indices[row]
+            row_length = len(indices)
+            tokens[offset : offset + row_length] = sequences[row, indices]
+            segment_ids[offset : offset + row_length] = row
+            for packed_position, original_position in enumerate(indices, start=offset):
+                if original_position >= action_start:
+                    if packed_position == offset:
+                        raise ValueError("A response token cannot be the first valid token in a sequence")
+                    output_rows.append(row)
+                    output_columns.append(original_position - action_start)
+                    prediction_positions.append(packed_position - 1)
+            offset += row_length
+        blocks.append(
+            _PackedPolicyBlock(
+                tokens=tokens,
+                segment_ids=segment_ids,
+                output_rows=np.asarray(output_rows, dtype=np.int32),
+                output_columns=np.asarray(output_columns, dtype=np.int32),
+                prediction_positions=np.asarray(prediction_positions, dtype=np.int32),
+            )
+        )
+    return blocks
+
+
+def _packed_token_log_probs(model: LmHeadModel, sequences: jax.Array, segment_ids_array: jax.Array) -> jax.Array:
+    batch_axis = hax.Axis("batch", 1)
     position_axis = model.Pos
+    sequences = sequences[None, :]
+    segment_ids_array = segment_ids_array[None, :]
     tokens = hax.named(sequences, (batch_axis, position_axis))
-    segment_ids = hax.named(jnp.where(attention_mask, 0, -1), (batch_axis, position_axis))
+    segment_ids = hax.named(segment_ids_array, (batch_axis, position_axis))
     logits = model(tokens, AttentionMask.causal().with_segment_ids(segment_ids)).array
     token_log_probs = jax.nn.log_softmax(logits[:, :-1, :], axis=-1)
     targets = sequences[:, 1:]
     selected = jnp.take_along_axis(token_log_probs, targets[..., None], axis=-1)[..., 0]
-    return selected[:, sequence_length - action_count - 1 : sequence_length - 1]
+    return selected[0]
 
 
 class LevanterPolicy:
@@ -178,34 +222,79 @@ class LevanterPolicy:
         self.step = 0
 
     def forward(self, batch: PolicyBatch) -> PolicyForwardOutput:
-        action_log_probs = _action_log_probs(
-            self.model,
-            jnp.asarray(batch.sequences, dtype=jnp.int32),
-            jnp.asarray(batch.attention_mask, dtype=jnp.bool_),
-            batch.action_count,
-        )
-        return PolicyForwardOutput(np.asarray(action_log_probs, dtype=np.float32))
+        blocks = _pack_policy_batch(batch, self.model.Pos.size)
+        action_log_probs = np.zeros((batch.sequences.shape[0], batch.action_count), dtype=np.float32)
+        for block in blocks:
+            packed_log_probs = _packed_token_log_probs(
+                self.model,
+                jnp.asarray(block.tokens),
+                jnp.asarray(block.segment_ids),
+            )
+            action_log_probs[block.output_rows, block.output_columns] = np.asarray(
+                packed_log_probs[block.prediction_positions]
+            )
+        return PolicyForwardOutput(action_log_probs)
 
     def ppo_train(self, batch: PolicyBatch) -> PolicyTrainOutput:
         if batch.old_action_log_probs is None or batch.advantages is None:
             raise ValueError("ppo_train requires old_action_log_probs and advantages")
         loss_mask = np.ones_like(batch.advantages) if batch.loss_mask is None else batch.loss_mask
-        sequences = jnp.asarray(batch.sequences, dtype=jnp.int32)
-        attention_mask = jnp.asarray(batch.attention_mask, dtype=jnp.bool_)
-        old_action_log_probs = jnp.asarray(batch.old_action_log_probs)
-        advantages = jnp.asarray(batch.advantages)
-        mask = jnp.asarray(loss_mask)
+        blocks = _pack_policy_batch(batch, self.model.Pos.size)
+        denominator = max(float(np.asarray(loss_mask).sum()), 1.0)
+        action_log_probs = np.zeros((batch.sequences.shape[0], batch.action_count), dtype=np.float32)
 
-        def loss_fn(model: LmHeadModel) -> tuple[jax.Array, jax.Array]:
-            action_log_probs = _action_log_probs(model, sequences, attention_mask, batch.action_count)
-            ratio = jnp.exp(action_log_probs - old_action_log_probs)
-            unclipped = ratio * advantages
-            clipped = jnp.clip(ratio, 1.0 - self.clip_epsilon, 1.0 + self.clip_epsilon) * advantages
-            denominator = jnp.maximum(mask.sum(), 1.0)
-            loss = -(jnp.minimum(unclipped, clipped) * mask).sum() / denominator
-            return loss, action_log_probs
+        def block_loss_fn(
+            model: LmHeadModel,
+            tokens: jax.Array,
+            segment_ids: jax.Array,
+            old_log_probs: jax.Array,
+            block_advantages: jax.Array,
+            block_mask: jax.Array,
+        ) -> tuple[jax.Array, jax.Array]:
+            packed_log_probs = _packed_token_log_probs(model, tokens, segment_ids)
+            ratio = jnp.exp(packed_log_probs - old_log_probs)
+            unclipped = ratio * block_advantages
+            clipped = jnp.clip(ratio, 1.0 - self.clip_epsilon, 1.0 + self.clip_epsilon) * block_advantages
+            numerator = -(jnp.minimum(unclipped, clipped) * block_mask).sum()
+            return numerator, packed_log_probs
 
-        (loss, action_log_probs), grads = eqx.filter_value_and_grad(loss_fn, has_aux=True)(self.model)
+        value_and_grad = eqx.filter_value_and_grad(block_loss_fn, has_aux=True)
+        accumulated_grads = None
+        loss_numerator = 0.0
+        for block in blocks:
+            old_log_probs = np.zeros(self.model.Pos.size - 1, dtype=np.float32)
+            block_advantages = np.zeros_like(old_log_probs)
+            block_mask = np.zeros_like(old_log_probs)
+            source = (block.output_rows, block.output_columns)
+            old_log_probs[block.prediction_positions] = batch.old_action_log_probs[source]
+            block_advantages[block.prediction_positions] = batch.advantages[source]
+            block_mask[block.prediction_positions] = loss_mask[source]
+            (block_numerator, packed_log_probs), grads = value_and_grad(
+                self.model,
+                jnp.asarray(block.tokens),
+                jnp.asarray(block.segment_ids),
+                jnp.asarray(old_log_probs),
+                jnp.asarray(block_advantages),
+                jnp.asarray(block_mask),
+            )
+            action_log_probs[source] = np.asarray(packed_log_probs[block.prediction_positions])
+            loss_numerator += float(block_numerator)
+            if accumulated_grads is None:
+                accumulated_grads = grads
+            else:
+                accumulated_grads = jax.tree.map(
+                    lambda total, update: None if total is None else total + update,
+                    accumulated_grads,
+                    grads,
+                    is_leaf=lambda value: value is None,
+                )
+
+        assert accumulated_grads is not None
+        grads = jax.tree.map(
+            lambda grad: None if grad is None else grad / denominator,
+            accumulated_grads,
+            is_leaf=lambda value: value is None,
+        )
         updates, self.opt_state = self.optimizer.update(
             grads,
             self.opt_state,
@@ -213,7 +302,7 @@ class LevanterPolicy:
         )
         self.model = eqx.apply_updates(self.model, updates)
         self.step += 1
-        return PolicyTrainOutput(np.asarray(action_log_probs, dtype=np.float32), float(loss), self.step)
+        return PolicyTrainOutput(action_log_probs, loss_numerator / denominator, self.step)
 
     def broadcast_weights(self) -> int:
         if self.weight_publisher is None:

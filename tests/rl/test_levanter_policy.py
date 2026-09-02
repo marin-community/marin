@@ -99,6 +99,36 @@ def test_levanter_policy_forward_ignores_left_padding() -> None:
     np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-5)
 
 
+def test_levanter_policy_packing_preserves_independent_sequences_and_action_padding() -> None:
+    sequences = np.asarray(
+        [
+            [0, 0, 1, 2, 3, 4, 0],
+            [0, 5, 6, 7, 8, 9, 10],
+        ],
+        dtype=np.int32,
+    )
+    attention_mask = np.asarray(
+        [
+            [0, 0, 1, 1, 1, 1, 0],
+            [0, 1, 1, 1, 1, 1, 1],
+        ],
+        dtype=np.int32,
+    )
+
+    with use_test_mesh():
+        policy = LevanterPolicy(_tiny_qwen(), learning_rate=0.05)
+        packed = policy.forward(PolicyBatch(sequences, action_count=3, attention_mask=attention_mask)).action_log_probs
+        independent = np.concatenate(
+            [
+                policy.forward(PolicyBatch(row[None, :], action_count=3, attention_mask=mask[None, :])).action_log_probs
+                for row, mask in zip(sequences, attention_mask, strict=True)
+            ]
+        )
+
+    np.testing.assert_allclose(packed, independent, rtol=1e-5, atol=1e-5)
+    assert packed[0, 2] == 0.0
+
+
 def test_policy_batch_codec_preserves_training_inputs() -> None:
     batch = PolicyBatch(
         sequences=np.asarray([[1, 2, 3]], dtype=np.int32),
