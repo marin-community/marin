@@ -126,7 +126,7 @@ This is a single-seed grid, so the sub-millibit differences should not be treate
 ## Artifacts
 
 - [Completed experiment](https://marin.community/data-browser/experiment?path=gs%3A//marin-us-central1/experiments/muon_error_feedback_sweep-d76bb7.json)
-- [Machine-readable results](https://github.com/marin-community/marin/blob/main/experiments/speedrun/prism_berkeley_qwen3_scaling/muon_error_feedback_results.json)
+- [Machine-readable results](../../experiments/speedrun/prism_berkeley_qwen3_scaling/muon_error_feedback_results.json)
 - [Best Hesscorr run](https://wandb.ai/understanding-sam/marin/runs/qwen3_130m_error_aware_muon_hesscorr-g0p1_lr0p02-72a859)
 - [Paired Muon control](https://wandb.ai/understanding-sam/marin/runs/qwen3_130m_error_aware_muon_muon_lr0p02-5c7b32)
 - [Historical Muon baseline](https://wandb.ai/marin-community/marin/runs/qwen3_130m_muon_4096-04770b)
