@@ -2,13 +2,13 @@
   "added_variants": [
     "moe_pipeline"
   ],
-  "base_sha": "8ed202629425a2c722827838f1e59b7462448c07",
-  "head_sha": "61db44842c0eda0862e4fbbe9a1cfd66e23c34c7",
+  "base_sha": "56d3edd751fa51b41959a98cbd43211bfda6f480",
+  "head_sha": "9c67d7ec64d187ca25f7d42852024e3a1f29ae0d",
   "report_count": 1,
   "reports": [
     {
       "closest_variant": "base",
-      "distance_score": 2758,
+      "distance_score": 2518,
       "report_relpath": "moe_pipeline/index.html",
       "status_counts": {
         "added": 3,
