@@ -10,10 +10,10 @@ staged tip, re-pin Marin, and prepare protected-branch promotion. An unattended
 run opens a draft Marin PR and names the required admin promotion; it never
 force-moves the stable branch.
 
-Refresh a `group` as one unit and one PR. The only current group is
-`vllm`/`tpu-inference`; `vllm-gpu` tracks the fork's independent `main` branch.
-The TPU launcher installs both grouped pins, and vLLM's TPU base derives from
-the tpu-inference release; splitting them can produce an unvalidated stack.
+Refresh a `group` as one unit and one PR. Per-fork guidance lives beside this
+file: `docs/vllm.md` covers the `vllm`/`tpu-inference` group and the GPU release
+pipeline, and `docs/xla.md` covers the XLA PJRT fork, which is pinned outside
+`migration.toml` entirely.
 
 In local mode, ask before pushing fork branches, opening the PR, or filing an
 issue. The required end-to-end test needs no extra confirmation.
@@ -87,11 +87,9 @@ git -C <fork> remote set-head upstream -a                # so upstream/HEAD reso
   fork's `upstream`; do not use raw tags or branches. Select the newest release
   where `draft == false`, `prerelease == false`, and the tag is exactly
   `vMAJOR.MINOR.PATCH`. Resolve it to a commit SHA.
-- `base_select = derived` (`vllm`): read the SHA at `derived_from`
-  (`tpu-inference:.buildkite/vllm_lkg.version`) from the selected `tpu-inference`
-  release. That exact SHA is the base; verify it resolves in the fork's `upstream`.
-  Inspect its TPU build metadata (`requirements/tpu.txt`, `pyproject.toml`,
-  `setup.py`) for dependency implications.
+- `base_select = derived` (`vllm`): read the SHA at `derived_from` from the
+  release it names, verify it resolves in the fork's `upstream`, and use it as
+  the base. See `docs/vllm.md` for the vllm-specific derivation detail.
 
 If the selected base matches the current one and no pin metadata needs repair, exit
 no-op. Do not walk back to older releases when the latest eligible one fails; fix
@@ -171,34 +169,12 @@ the draft PR. Because `<branch>-next` and the eventual `<branch>` are the same c
 the pin set here needs no change after that promotion.
 
 - `pin = descriptor:<path>#<section>` (`vllm`, `tpu-inference`): push `<branch>-next` to
-  the fork. Set the section's `commit` to its tip and `upstream_base` to the selected
-  base in `vllm/tpu.toml`. This stack resolves entirely inside the `uvx` env from
-  the two forks, so there are no `uv.lock` changes and `jax`/`jaxlib`/`libtpu`/`torch`
-  come from the forks' own dependencies — do not touch `marin-core`, `marin-levanter`,
-  or `marin-fray`.
+  the fork and record its tip and the selected base in the descriptor file. The
+  section-by-section mechanics are in `docs/vllm.md`.
 - `pin = release:<path>` (`vllm-gpu`): the pin is a prebuilt wheel, so the refresh builds
   and promotes one through the fork's own release pipeline, then re-pins from the promoted
-  manifest. Dispatching fork workflows needs `actions:write` on `marin-community/vllm`,
-  which the fork-ferry profile grants.
-  1. Push `main-next` to the fork.
-  2. Build the candidate on that ref:
-     `gh workflow run marin-gpu-candidate.yaml --repo marin-community/vllm --ref main-next`.
-     The workflow otherwise builds on `push: main`; dispatching on `main-next` compiles the
-     staged tip into both arches under a `marin-vllm-gpu-candidate-<sha>` prerelease.
-  3. Once the candidate prerelease exists, promote it:
-     `gh workflow run marin-gpu-release.yaml --repo marin-community/vllm --ref main-next -f candidate_tag=<tag>`.
-     The release job validates the exact wheel bytes on real GPUs and publishes an immutable
-     release carrying `marin-vllm-gpu-manifest.json`.
-  4. Download that manifest and re-pin without hand-editing `gpu.toml`:
-     `gh release download <release_tag> --repo marin-community/vllm --pattern marin-vllm-gpu-manifest.json`,
-     then `uv run config/update-external.py --promote-gpu-release marin-vllm-gpu-manifest.json`.
-     The helper writes `gpu.toml` (release tag, source commit, version, torch backend,
-     per-arch url+sha256) and regenerates `external_dependencies.py`; it re-encodes the wheel
-     URLs the way the pin loader validates, which a hand copy gets wrong.
-
-  A base that crosses a CUDA/torch or vLLM stable-ABI boundary is a migration. Re-audit the
-  wheel verifier and the fork's release gate for the extension name (`vllm._C_stable_libtorch`
-  on CUDA 13) when the base moves across such a boundary.
+  manifest. The candidate/promote/re-pin commands and the CUDA/torch ABI-boundary caveat
+  are in `docs/vllm.md`.
 - `pin = isolated_project` (`evalchemy`, `harbor`, `MarinSkyRL`): the uv source follows
   the fork's `main`, so `main` is the stable branch. Stage the rebase on `main-next`,
   review it from a compare link (`upstream_base..main-next`) on the Marin PR, and point
@@ -232,9 +208,6 @@ DOCKER-env golden tests must run in fork CI. Confirm the workflow supports
 `workflow_dispatch` on the staged ref; otherwise it may silently skip a
 non-`main` review branch.
 
-For vLLM without its compiled CUDA/TPU stack, `py_compile` and a conflict-marker
-sweep are structural checks only; do not call them behavioral validation.
-
 For a version-sensitive golden, inspect the deciding code path and distinguish a
 new dependency floor from a port defect. An upstream `litellm>=1.92` floor, for
 example, can stale a golden without a fork-source change. Never downgrade below
@@ -246,31 +219,9 @@ and verify it in one CI run with logs as artifacts.
 
 Run the descriptor's `e2e` before opening the PR:
 
-- **`experiments/evals/served_qwen3.py::QWEN3_TPU_INFERENCE`** (`vllm`,
-  `tpu-inference`) — a bounded brokered TPU serve+eval smoke. Run TPU workloads
-  through Iris on the `marin` cluster at interactive priority, `v6e-4` in GCP
-  `europe-west4`. Confirm the proxy served completions, lm-eval wrote metrics and
-  sample outputs, and no TPU/vLLM build, import, or runtime tracebacks occurred:
-
-```sh
-uv run iris --config lib/iris/config/marin.yaml job run \
-  --job-name served-qwen3-<run-id> --cpu 1 --memory 2G --extra cpu \
-  --priority interactive --no-wait -- python -c \
-  "from dataclasses import replace; from fray.types import ResourceConfig; from marin.execution.lazy import lower; from marin.execution.step_runner import StepRunner; from experiments.evals.lm_eval_suite import lm_eval_suite; from experiments.evals.served_qwen3 import QWEN3_TPU_INFERENCE; inference = replace(QWEN3_TPU_INFERENCE, iris=replace(QWEN3_TPU_INFERENCE.iris, worker_resources=ResourceConfig.with_tpu('v6e-4', ram='96g', regions=['europe-west4']))); StepRunner().run([lower(lm_eval_suite(inference, model_name='qwen3-0.6b-refresh-smoke', version='<run-id>-dev', limit=8))])"
-```
-
-- **`tests/cluster/vllm/test_snowball_backend_parity.py`** (`vllm-gpu`) — the
-  Snowball-67B next-token logprob parity gate on H100s. It is `-m cluster` marked, so
-  run it with `-o addopts= --import-mode=importlib`; the H100s live on CoreWeave and are
-  reached through the marin federation hub (`target_cluster`), not a direct controller.
-  Confirm the Levanter reference and `vllm-gpu-pp1` (single-node 8×H100) match the
-  goldens within `max_probability_error` (`pp2` is a 16×H100 multi-node variant). Pair
-  it with a bounded qwen3-0.6B GPU serve+eval to exercise the brokered serving path:
-
-```sh
-uv run pytest tests/cluster/vllm/test_snowball_backend_parity.py \
-  -m cluster -o addopts= --import-mode=importlib -vv -s
-```
+- The vllm-family e2es — `experiments/evals/served_qwen3.py::QWEN3_TPU_INFERENCE`
+  (`vllm`, `tpu-inference`) and `tests/cluster/vllm/test_snowball_backend_parity.py`
+  (`vllm-gpu`) — are documented with their exact commands in `docs/vllm.md`.
 
 - **`experiments/evaluation/configs/evalchemy/gsm8k-smoke.yaml`** (`evalchemy`) and
   **`experiments/evaluation/configs/harbor/aime-smoke.yaml`** (`harbor`) — one eval
@@ -310,8 +261,7 @@ Once the e2e passes on `<branch>-next`, create the rollback tag for the current 
 tip and the date tag for the validated staged tip per `docs/promotion-protocol.md`.
 Push and verify those tags, then leave the protected stable `<branch>` unchanged. The
 draft Marin PR must identify each `<branch>-next` to `<branch>` hard swap that an admin
-must complete before merge. On the vllm fork the GPU and TPU pins promote onto their own
-stable branches (`main` and `tpu`) independently.
+must complete before merge.
 
 Keep the Marin PR draft until every required admin promotion is complete. After an
 `isolated_project` promotion, restore its uv source from `main-next` to `main`, relock,

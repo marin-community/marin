@@ -13,7 +13,11 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
 
 from levanter.grug._moe.common import CapacityOverflow
-from levanter.grug._moe.ep_common import _assignment_sources, _ranks_within_groups, _token_sources
+from levanter.grug._moe.ep_common import (
+    _assignment_sources,
+    _ranks_within_groups,
+    _token_sources,
+)
 from levanter.grug._moe.sonic import sonic_gather_sum_available, sonic_gather_sum_masked
 from levanter.grug.sharding import _batch_axes
 
@@ -38,10 +42,6 @@ class _PooledOutput(NamedTuple):
     receiver_dropped: Int[Array, ""]
 
 
-def _use_sonic_gather_sum() -> bool:
-    return sonic_gather_sum_available() and jax.default_backend() == "gpu"
-
-
 def _dispatch_gather_input_grad(
     cotangent: Float[Array, "send H"],
     linear_indices: Int[Array, " assignments"],
@@ -53,7 +53,7 @@ def _dispatch_gather_input_grad(
     linear_indices = linear_indices.reshape(tokens_per_shard, topk)
     keep = keep.reshape(tokens_per_shard, topk)
 
-    if _use_sonic_gather_sum():
+    if sonic_gather_sum_available():
         return sonic_gather_sum_masked(cotangent, linear_indices, keep.astype(jnp.float32))
 
     grad_x = jnp.zeros((tokens_per_shard, hidden_dim), dtype=jnp.float32)
@@ -78,7 +78,7 @@ def _combine_gather_sum_impl(
     gather_indices = gather_indices.reshape(tokens_per_shard, topk)
     keep = keep.reshape(tokens_per_shard, topk)
 
-    if _use_sonic_gather_sum():
+    if sonic_gather_sum_available():
         weights = jnp.where(keep, combine_weights, 0)
         return sonic_gather_sum_masked(send_output, gather_indices, weights, output_dtype=jnp.float32)
 

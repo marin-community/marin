@@ -57,7 +57,7 @@ EVALCHEMY = ExternalDependency(
     distribution="evalchemy",
     repository="https://github.com/marin-community/evalchemy.git",
     version="0.1.0",
-    commit="e59e88bccdc1b8e8e18a4d52e041aff2dfac548e",
+    commit="cf66d0b14975379bf7fc5c4a7cfff1400c636f1c",
     runtime_requirements=(),
 )
 
@@ -66,7 +66,7 @@ HARBOR = ExternalDependency(
     distribution="harbor",
     repository="https://github.com/marin-community/harbor.git",
     version="0.8.1",
-    commit="29179c74a1c538bb453e26c6c9f67ca018f9ff20",
+    commit="c78c98f52eb5a4becaf15b5a0c6cc096d240bb14",
     runtime_requirements=("daytona==0.200.2", "gcsfs==2026.7.0", "pydantic-settings==2.14.2", "s3fs==2026.7.0"),
 )
 
@@ -75,14 +75,14 @@ MARIN_SKYRL = ExternalDependency(
     distribution="marinskyrl",
     repository="https://github.com/marin-community/MarinSkyRL.git",
     version="0.1.0",
-    commit="b69d22cebfa5824745df0d4b2d5c57c55bb74b35",
+    commit="7836835b117df64e2ba309d4eeff5e67254bf8a4",
     runtime_requirements=(),
 )
 
 VLLM_GPU_RELEASE = VllmGpuRelease(
-    release_tag="marin-vllm-gpu-20260813-76c6650513a9",
-    source_commit="76c6650513a97507a485e142d48b4ce50c7fd0e0",
-    version="0.0.0.dev20260813+marin.76c6650513a9",
+    release_tag="marin-vllm-gpu-20260827-f0d7cc7f5874",
+    source_commit="f0d7cc7f587482e0ab771e3c9715e726eb914e60",
+    version="0.0.0.dev20260827+marin.f0d7cc7f5874",
     torch_backend="cu130",
     wheels=(
         VllmGpuWheel(
@@ -90,20 +90,20 @@ VLLM_GPU_RELEASE = VllmGpuRelease(
             sm_targets=("10.0",),
             url=(
                 "https://github.com/marin-community/vllm/releases/download/"
-                "marin-vllm-gpu-20260813-76c6650513a9/vllm-0.0.0.dev20260813%2Bmarin.76c6650513a9-cp38-"
+                "marin-vllm-gpu-20260827-f0d7cc7f5874/vllm-0.0.0.dev20260827%2Bmarin.f0d7cc7f5874-cp38-"
                 "abi3-manylinux_2_28_aarch64.whl"
             ),
-            sha256="31d3b80da458ea78385ab8d93bb4d5479004fd898070e2de3f0b20b3c37c5fa7",
+            sha256="de51618bb9ca6074edb0b8ff3ee53396742586c6c738e2161921c840867939c5",
         ),
         VllmGpuWheel(
             architecture="x86_64",
             sm_targets=("9.0",),
             url=(
                 "https://github.com/marin-community/vllm/releases/download/"
-                "marin-vllm-gpu-20260813-76c6650513a9/vllm-0.0.0.dev20260813%2Bmarin.76c6650513a9-cp38-"
+                "marin-vllm-gpu-20260827-f0d7cc7f5874/vllm-0.0.0.dev20260827%2Bmarin.f0d7cc7f5874-cp38-"
                 "abi3-manylinux_2_28_x86_64.whl"
             ),
-            sha256="249012b13629a78dbebd2490ec913766206e68892b773af8f5fd7b504760ae2f",
+            sha256="400cb816aea3d46841da6cf9f8e3f4e40bcb7b6a60cf66ecf59e7afd7da4c7c7",
         ),
     ),
 )

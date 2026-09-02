@@ -19,12 +19,11 @@ from zephyr.readers import load_jsonl
 logger = logging.getLogger(__name__)
 
 
-def _html_to_md(data: dict, extract_method: str, config: ExtractionConfig):
+def _html_to_md(data: dict, config: ExtractionConfig):
     """Convert a single HTML record to markdown.
 
     Args:
         data: Record from JSONL file
-        extract_method: Method to use for HTML extraction
         config: Configuration for the extraction method
 
     Returns:
@@ -41,7 +40,7 @@ def _html_to_md(data: dict, extract_method: str, config: ExtractionConfig):
     # Convert page can throw exception based on the html content (e.g. invalid html, Empty page)
     try:
         logger.debug(f"Converting {data_id} {url}")
-        md = convert_page(html, url, extract_method, config)["content"]
+        md = convert_page(html, url, config)["content"]
         error = None
     except ImportError:
         # Configuration errors should fail the job, not be caught
@@ -70,16 +69,15 @@ def _html_to_md(data: dict, extract_method: str, config: ExtractionConfig):
 class SimpleHtmlToMdConfig:
     input_path: str  # Input directory containing jsonl.gz files
     output_path: str  # Output directory containing md files
-    extract_method: str = "resiliparse"
     config: ExtractionConfig = field(default_factory=HtmlToMarkdownConfig)
 
 
 def html_to_md(cfg: SimpleHtmlToMdConfig):
-    """Transform HTML content to markdown using the specified extraction method."""
+    """Transform HTML content to markdown."""
     pipeline = (
         Dataset.from_files(f"{cfg.input_path}/**/*.jsonl.gz")
         .flat_map(load_jsonl)
-        .map(lambda data: _html_to_md(data, cfg.extract_method, cfg.config))
+        .map(lambda data: _html_to_md(data, cfg.config))
         .write_jsonl(f"{cfg.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
     )
     ctx = ZephyrContext(name="html-to-md")

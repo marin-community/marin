@@ -41,6 +41,7 @@ from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from iris.test_util import FakeStatsTable, wait_for_condition
 from iris.testing.k8s import (
+    k8s_backend_descriptor,
     make_batch,
     make_kueue_provider,
     make_pod,
@@ -70,6 +71,7 @@ def test_sync_applies_pods_for_tasks_to_run(provider, k8s):
 
 def test_sync_releases_output_uploader_after_task_container_exits(k8s):
     provider = K8sTaskProvider(
+        descriptor=k8s_backend_descriptor(),
         kubectl=k8s,
         pods=pod_config(task_outputs=TaskOutputPolicy()),
         cluster_scan_interval=0.0,
@@ -99,6 +101,7 @@ def test_sync_releases_output_uploader_after_task_container_exits(k8s):
 
 def test_sync_output_timeout_preserves_successful_task_outcome(k8s, monkeypatch):
     provider = K8sTaskProvider(
+        descriptor=k8s_backend_descriptor(),
         kubectl=k8s,
         pods=pod_config(task_outputs=TaskOutputPolicy(finalization_timeout=Duration.from_ms(1))),
         cluster_scan_interval=0.0,
@@ -481,6 +484,7 @@ def test_poll_stops_scanning_terminal_pods_once_attempts_resolve(k8s):
     """
     counting = _CountingK8sService(k8s)
     provider = K8sTaskProvider(
+        descriptor=k8s_backend_descriptor(),
         kubectl=counting,
         pods=pod_config(),
         cluster_scan_interval=0.0,
@@ -688,7 +692,12 @@ def test_get_cluster_status_basic(k8s):
     pod = k8s.get_json(K8sResource.PODS, "iris-task-0")
     pod["status"]["conditions"] = []
 
-    p = K8sTaskProvider(kubectl=k8s, pods=pod_config(default_image="img:latest"), cluster_scan_interval=0.0)
+    p = K8sTaskProvider(
+        descriptor=k8s_backend_descriptor(),
+        kubectl=k8s,
+        pods=pod_config(default_image="img:latest"),
+        cluster_scan_interval=0.0,
+    )
     try:
         p.sync(make_batch())
         resp = p.get_cluster_status()
@@ -709,7 +718,10 @@ def test_get_cluster_status_node_failure(k8s):
     """Node list failure during sync is handled gracefully; status reports 0 nodes."""
     k8s.inject_failure("list_json:node", RuntimeError("kubectl error"))
     p = K8sTaskProvider(
-        kubectl=k8s, pods=pod_config(namespace="test-ns", default_image="img:latest"), cluster_scan_interval=0.0
+        descriptor=k8s_backend_descriptor(),
+        kubectl=k8s,
+        pods=pod_config(namespace="test-ns", default_image="img:latest"),
+        cluster_scan_interval=0.0,
     )
     try:
         p.sync(make_batch())
@@ -728,7 +740,12 @@ def test_get_cluster_status_excludes_terminal_pods(k8s):
     populate_pod(k8s, "iris-succeeded", "Succeeded")
     populate_pod(k8s, "iris-failed", "Failed")
 
-    p = K8sTaskProvider(kubectl=k8s, pods=pod_config(default_image="img:latest"), cluster_scan_interval=0.0)
+    p = K8sTaskProvider(
+        descriptor=k8s_backend_descriptor(),
+        kubectl=k8s,
+        pods=pod_config(default_image="img:latest"),
+        cluster_scan_interval=0.0,
+    )
     try:
         p.sync(make_batch())
         resp = p.get_cluster_status()
@@ -1119,6 +1136,7 @@ def test_reconcile_dumps_only_running_pods_via_periodic_profiler(k8s):
     dumps only the running pod (not the terminal one) into iris.profile."""
     profile_table = FakeStatsTable()
     provider = K8sTaskProvider(
+        descriptor=k8s_backend_descriptor(),
         kubectl=k8s,
         pods=pod_config(),
         profile_table=profile_table,

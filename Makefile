@@ -1,5 +1,5 @@
-.PHONY: help clean check fix setup_pre_commit rust-dev rust-user rust-status configure_gcp_registry_all
-.DEFAULT: help
+.PHONY: help clean check fix lint test init dev_setup setup_pre_commit rust-dev rust-user rust-status configure_gcp_registry_all
+.DEFAULT_GOAL := help
 
 
 help:
@@ -12,7 +12,7 @@ help:
 	@echo "make lint"
 	@echo "    Run infra/pre-commit.py --all-files (no auto-fixing)."
 	@echo "make test"
-	@echo "    Run all tests"
+	@echo "    Run the safe tests affected by the current branch and working tree"
 	@echo "make init"
 	@echo "    Init the repo for development"
 	@echo "make rust-dev"
@@ -54,9 +54,7 @@ configure_gcp_registry_all:
 	uv run infra/configure_gcp_registry.py marin --all-regions
 
 test:
-	export HUGGING_FACE_HUB_TOKEN=$HF_TOKEN
-	export HF_HUB_TOKEN=$HF_TOKEN
-	RAY_ADDRESS= PYTHONPATH=tests:. pytest tests --durations=0 -n 4 --tb=no -v
+	uv run --no-project infra/ci/run_tests.py
 
 
 # stuff for setting up locally

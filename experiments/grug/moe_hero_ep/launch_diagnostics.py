@@ -30,6 +30,7 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     HERO_EP_EXPERT_AXIS_SIZE,
     HERO_EP_NODES,
     HERO_GPUS_PER_NODE,
+    HERO_MASTER_PARAM_MODE,
     HERO_MODEL_CONFIG,
     HERO_NODE_CPU,
     HERO_NODE_DISK,
@@ -41,11 +42,14 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     hero_grug_trainer_config,
     hero_trainer_config,
     validation_datasets,
+    with_transport_remat_mode,
 )
 from experiments.grug.moe_hero_ep.heuristic import build_hero_configs
 from experiments.grug.moe_hero_ep.train import (
+    RAGGED_MOE_IMPLEMENTATION,
     GrugEvalConfig,
     GrugRunConfig,
+    MasterParamMode,
     TrainingDataMode,
     WatchMode,
     _compute_flops,
@@ -69,6 +73,9 @@ def build_diagnostic_run(
     intermediate_dim: int | None = None,
     capacity_factor: float | None = None,
     latent_dim: int | None = None,
+    moe_implementation: str | None = None,
+    master_param_mode: MasterParamMode = HERO_MASTER_PARAM_MODE,
+    processes_per_task: int = HERO_PROCESSES_PER_TASK,
     eval_every: int = 0,
     save_checkpoints: bool = False,
     checkpoint_interval: timedelta = HERO_CHECKPOINT_INTERVAL,
@@ -104,7 +111,8 @@ def build_diagnostic_run(
         raise ValueError(f"profile_start_step must be non-negative, got {profile_start_step}")
     if profile_steps > 0 and profile_start_step >= num_steps:
         raise ValueError(f"profile_start_step must be less than num_steps={num_steps}, got {profile_start_step}")
-    # `schedule_steps` sets the whole learning-rate schedule; `num_steps` sets how far the run goes.
+    # `schedule_steps` sets the whole learning-rate schedule; `num_steps` is the absolute step the
+    # run stops at (a restore resumes mid-schedule, so it must lie past the restored step).
     # Both matter, and they enter in different places. The optimizer heuristic scales learning rate,
     # adam_lr, and epsilon from a token budget (`num_train_steps * batch * seq`), which fixes the
     # peak. Warmup and decay are *fractions* of `TrainerConfig.num_train_steps`, so that field has to
@@ -129,11 +137,13 @@ def build_diagnostic_run(
             ("intermediate_dim", intermediate_dim),
             ("capacity_factor", capacity_factor),
             ("latent_dim", latent_dim),
+            ("moe_implementation", moe_implementation),
         )
         if value is not None
     }
     if overrides:
         model = dataclasses.replace(model, **overrides)
+    model = with_transport_remat_mode(model)
     # A bank that is not divisible by the expert axis fails inside `moe_mlp`, which is after the rack
     # is already allocated and the workspace is built. Reject it here instead.
     if model.num_experts % HERO_EP_EXPERT_AXIS_SIZE != 0:
@@ -143,13 +153,19 @@ def build_diagnostic_run(
         raise ValueError(
             f"local expert count={local_experts} must be divisible by num_expert_waves={model.num_expert_waves}"
         )
-    if model.moe_implementation != "fixed_pooled_wave_all_to_all":
-        raise AssertionError(f"unexpected hero MoE implementation: {model.moe_implementation}")
-    if model.pooled_transport_capacity_factor is None:
+    # The ragged transport requires one GPU per process; fail fast if this is not satisfied.
+    if model.moe_implementation == RAGGED_MOE_IMPLEMENTATION and processes_per_task != HERO_GPUS_PER_NODE:
+        raise ValueError(
+            f"{RAGGED_MOE_IMPLEMENTATION} needs one process per GPU: pass "
+            f"processes_per_task={HERO_GPUS_PER_NODE}, got {processes_per_task}"
+        )
+    pooled = model.moe_implementation == "fixed_pooled_wave_all_to_all"
+    if pooled and model.pooled_transport_capacity_factor is None:
         raise AssertionError("the pooled-wave hero requires a transport capacity factor")
     backend_tag = model.moe_implementation.replace("_", "-")
     capacity_tag = f"capacity-{model.capacity_factor:g}"
-    transport_capacity_tag = f"transport-capacity-{model.pooled_transport_capacity_factor:g}"
+    # Only the pooled transport has a receiver capacity of its own to report.
+    transport_capacity_tags = (f"transport-capacity-{model.pooled_transport_capacity_factor:g}",) if pooled else ()
     wave_tag = f"expert-waves-{model.num_expert_waves}"
     size_tag = f"e{model.num_experts}-i{model.intermediate_dim}"
     wandb_project = os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT
@@ -158,6 +174,7 @@ def build_diagnostic_run(
         training_data_mode=training_data_mode,
         watch_mode=watch_mode,
         save_checkpoints=save_checkpoints,
+        master_param_mode=master_param_mode,
     )
     train_resources = ResourceConfig.with_gpu(
         "GB200",
@@ -179,6 +196,7 @@ def build_diagnostic_run(
             seed=seed,
             train_batch_size=batch_size,
             num_train_steps=total_schedule_steps,
+            master_param_mode=master_param_mode,
             profiler=ProfilerConfig(
                 enabled=profile_steps > 0,
                 start_step=profile_start_step,
@@ -203,7 +221,8 @@ def build_diagnostic_run(
                     "ep",
                     backend_tag,
                     capacity_tag,
-                    transport_capacity_tag,
+                    f"master-params-{master_param_mode.value.replace('_', '-')}",
+                    *transport_capacity_tags,
                     wave_tag,
                     size_tag,
                     "gb200",
@@ -257,7 +276,7 @@ def build_diagnostic_run(
                 else None
             ),
             stop_after_steps=num_steps,
-            processes_per_task=HERO_PROCESSES_PER_TASK,
+            processes_per_task=processes_per_task,
         )
 
     return ArtifactStep(
@@ -285,7 +304,11 @@ def build_diagnostic_run(
     type=click.IntRange(min=1),
     default=DEFAULT_HERO_STEPS,
     show_default=True,
-    help="Number of training steps.",
+    help=(
+        "Number of steps at which training terminates. When restoring from a checkpoint, "
+        "the number of steps taken in this run will be less than --num-steps "
+        "by the number of steps at the checkpoint."
+    ),
 )
 @click.option(
     "--schedule-steps",
@@ -333,6 +356,25 @@ def build_diagnostic_run(
     default=HERO_EP_BATCH_SIZE,
     show_default=True,
     help="Global sequences per step. This value does not scale with --dp-racks.",
+)
+@click.option(
+    "--moe-implementation",
+    default=None,
+    help="Override the MoE backend, e.g. ragged_all_to_all. Defaults to the hero spec.",
+)
+@click.option(
+    "--master-params",
+    type=click.Choice([mode.value for mode in MasterParamMode]),
+    default=HERO_MASTER_PARAM_MODE.value,
+    show_default=True,
+    help=("Where the authoritative fp32 weights live: on device, or as a pinned-host master."),
+)
+@click.option(
+    "--processes-per-task",
+    type=click.IntRange(min=1),
+    default=HERO_PROCESSES_PER_TASK,
+    show_default=True,
+    help="JAX processes per node.",
 )
 @click.option(
     "--latent-dim",
@@ -426,6 +468,9 @@ def main(
     intermediate_dim: int | None,
     capacity_factor: float | None,
     latent_dim: int | None,
+    moe_implementation: str | None,
+    master_params: str,
+    processes_per_task: int,
     save_checkpoints: bool,
     checkpoint_minutes: float,
     checkpoint_path: str | None,
@@ -449,6 +494,9 @@ def main(
         intermediate_dim=intermediate_dim,
         capacity_factor=capacity_factor,
         latent_dim=latent_dim,
+        moe_implementation=moe_implementation,
+        master_param_mode=MasterParamMode(master_params),
+        processes_per_task=processes_per_task,
         save_checkpoints=save_checkpoints,
         checkpoint_interval=timedelta(minutes=checkpoint_minutes),
         checkpoint_path=checkpoint_path,

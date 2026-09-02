@@ -11,7 +11,7 @@ aggregated from task states.
 import json
 import logging
 import secrets
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any, Protocol, TypeVar
@@ -30,7 +30,6 @@ from iris.cluster.bundle import MAX_BUNDLE_SIZE_BYTES, BundleStore
 from iris.cluster.config import user_admitted
 from iris.cluster.constraints import (
     Constraint,
-    backend_directive,
     cluster_directive,
     constraints_from_resources,
     merge_constraints,
@@ -43,8 +42,17 @@ from iris.cluster.controller.auth import (
     ControllerAuth,
 )
 from iris.cluster.controller.autoscaler.status import PendingHint
-from iris.cluster.controller.backend import BackendCapability, ProviderError, TaskBackend, TaskTarget
+from iris.cluster.controller.backend import (
+    BackendCapability,
+    BackendObservation,
+    JobFeasibilityRequest,
+    ProviderError,
+    TaskBackend,
+    TaskTarget,
+    dashboard_backend_descriptor,
+)
 from iris.cluster.controller.budget import (
+    budget_user_id,
     compute_effective_band,
     compute_user_spend,
 )
@@ -63,13 +71,11 @@ from iris.cluster.controller.projections.attempt_counts import AttemptCountsProj
 from iris.cluster.controller.reads import TaskJobSummary
 from iris.cluster.controller.reconcile.policy import MAX_ACTIVE_TASKS_PER_USER
 from iris.cluster.controller.reconcile.task import TerminalKind
-from iris.cluster.controller.scheduling.scheduler import SchedulingContext
 from iris.cluster.controller.schema import (
     federation_changelog_table,
     federation_sync_state_table,
     job_config_table,
     jobs_table,
-    local_tasks,
     meta_table,
     task_attempts_table,
     tasks_table,
@@ -78,7 +84,7 @@ from iris.cluster.controller.schema import (
     workers_table,
 )
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, task_row_can_be_scheduled
-from iris.cluster.controller.worker_health import WorkerLiveness
+from iris.cluster.controller.worker_health import WorkerHealthTracker, WorkerLiveness
 from iris.cluster.federation.availability import AVAILABILITY_METRIC_VERSION
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.peer import FederationPeer
@@ -110,7 +116,7 @@ from iris.cluster.types import (
     is_federated,
     is_job_finished,
 )
-from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2, worker_pb2
+from iris.rpc import controller_pb2, job_pb2, query_pb2, resource_pb2, vm_pb2, worker_pb2
 from iris.rpc.auth import FEDERATION_PEER_ROLE, AuthzAction, authorize, authorize_resource_owner
 from iris.rpc.proto_display import (
     ADMIN_PRIORITY_BAND_VALUES,
@@ -121,6 +127,10 @@ from iris.rpc.proto_display import (
     resolve_container_profile,
     task_state_friendly,
 )
+from iris.rpc.resource_registry import (
+    ResourceRegistry,
+    ResourceRegistryBuilder,
+)
 from iris.time_proto import duration_from_proto, duration_to_proto, timestamp_to_proto
 from iris.version import client_revision_date
 
@@ -128,6 +138,155 @@ logger = logging.getLogger(__name__)
 
 # Return type of a proxied on-demand RPC (a unary controller response).
 _T = TypeVar("_T")
+
+
+def _build_resource_registry(service: "ControllerServiceImpl") -> ResourceRegistry:
+    registry = ResourceRegistryBuilder()
+    registry.get(
+        "/job/get",
+        service.get_job_status,
+        request_type=controller_pb2.Controller.GetJobStatusRequest,
+        response_type=controller_pb2.Controller.GetJobStatusResponse,
+        dashboard_readable=True,
+    )
+    registry.list(
+        "/job/list",
+        service.list_jobs,
+        request_type=controller_pb2.Controller.ListJobsRequest,
+        response_type=controller_pb2.Controller.ListJobsResponse,
+        resources=lambda response: response.jobs,
+        page=lambda response: resource_pb2.PageInfo(
+            total_count=response.total_count,
+            has_more=response.has_more,
+        ),
+        dashboard_readable=True,
+    )
+    registry.batch_get(
+        "/job/batch-get",
+        service.get_job_state,
+        request_type=controller_pb2.Controller.GetJobStateRequest,
+        response_type=controller_pb2.Controller.GetJobStateResponse,
+        resources=_job_state_snapshots,
+        dashboard_readable=True,
+    )
+    registry.get(
+        "/task/get",
+        service.get_task_status,
+        request_type=controller_pb2.Controller.GetTaskStatusRequest,
+        response_type=controller_pb2.Controller.GetTaskStatusResponse,
+        dashboard_readable=True,
+    )
+    registry.list(
+        "/task/list",
+        service.list_tasks,
+        request_type=controller_pb2.Controller.ListTasksRequest,
+        response_type=controller_pb2.Controller.ListTasksResponse,
+        resources=lambda response: response.tasks,
+        dashboard_readable=True,
+    )
+    registry.get(
+        "/attempt/get",
+        service.get_attempt,
+        request_type=job_pb2.TaskAttemptSelector,
+        response_type=job_pb2.TaskAttempt,
+        dashboard_readable=True,
+    )
+    registry.list(
+        "/attempt/list",
+        service.list_attempts,
+        request_type=job_pb2.TaskAttemptSelector,
+        response_type=job_pb2.TaskAttemptList,
+        resources=lambda response: response.attempts,
+        dashboard_readable=True,
+    )
+    registry.get(
+        "/worker/get",
+        service.get_worker_status,
+        request_type=controller_pb2.Controller.GetWorkerStatusRequest,
+        response_type=controller_pb2.Controller.GetWorkerStatusResponse,
+        dashboard_readable=True,
+    )
+    registry.list(
+        "/worker/list",
+        service.list_workers,
+        request_type=controller_pb2.Controller.ListWorkersRequest,
+        response_type=controller_pb2.Controller.ListWorkersResponse,
+        resources=lambda response: response.workers,
+        page=lambda response: resource_pb2.PageInfo(
+            total_count=response.total_count,
+            has_more=response.has_more,
+        ),
+        dashboard_readable=True,
+    )
+    registry.list(
+        "/endpoint/list",
+        service.endpoint_service.list_endpoints,
+        request_type=controller_pb2.Controller.ListEndpointsRequest,
+        response_type=controller_pb2.Controller.ListEndpointsResponse,
+        resources=lambda response: response.endpoints,
+        dashboard_readable=True,
+    )
+    registry.list(
+        "/user/list",
+        service.list_users,
+        request_type=controller_pb2.Controller.ListUsersRequest,
+        response_type=controller_pb2.Controller.ListUsersResponse,
+        resources=lambda response: response.users,
+        dashboard_readable=True,
+    )
+    registry.get(
+        "/user-budget/get",
+        service.get_user_budget,
+        request_type=controller_pb2.Controller.GetUserBudgetRequest,
+        response_type=controller_pb2.Controller.GetUserBudgetResponse,
+        dashboard_readable=True,
+    )
+    registry.list(
+        "/user-budget/list",
+        service.list_user_budgets,
+        request_type=controller_pb2.Controller.ListUserBudgetsRequest,
+        response_type=controller_pb2.Controller.ListUserBudgetsResponse,
+        resources=lambda response: response.users,
+        dashboard_readable=True,
+    )
+    registry.list(
+        "/backend/list",
+        service.list_backends,
+        request_type=controller_pb2.Controller.ListBackendsRequest,
+        response_type=controller_pb2.Controller.ListBackendsResponse,
+        resources=lambda response: response.backends,
+        metadata=_backend_list_metadata,
+        dashboard_readable=True,
+    )
+    registry.list(
+        "/peer/list",
+        service.list_peers,
+        request_type=controller_pb2.Controller.ListPeersRequest,
+        response_type=controller_pb2.Controller.ListPeersResponse,
+        resources=lambda response: response.peers,
+        dashboard_readable=True,
+    )
+    return registry.freeze()
+
+
+def _job_state_snapshots(
+    request: controller_pb2.Controller.GetJobStateRequest,
+    response: controller_pb2.Controller.GetJobStateResponse,
+) -> Iterable[job_pb2.JobStateSnapshot]:
+    return (
+        job_pb2.JobStateSnapshot(job_id=job_id, state=response.states[job_id])
+        for job_id in request.job_ids
+        if job_id in response.states
+    )
+
+
+def _backend_list_metadata(
+    response: controller_pb2.Controller.ListBackendsResponse,
+) -> controller_pb2.Controller.BackendListMetadata:
+    return controller_pb2.Controller.BackendListMetadata(
+        unroutable_job_count=response.unroutable_job_count,
+        unroutable_sample=response.unroutable_sample,
+    )
 
 
 def submitting_user_for_root(
@@ -172,13 +331,6 @@ WORKDIR_FILE_OFFLOAD_THRESHOLD = 10 * 1024  # 10KB — externalize large workdir
 # new submission indefinitely.
 _JOB_REPLACEMENT_DRAIN_WAIT = Duration.from_seconds(120)
 
-# Cap on the merged autoscaler action log returned by GetAutoscalerStatus; matches
-# the per-autoscaler action_log deque cap so a single-backend view is unchanged.
-_MERGED_AUTOSCALER_ACTIONS = 100
-
-# Max unroutable job sample entries returned by ListBackends.
-_UNROUTABLE_SAMPLE_SIZE = 10
-
 # Shown when a local_admin (CIDR/loopback) caller tries to federate a job — a federated
 # job must carry an accountable authenticated user.
 _LOCAL_ADMIN_FEDERATION_DENIED = (
@@ -200,24 +352,6 @@ def _child_federation_refusal(job_id: JobName, peer_id: str) -> str:
         f"runs its parent. Submit the root job to {peer_id!r} instead, so its whole tree runs there: "
         f"iris job run --target-cluster {peer_id} -- <command>"
     )
-
-
-def _accumulate_routing_decision(merged: vm_pb2.RoutingDecision, sub: vm_pb2.RoutingDecision) -> None:
-    """Fold one backend's routing decision into the merged decision.
-
-    Scale groups partition disjointly across backends (the single
-    scale-group->backend key space), so the group-keyed maps never collide and the
-    per-group lists concatenate. With a single backend this reproduces that
-    backend's decision exactly.
-    """
-    for group, launch in sub.group_to_launch.items():
-        merged.group_to_launch[group] = launch
-    for group, reason in sub.group_reasons.items():
-        merged.group_reasons[group] = reason
-    for group, entries in sub.routed_entries.items():
-        merged.routed_entries[group].CopyFrom(entries)
-    merged.unmet_entries.extend(sub.unmet_entries)
-    merged.group_statuses.extend(sub.group_statuses)
 
 
 # A root LaunchJob submission is rejected if its client_revision_date is more
@@ -1092,31 +1226,20 @@ class ControllerProtocol(Protocol):
     def begin_checkpoint(self) -> tuple[str, Any]: ...
 
     @property
-    def last_scheduling_context(self) -> SchedulingContext | None: ...
+    def backend(self) -> TaskBackend: ...
 
     @property
-    def provider(self) -> Any: ...
+    def backend_observation(self) -> BackendObservation: ...
 
     @property
-    def backends(self) -> dict[str, TaskBackend]: ...
+    def worker_health(self) -> WorkerHealthTracker: ...
 
     @property
     def federation(self) -> FederationManager: ...
 
-    @property
-    def capabilities(self) -> frozenset[BackendCapability]: ...
-
-    def backend_id_for_scale_group(self, scale_group: str) -> str: ...
-
     def all_liveness(self) -> dict[WorkerId, WorkerLiveness]: ...
 
     def liveness_for_worker(self, worker_id: WorkerId) -> WorkerLiveness: ...
-
-    @property
-    def last_unroutable_jobs(self) -> dict[str, str]: ...
-
-    @property
-    def scale_group_to_backend(self) -> dict[str, str]: ...
 
 
 def _profile_is_elevated(profile: int) -> bool:
@@ -1197,6 +1320,7 @@ class ControllerServiceImpl:
                 storage_policy=TASK_EVENT_STORAGE_POLICY,
             )
         )
+        self._resource_registry = _build_resource_registry(self)
 
     def bundle_zip(self, bundle_id: str) -> bytes:
         return self._bundle_store.get(bundle_id)
@@ -1216,20 +1340,8 @@ class ControllerServiceImpl:
         return int(checkpoint_epoch_ms) if checkpoint_epoch_ms is not None else None
 
     def _get_autoscaler_pending_hints(self) -> dict[str, PendingHint]:
-        """Build autoscaler-based pending hints keyed by job id, merged across
-        every backend's autoscaler.
-
-        Each backend owns a disjoint set of scale groups (and thus jobs), so the
-        per-backend hint dicts never collide on a job id. Each autoscaler caches
-        its hint dict per evaluate() cycle, so this stays a cheap merge rather
-        than a full AutoscalerStatus rebuild on every GetJobStatus RPC.
-        """
-        hints: dict[str, PendingHint] = {}
-        for backend in self._controller.backends.values():
-            autoscaler = backend.autoscaler
-            if autoscaler is not None:
-                hints.update(autoscaler.get_pending_hints())
-        return hints
+        """Build the backend autoscaler's cached pending hints keyed by job id."""
+        return self._controller.backend_observation.pending_hints
 
     def _authorize_job_owner(self, job_id: JobName) -> None:
         """Raise PERMISSION_DENIED if the authenticated user doesn't own this job.
@@ -1494,14 +1606,21 @@ class ControllerServiceImpl:
         # the verified identity (or, for a received handoff, the parent's signed
         # claim); a child inherits its root's value at insert time.
         submitting_user = submitting_user_for_root(identity, request)
+        if job_id.parent is not None:
+            with self._db.read_snapshot() as _snap:
+                root_submitting_user = reads.get_job_submitting_user(_snap, job_id.root_job)
+            if root_submitting_user is not None:
+                submitting_user = root_submitting_user
+        budget_user = budget_user_id(job_id, submitting_user)
 
         # Priority band validation.
         #
         # - SYSTEM and PRODUCTION additionally require MANAGE_BUDGETS when auth
         #   is on; admins pass here and skip the max_band cap below.
-        # - The max_band cap fires regardless of auth mode, keyed on the
-        #   claimed job_id.user. In anonymous mode this doesn't guarantee the
-        #   user is who they claim to be, but it ensures the cluster's
+        # - The max_band cap fires regardless of auth mode, keyed on the verified
+        #   submitter for authenticated jobs and the job owner for trusted local
+        #   or legacy jobs. In anonymous mode this doesn't guarantee the owner
+        #   is who they claim to be, but it ensures the cluster's
         #   configured tiers and UserBudgetDefaults still bite — an unlisted
         #   submitter hits the INTERACTIVE default cap and can't punch up to
         #   SYSTEM or PRODUCTION just by skipping auth.
@@ -1541,18 +1660,16 @@ class ControllerServiceImpl:
                 authorize(AuthzAction.MANAGE_BUDGETS)
             else:
                 with self._db.read_snapshot() as _snap:
-                    user_budget = reads.get_user_budget(_snap, job_id.user)
+                    user_budget = reads.get_user_budget(_snap, budget_user)
                 max_band = user_budget.max_band if user_budget is not None else self._user_budget_defaults.max_band
                 if priority_band_rank(band) < priority_band_rank(max_band):
                     raise ConnectError(
                         Code.PERMISSION_DENIED,
-                        f"User {job_id.user} cannot submit {priority_band_name(band)} jobs "
+                        f"Budget identity {budget_user} cannot submit {priority_band_name(band)} jobs "
                         f"(max band: {priority_band_name(max_band)}). "
                         f"Resubmit with `--priority {priority_band_name(max_band).lower()}` "
                         f"(e.g. `--priority batch`) to launch opportunistically, or ping @Helw150 "
-                        f"if you believe your username ({job_id.user}) should have a higher band — "
-                        f"either to be added to the researcher list or to confirm your username is "
-                        f"registered correctly.",
+                        f"to request a higher band for {budget_user}.",
                     )
 
         # Elevated profiles (DOCKER_ACCESS, PRIVILEGED) are host-root-equivalent
@@ -1576,7 +1693,7 @@ class ControllerServiceImpl:
         # manifest builder would otherwise raise mid-reconcile and stall dispatch.
         if (
             resolve_container_profile(request.container_profile) == job_pb2.CONTAINER_PROFILE_DOCKER_ACCESS
-            and BackendCapability.WORKER_DAEMON not in self._controller.capabilities
+            and BackendCapability.WORKER_FLEET not in self._controller.backend.descriptor.capabilities
         ):
             raise ConnectError(
                 Code.INVALID_ARGUMENT,
@@ -1598,19 +1715,18 @@ class ControllerServiceImpl:
                 "accelerator tasks.",
             )
 
-        # Cap the number of non-terminal tasks a single user may hold at once.
+        # Cap the number of non-terminal tasks a single budget principal may hold.
         # A burst of eval submissions once materialized enough tasks to OOM the
-        # controller (#6411); reject up front any submission that would push the
-        # user past the cap. Keyed on job_id.user, so a launcher that admits
-        # tasks gradually stays under the cap as earlier tasks finish.
+        # controller. A launcher that admits tasks gradually stays under the cap
+        # as earlier tasks finish.
         incoming_tasks = int(request.replicas)
         if incoming_tasks > 0:
             with self._db.read_snapshot() as _snap:
-                active_tasks = reads.count_active_tasks_for_user(_snap, job_id.user)
+                active_tasks = reads.count_active_tasks_for_budget_user(_snap, budget_user)
             if active_tasks + incoming_tasks > MAX_ACTIVE_TASKS_PER_USER:
                 raise ConnectError(
                     Code.RESOURCE_EXHAUSTED,
-                    f"User {job_id.user} has {active_tasks} active task(s); submitting "
+                    f"Budget identity {budget_user} has {active_tasks} active task(s); submitting "
                     f"{incoming_tasks} more would exceed the per-user cap of "
                     f"{MAX_ACTIVE_TASKS_PER_USER}. Wait for running tasks to finish, or "
                     f"structure the work as a launcher job that admits tasks gradually.",
@@ -1773,53 +1889,30 @@ class ControllerServiceImpl:
         if tpu_error:
             raise ConnectError(Code.INVALID_ARGUMENT, tpu_error)
 
-        # Resolve the routing directives (mutually exclusive): --backend pins a
-        # local backend, --cluster hands the job to a federation peer. A job may
-        # not pin both, and a --cluster pin must name a configured peer.
+        # A cluster directive hands the job to a federation peer. Local backend
+        # selection is not exposed: one controller owns one backend.
         replicas = request.replicas if request.HasField("coscheduling") else None
         constraints = [Constraint.from_proto(c) for c in request.constraints]
-        directive = backend_directive(constraints)
         cluster_pin = cluster_directive(constraints)
-        if directive is not None and cluster_pin is not None:
-            raise ConnectError(
-                Code.INVALID_ARGUMENT,
-                f"Job {job_id} pins both a local backend ({directive!r}) and a peer cluster "
-                f"({cluster_pin!r}); these are mutually exclusive.",
-            )
         if cluster_pin is not None and not self._controller.federation.has_peer(cluster_pin):
             raise ConnectError(
                 Code.INVALID_ARGUMENT,
                 f"Job {job_id} pins cluster {cluster_pin!r}, which is not a configured federation peer.",
             )
 
-        # Compute local feasibility WITHOUT failing yet: a job no local backend
-        # can host is not an error if a peer can take it. A job pinned to one
-        # backend is checked only against that backend; an unpinned job is
-        # feasible if any backend can host its shape. A backend without an
-        # autoscaler (e.g. a cluster-view backend) can't prove infeasibility, so
-        # its presence means we treat the job as feasible. For coscheduled jobs
-        # this also verifies the replica count fits some group's num_vms.
-        if directive is not None:
-            pinned = self._controller.backends.get(directive)
-            candidate_backends = [pinned] if pinned is not None else []
-        else:
-            candidate_backends = list(self._controller.backends.values())
-        feasibility_errors: list[str] = []
-        feasible = False
-        for backend in candidate_backends:
-            autoscaler = backend.autoscaler
-            if autoscaler is None:
-                feasible = True
-                break
-            error = autoscaler.job_feasibility(
+        # Compute local feasibility without failing yet: an infeasible job may be
+        # queued for a federation peer. A backend without an Iris autoscaler (for
+        # example Kubernetes) cannot prove infeasibility and is treated as feasible.
+        backend = self._controller.backend
+        error = backend.job_feasibility(
+            JobFeasibilityRequest(
                 constraints=constraints,
                 replicas=replicas,
                 resources=request.resources,
             )
-            if error is None:
-                feasible = True
-                break
-            feasibility_errors.append(error)
+        )
+        feasible = error is None
+        feasibility_errors = [error] if error is not None else []
 
         # Classify at submit: run locally, queue for federation, or reject. Submit
         # never picks a peer — the control tick's federation pass does, once a peer
@@ -2241,7 +2334,7 @@ class ControllerServiceImpl:
                 job_resources = resource_spec_from_scalars(
                     jc_row.res_cpu_millicores, jc_row.res_memory_bytes, jc_row.res_disk_bytes, jc_row.res_device_json
                 )
-            runtime_image = self._backend_for_id(task.backend_id).runtime_image(jc_row.task_image)
+            runtime_image = self._controller.backend.runtime_image(jc_row.task_image)
             if runtime_image:
                 proto.build_metrics.image_tag = runtime_image
 
@@ -2305,6 +2398,45 @@ class ControllerServiceImpl:
             task_statuses.append(proto_task_status)
 
         return controller_pb2.Controller.ListTasksResponse(tasks=task_statuses)
+
+    def get_attempt(
+        self,
+        request: job_pb2.TaskAttemptSelector,
+        ctx: Any,
+    ) -> job_pb2.TaskAttempt:
+        """Return one numbered Attempt belonging to a Task."""
+        del ctx
+        if not request.HasField("attempt_id"):
+            raise ConnectError(Code.INVALID_ARGUMENT, "attempt_id is required")
+        if request.attempt_id < 0:
+            raise ConnectError(Code.INVALID_ARGUMENT, "attempt_id must be non-negative")
+        attempts = self._attempts_for_task(request.task_id)
+        for attempt in attempts:
+            if attempt.attempt_id == request.attempt_id:
+                return attempt
+        raise ConnectError(Code.NOT_FOUND, f"Attempt {request.task_id}:{request.attempt_id} not found")
+
+    def list_attempts(
+        self,
+        request: job_pb2.TaskAttemptSelector,
+        ctx: Any,
+    ) -> job_pb2.TaskAttemptList:
+        """Return the ordered Attempt history for one Task."""
+        del ctx
+        if request.HasField("attempt_id"):
+            raise ConnectError(Code.INVALID_ARGUMENT, "attempt_id is not valid when listing Attempts")
+        return job_pb2.TaskAttemptList(attempts=self._attempts_for_task(request.task_id))
+
+    def _attempts_for_task(self, task_id_raw: str) -> list[job_pb2.TaskAttempt]:
+        try:
+            task_id = JobName.from_wire(task_id_raw)
+            task_id.require_task()
+        except ValueError as exc:
+            raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
+        task = _read_task_with_attempts(self._db, task_id)
+        if task is None:
+            raise ConnectError(Code.NOT_FOUND, f"Task {task_id} not found")
+        return list(task_to_proto(task).attempts)
 
     def kick_tasks(
         self,
@@ -2422,9 +2554,6 @@ class ControllerServiceImpl:
             )
         worker_id = WorkerId(request.worker_id)
 
-        backend = self._backend_for_id(self._controller.backend_id_for_scale_group(request.scale_group))
-        health = backend.health
-        assert health is not None, f"worker {worker_id} registered into a scale group with no liveness tracker"
         with self._db.transaction() as cur:
             ops.worker.register(
                 cur,
@@ -2432,7 +2561,7 @@ class ControllerServiceImpl:
                 address=request.address,
                 metadata=request.metadata,
                 ts=Timestamp.now(),
-                health=health,
+                health=self._controller.worker_health,
                 slice_id=request.slice_id,
                 scale_group=request.scale_group,
             )
@@ -2470,12 +2599,12 @@ class ControllerServiceImpl:
         """List workers with their running task counts.
 
         Served directly from the workers table (cluster size is in the low
-        thousands at most), with liveness queried from the backends' trackers
-        (unioned by the controller) and a single per-page running-task lookup.
+        thousands at most), with liveness queried from the controller tracker and
+        a single per-page running-task lookup.
         ``query.limit == 0`` disables paging (preserves CLI callers that fetch the
         whole roster); ``limit > 0`` is clamped to ``MAX_LIST_WORKERS_LIMIT``.
         """
-        if BackendCapability.WORKER_DAEMON not in self._controller.capabilities:
+        if BackendCapability.WORKER_FLEET not in self._controller.backend.descriptor.capabilities:
             return controller_pb2.Controller.ListWorkersResponse()
 
         query = controller_pb2.Controller.WorkerQuery()
@@ -2487,11 +2616,8 @@ class ControllerServiceImpl:
         liveness_by_id = {w.worker_id: all_liveness.get(w.worker_id, WorkerLiveness()) for w, _attrs in workers_all}
         if query.backend_id:
             backend_filter = query.backend_id
-            workers_all = [
-                (w, attrs)
-                for w, attrs in workers_all
-                if self._controller.backend_id_for_scale_group(str(w.scale_group or "")) == backend_filter
-            ]
+            if backend_filter != self._controller.backend.descriptor.backend_id:
+                workers_all = []
         filtered = _filter_and_sort_workers(workers_all, liveness_by_id, query)
         total_count = len(filtered)
 
@@ -2524,7 +2650,7 @@ class ControllerServiceImpl:
                     address=worker.address,
                     metadata=worker_metadata_to_proto(worker, attrs),
                     status_message=worker_status_message(liveness),
-                    backend_id=self._controller.backend_id_for_scale_group(str(worker.scale_group or "")),
+                    backend_id=self._controller.backend.descriptor.backend_id,
                     scale_group=str(worker.scale_group or ""),
                 )
             )
@@ -2535,20 +2661,8 @@ class ControllerServiceImpl:
         )
 
     @property
-    def provider(self) -> TaskBackend:
-        """The live execution backend (read-only handle for dashboard descriptors)."""
-        return self._controller.provider
-
-    @property
-    def backends(self) -> dict[str, TaskBackend]:
-        """The controller's full backend collection (for the union capabilities descriptor)."""
-        return self._controller.backends
-
-    def _backend_for_id(self, backend_id: str) -> TaskBackend:
-        """Resolve a backend by id for per-task/-worker dispatch (profile, exec,
-        process status), falling back to the representative backend when the id is
-        empty or unknown — the single-backend case and any pre-routing rows."""
-        return self._controller.backends.get(backend_id) or self._controller.provider
+    def backend(self) -> TaskBackend:
+        return self._controller.backend
 
     def _federated_handle_for_task(self, task_id: JobName) -> reads.FederatedHandle | None:
         """The SENT federated handle owning ``task_id``'s root job, or ``None`` if
@@ -2573,7 +2687,7 @@ class ControllerServiceImpl:
     def _resolve_task_target(self, task: TaskWithAttempts, attempt_id: int, *, wire_name: str) -> TaskTarget:
         """Resolve a running task to a :class:`TaskTarget` for on-demand worker RPCs.
 
-        CLUSTER_VIEW backends (K8s) route by task id with no worker; worker-daemon
+        Kubernetes backends route by task id with no worker; worker-daemon
         backends resolve and liveness-check the owning worker. Raises
         ``FAILED_PRECONDITION`` if the task is not yet placed and ``UNAVAILABLE`` if
         its worker is gone or unhealthy. Shared by ``profile_task`` and
@@ -2584,7 +2698,7 @@ class ControllerServiceImpl:
         attempt_uid = next((a.attempt_uid for a in task.attempts if a.attempt_id == attempt_id), "")
         task_worker_id = _task_worker_id(task)
         if not task_worker_id:
-            if BackendCapability.CLUSTER_VIEW not in self._controller.capabilities:
+            if BackendCapability.DIRECT_DISPATCH not in self._controller.backend.descriptor.capabilities:
                 raise ConnectError(Code.FAILED_PRECONDITION, f"Task {wire_name} not yet assigned to a worker")
             return TaskTarget(
                 task_id=task.task_id.to_wire(),
@@ -2609,6 +2723,10 @@ class ControllerServiceImpl:
         """The leased endpoint registry these RPCs delegate to (shared with the dashboard)."""
         return self._endpoint_service
 
+    @property
+    def resource_registry(self) -> ResourceRegistry:
+        return self._resource_registry
+
     # --- Autoscaler ---
 
     def get_autoscaler_status(
@@ -2616,49 +2734,17 @@ class ControllerServiceImpl:
         request: controller_pb2.Controller.GetAutoscalerStatusRequest,
         ctx: Any,
     ) -> controller_pb2.Controller.GetAutoscalerStatusResponse:
-        """Get autoscaler status, merged across every backend's autoscaler.
+        """Get this controller backend's autoscaler status.
 
-        When ``request.backend_id`` is set, restricts the view to that one
-        backend's autoscaler; empty merges all.
+        A mismatched ``request.backend_id`` returns an empty status.
         """
-        if BackendCapability.IRIS_AUTOSCALER not in self._controller.capabilities:
+        if BackendCapability.AUTOSCALER not in self._controller.backend.descriptor.capabilities:
             return controller_pb2.Controller.GetAutoscalerStatusResponse(status=vm_pb2.AutoscalerStatus())
 
-        status = self._merge_autoscaler_status(only_backend_id=request.backend_id)
+        if request.backend_id and request.backend_id != self._controller.backend.descriptor.backend_id:
+            return controller_pb2.Controller.GetAutoscalerStatusResponse(status=vm_pb2.AutoscalerStatus())
+        status = self._controller.backend_observation.status.worker.autoscaler
         return controller_pb2.Controller.GetAutoscalerStatusResponse(status=status)
-
-    def _merge_autoscaler_status(self, only_backend_id: str = "") -> vm_pb2.AutoscalerStatus:
-        """Merge each backend's authored autoscaler status into one.
-
-        Merges every backend by default; ``only_backend_id`` restricts the view to
-        a single backend. Each backend authors its own status — groups already
-        tagged with its backend_id and every VM overlaid with usability/running-task
-        counts — so this only concatenates; a backend with no autoscaler authors an
-        empty status that contributes nothing. Each backend owns a disjoint set of
-        scale groups (the single scale-group->backend key space), so group-keyed
-        fields (``current_demand``, ``recent_actions``) need no further
-        disambiguation. ``recent_actions`` are re-sorted newest-first and capped;
-        each backend's ``last_routing_decision`` folds into one merged decision
-        (disjoint groups, so the per-group fields concatenate).
-        """
-        merged = vm_pb2.AutoscalerStatus()
-        last_evaluation = 0
-        for backend_id, backend in self._controller.backends.items():
-            if only_backend_id and backend_id != only_backend_id:
-                continue
-            sub = backend.autoscaler_status()
-            merged.groups.extend(sub.groups)
-            for key, value in sub.current_demand.items():
-                merged.current_demand[key] = value
-            merged.recent_actions.extend(sub.recent_actions)
-            last_evaluation = max(last_evaluation, sub.last_evaluation.epoch_ms)
-            if sub.HasField("last_routing_decision"):
-                _accumulate_routing_decision(merged.last_routing_decision, sub.last_routing_decision)
-        merged.recent_actions.sort(key=lambda action: action.timestamp.epoch_ms, reverse=True)
-        del merged.recent_actions[_MERGED_AUTOSCALER_ACTIONS:]
-        if last_evaluation:
-            merged.last_evaluation.epoch_ms = last_evaluation
-        return merged
 
     # --- Kubernetes Cluster Status ---
 
@@ -2669,35 +2755,17 @@ class ControllerServiceImpl:
     ) -> controller_pb2.Controller.GetKubernetesClusterStatusResponse:
         """Get Kubernetes cluster status: node counts, capacity, and recent pod statuses.
 
-        Routes to the ``CLUSTER_VIEW`` backend named by ``request.backend_id``, or
-        the sole such backend if there is exactly one; raises ``INVALID_ARGUMENT``
-        when the choice is ambiguous.
+        Returns the Kubernetes backend's cached cluster projection. A worker
+        backend has no such projection.
         """
-        cluster_view_backends = [
-            (bid, backend)
-            for bid, backend in sorted(self._controller.backends.items())
-            if BackendCapability.CLUSTER_VIEW in backend.capabilities
-        ]
-
-        if request.backend_id:
-            for bid, backend in cluster_view_backends:
-                if bid == request.backend_id:
-                    return backend.status().kubernetes
+        backend = self._controller.backend
+        if request.backend_id and request.backend_id != backend.descriptor.backend_id:
             raise ConnectError(
                 Code.INVALID_ARGUMENT,
-                f"Backend {request.backend_id!r} does not exist or has no cluster view",
+                f"Backend {request.backend_id!r} does not exist",
             )
-
-        if len(cluster_view_backends) > 1:
-            ids = ", ".join(bid for bid, _ in cluster_view_backends)
-            raise ConnectError(
-                Code.INVALID_ARGUMENT,
-                f"Multiple cluster-view backends ({ids}); specify backend_id in the request",
-            )
-
-        if cluster_view_backends:
-            return cluster_view_backends[0][1].status().kubernetes
-
+        if BackendCapability.DIRECT_DISPATCH in backend.descriptor.capabilities:
+            return self._controller.backend_observation.status.kubernetes
         return controller_pb2.Controller.GetKubernetesClusterStatusResponse()
 
     # --- VM Logs ---
@@ -2775,10 +2843,7 @@ class ControllerServiceImpl:
                 worker_id=worker.worker_id,
                 address=worker.address,
             )
-            worker_backend = self._backend_for_id(
-                self._controller.backend_id_for_scale_group(str(worker.scale_group or ""))
-            )
-            resp = worker_backend.profile_task(worker_target, forwarded, timeout_ms)
+            resp = self._controller.backend.profile_task(worker_target, forwarded, timeout_ms)
             return job_pb2.ProfileTaskResponse(
                 profile_data=resp.profile_data,
                 error=resp.error,
@@ -2798,7 +2863,7 @@ class ControllerServiceImpl:
         # A federated task's subtree runs on a peer — it has no local worker or
         # attempt rows. Proxy the profile through the peer controller (which does
         # its own task->worker resolution) before the local resolution below, so
-        # it is never dispatched to _backend_for_id's local fallback.
+        # it is never dispatched to the local backend.
         proxied = self._proxy_if_federated(target.task_id, lambda peer: peer.profile_task(request))
         if proxied is not None:
             return proxied
@@ -2807,7 +2872,7 @@ class ControllerServiceImpl:
         task_target = self._resolve_task_target(task, attempt_id, wire_name=request.target)
 
         timeout_ms = (request.duration_seconds or 10) * 1000 + 30000
-        resp = self._backend_for_id(str(task.backend_id or "")).profile_task(task_target, request, timeout_ms)
+        resp = self._controller.backend.profile_task(task_target, request, timeout_ms)
         return job_pb2.ProfileTaskResponse(
             profile_data=resp.profile_data,
             error=resp.error,
@@ -2859,7 +2924,7 @@ class ControllerServiceImpl:
         worker state (health, tasks, logs). VM status lives on the Autoscaler
         tab.
         """
-        if BackendCapability.WORKER_DAEMON not in self._controller.capabilities:
+        if BackendCapability.WORKER_FLEET not in self._controller.backend.descriptor.capabilities:
             raise ConnectError(Code.UNIMPLEMENTED, "Direct provider mode: no workers")
         if not request.id:
             raise ConnectError(Code.INVALID_ARGUMENT, "id is required")
@@ -2881,7 +2946,7 @@ class ControllerServiceImpl:
             metadata=worker_metadata_to_proto(worker, detail.attributes),
             status_message=worker_status_message(liveness),
             scale_group=scale_group,
-            backend_id=self._controller.backend_id_for_scale_group(scale_group),
+            backend_id=self._controller.backend.descriptor.backend_id,
         )
 
         # Worker daemon logs are NOT inlined here — when the worker is
@@ -2947,10 +3012,7 @@ class ControllerServiceImpl:
             address=worker.address,
         )
         try:
-            worker_backend = self._backend_for_id(
-                self._controller.backend_id_for_scale_group(str(worker.scale_group or ""))
-            )
-            return worker_backend.get_process_status(process_target, request)
+            return self._controller.backend.get_process_status(process_target, request)
         except ProviderError as exc:
             raise ConnectError(Code.UNAVAILABLE, str(exc)) from exc
 
@@ -2981,7 +3043,7 @@ class ControllerServiceImpl:
 
         task_target = self._resolve_task_target(task, task.current_attempt_id, wire_name=target)
         try:
-            return self._backend_for_id(str(task.backend_id or "")).get_process_status(task_target, request)
+            return self._controller.backend.get_process_status(task_target, request)
         except ProviderError as exc:
             raise ConnectError(Code.UNAVAILABLE, str(exc)) from exc
 
@@ -3063,7 +3125,7 @@ class ControllerServiceImpl:
         # A federated task's subtree runs on a peer — it has no local worker or
         # attempt rows. Proxy the exec through the peer controller (which does its
         # own task->worker resolution) before the local resolution below, so it is
-        # never dispatched to _backend_for_id's local fallback.
+        # never dispatched to the local backend.
         proxied = self._proxy_if_federated(task_id, lambda peer: peer.exec_in_container(request))
         if proxied is not None:
             return proxied
@@ -3079,7 +3141,7 @@ class ControllerServiceImpl:
         # timeout to 60s; a worker-daemon exec passes the request timeout through.
         timeout = request.timeout_seconds or (60 if exec_target.worker_id is None else 0)
 
-        resp = self._backend_for_id(str(task.backend_id or "")).exec_in_container(exec_target, worker_request, timeout)
+        resp = self._controller.backend.exec_in_container(exec_target, worker_request, timeout)
         return controller_pb2.Controller.ExecInContainerResponse(
             exit_code=resp.exit_code,
             stdout=resp.stdout,
@@ -3193,23 +3255,23 @@ class ControllerServiceImpl:
             budget_limits: dict[str, int] = {b.user_id: b.budget_limit for b in budgets}
             user_spend = compute_user_spend(snap)
 
-            # Pending tasks: the scheduler's pending-task projection, reused here for
-            # task_row_can_be_scheduled + band aggregation. No ORDER BY — we aggregate, not display.
-            pending_raw = snap.execute(
-                select(*reads.PENDING_TASK_COLS).where(local_tasks.c.state == job_pb2.TASK_STATE_PENDING)
-            ).all()
-            pending_rows = pending_raw
+            # Reuse the scheduler's filtered pending-task projection so dashboard
+            # aggregation and scheduling apply the same admission gates.
+            pending_rows = reads.pending_tasks_with_jobs(snap)
             pending_requested_bands = reads.get_priority_bands(snap, {row.job_id for row in pending_rows})
 
-            # Running tasks: only task_id, priority_band, worker, and backend_id — no
-            # job_config join is needed for the rolled-up counts below.
+            # The jobs join supplies the budget principal; no job_config fields are
+            # needed for running tasks because assignment stamps the effective band.
             running_raw = snap.execute(
                 select(
                     tasks_table.c.task_id,
+                    jobs_table.c.submitting_user,
                     tasks_table.c.priority_band,
                     tasks_table.c.current_worker_id.label("worker_id"),
                     tasks_table.c.backend_id,
-                ).where(
+                )
+                .select_from(tasks_table.join(jobs_table, jobs_table.c.job_id == tasks_table.c.job_id))
+                .where(
                     tasks_table.c.state == job_pb2.TASK_STATE_RUNNING,
                     tasks_table.c.current_worker_id.is_not(None),
                 )
@@ -3221,9 +3283,7 @@ class ControllerServiceImpl:
         pending_counts: dict[tuple[int, str, str, str], int] = {}
         total_pending = 0
         for row in pending_rows:
-            if not task_row_can_be_scheduled(row):
-                continue
-            user_id = row.task_id.user
+            user_id = budget_user_id(row.job_id, row.submitting_user)
             eff_band = compute_effective_band(
                 pending_requested_bands.get(row.job_id, row.priority_band),
                 user_id,
@@ -3244,7 +3304,7 @@ class ControllerServiceImpl:
         running_counts: dict[tuple[int, str, str, str, str], int] = {}
         total_running = 0
         for row in running_rows:
-            user_id = row.task_id.user
+            user_id = budget_user_id(row.task_id, str(row.submitting_user))
             job_id = (row.task_id.parent or row.task_id).to_wire()
             backend_id = str(row.backend_id or "")
             key = (row.priority_band, user_id, str(row.worker_id), job_id, backend_id)
@@ -3319,129 +3379,72 @@ class ControllerServiceImpl:
         request: controller_pb2.Controller.ListBackendsRequest,
         ctx: Any,
     ) -> controller_pb2.Controller.ListBackendsResponse:
-        """List all backends with aggregate task/worker statistics.
-
-        Counts come from grouped SQL queries joined in Python; capacity health is
-        read from the in-memory autoscaler snapshot, not the DB.
-        """
+        """Describe this controller's backend and aggregate workload state."""
         require_identity()
 
-        backends = self._controller.backends
-        sg_to_backend = self._controller.scale_group_to_backend
-
-        # Invert sg_to_backend: backend_id → list[scale_group]
-        backend_to_sgs: dict[str, list[str]] = {bid: [] for bid in backends}
-        for sg, bid in sg_to_backend.items():
-            if bid in backend_to_sgs:
-                backend_to_sgs[bid].append(sg)
+        backend = self._controller.backend
+        descriptor = backend.descriptor
+        dashboard = dashboard_backend_descriptor(backend)
 
         with self._db.read_snapshot() as snap:
-            pending_by_backend: dict[str, int] = {}
-            for row in snap.execute(
-                select(tasks_table.c.backend_id, func.count().label("cnt"))
-                .where(tasks_table.c.state == job_pb2.TASK_STATE_PENDING)
-                .group_by(tasks_table.c.backend_id)
-            ).all():
-                pending_by_backend[str(row.backend_id or "")] = int(row.cnt)
-
-            running_by_backend: dict[str, int] = {}
-            for row in snap.execute(
-                select(tasks_table.c.backend_id, func.count().label("cnt"))
-                .where(tasks_table.c.state == job_pb2.TASK_STATE_RUNNING)
-                .group_by(tasks_table.c.backend_id)
-            ).all():
-                running_by_backend[str(row.backend_id or "")] = int(row.cnt)
-
-            worker_sg_rows = snap.execute(
-                select(workers_table.c.scale_group, func.count().label("cnt")).group_by(workers_table.c.scale_group)
-            ).all()
-
-        worker_count_by_backend: dict[str, int] = {bid: 0 for bid in backends}
-        for row in worker_sg_rows:
-            bid = self._controller.backend_id_for_scale_group(str(row.scale_group or ""))
-            worker_count_by_backend[bid] = worker_count_by_backend.get(bid, 0) + int(row.cnt)
-
-        summaries: list[controller_pb2.Controller.BackendSummary] = []
-        for backend_id, backend in sorted(backends.items()):
-            caps = backend.capabilities
-            if BackendCapability.CLUSTER_VIEW in caps:
-                kind = "kubernetes"
-            elif BackendCapability.WORKER_DAEMON in caps:
-                kind = "worker-daemon"
-            else:
-                kind = "unknown"
-
-            adv: dict[str, set[str]] = backend.advertised_attributes()
-
-            # Each backend authors its own expanded status variant in full: a
-            # worker-daemon backend reads its own liveness tracker and running-task
-            # rows to stamp health counts, per-VM usability, and the backend_id on its
-            # autoscaler groups. The controller renders the result verbatim — the
-            # Backends tab's detail panel shows whichever variant the backend selected,
-            # and the per-group capacity-health tally is read off the same authored view.
-            backend_status = backend.status()
-            variant = backend_status.WhichOneof("detail")
-
-            cap_health: dict[str, int] = {}
-            if variant == "worker":
-                for group in backend_status.worker.autoscaler.groups:
-                    st = group.availability_status or "unknown"
-                    cap_health[st] = cap_health.get(st, 0) + 1
-
-            summary = controller_pb2.Controller.BackendSummary(
-                backend_id=backend_id,
-                name=backend.name,
-                kind=kind,
-                capabilities=sorted(c.value for c in caps),
-                scale_groups=sorted(backend_to_sgs.get(backend_id, [])),
-                worker_count=worker_count_by_backend.get(backend_id, 0),
-                pending_task_count=pending_by_backend.get(backend_id, 0),
-                running_task_count=running_by_backend.get(backend_id, 0),
-                has_autoscaler=backend.autoscaler is not None,
-                capacity_health=cap_health,
+            pending_count = int(
+                snap.execute(
+                    select(func.count())
+                    .select_from(tasks_table)
+                    .where(tasks_table.c.state == job_pb2.TASK_STATE_PENDING)
+                ).scalar_one()
             )
-            # advertised_attributes is a proto map<string, StringList> (message
-            # values), which doesn't support dict-style assignment/update; populate
-            # each entry's repeated field in place.
-            for key, values in adv.items():
-                summary.advertised_attributes[key].values.extend(sorted(values))
+            running_count = int(
+                snap.execute(
+                    select(func.count())
+                    .select_from(tasks_table)
+                    .where(tasks_table.c.state == job_pb2.TASK_STATE_RUNNING)
+                ).scalar_one()
+            )
+            worker_count = int(snap.execute(select(func.count()).select_from(workers_table)).scalar_one())
 
-            # Capacity metric for federation queueing and the dashboard. A backend
-            # that supplies it fills availability even when empty (authoritative
-            # zero); one that returns None leaves it UNSET so a peer falls back to
-            # shape-only federation. observation_epoch_ms is the generation the
-            # parent's reservation ledger keys on.
-            capacity = backend.resource_capacity()
-            if capacity is not None:
-                summary.availability.version = AVAILABILITY_METRIC_VERSION
-                summary.availability.observation_epoch_ms = Timestamp.now().epoch_ms()
-                held_by_band: dict[int, dict[str, int]] = {}
-                for token, device_capacity in capacity.items():
-                    summary.availability.amounts[token] = device_capacity.free
-                    summary.availability.total_amounts[token] = device_capacity.total
-                    for band, amount in device_capacity.held_by_band.items():
-                        held_by_band.setdefault(band, {})[token] = amount
-                for band, amounts in sorted(held_by_band.items(), key=lambda item: priority_band_rank(item[0])):
-                    summary.availability.held_by_band.add(band=band, amounts=amounts)
+        backend_status = self._controller.backend_observation.status
+        variant = backend_status.WhichOneof("detail")
+        cap_health: dict[str, int] = {}
+        if variant == "worker":
+            for group in backend_status.worker.autoscaler.groups:
+                status = group.availability_status or "unknown"
+                cap_health[status] = cap_health.get(status, 0) + 1
 
-            if variant == "kubernetes":
-                summary.detail.kubernetes.CopyFrom(backend_status.kubernetes)
-            elif variant == "worker":
-                summary.detail.worker.CopyFrom(backend_status.worker)
-
-            summaries.append(summary)
-
-        unroutable = self._controller.last_unroutable_jobs
-        sample = [
-            controller_pb2.Controller.UnroutableJob(job_id=jid, reason=reason)
-            for jid, reason in list(unroutable.items())[:_UNROUTABLE_SAMPLE_SIZE]
-        ]
-
-        return controller_pb2.Controller.ListBackendsResponse(
-            backends=summaries,
-            unroutable_job_count=len(unroutable),
-            unroutable_sample=sample,
+        summary = controller_pb2.Controller.BackendSummary(
+            backend_id=descriptor.backend_id,
+            name=dashboard.name,
+            kind=descriptor.kind.value,
+            capabilities=dashboard.capabilities,
+            scale_groups=sorted(descriptor.scale_groups),
+            worker_count=worker_count,
+            pending_task_count=pending_count,
+            running_task_count=running_count,
+            has_autoscaler=BackendCapability.AUTOSCALER in descriptor.capabilities,
+            capacity_health=cap_health,
         )
+        for key, values in descriptor.advertised_attributes.items():
+            summary.advertised_attributes[key].values.extend(sorted(values))
+
+        capacity = self._controller.backend_observation.resource_capacity
+        if capacity is not None:
+            summary.availability.version = AVAILABILITY_METRIC_VERSION
+            summary.availability.observation_epoch_ms = self._controller.backend_observation.observed_at.epoch_ms()
+            held_by_band: dict[int, dict[str, int]] = {}
+            for token, device_capacity in capacity.items():
+                summary.availability.amounts[token] = device_capacity.free
+                summary.availability.total_amounts[token] = device_capacity.total
+                for band, amount in device_capacity.held_by_band.items():
+                    held_by_band.setdefault(band, {})[token] = amount
+            for band, amounts in sorted(held_by_band.items(), key=lambda item: priority_band_rank(item[0])):
+                summary.availability.held_by_band.add(band=band, amounts=amounts)
+
+        if variant == "kubernetes":
+            summary.detail.kubernetes.CopyFrom(backend_status.kubernetes)
+        elif variant == "worker":
+            summary.detail.worker.CopyFrom(backend_status.worker)
+
+        return controller_pb2.Controller.ListBackendsResponse(backends=[summary])
 
     def list_peers(
         self,

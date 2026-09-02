@@ -606,15 +606,15 @@ uv run finelog query marin "SELECT source, type, format, count(*) FROM \"iris.pr
 ```
 
 To aggregate a whole job's CPU profiles into a per-worker-sub-job breakdown + merged
-flamegraph, use `scripts/job_profile_summary.py` — it resolves the cluster's finelog
+flamegraph, use `lib/iris/scripts/job_profile_summary.py` — it resolves the cluster's finelog
 deployment, pulls every CPU capture under a job (and its descendant sub-jobs), parses the
 speedscope stacks, and reports where CPU is spent:
 
 ```bash
-uv run python scripts/job_profile_summary.py /user/job/id          # per-sub-job + top leaves
-uv run python scripts/job_profile_summary.py <dashboard-url>       # accepts iris.oa.dev URLs
-uv run python scripts/job_profile_summary.py /user/job/id --subjob <name> --show-stacks
-uv run python scripts/job_profile_summary.py /user/job/id -o merged.folded --svg flame.svg
+uv run python lib/iris/scripts/job_profile_summary.py /user/job/id          # per-sub-job + top leaves
+uv run python lib/iris/scripts/job_profile_summary.py <dashboard-url>       # accepts iris.oa.dev URLs
+uv run python lib/iris/scripts/job_profile_summary.py /user/job/id --subjob <name> --show-stacks
+uv run python lib/iris/scripts/job_profile_summary.py /user/job/id -o merged.folded --svg flame.svg
 ```
 
 ## Users & Auth

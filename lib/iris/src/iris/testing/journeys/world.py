@@ -17,7 +17,6 @@ from iris.cluster.controller.checkpoint import CheckpointResult, download_checkp
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.log_stack import build_log_stack
-from iris.cluster.controller.transition_reader import DbTransitionReader
 from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.log_keys import task_log_key
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, TaskAttempt
@@ -74,8 +73,6 @@ class JourneyWorld:
         peer_configs: dict[str, PeerConfig] | None = None,
         federation_peers: list[FederationPeer] | None = None,
         dry_run: bool = False,
-        backend_advertisements: dict[str, dict[str, set[str]]] | None = None,
-        unavailable_backend_ids: set[str] | None = None,
     ) -> None:
         self.root = root
         self.clock = ManualClock()
@@ -86,8 +83,6 @@ class JourneyWorld:
         self._peer_configs = peer_configs or {}
         self._federation_peers = federation_peers
         self._dry_run = dry_run
-        self._backend_advertisements = backend_advertisements
-        self._unavailable_backend_ids = unavailable_backend_ids or set()
         self._jobs: dict[str, JobRef] = {}
         self._checkpoint_jobs: dict[str, frozenset[str]] = {}
         self._task_history: dict[str, tuple[tuple[int, int], ...]] = {}
@@ -98,10 +93,9 @@ class JourneyWorld:
 
         db = ControllerDB(db_dir=self._db_dir)
         monkeypatch.setattr(Timestamp, "now", classmethod(lambda cls: self.clock.now()))
-        self.controller, self.backends = self._build_controller(db)
-        self.backend = next(iter(self.backends.values()))
+        self.controller, self.backend = self._build_controller(db)
 
-    def _build_controller(self, db: ControllerDB) -> tuple[Controller, dict[str, ScriptedTaskBackend]]:
+    def _build_controller(self, db: ControllerDB) -> tuple[Controller, ScriptedTaskBackend]:
         self._incarnation += 1
         state_dir = self.root / f"controller-{self._incarnation}"
         config = ControllerConfig(
@@ -111,19 +105,11 @@ class JourneyWorld:
             peers=self._peer_configs,
             dry_run=self._dry_run,
         )
-        advertisements = self._backend_advertisements or {
-            DEFAULT_BACKEND_ID: {"region": {"us-central1"}},
-        }
-        backends: dict[str, ScriptedTaskBackend] = {}
-        for backend_id, advertised in advertisements.items():
-            backend_type = (
-                UnavailableTaskBackend
-                if not self._capacity_available or backend_id in self._unavailable_backend_ids
-                else ScriptedTaskBackend
-            )
-            backend = backend_type(DbTransitionReader(db), backend_id=backend_id)
-            backend.configure_routing(advertised)
-            backends[backend_id] = backend
+        backend_type = UnavailableTaskBackend if not self._capacity_available else ScriptedTaskBackend
+        backend = backend_type(
+            backend_id=DEFAULT_BACKEND_ID,
+            advertised_attributes={"region": {"us-central1"}},
+        )
         log_stack = build_log_stack(
             log_service_address="",
             local_log_dir=state_dir / "log-server",
@@ -133,13 +119,13 @@ class JourneyWorld:
         self.log_stack = log_stack
         controller = Controller(
             config=config,
-            backends=backends,
             log_stack=log_stack,
             threads=ThreadContainer(name=f"journey-{self._incarnation}"),
             db=db,
             federation_peers=self._federation_peers,
         )
-        return controller, backends
+        controller.register_backend(backend)
+        return controller, backend
 
     def close(self) -> None:
         self.controller.stop()
@@ -150,8 +136,7 @@ class JourneyWorld:
         self._remember_backend_activity()
         self.controller.stop()
         db = ControllerDB(db_dir=self._db_dir)
-        self.controller, self.backends = self._build_controller(db)
-        self.backend = next(iter(self.backends.values()))
+        self.controller, self.backend = self._build_controller(db)
         self._check_invariants()
 
     def checkpoint(self) -> tuple[str, CheckpointResult]:
@@ -183,8 +168,7 @@ class JourneyWorld:
             task_id for task_id in self._terminal_tasks if any(task_id.startswith(f"{job_id}/") for job_id in retained)
         }
         db = ControllerDB(db_dir=self._db_dir)
-        self.controller, self.backends = self._build_controller(db)
-        self.backend = next(iter(self.backends.values()))
+        self.controller, self.backend = self._build_controller(db)
         self._check_invariants()
 
     def submit(
@@ -311,8 +295,7 @@ class JourneyWorld:
         exit_code: int | None = None,
         attempt_id: int | None = None,
     ) -> None:
-        backend = self._backend_for_task(task)
-        backend.observe(
+        self.backend.queue_observation(
             task.wire_id,
             ScriptedObservation(state, error=error, exit_code=exit_code, attempt_id=attempt_id),
         )
@@ -396,8 +379,6 @@ class JourneyWorld:
         return list(self.controller.list_endpoints(request).endpoints)
 
     def backend_outage(self, *, ticks: int) -> None:
-        if len(self.backends) != 1:
-            raise ValueError("backend_outage requires one backend; address a backend in a multi-backend journey")
         self.backend.fail_reconcile(times=ticks)
         self.trace.append(f"backend unavailable ticks={ticks}")
 
@@ -422,7 +403,7 @@ class JourneyWorld:
         for _ in range(max_ticks):
             self.step()
             current = self._fingerprint()
-            if current == previous and not any(backend.has_pending_observations for backend in self.backends.values()):
+            if current == previous and not self.backend.has_pending_observations:
                 return
             previous = current
         raise AssertionError(
@@ -475,7 +456,7 @@ class JourneyWorld:
     def backend_calls(self, *, kind: str | None = None, backend_id: str | None = None) -> list[tuple[str, str]]:
         """Return externally visible backend calls as ``(backend_id, kind)`` rows."""
         calls = [*self._prior_backend_calls]
-        calls.extend((candidate_id, call) for candidate_id, backend in self.backends.items() for call in backend.calls)
+        calls.extend((self.backend.descriptor.backend_id, call) for call in self.backend.calls)
         if kind is not None:
             calls = [row for row in calls if row[1] == kind]
         if backend_id is not None:
@@ -484,27 +465,14 @@ class JourneyWorld:
 
     @property
     def pending_task_ids(self) -> tuple[str, ...]:
-        return tuple(sorted(task_id for backend in self.backends.values() for task_id in backend.pending_task_ids))
-
-    def _backend_for_task(self, task: TaskRef) -> ScriptedTaskBackend:
-        backend_id = self.task(task).backend_id
-        if backend_id in self.backends:
-            return self.backends[backend_id]
-        if len(self.backends) == 1:
-            return next(iter(self.backends.values()))
-        owners = [backend for backend in self.backends.values() if backend.owns_task(task.wire_id)]
-        if len(owners) != 1:
-            raise AssertionError(f"expected one backend for {task.wire_id}, found {len(owners)}: {self.timeline}")
-        return owners[0]
+        return self.backend.pending_task_ids
 
     def _current_backend_events(self) -> list[BackendEvent]:
-        return [event for backend in self.backends.values() for event in backend.events]
+        return self.backend.events
 
     def _remember_backend_activity(self) -> None:
         self._prior_backend_events.extend(self._current_backend_events())
-        self._prior_backend_calls.extend(
-            (backend_id, call) for backend_id, backend in self.backends.items() for call in backend.calls
-        )
+        self._prior_backend_calls.extend((self.backend.descriptor.backend_id, call) for call in self.backend.calls)
 
     def _fingerprint(self) -> tuple:
         return tuple(

@@ -22,6 +22,10 @@ revision directly. There are three pin kinds:
   dependencies and there is no workspace lock change.
 - Release wheel (`vllm` GPU): `config/external/vllm/gpu.toml` records a
   promoted, immutable wheel per architecture. See the GPU release pipeline below.
+- Pinned wheel URL (`xla`): the `gpu` extra's `jax-cuda13-pjrt` source in
+  `lib/marin/pyproject.toml` points at a promoted wheel from the fork's release,
+  and `uv.lock` records its hash. This fork sits outside the weekly refresh; see
+  the XLA fork section below.
 
 ## The weekly refresh
 
@@ -105,6 +109,29 @@ change after promotion.
 | evalchemy | [`marin-community/evalchemy`](https://github.com/marin-community/evalchemy) | [`mlfoundations/evalchemy`](https://github.com/mlfoundations/evalchemy) | isolated uv lock |
 | harbor | [`marin-community/harbor`](https://github.com/marin-community/harbor) | [`harbor-framework/harbor`](https://github.com/harbor-framework/harbor) | isolated uv lock |
 | MarinSkyRL | [`marin-community/MarinSkyRL`](https://github.com/marin-community/MarinSkyRL) | [`NovaSky-AI/SkyRL`](https://github.com/NovaSky-AI/SkyRL) | isolated uv lock |
+| xla | [`marin-community/xla`](https://github.com/marin-community/xla) | [`openxla/xla`](https://github.com/openxla/xla) | wheel URL in `lib/marin/pyproject.toml` (gpu extra) |
+
+## The XLA fork
+
+The fork exists to carry two ragged all-to-all device-kernel patches on the GPU
+PJRT plugin, which only that plugin binary embeds. It is not in
+`config/external/migration.toml` and the weekly refresh never advances it,
+because its base is not a refreshable choice: jax pins an exact XLA revision by
+integrity hash, so the fork must sit on the XLA commit that the workspace's
+pinned `jax[cuda13]` release names, and it moves only when that pin moves. Every
+sibling package (`jax`, `jaxlib`, `jax-cuda13-plugin`) installs stock at the
+pin, and the wheel's `+marin.<sha>` local version still satisfies the stock
+`jax-cuda13-pjrt==` requirement.
+
+A refresh happens only after a jax bump; the step-by-step rebuild-and-re-pin
+procedure is the refresh-fork skill's `.agents/skills/refresh-fork/docs/xla.md`.
+The pin gate is
+policy: do not pin a wheel whose manifest's `validation` block is not
+`status: passed`. A patch can compile in and still be inert, and an inert patch
+passes ordinary correctness tests, including the e2e
+(`tests/cluster/grug/test_ragged_ep_check.py`, `cluster`-marked), so the
+promote job's validation proves the patched behaviors are live, and a patch
+that adds another required behavior adds its own check there.
 
 ## When to fork
 

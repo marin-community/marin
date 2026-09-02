@@ -139,6 +139,10 @@ class Flavor:
     kernel runs the experts: ``fsdp-nodrop`` at one chunk computes every assignment (dropless), and
     ``fsdp-chunk4`` splits into four chunks to match the FSDP hero's minor-dropping reference. Both use
     the same kernel; only the chunk count (drop rate) differs.
+
+    ``ragged`` spans the fleet like ``ep`` but moves tokens with the ragged all-to-all transport,
+    which has a single gate: per-chunk receiver capacity from ``capacity_factor``. It has no sender
+    pool, so ``pooled_transport_capacity_factor`` does not apply.
     """
 
     expert_axis_size: int | None  # None spans the fleet
@@ -159,6 +163,11 @@ FLAVORS: dict[str, Flavor] = {
     # `scatter` grouped-GMM path mis-routes this QB/sigmoid-combine model (loss ~1.1 above chunk4).
     "fsdp-nodrop": Flavor(1, "sonic_cute", 1),
     "fsdp-chunk4": Flavor(1, "sonic_cute", 4),
+    # Ragged a2a with the leg-2 lean data path (expert-granular updates, two sequential expert
+    # chunks inside the backend). Per-chunk receiver capacity is capacity_factor/2 of the layer
+    # total, a stricter per-chunk gate than the pooled receiver's -- the drop trajectory under a
+    # trained router is exactly what this flavor exists to measure against `ep`.
+    "ragged": Flavor(None, "ragged_all_to_all", 1),
 }
 
 

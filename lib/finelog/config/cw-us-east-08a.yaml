@@ -9,8 +9,9 @@ deployment:
     namespace: iris
     kubeconfig: ~/.kube/coreweave-iris
     kube_context: marin-us-east-08a_US-EAST-08A
-    # storage_class omitted -> cluster default; sized generously to absorb ingest
-    # bursts before offload to R2.
+    # The regional cache is disposable once rows reach the hub. Keep it on the
+    # node's local disk so VAST availability cannot block Finelog persistence.
+    cache_storage: node-local
     storage_gb: 250
     # R2 endpoint for the s3:// archive (authenticated by the R2_* keys, not the
     # CoreWeave object-storage keys iris uses for marin-us-east-02a).
