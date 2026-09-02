@@ -989,3 +989,123 @@ def _serve_text_upstream(*, status_code: int, body: str) -> Iterator[RunningMode
         server.shutdown()
         server.server_close()
         thread.join()
+
+
+class _FakeClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+
+
+class _PhasedJob:
+    """Job whose status is a function of fake-clock time: (end_time, state) phases."""
+
+    job_id = "/test/inference-job"
+    iris_job = None
+
+    def __init__(self, clock: _FakeClock, phases: list[tuple[float, JobStatus]]) -> None:
+        self._clock = clock
+        self._phases = phases
+        self.terminated = False
+
+    def status(self) -> JobStatus:
+        for end, state in self._phases:
+            if self._clock.now < end:
+                return state
+        return self._phases[-1][1]
+
+    def terminate(self) -> None:
+        self.terminated = True
+
+
+def _patch_direct_inference(monkeypatch, job: _PhasedJob, clock: _FakeClock, endpoints=()) -> None:
+    monkeypatch.setattr(iris_module, "get_job_info", lambda: SimpleNamespace())
+    monkeypatch.setattr(iris_module, "current_client", lambda: SimpleNamespace(submit=lambda request: job))
+    monkeypatch.setattr(
+        iris_module,
+        "iris_ctx",
+        lambda: SimpleNamespace(client=SimpleNamespace(list_endpoint_instances=lambda _name: list(endpoints))),
+    )
+    monkeypatch.setattr(iris_module.time, "monotonic", clock.monotonic)
+    monkeypatch.setattr(iris_module.time, "sleep", clock.sleep)
+
+
+def _direct_config(ready_timeout_seconds: float) -> RemoteInferenceConfig:
+    return RemoteInferenceConfig(
+        model=ServedModelConfig(weights="gpt2"),
+        engine=VllmEngineConfig(),
+        iris=IrisConfig(
+            worker_resources=ResourceConfig.with_tpu("v6e-4"),
+            worker_environment=create_environment(extras=["tpu"]),
+            endpoint_ready_timeout_seconds=ready_timeout_seconds,
+        ),
+    )
+
+
+def test_remote_inference_queue_time_does_not_consume_startup_budget(monkeypatch) -> None:
+    clock = _FakeClock()
+    # Queued far beyond the ready timeout, then running without ever
+    # registering: the ready timeout must start at the running transition,
+    # not at submission.
+    job = _PhasedJob(clock, [(3000.0, JobStatus.PENDING), (float("inf"), JobStatus.RUNNING)])
+    _patch_direct_inference(monkeypatch, job, clock)
+
+    with pytest.raises(RemoteInferenceStartupError, match="inference endpoint"):
+        with remote_inference(_direct_config(ready_timeout_seconds=100.0)):
+            pass
+
+    # Survived the queue phase, then spent a full startup budget while running.
+    assert clock.now >= 3000 + 100
+    assert job.terminated
+
+
+def test_remote_inference_bounds_time_spent_queued(monkeypatch) -> None:
+    clock = _FakeClock()
+    job = _PhasedJob(clock, [(float("inf"), JobStatus.PENDING)])
+    _patch_direct_inference(monkeypatch, job, clock)
+
+    with pytest.raises(RemoteInferenceStartupError, match="to be placed"):
+        with remote_inference(_direct_config(ready_timeout_seconds=100.0)):
+            pass
+
+    # A never-placed job fails after the documented four-hour placement bound,
+    # long after the 100-second startup budget.
+    assert 4 * 3600 <= clock.now < 5 * 3600
+    assert job.terminated
+
+
+def test_remote_inference_requeue_resets_startup_budget(monkeypatch) -> None:
+    clock = _FakeClock()
+    # Running long enough to eat half the budget, preempted back to pending,
+    # then running again: the second run gets a fresh budget.
+    job = _PhasedJob(
+        clock,
+        [(50.0, JobStatus.RUNNING), (70.0, JobStatus.PENDING), (float("inf"), JobStatus.RUNNING)],
+    )
+    _patch_direct_inference(monkeypatch, job, clock)
+
+    with pytest.raises(RemoteInferenceStartupError, match="inference endpoint"):
+        with remote_inference(_direct_config(ready_timeout_seconds=100.0)):
+            pass
+
+    assert clock.now >= 70 + 100
+    assert job.terminated
+
+
+def test_remote_inference_returns_endpoint_when_registered(monkeypatch) -> None:
+    clock = _FakeClock()
+    job = _PhasedJob(clock, [(float("inf"), JobStatus.RUNNING)])
+    endpoint = SimpleNamespace(
+        address="http://10.0.0.2:9000",
+        metadata={"tensor_parallel_size": "1", "backend": "vllm"},
+    )
+    _patch_direct_inference(monkeypatch, job, clock, endpoints=[endpoint])
+
+    with remote_inference(_direct_config(ready_timeout_seconds=100.0)) as session:
+        assert session.model.endpoint.base_url == "http://10.0.0.2:9000/v1"
+        assert session.model.endpoint.model == "gpt2"
