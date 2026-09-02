@@ -188,7 +188,8 @@ E6_ROLE_PLAN = SkyRLRolePlan(
 )
 
 
-def _rl_config(*, role_plan: SkyRLRolePlan, max_steps: int, ckpt_interval: int, debug_distributed: bool) -> str:
+def _rl_config(*, role_plan: SkyRLRolePlan, max_steps: int, ckpt_interval: int, debug_distributed: bool,
+               reshard_after_forward: bool = True) -> str:
     """Render the SkyRL config.
 
     ``ckpt_interval`` defaults to ``max_steps + 1``: no periodic checkpoint, but one terminal
@@ -304,7 +305,14 @@ trainer:
       max_grad_norm: 0.5
     fsdp_config:
       cpu_offload: false
-      reshard_after_forward: true
+      # O2's arm. true re-gathers the full 67B parameter set for the backward instead of holding
+      # it resident, so each micro-step pays two all-gathers and one reduce-scatter to compute on
+      # 2B active parameters. That cost is exactly as independent of token content as the eager
+      # expert loop is, and F3 records that our spans cannot separate the two -- FSDP2 issues these
+      # collectives INSIDE forward and backward. Setting it false trades memory for traffic and is
+      # the cheapest discriminator we have. ⚠️ F6 says memory is already tight; an OOM here is
+      # itself the answer, not a failed run.
+      reshard_after_forward: {str(reshard_after_forward).lower()}
       expert_model_parallel_size: 1
 
   placement:
@@ -362,6 +370,7 @@ def build_workflow(
     collective_diagnostics: bool = False,
     telemetry_only: bool = False,
     grouped_mm: bool = False,
+    reshard_after_forward: bool = True,
     label: str = "",
 ) -> ArtifactStep[SkyRLModel] | ArtifactStep[SkyRLTelemetryRun]:
     """Compose the E6 baseline as one inspectable artifact step."""
@@ -393,6 +402,8 @@ def build_workflow(
         variant += "-telonly"
     if grouped_mm:
         variant += "-groupedmm"
+    if not reshard_after_forward:
+        variant += "-noreshard"
     if bf16_update_mode != "stochastic":
         variant += f"-{bf16_update_mode}"
     if label:
@@ -413,6 +424,7 @@ def build_workflow(
                 # before either would have happened.
                 ckpt_interval=(0 if telemetry_only else (max_steps + 1 if ckpt_interval is None else ckpt_interval)),
                 debug_distributed=debug_distributed,
+                reshard_after_forward=reshard_after_forward,
             ),
             runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.FSDP),
             model=ExternalModel(
@@ -562,6 +574,17 @@ def build_workflow(
     "rows are separable from the baseline's by run_id.",
 )
 @click.option(
+    "--reshard-after-forward/--no-reshard-after-forward",
+    default=True,
+    show_default=True,
+    help="FSDP2 reshard_after_forward. On (the baseline) re-gathers all 67B parameters for the "
+    "backward; off keeps them resident. This is O2's discriminator: FSDP parameter traffic is as "
+    "token-independent as the eager expert loop, and our spans cannot separate them because the "
+    "collectives are issued inside forward and backward. If --no-reshard-after-forward moves the "
+    "clock, the cost is traffic and use_grouped_mm will buy nothing. Trades memory for traffic; an "
+    "OOM is an informative result, not a failed run.",
+)
+@click.option(
     "--label",
     default="",
     help="Extra suffix on the artifact name, and therefore on run_id. The flags that change "
@@ -622,6 +645,7 @@ def main(
     collective_diagnostics: bool,
     telemetry_only: bool,
     grouped_mm: bool,
+    reshard_after_forward: bool,
     label: str,
 ) -> ArtifactStep[SkyRLModel] | ArtifactStep[SkyRLTelemetryRun]:
     return build_workflow(
@@ -636,6 +660,7 @@ def main(
         collective_diagnostics=collective_diagnostics,
         telemetry_only=telemetry_only,
         grouped_mm=grouped_mm,
+        reshard_after_forward=reshard_after_forward,
         label=label,
     )
 
