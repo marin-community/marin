@@ -105,6 +105,7 @@ def hero_trainer_config(
     checkpointer: CheckpointerConfig,
     progress_watchdog: ProgressWatchdogConfig = ProgressWatchdogConfig(),
     load_checkpoint_path: str | list[str] | None = None,
+    load_checkpoint: bool | None = None,
     master_param_mode: MasterParamMode = HERO_MASTER_PARAM_MODE,
 ) -> TrainerConfig:
     """Set the Levanter options that affect the compiled hero step."""
@@ -122,6 +123,7 @@ def hero_trainer_config(
         require_accelerator=True,
         allow_nondivisible_batch_size=False,
         load_checkpoint_path=load_checkpoint_path,
+        load_checkpoint=load_checkpoint,
         checkpointer=checkpointer,
     )
 
