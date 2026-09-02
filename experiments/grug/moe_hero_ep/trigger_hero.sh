@@ -11,9 +11,9 @@ fi
 
 : "${WANDB_API_KEY:?Set WANDB_API_KEY before you start the hero.}"
 
-# This run continues the previous hero's full state from its checkpoint tree without writing to it.
+# This run continues the previous hero's full state from this checkpoint without writing to that run's tree.
 RUN_ID=hero-ragged_a2a-ep-step54k
-PREVIOUS_RUN_PATH=s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2
+HANDOFF_CHECKPOINT=s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-54000
 short_uuid=$(uuidgen | tr '[:upper:]' '[:lower:]')
 short_uuid=${short_uuid:0:8}
 
@@ -32,7 +32,7 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra
   -e XLA_FLAGS "--xla_gpu_memory_limit_slop_factor=85" \
   -- python -m experiments.grug.moe_hero_ep.launch_scaling_ladder \
     --run-id "$RUN_ID" \
-    --initialize-from-path "$PREVIOUS_RUN_PATH" \
+    --initialize-from-checkpoint "$HANDOFF_CHECKPOINT" \
     --size d6144 \
     --version 2026.08.19.2 \
     --run
