@@ -3,7 +3,7 @@
 
 # /// script
 # requires-python = ">=3.12"
-# dependencies = ["numpy", "pandas", "scipy"]
+# dependencies = ["numpy", "pandas", "scikit-learn", "scipy"]
 # ///
 """Build upward from canonical single-phase DSP, one mechanism at a time (ATOM-033).
 
@@ -31,6 +31,8 @@ a high and a low split, giving a balanced high / low / unsplit partition and thi
 
 import argparse
 import sys
+from concurrent.futures import Executor, ProcessPoolExecutor
+from functools import partial
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -46,6 +48,7 @@ import swarm39_harness_20260725 as swarm39  # noqa: E402
 from scipy.optimize import minimize, nnls  # noqa: E402
 
 LINEAR_REG = 1e-6
+ACTIVE_COEFFICIENT_RELATIVE_TOL = 1e-10
 LOG_RATE_BOUND = (float(np.log(1e-4)), float(np.log(2.0)))
 THRESHOLD_BOUND = (-2.0, 8.0)
 LOG_EXPONENT_BOUND = (float(np.log(0.2)), float(np.log(10.0)))
@@ -142,40 +145,190 @@ def rung_design(exposure: np.ndarray, vector: np.ndarray, rung: Rung, n_buckets:
     return np.hstack([-signal, penalty])
 
 
+def rung_feature_derivative(
+    exposure: np.ndarray, vector: np.ndarray, rung: Rung, n_buckets: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """Derivative of each design column with respect to its controlling shape parameter."""
+    if rung.per_domain:
+        log_rate, harm = vector[:n_buckets], vector[n_buckets:]
+        parameter_index = np.arange(2 * n_buckets)
+    else:
+        log_rate = np.full(n_buckets, vector[0])
+        harm = np.full(n_buckets, vector[1])
+        parameter_index = np.concatenate([np.zeros(n_buckets, dtype=int), np.ones(n_buckets, dtype=int)])
+
+    rate = np.exp(log_rate)[None, :]
+    benefit_derivative = -rate * exposure * np.exp(-rate * exposure)
+    if rung.penalty == "canonical":
+        shifted = np.log1p(exposure) - harm[None, :]
+        softplus_value = softplus(shifted)
+        sigmoid_value = np.exp(-np.logaddexp(0.0, -shifted))
+        penalty_derivative = -2.0 * softplus_value * sigmoid_value
+    else:
+        unit = np.maximum(exposure - 1.0, 0.0) / DAMAGE_KNEE
+        exponent = np.exp(harm)[None, :]
+        powered = np.zeros_like(unit)
+        np.power(unit, exponent, out=powered, where=unit > 0.0)
+        penalty = powered / (1.0 + powered)
+        log_unit = np.zeros_like(unit)
+        np.log(unit, out=log_unit, where=unit > 0.0)
+        penalty_derivative = penalty * (1.0 - penalty) * exponent * log_unit
+    return np.hstack([benefit_derivative, penalty_derivative]), parameter_index
+
+
+def head_quadratic_regularizer(width: int, pairs: tuple[tuple[int, int], ...]) -> np.ndarray:
+    regularizer = LINEAR_REG * np.eye(width)
+    for first, second in pairs:
+        regularizer[first, first] += SHRINKAGE
+        regularizer[second, second] += SHRINKAGE
+        regularizer[first, second] -= SHRINKAGE
+        regularizer[second, first] -= SHRINKAGE
+    return regularizer
+
+
+def profiled_cv_objective_and_gradient(
+    exposure: np.ndarray,
+    response: np.ndarray,
+    vector: np.ndarray,
+    rung: Rung,
+    folds: tuple[tuple[np.ndarray, np.ndarray], ...],
+    pairs: tuple[tuple[int, int], ...],
+) -> tuple[float, np.ndarray]:
+    """Blocked-CV loss and its implicit gradient through the ridge-NNLS head.
+
+    The NNLS solution is piecewise smooth. Within its current active set, the
+    derivative follows by differentiating the ridge normal equations. Shape
+    parameters attached only to inactive head columns have zero local gradient.
+    """
+    n_buckets = exposure.shape[1]
+    design = rung_design(exposure, vector, rung, n_buckets)
+    feature_derivative, parameter_index = rung_feature_derivative(exposure, vector, rung, n_buckets)
+    regularizer = head_quadratic_regularizer(design.shape[1], pairs)
+    total = 0.0
+    gradient = np.zeros(len(vector), dtype=float)
+
+    for train, validation in folds:
+        train_design = design[train]
+        train_response = response[train]
+        intercept, coefficients = solve_head(train_design, train_response, pairs)
+        validation_design = design[validation]
+        residual = intercept + validation_design @ coefficients - response[validation]
+        if not np.isfinite(residual).all():
+            return 1e6, np.zeros_like(gradient)
+        total += float(residual @ residual)
+
+        coefficient_scale = max(1.0, float(np.max(coefficients, initial=0.0)))
+        active = np.flatnonzero(coefficients > ACTIVE_COEFFICIENT_RELATIVE_TOL * coefficient_scale)
+        if len(active) == 0:
+            continue
+
+        design_mean = train_design.mean(axis=0)
+        derivative_mean = feature_derivative[train].mean(axis=0)
+        centered_train_design = train_design - design_mean
+        centered_train_derivative = feature_derivative[train] - derivative_mean
+        centered_validation_design = validation_design - design_mean
+        centered_validation_derivative = feature_derivative[validation] - derivative_mean
+        centered_train_response = train_response - train_response.mean()
+
+        active_design = centered_train_design[:, active]
+        active_derivative = centered_train_derivative[:, active]
+        validation_active_design = centered_validation_design[:, active]
+        validation_active_derivative = centered_validation_derivative[:, active]
+        active_coefficients = coefficients[active]
+        active_parameter_index = parameter_index[active]
+
+        selector = np.zeros((len(active), len(vector)), dtype=float)
+        selector[np.arange(len(active)), active_parameter_index] = active_coefficients
+        direct_train_derivative = active_derivative @ selector
+        train_residual = centered_train_response - active_design @ active_coefficients
+        feature_score = active_derivative.T @ train_residual
+        right_hand_side = np.zeros((len(active), len(vector)), dtype=float)
+        right_hand_side[np.arange(len(active)), active_parameter_index] = feature_score
+        right_hand_side -= active_design.T @ direct_train_derivative
+
+        active_hessian = active_design.T @ active_design + regularizer[np.ix_(active, active)]
+        coefficient_derivative = np.linalg.solve(active_hessian, right_hand_side)
+        direct_validation_derivative = validation_active_derivative @ selector
+        prediction_derivative = direct_validation_derivative + validation_active_design @ coefficient_derivative
+        gradient += 2.0 * prediction_derivative.T @ residual
+
+    return total, gradient
+
+
 def rung_bounds(rung: Rung, n_buckets: int) -> list[tuple[float, float]]:
     harm_bound = THRESHOLD_BOUND if rung.penalty == "canonical" else LOG_EXPONENT_BOUND
     count = n_buckets if rung.per_domain else 1
     return [LOG_RATE_BOUND] * count + [harm_bound] * count
 
 
-def fit_rung(exposure, response, rung: Rung, folds, pairs, seed: int, maxiter: int, restarts: int = RESTARTS):
+def optimize_restart(
+    start: np.ndarray,
+    *,
+    exposure: np.ndarray,
+    response: np.ndarray,
+    rung: Rung,
+    folds: tuple[tuple[np.ndarray, np.ndarray], ...],
+    pairs: tuple[tuple[int, int], ...],
+    box: list[tuple[float, float]],
+    maxiter: int,
+) -> tuple[float, np.ndarray]:
+    """Run one independent nonlinear restart."""
+
+    def objective_and_gradient(vector: np.ndarray) -> tuple[float, np.ndarray]:
+        return profiled_cv_objective_and_gradient(exposure, response, vector, rung, folds, pairs)
+
+    result = minimize(
+        objective_and_gradient,
+        start,
+        method="L-BFGS-B",
+        jac=True,
+        bounds=box,
+        options={"maxiter": maxiter},
+    )
+    return float(result.fun), np.asarray(result.x, dtype=float)
+
+
+def fit_rung(
+    exposure,
+    response,
+    rung: Rung,
+    folds,
+    pairs,
+    seed: int,
+    maxiter: int,
+    restarts: int = RESTARTS,
+    workers: int = 1,
+    executor: Executor | None = None,
+):
     n_buckets = exposure.shape[1]
     box = rung_bounds(rung, n_buckets)
     tied = pairs if rung.tie_pairs else ()
-
-    def objective(vector: np.ndarray) -> float:
-        total = 0.0
-        for train, test in folds:
-            intercept, coefficients = solve_head(
-                rung_design(exposure[train], vector, rung, n_buckets), response[train], tied
-            )
-            predicted = intercept + rung_design(exposure[test], vector, rung, n_buckets) @ coefficients
-            residual = predicted - response[test]
-            if not np.isfinite(residual).all():
-                return 1e6
-            total += float(residual @ residual)
-        return total
+    if workers < 1:
+        raise ValueError("workers must be positive")
 
     rng = np.random.default_rng(20260824 + seed)
     lows = np.array([low for low, _ in box])
     highs = np.array([high for _, high in box])
     starts = [0.5 * (lows + highs)]
     starts.extend(rng.uniform(lows, highs) for _ in range(restarts - 1))
-    best_vector, best_value = None, np.inf
-    for start in starts:
-        result = minimize(objective, start, method="L-BFGS-B", bounds=box, options={"maxiter": maxiter})
-        if float(result.fun) < best_value:
-            best_value, best_vector = float(result.fun), np.asarray(result.x, dtype=float)
+    optimize = partial(
+        optimize_restart,
+        exposure=exposure,
+        response=response,
+        rung=rung,
+        folds=folds,
+        pairs=tied,
+        box=box,
+        maxiter=maxiter,
+    )
+    if len(starts) == 1 or (workers == 1 and executor is None):
+        results = [optimize(start) for start in starts]
+    elif executor is not None:
+        results = list(executor.map(optimize, starts))
+    else:
+        with ProcessPoolExecutor(max_workers=min(workers, len(starts))) as local_executor:
+            results = list(local_executor.map(optimize, starts))
+    _, best_vector = min(results, key=lambda item: item[0])
     intercept, coefficients = solve_head(rung_design(exposure, best_vector, rung, n_buckets), response, tied)
     return best_vector, intercept, coefficients
 
@@ -185,6 +338,7 @@ def main() -> None:
     parser.add_argument("--scales", default="delphi_3e18")
     parser.add_argument("--maxiter", type=int, default=40)
     parser.add_argument("--restarts", type=int, default=RESTARTS)
+    parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--rungs", default=",".join(rung.name for rung in LADDER))
     parser.add_argument("--output-csv", type=Path)
     args = parser.parse_args()
@@ -217,7 +371,15 @@ def main() -> None:
                     if rung.name not in requested_rungs:
                         continue
                     vector, intercept, coefficients = fit_rung(
-                        exposure, response, rung, folds, pairs, seed=0, maxiter=args.maxiter, restarts=args.restarts
+                        exposure,
+                        response,
+                        rung,
+                        folds,
+                        pairs,
+                        seed=0,
+                        maxiter=args.maxiter,
+                        restarts=args.restarts,
+                        workers=args.workers,
                     )
                     predicted = intercept + rung_design(query_exposure, vector, rung, exposure.shape[1]) @ coefficients
                     rows.append(
