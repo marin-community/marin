@@ -27,9 +27,14 @@ TASK_STATE_LOOKBACK = timedelta(hours=1)
 # Long enough that a run which goes silent stays watched while
 # `TrainingTelemetryGone` counts out its threshold and pending period.
 PHASE_ENROLLMENT_LOOKBACK = timedelta(minutes=60)
+# Keep enough phase history to identify the current execution after a telemetry
+# outage has outlasted the enrollment window. `watched_runs` only enrolls a
+# phase-only run for `PHASE_ENROLLMENT_LOOKBACK`.
+PHASE_EXECUTION_LOOKBACK = timedelta(hours=24)
 # Silence this long is the telemetry path or the process. `TrainingTelemetryGone`
 # owns that case; the other projections defer rather than page for it again.
 TELEMETRY_GONE_AGE = timedelta(minutes=10)
+LEVANTER_METRICS_TABLE = '"levanter.metrics"'
 
 HERO_RUN_PREFIX = "hero-"
 _COORDINATOR_MARKER = "-coord"
@@ -120,24 +125,25 @@ def task_state_query(now: datetime) -> str:
 
 
 def phase_enrollment_query(now: datetime) -> str:
-    """Return each hero run that still publishes Levanter phase telemetry."""
-    start = sql_epoch_ms(now - PHASE_ENROLLMENT_LOOKBACK)
+    """Return the latest Levanter phase and execution identity for each hero run."""
+    start = sql_epoch_ms(now - PHASE_EXECUTION_LOOKBACK)
     end = sql_epoch_ms(now)
     return (
         "WITH samples AS ("
         "SELECT COALESCE(NULLIF(cluster,''),'unknown') AS origin_cluster, "
-        "run_id, job_id, timestamp_ms, seq "
-        'FROM "telemetry_v1" '
-        f"WHERE service = 'levanter' AND name = '{PHASE_METRIC}' AND process_index = '0' "
-        f"AND run_id LIKE '{HERO_RUN_PREFIX}%' AND job_id IS NOT NULL "
+        "run_id, job_id, execution_uid, timestamp_ms, seq "
+        f"FROM {LEVANTER_METRICS_TABLE} "
+        f"WHERE name = '{PHASE_METRIC}' AND process_index = 0 "
+        f"AND run_id LIKE '{HERO_RUN_PREFIX}%' AND job_id IS NOT NULL AND execution_uid IS NOT NULL "
         f"AND timestamp_ms >= {start} AND timestamp_ms < {end}"
         "), ranked AS ("
-        "SELECT origin_cluster, run_id, job_id, "
+        "SELECT origin_cluster, run_id, job_id, execution_uid, timestamp_ms, "
         "ROW_NUMBER() OVER ("
         "PARTITION BY origin_cluster, run_id ORDER BY timestamp_ms DESC, seq DESC"
         ") AS rn FROM samples"
         ") "
-        "SELECT origin_cluster AS cluster, run_id, job_id AS telemetry_job "
+        "SELECT origin_cluster AS cluster, run_id, job_id AS telemetry_job, execution_uid, "
+        "to_timestamp_millis(timestamp_ms) AS phase_at "
         "FROM ranked WHERE rn = 1"
     )
 

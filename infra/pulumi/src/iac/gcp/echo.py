@@ -3,9 +3,12 @@
 
 """GCP IAM declarations required by the Echo deploy target."""
 
+from collections.abc import Mapping
+
 from iac.gcp.iam import (
     GcpArtifactRepositoryIam,
     GcpCloudRunIapIam,
+    GcpEncryptedMember,
     GcpIamGrantSet,
     GcpRoleGrant,
     GcpSecretIam,
@@ -18,7 +21,7 @@ _SYNC_JOB = "echo-sync"
 _MIRROR_TOKEN_SECRET = "marinmirror-token"
 
 
-def iam_grants(project: str) -> GcpIamGrantSet:
+def iam_grants(project: str, principals: Mapping[str, GcpEncryptedMember]) -> GcpIamGrantSet:
     """Return Echo grants for composition into the global IAM stack."""
     deploy_account = f"serviceAccount:marin-cd-cloud-run-deploy@{project}.iam.gserviceaccount.com"
     echo_api_account = f"serviceAccount:{_API_SERVICE}@{project}.iam.gserviceaccount.com"
@@ -66,7 +69,19 @@ def iam_grants(project: str) -> GcpIamGrantSet:
                 iap_grants=(
                     GcpRoleGrant(
                         role="roles/iap.httpsResourceAccessor",
-                        members=("domain:openathena.ai", loom_account),
+                        members=(
+                            f"serviceAccount:iris-controller@{project}.iam.gserviceaccount.com",
+                            "serviceAccount:ravwojdyla@rav-openathena.iam.gserviceaccount.com",
+                            principals["human-014"],
+                            principals["human-032"],
+                            principals["human-024"],
+                            principals["human-012"],
+                            principals["human-067"],
+                            principals["human-021"],
+                            principals["human-006"],
+                            "domain:openathena.ai",
+                            loom_account,
+                        ),
                     ),
                 ),
             ),

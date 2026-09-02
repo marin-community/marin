@@ -65,7 +65,7 @@ SOURCES = ("github", "discord")
 KINDS = ("issue", "pr", "comment", "message")
 DOMAINS = search_config.SEARCH_DOMAINS
 DEFAULT_DOMAINS = search_config.DEFAULT_SEARCH_DOMAINS
-SEARCH_DETAIL_INSTRUCTION = "Detail: uv run infra/echo/cli.py get <domain:id>"
+SEARCH_DETAIL_INSTRUCTION = "Detail: uv run infra/echo/cli.py get <source-id> (copy the SOURCE ID column)"
 SEARCH_DETAIL_MAX_CHARACTERS = 240
 MISSING_EMAIL_SCOPE_WARNING = "Not all requested scopes were granted by the authorization server, missing scopes email."
 DEFAULT_REQUEST_TIMEOUT = 30
@@ -173,7 +173,7 @@ def print_search_results(results: list[SearchResult]) -> None:
         print("No results.")
         return
 
-    print("KEY  TITLE  ID")
+    print("GRADE KEY  TITLE  SOURCE ID")
     for result in results:
         key = result.key or "unavailable"
         if result.references:
@@ -276,6 +276,9 @@ def cmd_search(args: argparse.Namespace) -> None:
     elapsed = time.perf_counter() - started_at
     noun = "result" if len(results) == 1 else "results"
     print(f"{len(results)} {noun} in {elapsed:.2f}s")
+    server_timing = response.headers.get(search_config.SERVER_TIMING_HEADER)
+    if server_timing:
+        print(f"Server timing: {server_timing}")
     print_search_results(results)
     execution_id = response.headers.get(search_config.SEARCH_EXECUTION_HEADER)
     execution_flag = f"--execution-id {execution_id} " if execution_id else ""
@@ -334,7 +337,8 @@ def cmd_grep(args: argparse.Namespace) -> None:
 
 
 def cmd_get(args: argparse.Namespace) -> None:
-    domain, _, value = args.id.partition(":")
+    source_id = detail_source_id(args.id)
+    domain, _, value = source_id.partition(":")
     if domain == "wiki":
         entry = response_object(request("GET", f"/wiki/{value}"))
         title = entry["title"]
@@ -342,14 +346,14 @@ def cmd_get(args: argparse.Namespace) -> None:
         url = wiki_link(int(value))
         text = entry["body"]
     elif domain == "file":
-        reference = repository_identity.parse_repository_file_id(args.id)
+        reference = repository_identity.parse_repository_file_id(source_id)
         file = response_object(request("GET", f"/repository-files/{quote(reference.route_value, safe='/@:')}"))
         title, subtitle, url, text = file["title"], file["subtitle"], file["url"], file["text"]
     else:
         chunk = response_object(request("GET", f"/chunks/{value}"))
         actual_domain = chunk_domain(chunk)
         if actual_domain != domain:
-            raise SystemExit(f"{args.id} identifies a {actual_domain} result")
+            raise SystemExit(f"{source_id} identifies a {actual_domain} result")
         title = chunk.get("title") or chunk.get("snippet") or chunk["url"]
         details = [domain]
         if chunk.get("author"):
@@ -358,11 +362,25 @@ def cmd_get(args: argparse.Namespace) -> None:
             details.append(str(chunk["date"]))
         subtitle = " · ".join(details)
         url, text = chunk["url"], chunk.get("text") or ""
-    print(f"[{args.id}] {title}")
+    print(f"[{source_id}] {title}")
     if subtitle:
         print(subtitle)
     print(f"{url}\n")
     print(text)
+
+
+def detail_source_id(value: str) -> str:
+    """Resolve an unambiguous numeric file grading key to its stored source ID."""
+    domain, _, detail = value.partition(":")
+    if domain != "file" or not detail.isdecimal():
+        return value
+    result = response_object(request("GET", f"/search-results/{detail}"))
+    actual_domain = str(result["domain"])
+    if actual_domain != domain:
+        raise SystemExit(f"{value} identifies a {actual_domain} result")
+    source_id = artifact_id(str(result["source_id"]))
+    repository_identity.parse_repository_file_id(source_id)
+    return source_id
 
 
 def cmd_history_export(args: argparse.Namespace) -> None:
@@ -459,6 +477,8 @@ def artifact_id(value: str) -> str:
 def detail_artifact_id(value: str) -> str:
     checked = artifact_id(value)
     if checked.startswith("file:"):
+        if checked.removeprefix("file:").isdecimal():
+            return checked
         try:
             repository_identity.parse_repository_file_id(checked)
         except ValueError as error:

@@ -20,9 +20,9 @@ Lazy dataset processing library. Start with the shared instructions in `/AGENTS.
 - `src/zephyr/readers.py` — `load_jsonl`, `load_parquet`, `load_vortex`
 - `src/zephyr/input_file.py` — lightweight `InputFileSpec` and file-path column contract
 - `src/zephyr/writers.py` — `write_jsonl_file`, `write_parquet_file`, `write_vortex_file`, Levanter cache writer
-- `src/zephyr/shuffle.py` — scatter pipeline internals (`ScatterFileIterator`, `ScatterReader`, hash-routing, combiner, zstd-chunk file format with byte-range sidecar)
+- `src/zephyr/shuffle.py` — scatter pipeline internals (`ScatterFileIterator`, `ScatterReader`, hash routing, combiner, sidecars, and bounded multi-pass merge)
 - `src/zephyr/expr.py` — `Expr`, `col`, `lit` for filter expressions
-- `src/zephyr/external_sort.py` — `external_sort_merge` k-way merge of sorted runs
+- `src/zephyr/memory_budget.py` — flush/merge memory-budget arithmetic shared by the scatter writer and external-sort merge
 - `src/zephyr/counters.py` — `ScopedCounters`, `pipeline`, `stage()`, `current_stage()` scoped counter API (`CounterSnapshot` lives in `worker_context.py`)
 
 ## Execution Model

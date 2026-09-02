@@ -8,6 +8,8 @@ use std::sync::OnceLock;
 
 use regex::Regex;
 
+use crate::partition_policy::SegmentPartition;
+
 /// Where a segment's bytes currently live. Wire/catalog strings: LOCAL/REMOTE/BOTH.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SegmentLocation {
@@ -48,6 +50,7 @@ pub struct SegmentRow {
     pub created_at_ms: i64,
     pub min_key_value: Option<String>,
     pub max_key_value: Option<String>,
+    pub partition: Option<SegmentPartition>,
     pub location: SegmentLocation,
 }
 
@@ -69,6 +72,7 @@ pub struct LocalSegment {
     pub created_at_ms: i64,
     pub min_key_value: Option<i64>,
     pub max_key_value: Option<i64>,
+    pub partition: Option<SegmentPartition>,
     pub location: SegmentLocation,
 }
 
@@ -109,15 +113,29 @@ pub struct MemorySummary {
 
 /// The filename part of `path`, or `path` itself when it has none.
 ///
-/// Segments are identified by basename nearly everywhere outside the catalog —
-/// logs, the remote archive's object keys, the debug and introspection routes —
-/// because the directory is a property of the store, not of the segment.
+/// Segments are identified by basename in logs and introspection routes. Remote
+/// archive keys use [`segment_relative_key`] so physical partitions survive.
 pub fn basename(path: &str) -> String {
     std::path::Path::new(path)
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or(path)
         .to_string()
+}
+
+/// Object-store key for a catalog segment path relative to its namespace dir.
+pub fn segment_relative_key(namespace_dir: &std::path::Path, path: &str) -> Option<String> {
+    let relative = std::path::Path::new(path)
+        .strip_prefix(namespace_dir)
+        .ok()?;
+    let parts = relative
+        .components()
+        .map(|component| match component {
+            std::path::Component::Normal(part) => part.to_str(),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()?;
+    (!parts.is_empty()).then(|| parts.join("/"))
 }
 
 /// Filename for a segment at `level` whose smallest seq is `min_seq`.
@@ -128,7 +146,7 @@ pub fn seg_filename(level: i32, min_seq: i64) -> String {
 fn seg_filename_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"^seg_L(?P<level>\d+)_(?P<seq>\d+)\.parquet$")
+        Regex::new(r"^seg_L(?P<level>\d+)_(?P<seq>-?\d+)\.parquet$")
             .expect("seg filename regex compiles")
     })
 }
@@ -162,6 +180,8 @@ mod tests {
         let name = seg_filename(0, 42);
         assert_eq!(name, "seg_L0_0000000000000000042.parquet");
         assert_eq!(parse_seg_filename(&name), Some((0, 42)));
+        let migrated = seg_filename(0, -42);
+        assert_eq!(parse_seg_filename(&migrated), Some((0, -42)));
         assert_eq!(parse_seg_filename("not_a_segment.parquet"), None);
     }
 }

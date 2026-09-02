@@ -1,0 +1,20 @@
+schema_version: 1
+code: ml-parallel-source-impl
+lane: cruft
+title: Two production functions doing the same operation
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** A "legacy translator" sitting next to the new translator
+  (or `submit_task` next to `enqueue_attempt` differing only in spec source)
+  is source-cloned production code. Drift here shows up in production, not
+  in tests.
+
+  **When allowed:** During a migration window where both paths are
+  intentionally live, with a deletion PR linked. See also
+  `ml-flag-gated-parallel-path` if a flag selects between them.
+
+  **Bad example:**
+  ```python
+  def reconcile_request_from_plan(plan): ...      # new-wire builder
+  def legacy_translator_request(plan): ...        # old-wire builder from same plan.request.desired
+  ```

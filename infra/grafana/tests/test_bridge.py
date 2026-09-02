@@ -383,6 +383,7 @@ def test_training_stall_alert_selects_named_hero_run_and_resolves_on_progress():
         )
         """
     )
+    database.execute('CREATE VIEW "levanter.metrics" AS SELECT *, 123::BIGINT AS step FROM telemetry_v1')
     database.execute("CREATE MACRO to_timestamp_millis(value) AS to_timestamp(value / 1000.0)")
 
     stalled_at = now - timedelta(minutes=20)
@@ -531,6 +532,7 @@ def _loss_windows(now: datetime, runs: tuple[HeroRun, ...], samples: list[tuple[
         )
         """
     )
+    database.execute('CREATE VIEW "levanter.metrics" AS SELECT * FROM telemetry_v1')
     database.executemany(
         "INSERT INTO telemetry_v1 VALUES ('cw-a', 'levanter', ?, 'train_loss', ?, ?)",
         [(run_id, loss, int(at.timestamp() * 1000)) for run_id, at, loss in samples],
@@ -610,16 +612,26 @@ def test_loss_spike_alert_returns_explicit_zero_without_active_hero_runs():
     ]
 
 
-def test_loss_spike_query_reads_one_bounded_window_per_evaluation():
+def test_loss_spike_query_bounds_window_and_run():
     now = datetime(2026, 7, 28, 12, tzinfo=UTC)
-    sql = loss_window_query(now, (_hero_run("hero-prod"),))
+    windows = _loss_windows(
+        now,
+        (_hero_run("hero-prod"),),
+        [
+            ("hero-prod", now - timedelta(minutes=61), 100.0),
+            ("hero-prod", now - timedelta(minutes=60), 1.0),
+            ("hero-other", now - timedelta(minutes=30), 100.0),
+            ("hero-prod", now - timedelta(minutes=5), 2.0),
+            ("hero-prod", now, 100.0),
+        ],
+    ).to_pylist()
 
-    assert sql.count('FROM "telemetry_v1"') == 1
-    assert "name = 'train_loss'" in sql
-    assert "run_id = 'hero-prod'" in sql
-    assert "timestamp_ms >= CAST(EXTRACT(EPOCH FROM TIMESTAMP '2026-07-28 11:00:00') * 1000 AS BIGINT)" in sql
-    assert "timestamp_ms < CAST(EXTRACT(EPOCH FROM TIMESTAMP '2026-07-28 12:00:00') * 1000 AS BIGINT)" in sql
-    assert "CAST(EXTRACT(EPOCH FROM TIMESTAMP '2026-07-28 11:55:00') * 1000 AS BIGINT)" in sql
+    assert len(windows) == 1
+    assert windows[0]["run_id"] == "hero-prod"
+    assert windows[0]["baseline_samples"] == 1
+    assert windows[0]["baseline_loss"] == pytest.approx(1.0)
+    assert windows[0]["recent_samples"] == 1
+    assert windows[0]["recent_loss"] == pytest.approx(2.0)
 
 
 def _watched(
@@ -627,6 +639,7 @@ def _watched(
     *,
     iris_running: bool = True,
     iris_state_age: timedelta | None = timedelta(seconds=30),
+    execution_uid: str | None = "attempt-1",
 ) -> WatchedRun:
     return WatchedRun(
         cluster="cw-a",
@@ -634,6 +647,7 @@ def _watched(
         run_id=run_id,
         iris_running=iris_running,
         iris_state_age=iris_state_age,
+        execution_uid=execution_uid,
     )
 
 
@@ -649,6 +663,7 @@ def _signals(now: datetime, metrics: dict[str, dict], run_id: str = "hero-a") ->
             latest=values["latest"],
             observed_at=values.get("observed_at", now - timedelta(seconds=30)),
             previous=values.get("previous"),
+            two_samples_ago=values.get("two_samples_ago"),
             recent_samples=values.get("recent_samples", 0),
             recent_total=values.get("recent_total", 0.0),
             recent_below_floor=values.get("recent_below_floor", 0),
@@ -673,7 +688,13 @@ def test_run_health_watches_a_run_whose_iris_state_row_went_stale():
         running_since=[now - timedelta(hours=3)],
         running=[64],
     )
-    phase_runs = finelog_result(cluster=["cw-a"], run_id=["hero-a"], telemetry_job=["/u/hero-a-coord/train"])
+    phase_runs = finelog_result(
+        cluster=["cw-a"],
+        run_id=["hero-a"],
+        telemetry_job=["/u/hero-a-coord/train"],
+        execution_uid=["attempt-1"],
+        phase_at=[now - timedelta(seconds=30)],
+    )
 
     assert active_hero_runs(task_states, now) == ()
     runs = watched_runs(task_states, phase_runs, now)
@@ -681,6 +702,28 @@ def test_run_health_watches_a_run_whose_iris_state_row_went_stale():
 
     signals = _signals(now, {"phase": {"latest": 1.0}})
     assert "iris_state_stale" in _reasons(health_alert_rows(runs, signals, pa.table({}), now))
+
+
+def test_watched_run_keeps_an_old_phase_execution_without_phase_only_enrollment():
+    now = datetime(2026, 8, 21, 12, tzinfo=UTC)
+    task_states = finelog_result(
+        cluster=["cw-a"],
+        job=["/u/hero-a-coord"],
+        state_at=[now],
+        running_since=[now - timedelta(hours=3)],
+        running=[64],
+    )
+    old_phase = finelog_result(
+        cluster=["cw-a", "cw-b"],
+        run_id=["hero-a", "hero-old"],
+        telemetry_job=["/u/hero-a-coord/train", "/u/hero-old-coord/train"],
+        execution_uid=["attempt-1", "attempt-old"],
+        phase_at=[now - timedelta(hours=2), now - timedelta(hours=2)],
+    )
+
+    runs = watched_runs(task_states, old_phase, now)
+
+    assert [(run.run_id, run.execution_uid) for run in runs] == [("hero-a", "attempt-1")]
 
 
 def test_silent_telemetry_pages_whether_or_not_iris_still_runs_the_tasks():
@@ -782,6 +825,7 @@ def test_loss_jump_reads_one_attempt_so_a_restore_is_not_a_rise():
         )
         """
     )
+    database.execute('CREATE VIEW "levanter.metrics" AS SELECT * FROM telemetry_v1')
 
     def at(minutes: float) -> int:
         return int((now - timedelta(minutes=minutes)).timestamp() * 1000)
@@ -845,6 +889,30 @@ def test_health_alert_reads_routing_throughput_and_evaluation():
         "throughput_low",
         "eval_regressed",
     }
+
+
+@pytest.mark.parametrize(
+    ("latest", "previous", "two_samples_ago", "should_alert"),
+    [
+        pytest.param(2.01, 2.00, 1.99, True, id="higher-than-two-evals-ago"),
+        pytest.param(2.05, 2.00, 2.10, True, id="one-step-rise-over-two-percent"),
+        pytest.param(2.01, 2.00, 2.02, False, id="small-one-step-rise"),
+        pytest.param(2.04, 2.00, 2.05, False, id="exactly-two-percent-one-step-rise"),
+    ],
+)
+def test_eval_regression_uses_two_eval_history_and_two_percent_jump(
+    latest: float, previous: float, two_samples_ago: float, should_alert: bool
+):
+    now = datetime(2026, 8, 21, 12, tzinfo=UTC)
+    evaluation = {
+        "latest": latest,
+        "previous": previous,
+        "two_samples_ago": two_samples_ago,
+    }
+    signals = _signals(now, {"eval_paloma_macro_loss": evaluation})
+
+    reasons = _reasons(health_alert_rows((_watched(),), signals, pa.table({}), now))
+    assert ("eval_regressed" in reasons) is should_alert
 
 
 def test_throughput_floor_needs_most_of_the_window_below_it():
@@ -924,6 +992,7 @@ def _signal_database(samples: list[tuple[str, str, float, datetime, int]]) -> du
         )
         """
     )
+    database.execute('CREATE VIEW "levanter.metrics" AS SELECT * FROM telemetry_v1')
     database.execute("CREATE MACRO to_timestamp_millis(value) AS to_timestamp(value / 1000.0)")
     database.executemany(
         "INSERT INTO telemetry_v1 VALUES ('cw-a', 'levanter', 'hero-a', ?, '0', ?, ?, ?, ?)",
@@ -944,20 +1013,22 @@ def test_signal_query_reduces_the_newest_sample_and_the_health_window():
             ("attempt-1", "throughput_tokens_per_second", 0.1e6, now - timedelta(minutes=40), 0),
             ("attempt-1", "optim_skipped_step", 1.0, now - timedelta(minutes=9), 4),
             ("attempt-1", "optim_skipped_step", 1.0, now - timedelta(minutes=2), 5),
-            # Hours apart, so only the eval lookback keeps the previous value.
+            # Hours apart, so only the eval lookback keeps the comparison history.
+            ("attempt-1", "eval_paloma_macro_loss", 2.19, now - timedelta(hours=12), 9),
             ("attempt-1", "eval_paloma_macro_loss", 2.17, now - timedelta(hours=6), 6),
             ("attempt-1", "eval_paloma_macro_loss", 2.31, now - timedelta(minutes=12), 7),
         ]
     )
 
-    run = signals_by_run(database.execute(signal_query(now, (_watched(),))).fetch_arrow_table())["cw-a", "hero-a"]
+    query = signal_query(now, (_watched(),))
+    run = signals_by_run(database.execute(query).fetch_arrow_table())["cw-a", "hero-a"]
     signals = run.metrics
 
     throughput = signals["throughput_tokens_per_second"]
     assert (throughput.latest, throughput.recent_samples, throughput.recent_below_floor) == (2.6e6, 3, 2)
     assert signals["optim_skipped_step"].recent_total == 2.0
     evaluation = signals["eval_paloma_macro_loss"]
-    assert (evaluation.latest, evaluation.previous) == (2.31, 2.17)
+    assert (evaluation.latest, evaluation.previous, evaluation.two_samples_ago) == (2.31, 2.17, 2.19)
 
 
 def test_signal_query_reduces_one_task_attempt_at_a_time():
@@ -975,7 +1046,9 @@ def test_signal_query_reduces_one_task_attempt_at_a_time():
         ]
     )
 
-    run = signals_by_run(database.execute(signal_query(now, (_watched(),))).fetch_arrow_table())["cw-a", "hero-a"]
+    run = signals_by_run(
+        database.execute(signal_query(now, (_watched(execution_uid="attempt-2"),))).fetch_arrow_table()
+    )["cw-a", "hero-a"]
 
     assert run.execution_uid == "attempt-2"
     assert run.metrics["optim_skipped_step"].recent_total == 1.0
@@ -1028,8 +1101,10 @@ def test_zephyr_stall_alert_returns_explicit_zero_without_active_pipelines():
 def test_alert_queries_use_int64_epoch_boundaries_and_project_timestamps():
     now = datetime(2026, 7, 28, 12, tzinfo=UTC)
     run = HeroRun("cw-a", "/u/hero-prod-coord", "hero-prod", now - timedelta(hours=1))
-    for sql in (telemetry_query(now, (run,)), zephyr_progress_query(now)):
-        assert 'FROM "telemetry_v1"' in sql
+    training_sql = telemetry_query(now, (run,))
+    zephyr_sql = zephyr_progress_query(now)
+
+    for sql in (training_sql, zephyr_sql):
         assert "timestamp_ms >= CAST(EXTRACT(EPOCH FROM TIMESTAMP '" in sql
         assert "timestamp_ms < CAST(EXTRACT(EPOCH FROM TIMESTAMP '" in sql
         assert "* 1000 AS BIGINT)" in sql
@@ -1059,6 +1134,7 @@ def test_zephyr_alert_query_keeps_job_identity_across_the_schema_transition():
         )
         """
     )
+    database.execute('CREATE VIEW "telemetry_v1.zephyr" AS SELECT * FROM telemetry_v1')
     database.executemany(
         "INSERT INTO telemetry_v1 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
@@ -1089,30 +1165,6 @@ def test_zephyr_alert_query_keeps_job_identity_across_the_schema_transition():
 
     zephyr_jobs = {row[0] for row in database.execute(f"SELECT job FROM ({zephyr_progress_query(now)})").fetchall()}
     assert zephyr_jobs == {"old-zephyr-job", "new-zephyr-job"}
-
-
-def test_training_stall_query_bounds_each_metric_family_to_its_detection_window():
-    """Wide scans read telemetry_v1 once a minute and can saturate Finelog.
-
-    Progress needs one extra stall window so a metric that just became stale
-    remains observable. Levanter republishes `phase` every 60s, and it reaches
-    back a day so a run silent for hours is still recognisable as one that
-    stopped publishing rather than one that never started.
-    """
-    now = datetime(2026, 7, 28, 12, tzinfo=UTC)
-    run = HeroRun("cw-a", "/u/hero-prod-coord", "hero-prod", now - timedelta(hours=1))
-    sql = telemetry_query(now, (run,))
-
-    assert sql.count('FROM "telemetry_v1"') == 1
-    assert "name IN ('phase', 'step', 'progress_time_seconds')" in sql
-    assert "run_id = 'hero-prod'" in sql
-    assert "timestamp_ms >= CAST(EXTRACT(EPOCH FROM TIMESTAMP '2026-07-27 12:00:00') * 1000 AS BIGINT)" in sql
-    assert (
-        "name = 'phase' OR timestamp_ms >= "
-        "CAST(EXTRACT(EPOCH FROM TIMESTAMP '2026-07-28 11:30:00') * 1000 AS BIGINT)" in sql
-    )
-    assert "WHERE name = 'phase' AND ts >= TIMESTAMP '2026-07-27 12:00:00'" in sql
-    assert "root_job_id LIKE '%/hero-%-coord'" in task_state_query(now)
 
 
 class FakeLoomAlerts(LoomAlertClient):

@@ -45,6 +45,7 @@ from iris.cluster.controller.schema import (
     jobs_table,
     meta_table,
     slices_table,
+    task_attempt_outputs_table,
     task_attempts_table,
     tasks_table,
     user_budgets_table,
@@ -242,9 +243,8 @@ def insert_job(
 def stamp_backend(tx: Tx, pins: list[tuple[JobName, str]]) -> None:
     """Stamp ``backend_id`` on each job and all of its tasks.
 
-    ``pins`` is a list of ``(job_id, backend_id)`` produced by the task->backend
-    meta-scheduler. Recording the pin lets later ticks skip routing the job; the
-    same id propagates to the job's tasks.
+    ``pins`` is a list of ``(job_id, backend_id)`` produced when local scheduling
+    accepts an unassigned job. The same id propagates to the job's tasks.
     """
     by_backend: dict[str, list[JobName]] = {}
     for job_id, backend_id in pins:
@@ -317,12 +317,15 @@ def insert_job_config(
     )
 
 
-@writes_to(jobs_table, cascades_into=(task_attempts_table, job_config_table, job_workdir_files_table))
+@writes_to(
+    jobs_table,
+    cascades_into=(task_attempts_table, task_attempt_outputs_table, job_config_table, job_workdir_files_table),
+)
 def delete_job(tx: Tx, job_id: JobName, *, record_tombstone: bool = True) -> None:
     """Delete a job row and drop the per-job memos its cascade would strand.
 
-    ``ON DELETE CASCADE`` removes the job's tasks, attempts, config, and workdir
-    files. Endpoints carry no FK to jobs (see migration 0048), so this removes them
+    ``ON DELETE CASCADE`` removes the job's tasks, attempts, output metadata,
+    config, and workdir files. Endpoints carry no FK to jobs (see migration 0048), so this removes them
     explicitly through the projection, which keeps the in-memory endpoint cache in
     sync as well as the row.
 
@@ -1037,7 +1040,7 @@ def mirror_federated_task(
     )
 
 
-@writes_to(task_attempts_table)
+@writes_to(task_attempts_table, task_attempt_outputs_table)
 def mirror_federated_attempts(
     tx: Tx,
     *,
@@ -1090,6 +1093,16 @@ def mirror_federated_attempts(
                 },
             )
         )
+        if attempt.HasField("output_archive"):
+            tx.execute(
+                sqlite_insert(task_attempt_outputs_table)
+                .values(
+                    task_id=task_id,
+                    attempt_id=attempt.attempt_id,
+                    archive_json=proto_to_json(attempt.output_archive),
+                )
+                .on_conflict_do_nothing(index_elements=["task_id", "attempt_id"])
+            )
 
 
 @writes_to(federation_sync_state_table)

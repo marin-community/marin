@@ -4,9 +4,9 @@
 """Time a hero-shaped checkpoint save and restore on one or more replica groups.
 
 Builds a hero or hero-shaped small train state, writes it to a one-day temporary prefix, and
-reads it back into the same exemplar a resume restores into. Offloaded optimizer state and
-FP32 pinned-host master params are included. It trains nothing, so a run measures the
-checkpoint paths alone.
+reads it back into the same exemplar a resume restores into. Offloaded optimizer state is
+included, and the master-parameter mode matches the hero's. It trains nothing, so a run
+measures the checkpoint paths alone.
 
 The save timing is what a training step is blocked for. The first read is the only one that
 can miss the node-local cache.
@@ -19,7 +19,6 @@ Dispatch needs an Iris task to submit from, so launch it as a coordinator job:
         -- python -m experiments.grug.moe_hero_ep.restore_benchmark --run-id restore-bench-1
 """
 
-import dataclasses
 import gc
 import logging
 import time
@@ -49,17 +48,23 @@ from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.grug.dispatch import dispatch_grug_training_run
-from experiments.grug.moe_hero_ep.heuristic import HERO_MODEL, MoeHeuristic, build_hero_configs
-from experiments.grug.moe_hero_ep.launch_mfu_test import (
+from experiments.grug.moe_hero_ep.hero_recipe import (
     HERO_EP_BATCH_SIZE,
     HERO_EP_EXPERT_AXIS_SIZE,
     HERO_GPUS_PER_NODE,
-    HERO_MIXED_PRECISION,
+    HERO_MASTER_PARAM_MODE,
+    HERO_MIXED_PRECISION_BY_MASTER_PARAM_MODE,
+    HERO_MODEL_CONFIG,
+    HERO_NODE_CPU,
+    HERO_NODE_DISK,
+    HERO_NODE_RAM,
+    HERO_QB_HIST_BINS,
+    with_transport_remat_mode,
 )
-from experiments.grug.moe_hero_ep.model import GrugModelConfig, QbEstimator
+from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic, build_hero_configs
+from experiments.grug.moe_hero_ep.model import GrugModelConfig
 from experiments.grug.moe_hero_ep.small_scale_abl_launch import SMALL_SHAPES, _small_model
 from experiments.grug.moe_hero_ep.train import (
-    MasterParamMode,
     _apply_hero_ep_runtime_defaults,
     initial_state,
     restore_template_from,
@@ -69,7 +74,6 @@ logger = logging.getLogger(__name__)
 
 # The hero's own schedule length, so this pytree matches the one a hero resume restores into.
 HERO_SCHEDULE_STEPS = 390_251
-QB_HIST_BINS = 10_000
 CHECKPOINT_TTL_DAYS = 1
 GIB = 1024**3
 HERO_MODEL_SIZE = "hero"
@@ -103,7 +107,7 @@ def _benchmark_state(config: RestoreBenchmarkConfig, mesh):
             key=key,
             ema_beta=None,
             offload_opt_state=True,
-            master_param_mode=MasterParamMode.FP32_PINNED_HOST,
+            master_param_mode=HERO_MASTER_PARAM_MODE,
         )
 
     with set_mesh(mesh):
@@ -240,24 +244,27 @@ def main(
 ) -> None:
     batch_size = HERO_EP_BATCH_SIZE * replica_groups
     if model_size == HERO_MODEL_SIZE:
-        model, optimizer = build_hero_configs(num_train_steps=HERO_SCHEDULE_STEPS, batch_size=batch_size)
+        model = with_transport_remat_mode(HERO_MODEL_CONFIG)
+        _, optimizer = build_hero_configs(num_train_steps=HERO_SCHEDULE_STEPS, batch_size=batch_size)
     else:
         shape = SMALL_SHAPES[model_size]
         model = _small_model(
             shape=shape,
-            capacity_factor=HERO_MODEL.capacity_factor,
-            attention_implementation=HERO_MODEL.attention_implementation,
-            moe_implementation=HERO_MODEL.moe_implementation,
-            expert_chunks=HERO_MODEL.expert_chunks,
-            seq_len=HERO_MODEL.max_seq_len,
-            num_experts=HERO_MODEL.num_experts,
-            num_experts_per_token=HERO_MODEL.num_experts_per_token,
+            capacity_factor=HERO_MODEL_CONFIG.capacity_factor,
+            # The wide forward tile is measured only at the hero shape, so the small
+            # stand-ins keep the plain FA4 name.
+            attention_implementation="gpu_fa4_cute",
+            moe_implementation=HERO_MODEL_CONFIG.moe_implementation,
+            expert_chunks=HERO_MODEL_CONFIG.expert_chunks,
+            seq_len=HERO_MODEL_CONFIG.max_seq_len,
+            num_experts=HERO_MODEL_CONFIG.num_experts,
+            num_experts_per_token=HERO_MODEL_CONFIG.num_experts_per_token,
             intermediate_dim=None,
             latent_dim=None,
-            pooled_transport_capacity_factor=HERO_MODEL.pooled_transport_capacity_factor,
-            num_expert_waves=HERO_MODEL.num_expert_waves,
+            pooled_transport_capacity_factor=HERO_MODEL_CONFIG.pooled_transport_capacity_factor,
+            num_expert_waves=HERO_MODEL_CONFIG.num_expert_waves,
             qb_use_histogram=True,
-            qb_hist_bins=QB_HIST_BINS,
+            qb_hist_bins=HERO_QB_HIST_BINS,
         )
         optimizer = MoeHeuristic().build_optimizer_config(
             num_train_steps=HERO_SCHEDULE_STEPS,
@@ -284,14 +291,14 @@ def main(
         checkpoint_path=prefix_join(
             marin_temp_bucket(ttl_days=CHECKPOINT_TTL_DAYS, prefix=f"restore-benchmark/{run_id}"), "checkpoint"
         ),
-        model=dataclasses.replace(model, qb_estimator=QbEstimator.HIST, qb_hist_bins=QB_HIST_BINS),
+        model=model,
         optimizer=optimizer,
         trainer=TrainerConfig(
             id=run_id,
             seed=0,
             train_batch_size=batch_size,
             num_train_steps=HERO_SCHEDULE_STEPS,
-            mp=jmp.get_policy(HERO_MIXED_PRECISION),
+            mp=jmp.get_policy(HERO_MIXED_PRECISION_BY_MASTER_PARAM_MODE[HERO_MASTER_PARAM_MODE]),
             tracker=TelemetryConfig(),
             use_explicit_mesh_axes=True,
             require_accelerator=True,
@@ -307,7 +314,12 @@ def main(
         replica_axis_size=replica_groups,
     )
 
-    _apply_hero_ep_runtime_defaults(inline_watch_enabled=False, processes_per_task=HERO_GPUS_PER_NODE)
+    _apply_hero_ep_runtime_defaults(
+        inline_watch_enabled=False,
+        moe_implementation=model.moe_implementation,
+        remat_mode=model.remat_mode,
+        processes_per_task=HERO_GPUS_PER_NODE,
+    )
     dispatch_grug_training_run(
         run_id=run_id,
         config=config,
@@ -315,9 +327,9 @@ def main(
         resources=ResourceConfig.with_gpu(
             "GB200",
             count=HERO_GPUS_PER_NODE,
-            cpu=120,
-            ram="890g",
-            disk="1t",
+            cpu=HERO_NODE_CPU,
+            ram=HERO_NODE_RAM,
+            disk=HERO_NODE_DISK,
             replicas=device_count // HERO_GPUS_PER_NODE,
         ),
         processes_per_task=HERO_GPUS_PER_NODE,

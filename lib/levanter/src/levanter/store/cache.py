@@ -6,6 +6,7 @@ import concurrent.futures
 import copy
 import dataclasses
 import gc
+import json
 import logging as pylogging
 import operator
 import os
@@ -41,7 +42,7 @@ from levanter.utils.thread_utils import blocking_wait
 from levanter.data._preprocessor import BatchProcessor, BatchResult, canonicalize_batch, dict_from_record_batch
 from levanter.data.sharded_datasource import ShardedDataSource
 from .jagged_array import JaggedArrayStore, _no_cache_read_context
-from .tree_store import TreeStore, heuristic_is_leaf
+from .tree_store import TreeStore, heuristic_is_leaf, render_tree_path
 
 T = TypeVar("T")
 U = TypeVar("U")
@@ -55,6 +56,7 @@ LEDGER_FILE_NAME = "shard_ledger.json"
 CONSOLIDATE_DATA_SIZE_WORKERS = 32
 CACHE_LAYOUT_CONSOLIDATED = "consolidated"
 CACHE_LAYOUT_SHARDED = "sharded"
+CACHE_CATALOG_VERSION = 1
 
 
 def _cache_zephyr_context(*, resources: ResourceConfig, max_workers: int, name: str) -> ZephyrContext:
@@ -459,7 +461,22 @@ class TreeCache(AsyncDataset[T_co]):
     @staticmethod
     def load(cache_dir: str, exemplar: T, options: Optional["CacheMetadata"] = None) -> "TreeCache":
         logger.info(f"Loading cache from {cache_dir}")
-        ledger = CacheLedger.load(cache_dir, options)
+        ledger = CacheLedger.load(cache_dir)
+
+        return TreeCache.load_from_ledger(cache_dir, exemplar, ledger, options)
+
+    @staticmethod
+    def load_from_ledger(
+        cache_dir: str,
+        exemplar: T,
+        ledger: "CacheLedger",
+        options: Optional["CacheMetadata"] = None,
+    ) -> "TreeCache":
+        """Load a cache from supplied ledger metadata."""
+        if options:
+            diff = ledger.metadata.compare_to(options)
+            if diff:
+                logger.warning(f"Metadata mismatch: {diff}")
 
         if not ledger.is_finished:
             raise FileNotFoundError(f"Cache at {cache_dir} is not finished. Use build_or_load to build it.")
@@ -622,8 +639,7 @@ class _ShardedTreeCacheReader(Generic[T_co]):
 
     def jagged_array_tree(self) -> Any:
         def field_store(path, _):
-            field = "/".join(_render_path_elem(part) for part in path)
-            return _ShardedJaggedArrayStore(self._cache, field)
+            return _ShardedJaggedArrayStore(self._cache, render_tree_path(path))
 
         return jtu.tree_map_with_path(field_store, self._cache._exemplar, is_leaf=heuristic_is_leaf)
 
@@ -664,6 +680,76 @@ class CacheLedger:
     def _serialize_and_commit(self, cache_dir):
         path = ShardedCacheLayout.parse(cache_dir).ledger
         return _serialize_json_and_commit(path, self)  # type: ignore[arg-type]
+
+
+@dataclass(frozen=True)
+class CacheCatalogEntry:
+    """A cache location and its embedded ledger."""
+
+    cache_dir: str
+    ledger: CacheLedger
+
+
+@dataclass(frozen=True)
+class CacheCatalog:
+    """A versioned snapshot of cache ledgers grouped by dataset split."""
+
+    splits: Dict[str, Dict[str, CacheCatalogEntry]]
+    version: int = CACHE_CATALOG_VERSION
+
+    def entry(self, split: str, name: str) -> CacheCatalogEntry | None:
+        return self.splits.get(split, {}).get(name)
+
+    def to_json(self) -> str:
+        splits = {
+            split: {
+                name: {"cache_dir": entry.cache_dir, "ledger": entry.ledger.to_dict()}
+                for name, entry in sorted(entries.items())
+            }
+            for split, entries in sorted(self.splits.items())
+        }
+        return json.dumps({"version": self.version, "splits": splits}, sort_keys=True, separators=(",", ":"))
+
+    @staticmethod
+    def from_json(contents: str) -> "CacheCatalog":
+        payload = json.loads(contents)
+        if not isinstance(payload, dict):
+            raise ValueError("Cache catalog must contain a JSON object")
+
+        version = payload.get("version")
+        if version != CACHE_CATALOG_VERSION:
+            raise ValueError(f"Unsupported cache catalog version {version}; expected {CACHE_CATALOG_VERSION}")
+
+        raw_splits = payload.get("splits")
+        if not isinstance(raw_splits, dict):
+            raise ValueError("Cache catalog must contain a splits object")
+
+        splits: Dict[str, Dict[str, CacheCatalogEntry]] = {}
+        for split, raw_entries in raw_splits.items():
+            if not isinstance(split, str) or not isinstance(raw_entries, dict):
+                raise ValueError("Cache catalog split names must map to entry objects")
+            entries: Dict[str, CacheCatalogEntry] = {}
+            for name, raw_entry in raw_entries.items():
+                if not isinstance(name, str) or not isinstance(raw_entry, dict):
+                    raise ValueError(f"Invalid cache catalog entry in split {split}")
+                cache_dir = raw_entry.get("cache_dir")
+                raw_ledger = raw_entry.get("ledger")
+                if not isinstance(cache_dir, str) or not isinstance(raw_ledger, dict):
+                    raise ValueError(f"Cache catalog entry {split}/{name} must contain cache_dir and ledger")
+                ledger = CacheLedger.from_dict(raw_ledger)  # type: ignore[arg-type]
+                entries[name] = CacheCatalogEntry(cache_dir=cache_dir, ledger=ledger)
+            splits[split] = entries
+        return CacheCatalog(splits=splits, version=version)
+
+    @staticmethod
+    def load(path: str) -> "CacheCatalog":
+        """Load and validate a cache catalog."""
+        logger.info("Loading cache catalog from %s", path)
+        return CacheCatalog.from_json(StoragePath(path).read_text())
+
+    def write(self, path: str) -> None:
+        """Write this catalog after all referenced caches are complete."""
+        _serialize_json_and_commit(path, self)
 
 
 def _validate_sharded_ledger(ledger: CacheLedger) -> None:
@@ -1480,21 +1566,8 @@ def _field_counts_from_store(store: TreeStore) -> Dict[str, int]:
 def _field_counts_from_data_sizes(data_sizes) -> Dict[str, int]:
     counts: Dict[str, int] = {}
     for path, value in jtu.tree_leaves_with_path(data_sizes):
-        field = "/".join(_render_path_elem(part) for part in path)
-        counts[field] = int(value)
+        counts[render_tree_path(path)] = int(value)
     return counts
-
-
-def _render_path_elem(path_elem) -> str:
-    if isinstance(path_elem, jtu.DictKey):
-        return str(path_elem.key)
-    if isinstance(path_elem, jtu.GetAttrKey):
-        return str(path_elem.name)
-    if isinstance(path_elem, jtu.SequenceKey):
-        return str(path_elem.idx)
-    if isinstance(path_elem, jtu.FlattenedIndexKey):
-        return str(path_elem.key)
-    return str(path_elem)
 
 
 def _sanitize_shard_name(name: str) -> str:

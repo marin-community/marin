@@ -1,0 +1,21 @@
+schema_version: 1
+code: ml-obsolete-after-refactor
+lane: cruft
+title: Code obsoleted by an earlier refactor
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** A helper that handled the old log-forwarding path still
+  sits in the worker provider after workers started sending logs directly.
+  Dead branches confuse readers and the next refactor has to figure out
+  whether they're load-bearing.
+
+  **When allowed:** Conditional compatibility shims tied to a known removal
+  date — comment must name the trigger.
+
+  **Bad example:**
+  ```python
+  def push_logs(worker, entries):
+      # workers now send logs directly; this branch is unreachable.
+      if worker.legacy_log_path:
+          _forward(worker, entries)
+  ```

@@ -3,6 +3,11 @@
 
 """Normalize pre-staged Nemotron Code v2 file contents.
 
+The exact resolver, pinned 2025-05-18 Software Heritage graph configuration,
+``sha1_git`` mapping, and S3 content downloader are preserved at commit
+``c774272e5561e1fe2f8c7d92ecef60b333d95307``:
+https://github.com/marin-community/build-nt-code/blob/c774272e5561e1fe2f8c7d92ecef60b333d95307/pipeline/README.md
+
 The raw parquet shards are consumed from ``{MARIN_PREFIX}/raw/nemotron-code-v2-content``,
 so each cluster reads them from its own bucket and they must be copied in before a run. The
 canonical copy lives on Cloudflare R2 at ``s3://marin-na/users/held/nemotron-code-v2-content``

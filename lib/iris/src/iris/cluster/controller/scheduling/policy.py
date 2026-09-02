@@ -27,12 +27,12 @@ from iris.cluster.constraints import (
     extract_placement_requirements,
     is_availability_key,
     split_hard_soft,
-    strip_backend_constraints,
 )
 from iris.cluster.controller import reads
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.budget import (
     UserTask,
+    budget_user_id,
     compute_effective_band,
     compute_user_spend,
     interleave_by_user,
@@ -153,10 +153,7 @@ def job_requirements_from_job(job: PendingTask) -> JobRequirements:
         req_gpu_count=dc.gpu,
         req_tpu_count=dc.tpu,
         device_variant=device_variant_from_json(job.res_device_json),
-        # The reserved ``backend`` routing directive is consumed by the
-        # meta-scheduler; strip it so it never reaches per-worker matching (no
-        # worker advertises a ``backend`` attribute, so it would starve the task).
-        constraints=strip_backend_constraints(constraints_from_json(job.constraints_json)),
+        constraints=constraints_from_json(job.constraints_json),
         is_coscheduled=job.has_coscheduling,
         coscheduling_group_by=job.coscheduling_group_by if job.has_coscheduling else None,
     )
@@ -767,59 +764,49 @@ def _sort_pending_tasks_by_resolved_band(
     )
 
 
-@dataclass(frozen=True)
-class RoutingInputs:
-    """Controller-owned per-tick scheduling state: pending tasks + budgets.
-
-    Carries no worker data — the controller routes and budgets from this, then
-    each backend sources its own workers and assembles its full scheduling
-    context from this plus its worker view.
-    """
-
-    pending_task_rows: list[PendingTask]
-    requested_bands: dict[JobName, int]
-    user_spend: dict[str, int]
-    user_budget_limits: dict[str, int]
-    user_budget_defaults: UserBudgetDefaults
-
-
-def build_routing_inputs(snap: Tx, defaults: UserBudgetDefaults) -> RoutingInputs:
-    """Read the controller-owned scheduling inputs from ``snap`` (no worker reads)."""
-    pending = reads.pending_tasks_with_jobs(snap)
-    requested_bands = reads.get_priority_bands(snap, {t.job_id for t in pending})
-    return RoutingInputs(
-        pending_task_rows=_sort_pending_tasks_by_resolved_band(pending, requested_bands),
-        requested_bands=requested_bands,
-        user_spend=compute_user_spend(snap),
-        user_budget_limits=reads.get_all_user_budget_limits(snap),
-        user_budget_defaults=defaults,
-    )
-
-
 def build_scheduling_context(
     snap: Tx,
-    health: WorkerHealthTracker,
+    health: WorkerHealthTracker | None,
     worker_attrs: WorkerAttrsSource,
     defaults: UserBudgetDefaults,
     max_building_tasks: int = DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
 ) -> SchedulingContext:
-    """Build a ``SchedulingContext`` from the caller's read snapshot ``snap``.
+    """Build the complete scheduling workspace for the controller's backend.
 
-    All scheduling-tick DB reads live here. Every read shares the caller's
-    snapshot, so the control tick issues a single DB read for the whole tick.
+    Worker backends receive the live worker and running-attempt state. A backend
+    whose substrate owns placement passes ``health=None`` and receives the same
+    pending/budget inputs with an empty worker view. Every database query shares
+    the caller's transaction snapshot.
     """
+    pending = reads.pending_tasks_with_jobs(snap)
+    requested_bands = reads.get_priority_bands(snap, {task.job_id for task in pending})
+    pending = _sort_pending_tasks_by_resolved_band(pending, requested_bands)
+    user_spend = compute_user_spend(snap)
+    user_budget_limits = reads.get_all_user_budget_limits(snap)
+
+    if health is None or not pending:
+        return SchedulingContext(
+            workers=[],
+            building_counts={},
+            max_building_tasks=max_building_tasks,
+            max_assignments_per_worker=DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
+            pending_tasks=[],
+            jobs={},
+            pending_task_rows=pending,
+            user_spend=user_spend,
+            user_budget_limits=user_budget_limits,
+            requested_bands=requested_bands,
+            user_budget_defaults=defaults,
+            running_for_preemption=[],
+        )
+
     with slow_log(logger, "scheduling tick context", threshold_ms=50):
-        pending = reads.pending_tasks_with_jobs(snap)
         workers = reads.healthy_active_workers_with_attributes(snap, health, worker_attrs)
         usage_by_worker = reads.resource_usage_by_worker(snap)
-        user_spend = compute_user_spend(snap)
-        user_budget_limits = reads.get_all_user_budget_limits(snap)
-        requested_bands = reads.get_priority_bands(snap, {t.job_id for t in pending})
         building_counts = reads.building_counts(snap, [w.worker_id for w in workers])
         running = _running_tasks_with_band_and_value(snap)
 
     snapshots = [worker_snapshot_from_row(w, usage_by_worker.get(w.worker_id)) for w in workers]
-    sorted_pending = _sort_pending_tasks_by_resolved_band(pending, requested_bands)
     return SchedulingContext(
         workers=snapshots,
         building_counts=building_counts,
@@ -827,7 +814,7 @@ def build_scheduling_context(
         max_assignments_per_worker=DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
         pending_tasks=[],
         jobs={},
-        pending_task_rows=sorted_pending,
+        pending_task_rows=pending,
         user_spend=user_spend,
         user_budget_limits=user_budget_limits,
         requested_bands=requested_bands,
@@ -904,10 +891,13 @@ def compute_scheduling_order(
     requested_bands = ctx.requested_bands
     user_budget_limits = ctx.user_budget_limits
     defaults = ctx.user_budget_defaults
+    task_budget_users = {
+        task.task_id: budget_user_id(task.job_id, task.submitting_user) for task in ctx.pending_task_rows
+    }
     task_band_map: dict[JobName, int] = {
         task.task_id: compute_effective_band(
             requested_bands.get(task.job_id, task.priority_band),
-            task.task_id.user,
+            task_budget_users[task.task_id],
             user_spend,
             user_budget_limits,
             defaults,
@@ -922,7 +912,7 @@ def compute_scheduling_order(
     interleaved: list[JobName] = []
     for band_key in sorted(tasks_by_band, key=priority_band_rank):
         band_tasks = tasks_by_band[band_key]
-        user_tasks = [UserTask(user_id=tid.user, task=tid) for tid in band_tasks]
+        user_tasks = [UserTask(user_id=task_budget_users[tid], task=tid) for tid in band_tasks]
         interleaved.extend(interleave_by_user(user_tasks, user_spend))
 
     if trace:

@@ -340,7 +340,7 @@ def main(config: GapFinderConfig) -> None:
             model_b_score_summary=score_report_b.build_summary(),
         )
         write_report_files(config.output_path, summary)
-        levanter.tracker.log(_summary_scalars(summary), step=0)
+        levanter.tracker.log(gap_summary_scalars(summary), step=0)
         _log_report_artifact(summary)
 
     levanter.tracker.current_tracker().finish()
@@ -503,7 +503,11 @@ def _accumulate_token_losses(
     out += np.cumsum(diff[:-1])
 
 
-def _summary_scalars(summary: dict[str, Any]) -> dict[str, float]:
+def gap_summary_scalars(summary: dict[str, Any]) -> dict[str, float]:
+    """Flatten a perplexity-gap summary into the ``gap/`` tracker scalars.
+
+    Shared with Marin's gap step so both loggers publish identical metric keys.
+    """
     scalars: dict[str, float] = {}
     for row in summary["datasets"]:
         if row["gap_bpb"] is None:

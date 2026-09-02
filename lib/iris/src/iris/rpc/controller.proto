@@ -546,7 +546,7 @@ message Controller {
   }
 
   message GetKubernetesClusterStatusRequest {
-    // Filter to one backend. Empty = single CLUSTER_VIEW backend, or error if >1.
+    // If set, must match this controller's backend ID.
     string backend_id = 1;
   }
 
@@ -680,8 +680,7 @@ message Controller {
   message ListBackendsRequest {}
 
   // Worker-daemon fleet detail: the backend's own autoscaler view plus the
-  // controller's DB-derived worker health counts. Populated for backends that
-  // carry WORKER_DAEMON.
+  // controller's DB-derived worker health counts. Populated by a worker backend.
   message WorkerFleetDetail {
     iris.vm.AutoscalerStatus autoscaler = 1;
     int32 healthy_worker_count = 2;
@@ -689,8 +688,8 @@ message Controller {
   }
 
   // The expanded, backend-authored status each TaskBackend.status() returns. The
-  // variant follows the backend's BackendCapability: a CLUSTER_VIEW backend
-  // fills ``kubernetes``; a WORKER_DAEMON backend fills ``worker``.
+  // variant follows the backend kind: Kubernetes fills ``kubernetes`` and a
+  // worker backend fills ``worker``.
   message BackendStatus {
     oneof detail {
       GetKubernetesClusterStatusResponse kubernetes = 1;
@@ -754,7 +753,7 @@ message Controller {
     int32 running_task_count = 11;
     bool has_autoscaler = 12;
     map<string, int32> capacity_health = 13;
-    // Expanded per-backend status for the always-on Backends tab's detail panel.
+    // Expanded status for the always-on Backends tab's detail panel.
     BackendStatus detail = 14;
     // Free consumable capacity for federation queueing; unset on a legacy peer.
     ResourceAvailability availability = 15;
@@ -769,6 +768,11 @@ message Controller {
     repeated BackendSummary backends = 1;
     int32 unroutable_job_count = 2;
     repeated UnroutableJob unroutable_sample = 3;
+  }
+
+  message BackendListMetadata {
+    int32 unroutable_job_count = 1;
+    repeated UnroutableJob unroutable_sample = 2;
   }
 
   message ListPeersRequest {}

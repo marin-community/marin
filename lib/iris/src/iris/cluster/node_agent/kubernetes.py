@@ -5,8 +5,10 @@
 
 from __future__ import annotations
 
+import http.client
 import logging
 import math
+import ssl
 import threading
 import time
 import urllib.request
@@ -44,9 +46,14 @@ from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_COLLECTION_INTERVAL = 30.0
-K8S_API_TIMEOUT = 2.0
+DEFAULT_COLLECTION_INTERVAL = 60.0
+# Generous enough that ordinary apiserver latency, including a control plane under
+# load, does not fail a collection cycle; collection runs once per interval, so a
+# slow call delays one sample rather than overlapping the next.
+K8S_API_TIMEOUT = 15.0
 NODE_EXPORTER_ADDRESS = "127.0.0.1"
+KUBELET_RESOURCE_METRICS_URL = "https://127.0.0.1:10250/metrics/resource"
+SERVICE_ACCOUNT_TOKEN_PATH = Path("/var/run/secrets/kubernetes.io/serviceaccount/token")
 _K8S_GPU_MODEL_LABELS = ("nvidia.com/gpu.product", "gpu.nvidia.com/model")
 
 # CoreWeave runs both exporters as DaemonSets in this namespace. node-exporter
@@ -88,7 +95,6 @@ _MAX_SCRAPE_WORKERS = 16
 _MAX_SCRAPE_BYTES = 16 << 20
 _MAX_DCGM_SAMPLES = 32_768
 _MAX_DCGM_DEVICES = 256
-_MAX_DCGM_EXPORTERS = 512
 
 # One injectable seam so tests exercise the parsing/aggregation without a network.
 Fetch = Callable[[str], str | None]
@@ -108,6 +114,37 @@ def _http_get(url: str, timeout: float = _SCRAPE_TIMEOUT) -> str | None:
     except Exception as e:
         logger.debug("node-metrics scrape failed for %s: %s", url, e)
         return None
+
+
+# The kubelet's serving certificate is issued by the node rather than the cluster
+# CA, so it does not verify against the service-account CA bundle. The connection
+# is to loopback on the agent's own node and carries no off-host exposure.
+_KUBELET_TLS_CONTEXT = ssl.create_default_context()
+_KUBELET_TLS_CONTEXT.check_hostname = False
+_KUBELET_TLS_CONTEXT.verify_mode = ssl.CERT_NONE
+
+
+class KubeletScrapeError(RuntimeError):
+    """The local kubelet did not return resource metrics."""
+
+
+def kubelet_resource_metrics(timeout: float = _SCRAPE_TIMEOUT) -> str:
+    """Return the local kubelet's ``metrics/resource`` text.
+
+    Reads the kubelet on the agent's own node over loopback, which the host
+    network makes reachable. Authorization uses the pod's service-account token,
+    which the kubelet checks against the ``nodes/metrics`` subresource.
+    """
+    token = SERVICE_ACCOUNT_TOKEN_PATH.read_text().strip()
+    request = urllib.request.Request(KUBELET_RESOURCE_METRICS_URL, headers={"Authorization": f"Bearer {token}"})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout, context=_KUBELET_TLS_CONTEXT) as resp:
+            body = resp.read(_MAX_SCRAPE_BYTES + 1)
+    except (OSError, http.client.HTTPException) as error:
+        raise KubeletScrapeError(f"kubelet resource-metrics scrape failed: {error}") from error
+    if len(body) > _MAX_SCRAPE_BYTES:
+        raise KubeletScrapeError(f"kubelet resource metrics exceeded {_MAX_SCRAPE_BYTES} bytes")
+    return body.decode("utf-8", errors="replace")
 
 
 def _parse_labels(body: str) -> dict[str, str]:
@@ -224,11 +261,13 @@ class TaskStatsCollector:
         table: Table,
         *,
         clock: Callable[[], float] = time.monotonic,
+        read_kubelet_metrics: Callable[[], str] = kubelet_resource_metrics,
     ) -> None:
         self._kubectl = kubectl
         self._node_name = node_name
         self._table = table
         self._clock = clock
+        self._read_kubelet_metrics = read_kubelet_metrics
         self._previous_cpu: dict[str, tuple[float, float]] = {}
         self._memory_peak: dict[str, int] = {}
 
@@ -241,8 +280,8 @@ class TaskStatsCollector:
                 labels=labels,
                 field_selector=f"spec.nodeName={self._node_name}",
             )
-            resources = parse_kubelet_resource_metrics(self._kubectl.node_resource_metrics(self._node_name))
-        except KubectlError as error:
+            resources = parse_kubelet_resource_metrics(self._read_kubelet_metrics())
+        except (KubectlError, KubeletScrapeError) as error:
             logger.warning("task-resource collection failed for node %s: %s", self._node_name, error)
             return
 
@@ -324,6 +363,16 @@ class HostSample:
     net_recv_bytes: int
     net_sent_bytes: int
     boot_time_seconds: int | None
+
+
+@dataclass(frozen=True)
+class _DcgmExporter:
+    """One dcgm-exporter pod's scrape address and the identity of what it reports."""
+
+    name: str
+    url: str
+    uid: str
+    node_name: str
 
 
 @dataclass(frozen=True)
@@ -617,6 +666,10 @@ class NodeStatsScraper:
         self._fetch = fetch
         self._max_workers = max_workers
         self._prev_cpu: dict[str, tuple[float, float]] = {}
+        # node name -> its dcgm exporters. The exporter is a DaemonSet pod whose address
+        # moves only when it restarts, so discovery is cached until a pass reads nothing
+        # from that node.
+        self._dcgm_exporters_by_node: dict[str, list[_DcgmExporter]] = {}
 
     def scrape(self, targets: list[NodeTarget]) -> dict[str, NodeMetrics]:
         """Return per-node metrics for ``targets`` (best-effort; missing nodes omitted)."""
@@ -673,42 +726,83 @@ class NodeStatsScraper:
     def _prune_prev(self, live: set[str]) -> None:
         for stale in self._prev_cpu.keys() - live:
             del self._prev_cpu[stale]
+        for stale in self._dcgm_exporters_by_node.keys() - live:
+            del self._dcgm_exporters_by_node[stale]
 
     def _scrape_hosts(self, targets: list[NodeTarget]) -> dict[str, HostSample]:
         urls = {t.name: f"http://{t.internal_ip}:{self._node_port}/metrics" for t in targets if t.internal_ip}
         texts = self._fetch_all(urls)
         return {name: parse_node_exporter(text) for name, text in texts.items()}
 
-    def _scrape_gpus(self, node_names: set[str]) -> dict[str, GpuSample]:
+    def _dcgm_exporters(self, node_name: str) -> list[_DcgmExporter]:
+        """Return the scrapeable dcgm exporters on ``node_name``.
+
+        Both selectors are applied server-side. Pods with no ``podIP`` are omitted
+        because they have no address to scrape.
+        """
         try:
-            pods = self._kubectl.list_pods_in_namespace(self._ns)
+            pods = list(
+                self._kubectl.iter_json(
+                    K8sResource.PODS,
+                    namespace=self._ns,
+                    labels={_DCGM_NAME_LABEL: _DCGM_NAME_VALUE},
+                    field_selector=f"spec.nodeName={node_name}",
+                )
+            )
         except Exception as e:
             logger.debug("node-metrics: listing dcgm exporters in %s failed: %s", self._ns, e)
-            return {}
-        dcgm_pods = [
-            pod
-            for pod in pods
-            if pod.get("metadata", {}).get("labels", {}).get(_DCGM_NAME_LABEL) == _DCGM_NAME_VALUE
-            and pod.get("spec", {}).get("nodeName", "") in node_names
-        ]
-        if len(dcgm_pods) > _MAX_DCGM_EXPORTERS:
-            logger.warning("dcgm exporter count exceeded %d", _MAX_DCGM_EXPORTERS)
-        exporters: dict[str, tuple[str, str, str]] = {}
-        for pod in dcgm_pods[:_MAX_DCGM_EXPORTERS]:
+            return []
+        exporters = []
+        for pod in pods:
+            metadata = pod.get("metadata", {})
+            name = metadata.get("name", "")
             pod_ip = pod.get("status", {}).get("podIP")
-            name = pod.get("metadata", {}).get("name", "")
-            uid = pod.get("metadata", {}).get("uid", "")
-            node_name = pod.get("spec", {}).get("nodeName", "")
-            if pod_ip and name:
-                exporters[name] = (f"http://{pod_ip}:{self._dcgm_port}/metrics", uid, node_name)
+            if not name or not pod_ip:
+                continue
+            exporters.append(
+                _DcgmExporter(
+                    name=name,
+                    url=f"http://{pod_ip}:{self._dcgm_port}/metrics",
+                    uid=metadata.get("uid", ""),
+                    node_name=pod.get("spec", {}).get("nodeName", node_name),
+                )
+            )
+        return exporters
+
+    def _discover_dcgm_exporters(self, node_name: str) -> list[_DcgmExporter]:
+        """Return ``node_name``'s cached exporters, discovering them when the cache is cold.
+
+        An empty result is not cached, so a node whose exporter has not started yet is
+        retried on the next pass.
+        """
+        cached = self._dcgm_exporters_by_node.get(node_name)
+        if cached:
+            return cached
+        exporters = self._dcgm_exporters(node_name)
+        if exporters:
+            self._dcgm_exporters_by_node[node_name] = exporters
+        return exporters
+
+    def _scrape_gpus(self, node_names: set[str]) -> dict[str, GpuSample]:
+        exporters = {
+            exporter.name: exporter
+            for node_name in sorted(node_names)
+            for exporter in self._discover_dcgm_exporters(node_name)
+        }
         merged: dict[str, GpuSample] = {}
-        urls = {name: endpoint[0] for name, endpoint in exporters.items()}
-        for name, text in self._fetch_all(urls).items():
-            _, uid, node_name = exporters[name]
+        texts = self._fetch_all({exporter.name: exporter.url for exporter in exporters.values()})
+        for name, text in texts.items():
+            exporter = exporters[name]
             try:
-                merged.update(parse_dcgm(text, exporter_uid=uid, node_name=node_name))
+                merged.update(parse_dcgm(text, exporter_uid=exporter.uid, node_name=exporter.node_name))
             except ValueError as error:
                 logger.warning("could not parse dcgm exporter %s: %s", name, error)
+        # Drop the cached address of every node this pass could not read: the exporter
+        # stopped answering, moved, or a recycled pod IP is serving another node's
+        # metrics under its own hostname. Those nodes rediscover on the next pass.
+        for exporter in exporters.values():
+            if exporter.node_name not in merged:
+                self._dcgm_exporters_by_node.pop(exporter.node_name, None)
         return merged
 
     def _fetch_all(self, urls: dict[str, str]) -> dict[str, str]:

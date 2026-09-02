@@ -10,8 +10,9 @@ from enum import StrEnum
 VLLM_MAX_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
 VLLM_MAX_POINTS = 720
 VLLM_MAX_RESULT_ROWS = 10_000
-VLLM_MIN_BUCKET_MS = 15_000
-VLLM_SCRAPE_INTERVAL_MS = 15_000
+VLLM_MIN_BUCKET_MS = 60_000
+VLLM_SCRAPE_INTERVAL_MS = 60_000
+VLLM_HISTOGRAM_COHERENCE_MS = 15_000
 VLLM_SNAPSHOT_LOOKBACK_MS = 3 * VLLM_SCRAPE_INTERVAL_MS
 VLLM_FRESHNESS_THRESHOLD_MS = 3 * VLLM_SCRAPE_INTERVAL_MS
 VLLM_MAX_FRESHNESS_DETAILS = 128
@@ -25,6 +26,7 @@ VLLM_OVERVIEW_SECTIONS = frozenset(
         "request_outcome",
         "saturation",
         "saturation_summary",
+        "telemetry_health",
         "token_rate",
     }
 )
@@ -76,7 +78,13 @@ _HISTOGRAM_COMPONENTS = ("bucket", "count", "sum")
 _HISTOGRAM_NAMES = tuple(
     f"{family}_{component}" for family, _ in _HISTOGRAM_FAMILIES for component in _HISTOGRAM_COMPONENTS
 )
-_METRIC_NAMES = (*_TOKEN_COUNTERS, *_PREEMPTION_COUNTERS, *_OUTCOME_COUNTERS, *_GAUGES, *_HISTOGRAM_NAMES)
+_SERVING_METRIC_NAMES = (*_TOKEN_COUNTERS, *_PREEMPTION_COUNTERS, *_OUTCOME_COUNTERS, *_GAUGES, *_HISTOGRAM_NAMES)
+_HEALTH_METRIC_NAMES = (
+    "prometheus_source_available",
+    "prometheus_stage_failures",
+    "prometheus_dropped_samples",
+)
+_METRIC_NAMES = (*_SERVING_METRIC_NAMES, *_HEALTH_METRIC_NAMES)
 
 
 def sql_string(value: str) -> str:
@@ -146,6 +154,7 @@ def vllm_overview_query(
     scan_start_ms = max(0, start_ms - VLLM_SNAPSHOT_LOOKBACK_MS)
     identity_literal = sql_string(identity)
     metric_names = _sql_values(_METRIC_NAMES)
+    serving_metric_names = _sql_values(_SERVING_METRIC_NAMES)
     token_counters = _sql_values(_TOKEN_COUNTERS)
     preemption_counters = _sql_values(_PREEMPTION_COUNTERS)
     outcome_counters = _sql_values(_OUTCOME_COUNTERS)
@@ -166,7 +175,7 @@ WITH base AS (
            attributes_json,
            timestamp_ms,
            seq
-    FROM "telemetry_v1"
+    FROM "telemetry_v1.vllm"
     WHERE service = 'vllm'
       AND {identity_field.value} = {identity_literal}
       AND name IN ({metric_names})
@@ -284,6 +293,7 @@ WITH base AS (
            resource_attributes_json,
            attributes_json,
            timestamp_ms,
+           timestamp_ms - timestamp_ms % {VLLM_HISTOGRAM_COHERENCE_MS} AS sample_t,
            name,
            {histogram_source_family} AS source_family,
            {histogram_family} AS family,
@@ -317,7 +327,7 @@ WITH base AS (
            samples.service,
            samples.resource_attributes_json,
            samples.source_family,
-           samples.timestamp_ms,
+           samples.sample_t,
            CASE
                WHEN MAX(samples.invalid_component) = 1 OR COUNT(*) < MAX(expected.expected_series) THEN 0
                ELSE 1
@@ -341,7 +351,7 @@ WITH base AS (
      AND samples.service = validity.service
      AND samples.resource_attributes_json = validity.resource_attributes_json
      AND samples.source_family = validity.source_family
-     AND samples.timestamp_ms = validity.timestamp_ms
+     AND samples.sample_t = validity.sample_t
     WHERE validity.valid_sample = 1
 ), histogram_means AS (
     SELECT family,
@@ -401,9 +411,59 @@ WITH base AS (
     WHERE name IN ({outcome_counters})
       AND delta IS NOT NULL
     GROUP BY 1
+), collector_polls AS (
+    SELECT COUNT(*) AS polls,
+           SUM(CASE WHEN value <= 0 THEN 1 ELSE 0 END) AS unavailable_polls
+    FROM base
+    WHERE timestamp_ms >= {start_ms}
+      AND name = 'prometheus_source_available'
+      AND json_get(attributes_json, 'metric_source') = 'vllm'
+), collection_failure_increments AS (
+    SELECT COALESCE(json_get(attributes_json, 'stage'), 'unknown') AS stage,
+           CASE
+               WHEN previous_value IS NULL THEN NULL
+               WHEN value < previous_value THEN value
+               ELSE value - previous_value
+           END AS delta,
+           CASE WHEN previous_value IS NULL AND value > 0 THEN 1 ELSE 0 END AS uncertain
+    FROM cumulative_samples
+    WHERE timestamp_ms >= {start_ms}
+      AND name = 'prometheus_stage_failures'
+      AND json_get(attributes_json, 'metric_source') = 'vllm'
+), collection_failure_totals AS (
+    SELECT stage, SUM(delta) AS value
+    FROM collection_failure_increments
+    WHERE delta > 0
+    GROUP BY 1
+), dropped_sample_totals AS (
+    SELECT COALESCE(json_get(attributes_json, 'drop_reason'), 'unknown') AS drop_reason,
+           SUM(value) AS value
+    FROM base
+    WHERE timestamp_ms >= {start_ms}
+      AND name = 'prometheus_dropped_samples'
+      AND json_get(attributes_json, 'metric_source') = 'vllm'
+      AND value > 0
+    GROUP BY 1
+), telemetry_health AS (
+    SELECT polls,
+           COALESCE(unavailable_polls, 0) AS unavailable_polls,
+           CASE
+               WHEN COALESCE(unavailable_polls, 0) > 0
+                 OR failure_stages > 0
+                 OR uncertain_failures > 0
+                 OR drop_reasons > 0
+               THEN 'incomplete'
+               WHEN polls > 0 THEN 'healthy'
+               ELSE 'unknown'
+           END AS status
+    FROM collector_polls
+    CROSS JOIN (SELECT COUNT(*) AS failure_stages FROM collection_failure_totals)
+    CROSS JOIN (SELECT COUNT(*) AS uncertain_failures FROM collection_failure_increments WHERE uncertain > 0)
+    CROSS JOIN (SELECT COUNT(*) AS drop_reasons FROM dropped_sample_totals)
 ), producer_samples AS (
     SELECT DISTINCT origin_cluster, service, resource_attributes_json, timestamp_ms
     FROM base
+    WHERE name IN ({serving_metric_names})
 ), producer_ordered AS (
     SELECT *,
            LAG(timestamp_ms) OVER (
@@ -448,7 +508,7 @@ WITH base AS (
 ), freshness_summary AS (
     SELECT * FROM ranked_freshness WHERE freshness_rank = 1
 ), output AS (
-    SELECT t,
+    SELECT t AS t,
            'token_rate' AS section,
            CASE name
                WHEN 'prompt_tokens_total' THEN 'prompt_tokens'
@@ -459,7 +519,7 @@ WITH base AS (
                WHEN 'prompt_tokens_total' THEN 'prompt tokens/s'
                ELSE 'generated tokens/s'
            END AS series,
-           value,
+           value AS value,
            'tokens/s' AS unit,
            CAST(NULL AS VARCHAR) AS status,
            CAST(NULL AS BIGINT) AS samples,
@@ -468,142 +528,204 @@ WITH base AS (
 
     UNION ALL
 
-    SELECT CAST(NULL AS BIGINT),
-           'counter_total',
+    SELECT CAST(NULL AS BIGINT) AS t,
+           'counter_total' AS section,
            CASE name
                WHEN 'prompt_tokens_total' THEN 'prompt_tokens'
                WHEN 'generation_tokens_total' THEN 'generated_tokens'
                ELSE 'preemptions'
-           END,
-           'total',
+           END AS metric,
+           'total' AS stat,
            CASE name
                WHEN 'prompt_tokens_total' THEN 'prompt tokens'
                WHEN 'generation_tokens_total' THEN 'generated tokens'
                ELSE 'preemptions'
-           END,
-           value,
-           CASE WHEN name IN ({token_counters}) THEN 'tokens' ELSE 'requests' END,
-           CAST(NULL AS VARCHAR),
-           CAST(NULL AS BIGINT),
-           CAST(NULL AS DOUBLE)
+           END AS series,
+           value AS value,
+           CASE WHEN name IN ({token_counters}) THEN 'tokens' ELSE 'requests' END AS unit,
+           CAST(NULL AS VARCHAR) AS status,
+           CAST(NULL AS BIGINT) AS samples,
+           CAST(NULL AS DOUBLE) AS gap_seconds
     FROM counter_totals
 
     UNION ALL
 
-    SELECT t,
-           'saturation',
-           name,
-           'value',
-           name,
-           value,
-           CASE WHEN name = 'kv_cache_usage' THEN 'ratio' ELSE 'requests' END,
-           CAST(NULL AS VARCHAR),
-           CAST(NULL AS BIGINT),
-           CAST(NULL AS DOUBLE)
+    SELECT t AS t,
+           'saturation' AS section,
+           name AS metric,
+           'value' AS stat,
+           name AS series,
+           value AS value,
+           CASE WHEN name = 'kv_cache_usage' THEN 'ratio' ELSE 'requests' END AS unit,
+           CAST(NULL AS VARCHAR) AS status,
+           CAST(NULL AS BIGINT) AS samples,
+           CAST(NULL AS DOUBLE) AS gap_seconds
     FROM canonical_gauge_bins
 
     UNION ALL
 
-    SELECT CAST(NULL AS BIGINT),
-           'saturation_summary',
-           name,
-           'average',
-           name,
-           average,
-           CASE WHEN name = 'kv_cache_usage' THEN 'ratio' ELSE 'requests' END,
-           CAST(NULL AS VARCHAR),
-           CAST(NULL AS BIGINT),
-           CAST(NULL AS DOUBLE)
+    SELECT CAST(NULL AS BIGINT) AS t,
+           'saturation_summary' AS section,
+           name AS metric,
+           'average' AS stat,
+           name AS series,
+           average AS value,
+           CASE WHEN name = 'kv_cache_usage' THEN 'ratio' ELSE 'requests' END AS unit,
+           CAST(NULL AS VARCHAR) AS status,
+           CAST(NULL AS BIGINT) AS samples,
+           CAST(NULL AS DOUBLE) AS gap_seconds
     FROM gauge_stats
 
     UNION ALL
 
-    SELECT CAST(NULL AS BIGINT),
-           'saturation_summary',
-           name,
-           'peak',
-           name,
-           peak,
-           CASE WHEN name = 'kv_cache_usage' THEN 'ratio' ELSE 'requests' END,
-           CAST(NULL AS VARCHAR),
-           CAST(NULL AS BIGINT),
-           CAST(NULL AS DOUBLE)
+    SELECT CAST(NULL AS BIGINT) AS t,
+           'saturation_summary' AS section,
+           name AS metric,
+           'peak' AS stat,
+           name AS series,
+           peak AS value,
+           CASE WHEN name = 'kv_cache_usage' THEN 'ratio' ELSE 'requests' END AS unit,
+           CAST(NULL AS VARCHAR) AS status,
+           CAST(NULL AS BIGINT) AS samples,
+           CAST(NULL AS DOUBLE) AS gap_seconds
     FROM gauge_stats
 
     UNION ALL
 
-    SELECT CAST(NULL AS BIGINT),
-           'latency',
-           family,
-           stat,
-           family,
-           value,
-           's',
-           CAST(NULL AS VARCHAR),
-           CAST(NULL AS BIGINT),
-           CAST(NULL AS DOUBLE)
+    SELECT CAST(NULL AS BIGINT) AS t,
+           'latency' AS section,
+           family AS metric,
+           stat AS stat,
+           family AS series,
+           value AS value,
+           's' AS unit,
+           CAST(NULL AS VARCHAR) AS status,
+           CAST(NULL AS BIGINT) AS samples,
+           CAST(NULL AS DOUBLE) AS gap_seconds
     FROM histogram_evidence
 
     UNION ALL
 
-    SELECT CAST(NULL AS BIGINT),
-           'request_outcome',
-           'requests',
-           'total',
-           outcome,
-           value,
-           'requests',
-           CAST(NULL AS VARCHAR),
-           CAST(NULL AS BIGINT),
-           CAST(NULL AS DOUBLE)
+    SELECT CAST(NULL AS BIGINT) AS t,
+           'request_outcome' AS section,
+           'requests' AS metric,
+           'total' AS stat,
+           outcome AS series,
+           value AS value,
+           'requests' AS unit,
+           CAST(NULL AS VARCHAR) AS status,
+           CAST(NULL AS BIGINT) AS samples,
+           CAST(NULL AS DOUBLE) AS gap_seconds
     FROM outcome_totals
 
     UNION ALL
 
-    SELECT latest_timestamp_ms,
-           'freshness',
-           'telemetry',
-           'latest_sample_age',
-           origin_cluster || ':' || service || ':' || resource_attributes_json,
-           ({end_ms} - latest_timestamp_ms) / 1000.0,
-           's',
-           freshness_status,
-           CAST(samples AS BIGINT),
-           gap_seconds
+    SELECT CAST(NULL AS BIGINT) AS t,
+           'telemetry_health' AS section,
+           'collector' AS metric,
+           'polls' AS stat,
+           'all resources' AS series,
+           CAST(polls AS DOUBLE) AS value,
+           'polls' AS unit,
+           status AS status,
+           CAST(polls AS BIGINT) AS samples,
+           CAST(NULL AS DOUBLE) AS gap_seconds
+    FROM telemetry_health
+
+    UNION ALL
+
+    SELECT CAST(NULL AS BIGINT) AS t,
+           'telemetry_health' AS section,
+           'source availability' AS metric,
+           'unavailable polls' AS stat,
+           'all resources' AS series,
+           CAST(unavailable_polls AS DOUBLE) AS value,
+           'polls' AS unit,
+           CAST(NULL AS VARCHAR) AS status,
+           CAST(NULL AS BIGINT) AS samples,
+           CAST(NULL AS DOUBLE) AS gap_seconds
+    FROM telemetry_health
+    WHERE unavailable_polls > 0
+
+    UNION ALL
+
+    SELECT CAST(NULL AS BIGINT) AS t,
+           'telemetry_health' AS section,
+           'collection failures' AS metric,
+           'delta' AS stat,
+           stage AS series,
+           value AS value,
+           'failures' AS unit,
+           CAST(NULL AS VARCHAR) AS status,
+           CAST(NULL AS BIGINT) AS samples,
+           CAST(NULL AS DOUBLE) AS gap_seconds
+    FROM collection_failure_totals
+
+    UNION ALL
+
+    SELECT CAST(NULL AS BIGINT) AS t,
+           'telemetry_health' AS section,
+           'dropped samples' AS metric,
+           'total' AS stat,
+           drop_reason AS series,
+           value AS value,
+           'samples' AS unit,
+           CAST(NULL AS VARCHAR) AS status,
+           CAST(NULL AS BIGINT) AS samples,
+           CAST(NULL AS DOUBLE) AS gap_seconds
+    FROM dropped_sample_totals
+
+    UNION ALL
+
+    SELECT latest_timestamp_ms AS t,
+           'freshness' AS section,
+           'telemetry' AS metric,
+           'latest_sample_age' AS stat,
+           origin_cluster || ':' || service || ':' || resource_attributes_json AS series,
+           ({end_ms} - latest_timestamp_ms) / 1000.0 AS value,
+           's' AS unit,
+           freshness_status AS status,
+           CAST(samples AS BIGINT) AS samples,
+           gap_seconds AS gap_seconds
     FROM freshness_summary
 
     UNION ALL
 
-    SELECT latest_timestamp_ms,
-           'freshness_detail',
-           'telemetry',
-           'latest_sample_age',
-           origin_cluster || ':' || service || ':' || resource_attributes_json,
-           ({end_ms} - latest_timestamp_ms) / 1000.0,
-           's',
-           freshness_status,
-           CAST(samples AS BIGINT),
-           gap_seconds
+    SELECT latest_timestamp_ms AS t,
+           'freshness_detail' AS section,
+           'telemetry' AS metric,
+           'latest_sample_age' AS stat,
+           origin_cluster || ':' || service || ':' || resource_attributes_json AS series,
+           ({end_ms} - latest_timestamp_ms) / 1000.0 AS value,
+           's' AS unit,
+           freshness_status AS status,
+           CAST(samples AS BIGINT) AS samples,
+           gap_seconds AS gap_seconds
     FROM ranked_freshness
     WHERE freshness_rank <= {VLLM_MAX_FRESHNESS_DETAILS}
 
     UNION ALL
 
-    SELECT CAST(NULL AS BIGINT),
-           'freshness',
-           'telemetry',
-           'latest_sample_age',
-           'telemetry',
-           CAST(NULL AS DOUBLE),
-           's',
-           'no_data',
-           CAST(0 AS BIGINT),
-           CAST(NULL AS DOUBLE)
+    SELECT CAST(NULL AS BIGINT) AS t,
+           'freshness' AS section,
+           'telemetry' AS metric,
+           'latest_sample_age' AS stat,
+           'telemetry' AS series,
+           CAST(NULL AS DOUBLE) AS value,
+           's' AS unit,
+           'no_data' AS status,
+           CAST(0 AS BIGINT) AS samples,
+           CAST(NULL AS DOUBLE) AS gap_seconds
     WHERE NOT EXISTS (SELECT 1 FROM producer_freshness)
 )
 SELECT t, section, metric, stat, series, value, unit, status, samples, gap_seconds
 FROM output
-ORDER BY section, metric, stat, series, t
+ORDER BY section,
+         CASE WHEN section = 'telemetry_health' AND metric = 'collector' THEN 0 ELSE 1 END,
+         metric,
+         stat,
+         series,
+         t
 LIMIT {VLLM_MAX_RESULT_ROWS}
 """.strip()
     return VllmOverviewQuery(

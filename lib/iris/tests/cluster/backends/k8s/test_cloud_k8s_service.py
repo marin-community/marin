@@ -7,9 +7,10 @@ from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
+import urllib3
 from iris.cluster.platforms.k8s import service as k8s_service
 from iris.cluster.platforms.k8s.service import CloudK8sService
-from iris.cluster.platforms.k8s.types import K8sResource
+from iris.cluster.platforms.k8s.types import K8sResource, KubectlError
 
 
 class _FakeExecStream:
@@ -100,23 +101,6 @@ def test_crud_client_requires_kubernetes(monkeypatch, client_attr: str):
         getattr(svc, client_attr)
 
 
-def test_node_resource_metrics_decodes_raw_response():
-    metrics = b"# HELP container_cpu_usage_seconds_total CPU usage.\ncontainer_cpu_usage_seconds_total 1.5\n"
-    request: dict = {}
-
-    def get_metrics(**kwargs):
-        request.update(kwargs)
-        return SimpleNamespace(data=metrics)
-
-    svc = CloudK8sService(namespace="iris")
-    svc.__dict__["_core_v1"] = SimpleNamespace(connect_get_node_proxy_with_path=get_metrics)
-
-    assert svc.node_resource_metrics("worker-0") == metrics.decode()
-    assert request["name"] == "worker-0"
-    assert request["path"] == "metrics/resource"
-    assert request["_preload_content"] is False
-
-
 class _FakeApiServer:
     """Paginating stand-in for one DynamicClient resource handle.
 
@@ -172,6 +156,25 @@ def test_list_json_walks_all_pages():
     assert names == ["a", "b", "c", "d", "e"]
     # Every request carries a page limit: an unpaginated one is the wedge itself.
     assert [req.get("limit") for req in api.requests] == [k8s_service._LIST_PAGE_LIMIT] * 3
+
+
+def test_list_json_converts_transport_timeout_to_kubectl_error():
+    """A urllib3 timeout must surface as KubectlError, not escape the client boundary.
+
+    The node agent's collection loop catches KubectlError and skips the cycle; an
+    escaping transport error propagates out of its run loop and kills the agent.
+    """
+    svc = CloudK8sService(namespace="iris")
+
+    def timing_out(**kwargs):
+        raise urllib3.exceptions.ReadTimeoutError(None, "/api/v1/pods", "Read timed out. (read timeout=15.0)")
+
+    svc.__dict__["_dyn"] = SimpleNamespace(
+        resources=SimpleNamespace(get=lambda **kwargs: SimpleNamespace(get=timing_out))
+    )
+
+    with pytest.raises(KubectlError, match="list pods failed"):
+        svc.list_json(K8sResource.PODS)
 
 
 def test_iter_json_stops_fetching_when_abandoned():

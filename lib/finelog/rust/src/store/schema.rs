@@ -250,6 +250,10 @@ pub fn map_utf8_utf8_type() -> DataType {
     )
 }
 
+fn list_type(element_type: DataType) -> DataType {
+    DataType::List(Arc::new(Field::new("item", element_type, true)))
+}
+
 /// Whether a map's entries `DataType` is a `Struct` of a string key and a
 /// string value (the shape `COLUMN_TYPE_MAP` accepts), regardless of the field
 /// names or their nullability.
@@ -287,6 +291,8 @@ pub fn arrow_type_for(t: ColumnType) -> Option<DataType> {
         }
         ColumnType::COLUMN_TYPE_BYTES => Some(DataType::Binary),
         ColumnType::COLUMN_TYPE_MAP => Some(map_utf8_utf8_type()),
+        ColumnType::COLUMN_TYPE_FLOAT64_LIST => Some(list_type(DataType::Float64)),
+        ColumnType::COLUMN_TYPE_INT64_LIST => Some(list_type(DataType::Int64)),
         ColumnType::COLUMN_TYPE_UNKNOWN => None,
     }
 }
@@ -498,6 +504,8 @@ fn column_type_name(t: ColumnType) -> &'static str {
         ColumnType::COLUMN_TYPE_BYTES => "COLUMN_TYPE_BYTES",
         ColumnType::COLUMN_TYPE_INT32 => "COLUMN_TYPE_INT32",
         ColumnType::COLUMN_TYPE_MAP => "COLUMN_TYPE_MAP",
+        ColumnType::COLUMN_TYPE_FLOAT64_LIST => "COLUMN_TYPE_FLOAT64_LIST",
+        ColumnType::COLUMN_TYPE_INT64_LIST => "COLUMN_TYPE_INT64_LIST",
     }
 }
 
@@ -513,6 +521,8 @@ fn column_type_from_json(name: &str) -> Result<ColumnType, StatsError> {
         "timestamp_ms" => Some(ColumnType::COLUMN_TYPE_TIMESTAMP_MS),
         "bytes" => Some(ColumnType::COLUMN_TYPE_BYTES),
         "map" => Some(ColumnType::COLUMN_TYPE_MAP),
+        "float64_list" => Some(ColumnType::COLUMN_TYPE_FLOAT64_LIST),
+        "int64_list" => Some(ColumnType::COLUMN_TYPE_INT64_LIST),
         "COLUMN_TYPE_UNKNOWN" => Some(ColumnType::COLUMN_TYPE_UNKNOWN),
         "COLUMN_TYPE_STRING" => Some(ColumnType::COLUMN_TYPE_STRING),
         "COLUMN_TYPE_INT64" => Some(ColumnType::COLUMN_TYPE_INT64),
@@ -522,6 +532,8 @@ fn column_type_from_json(name: &str) -> Result<ColumnType, StatsError> {
         "COLUMN_TYPE_BYTES" => Some(ColumnType::COLUMN_TYPE_BYTES),
         "COLUMN_TYPE_INT32" => Some(ColumnType::COLUMN_TYPE_INT32),
         "COLUMN_TYPE_MAP" => Some(ColumnType::COLUMN_TYPE_MAP),
+        "COLUMN_TYPE_FLOAT64_LIST" => Some(ColumnType::COLUMN_TYPE_FLOAT64_LIST),
+        "COLUMN_TYPE_INT64_LIST" => Some(ColumnType::COLUMN_TYPE_INT64_LIST),
         _ => None,
     };
     resolved.ok_or_else(|| {
@@ -1071,6 +1083,26 @@ pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, 
     Ok(merged_schema)
 }
 
+/// Merge a server-owned schema while treating its derived layout as authoritative.
+///
+/// Columns still evolve additively so historical Parquets remain readable, but
+/// secondary indexes, projections, and grouped extrema are owned by the server
+/// policy rather than monotonically accumulated from older registrations. This
+/// lets a rollout disable a broken derived index without rewriting source data.
+pub fn merge_managed_schema(registered: &Schema, requested: &Schema) -> Result<Schema, StatsError> {
+    let mut merged = merge_schemas(registered, requested)?;
+    for column in &mut merged.columns {
+        column.index = requested
+            .column(&column.name)
+            .map(|requested_column| requested_column.index.clone())
+            .unwrap_or_default();
+    }
+    merged.projections = requested.projections.clone();
+    merged.grouped_extrema = requested.grouped_extrema.clone();
+    validate_index_policies(&merged)?;
+    Ok(merged)
+}
+
 /// Validate a forwarded schema without evolving the receiving schema.
 ///
 /// Unknown nullable columns are returned as ignored. Shared columns must retain their
@@ -1119,13 +1151,19 @@ pub fn ignored_forwarded_schema_columns(
 /// reported). A `Map<Utf8,Utf8>` maps to `COLUMN_TYPE_MAP` regardless of its
 /// entries/key/value field names or sorted flag (so a parquet-round-tripped or
 /// non-pyarrow map still decodes); a map with any other key/value type is
-/// rejected. list/large-list/struct/union and any other unsupported type are
-/// rejected.
+/// rejected. Only lists of float64 and int64 are supported; large-list,
+/// fixed-size-list, struct, union, and other nested types are rejected.
 pub fn arrow_to_column_type(dt: &DataType) -> Result<ColumnType, StatsError> {
     match dt {
         DataType::Dictionary(_, value) => arrow_to_column_type(value),
         DataType::Map(field, _) if is_utf8_utf8_entries(field.data_type()) => {
             Ok(ColumnType::COLUMN_TYPE_MAP)
+        }
+        DataType::List(field) if field.data_type() == &DataType::Float64 => {
+            Ok(ColumnType::COLUMN_TYPE_FLOAT64_LIST)
+        }
+        DataType::List(field) if field.data_type() == &DataType::Int64 => {
+            Ok(ColumnType::COLUMN_TYPE_INT64_LIST)
         }
         DataType::List(_)
         | DataType::LargeList(_)
@@ -1226,7 +1264,9 @@ fn array_buffer_size(arr: &ArrayRef) -> i64 {
 /// Rejects: a batch column
 /// literally named `seq`, a duplicate column, an unknown column, a missing
 /// non-nullable column, a type mismatch (after dictionary decode), and any
-/// nested/union arrow type.
+/// nested/union arrow type. Conflicts with the registered columns are reported as
+/// [`StatsError::BatchSchemaConflict`]; malformed Arrow content remains
+/// [`StatsError::SchemaValidation`].
 pub fn validate_and_align_batch(
     batch: &RecordBatch,
     registered: &Schema,
@@ -1301,12 +1341,12 @@ fn validate_and_align_batch_with_policy(
                     ignored_columns.push((*name).to_string());
                 }
                 UnknownColumnPolicy::IgnoreNullable => {
-                    return Err(StatsError::SchemaValidation(format!(
+                    return Err(StatsError::BatchSchemaConflict(format!(
                         "unknown required column {name:?} not in registered schema"
                     )));
                 }
                 UnknownColumnPolicy::Reject => {
-                    return Err(StatsError::SchemaValidation(format!(
+                    return Err(StatsError::BatchSchemaConflict(format!(
                         "unknown column {name:?} not in registered schema"
                     )));
                 }
@@ -1329,7 +1369,7 @@ fn validate_and_align_batch_with_policy(
             Some((actual_dt, _, array)) => {
                 let actual_type = arrow_to_column_type(actual_dt)?;
                 if actual_type != col.r#type {
-                    return Err(StatsError::SchemaValidation(format!(
+                    return Err(StatsError::BatchSchemaConflict(format!(
                         "column {:?}: type mismatch registered={} batch={}",
                         col.name,
                         column_type_name(col.r#type),
@@ -1356,7 +1396,7 @@ fn validate_and_align_batch_with_policy(
             }
             None => {
                 if !col.nullable {
-                    return Err(StatsError::SchemaValidation(format!(
+                    return Err(StatsError::BatchSchemaConflict(format!(
                         "column {:?}: missing required (non-nullable) column",
                         col.name
                     )));
@@ -1462,6 +1502,14 @@ mod tests {
         assert_eq!(
             arrow_type_for(ColumnType::COLUMN_TYPE_MAP),
             Some(map_utf8_utf8_type())
+        );
+        assert_eq!(
+            arrow_type_for(ColumnType::COLUMN_TYPE_FLOAT64_LIST),
+            Some(list_type(DataType::Float64))
+        );
+        assert_eq!(
+            arrow_type_for(ColumnType::COLUMN_TYPE_INT64_LIST),
+            Some(list_type(DataType::Int64))
         );
         assert_eq!(arrow_type_for(ColumnType::COLUMN_TYPE_UNKNOWN), None);
     }
@@ -2253,7 +2301,7 @@ mod tests {
         );
         assert!(matches!(
             validate_and_align_batch(&b, &worker_stored()),
-            Err(StatsError::SchemaValidation(_))
+            Err(StatsError::BatchSchemaConflict(_))
         ));
     }
 
@@ -2275,7 +2323,7 @@ mod tests {
         );
         assert!(matches!(
             validate_and_align_batch(&b, &worker_stored()),
-            Err(StatsError::SchemaValidation(_))
+            Err(StatsError::BatchSchemaConflict(_))
         ));
     }
 
@@ -2296,7 +2344,7 @@ mod tests {
         );
         assert!(matches!(
             validate_and_align_batch(&b, &worker_stored()),
-            Err(StatsError::SchemaValidation(_))
+            Err(StatsError::BatchSchemaConflict(_))
         ));
     }
 
@@ -2329,10 +2377,9 @@ mod tests {
     #[test]
     fn align_nested_type_rejected() {
         // worker_id arrives as a List, which is unsupported.
-        let list =
-            ListArray::from_iter_primitive::<arrow::datatypes::Int64Type, _, _>(vec![Some(vec![
-                Some(1_i64),
-            ])]);
+        let list = ListArray::from_iter_primitive::<arrow::datatypes::UInt64Type, _, _>(vec![
+            Some(vec![Some(1_u64)]),
+        ]);
         let list_dt = list.data_type().clone();
         let b = batch(
             vec![Field::new("worker_id", list_dt, false)],

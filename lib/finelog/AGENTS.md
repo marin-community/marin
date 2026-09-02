@@ -38,10 +38,9 @@ Start with the shared instructions in `/AGENTS.md`. Finelog-specific notes:
   policy schema lives in `deploy/config.py`.
 - **The admitting layer names the caller.** A `jwt` layer's matched key binds the
   request to that key's `cluster`; a `cidr` match binds to nothing (see
-  `AuthIdentity` in `rust/src/server/auth.rs`). `PushLogs` stamps each row with the
-  authenticated cluster. Cross-cluster forwarding instead writes through the generic
-  `WriteRows` path and stamps the origin into the row itself, so the `cluster` column
-  is a label, not a trust boundary — any admitted sender can write any cluster's rows.
+  `AuthIdentity` in `rust/src/server/auth.rs`). `PushLogs` and `WriteRows` overwrite
+  each row's `cluster` with the authenticated JWT cluster. Network-authenticated
+  writers stamp no cluster.
 - Keys are opaque strings. Any structure (`/system/...`, `/user/<job>/<task>:<attempt>`)
   is iris-side convention; finelog does not parse keys.
 
@@ -50,8 +49,8 @@ Start with the shared instructions in `/AGENTS.md`. Finelog-specific notes:
 A per-cluster finelog ships its rows to a hub finelog itself; no other process
 relays them. `forwarding:` in its deploy config names the hub, this cluster's
 name, and a `rigging.secrets` reference to its Ed25519 private key; the hub adds
-one `jwt` key entry per sender. Each server therefore owns a keypair, distinct
-from the iris controller's signing key.
+one `jwt` key entry per sender. Each sending Finelog therefore owns a keypair,
+distinct from the iris controller's signing key; the hub stores its public key.
 
 The forwarder (`rust/src/server/forwarding.rs`) forwards **every table**, not just
 logs. Each round it lists the live namespaces and gives each one a batch-sized turn,
@@ -59,12 +58,15 @@ then immediately starts another round while any namespace remains backlogged. Pe
 namespace, it reads the rows past a durable per-`(target, namespace)` cursor
 (`forward_state` in the catalog) and ships them through the generic `RegisterTable` +
 `WriteRows` (Arrow IPC) path — a namespace the hub lacks is created there first. Rows
-of a table with a `cluster` column are stamped with the origin and skipped if they
+forwarded from the legacy `telemetry_v1` root can route to service-specific namespaces;
+the hub registers each missing destination with its canonical server-owned schema and
+managed storage policy before appending the routed rows. Rows of a table with a
+`cluster` column are stamped with the origin and skipped if they
 already carry a foreign one, so a hub's own relayed rows never loop. The cursor is
 durable, so a restart resumes rather than replays.
 
-`telemetry_v1` is server-owned at both ends of federation. A JWT sender's
-`RegisterTable` cannot evolve an existing hub telemetry schema or its physical layout.
+`telemetry_v1.*` and `levanter.metrics` are server-owned at both ends of federation. A JWT sender's
+`RegisterTable` cannot evolve an existing hub telemetry or metric schema or its physical layout.
 If the sender is ahead by an optional column, the hub reports the ignored column once,
 drops that column from forwarded batches, and appends the compatible fields. Required
 unknown columns and shared-column type changes remain errors. Other namespaces retain
@@ -74,13 +76,29 @@ Forwarding is **best-effort by construction**: the sending store holds the recor
 the hub a convenience copy. A backlog is a durable cursor into the sender's bounded
 local retention rather than a separate queue, so the forwarder drains it without an
 age or row-count cap. Non-log chunks from one read turn may wait for hub durability
-concurrently; log chunks stay serial to preserve line order. Rows are skipped only
-after local eviction makes them unreadable. A rejected write preserves its cursor and
+concurrently; log chunks stay serial to preserve line order. Rows are skipped after
+local eviction makes them unreadable or after the hub returns `invalid_argument` for
+permanently invalid content. A `failed_precondition` write preserves its cursor and
 invalidates the cached hub registration; the next sweep re-registers the current source
 schema and retries while other namespaces continue forwarding. Transient failures get
 three attempts before the namespace yields for the sweep, without advancing its cursor.
 A hub outage therefore cannot consume extra sender memory, but a long enough outage can
 still outlive local retention.
+
+Every five minutes the sender writes delta counters to `telemetry_v1.finelog`. A later
+successful forwarding sweep can copy them to the hub. `forwarding_batches` labels accepted,
+permanently rejected, schema-conflicting, and retryable batches by namespace.
+`forwarding_seq_positions` labels accepted positions and positions skipped after a
+permanent rejection or retention eviction. Hub copies can be stale during the failure
+they diagnose, so operators check metric freshness and query the regional namespace
+when the hub or network is unavailable.
+
+Client-owned namespaces register lazily on their first write. A long-lived `Table`
+handle that receives `NOT_FOUND` from `WriteRows` retains the failed batch, registers
+its schema again, and retries. This lets producers recover when a node-local Finelog
+restart replaces the catalog. Producers running a client without this behavior need
+a restart, which creates a new `Table` handle and repeats lazy registration, or a
+manual `RegisterTable` call before their writes resume.
 
 Only the k8s backend can forward — it projects the key through a Secret. The gcp
 backend refuses, because its only channel to the server is world-readable
@@ -190,7 +208,7 @@ Pulumi stack's post-rollout `finelog deploy verify`. A binary that cannot regist
 
 ## Changing a server-owned schema
 
-`log` and `telemetry_v1` are registered by the server itself, and every boot
+`log`, the semantic `telemetry_v1.*` tables, and `levanter.metrics` are registered by the server itself, and every boot
 re-merges this binary's definition against the schema that deployment's catalog
 persisted. A merge that fails wedges the namespace for as long as the image is
 deployed, so `/health` reports it (`server/ingest_health.rs`) and `safe_deploy
@@ -224,7 +242,12 @@ benchmark; there is no free-form plugin registry.
 A column declared with `ColumnIndex.trigram` gets a span-granular substring
 section. That index makes `contains(col, …)`, `col LIKE '%…%'`, and regexes with
 required literal runs prune instead of full-scan. Today it is on `log.key`,
-`log.data`, and `telemetry_v1.name`.
+`log.data`, and telemetry `name` columns. `levanter.metrics` intentionally has no
+secondary indexes: its queries use exact `run_id` and `name` predicates, which
+are served by the hidden exact run partition and Parquet sort/statistics. Its
+managed policy also disables adaptive string value counts and removes stale
+bundles written under the old telemetry-derived schema in bounded maintenance
+batches.
 
 Sorting by a column does not cover substring search of it. A log key is
 `/user/<job>-coord/<job>/<task>:<attempt>`, so the job an operator searches for
@@ -260,8 +283,9 @@ remains.
 predicate and an explicit included-column list. The planner substitutes one
 only when both the predicate values and every referenced query column are
 covered. Covered segments use the projection while uncovered segments retain
-source Parquet. The initial `training-status` projection covers three metric
-names and seven columns.
+source Parquet. The legacy root `telemetry_v1` table retains its training
+projections during migration. Typed training queries use `levanter.metrics`,
+whose exact hidden `run_id` partitions provide their primary pruning boundary.
 
 Redefining a projection is not a conflict. `merge_schemas` supersedes the
 registered definition with the requested one, unless the registered one already

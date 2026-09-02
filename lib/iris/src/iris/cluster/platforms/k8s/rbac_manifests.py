@@ -18,7 +18,9 @@ CLUSTER_ROLE_RULES = [
         "verbs": ["get", "list", "watch", "create", "update", "patch", "delete"],
     },
     {"apiGroups": [""], "resources": ["nodes"], "verbs": ["get", "list", "watch"]},
-    {"apiGroups": [""], "resources": ["nodes/proxy"], "verbs": ["get"]},
+    # The node agent reads its own kubelet's metrics/resource endpoint directly;
+    # the kubelet authorizes that read against the nodes/metrics subresource.
+    {"apiGroups": [""], "resources": ["nodes/metrics"], "verbs": ["get"]},
     {
         "apiGroups": [""],
         "resources": ["configmaps"],

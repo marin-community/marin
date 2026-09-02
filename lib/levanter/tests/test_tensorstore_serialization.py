@@ -611,3 +611,15 @@ def test_checkpoints_without_a_manifest_still_load(tmp_path):
         restored = load_checkpoint({"model": {"w": hax.zeros(A)}}, str(tmp_path))
 
         assert jax.numpy.array_equal(restored["model"]["w"].array, state["model"]["w"].array)
+
+
+def test_a_leaf_absent_from_the_exemplar_is_not_read_back():
+    fp32 = jnp.arange(8, dtype=jnp.float32) + 0.123456789
+    written = {"params": fp32.astype(jnp.bfloat16), "master_params": fp32}
+
+    with TemporaryDirectory() as tmpdir:
+        save_checkpoint(written, step=0, checkpoint_path=tmpdir)
+        restored = load_checkpoint({"params": jnp.zeros(8, jnp.float32)}, tmpdir)
+
+    assert restored["params"].dtype == jnp.bfloat16
+    assert_trees_not_close(restored["params"].astype(jnp.float32), fp32)

@@ -18,6 +18,70 @@ from levanter.utils.activation import ActivationFunctionEnum
 _DEFAULT_EP_CAPACITY_FACTOR = 1.25
 # #2710 used 1.25 as the practical EP ring default to avoid over/under-packing.
 
+
+def _pack_pairs_u32(a: jax.Array, b: jax.Array) -> jax.Array:
+    """Interleave two 16-bit ``[..., F]`` arrays as ``[..., 2F]``."""
+    ai = jax.lax.bitcast_convert_type(a, jnp.uint16).astype(jnp.uint32)
+    bi = jax.lax.bitcast_convert_type(b, jnp.uint16).astype(jnp.uint32)
+    packed = ai | (bi << jnp.uint32(16))
+    # A uint32 -> 16-bit bitcast appends an axis of 2, little end first, so `a` leads.
+    return jax.lax.bitcast_convert_type(packed, a.dtype).reshape(*a.shape[:-1], 2 * a.shape[-1])
+
+
+def _unpack_pairs_u32(x: jax.Array) -> tuple[jax.Array, jax.Array]:
+    """``[..., 2F]`` of a 16-bit dtype -> ``([..., F], [..., F])``, undoing ``_pack_pairs_u32``."""
+    pairs = x.reshape(*x.shape[:-1], x.shape[-1] // 2, 2)
+    packed = jax.lax.bitcast_convert_type(pairs, jnp.uint32)
+    lo = (packed & jnp.uint32(0xFFFF)).astype(jnp.uint16)
+    hi = (packed >> jnp.uint32(16)).astype(jnp.uint16)
+    return (
+        jax.lax.bitcast_convert_type(lo, x.dtype),
+        jax.lax.bitcast_convert_type(hi, x.dtype),
+    )
+
+
+# `bitcast_convert_type` has no AD rule, so the interleave carries its own transpose.
+@jax.custom_vjp
+def _interleave_halves(gate: jax.Array, up: jax.Array) -> jax.Array:
+    return _pack_pairs_u32(gate, up)
+
+
+def _interleave_halves_fwd(gate, up):
+    return _pack_pairs_u32(gate, up), None
+
+
+def _interleave_halves_bwd(_, ct):
+    return _unpack_pairs_u32(ct)
+
+
+_interleave_halves.defvjp(_interleave_halves_fwd, _interleave_halves_bwd)
+
+
+def _interleave_gate_up(moe_w13: jax.Array, moe_dim: int) -> jax.Array:
+    """grug w13 [E,H,2I] gate=[:I], up=[I:] -> interleaved [g0,u0,g1,u1,...] (QuACK layout)."""
+    # The split's width check matters here: the packed path would broadcast mismatched halves
+    # against each other and return a wrong-width array instead of raising.
+    gate, up = split_moe_w13_output(moe_w13, intermediate_dim=moe_dim, interleaved=False)
+    if moe_w13.dtype.itemsize != 2:
+        return jnp.stack([gate, up], axis=-1).reshape(moe_w13.shape)
+    return _interleave_halves(gate, up)
+
+
+def _swiglu_gate_up_backward(gu: jax.Array, dh: jax.Array) -> jax.Array:
+    """Cotangent of the interleaved gate/up pre-activations, given the SwiGLU output's."""
+    if gu.dtype.itemsize == 2:
+        gate, up = _unpack_pairs_u32(gu)
+    else:
+        gate, up = gu[..., 0::2], gu[..., 1::2]
+    sg = jax.nn.sigmoid(gate)
+    silu = gate * sg
+    dgate = dh * up * (sg + silu * (1.0 - sg))
+    dup = dh * silu
+    if gu.dtype.itemsize == 2:
+        return _pack_pairs_u32(dgate.astype(gu.dtype), dup.astype(gu.dtype))
+    return jnp.stack([dgate, dup], axis=-1).reshape(gu.shape)
+
+
 PspecAxis: TypeAlias = str | tuple[str, ...] | None
 MoeActivation: TypeAlias = ActivationFunctionEnum | Callable[[jax.Array], jax.Array]
 MoeImplementation: TypeAlias = Literal[
@@ -185,3 +249,9 @@ def _chunk_capacity_drops(cu: Int[Array, "E1"], bounds: Sequence[int], caps: Seq
         count = cu[bounds[chunk + 1]] - cu[bounds[chunk]]
         total = total + jnp.maximum(count - cap, 0).astype(jnp.int32)
     return total
+
+
+def _zero_inactive_grouped_rows(values: jax.Array, cumulative_group_sizes: jax.Array) -> jax.Array:
+    """Zero the rows past the last expert group, which the grouped kernels never write."""
+    active_rows = cumulative_group_sizes[-1]
+    return jnp.where(jnp.arange(values.shape[0])[:, None] < active_rows, values, jnp.zeros((), values.dtype))

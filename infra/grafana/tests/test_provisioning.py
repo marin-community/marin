@@ -35,7 +35,7 @@ EXPRESSION_UID = "__expr__"
 # Grafana's built-in fan-out datasource: the panel's targets each name a real one.
 MIXED_DATASOURCE = "-- Mixed --"
 VALID_SEVERITIES = {"critical", "warning"}
-STORAGE_ALERT_FRACTION = 0.8
+STORAGE_QUOTA_EXCEEDED_FRACTION = 1.0
 
 
 def _stitched_dashboards() -> dict[str, dict]:
@@ -66,6 +66,30 @@ def _panel_sql(dashboard: dict) -> list[str]:
         for param in query.get("url_options", {}).get("params", [])
         if param["key"] == "sql"
     ]
+
+
+def _create_levanter_stream_view(database: duckdb.DuckDBPyConnection) -> None:
+    database.execute('CREATE VIEW "levanter.metrics" AS SELECT * FROM telemetry_v1')
+
+
+def _storage_usage_database() -> duckdb.DuckDBPyConnection:
+    database = duckdb.connect()
+    database.execute(
+        """
+        CREATE TABLE "storage.usage"(
+            provider VARCHAR,
+            metric VARCHAR,
+            zone VARCHAR,
+            bucket VARCHAR,
+            storage_class VARCHAR,
+            value_bytes DOUBLE,
+            observed_at TIMESTAMPTZ,
+            collected_at TIMESTAMPTZ,
+            seq BIGINT
+        )
+        """
+    )
+    return database
 
 
 def _load(path: Path) -> dict:
@@ -157,15 +181,6 @@ class _FakeFinelog:
 
     def query(self, sql: str, *, max_rows: int) -> pa.Table:
         if '"storage.usage"' in sql:
-            if "AS detail" in sql:
-                return pa.table(
-                    {
-                        "region": ["US-EAST-02A"],
-                        "metric": ["quota_bytes"],
-                        "detail": ["STANDARD"],
-                        "value": [0],
-                    }
-                )
             return pa.table(
                 {
                     "region": ["US-EAST-02A"],
@@ -252,18 +267,10 @@ def test_coreweave_storage_capacity_pages_critical_ops():
     assert rule["noDataState"] == "OK"
     assert rule["labels"] == {"severity": "critical"}
     assert source["datasourceUid"] == "finelog-marin"
-    assert 'FROM "storage.usage"' in sql
-    assert "metric IN ('used_bytes', 'quota_bytes')" in sql
-    assert "PARTITION BY provider, metric, zone, bucket, storage_class" in sql
-    assert "ORDER BY observed_at DESC, seq DESC" in sql
-    assert "observed_at >= CURRENT_TIMESTAMP - INTERVAL '3 hours'" in sql
-    assert "SUM(value_bytes) AS usage_bytes" in sql
-    assert "MAX(value_bytes) AS quota_bytes" in sql
-    assert "usage.usage_bytes / NULLIF(quota.quota_bytes, 0) AS value" in sql
     assert {column["selector"] for column in source["model"]["columns"]} == {"region", "value"}
     assert threshold["model"]["conditions"][0]["evaluator"] == {
         "type": "gt",
-        "params": [STORAGE_ALERT_FRACTION],
+        "params": [STORAGE_QUOTA_EXCEEDED_FRACTION],
     }
 
     (policy,) = _load(ALERTING / "policies.yaml")["policies"]
@@ -272,8 +279,71 @@ def test_coreweave_storage_capacity_pages_critical_ops():
     assert route["receiver"] == "ops-critical"
     assert "mute_time_intervals" not in route
 
+    database = _storage_usage_database()
+    database.executemany(
+        'INSERT INTO "storage.usage" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [
+            (
+                "coreweave",
+                "used_bytes",
+                "US-EAST-02A",
+                "bucket",
+                "STANDARD",
+                120.0,
+                "2026-08-27 11:00:00+00",
+                "2026-08-26 10:00:00+00",
+                1,
+            ),
+            (
+                "coreweave",
+                "quota_bytes",
+                "US-EAST-02A",
+                None,
+                "STANDARD",
+                100.0,
+                "2026-08-27 11:00:00+00",
+                "2026-08-26 10:00:00+00",
+                2,
+            ),
+            (
+                "coreweave",
+                "used_bytes",
+                "US-EAST-02A",
+                "deleted-bucket",
+                "STANDARD",
+                70.0,
+                "2026-08-27 11:00:00+00",
+                "2026-08-26 10:00:00+00",
+                5,
+            ),
+            (
+                "coreweave",
+                "used_bytes",
+                "US-EAST-02A",
+                "bucket",
+                "STANDARD",
+                80.0,
+                "2026-08-26 09:00:00+00",
+                "2026-08-27 11:00:00+00",
+                3,
+            ),
+            (
+                "coreweave",
+                "quota_bytes",
+                "US-EAST-02A",
+                None,
+                "STANDARD",
+                100.0,
+                "2026-08-26 09:00:00+00",
+                "2026-08-27 11:00:00+00",
+                4,
+            ),
+        ],
+    )
+    assert database.execute(sql).fetchall() == [("US-EAST-02A", 0.8)]
 
-def test_coreweave_storage_alert_notifies_slack_when_a_known_series_is_stale():
+
+def test_coreweave_storage_alert_notifies_slack_when_collection_is_missing_for_24_hours():
     (rule,) = [rule for rule in _rules() if rule["uid"] == "coreweave-storage-telemetry-stale"]
     source, threshold = rule["data"]
     sql = next(param["value"] for param in source["model"]["url_options"]["params"] if param["key"] == "sql")
@@ -281,17 +351,20 @@ def test_coreweave_storage_alert_notifies_slack_when_a_known_series_is_stale():
     assert rule["for"] == "5m"
     assert rule["noDataState"] == "OK"
     assert rule["labels"] == {"severity": "warning", "notification": "slack"}
-    assert 'FROM "storage.usage"' in sql
-    assert "PARTITION BY provider, metric, zone, bucket, storage_class" in sql
-    assert "COALESCE(bucket, storage_class) AS detail" in sql
-    assert "observed_at < CURRENT_TIMESTAMP - INTERVAL '3 hours'" in sql
-    assert {column["selector"] for column in source["model"]["columns"]} == {
-        "region",
-        "metric",
-        "detail",
-        "value",
-    }
+    assert {column["selector"] for column in source["model"]["columns"]} == {"value"}
     assert threshold["model"]["conditions"][0]["evaluator"] == {"type": "gt", "params": [0]}
+
+    sql = sql.replace("CURRENT_TIMESTAMP", "TIMESTAMP '2026-08-27 12:00:00+00:00'")
+    for collected_at, expected in [
+        ("2026-08-26 13:00:00+00", []),
+        ("2026-08-26 11:00:00+00", [(1,)]),
+    ]:
+        database = _storage_usage_database()
+        database.execute(
+            'INSERT INTO "storage.usage" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            ("coreweave", "used_bytes", "US-EAST-02A", "bucket", "STANDARD", 80.0, collected_at, collected_at, 1),
+        )
+        assert database.execute(sql).fetchall() == expected
 
 
 def test_every_slack_alert_goes_through_the_bridge_and_none_through_grafana():
@@ -337,7 +410,11 @@ def test_training_stall_alert_pages_each_hero_run_after_five_minutes():
     (rule,) = [rule for rule in _rules() if rule["uid"] == "training-progress-stalled"]
     assert rule["for"] == "5m"
     assert "isPaused" not in rule
-    assert rule["labels"] == {"severity": "critical", "notification": "hero-run"}
+    assert rule["labels"] == {
+        "severity": "critical",
+        "notification": "hero-run",
+        "operator_behavior": "hero",
+    }
     assert rule["data"][0]["model"]["url"] == "/alerts/training_stalls"
 
     route = _route_for(rule)
@@ -346,13 +423,27 @@ def test_training_stall_alert_pages_each_hero_run_after_five_minutes():
     assert {column["selector"] for column in rule["data"][0]["model"]["columns"]} >= {"run", "job"}
 
 
+def test_training_loss_alert_selects_the_hero_operator_behavior():
+    (rule,) = [rule for rule in _rules() if rule["uid"] == "training-loss-spike"]
+
+    assert rule["labels"] == {
+        "severity": "critical",
+        "notification": "hero-run",
+        "operator_behavior": "hero",
+    }
+
+
 def test_run_health_alerts_split_paging_from_announcing():
     # The hero on-call policy pages for a lost run or an unstable optimizer, and
     # announces the routing, throughput, and Iris signals an operator reads.
     rules = {rule["uid"]: rule for rule in _rules()}
     paging = ("training-telemetry-gone", "training-optimizer-unstable")
     for uid in paging:
-        assert rules[uid]["labels"] == {"severity": "critical", "notification": "hero-run"}
+        assert rules[uid]["labels"] == {
+            "severity": "critical",
+            "notification": "hero-run",
+            "operator_behavior": "hero",
+        }
         assert rules[uid]["for"] == "5m"
     assert rules["training-run-health-degraded"]["labels"] == {"severity": "warning", "notification": "slack"}
 
@@ -397,6 +488,19 @@ def test_clusters_dashboard_shows_finelog_fleet_health():
     assert panel["datasource"]["uid"] == "finelog-marin"
     selectors = {column["selector"] for column in panel["targets"][0]["columns"]}
     assert {"cluster", "server", "responsive", "ready", "desired", "latency_ms"} <= selectors
+
+
+def test_clusters_dashboard_shows_finelog_forwarding_failures_and_drops():
+    panels = {panel.get("title"): panel for panel in _all_panels(_stitched_dashboards()["clusters.json"])}
+    panel = panels["Finelog forwarding failures and drops"]
+    sql = _panel_sql({"panels": [panel]})[0]
+
+    assert 'FROM "telemetry_v1.finelog"' in sql
+    assert "name = 'forwarding_batches'" in sql
+    assert "json_get(attributes_json, 'outcome') <> 'accepted'" in sql
+    assert "name = 'forwarding_seq_positions'" in sql
+    assert "'permanent_rejection', 'retention_eviction'" in sql
+    assert panel["datasource"]["uid"] == "finelog-marin"
 
 
 def test_clusters_dashboard_shows_node_deadlock_and_reboot_state():
@@ -623,7 +727,7 @@ def test_telemetry_queries_bound_their_window_with_foldable_macros():
     unbounded: list[tuple[str, str]] = []
     for name, dashboard in _stitched_dashboards().items():
         for sql in _panel_sql(dashboard):
-            if '"telemetry_v1"' not in sql:
+            if '"telemetry_v1' not in sql:
                 continue
             if "timestamp_ms >= CAST(EXTRACT(EPOCH FROM" not in sql:
                 unbounded.append((name, sql))
@@ -680,6 +784,29 @@ def test_cluster_variable_lists_every_configured_cluster():
         assert set(variables["cluster"]["query"].split(",")) == expected, name
 
 
+def test_training_run_selector_uses_a_fixed_discovery_window():
+    dashboard = _stitched_dashboards()["training.json"]
+    variable = next(variable for variable in dashboard["templating"]["list"] if variable["name"] == "run")
+    sql = next(
+        param["value"] for param in variable["query"]["infinityQuery"]["url_options"]["params"] if param["key"] == "sql"
+    )
+    at = datetime(2026, 8, 26, 12, tzinfo=UTC)
+    database = duckdb.connect()
+    database.execute('CREATE TABLE "levanter.metrics"(run_id VARCHAR, step BIGINT, timestamp_ms BIGINT)')
+    database.executemany(
+        'INSERT INTO "levanter.metrics" VALUES (?, ?, ?)',
+        [
+            ("recent-run", 100, int((at.timestamp() - 3_600) * 1_000)),
+            ("old-run", 200, int((at.timestamp() - 3 * 86_400) * 1_000)),
+        ],
+    )
+    sql = sql.replace("now()", "TIMESTAMP '2026-08-26 12:00:00+00:00'")
+    sql = sql.replace("{{from}}", "TIMESTAMP '2026-08-19 12:00:00+00:00'")
+    sql = sql.replace("{{to}}", "TIMESTAMP '2026-08-26 12:00:00+00:00'")
+
+    assert database.execute(sql).fetchall() == [("recent-run",)]
+
+
 def test_cluster_series_keep_one_colour_across_dashboards():
     # Colour follows the entity, not its rank: a cluster filtered out of one panel must
     # not repaint the survivors, and the same cluster reads the same on every dashboard.
@@ -719,6 +846,7 @@ def test_training_loss_by_attempt_separates_process_incarnations():
         )
         """
     )
+    _create_levanter_stream_view(database)
     at = int(datetime(2026, 8, 20, 12, tzinfo=UTC).timestamp() * 1000)
     database.executemany(
         "INSERT INTO telemetry_v1 VALUES ('levanter', 'hero-run', ?, 'train_loss', ?, ?)",
@@ -808,6 +936,7 @@ def test_training_execution_health_uses_the_current_attempt_and_iris_state():
         )
         """
     )
+    _create_levanter_stream_view(database)
     fixed_now_ms = int(datetime(2026, 8, 21, 12, tzinfo=UTC).timestamp() * 1000)
     database.executemany(
         "INSERT INTO telemetry_v1 VALUES ('levanter', ?, 'cw-a', ?, ?, ?, 'phase', ?, ?, ?)",
@@ -966,7 +1095,7 @@ def test_training_attempts_table_links_the_newest_attempt_to_iris():
     database = duckdb.connect()
     database.execute(
         """
-        CREATE TABLE telemetry_v1(
+        CREATE TABLE "levanter.metrics"(
             service VARCHAR,
             run_id VARCHAR,
             cluster VARCHAR,
@@ -982,7 +1111,7 @@ def test_training_attempts_table_links_the_newest_attempt_to_iris():
     hour = 3_600_000
     at = int(datetime(2026, 8, 21, 12, tzinfo=UTC).timestamp() * 1000)
     database.executemany(
-        "INSERT INTO telemetry_v1 VALUES ('levanter', ?, ?, ?, ?, ?, 'phase', 1, ?)",
+        "INSERT INTO \"levanter.metrics\" VALUES ('levanter', ?, ?, ?, ?, ?, 'phase', 1, ?)",
         [
             # An attempt that ran two hours on a CoreWeave cluster and then failed.
             ("hero-run", "cw-a", "/u/hero-run-coord/train", "attempt-one", "0", at - 6 * hour),
@@ -1024,6 +1153,7 @@ def test_training_moe_health_queries_show_routing_signals():
         )
         """
     )
+    _create_levanter_stream_view(database)
     at = int(datetime(2026, 8, 21, 12, tzinfo=UTC).timestamp() * 1000)
     database.executemany(
         "INSERT INTO telemetry_v1 VALUES ('levanter', 'hero-run', ?, ?, ?)",

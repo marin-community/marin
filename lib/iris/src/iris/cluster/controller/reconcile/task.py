@@ -54,13 +54,6 @@ class TerminalKind(StrEnum):
     UNSCHEDULABLE = "unschedulable"
 
 
-class TransitionSource(StrEnum):
-    """Caller policy for side effects attached to task-state updates."""
-
-    WORKER_RECONCILE = "worker_reconcile"
-    DISPATCH = "dispatch"
-
-
 @dataclass(frozen=True, slots=True)
 class TerminalDecision:
     """One task → terminal assertion to be applied as part of a batch."""
@@ -284,15 +277,13 @@ def apply_one_transition(
     snapshot: TransitionSnapshot,
     update: TaskUpdate,
     now_ms: int,
-    *,
-    source: TransitionSource = TransitionSource.WORKER_RECONCILE,
 ) -> TransitionOutcome | None:
     """Apply one ``TaskUpdate`` against ``state``: write attempt + task mutations.
 
-    This is the single per-update transition core. Worker reconcile updates
-    charge build failures to worker health so hosts that keep failing builds
-    get reaped; direct providers manage their own hosts. ``update.container_id``
-    is folded into the task row when present.
+    This is the single per-update transition core. An update carrying an Iris
+    ``worker_id`` charges launch/build failures to that worker so a host that
+    keeps failing builds gets reaped. ``update.container_id`` is folded into the
+    task row when present.
 
     Returns a :class:`TransitionOutcome` describing the change so the
     orchestrator can drive the peer-cascade and job-recompute. Returns
@@ -401,17 +392,15 @@ def apply_one_transition(
     # (see Overlay.job_basis), symmetric with preemption.
     failure_count = task.failure_count
     preemption_count = task.preemption_count
-    charge_worker_build_failures = source is TransitionSource.WORKER_RECONCILE
-
     if update.new_state == job_pb2.TASK_STATE_RUNNING:
         started_ms = now_ms
         task_state = job_pb2.TASK_STATE_RUNNING
     elif update.new_state == job_pb2.TASK_STATE_BUILDING:
-        # Worker BUILDING runs setup, so start its clock to catch wedged builds
-        # (#6077). K8s BUILDING includes pre-admission waits, so its clock starts
-        # at RUNNING instead (#7431).
-        if source is TransitionSource.WORKER_RECONCILE:
-            started_ms = now_ms
+        # Some runtimes report BUILDING while execution/setup is already under
+        # way; others include admission waits. The observation states the fact
+        # explicitly rather than making the kernel infer it from backend type.
+        if update.execution_started_at is not None:
+            started_ms = update.execution_started_at.epoch_ms()
         task_state = job_pb2.TASK_STATE_BUILDING
     elif update.new_state in (
         job_pb2.TASK_STATE_FAILED,
@@ -434,14 +423,19 @@ def apply_one_transition(
         # infra (bad/missing node); a FAILED-from-BUILDING is a failed image pull
         # or runtime setup. A FAILED-from-ASSIGNED is not a host fault (and the
         # worker never reports it: it announces BUILDING before running). Direct
-        # providers manage their own hosts, so this is gated on
-        # charge_worker_build_failures (worker path only).
+        # providers that do not expose Iris workers leave ``worker_id`` unset.
         launch_or_build_failure = (
             update.new_state == job_pb2.TASK_STATE_WORKER_FAILED
             and prior_state in (job_pb2.TASK_STATE_ASSIGNED, job_pb2.TASK_STATE_BUILDING)
         ) or (update.new_state == job_pb2.TASK_STATE_FAILED and prior_state == job_pb2.TASK_STATE_BUILDING)
-        if charge_worker_build_failures and launch_or_build_failure and attempt_worker_id is not None:
-            state.emit_worker_build_failed(WorkerId(str(attempt_worker_id)))
+        observed_worker_id = update.worker_id
+        if (
+            launch_or_build_failure
+            and observed_worker_id is not None
+            and attempt_worker_id is not None
+            and observed_worker_id == WorkerId(str(attempt_worker_id))
+        ):
+            state.emit_worker_build_failed(observed_worker_id)
 
         if update.new_state == job_pb2.TASK_STATE_FAILED:
             # Application failure (non-zero exit / setup error): failure budget.
@@ -507,6 +501,7 @@ def apply_one_transition(
             pod_uid=update.pod_uid,
             node_name=update.node_name,
             terminal_reason=update.terminal_reason,
+            output_archive=update.output_archive,
         )
     )
     state.merge_task(

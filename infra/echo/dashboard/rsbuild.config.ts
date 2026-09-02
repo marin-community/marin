@@ -13,8 +13,18 @@ export default defineConfig({
   output: {
     distPath: { root: 'dist' },
     assetPrefix: 'auto',
+    dataUriLimit: { font: 40_000 },
+    inlineScripts: true,
+    inlineStyles: true,
+    legalComments: 'inline',
+  },
+  // Cloud Run admits one request per Echo instance so CPU-bound searches scale out.
+  // Keep the dashboard in one response instead of scaling out for its initial assets.
+  performance: {
+    chunkSplit: { strategy: 'all-in-one' },
   },
   html: {
+    inject: 'body',
     template: './src/template.html',
     templateParameters: { title: 'Echo · Marin' },
   },

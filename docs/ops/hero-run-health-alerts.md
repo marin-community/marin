@@ -13,6 +13,16 @@ Pushover monitor applies.
 
 Each rule evaluates once a minute and stays pending for five. Each firing check is its own alert
 instance labeled with its `reason`; the hero-run route groups them by logical run.
+Every `notification=hero-run` group, including `TrainingProgressStalled` and
+`TrainingLossSpike`, carries `operator_behavior=hero`. The bridge resolves that
+trusted behavior to the `operator:hero` channel on Loom's shared `ops` profile,
+giving Hero operations a durable coordinator separate from generic Grafana incidents.
+The Hero behavior gives that coordinator stable discovery and query guidance,
+not a precomputed evidence snapshot. Starting from the alert's cluster, run, and
+job labels, the coordinator queries current execution UIDs and telemetry, derives
+prior coordinator roots for the same logical run, and then inspects exact Iris
+state, event, and task-log prefixes. It compares tasks and ranks without a fixed
+error-signature list and treats the first pass as lead gathering, not a diagnosis.
 
 ## Enrollment
 
@@ -39,20 +49,22 @@ a training run with no signal that it happened. That is what `iris_state_stale` 
 | `router_bias` | Newest bound over 400 from zero | `train_router_bias_max`, `train_router_bias_min` |
 | `throughput_low` | Most of 15 minutes below 2.0M tokens per second | `throughput_tokens_per_second` |
 | `mfu_low` | Most of 15 minutes below 15% | `throughput_mfu` |
-| `eval_regressed` | Newest evaluation, within 30 minutes, worse than the one before it | `eval_paloma_macro_loss` |
+| `eval_regressed` | Newest evaluation, within 30 minutes, worse than two evaluations ago or over 2% worse than the preceding evaluation | `eval_paloma_macro_loss` |
 | `iris_state_stale` | Newest `iris.task_state` row for the root over 5 minutes old | `iris.task_state` |
 | `task_retried` | A controller retry or gang requeue in the last 15 minutes | `iris.task_event` |
 
 Uniform routing over the hero rung's experts is 5.951 entropy, so falling entropy is expert collapse.
 The 7% drop limit sits above the intermittent 5% spikes a healthy MoE run shows.
 
-One bounded `telemetry_v1` scan per bridge cache interval feeds all three rules, reduced over a
-single execution: the newest attempt process zero reports. `loss_jump` reads its two loss windows
-against each other, so it filters them to that same execution. A retry keeps the run ID and takes a
-new `execution_uid`, so partitioning on the run alone would sum one attempt's skipped steps into the
-next and compare evaluations across a restore that redid steps. Process zero is the stable choice
-because Levanter publishes tracker metrics only from it. A check reads a newest sample only while it
-is under 15 minutes old.
+The enrollment query returns the latest `execution_uid` with each phase heartbeat. One subsequent,
+bounded `levanter.metrics` scan per bridge cache interval feeds all three rules, using exact
+cluster, run, and execution predicates rather than scanning the table again to rediscover the
+attempt. `loss_jump` reads its two loss windows against each other, so it filters them to that same
+execution. A retry keeps the run ID and takes a new `execution_uid`, so partitioning on the run alone
+would sum one attempt's skipped steps into the next and compare evaluations across a restore that
+redid steps. Process zero is the stable choice because Levanter publishes tracker metrics only from
+it. The evaluation check retains the newest three samples from that execution. A check reads a newest
+sample only while it is under 15 minutes old, except evaluations, which remain fresh for 30 minutes.
 
 The throughput checks count how much of the window sat below the floor rather than averaging it —
 the median comparison the Pushover monitor makes, which keeps one restart step at zero from reading
@@ -109,9 +121,8 @@ SELECT
   name,
   value,
   to_timestamp_millis(timestamp_ms) AS observed_at
-FROM "telemetry_v1"
-WHERE service = 'levanter'
-  AND run_id = '<hero-run-id>'
+FROM "levanter.metrics"
+WHERE run_id = '<hero-run-id>'
   AND name IN ('phase', 'grad_norm_total', 'optim_skipped_step', 'moe_drop_fraction',
                'train_router_routing_entropy_mean', 'throughput_mfu')
   AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM now() - INTERVAL '15 minutes') * 1000 AS BIGINT)

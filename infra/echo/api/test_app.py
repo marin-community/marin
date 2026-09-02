@@ -135,6 +135,13 @@ def client_with():
     echo.app.dependency_overrides.clear()
 
 
+def test_health_reports_database_availability(client_with):
+    response = client_with([]).client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+
 def test_grep_escapes_like_wildcards():
     assert echo.escape_like("ragged_all_to_all") == "ragged\\_all\\_to\\_all"
     assert echo.escape_like("50%") == "50\\%"
@@ -795,7 +802,7 @@ def test_federated_search_classifies_github_comment_domain(client_with):
         ["pr"],
         (echo.search_config.LEGACY_REPOSITORY_TARGET,),
         10,
-    )
+    ).results
     assert [result.model_dump(mode="json") for result in results] == [
         {
             "key": None,
@@ -860,6 +867,19 @@ def test_federated_file_result_names_exact_indexed_head(client_with):
 
     assert response.status_code == 200
     assert response.headers[echo.SEARCH_EXECUTION_HEADER] == "991"
+    server_timings = {
+        name: float(duration.removeprefix("dur="))
+        for metric in response.headers["server-timing"].split(", ")
+        for name, duration in [metric.split(";", 1)]
+    }
+    assert set(server_timings) == {
+        "query_embedding",
+        "database_setup",
+        "file_retrieval",
+        "rerank",
+        "history",
+        "total",
+    }
     assert response.json() == [
         {
             "key": "file:1001",
@@ -1229,8 +1249,8 @@ def test_reranker_uses_full_candidate_text_without_erasing_hybrid_rank():
 
     class DeploymentReranker:
         def rerank(self, query, documents, batch_size):
+            del batch_size
             assert query == "how do i deploy iris"
-            assert batch_size == 4
             return [float("verifies controller health" in document) for document in documents]
 
     ranked = echo.rerank_candidates([distractor, runbook], "how do i deploy iris", DeploymentReranker(), 2)
@@ -1256,7 +1276,7 @@ def test_reranker_suppresses_all_candidates_below_the_quality_floor(monkeypatch)
 
     class RejectingReranker:
         def rerank(self, _query, documents, batch_size):
-            assert batch_size == 4
+            del batch_size
             return [-3.0 for _ in documents]
 
     monkeypatch.setattr(echo.search_config, "RERANK_MAX_CANDIDATES", 2)
@@ -1357,6 +1377,31 @@ def test_same_path_file_detail_uses_qualified_repository_and_commit(client_with,
         "url": f"https://github.com/{repository}/blob/{commit_sha}/README.md",
         "text": f"# {project}\n\nShared path, repository-specific contents.\nThen verify provenance.",
     }
+
+
+def test_search_result_key_resolves_to_exact_source_id(client_with):
+    row = make_row(
+        id=20849,
+        execution_id=991,
+        result_id="file:marin-community/marin@main:infra/echo/README.md",
+        domain="file",
+        title="Echo",
+        url="https://github.com/marin-community/marin/blob/abc123/infra/echo/README.md",
+    )
+    response = client_with([row]).client.get("/api/search-results/20849")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "key": "file:20849",
+        "source_id": "file:marin-community/marin@main:infra/echo/README.md",
+        "domain": "file",
+    }
+
+
+def test_search_result_key_reports_missing_row(client_with):
+    response = client_with([]).client.get("/api/search-results/20849")
+
+    assert response.status_code == 404
 
 
 def test_repository_index_reports_searchable_partial_build(client_with):

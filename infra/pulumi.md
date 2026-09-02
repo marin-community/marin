@@ -29,9 +29,11 @@ bucket, and Cloud Run IAP grants. Declare grants in
 `infra/pulumi/src/iac/gcp/iam_data.yaml` or the adjacent Echo, EvalDash, Grafana,
 and Loom modules; application stacks and deployment scripts must not declare or
 mutate them. This central ownership is the policy boundary required for
-authoritative IAM reconciliation. The provider resources remain additive
-`*IAMMember` resources during inventory adoption. Convert them to authoritative
-bindings in a separately reviewed change after importing the live-policy inventory.
+authoritative IAM reconciliation. Each `*IAMBinding` resource owns the complete
+member set for one role and optional condition on its target. Pulumi removes
+undeclared members from managed bindings while leaving other roles untouched.
+Audit live policy before adopting a binding so its declaration includes every
+intended member.
 
 When a grant targets a resource owned by another stack, create that resource
 before applying the global IAM stack. Omit code-declared grants that the
@@ -43,8 +45,8 @@ Use the Program-first import command in `infra/pulumi/README.md` for a one-time
 adoption. It generates a mode-`0600` transaction file outside the repository
 from the program's create preview, then validates and imports only the reviewed
 subset. The normal program never attaches import options. Provider IDs live
-beside their declarations, including all GCP `*IAMMember` grants, so a new grant
-can be imported without putting already-tracked grants into import mode.
+beside their declarations, including all GCP `*IAMBinding` grants, so a new
+binding can be imported without putting already-tracked resources into import mode.
 
 `infra/pulumi/src/iac` contains reusable components imported by other projects.
 For example, application projects use `iac.gcp.cloud_run.CloudRunService`

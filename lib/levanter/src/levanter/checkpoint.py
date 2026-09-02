@@ -33,6 +33,7 @@ from haliax.jax_utils import broadcast_one_to_all, is_in_jit, is_jax_array_like
 from jax.experimental.array_serialization.serialization import GlobalAsyncCheckpointManager
 from jaxtyping import PyTree
 
+from rigging import telemetry
 from rigging.filesystem.storage_path import StoragePath
 
 from levanter._debug_logging import flush_debug_output
@@ -44,6 +45,9 @@ from levanter.tensorstore_serialization import (
 from levanter.utils.types import FilterSpec
 
 logger = logging.getLogger(__name__)
+
+_CHECKPOINT_CURRENT = telemetry.snapshot_attributes("gauge", telemetry.CURRENT_SNAPSHOT)
+_CHECKPOINT_PHASE_DURATION_METRIC = "checkpoint_phase_duration_seconds"
 
 PathLike = Union[str, pathlib.Path]
 
@@ -218,11 +222,18 @@ class _CheckpointProgressLogger:
         if self._flush_logs:
             flush_debug_output(logger)
 
+    def _publish(self, name: str, value: int | float, **attributes: str) -> None:
+        telemetry.gauge(name).set(
+            float(value),
+            attributes={**_CHECKPOINT_CURRENT, "checkpoint_step": str(self.step), **attributes},
+        )
+
     def _log_memory_state(self, event: str, *, include_top_allocations: bool = False) -> None:
+        rss_bytes = _current_process_rss_bytes()
         state: dict[str, Any] = {
             "event": event,
             "phase": self.phase,
-            "rss": _format_bytes_human_readable(_current_process_rss_bytes()),
+            "rss": _format_bytes_human_readable(rss_bytes),
             "gc_counts": gc.get_count(),
             "gc_garbage_len": len(gc.garbage),
             **_tracemalloc_memory_state(),
@@ -233,6 +244,8 @@ class _CheckpointProgressLogger:
         extra_state = _collect_debug_checkpointer_state()
         if extra_state:
             state["providers"] = extra_state
+        if rss_bytes is not None:
+            self._publish("checkpoint_process_peak_rss_bytes", rss_bytes, event=event, phase=self.phase)
 
         self._log(
             logging.INFO,
@@ -300,14 +313,28 @@ class _CheckpointProgressLogger:
             previous_phase_elapsed,
             total_elapsed,
         )
+        self._publish(_CHECKPOINT_PHASE_DURATION_METRIC, previous_phase_elapsed, phase=previous_phase)
         self._log_memory_state(f"phase_{phase}", include_top_allocations=True)
 
+    def publish_staged_host_bytes(self, staged_host_bytes: int) -> None:
+        self._publish("checkpoint_staged_host_bytes", staged_host_bytes)
+
     def finish(self, status: str) -> None:
+        elapsed = self._finish_local(status)
+        self._publish("checkpoint_total_duration_seconds", elapsed, status=status)
+
+    def finish_local(self, status: str) -> None:
+        self._finish_local(status)
+
+    def _finish_local(self, status: str) -> float:
         self._stop_event.set()
         if self._thread.is_alive():
             self._thread.join(timeout=1.0)
 
-        elapsed = time.time() - self.started_at
+        now = time.time()
+        elapsed = now - self.started_at
+        phase_elapsed = now - self.phase_started_at
+        self._publish(_CHECKPOINT_PHASE_DURATION_METRIC, phase_elapsed, phase=self.phase)
         self._log_memory_state(f"checkpoint_{status}", include_top_allocations=True)
         self._log(
             logging.INFO,
@@ -317,6 +344,7 @@ class _CheckpointProgressLogger:
             self.checkpoint_path,
             elapsed,
         )
+        return elapsed
 
     def _run(self) -> None:
         while not self._stop_event.wait(self.interval):
@@ -830,6 +858,15 @@ def save_checkpoint(
 
     tree = equinox.filter(tree, lambda x: is_jax_array_like(x) or isinstance(x, (int, float, bool, complex)))
 
+    def on_staged(staged_host_bytes: int) -> None:
+        if progress_logger is not None:
+            progress_logger.publish_staged_host_bytes(staged_host_bytes)
+            progress_logger.set_phase("async_commit_in_flight")
+
+    def on_local_commit(status: str) -> None:
+        if progress_logger is not None and jax.process_index() != 0:
+            progress_logger.finish_local(status)
+
     try:
         if progress_logger is not None:
             if checkpoint_debug.force_gc_before_serialize:
@@ -841,14 +878,18 @@ def save_checkpoint(
             tree,
             manager,
             commit_callback=my_callback,
+            on_local_commit=on_local_commit,
+            on_staged=on_staged,
             debug_checkpointer=checkpoint_debug.enabled,
+            debug_log_flush=flush_debug_output if checkpoint_debug.flush_logs else None,
             write_config=write_config,
         )
-        if progress_logger is not None:
-            progress_logger.set_phase("async_commit_in_flight")
     except Exception:
         if progress_logger is not None:
-            progress_logger.finish("failed")
+            if jax.process_index() == 0:
+                progress_logger.finish("failed")
+            else:
+                progress_logger.finish_local("failed")
         raise
 
     return checkpoint_path

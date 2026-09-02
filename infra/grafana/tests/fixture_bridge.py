@@ -44,6 +44,7 @@ def _nightlies() -> list[dict]:
                     "group": group,
                     "subgroup": subgroup,
                     "state": "run",
+                    "status": "completed",
                     "duration_state": "slow" if slow else "normal",
                     "duration_seconds": 1800 + lane_order * 137 + offset * 83,
                     "conclusion": "failure" if failed else "success",
@@ -81,7 +82,7 @@ def _builds() -> list[dict]:
 def _wandb(chart: str) -> list[dict]:
     titles = {"train-loss": "Train cross-entropy loss", "paloma-macro-loss": "Paloma macro loss", "mfu": "MFU (%)"}
     rows = []
-    for run_index, run in enumerate(("67b-a2b-10t", "67b-a2b-resume")):
+    for run_index, run in enumerate(("hero-12d8b6f0-dee637",)):
         for index in range(40):
             tokens = (index + 1) * 250_000_000_000
             if chart == "mfu":
@@ -94,10 +95,10 @@ def _wandb(chart: str) -> list[dict]:
                     "run": run,
                     "tokens": tokens,
                     "value": value,
-                    "report_title": "67B-A2B MoE on 10T tokens",
+                    "report_title": "535B-A23B 18T Token Hero Run + Scaling Ladder",
                     "report_url": (
                         "https://wandb.ai/marin-community/marin_moe/reports/"
-                        "67B-A2B-MoE-on-10T-tokens--VmlldzoxNzM1OTMxMQ"
+                        "535B-A23B-18T-Token-Hero-Run-Scaling-Ladder--VmlldzoxNzc2MDM5Ng"
                     ),
                 }
             )

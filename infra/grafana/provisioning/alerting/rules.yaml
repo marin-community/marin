@@ -397,7 +397,7 @@ groups:
     interval: 5m
     rules:
       - uid: coreweave-storage-capacity
-        title: CoreWeaveStorageCapacity
+        title: CoreWeaveStorageQuotaExceeded
         condition: C
         for: 5m
         noDataState: OK
@@ -405,7 +405,7 @@ groups:
         labels:
           severity: critical
         annotations:
-          summary: "{{ $labels.region }}: CoreWeave storage exceeds 80% of quota"
+          summary: "{{ $labels.region }}: CoreWeave storage quota exceeded"
           runbook_url: https://github.com/marin-community/marin/blob/main/scripts/ops/storage/README.md
         data:
           - refId: A
@@ -424,20 +424,17 @@ groups:
                 params:
                   - key: sql
                     value: >-
-                      WITH ranked AS (
-                        SELECT metric, zone, bucket, storage_class, value_bytes, observed_at,
-                               ROW_NUMBER() OVER (
-                                 PARTITION BY provider, metric, zone, bucket, storage_class
-                                 ORDER BY observed_at DESC, seq DESC
-                               ) AS row_num
+                      WITH latest_collection AS (
+                        SELECT MAX(collected_at) AS collected_at
                         FROM "storage.usage"
                         WHERE provider = 'coreweave'
-                          AND metric IN ('used_bytes', 'quota_bytes')
                       ), latest AS (
                         SELECT metric, zone, storage_class, value_bytes
-                        FROM ranked
-                        WHERE row_num = 1
-                          AND observed_at >= CURRENT_TIMESTAMP - INTERVAL '3 hours'
+                        FROM "storage.usage" AS samples
+                        JOIN latest_collection
+                          ON samples.collected_at = latest_collection.collected_at
+                        WHERE provider = 'coreweave'
+                          AND metric IN ('used_bytes', 'quota_bytes')
                       ), usage AS (
                         SELECT zone, storage_class, SUM(value_bytes) AS usage_bytes
                         FROM latest
@@ -466,10 +463,10 @@ groups:
               type: threshold
               expression: A
               conditions:
-                - evaluator: { type: gt, params: [0.8] }
+                - evaluator: { type: gt, params: [1.0] }
 
       - uid: coreweave-storage-telemetry-stale
-        title: CoreWeaveStorageTelemetryStale
+        title: CoreWeaveStorageTelemetryMissing
         condition: C
         for: 5m
         noDataState: OK
@@ -478,11 +475,11 @@ groups:
           severity: warning
           notification: slack
         annotations:
-          summary: "{{ $labels.region }}: CoreWeave {{ $labels.metric }} telemetry is stale for {{ $labels.detail }}"
+          summary: "CoreWeave storage telemetry has not been collected in 24 hours"
           runbook_url: https://github.com/marin-community/marin/blob/main/scripts/ops/storage/README.md
         data:
           - refId: A
-            relativeTimeRange: { from: 10800, to: 0 }
+            relativeTimeRange: { from: 86400, to: 0 }
             datasourceUid: finelog-marin
             model:
               refId: A
@@ -497,27 +494,15 @@ groups:
                 params:
                   - key: sql
                     value: >-
-                      WITH ranked AS (
-                        SELECT metric, zone, bucket, storage_class, observed_at,
-                               ROW_NUMBER() OVER (
-                                 PARTITION BY provider, metric, zone, bucket, storage_class
-                                 ORDER BY observed_at DESC, seq DESC
-                               ) AS row_num
+                      WITH latest AS (
+                        SELECT MAX(collected_at) AS latest_collected_at
                         FROM "storage.usage"
                         WHERE provider = 'coreweave'
-                          AND metric IN ('used_bytes', 'quota_bytes')
                       )
-                      SELECT zone AS region,
-                             metric,
-                             COALESCE(bucket, storage_class) AS detail,
-                             1 AS value
-                      FROM ranked
-                      WHERE row_num = 1
-                        AND observed_at < CURRENT_TIMESTAMP - INTERVAL '3 hours'
+                      SELECT 1 AS value
+                      FROM latest
+                      WHERE latest_collected_at < CURRENT_TIMESTAMP - INTERVAL '24 hours'
               columns:
-                - { selector: region, text: region, type: string }
-                - { selector: metric, text: metric, type: string }
-                - { selector: detail, text: detail, type: string }
                 - { selector: value, text: value, type: number }
           - refId: C
             datasourceUid: __expr__
@@ -547,6 +532,7 @@ groups:
         labels:
           severity: critical
           notification: hero-run
+          operator_behavior: hero
         annotations:
           summary: "{{ $labels.cluster }}: {{ $labels.job }} has {{ $labels.reason }}"
           runbook_url: https://github.com/marin-community/marin/blob/main/docs/ops/training-stall-alert-contract.md
@@ -595,6 +581,7 @@ groups:
         labels:
           severity: critical
           notification: hero-run
+          operator_behavior: hero
         annotations:
           summary: "{{ $labels.cluster }}: {{ $labels.run }} training loss is {{ $labels.reason }}"
           runbook_url: https://github.com/marin-community/marin/blob/main/docs/ops/training-loss-spike-alert.md
@@ -648,6 +635,7 @@ groups:
         labels:
           severity: critical
           notification: hero-run
+          operator_behavior: hero
         annotations:
           summary: "{{ $labels.cluster }}: {{ $labels.run }} publishes no telemetry while Iris runs its tasks"
           runbook_url: https://github.com/marin-community/marin/blob/main/docs/ops/hero-run-health-alerts.md
@@ -692,6 +680,7 @@ groups:
         labels:
           severity: critical
           notification: hero-run
+          operator_behavior: hero
         annotations:
           summary: "{{ $labels.cluster }}: {{ $labels.run }} optimizer reports {{ $labels.reason }}"
           runbook_url: https://github.com/marin-community/marin/blob/main/docs/ops/hero-run-health-alerts.md

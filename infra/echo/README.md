@@ -101,8 +101,8 @@ evidence helps without allowing a large file to dominate. Paraphrases can enter 
 BGE semantic retrieval.
 
 The API retrieves at least 20 candidates from each selected domain, takes the best 24
-after first-stage fusion, and reranks their complete indexed chunks with the INT8 ONNX
-build of `ms-marco-MiniLM-L-6-v2`. Final rank is reciprocal-rank fusion of the
+after first-stage fusion, and reranks their complete indexed chunks one at a time with
+the INT8 ONNX build of `ms-marco-MiniLM-L-6-v2`. Final rank is reciprocal-rank fusion of the
 first-stage rank (weight 0.2) and cross-encoder rank (weight 0.8). Wiki candidates need
 a raw cross-encoder score of at least -1; other domains retain the -2 floor. These are
 empirical relevance floors, not calibrated probabilities. The wiki cutoff retains 93%
@@ -112,14 +112,24 @@ with new result snapshots so other domain cutoffs can use stable data. A search 
 return fewer than the requested limit and returns at most 24 results. `grep` remains a
 case-insensitive literal substring scan over activity, newest first.
 
-CLI search prints one result block with an execution-specific grading key, title,
-source ID, and one primary source excerpt of at most 240 characters. File results use
-their highest-ranked `path:line` reference, wiki results use `use_when`, and activity
-results use the matching source excerpt. The detail line is independent of terminal
+The API runs four ONNX inference threads on each 4-vCPU Cloud Run instance. Request-based
+billing retains one warm instance, admits one request per instance, and scales concurrent
+searches out to at most four instances. The production dashboard bundles its JavaScript,
+styles, and fonts into the HTML response so an uncached page load does not consume that
+single-request capacity with parallel static assets. Startup CPU boost reduces model
+initialization time for burst instances without allocating CPU to idle instances continuously.
+
+CLI search prints one block per result with a grading key tied to the stored search
+result, title, source ID, and one primary source excerpt of at most 240 characters. Pass
+the source ID to `get`; the grading key is for `feedback`. `get` also accepts a file
+grading key with a numeric suffix, such as `file:20849`, and looks up the retained source
+ID. File results use the `path:line` reference ranked highest by search, wiki results use
+the contents of their `use_when` field, and activity results use the matching source
+excerpt. The detail line is independent of terminal
 width, so long source IDs do not consume its display budget. Grading keys use
 `<domain>:<numeric-key>` and remain attached
 to the stored row even when a later corpus sync replaces an activity chunk ID.
-Run `uv run infra/echo/cli.py get <domain:id>` to fetch the full indexed wiki body,
+Run `uv run infra/echo/cli.py get <source-id>` to fetch the full indexed wiki body,
 repository file, pull request or issue chunk, or Discord message and its canonical URL.
 File IDs have the form `file:<owner>/<repository>@main:<path>`; the repository is part
 of the identity, so `file:marin-community/marin@main:README.md` and
@@ -128,9 +138,11 @@ Wiki summaries use the `use_when` hint; files and activity use the matching sour
 excerpt. Echo does not generate summaries with an LLM at query time, avoiding added
 latency and an additional prompt-injection path.
 
-`search` reports the number of results and elapsed wall-clock time before its table. The
-measurement covers token acquisition, the network request, server retrieval and
-reranking, and response decoding: the time the caller waited for Echo.
+`search` reports the number of results, elapsed wall-clock time, and the API's
+`Server-Timing` stages before its table. The wall-clock measurement covers token
+acquisition, the network request, server retrieval and reranking, history persistence,
+and response decoding. The server stages separate query embedding, database setup,
+selected-domain retrieval, reranking, history persistence, and total application time.
 
 ### Record and inspect search feedback
 
@@ -304,7 +316,7 @@ work-log entries), `/feedback` (recent result grades), `/wiki/<id>` (a note), an
 `/chunk/<id>` (an activity chunk). Conversation details load when an entry is opened.
 The feedback table links each grade to its source and keeps explanation-only submissions
 visible. The API's catch-all route serves `index.html` for any path that isn't
-`/api/...`, `/healthz`, `/static/...`, `/docs`, or `/openapi.json`, so vue-router's
+`/api/...`, `/health`, `/static/...`, `/docs`, or `/openapi.json`, so vue-router's
 history-mode navigation and reloads resolve correctly.
 
 Dashboard search uses the federated endpoint and exposes checkboxes for files, wiki,

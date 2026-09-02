@@ -4,7 +4,7 @@
 """Bounded finelog queries and alert projections for hero-run health.
 
 Beyond the progress and loss rules: the telemetry path itself, the optimizer, MoE
-routing, throughput, evaluation, and Iris retries. One `telemetry_v1` scan per
+routing, throughput, evaluation, and Iris retries. One `levanter.metrics` scan per
 bridge cache interval feeds all three projections. The telemetry and optimizer
 ones page; the health one announces in Slack without opening a triage session.
 See docs/ops/hero-run-health-alerts.md.
@@ -18,6 +18,8 @@ from math import isfinite
 import pyarrow as pa
 from hero_runs import (
     HERO_ROOT_PATTERNS,
+    LEVANTER_METRICS_TABLE,
+    PHASE_ENROLLMENT_LOOKBACK,
     PHASE_METRIC,
     TASK_STATE_FRESHNESS,
     TELEMETRY_GONE_AGE,
@@ -31,6 +33,7 @@ from hero_runs import (
     sql_timestamp,
 )
 from loss_spikes import LossWindows, loss_spike_reason, windows_by_run
+from vllm_observability import sql_string
 
 # Past this the rollup no longer enrolls a run, so the rules that read it go blind.
 IRIS_STATE_STALE_AGE = timedelta(minutes=5)
@@ -45,6 +48,8 @@ ROUTER_ENTROPY_MIN = 5.92
 ROUTER_BIAS_MAX = 400.0
 TOKENS_PER_SECOND_MIN = 2.0e6
 MFU_MIN = 15.0
+EVAL_LOSS_RELATIVE_INCREASE = 0.02
+EVAL_HISTORY_SAMPLES = 3
 
 _GRAD_NORM = "grad_norm_total"
 _SKIPPED_STEP = "optim_skipped_step"
@@ -95,6 +100,7 @@ class WatchedRun:
     run_id: str
     iris_running: bool
     iris_state_age: timedelta | None
+    execution_uid: str | None
 
 
 @dataclass(frozen=True)
@@ -104,6 +110,7 @@ class MetricSignal:
     latest: float
     observed_at: datetime
     previous: float | None
+    two_samples_ago: float | None
     recent_samples: int
     recent_total: float
     recent_below_floor: int
@@ -123,11 +130,20 @@ Signals = dict[tuple[str, str], RunSignals]
 def signal_query(now: datetime, runs: tuple[WatchedRun, ...]) -> str:
     """Return the newest sample and health-window reductions per run and metric.
 
-    Everything reduces over one execution: the newest attempt process zero
-    reports. A retry keeps the run ID and takes a new `execution_uid`, so
-    partitioning on the run alone would sum one attempt's skipped steps into the
-    next. Process zero because Levanter publishes tracker metrics only from it.
+    Runs without a current execution are omitted. A retry keeps the run ID and
+    takes a new `execution_uid`, so reductions also match that identity. Process
+    zero reports the Levanter tracker metrics.
     """
+    execution_predicates = [
+        "("
+        f"COALESCE(NULLIF(cluster,''),'unknown') = {sql_string(run.cluster)} "
+        f"AND run_id = {sql_string(run.run_id)} "
+        f"AND execution_uid = {sql_string(run.execution_uid)}"
+        ")"
+        for run in runs
+        if run.execution_uid is not None
+    ]
+    execution_predicate = " OR ".join(execution_predicates) or "FALSE"
     run_predicate = run_id_predicate(runs)
     signal_since = sql_epoch_ms(now - _SIGNAL_LOOKBACK)
     liveness_since = sql_epoch_ms(now - _LIVENESS_LOOKBACK)
@@ -136,29 +152,15 @@ def signal_query(now: datetime, runs: tuple[WatchedRun, ...]) -> str:
     metric_names = ", ".join(f"'{name}'" for name in _SIGNAL_METRICS)
     below_floor = " OR ".join(f"(name = '{name}' AND value < {floor})" for name, floor in _FLOORS.items())
     return (
-        "WITH attempts AS ("
+        "WITH samples AS ("
         "SELECT COALESCE(NULLIF(cluster,''),'unknown') AS origin_cluster, run_id, execution_uid, "
-        "ROW_NUMBER() OVER ("
-        "PARTITION BY COALESCE(NULLIF(cluster,''),'unknown'), run_id "
-        "ORDER BY timestamp_ms DESC, seq DESC"
-        ") AS rn "
-        'FROM "telemetry_v1" '
-        f"WHERE service = 'levanter' AND name = '{PHASE_METRIC}' AND process_index = '0' "
-        f"AND {run_predicate} AND execution_uid IS NOT NULL "
-        f"AND timestamp_ms >= {liveness_since} AND timestamp_ms < {end}"
-        "), execution AS ("
-        "SELECT origin_cluster, run_id, execution_uid FROM attempts WHERE rn = 1"
-        "), samples AS ("
-        "SELECT execution.origin_cluster, execution.run_id, execution.execution_uid, "
-        "telemetry.name, telemetry.value, telemetry.timestamp_ms, telemetry.seq "
-        'FROM "telemetry_v1" AS telemetry JOIN execution '
-        "ON COALESCE(NULLIF(telemetry.cluster,''),'unknown') = execution.origin_cluster "
-        "AND telemetry.run_id = execution.run_id "
-        "AND telemetry.execution_uid = execution.execution_uid "
-        f"WHERE telemetry.service = 'levanter' AND telemetry.name IN ({metric_names}) "
-        f"AND telemetry.timestamp_ms >= {liveness_since} AND telemetry.timestamp_ms < {end} "
-        f"AND (telemetry.name IN ('{PHASE_METRIC}', '{_EVAL_LOSS}') "
-        f"OR telemetry.timestamp_ms >= {signal_since})"
+        "name, value, timestamp_ms, seq "
+        f"FROM {LEVANTER_METRICS_TABLE} "
+        f"WHERE {run_predicate} AND ({execution_predicate}) AND process_index = 0 "
+        f"AND name IN ({metric_names}) "
+        f"AND timestamp_ms >= {liveness_since} AND timestamp_ms < {end} "
+        f"AND (name IN ('{PHASE_METRIC}', '{_EVAL_LOSS}') "
+        f"OR timestamp_ms >= {signal_since})"
         "), ranked AS ("
         "SELECT origin_cluster, run_id, execution_uid, name, value, timestamp_ms, "
         "ROW_NUMBER() OVER ("
@@ -168,8 +170,10 @@ def signal_query(now: datetime, runs: tuple[WatchedRun, ...]) -> str:
         "SELECT origin_cluster, run_id, execution_uid, name, "
         "MAX(CASE WHEN rn = 1 THEN value END) AS latest_value, "
         "MAX(CASE WHEN rn = 1 THEN timestamp_ms END) AS latest_at, "
-        "MAX(CASE WHEN rn = 2 THEN value END) AS previous_value "
-        "FROM ranked WHERE rn <= 2 GROUP BY origin_cluster, run_id, execution_uid, name"
+        "MAX(CASE WHEN rn = 2 THEN value END) AS previous_value, "
+        f"MAX(CASE WHEN rn = {EVAL_HISTORY_SAMPLES} THEN value END) AS two_samples_ago_value "
+        f"FROM ranked WHERE rn <= {EVAL_HISTORY_SAMPLES} "
+        "GROUP BY origin_cluster, run_id, execution_uid, name"
         "), health_window AS ("
         "SELECT origin_cluster, run_id, name, COUNT(*) AS recent_samples, "
         "SUM(value) AS recent_total, "
@@ -179,7 +183,7 @@ def signal_query(now: datetime, runs: tuple[WatchedRun, ...]) -> str:
         ") "
         "SELECT newest.origin_cluster AS cluster, newest.run_id, newest.execution_uid, newest.name, "
         "newest.latest_value, to_timestamp_millis(newest.latest_at) AS observed_at, "
-        "newest.previous_value, "
+        "newest.previous_value, newest.two_samples_ago_value, "
         "COALESCE(health_window.recent_samples, 0) AS recent_samples, "
         "COALESCE(health_window.recent_total, 0) AS recent_total, "
         "COALESCE(health_window.recent_below_floor, 0) AS recent_below_floor "
@@ -219,12 +223,14 @@ def watched_runs(task_states: pa.Table, phase_runs: pa.Table, now: datetime) -> 
         states[(str(row["cluster"]), root_job)] = (age, int(row["running"] or 0) > 0)
 
     enrolled = [key for key, (age, running) in states.items() if running and age <= TASK_STATE_FRESHNESS]
+    executions: dict[tuple[str, str], str] = {}
     for row in phase_runs.to_pylist():
         root_job = root_job_for(str(row["telemetry_job"]))
         if root_job is None:
             continue
         key = (str(row["cluster"]), root_job)
-        if key not in enrolled:
+        executions[key] = str(row["execution_uid"])
+        if key not in enrolled and now - as_utc(row["phase_at"]) <= PHASE_ENROLLMENT_LOOKBACK:
             enrolled.append(key)
 
     runs = []
@@ -240,6 +246,7 @@ def watched_runs(task_states: pa.Table, phase_runs: pa.Table, now: datetime) -> 
                 run_id=run_id,
                 iris_running=running and age is not None and age <= TASK_STATE_FRESHNESS,
                 iris_state_age=age,
+                execution_uid=executions.get((cluster, root_job)),
             )
         )
     return tuple(runs)
@@ -258,6 +265,7 @@ def signals_by_run(signal_rows: pa.Table) -> Signals:
             latest=latest,
             observed_at=as_utc(row["observed_at"]),
             previous=as_number(row["previous_value"]),
+            two_samples_ago=as_number(row["two_samples_ago_value"]),
             recent_samples=int(row["recent_samples"] or 0),
             recent_total=float(row["recent_total"] or 0.0),
             recent_below_floor=int(row["recent_below_floor"] or 0),
@@ -448,8 +456,13 @@ def _mostly_below_floor(signal: MetricSignal | None) -> bool:
 
 
 def _evaluation_regressed(signal: MetricSignal | None, now: datetime) -> bool:
-    """True when the newest evaluation is worse than the one before it."""
+    """True when evaluation loss sustains a rise or jumps by more than two percent."""
     signal = _fresh(signal, now, _EVAL_FRESHNESS)
-    if signal is None or signal.previous is None or not isfinite(signal.previous):
+    if signal is None:
         return False
-    return signal.latest > signal.previous
+    if signal.two_samples_ago is not None and isfinite(signal.two_samples_ago):
+        if signal.latest > signal.two_samples_ago:
+            return True
+    if signal.previous is None or not isfinite(signal.previous) or signal.previous <= 0:
+        return False
+    return signal.latest > signal.previous * (1 + EVAL_LOSS_RELATIVE_INCREASE)

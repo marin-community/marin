@@ -19,7 +19,7 @@ from rigging.telemetry import metrics
 logger = logging.getLogger(__name__)
 
 DEFAULT_SCRAPE_TIMEOUT = 5.0
-DEFAULT_POLL_INTERVAL = 15.0
+DEFAULT_POLL_INTERVAL = 60.0
 DEFAULT_MAX_SCRAPE_BYTES = 16 << 20
 
 type PrometheusProcessor = Callable[[tuple[PrometheusMetric, ...]], Sequence[metrics.MetricSnapshot]]

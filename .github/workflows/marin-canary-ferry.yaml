@@ -10,7 +10,7 @@ on:
         type: number
         required: false
       tpu_type:
-        description: 'Override TPU slice type(s), comma-separated, primary first (e.g. v5p-8,v6e-4,v4-8)'
+        description: 'Override TPU slice type(s), comma-separated, primary first (default v6e-4)'
         type: string
         required: false
 
@@ -89,6 +89,7 @@ jobs:
             job run --no-wait \
             --memory=2G --disk=4G --cpu=1 --extra=cpu \
             --priority production \
+            --preemptible \
             --reserve "$RESERVE_TPU_TYPE" \
             -e RUN_ID "$RUN_ID" \
             -e CANARY_ACCELERATOR "$CANARY_ACCELERATOR" \
@@ -145,10 +146,9 @@ jobs:
         # _mirror_remote_prefixes() returns [] (to avoid anonymous-caller 401s
         # from gcsfs off-GCP), and the read raises FileNotFoundError. The
         # google-github-actions/auth step above provides the credentials
-        # gcsfs needs to actually scan the remote buckets. The canary lands on
-        # v5p (us-central1/us-east5), v6e (us-east1/us-east5/europe-west4), or
-        # v4 (us-central2); mirror://
-        # scans all marin-* regions, and us-central1 keeps the hit rate high.
+        # gcsfs needs to actually scan the remote buckets. The v6e canary can
+        # land in us-east1, us-east5, or europe-west4. mirror:// scans
+        # all marin-* regions, and us-central1 keeps the hit rate high.
         env:
           MARIN_PREFIX: gs://marin-us-central1
         run: .venv/bin/python scripts/ci/validate_canary_metrics.py
@@ -234,7 +234,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
       - name: Notify Slack
-        uses: marin-community/marin-style/actions/notify-slack@main
+        uses: marin-community/marin-style/actions/notify-slack@4b2fc2b0ec0bb9ad1304ef76936eb68e97f893cb  # main 2026-08-24
         with:
           webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
           fallback-text: ":red_circle: *TPU Canary failed*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

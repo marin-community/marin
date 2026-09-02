@@ -550,12 +550,15 @@ Namespaces:
 - `iris.task` — per-attempt task resource snapshots, keyed by `ts`. Worker
   daemons write their process readings directly. On Kubernetes, each
   `iris-node-agent` samples the task containers on its node from kubelet
-  `/metrics/resource` every 30 seconds. CPU is derived from consecutive
-  cumulative counter samples, so the first row after an agent start reports
-  zero CPU. Memory uses the working-set gauge and an agent-local peak; an agent
-  restart resets that peak. Kubelet resource metrics do not expose container
-  filesystem usage, so Kubernetes rows report zero disk usage. The node-agent
-  service account requires `get` on `nodes/proxy`.
+  `/metrics/resource` every 60 seconds. The agent runs on the host network and
+  reads its own kubelet over loopback; the request does not go through the
+  apiserver, so node telemetry stays off the cluster's Konnectivity tunnel. CPU
+  is derived from consecutive cumulative counter samples, so the first row after
+  an agent start reports zero CPU. Memory uses the working-set gauge and an
+  agent-local peak; an agent restart resets that peak. Kubelet resource metrics
+  do not expose container filesystem usage, so Kubernetes rows report zero disk
+  usage. The node-agent service account requires `get` on `nodes/metrics`, which
+  is the subresource the kubelet authorizes that endpoint against.
 - `iris.task_event` — up to 30 days of deduplicated backend verdicts and
   state-changing controller actions per task attempt. Query all attempts with
   `iris task events /user/job/0`, or directly:
@@ -603,15 +606,15 @@ uv run finelog query marin "SELECT source, type, format, count(*) FROM \"iris.pr
 ```
 
 To aggregate a whole job's CPU profiles into a per-worker-sub-job breakdown + merged
-flamegraph, use `scripts/job_profile_summary.py` — it resolves the cluster's finelog
+flamegraph, use `lib/iris/scripts/job_profile_summary.py` — it resolves the cluster's finelog
 deployment, pulls every CPU capture under a job (and its descendant sub-jobs), parses the
 speedscope stacks, and reports where CPU is spent:
 
 ```bash
-uv run python scripts/job_profile_summary.py /user/job/id          # per-sub-job + top leaves
-uv run python scripts/job_profile_summary.py <dashboard-url>       # accepts iris.oa.dev URLs
-uv run python scripts/job_profile_summary.py /user/job/id --subjob <name> --show-stacks
-uv run python scripts/job_profile_summary.py /user/job/id -o merged.folded --svg flame.svg
+uv run python lib/iris/scripts/job_profile_summary.py /user/job/id          # per-sub-job + top leaves
+uv run python lib/iris/scripts/job_profile_summary.py <dashboard-url>       # accepts iris.oa.dev URLs
+uv run python lib/iris/scripts/job_profile_summary.py /user/job/id --subjob <name> --show-stacks
+uv run python lib/iris/scripts/job_profile_summary.py /user/job/id -o merged.folded --svg flame.svg
 ```
 
 ## Users & Auth

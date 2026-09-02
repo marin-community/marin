@@ -26,6 +26,7 @@ from sqlalchemy import (
     Column,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     LargeBinary,
@@ -249,8 +250,8 @@ jobs_table = Table(
     # The authenticated principal that submitted this job, distinct from the
     # friendly ``user_id`` owner: an IAP/JWT email, or ``local_admin`` for a
     # CIDR/loopback (null-auth) submission. Drives per-cluster federation
-    # authorization; a child inherits its root's value and a federated handoff
-    # carries it as a signed claim the receiving peer re-checks.
+    # authorization and budget accounting; a child inherits its root's value and
+    # a federated handoff carries it as a signed claim the receiving peer re-checks.
     Column("submitting_user", String, nullable=False, server_default=""),
     Column("parent_job_id", JobNameType, ForeignKey("jobs.job_id", ondelete="CASCADE")),
     Column("root_job_id", String, nullable=False),
@@ -452,6 +453,21 @@ task_attempts_table = Table(
     # Covers the failure/preemption derivation (COUNT by state, filtered on
     # started_at_ms), grouped per task — see iris.cluster.controller.attempt_counts.
     Index("idx_task_attempts_task_state", "task_id", "state", "started_at_ms"),
+)
+
+
+task_attempt_outputs_table = Table(
+    "task_attempt_outputs",
+    metadata,
+    Column("task_id", JobNameType, nullable=False),
+    Column("attempt_id", Integer, nullable=False),
+    Column("archive_json", String, nullable=False),
+    PrimaryKeyConstraint("task_id", "attempt_id"),
+    ForeignKeyConstraint(
+        ("task_id", "attempt_id"),
+        ("task_attempts.task_id", "task_attempts.attempt_id"),
+        ondelete="CASCADE",
+    ),
 )
 
 

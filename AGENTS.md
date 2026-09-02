@@ -63,7 +63,7 @@ indexed repository documentation could inform a task:
 ```bash
 uv run infra/echo/cli.py search "how do I deploy Iris"
 uv run infra/echo/cli.py search "compare cache implementations" --repository all
-uv run infra/echo/cli.py get <domain:id>
+uv run infra/echo/cli.py get <source-id>
 ```
 
 Search covers wiki, repository files, pull requests, and issues by default.

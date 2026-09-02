@@ -14,7 +14,6 @@ import yaml
 from iris.cluster.backends.k8s.tasks import K8sTaskProvider
 from iris.cluster.composer import make_task_backend
 from iris.cluster.config import (
-    BackendConfig,
     ControllerVmConfig,
     CoreweavePlatformConfig,
     CoreweaveSliceConfig,
@@ -38,14 +37,14 @@ from iris.cluster.config import (
     config_to_dict,
     load_config,
     make_local_config,
-    resolve_backends,
     validate_config,
 )
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller.autoscaler.factory import create_autoscaler
 from iris.cluster.platforms.factory import create_provider_bundle
 from iris.cluster.platforms.gcp.service import KNOWN_GCP_ZONES
-from iris.cluster.types import DEFAULT_BACKEND_ID, LOCAL_CLUSTER, AcceleratorType, CapacityType, GcpSliceMode
+from iris.cluster.types import LOCAL_CLUSTER, AcceleratorType, CapacityType, GcpSliceMode
+from iris.testing.k8s import k8s_backend_descriptor
 from rigging.timing import Duration
 
 
@@ -579,6 +578,10 @@ scale_groups:
         assert local_config.defaults.autoscaler.evaluation_interval.to_ms() == 500
         assert local_config.defaults.autoscaler.scale_up_delay.to_ms() == 1000
         assert local_config.defaults.autoscaler.scale_down_delay.to_ms() == 1000
+        assert local_config.task_outputs is not None
+        assert local_config.task_outputs.destination == "file://"
+        assert local_config.task_outputs.ttl_days == 0
+        assert local_config.defaults.worker.task_outputs == local_config.task_outputs
 
     def test_make_local_config_preserves_scale_group_details(self, tmp_path: Path):
         """make_local_config preserves accelerator type and other scale group settings."""
@@ -1862,13 +1865,6 @@ def test_coreweave_worker_provider_rejected():
         validate_config(config)
 
 
-def _worker_daemon_backend(**overrides) -> BackendConfig:
-    """A minimal valid worker_daemon backend (worker_provider present, in_process)."""
-    fields = {"kind": "worker_daemon", "worker_provider": WorkerProviderConfig()}
-    fields.update(overrides)
-    return BackendConfig(**fields)
-
-
 def _accel_scale_group(device_type: AcceleratorType, device_variant: str = "") -> ScaleGroupConfig:
     """A scale group carrying the device fields backend attribute derivation reads."""
     return ScaleGroupConfig(
@@ -1884,149 +1880,30 @@ def _accel_scale_group(device_type: AcceleratorType, device_variant: str = "") -
     )
 
 
-class TestBackendsConfig:
-    """The explicit ``backends:`` map and the implicit single-backend synthesis."""
-
-    def test_explicit_backends_map_validates_and_resolves(self):
-        config = IrisClusterConfig(
-            name="test-cluster",
-            backends={"cpu": _worker_daemon_backend(attributes={"device-type": "cpu"})},
-        )
-        validate_config(config)
-
-        resolved = resolve_backends(config)
-        assert set(resolved) == {"cpu"}
-        # Defaults fill in: in_process transport.
-        assert resolved["cpu"].transport == "in_process"
-
-    def test_mixing_backends_with_top_level_scale_groups_rejected(self):
-        config = IrisClusterConfig(
-            name="test-cluster",
-            backends={"cpu": _worker_daemon_backend()},
-            scale_groups={"test": _valid_scale_group()},
-        )
-        with pytest.raises(ValueError, match="cannot be combined with top-level"):
-            validate_config(config)
-
-    def test_multiple_in_process_backends_validate(self):
-        # The controller routes tasks to N in-process backends by backend_id and
-        # drives them from its single control thread, so more than one in_process
-        # backend is allowed.
-        config = IrisClusterConfig(
-            name="test-cluster",
-            backends={
-                "cpu": _worker_daemon_backend(attributes={"device-type": "cpu"}),
-                "tpu": _worker_daemon_backend(attributes={"device-type": "tpu"}),
-            },
-        )
-        validate_config(config)
-
-        resolved = resolve_backends(config)
-        assert set(resolved) == {"cpu", "tpu"}
-
-    def test_remote_transport_rejected(self):
-        config = IrisClusterConfig(
-            name="test-cluster",
-            backends={"cpu": _worker_daemon_backend(transport="remote")},
-        )
-        with pytest.raises(ValueError, match="remote transport lands in a later PR"):
-            validate_config(config)
-
-    def test_k8s_backend_requires_kubernetes_provider(self):
-        config = IrisClusterConfig(name="test-cluster", backends={"k8s": BackendConfig(kind="k8s")})
-        with pytest.raises(ValueError, match="kind 'k8s' requires kubernetes_provider"):
-            validate_config(config)
-
-    def test_backend_scale_group_names_injected(self, tmp_path: Path):
-        # A backend's scale groups must get their map key stamped onto `name`,
-        # exactly like top-level scale groups. Otherwise the worker registers
-        # under an empty scale group, which maps to DEFAULT_BACKEND_ID instead
-        # of the backend that owns it, and the backend never sees its workers.
-        config_path = tmp_path / "cluster.yaml"
-        config_path.write_text(
-            "name: c\n"
-            "backends:\n"
-            "  tpu:\n"
-            "    kind: worker_daemon\n"
-            "    worker_provider: {}\n"
-            "    scale_groups:\n"
-            "      sg-tpu:\n"
-            "        max_slices: 1\n"
-        )
-        config = load_config(config_path)
-        assert config.backends["tpu"].scale_groups["sg-tpu"].name == "sg-tpu"
-
-    def test_single_cluster_synthesizes_one_default_backend(self):
-        config = _config_with()  # no backends: — implicit single-backend form
-        validate_config(config)
-
-        resolved = resolve_backends(config)
-        assert list(resolved) == [DEFAULT_BACKEND_ID]
-        synthesized = resolved[DEFAULT_BACKEND_ID]
-        assert synthesized.kind == "worker_daemon"
-        assert set(synthesized.scale_groups) == set(config.scale_groups)
-
-    def test_kubernetes_provider_synthesizes_k8s_backend(self):
-        config = IrisClusterConfig(
-            kubernetes_provider=KubernetesProviderConfig(controller_address="http://controller:10000"),
-        )
-        resolved = resolve_backends(config)
-        assert resolved[DEFAULT_BACKEND_ID].kind == "k8s"
-
-    def test_attribute_values_comma_split_into_sets(self):
-        backend = _worker_daemon_backend(attributes={"device-variant": "v5e-4, v5p-8 ,", "device-type": "tpu"})
-        assert backend_attribute_sets(backend) == {
-            "device-variant": {"v5e-4", "v5p-8"},
-            "device-type": {"tpu"},
-        }
-
+class TestBackendAttributes:
     def test_device_attrs_derived_from_scale_group_resources(self):
-        # A GPU scale group with no explicit backend attributes advertises the
-        # device-type/device-variant its resources declare, lowercased ('H100' -> 'h100')
-        # so the value equals the constraint literal a GPU job matches with.
-        backend = _worker_daemon_backend(scale_groups={"h100-8x": _accel_scale_group(AcceleratorType.GPU, "H100")})
-        assert backend_attribute_sets(backend) == {"device-type": {"gpu"}, "device-variant": {"h100"}}
+        config = IrisClusterConfig(scale_groups={"h100-8x": _accel_scale_group(AcceleratorType.GPU, "H100")})
+        assert backend_attribute_sets(config) == {"device-type": {"gpu"}, "device-variant": {"h100"}}
 
     def test_cpu_scale_group_advertises_no_device_attrs(self):
-        # A CPU-only backend derives nothing, staying a routing catch-all as before.
-        backend = _worker_daemon_backend(scale_groups={"cpu": _accel_scale_group(AcceleratorType.CPU)})
-        assert backend_attribute_sets(backend) == {}
+        config = IrisClusterConfig(scale_groups={"cpu": _accel_scale_group(AcceleratorType.CPU)})
+        assert backend_attribute_sets(config) == {}
 
     def test_multi_scale_group_backend_advertises_variant_union(self):
-        # Several accelerator groups union their variants; a CPU group adds nothing.
-        backend = _worker_daemon_backend(
+        config = IrisClusterConfig(
             scale_groups={
                 "h100": _accel_scale_group(AcceleratorType.GPU, "H100"),
                 "a100": _accel_scale_group(AcceleratorType.GPU, "A100"),
                 "cpu": _accel_scale_group(AcceleratorType.CPU),
             }
         )
-        assert backend_attribute_sets(backend) == {"device-type": {"gpu"}, "device-variant": {"h100", "a100"}}
-
-    def test_derived_device_attrs_union_with_explicit_attributes(self):
-        # Explicit non-device attributes are preserved; an explicit device-variant
-        # unions with the derived one rather than being overwritten.
-        backend = _worker_daemon_backend(
-            attributes={"pool": "h100-8x", "device-variant": "a100"},
-            scale_groups={"h100": _accel_scale_group(AcceleratorType.GPU, "H100")},
-        )
-        assert backend_attribute_sets(backend) == {
-            "pool": {"h100-8x"},
-            "device-type": {"gpu"},
-            "device-variant": {"a100", "h100"},
-        }
+        assert backend_attribute_sets(config) == {"device-type": {"gpu"}, "device-variant": {"h100", "a100"}}
 
     def test_auto_variant_derives_device_type_only(self):
-        # A blank or 'auto' variant yields device-type but no device-variant,
-        # matching constraints_from_resources which emits no variant constraint.
-        backend = _worker_daemon_backend(scale_groups={"tpu": _accel_scale_group(AcceleratorType.TPU, "auto")})
-        assert backend_attribute_sets(backend) == {"device-type": {"tpu"}}
+        config = IrisClusterConfig(scale_groups={"tpu": _accel_scale_group(AcceleratorType.TPU, "auto")})
+        assert backend_attribute_sets(config) == {"device-type": {"tpu"}}
 
     def test_coreweave_implicit_config_advertises_gpu_and_region_attrs(self):
-        # The CoreWeave configs use the implicit single-backend shape (no backends:).
-        # resolve_backends synthesizes one backend whose GPU scale group must
-        # advertise device-type/device-variant and its region, else a GPU job can
-        # neither route to it locally nor federate to it by --region as a peer.
         iris_root = Path(__file__).parent.parent.parent.parent
         expected_region = {
             "config/examples/coreweave.yaml": "US-WEST-04A",
@@ -2035,9 +1912,7 @@ class TestBackendsConfig:
         for rel, region in expected_region.items():
             config_path = iris_root / rel
             config = load_config(config_path)
-            resolved = resolve_backends(config)
-            assert list(resolved) == [DEFAULT_BACKEND_ID]
-            assert backend_attribute_sets(resolved[DEFAULT_BACKEND_ID]) == {
+            assert backend_attribute_sets(config) == {
                 "device-type": {"gpu"},
                 "device-variant": {"h100"},
                 "region": {region},
@@ -2046,7 +1921,7 @@ class TestBackendsConfig:
     def test_region_derived_from_coreweave_slice_template(self):
         # A CoreWeave scale group advertises its region so --region routes to it across
         # a federation; the CoreWeave region is exported verbatim (not a GCP zone prefix).
-        backend = _worker_daemon_backend(
+        config = IrisClusterConfig(
             scale_groups={
                 "h100": ScaleGroupConfig(
                     name="h100",
@@ -2064,7 +1939,7 @@ class TestBackendsConfig:
                 )
             }
         )
-        assert backend_attribute_sets(backend) == {
+        assert backend_attribute_sets(config) == {
             "device-type": {"gpu"},
             "device-variant": {"h100"},
             "region": {"US-EAST-02A"},
@@ -2072,7 +1947,7 @@ class TestBackendsConfig:
 
     def test_region_derived_from_gcp_zone_prefix(self):
         # A GCP scale group advertises the zone's region prefix (us-central2-b -> us-central2).
-        backend = _worker_daemon_backend(
+        config = IrisClusterConfig(
             scale_groups={
                 "tpu": ScaleGroupConfig(
                     name="tpu",
@@ -2083,7 +1958,7 @@ class TestBackendsConfig:
                 )
             }
         )
-        assert backend_attribute_sets(backend) == {"region": {"us-central2"}}
+        assert backend_attribute_sets(config) == {"region": {"us-central2"}}
 
 
 def test_make_task_backend_requires_kueue_for_k8s_backend():
@@ -2094,7 +1969,10 @@ def test_make_task_backend_requires_kueue_for_k8s_backend():
         kubernetes_provider=KubernetesProviderConfig(),  # no kueue.cluster_queue
     )
     with pytest.raises(ValueError, match=r"kueue\.cluster_queue"):
-        make_task_backend(config, unreachable_grace=Duration.from_seconds(1))
+        make_task_backend(
+            config,
+            descriptor=k8s_backend_descriptor(),
+        )
 
 
 def test_kubernetes_provider_rejects_nonpositive_cache_max_age():
@@ -2108,7 +1986,10 @@ def test_k8s_backend_uses_canonical_default_task_image():
         kubernetes_provider=KubernetesProviderConfig(kueue=KueueConfig(cluster_queue="iris-cq")),
     )
 
-    backend = make_task_backend(config, unreachable_grace=Duration.from_seconds(1))
+    backend = make_task_backend(
+        config,
+        descriptor=k8s_backend_descriptor(),
+    )
 
     assert isinstance(backend, K8sTaskProvider)
     assert backend.pods.default_image == "registry.example/iris-task:abc1234"

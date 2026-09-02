@@ -27,6 +27,11 @@ class _WorkloadTransport:
             attempt.attempt_id = number
             attempt.attempt_uid = f"attempt-{number}"
             attempt.state = state
+            if number == 2:
+                attempt.output_archive.state = job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_STATE_UPLOADED
+                attempt.output_archive.uri = "gs://marin-us-east1/tmp/ttl=7d/iris/task-outputs/archive.tar.zst"
+                attempt.output_archive.retention = job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_RETENTION_TTL
+                attempt.output_archive.ttl_days = 7
 
         self.log_requests: list[tuple[str, int, str]] = []
         self.actions: list[tuple[list[str], job_pb2.TaskState, str]] = []
@@ -108,6 +113,7 @@ def test_task_and_attempt_handles_select_current_and_historical_execution():
 
     assert task.status().state is TaskState.RUNNING
     assert [attempt.attempt_number for attempt in task.attempts()] == [2, 3]
+    assert task.attempt(2).status().output_archive.uri.startswith("gs://marin-us-east1/tmp/ttl=7d/")
     current_attempt = cast(Attempt, task.current_attempt())
     assert current_attempt.ref == TaskAttempt.from_wire("/alice/train/0:3")
 

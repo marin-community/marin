@@ -4,10 +4,10 @@
 """Hero-shape scaling ladder: one recipe, five widths.
 
 Every rung trains the *same* EP hero recipe -- 384 routed experts, top-8, hidden/2-wide experts in a
-hidden/2 latent, pooled-wave transport, the Harrier 2026.08.18 two-phase mixture on the Marin
-tokenizer, offloaded MuonH state on FP32 pinned-host master params, the QB histogram estimator, and
-a dropless held-out eval -- and differs only in width and the rack count it spans. Behaviour is
-uniform across the ladder so a rung predicts the d6144 hero. ``d6144`` is the hero itself.
+hidden/2 latent, ragged all-to-all transport, the Harrier 2026.08.18 two-phase mixture on the
+Marin tokenizer, offloaded MuonH state, the QB histogram estimator, and a dropless held-out eval --
+and differs only in width and the rack count it spans. Behaviour is uniform across the ladder so a
+rung predicts the d6144 hero. ``d6144`` is the hero itself.
 
     size   racks  batch    steps  eval        checkpoints  tokens  active  total   FLOPs
     d768     1     1024    11420  every 5%    final only     48B     61M    1.6B    5.5e19
@@ -26,14 +26,12 @@ import os
 from datetime import timedelta
 
 import click
-import jmp
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.tracker.wandb import WandbConfig
-from levanter.trainer import TrainerConfig
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import build_options
@@ -51,18 +49,27 @@ from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import (
     HARRIER_MIX_2026_08_18_TAG,
     harrier_mix_2026_08_18_data_config,
 )
-from experiments.grug.moe_hero_ep.heuristic import HERO_MODEL, MoeHeuristic, build_hero_configs
-from experiments.grug.moe_hero_ep.launch_mfu_test import (
+from experiments.grug.moe_hero_ep.hero_recipe import (
     DEFAULT_WANDB_PROJECT,
     HERO_EP_BATCH_SIZE,
     HERO_EP_EXPERT_AXIS_SIZE,
     HERO_EP_NODES,
     HERO_GPUS_PER_NODE,
-    HERO_MIXED_PRECISION,
+    HERO_MODEL_CONFIG,
+    HERO_NODE_CPU,
+    HERO_NODE_DISK,
+    HERO_NODE_RAM,
+    HERO_PROCESSES_PER_TASK,
+    HERO_QB_HIST_BINS,
+    HERO_TENSORSTORE_CACHE_BYTES,
+    HERO_WATCH_INTERVAL,
     HeroThroughputResult,
-    _validation_datasets,
+    hero_grug_trainer_config,
+    hero_trainer_config,
+    validation_datasets,
+    with_transport_remat_mode,
 )
-from experiments.grug.moe_hero_ep.model import QbEstimator
+from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic, build_hero_configs
 from experiments.grug.moe_hero_ep.small_scale_abl_launch import (
     _EP_CAPACITY_FACTOR,
     SEQ_LEN,
@@ -73,16 +80,13 @@ from experiments.grug.moe_hero_ep.small_scale_abl_launch import (
 from experiments.grug.moe_hero_ep.train import (
     GrugEvalConfig,
     GrugRunConfig,
-    GrugTrainerConfig,
-    MasterParamMode,
+    TrainingDataMode,
     WatchMode,
     _compute_flops,
     run_grug,
 )
 from experiments.marin_tokenizer import marin_tokenizer
 
-# Ladder rungs, each pinned to the rack count that holds its batch. d6144 is the hero, reusing
-# HERO_MODEL; the narrower rungs reuse the ablation's `_small_model` at the same hero routing geometry.
 # Deadlines for the progress watchdog. A stalled process exits so the scheduler can replace the
 # gang rather than leaving every rank blocked on it.
 HERO_STEP_TIMEOUT = timedelta(minutes=15)
@@ -92,16 +96,11 @@ HERO_PROCESS_STALL_TIMEOUT = timedelta(hours=1)
 HERO_STARTUP_TIMEOUT = timedelta(seconds=2 * RESTORE_BARRIER_TIMEOUT)
 
 LADDER_RACKS: dict[str, int] = {"d768": 1, "d1024": 2, "d1536": 6, "d2048": 11, "d6144": 11}
-QB_HIST_BINS = 10_000
-# Gradient and parameter norm logs every 10 steps on every rung.
-WATCH_INTERVAL = 10
+# Each rung uses the rack count that holds its batch. d6144 uses the shared hero recipe. Narrower
+# rungs use `_small_model` with the same routing geometry.
 # 791 tokens per active parameter sets the step budget: it lands the d6144 hero at 18T tokens and
 # scales every narrower rung by the same ratio.
 TOKENS_PER_ACTIVE_PARAM = 791
-# The decoded-chunk cache is process-local. A two-tray loader benchmark at the hero's global batch
-# and sequence length found 1 GB retained 18.6x throughput headroom while bounding the cache near
-# 0.923 GiB per process; 125 GB allowed native RSS to grow until the cache filled.
-TENSORSTORE_CACHE_BYTES = 1_000_000_000
 # A crash costs at most this much training time. A hero checkpoint is several TB, thus a shorter
 # interval would spend a large part of the run inside a checkpoint write.
 RESUME_SAVE_INTERVAL = timedelta(hours=1)
@@ -116,23 +115,22 @@ LADDER_MAX_TASK_FAILURES = 1000
 def _ladder_model(size: str):
     """The GrugModelConfig for ``size`` at the hero routing geometry with the QB histogram estimator."""
     if size == "d6144":
-        return dataclasses.replace(HERO_MODEL, qb_estimator=QbEstimator.HIST, qb_hist_bins=QB_HIST_BINS)
+        # Only the hero rung is measured with the layer-carry offload.
+        return with_transport_remat_mode(HERO_MODEL_CONFIG)
     shape = SMALL_SHAPES[size]
     return _small_model(
         shape,
         _EP_CAPACITY_FACTOR,
         attention_implementation="gpu_fa4_cute",
-        moe_implementation="fixed_pooled_wave_all_to_all",
+        moe_implementation="ragged_all_to_all",
         expert_chunks=1,
         seq_len=SEQ_LEN,
         num_experts=384,
         num_experts_per_token=8,
         intermediate_dim=None,
         latent_dim=None,
-        pooled_transport_capacity_factor=_EP_CAPACITY_FACTOR,
-        num_expert_waves=3,
         qb_use_histogram=True,
-        qb_hist_bins=QB_HIST_BINS,
+        qb_hist_bins=HERO_QB_HIST_BINS,
     )
 
 
@@ -160,8 +158,7 @@ def build_ladder_run(
         raise ValueError(f"size must be one of {sorted(LADDER_RACKS)}, got {size!r}")
 
     dp_racks = LADDER_RACKS[size]
-    # Weak scaling: batch grows with racks so per-rack token load (and the pooled-wave drop dynamics)
-    # stays constant across rungs. Eval batch is one sequence per device (64 per rack).
+    # Weak scaling holds per-rack token load constant; eval is one sequence per device.
     batch_size = HERO_EP_BATCH_SIZE * dp_racks
     eval_batch_size = HERO_EP_EXPERT_AXIS_SIZE * dp_racks
     global_tokens_per_step = batch_size * SEQ_LEN
@@ -202,44 +199,36 @@ def build_ladder_run(
         )
 
     # Uniform hero trainer: expert-parallel within each rack, replicated across racks, MuonH state
-    # offloaded to FP32 pinned host so the pooled all-to-all buffers keep their HBM.
-    grug_trainer = GrugTrainerConfig(
-        data_seed=None,
-        log_every=1,
-        ema_beta=None,
-        z_loss_weight=1e-4,
-        offload_opt_state=True,
-        master_param_mode=MasterParamMode.FP32_PINNED_HOST,
+    # offloaded to FP32 pinned host.
+    grug_trainer = hero_grug_trainer_config(
+        replica_axis_size=dp_racks,
+        training_data_mode=TrainingDataMode.MIXTURE,
         watch_mode=WatchMode.INLINE,
         save_checkpoints=True,
-        expert_axis_size=HERO_EP_EXPERT_AXIS_SIZE,
-        replica_axis_size=dp_racks,
-        sharding_dump_path=None,
     )
     train_resources = ResourceConfig.with_gpu(
         "GB200",
         count=HERO_GPUS_PER_NODE,
-        cpu=120,
-        ram="890g",
-        disk="1t",
+        cpu=HERO_NODE_CPU,
+        ram=HERO_NODE_RAM,
+        disk=HERO_NODE_DISK,
         replicas=HERO_EP_NODES * dp_racks,
     )
     name = f"grug/{run_id}"
     version = resolve_version(name, version)
-    validation = [*_validation_datasets(), *uncheatable_datasets(tokenizer=marin_tokenizer).values()]
+    validation = [*validation_datasets(), *uncheatable_datasets(tokenizer=marin_tokenizer).values()]
     wandb_project = os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT
 
     def build_config(ctx: StepContext) -> GrugRunConfig:
         permanent_checkpoint_path = prefix_join(ctx.output_path, "checkpoints")
         temporary_checkpoint_path = temporary_checkpoint_base_path(ctx.output_path)
         data_local_checkpoint_path = data_local_temporary_checkpoint_base_path(ctx.output_path)
-        trainer = TrainerConfig(
-            id=run_id,
+        trainer = hero_trainer_config(
+            run_id=run_id,
             seed=0,
             train_batch_size=batch_size,
             num_train_steps=num_steps,
             profiler=ProfilerConfig(enabled=False),
-            mp=jmp.get_policy(HERO_MIXED_PRECISION),
             tracker=WandbConfig(
                 entity="marin-community",
                 project=wandb_project,
@@ -258,15 +247,12 @@ def build_ladder_run(
                 name=run_id,
                 replicate_path=ctx.output_path,
             ),
-            watch=WatchConfig(interval=WATCH_INTERVAL),
+            watch=WatchConfig(interval=HERO_WATCH_INTERVAL),
             progress_watchdog=ProgressWatchdogConfig(
                 step_timeout=HERO_STEP_TIMEOUT,
                 process_timeout=HERO_PROCESS_STALL_TIMEOUT,
                 startup_timeout=HERO_STARTUP_TIMEOUT,
             ),
-            use_explicit_mesh_axes=True,
-            require_accelerator=True,
-            allow_nondivisible_batch_size=False,
             # Existing 02A temporaries remain valid resume candidates for this lineage.
             load_checkpoint_path=[
                 permanent_checkpoint_path,
@@ -298,7 +284,7 @@ def build_ladder_run(
                 validation=validation,
             ),
             resources=ctx.runtime_arg("train_resources"),
-            tensorstore_cache_bytes=TENSORSTORE_CACHE_BYTES,
+            tensorstore_cache_bytes=HERO_TENSORSTORE_CACHE_BYTES,
             optimizer=optimizer,
             trainer=dataclasses.replace(grug_trainer, trainer=trainer),
             eval=GrugEvalConfig(
@@ -312,7 +298,7 @@ def build_ladder_run(
                 eval_at_first_step=size == "d6144",
             ),
             stop_after_steps=num_steps,
-            processes_per_task=HERO_GPUS_PER_NODE,
+            processes_per_task=HERO_PROCESSES_PER_TASK,
             max_retries_failure=LADDER_MAX_RETRIES_FAILURE,
             max_task_failures=LADDER_MAX_TASK_FAILURES,
         )

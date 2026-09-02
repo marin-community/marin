@@ -24,19 +24,21 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use arrow::array::RecordBatch;
+use arrow::array::{Array, Int64Array, RecordBatch};
 use arrow::datatypes::SchemaRef;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::arrow_writer::{ArrowWriter, ArrowWriterOptions};
 use parquet::arrow::ProjectionMask;
 
 use crate::errors::StatsError;
+use crate::partition_policy::{segment_path, PhysicalPartitionPolicy, SegmentPartition};
 use crate::store::compaction::config::CompactionJob;
 use crate::store::compaction::merge::{
     kway_merge, project_to_schema, sort_batch_by, sort_col_indices,
 };
-use crate::store::compaction::planner::aggregate_key_bounds;
-use crate::store::segment::{segment_bounds, segment_writer_properties_with_max_rows};
+use crate::store::segment::{
+    read_segment_footer, segment_bounds, segment_writer_properties_with_partition,
+};
 use crate::store::segment_index::{write_segment_index, SegmentIndexConfig};
 use crate::store::types::{seg_filename, LocalSegment, SegmentLocation, SegmentRow};
 
@@ -52,10 +54,9 @@ fn now_ms() -> i64 {
 ///
 /// `removed` are the input segment paths to splice out — the prefix of the job's
 /// inputs that fit the merge memory ceiling, which may be shorter than the job.
-/// `added` is the single output segment (its file already exists for a merge;
-/// for a bump the file appears only after `bump_rename` runs in the commit). It
-/// is `None` only when the job's head input file is gone, so the swap drops that
-/// dangling reference and produces no replacement.
+/// `added` holds one output for an ordinary merge or multiple outputs when an
+/// unpartitioned stream first crosses a physical partition boundary. It is
+/// empty only when the job's head input file is gone.
 /// `unlink_removed` is `false` for a level bump (the input file was renamed, so
 /// its old path is already gone after `bump_rename`) and `true` for a merge (the
 /// inputs are still on disk). `bump_rename`, when `Some((from, to))`, is the
@@ -66,7 +67,7 @@ fn now_ms() -> i64 {
 #[derive(Debug, Clone)]
 pub struct PlannedSwap {
     pub removed: Vec<String>,
-    pub added: Option<LocalSegment>,
+    pub added: Vec<LocalSegment>,
     pub unlink_removed: bool,
     pub bump_rename: Option<(PathBuf, PathBuf)>,
     pub input_arrow_bytes: i64,
@@ -75,7 +76,16 @@ pub struct PlannedSwap {
 #[derive(Clone, Copy)]
 pub struct CompactionLayout<'a> {
     pub sort_columns: &'a [String],
+    pub key_column: &'a str,
     pub max_row_group_rows: usize,
+}
+
+#[derive(Clone, Copy)]
+pub struct CompactionExecution<'a> {
+    pub layout: CompactionLayout<'a>,
+    pub index_config: &'a SegmentIndexConfig,
+    pub partition_policy: Option<&'a dyn PhysicalPartitionPolicy>,
+    pub max_merge_arrow_bytes: i64,
 }
 
 /// Resolve `job` into a `PlannedSwap`, performing the heavy read/merge/write for
@@ -90,7 +100,8 @@ pub struct CompactionLayout<'a> {
 /// `input_key_bounds` supplies typed in-memory key bounds for each input (the
 /// catalog round-trip stringifies them, losing numeric ordering). A bump carries
 /// the single input's bounds; a merge folds them via `aggregate_key_bounds`.
-pub fn run_job(
+#[cfg(test)]
+fn run_job(
     job: &CompactionJob,
     dir: &Path,
     arrow_schema: &SchemaRef,
@@ -99,16 +110,46 @@ pub fn run_job(
     max_merge_arrow_bytes: i64,
     input_key_bounds: impl Fn(&str) -> (Option<i64>, Option<i64>),
 ) -> Result<PlannedSwap, StatsError> {
-    if job.inputs.len() == 1 {
-        apply_level_bump(&job.inputs[0], job.output_level, dir, &input_key_bounds)
+    let execution = CompactionExecution {
+        layout,
+        index_config,
+        partition_policy: None,
+        max_merge_arrow_bytes,
+    };
+    run_job_with_partition_policy(job, dir, arrow_schema, execution, input_key_bounds)
+}
+
+pub fn run_job_with_partition_policy(
+    job: &CompactionJob,
+    dir: &Path,
+    arrow_schema: &SchemaRef,
+    execution: CompactionExecution<'_>,
+    input_key_bounds: impl Fn(&str) -> (Option<i64>, Option<i64>),
+) -> Result<PlannedSwap, StatsError> {
+    let job_partition = job
+        .inputs
+        .first()
+        .and_then(|segment| segment.partition.clone());
+    let needs_repartition = execution.partition_policy.is_some_and(|policy| {
+        job_partition
+            .as_ref()
+            .is_none_or(|partition| !policy.is_current_partition(partition))
+    });
+    if job.inputs.len() == 1 && !needs_repartition {
+        apply_level_bump(
+            &job.inputs[0],
+            job.output_level,
+            dir,
+            execution.partition_policy,
+            &input_key_bounds,
+        )
     } else {
         apply_merge(
             job,
             dir,
             arrow_schema,
-            layout,
-            index_config,
-            max_merge_arrow_bytes,
+            execution,
+            needs_repartition,
             &input_key_bounds,
         )
     }
@@ -131,6 +172,7 @@ fn apply_level_bump(
     old: &SegmentRow,
     output_level: i32,
     dir: &Path,
+    partition_policy: Option<&dyn PhysicalPartitionPolicy>,
     input_key_bounds: &impl Fn(&str) -> (Option<i64>, Option<i64>),
 ) -> Result<PlannedSwap, StatsError> {
     if !Path::new(&old.path).exists() {
@@ -141,7 +183,13 @@ fn apply_level_bump(
         return Ok(drop_missing_input(old));
     }
     let new_filename = seg_filename(output_level, old.min_seq);
-    let new_path = dir.join(&new_filename);
+    let new_path = segment_path(
+        dir,
+        &new_filename,
+        output_level,
+        old.partition.as_ref(),
+        partition_policy,
+    );
     let (min_key, max_key) = input_key_bounds(&old.path);
     let bumped = LocalSegment {
         path: new_path.to_string_lossy().into_owned(),
@@ -153,11 +201,12 @@ fn apply_level_bump(
         created_at_ms: old.created_at_ms,
         min_key_value: min_key,
         max_key_value: max_key,
+        partition: old.partition.clone(),
         location: SegmentLocation::Local,
     };
     Ok(PlannedSwap {
         removed: vec![old.path.clone()],
-        added: Some(bumped),
+        added: vec![bumped],
         unlink_removed: false,
         bump_rename: Some((PathBuf::from(&old.path), new_path)),
         input_arrow_bytes: 0,
@@ -174,7 +223,7 @@ fn apply_level_bump(
 fn drop_missing_input(missing: &SegmentRow) -> PlannedSwap {
     PlannedSwap {
         removed: vec![missing.path.clone()],
-        added: None,
+        added: Vec::new(),
         unlink_removed: false,
         bump_rename: None,
         input_arrow_bytes: 0,
@@ -194,16 +243,15 @@ fn apply_merge(
     job: &CompactionJob,
     dir: &Path,
     arrow_schema: &SchemaRef,
-    layout: CompactionLayout<'_>,
-    index_config: &SegmentIndexConfig,
-    max_merge_arrow_bytes: i64,
+    execution: CompactionExecution<'_>,
+    needs_repartition: bool,
     input_key_bounds: &impl Fn(&str) -> (Option<i64>, Option<i64>),
 ) -> Result<PlannedSwap, StatsError> {
-    let merged_filename = seg_filename(job.output_level, job.output_min_seq);
-    let merged_path = dir.join(&merged_filename);
-    let staging_path = dir.join(format!("{merged_filename}.tmp"));
-
-    let sort_cols = sort_col_indices(arrow_schema, layout.sort_columns);
+    let job_partition = job
+        .inputs
+        .first()
+        .and_then(|segment| segment.partition.clone());
+    let sort_cols = sort_col_indices(arrow_schema, execution.layout.sort_columns);
 
     // Read each input's row-group batches, project onto the namespace schema
     // (additive null-fill), then SORT each batch and feed it to the k-way merge
@@ -247,7 +295,13 @@ fn apply_merge(
                         error = %e,
                         "unreadable merge input at run head; promoting or dropping it"
                     );
-                    return apply_level_bump(inp, job.output_level, dir, input_key_bounds);
+                    return apply_level_bump(
+                        inp,
+                        job.output_level,
+                        dir,
+                        execution.partition_policy,
+                        input_key_bounds,
+                    );
                 }
                 tracing::warn!(
                     path = %inp.path,
@@ -268,14 +322,14 @@ fn apply_merge(
             batches.push(sorted);
         }
         if !consumed.is_empty()
-            && input_arrow_bytes.saturating_add(batch_bytes) > max_merge_arrow_bytes
+            && input_arrow_bytes.saturating_add(batch_bytes) > execution.max_merge_arrow_bytes
         {
             break;
         }
         input_arrow_bytes = input_arrow_bytes.saturating_add(batch_bytes);
         projected.extend(batches);
         consumed.push(inp);
-        if input_arrow_bytes > max_merge_arrow_bytes {
+        if input_arrow_bytes > execution.max_merge_arrow_bytes {
             break;
         }
     }
@@ -283,9 +337,15 @@ fn apply_merge(
     // One input has nothing to merge with — whether it busted the ceiling alone
     // or merely left no room for the next input. Promote it by rename instead,
     // so it costs no merge memory and its level still advances.
-    if consumed.len() == 1 {
+    if consumed.len() == 1 && !needs_repartition {
         drop(projected);
-        return apply_level_bump(consumed[0], job.output_level, dir, input_key_bounds);
+        return apply_level_bump(
+            consumed[0],
+            job.output_level,
+            dir,
+            execution.partition_policy,
+            input_key_bounds,
+        );
     }
 
     let merged = kway_merge(&projected, &sort_cols)
@@ -295,58 +355,86 @@ fn apply_merge(
     // writes below (each input plus the output is a fully materialized,
     // uncompressed copy of the segment).
     drop(projected);
-    write_merged_segment(
-        &staging_path,
-        arrow_schema,
-        &merged,
-        layout.max_row_group_rows,
-    )?;
-    std::fs::rename(&staging_path, &merged_path).map_err(|e| {
-        StatsError::Internal(format!(
-            "rename merge output {} -> {}: {e}",
-            staging_path.display(),
-            merged_path.display()
-        ))
-    })?;
-
-    // Build the complete segment-index bundle next to the merged output. The
-    // derived data is optional, so a missing bundle only disables acceleration
-    // for this segment, never correctness. Bundles are carried forward by
-    // single-input level bumps; L0 flushes omit only trigram sections.
-    //
-    // The parquet rename above already committed the segment, so a crash in the
-    // gap before this write leaves the segment without a bundle. That is the
-    // same correct-but-unaccelerated state as any missing bundle; a later compaction
-    // consuming this segment rebuilds it. A terminal-level segment that is never
-    // re-merged (or one written before bundles existed) stays unindexed until
-    // maintenance backfills it a few segments per tick.
-    if let Err(error) = write_segment_index(&merged_path, &merged, index_config) {
-        tracing::warn!(path = %merged_path.display(), %error, "segment index bundle write failed");
-    }
-
-    let size = std::fs::metadata(&merged_path)
-        .map_err(|e| StatsError::Internal(format!("stat {}: {e}", merged_path.display())))?
-        .len() as i64;
-    // Bounds and counts fold over the CONSUMED prefix, not the planned job: the
-    // inputs left behind are still live segments at their own level.
-    let row_count: i64 = consumed.iter().map(|s| s.row_count).sum();
-    let (merged_min_key, merged_max_key) =
-        aggregate_key_bounds(consumed.iter().map(|s| input_key_bounds(&s.path)));
-    let merged_seg = LocalSegment {
-        path: merged_path.to_string_lossy().into_owned(),
-        size_bytes: size,
-        level: job.output_level,
-        min_seq: consumed.iter().map(|s| s.min_seq).min().expect("non-empty"),
-        max_seq: consumed.iter().map(|s| s.max_seq).max().expect("non-empty"),
-        row_count,
-        created_at_ms: now_ms(),
-        min_key_value: merged_min_key,
-        max_key_value: merged_max_key,
-        location: SegmentLocation::Local,
+    let output_batches: Vec<(Option<SegmentPartition>, Vec<RecordBatch>)> = if needs_repartition {
+        execution
+            .partition_policy
+            .expect("repartition requires a policy")
+            .partition_batches(&merged)?
+            .into_iter()
+            .map(|output| (Some(output.partition), output.batches))
+            .collect()
+    } else {
+        vec![(job_partition, merged)]
     };
+    let mut added = Vec::with_capacity(output_batches.len());
+    for (partition, batches) in output_batches {
+        let (min_seq, _) = batch_int64_bounds(&batches, "seq")?.ok_or_else(|| {
+            StatsError::Internal("compaction produced an empty physical partition".to_string())
+        })?;
+        let merged_filename = seg_filename(job.output_level, min_seq);
+        let merged_path = segment_path(
+            dir,
+            &merged_filename,
+            job.output_level,
+            partition.as_ref(),
+            execution.partition_policy,
+        );
+        let output_dir = merged_path
+            .parent()
+            .expect("physical segment path has a parent");
+        std::fs::create_dir_all(output_dir).map_err(|error| {
+            StatsError::Internal(format!(
+                "create physical segment directory {}: {error}",
+                output_dir.display()
+            ))
+        })?;
+        let staging_path = output_dir.join(format!("{merged_filename}.tmp"));
+        write_merged_segment(
+            &staging_path,
+            arrow_schema,
+            &batches,
+            execution.layout.max_row_group_rows,
+            partition.as_ref(),
+        )?;
+        std::fs::rename(&staging_path, &merged_path).map_err(|error| {
+            StatsError::Internal(format!(
+                "rename merge output {} -> {}: {error}",
+                staging_path.display(),
+                merged_path.display()
+            ))
+        })?;
+        if let Err(error) = write_segment_index(&merged_path, &batches, execution.index_config) {
+            tracing::warn!(path = %merged_path.display(), %error, "segment index bundle write failed");
+        }
+        let size = std::fs::metadata(&merged_path)
+            .map_err(|error| {
+                StatsError::Internal(format!("stat {}: {error}", merged_path.display()))
+            })?
+            .len() as i64;
+        let metadata = read_segment_footer(&merged_path, Some(execution.layout.key_column))
+            .ok_or_else(|| {
+                StatsError::Internal(format!(
+                    "read freshly-written compaction output {}",
+                    merged_path.display()
+                ))
+            })?;
+        added.push(LocalSegment {
+            path: merged_path.to_string_lossy().into_owned(),
+            size_bytes: size,
+            level: job.output_level,
+            min_seq: metadata.min_seq,
+            max_seq: metadata.max_seq,
+            row_count: metadata.row_count,
+            created_at_ms: now_ms(),
+            min_key_value: metadata.min_key_value,
+            max_key_value: metadata.max_key_value,
+            partition: metadata.partition,
+            location: SegmentLocation::Local,
+        });
+    }
     Ok(PlannedSwap {
         removed: consumed.iter().map(|s| s.path.clone()).collect(),
-        added: Some(merged_seg),
+        added,
         unlink_removed: true,
         bump_rename: None,
         input_arrow_bytes,
@@ -403,8 +491,9 @@ fn write_merged_segment(
     schema: &SchemaRef,
     batches: &[RecordBatch],
     max_row_group_rows: usize,
+    partition: Option<&SegmentPartition>,
 ) -> Result<(), StatsError> {
-    let props = segment_writer_properties_with_max_rows(max_row_group_rows)?;
+    let props = segment_writer_properties_with_partition(max_row_group_rows, partition)?;
     let file = std::fs::File::create(path)
         .map_err(|e| StatsError::Internal(format!("create {}: {e}", path.display())))?;
     let opts = ArrowWriterOptions::new().with_properties(props);
@@ -419,6 +508,31 @@ fn write_merged_segment(
         .close()
         .map_err(|e| StatsError::Internal(format!("arrow writer close: {e}")))?;
     Ok(())
+}
+
+fn batch_int64_bounds(
+    batches: &[RecordBatch],
+    column: &str,
+) -> Result<Option<(i64, i64)>, StatsError> {
+    let mut minimum = None;
+    let mut maximum = None;
+    for batch in batches {
+        let values = batch
+            .column_by_name(column)
+            .and_then(|array| array.as_any().downcast_ref::<Int64Array>())
+            .ok_or_else(|| {
+                StatsError::Internal(format!("compaction output lacks Int64 {column:?}"))
+            })?;
+        for index in 0..values.len() {
+            if values.is_null(index) {
+                continue;
+            }
+            let value = values.value(index);
+            minimum = Some(minimum.map_or(value, |current: i64| current.min(value)));
+            maximum = Some(maximum.map_or(value, |current: i64| current.max(value)));
+        }
+    }
+    Ok(minimum.zip(maximum))
 }
 
 /// Footer-only `row_count` for a written segment (verification helper for the
@@ -466,6 +580,7 @@ mod tests {
     fn default_layout(sort_columns: &[String]) -> CompactionLayout<'_> {
         CompactionLayout {
             sort_columns,
+            key_column: "key",
             max_row_group_rows: MAX_ROW_GROUP_ROWS,
         }
     }
@@ -525,9 +640,7 @@ mod tests {
     /// Unwrap the output segment of a swap that is expected to produce one (every
     /// merge/bump; a drop returns `None`).
     fn added_seg(swap: &PlannedSwap) -> &LocalSegment {
-        swap.added
-            .as_ref()
-            .expect("swap produced an output segment")
+        swap.added.first().expect("swap produced an output segment")
     }
 
     fn row_for(path: &str, level: i32, min_seq: i64, max_seq: i64, byte_size: i64) -> SegmentRow {
@@ -542,6 +655,7 @@ mod tests {
             created_at_ms: 111,
             min_key_value: None,
             max_key_value: None,
+            partition: None,
             location: SegmentLocation::Local,
         }
     }
@@ -677,6 +791,7 @@ mod tests {
             &schema(),
             CompactionLayout {
                 sort_columns: &["worker_id".to_string(), "key".to_string()],
+                key_column: "key",
                 max_row_group_rows: 2,
             },
             &SegmentIndexConfig::from_policies(
@@ -942,7 +1057,7 @@ mod tests {
         )
         .expect("a missing input must not fail the tick");
         assert!(
-            swap.added.is_none(),
+            swap.added.is_empty(),
             "a missing head produces no output segment"
         );
         assert!(
@@ -1000,7 +1115,7 @@ mod tests {
             |_| (None, None),
         )
         .expect("a missing single input must not fail the tick");
-        assert!(swap.added.is_none(), "a missing input produces no output");
+        assert!(swap.added.is_empty(), "a missing input produces no output");
         assert!(
             swap.bump_rename.is_none(),
             "a missing single input is dropped, never renamed"
@@ -1288,7 +1403,7 @@ mod tests {
         let total: usize = batches.iter().map(|b| b.num_rows()).sum();
 
         let path = dir.join("seg_L1_00000000000000000001.parquet");
-        write_merged_segment(&path, &log, &batches, MAX_ROW_GROUP_ROWS).unwrap();
+        write_merged_segment(&path, &log, &batches, MAX_ROW_GROUP_ROWS, None).unwrap();
 
         let row_group_rows =
             segment_row_group_rows(&path).expect("readable footer for the written segment");

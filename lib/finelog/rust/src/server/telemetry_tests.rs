@@ -27,6 +27,7 @@ use crate::store::Store;
 use crate::test_support::unique_dir;
 
 type TestHttpClient = HyperClient<HttpConnector, ClientBody>;
+const GIBIBYTE: i64 = 1024 * 1024 * 1024;
 
 struct TestResponse {
     status: StatusCode,
@@ -151,11 +152,15 @@ fn zstd_body(body: &[u8]) -> Vec<u8> {
 }
 
 fn batch(batch_id: &str) -> Vec<u8> {
+    batch_for_service(batch_id, "trainer")
+}
+
+fn batch_for_service(batch_id: &str, service: &str) -> Vec<u8> {
     serde_json::to_vec(&json!({
         "version": 1,
         "batch_id": batch_id,
         "resource": {
-            "service": "trainer",
+            "service": service,
             "attributes": {"role": "worker", "run_id": "run-1"}
         },
         "records": [
@@ -177,6 +182,12 @@ fn batch(batch_id: &str) -> Vec<u8> {
         ]
     }))
     .unwrap()
+}
+
+fn batch_with_namespace_hint(batch_id: &str, service: &str, namespace: &str) -> Vec<u8> {
+    let mut payload: Value = serde_json::from_slice(&batch_for_service(batch_id, service)).unwrap();
+    payload["namespace"] = json!(namespace);
+    serde_json::to_vec(&payload).unwrap()
 }
 
 fn training_metrics_batch(
@@ -228,6 +239,13 @@ async fn query(store: &Store, sql: &str) -> Vec<arrow::array::RecordBatch> {
 #[tokio::test]
 async fn router_registers_index_policy_before_first_telemetry_request() {
     let store = disk_store("telemetry-startup-registration");
+    store
+        .register_table(
+            "telemetry_v1",
+            super::telemetry::telemetry_schema(),
+            StoragePolicy::default(),
+        )
+        .unwrap();
     let health = Arc::new(IngestHealth::new());
     let _router = super::telemetry::router(
         Arc::clone(&store),
@@ -249,7 +267,32 @@ async fn router_registers_index_policy_before_first_telemetry_request() {
     .await
     .expect("startup registration did not complete");
     let schema = store.get_table_schema("telemetry_v1").unwrap();
-
+    assert_eq!(
+        store.get_policy("telemetry_v1").unwrap().max_bytes,
+        Some(50 * GIBIBYTE)
+    );
+    let storage_namespaces = [
+        ("telemetry_v1.levanter", 32),
+        ("telemetry_v1.node_agent", 15),
+        ("telemetry_v1.iris.rpc", 1),
+        ("telemetry_v1.iris", 2),
+        ("telemetry_v1.vllm", 2),
+        ("telemetry_v1.zephyr", 2),
+    ];
+    for (namespace, max_gibibytes) in storage_namespaces {
+        assert_eq!(
+            store.get_policy(namespace).unwrap().max_bytes,
+            Some(max_gibibytes * GIBIBYTE)
+        );
+    }
+    assert_eq!(
+        store.get_policy("levanter.metrics").unwrap(),
+        StoragePolicy {
+            max_segments: Some(i32::MAX),
+            max_bytes: Some(32 * GIBIBYTE),
+            max_age_seconds: None,
+        }
+    );
     for name in ["service", "kind", "name"] {
         let column = schema
             .columns
@@ -434,11 +477,11 @@ async fn process_zero_training_query_uses_projection_without_changing_results() 
         assert_eq!(response.status, StatusCode::OK);
     }
     store
-        .maintain_namespace("telemetry_v1", true)
+        .maintain_namespace("telemetry_v1.levanter", true)
         .await
         .unwrap();
 
-    const FILTER_AND_ORDER: &str = "FROM telemetry_v1 \
+    const FILTER_AND_ORDER: &str = "FROM \"telemetry_v1.levanter\" \
         WHERE service = 'levanter' \
           AND name IN ('step', 'train_loss') \
           AND run_id = 'run-projection' \
@@ -494,7 +537,7 @@ async fn a_registration_the_catalog_rejects_shows_up_in_health_and_server_info()
     // A `name` column of the wrong type: no additive merge reconciles it.
     store
         .register_table(
-            "telemetry_v1",
+            "telemetry_v1.levanter",
             Schema::new(
                 vec![
                     Column::new("timestamp_ms", ColumnType::COLUMN_TYPE_INT64, false),
@@ -521,11 +564,16 @@ async fn a_registration_the_catalog_rejects_shows_up_in_health_and_server_info()
     })
     .await
     .expect("the wedged registration never reached /health");
-    assert!(health.contains("telemetry_v1"), "{health}");
+    assert!(health.contains("telemetry_v1.levanter"), "{health}");
 
     let info: Value = serde_json::from_str(&get_text(&client, addr, "/api/server").await).unwrap();
-    let namespace = &info["ingest"][0];
-    assert_eq!(namespace["namespace"], "telemetry_v1");
+    let namespace = info["ingest"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|namespace| namespace["namespace"] == "telemetry_v1.levanter")
+        .unwrap();
+    assert_eq!(namespace["namespace"], "telemetry_v1.levanter");
     assert_eq!(namespace["state"], "failed");
     assert!(namespace["sinceUnix"].as_i64().unwrap() > 0);
     assert!(namespace["error"].as_str().unwrap().contains("name"));
@@ -533,13 +581,13 @@ async fn a_registration_the_catalog_rejects_shows_up_in_health_and_server_info()
     let posted = post(
         &client,
         addr,
-        batch("11111111-1111-4111-8111-111111111111"),
+        batch_for_service("11111111-1111-4111-8111-111111111111", "levanter"),
         Some("11111111-1111-4111-8111-111111111111"),
         Some("application/json"),
         None,
     )
     .await;
-    assert_eq!(posted.status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(posted.status, StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
@@ -575,13 +623,13 @@ async fn accepted_batch_is_queryable_through_normal_store_rows() {
     assert_eq!(response.payload["deduplicated"], false);
     assert_eq!(response.payload["record_count"], 2);
     store
-        .await_persisted("telemetry_v1", 1, Duration::from_secs(5))
+        .await_persisted("telemetry_v1.trainer", 1, Duration::from_secs(5))
         .await
         .unwrap();
     let rows = query(
         &store,
         "SELECT name, value, body_json, resource_attributes_json, attributes_json \
-         FROM telemetry_v1 ORDER BY record_index",
+         FROM \"telemetry_v1.trainer\" ORDER BY record_index",
     )
     .await;
     assert_eq!(rows.iter().map(|batch| batch.num_rows()).sum::<usize>(), 2);
@@ -607,7 +655,7 @@ async fn accepted_batch_is_queryable_through_normal_store_rows() {
     let bounded = query(
         &store,
         "SELECT name, to_timestamp_millis(timestamp_ms) AS observed_at, run_id \
-         FROM telemetry_v1 \
+         FROM \"telemetry_v1.trainer\" \
          WHERE timestamp_ms >= CAST(EXTRACT(EPOCH FROM TIMESTAMP '2023-11-14 22:13:20') * 1000 AS BIGINT) \
          AND timestamp_ms < CAST(EXTRACT(EPOCH FROM TIMESTAMP '2023-11-14 22:13:21') * 1000 AS BIGINT)",
     )
@@ -617,6 +665,158 @@ async fn accepted_batch_is_queryable_through_normal_store_rows() {
         2
     );
     assert_eq!(bounded[0].column(2).as_string::<i32>().value(0), "run-1");
+}
+
+#[tokio::test]
+async fn automated_levanter_telemetry_stays_in_its_service_namespace() {
+    let store = disk_store("telemetry-client-namespace");
+    let (addr, _) = serve(Arc::clone(&store), AuthPolicy::allow_localhost()).await;
+    let client = http_client();
+    let batch_id = "4f106a9c-b70d-445a-902d-529aab755aa7";
+
+    let body = serde_json::to_vec(&json!({
+        "version": 1,
+        "batch_id": batch_id,
+        "resource": {"service": "levanter", "attributes": {}},
+        "records": [
+            {
+                "timestamp_ms": 1_700_000_000_000_i64,
+                "kind": "gauge",
+                "name": "train_loss",
+                "value": 1.0,
+                "attributes": {}
+            },
+            {
+                "timestamp_ms": 1_700_000_000_001_i64,
+                "kind": "gauge",
+                "name": "grad_norm_transformer_layers_4_mlp_gate_proj_weight",
+                "value": 0.4,
+                "attributes": {}
+            }
+        ]
+    }))
+    .unwrap();
+    let response = post(
+        &client,
+        addr,
+        body,
+        Some(batch_id),
+        Some("application/json"),
+        None,
+    )
+    .await;
+
+    assert_eq!(response.status, StatusCode::OK);
+    store
+        .await_persisted("telemetry_v1.levanter", 2, Duration::from_secs(5))
+        .await
+        .unwrap();
+    assert_eq!(
+        store.get_policy("telemetry_v1.levanter").unwrap().max_bytes,
+        Some(32 * 1024 * 1024 * 1024)
+    );
+    store
+        .maintain_namespace("telemetry_v1.levanter", true)
+        .await
+        .unwrap();
+    let segments = store.list_segments("telemetry_v1.levanter").unwrap();
+    assert_eq!(
+        segments
+            .iter()
+            .map(|segment| segment.row_count)
+            .sum::<i64>(),
+        2
+    );
+    assert_eq!(segments.len(), 1);
+    assert!(segments[0].partition.is_none());
+    let rows = query(
+        &store,
+        "SELECT name FROM \"telemetry_v1.levanter\" ORDER BY record_index",
+    )
+    .await;
+    assert_eq!(rows.iter().map(|batch| batch.num_rows()).sum::<usize>(), 2);
+    let loss = query(
+        &store,
+        "SELECT name FROM \"telemetry_v1.levanter\" WHERE name = 'train_loss'",
+    )
+    .await;
+    assert_eq!(loss.iter().map(|batch| batch.num_rows()).sum::<usize>(), 1);
+
+    assert!(store.get_table_schema("telemetry_v1").is_err());
+}
+
+#[tokio::test]
+async fn unmapped_service_uses_its_normalized_semantic_namespace() {
+    let store = disk_store("telemetry-unmapped-service");
+    let (addr, _) = serve(Arc::clone(&store), AuthPolicy::allow_localhost()).await;
+    let client = http_client();
+    let batch_id = "37a4d54c-0911-44dd-babd-83075196aca4";
+
+    let response = post(
+        &client,
+        addr,
+        batch_for_service(batch_id, "Rigging Scheduler"),
+        Some(batch_id),
+        Some("application/json"),
+        None,
+    )
+    .await;
+
+    assert_eq!(response.status, StatusCode::OK);
+    store
+        .await_persisted("telemetry_v1.rigging_scheduler", 2, Duration::from_secs(5))
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .get_policy("telemetry_v1.rigging_scheduler")
+            .unwrap()
+            .max_bytes,
+        Some(2 * 1024 * 1024 * 1024)
+    );
+    let rows = query(
+        &store,
+        "SELECT name FROM \"telemetry_v1.rigging_scheduler\" ORDER BY record_index",
+    )
+    .await;
+    assert_eq!(rows.iter().map(|batch| batch.num_rows()).sum::<usize>(), 2);
+}
+
+#[tokio::test]
+async fn namespace_field_is_rejected_instead_of_routing_client_rows() {
+    let store = disk_store("telemetry-namespace-field-rejected");
+    store
+        .register_table(
+            "telemetry_v1.bad_schema",
+            Schema::new(
+                vec![
+                    Column::new("timestamp_ms", ColumnType::COLUMN_TYPE_INT64, false),
+                    Column::new("name", ColumnType::COLUMN_TYPE_INT64, false),
+                ],
+                "timestamp_ms",
+            ),
+            StoragePolicy::default(),
+        )
+        .unwrap();
+    let (addr, _) = serve(Arc::clone(&store), AuthPolicy::allow_localhost()).await;
+    let client = http_client();
+    let batch_id = "13ab225e-2bb9-4e96-a312-21cdaff3f139";
+    let response = post(
+        &client,
+        addr,
+        batch_with_namespace_hint(batch_id, "levanter", "telemetry_v1.bad_schema"),
+        Some(batch_id),
+        Some("application/json"),
+        None,
+    )
+    .await;
+
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
+    assert_eq!(response.payload["error"]["code"], "invalid_request");
+    assert!(store
+        .list_segments("telemetry_v1.bad_schema")
+        .unwrap()
+        .is_empty());
 }
 
 #[tokio::test]
@@ -662,13 +862,13 @@ async fn explicit_resource_dimensions_override_attribute_fallbacks() {
     .await;
     assert_eq!(response.status, StatusCode::OK);
     store
-        .await_persisted("telemetry_v1", 1, Duration::from_secs(5))
+        .await_persisted("telemetry_v1.levanter", 1, Duration::from_secs(5))
         .await
         .unwrap();
     let rows = query(
         &store,
         "SELECT run_id, job_id, execution_uid, region, node_name, process_index \
-         FROM telemetry_v1",
+         FROM \"telemetry_v1.levanter\"",
     )
     .await;
     let values: Vec<&str> = (0..6)
@@ -709,10 +909,10 @@ async fn zstd_batch_is_accepted_and_queryable() {
 
     assert_eq!(response.status, StatusCode::OK);
     store
-        .await_persisted("telemetry_v1", 1, Duration::from_secs(5))
+        .await_persisted("telemetry_v1.trainer", 1, Duration::from_secs(5))
         .await
         .unwrap();
-    let rows = query(&store, "SELECT count(*) AS n FROM telemetry_v1").await;
+    let rows = query(&store, "SELECT count(*) AS n FROM \"telemetry_v1.trainer\"").await;
     assert_eq!(
         rows[0]
             .column(0)
@@ -769,10 +969,10 @@ async fn repeated_and_concurrent_requests_append_once_but_changed_content_confli
     assert_eq!(response.payload["error"]["code"], "idempotency_conflict");
 
     store
-        .await_persisted("telemetry_v1", 1, Duration::from_secs(5))
+        .await_persisted("telemetry_v1.trainer", 1, Duration::from_secs(5))
         .await
         .unwrap();
-    let rows = query(&store, "SELECT count(*) AS n FROM telemetry_v1").await;
+    let rows = query(&store, "SELECT count(*) AS n FROM \"telemetry_v1.trainer\"").await;
     assert_eq!(
         rows[0]
             .column(0)
@@ -1012,7 +1212,7 @@ async fn admission_and_store_unavailability_are_retryable_json_errors() {
     let store = disk_store("telemetry-schema-conflict");
     store
         .register_table(
-            "telemetry_v1",
+            "telemetry_v1.levanter",
             Schema::new(
                 vec![Column::new("other", ColumnType::COLUMN_TYPE_STRING, false)],
                 "other",
@@ -1024,7 +1224,7 @@ async fn admission_and_store_unavailability_are_retryable_json_errors() {
     let response = post(
         &client,
         addr,
-        batch(batch_id),
+        batch_for_service(batch_id, "levanter"),
         Some(batch_id),
         Some("application/json"),
         None,

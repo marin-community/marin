@@ -10,7 +10,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
+use finelog::migrations::telemetry_v1::ensure_dual_write_fence;
 use finelog::query::configure_query_runtime;
 use finelog::query::index_cache::DEFAULT_INDEX_CACHE_MB;
 use finelog::server::diagnostics::spawn_pool_diagnostics;
@@ -18,7 +19,7 @@ use finelog::server::{
     build_app_with_config, spawn_forwarder, AuthPolicy, Forwarder, ForwardingConfig, ServerConfig,
 };
 use finelog::store::remote::is_object_store;
-use finelog::store::{ServeMode, Store};
+use finelog::store::{ServeMode, Store, TelemetryRootWriteMode};
 use tokio::sync::Notify;
 
 /// Bound process RSS. DataFusion frees its query buffers promptly (the pool
@@ -32,6 +33,13 @@ use tokio::sync::Notify;
 #[cfg(not(target_env = "msvc"))]
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
+enum TelemetryMigrationMode {
+    #[default]
+    Normal,
+    DualWrite,
+}
 
 #[derive(Parser, Debug)]
 #[command(name = "finelog-server")]
@@ -100,10 +108,33 @@ struct Args {
     /// through a secret; never inline it into a deploy manifest.
     #[arg(long = "signing-key", env = "FINELOG_SIGNING_KEY", default_value = "")]
     signing_key: String,
+
+    /// Transitional hub behavior for the telemetry_v1 migration. `dual-write`
+    /// mirrors legacy root rows while also writing their semantic destination.
+    #[arg(
+        long,
+        env = "FINELOG_TELEMETRY_MIGRATION_MODE",
+        value_enum,
+        default_value_t = TelemetryMigrationMode::Normal
+    )]
+    telemetry_migration_mode: TelemetryMigrationMode,
+}
+
+/// Abort the standalone server after reporting any Rust panic.
+fn install_abort_on_panic_hook() {
+    // Tokio contains task panics as JoinErrors, which can leave poisoned store
+    // mutexes in a live process. Keep this hook in the binary so the PyO3 host
+    // does not inherit an abort-on-panic policy.
+    let report = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic| {
+        report(panic);
+        std::process::abort();
+    }));
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    install_abort_on_panic_hook();
     let args = Args::parse();
 
     tracing_subscriber::fmt()
@@ -117,15 +148,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     configure_query_runtime(args.query_metadata_cache_mb.map(NonZeroUsize::get))
         .map_err(|e| format!("failed to configure query runtime: {e}"))?;
+    let store_dir = args.log_dir.clone().map(PathBuf::from);
+    let telemetry_root_write_mode = match args.telemetry_migration_mode {
+        TelemetryMigrationMode::Normal => TelemetryRootWriteMode::SemanticOnly,
+        TelemetryMigrationMode::DualWrite => TelemetryRootWriteMode::MirrorRoot,
+    };
     let store = Arc::new(
-        Store::new(
-            args.log_dir.clone().map(PathBuf::from),
+        Store::new_with_telemetry_root_write_mode(
+            store_dir.clone(),
             args.remote_log_dir.clone(),
             args.index_cache_mb.get(),
             mode,
+            telemetry_root_write_mode,
         )
         .map_err(|e| format!("failed to open store: {e}"))?,
     );
+    if args.telemetry_migration_mode == TelemetryMigrationMode::DualWrite {
+        let store_dir = store_dir
+            .as_deref()
+            .ok_or("dual-write telemetry migration mode requires a persistent --log-dir")?;
+        let fence = ensure_dual_write_fence(store_dir, store.telemetry_root_max_seq()?)?;
+        tracing::info!(
+            legacy_max_seq = fence.legacy_max_seq,
+            armed_at_ms = fence.armed_at_ms,
+            "telemetry dual-write migration fence active"
+        );
+    }
     // Start each namespace's maintenance task. Each task runs its boot remote
     // reconcile (adopt unknown remote parquet, redundancy-drop covered segments)
     // in the BACKGROUND as its first step, so a large first-time reconcile (e.g.
@@ -290,7 +338,42 @@ async fn shutdown_signal() {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use std::os::unix::process::ExitStatusExt;
+    #[cfg(unix)]
+    use std::process::Command;
+
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn panic_boundary_aborts_process() {
+        const CHILD_PROCESS: &str = "FINELOG_ABORT_ON_PANIC_TEST_CHILD";
+
+        if std::env::var_os(CHILD_PROCESS).is_some() {
+            install_abort_on_panic_hook();
+            let runtime = tokio::runtime::Runtime::new().expect("test runtime starts");
+            runtime.block_on(async {
+                let _ = tokio::spawn(async {
+                    panic!("exercise the finelog-server panic boundary");
+                })
+                .await;
+            });
+            return;
+        }
+
+        let status = Command::new(std::env::current_exe().expect("test executable exists"))
+            .args([
+                "--exact",
+                "tests::panic_boundary_aborts_process",
+                "--nocapture",
+            ])
+            .env(CHILD_PROCESS, "1")
+            .status()
+            .expect("panic-boundary child process starts");
+
+        assert_eq!(status.signal(), Some(libc::SIGABRT));
+    }
 
     fn args(argv: &[&str]) -> Args {
         let mut full = vec!["finelog-server"];

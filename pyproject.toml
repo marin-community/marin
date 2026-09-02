@@ -36,6 +36,10 @@ dependencies = [
     "joblib",
     "scikit-learn",
     "watchdog",
+    # Codehealth's weekly review workbench persists into the shared metadata database.
+    "cloud-sql-python-connector[pg8000]>=1.9",
+    "sqlalchemy>=2",
+    "seaborn>=0.13",
     # marin-dupekit is the pure-Python text-dedup surface, a workspace member
     # (editable source). Its native companion marin-dupekit-native (the Rust
     # kernels, module `dupekit_native`, maturin lib/dupekit/rust) is NOT a

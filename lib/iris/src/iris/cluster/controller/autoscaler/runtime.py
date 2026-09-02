@@ -18,8 +18,6 @@ The run_once() flow splits into two phases:
 """
 
 import logging
-import urllib.error
-import urllib.request
 from collections import deque
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -45,7 +43,7 @@ from iris.cluster.controller.autoscaler.provisioning import (
     classify_create_failure,
 )
 from iris.cluster.controller.autoscaler.recovery import (
-    load_autoscaler_checkpoint,
+    AutoscalerCheckpoint,
     restore_autoscaler_state,
 )
 from iris.cluster.controller.autoscaler.routing import (
@@ -61,7 +59,6 @@ from iris.cluster.controller.autoscaler.scaling_group import (
 from iris.cluster.controller.autoscaler.state import AutoscalerState, GroupPersist, SlicePersist
 from iris.cluster.controller.autoscaler.status import PendingHint, build_job_pending_hints, routing_decision_to_proto
 from iris.cluster.controller.autoscaler.worker_registry import TrackedWorker, WorkerRegistry
-from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.worker_health import CONSECUTIVE_FAILURE_THRESHOLD
 from iris.cluster.platforms.protocols import WorkerInfraProvider
 from iris.cluster.platforms.types import (
@@ -70,6 +67,7 @@ from iris.cluster.platforms.types import (
     RemoteWorkerHandle,
     SliceHandle,
     SliceStatus,
+    probe_worker_health,
 )
 from iris.cluster.stats.tables import IrisProvisioning, ProvisioningOutcome
 from iris.cluster.types import WorkerStatusMap
@@ -89,10 +87,6 @@ DEFAULT_CREATE_RATE_LIMIT = 60
 
 # How long the autoscaler waits for a worker /health response per probe.
 _HEALTH_PROBE_TIMEOUT_SECONDS = 3.0
-
-# Bypass any HTTP_PROXY env var: worker addresses are private cluster IPs,
-# never reachable via an upstream proxy.
-_HEALTH_PROBE_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 # Cap concurrent /health probes. ~1000 VMs in production; serializing 3 s
 # timeouts would blow past evaluation_interval (10 s default).
@@ -131,21 +125,6 @@ def _run_io_batch(
     workers = min(max_workers, len(items))
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix=thread_name_prefix) as pool:
         return list(pool.map(issue, items))
-
-
-def _probe_worker_health(worker_url: str) -> bool:
-    """Probe a worker's /health endpoint. ``worker_url`` is an ``http://host:port`` base URL.
-
-    Returns True iff the response is 2xx.
-    """
-    try:
-        resp = _HEALTH_PROBE_OPENER.open(
-            f"{worker_url}/health",
-            timeout=_HEALTH_PROBE_TIMEOUT_SECONDS,
-        )
-        return 200 <= resp.status < 300
-    except (urllib.error.URLError, urllib.error.HTTPError, OSError, TimeoutError):
-        return False
 
 
 def _safe_describe(slice_id: str, handle: SliceHandle) -> SliceStatus | None:
@@ -504,7 +483,7 @@ class Autoscaler:
         # each outcome into state serially.
         outcomes = _run_io_batch(
             to_issue,
-            lambda req: self._issue_scale_up(req, timestamp),
+            self._issue_scale_up,
             max_workers=_CLOUD_OP_MAX_WORKERS,
             thread_name_prefix="scale-up",
         )
@@ -540,7 +519,7 @@ class Autoscaler:
                 reason=summary,
             )
 
-    def _issue_scale_up(self, request: _ScaleUpRequest, ts: Timestamp) -> _ScaleUpOutcome:
+    def _issue_scale_up(self, request: _ScaleUpRequest) -> _ScaleUpOutcome:
         """Submit one create and return the handle-or-error as data. Pure I/O.
 
         Runs inside the bounded issue fan-out, so it must not touch shared
@@ -554,7 +533,7 @@ class Autoscaler:
         try:
             logger.info("Scaling up %s: %s", group.name, request.reason)
             wc = self._per_group_worker_config(group)
-            handle = group.scale_up(worker_config=wc, timestamp=ts)
+            handle = group.scale_up(worker_config=wc)
             return _ScaleUpOutcome(request=request, handle=handle)
         except Exception as e:
             # Captured as data (not swallowed): _fold_scale_up classifies it,
@@ -776,7 +755,7 @@ class Autoscaler:
         if probes:
             results = _run_io_batch(
                 probes,
-                lambda p: _probe_worker_health(p[3]),
+                lambda p: probe_worker_health(p[3], timeout=_HEALTH_PROBE_TIMEOUT_SECONDS),
                 max_workers=_HEALTH_PROBE_MAX_WORKERS,
                 thread_name_prefix="health-probe",
             )
@@ -875,15 +854,14 @@ class Autoscaler:
         """Restore tracked worker state from a snapshot. Called before loops start."""
         self._worker_registry.restore(workers)
 
-    def restore_from_db(self, db: ControllerDB, platform: WorkerInfraProvider) -> None:
-        """Reconcile DB-checkpointed autoscaler state against live cloud.
-
-        Reads scaling group and slice rows from proper DB tables,
-        reconciles each group against the cloud in parallel, and restores
-        tracked workers. Call at startup before loops begin.
-        """
-        checkpoint = load_autoscaler_checkpoint(db)
-        restored_workers = restore_autoscaler_state(self._groups, checkpoint, platform, self._make_draining_group)
+    def restore(self, checkpoint: AutoscalerCheckpoint) -> None:
+        """Reconcile a controller-supplied checkpoint against live capacity."""
+        restored_workers = restore_autoscaler_state(
+            self._groups,
+            checkpoint,
+            self._platform,
+            self._make_draining_group,
+        )
         self.restore_tracked_workers(restored_workers)
         logger.info("Restored %d tracked workers", len(restored_workers))
 

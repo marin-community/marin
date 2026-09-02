@@ -70,9 +70,8 @@ class GcpSliceMode(StrEnum):
 DEFAULT_BACKEND_ID = "default"
 """Backend id of the implicit single backend synthesized from top-level config.
 
-Shared by the runtime config synthesis (``iris.cluster.config.resolve_backends``)
-and the ``0032_backend_id`` migration backfill — the migration has only a raw DB
-connection (no config object), so both must agree on this exact literal.
+Shared by controller composition and the backend-ID migration backfill. The
+migration has only a raw DB connection, so both must agree on this literal.
 """
 
 
@@ -441,6 +440,7 @@ class PendingTask:
 
     task_id: JobName
     job_id: JobName
+    submitting_user: str
     backend_id: str
     state: int
     current_attempt_id: int

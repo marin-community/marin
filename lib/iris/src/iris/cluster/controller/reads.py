@@ -19,12 +19,13 @@ Areas covered:
   control-cycle   — the per-tick ControlSnapshot built via load_control_snapshot
 """
 
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Protocol
 
 from rigging.timing import Timestamp
 from sqlalchemy import Integer, Row, bindparam, case, exists, func, literal_column, select, tuple_
+from sqlalchemy.sql.selectable import FromClause
 
 from iris.cluster.constraints import AttributeValue
 from iris.cluster.controller.attempt_counts import (
@@ -51,6 +52,7 @@ from iris.cluster.controller.schema import (
     jobs_table,
     local_tasks,
     slices_table,
+    task_attempt_outputs_table,
     task_attempts_table,
     tasks_table,
     user_budgets_table,
@@ -66,7 +68,9 @@ from iris.cluster.controller.task_state import (
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.federation.store import FederationDirection, HandoffState
+from iris.cluster.runtime.env import TASK_OUTPUT_FINALIZING_STATUS
 from iris.cluster.types import (
+    LOCAL_ADMIN_SUBMITTER,
     LOCAL_CLUSTER,
     TERMINAL_JOB_STATES,
     AttemptUid,
@@ -549,6 +553,15 @@ def get_job_state(tx: Tx, job_id: JobName) -> int | None:
     return int(row.state) if row is not None else None
 
 
+def get_job_submitting_user(tx: Tx, job_id: JobName) -> str | None:
+    """Return the authenticated submitter stored for ``job_id``, or None if absent."""
+    row = tx.execute(
+        select(jobs_table.c.submitting_user).where(jobs_table.c.job_id == bindparam("job_id")),
+        {"job_id": job_id},
+    ).first()
+    return str(row.submitting_user) if row is not None else None
+
+
 def find_prunable_job(tx: Tx, terminal_states: Iterable[int], before_ts: Timestamp) -> JobName | None:
     """Return one terminal *local* job finished before ``before_ts``, or None.
 
@@ -855,6 +868,7 @@ def _row_to_pending_task(row: Row) -> PendingTask:
     return PendingTask(
         task_id=row.task_id,
         job_id=row.job_id,
+        submitting_user=str(row.submitting_user),
         backend_id=str(row.backend_id),
         state=int(row.state),
         current_attempt_id=int(row.current_attempt_id),
@@ -883,6 +897,7 @@ _PENDING_TASKS_STMT = (
         *PENDING_TASK_COLS,
         # job columns (label job_state to avoid clash with tasks.state)
         jobs_table.c.state.label("job_state"),
+        jobs_table.c.submitting_user,
         jobs_table.c.scheduling_deadline_epoch_ms,
         # job_config columns
         job_config_table.c.scheduling_timeout_ms,
@@ -951,24 +966,29 @@ def running_task_band_rows(tx: Tx) -> Sequence[Row]:
 _USER_SPEND_STMT = (
     select(
         local_tasks.c.job_id,
+        jobs_table.c.submitting_user,
         job_config_table.c.res_cpu_millicores,
         job_config_table.c.res_memory_bytes,
         job_config_table.c.res_device_json,
         func.count().label("task_count"),
     )
-    .select_from(local_tasks.join(job_config_table, job_config_table.c.job_id == local_tasks.c.job_id))
+    .select_from(
+        local_tasks.join(jobs_table, jobs_table.c.job_id == local_tasks.c.job_id).join(
+            job_config_table, job_config_table.c.job_id == local_tasks.c.job_id
+        )
+    )
     .where(hint_rare_state(local_tasks.c.state.in_(bindparam("states", expanding=True))))
     .where(job_config_table.c.priority_band != job_pb2.PRIORITY_BAND_BATCH)
-    .group_by(local_tasks.c.job_id)
+    .group_by(local_tasks.c.job_id, jobs_table.c.submitting_user)
 )
 
 
 def user_spend_rows(tx: Tx) -> Sequence[Row]:
     """Return per-job resource rows for active, non-BATCH tasks (budget spend basis).
 
-    Each row carries ``(job_id, res_cpu_millicores, res_memory_bytes,
-    res_device_json, task_count)``. ``job_config.priority_band`` (the user's
-    requested band) drives the BATCH exclusion, not the stamped
+    Each row carries ``(job_id, submitting_user, res_cpu_millicores,
+    res_memory_bytes, res_device_json, task_count)``. ``job_config.priority_band``
+    (the user's requested band) drives the BATCH exclusion, not the stamped
     ``tasks.priority_band``, so scheduler-downgraded jobs still count.
     """
     return tx.execute(_USER_SPEND_STMT, {"states": list(ACTIVE_TASK_STATES)}).all()
@@ -993,11 +1013,24 @@ ATTEMPT_COLS = (
     task_attempts_table.c.pod_uid,
     task_attempts_table.c.node_name,
     task_attempts_table.c.terminal_reason,
+    task_attempt_outputs_table.c.archive_json.label("output_archive_json"),
 )
+
+ATTEMPTS_WITH_OUTPUT = task_attempts_table.outerjoin(
+    task_attempt_outputs_table,
+    (task_attempt_outputs_table.c.task_id == task_attempts_table.c.task_id)
+    & (task_attempt_outputs_table.c.attempt_id == task_attempts_table.c.attempt_id),
+)
+
+
+def attempt_select(from_clause: FromClause = ATTEMPTS_WITH_OUTPUT):
+    """Select attempt rows with their optional output archive metadata."""
+    return select(*ATTEMPT_COLS).select_from(from_clause)
+
 
 _BULK_GET_CHUNK_SIZE = 450
 
-_BULK_GET_ATTEMPTS_STMT = select(*ATTEMPT_COLS).where(
+_BULK_GET_ATTEMPTS_STMT = attempt_select().where(
     tuple_(task_attempts_table.c.task_id, task_attempts_table.c.attempt_id).in_(bindparam("keys", expanding=True))
 )
 
@@ -1081,7 +1114,7 @@ def all_attempts_for_tasks(tx: Tx, task_ids: Sequence[JobName]) -> dict[JobName,
     if not task_ids:
         return {}
     rows = tx.execute(
-        select(*ATTEMPT_COLS)
+        attempt_select()
         .where(task_attempts_table.c.task_id.in_(bindparam("task_ids", expanding=True)))
         .order_by(task_attempts_table.c.task_id.asc(), task_attempts_table.c.attempt_id.asc()),
         {"task_ids": list(task_ids)},
@@ -1419,13 +1452,20 @@ def list_active_tasks_for_jobs(
     return result
 
 
-def count_active_tasks_for_user(tx: Tx, user_id: str) -> int:
-    """Return the number of non-terminal tasks across all jobs owned by ``user_id``."""
+def count_active_tasks_for_budget_user(tx: Tx, user_id: str) -> int:
+    """Return non-terminal local tasks attributed to the budget identity ``user_id``."""
+    budget_user = case(
+        (
+            jobs_table.c.submitting_user.in_(("", LOCAL_ADMIN_SUBMITTER)),
+            jobs_table.c.user_id,
+        ),
+        else_=jobs_table.c.submitting_user,
+    )
     return int(
         tx.execute(
             select(func.count())
             .select_from(local_tasks.join(jobs_table, jobs_table.c.job_id == local_tasks.c.job_id))
-            .where(jobs_table.c.user_id == bindparam("user_id"))
+            .where(budget_user == bindparam("user_id"))
             .where(local_tasks.c.state.in_(bindparam("states", expanding=True))),
             {"user_id": user_id, "states": list(NON_TERMINAL_TASK_STATES)},
         ).scalar()
@@ -1492,6 +1532,10 @@ def get_worker_detail(tx: Tx, worker_id: WorkerId):
         select(*WORKER_DETAIL_COLS).where(workers_table.c.worker_id == bindparam("worker_id")),
         {"worker_id": worker_id},
     ).first()
+
+
+def all_worker_ids(tx: Tx) -> set[WorkerId]:
+    return {WorkerId(str(row.worker_id)) for row in tx.execute(select(workers_table.c.worker_id)).all()}
 
 
 def _healthy_active_worker_ids(health: WorkerLivenessSource) -> set[WorkerId]:
@@ -1719,21 +1763,6 @@ def row_counts(tx: Tx) -> RowCounts:
     )
 
 
-def worker_scale_groups(tx: Tx) -> dict[WorkerId, str]:
-    """Return ``{worker_id: scale_group}`` for every persisted worker.
-
-    The controller maps each worker's scale group to its owning backend to
-    partition the per-tick snapshot. Workers with no scale group map to ``""``.
-    """
-    rows = tx.execute(select(workers_table.c.worker_id, workers_table.c.scale_group)).all()
-    return {WorkerId(str(row.worker_id)): str(row.scale_group or "") for row in rows}
-
-
-def owned_worker_ids(tx: Tx, owns_scale_group: Callable[[str], bool]) -> set[WorkerId]:
-    """The workers whose scale group ``owns_scale_group`` claims, in the read ``tx``."""
-    return {wid for wid, scale_group in worker_scale_groups(tx).items() if owns_scale_group(scale_group)}
-
-
 _EXECUTING_TASK_STATES = (int(job_pb2.TASK_STATE_BUILDING), int(job_pb2.TASK_STATE_RUNNING))
 
 _EXECUTION_TIMEOUT_STMT = (
@@ -1754,6 +1783,7 @@ _EXECUTION_TIMEOUT_STMT = (
         job_config_table.c.timeout_ms.is_not(None),
         job_config_table.c.timeout_ms > 0,
         task_attempts_table.c.started_at_ms.is_not(None),
+        local_tasks.c.status_message.is_distinct_from(TASK_OUTPUT_FINALIZING_STATUS),
     )
 )
 
@@ -1826,12 +1856,11 @@ def load_reconcile_rows(tx: Tx, worker_ids: Iterable[WorkerId]) -> list[Reconcil
 
 @dataclass(frozen=True, slots=True)
 class ControlSnapshot:
-    """The DB-less per-tick input the controller hands to a :class:`TaskBackend`.
+    """Controller-owned intermediate rows for reconcile and timeout phases.
 
-    One snapshot type feeds all three uniform backend methods; each control loop
-    populates the section its phase needs and leaves the rest empty (the
-    ``scan_timeouts`` flag is the pattern). The backend reads its section and
-    never touches the database.
+    Backends never receive this aggregate. The controller converts worker rows
+    into ``WorkerFleetReconcileRequest``, direct-dispatch rows into
+    ``DirectReconcileRequest``, and timeout rows into controller decisions.
 
     * ``worker_addresses`` — ``{worker_id: address}`` for active + healthy workers.
     * ``reconcile_rows`` — live ``(task, attempt, worker)`` tuples across those
@@ -1839,12 +1868,12 @@ class ControlSnapshot:
     * ``timeout_rows`` — executing tasks past their declared deadline; empty
       unless the caller requested the timeout sweep this tick.
     * ``job_specs`` — per-job ``RunTaskRequest`` templates for ASSIGNED reconcile
-      rows, so a worker-daemon backend can build its per-worker reconcile plans.
+      rows used to build per-worker reconcile plans.
     * ``tasks_to_run`` / ``running_tasks`` — the dispatch drain for a cluster
       backend that owns placement (built only when that backend reconciles).
 
     Worker liveness is never persisted and never read off the snapshot: the
-    controller owns its in-memory :class:`WorkerHealthTracker` directly and folds
+    controller owns its in-memory :class:`WorkerHealthTracker` directly and applies
     backend-observed health events into it. The tracker is passed to
     :func:`load_control_snapshot` only to select the live worker set.
     """

@@ -15,10 +15,10 @@ from unittest.mock import MagicMock
 
 import cloudpickle
 import pytest
+import zephyr.coordinator as coordinator_module
 from fray.actor import ActorContext
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
-from rigging import telemetry
 from zephyr import counters
 from zephyr.context import (
     _NON_RETRYABLE_ERRORS,
@@ -714,7 +714,7 @@ def test_progress_metric_resets_at_stage_start_and_advances_after_a_shard(coordi
             if self.name == ZEPHYR_PROGRESS_TIME_METRIC:
                 emitted.append((value, attributes))
 
-    monkeypatch.setattr(telemetry, "gauge", lambda name, **kwargs: Gauge(name))
+    monkeypatch.setattr(coordinator_module.telemetry, "gauge", lambda name, **_kwargs: Gauge(name))
     start_test_stage(coordinator, [task])
     coordinator._publish_telemetry()
     assert emitted[-1][0] == 1_000.0
@@ -759,7 +759,7 @@ def test_progress_metric_isolated_between_executions(coordinator, monkeypatch):
         def set(self, value, *, attributes=None):
             emitted.append((self.name, value, attributes))
 
-    monkeypatch.setattr(telemetry, "gauge", lambda name, **kwargs: Gauge(name))
+    monkeypatch.setattr(coordinator_module.telemetry, "gauge", lambda name, **_kwargs: Gauge(name))
     coordinator._publish_telemetry()
     progress = {attributes["run"]: value for name, value, attributes in emitted if name == ZEPHYR_PROGRESS_TIME_METRIC}
     assert progress == {"run-1": 1_000.0, "run-2": 2_000.0}

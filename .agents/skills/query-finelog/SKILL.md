@@ -76,7 +76,7 @@ Native `rigging.telemetry.counter(...).add(...)` rows are already increments:
 
 ```sql
 SELECT sum(value)
-FROM telemetry_v1
+FROM "telemetry_v1.<semantic_scope>"
 WHERE name = 'requests_completed'
   AND timestamp_ms >= <start_ms>
   AND timestamp_ms < <end_ms>
@@ -84,18 +84,18 @@ WHERE name = 'requests_completed'
 
 ### Imported cumulative counter
 
-Imported vLLM counters carry `source_temporality = 'cumulative_snapshot'`. Scan one 15-second scrape before the visible window, preserve the complete series identity, and discard reset intervals.
+Imported vLLM counters carry `source_temporality = 'cumulative_snapshot'`. Scan one 60-second scrape before the visible window, preserve the complete series identity, and discard reset intervals.
 
 ```sql
 WITH base AS (
   SELECT COALESCE(NULLIF(cluster, ''), 'local') AS origin_cluster,
          service, name, resource_attributes_json, attributes_json,
          timestamp_ms, seq, value
-  FROM telemetry_v1
+  FROM "telemetry_v1.vllm"
   WHERE service = 'vllm'
     AND name = 'generation_tokens_total'
     AND json_get(attributes_json, 'source_temporality') = 'cumulative_snapshot'
-    AND timestamp_ms >= <start_ms - 15000>
+    AND timestamp_ms >= <start_ms - 60000>
     AND timestamp_ms < <end_ms>
 ), samples AS (
   SELECT *, lag(value) OVER (

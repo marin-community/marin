@@ -6,13 +6,14 @@
 from copy import deepcopy
 
 from iris.cluster.backends.k8s.tasks import K8sTaskProvider, PodConfig
+from iris.cluster.controller.backend import BackendDescriptor, BackendKind
 from iris.cluster.controller.reads import ControlSnapshot
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.runtime.env import build_common_iris_env
-from iris.cluster.types import JobName
+from iris.cluster.types import DEFAULT_BACKEND_ID, JobName
 from iris.rpc import job_pb2
 
 KUEUE_POD_GROUP_NAME = "kueue.x-k8s.io/pod-group-name"
@@ -20,6 +21,15 @@ LABEL_MANAGED = "iris.managed"
 LABEL_RUNTIME = "iris.runtime"
 RUNTIME_LABEL_VALUE = "iris-kubernetes"
 TASK_CONTAINER_NAME = "task"
+
+
+def k8s_backend_descriptor(*, advertised_attributes: dict[str, set[str]] | None = None) -> BackendDescriptor:
+    return BackendDescriptor(
+        backend_id=DEFAULT_BACKEND_ID,
+        display_name="kubernetes",
+        kind=BackendKind.KUBERNETES,
+        advertised_attributes=advertised_attributes or {},
+    )
 
 
 def pod_config(
@@ -59,7 +69,12 @@ def make_run_req(
 def make_kueue_provider(k8s, *, local_queue: str = "iris-lq", **kwargs) -> K8sTaskProvider:
     """K8sTaskProvider with Kueue gang admission enabled (a configured LocalQueue)."""
     kwargs.setdefault("cluster_scan_interval", 0.0)
-    return K8sTaskProvider(kubectl=k8s, pods=pod_config(local_queue=local_queue), **kwargs)
+    return K8sTaskProvider(
+        descriptor=k8s_backend_descriptor(),
+        kubectl=k8s,
+        pods=pod_config(local_queue=local_queue),
+        **kwargs,
+    )
 
 
 def make_batch(
@@ -78,7 +93,12 @@ def make_batch(
 def observe_pod_update(pod: dict, workload: dict | None = None) -> TaskUpdate:
     """Reconcile a seeded pod through the public Kubernetes provider boundary."""
     k8s = InMemoryK8sService(namespace="iris")
-    provider = K8sTaskProvider(kubectl=k8s, pods=pod_config(), cluster_scan_interval=0.0)
+    provider = K8sTaskProvider(
+        descriptor=k8s_backend_descriptor(),
+        kubectl=k8s,
+        pods=pod_config(),
+        cluster_scan_interval=0.0,
+    )
     entry = RunningTaskEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0)
     try:
         provider.sync(make_batch(tasks_to_run=[make_run_req("/job/0")]))

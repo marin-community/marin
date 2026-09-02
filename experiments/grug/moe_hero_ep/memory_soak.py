@@ -9,8 +9,8 @@ This run puts the same hooks on a one-step cadence on up to two GB200 trays, so 
 100 checkpoints, tagged evaluations, and dropless evaluations.
 
 The shape is downsized but the memory-relevant machinery is the hero's: MuonH optimizer state
-offloaded to pinned host memory, FP32 pinned-host master parameters, and the pooled-wave transport.
-Those decide what the checkpoint path has to move through host memory, which is what the soak measures.
+offloaded to pinned host memory, and the ragged all-to-all transport. Those decide what the
+checkpoint path has to move through host memory, which is what the soak measures.
 
 Checkpoints go to a one-day temporary prefix, never to the hero's own checkpoint root.
 
@@ -41,14 +41,20 @@ from marin.experiment.namespacing import user_namespaced_name
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import prefix_join
 
-from experiments.grug.moe_hero_ep.heuristic import HERO_MODEL, MoeHeuristic
-from experiments.grug.moe_hero_ep.launch_mfu_test import (
+from experiments.grug.moe_hero_ep.hero_recipe import (
     DEFAULT_WANDB_PROJECT,
     HERO_GPUS_PER_NODE,
-    HERO_MIXED_PRECISION,
+    HERO_MASTER_PARAM_MODE,
+    HERO_MIXED_PRECISION_BY_MASTER_PARAM_MODE,
+    HERO_MODEL_CONFIG,
+    HERO_NODE_CPU,
+    HERO_NODE_DISK,
+    HERO_NODE_RAM,
+    HERO_QB_HIST_BINS,
     HeroThroughputResult,
+    with_transport_remat_mode,
 )
-from experiments.grug.moe_hero_ep.model import QbEstimator
+from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic
 from experiments.grug.moe_hero_ep.small_scale_abl_launch import (
     _EP_CAPACITY_FACTOR,
     SMALL_SHAPES,
@@ -59,7 +65,6 @@ from experiments.grug.moe_hero_ep.train import (
     GrugEvalConfig,
     GrugRunConfig,
     GrugTrainerConfig,
-    MasterParamMode,
     TrainingDataMode,
     WatchMode,
     run_grug,
@@ -90,7 +95,6 @@ CHECKPOINT_TTL_DAYS = 1
 # Falsy `timedelta(0)` disables time-policy saves outright. A microsecond is below even a compiled
 # no-op step, making every call a real temporary save without retaining 100 permanent checkpoints.
 EVERY_STEP = timedelta(microseconds=1)
-QB_HIST_BINS = 10_000
 SOAK_SHAPES = {**SMALL_SHAPES, "d384": SmallShape(384, 4, 3, 1, 1)}
 
 
@@ -145,27 +149,28 @@ def build_memory_soak_run(
     model = _small_model(
         shape=SOAK_SHAPES[size],
         capacity_factor=_EP_CAPACITY_FACTOR,
-        # FA4's packed-segment helper gives equivalent size-one mesh axes distinct explicit
-        # shardings. Reference attention avoids that single-device-only mismatch; attention
-        # implementation does not participate in checkpoint host staging.
-        attention_implementation="reference" if devices == 1 else HERO_MODEL.attention_implementation,
-        moe_implementation=HERO_MODEL.moe_implementation,
-        expert_chunks=HERO_MODEL.expert_chunks,
+        # A single-device soak uses reference attention. FA4's packed-segment helper gives
+        # equivalent size-one mesh axes distinct explicit shardings, and reference attention
+        # avoids that mismatch. The attention implementation does not participate in
+        # checkpoint host staging. Multi-device soaks use the plain FA4 name, because the
+        # soak shapes are all small and the wide forward tile is measured only at the hero.
+        attention_implementation="reference" if devices == 1 else "gpu_fa4_cute",
+        moe_implementation=HERO_MODEL_CONFIG.moe_implementation,
+        expert_chunks=HERO_MODEL_CONFIG.expert_chunks,
         seq_len=seq_len,
         num_experts=num_experts,
-        num_experts_per_token=HERO_MODEL.num_experts_per_token,
+        num_experts_per_token=HERO_MODEL_CONFIG.num_experts_per_token,
         intermediate_dim=None,
         latent_dim=None,
-        pooled_transport_capacity_factor=HERO_MODEL.pooled_transport_capacity_factor,
-        num_expert_waves=HERO_MODEL.num_expert_waves,
+        pooled_transport_capacity_factor=HERO_MODEL_CONFIG.pooled_transport_capacity_factor,
+        num_expert_waves=HERO_MODEL_CONFIG.num_expert_waves,
         qb_use_histogram=True,
-        qb_hist_bins=QB_HIST_BINS,
+        qb_hist_bins=HERO_QB_HIST_BINS,
     )
+    model = with_transport_remat_mode(model)
     local_experts = num_experts // expert_axis
     if local_experts % model.num_expert_waves != 0:
         raise ValueError(f"local expert count={local_experts} must divide num_expert_waves={model.num_expert_waves}")
-    model = dataclasses.replace(model, qb_estimator=QbEstimator.HIST, qb_hist_bins=QB_HIST_BINS)
-
     if devices == 1:
         # MuonH's Newton--Schulz contraction expects a nontrivial model axis. Adam keeps the
         # single-device soak on the same training/checkpoint path without introducing a fake axis.
@@ -182,10 +187,10 @@ def build_memory_soak_run(
         log_every=1,
         ema_beta=None,
         z_loss_weight=1e-4,
-        # Both match the hero. They decide which leaves the checkpoint reads out of pinned host
-        # memory, which is the path under suspicion, so a soak without them tests something else.
+        # Matches the hero: the MuonH state is what the checkpoint reads out of pinned host
+        # memory, which is the path under suspicion.
         offload_opt_state=True,
-        master_param_mode=MasterParamMode.FP32_PINNED_HOST,
+        master_param_mode=HERO_MASTER_PARAM_MODE,
         training_data_mode=TrainingDataMode.SYNTHETIC,
         watch_mode=WatchMode.INLINE,
         save_checkpoints=True,
@@ -198,9 +203,9 @@ def build_memory_soak_run(
     train_resources = ResourceConfig.with_gpu(
         "GB200",
         count=gpus_per_task,
-        cpu=120 if gpus_per_task == HERO_GPUS_PER_NODE else 32,
-        ram="890g" if gpus_per_task == HERO_GPUS_PER_NODE else "192g",
-        disk="1t" if gpus_per_task == HERO_GPUS_PER_NODE else "256g",
+        cpu=HERO_NODE_CPU if gpus_per_task == HERO_GPUS_PER_NODE else 32,
+        ram=HERO_NODE_RAM if gpus_per_task == HERO_GPUS_PER_NODE else "192g",
+        disk=HERO_NODE_DISK if gpus_per_task == HERO_GPUS_PER_NODE else "256g",
         replicas=tasks,
     )
     name = f"grug/{run_id}"
@@ -213,7 +218,7 @@ def build_memory_soak_run(
             train_batch_size=batch_size,
             num_train_steps=SOAK_SCHEDULE_STEPS,
             profiler=ProfilerConfig(enabled=False),
-            mp=jmp.get_policy(HERO_MIXED_PRECISION),
+            mp=jmp.get_policy(HERO_MIXED_PRECISION_BY_MASTER_PARAM_MODE[HERO_MASTER_PARAM_MODE]),
             tracker=WandbConfig(
                 entity="marin-community",
                 project=os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT,
