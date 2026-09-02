@@ -23,7 +23,9 @@ from jax import core, random
 
 try:
     from jax.shard_map import shard_map
-except ModuleNotFoundError:
+except ModuleNotFoundError as error:
+    if error.name != "jax.shard_map":
+        raise
     from jax.experimental.shard_map import shard_map
 from jax.sharding import NamedSharding, get_abstract_mesh, reshard
 from jax.sharding import PartitionSpec as P
