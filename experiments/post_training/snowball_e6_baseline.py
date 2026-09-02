@@ -18,8 +18,18 @@ The values here come from penfever's #7786 gist ``snowball_e6_rno2a_rlvrmath.yam
 specification of record; the campaign issue's body was edited away when it closed on 2026-08-27, so
 the gist is what survived. Where the gist and this file disagree, the disagreement is commented.
 
-Defaults are set for a **timing run**: two steps, no checkpoint, no resume, no retry. Pass
-``--max-steps 20`` to run it as the science configuration instead.
+Defaults are set for a **timing run**: four steps, no checkpoint, no Hub upload, no resume. Pass
+``--max-steps 20 --ckpt-interval 2`` to run it as the science configuration instead.
+
+Two caveats that are not fixable from this file, and that any measurement taken here must carry:
+
+* **Preemption still retries.** ``max_retries=0`` bounds *failure* retries only; Iris's
+  ``max_retries_preemption`` defaults to 1000 and is not exposed by ``IrisSkyRLExecution``. A
+  preempted gang can relaunch. Check the attempt count before trusting a step time.
+* **The optimizer is not the one E6 ran.** At the current MarinSkyRL pin, ``AdamW`` resolves to a
+  custom stochastic-BF16 implementation (``distributed/bf16_adamw.py``), not ``torch.optim.AdamW``
+  as at the pin E6 used. The name matches; the implementation, and therefore the timing, may not.
+  This run is the control for *our* arms; it is not a reproduction of run ``nk0ehfrv``.
 
 Print the plan (this is the dry run -- there is no ``--dry-run`` flag)::
 
@@ -132,13 +142,23 @@ E6_ROLE_PLAN = SkyRLRolePlan(
 )
 
 
-def _rl_config(*, max_steps: int) -> str:
-    """Render the SkyRL config. ``ckpt_interval`` is derived so a timing run writes no checkpoint.
+def _rl_config(*, max_steps: int, ckpt_interval: int) -> str:
+    """Render the SkyRL config.
 
-    A Grug checkpoint is ~539 GB. At the default two steps we want none written at all, so the
-    interval is set past the end of the run rather than to the gist's 2.
+    ``ckpt_interval`` must be **0** for a timing run, and 0 is not merely "an interval past the end".
+    Setting it past the end does NOT stop a checkpoint: any positive interval installs
+    ``CheckpointCallback`` (callbacks/builtin.py), whose ``save_on_train_end`` defaults to True, so a
+    ~539 GB checkpoint is written when training ends no matter how large the interval is. 0 skips
+    the callback entirely.
+
+    0 also closes the Hugging Face upload path, which is the more dangerous one.
+    ``config/callbacks.py`` enables the Hub callback only when ``hf_hub_repo_id`` is truthy **and**
+    ``hf_save_interval > 0``; ``hf_save_interval`` defaults to ``${trainer.ckpt_interval}``. That
+    matters because the launcher auto-defaults ``hf_hub_repo_id`` to **``laion/<job_name>``** when it
+    is unset (cloud/iris/rl_config_translation.py) -- an org we do not own -- and the publisher
+    explicitly turns HF_HUB_OFFLINE back off before uploading (skyrl_train/hf_publisher.py), so the
+    ``HF_HUB_OFFLINE=1`` set in ``extra_env`` below does NOT protect against it.
     """
-    ckpt_interval = max_steps + 1
 
     # Notes on the values that are NOT simply the gist's, and on the ones that look like oversights
     # but are not:
@@ -155,11 +175,11 @@ def _rl_config(*, max_steps: int) -> str:
     #                           bf16 otherwise -- so this run's persistent parameter memory is half
     #                           the MuonH file's, and none of that file's memory arithmetic carries.
     #
-    #   resume_mode: null    -- NOT the base default (latest). A retry that resumes on different
-    #                           hardware appends to what looks like one attempt, which silently
-    #                           destroys a timing measurement. ResumeMode._missing_ maps None to
-    #                           ResumeMode.NONE (trainer_utils.py:46-49), so `null` and `"none"` are
-    #                           equivalent; null is used because the override form is `=null`.
+    #   resume_mode: null    -- INERT HERE, and kept only so the intent reads in one place. The
+    #                           launcher appends `++trainer.resume_mode=latest` itself, which beats
+    #                           the YAML body; the setting that actually takes is the spec-level
+    #                           override in build_workflow below. ResumeMode._missing_ maps None to
+    #                           ResumeMode.NONE (trainer_utils.py), so null and "none" are equivalent.
     #
     #   flash_attn: false    -- eager attention, via attn_backend "auto". This is E6's behaviour and
     #   use_sample_packing   -- packing off; Grug rejects it, and the base config defaults it TRUE.
@@ -272,8 +292,9 @@ data:
 def build_workflow(
     *,
     version: str | None = None,
-    wandb_entity: str | None = None,
-    max_steps: int = 2,
+    wandb_entity: str = "dogml",
+    max_steps: int = 4,
+    ckpt_interval: int = 0,
 ) -> ArtifactStep[SkyRLModel]:
     """Compose the E6 baseline as one inspectable artifact step."""
     base_name = f"checkpoints/{E6_MODEL_NAME}"
@@ -284,7 +305,7 @@ def build_workflow(
         SkyRLSpec(
             name=user_owned_name(base_name),
             version=version or resolve_version(base_name, None),
-            config_yaml=_rl_config(max_steps=max_steps),
+            config_yaml=_rl_config(max_steps=max_steps, ckpt_interval=ckpt_interval),
             runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.FSDP),
             model=ExternalModel(
                 uri=SNOWBALL_SFT_MIRROR,
@@ -300,6 +321,12 @@ def build_workflow(
                 gpu_variant=E6_GPU_VARIANT,
                 role_plan=E6_ROLE_PLAN,
             ),
+            # The launcher hardcodes `++trainer.resume_mode=latest` (cloud/iris/iris_backend.py),
+            # which beats anything in the YAML body -- so `resume_mode: null` there is inert. Spec
+            # overrides are appended AFTER the launcher's own, and later Hydra overrides win, so this
+            # is the only place the setting actually takes. A resumed timing run appends a second
+            # attempt, on possibly different hardware, to what reads as one run.
+            overrides=("++trainer.resume_mode=none",),
             retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
             seed=17,
         ),
@@ -326,21 +353,30 @@ def build_workflow(
 @click.command(help=__doc__)
 @click.option(
     "--wandb-entity",
-    default=None,
-    help="W&B team for the run. Pass `dogml`. Unset lands in whatever team the API key defaults to; "
-    "WANDB_ENTITY is not forwarded into the nested job.",
+    default="dogml",
+    show_default=True,
+    help="W&B team for the run. Defaults rather than being optional: the launcher drops the flag "
+    "when it is falsey, and WANDB_ENTITY is not forwarded into the nested job, so an unset value "
+    "silently lands the run in whatever team the API key defaults to -- unjoinable with the campaign.",
 )
 @click.option(
     "--max-steps",
-    default=2,
+    default=4,
     show_default=True,
-    help="Training steps. The default is a timing run: one warm-up plus one measured step, with "
-    "ckpt_interval derived past the end so no ~539 GB checkpoint is written. Pass 20 for E6's "
-    "science configuration.",
+    help="Training steps. 4 is the timing-run minimum: AdamW allocates its moment tensors lazily on "
+    "the first optimizer step, so step 1 is discarded and steps 2-4 give a dispersion estimate. Two "
+    "steps yield a single observation with no stability check. Pass 20 for the science configuration.",
+)
+@click.option(
+    "--ckpt-interval",
+    default=0,
+    show_default=True,
+    help="0 disables checkpointing AND the Hugging Face upload path. Any positive value writes a "
+    "~539 GB checkpoint at train end regardless of how large it is. See _rl_config.",
 )
 @build_options
-def main(wandb_entity: str | None, max_steps: int) -> ArtifactStep[SkyRLModel]:
-    return build_workflow(wandb_entity=wandb_entity, max_steps=max_steps)
+def main(wandb_entity: str, max_steps: int, ckpt_interval: int) -> ArtifactStep[SkyRLModel]:
+    return build_workflow(wandb_entity=wandb_entity, max_steps=max_steps, ckpt_interval=ckpt_interval)
 
 
 if __name__ == "__main__":
