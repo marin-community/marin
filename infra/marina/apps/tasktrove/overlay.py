@@ -25,9 +25,9 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 from huggingface_hub import HfFileSystem
+from manifest import DATA_DIR, DATASET  # pyrefly: ignore[missing-import]  # a sibling script, run from its directory
 
-DATASET = "datasets/open-thoughts/TaskTrove"
-OUT = Path(__file__).parent / "web" / "public" / "corpus"
+OUT = DATA_DIR
 
 
 def current_name(source: str, manifest: set[str]) -> str:

@@ -20,7 +20,10 @@ import pyarrow.parquet as pq
 from huggingface_hub import HfFileSystem
 
 DATASET = "datasets/open-thoughts/TaskTrove"
-OUT = Path(__file__).parent / "web" / "public" / "corpus" / "files.json"
+# The app's data directory: uploaded to the Marina bucket, served at /tasktrove/data/.
+# The app's data directory: uploaded to the Marina bucket, served at /tasktrove/data/.
+DATA_DIR = Path(__file__).parents[2] / ".data" / "tasktrove"
+OUT = DATA_DIR / "files.json"
 
 
 def main() -> None:

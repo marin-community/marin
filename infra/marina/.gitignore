@@ -1,2 +1,4 @@
 dist/
 node_modules/
+.data/
+journeys-out/

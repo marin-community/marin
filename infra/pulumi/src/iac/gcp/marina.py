@@ -1,20 +1,71 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""GCP IAM declarations required by the Marina deploy target."""
+"""GCP IAM declarations required by the Marina deploy target.
+
+One runtime service account serves every app, runs the migrate and Echo sync jobs, and is
+the only Cloud SQL IAM user of the ``marina`` database. The grants below are the union of
+what the hosted apps need: Cloud SQL login, the record buckets evaldash indexes, compute
+listing for Iris discovery, the CoreWeave storage keys, and the marinmirror token for sync.
+"""
 
 from collections.abc import Mapping
 
-from iac.gcp.iam import GcpArtifactRepositoryIam, GcpCloudRunIapIam, GcpEncryptedMember, GcpIamGrantSet, GcpRoleGrant
+from iac.gcp.iam import (
+    GcpArtifactRepositoryIam,
+    GcpBucketIam,
+    GcpCloudRunIapIam,
+    GcpEncryptedMember,
+    GcpIamGrantSet,
+    GcpRoleGrant,
+    GcpSecretIam,
+)
 
 _REGION = "us-central1"
 _SERVICE = "marina"
+_DATA_BUCKET = "marin-marina"
+_MIRROR_TOKEN_SECRET = "marinmirror-token"
+_COREWEAVE_SECRETS = ("cw-object-storage-key-id", "cw-object-storage-key-secret")
 
 
 def iam_grants(project: str, principals: Mapping[str, GcpEncryptedMember]) -> GcpIamGrantSet:
     """Return Marina grants for composition into the global IAM stack."""
     deploy_account = f"serviceAccount:marin-cd-cloud-run-deploy@{project}.iam.gserviceaccount.com"
+    runtime_account = f"serviceAccount:{_SERVICE}@{project}.iam.gserviceaccount.com"
+    loom_account = f"serviceAccount:loom-vm@{project}.iam.gserviceaccount.com"
     return GcpIamGrantSet(
+        project_grants=(
+            GcpRoleGrant(role="roles/cloudsql.client", members=(runtime_account,)),
+            GcpRoleGrant(role="roles/cloudsql.instanceUser", members=(runtime_account,)),
+            GcpRoleGrant(role="roles/compute.viewer", members=(runtime_account,)),
+            GcpRoleGrant(role="roles/storage.objectViewer", members=(runtime_account,)),
+            # Cloud Scheduler runs the sync job as the runtime account.
+            GcpRoleGrant(role="roles/run.invoker", members=(runtime_account,)),
+        ),
+        secrets=(
+            GcpSecretIam(
+                secret=_MIRROR_TOKEN_SECRET,
+                grants=(
+                    GcpRoleGrant(role=f"projects/{project}/roles/marinSecretIamManager", members=(deploy_account,)),
+                    GcpRoleGrant(role="roles/secretmanager.secretAccessor", members=(runtime_account,)),
+                ),
+            ),
+            *(
+                GcpSecretIam(
+                    secret=secret,
+                    grants=(GcpRoleGrant(role="roles/secretmanager.secretAccessor", members=(runtime_account,)),),
+                )
+                for secret in _COREWEAVE_SECRETS
+            ),
+        ),
+        buckets=(
+            GcpBucketIam(
+                bucket=_DATA_BUCKET,
+                grants=(
+                    GcpRoleGrant(role="roles/storage.objectAdmin", members=(deploy_account, "domain:openathena.ai")),
+                ),
+            ),
+        ),
         artifact_repositories=(
             GcpArtifactRepositoryIam(
                 location=_REGION,
@@ -31,6 +82,9 @@ def iam_grants(project: str, principals: Mapping[str, GcpEncryptedMember]) -> Gc
                         role="roles/iap.httpsResourceAccessor",
                         members=(
                             "domain:openathena.ai",
+                            loom_account,
+                            f"serviceAccount:iris-controller@{project}.iam.gserviceaccount.com",
+                            "serviceAccount:ravwojdyla@rav-openathena.iam.gserviceaccount.com",
                             principals["human-014"],
                             principals["human-032"],
                             principals["human-024"],
@@ -38,6 +92,8 @@ def iam_grants(project: str, principals: Mapping[str, GcpEncryptedMember]) -> Gc
                             principals["human-067"],
                             principals["human-021"],
                             principals["human-006"],
+                            principals["human-064"],
+                            principals["human-070"],
                         ),
                     ),
                 ),

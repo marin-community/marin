@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import gzip
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -30,11 +31,21 @@ def write_app(apps_dir: Path, name: str, manifest: str = TASKTROVE_MANIFEST, bui
     return root
 
 
+def config_for(tmp_path: Path) -> MarinaConfig:
+    data_root = tmp_path / "data"
+    (data_root / "tasktrove").mkdir(parents=True, exist_ok=True)
+    return MarinaConfig(apps_dir=tmp_path / "apps", data_root=str(data_root), iap_audience=None)
+
+
 @pytest.fixture
 def client(tmp_path: Path) -> TestClient:
-    write_app(tmp_path, "tasktrove")
-    write_app(tmp_path, "unbuilt", built=False)
-    return TestClient(create_app(MarinaConfig(apps_dir=tmp_path, iap_audience=None)), client=("127.0.0.1", 40000))
+    write_app(tmp_path / "apps", "tasktrove")
+    write_app(tmp_path / "apps", "unbuilt", built=False)
+    config = config_for(tmp_path)
+    (tmp_path / "data" / "tasktrove" / "sources.json").write_text('[{"source": "a"}]')
+    with gzip.open(tmp_path / "data" / "tasktrove" / "labels.json.gz", "wt") as f:
+        f.write("[1, 2]")
+    return TestClient(create_app(config), client=("127.0.0.1", 40000))
 
 
 def test_manifest_rejects_unknown_keys(tmp_path: Path) -> None:
@@ -83,9 +94,30 @@ def test_unbuilt_app_reports_503(client: TestClient) -> None:
     assert client.get("/unbuilt/").status_code == 503
 
 
+def test_data_files_come_from_the_data_root(client: TestClient) -> None:
+    plain = client.get("/tasktrove/data/sources.json")
+    assert plain.status_code == 200 and plain.json() == [{"source": "a"}]
+    assert plain.headers["cache-control"] == "private, max-age=300"
+    compressed = client.get("/tasktrove/data/labels.json")
+    assert compressed.headers["content-encoding"] == "gzip" and compressed.json() == [1, 2]
+    assert client.get("/tasktrove/data/missing.json").status_code == 404
+    assert client.get("/tasktrove/data/..%2Fother%2Fx").status_code == 404
+
+
 def test_non_loopback_without_iap_is_denied(tmp_path: Path) -> None:
-    write_app(tmp_path, "tasktrove")
-    app = create_app(MarinaConfig(apps_dir=tmp_path, iap_audience=None))
+    write_app(tmp_path / "apps", "tasktrove")
+    app = create_app(config_for(tmp_path))
     remote = TestClient(app, client=("10.0.0.7", 1234))
     assert remote.get("/api/marina/me").status_code == 401
     assert remote.get("/healthz").status_code == 200
+
+
+def test_aliased_host_redirects_into_its_app(tmp_path: Path) -> None:
+    write_app(tmp_path / "apps", "tasktrove")
+    config = replace(config_for(tmp_path), host_apps={"old.example": "tasktrove"})
+    client = TestClient(create_app(config), client=("127.0.0.1", 40000))
+    response = client.get("/wiki/59?x=1", headers={"host": "old.example"}, follow_redirects=False)
+    assert response.status_code == 308
+    assert response.headers["location"] == "/tasktrove/wiki/59?x=1"
+    assert client.get("/tasktrove/", headers={"host": "old.example"}).status_code == 200
+    assert client.get("/", headers={"host": "other.example"}).status_code == 200

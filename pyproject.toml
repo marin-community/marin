@@ -270,7 +270,8 @@ project-includes = [
     "lib/rigging/src/**/*.py",
     "lib/zephyr/src/**/*.py",
     "lib/finestore/src/**/*.py",
-    "infra/evaldash/src/**/*.py",
+    "infra/marina/src/**/*.py",
+    "infra/marina/apps/**/*.py",
     "infra/deploy/src/**/*.py",
     "scripts/ci",
     "scripts/cost_manager",
@@ -290,6 +291,8 @@ search-path = [
     "lib/iris/src",
     "lib/ducky/src",
     "infra/deploy/src",
+    "infra/marina/src",
+    "infra/marina/apps",
 ]
 disable-search-path-heuristics = true
 

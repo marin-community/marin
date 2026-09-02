@@ -1,10 +1,10 @@
 // What this site carries of its own: the manifest of the dataset's files, the
 // audit's review of each source, and the audit's label for each sampled task.
-// The three JSON files ship in the bundle under the app's own prefix; the page
-// reads and holds them once.
+// The three JSON files come from the app's data directory, which the kernel
+// serves; the page reads and holds them once.
 
-/** Where `public/corpus` lands once the kernel serves this app. */
-const CORPUS = '/tasktrove/corpus'
+/** The kernel serves this app's data directory here (`.data/tasktrove` locally, the bucket in production). */
+const CORPUS = '/tasktrove/data'
 
 export type Source = {
   source: string

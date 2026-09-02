@@ -7,8 +7,6 @@ Pulumi-managed application services use the same rollout interface:
 
 ```bash
 uv run --all-packages --extra deploy marin-deploy ducky rollout
-uv run --all-packages --extra deploy marin-deploy echo rollout
-uv run --all-packages --extra deploy marin-deploy evaldash rollout
 uv run --all-packages --extra deploy marin-deploy grafana rollout
 uv run --all-packages --extra deploy marin-deploy loom rollout
 uv run --all-packages --extra deploy marin-deploy marina rollout

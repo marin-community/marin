@@ -173,9 +173,8 @@ to bind the new service account, then enable Loom alerts and redeploy Grafana.
 The Loom VM service account runs interactive agent sessions. Its project, secret, and KMS
 grants are declared in `infra/pulumi/src/iac/gcp/loom.py` and applied by the `marin`
 infrastructure stack. `Pulumi.marin-loom.yaml` contains runtime configuration only; do not add
-IAM bindings to this application stack or deployment scripts. Cloud SQL database users and
-PostgreSQL table privileges are database resources, so Echo continues to own the `loom-vm`
-principal, login roles, and table grants in `infra/echo`.
+IAM bindings to this application stack or deployment scripts. Loom reaches Echo through its IAP-gated HTTP API on Marina (`infra/marina`), which is
+why the Loom VM account is an IAP accessor there; it holds no database login.
 
 A stack cannot bootstrap access to its own secrets-provider key. An identity that already has
 key access must apply the central KMS grant before Loom needs it.
