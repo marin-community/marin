@@ -93,8 +93,11 @@ def test_scaling_ladder_searches_cluster_and_data_local_temp_roots(monkeypatch):
     ]
 
 
-@pytest.mark.parametrize("dirty", [False, True])
-def test_hero_trigger_records_the_submitted_commit_and_tree_state(tmp_path, dirty):
+@pytest.mark.parametrize(
+    ("dirty", "comment_succeeds"),
+    [(False, True), (True, True), (False, False)],
+)
+def test_hero_trigger_records_the_submitted_commit_and_tree_state(tmp_path, dirty, comment_succeeds):
     repo = tmp_path / "repo"
     repo.mkdir()
     trigger = repo / "trigger_hero.sh"
@@ -130,21 +133,54 @@ def test_hero_trigger_records_the_submitted_commit_and_tree_state(tmp_path, dirt
     fake_uuidgen = fake_bin / "uuidgen"
     fake_uuidgen.write_text("#!/bin/sh\necho 12345678-1234-1234-1234-123456789abc\n")
     fake_uuidgen.chmod(0o755)
+    fake_gh = fake_bin / "gh"
+    fake_gh.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, sys\n"
+        "from pathlib import Path\n"
+        "Path(os.environ['HERO_GH_CAPTURE']).write_text(json.dumps(sys.argv[1:]))\n"
+        "raise SystemExit(int(os.environ.get('HERO_GH_EXIT_CODE', '0')))\n"
+    )
+    fake_gh.chmod(0o755)
 
     capture = tmp_path / "capture.json"
+    gh_capture = tmp_path / "gh.json"
     env = {
         **os.environ,
         "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
         "WANDB_API_KEY": "test-key",
         "HERO_TRIGGER_CAPTURE": str(capture),
+        "HERO_GH_CAPTURE": str(gh_capture),
+        "HERO_GH_EXIT_CODE": "0" if comment_succeeds else "1",
     }
-    subprocess.run([str(trigger)], cwd=repo, env=env, check=True, capture_output=True, text=True)
+    result = subprocess.run([str(trigger)], cwd=repo, env=env, check=False, capture_output=True, text=True)
 
-    submitted = json.loads(capture.read_text())
-    argv = submitted["argv"]
     expected_dirty = str(dirty).lower()
     expected_state = "dirty" if dirty else "clean"
+    expected_job_name = f"hero-12d8b6f0-dee637-coord-{commit[:8]}-{expected_state}-12345678"
+    assert json.loads(gh_capture.read_text()) == [
+        "issue",
+        "comment",
+        "https://github.com/marin-community/marin/issues/8506",
+        "--body",
+        (
+            "Hero launch requested.\n\n"
+            "- Run ID: `hero-12d8b6f0-dee637`\n"
+            f"- Commit: `{commit}`\n"
+            f"- Tree dirty: `{expected_dirty}`\n"
+            f"- Coordinator job: `{expected_job_name}`\n"
+            "- Target: `cw-us-east-08a` (11 x NVL72)"
+        ),
+    ]
+    if not comment_succeeds:
+        assert result.returncode == 1
+        assert not capture.exists()
+        return
+
+    assert result.returncode == 0
+    submitted = json.loads(capture.read_text())
+    argv = submitted["argv"]
     assert argv[argv.index("--system-reason") + 1] == (f"hero run; commit={commit}; tree_dirty={expected_dirty}")
-    assert argv[argv.index("--job-name") + 1] == (f"hero-12d8b6f0-dee637-coord-{commit[:8]}-{expected_state}-12345678")
+    assert argv[argv.index("--job-name") + 1] == expected_job_name
     assert argv[argv.index("GIT_COMMIT") + 1] == commit
     assert argv[argv.index("HERO_LAUNCH_TREE_DIRTY") + 1] == expected_dirty
