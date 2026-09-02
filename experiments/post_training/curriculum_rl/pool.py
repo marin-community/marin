@@ -110,9 +110,10 @@ GSM8K_VALIDATION_ROWS = 256
 QWEN3_MODEL = "Qwen/Qwen3-0.6B"
 QWEN3_REVISION = "c1899de"
 # The trainer skips generation for prompts above max_input_length
-# (request_window_tokens - max_new_tokens = 1024 in both presets), and a fully
-# skipped GRPO group fails group admission. Drop over-length train prompts at
-# pool build with a margin for chat-template variants.
+# (request_window_tokens - max_new_tokens; every launch.py preset keeps this
+# at 1024 and asserts it), and a fully skipped GRPO group fails group
+# admission. Drop over-length train prompts at pool build with a margin for
+# chat-template variants.
 MAX_PROMPT_TOKENS = 1000
 
 TRAIN_FILENAME = "train.parquet"

@@ -38,6 +38,7 @@ import math
 import re
 import zipfile
 from collections import Counter, defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 
 import click
@@ -52,13 +53,17 @@ import wandb
 from marin.evaluation.records import CW_RECORDS_PREFIX, RunStatus, list_records
 from marin.training.training import temporary_storage_base_path
 from rigging.filesystem.storage_path import StoragePath, prefix_join
+from rigging.provenance import username_segment
 
-from experiments.post_training.curriculum_rl.launch import EXPERIMENT_NAME
+from experiments.post_training.curriculum_rl.launch import EXPERIMENT_NAME, SCALES
+from experiments.post_training.curriculum_rl.pool import TRAIN_FILENAME, VALIDATION_FILENAME
 
 logger = logging.getLogger(__name__)
 
 WANDB_PROJECT = "marin-community/marin-curriculum-rl"
-POOL_ROOT = "s3://marin-us-east-02a/marin/documents/curriculum-rl-pool"
+# The experiment's artifact bucket; pools and checkpoints live under it.
+STORAGE_ROOT = "s3://marin-us-east-02a/marin"
+POOL_ROOT = f"{STORAGE_ROOT}/documents/{EXPERIMENT_NAME}-pool"
 
 # Trajectory aggregation (the ``trajectories`` subcommand).
 MAX_ARCHIVES = 80
@@ -67,7 +72,7 @@ STEP_BUCKET = 20
 TAIL_CHARS = 400
 THINK_TOKENS = ("<|start_think|>", "<|end_think|>", "<think>", "</think>")
 ANSWER_LINE = re.compile(r"(####\s*\S+|Answer:\s*\S+)")
-BIN_TOKENS = ("gsm8k", "svamp", "asdiv", "math", "numina", "omni", "aime", "theoremqa", "hardmath", "rg-sum", "putnam")
+BIN_TOKENS = ("gsm8k", "svamp", "asdiv", "math", "numina", "omni", "aime", "theoremqa", "hardmath", "rg-sum")
 VERSION_TAG = "2026.08.31"
 # Snowball arms were relaunched at micro_train_batch_size_per_gpu=4 under a
 # bumped version; the cancelled micro=1 probe lives at plain 2026.08.31 and
@@ -105,14 +110,44 @@ SAMPLER_ORDER = (
     "grade-adaptive",
     "grade-prior",
 )
-FAMILY_LABELS = {
-    "qwen": "Qwen3-0.6B",
-    "snowball": "Snowball 67B-A2B SFT",
-    "snowball-r4": "Snowball 67B-A2B SFT (round 4: MuonH + system prompt)",
-    "snowball-r5": "Snowball 67B-A2B SFT (round 5: 8192-token budget)",
-}
-# Validation bin -> ladder grade (pool.py bins). The end metric weights each
-# bin by 1 + grade; the weights are fixed here and never visible to samplers.
+
+
+@dataclass(frozen=True)
+class Family:
+    """One run family: the arm-name prefix plus the version tag and scale
+    preset that identify its W&B runs and per-step generation volume."""
+
+    key: str  # frame column value and chart filename prefix
+    arm_prefix: str  # canonical arm-name prefix; "" matches the Qwen arms
+    label: str
+    version_tag: str
+    scale: str  # launch.py SCALES key the family's full arms ran at
+
+
+# Ordered longest-arm-prefix first so family_of can match by prefix.
+FAMILIES = (
+    Family(
+        "snowball-r5",
+        "snowball-r5-",
+        "Snowball 67B-A2B SFT (round 5: 8192-token budget)",
+        SNOWBALL_R5_VERSION_TAG,
+        "snowball-full-r5",
+    ),
+    Family(
+        "snowball-r4",
+        "snowball-r4-",
+        "Snowball 67B-A2B SFT (round 4: MuonH + system prompt)",
+        SNOWBALL_R4_VERSION_TAG,
+        "snowball-full-r4",
+    ),
+    Family("snowball", "snowball-", "Snowball 67B-A2B SFT", SNOWBALL_VERSION_TAG, "snowball-full"),
+    Family("qwen", "", "Qwen3-0.6B", VERSION_TAG, "full"),
+)
+FAMILY_BY_KEY = {family.key: family for family in FAMILIES}
+# Validation bin -> ladder grade. The end metric weights each bin by
+# 1 + grade; the weights are deliberately fixed here rather than derived from
+# pool.py bin grades (val-math500 spans several MATH bins), so pool regrading
+# cannot silently move the metric, and they are never visible to samplers.
 VAL_GRADES = {
     "val-rg-sum": 1,
     "val-gsm8k": 3,
@@ -130,40 +165,21 @@ EVAL_ALPHA = 0.5
 CURRICULUM_ALPHA = 0.3
 STEP_KEY = "trainer/global_step"
 TOKENS_KEY = "generate/avg_num_tokens"
-# Responses per generate call: train_batch_size * n_samples_per_prompt, from the
-# launch.py FULL (512*8) and SNOWBALL_FULL (128*8) presets.
-QWEN_RESPONSES_PER_GENERATE = 512 * 8
-SNOWBALL_RESPONSES_PER_GENERATE = 128 * 8
-SNOWBALL_R4_RESPONSES_PER_GENERATE = 64 * 8
-SNOWBALL_R5_RESPONSES_PER_GENERATE = 64 * 8
 
 
-def family_of(arm: str) -> str:
-    if arm.startswith("snowball-r5-"):
-        return "snowball-r5"
-    if arm.startswith("snowball-r4-"):
-        return "snowball-r4"
-    return "snowball" if arm.startswith("snowball-") else "qwen"
+def family_of(arm: str) -> Family:
+    return next(family for family in FAMILIES if arm.startswith(family.arm_prefix))
 
 
 def sampler_of(arm: str) -> str:
-    return arm.removeprefix("snowball-r5-").removeprefix("snowball-r4-").removeprefix("snowball-")
+    return arm.removeprefix(family_of(arm).arm_prefix)
 
 
 def responses_per_generate(arm: str) -> int:
-    if family_of(arm) == "snowball-r5":
-        return SNOWBALL_R5_RESPONSES_PER_GENERATE
-    if family_of(arm) == "snowball-r4":
-        return SNOWBALL_R4_RESPONSES_PER_GENERATE
-    return SNOWBALL_RESPONSES_PER_GENERATE if family_of(arm) == "snowball" else QWEN_RESPONSES_PER_GENERATE
-
-
-FAMILY_TAGS = {
-    "qwen": VERSION_TAG,
-    "snowball": SNOWBALL_VERSION_TAG,
-    "snowball-r4": SNOWBALL_R4_VERSION_TAG,
-    "snowball-r5": SNOWBALL_R5_VERSION_TAG,
-}
+    """TOKENS_KEY is a per-response mean, so token spend scales by the arm's
+    responses per generate call: train_batch_size * n_samples_per_prompt."""
+    plan = SCALES[family_of(arm).scale].role_plan
+    return plan.train_batch_size * plan.n_samples_per_prompt
 
 
 def arm_of(run_name: str) -> str | None:
@@ -171,14 +187,13 @@ def arm_of(run_name: str) -> str | None:
         return None
     arm = run_name.split("curriculum-rl-")[1].split("-2026")[0]
     # Snowball checkpoint names carry the scale label (launch.py only drops the
-    # suffix for the Qwen FULL preset): snowball-naive-snowball-full -> snowball-naive,
-    # snowball-naive-snowball-full-r4 -> snowball-r4-naive.
-    if arm.endswith("-snowball-full-r5"):
-        arm = "snowball-r5-" + arm.removeprefix("snowball-").removesuffix("-snowball-full-r5")
-    if arm.endswith("-snowball-full-r4"):
-        arm = "snowball-r4-" + arm.removeprefix("snowball-").removesuffix("-snowball-full-r4")
-    arm = arm.removesuffix("-snowball-full")
-    if f"-{FAMILY_TAGS[family_of(arm)]}-" not in run_name:
+    # suffix for the Qwen FULL preset): snowball-naive-snowball-full-r4 maps to
+    # snowball-r4-naive.
+    for family in FAMILIES:
+        if family.key != "qwen" and arm.endswith(f"-{family.scale}"):
+            arm = family.arm_prefix + arm.removeprefix("snowball-").removesuffix(f"-{family.scale}")
+            break
+    if f"-{family_of(arm).version_tag}-" not in run_name:
         return None
     return arm
 
@@ -210,7 +225,15 @@ def merged_history(runs: list, keys: list[str], step_key: str = STEP_KEY) -> dic
     return merged
 
 
-def arm_series(arm: str, runs: list) -> dict[str, object]:
+@dataclass(frozen=True)
+class ArmSeries:
+    """Eval rows keyed by (entry_index, wandb_step), plus total token spend."""
+
+    evals: dict[tuple[int, int], dict[str, float]]
+    total_tokens: float
+
+
+def arm_series(arm: str, runs: list) -> ArmSeries:
     """Eval points aligned to cumulative generated tokens across all run entries.
 
     A resumed run starts a new W&B entry whose ``_step`` restarts at zero, so
@@ -235,7 +258,7 @@ def arm_series(arm: str, runs: list) -> dict[str, object]:
                 **row,
                 "cumulative_tokens": cumulative[preceding[-1]] if preceding else base,
             }
-    return {"evals": aligned, "total_tokens": total}
+    return ArmSeries(evals=aligned, total_tokens=total)
 
 
 def grade_weighted_score(row: dict[str, float]) -> float | None:
@@ -250,7 +273,7 @@ def grade_weighted_score(row: dict[str, float]) -> float | None:
     return sum((1 + VAL_GRADES[v]) * s for v, s in scores.items()) / weight_total
 
 
-def eval_frame(data: dict[str, dict]) -> pd.DataFrame:
+def eval_frame(data: dict[str, ArmSeries]) -> pd.DataFrame:
     """Tidy per-eval-point rows: one row per (arm, bin) score, plus grade-weighted.
 
     ``smoothed`` is an EMA over each (arm, bin) series in token order; raw
@@ -258,10 +281,10 @@ def eval_frame(data: dict[str, dict]) -> pd.DataFrame:
     """
     rows = []
     for arm, d in data.items():
-        for r in d["evals"].values():
+        for r in d.evals.values():
             base = {
                 "arm": arm,
-                "family": family_of(arm),
+                "family": family_of(arm).key,
                 "sampler": sampler_of(arm),
                 "step": r.get(STEP_KEY),
                 "tokens_m": r["cumulative_tokens"] / 1e6,
@@ -300,7 +323,7 @@ def plot_headline(frame: pd.DataFrame, family: str, path: Path) -> None:
     draw_arm_lines(ax, sub, "tokens_m", sampler_palette())
     ax.set_xlabel("generated tokens (M)")
     ax.set_ylabel("grade-weighted pass@1")
-    ax.set_title(f"{FAMILY_LABELS[family]}: grade-weighted validation pass@1")
+    ax.set_title(f"{FAMILY_BY_KEY[family].label}: grade-weighted validation pass@1")
     ax.legend(fontsize=9)
     fig.tight_layout()
     fig.savefig(path, dpi=150)
@@ -326,7 +349,7 @@ def plot_grade_breakout(frame: pd.DataFrame, family: str, x: str, xlabel: str, p
         ax.set_ylabel("pass@1")
     handles, labels = axes.flat[0].get_legend_handles_labels()
     fig.legend(handles, labels, loc="lower center", ncol=len(labels), frameon=False)
-    fig.suptitle(f"{FAMILY_LABELS[family]}: validation pass@1 by grade", y=0.99)
+    fig.suptitle(f"{FAMILY_BY_KEY[family].label}: validation pass@1 by grade", y=0.99)
     fig.tight_layout(rect=(0, 0.05, 1, 1))
     fig.savefig(path, dpi=150)
     plt.close(fig)
@@ -380,7 +403,9 @@ def plot_attainment(attainment: pd.DataFrame, family: str, path: Path) -> None:
     )
     ax.set_xlabel("")
     ax.set_ylabel("generated tokens (M) to attain grade")
-    ax.set_title(f"{FAMILY_LABELS[family]}: tokens to reach pass@1 >= {FRONTIER_THRESHOLD} (no bar: never reached)")
+    ax.set_title(
+        f"{FAMILY_BY_KEY[family].label}: tokens to reach pass@1 >= {FRONTIER_THRESHOLD} (no bar: never reached)"
+    )
     ax.legend(fontsize=9)
     fig.tight_layout()
     fig.savefig(path, dpi=150)
@@ -518,9 +543,9 @@ def charts(out: Path) -> None:
     data = {arm: arm_series(arm, runs) for arm, runs in by_arm.items()}
     summary = {}
     for arm, d in data.items():
-        final = d["evals"][max(d["evals"])] if d["evals"] else {}
+        final = d.evals[max(d.evals)] if d.evals else {}
         summary[arm] = {
-            "total_tokens": d["total_tokens"],
+            "total_tokens": d.total_tokens,
             "final_evals": final,
             "final_grade_weighted": grade_weighted_score(final),
             "final_frontier_grade": frontier_grade(final),
@@ -530,7 +555,7 @@ def charts(out: Path) -> None:
 
     frame = eval_frame(data)
     attainment = attainment_frame(frame)
-    for family in FAMILY_LABELS:
+    for family in FAMILY_BY_KEY:
         if frame[frame["family"] == family].empty:
             continue
         plot_headline(frame, family, out / f"{family}-grade-weighted-tokens.png")
@@ -570,7 +595,7 @@ def evals() -> None:
 @click.option("--version", required=True)
 def pool_stats(version: str) -> None:
     """Print per-bin row counts and grades for one built pool version."""
-    for filename in ("train.parquet", "validation.parquet"):
+    for filename in (TRAIN_FILENAME, VALIDATION_FILENAME):
         path = prefix_join(prefix_join(POOL_ROOT, version), filename)
         with StoragePath(path).open("rb") as handle:
             table = pq.read_table(handle, columns=["extra_info"])
@@ -582,39 +607,39 @@ def pool_stats(version: str) -> None:
             print(json.dumps({"grade": grade, "bin": source, "rows": n}))
 
 
-def record_stats(rec: dict, reasons: tuple[str, ...]) -> dict:
-    resp = rec.get("response", {})
-    text = resp.get("text") or ""
-    extras = json.dumps(rec.get("trajectory", {}).get("environment_extras"))
-    bin_token = next((t for t in BIN_TOKENS if t in extras), "other")
-    return {
-        "step": rec.get("global_step") or 0,
-        "bin": bin_token,
-        # Failures and truncations are retained mandatorily, so the
-        # non-mandatory remainder is a hash sample of successful terminating
-        # rollouts only. None when the record id is missing from the ledger.
-        "sampled": None if not reasons else "mandatory" not in reasons,
-        "truncated": resp.get("stop_reason") == "length",
-        "think": any(t in text for t in THINK_TOKENS),
-        "answer_line": bool(ANSWER_LINE.search(text[-TAIL_CHARS:])),
-        "boxed": "\\boxed{" in text[-TAIL_CHARS:],
-        "chars": len(text),
-    }
+@dataclass(frozen=True)
+class TrajectoryRecord:
+    step: int
+    bin: str
+    # Failures and truncations are retained mandatorily, so the non-mandatory
+    # remainder is a hash sample of successful terminating rollouts only.
+    # None when the record id is missing from the ledger.
+    sampled: bool | None
+    truncated: bool
+    think: bool
+    answer_line: bool
+    boxed: bool
+    chars: int
 
 
-@main.command()
-@click.argument("arm")
-@click.argument("version")
-def trajectories(arm: str, version: str) -> None:
-    """Aggregate retained-trajectory statistics for one arm.
+def trajectory_record(record: dict, reasons: tuple[str, ...]) -> TrajectoryRecord:
+    response = record.get("response", {})
+    text = response.get("text") or ""
+    extras = json.dumps(record.get("trajectory", {}).get("environment_extras"))
+    return TrajectoryRecord(
+        step=record.get("global_step") or 0,
+        bin=next((t for t in BIN_TOKENS if t in extras), "other"),
+        sampled=None if not reasons else "mandatory" not in reasons,
+        truncated=response.get("stop_reason") == "length",
+        think=any(t in text for t in THINK_TOKENS),
+        answer_line=bool(ANSWER_LINE.search(text[-TAIL_CHARS:])),
+        boxed="\\boxed{" in text[-TAIL_CHARS:],
+        chars=len(text),
+    )
 
-    Reports, per 20-step bucket and per bin: truncation rate
-    (stop_reason=length), canonical think-token usage, graded answer-line
-    compliance, and \\boxed{} usage.
-    """
-    out = f"s3://marin-us-east-02a/marin/users/power/checkpoints/curriculum-rl/{arm}/{version}"
-    root = temporary_storage_base_path(out, ttl_days=14, category="skyrl")
-    traj_root = prefix_join(prefix_join(root, "attempts"), "trajectories")
+
+def read_trajectory_records(traj_root: str) -> list[TrajectoryRecord]:
+    """Read retained-trajectory archives, stride-sampled down to MAX_ARCHIVES."""
     ledger = json.loads(StoragePath(prefix_join(traj_root, "_retention_ledger.json")).read_text())
     reasons_by_id = {rid: tuple(entry.get("reasons", ())) for rid, entry in ledger.get("records", {}).items()}
     archives = sorted(ledger.get("archives", {}))
@@ -639,37 +664,54 @@ def trajectories(arm: str, version: str) -> None:
                 continue
             record_id = name.rsplit("/", 1)[-1].removesuffix(".json.gz")
             reasons = reasons_by_id.get(record_id, ())
-            rows.append(record_stats(json.loads(gzip.decompress(zf.read(name))), reasons))
-    matched = sum(1 for r in rows if r["sampled"] is not None)
+            rows.append(trajectory_record(json.loads(gzip.decompress(zf.read(name))), reasons))
+    matched = sum(1 for r in rows if r.sampled is not None)
     print(f"records: {len(rows)} (ledger reason matched for {matched})")
+    return rows
 
-    def bucket(rows_subset: list[dict], label: str) -> None:
+
+@main.command()
+@click.argument("arm")
+@click.argument("version")
+def trajectories(arm: str, version: str) -> None:
+    """Aggregate retained-trajectory statistics for one arm.
+
+    Reports, per 20-step bucket and per bin: truncation rate
+    (stop_reason=length), canonical think-token usage, graded answer-line
+    compliance, and \\boxed{} usage.
+    """
+    out = prefix_join(STORAGE_ROOT, f"users/{username_segment()}/checkpoints/{EXPERIMENT_NAME}/{arm}/{version}")
+    root = temporary_storage_base_path(out, ttl_days=14, category="skyrl")
+    traj_root = prefix_join(prefix_join(root, "attempts"), "trajectories")
+    rows = read_trajectory_records(traj_root)
+
+    def bucket(rows_subset: list[TrajectoryRecord], label: str) -> None:
         n = len(rows_subset)
         if not n:
             return
-        trunc = sum(r["truncated"] for r in rows_subset) / n
-        think = sum(r["think"] for r in rows_subset) / n
-        ans = sum(r["answer_line"] for r in rows_subset) / n
-        boxed = sum(r["boxed"] for r in rows_subset) / n
-        chars = sum(r["chars"] for r in rows_subset) / n
+        trunc = sum(r.truncated for r in rows_subset) / n
+        think = sum(r.think for r in rows_subset) / n
+        ans = sum(r.answer_line for r in rows_subset) / n
+        boxed = sum(r.boxed for r in rows_subset) / n
+        chars = sum(r.chars for r in rows_subset) / n
         print(
             f"{label:>16} n={n:<6} trunc={trunc:.3f} think={think:.3f} "
             f"answer_line={ans:.3f} boxed={boxed:.3f} avg_chars={chars:,.0f}"
         )
 
     for label, subset in (
-        ("success stream (hash-sampled)", [r for r in rows if r["sampled"] is True]),
-        ("failure/trunc stream (mandatory)", [r for r in rows if r["sampled"] is False]),
+        ("success stream (hash-sampled)", [r for r in rows if r.sampled is True]),
+        ("failure/trunc stream (mandatory)", [r for r in rows if r.sampled is False]),
     ):
         print(f"\n==== {label} ====")
         by_step = defaultdict(list)
         for r in subset:
-            by_step[r["step"] // STEP_BUCKET * STEP_BUCKET].append(r)
+            by_step[r.step // STEP_BUCKET * STEP_BUCKET].append(r)
         for k in sorted(by_step):
             bucket(by_step[k], f"steps {k}-{k + STEP_BUCKET - 1}")
         by_bin = defaultdict(list)
         for r in subset:
-            by_bin[r["bin"]].append(r)
+            by_bin[r.bin].append(r)
         for k in sorted(by_bin):
             bucket(by_bin[k], k)
 

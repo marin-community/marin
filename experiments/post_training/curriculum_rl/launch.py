@@ -82,7 +82,7 @@ MARIN_TOKENIZER_REVISION = "a5ca45f"
 
 @dataclass(frozen=True)
 class PolicySpec:
-    """Which policy model arms train, where it runs, and its model-specific overrides."""
+    """Which policy model arms train, where it runs, and its model-specific profile."""
 
     label: str
     cluster: str
@@ -90,6 +90,20 @@ class PolicySpec:
     tokenizer_revision: str
     model_relative_path: str
     overrides: tuple[str, ...]
+    # Host memory for every training and engine task. The Snowball export
+    # streams ~134GB of bf16 shards through host buffers on load (per node,
+    # policy and engine alike); 128GB of host RAM OOM-killed its first smoke.
+    task_memory: str
+    # Evaluation serving profile: GPUs and host memory per serving instance,
+    # engine data parallelism, and model-specific vLLM flags and sampling
+    # kwargs.
+    serve_gpus: int
+    serve_memory: str | None = None
+    serve_data_parallel_size: int | None = None
+    serve_vllm_extra_args: tuple[str, ...] = ()
+    serve_gen_kwargs: tuple[tuple[str, str], ...] = ()
+    # Pre-existing model artifact; None mirrors the HF model via model_step.
+    adopted_model: ArtifactStep[LevanterCheckpoint] | None = None
 
 
 QWEN_POLICY = PolicySpec(
@@ -101,11 +115,21 @@ QWEN_POLICY = PolicySpec(
     # Thinking mode ate the whole generation budget at 0.6B (85% truncation in
     # the round-1 smoke); Qwen arms train and roll out in non-thinking mode.
     overrides=("++generator.chat_template_kwargs.enable_thinking=false",),
+    task_memory="128GB",
+    serve_gpus=1,
+)
+
+# Adopted in place from the exports prefix (~134GB referenced, not copied).
+SNOWBALL_MODEL = ArtifactStep.adopt(
+    "models/snowball-67b-a2b-sft-s2-thinking",
+    "2026.08.30",
+    SNOWBALL_SFT_EXPORT_URI,
+    kind=LevanterCheckpoint,
 )
 
 # The Snowball SFT trains where its export lives (us-east-02a) so 134GB of
-# shards never stream cross-region. Rollout engines mirror the export's
-# serving profile: one node-sized vLLM instance, tensor_parallel_size=1,
+# shards never stream cross-region. Rollout and serving engines mirror the
+# export's profile: one node-sized vLLM instance, tensor_parallel_size=1,
 # experts sharded across the node's eight ranks (ep = dp * tp). The frozen
 # query-bias router is the pinned MarinSkyRL default.
 SNOWBALL_POLICY = PolicySpec(
@@ -118,16 +142,17 @@ SNOWBALL_POLICY = PolicySpec(
         "generator.inference_engine_data_parallel_size=8",
         "generator.inference_engine_expert_parallel_size=8",
     ),
+    task_memory="512GB",
+    serve_gpus=GPUS_PER_NODE,
+    serve_memory="512g",
+    serve_data_parallel_size=GPUS_PER_NODE,
+    serve_vllm_extra_args=SNOWBALL_VLLM_ARGS,
+    # Emit the canonical think tokens verbatim (the export otherwise scores 0)
+    # and curb thinking loops with a light repetition penalty.
+    serve_gen_kwargs=(("skip_special_tokens", "false"), ("repetition_penalty", "1.1")),
+    adopted_model=SNOWBALL_MODEL,
 )
 POLICIES = {policy.label: policy for policy in (QWEN_POLICY, SNOWBALL_POLICY)}
-
-# Adopted in place from the exports prefix (~134GB referenced, not copied).
-SNOWBALL_MODEL = ArtifactStep.adopt(
-    "models/snowball-67b-a2b-sft-s2-thinking",
-    "2026.08.30",
-    SNOWBALL_SFT_EXPORT_URI,
-    kind=LevanterCheckpoint,
-)
 
 
 class SamplerKind(StrEnum):
@@ -388,7 +413,8 @@ SNOWBALL_FULL_R4 = ScalePreset(
         inference_engine_tensor_parallel_size=1,
         train_batch_size=64,
         policy_mini_batch_size=64,
-        # micro=8 halves all-gather count vs round 3; validated by the r4 smoke run.
+        # Eight 3072-token sequences per micro-batch fit in HBM at this window;
+        # fewer, larger micro-batches keep the per-step all-gather count low.
         micro_train_batch_size_per_gpu=8,
         n_samples_per_prompt=8,
     ),
@@ -593,40 +619,25 @@ class CurriculumArm:
 
 
 def _evaluation_serving(policy: PolicySpec, preset: ScalePreset, name: str) -> ModelConfig:
-    """Serving profile for the trained policy: single-GPU for Qwen, a full
-    expert-parallel node for the Snowball export (see evaluation/models.py)."""
-    max_model_len = preset.request_window_tokens + preset.max_new_tokens
-    if policy is SNOWBALL_POLICY:
-        return ModelConfig(
-            name=name,
-            location=SKYRL_POLICY_LOCATION,
-            tokenizer=policy.tokenizer_uri,
-            apply_chat_template=True,
-            resource_hint=ResourceHint(gpu={GPU_VARIANT: GPUS_PER_NODE}, memory="512g"),
-            serve=ServeConfig(
-                tensor_parallel_size=1,
-                data_parallel_size=GPUS_PER_NODE,
-                max_model_len=max_model_len,
-                max_num_seqs=64,
-                vllm_extra_args=SNOWBALL_VLLM_ARGS,
-            ),
-            generation=GenerationConfig(
-                max_gen_toks=preset.max_new_tokens,
-                extra_gen_kwargs={"skip_special_tokens": "false", "repetition_penalty": "1.1"},
-            ),
-        )
+    """Serving profile for the trained policy checkpoint, from the policy's
+    ``serve_*`` fields and the preset's context window."""
     return ModelConfig(
         name=name,
         location=SKYRL_POLICY_LOCATION,
         tokenizer=policy.tokenizer_uri,
         apply_chat_template=True,
-        resource_hint=ResourceHint(gpu={GPU_VARIANT: 1}),
+        resource_hint=ResourceHint(gpu={GPU_VARIANT: policy.serve_gpus}, memory=policy.serve_memory),
         serve=ServeConfig(
             tensor_parallel_size=1,
-            max_model_len=max_model_len,
+            data_parallel_size=policy.serve_data_parallel_size,
+            max_model_len=preset.request_window_tokens + preset.max_new_tokens,
             max_num_seqs=64,
+            vllm_extra_args=policy.serve_vllm_extra_args,
         ),
-        generation=GenerationConfig(max_gen_toks=preset.max_new_tokens),
+        generation=GenerationConfig(
+            max_gen_toks=preset.max_new_tokens,
+            extra_gen_kwargs=dict(policy.serve_gen_kwargs),
+        ),
     )
 
 
@@ -673,10 +684,7 @@ def build_arm(
             cluster=policy.cluster,
             cluster_config=cluster_config,
             cpu=16,
-            # The Snowball export streams ~134GB of bf16 shards through host
-            # buffers on load (per node, policy and engine alike); 128GB of
-            # host RAM OOM-killed the first smoke.
-            memory="512GB" if policy is SNOWBALL_POLICY else "128GB",
+            memory=policy.task_memory,
             disk="2TB",
             priority="interactive",
             # Fail fast: a broken config surfaces on the first attempt, and a
@@ -697,7 +705,7 @@ def build_arm(
         ),
         preset.evals,
         version=version or resolve_version(evaluation_base_name, None),
-        accelerator=f"{GPU_VARIANT}x{GPUS_PER_NODE if policy is SNOWBALL_POLICY else 1}",
+        accelerator=f"{GPU_VARIANT}x{policy.serve_gpus}",
         submission_cluster=policy.cluster,
         federated_cluster=policy.cluster,
     )
@@ -713,8 +721,8 @@ def build_arms(
 ) -> dict[str, CurriculumArm]:
     preset = SCALES[scale]
     pool = pool_step(POOL_ARTIFACT_NAME, version or resolve_version(POOL_ARTIFACT_NAME, None))
-    if policy is SNOWBALL_POLICY:
-        model = SNOWBALL_MODEL
+    if policy.adopted_model is not None:
+        model = policy.adopted_model
     else:
         model = model_step(version or resolve_version(MODEL_ARTIFACT_NAME, None))
     return {
