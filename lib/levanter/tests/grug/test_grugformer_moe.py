@@ -1403,6 +1403,10 @@ def test_loop_local_zeros_fills_exact_zeros(site: _LoopLocalZeroSite, tie: np.nd
     np.testing.assert_array_equal(np.asarray(filled), np.zeros((4, 3), dtype=np.float32))
 
 
+# The zero fill's traced minimum, as XLA names the opcode in optimized HLO.
+MINIMUM_OPCODE = "kMinimum"
+
+
 def _optimized_hlo_opcode_count(fill_fn, opcode_name: str) -> int:
     tie = jnp.asarray([1, 7, 0, 3], dtype=jnp.int32)
     executable = jax.jit(fill_fn).lower(tie).compile().runtime_executable()
@@ -1418,13 +1422,13 @@ def test_loop_local_zeros_is_not_a_foldable_constant():
     assert (
         _optimized_hlo_opcode_count(
             lambda tie: _loop_local_zeros(4, 3, jnp.float32, tie, site=_LoopLocalZeroSite.DISPATCH_OUTPUT),
-            "kMinimum",
+            MINIMUM_OPCODE,
         )
         == 1
     )
     assert (
         _optimized_hlo_opcode_count(
-            lambda tie: jnp.broadcast_to((jnp.minimum(tie[0], 5) * 0).astype(jnp.float32), (4, 3)), "kMinimum"
+            lambda tie: jnp.broadcast_to((jnp.minimum(tie[0], 5) * 0).astype(jnp.float32), (4, 3)), MINIMUM_OPCODE
         )
         == 0
     ), "the folding probe no longer folds, so this test can no longer detect a foldable fill"
@@ -1441,7 +1445,7 @@ def test_loop_local_zeros_sites_prevent_cse():
         fill = _loop_local_zeros(4, 3, jnp.float32, tie, site=_LoopLocalZeroSite.DISPATCH_OUTPUT)
         return fill, fill
 
-    assert _optimized_hlo_opcode_count(distinct_sites, "kMinimum") == 2
+    assert _optimized_hlo_opcode_count(distinct_sites, MINIMUM_OPCODE) == 2
     assert (
-        _optimized_hlo_opcode_count(repeated_site, "kMinimum") == 1
+        _optimized_hlo_opcode_count(repeated_site, MINIMUM_OPCODE) == 1
     ), "the CSE probe no longer merges repeated sites, so this test can no longer detect a site collision"
