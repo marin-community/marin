@@ -25,7 +25,7 @@ Changelog:
         from a pinned checkpoint via ``--initialize-from-checkpoint`` and writing only to its own tree.
         hero-ragged_a2a-ep-step54k forks hero-12d8b6f0-dee637 at step 54000 onto the ragged all-to-all
         expert-parallel transport.
-    2026-09-01 (#8818, PR #8833): decoupled weight decay on the attn_gate and router weights is on by
+    2026-09-02 (#8818, PR #8833): decoupled weight decay on the attn_gate and router weights is on by
         default (0.02, annealed linearly to 0 over training and read from the Adam step count so it
         resumes at the right step); pass ``--gate-router-weight-decay 0`` to opt out.
         hero-wd-gate-router-p02 forks the ragged-a2a run at step 55000 (see ``trigger_hero.sh``).
