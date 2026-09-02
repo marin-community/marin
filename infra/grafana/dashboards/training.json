@@ -1318,7 +1318,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "WITH telemetry AS (SELECT * FROM \"levanter.metrics\") SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, name AS series, AVG(value) AS value FROM telemetry WHERE name IN ('eval_loss', 'eval_macro_loss', 'eval_paloma_macro_loss') AND run_id IN (${run:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
+                "value": "WITH telemetry AS (SELECT * FROM \"levanter.metrics\") SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, name AS series, AVG(value) AS value FROM telemetry WHERE name IN ('eval_loss', 'eval_macro_loss', 'eval_paloma_macro_loss', 'eval_dropless_paloma_macro_loss') AND run_id IN (${run:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
               },
               {
                 "key": "from",
