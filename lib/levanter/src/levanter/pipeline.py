@@ -6,10 +6,11 @@
 from typing import TypeVar
 
 import jax
+import jax.numpy as jnp
 from jax import core
 
-
 BatchT = TypeVar("BatchT")
+type ArrayValue = jax.Array | core.Tracer
 
 
 def evenly_partition_layers(num_layers: int, num_stages: int) -> tuple[tuple[int, int], ...]:
@@ -32,27 +33,38 @@ def evenly_partition_layers(num_layers: int, num_stages: int) -> tuple[tuple[int
     return tuple(ranges)
 
 
-def split_batch_into_microbatches(batch: BatchT, num_microbatches: int) -> tuple[BatchT, ...]:
-    """Split every non-scalar array leaf along its leading batch dimension."""
+def reshape_array_into_microbatches(value: ArrayValue, num_microbatches: int) -> ArrayValue:
+    """Split an array's leading batch axis into microbatch and example axes."""
     if num_microbatches <= 0:
         raise ValueError(f"num_microbatches must be positive, got {num_microbatches}")
+    if value.ndim == 0:
+        return value
+    if value.shape[0] % num_microbatches != 0:
+        raise ValueError(f"batch axis size {value.shape[0]} must be divisible by num_microbatches={num_microbatches}")
+    microbatch_size = value.shape[0] // num_microbatches
+    return jnp.reshape(value, (num_microbatches, microbatch_size, *value.shape[1:]))
 
-    def split_leaf(value):
+
+def reshape_batch_into_microbatches(batch: BatchT, num_microbatches: int) -> BatchT:
+    """Reshape every non-scalar array leaf to lead with a microbatch axis."""
+
+    def reshape_leaf(value):
+        if not isinstance(value, jax.Array | core.Tracer):
+            return value
+        return reshape_array_into_microbatches(value, num_microbatches)
+
+    return jax.tree.map(reshape_leaf, batch)
+
+
+def split_batch_into_microbatches(batch: BatchT, num_microbatches: int) -> tuple[BatchT, ...]:
+    """Split every non-scalar array leaf along its leading batch dimension."""
+    reshaped = reshape_batch_into_microbatches(batch, num_microbatches)
+
+    def select_microbatch(value, index: int):
         if not isinstance(value, jax.Array | core.Tracer) or value.ndim == 0:
-            return tuple(value for _ in range(num_microbatches))
-        if value.shape[0] % num_microbatches != 0:
-            raise ValueError(
-                f"batch axis size {value.shape[0]} must be divisible by num_microbatches={num_microbatches}"
-            )
-        microbatch_size = value.shape[0] // num_microbatches
-        return tuple(
-            jax.lax.slice_in_dim(value, index * microbatch_size, (index + 1) * microbatch_size, axis=0)
-            for index in range(num_microbatches)
-        )
+            return value
+        return value[index]
 
-    split_leaves = jax.tree.map(split_leaf, batch)
-    is_split_leaf = lambda value: isinstance(value, tuple) and len(value) == num_microbatches
     return tuple(
-        jax.tree.map(lambda leaves: leaves[index], split_leaves, is_leaf=is_split_leaf)
-        for index in range(num_microbatches)
+        jax.tree.map(lambda value: select_microbatch(value, index), reshaped) for index in range(num_microbatches)
     )

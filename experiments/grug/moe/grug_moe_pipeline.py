@@ -483,12 +483,6 @@ def microbatched_staged_loss(
     return cross_entropy + router_loss
 
 
-def stacked_microbatches(batch: GrugLmExample, num_microbatches: int) -> GrugLmExample:
-    """Stack a batch on the leading temporal axis consumed by ``jaxpp.treduce``."""
-    microbatches = split_batch_into_microbatches(batch, num_microbatches)
-    return jax.tree.map(lambda *values: jnp.stack(values), *microbatches)
-
-
 def _stack_router_metrics(block_metrics: list[dict[str, jax.Array]]) -> dict[str, jax.Array]:
     keys = (
         "routing_entropy",
@@ -582,7 +576,7 @@ def make_automatic_pipeline_step(
 
     ``static_stages`` and ``sample_state`` must come from the same automatic
     state initializer. ``sample_batches`` must have the leading microbatch axis
-    produced by :func:`stacked_microbatches`.
+    produced by :func:`levanter.pipeline.reshape_batch_into_microbatches`.
 
     """
     pp, _ = _jaxpp_modules()

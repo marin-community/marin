@@ -166,6 +166,7 @@ def _run_benchmark(config: BenchmarkConfig) -> None:
     from jax.sharding import PartitionSpec as P  # noqa: PLC0415
     from jaxpp.array import MpmdArray  # noqa: PLC0415
     from levanter.data.text.examples import GrugLmExample  # noqa: PLC0415
+    from levanter.pipeline import reshape_batch_into_microbatches  # noqa: PLC0415
     from levanter.utils.flop_utils import lm_flops_per_token  # noqa: PLC0415
 
     from experiments.grug.moe.grug_moe_pipeline import (  # noqa: PLC0415
@@ -176,7 +177,6 @@ def _run_benchmark(config: BenchmarkConfig) -> None:
         make_mpmd_automatic_pipeline_state,
         make_pipeline_mesh,
         prepare_automatic_mpmd_step,
-        stacked_microbatches,
     )
     from experiments.grug.moe.heuristic import MoeHeuristic  # noqa: PLC0415
     from experiments.grug.moe.model import BATCH_AXES, Transformer  # noqa: PLC0415
@@ -273,7 +273,7 @@ def _run_benchmark(config: BenchmarkConfig) -> None:
             loss_weight=jax.device_put(host_loss_weight, batch_sharding),
         )
         loss_denominator = jnp.sum(batch.loss_weight.astype(jnp.float32))
-        batches = stacked_microbatches(batch, config.microbatches)
+        batches = reshape_batch_into_microbatches(batch, config.microbatches)
         if config.schedule == PipelineSchedule.DUALPIPE_V:
             stage_to_mpmd_index = automatic_stage_to_mpmd_indices(pipeline_config, config.schedule.automatic_schedule)
         else:

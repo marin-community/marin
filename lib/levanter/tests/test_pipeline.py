@@ -13,6 +13,7 @@ from jax.tree_util import register_dataclass
 
 from levanter.pipeline import (
     evenly_partition_layers,
+    reshape_batch_into_microbatches,
     split_batch_into_microbatches,
 )
 
@@ -27,6 +28,21 @@ class _Batch:
     tokens: jnp.ndarray
     weights: jnp.ndarray
     label: str
+
+
+def test_reshape_batch_into_microbatches_adds_leading_axis():
+    batch = _Batch(
+        tokens=jnp.arange(24).reshape(6, 4),
+        weights=jnp.arange(6),
+        label="train",
+    )
+
+    reshaped = reshape_batch_into_microbatches(batch, 3)
+
+    assert reshaped.tokens.shape == (3, 2, 4)
+    assert reshaped.weights.shape == (3, 2)
+    assert reshaped.label == "train"
+    np.testing.assert_array_equal(reshaped.tokens[1], np.arange(8, 16).reshape(2, 4))
 
 
 def test_split_batch_into_microbatches_preserves_pytree_and_static_leaves():
