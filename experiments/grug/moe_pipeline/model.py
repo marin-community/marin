@@ -19,7 +19,7 @@ import jax.scipy as jsp
 from einops import rearrange
 from haliax import Axis
 from haliax.jax_utils import named_call
-from jax import core, random
+from jax import random
 
 try:
     from jax.shard_map import shard_map
@@ -27,17 +27,14 @@ except ModuleNotFoundError as error:
     if error.name != "jax.shard_map":
         raise
     from jax.experimental.shard_map import shard_map
-from jax.sharding import NamedSharding, get_abstract_mesh, reshard
 from jax.sharding import PartitionSpec as P
+from jax.sharding import get_abstract_mesh, reshard
 from jaxtyping import Array, Float, Int, PRNGKeyArray
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.grug.attention import (
     AttentionMask,
     GrugAttentionImplementation,
     RotaryConfig,
-    align_kv_heads,
-    apply_rotary_embedding,
-    attention,
 )
 from levanter.grug.grug_moe import (
     MOE_REMAT_SAVE_NAMES,
@@ -47,12 +44,17 @@ from levanter.grug.grug_moe import (
     resolve_moe_implementation,
 )
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
-from levanter.grug.sharding import Pembed_vocab, Plm_head, unshard
+from levanter.grug.sharding import Pembed_vocab, Plm_head
 from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 from transformers import PretrainedConfig as HfConfig
 
-_GATED_NORM_RANK = 128
+from experiments.grug.moe.model import CausalSelfAttention as CausalSelfAttention
+from experiments.grug.moe.model import DenseMLP as DenseMLP
+from experiments.grug.moe.model import GatedNorm as GatedNorm
+from experiments.grug.moe.model import GrugMoeHfConfig as GrugMoeHfConfig
+from experiments.grug.moe.model import RMSNorm as RMSNorm
+
 _ROUTING_RENORM_SUM = 2.5
 GRUG_MOE_MODEL_TYPE = "grug_moe"
 GRUG_MOE_ARCHITECTURE = "GrugMoeForCausalLM"
@@ -80,23 +82,8 @@ def _batch_spec() -> P:
     return P(BATCH_AXES)
 
 
-def _batch_reshard(x: jax.Array) -> jax.Array:
-    return reshard(x, _batch_spec())
-
-
-def _partition_spec_of(x: jax.Array) -> P | None:
-    sharding = jax.typeof(x).sharding if isinstance(x, core.Tracer) else x.sharding
-    if isinstance(sharding, NamedSharding):
-        return sharding.spec
-    return None
-
-
 def _layer_attention_masks(mask: AttentionMask, *, sliding_window: int) -> tuple[AttentionMask, AttentionMask]:
     return mask.with_sliding_window(sliding_window // 2), mask.with_sliding_window(sliding_window)
-
-
-class GrugMoeHfConfig(HfConfig):
-    model_type = GRUG_MOE_MODEL_TYPE
 
 
 def _hf_config_attr(config: HfConfig, names: tuple[str, ...], default: Any = None) -> Any:
@@ -258,192 +245,6 @@ class GrugModelConfig:
         if config_overrides is not None:
             config.update(config_overrides)
         return GrugMoeHfConfig(**config)
-
-
-def rms_norm(x: jax.Array, eps: float = 1e-6) -> jax.Array:
-    """Non-parametric RMS norm over the last dimension."""
-    variance = jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1, keepdims=True)
-    return (x * jax.lax.rsqrt(variance + eps)).astype(x.dtype)
-
-
-class CausalSelfAttention(eqx.Module):
-    w_q: Float[Array, "D NH"]
-    w_k: Float[Array, "D MH"]
-    w_v: Float[Array, "D MH"]
-    w_o: Float[Array, "NH D"]
-    attn_gate: Float[Array, "D N"]
-    cfg: GrugModelConfig = eqx.field(static=True)
-
-    @staticmethod
-    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "CausalSelfAttention":
-        k_q, k_k, k_v, k_o = random.split(key, 4)
-        d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, cfg.inferred_head_dim
-        return CausalSelfAttention(
-            w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), P("data", "model")),
-            w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), P("data", "model")),
-            w_v=reshard(_init_weight(k_v, (d, m * h), cfg.initializer_std), P("data", "model")),
-            w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), P("model", "data")),
-            attn_gate=reshard(jnp.zeros((d, n)), P(None, None)),
-            cfg=cfg,
-        )
-
-    @named_call
-    def __call__(
-        self,
-        x: Float[Array, "B S D"],
-        mask: AttentionMask | jax.Array,
-        use_pko: bool = False,
-        disable_rope: bool = False,
-    ) -> Float[Array, "B S D"]:
-        head_dim = self.cfg.inferred_head_dim
-        seq_len = x.shape[1]
-        batch_spec = _batch_spec()
-
-        q = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_q), "... (n d) -> ... n d", d=head_dim)
-        k = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_k), "... (m d) -> ... m d", d=head_dim)
-        v = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_v), "... (m d) -> ... m d", d=head_dim)
-
-        # Shift the second half of K's head_dim back by one position so the
-        # query at position i sees K[i] on head_dim[:half] but K[i-1] on
-        # head_dim[half:]. Zero the shifted half at document starts so the
-        # cross-half look-back does not leak across docs. Runs before the
-        # rms_norm on Q/K below.
-        if use_pko:
-            half = head_dim // 2
-            k_stationary = k[..., half:]
-            k_shifted = jnp.concatenate([k_stationary[:, :1, :, :], k_stationary[:, :-1, :, :]], axis=1)
-            segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
-            if segment_ids is None:
-                # No segment info (raw-mask or unsegmented eval path): only position 0 is a doc start.
-                is_doc_start_seq = jnp.zeros((seq_len,), dtype=bool).at[0].set(True)
-                is_doc_start = jnp.broadcast_to(is_doc_start_seq, k_shifted.shape[:2])
-            else:
-                q_seg = segment_ids[0]
-                if q_seg.ndim == 1:
-                    is_doc_start_seq = jnp.concatenate([jnp.ones((1,), dtype=bool), q_seg[1:] != q_seg[:-1]])
-                    is_doc_start = jnp.broadcast_to(is_doc_start_seq, k_shifted.shape[:2])
-                else:
-                    is_doc_start = jnp.concatenate(
-                        [jnp.ones_like(q_seg[:, :1], dtype=bool), q_seg[:, 1:] != q_seg[:, :-1]],
-                        axis=1,
-                    )
-            k_shifted = jnp.where(is_doc_start[..., None, None], jnp.zeros_like(k_shifted), k_shifted)
-            k = jnp.concatenate([k[..., :half], k_shifted], axis=-1)
-
-        q = rms_norm(q)
-        k = rms_norm(k)
-        # Half-RoPE: apply rotary embedding only to first half of Q/K head_dim
-        # (second half is rope-free on every layer). ``disable_rope`` skips
-        # the RoPE step entirely on this layer — used to opt long layers out
-        # of rotary embedding when ``cfg.disable_long_rope`` is set.
-        if not disable_rope:
-            half = head_dim // 2
-            q_rot, k_rot = apply_rotary_embedding(
-                q[..., :half], k[..., :half], seq_len=seq_len, head_dim=half, rope=self.cfg.rope
-            )
-            q = jnp.concatenate([q_rot, q[..., half:]], axis=-1)
-            k = jnp.concatenate([k_rot, k[..., half:]], axis=-1)
-        q = q * self.cfg.qk_mult
-        attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
-        aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
-        # GPU XSA with GQA can give attn_out a backend-specific head sharding;
-        # match v to that dynamic sharding before the per-head projection math.
-        aligned_v = reshard(aligned_v, _partition_spec_of(attn_out) or P(BATCH_AXES, None, None, "model"))
-        # Exclusive Self Attention: subtract the component of yᵢ parallel to vᵢ.
-        # zᵢ = yᵢ - (yᵢᵀvᵢ / ‖vᵢ‖²) vᵢ, per head.
-        dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
-        v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
-        attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
-        gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
-        attn_out = gate * attn_out
-        # Merge heads into hidden dim while keeping model-axis sharding for w_o.
-        attn_out = jnp.reshape(
-            attn_out,
-            (*attn_out.shape[:-2], attn_out.shape[-2] * attn_out.shape[-1]),
-            out_sharding=P(BATCH_AXES, None, "model"),
-        )
-        return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec)
-
-
-class RMSNorm(eqx.Module):
-    weight: jax.Array
-    eps: float = eqx.field(static=True)
-
-    @staticmethod
-    def init(dim: int, eps: float) -> "RMSNorm":
-        return RMSNorm(weight=jnp.ones((dim,), dtype=jnp.float32), eps=eps)
-
-    @named_call
-    def __call__(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
-        weight = unshard(self.weight)
-        dtype = x.dtype
-        x = x.astype(jnp.float32)
-        variance = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
-        normed = x * jax.lax.rsqrt(variance + self.eps)
-        return (normed * weight).astype(dtype)
-
-
-class GatedNorm(eqx.Module):
-    """Learnable per-dimension gating. Compensates for AdamH's bounded activation norms.
-    See https://arxiv.org/abs/2601.22966v1"""
-
-    w_down: jax.Array
-    w_up: jax.Array
-
-    @staticmethod
-    def init(hidden_dim: int, initializer_std: float, *, key: PRNGKeyArray) -> "GatedNorm":
-        k_down, k_up = random.split(key)
-        return GatedNorm(
-            w_down=reshard(_init_weight(k_down, (hidden_dim, _GATED_NORM_RANK), initializer_std), P(None, None)),
-            w_up=reshard(_init_weight(k_up, (_GATED_NORM_RANK, hidden_dim), initializer_std), P(None, None)),
-        )
-
-    @named_call
-    def __call__(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
-        gate_hidden = jnp.einsum("...d,dr->...r", x, self.w_down)
-        gate_hidden = jax.nn.silu(gate_hidden)
-        gate = jax.nn.sigmoid(jnp.einsum("...r,rd->...d", gate_hidden, self.w_up))
-        return x * gate.astype(x.dtype)
-
-
-class DenseMLP(eqx.Module):
-    w_gate: jax.Array
-    w_up: jax.Array
-    w_down: jax.Array
-
-    @staticmethod
-    def init(hidden_dim: int, intermediate_dim: int, initializer_std: float, *, key: PRNGKeyArray) -> "DenseMLP":
-        k_gate, k_up, k_down = random.split(key, 3)
-        return DenseMLP(
-            w_gate=reshard(_init_weight(k_gate, (hidden_dim, intermediate_dim), initializer_std), P("data", "model")),
-            w_up=reshard(_init_weight(k_up, (hidden_dim, intermediate_dim), initializer_std), P("data", "model")),
-            w_down=reshard(_init_weight(k_down, (intermediate_dim, hidden_dim), initializer_std), P("model", "data")),
-        )
-
-    @named_call
-    def __call__(
-        self,
-        x: Float[Array, "B S D"],
-        *,
-        activation: MoeActivation = ActivationFunctionEnum.silu,
-    ) -> Float[Array, "B S D"]:
-        if isinstance(activation, ActivationFunctionEnum):
-            activation_fn = activation.to_jax_fn()
-        else:
-            activation_fn = activation
-
-        b, s, _ = x.shape
-        x_flat = rearrange(x, "b s d -> (b s) d")
-        gate = jnp.einsum("td,dm->tm", x_flat, self.w_gate)
-        up = jnp.einsum("td,dm->tm", x_flat, self.w_up)
-        out_flat = jnp.einsum("tm,md->td", activation_fn(gate) * up, self.w_down, out_sharding=_batch_spec())
-        # Reshard after the reshape so the shared-expert output carries the same
-        # canonical batch sharding as the routed MoE output (MoEMLP reshards its
-        # routed result identically). Splitting the fused
-        # batch axes token dimension back into (b, s) otherwise
-        # leaks the `expert` mesh axis onto the seq dim, so the shared+routed
-        # residual add fails with a ShardingTypeError on a multi-node mesh.
-        return _batch_reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s))
 
 
 def _routing_stats(
