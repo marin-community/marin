@@ -12,35 +12,13 @@ from jax.sharding import PartitionSpec as P
 from jax.tree_util import register_dataclass
 
 from levanter.pipeline import (
-    PipelineDirection,
-    PipelineTask,
     evenly_partition_layers,
     split_batch_into_microbatches,
-    standard_1f1b_stage_schedule,
 )
 
 
 def test_evenly_partition_layers_returns_contiguous_balanced_ranges():
     assert evenly_partition_layers(10, 4) == ((0, 3), (3, 6), (6, 8), (8, 10))
-
-
-def test_standard_1f1b_schedule_warms_up_then_alternates_then_drains():
-    schedule = standard_1f1b_stage_schedule(num_stages=4, num_microbatches=6, stage_index=2)
-
-    assert schedule == (
-        PipelineTask(PipelineDirection.FORWARD, 0),
-        PipelineTask(PipelineDirection.FORWARD, 1),
-        PipelineTask(PipelineDirection.BACKWARD, 0),
-        PipelineTask(PipelineDirection.FORWARD, 2),
-        PipelineTask(PipelineDirection.BACKWARD, 1),
-        PipelineTask(PipelineDirection.FORWARD, 3),
-        PipelineTask(PipelineDirection.BACKWARD, 2),
-        PipelineTask(PipelineDirection.FORWARD, 4),
-        PipelineTask(PipelineDirection.BACKWARD, 3),
-        PipelineTask(PipelineDirection.FORWARD, 5),
-        PipelineTask(PipelineDirection.BACKWARD, 4),
-        PipelineTask(PipelineDirection.BACKWARD, 5),
-    )
 
 
 @register_dataclass

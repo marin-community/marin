@@ -16,24 +16,18 @@ from typing import cast
 
 
 class PipelineSchedule(StrEnum):
-    ONE_F_ONE_B = "1f1b"
-    ZERO_BUBBLE = "zero_bubble"
-    AUTOMATIC_ZERO_BUBBLE = "automatic_zero_bubble"
-    AUTOMATIC_DUALPIPE_V = "automatic_dualpipe_v"
-
-    @property
-    def is_automatic(self) -> bool:
-        return self in {self.AUTOMATIC_ZERO_BUBBLE, self.AUTOMATIC_DUALPIPE_V}
+    ZERO_BUBBLE = "automatic_zero_bubble"
+    DUALPIPE_V = "automatic_dualpipe_v"
 
     @property
     def automatic_schedule(self):
         from experiments.grug.moe.grug_moe_pipeline import AutomaticPipelineSchedule  # noqa: PLC0415
 
-        if self == self.AUTOMATIC_DUALPIPE_V:
+        if self == self.DUALPIPE_V:
             return AutomaticPipelineSchedule.DUALPIPE_V
-        if self == self.AUTOMATIC_ZERO_BUBBLE:
+        if self == self.ZERO_BUBBLE:
             return AutomaticPipelineSchedule.ZERO_BUBBLE
-        raise ValueError(f"{self.value} is not an automatic pipeline schedule")
+        raise ValueError(f"unknown pipeline schedule: {self.value}")
 
 
 @dataclass(frozen=True)
@@ -135,7 +129,7 @@ def _resolve_benchmark_config(environ: Mapping[str, str]) -> BenchmarkConfig:
         remat_mode=environ.get("PIPELINE_REMAT", "recompute_all"),
         attention_implementation=environ.get("PIPELINE_ATTENTION", "gpu_fa4_cute"),
         moe_implementation=environ.get("PIPELINE_MOE", "ring"),
-        schedule=PipelineSchedule(environ.get("PIPELINE_SCHEDULE", PipelineSchedule.ONE_F_ONE_B)),
+        schedule=PipelineSchedule(environ.get("PIPELINE_SCHEDULE", PipelineSchedule.ZERO_BUBBLE)),
     )
 
 
@@ -178,16 +172,10 @@ def _run_benchmark(config: BenchmarkConfig) -> None:
         TRAIN_LOSS_KEY,
         GrugMoePipelineConfig,
         automatic_stage_to_mpmd_indices,
-        batches_for_pipeline,
         make_automatic_pipeline_step,
-        make_explicit_1f1b_step,
-        make_explicit_zero_bubble_step,
         make_mpmd_automatic_pipeline_state,
-        make_mpmd_pipeline_state,
         make_pipeline_mesh,
-        place_pipeline_batches,
         prepare_automatic_mpmd_step,
-        prepare_explicit_step,
         stacked_microbatches,
     )
     from experiments.grug.moe.heuristic import MoeHeuristic  # noqa: PLC0415
@@ -285,38 +273,20 @@ def _run_benchmark(config: BenchmarkConfig) -> None:
             loss_weight=jax.device_put(host_loss_weight, batch_sharding),
         )
         loss_denominator = jnp.sum(batch.loss_weight.astype(jnp.float32))
-        if config.schedule.is_automatic:
-            batches = stacked_microbatches(batch, config.microbatches)
-            if config.schedule == PipelineSchedule.AUTOMATIC_DUALPIPE_V:
-                stage_to_mpmd_index = automatic_stage_to_mpmd_indices(
-                    pipeline_config, config.schedule.automatic_schedule
-                )
-            else:
-                stage_to_mpmd_index = None
-            state, static_stages = make_mpmd_automatic_pipeline_state(
-                model,
-                optimizer,
-                mpmd_mesh,
-                num_stages=config.stages,
-                layer_counts=config.layer_counts,
-                stage_to_mpmd_index=stage_to_mpmd_index,
-                memory_threshold=config.memory_threshold,
-            )
+        batches = stacked_microbatches(batch, config.microbatches)
+        if config.schedule == PipelineSchedule.DUALPIPE_V:
+            stage_to_mpmd_index = automatic_stage_to_mpmd_indices(pipeline_config, config.schedule.automatic_schedule)
         else:
-            batches = batches_for_pipeline(batch, pipeline_config)
-            state = make_mpmd_pipeline_state(
-                model,
-                optimizer,
-                mpmd_mesh,
-                num_stages=config.stages,
-                layer_counts=config.layer_counts,
-                memory_threshold=config.memory_threshold,
-            )
-            batches = place_pipeline_batches(
-                mpmd_mesh,
-                batches,
-                memory_threshold=config.memory_threshold,
-            )
+            stage_to_mpmd_index = None
+        state, static_stages = make_mpmd_automatic_pipeline_state(
+            model,
+            optimizer,
+            mpmd_mesh,
+            num_stages=config.stages,
+            layer_counts=config.layer_counts,
+            stage_to_mpmd_index=stage_to_mpmd_index,
+            memory_threshold=config.memory_threshold,
+        )
     jax.block_until_ready((state, batches, loss_denominator))
     _log(
         "PIPELINE_INIT",
@@ -325,53 +295,34 @@ def _run_benchmark(config: BenchmarkConfig) -> None:
     )
 
     build_started = time.monotonic()
-    if config.schedule.is_automatic:
-        step = make_automatic_pipeline_step(
-            optimizer,
-            mp_policy,
-            static_stages,
-            state,
-            batches,
-            config=pipeline_config,
-            mpmd_mesh=mpmd_mesh,
-            schedule_name=config.schedule.automatic_schedule,
-        )
-    else:
-        if config.schedule == PipelineSchedule.ONE_F_ONE_B:
-            make_step = make_explicit_1f1b_step
-        elif config.schedule == PipelineSchedule.ZERO_BUBBLE:
-            make_step = make_explicit_zero_bubble_step
-        else:
-            raise ValueError(f"unknown pipeline schedule: {config.schedule}")
-        step = make_step(
-            optimizer,
-            mp_policy,
-            config=pipeline_config,
-            mpmd_mesh=mpmd_mesh,
-            sample_state=state,
-            sample_batches=batches,
-        )
+    step = make_automatic_pipeline_step(
+        optimizer,
+        mp_policy,
+        static_stages,
+        state,
+        batches,
+        config=pipeline_config,
+        mpmd_mesh=mpmd_mesh,
+        schedule_name=config.schedule.automatic_schedule,
+    )
     _log(
         "PIPELINE_BUILD",
         process_index=jax.process_index(),
         elapsed_seconds=time.monotonic() - build_started,
     )
     lower_started = time.monotonic()
-    if config.schedule.is_automatic:
-        prepared = prepare_automatic_mpmd_step(
-            step,
-            state,
-            batches,
-            loss_denominator,
-            mpmd_mesh,
-            memory_threshold=config.memory_threshold,
-        )
-        step = prepared.step
-        state = prepared.state
-        batches = prepared.batches
-        loss_denominator = prepared.loss_denominator
-    else:
-        step = prepare_explicit_step(step, state, batches, mpmd_mesh)
+    prepared = prepare_automatic_mpmd_step(
+        step,
+        state,
+        batches,
+        loss_denominator,
+        mpmd_mesh,
+        memory_threshold=config.memory_threshold,
+    )
+    step = prepared.step
+    state = prepared.state
+    batches = prepared.batches
+    loss_denominator = prepared.loss_denominator
     _log(
         "PIPELINE_LOWER",
         process_index=jax.process_index(),
@@ -402,10 +353,7 @@ def _run_benchmark(config: BenchmarkConfig) -> None:
     loss = None
     for step_index in range(config.steps):
         started = time.monotonic()
-        if config.schedule.is_automatic:
-            state, metrics = step(state, batches, loss_denominator)
-        else:
-            state, metrics = step(state, batches)
+        state, metrics = step(state, batches, loss_denominator)
         jax.block_until_ready((state, metrics))
         elapsed = time.monotonic() - started
         step_times.append(elapsed)

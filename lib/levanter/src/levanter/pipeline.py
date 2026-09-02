@@ -1,10 +1,8 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Small, backend-independent building blocks for explicit pipeline parallelism."""
+"""Small, backend-independent building blocks for pipeline parallelism."""
 
-from dataclasses import dataclass
-from enum import StrEnum
 from typing import TypeVar
 
 import jax
@@ -12,17 +10,6 @@ from jax import core
 
 
 BatchT = TypeVar("BatchT")
-
-
-class PipelineDirection(StrEnum):
-    FORWARD = "forward"
-    BACKWARD = "backward"
-
-
-@dataclass(frozen=True)
-class PipelineTask:
-    direction: PipelineDirection
-    microbatch: int
 
 
 def evenly_partition_layers(num_layers: int, num_stages: int) -> tuple[tuple[int, int], ...]:
@@ -43,32 +30,6 @@ def evenly_partition_layers(num_layers: int, num_stages: int) -> tuple[tuple[int
         ranges.append((start, end))
         start = end
     return tuple(ranges)
-
-
-def standard_1f1b_stage_schedule(
-    *,
-    num_stages: int,
-    num_microbatches: int,
-    stage_index: int,
-) -> tuple[PipelineTask, ...]:
-    """Return the local task order for the standard warmup/1F1B/drain schedule."""
-    if num_stages <= 0:
-        raise ValueError(f"num_stages must be positive, got {num_stages}")
-    if num_microbatches <= 0:
-        raise ValueError(f"num_microbatches must be positive, got {num_microbatches}")
-    if not 0 <= stage_index < num_stages:
-        raise ValueError(f"stage_index must be in [0, {num_stages}), got {stage_index}")
-
-    warmup = min(num_stages - stage_index, num_microbatches)
-    tasks = [PipelineTask(PipelineDirection.FORWARD, microbatch) for microbatch in range(warmup)]
-    for microbatch in range(warmup, num_microbatches):
-        tasks.append(PipelineTask(PipelineDirection.BACKWARD, microbatch - warmup))
-        tasks.append(PipelineTask(PipelineDirection.FORWARD, microbatch))
-    tasks.extend(
-        PipelineTask(PipelineDirection.BACKWARD, microbatch)
-        for microbatch in range(num_microbatches - warmup, num_microbatches)
-    )
-    return tuple(tasks)
 
 
 def split_batch_into_microbatches(batch: BatchT, num_microbatches: int) -> tuple[BatchT, ...]:

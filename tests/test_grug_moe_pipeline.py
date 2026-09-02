@@ -5,11 +5,9 @@ import dataclasses
 
 import jax
 import jax.numpy as jnp
-import jmp
 import numpy as np
 import pytest
-from jax.sharding import AxisType, Mesh, NamedSharding
-from jax.sharding import PartitionSpec as P
+from jax.sharding import AxisType, Mesh
 from levanter.data.text.examples import GrugLmExample
 
 from experiments.grug.moe.benchmark_grug_moe_pipeline import _validate_local_mesh
@@ -17,17 +15,13 @@ from experiments.grug.moe.grug_moe_pipeline import (
     AutomaticPipelineSchedule,
     GrugMoePipelineConfig,
     automatic_stage_to_mpmd_indices,
-    batches_for_pipeline,
     merge_stages,
     microbatched_staged_loss,
     split_automatic_stages,
     split_transformer,
-    stage_forward_with_pullback,
-    stage_pullback_input_gradient,
-    stage_pullback_weight_gradient,
     staged_loss,
 )
-from experiments.grug.moe.model import BATCH_AXES, GrugModelConfig, Transformer
+from experiments.grug.moe.model import GrugModelConfig, Transformer
 
 
 def _tiny_model(*, num_layers: int = 2) -> tuple[Mesh, Transformer]:
@@ -102,56 +96,6 @@ def test_staged_loss_and_gradients_match_the_unsplit_model():
 
     np.testing.assert_allclose(pipeline_value, ordinary_value, rtol=1e-5, atol=1e-5)
     _assert_trees_close(pipeline_grads, ordinary_grads)
-
-
-def test_reusable_stage_pullback_matches_combined_backward():
-    mesh, model = _tiny_model(num_layers=4)
-    stage = split_transformer(model, 2)[1]
-    batch = _batch()
-    activation_sharding = NamedSharding(mesh, P(BATCH_AXES, None, None))
-    hidden = jax.device_put(
-        jax.random.normal(jax.random.PRNGKey(1), (2, 4, model.config.hidden_dim)),
-        activation_sharding,
-    )
-    hidden_cotangent = jax.device_put(
-        jax.random.normal(jax.random.PRNGKey(2), hidden.shape),
-        activation_sharding,
-    )
-    qb_betas = jnp.zeros((len(stage.blocks), model.config.num_experts), dtype=jnp.float32)
-    mp_policy = jmp.get_policy("f32")
-
-    def projected_loss(params, stage_hidden):
-        params = mp_policy.cast_to_compute(params)
-        output, metrics = params.run_blocks(stage_hidden, batch.attn_mask)
-        activation_term = jnp.sum(output.astype(jnp.float32) * hidden_cotangent.astype(jnp.float32))
-        return activation_term + params.local_router_loss(metrics)
-
-    with jax.set_mesh(mesh):
-        expected_grads, expected_input_gradient = jax.grad(projected_loss, argnums=(0, 1))(stage, hidden)
-        forward_result = stage_forward_with_pullback(
-            stage,
-            qb_betas,
-            hidden,
-            batch,
-            mp_policy,
-            router_loss_scale=1.0,
-        )
-        input_gradient = jax.jit(stage_pullback_input_gradient)(forward_result.pullback, hidden_cotangent)
-        grads = jax.jit(stage_pullback_weight_gradient)(forward_result.pullback, hidden_cotangent)
-
-        np.testing.assert_allclose(input_gradient, expected_input_gradient, rtol=1e-5, atol=1e-5)
-        _assert_trees_close(grads, expected_grads)
-
-
-def test_pipeline_accepts_fewer_microbatches_than_stages():
-    config = GrugMoePipelineConfig(stages=2, microbatches=1)
-
-    batches = batches_for_pipeline(_batch(), config)
-
-    assert len(batches) == 1
-    assert len(batches[0]) == 2
-    assert batches[0][0].tokens is not batches[0][1].tokens
-    np.testing.assert_array_equal(batches[0][0].tokens, batches[0][1].tokens)
 
 
 def test_dualpipe_v_maps_two_logical_stages_to_each_physical_rank():
