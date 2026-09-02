@@ -419,6 +419,8 @@ impl Catalog {
         &self,
         segments: &[SegmentDescriptor],
         table_spec_version: u64,
+        // One or more source identities this checkpoint covers, separator-joined
+        // by the caller; recovery splits them to rebuild the covered set.
         migration_source_id: &str,
         migration_source_rows: i64,
     ) -> Result<TableRevision, StatsError> {

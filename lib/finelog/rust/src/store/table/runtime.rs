@@ -131,6 +131,7 @@ impl TableRuntime {
         maintenance_wake: Arc<Notify>,
         controller: Arc<TableController>,
         storage_policy: StoragePolicy,
+        compaction_config: CompactionConfig,
     ) -> Result<Arc<TableRuntime>, StatsError> {
         let startup_started = Instant::now();
         let format = SegmentFormat::resolve(schema)?;
@@ -209,7 +210,7 @@ impl TableRuntime {
             controller,
             policy: Mutex::new(policy),
             storage_policy: Mutex::new(storage_policy),
-            compaction_config: CompactionConfig::default(),
+            compaction_config,
             flush_lock: Mutex::new(()),
             object_flush_lock: tokio::sync::Mutex::new(()),
             maint_lock: tokio::sync::Mutex::new(()),

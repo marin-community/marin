@@ -42,8 +42,13 @@ use crate::store::table::segment_view::SegmentView;
 use crate::store::table_state::{SegmentDescriptor, TableRevision};
 use crate::store::types::{segment_to_row, LocalSegment, SegmentLocation, SegmentRow};
 
-/// Source objects rewritten per maintenance tick while a transition is active.
-const SEGMENTS_PER_TICK: usize = 4;
+/// Floor for the batch's compressed-input byte cap; the working cap is the
+/// larger of this and a quarter of the merge's decoded-bytes budget, so batch
+/// assembly does not localize and hash far more than one job can consume.
+const MIN_BATCH_SOURCE_BYTES: i64 = 64 << 20;
+
+/// Separator between the source identities one checkpointed output covers.
+const SOURCE_ID_SEPARATOR: char = '\n';
 
 /// Directory fan-out for a rewrite's staged partition outputs. The uploaded
 /// objects are content-addressed, so this only keeps one source's staged files
@@ -112,6 +117,9 @@ pub struct SpecMigration<'a> {
     /// concurrent flush would commit against, so the two never overlap.
     pub flush_gate: &'a tokio::sync::Mutex<()>,
     pub max_merge_arrow_bytes: i64,
+    /// Most sources one backfill batch coalesces
+    /// (`CompactionConfig::migration_batch_sources`).
+    pub migration_batch_sources: usize,
     /// How this table's transition is failing, carried across ticks so a
     /// permanently stuck transition becomes visible.
     pub blocked: &'a std::sync::Mutex<MigrationBlock>,
@@ -271,10 +279,11 @@ async fn backfill(
         .map(|record| (record.path.clone(), record))
         .collect();
     let rows = migration.catalog.list_segments(table)?;
-    let mut covered: HashSet<_> = object_records
+    let covered: HashSet<_> = object_records
         .values()
         .filter(|record| record.table_spec_version == to_version && record.migration_backfill)
-        .filter_map(|record| record.migration_source_id.clone())
+        .filter_map(|record| record.migration_source_id.as_deref())
+        .flat_map(|ids| ids.split(SOURCE_ID_SEPARATOR).map(str::to_string))
         .collect();
     let mut sources: Vec<_> = rows
         .iter()
@@ -291,10 +300,12 @@ async fn backfill(
         .as_ref()
         .and_then(|spec| spec.source_layout.as_option())
         .cloned();
-    let mut processed = 0;
+    let batch_byte_cap = MIN_BATCH_SOURCE_BYTES.max(migration.max_merge_arrow_bytes / 4);
+    let mut batch: Vec<BatchSource> = Vec::new();
+    let mut batch_bytes: i64 = 0;
     let mut unexamined = false;
     for row in &sources {
-        if processed >= SEGMENTS_PER_TICK {
+        if batch.len() >= migration.migration_batch_sources || batch_bytes >= batch_byte_cap {
             unexamined = true;
             break;
         }
@@ -316,21 +327,30 @@ async fn backfill(
         if covered.contains(&source_id) {
             continue;
         }
+        batch_bytes += row.byte_size;
+        batch.push(BatchSource {
+            row: row.clone(),
+            localized,
+            source_id,
+        });
+    }
+    if !batch.is_empty() {
         let staging = StagingDir::create(migration.table_dir)?;
-        let outcome = rewrite_source(
+        let outcome = rewrite_batch(
             migration,
             &staging,
-            row,
-            &localized,
+            &batch,
             target_layout.as_ref(),
             to_version,
-            &source_id,
         )
         .await;
         drop(staging);
-        outcome?;
-        covered.insert(source_id);
-        processed += 1;
+        let consumed = outcome?;
+        if consumed < batch.len() {
+            // The merge's decoded-bytes budget ended the job early; the
+            // remainder is still unmigrated.
+            unexamined = true;
+        }
     }
 
     migration.catalog.refresh_migration_rows_total(table)?;
@@ -355,28 +375,52 @@ async fn backfill(
     Ok(true)
 }
 
-/// Rewrite the segment `row`, localized at `localized`, into `target_layout` at
-/// version `to_version`, and checkpoint the result against `source_id`.
+/// One localized, identity-hashed, uncovered source awaiting rewrite.
+struct BatchSource {
+    row: SegmentRow,
+    localized: PathBuf,
+    source_id: String,
+}
+
+/// Rewrite `batch` into `target_layout` at version `to_version` as one
+/// multi-input job, and checkpoint every consumed source in one commit.
 ///
-/// On success the rewritten objects are committed and the source is recorded as
-/// migrated; the migration will not revisit it. An error leaves the source
+/// Returns how many of the batch's sources the job consumed — the executor
+/// takes the longest input prefix fitting its decoded-bytes budget and leaves
+/// the rest unmigrated. On success the rewritten objects are committed and the
+/// consumed sources are recorded as migrated; an error leaves every source
 /// unmigrated and any uploaded outputs unreferenced.
-async fn rewrite_source(
+async fn rewrite_batch(
     migration: &SpecMigration<'_>,
     staging: &StagingDir,
-    row: &SegmentRow,
-    localized: &Path,
+    batch: &[BatchSource],
     target_layout: Option<&SourceLayout>,
     to_version: u64,
-    source_id: &str,
-) -> Result<(), StatsError> {
+) -> Result<usize, StatsError> {
+    let by_localized: HashMap<String, &BatchSource> = batch
+        .iter()
+        .map(|source| (source.localized.to_string_lossy().into_owned(), source))
+        .collect();
     let job = CompactionJob {
-        inputs: vec![SegmentRow {
-            path: localized.to_string_lossy().into_owned(),
-            ..row.clone()
-        }],
-        output_level: row.level,
-        output_min_seq: row.min_seq,
+        inputs: batch
+            .iter()
+            .map(|source| SegmentRow {
+                path: source.localized.to_string_lossy().into_owned(),
+                ..source.row.clone()
+            })
+            .collect(),
+        // Outputs take the batch's deepest level: the merge folds shallow
+        // levels into it, which is the direction compaction moves anyway.
+        output_level: batch
+            .iter()
+            .map(|source| source.row.level)
+            .max()
+            .unwrap_or(0),
+        output_min_seq: batch
+            .iter()
+            .map(|source| source.row.min_seq)
+            .min()
+            .unwrap_or(0),
     };
     let index_config = migration.index_config.clone();
     let arrow_schema = Arc::clone(migration.format.arrow_schema());
@@ -391,7 +435,15 @@ async fn rewrite_source(
         .unwrap_or(migration.format.max_row_group_rows());
     let max_merge_arrow_bytes = migration.max_merge_arrow_bytes;
     let partitions = target_layout.and_then(TargetPartitions::new);
-    let key_bounds = migration.segments.key_bounds(&row.path);
+    let bounds_by_path: HashMap<String, (Option<i64>, Option<i64>)> = batch
+        .iter()
+        .map(|source| {
+            (
+                source.localized.to_string_lossy().into_owned(),
+                migration.segments.key_bounds(&source.row.path),
+            )
+        })
+        .collect();
     let staging_dir = staging.path().to_path_buf();
     let swap = tokio::task::spawn_blocking(move || {
         run_job_with_partition_policy(
@@ -411,19 +463,34 @@ async fn rewrite_source(
                 max_merge_arrow_bytes,
                 output: OutputPolicy::AlwaysRewrite,
             },
-            |_| key_bounds,
+            move |path| bounds_by_path.get(path).copied().unwrap_or((None, None)),
         )
     })
     .await
     .map_err(|error| StatsError::Internal(format!("migration rewrite task panicked: {error}")))??;
 
+    let consumed: Vec<&BatchSource> = swap
+        .removed
+        .iter()
+        .map(|path| {
+            by_localized.get(path.as_str()).copied().ok_or_else(|| {
+                StatsError::Internal(format!("migration job consumed unknown input {path:?}"))
+            })
+        })
+        .collect::<Result<_, _>>()?;
+    let consumed_rows: i64 = consumed.iter().map(|source| source.row.row_count).sum();
     let rewritten_rows: i64 = swap.added.iter().map(|segment| segment.row_count).sum();
-    if rewritten_rows != row.row_count {
+    if rewritten_rows != consumed_rows {
         return Err(StatsError::Internal(format!(
-            "migration source {} rewrote {} rows as {rewritten_rows}",
-            row.path, row.row_count
+            "migration batch of {} sources rewrote {consumed_rows} rows as {rewritten_rows}",
+            consumed.len()
         )));
     }
+    let created_at_ms = consumed
+        .iter()
+        .map(|source| source.row.created_at_ms)
+        .max()
+        .unwrap_or(0);
     let mut migrated = Vec::with_capacity(swap.added.len());
     for staged in swap.added {
         let staged_path = PathBuf::from(&staged.path);
@@ -438,7 +505,7 @@ async fn rewrite_source(
             path: stored.path.to_string_lossy().into_owned(),
             size_bytes: stored.byte_size,
             location: SegmentLocation::Both,
-            created_at_ms: row.created_at_ms,
+            created_at_ms,
             artifacts: local,
             ..staged
         };
@@ -448,20 +515,31 @@ async fn rewrite_source(
             artifacts: references,
         });
     }
-    let source_rows = row.row_count;
+    let source_ids: Vec<String> = consumed
+        .iter()
+        .map(|source| source.source_id.clone())
+        .collect();
+    let joined_ids = source_ids.join(&SOURCE_ID_SEPARATOR.to_string());
     migration
         .controller
         .commit(|| {
             let revision = migration.catalog.commit_migration_segments(
                 &migrated,
                 to_version,
-                source_id,
-                source_rows,
+                &joined_ids,
+                consumed_rows,
             )?;
             Ok((revision, ()))
         })
         .await?;
-    Ok(())
+    tracing::info!(
+        namespace = %migration.table,
+        sources = consumed.len(),
+        rows = consumed_rows,
+        outputs = migrated.len(),
+        "migration backfill batch committed"
+    );
+    Ok(consumed.len())
 }
 
 /// Stable identity of one migration source, so a rewrite interrupted after its

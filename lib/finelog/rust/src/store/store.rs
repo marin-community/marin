@@ -2312,11 +2312,13 @@ mod tests {
 
         let status = store.spec_lifecycle("iris.worker").unwrap();
         assert_eq!(status.active_version(), 2);
+        // The backfill coalesces both version-1 sources into one rewritten
+        // output object.
         let snapshot = store.query_snapshot("iris.worker").unwrap();
-        assert_eq!(snapshot.paths.len(), 2);
+        assert_eq!(snapshot.paths.len(), 1);
 
-        // Observation permits compaction, but its output must remain marked as
-        // backfill so a rollback can discard it in favor of version 1.
+        // Observation permits compaction, but the backfill output must remain
+        // marked as backfill so a rollback can discard it in favor of version 1.
         store.maintain_namespace("iris.worker", true).await.unwrap();
         let compacted = store
             .catalog
@@ -2374,6 +2376,114 @@ mod tests {
             .version_segments
             .iter()
             .all(|version| version.table_spec_version == Some(2)));
+
+        store.shutdown(Duration::from_secs(1)).await;
+        std::fs::remove_dir_all(data_dir).ok();
+        std::fs::remove_dir_all(remote_dir).ok();
+    }
+
+    /// A backfill spanning several batches must not revisit sources an earlier
+    /// batch checkpointed: every tick re-derives the covered set by splitting
+    /// each checkpoint's separator-joined source identities, and a source
+    /// migrated twice would duplicate its rows.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_multi_batch_backfill_skips_sources_covered_by_a_joined_checkpoint() {
+        let data_dir = crate::test_support::unique_dir("multi_batch_backfill_data");
+        let remote_dir = crate::test_support::unique_dir("multi_batch_backfill_remote");
+        let store = Store::new(
+            Some(data_dir.clone()),
+            remote_dir.to_string_lossy().into_owned(),
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Shadow,
+        )
+        .unwrap();
+        store.bootstrap_maintenance();
+        store
+            .tables()
+            .set_compaction_config(crate::store::compaction::config::CompactionConfig {
+                migration_batch_sources: 2,
+                ..Default::default()
+            });
+        store
+            .register_versioned_table(
+                "iris.worker",
+                ObjectSpec::new(1).max_query_time_ms(100).validated(),
+            )
+            .unwrap();
+        store.publish_object_catalog("iris.worker").await.unwrap();
+
+        let batch_schema = schema_to_arrow(&worker_schema());
+        for (worker, mem_bytes) in [("w-1", 10), ("w-2", 20), ("w-3", 30)] {
+            let batch = RecordBatch::try_new(
+                batch_schema.clone(),
+                vec![
+                    Arc::new(StringArray::from(vec![worker])),
+                    Arc::new(Int64Array::from(vec![mem_bytes])),
+                    Arc::new(Int64Array::from(vec![mem_bytes])),
+                ],
+            )
+            .unwrap();
+            let ipc = crate::store::ipc::encode_ipc(&batch_schema, &[batch]).unwrap();
+            let (_, last_seq) = store.write_rows("iris.worker", &ipc, None).unwrap();
+            store
+                .await_persisted("iris.worker", last_seq, Duration::from_secs(10))
+                .await
+                .unwrap();
+        }
+
+        store
+            .register_versioned_table("iris.worker", retargeted_object_backed_spec(2))
+            .unwrap();
+        store.publish_object_catalog("iris.worker").await.unwrap();
+
+        // Tick 1 checkpoints a two-source batch under one joined identity;
+        // tick 2 must skip both and finish the third.
+        for _ in 0..6 {
+            store
+                .maintain_namespace("iris.worker", false)
+                .await
+                .unwrap();
+            if store
+                .spec_lifecycle("iris.worker")
+                .unwrap()
+                .active_version()
+                == 2
+            {
+                break;
+            }
+        }
+        assert_eq!(
+            store
+                .spec_lifecycle("iris.worker")
+                .unwrap()
+                .active_version(),
+            2
+        );
+
+        let backfilled: Vec<_> = store
+            .catalog
+            .object_segments("iris.worker")
+            .unwrap()
+            .into_iter()
+            .filter(|segment| segment.table_spec_version == 2 && segment.migration_backfill)
+            .collect();
+        let total_rows: i64 = backfilled
+            .iter()
+            .map(|segment| segment.artifacts.binding.row_count)
+            .sum();
+        assert_eq!(total_rows, 3, "a revisited source would duplicate its rows");
+        let mut covered: Vec<_> = backfilled
+            .iter()
+            .filter_map(|segment| segment.migration_source_id.as_deref())
+            .flat_map(|ids| ids.split('\n'))
+            .collect();
+        covered.sort_unstable();
+        covered.dedup();
+        assert_eq!(
+            covered.len(),
+            3,
+            "each source is covered by exactly one checkpoint"
+        );
 
         store.shutdown(Duration::from_secs(1)).await;
         std::fs::remove_dir_all(data_dir).ok();

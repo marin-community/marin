@@ -147,6 +147,32 @@ def _measure_latencies(client: LogClient, probes: dict[str, str]) -> dict[str, l
     return samples
 
 
+FLOAT_TOTAL_RELATIVE_TOLERANCE = 1e-9
+
+
+def _digests_equal(expected: dict | None, actual: dict | None) -> bool:
+    """Exact equality, except float ``total`` fields compare with relative
+    tolerance: the rewrite re-sorts rows, so IEEE summation order differs and
+    the last couple of digits legitimately move."""
+    if expected is None or actual is None or expected.keys() != actual.keys():
+        return expected == actual
+    for field, left in expected.items():
+        right = actual[field]
+        if left == right:
+            continue
+        if field != "total" or not isinstance(left, str) or not isinstance(right, str):
+            return False
+        if not any(mark in left for mark in (".", "e", "E")):
+            return False
+        try:
+            a, b = float(left), float(right)
+        except ValueError:
+            return False
+        if abs(a - b) > FLOAT_TOTAL_RELATIVE_TOLERANCE * max(abs(a), abs(b), 1.0):
+            return False
+    return True
+
+
 def _print_status(client: LogClient, namespace: str) -> None:
     status = client.get_table_status(namespace)
     click.echo(
@@ -288,7 +314,7 @@ def validate_cmd(name: str, namespace: str, request_timeout: float) -> None:
     mismatches = []
     for column, expected in state["column_digests"].items():
         actual = digests.get(column)
-        if actual != expected:
+        if not _digests_equal(expected, actual):
             mismatches.append(column)
             click.echo(f"DIGEST MISMATCH {column}:\n  baseline: {expected}\n  now:      {actual}")
     if not mismatches:

@@ -4,6 +4,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use finelog::store::compaction::config::CompactionConfig;
 use finelog::store::object_store::{ObjectId, OBJECTS_PREFIX};
 use finelog::store::table_state::{CommitError, TableRevision};
 use finelog::test_support::{unique_dir, FaultAction, FaultGate, ObjectFault};
@@ -24,6 +25,12 @@ async fn a_crash_during_migration_backfill_resumes_and_rejects_the_stale_lease()
     let mut invariants = Invariants::new(&cluster.remote_dir);
 
     let (store, faults) = cluster.open();
+    // One source per backfill batch, so the crash can land between the first
+    // source's checkpoint commit and the second source's output upload.
+    store.tables().set_compaction_config(CompactionConfig {
+        migration_batch_sources: 1,
+        ..CompactionConfig::default()
+    });
     register_v1(&store).await;
     for (worker, mem_bytes) in [("w-1", 10), ("w-2", 20), ("w-3", 30)] {
         write_row(&store, worker, mem_bytes).await;
@@ -62,7 +69,13 @@ async fn a_crash_during_migration_backfill_resumes_and_rejects_the_stale_lease()
         .arm(ObjectFault::new(op, pattern, FaultAction::Park(Arc::clone(&mid_backfill))).after(1));
     let backfilling = {
         let tables = store.tables().clone();
-        tokio::spawn(async move { tables.maintain(TABLE, false).await })
+        // Each maintenance tick runs one single-source batch: the first
+        // checkpoints, the second parks mid-upload.
+        tokio::spawn(async move {
+            loop {
+                tables.maintain(TABLE, false).await.unwrap();
+            }
+        })
     };
     mid_backfill.entered().await;
 

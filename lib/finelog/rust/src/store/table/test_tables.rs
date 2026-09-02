@@ -118,6 +118,7 @@ pub fn open_table_with_policy(
             crate::store::table_state::WriterFence::UNCLAIMED,
         ),
         policy,
+        crate::store::compaction::config::CompactionConfig::default(),
     )
     .unwrap()
 }
@@ -170,6 +171,7 @@ pub fn open_table_remote(
         Arc::new(Notify::new()),
         controller,
         policy,
+        crate::store::compaction::config::CompactionConfig::default(),
     )
     .unwrap()
 }

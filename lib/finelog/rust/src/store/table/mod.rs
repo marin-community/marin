@@ -39,6 +39,7 @@ use crate::indices::cache::IndexCache;
 use crate::indices::IndexRegistry;
 use crate::maintenance::MaintenanceLimits;
 use crate::store::catalog::Catalog;
+use crate::store::compaction::config::CompactionConfig;
 use crate::store::object_store::ObjectStore;
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{AlignedBatch, Schema};
@@ -122,6 +123,9 @@ pub struct TableManager {
     indices: Arc<IndexRegistry>,
     /// Process-wide maintenance concurrency limits, handed to every runtime.
     limits: Arc<MaintenanceLimits>,
+    /// Compaction tuning copied into each runtime as it opens. Tests shrink
+    /// these budgets before registering tables to force multi-batch backfills.
+    compaction: Mutex<CompactionConfig>,
     /// The maintenance scheduler's wake signal. Held here because runtimes are
     /// built before the scheduler starts and must already carry it.
     maintenance_wake: Arc<tokio::sync::Notify>,
@@ -156,8 +160,15 @@ impl TableManager {
                 index_cache_mb,
             )))),
             limits: MaintenanceLimits::new(),
+            compaction: Mutex::new(CompactionConfig::default()),
             maintenance_wake: Arc::new(tokio::sync::Notify::new()),
         })
+    }
+
+    /// Replace the compaction tuning copied into runtimes opened after this
+    /// call; already-open runtimes keep their configuration.
+    pub fn set_compaction_config(&self, config: CompactionConfig) {
+        *self.compaction.lock().unwrap() = config;
     }
 
     pub fn query_visibility(&self) -> &Arc<RwLock<()>> {
@@ -319,6 +330,7 @@ impl TableManager {
             Arc::clone(&self.maintenance_wake),
             self.controller(name),
             policy,
+            self.compaction.lock().unwrap().clone(),
         )?;
         self.runtimes
             .lock()
