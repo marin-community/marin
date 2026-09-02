@@ -222,12 +222,18 @@ class _LoopLocalZeroSite(IntEnum):
 def _loop_local_zeros(
     rows: int, hidden_dim: int, dtype, tie: Int[Array, "N"], site: _LoopLocalZeroSite
 ) -> Float[Array, "rows H"]:
-    """Return an exact-zero output init for an in-place collective.
+    """Return an exact-zero output init for an in-place ``ragged_all_to_all``.
+
+    A ``jnp.zeros`` init is a trace-time constant. XLA hoists it out of the layer loop and merges
+    equal-shaped inits under CSE. Each collective then writes into one shared constant, so
+    CopyInsertion copies the pristine zeros into every output slot on every layer (#8822).
+
+    ``min(tie[0], -site) + site`` is zero for every non-negative ``tie`` but depends on a
+    loop-carried value, so XLA cannot hoist or fold it. ``site`` makes each call's expression
+    distinct, so CSE cannot merge two inits into one shared buffer.
 
     ``tie`` must contain non-negative integers. ``site`` must identify the call site.
     """
-    # The traced minimum keeps the fill inside the loop; unique site values keep separate
-    # collective output buffers from merging under CSE.
     zero = (jnp.minimum(tie[0], -site) + site).astype(dtype)
     return jax.lax.broadcast(zero, (rows, hidden_dim))
 
