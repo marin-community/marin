@@ -52,7 +52,7 @@ from experiments.grug.moe.nccl_runtime import nccl_runtime, validate_nccl_runtim
 JAX_VERSION = "0.11.1.dev20260725"
 JAXPP_VERSION = "0.10.2"
 JAXPP_REVISION = "7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9"
-NCCL_VERSION = "2.30.7"
+NCCL_VERSION = os.environ.get("NCCL_TEST_VERSION", "2.30.7")
 TWO_STAGE_MPMD_RANKS = 2
 FOUR_STAGE_MPMD_RANKS = 4
 DEVICES_PER_STAGE = 2

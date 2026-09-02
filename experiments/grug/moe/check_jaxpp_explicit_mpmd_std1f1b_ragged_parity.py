@@ -550,7 +550,21 @@ def _run_initialized_worker(
         )
         stage_batches = _stage_batches(mpmd_mesh, batch)
 
-        if standalone_direct_result is not None:
+        repro_only = os.environ.get("ISSUE_7655_REPRO_ONLY") == "1"
+        if repro_only:
+            direct_loss = jnp.zeros((), dtype=jnp.float32)
+            direct_stage_gradient = jax.tree.map(
+                jnp.zeros_like,
+                pipeline_state.params[local_stage_index],
+            )
+            grug_train._warm_jaxpp_device_ragged(
+                mpmd_mesh,
+                global_microbatch_tokens=MICROBATCH_SIZE * SEQUENCE_LENGTH,
+                hidden_dim=_model_config().hidden_dim,
+                top_k=_model_config().num_experts_per_token,
+            )
+            _event(process_id, "device_ragged_warmup_complete", stage_index=local_stage_index)
+        elif standalone_direct_result is not None:
             direct_loss, direct_stage_gradients = standalone_direct_result
             direct_stage_gradient = direct_stage_gradients[local_stage_index]
             _event(process_id, "standalone_direct_reference_loaded", stage_index=local_stage_index)
@@ -641,6 +655,11 @@ def _run_initialized_worker(
             metrics,
         )
         _event(process_id, "explicit_execute_complete", stage_index=local_stage_index)
+
+        if repro_only:
+            multihost_utils.sync_global_devices("issue_7655_repro_complete")
+            completed = True
+            return
 
         explicit_gradients = captured_gradients(next_state.opt_state[local_stage_index])
         explicit_loss_local = np.zeros((), dtype=np.float32)

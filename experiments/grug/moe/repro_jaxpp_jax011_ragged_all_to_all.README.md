@@ -195,3 +195,33 @@ Therefore differentiable BF16 ragged forward/VJP tasks and bidirectional DIME
 transfers are not sufficient to reproduce the training deadlock.
 
 Part of #7024.
+
+## Full JaxPP execution reproducer
+
+On one H100x8 host, run the full one-microbatch graph twice from this commit:
+
+```bash
+NCCL_TEST_VERSION=2.30.7 NCCL_RMA_EAGER_INIT=1 \
+  uv run --extra gpu -- bash experiments/grug/moe/run_issue_7655_full_repro.sh
+NCCL_TEST_VERSION=2.31.2 NCCL_RMA_EAGER_INIT=1 \
+  uv run --extra gpu -- bash experiments/grug/moe/run_issue_7655_full_repro.sh
+```
+
+The runner pins JAX `0.11.1.dev20260725`, JaxPP revision
+`7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9`, and jax-tvm-ffi revision
+`e238a28483123efc8f56b9de358c2fb8b8de77e5`. It uses the full four-stage
+Grug graph but skips the separate direct-reference parity calculation. Both
+arms enable eager RMA initialization and use the same XLA settings.
+
+H100 validation produced:
+
+```text
+NCCL 2.30.7: killed after 180s
+NCCL 2.31.2: passed
+```
+
+The 2.30.7 watchdog found ranks in JaxPP DIME transfer, JAX compilation, and
+output readiness after all four ranks entered explicit pipeline execution.
+The 2.31.2 run completed every stage and shut down all ranks.
+
+Part of #7655.
