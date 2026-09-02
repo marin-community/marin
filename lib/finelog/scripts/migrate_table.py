@@ -47,6 +47,9 @@ LATENCY_REPS = 3
 DEFAULT_WINDOW = 2_000_000
 DEFAULT_REQUEST_TIMEOUT = 30.0
 WATCH_POLL_SECONDS = 15.0
+# One unbounded count(*) over a multi-billion-row table exceeds the server's
+# 10s query deadline; disjoint seq windows keep each scan under it.
+FULL_COUNT_CHUNK_SEQS = 200_000_000
 
 NUMERIC_TYPES = {
     stats_pb2.COLUMN_TYPE_INT32,
@@ -81,6 +84,18 @@ def _scalar(client: LogClient, sql: str):
     if table.num_rows != 1 or table.num_columns != 1:
         raise click.ClickException(f"expected one scalar from {sql!r}, got {table.num_rows}x{table.num_columns}")
     return table.column(0)[0].as_py()
+
+
+def _full_count(client: LogClient, namespace: str, min_seq: int, frozen: int) -> int:
+    """Count rows with ``seq <= frozen``, chunked so each scan fits the deadline."""
+    total = 0
+    for start in range(min_seq - 1, frozen, FULL_COUNT_CHUNK_SEQS):
+        end = min(start + FULL_COUNT_CHUNK_SEQS, frozen)
+        total += _scalar(
+            client,
+            f"SELECT count(*) FROM {_quoted(namespace)} WHERE seq > {start} AND seq <= {end}",
+        )
+    return total
 
 
 def _column_digests(
@@ -202,7 +217,7 @@ def baseline_cmd(name: str, namespace: str, window: int, request_timeout: float)
             f"frozen max_seq={frozen} min_seq={info.min_seq} "
             f"window=({window_start}, {frozen}] bytes_window=({bytes_window_start}, {frozen}]"
         )
-        full_count = _scalar(client, f"SELECT count(*) FROM {_quoted(namespace)} WHERE seq <= {frozen}")
+        full_count = _full_count(client, namespace, info.min_seq, frozen)
         digests = _column_digests(client, namespace, window_start, bytes_window_start, frozen)
         probes = _latency_probes(namespace, frozen)
         latencies = _measure_latencies(client, probes)
@@ -304,7 +319,8 @@ def validate_cmd(name: str, namespace: str, request_timeout: float) -> None:
                 f"WARNING: min_seq advanced past the digest window start ({info.min_seq} > {window_start}); "
                 "window digests are no longer comparable"
             )
-        full_count = _scalar(client, f"SELECT count(*) FROM {_quoted(namespace)} WHERE seq <= {frozen}")
+        count_floor = min(info.min_seq, state["min_seq_at_baseline"])
+        full_count = _full_count(client, namespace, count_floor, frozen)
         digests = _column_digests(client, namespace, window_start, bytes_window_start, frozen)
         latencies = _measure_latencies(client, state["latency_probes"])
 
