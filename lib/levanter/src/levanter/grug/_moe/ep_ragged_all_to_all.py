@@ -29,7 +29,7 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
 
 from haliax.nn.ragged_dot import ragged_dot
-from levanter.grug._moe.common import CapacityOverflow
+from levanter.grug._moe.common import CapacityOverflow, _interleave_gate_up
 from levanter.grug._moe.sonic import sonic_gather_sum, sonic_gather_sum_available
 from levanter.grug._moe.ep_common import (
     _clip_receiver_group_sizes,
@@ -107,7 +107,7 @@ def _cute_expert_mlp(
     del activation_fn, physical_group_sizes
 
     # QuACK and CUTLASS DSL are installed only with the CUDA 13 GPU extra.
-    from levanter.grug._moe.sonic_cute import _expert_mlp_quack_wgrad, _interleave_gate_up  # noqa: PLC0415
+    from levanter.grug._moe.sonic_cute import _expert_mlp_quack_wgrad  # noqa: PLC0415
 
     moe_dim = moe_w2_local.shape[1]
     w13_interleaved = _interleave_gate_up(moe_w13_local, moe_dim)

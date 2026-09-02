@@ -709,7 +709,10 @@ class ScatterWriter:
         buf = io.BytesIO()
         buffer_sorted.write_parquet(buf, compression="zstd", row_group_size=row_group_size)
         with open_url(chunk_path, "wb") as f:
-            f.write(buf.getvalue())
+            # getbuffer() views the serialized chunk in place; getvalue() would copy the
+            # whole compressed payload, and this flush is exactly what memory_budget.py
+            # sizes peak RSS against.
+            f.write(buf.getbuffer())
 
         self._chunk_files.append(_ChunkFile(path=chunk_path, schema=buffer_sorted.schema))
         self._n_chunks_written += 1

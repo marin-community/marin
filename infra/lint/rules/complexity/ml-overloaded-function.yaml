@@ -1,0 +1,32 @@
+schema_version: 1
+code: ml-overloaded-function
+lane: complexity
+title: Function body interleaves several distinct responsibilities
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** A function with an ordinary signature whose body runs several
+  unrelated jobs in sequence — validation, then two separate DB transactions, then
+  state/drain transitions — forces the reader to hold every stage at once and leaves
+  the next editor no seam to change one stage in isolation. This is the body-level
+  sibling of `ml-monolithic-function`: that rule fires on a multi-mode *signature*
+  (boolean knobs); this one fires on an ordinary signature wrapping a body that does
+  too many *distinct, separately-nameable* things. Split into named steps the entry
+  point composes.
+
+  Flag on intent, not length: you must be able to name three or more unrelated
+  responsibilities at the cited line. A long but genuinely linear routine — one
+  responsibility, many sequential steps — is not a violation. The complexity leads
+  (high cyclomatic complexity, deep nesting, large line count) are a hint to look
+  here, never the trigger. When in doubt, suppress.
+
+  **When allowed:** Pre-existing public entry points where splitting would break
+  callers; a genuinely single-responsibility routine that is merely long.
+
+  **Bad example:**
+  ```python
+  def launch_job(req):
+      # validates the request, opens a reservation transaction, opens a second
+      # scheduling transaction, runs TPU-shape validation, then walks drain/cancel
+      # state transitions — five responsibilities, each a candidate helper.
+      ...
+  ```

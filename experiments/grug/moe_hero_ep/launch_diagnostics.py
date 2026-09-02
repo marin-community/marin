@@ -42,6 +42,7 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     hero_grug_trainer_config,
     hero_trainer_config,
     validation_datasets,
+    with_transport_remat_mode,
 )
 from experiments.grug.moe_hero_ep.heuristic import build_hero_configs
 from experiments.grug.moe_hero_ep.train import (
@@ -142,6 +143,7 @@ def build_diagnostic_run(
     }
     if overrides:
         model = dataclasses.replace(model, **overrides)
+    model = with_transport_remat_mode(model)
     # A bank that is not divisible by the expert axis fails inside `moe_mlp`, which is after the rack
     # is already allocated and the workspace is built. Reject it here instead.
     if model.num_experts % HERO_EP_EXPERT_AXIS_SIZE != 0:
