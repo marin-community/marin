@@ -35,6 +35,32 @@ function frame(refId: string, rows: Array<Record<string, unknown>>) {
   });
 }
 
+test('nightly matrix presents every nonterminal run as running and summarizes states by category', () => {
+  const base = {
+    date: '2026-08-31', label: 'Nightly', group: 'marin', subgroup: 'training', state: 'run',
+    duration_state: 'normal', conclusion: null, url: 'https://example/run', workflow_url: 'https://example/workflow',
+    healthy: false, due: true, source_error: null,
+  };
+  const rows = [
+    { ...base, lane_id: 'queued', lane: 'Queued', label: 'Queued nightly', status: 'queued', duration_seconds: null, lane_order: 0 },
+    { ...base, lane_id: 'active', lane: 'Active', label: 'Active nightly', status: 'in_progress', duration_seconds: 600, lane_order: 1 },
+    { ...base, lane_id: 'requested', lane: 'Requested', label: 'Requested nightly', status: 'requested', duration_seconds: null, lane_order: 2 },
+    { ...base, lane_id: 'waiting', lane: 'Waiting', label: 'Waiting nightly', status: 'waiting', duration_seconds: null, lane_order: 3 },
+    { ...base, lane_id: 'pending', lane: 'Pending', label: 'Pending nightly', status: 'pending', duration_seconds: null, lane_order: 4 },
+    { ...base, lane_id: 'failed', lane: 'Failed', label: 'Failed nightly', status: 'completed', conclusion: 'failure', duration_seconds: 600, lane_order: 5 },
+  ];
+
+  render(<NightlyMatrix frames={[frame('N', rows)]} width={1200} height={300} />);
+
+  expect(screen.getAllByRole('link', { name: /Running/ })).toHaveLength(5);
+  expect(screen.getByRole('link', { name: /Active nightly.*Running.*10m/ })).toBeInTheDocument();
+  expect(screen.getByText(/Today: 5 running · 1 failed/)).toBeInTheDocument();
+  const legend = screen.getByRole('note', { name: 'Nightly state legend' });
+  for (const state of ['Passed', 'Running', 'Slow', 'Failed', 'No run', 'Data unavailable', 'Not due']) {
+    expect(legend).toHaveTextContent(state);
+  }
+});
+
 test('cluster capacity rolls tasks into jobs and packs requested GPUs onto their nodes', () => {
   const frames = [
     frame('W', [{

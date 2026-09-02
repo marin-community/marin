@@ -27,8 +27,10 @@ data-parallel rack uses one 64-device expert mesh.
   (the bf16 compute copy goes unread), and the next save writes the new layout. The reverse
   (synthesizing a master) is refused.
 - Runtime: Each GPU has one JAX process. The recipe uses `cuda_async`, no PGLE, and no GPU
-  command buffers. The ragged transport fixes collective overlap at 1 and turns the latency-hiding
-  scheduler off, for memory rather than scheduling.
+  command buffers. The ragged transport stages each layer's residual carry on pinned host, which
+  frees the HBM the latency-hiding scheduler needs to run. Collective overlap stays at 1: the
+  offload, the scheduler, and a higher limit corrupt training together, though no pair of them
+  does.
 - Resources: Each four-GPU worker requests 120 CPU, 890 GB of RAM, and 1 TB of disk.
 
 The attention, shared-expert, language-model-head, and optimizer states use the combined `data` and

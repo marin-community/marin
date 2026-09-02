@@ -21,13 +21,15 @@ function frame(rows: Array<Record<string, unknown>>, refId?: string) {
 
 const CELL = {
   lane_id: 'tpu-ferry', date: '2026-07-21', lane: 'TPU ferry', label: 'TPU ferry',
-  group: 'marin', subgroup: 'training', state: 'run', duration_state: 'normal',
+  group: 'marin', subgroup: 'training', state: 'run', status: 'completed', duration_state: 'normal',
   duration_seconds: 3600, healthy: true, due: true, url: 'https://example/run', lane_order: 0,
 };
 
 test('nightlyCells reads fields by name and preserves the link contract', () => {
   const [cell] = nightlyCells(frame([CELL]));
-  expect(cell).toMatchObject({ laneId: 'tpu-ferry', durationSeconds: 3600, healthy: true, url: 'https://example/run' });
+  expect(cell).toMatchObject({
+    laneId: 'tpu-ferry', runStatus: 'completed', durationSeconds: 3600, healthy: true, url: 'https://example/run',
+  });
 });
 
 test('nightlyCells rejects duplicate lane and date cells', () => {

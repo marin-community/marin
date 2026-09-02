@@ -18,8 +18,9 @@ from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.datasets.paloma import paloma_datasets
 from experiments.grug.moe_hero_ep.heuristic import HERO_MODEL
-from experiments.grug.moe_hero_ep.model import QbEstimator
+from experiments.grug.moe_hero_ep.model import OFFLOAD_CARRY_REMAT_MODE, GrugModelConfig, QbEstimator
 from experiments.grug.moe_hero_ep.train import (
+    RAGGED_MOE_IMPLEMENTATION,
     GrugTrainerConfig,
     MasterParamMode,
     TrainingDataMode,
@@ -54,6 +55,12 @@ HERO_MODEL_CONFIG = dataclasses.replace(
     qb_estimator=QbEstimator.HIST,
     qb_hist_bins=HERO_QB_HIST_BINS,
 )
+
+
+def with_transport_remat_mode(model: GrugModelConfig) -> GrugModelConfig:
+    if model.moe_implementation != RAGGED_MOE_IMPLEMENTATION:
+        return model
+    return dataclasses.replace(model, remat_mode=OFFLOAD_CARRY_REMAT_MODE)
 
 
 class HeroThroughputResult(Artifact):
@@ -98,6 +105,7 @@ def hero_trainer_config(
     checkpointer: CheckpointerConfig,
     progress_watchdog: ProgressWatchdogConfig = ProgressWatchdogConfig(),
     load_checkpoint_path: str | list[str] | None = None,
+    load_checkpoint: bool | None = None,
     master_param_mode: MasterParamMode = HERO_MASTER_PARAM_MODE,
 ) -> TrainerConfig:
     """Set the Levanter options that affect the compiled hero step."""
@@ -115,6 +123,7 @@ def hero_trainer_config(
         require_accelerator=True,
         allow_nondivisible_batch_size=False,
         load_checkpoint_path=load_checkpoint_path,
+        load_checkpoint=load_checkpoint,
         checkpointer=checkpointer,
     )
 

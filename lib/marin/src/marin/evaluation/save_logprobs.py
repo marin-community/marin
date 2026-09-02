@@ -1,9 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """
 Save per-token log probabilities for a language model on a dataset.
 
@@ -23,8 +20,6 @@ import jmp
 import levanter
 import levanter.tracker
 import numpy as np
-from fray.current_client import current_client
-from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 from haliax import Axis
 from haliax.partitioning import round_axis_for_partitioning
 from jax.experimental import multihost_utils
@@ -39,7 +34,6 @@ from rigging.filesystem.factory import open_url
 
 from marin.evaluation.model_loading import load_eval_model
 from marin.processing.tokenize.data_configs import with_pack
-from marin.training.run_environment import extras_for_resources
 
 logger = logging.getLogger(__name__)
 
@@ -56,14 +50,6 @@ class SaveLogprobsConfig:
     max_eval_length: int = 4096
     output_path: str = ""
     top_k: int | None = None
-
-
-@dataclass(frozen=True)
-class SaveLogprobsOnPodConfig:
-    """Wrapper config for running save_logprobs on a TPU pod via fray."""
-
-    save_logprobs_config: SaveLogprobsConfig
-    resources: ResourceConfig
 
 
 def _force_pack_data(data: LmDataConfig) -> LmDataConfig:
@@ -194,19 +180,3 @@ def save_logprobs(config: SaveLogprobsConfig) -> None:
                 logger.info(f"Saved logprobs to {output_file}")
 
     levanter.tracker.current_tracker().finish()
-
-
-def run_save_logprobs_on_pod(config: SaveLogprobsOnPodConfig) -> None:
-    """Submit save_logprobs as a fray job on a TPU pod and wait for completion."""
-    client = current_client()
-
-    extras = extras_for_resources(config.resources)
-
-    job_request = JobRequest(
-        name="save_logprobs",
-        entrypoint=Entrypoint.from_callable(save_logprobs, args=[config.save_logprobs_config]),
-        resources=config.resources,
-        environment=create_environment(extras=extras),
-    )
-    job = client.submit(job_request)
-    job.wait(raise_on_failure=True)

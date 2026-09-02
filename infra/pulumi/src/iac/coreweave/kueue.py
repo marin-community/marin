@@ -8,9 +8,8 @@ from dataclasses import dataclass
 import pulumi
 import pulumi_kubernetes as k8s
 from iris.cluster.config import IrisClusterConfig
-from iris.cluster.platforms.k8s.constants import NVIDIA_GPU_RESOURCE, RDMA_RESOURCE
+from iris.cluster.platforms.k8s.constants import CW_REPO_URL, NVIDIA_GPU_RESOURCE, RDMA_RESOURCE
 from iris.cluster.platforms.k8s.kueue_manifests import (
-    CW_REPO_URL,
     OPERATOR_NS,
     RELEASE_DEFAULT,
     RESOURCE_FLAVOR_NAME,
