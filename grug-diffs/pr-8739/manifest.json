@@ -3,17 +3,17 @@
     "moe_pipeline"
   ],
   "base_sha": "8ed202629425a2c722827838f1e59b7462448c07",
-  "head_sha": "46879a79d5625b5f37574ba1356ce4ddaed6c681",
+  "head_sha": "61fee9de8aee4b44554091b35c702a32ea060e14",
   "report_count": 1,
   "reports": [
     {
       "closest_variant": "base",
-      "distance_score": 2986,
+      "distance_score": 2890,
       "report_relpath": "moe_pipeline/index.html",
       "status_counts": {
         "added": 3,
-        "changed": 1,
-        "removed": 2,
+        "changed": 2,
+        "removed": 1,
         "unchanged": 1
       },
       "variant": "moe_pipeline"
