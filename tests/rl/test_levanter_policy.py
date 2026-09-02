@@ -54,17 +54,19 @@ def test_levanter_policy_forward_train_and_publish_changes_policy() -> None:
 
     with use_test_mesh():
         policy = LevanterPolicy(_tiny_qwen(), learning_rate=0.05, weight_publisher=publisher)
-        initial = policy.forward(PolicyBatch(sequences, action_count=2)).action_log_probs
+        attention_mask = np.ones_like(sequences)
+        initial = policy.forward(PolicyBatch(sequences, action_count=2, attention_mask=attention_mask)).action_log_probs
         result = policy.ppo_train(
             PolicyBatch(
                 sequences,
                 action_count=2,
+                attention_mask=attention_mask,
                 old_action_log_probs=initial,
                 advantages=np.ones_like(initial),
                 loss_mask=np.ones_like(initial),
             )
         )
-        updated = policy.forward(PolicyBatch(sequences, action_count=2)).action_log_probs
+        updated = policy.forward(PolicyBatch(sequences, action_count=2, attention_mask=attention_mask)).action_log_probs
         published_step = policy.broadcast_weights()
 
     assert result.step == 1
@@ -77,10 +79,31 @@ def test_levanter_policy_forward_train_and_publish_changes_policy() -> None:
     assert all(np.isfinite(weight).all() for weight in publisher.weights.values())
 
 
+def test_levanter_policy_forward_ignores_left_padding() -> None:
+    unpadded = np.asarray([[1, 2, 3, 4]], dtype=np.int32)
+    padded = np.asarray([[0, 0, 1, 2, 3, 4]], dtype=np.int32)
+
+    with use_test_mesh():
+        policy = LevanterPolicy(_tiny_qwen(), learning_rate=0.05)
+        expected = policy.forward(
+            PolicyBatch(unpadded, action_count=2, attention_mask=np.ones_like(unpadded))
+        ).action_log_probs
+        actual = policy.forward(
+            PolicyBatch(
+                padded,
+                action_count=2,
+                attention_mask=np.asarray([[0, 0, 1, 1, 1, 1]], dtype=np.int32),
+            )
+        ).action_log_probs
+
+    np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-5)
+
+
 def test_policy_batch_codec_preserves_training_inputs() -> None:
     batch = PolicyBatch(
         sequences=np.asarray([[1, 2, 3]], dtype=np.int32),
         action_count=2,
+        attention_mask=np.ones((1, 3), dtype=np.int32),
         old_action_log_probs=np.asarray([[-0.5, -0.25]], dtype=np.float32),
         advantages=np.asarray([[1.0, -1.0]], dtype=np.float32),
         loss_mask=np.asarray([[1.0, 0.0]], dtype=np.float32),
@@ -89,6 +112,7 @@ def test_policy_batch_codec_preserves_training_inputs() -> None:
     decoded = decode_policy_batch(encode_policy_batch(batch))
 
     np.testing.assert_array_equal(decoded.sequences, batch.sequences)
+    np.testing.assert_array_equal(decoded.attention_mask, batch.attention_mask)
     np.testing.assert_array_equal(decoded.old_action_log_probs, batch.old_action_log_probs)
     np.testing.assert_array_equal(decoded.advantages, batch.advantages)
     np.testing.assert_array_equal(decoded.loss_mask, batch.loss_mask)
@@ -104,16 +128,22 @@ def test_levanter_policy_http_client_runs_forward_and_training() -> None:
         port = socket.getsockname()[1]
         with serve_app_background(build_levanter_policy_app(policy), socket, name="test-levanter-policy"):
             client = LevanterPolicyClient(f"http://127.0.0.1:{port}")
-            initial = client.forward(PolicyBatch(sequences, action_count=2)).action_log_probs
+            attention_mask = np.ones_like(sequences)
+            initial = client.forward(
+                PolicyBatch(sequences, action_count=2, attention_mask=attention_mask)
+            ).action_log_probs
             trained = client.ppo_train(
                 PolicyBatch(
                     sequences,
                     action_count=2,
+                    attention_mask=attention_mask,
                     old_action_log_probs=initial,
                     advantages=np.ones_like(initial),
                 )
             )
-            updated = client.forward(PolicyBatch(sequences, action_count=2)).action_log_probs
+            updated = client.forward(
+                PolicyBatch(sequences, action_count=2, attention_mask=attention_mask)
+            ).action_log_probs
             published_step = client.broadcast_weights()
 
     assert trained.step == 1

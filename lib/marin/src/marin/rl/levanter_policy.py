@@ -33,6 +33,7 @@ class PolicyBatch:
 
     sequences: np.ndarray
     action_count: int
+    attention_mask: np.ndarray
     old_action_log_probs: np.ndarray | None = None
     advantages: np.ndarray | None = None
     loss_mask: np.ndarray | None = None
@@ -40,6 +41,8 @@ class PolicyBatch:
     def __post_init__(self) -> None:
         if self.sequences.ndim != 2:
             raise ValueError(f"sequences must have shape [batch, sequence], got {self.sequences.shape}")
+        if self.attention_mask.shape != self.sequences.shape:
+            raise ValueError(f"attention_mask must have shape {self.sequences.shape}, got {self.attention_mask.shape}")
         if not 0 < self.action_count < self.sequences.shape[1]:
             raise ValueError(f"action_count must be between one and sequence_length - 1, got {self.action_count}")
         expected = (self.sequences.shape[0], self.action_count)
@@ -73,6 +76,7 @@ def encode_policy_batch(batch: PolicyBatch) -> bytes:
     arrays: dict[str, np.ndarray] = {
         "sequences": batch.sequences,
         "action_count": np.asarray(batch.action_count, dtype=np.int32),
+        "attention_mask": batch.attention_mask,
     }
     for name in ("old_action_log_probs", "advantages", "loss_mask"):
         value = getattr(batch, name)
@@ -88,6 +92,7 @@ def decode_policy_batch(payload: bytes) -> PolicyBatch:
         return PolicyBatch(
             sequences=arrays["sequences"],
             action_count=int(arrays["action_count"]),
+            attention_mask=arrays["attention_mask"],
             old_action_log_probs=arrays["old_action_log_probs"] if "old_action_log_probs" in arrays else None,
             advantages=arrays["advantages"] if "advantages" in arrays else None,
             loss_mask=arrays["loss_mask"] if "loss_mask" in arrays else None,
@@ -131,11 +136,17 @@ def hf_named_jax_weights(model: LmHeadModel) -> dict[str, jax.Array]:
     return {name: value for name, value in to_state_dict(flattened).items() if isinstance(value, jax.Array)}
 
 
-def _action_log_probs(model: LmHeadModel, sequences: jax.Array, action_count: int) -> jax.Array:
+def _action_log_probs(
+    model: LmHeadModel,
+    sequences: jax.Array,
+    attention_mask: jax.Array,
+    action_count: int,
+) -> jax.Array:
     batch_axis = hax.Axis("batch", sequences.shape[0])
     position_axis = model.Pos.resize(sequences.shape[1])
     tokens = hax.named(sequences, (batch_axis, position_axis))
-    logits = model(tokens, AttentionMask.causal()).array
+    segment_ids = hax.named(jnp.where(attention_mask, 0, -1), (batch_axis, position_axis))
+    logits = model(tokens, AttentionMask.causal().with_segment_ids(segment_ids)).array
     token_log_probs = jax.nn.log_softmax(logits[:, :-1, :], axis=-1)
     targets = sequences[:, 1:]
     selected = jnp.take_along_axis(token_log_probs, targets[..., None], axis=-1)[..., 0]
@@ -164,6 +175,7 @@ class LevanterPolicy:
         action_log_probs = _action_log_probs(
             self.model,
             jnp.asarray(batch.sequences, dtype=jnp.int32),
+            jnp.asarray(batch.attention_mask, dtype=jnp.bool_),
             batch.action_count,
         )
         return PolicyForwardOutput(np.asarray(action_log_probs, dtype=np.float32))
@@ -173,12 +185,13 @@ class LevanterPolicy:
             raise ValueError("ppo_train requires old_action_log_probs and advantages")
         loss_mask = np.ones_like(batch.advantages) if batch.loss_mask is None else batch.loss_mask
         sequences = jnp.asarray(batch.sequences, dtype=jnp.int32)
+        attention_mask = jnp.asarray(batch.attention_mask, dtype=jnp.bool_)
         old_action_log_probs = jnp.asarray(batch.old_action_log_probs)
         advantages = jnp.asarray(batch.advantages)
         mask = jnp.asarray(loss_mask)
 
         def loss_fn(model: LmHeadModel) -> tuple[jax.Array, jax.Array]:
-            action_log_probs = _action_log_probs(model, sequences, batch.action_count)
+            action_log_probs = _action_log_probs(model, sequences, attention_mask, batch.action_count)
             ratio = jnp.exp(action_log_probs - old_action_log_probs)
             unclipped = ratio * advantages
             clipped = jnp.clip(ratio, 1.0 - self.clip_epsilon, 1.0 + self.clip_epsilon) * advantages
@@ -327,6 +340,7 @@ class LevanterPolicyGroupClient:
             PolicyBatch(
                 sequences=batch.sequences[index],
                 action_count=batch.action_count,
+                attention_mask=batch.attention_mask[index],
                 old_action_log_probs=(
                     batch.old_action_log_probs[index] if batch.old_action_log_probs is not None else None
                 ),
