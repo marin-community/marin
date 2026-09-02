@@ -533,7 +533,7 @@ def _math500_records() -> list[dict[str, object]]:
 
 def _reasoning_gym_records(rg_bin: ReasoningGymBin, split: str) -> list[dict[str, object]]:
     # Optional dependency: only the remote pool build installs the
-    # reasoning-gym group, so keep the import out of module scope.
+    # reasoning-gym package, so keep the import out of module scope.
     import reasoning_gym  # noqa: PLC0415
 
     dataset = reasoning_gym.create_dataset(rg_bin.task, size=rg_bin.size, seed=rg_bin.seed, **rg_bin.knobs)
@@ -613,7 +613,9 @@ def pool_step(name: str, version: str) -> ArtifactStep[Artifact]:
         run=remote(
             write_pool_parquet,
             resources=ResourceConfig.with_cpu(cpu=4, ram="16g", disk="32g"),
-            pip_dependency_groups=["reasoning-gym"],
+            # Pinned to the version skyrl-gym uses so pool build and training
+            # score identically.
+            pip_packages=["reasoning-gym==0.1.25"],
         ),
         build_config=lambda ctx: PoolParquetConfig(output_path=ctx.output_path),
     )
