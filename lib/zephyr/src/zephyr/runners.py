@@ -38,9 +38,12 @@ from typing import Any, TypeVar
 
 import cloudpickle
 import psutil
+import pyarrow as pa
 from rigging.filesystem.storage_path import StoragePath
 
 from zephyr import counters, memory_budget
+from zephyr.batches import _iter_record_batches
+from zephyr.expr import ColumnExpr
 from zephyr.plan import Scatter, StageContext, run_stage
 from zephyr.stage_io import (
     ShardTask,
@@ -158,12 +161,20 @@ class _InProcessWorkerContext:
 _T = TypeVar("_T")
 
 
+def _stage_item_count_and_bytes(item: Any) -> tuple[int, int]:
+    """Return logical row count and in-memory payload bytes for a stage item."""
+    if isinstance(item, pa.RecordBatch):
+        return item.num_rows, item.get_total_buffer_size()
+    return 1, sys.getsizeof(item)
+
+
 def _wrap_stage_stats(gen: Iterator[_T]) -> Iterator[_T]:
     """Yield items from ``gen`` while recording item count and byte size into the current stage's counters."""
     stage_counters = counters.current_stage()
     for item in gen:
-        stage_counters.update_counter(ZEPHYR_STAGE_ITEM_COUNT_KEY, 1)
-        stage_counters.update_counter(ZEPHYR_STAGE_BYTES_PROCESSED_KEY, sys.getsizeof(item))
+        item_count, bytes_processed = _stage_item_count_and_bytes(item)
+        stage_counters.update_counter(ZEPHYR_STAGE_ITEM_COUNT_KEY, item_count)
+        stage_counters.update_counter(ZEPHYR_STAGE_BYTES_PROCESSED_KEY, bytes_processed)
         yield item
 
 
@@ -296,8 +307,11 @@ def _run_stage_with_ctx(
     if external_sort_dir is None:
         external_sort_dir = f"{stage_dir}-external-sort/shard-{task.shard_idx:04d}"
     scatter_op = next((op for op in task.operations if isinstance(op, Scatter)), None)
+    stage_gen = run_stage(stage_ctx, task.operations, external_sort_dir=external_sort_dir)
+    if scatter_op is not None and isinstance(scatter_op.key, ColumnExpr):
+        stage_gen = _iter_record_batches(stage_gen)
     return _write_stage_output(
-        _wrap_stage_stats(run_stage(stage_ctx, task.operations, external_sort_dir=external_sort_dir)),
+        _wrap_stage_stats(stage_gen),
         source_shard=task.shard_idx,
         stage_dir=stage_dir,
         shard_idx=task.shard_idx,

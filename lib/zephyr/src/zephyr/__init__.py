@@ -3,8 +3,9 @@
 
 """Zephyr: Lightweight dataset library for distributed data processing.
 
-Import from the defining submodule (``zephyr.context``, ``zephyr.dataset``, ``zephyr.expr``,
-``zephyr.readers``, ``zephyr.writers``, ``zephyr.plan``, ``zephyr.worker_context``, ``zephyr.counters``)
-rather than the package: a re-export hub here ties every importer of any submodule to all of
-them, which over-selects CI tests.
+Import from the defining submodule (``zephyr.batches``, ``zephyr.context``,
+``zephyr.dataset``, ``zephyr.expr``, ``zephyr.readers``, ``zephyr.writers``,
+``zephyr.plan``, ``zephyr.worker_context``, ``zephyr.counters``) rather than
+the package: a re-export hub here ties every importer of any submodule to all
+of them, which over-selects CI tests.
 """

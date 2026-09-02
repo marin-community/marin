@@ -14,6 +14,7 @@ from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from marin.datakit.normalize import NORMALIZED_DATA_VERSION, NormalizedData, generate_id, normalize_to_parquet
 from marin.execution.artifact import ArtifactRecord, read_artifact, write_artifact, write_record
+from zephyr.stage_io import ZephyrWorkerError
 
 
 @pytest.fixture(autouse=True)
@@ -382,4 +383,31 @@ def test_no_input_files_raises(tmp_path: Path):
     output_dir = tmp_path / "output"
 
     with pytest.raises(FileNotFoundError):
+        normalize_to_parquet(input_path=str(input_dir), output_path=str(output_dir))
+
+
+def test_schema_inferred_input_preserves_late_typed_metadata(tmp_path: Path, write_jsonl_gz):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    write_jsonl_gz(
+        input_dir / "a.jsonl.gz",
+        [{"id": "1", "text": "first", "meta": None}],
+    )
+    write_jsonl_gz(input_dir / "b.jsonl.gz", [{"id": "2", "text": "second", "meta": "late"}])
+
+    normalize_to_parquet(input_path=str(input_dir), output_path=str(output_dir))
+
+    by_source = {record["source_id"]: record for record in _read_all_parquet(output_dir)}
+    assert by_source["1"]["meta"] is None
+    assert by_source["2"]["meta"] == "late"
+
+
+def test_schema_inferred_input_rejects_field_missing_from_sample(tmp_path: Path, write_jsonl_gz):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    write_jsonl_gz(input_dir / "a.jsonl.gz", [{"id": "1", "text": "first"}])
+    write_jsonl_gz(input_dir / "b.jsonl.gz", [{"id": "2", "text": "second"}])
+    write_jsonl_gz(input_dir / "c.jsonl.gz", [{"id": "3", "text": "third", "late": "metadata"}])
+
+    with pytest.raises(ZephyrWorkerError, match="does not match the sampled schema"):
         normalize_to_parquet(input_path=str(input_dir), output_path=str(output_dir))

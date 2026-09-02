@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Scatter/shuffle support for Zephyr pipelines.
+"""Scatter/shuffle for Zephyr group-by.
 
 Each source-shard's scatter output is a set of zstd-compressed Parquet files,
 one combined file per flush (``c{chunk:04d}.parquet``) containing all target
@@ -41,7 +41,7 @@ import math
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
-from typing import Any, ClassVar, Protocol
+from typing import Any, ClassVar, Protocol, overload
 
 import cloudpickle
 import humanfriendly
@@ -55,8 +55,10 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import RateLimiter, log_time
 
 from zephyr import memory_budget
+from zephyr.batches import ArrowBatch
+from zephyr.expr import ColumnExpr
 from zephyr.parquet_scan import scan_parquet
-from zephyr.shard_keys import encode_key, hash_encoded_key
+from zephyr.shard_keys import encode_key
 from zephyr.worker_context import _worker_ctx_var
 from zephyr.writers import ensure_parent_dir
 
@@ -111,12 +113,13 @@ _PROGRESS_LOG_INTERVAL_SECONDS = 60.0
 # row group per target gives ideal predicate pruning, but makes every reducer
 # read multi-megabyte footers from every mapper chunk before it can read data.
 _SCATTER_MAX_ROW_GROUPS_PER_CHUNK = 512
-
 # Helper column names injected by _items_to_dataframe and stripped before
 # writing to disk.  Both are internal implementation details; user schemas must
 # not collide with these names.
 _SHARD_COL = "__zephyr_shard__"
 _SORT_KEY_COL = "__zephyr_sort_key__"
+_SORT_KEY_FIELD = "key"
+_SORT_VALUE_FIELD = "sort_value"
 # A cloudpickle-serialized Python object representing the item
 _PAYLOAD_COL = "__payload__"
 # Temporary flat columns folded into the _SORT_KEY_COL struct during
@@ -143,48 +146,56 @@ def _task_memory_bytes() -> int:
 
 
 def _dataframe_to_items(df: pl.DataFrame) -> Iterator[Any]:
-    """Yield Python items from a DataFrame, stripping routing columns and deserializing payloads."""
-    for p in df[_PAYLOAD_COL].to_list():
-        yield cloudpickle.loads(p)
+    """Yield Python items from a DataFrame, stripping routing columns."""
+    if _PAYLOAD_COL in df.columns:
+        for p in df[_PAYLOAD_COL].to_list():
+            yield cloudpickle.loads(p)
+    else:
+        drop_cols = [c for c in (_SHARD_COL, _SORT_KEY_COL) if c in df.columns]
+        yield from df.drop(drop_cols).to_dicts()
+
+
+def _with_routing_columns(
+    df: pl.DataFrame,
+    key_expr: pl.Expr,
+    sort_value_expr: pl.Expr,
+    num_output_shards: int,
+) -> pl.DataFrame:
+    return df.with_columns(
+        (key_expr.hash() % num_output_shards).cast(pl.Int32).alias(_SHARD_COL),
+        pl.struct(key_expr.alias(_SORT_KEY_FIELD), sort_value_expr.alias(_SORT_VALUE_FIELD)).alias(_SORT_KEY_COL),
+    )
+
+
+def _column_routing_exprs(key: ColumnExpr, sort_by: ColumnExpr | None) -> tuple[pl.Expr, pl.Expr]:
+    return pl.col(key.name), pl.col(sort_by.name) if sort_by is not None else pl.lit(None)
 
 
 def _columns_to_dataframe(
     payloads: list[bytes],
-    shards: list[int],
     key_bytes: list[bytes],
     sort_values: list[Any],
+    num_output_shards: int,
 ) -> pl.DataFrame:
-    """Build the scatter DataFrame from pre-computed flat columns.
-
-    The sort-key struct is folded from two flat columns rather than per-row
-    Python dicts: series construction from homogeneous lists is the native
-    fast path, and ``pl.struct`` over existing columns is cheap. Field order
-    (key first) drives the (key, sort_value) sort order.
-
-    ``key_bytes`` must be pre-encoded via :func:`~zephyr.shard_keys.encode_key` so that
-    ``_KEY_TMP_COL`` is always ``Binary`` — preventing struct schema mismatches
-    when different mapper shards produce keys of different Python types.
-    """
+    """Build a routed scatter DataFrame from serialized payloads and sort keys."""
     try:
-        return pl.DataFrame(
+        df = pl.DataFrame(
             {
                 _PAYLOAD_COL: pl.Series(payloads, dtype=pl.Binary),
-                _SHARD_COL: pl.Series(shards, dtype=pl.Int32),
                 _KEY_TMP_COL: pl.Series(key_bytes, dtype=pl.Binary),
                 _SORT_VALUE_TMP_COL: sort_values,
             }
-        ).select(
-            _PAYLOAD_COL,
-            _SHARD_COL,
-            pl.struct(
-                pl.col(_KEY_TMP_COL).alias("key"),
-                pl.col(_SORT_VALUE_TMP_COL).alias("sort_value"),
-            ).alias(_SORT_KEY_COL),
         )
+        # Non-serializable sort_values surface as TypeError from Series
+        # construction or InvalidOperationError ("nested objects are not
+        # allowed") when a column lands as Object dtype and pl.struct rejects it.
+        return _with_routing_columns(
+            df,
+            pl.col(_KEY_TMP_COL),
+            pl.col(_SORT_VALUE_TMP_COL),
+            num_output_shards,
+        ).select(_PAYLOAD_COL, _SHARD_COL, _SORT_KEY_COL)
     except (TypeError, pl.exceptions.InvalidOperationError) as err:
-        # Non-serializable sort_values surface as TypeError from Series construction
-        # or InvalidOperationError ("nested objects are not allowed") when the
-        # sort_value column lands as Object dtype and pl.struct rejects it.
         raise ValueError("sort_fn must return an Arrow-serializable object.") from err
 
 
@@ -194,34 +205,18 @@ def _items_to_dataframe(
     sort_fn: Callable | None,
     num_output_shards: int,
 ) -> pl.DataFrame:
-    """Convert a list of Python items to a DataFrame with routing columns.
-
-    Cloudpickle-serializes items into ``_PAYLOAD_COL`` and adds ``_SHARD_COL``
-    (int32 target shard index) and ``_SORT_KEY_COL``. This is the adapter
-    between Python-item pipelines and the DataFrame-based
-    :class:`ScatterWriter`; DataFrame-native pipelines can feed the writer
-    directly.
-
-    ``num_output_shards=0`` means the caller assigns ``_SHARD_COL`` itself (the
-    combiner path in :meth:`ScatterWriter._flush`, whose rows are already
-    routed); routing is then skipped rather than computed and discarded.
-    """
-    shards: list[int] = []
+    """Serialize Python items into a routed scatter DataFrame."""
     key_bytes: list[bytes] = []
     sort_values: list[Any] = []
     for item in items:
         key = key_fn(item)
         try:
-            kb = encode_key(key)
+            key_bytes.append(encode_key(key))
         except TypeError as err:
             raise ValueError(f"key_fn must return a msgpack-serializable object; got {type(key).__name__!r}.") from err
-        # Route from the bytes we just encoded: deterministic_hash(key) would
-        # msgpack-encode the same key a second time for every scattered item.
-        shards.append(hash_encoded_key(kb) % num_output_shards if num_output_shards > 0 else 0)
-        key_bytes.append(kb)
         sort_values.append(sort_fn(item) if sort_fn is not None else None)
     payloads = [cloudpickle.dumps(item) for item in items]
-    return _columns_to_dataframe(payloads, shards, key_bytes, sort_values)
+    return _columns_to_dataframe(payloads, key_bytes, sort_values, num_output_shards)
 
 
 class _SidecarFilesystem(Protocol):
@@ -279,12 +274,14 @@ class _Sidecar:
     files: list[_ChunkFile]
     shard_bytes: dict[int, int]
     shard_rows: dict[int, int]
+    arrow_schema: pa.Schema | None = None
 
     _encoder: ClassVar[msgspec.msgpack.Encoder] = msgspec.msgpack.Encoder()
     _decoder: ClassVar[msgspec.msgpack.Decoder] = msgspec.msgpack.Decoder()
     _files_field: ClassVar[str] = "files"
     _shard_bytes_field: ClassVar[str] = "shard_bytes"
     _shard_rows_field: ClassVar[str] = "shard_rows"
+    _arrow_schema_field: ClassVar[str] = "arrow_schema"
 
     @staticmethod
     def meta_path(data_path: str) -> str:
@@ -304,6 +301,9 @@ class _Sidecar:
                 self._files_field: [file.to_metadata() for file in self.files],
                 self._shard_bytes_field: {str(k): v for k, v in self.shard_bytes.items()},
                 self._shard_rows_field: {str(k): v for k, v in self.shard_rows.items()},
+                self._arrow_schema_field: (
+                    self.arrow_schema.serialize().to_pybytes() if self.arrow_schema is not None else None
+                ),
             }
         )
         with log_time(f"Writing scatter meta for {self.path} to {meta_path}", level=logging.DEBUG):
@@ -320,11 +320,13 @@ class _Sidecar:
             return None
         raw_shard_bytes = data.get(cls._shard_bytes_field, {})
         raw_shard_rows = data.get(cls._shard_rows_field, {})
+        raw_arrow_schema = data.get(cls._arrow_schema_field)
         return cls(
             path=data_path,
             files=[_ChunkFile.from_metadata(file) for file in files],
             shard_bytes={int(k): int(v) for k, v in raw_shard_bytes.items()},
             shard_rows={int(k): int(v) for k, v in raw_shard_rows.items()},
+            arrow_schema=pa.ipc.read_schema(pa.BufferReader(raw_arrow_schema)) if raw_arrow_schema is not None else None,
         )
 
     @classmethod
@@ -343,14 +345,24 @@ class _Sidecar:
 
 
 def _unify_frame_schemas(frames: list[_FrameWithSchema]) -> list[pl.LazyFrame]:
-    """Cast frames to a common supertype schema for sorted merging."""
+    """Validate columnar schemas or reconcile legacy Python payload schemas."""
     if len(frames) <= 1:
         return [frame.frame for frame in frames]
-    if all(frame.schema == frames[0].schema for frame in frames[1:]):
+    schemas = [frame.schema for frame in frames]
+    if all(schema == schemas[0] for schema in schemas[1:]):
         return [frame.frame for frame in frames]
-    # Build the supertype from sidecar schemas so drift such as Null versus
-    # Int64 is resolved without reading the Parquet footer for every input.
-    unified = pl.concat([pl.DataFrame(schema=frame.schema) for frame in frames], how="diagonal_relaxed").schema
+
+    payload_schemas = [_PAYLOAD_COL in schema for schema in schemas]
+    if not all(payload_schemas):
+        if any(payload_schemas):
+            raise ValueError("Scatter data cannot mix Python rows and Arrow batches across mapper chunks.")
+        raise ValueError(
+            "Arrow batch schema mismatch across mapper chunks. Every batch in a columnar "
+            f"group_by stage must have the same column names, order, and dtypes. Expected:\n{schemas[0]}\n"
+            f"Got:\n{next(schema for schema in schemas[1:] if schema != schemas[0])}"
+        )
+
+    unified = pl.concat([pl.DataFrame(schema=schema) for schema in schemas], how="diagonal_relaxed").schema
     return [frame.frame.cast(dict(unified)) for frame in frames]
 
 
@@ -491,6 +503,21 @@ class ScatterReader:
             f"from {len(scatter_paths)} sidecars (concurrency={_SIDECAR_READ_CONCURRENCY})"
         ):
             sidecars = _Sidecar.read_all(scatter_paths)
+            arrow_sidecars = [sidecar for sidecar in sidecars if sidecar.arrow_schema is not None]
+            if arrow_sidecars and len(arrow_sidecars) != len(sidecars):
+                raise ValueError("Scatter data cannot mix Python rows and Arrow batches across mapper shards.")
+            if arrow_sidecars:
+                expected_schema = arrow_sidecars[0].arrow_schema
+                assert expected_schema is not None
+                for sidecar in arrow_sidecars[1:]:
+                    schema = sidecar.arrow_schema
+                    assert schema is not None
+                    if not expected_schema.equals(schema, check_metadata=True):
+                        raise ValueError(
+                            "Arrow batch schema mismatch across mapper shards. Every batch in a columnar "
+                            f"group_by stage must have the same schema. Expected:\n{expected_schema}\n"
+                            f"Got:\n{schema}"
+                        )
             for sidecar in sidecars:
                 chunk_files.extend(sidecar.files)
                 shard_payload_bytes += sidecar.target_bytes(target_shard)
@@ -607,13 +634,42 @@ def _apply_combiner(buffer: list, key_fn: Callable, combiner_fn: Callable) -> li
     return combined
 
 
-class ScatterWriter:
-    """Writes scatter chunk files as zstd-compressed Parquet, one combined file per flush.
+def _combine_scatter_buffer(
+    buffer: pl.DataFrame,
+    key: Callable | ColumnExpr,
+    sort_by: Callable | ColumnExpr | None,
+    combiner_fn: Callable,
+) -> pl.DataFrame | None:
+    """Run *combiner_fn* per shard and rebuild routing columns. Empty → ``None``."""
+    frames: list[pl.DataFrame] = []
+    key_fn = key.evaluate if isinstance(key, ColumnExpr) else key
+    for (shard_val,), group in buffer.partition_by(_SHARD_COL, as_dict=True).items():
+        rows = list(_dataframe_to_items(group))
+        rows = _apply_combiner(rows, key_fn, combiner_fn)
+        if not rows:
+            continue
+        # Shard is already assigned; rebuild sort keys then restore it.
+        if _PAYLOAD_COL in group.columns:
+            df = _items_to_dataframe(rows, key, sort_by, num_output_shards=1)
+        else:
+            assert isinstance(key, ColumnExpr)
+            assert sort_by is None or isinstance(sort_by, ColumnExpr)
+            key_expr, sort_value_expr = _column_routing_exprs(key, sort_by)
+            df = _with_routing_columns(pl.DataFrame(rows), key_expr, sort_value_expr, num_output_shards=1)
+        frames.append(df.with_columns(pl.lit(shard_val, dtype=pl.Int32).alias(_SHARD_COL)))
+    if not frames:
+        return None
+    return pl.concat(frames, how="vertical_relaxed", rechunk=True)
 
-    Accepts routing-column DataFrames (see ``_items_to_dataframe`` for the
-    Python-items adapter) and buffers them as a frame list — appends are free,
-    and the frames are combined with one concat per flush. Buffering frames
-    keeps the interface ready for DataFrame/RecordBatch-native pipelines.
+
+class ScatterWriter:
+    """Write one mapper's scatter data and metadata.
+
+    Accepts routing-column DataFrames via :meth:`write` (see
+    ``_items_to_dataframe`` for the Python-items adapter) and canonical Arrow
+    batches via :meth:`write_batch`. The batch path converts once to Polars,
+    computes routing columns there, and avoids a per-row Python-object round
+    trip. Frames are buffered as a list and combined once per flush.
 
     Each flush writes a single ``c{chunk:04d}.parquet`` file sorted by
     ``[_SHARD_COL, _SORT_KEY_COL]`` with bounded, target-local row groups so
@@ -628,24 +684,26 @@ class ScatterWriter:
     def __init__(
         self,
         data_path: str,
-        key_fn: Callable,
+        key: Callable | ColumnExpr,
         source_shard: int,
-        sort_fn: Callable | None = None,
+        num_output_shards: int,
+        sort_by: Callable | ColumnExpr | None = None,
         combiner_fn: Callable | None = None,
     ) -> None:
         self._data_path = data_path if data_path.endswith("/") else f"{data_path}/"
-        self._key_fn = key_fn
-        self._sort_fn = sort_fn
+        self._key = key
+        self._sort_by = sort_by
+        self._num_output_shards = num_output_shards
 
         self._source_shard = source_shard
         self._combiner_fn = combiner_fn
         self._memory_available_bytes = _task_memory_bytes()
         self._flush_threshold_bytes: int | None = None
 
-        # Buffered DataFrames, combined into one file per flush. Buffering
-        # frames (not Python items) keeps the writer format-agnostic: a future
-        # RecordBatch/DataFrame-native pipeline can feed frames directly.
+        # Buffered DataFrames, combined into one file per flush.
         self._frames: list[pl.DataFrame] = []
+        self._columnar_schema: pa.Schema | None = None
+        self._columnar_polars_schema: pl.Schema | None = None
         self._chunk_files: list[_ChunkFile] = []
         # Payload bytes and row counts written per target shard, recorded in
         # the sidecar so reducers know their own shard's exact data size and
@@ -668,22 +726,23 @@ class ScatterWriter:
         if not self._frames:
             return
 
-        buffer = pl.concat(self._frames, how="vertical_relaxed", rechunk=False)
+        concat_mode = "vertical" if self._columnar_schema is not None else "vertical_relaxed"
+        buffer = pl.concat(self._frames, how=concat_mode, rechunk=False)
         self._frames = []
         self._buffer_estimated_bytes = 0
 
         if self._combiner_fn is not None:
-            frames: list[pl.DataFrame] = []
-            for (shard_val,), group in buffer.partition_by(_SHARD_COL, as_dict=True).items():
-                rows = list(_dataframe_to_items(group))
-                rows = _apply_combiner(rows, self._key_fn, self._combiner_fn)
-                if not rows:
-                    continue
-                df = _items_to_dataframe(rows, self._key_fn, self._sort_fn, num_output_shards=0)
-                frames.append(df.with_columns(pl.lit(shard_val, dtype=pl.Int32).alias(_SHARD_COL)))
-            if not frames:
+            combined = _combine_scatter_buffer(buffer, self._key, self._sort_by, self._combiner_fn)
+            if combined is None:
                 return
-            buffer = pl.concat(frames, how="vertical_relaxed", rechunk=True)
+            buffer = combined
+            if self._columnar_polars_schema is not None:
+                combined_schema = buffer.drop(_SHARD_COL, _SORT_KEY_COL).schema
+                if combined_schema != self._columnar_polars_schema:
+                    raise ValueError(
+                        "A combiner in a columnar group_by stage must preserve the Arrow batch schema. "
+                        f"Expected:\n{self._columnar_polars_schema}\nGot:\n{combined_schema}"
+                    )
 
         buffer_sorted = buffer.sort([_SHARD_COL, _SORT_KEY_COL])
         del buffer
@@ -691,12 +750,17 @@ class ScatterWriter:
         flushed_bytes = int(buffer_sorted.estimated_size())
         self._total_bytes_written += flushed_bytes
         self._total_rows_written += len(buffer_sorted)
-        shard_sizes = buffer_sorted.group_by(_SHARD_COL).agg(
-            pl.col(_PAYLOAD_COL).bin.size().sum().alias("bytes"), pl.len().alias("rows")
-        )
-        for shard_val, nbytes, nrows in shard_sizes.iter_rows():
-            self._shard_bytes[shard_val] += int(nbytes)
-            self._shard_rows[shard_val] += int(nrows)
+        if _PAYLOAD_COL in buffer_sorted.columns:
+            shard_sizes = buffer_sorted.group_by(_SHARD_COL).agg(
+                pl.col(_PAYLOAD_COL).bin.size().sum().alias("bytes"), pl.len().alias("rows")
+            )
+            for shard_val, nbytes, nrows in shard_sizes.iter_rows():
+                self._shard_bytes[shard_val] += int(nbytes)
+                self._shard_rows[shard_val] += int(nrows)
+        else:
+            for (shard_val,), group in buffer_sorted.partition_by(_SHARD_COL, as_dict=True).items():
+                self._shard_bytes[shard_val] += int(group.estimated_size())
+                self._shard_rows[shard_val] += len(group)
 
         # Keep target shards local to as few row groups as practical so Polars
         # predicate pushdown can skip unrelated data. Cap the group count because
@@ -738,6 +802,15 @@ class ScatterWriter:
         """
         if len(df) == 0:
             return
+        if self._columnar_schema is not None:
+            raise TypeError("ScatterWriter cannot mix Python rows and Arrow batches.")
+
+        self._buffer_frame(df)
+
+    def _buffer_frame(self, df: pl.DataFrame) -> None:
+        """Buffer one internally routed frame, flushing on memory pressure."""
+        if len(df) == 0:
+            return
 
         if self._flush_threshold_bytes is None:
             baseline_rss_bytes = _process_rss_bytes()
@@ -762,6 +835,35 @@ class ScatterWriter:
                 humanfriendly.format_size(self._flush_threshold_bytes, binary=True),
             )
             self._flush()
+
+    def write_batch(self, batch: pa.RecordBatch) -> None:
+        """Convert, route, and buffer an Arrow batch using column expressions."""
+        assert isinstance(
+            self._key, ColumnExpr
+        ), f"Arrow batch scatter items require key=zephyr.expr.col(...), got {self._key!r}"
+        if self._sort_by is not None:
+            assert isinstance(
+                self._sort_by, ColumnExpr
+            ), f"Arrow batch scatter items require sort_by=zephyr.expr.col(...), got {self._sort_by!r}"
+
+        if self._frames and self._columnar_schema is None:
+            raise TypeError("ScatterWriter cannot mix Python rows and Arrow batches.")
+        if self._columnar_schema is None:
+            self._columnar_schema = batch.schema
+        elif not self._columnar_schema.equals(batch.schema, check_metadata=True):
+            raise ValueError(
+                "Arrow batch schema mismatch within mapper shard. Every batch in a columnar "
+                f"group_by stage must have the same schema. Expected:\n{self._columnar_schema}\n"
+                f"Got:\n{batch.schema}"
+            )
+
+        df = pl.from_arrow(batch, rechunk=False)
+        assert isinstance(df, pl.DataFrame)
+        if self._columnar_polars_schema is None:
+            self._columnar_polars_schema = df.schema
+
+        key_expr, sort_value_expr = _column_routing_exprs(self._key, self._sort_by)
+        self._buffer_frame(_with_routing_columns(df, key_expr, sort_value_expr, self._num_output_shards))
 
     def close(self) -> ListShard:
         """Flush remaining buffers, write sidecar, return ListShard.
@@ -794,6 +896,7 @@ class ScatterWriter:
                 files=list(self._chunk_files),
                 shard_bytes=dict(self._shard_bytes),
                 shard_rows=dict(self._shard_rows),
+                arrow_schema=self._columnar_schema,
             ).write()
 
         self._result = ListShard(refs=[MemChunk(items=[self._data_path])])
@@ -824,20 +927,49 @@ class ScatterWriter:
             raise
 
 
+@overload
 def _write_scatter(
     items: Iterator,
     source_shard: int,
     data_path: str,
-    key_fn: Callable,
+    key: Callable,
     num_output_shards: int,
-    sort_fn: Callable | None = None,
+    sort_by: Callable | None = None,
+    combiner_fn: Callable | None = None,
+) -> ListShard: ...
+
+
+@overload
+def _write_scatter(
+    items: Iterator[pa.RecordBatch],
+    source_shard: int,
+    data_path: str,
+    key: ColumnExpr,
+    num_output_shards: int,
+    sort_by: ColumnExpr | None = None,
+    combiner_fn: Callable | None = None,
+) -> ListShard: ...
+
+
+def _write_scatter(
+    items: Iterator,
+    source_shard: int,
+    data_path: str,
+    key: Callable | ColumnExpr,
+    num_output_shards: int,
+    sort_by: Callable | ColumnExpr | None = None,
     combiner_fn: Callable | None = None,
 ) -> ListShard:
     """Route items to target shards, buffer, sort, and flush as Parquet chunk files.
 
-    Routing and sort keys are computed here (in Python, since ``key_fn`` and
-    ``sort_fn`` are arbitrary callables) and embedded as helper columns in the DataFrame.
-    Items are batched into DataFrames.
+    Two distinct modes, selected by the key expression:
+
+    * **Python items** — ``key``/``sort_by`` are Callables invoked per item;
+      items are batched into DataFrames up to ``_DATAFRAME_ROW_COUNT``.
+    * **Arrow batch items** — ``key``/``sort_by`` are ``zephyr.expr.col(...)``
+      values; each canonical RecordBatch is ingested with no per-row Python
+      conversion.
+
     Writes Parquet chunk files plus one ``metadata.msgpack`` sidecar.
 
     Returns:
@@ -846,17 +978,34 @@ def _write_scatter(
     """
     with ScatterWriter(
         data_path=data_path,
-        key_fn=key_fn,
+        key=key,
         source_shard=source_shard,
-        sort_fn=sort_fn,
+        num_output_shards=num_output_shards,
+        sort_by=sort_by,
         combiner_fn=combiner_fn,
     ) as writer:
+        if isinstance(key, ColumnExpr):
+            if sort_by is not None and not isinstance(sort_by, ColumnExpr):
+                raise TypeError("Arrow batch scatter requires sort_by=zephyr.expr.col(...).")
+            for item in items:
+                if not isinstance(item, pa.RecordBatch):
+                    raise TypeError(
+                        "Columnar scatter expects canonical pyarrow.RecordBatch items; " f"got {type(item).__name__}."
+                    )
+                writer.write_batch(item)
+            return writer.close()
+
+        if isinstance(sort_by, ColumnExpr):
+            raise TypeError("Python row scatter requires sort_by to be a callable.")
         pending: list[Any] = []
         for item in items:
+            if isinstance(item, ArrowBatch):
+                raise TypeError("Arrow-exportable batch scatter requires key=zephyr.expr.col(...).")
+
             pending.append(item)
             if len(pending) >= _DATAFRAME_ROW_COUNT:
-                writer.write(_items_to_dataframe(pending, key_fn, sort_fn, num_output_shards))
+                writer.write(_items_to_dataframe(pending, key, sort_by, num_output_shards))
                 pending.clear()
         if pending:
-            writer.write(_items_to_dataframe(pending, key_fn, sort_fn, num_output_shards))
+            writer.write(_items_to_dataframe(pending, key, sort_by, num_output_shards))
         return writer.close()

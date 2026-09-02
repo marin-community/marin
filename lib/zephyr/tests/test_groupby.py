@@ -4,11 +4,27 @@
 """Tests for deduplicate and group_by operations."""
 import hashlib
 
+import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from zephyr.dataset import Dataset
+from zephyr.expr import col
 from zephyr.writers import infer_arrow_schema
+
+
+class _OneShotArrowBatch:
+    """Arrow exporter that fails if Zephyr consumes its capsule twice."""
+
+    def __init__(self, records: list[dict]) -> None:
+        self._frame = pl.DataFrame(records)
+        self._exported = False
+
+    def __arrow_c_stream__(self, requested_schema: object | None = None) -> object:
+        if self._exported:
+            raise RuntimeError("Arrow stream was exported more than once")
+        self._exported = True
+        return self._frame.__arrow_c_stream__(requested_schema)
 
 
 @pytest.fixture
@@ -103,6 +119,34 @@ def test_group_by_count(zephyr_ctx):
     assert results[0] == {"cat": "A", "count": 3}
     assert results[1] == {"cat": "B", "count": 2}
     assert results[2] == {"cat": "C", "count": 1}
+
+
+@pytest.mark.parametrize(
+    "batch_factory",
+    [
+        pytest.param(pa.RecordBatch.from_pylist, id="record-batch"),
+        pytest.param(pa.Table.from_pylist, id="table"),
+        pytest.param(pl.DataFrame, id="polars-dataframe"),
+        pytest.param(_OneShotArrowBatch, id="arrow-protocol"),
+    ],
+)
+def test_group_by_accepts_arrow_exportable_batches(zephyr_ctx, batch_factory):
+    """Columnar producers interoperate through Arrow, including one-shot streams."""
+    batches = [
+        batch_factory([{"cat": "A", "value": 1}, {"cat": "B", "value": 2}]),
+        batch_factory([{"cat": "A", "value": 3}, {"cat": "B", "value": 4}]),
+    ]
+
+    dataset = Dataset.from_list(batches).group_by(
+        key=col("cat"),
+        reducer=lambda key, items: {"cat": key, "sum": sum(item["value"] for item in items)},
+        num_output_shards=3,
+    )
+
+    assert sorted(zephyr_ctx.execute(dataset).results, key=lambda row: row["cat"]) == [
+        {"cat": "A", "sum": 4},
+        {"cat": "B", "sum": 6},
+    ]
 
 
 def test_group_by_sum(zephyr_ctx):
