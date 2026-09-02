@@ -136,6 +136,7 @@ def run_iris_levanter_policy_service(config: LevanterPolicyServiceConfig) -> Non
         ctx = iris_ctx()
         port = ctx.get_port(config.port_name) if config.port_name is not None else 0
         socket = bind_serving_socket(job_info.advertise_host, port)
+        port = socket.getsockname()[1]
         address = f"http://{job_info.advertise_host}:{port}"
         metadata = {
             "kind": "levanter-policy",
