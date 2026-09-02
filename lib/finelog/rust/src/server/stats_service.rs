@@ -39,6 +39,10 @@ use crate::store::table_spec::ValidatedTableSpec;
 use crate::store::Store;
 use crate::telemetry_policy::{is_forwarded_telemetry_namespace, TELEMETRY_NAMESPACE};
 
+/// A per-destination durability wait above this is worth naming in the log:
+/// it points at the table whose flush cadence is holding acks up.
+const SLOW_PERSIST_WARN_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(5);
+
 pub struct StatsServiceImpl {
     store: Arc<Store>,
     ignored_forwarded_telemetry_columns: Mutex<HashSet<String>>,
@@ -281,12 +285,31 @@ impl StatsService for StatsServiceImpl {
 
         // The server does not auto-cancel on the client deadline; enforce the
         // durability await ourselves, bounded by the remaining budget (falling
-        // back to DEFAULT_PERSIST_TIMEOUT).
-        for (destination, last_seq) in persisted_targets {
-            let budget = ctx.time_remaining().unwrap_or(DEFAULT_PERSIST_TIMEOUT);
-            self.store
-                .await_persisted(&destination, last_seq, budget)
-                .await?;
+        // back to DEFAULT_PERSIST_TIMEOUT). A forwarded telemetry batch fans
+        // out to many namespaces whose flushes run independently, so the waits
+        // run concurrently: the ack costs the slowest destination, not the sum.
+        let budget = ctx.time_remaining().unwrap_or(DEFAULT_PERSIST_TIMEOUT);
+        let waits = persisted_targets
+            .into_iter()
+            .map(|(destination, last_seq)| {
+                let store = Arc::clone(&self.store);
+                async move {
+                    let started = std::time::Instant::now();
+                    store
+                        .await_persisted(&destination, last_seq, budget)
+                        .await?;
+                    Ok::<_, StatsError>((destination, started.elapsed()))
+                }
+            });
+        let waited = futures::future::try_join_all(waits).await?;
+        if let Some((destination, wait)) = waited.iter().max_by_key(|(_, wait)| *wait) {
+            if *wait > SLOW_PERSIST_WARN_THRESHOLD {
+                tracing::warn!(
+                    namespace = %destination,
+                    waited_ms = wait.as_millis() as u64,
+                    "write ack waited on this destination's flush"
+                );
+            }
         }
 
         connectrpc::Response::ok(WriteRowsResponse::default().with_rows_written(rows_written))
