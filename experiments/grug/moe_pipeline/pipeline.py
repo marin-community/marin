@@ -211,7 +211,6 @@ class GrugMoePipelineStage(eqx.Module):
 class GrugMoeAutomaticPipelineState:
     """Array state for JaxPP's automatic pipeline transform."""
 
-    step: jax.Array
     trainable_params: tuple[GrugMoePipelineStage, ...]
     opt_state: tuple[optax.OptState, ...]
     pending_qb_betas: tuple[jax.Array, ...]
@@ -219,7 +218,6 @@ class GrugMoeAutomaticPipelineState:
 
 @dataclass(frozen=True)
 class _InitializedMpmdStageState:
-    step: jax.Array
     opt_state: tuple[optax.OptState, ...]
     pending_qb_betas: tuple[jax.Array, ...]
 
@@ -346,9 +344,7 @@ def _initialize_mpmd_stage_state(
         _localize_optimizer_scalars(mpmd_mesh, mpmd_index, optimizer.init(stage))
         for mpmd_index, stage in zip(stage_to_mpmd_index, stages, strict=True)
     )
-    step = _stage_local_scalar(jnp.array(0, dtype=jnp.int32), NamedSharding(mpmd_mesh.unstack[0], P()))
     return _InitializedMpmdStageState(
-        step=step,
         opt_state=opt_state,
         pending_qb_betas=pending_qb_betas,
     )
@@ -394,7 +390,6 @@ def initialize_mpmd_automatic_pipeline_state(
     )
     return (
         GrugMoeAutomaticPipelineState(
-            step=initialized.step,
             trainable_params=trainable_stages,
             opt_state=initialized.opt_state,
             pending_qb_betas=initialized.pending_qb_betas,
@@ -559,7 +554,6 @@ def make_automatic_pipeline_step(
             next_opt_state.append(stage_opt_state)
         next_state = dataclasses.replace(
             state,
-            step=state.step + jnp.array(1, dtype=state.step.dtype),
             trainable_params=tuple(next_params),
             opt_state=tuple(next_opt_state),
             pending_qb_betas=tuple(beta / config.microbatches for beta in next_qb_betas),
