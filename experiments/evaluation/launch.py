@@ -23,7 +23,7 @@ from marin.evaluation.harbor.driver_config import (
     ValidatedHarborConfig,
     preflight_harbor_configs,
 )
-from marin.evaluation.harbor.runner import canonical_served_name
+from marin.evaluation.harbor.runner import HarborExecutor, canonical_served_name, validate_harbor_resume_root
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.records import (
@@ -72,6 +72,7 @@ class LaunchSpec:
     priority_band: int
     version: str | None = None
     description: str | None = None
+    resume_results_path: str | None = None
 
 
 def _git_sha() -> str:
@@ -201,6 +202,12 @@ def build_evaluation_batch(
             raise ValueError("--federated_cluster requires a GPU accelerator")
         accelerator = replace(accelerator, target_cluster=spec.federated_cluster)
     definitions = _resolve_definitions(_evaluation_definitions(spec), model, spec.limit)
+    if spec.resume_results_path is not None:
+        if len(definitions) != 1 or not isinstance(definitions[0][1].executor, HarborExecutor):
+            raise ValueError("--resume-results-path requires exactly one Harbor evaluation")
+        if "://" not in spec.resume_results_path:
+            raise ValueError("--resume-results-path must be an object-store path")
+        validate_harbor_resume_root(spec.resume_results_path, definitions[0][1].executor.config)
     records_prefix = records_prefix_for(accelerator, spec)
     created_at = datetime.now(UTC).isoformat()
     evaluations: list[Evaluation] = []
@@ -211,7 +218,7 @@ def build_evaluation_batch(
                 raise ValueError(f"evaluations declare conflicting secret specifications for {name}")
             secret_env[name] = spec_value
         run_id = _run_id(model.name, eval_key)
-        output_dir = prefix_join(records_prefix, f"{run_id}/results")
+        output_dir = spec.resume_results_path or prefix_join(records_prefix, f"{run_id}/results")
         evaluations.append(
             Evaluation(
                 identity=EvaluationIdentity(
