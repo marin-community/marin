@@ -361,6 +361,7 @@ def build_workflow(
     debug_distributed: bool = False,
     collective_diagnostics: bool = False,
     telemetry_only: bool = False,
+    grouped_mm: bool = False,
     label: str = "",
 ) -> ArtifactStep[SkyRLModel] | ArtifactStep[SkyRLTelemetryRun]:
     """Compose the E6 baseline as one inspectable artifact step."""
@@ -390,6 +391,8 @@ def build_workflow(
         variant += "-colldiag"
     if telemetry_only:
         variant += "-telonly"
+    if grouped_mm:
+        variant += "-groupedmm"
     if bf16_update_mode != "stochastic":
         variant += f"-{bf16_update_mode}"
     if label:
@@ -440,6 +443,16 @@ def build_workflow(
                 # override of an undeclared key fails Hydra's struct check, which would abort the run
                 # after the 80-GPU gang had already started.
                 f"++trainer.policy.optimizer_config.bf16_update_mode={bf16_update_mode}",
+                # F2's headline arm, and a single flag: the baseline leaves use_grouped_mm absent and
+                # so inherits false, which is the eager 256-expert Python loop. True routes Grug MoE
+                # blocks through torch._grouped_mm instead (model_wrapper.py _enable_native_grug_grouping
+                # -> enable_grug_grouped_mm), which needs no expert parallelism -- the EP coupling runs
+                # the other way, validate_grug_expert_parallel_runtime rejects EP>1 WITHOUT grouped_mm,
+                # never the reverse.
+                # NO `++` here, deliberately, unlike bf16_update_mode above: this key IS declared in
+                # ppo_base_config.yaml, so a plain override fails closed if it is ever renamed, while
+                # `++` would silently add a dead key and the arm would read as a null result.
+                *(("trainer.policy.fsdp_config.use_grouped_mm=true",) if grouped_mm else ()),
                 # The Hugging Face upload gate, and it is NOT ckpt_interval. The Hub callback
                 # needs `trainer.hf_hub_repo_id` truthy AND `trainer.hf_save_interval > 0`
                 # (skyrl_train/config/callbacks.py); hf_save_interval merely DEFAULTS to
@@ -539,6 +552,16 @@ def build_workflow(
     "be fed to an evaluation step -- read the rows in finelog and W&B, keyed by run_id.",
 )
 @click.option(
+    "--grouped-mm",
+    is_flag=True,
+    default=False,
+    help="Route Grug MoE blocks through torch._grouped_mm instead of the eager 256-expert Python "
+    "loop. This is the workstream's headline arm: the baseline inherits use_grouped_mm=false, and "
+    "F2 measures that path at ~0.6% MFU against Megatron's 10%. Needs no expert parallelism -- the "
+    "EP constraint runs the other way. Encodes itself into the artifact name as -groupedmm, so its "
+    "rows are separable from the baseline's by run_id.",
+)
+@click.option(
     "--label",
     default="",
     help="Extra suffix on the artifact name, and therefore on run_id. The flags that change "
@@ -598,6 +621,7 @@ def main(
     debug_distributed: bool,
     collective_diagnostics: bool,
     telemetry_only: bool,
+    grouped_mm: bool,
     label: str,
 ) -> ArtifactStep[SkyRLModel] | ArtifactStep[SkyRLTelemetryRun]:
     return build_workflow(
@@ -611,6 +635,7 @@ def main(
         debug_distributed=debug_distributed,
         collective_diagnostics=collective_diagnostics,
         telemetry_only=telemetry_only,
+        grouped_mm=grouped_mm,
         label=label,
     )
 
