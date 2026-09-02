@@ -145,8 +145,8 @@ def build_ladder_run(
     """One scaling-ladder rung at width ``size`` on ``LADDER_RACKS[size]`` GB200 racks.
 
     ``num_steps`` defaults to the steps needed to train ``TOKENS_PER_ACTIVE_PARAM`` tokens per active
-    parameter at the rung's (rack-scaled) batch. Every eval scores the held-out set both as-trained
-    and dropless. The narrow rungs eval every 5% of the run and keep only the forced final
+    parameter at the rung's (rack-scaled) batch. Every eval scores the held-out set dropless. The
+    narrow rungs eval every 5% of the run and keep only the forced final
     checkpoint; the d6144 hero evals every 3000 steps and keeps a permanent checkpoint every 6000.
     ``checkpoint_every`` overrides that cadence for any rung. A rolling temporary checkpoint every
     ``RESUME_SAVE_INTERVAL`` on region-local storage covers a crash or a preemption, and a rung
@@ -290,8 +290,8 @@ def build_ladder_run(
             eval=GrugEvalConfig(
                 steps_per_eval=steps_per_eval,
                 eval_batch_size=eval_batch_size,
-                # The capacity-limited eval breaks the ragged train step's NCCL windows at d6144;
-                # see `GrugEvalConfig.eval_current`. The dropless eval is the reported metric.
+                # The capacity-limited eval breaks the ragged train step at d6144 (#8861). The
+                # dropless eval is the reported metric.
                 eval_current=False,
                 eval_ema=False,
                 compute_bpb=True,
