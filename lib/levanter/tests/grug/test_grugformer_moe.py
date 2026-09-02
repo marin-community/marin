@@ -1423,7 +1423,9 @@ def test_loop_local_zeros_is_not_a_foldable_constant():
         == 1
     )
     assert (
-        _optimized_hlo_opcode_count(lambda tie: jnp.broadcast_to((tie[0] * 0).astype(jnp.float32), (4, 3)), "kMinimum")
+        _optimized_hlo_opcode_count(
+            lambda tie: jnp.broadcast_to((jnp.minimum(tie[0], 5) * 0).astype(jnp.float32), (4, 3)), "kMinimum"
+        )
         == 0
     ), "the folding probe no longer folds, so this test can no longer detect a foldable fill"
 
