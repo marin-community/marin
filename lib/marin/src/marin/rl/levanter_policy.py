@@ -21,7 +21,8 @@ from haliax._src.state_dict import flatten_modules_for_export, to_state_dict
 from haliax.jax_utils import is_jax_array_like
 from levanter.data.packing import pack_documents
 from levanter.layers.attention import AttentionMask
-from levanter.models.lm_model import LmHeadModel
+from levanter.models.lm_model import LmHeadModel, split_activations
+from levanter.models.loss import maybe_fused_next_token_loss
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
@@ -196,11 +197,21 @@ def _packed_token_log_probs(model: LmHeadModel, sequences: jax.Array, segment_id
     segment_ids_array = segment_ids_array[None, :]
     tokens = hax.named(sequences, (batch_axis, position_axis))
     segment_ids = hax.named(segment_ids_array, (batch_axis, position_axis))
-    logits = model(tokens, AttentionMask.causal().with_segment_ids(segment_ids)).array
-    token_log_probs = jax.nn.log_softmax(logits[:, :-1, :], axis=-1)
-    targets = sequences[:, 1:]
-    selected = jnp.take_along_axis(token_log_probs, targets[..., None], axis=-1)[..., 0]
-    return selected[0]
+    activations, _ = split_activations(model.activations(tokens, AttentionMask.causal().with_segment_ids(segment_ids)))
+    token_losses = maybe_fused_next_token_loss(
+        position_axis,
+        model.Embed,
+        model.Vocab,
+        activations,
+        model.get_lm_head(),
+        tokens,
+        reduction=None,
+        logsumexp_weight=0.0,
+    )
+    # Cross entropy is the negative selected-token log probability.  The fused
+    # path streams over vocabulary blocks instead of materializing
+    # [batch, position, vocab], which is ~12 GiB for Qwen3 at this context size.
+    return -token_losses.array[0, :-1]
 
 
 @eqx.filter_jit(donate="all-except-first")
