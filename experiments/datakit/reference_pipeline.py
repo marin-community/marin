@@ -344,6 +344,22 @@ SMOKE_SCALE = PipelineScale(
 """Small K + a small pool -- a true end-to-end run on a testbed sample."""
 
 
+def datakit_zephyr_context(
+    name: str,
+    scale: PipelineScale,
+    max_concurrent_pipelines: int,
+) -> ZephyrContext:
+    """Build the shared Zephyr pool used by Datakit pipelines."""
+    return ZephyrContext(
+        name=name,
+        resources=scale.pool.worker,
+        coordinator_resources=scale.pool.coordinator,
+        max_workers=scale.pool.n_workers,
+        max_concurrent_pipelines=max_concurrent_pipelines,
+        stage_runner_factory=SubprocessRunner,
+    )
+
+
 def select_sources(names: list[str] | None = None) -> dict[str, StepSpec]:
     """Map source names to their normalize StepSpec; ``None`` selects every source.
 
@@ -1136,13 +1152,7 @@ def main() -> None:
     scale = _apply_pool_overrides(SMOKE_SCALE if args.mode == "sample" else DEFAULT_SCALE, args)
     sources = _select_pipeline_sources(args)
 
-    with ZephyrContext(
-        name="datakit-reference",
-        resources=scale.pool.worker,
-        coordinator_resources=scale.pool.coordinator,
-        max_workers=scale.pool.n_workers,
-        stage_runner_factory=SubprocessRunner,
-    ) as zephyr_context:
+    with datakit_zephyr_context("datakit-reference", scale, args.max_concurrent) as zephyr_context:
         result = reference_datakit_steps(
             sources,
             quality_model=args.quality_model,

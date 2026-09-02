@@ -8,11 +8,12 @@ from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication import fuzzy_dups
 
 from experiments.datakit import reference_pipeline, zephyr_benchmark
-from experiments.datakit.materialize_zephyr_benchmark_sample import (
-    BENCHMARK_SAMPLE_INPUTS_DIR,
-    benchmark_zephyr_context,
+from experiments.datakit.materialize_zephyr_benchmark_sample import BENCHMARK_SAMPLE_INPUTS_DIR
+from experiments.datakit.reference_pipeline import (
+    SMOKE_SCALE,
+    SOURCE_DISCOVERY_DEPTHS,
+    datakit_zephyr_context,
 )
-from experiments.datakit.reference_pipeline import SMOKE_SCALE, SOURCE_DISCOVERY_DEPTHS
 from experiments.datakit.zephyr_benchmark import (
     BenchmarkTarget,
     SourceShardStats,
@@ -194,7 +195,7 @@ def test_shuffle_target_reads_sample_minhash_and_writes_fresh_output(monkeypatch
     monkeypatch.setattr(fuzzy_dups, "read_artifact", lambda path, _cls: requested_paths.append(path))
     monkeypatch.setattr(fuzzy_dups, "compute_fuzzy_dups_attrs", lambda **kwargs: kwargs["inputs"])
 
-    context = benchmark_zephyr_context("test-benchmark", SMOKE_SCALE, 8)
+    context = datakit_zephyr_context("test-benchmark", SMOKE_SCALE, 8)
     steps = _benchmark_steps(
         sample_prefix=_SAMPLE_PREFIX,
         selected_sources=["a"],
@@ -224,7 +225,7 @@ def test_shuffle_target_requires_every_sample_minhash_artifact(monkeypatch):
             run_tag="shuffle-v2",
             target=BenchmarkTarget.SHUFFLE,
             scale=SMOKE_SCALE,
-            zephyr_context=benchmark_zephyr_context("test-benchmark", SMOKE_SCALE, 8),
+            zephyr_context=datakit_zephyr_context("test-benchmark", SMOKE_SCALE, 8),
         )
 
 

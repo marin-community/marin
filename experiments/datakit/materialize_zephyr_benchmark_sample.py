@@ -30,12 +30,12 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
 from zephyr.context import ZephyrContext
-from zephyr.runners import SubprocessRunner
 
 from experiments.datakit.reference_pipeline import (
     SMOKE_SCALE,
     PipelineScale,
     ZephyrDatakitSteps,
+    datakit_zephyr_context,
     fuzzy_dedup_step,
     sample_sources,
     zephyr_datakit_steps,
@@ -70,21 +70,6 @@ class BenchmarkSampleFuzzySteps:
 
 def benchmark_sample_inputs_prefix(sample_prefix: str) -> str:
     return prefix_join(sample_prefix, BENCHMARK_SAMPLE_INPUTS_DIR)
-
-
-def benchmark_zephyr_context(
-    name: str,
-    scale: PipelineScale,
-    max_concurrent_pipelines: int,
-) -> ZephyrContext:
-    return ZephyrContext(
-        name=name,
-        resources=scale.pool.worker,
-        coordinator_resources=scale.pool.coordinator,
-        max_workers=scale.pool.n_workers,
-        max_concurrent_pipelines=max_concurrent_pipelines,
-        stage_runner_factory=SubprocessRunner,
-    )
 
 
 def benchmark_datakit_steps(
@@ -284,7 +269,7 @@ def _materialize_minhash(args: argparse.Namespace, source_names: set[str]) -> No
             map_task=map_task,
         ),
     )
-    zephyr_context = benchmark_zephyr_context(
+    zephyr_context = datakit_zephyr_context(
         "zephyr-benchmark-sample-minhash",
         scale,
         args.minhash_max_concurrent,

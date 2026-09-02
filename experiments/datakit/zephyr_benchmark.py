@@ -56,7 +56,6 @@ from experiments.datakit.materialize_zephyr_benchmark_sample import (
     GCP_BENCHMARK_SAMPLE_PREFIX,
     benchmark_datakit_steps,
     benchmark_sample_fuzzy_steps,
-    benchmark_zephyr_context,
 )
 from experiments.datakit.reference_pipeline import (
     DEFAULT_SCALE,
@@ -64,6 +63,7 @@ from experiments.datakit.reference_pipeline import (
     SOURCE_DISCOVERY_DEPTHS,
     PipelineScale,
     ZephyrDatakitSteps,
+    datakit_zephyr_context,
     sample_sources,
 )
 
@@ -342,7 +342,7 @@ def _scale_from_args(args: argparse.Namespace) -> PipelineScale:
 def _run_benchmark(args: argparse.Namespace) -> None:
     selected_sources = _resolve_sources(args.sample_prefix, args.sources, args.source_fraction, args.pool_workers)
     scale = _scale_from_args(args)
-    zephyr_context = benchmark_zephyr_context(
+    zephyr_context = datakit_zephyr_context(
         "zephyr-benchmark",
         scale,
         args.max_concurrent,
