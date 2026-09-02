@@ -85,27 +85,16 @@ def test_scaling_ladder_searches_cluster_and_data_local_temp_roots(monkeypatch):
     ]
 
 
-def _permanent_at(keep, step):
-    # Mirror the checkpointer step policy: the first interval whose `until` still covers the step sets
-    # the cadence, and a permanent checkpoint lands when the step is a multiple of it.
-    for interval in keep:
-        until = interval.get("until")
-        if until is None or until >= step:
-            return step % interval["every"] == 0
-    return False
-
-
-def test_d6144_pins_permanent_checkpoint_at_55000_and_keeps_the_6000_cadence():
+def test_d6144_pins_permanent_checkpoint_at_55000_alongside_the_6000_cadence():
     step = build_ladder_run(run_id="test-d6144-ckpt", size="d6144", num_steps=390_251, version="2026.08.18")
     ctx = StepContext.for_fingerprint(runtime_arg_keys=step.runtime_args, deps=step.deps)
     keep = step.build_config(ctx).trainer.trainer.checkpointer.keep
 
-    # The one-off pin lands exactly at 55000, not at its neighbors.
-    assert _permanent_at(keep, 55_000)
-    assert not _permanent_at(keep, 54_001)
-    assert not _permanent_at(keep, 55_001)
-    # The every-6000 cadence is intact below and above the pinned range.
-    for kept_step in (6_000, 54_000, 60_000, 390_000):
-        assert _permanent_at(keep, kept_step), kept_step
-    # A step off both schedules is not kept.
-    assert not _permanent_at(keep, 57_000)
+    # Modular per-`until` ranges: the 6000 cadence holds up to 54000, the middle range pins exactly
+    # 55000, and the open-ended range restores the 6000 cadence for every step past it. Building the
+    # step already runs CheckpointerConfig's monotonic-interval validation.
+    assert keep == [
+        {"until": 54_000, "every": 6_000},
+        {"until": 55_000, "every": 55_000},
+        {"until": None, "every": 6_000},
+    ]

@@ -147,8 +147,9 @@ def build_ladder_run(
     ``num_steps`` defaults to the steps needed to train ``TOKENS_PER_ACTIVE_PARAM`` tokens per active
     parameter at the rung's (rack-scaled) batch. Every eval scores the held-out set both as-trained
     and dropless. The narrow rungs eval every 5% of the run and keep only the forced final
-    checkpoint; the d6144 hero evals every 3000 steps and keeps a permanent checkpoint every 6000.
-    ``checkpoint_every`` overrides that cadence for any rung. A rolling temporary checkpoint every
+    checkpoint; the d6144 hero evals every 3000 steps and keeps a permanent checkpoint every 6000,
+    plus a one-off permanent checkpoint at step 55000. ``checkpoint_every`` overrides that cadence
+    for any rung. A rolling temporary checkpoint every
     ``RESUME_SAVE_INTERVAL`` on region-local storage covers a crash or a preemption, and a rung
     resumes from the newest checkpoint it finds.
     """
