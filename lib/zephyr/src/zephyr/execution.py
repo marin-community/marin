@@ -516,7 +516,11 @@ class ZephyrContext:
         )
         coordinator: ActorHandle | None = None
         try:
-            coordinator = coordinator_group.wait_ready(count=1)[0]
+            # The coordinator pays the same env build as workers; after a lockfile
+            # change a cold sync can exceed the fray default (900s). wait_ready
+            # fail-fasts on dead jobs, so a long budget only tolerates slow builds.
+            coordinator_ready_wait = float(os.environ.get("ZEPHYR_COORDINATOR_READY_WAIT") or 12 * 60 * 60)
+            coordinator = coordinator_group.wait_ready(count=1, timeout=coordinator_ready_wait)[0]
             # The coordinator creates the workers so they land in a child job of its
             # own and Iris cascading termination retires them with it.
             coordinator.start_workers.remote(
