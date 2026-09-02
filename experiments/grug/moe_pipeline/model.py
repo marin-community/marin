@@ -9,6 +9,7 @@ No load-balancing loss; router z-loss only. All layers are MoE (no dense layers)
 
 import dataclasses
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any, Literal
 
 import equinox as eqx
@@ -19,13 +20,13 @@ from einops import rearrange
 from haliax import Axis
 from haliax.jax_utils import named_call
 from jax import core, random
-from jax.sharding import NamedSharding, get_abstract_mesh, reshard
-from jax.sharding import PartitionSpec as P
 
 try:
     from jax.shard_map import shard_map
 except ModuleNotFoundError:
     from jax.experimental.shard_map import shard_map
+from jax.sharding import NamedSharding, get_abstract_mesh, reshard
+from jax.sharding import PartitionSpec as P
 from jaxtyping import Array, Float, Int, PRNGKeyArray
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.grug.attention import (
@@ -105,11 +106,7 @@ def _hf_config_attr(config: HfConfig, names: tuple[str, ...], default: Any = Non
 
 @dataclass(frozen=True)
 class GrugModelConfig:
-    """Hyperparameters for the grug MoE transformer.
-
-    Architecture choices (GatedNorm, XSA, QB routing) are hardcoded.
-    Only shape/size knobs live here. All layers are MoE.
-    """
+    """Architecture and execution settings for the Grug MoE transformer."""
 
     vocab_size: int
     hidden_dim: int = 512
@@ -403,8 +400,6 @@ class GatedNorm(eqx.Module):
     @named_call
     def __call__(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
         gate_hidden = jnp.einsum("...d,dr->...r", x, self.w_down)
-        # TODO: silu activation here isn't explored, just cargo-culted from Qwen. Likely low-hanging ablation fruit
-        # (e.g. compare no activation, relu, etc.).
         gate_hidden = jax.nn.silu(gate_hidden)
         gate = jax.nn.sigmoid(jnp.einsum("...r,rd->...d", gate_hidden, self.w_up))
         return x * gate.astype(x.dtype)
@@ -609,8 +604,8 @@ class MoEMLP(eqx.Module):
             local_tokens = s_minus_alpha.shape[0] // num_devices
             qb_count = max(1, local_tokens * self.cfg.num_experts_per_token // self.cfg.num_experts)
 
-            def _local_qb_beta(s_ma):
-                topk_vals, _ = jax.lax.top_k(s_ma.T, qb_count)
+            def _local_qb_beta(local_s_minus_alpha):
+                topk_vals, _ = jax.lax.top_k(local_s_minus_alpha.T, qb_count)
                 beta = topk_vals[:, -1]
                 return jax.lax.pmean(beta, axis_name=BATCH_AXES)
 
@@ -635,6 +630,11 @@ class MoEMLP(eqx.Module):
             routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
             routed = reshard(routed, _batch_spec())
         return routed, router_stats
+
+
+class LayerAttentionMode(StrEnum):
+    SHORT = "short"
+    LONG = "long"
 
 
 class Block(eqx.Module):
@@ -669,12 +669,17 @@ class Block(eqx.Module):
         self,
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
-        use_pko: bool = False,
-        disable_rope: bool = False,
+        attention_mode: LayerAttentionMode,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+        is_long = attention_mode == LayerAttentionMode.LONG
         with jax.named_scope("attention"):
             attn_in = self.attn_gated_norm(self.rms_attn(x))
-            x = x + self.attn(attn_in, mask, use_pko=use_pko, disable_rope=disable_rope)
+            x = x + self.attn(
+                attn_in,
+                mask,
+                use_pko=is_long and not self.attn.cfg.disable_pko,
+                disable_rope=is_long and self.attn.cfg.disable_long_rope,
+            )
         with jax.named_scope("routed_moe"):
             mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
             mlp_out, router_stats = self.mlp(mlp_in)
@@ -766,10 +771,10 @@ class Transformer(eqx.Module):
             is_last = i == num_blocks - 1
             is_long = i % 4 == 3 or is_last
             layer_mask = long_mask if is_long else short_mask
-            use_pko = is_long and not cfg.disable_pko
-            disable_rope = is_long and cfg.disable_long_rope
             hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(
-                hidden, layer_mask, use_pko, disable_rope
+                hidden,
+                layer_mask,
+                LayerAttentionMode.LONG if is_long else LayerAttentionMode.SHORT,
             )
             moe_router_stats.append(router_stats)
 
@@ -823,8 +828,8 @@ class Transformer(eqx.Module):
         )
         # No load-balancing loss; router z-loss only.
         num_moe_layers = router_metrics["router_z_loss_per_layer"].shape[0]
-        rzl = jnp.sum(router_metrics["router_z_loss_per_layer"]) / num_moe_layers
-        aux_loss = self.config.router_z_loss_coef * rzl
+        router_z_loss = jnp.sum(router_metrics["router_z_loss_per_layer"]) / num_moe_layers
+        aux_loss = self.config.router_z_loss_coef * router_z_loss
         loss = cross_entropy_loss + aux_loss if reduction != "none" else cross_entropy_loss
         if return_router_metrics:
             summarized_metrics = _summarize_router_metrics(router_metrics)

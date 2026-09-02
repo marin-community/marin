@@ -34,16 +34,22 @@ from experiments.grug.moe_pipeline.model import (
     Block,
     GatedNorm,
     GrugModelConfig,
+    LayerAttentionMode,
     RMSNorm,
     Transformer,
 )
 
 try:
     import jaxpp.api as jaxpp
-    from jaxpp.experimental import mpmd
-except ModuleNotFoundError:
+except ModuleNotFoundError as error:
+    if error.name != "jaxpp":
+        raise
     jaxpp = None
+
+if jaxpp is None:
     mpmd = None
+else:
+    from jaxpp.experimental import mpmd
 
 
 TRAIN_LOSS_KEY = "train/loss"
@@ -123,7 +129,6 @@ class GrugMoePipelineStage(eqx.Module):
     final_norm: RMSNorm | None
     final_gated_norm: GatedNorm | None
     config: GrugModelConfig = eqx.field(static=True)
-    stage_index: int = eqx.field(static=True)
     start_layer: int = eqx.field(static=True)
     end_layer: int = eqx.field(static=True)
 
@@ -161,8 +166,7 @@ class GrugMoePipelineStage(eqx.Module):
             hidden, metrics = eqx.filter_checkpoint(block, policy=remat_policy)(
                 hidden,
                 layer_mask,
-                is_long and not cfg.disable_pko,
-                is_long and cfg.disable_long_rope,
+                LayerAttentionMode.LONG if is_long else LayerAttentionMode.SHORT,
             )
             block_metrics.append(metrics)
 
@@ -260,7 +264,6 @@ def split_transformer(
                 final_norm=model.final_norm if is_last else None,
                 final_gated_norm=model.final_gated_norm if is_last else None,
                 config=model.config,
-                stage_index=stage_index,
                 start_layer=start_layer,
                 end_layer=end_layer,
             )

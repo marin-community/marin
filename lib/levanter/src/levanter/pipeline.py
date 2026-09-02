@@ -42,9 +42,7 @@ def reshape_array_into_microbatches(value: ArrayValue, num_microbatches: int) ->
     if value.shape[0] % num_microbatches != 0:
         raise ValueError(f"batch axis size {value.shape[0]} must be divisible by num_microbatches={num_microbatches}")
     microbatch_size = value.shape[0] // num_microbatches
-    sharding = getattr(value, "sharding", None)
-    if sharding is None:
-        sharding = getattr(getattr(value, "aval", None), "sharding", None)
+    sharding = jax.typeof(value).sharding
     out_sharding = None
     if isinstance(sharding, NamedSharding):
         out_sharding = NamedSharding(sharding.mesh, P(None, *sharding.spec))
@@ -64,17 +62,3 @@ def reshape_batch_into_microbatches(batch: BatchT, num_microbatches: int) -> Bat
         return reshape_array_into_microbatches(value, num_microbatches)
 
     return jax.tree.map(reshape_leaf, batch)
-
-
-def split_batch_into_microbatches(batch: BatchT, num_microbatches: int) -> tuple[BatchT, ...]:
-    """Split every non-scalar array leaf along its leading batch dimension."""
-    reshaped = reshape_batch_into_microbatches(batch, num_microbatches)
-
-    def select_microbatch(value, index: int):
-        if not isinstance(value, jax.Array | core.Tracer) or value.ndim == 0:
-            return value
-        return value[index]
-
-    return tuple(
-        jax.tree.map(lambda value: select_microbatch(value, index), reshaped) for index in range(num_microbatches)
-    )
