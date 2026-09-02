@@ -123,14 +123,8 @@ pub async fn flush_to_objects(
         return Err(error);
     }
     // Local durability is the ack: staged objects and catalog rows are on
-    // disk. HEAD is owed, not waited on.
+    // disk. HEAD is owed, and the caller publishes it outside the flush gate.
     target.buffer.publish_persisted(max_seq);
-    // Publish immediately so HEAD lags the ack by one round trip in the
-    // common case. A failure — a remote outage — leaves the revision owed;
-    // maintenance retries it, and the ack above stands either way.
-    if let Err(error) = target.controller.publish_owed().await {
-        tracing::warn!(namespace = %target.table, %error, "flush publication deferred; revision stays owed to maintenance");
-    }
     Ok(())
 }
 
