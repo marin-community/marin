@@ -217,6 +217,8 @@ def pool_candidates(
     phase_1_bucket_caps: np.ndarray,
     total_bucket_caps: np.ndarray,
     forbidden: set[tuple[int, ...]],
+    design_seed: int = DESIGN_SEED,
+    dirichlet_draws_per_concentration: int = DIRICHLET_DRAWS_PER_CONCENTRATION,
 ) -> tuple[np.ndarray, list[str], list[float | None], dict[str, int]]:
     """Build an exact candidate union from the archive and deterministic Dirichlet draws."""
     candidates: dict[tuple[int, ...], tuple[np.ndarray, str, float | None]] = {}
@@ -241,9 +243,9 @@ def pool_candidates(
     for weights in historical_phase_1:
         consider(weights, "historical_panel", None)
 
-    generator = np.random.default_rng(DESIGN_SEED)
+    generator = np.random.default_rng(design_seed)
     for concentration in DIRICHLET_CONCENTRATIONS:
-        draws = generator.dirichlet(concentration * proportional, size=DIRICHLET_DRAWS_PER_CONCENTRATION)
+        draws = generator.dirichlet(concentration * proportional, size=dirichlet_draws_per_concentration)
         for weights in draws:
             consider(weights, "dirichlet", concentration)
 

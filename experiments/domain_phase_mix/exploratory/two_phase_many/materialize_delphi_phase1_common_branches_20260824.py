@@ -12,18 +12,14 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 
 import fsspec
 import pandas as pd
 
-SCRIPT_DIR = Path(__file__).resolve().parent
-DEFAULT_OUTPUT_DIR = SCRIPT_DIR / "reference_outputs" / "delphi_phase1_common_branch_results_20260824"
-DEFAULT_EXPERIMENT_ROOT = (
-    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/" "delphi_3e18_phase1_common_branches_20260824"
-)
-EXPECTED_EXPERIMENT_NAME = "pinlin_calvin_xu/data_mixture/delphi_3e18_phase1_common_branches_20260824"
 EXPECTED_TERMINAL_STEP = 3_006
+EXPECTED_PREFIX_TRAIN_STEPS = 2_400
 EXPECTED_FULL_ROWS = 232
 EXPECTED_FIT_ROWS = 200
 EXPECTED_PREFIX_COUNT = 4
@@ -33,17 +29,58 @@ PRIMARY_METRIC = "eval/uncheatable_eval/bpb"
 DIAGNOSTIC_METRIC = "eval/uncheatable_eval/github_cpp/bpb"
 OPERATIONAL_EVAL_FIELDS = frozenset({"eval/loading_time", "eval/total_time"})
 BRANCH_PROVENANCE_FILENAME = "branch_provenance.json"
+EXPECTED_TPU_DEVICE_COUNTS = {"v5p-8": 4, "v6e-8": 8}
+EXPECTED_TPU_KIND_FRAGMENTS = {"v5p-8": "v5", "v6e-8": "v6"}
+CANONICAL_PANEL_HARDWARE_STATUS = "canonical_v5p_continuation"
+MIGRATED_PANEL_HARDWARE_STATUS = "selection_only_requires_v5p_finalist_confirmation"
+
+
+@dataclass(frozen=True)
+class TpuHardware:
+    tpu_type: str
+    region: str
+    zone: str
+
+
+@dataclass(frozen=True)
+class HardwareCanaryGate:
+    paired_run_order: int = 0
+    noise_run_orders: tuple[int, ...] = (228, 229, 230, 231)
+    terminal_primary_absolute_bpb_max: float = 0.0002
+    terminal_diagnostic_absolute_bpb_max: float = 0.0002
+    terminal_component_absolute_bpb_max: float = 0.0005
+    terminal_noise_range_fraction_max: float = 0.25
+    boundary_train_loss_relative_max: float = 0.001
+    first_50_logged_steps_train_loss_relative_max: float = 0.002
+    provenance_comparison_mask: tuple[str, ...] = (
+        "experiment_name",
+        "prefix_hardware",
+        "continuation_hardware",
+        "observed_continuation_hardware",
+        "panel_hardware_status",
+        "terminal_checkpoint_uri",
+        "minimum_initial_step",
+        "branch_code_commit",
+    )
+    failure_action: str = "do_not_migrate_full_panel"
+
+
+PREFIX_HARDWARE = TpuHardware(tpu_type="v5p-8", region="us-east5", zone="us-east5-a")
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--experiment-root", default=DEFAULT_EXPERIMENT_ROOT)
+    parser.add_argument("--experiment-root", required=True)
+    parser.add_argument("--expected-experiment-name", required=True)
+    parser.add_argument("--expected-continuation-tpu-type", required=True)
+    parser.add_argument("--expected-continuation-tpu-region", required=True)
+    parser.add_argument("--expected-continuation-tpu-zone", required=True)
     parser.add_argument("--expected-candidate-sha256", required=True)
     parser.add_argument("--expected-continuation-sha256", required=True)
     parser.add_argument("--expected-selected-prefixes-sha256", required=True)
     parser.add_argument("--prefix-replay-code-commit", required=True)
     parser.add_argument("--branch-code-commit", required=True)
-    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument("--output-dir", type=Path, required=True)
     return parser.parse_args()
 
 
@@ -67,6 +104,33 @@ def gs_uri(path: str) -> str:
     return "gs://" + path.removeprefix("gs://").lstrip("/")
 
 
+def panel_hardware_status(hardware: TpuHardware) -> str:
+    if hardware == PREFIX_HARDWARE:
+        return CANONICAL_PANEL_HARDWARE_STATUS
+    return MIGRATED_PANEL_HARDWARE_STATUS
+
+
+def hardware_canary_gate_payload() -> dict[str, object]:
+    payload = asdict(HardwareCanaryGate())
+    payload["noise_run_orders"] = list(HardwareCanaryGate().noise_run_orders)
+    payload["provenance_comparison_mask"] = list(HardwareCanaryGate().provenance_comparison_mask)
+    return payload
+
+
+def validate_observed_hardware(payload: object, expected: TpuHardware) -> dict[str, object]:
+    if not isinstance(payload, dict):
+        raise ValueError("Observed continuation hardware is missing")
+    expected_count = EXPECTED_TPU_DEVICE_COUNTS[expected.tpu_type]
+    if payload.get("platform") != "tpu":
+        raise ValueError(f"Expected observed TPU platform, found {payload}")
+    if payload.get("global_device_count") != expected_count or payload.get("local_device_count") != expected_count:
+        raise ValueError(f"Observed TPU device count does not match {expected.tpu_type}: {payload}")
+    device_kind = payload.get("device_kind")
+    if not isinstance(device_kind, str) or EXPECTED_TPU_KIND_FRAGMENTS[expected.tpu_type] not in device_kind.lower():
+        raise ValueError(f"Observed TPU device kind does not match {expected.tpu_type}: {payload}")
+    return payload
+
+
 def matching_full_manifest(
     fs: fsspec.AbstractFileSystem,
     root: str,
@@ -76,11 +140,21 @@ def matching_full_manifest(
     selected_prefixes_sha256: str,
     prefix_replay_code_commit: str,
     branch_code_commit: str,
+    expected_experiment_name: str,
+    continuation_hardware: TpuHardware,
 ) -> tuple[str, dict[str, object]]:
     matches = []
     for path in sorted(fs.glob(f"{root}/manifest-*/manifest.json")):
         payload = read_json(fs, path)
-        if payload.get("experiment_name") != EXPECTED_EXPERIMENT_NAME:
+        if payload.get("experiment_name") != expected_experiment_name:
+            continue
+        if payload.get("prefix_hardware") != asdict(PREFIX_HARDWARE):
+            continue
+        if payload.get("continuation_hardware") != asdict(continuation_hardware):
+            continue
+        if payload.get("panel_hardware_status") != panel_hardware_status(continuation_hardware):
+            continue
+        if payload.get("hardware_canary_gate") != hardware_canary_gate_payload():
             continue
         if payload.get("candidate_weights_sha256") != candidate_sha256:
             continue
@@ -134,6 +208,8 @@ def materialize_rows(
     continuation_sha256: str,
     prefix_replay_code_commit: str,
     branch_code_commit: str,
+    expected_experiment_name: str,
+    continuation_hardware: TpuHardware,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     manifest_rows = manifest["branch_rows"]
     if not isinstance(manifest_rows, list):
@@ -160,6 +236,9 @@ def materialize_rows(
         with fs.open(provenance_path, "rb") as handle:
             provenance_bytes = handle.read()
         provenance = json.loads(provenance_bytes)
+        observed_hardware = validate_observed_hardware(
+            provenance.get("observed_continuation_hardware"), continuation_hardware
+        )
         prefix = design_row["prefix"]
         if not isinstance(prefix, dict):
             raise ValueError(f"Prefix identity is malformed for {run_name}")
@@ -167,7 +246,7 @@ def materialize_rows(
         if not isinstance(phase_weights, dict):
             raise ValueError(f"Phase weights are malformed for {run_name}")
         expected_provenance = {
-            "experiment_name": EXPECTED_EXPERIMENT_NAME,
+            "experiment_name": expected_experiment_name,
             "run_name": run_name,
             "run_order": int(design_row["run_order"]),
             "run_id": int(design_row["run_id"]),
@@ -183,6 +262,11 @@ def materialize_rows(
             "continuation_id": str(design_row["continuation_id"]),
             "phase_weights_sha256": hashlib.sha256(json.dumps(phase_weights, sort_keys=True).encode()).hexdigest(),
             "branch_code_commit": branch_code_commit,
+            "prefix_hardware": asdict(PREFIX_HARDWARE),
+            "continuation_hardware": asdict(continuation_hardware),
+            "observed_continuation_hardware": observed_hardware,
+            "minimum_initial_step": EXPECTED_PREFIX_TRAIN_STEPS,
+            "panel_hardware_status": panel_hardware_status(continuation_hardware),
             "terminal_checkpoint_uri": gs_uri(checkpoint_path),
             "terminal_checkpoint_step": EXPECTED_TERMINAL_STEP,
         }
@@ -205,6 +289,10 @@ def materialize_rows(
             "provenance_sha256": hashlib.sha256(provenance_bytes).hexdigest(),
             "uncheatable_bpb": float(record[PRIMARY_METRIC]),
             "github_cpp_bpb": float(record[DIAGNOSTIC_METRIC]),
+            "prefix_tpu_type": PREFIX_HARDWARE.tpu_type,
+            "continuation_tpu_type": continuation_hardware.tpu_type,
+            "continuation_tpu_region": continuation_hardware.region,
+            "continuation_tpu_zone": continuation_hardware.zone,
         }
         phase_0 = phase_weights.get("phase_0")
         phase_1 = phase_weights.get("phase_1")
@@ -218,6 +306,10 @@ def materialize_rows(
                 "run_name": run_name,
                 "metric": key,
                 "value": float(value),
+                "prefix_tpu_type": PREFIX_HARDWARE.tpu_type,
+                "continuation_tpu_type": continuation_hardware.tpu_type,
+                "continuation_tpu_region": continuation_hardware.region,
+                "continuation_tpu_zone": continuation_hardware.zone,
             }
             for key, value in record.items()
             if key.startswith("eval/uncheatable_eval/") and isinstance(value, (float, int))
@@ -250,6 +342,11 @@ def materialize_rows(
 
 def main() -> None:
     args = parse_args()
+    continuation_hardware = TpuHardware(
+        tpu_type=args.expected_continuation_tpu_type,
+        region=args.expected_continuation_tpu_region,
+        zone=args.expected_continuation_tpu_zone,
+    )
     fs, root = fsspec.core.url_to_fs(args.experiment_root)
     manifest_path, manifest = matching_full_manifest(
         fs,
@@ -259,6 +356,8 @@ def main() -> None:
         selected_prefixes_sha256=args.expected_selected_prefixes_sha256,
         prefix_replay_code_commit=args.prefix_replay_code_commit,
         branch_code_commit=args.branch_code_commit,
+        expected_experiment_name=args.expected_experiment_name,
+        continuation_hardware=continuation_hardware,
     )
     results, metrics = materialize_rows(
         fs,
@@ -268,6 +367,8 @@ def main() -> None:
         continuation_sha256=args.expected_continuation_sha256,
         prefix_replay_code_commit=args.prefix_replay_code_commit,
         branch_code_commit=args.branch_code_commit,
+        expected_experiment_name=args.expected_experiment_name,
+        continuation_hardware=continuation_hardware,
     )
     args.output_dir.mkdir(parents=True, exist_ok=True)
     results.to_csv(args.output_dir / "branch_results.csv", index=False)
@@ -285,6 +386,11 @@ def main() -> None:
         "selected_prefixes_sha256": args.expected_selected_prefixes_sha256,
         "prefix_replay_code_commit": args.prefix_replay_code_commit,
         "branch_code_commit": args.branch_code_commit,
+        "experiment_name": args.expected_experiment_name,
+        "prefix_hardware": asdict(PREFIX_HARDWARE),
+        "continuation_hardware": asdict(continuation_hardware),
+        "panel_hardware_status": panel_hardware_status(continuation_hardware),
+        "hardware_canary_gate": hardware_canary_gate_payload(),
     }
     (args.output_dir / "coverage.json").write_text(json.dumps(coverage, indent=2, sort_keys=True) + "\n")
     print(json.dumps(coverage, indent=2, sort_keys=True))

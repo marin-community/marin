@@ -2,14 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
+from pathlib import Path
 from typing import cast
 
-<<<<<<< HEAD
-=======
 import numpy as np
 import pandas as pd
->>>>>>> 0dd17851fd (Freeze Delphi KL0.05 Wave 2 acquisition)
 import pytest
 from marin.execution.executor import collect_dependencies_and_version
 from marin.execution.types import versioned
@@ -18,10 +16,11 @@ from experiments.domain_phase_mix import launch_delphi_3e18_phase1_common_branch
 from experiments.domain_phase_mix import launch_delphi_3e18_phase1_kl0p05_wave2 as wave2_launch
 from experiments.domain_phase_mix import launch_delphi_augmented_swarm_3e18 as base
 from experiments.domain_phase_mix.exploratory.two_phase_many import (
+    design_delphi_phase1_kl0p05_wave2_pool_20260825 as wave2_pool,
+)
+from experiments.domain_phase_mix.exploratory.two_phase_many import (
     materialize_delphi_phase1_common_branches_20260824 as materialize,
 )
-<<<<<<< HEAD
-=======
 from experiments.domain_phase_mix.exploratory.two_phase_many import (
     materialize_delphi_phase1_kl0p05_noise_controls_20260825 as noise_materialize,
 )
@@ -31,10 +30,30 @@ from experiments.domain_phase_mix.exploratory.two_phase_many import (
 from experiments.domain_phase_mix.exploratory.two_phase_many import (
     select_delphi_phase1_kl0p05_wave2_20260825 as wave2_select,
 )
->>>>>>> 0dd17851fd (Freeze Delphi KL0.05 Wave 2 acquisition)
 
 CANDIDATE_SHA256 = "fef07d4188ef05f4df4a43d1eda6a12f7d2daf69a1ae1eb777863fd20db732b6"
 CONTINUATION_SHA256 = "9305b5c1598c9eb11e7f898f709bfb193f37802efaba40a43fbecd0d52c12355"
+EXTENSION_CONTINUATION_SHA256 = "2860d0e1f177f1728580ec1cdda05e049734e7977b868a8c0abd05d9d8bd0ec3"
+EXTENSION_CONTINUATION_WEIGHTS = (
+    Path(__file__).resolve().parents[1]
+    / "experiments"
+    / "domain_phase_mix"
+    / "exploratory"
+    / "two_phase_many"
+    / "reference_outputs"
+    / "delphi_phase1_kl0p05_wave1_extension_20260825"
+    / "continuation_weights.csv"
+)
+NOISE_CONTROL_DESIGN = (
+    Path(__file__).resolve().parents[1]
+    / "experiments"
+    / "domain_phase_mix"
+    / "exploratory"
+    / "two_phase_many"
+    / "reference_outputs"
+    / "delphi_phase1_kl0p05_noise_controls_20260825"
+    / "noise_controls.csv"
+)
 SELECTED_CANDIDATES = (
     "observed_cap10_best",
     "shared_bounded_ensemble_kl0p05",
@@ -50,8 +69,6 @@ class _PrefixSpec:
     trainer_seed: int
 
 
-<<<<<<< HEAD
-=======
 @dataclass(frozen=True)
 class _Device:
     platform: str
@@ -124,7 +141,6 @@ def _branch_training_config() -> branches.BranchTrainingConfig:
     )
 
 
->>>>>>> 0dd17851fd (Freeze Delphi KL0.05 Wave 2 acquisition)
 def test_frozen_continuation_design_obeys_runtime_contract() -> None:
     buckets, continuations = branches.load_continuations(
         branches.DEFAULT_CONTINUATION_WEIGHTS,
@@ -198,6 +214,261 @@ def test_branch_panel_crosses_common_fit_rows_and_keeps_controls_outside_budget(
     assert len({row["data_seed"] for row in noise_rows}) == branches.BRANCH_NOISE_REPEAT_COUNT
     assert len({row["trainer_seed"] for row in noise_rows}) == 1
     assert len({branches.phase_weights_sha256(row["phase_weights"]) for row in noise_rows}) == 1
+    assert tuple(row["run_order"] for row in noise_rows) == branches.hardware_canary_gate().noise_run_orders
+
+    custom_controls = (
+        branches.BranchNoiseControl(
+            prefix_candidate_id="shared_bounded_ensemble_kl0p05",
+            continuation_id="control_proportional",
+            repeat_index=1,
+            data_seed=962_000,
+        ),
+        branches.BranchNoiseControl(
+            prefix_candidate_id="shared_bounded_ensemble_kl0p05",
+            continuation_id="fit_maximin_26",
+            repeat_index=1,
+            data_seed=962_001,
+        ),
+    )
+    custom_rows = branches.branch_rows(
+        prefixes=prefixes,
+        prefix_specs=prefix_specs,
+        continuations=continuations,
+        noise_controls=custom_controls,
+    )
+    custom_noise = [row for row in custom_rows if row["branch_role"] == "same_prefix_branch_noise"]
+    assert len(custom_rows) == branches.BASE_BRANCH_ROWS + len(custom_controls)
+    assert {row["prefix"].candidate_id for row in custom_noise} == {"shared_bounded_ensemble_kl0p05"}
+    assert {row["noise_group_id"] for row in custom_noise} == {
+        "shared_bounded_ensemble_kl0p05/control_proportional",
+        "shared_bounded_ensemble_kl0p05/fit_maximin_26",
+    }
+
+
+def test_kl0p05_noise_control_design_is_hash_pinned() -> None:
+    controls = branches.load_branch_noise_controls(
+        NOISE_CONTROL_DESIGN,
+        branches.file_sha256(NOISE_CONTROL_DESIGN),
+    )
+
+    assert len(controls) == 8
+    assert {control.prefix_candidate_id for control in controls} == {"shared_bounded_ensemble_kl0p05"}
+    assert {control.continuation_id for control in controls} == {
+        "control_proportional",
+        "fit_maximin_26",
+    }
+    assert len({control.data_seed for control in controls}) == 8
+
+
+def test_branch_run_id_base_can_isolate_an_extension_panel() -> None:
+    uniform = {domain: 1.0 / len(base.DOMAIN_NAMES) for domain in base.DOMAIN_NAMES}
+    row = {
+        "run_order": 57,
+        "fit_budget": True,
+        "branch_role": "primary_cross",
+        "prefix": branches.PrefixCheckpoint(
+            candidate_id="shared_bounded_ensemble_kl0p05",
+            repeat_seed=0,
+            checkpoint_uri="gs://marin-us-east5/prefix/step-2399",
+            provenance_sha256="provenance",
+        ),
+        "continuation_id": "fit_wave1_extension_00",
+        "continuation_role": "wave1_extension_stratified_maximin",
+        "phase_weights": {"phase_0": uniform, "phase_1": uniform},
+    }
+    prefix_specs = {
+        ("shared_bounded_ensemble_kl0p05", 0): cast(
+            base.DelphiSwarmRunSpec,
+            _PrefixSpec(
+                phase_weights={"phase_0": uniform, "phase_1": uniform},
+                data_seed=930_000,
+                trainer_seed=0,
+            ),
+        )
+    }
+
+    enriched = branches.enrich_branch_rows([row], prefix_specs, run_id_base=951_000)
+
+    assert enriched[0]["run_id"] == 951_057
+    assert enriched[0]["run_order"] == 57
+    assert enriched[0]["run_name"] == ("branch_shared_bounded_ensemble_kl0p05_seed0_fit_wave1_extension_00")
+
+
+def test_branch_run_id_base_rejects_negative_values() -> None:
+    with pytest.raises(ValueError, match="must be nonnegative"):
+        branches.enrich_branch_rows([], {}, run_id_base=-1)
+
+
+def test_hardware_canary_payload_uses_actual_custom_noise_orders() -> None:
+    payload = branches.hardware_canary_gate_payload((228, 229, 230, 231, 232, 233, 234, 235))
+
+    assert payload["noise_run_orders"] == [228, 229, 230, 231, 232, 233, 234, 235]
+
+
+def test_noncanonical_continuation_panel_requires_distinct_run_id_namespace() -> None:
+    with pytest.raises(ValueError, match="must use a distinct"):
+        branches.validate_branch_run_id_namespace("extension", branches.BRANCH_RUN_ID_BASE)
+    branches.validate_branch_run_id_namespace(
+        branches.CANONICAL_CONTINUATION_WEIGHTS_SHA256,
+        branches.BRANCH_RUN_ID_BASE,
+    )
+    branches.validate_branch_run_id_namespace("extension", 951_000)
+
+
+def test_wave1_extension_loads_fifty_fit_rows_and_repeats_the_frozen_anchor() -> None:
+    _, original = branches.load_continuations(
+        branches.DEFAULT_CONTINUATION_WEIGHTS,
+        CONTINUATION_SHA256,
+        branches.DEFAULT_CANDIDATE_WEIGHTS,
+        CANDIDATE_SHA256,
+    )
+    _, extension = branches.load_continuations(
+        EXTENSION_CONTINUATION_WEIGHTS,
+        EXTENSION_CONTINUATION_SHA256,
+        branches.DEFAULT_CANDIDATE_WEIGHTS,
+        CANDIDATE_SHA256,
+    )
+
+    original_fit = next(row for row in original if row["continuation_id"] == "fit_maximin_00")
+    anchor = next(row for row in extension if row["continuation_id"] == "control_wave1a_anchor_fit_maximin_00")
+    assert len(extension) == branches.COMMON_CONTINUATION_COUNT
+    assert sum(bool(row["fit_budget"]) for row in extension) == branches.COMMON_FIT_CONTINUATION_COUNT
+    assert anchor["fit_budget"] is False
+    assert anchor["role"] == "cross_wave_anchor"
+    assert anchor["weights"] == original_fit["weights"]
+
+
+def _wave_manifest_payload(contract: wave1_materialize.WaveContract) -> dict[str, object]:
+    rows = []
+    for index, run_order in enumerate(contract.selected_run_orders):
+        rows.append(
+            {
+                "run_order": run_order,
+                "run_id": contract.run_id_base + run_order,
+                "fit_budget": index < contract.fit_rows,
+            }
+        )
+    return {
+        "experiment_name": wave1_materialize.EXPERIMENT_NAME,
+        "candidate_weights_sha256": wave1_materialize.CANDIDATE_SHA256,
+        "continuation_weights_sha256": contract.continuation_sha256,
+        "selected_prefixes_sha256": wave1_materialize.SELECTED_PREFIXES_SHA256,
+        "prefix_replay_code_commit": wave1_materialize.PREFIX_REPLAY_CODE_COMMIT,
+        "code_commit": contract.branch_code_commit,
+        "continuation_hardware": asdict(wave1_materialize.CONTINUATION_HARDWARE),
+        "selected_run_orders": list(contract.selected_run_orders),
+        "branch_rows": rows,
+    }
+
+
+def test_wave1_materializer_selects_each_manifest_by_hash_and_exact_rows(tmp_path) -> None:
+    for contract in wave1_materialize.WAVE_CONTRACTS:
+        manifest_dir = tmp_path / f"manifest-{contract.name}"
+        manifest_dir.mkdir()
+        (manifest_dir / "manifest.json").write_text(json.dumps(_wave_manifest_payload(contract)))
+    canary_dir = tmp_path / "manifest-canary"
+    canary_dir.mkdir()
+    canary = _wave_manifest_payload(wave1_materialize.WAVE_CONTRACTS[0])
+    canary["selected_run_orders"] = [0]
+    canary["branch_rows"] = [{"run_order": 0, "run_id": 950_000, "fit_budget": True}]
+    (canary_dir / "manifest.json").write_text(json.dumps(canary))
+
+    fs, root = materialize.fsspec.core.url_to_fs(str(tmp_path))
+    for contract in wave1_materialize.WAVE_CONTRACTS:
+        match = wave1_materialize.matching_wave_manifest(fs, root, contract)
+        assert match is not None
+        path, payload = match
+        assert contract.name in path
+        assert payload["selected_run_orders"] == list(contract.selected_run_orders)
+
+
+def test_wave1_materializer_allows_only_absent_manifests_in_partial_mode(tmp_path) -> None:
+    fs, root = materialize.fsspec.core.url_to_fs(str(tmp_path))
+    contract = wave1_materialize.WAVE_CONTRACTS[0]
+
+    assert wave1_materialize.matching_wave_manifest(fs, root, contract, allow_missing=True) is None
+    with pytest.raises(ValueError, match="Expected one wave1a manifest"):
+        wave1_materialize.matching_wave_manifest(fs, root, contract)
+
+    for suffix in ("first", "second"):
+        manifest_dir = tmp_path / f"manifest-{suffix}"
+        manifest_dir.mkdir()
+        (manifest_dir / "manifest.json").write_text(json.dumps(_wave_manifest_payload(contract)))
+    with pytest.raises(ValueError, match="Expected one wave1a manifest"):
+        wave1_materialize.matching_wave_manifest(fs, root, contract, allow_missing=True)
+
+
+def test_wave1_combined_result_contract_and_cross_wave_anchor() -> None:
+    rows = []
+    for index in range(wave1_materialize.EXPECTED_FIT_ROWS):
+        rows.append(
+            {
+                "wave": "wave1a" if index < 50 else "wave1b",
+                "run_name": f"fit-{index}",
+                "run_id": 950_000 + index,
+                "fit_budget": True,
+                "prefix_candidate_id": wave1_materialize.TARGET_PREFIX,
+                "prefix_repeat_seed": 0,
+                "continuation_id": f"fit-{index}",
+                "phase_1_a": index / 100,
+                "phase_1_b": 1 - index / 100,
+            }
+        )
+    rows.extend(
+        {
+            "wave": "wave1a",
+            "run_name": f"control-{index}",
+            "run_id": 960_000 + index,
+            "fit_budget": False,
+            "prefix_candidate_id": wave1_materialize.TARGET_PREFIX,
+            "prefix_repeat_seed": 0,
+            "continuation_id": f"control-{index}",
+            "phase_1_a": 0.5,
+            "phase_1_b": 0.5,
+        }
+        for index in range(8)
+    )
+    results = pd.DataFrame(rows)
+
+    wave1_materialize.validate_combined_results(results, complete=True)
+    duplicate = results.copy()
+    duplicate.loc[1, "run_id"] = duplicate.loc[0, "run_id"]
+    with pytest.raises(ValueError, match="Run IDs collide"):
+        wave1_materialize.validate_combined_results(duplicate, complete=True)
+
+    anchor_rows = pd.DataFrame(
+        [
+            {
+                "wave": "wave1a",
+                "continuation_id": wave1_materialize.WAVE1A_ANCHOR_ID,
+                "prefix_candidate_id": wave1_materialize.TARGET_PREFIX,
+                "prefix_repeat_seed": 0,
+                "run_name": "wave1a-anchor",
+                "data_seed": 1,
+                "trainer_seed": 2,
+                "uncheatable_bpb": 1.0,
+                "github_cpp_bpb": 0.8,
+                "phase_0_a": 0.4,
+                "phase_1_a": 0.6,
+            },
+            {
+                "wave": "wave1b",
+                "continuation_id": wave1_materialize.WAVE1B_ANCHOR_ID,
+                "prefix_candidate_id": wave1_materialize.TARGET_PREFIX,
+                "prefix_repeat_seed": 0,
+                "run_name": "wave1b-anchor",
+                "data_seed": 1,
+                "trainer_seed": 2,
+                "uncheatable_bpb": 1.001,
+                "github_cpp_bpb": 0.799,
+                "phase_0_a": 0.4,
+                "phase_1_a": 0.6,
+            },
+        ]
+    )
+    contrast = wave1_materialize.anchor_contrast(anchor_rows).iloc[0]
+    assert contrast.uncheatable_bpb_wave1b_minus_wave1a == pytest.approx(0.001)
+    assert contrast.github_cpp_bpb_wave1b_minus_wave1a == pytest.approx(-0.001)
 
 
 def test_terminal_metric_record_accepts_identical_retry_rows(tmp_path) -> None:
@@ -222,8 +493,117 @@ def test_terminal_metric_record_accepts_identical_retry_rows(tmp_path) -> None:
         materialize.metric_record(fs, root, run_name)
 
 
+def test_materializer_filters_manifest_by_observed_and_declared_hardware(tmp_path) -> None:
+    valid_observation = {
+        "platform": "tpu",
+        "device_kind": "TPU v6e",
+        "global_device_count": 8,
+        "local_device_count": 8,
+    }
+    assert (
+        materialize.validate_observed_hardware(
+            valid_observation, materialize.TpuHardware("v6e-8", "us-east5", "us-east5-b")
+        )
+        == valid_observation
+    )
+    with pytest.raises(ValueError, match="device count"):
+        materialize.validate_observed_hardware(
+            {**valid_observation, "global_device_count": 4},
+            materialize.TpuHardware("v6e-8", "us-east5", "us-east5-b"),
+        )
+
+    common = {
+        "experiment_name": branches.V6E_EXPERIMENT_NAME,
+        "prefix_hardware": asdict(materialize.PREFIX_HARDWARE),
+        "candidate_weights_sha256": CANDIDATE_SHA256,
+        "continuation_weights_sha256": CONTINUATION_SHA256,
+        "selected_prefixes_sha256": "selected",
+        "prefix_replay_code_commit": "prefix",
+        "code_commit": "branch",
+        "expected_full_design_rows": materialize.EXPECTED_FULL_ROWS,
+        "selected_design_rows": materialize.EXPECTED_FULL_ROWS,
+        "branch_rows": [{}] * materialize.EXPECTED_FULL_ROWS,
+        "hardware_canary_gate": materialize.hardware_canary_gate_payload(),
+    }
+    for name, hardware in (
+        ("manifest-v5p", branches.V5P_DEPLOYMENT.hardware),
+        ("manifest-v6e", branches.V6E_DEPLOYMENT.hardware),
+    ):
+        manifest_dir = tmp_path / name
+        manifest_dir.mkdir()
+        (manifest_dir / "manifest.json").write_text(
+            json.dumps(
+                {
+                    **common,
+                    "continuation_hardware": asdict(hardware),
+                    "panel_hardware_status": branches.panel_hardware_status(hardware),
+                }
+            )
+        )
+    fs, root = materialize.fsspec.core.url_to_fs(str(tmp_path))
+    manifest_path, _ = materialize.matching_full_manifest(
+        fs,
+        root,
+        candidate_sha256=CANDIDATE_SHA256,
+        continuation_sha256=CONTINUATION_SHA256,
+        selected_prefixes_sha256="selected",
+        prefix_replay_code_commit="prefix",
+        branch_code_commit="branch",
+        expected_experiment_name=branches.V6E_EXPERIMENT_NAME,
+        continuation_hardware=materialize.TpuHardware("v6e-8", "us-east5", "us-east5-b"),
+    )
+
+    assert "manifest-v6e" in manifest_path
+
+
+def test_branch_hardware_migration_preserves_scientific_run_spec() -> None:
+    source = _full_run_spec()
+
+    migrated = branches.move_run_spec_to_branch_hardware(source, branches.V6E_DEPLOYMENT)
+    expected = asdict(source)
+    expected.update(
+        tpu_type="v6e-8",
+        tpu_region="us-east5",
+        tpu_zone="us-east5-b",
+        tensor_parallel_size=1,
+    )
+
+    assert asdict(migrated) == expected
+    assert asdict(materialize.PREFIX_HARDWARE) == asdict(branches.PREFIX_HARDWARE)
+    assert asdict(materialize.HardwareCanaryGate()) == asdict(branches.hardware_canary_gate())
+    with pytest.raises(ValueError, match="Unsupported branch TPU deployment"):
+        branches.resolve_branch_deployment("v6e-8", "us-east5", "us-east5-a")
+    assert branches.resolve_branch_deployment("v5p-8", "us-east5", "us-east5-a") == branches.V5P_DEPLOYMENT
+    with pytest.raises(ValueError, match="Prefix run spec hardware changed"):
+        branches.move_run_spec_to_branch_hardware(
+            _full_run_spec(tpu_type="v6e-8", tpu_zone="us-east5-b"), branches.V6E_DEPLOYMENT
+        )
+
+
+def test_observed_hardware_and_worker_guards(monkeypatch) -> None:
+    monkeypatch.setattr(branches.jax, "devices", lambda: [_Device("tpu", "TPU v6e") for _ in range(8)])
+    monkeypatch.setattr(branches.jax, "local_device_count", lambda: 8)
+
+    observed = branches.observe_tpu_hardware(branches.V6E_DEPLOYMENT.hardware)
+
+    assert observed == branches.ObservedTpuHardware(
+        platform="tpu",
+        device_kind="TPU v6e",
+        global_device_count=8,
+        local_device_count=8,
+    )
+    config = _branch_training_config()
+    with pytest.raises(ValueError, match="Prefix hardware changed"):
+        branches.verify_prefix_checkpoint_on_worker(replace(config, prefix_hardware=branches.V6E_DEPLOYMENT.hardware))
+    with pytest.raises(ValueError, match="run-spec hardware"):
+        branches.verify_prefix_checkpoint_on_worker(
+            replace(config, continuation_hardware=branches.V5P_DEPLOYMENT.hardware)
+        )
+
+
 def test_manifest_step_versions_the_selected_run_orders() -> None:
     one_row = branches.SaveBranchManifestConfig(
+        experiment_name=branches.V6E_EXPERIMENT_NAME,
         output_path="unused",
         selected_prefixes_json="[]",
         selected_prefixes_sha256="selected",
@@ -231,18 +611,21 @@ def test_manifest_step_versions_the_selected_run_orders() -> None:
         continuation_weights_sha256=CONTINUATION_SHA256,
         prefix_replay_code_commit="prefix",
         code_commit="branch",
+        branch_run_id_base=branches.BRANCH_RUN_ID_BASE,
+        branch_noise_design_sha256=None,
+        expected_full_design_rows=branches.TOTAL_BRANCH_ROWS,
+        continuation_weights_version=versioned(CONTINUATION_SHA256),
+        branch_run_id_base_version=versioned(branches.BRANCH_RUN_ID_BASE),
         branch_rows_json="[]",
         selected_run_orders=versioned((0,)),
-<<<<<<< HEAD
-=======
         prefix_hardware=branches.PREFIX_HARDWARE,
         continuation_hardware=branches.V6E_DEPLOYMENT.hardware,
         continuation_hardware_version=versioned(branches.hardware_identity(branches.V6E_DEPLOYMENT.hardware)),
         selection_manifest_sha256=None,
         selection_contract_sha256=None,
->>>>>>> 0dd17851fd (Freeze Delphi KL0.05 Wave 2 acquisition)
     )
     full_panel = branches.SaveBranchManifestConfig(
+        experiment_name=branches.V6E_EXPERIMENT_NAME,
         output_path="unused",
         selected_prefixes_json="[]",
         selected_prefixes_sha256="selected",
@@ -250,55 +633,47 @@ def test_manifest_step_versions_the_selected_run_orders() -> None:
         continuation_weights_sha256=CONTINUATION_SHA256,
         prefix_replay_code_commit="prefix",
         code_commit="branch",
+        branch_run_id_base=branches.BRANCH_RUN_ID_BASE,
+        branch_noise_design_sha256=None,
+        expected_full_design_rows=branches.TOTAL_BRANCH_ROWS,
+        continuation_weights_version=versioned(CONTINUATION_SHA256),
+        branch_run_id_base_version=versioned(branches.BRANCH_RUN_ID_BASE),
         branch_rows_json="[]",
         selected_run_orders=versioned(tuple(range(branches.TOTAL_BRANCH_ROWS))),
-<<<<<<< HEAD
-=======
         prefix_hardware=branches.PREFIX_HARDWARE,
         continuation_hardware=branches.V6E_DEPLOYMENT.hardware,
         continuation_hardware_version=versioned(branches.hardware_identity(branches.V6E_DEPLOYMENT.hardware)),
         selection_manifest_sha256=None,
         selection_contract_sha256=None,
->>>>>>> 0dd17851fd (Freeze Delphi KL0.05 Wave 2 acquisition)
     )
 
     one_row_version = collect_dependencies_and_version(one_row).version
     full_panel_version = collect_dependencies_and_version(full_panel).version
 
-    assert one_row_version == {"selected_run_orders": (0,)}
-    assert full_panel_version == {"selected_run_orders": tuple(range(branches.TOTAL_BRANCH_ROWS))}
+    expected_hardware_version = branches.hardware_identity(branches.V6E_DEPLOYMENT.hardware)
+    assert one_row_version == {
+        "branch_run_id_base_version": branches.BRANCH_RUN_ID_BASE,
+        "continuation_weights_version": CONTINUATION_SHA256,
+        "selected_run_orders": (0,),
+        "continuation_hardware_version": expected_hardware_version,
+    }
+    assert full_panel_version == {
+        "branch_run_id_base_version": branches.BRANCH_RUN_ID_BASE,
+        "continuation_weights_version": CONTINUATION_SHA256,
+        "selected_run_orders": tuple(range(branches.TOTAL_BRANCH_ROWS)),
+        "continuation_hardware_version": expected_hardware_version,
+    }
 
 
 def test_branch_wandb_tags_fit_wandb_limit() -> None:
-    uniform = {"bucket": 1.0}
-    config = branches.BranchTrainingConfig(
-        analysis_output_path="analysis",
-        output_path="output",
-        run_spec=cast(
-            base.DelphiSwarmRunSpec,
-            _PrefixSpec(phase_weights={"phase_0": uniform, "phase_1": uniform}, data_seed=1, trainer_seed=2),
-        ),
-        validation_configs=None,
-        prefix_checkpoint=branches.PrefixCheckpoint(
-            candidate_id="shared_bounded_ensemble_kl0p05",
-            repeat_seed=0,
-            checkpoint_uri="gs://marin-us-east5/prefix/step-2399",
-            provenance_sha256="a" * 64,
-        ),
-        prefix_replay_code_commit="b" * 40,
-        candidate_weights_sha256="c" * 64,
-        continuation_weights_sha256="d" * 64,
-        continuation_id="fit_maximin_00",
-        code_commit="e" * 40,
-    )
+    config = _branch_training_config()
 
     tags = branches.branch_wandb_tags(config)
+    version = collect_dependencies_and_version(config).version
 
     assert max(map(len, tags)) <= branches.WANDB_TAG_MAX_LENGTH
     assert "prefix_replay_commit=" + "b" * branches.WANDB_HASH_TAG_LENGTH in tags
     assert "continuation_sha=" + "d" * branches.WANDB_HASH_TAG_LENGTH in tags
-<<<<<<< HEAD
-=======
     assert "prefix_tpu=v5p-8" in tags
     assert "continuation_tpu=v6e-8" in tags
     assert "continuation_zone=us-east5-b" in tags
@@ -485,11 +860,13 @@ def test_wave2_candidate_instability_uses_fifteen_spatial_subfits() -> None:
 
 
 def test_wave2_real_frozen_geometry_supports_guided_and_fail_closed_panels() -> None:
-    pool = np.load(wave2_select.POOL_DIR / "candidate_pool_counts.npy", allow_pickle=False).astype(float)
+    counts, metadata, coverage, coverage_weights, _ = wave2_pool.build_design(
+        wave2_pool.base.DEFAULT_PREFIX_WEIGHTS,
+        wave2_pool.ORIGINAL_WEIGHTS,
+        wave2_pool.EXTENSION_WEIGHTS,
+    )
+    pool = counts.astype(float)
     pool /= wave2_select.branch_design.MIXTURE_BLOCK_SIZE
-    metadata = pd.read_csv(wave2_select.POOL_DIR / "candidate_pool_metadata.csv")
-    coverage = pd.read_csv(wave2_select.POOL_DIR / "coverage_summary.csv")
-    coverage_weights = pd.read_csv(wave2_select.POOL_DIR / "coverage_weights.csv")
     panel = wave2_select.branch_design.load_canonical_panel_geometry()
     wave1 = wave2_select.frozen_wave1_design_weights(panel.buckets)
     index = np.arange(len(pool), dtype=float)
@@ -828,4 +1205,3 @@ def test_wave2_rows_use_one_prefix_and_disjoint_run_namespace() -> None:
     assert rows[-1]["run_id"] == 953_079
     assert {row["trainer_seed"] for row in rows} == {0}
     assert {row["data_seed"] for row in rows} == {930_000}
->>>>>>> 0dd17851fd (Freeze Delphi KL0.05 Wave 2 acquisition)
