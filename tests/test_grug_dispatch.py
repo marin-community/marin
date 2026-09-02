@@ -29,3 +29,20 @@ def test_dispatch_forwards_allocator_environment(monkeypatch):
 
     assert submitted[0].environment.env_vars["LD_PRELOAD"] == "libjemalloc.so.2"
     assert submitted[0].environment.env_vars["MALLOC_CONF"] == "background_thread:true,narenas:2"
+
+
+def test_dispatch_uses_explicit_dependency_extras(monkeypatch):
+    submitted = []
+    job = SimpleNamespace(wait=lambda **_: None)
+    client = SimpleNamespace(submit=lambda request: submitted.append(request) or job)
+    monkeypatch.setattr(dispatch, "current_client", lambda: client)
+
+    dispatch.dispatch_grug_training_run(
+        run_id="pipeline-test",
+        config=object(),
+        local_entrypoint=_noop,
+        resources=ResourceConfig.with_cpu(),
+        extras=["pipeline"],
+    )
+
+    assert submitted[0].environment.extras == ["pipeline"]

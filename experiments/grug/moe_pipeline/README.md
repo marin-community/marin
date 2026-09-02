@@ -6,8 +6,10 @@ so pipeline-specific changes do not turn the ordinary MoE implementation into a
 shared trainer framework.
 
 [`pipeline.py`](./pipeline.py) splits the local transformer into stage pytrees and
-builds automatic JaxPP ZeroBubble or DualPipeV optimizer steps. [`benchmark.py`](./benchmark.py)
-is the executable runner. One logical stage maps to each physical pipeline rank with
+builds automatic JaxPP ZeroBubble or DualPipeV optimizer steps. [`train.py`](./train.py)
+owns model initialization, the training loop, and the Fray dispatch entry point.
+[`benchmark.py`](./benchmark.py) maps environment variables onto that trainer for
+repeatable performance runs. One logical stage maps to each physical pipeline rank with
 `PIPELINE_SCHEDULE=automatic_zero_bubble`. Set `PIPELINE_SCHEDULE=automatic_dualpipe_v`,
 `PIPELINE_STAGES=2P`, and `PIPELINE_PHYSICAL_STAGES=P` to fold two logical stages onto
 each physical rank in JaxPP's V-shaped placement. DualPipeV requires at least `2P`

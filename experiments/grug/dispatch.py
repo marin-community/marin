@@ -54,6 +54,7 @@ def dispatch_grug_training_run(
     max_task_failures: int = 10,
     processes_per_task: int = 1,
     priority: int = INHERIT_PRIORITY,
+    extras: list[str] | None = None,
 ) -> None:
     """Submit a grug train entrypoint through Fray and wait for completion.
 
@@ -63,6 +64,9 @@ def dispatch_grug_training_run(
     ``max_retries_failure`` is the per-task retry budget and ``max_task_failures`` is the
     cumulative one. The job fails when either is exhausted, so raise the two together: a large
     per-task budget under a small cumulative one still ends the job at the cumulative limit.
+
+    ``extras`` overrides the dependency extras inferred from the accelerator type. This is used
+    by training variants whose locked runtime replaces the standard accelerator environment.
     """
     safe_run_id = _safe_job_suffix(run_id)
     env_vars = resolve_training_env(base_env=_forwarded_env_vars(), resources=resources)
@@ -70,7 +74,10 @@ def dispatch_grug_training_run(
         name=f"grug-train-{safe_run_id}",
         entrypoint=Entrypoint.from_callable(local_entrypoint, args=[config]),
         resources=resources,
-        environment=create_environment(env_vars=env_vars, extras=extras_for_resources(resources)),
+        environment=create_environment(
+            env_vars=env_vars,
+            extras=extras_for_resources(resources) if extras is None else extras,
+        ),
         max_retries_failure=max_retries_failure,
         max_task_failures=max_task_failures,
         processes_per_task=processes_per_task,
