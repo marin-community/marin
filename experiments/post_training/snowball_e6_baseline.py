@@ -342,6 +342,7 @@ def build_workflow(
     spans_synchronize: bool = True,
     smoke: bool = False,
     debug_distributed: bool = False,
+    telemetry_only: bool = False,
     label: str = "",
 ) -> ArtifactStep[SkyRLModel]:
     """Compose the E6 baseline as one inspectable artifact step."""
@@ -367,6 +368,8 @@ def build_workflow(
         variant += "-nosync"
     if debug_distributed:
         variant += "-nccldbg"
+    if telemetry_only:
+        variant += "-telonly"
     if bf16_update_mode != "stochastic":
         variant += f"-{bf16_update_mode}"
     if label:
@@ -382,7 +385,11 @@ def build_workflow(
             config_yaml=_rl_config(
                 role_plan=role_plan,
                 max_steps=max_steps,
-                ckpt_interval=max_steps + 1 if ckpt_interval is None else ckpt_interval,
+                # 0 skips CheckpointCallback entirely -- no ~539 GB terminal write, and no export
+                # job after it. The launcher's unconditional terminal export then fails, which fails
+                # the ARTIFACT but not the run: every telemetry row was published per-step inside
+                # ppo_train, well before this point.
+                ckpt_interval=(0 if telemetry_only else (max_steps + 1 if ckpt_interval is None else ckpt_interval)),
             ),
             runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.FSDP),
             model=ExternalModel(
@@ -489,6 +496,17 @@ def build_workflow(
     "explicitly because inheriting it silently attributes an optimizer change to the model.",
 )
 @click.option(
+    "--telemetry-only",
+    is_flag=True,
+    default=False,
+    help="Write NO checkpoint and run NO export job. Sets ckpt_interval=0, which skips the "
+    "~539 GB terminal checkpoint and the separate 64-GPU HF export that follows it. Telemetry is "
+    "published from inside ppo_train every step, so all the data lands before either would have "
+    "happened. ⚠️ The Marin ARTIFACT will end FAILED -- the launcher's terminal export has no "
+    "checkpoint marker to read. That is expected and is not a failed measurement: read the rows in "
+    "finelog and W&B, keyed by run_id.",
+)
+@click.option(
     "--label",
     default="",
     help="Extra suffix on the artifact name, and therefore on run_id. The flags that change "
@@ -545,6 +563,7 @@ def main(
     spans_synchronize: bool,
     smoke: bool,
     debug_distributed: bool,
+    telemetry_only: bool,
     label: str,
 ) -> ArtifactStep[SkyRLModel]:
     return build_workflow(
@@ -556,6 +575,7 @@ def main(
         spans_synchronize=spans_synchronize,
         smoke=smoke,
         debug_distributed=debug_distributed,
+        telemetry_only=telemetry_only,
         label=label,
     )
 
