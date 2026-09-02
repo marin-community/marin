@@ -50,10 +50,6 @@ logger = logging.getLogger(__name__)
 
 _TIMEOUT_POLL_SECONDS = 30
 _ENDPOINT_READY_POLL_SECONDS = 2.0
-# Bound on time spent queued (pending/building) before the server job is placed.
-# Distinct from the readiness timeout, which budgets server startup and only
-# counts while the job is actually running.
-_ENDPOINT_PLACEMENT_TIMEOUT_SECONDS = 4 * 3600.0
 _ENDPOINT_PROBE_TIMEOUT_SECONDS = 5.0
 _METADATA_MODEL = "model"
 _METADATA_KIND = "kind"
@@ -375,37 +371,16 @@ def run_iris_service(service: IrisServiceConfig) -> None:
 
 
 def _wait_for_endpoint(job: JobHandle, endpoint_name: str, timeout_seconds: float) -> tuple[str, dict[str, str]]:
-    """Wait for the serving job to register its endpoint.
-
-    ``timeout_seconds`` budgets server startup and counts only while the job is
-    running; time spent queued on a contended cluster is bounded separately so
-    a long scheduling wait cannot consume the startup budget (a placement retry
-    resets the startup clock).
-    """
     ctx = iris_ctx()
-    placement_deadline = time.monotonic() + _ENDPOINT_PLACEMENT_TIMEOUT_SECONDS
-    ready_deadline: float | None = None
-    while True:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
         endpoints = ctx.client.list_endpoint_instances(endpoint_name)
         if endpoints:
             return endpoints[0].address, dict(endpoints[0].metadata)
-        state = job.status().value
-        if state in {"succeeded", "failed", "stopped"}:
+        if job.status().value in {"succeeded", "failed", "stopped"}:
             raise RuntimeError(f"Inference job {job.job_id} finished before registering {endpoint_name!r}")
-        now = time.monotonic()
-        if state == "running":
-            if ready_deadline is None:
-                ready_deadline = now + timeout_seconds
-            if now >= ready_deadline:
-                raise TimeoutError(f"Timed out waiting for inference endpoint {endpoint_name!r}")
-        else:
-            ready_deadline = None
-            if now >= placement_deadline:
-                raise TimeoutError(
-                    f"Timed out waiting for inference job {job.job_id} to be placed "
-                    f"(queued for {_ENDPOINT_PLACEMENT_TIMEOUT_SECONDS:.0f}s)"
-                )
         time.sleep(_ENDPOINT_READY_POLL_SECONDS)
+    raise TimeoutError(f"Timed out waiting for inference endpoint {endpoint_name!r}")
 
 
 @contextlib.contextmanager

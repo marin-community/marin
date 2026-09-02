@@ -18,9 +18,12 @@ from marin.evaluation.model_config import (
 )
 from marin.inference.backend import CONCAT_CHAT_TEMPLATE
 
-from experiments.models import SNOWBALL_SFT_EXPORT_URI
-
 MODEL_CATALOG_DIR = Path(__file__).parent / "serve" / "models"
+
+# HF-format bf16 vLLM shards for the Snowball 67B-A2B stage-2 (thinking) SFT;
+# the export ships its own chat_template.jinja and tokenizes with
+# marin-community/marin-tokenizer.
+SNOWBALL_SFT_EXPORT_URI = "s3://marin-us-east-02a/marin/exports/grug/june-67b-a2b-sft-s2-thinking/step-630/hf-bf16-vllm/"
 
 # The 256-expert Grug MoE fork serves data-parallel + expert-parallel with tensor_parallel_size=1; the
 # per-head TP heuristic cannot infer this, and the loader streams shards distributed across the ranks.

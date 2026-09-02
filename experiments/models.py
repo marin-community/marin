@@ -304,17 +304,3 @@ apertus_8b = download_model(
         hf_revision="9325d4a",
     )
 )
-
-# The Snowball 67B-A2B stage-2 (thinking) SFT export: HF-format bf16
-# vLLM shards adopted in place from the exports prefix (~134GB referenced, not
-# copied). Serve with the marin vLLM fork's expert-parallel profile
-# (tensor_parallel_size=1, --enable-expert-parallel, distributed loader); the
-# tokenizer is marin-community/marin-tokenizer and the export ships its own
-# chat_template.jinja. See experiments/evaluation/models.py ("snowball-sft").
-SNOWBALL_SFT_EXPORT_URI = "s3://marin-us-east-02a/marin/exports/grug/june-67b-a2b-sft-s2-thinking/step-630/hf-bf16-vllm/"
-snowball_67b_a2b_sft = ArtifactStep.adopt(
-    "models/snowball-67b-a2b-sft-s2-thinking",
-    "2026.08.30",
-    SNOWBALL_SFT_EXPORT_URI,
-    kind=LevanterCheckpoint,
-)

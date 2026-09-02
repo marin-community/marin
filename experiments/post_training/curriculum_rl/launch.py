@@ -55,9 +55,8 @@ from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.provenance import username_segment
 
-from experiments.evaluation.models import SNOWBALL_VLLM_ARGS
+from experiments.evaluation.models import SNOWBALL_SFT_EXPORT_URI, SNOWBALL_VLLM_ARGS
 from experiments.evaluation.pipeline import EvaluationResult, eval_step
-from experiments.models import snowball_67b_a2b_sft
 from experiments.post_training.curriculum_rl.pool import (
     MAX_PROMPT_TOKENS,
     QWEN3_MODEL,
@@ -121,6 +120,14 @@ SNOWBALL_POLICY = PolicySpec(
     ),
 )
 POLICIES = {policy.label: policy for policy in (QWEN_POLICY, SNOWBALL_POLICY)}
+
+# Adopted in place from the exports prefix (~134GB referenced, not copied).
+SNOWBALL_MODEL = ArtifactStep.adopt(
+    "models/snowball-67b-a2b-sft-s2-thinking",
+    "2026.08.30",
+    SNOWBALL_SFT_EXPORT_URI,
+    kind=LevanterCheckpoint,
+)
 
 
 class SamplerKind(StrEnum):
@@ -707,7 +714,7 @@ def build_arms(
     preset = SCALES[scale]
     pool = pool_step(POOL_ARTIFACT_NAME, version or resolve_version(POOL_ARTIFACT_NAME, None))
     if policy is SNOWBALL_POLICY:
-        model = snowball_67b_a2b_sft
+        model = SNOWBALL_MODEL
     else:
         model = model_step(version or resolve_version(MODEL_ARTIFACT_NAME, None))
     return {
