@@ -3906,14 +3906,14 @@ test = [
 
 [[package]]
 name = "marin-finelog-server"
-version = "0.2.31.dev32323413989"
+version = "0.2.46.dev33324331711"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/af/39/6c11af6d0dea2abc141e961003df8d195775c6932a2d6747d35d856e874c/marin_finelog_server-0.2.31.dev32323413989.tar.gz", hash = "sha256:ee54541b4ce83d562a184fc7674e5eda137235fef4b42e758161d807361b7a6d", size = 381784, upload-time = "2026-08-20T02:35:13.777Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/3d/98/fcb0ea85100fd9207a058549296d1f675a1213ec6e082d626bca2e26e999/marin_finelog_server-0.2.46.dev33324331711.tar.gz", hash = "sha256:7628ff8d72ed3aba95f11cd93301af77b50f30777810acbd1f8039f8d1ffc594", size = 437480, upload-time = "2026-08-30T17:45:46.782Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f9/81/12c2bbe3b339947d45b9b87302da934d8f2bceaee224c7a7c70d3b09b51c/marin_finelog_server-0.2.31.dev32323413989-cp312-abi3-macosx_10_12_x86_64.whl", hash = "sha256:79173dd1841e8afcd5805670903f9891d7b7845d8a339cfcab46857bff38b306", size = 40998434, upload-time = "2026-08-20T02:35:01.482Z" },
-    { url = "https://files.pythonhosted.org/packages/3d/c5/ca898e02bf0dba81103a2a05afe0d8042d96fdc4f9540b7ca8a17b001afe/marin_finelog_server-0.2.31.dev32323413989-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:63316be55078066abd66e3ac28090292d2dcd2d8bc483cee6282f223c5df3f84", size = 38830490, upload-time = "2026-08-20T02:35:04.638Z" },
-    { url = "https://files.pythonhosted.org/packages/4e/dd/cb6721fccc3bb5297e9c1d3784012eeddc32554e751513bf021515a64969/marin_finelog_server-0.2.31.dev32323413989-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:269a8893a751ada5a2f3ee77e6e71be6b2dfec3cb436fb15b0986bd3240f5569", size = 40419920, upload-time = "2026-08-20T02:35:07.419Z" },
-    { url = "https://files.pythonhosted.org/packages/a8/3e/9381ab5739f5930456699b4ff0ee616a127bf2af75fadf8695f8a0c23b3d/marin_finelog_server-0.2.31.dev32323413989-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:21512ee308c3eaa265fb7d59382143e2040fa4a4c3c853e5e41d2a694befb29b", size = 42988429, upload-time = "2026-08-20T02:35:10.065Z" },
+    { url = "https://files.pythonhosted.org/packages/c4/68/eb14d0e799c5b9dd5e38a3f10af588b748fa92fe6bee8b6270b0ae77c1e8/marin_finelog_server-0.2.46.dev33324331711-cp312-abi3-macosx_10_12_x86_64.whl", hash = "sha256:ec30953c1b28ba8eeee8bc906db45a303c325b1e132949ab3ae9cc705733ec12", size = 41202110, upload-time = "2026-08-30T17:45:31.372Z" },
+    { url = "https://files.pythonhosted.org/packages/91/4b/704835dd714e9b699bc6268d0c6f40c4cc1fb933fdd0d0ba767f7b176623/marin_finelog_server-0.2.46.dev33324331711-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:53beffe3c52a3c766855c7bdac16de3000a1907f65a25e82ecc4ff1f2914650c", size = 38959003, upload-time = "2026-08-30T17:45:36.213Z" },
+    { url = "https://files.pythonhosted.org/packages/18/a2/e87c047522c993ed5d4cbd5b38f0b08d883a9686ab8916d8e0f79af17e46/marin_finelog_server-0.2.46.dev33324331711-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:c68919137c6dd9c2ba2ed6e16571811c14f53e06663697597c77305d79d618a9", size = 40527487, upload-time = "2026-08-30T17:45:39.99Z" },
+    { url = "https://files.pythonhosted.org/packages/b4/64/6d64972f9767f56b8f58c6fa401e3de1e305d36543c0409f717094de900f/marin_finelog_server-0.2.46.dev33324331711-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:7bbe91abda6466d25c181c9535da6a4529b14b885c3a249061094ec0e1623506", size = 43178606, upload-time = "2026-08-30T17:45:43.308Z" },
 ]
 
 [[package]]
@@ -4247,7 +4247,7 @@ requires-dist = [
     { name = "humanfriendly", specifier = ">=10.0" },
     { name = "kubernetes", marker = "extra == 'controller'", specifier = ">=31.0.0,!=36.0.0,<37" },
     { name = "marin-finelog", editable = "lib/finelog" },
-    { name = "marin-finelog-server", specifier = ">=0.2.31.dev32323413989" },
+    { name = "marin-finelog-server", specifier = ">=0.2.46.dev33324331711" },
     { name = "marin-finestore", editable = "lib/finestore" },
     { name = "marin-iris-native", specifier = ">=0.1.6.dev31131847556" },
     { name = "marin-rigging", editable = "lib/rigging" },

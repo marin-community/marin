@@ -15,10 +15,10 @@ dependencies = [
     # does not depend on it, so the controller — its one consumer — pulls it in
     # explicitly.
     "marin-finelog >= 0.2.10",
-    # 0.2.31 is the first release carrying FetchLogs.regex (#8198). An older
-    # server ignores the field rather than rejecting it, so the dashboard's
-    # filter would silently return unfiltered lines; the floor rules that out.
-    "marin-finelog-server>=0.2.31.dev32323413989",
+    # 0.2.46.dev33324331711 contains the catalog parser for list-valued
+    # histogram schemas. Older servers cannot reopen catalogs containing
+    # COLUMN_TYPE_FLOAT64_LIST or COLUMN_TYPE_INT64_LIST.
+    "marin-finelog-server>=0.2.46.dev33324331711",
     # Platform companion wheel containing the Rust-owned public proxy listener.
     "marin-iris-native>=0.1.6.dev31131847556",
     "click>=8.3.1",
