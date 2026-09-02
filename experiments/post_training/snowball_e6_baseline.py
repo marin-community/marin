@@ -331,6 +331,13 @@ generator:
   async_engine: true
 
 extra_env:
+  # Step 2 of both smoke runs died with `CUDA out of memory. Tried to allocate 3.58 GiB. GPU 0 has
+  # 79.18 GiB of which 3.17 GiB is free` -- a fragmentation failure, not a capacity one: step 1 runs
+  # on a clean allocator and step 2 cannot find a contiguous block. Four production configs in
+  # MarinSkyRL's cloud/iris/configs already set this for the same reason, and it is on the launcher's
+  # env passthrough list (cloud/iris/env_vars.py:268). Eager attention materialises a fp32
+  # [1,20,8192,8192] score tensor at ~5.4 GiB per copy, which is why the headroom is this thin.
+  PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
   HF_HUB_OFFLINE: "1"
   NCCL_SOCKET_IFNAME: "^ibs,ibp,lo,docker,veth,cilium,lxc"
 
