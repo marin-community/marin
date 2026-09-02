@@ -48,6 +48,8 @@ ROUTER_ENTROPY_MIN = 5.92
 ROUTER_BIAS_MAX = 400.0
 TOKENS_PER_SECOND_MIN = 2.0e6
 MFU_MIN = 15.0
+EVAL_LOSS_RELATIVE_INCREASE = 0.02
+EVAL_HISTORY_SAMPLES = 3
 
 _GRAD_NORM = "grad_norm_total"
 _SKIPPED_STEP = "optim_skipped_step"
@@ -57,7 +59,7 @@ _ROUTER_BIAS_MAX = "train_router_bias_max"
 _ROUTER_BIAS_MIN = "train_router_bias_min"
 _TOKENS_PER_SECOND = "throughput_tokens_per_second"
 _MFU = "throughput_mfu"
-_EVAL_LOSS = "eval_paloma_macro_loss"
+_EVAL_LOSS = "eval_dropless_paloma_macro_loss"
 
 _SIGNAL_METRICS = (
     PHASE_METRIC,
@@ -108,6 +110,7 @@ class MetricSignal:
     latest: float
     observed_at: datetime
     previous: float | None
+    two_samples_ago: float | None
     recent_samples: int
     recent_total: float
     recent_below_floor: int
@@ -167,8 +170,10 @@ def signal_query(now: datetime, runs: tuple[WatchedRun, ...]) -> str:
         "SELECT origin_cluster, run_id, execution_uid, name, "
         "MAX(CASE WHEN rn = 1 THEN value END) AS latest_value, "
         "MAX(CASE WHEN rn = 1 THEN timestamp_ms END) AS latest_at, "
-        "MAX(CASE WHEN rn = 2 THEN value END) AS previous_value "
-        "FROM ranked WHERE rn <= 2 GROUP BY origin_cluster, run_id, execution_uid, name"
+        "MAX(CASE WHEN rn = 2 THEN value END) AS previous_value, "
+        f"MAX(CASE WHEN rn = {EVAL_HISTORY_SAMPLES} THEN value END) AS two_samples_ago_value "
+        f"FROM ranked WHERE rn <= {EVAL_HISTORY_SAMPLES} "
+        "GROUP BY origin_cluster, run_id, execution_uid, name"
         "), health_window AS ("
         "SELECT origin_cluster, run_id, name, COUNT(*) AS recent_samples, "
         "SUM(value) AS recent_total, "
@@ -178,7 +183,7 @@ def signal_query(now: datetime, runs: tuple[WatchedRun, ...]) -> str:
         ") "
         "SELECT newest.origin_cluster AS cluster, newest.run_id, newest.execution_uid, newest.name, "
         "newest.latest_value, to_timestamp_millis(newest.latest_at) AS observed_at, "
-        "newest.previous_value, "
+        "newest.previous_value, newest.two_samples_ago_value, "
         "COALESCE(health_window.recent_samples, 0) AS recent_samples, "
         "COALESCE(health_window.recent_total, 0) AS recent_total, "
         "COALESCE(health_window.recent_below_floor, 0) AS recent_below_floor "
@@ -260,6 +265,7 @@ def signals_by_run(signal_rows: pa.Table) -> Signals:
             latest=latest,
             observed_at=as_utc(row["observed_at"]),
             previous=as_number(row["previous_value"]),
+            two_samples_ago=as_number(row["two_samples_ago_value"]),
             recent_samples=int(row["recent_samples"] or 0),
             recent_total=float(row["recent_total"] or 0.0),
             recent_below_floor=int(row["recent_below_floor"] or 0),
@@ -450,8 +456,13 @@ def _mostly_below_floor(signal: MetricSignal | None) -> bool:
 
 
 def _evaluation_regressed(signal: MetricSignal | None, now: datetime) -> bool:
-    """True when the newest evaluation is worse than the one before it."""
+    """True when evaluation loss sustains a rise or jumps by more than two percent."""
     signal = _fresh(signal, now, _EVAL_FRESHNESS)
-    if signal is None or signal.previous is None or not isfinite(signal.previous):
+    if signal is None:
         return False
-    return signal.latest > signal.previous
+    if signal.two_samples_ago is not None and isfinite(signal.two_samples_ago):
+        if signal.latest > signal.two_samples_ago:
+            return True
+    if signal.previous is None or not isfinite(signal.previous) or signal.previous <= 0:
+        return False
+    return signal.latest > signal.previous * (1 + EVAL_LOSS_RELATIVE_INCREASE)

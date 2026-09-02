@@ -57,6 +57,7 @@ marin-serve = "marin.inference.serve_cli:main"
 
 [dependency-groups]
 test = [
+    "cloud-sql-python-connector[pg8000]>=1.9",
     "pytest>=8.3.2",
     "pytest-asyncio",
     "pytest-xdist",
@@ -108,6 +109,10 @@ conflicts = [
 
 gpu = [
   "jax[cuda13]==0.11.1",
+  # On GB200 this resolves to Marin's patched PJRT build (see [tool.uv.sources]). Declared
+  # explicitly even though jax[cuda13] pins it transitively, because uv sources cannot override
+  # a transitive dependency: without this line the patched-wheel source is silently ignored.
+  "jax-cuda13-pjrt==0.11.1",
   # B200 emits a cuBLAS warning with older CUDA 13 cuBLAS builds.
   "nvidia-cublas>=13.2.0.9; sys_platform == 'linux'",
   # Preserve the CoreWeave H100 all-to-all guard under CUDA 13.
@@ -176,6 +181,9 @@ name = "marin-resiliparse"
 url = "https://marin-community.github.io/chatnoir-resiliparse/simple"
 
 [tool.uv.sources]
+# Marin's patched ragged all-to-all PJRT plugin, promoted from marin-community/xla
+# (docs/dev-guide/forking-policy.md). Non-aarch64 resolution falls back to PyPI.
+jax-cuda13-pjrt = { url = "https://github.com/marin-community/xla/releases/download/marin-xla-pjrt-20260831-e94a45d2a446/jax_cuda13_pjrt-0.11.1%2Bmarin.e94a45d2a446-py3-none-manylinux_2_27_aarch64.whl", extra = "gpu", marker = "platform_machine == 'aarch64'" }
 torchvision = [
     # Default to the CPU index for TPU/CPU builds
     { index = "pytorch-cpu", extra = "cpu" },

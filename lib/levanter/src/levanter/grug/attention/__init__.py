@@ -14,4 +14,5 @@ from levanter.grug.attention._core import (
 )
 from levanter.grug.attention._fa4_cute import fa4_cute_segment_bounds as fa4_cute_segment_bounds
 from levanter.grug.attention._fa4_cute import gpu_fa4_cute_attention as gpu_fa4_cute_attention
+from levanter.grug.attention._fa4_cute import gpu_fa4_cute_wide_attention as gpu_fa4_cute_wide_attention
 from levanter.grug.attention._fa4_thd import gpu_fa4_thd_attention as gpu_fa4_thd_attention

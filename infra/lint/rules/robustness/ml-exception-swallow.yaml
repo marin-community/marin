@@ -1,0 +1,34 @@
+schema_version: 1
+code: ml-exception-swallow
+lane: robustness
+title: '`except Exception` returning `None` / a default'
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** Never swallow exceptions unless specifically requested.
+  Returning `None` on parse failure makes the caller's `if result is None`
+  indistinguishable from "input legitimately empty."
+
+  **When allowed:** Background tasks that must keep running on per-item failure,
+  and best-effort teardown/cleanup where the resource is being released anyway —
+  but log the exception with context (and, for the loop case, emit a metric).
+  Silencing a failed `stop(force=True)` or `wandb.finish()` in a cleanup path is
+  tolerated only when the failure is of the very thing being torn down, and even
+  then a bare `pass` with no log is the smell — say *why* the swallow is safe.
+
+  **Bad example:**
+  ```python
+  def maybe_parse(s: str) -> dict | None:
+      try:
+          return json.loads(s)
+      except:
+          return None   # raise ValueError with context, or take an explicit on_error= flag.
+  ```
+
+  ```python
+  def adopt_running_containers(self):
+      for attempt in self._running:
+          try:
+              attempt.stop(force=True)
+          except RuntimeError:
+              pass   # cleanup-thread swallow, no log: a failed force-stop vanishes silently.
+  ```

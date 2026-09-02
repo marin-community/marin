@@ -1,0 +1,20 @@
+schema_version: 1
+code: ml-magic-constant
+lane: robustness
+title: Magic string/number repeated without a top-level constant
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** Hoist magic strings/numbers to top-level constants.
+  Repeated literals drift (one site updated, another not) and make searches for
+  "where does this value come from" yield nothing.
+
+  **When allowed:** A literal that appears exactly once, inside the function
+  that owns the meaning. Hoist the moment it appears twice.
+
+  **Bad example:**
+  ```python
+  def submit(spec):
+      spec["pool"] = "gpu-h100-spot"   # this string appears in 4 files. PoolName.GPU_H100_SPOT.
+      spec["timeout"] = 3600
+      ...
+  ```
