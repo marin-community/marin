@@ -166,7 +166,7 @@ class LevanterPolicy:
             jnp.asarray(batch.sequences, dtype=jnp.int32),
             batch.action_count,
         )
-        return PolicyForwardOutput(np.asarray(action_log_probs))
+        return PolicyForwardOutput(np.asarray(action_log_probs, dtype=np.float32))
 
     def ppo_train(self, batch: PolicyBatch) -> PolicyTrainOutput:
         if batch.old_action_log_probs is None or batch.advantages is None:
@@ -194,7 +194,7 @@ class LevanterPolicy:
         )
         self.model = eqx.apply_updates(self.model, updates)
         self.step += 1
-        return PolicyTrainOutput(np.asarray(action_log_probs), float(loss), self.step)
+        return PolicyTrainOutput(np.asarray(action_log_probs, dtype=np.float32), float(loss), self.step)
 
     def broadcast_weights(self) -> int:
         if self.weight_publisher is None:

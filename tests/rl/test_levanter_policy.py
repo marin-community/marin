@@ -70,6 +70,7 @@ def test_levanter_policy_forward_train_and_publish_changes_policy() -> None:
     assert result.step == 1
     assert published_step == 1
     assert result.action_log_probs.shape == (2, 2)
+    assert result.action_log_probs.dtype == np.float32
     assert not np.allclose(initial, updated)
     assert publisher.step == 1
     assert publisher.weights
