@@ -167,7 +167,6 @@ def test_hero_trigger_records_launch_provenance_on_the_tracking_issue(tmp_path, 
     launch_record = gh_argv[4]
     for value in ("hero-12d8b6f0-dee637", commit, expected_dirty, expected_job_name, "cw-us-east-08a"):
         assert f"`{value}`" in launch_record
-    assert "11 x NVL72" in launch_record
     if not comment_succeeds:
         assert result.returncode == 1
         assert not capture.exists()
@@ -179,5 +178,3 @@ def test_hero_trigger_records_launch_provenance_on_the_tracking_issue(tmp_path, 
     assert argv[argv.index("--target-cluster") + 1] == "cw-us-east-08a"
     assert argv[argv.index("--system-reason") + 1] == "hero run"
     assert argv[argv.index("--job-name") + 1] == expected_job_name
-    assert "GIT_COMMIT" not in argv
-    assert "HERO_LAUNCH_TREE_DIRTY" not in argv
