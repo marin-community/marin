@@ -37,3 +37,13 @@ This file is the paper trail for grug experiments.
 - Status: deleted
 - Purpose: historical head-to-head comparison.
 - Superseded by: template-first workflow centered on `experiments/grug/base/`.
+
+### moe-norm-preserving-residual
+- Path: `experiments/grug/moe_norm_preserving_residual/`
+- Origin: `experiments/grug/moe/` at canonical July Baseline commit `52d8a9eb8`
+- Introduced: branch `codex/july-norm-preserving-residual`
+- Last known-good: focused numerical validation on 2026-09-02
+- Status: active
+- Purpose: learn one positive norm-preserving residual-mixing coefficient per layer and evaluate Gate 1 against July Baseline #6882.
+- Issue: #8860
+- Diff: local report pending
