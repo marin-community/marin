@@ -192,3 +192,35 @@ the `softplus(0)` initialization, shared attention/MoE parameters, or Marin's
 - Open questions: whether one shared scalar per layer is better than separate
   attention/MoE scalars; whether `softplus(0)` overweights the hidden branch.
 - Stop reason: the remaining uncertainty requires training evidence.
+
+### 2026-09-02 12:27 - Gate 1 submitted
+
+- Hypothesis: `MOE-NPR-001-d512` and `MOE-NPR-002-d768` can start from the
+  clean July-derived snapshot with no recipe drift beyond residual mixing.
+- Commit Hash: experiment bundle at
+  `cd04f8dec5b5e4c8cc694be092eab6d4af24ce75`; behavior snapshot
+  `959fdb2b22b9387c5191aad72d4c6b5aa41b7cd8`.
+- Command: `test -z "$(git status --porcelain)" && /Users/kaiyuew/Downloads/Project/marin-iris-transport-8860/.venv/bin/iris --config=/Users/kaiyuew/Downloads/Project/marin-iris-transport-8860/lib/iris/config/marin.yaml job run --no-wait --job-name moe-npr-gate1-8860 --cpu=1 --memory=2G --disk=5GB --extra=cpu --zone=us-east5-a --priority=interactive -e WANDB_API_KEY "${WANDB_API_KEY}" -- python -m experiments.grug.moe_norm_preserving_residual.launch_norm_preserving_residual`.
+- Config: CPU-only parent in `us-east5-a`; two v5p-8 children; W&B project
+  `marin-community/dial_moe`, group `MOE-NPR-gate1-issue-8860`; d512 batch 16
+  for 10,980 steps and d768 batch 32 for 16,875 steps; seed 0; 8,192-token
+  sequence length; July data, optimizer, mixed precision, and evaluation.
+- Result: parent `/kaiyuew/moe-npr-gate1-8860` is running. Exactly two children
+  exist: `grug-train-MOE-NPR-001-d512` and
+  `grug-train-MOE-NPR-002-d768`. Both are pending v5p-8 capacity with zero
+  failures and zero preemptions. Output roots are
+  `gs://marin-us-east5/grug/MOE-NPR-001-d512-69288a` and
+  `gs://marin-us-east5/grug/MOE-NPR-002-d768-75a03`.
+- Transport notes: three pre-submit attempts created no job. The historical
+  config failed current schema validation; the first compatible transport was
+  below the controller's client-age floor; and a current client plus
+  `--reserve=v5p-8` made the non-preemptible CPU parent unschedulable. Final
+  submission used current `marin/main` commit `c94e00ab9` only as transport,
+  bundled the clean July-derived worktree, and omitted the redundant parent
+  reservation. Child accelerator requests remain `v5p-8`.
+- Interpretation: launch identity and child containment match the intended
+  Gate-1 matrix. Capacity pending is not a functional failure. W&B runs will
+  appear after allocation.
+- Next action: monitor at the normal capacity cadence; verify finite loss,
+  advancing steps, W&B config, throughput, and learned beta values after TPU
+  allocation.
