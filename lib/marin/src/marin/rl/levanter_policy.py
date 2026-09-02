@@ -339,8 +339,10 @@ class TorchDistributedWeightPublisher:
         import torch  # noqa: PLC0415 - optional GPU bridge
 
         del step
+        publication_device = jax.local_devices()[0]
         for name, array in weights.items():
-            tensor = torch.utils.dlpack.from_dlpack(array)
+            publication_array = jax.device_put(array, publication_device)
+            tensor = torch.utils.dlpack.from_dlpack(publication_array)
             self.announce(name, str(tensor.dtype).removeprefix("torch."), tuple(tensor.shape))
             torch.distributed.broadcast(tensor, 0, group=self.process_group)
             self.complete()
