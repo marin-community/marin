@@ -74,6 +74,7 @@ from marin.rl.skyrl import (
     SkyRLRuntime,
     SkyRLRuntimeProfile,
     SkyRLSpec,
+    SkyRLTelemetryRun,
     SkyRLTopology,
     skyrl_step,
 )
@@ -187,15 +188,17 @@ E6_ROLE_PLAN = SkyRLRolePlan(
 )
 
 
-def _rl_config(*, role_plan: SkyRLRolePlan, max_steps: int, ckpt_interval: int) -> str:
+def _rl_config(*, role_plan: SkyRLRolePlan, max_steps: int, ckpt_interval: int, debug_distributed: bool) -> str:
     """Render the SkyRL config.
 
     ``ckpt_interval`` defaults to ``max_steps + 1``: no periodic checkpoint, but one terminal
     checkpoint at train end. That terminal write is **required**, not incidental. On a successful
-    launch ``cloud/iris/job.py`` unconditionally runs ``export_terminal_policy``, which reads the
-    checkpoint marker and raises ``"Successful Iris job did not commit a checkpoint marker"``
-    (``cloud/iris/artifacts.py``) when there is none -- so ``ckpt_interval: 0`` trains all four steps
-    on 80 GPUs and then reports a failed artifact with no terminal manifest.
+    launch ``cloud/iris/job.py`` runs ``export_terminal_policy``, which reads the checkpoint marker
+    and raises ``"Successful Iris job did not commit a checkpoint marker"``
+    (``cloud/iris/artifacts.py``) when there is none -- so a bare ``ckpt_interval: 0`` trains all
+    four steps on 80 GPUs and then reports a failed artifact with no terminal manifest.
+    ``--telemetry-only`` is how a run asks for both halves at once: it sets ``ckpt_interval`` to 0
+    *and* tells the launcher to expect no model, so the artifact succeeds without one.
 
     The Hugging Face upload is closed at its own lever instead, ``trainer.hf_save_interval``, as an
     override in ``build_workflow``. Conflating the two is easy and wrong: ``hf_save_interval`` only
@@ -242,6 +245,13 @@ def _rl_config(*, role_plan: SkyRLRolePlan, max_steps: int, ckpt_interval: int) 
     #
     #   grug_query_bias_update_mode
     #                        -- required, no default at the call site; the validator raises if absent.
+    # In the config BODY, not a ++ override. The launcher's build_debug_launch_env reads
+    # args.debug_mode or the RL config YAML; a Hydra override reaches the driver and NOT the
+    # launcher, so SKYRL_DEBUG_ARTIFACT_DIR is never set and sync_debug_artifacts early-returns.
+    # The workers still write NCCL logs to pod-local /tmp, the artifact-sync line still prints a
+    # destination, and nothing reaches S3 -- the logs die with the pods.
+    debug_mode_line = "  debug_mode: distributed\n" if debug_distributed else ""
+
     return f"""\
 entrypoint: standard
 
@@ -268,7 +278,7 @@ trainer:
   max_steps: {max_steps}
   ckpt_interval: {ckpt_interval}
   resume_mode: null
-
+{debug_mode_line}
   train_batch_size: {role_plan.train_batch_size}
   policy_mini_batch_size: {role_plan.policy_mini_batch_size}
   eval_batch_size: 256
@@ -345,7 +355,7 @@ def build_workflow(
     collective_diagnostics: bool = False,
     telemetry_only: bool = False,
     label: str = "",
-) -> ArtifactStep[SkyRLModel]:
+) -> ArtifactStep[SkyRLModel] | ArtifactStep[SkyRLTelemetryRun]:
     """Compose the E6 baseline as one inspectable artifact step."""
     role_plan = (
         _role_plan(
@@ -389,10 +399,10 @@ def build_workflow(
                 role_plan=role_plan,
                 max_steps=max_steps,
                 # 0 skips CheckpointCallback entirely -- no ~539 GB terminal write, and no export
-                # job after it. The launcher's unconditional terminal export then fails, which fails
-                # the ARTIFACT but not the run: every telemetry row was published per-step inside
-                # ppo_train, well before this point.
+                # job after it. Every telemetry row was published per-step inside ppo_train, well
+                # before either would have happened.
                 ckpt_interval=(0 if telemetry_only else (max_steps + 1 if ckpt_interval is None else ckpt_interval)),
+                debug_distributed=debug_distributed,
             ),
             runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.FSDP),
             model=ExternalModel(
@@ -443,7 +453,6 @@ def build_workflow(
                 # ~34-42 TB/rank/step, so a 2x fabric inefficiency is ~1,900 s -- half of
                 # policy_train. ⚠️ It is also a timing contaminant: enable it in BOTH cells of a
                 # comparison, or in a separate diagnostic attempt.
-                *(("++trainer.debug_mode=distributed",) if debug_distributed else ()),
                 # Per-micro-batch, per-rank NCCL sequence numbers and mesh coordinates, at exactly
                 # the seams the spans use. What it adds over a wall-clock span is WHICH process group
                 # a straggler is behind on -- FSDP _ALLGATHER_BASE versus EP ALLTOALL_BASE. It reads
@@ -452,6 +461,7 @@ def build_workflow(
             ),
             retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
             seed=17,
+            telemetry_only=telemetry_only,
         ),
         IrisSkyRLExecution(
             cluster=E6_CLUSTER,
@@ -518,9 +528,8 @@ def build_workflow(
     help="Write NO checkpoint and run NO export job. Sets ckpt_interval=0, which skips the "
     "~539 GB terminal checkpoint and the separate 64-GPU HF export that follows it. Telemetry is "
     "published from inside ppo_train every step, so all the data lands before either would have "
-    "happened. ⚠️ The Marin ARTIFACT will end FAILED -- the launcher's terminal export has no "
-    "checkpoint marker to read. That is expected and is not a failed measurement: read the rows in "
-    "finelog and W&B, keyed by run_id.",
+    "happened. The artifact succeeds as a SkyRLTelemetryRun, which carries no policy and so cannot "
+    "be fed to an evaluation step -- read the rows in finelog and W&B, keyed by run_id.",
 )
 @click.option(
     "--label",
@@ -566,8 +575,9 @@ def build_workflow(
     type=int,
     default=None,
     help="Checkpoint interval. Default is max_steps + 1: no periodic checkpoint, one terminal "
-    "checkpoint. Do not set 0 -- the launcher's unconditional terminal export then fails on the "
-    "missing marker and the whole 80-GPU run reports a failed artifact. See _rl_config.",
+    "checkpoint. Do not set 0 here -- the terminal export then fails on the missing marker and the "
+    "whole 80-GPU run reports a failed artifact. Pass --telemetry-only instead, which also tells "
+    "the launcher to expect no model. See _rl_config.",
 )
 @build_options
 def main(
@@ -582,7 +592,7 @@ def main(
     collective_diagnostics: bool,
     telemetry_only: bool,
     label: str,
-) -> ArtifactStep[SkyRLModel]:
+) -> ArtifactStep[SkyRLModel] | ArtifactStep[SkyRLTelemetryRun]:
     return build_workflow(
         wandb_entity=wandb_entity,
         max_steps=max_steps,

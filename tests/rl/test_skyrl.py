@@ -36,6 +36,7 @@ from marin.rl.skyrl import (
     SkyRLRuntime,
     SkyRLRuntimeProfile,
     SkyRLSpec,
+    SkyRLTelemetryRun,
     SkyRLTopology,
     run_skyrl,
     skyrl_step,
@@ -354,6 +355,49 @@ def test_run_skyrl_returns_external_terminal_model(monkeypatch: pytest.MonkeyPat
         "profile": SkyRLRuntimeProfile.FSDP.value,
     }
     assert launch_envelopes[0]["execution"]["job_name"] == "checkpoints-iceball-rl-2026.08.01-attempt-1"
+
+
+def test_telemetry_only_run_produces_a_run_artifact_and_no_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    spec = dataclasses.replace(_spec(), telemetry_only=True)
+    step = skyrl_step(spec, _execution())
+    output_path = "s3://durable/users/tester/tests/iceball-rl/2026.08.01"
+    config = step.build_config(
+        StepContext.for_run(
+            output_path=output_path,
+            prefix="s3://durable",
+            runtime_args=step.runtime_args,
+            deps=step.deps,
+        )
+    )
+    response = {
+        "run_id": config.request.run_id,
+        "attempt_id": config.request.attempt_id,
+        "state": "succeeded",
+        "iris_job_id": "01KTEST",
+        "iris_job_state": "succeeded",
+        "runtime": asdict(config.request.runtime),
+        "failure": None,
+        "model": None,
+    }
+    launch_envelopes = []
+
+    def fake_popen(command, **_kwargs) -> _FakeLauncherProcess:
+        request_path = command[command.index("--request") + 1]
+        launch_envelopes.append(json.loads(Path(request_path).read_text()))
+        return _FakeLauncherProcess(response=json.dumps(response), returncode=0, stdout=_kwargs["stdout"])
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+
+    run = run_skyrl(config)
+
+    assert step.artifact_type is SkyRLTelemetryRun
+    assert step.fingerprint() != skyrl_step(_spec(), _execution()).fingerprint()
+    assert launch_envelopes[0]["request"]["telemetry_only"] is True
+    assert run == SkyRLTelemetryRun(
+        path=f"{output_path}/terminal.json",
+        terminal_manifest_uri=f"{output_path}/terminal.json",
+        iris_job_id="01KTEST",
+    )
 
 
 def test_launcher_failure_reports_the_launcher_stderr(monkeypatch: pytest.MonkeyPatch) -> None:

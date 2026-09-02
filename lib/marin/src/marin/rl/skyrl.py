@@ -280,6 +280,11 @@ class SkyRLSpec:
     retention: SkyRLRetentionPolicy
     seed: int
     overrides: tuple[str, ...] = ()
+    telemetry_only: bool = False
+    """Run for measurement only: write no checkpoint, export no policy, produce a
+    :class:`SkyRLTelemetryRun` instead of a :class:`SkyRLModel`. It bears identity because a run
+    that produces no model is a different artifact from one that does, not a cheaper way to build
+    the same one."""
 
 
 @dataclass(frozen=True)
@@ -325,6 +330,7 @@ class SkyRLLaunchRequest:
     output: SkyRLOutputPaths
     seed: int
     overrides: tuple[str, ...]
+    telemetry_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -342,6 +348,18 @@ class SkyRLModel(Artifact):
     tokenizer_uri: str
     tokenizer_revision: str
     checkpoint_root: str
+    terminal_manifest_uri: str
+    iris_job_id: str
+
+
+class SkyRLTelemetryRun(Artifact):
+    """A completed MarinSkyRL run that was configured to produce no model.
+
+    Its own type rather than a model with empty fields: the evaluation and export paths take a
+    :class:`SkyRLModel`, and a run with no policy must fail their type check rather than resolve to
+    a location holding nothing.
+    """
+
     terminal_manifest_uri: str
     iris_job_id: str
 
@@ -413,8 +431,8 @@ def _run_launcher(command: list[str]) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(command, returncode, response.read(), "".join(tail))
 
 
-def run_skyrl(config: SkyRLRunConfig) -> SkyRLModel:
-    """Run the pinned external launcher and return its validated model value."""
+def run_skyrl(config: SkyRLRunConfig) -> SkyRLModel | SkyRLTelemetryRun:
+    """Run the pinned external launcher and return its validated terminal value."""
     envelope = {
         "request": asdict(config.request),
         "execution": {
@@ -437,6 +455,12 @@ def run_skyrl(config: SkyRLRunConfig) -> SkyRLModel:
         raise RuntimeError(
             f"MarinSkyRL attempt {config.request.attempt_id} failed: {failure}\n{completed.stderr.strip()}"
         )
+    if config.request.telemetry_only:
+        return SkyRLTelemetryRun(
+            path=config.request.output.terminal_manifest_uri,
+            terminal_manifest_uri=config.request.output.terminal_manifest_uri,
+            iris_job_id=response["iris_job_id"],
+        )
     model = response["model"]
     return SkyRLModel(
         path=config.request.output.terminal_manifest_uri,
@@ -450,7 +474,9 @@ def run_skyrl(config: SkyRLRunConfig) -> SkyRLModel:
     )
 
 
-def skyrl_step(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[SkyRLModel]:
+def skyrl_step(
+    spec: SkyRLSpec, execution: IrisSkyRLExecution
+) -> ArtifactStep[SkyRLModel] | ArtifactStep[SkyRLTelemetryRun]:
     """Build a versioned MarinSkyRL training artifact."""
     step_name = spec.name
     deps = tuple(
@@ -498,6 +524,7 @@ def skyrl_step(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[S
             output=output,
             seed=spec.seed,
             overrides=(*spec.overrides, *retention_overrides),
+            telemetry_only=spec.telemetry_only,
         )
         return SkyRLRunConfig(
             request=request,
@@ -505,12 +532,13 @@ def skyrl_step(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[S
             launcher_requirement=MARIN_SKYRL.requirement(),
         )
 
-    return ArtifactStep(
+    step = ArtifactStep(
         name=step_name,
         version=spec.version,
-        artifact_type=SkyRLModel,
+        artifact_type=SkyRLTelemetryRun if spec.telemetry_only else SkyRLModel,
         run=run_skyrl,
         build_config=build_config,
         deps=deps,
         runtime_args={_EXECUTION: execution},
     )
+    return cast(ArtifactStep[SkyRLModel] | ArtifactStep[SkyRLTelemetryRun], step)
