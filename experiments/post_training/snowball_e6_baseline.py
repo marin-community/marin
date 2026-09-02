@@ -137,6 +137,43 @@ E6_MAX_NEW_TOKENS = 6528
 # minibatching -- so "step" and "update" are the same unit here, which they are not in general.
 E6_TRAIN_BATCH_SIZE = 256
 
+# ── SMOKE GEOMETRY ───────────────────────────────────────────────────────────────────────────
+# --smoke reduces the geometry so the SAME model, dataset, environment and code path produce real
+# telemetry cheaply. It is the right smoke test precisely because nothing about the path changes:
+# iceball would have exercised a different model on a dependency chain hardcoded to GB200.
+#
+#   constant                here (smoke)   E6      why
+#   policy nodes            2              8       memory floor is ~3 nodes under MuonH's fp32
+#                                                  parameter storage; under AdamW storage is BF16, so
+#                                                  2 is the first count with margin at 80 GB/GPU.
+#   inference engines       1              2       an engine is TP1 x DP8 = one node.
+#   train_batch_size        32             256     floor is policy_dp_size (utils.py). 8x cheaper.
+#   policy_mini_batch_size  32             256     must divide train_batch_size.
+#
+# ⚠️ The node reduction alone changes no RL math -- train_batch_size counts prompts globally, so the
+# effective batch is identical and only grad-accumulation depth changes. The BATCH reduction DOES
+# change semantics (32 GRPO groups per update, not 256) and must never be carried into a science run.
+# ⚠️ Timings from a smoke run are NOT comparable to the 4209.7 s baseline. It answers "do rows
+# arrive, and is the decomposition sane", nothing else.
+SMOKE_POLICY_NODES = 2
+SMOKE_INFERENCE_ENGINES = 1
+SMOKE_BATCH = 32
+
+
+def _role_plan(*, policy_nodes: int, inference_engines: int, batch: int) -> SkyRLRolePlan:
+    return SkyRLRolePlan(
+        colocate_all=False,
+        policy_num_nodes=policy_nodes,
+        policy_num_gpus_per_node=E6_GPUS_PER_NODE,
+        num_inference_engines=inference_engines,
+        inference_engine_tensor_parallel_size=1,
+        train_batch_size=batch,
+        policy_mini_batch_size=batch,
+        micro_train_batch_size_per_gpu=1,
+        n_samples_per_prompt=16,
+    )
+
+
 E6_ROLE_PLAN = SkyRLRolePlan(
     colocate_all=False,
     policy_num_nodes=E6_POLICY_NODES,
@@ -150,7 +187,7 @@ E6_ROLE_PLAN = SkyRLRolePlan(
 )
 
 
-def _rl_config(*, max_steps: int, ckpt_interval: int) -> str:
+def _rl_config(*, role_plan: SkyRLRolePlan, max_steps: int, ckpt_interval: int) -> str:
     """Render the SkyRL config.
 
     ``ckpt_interval`` defaults to ``max_steps + 1``: no periodic checkpoint, but one terminal
@@ -232,11 +269,11 @@ trainer:
   ckpt_interval: {ckpt_interval}
   resume_mode: null
 
-  train_batch_size: {E6_ROLE_PLAN.train_batch_size}
-  policy_mini_batch_size: {E6_ROLE_PLAN.policy_mini_batch_size}
+  train_batch_size: {role_plan.train_batch_size}
+  policy_mini_batch_size: {role_plan.policy_mini_batch_size}
   eval_batch_size: 256
   micro_forward_batch_size_per_gpu: 1
-  micro_train_batch_size_per_gpu: {E6_ROLE_PLAN.micro_train_batch_size_per_gpu}
+  micro_train_batch_size_per_gpu: {role_plan.micro_train_batch_size_per_gpu}
 
   use_sample_packing: false
   flash_attn: false
@@ -263,19 +300,19 @@ trainer:
   placement:
     colocate_all: false
     colocate_policy_ref: true
-    policy_num_nodes: {E6_ROLE_PLAN.policy_num_nodes}
-    policy_num_gpus_per_node: {E6_ROLE_PLAN.policy_num_gpus_per_node}
+    policy_num_nodes: {role_plan.policy_num_nodes}
+    policy_num_gpus_per_node: {role_plan.policy_num_gpus_per_node}
     policy_strict_spread_pg: true
     policy_per_gpu_bundles: true
 
 generator:
   backend: vllm
   model_dtype: bfloat16
-  inference_engine_tensor_parallel_size: {E6_ROLE_PLAN.inference_engine_tensor_parallel_size}
+  inference_engine_tensor_parallel_size: {role_plan.inference_engine_tensor_parallel_size}
   inference_engine_data_parallel_size: 8
   inference_engine_expert_parallel_size: 8
-  num_inference_engines: {E6_ROLE_PLAN.num_inference_engines}
-  n_samples_per_prompt: {E6_ROLE_PLAN.n_samples_per_prompt}
+  num_inference_engines: {role_plan.num_inference_engines}
+  n_samples_per_prompt: {role_plan.n_samples_per_prompt}
   gpu_memory_utilization: 0.85
   enforce_eager: false
   max_num_batched_tokens: 16384
@@ -303,9 +340,22 @@ def build_workflow(
     bf16_update_mode: str = "stochastic",
     policy_train_spans: bool = True,
     spans_synchronize: bool = True,
+    smoke: bool = False,
+    debug_distributed: bool = False,
 ) -> ArtifactStep[SkyRLModel]:
     """Compose the E6 baseline as one inspectable artifact step."""
-    base_name = f"checkpoints/{E6_MODEL_NAME}"
+    role_plan = (
+        _role_plan(
+            policy_nodes=SMOKE_POLICY_NODES,
+            inference_engines=SMOKE_INFERENCE_ENGINES,
+            batch=SMOKE_BATCH,
+        )
+        if smoke
+        else E6_ROLE_PLAN
+    )
+    num_nodes = role_plan.policy_num_nodes + role_plan.num_inference_engines
+    # A distinct artifact name: a smoke run must never be mistaken for, or cached as, the baseline.
+    base_name = f"checkpoints/{E6_MODEL_NAME}{'-smoke' if smoke else ''}"
     data = ExternalDataSource(uri=E6_DATA_PREFIX, identity=E6_DATA_IDENTITY)
     train_data = replace(data, relative_path=E6_TRAIN_FILENAME)
     validation_data = replace(data, relative_path=E6_VALIDATION_FILENAME)
@@ -314,6 +364,7 @@ def build_workflow(
             name=user_owned_name(base_name),
             version=version or resolve_version(base_name, None),
             config_yaml=_rl_config(
+                role_plan=role_plan,
                 max_steps=max_steps,
                 ckpt_interval=max_steps + 1 if ckpt_interval is None else ckpt_interval,
             ),
@@ -327,10 +378,10 @@ def build_workflow(
             train_data=(train_data,),
             validation_data=(validation_data,),
             topology=SkyRLTopology(
-                num_nodes=E6_NUM_NODES,
+                num_nodes=num_nodes,
                 gpus_per_node=E6_GPUS_PER_NODE,
                 gpu_variant=E6_GPU_VARIANT,
-                role_plan=E6_ROLE_PLAN,
+                role_plan=role_plan,
             ),
             # The launcher hardcodes `++trainer.resume_mode=latest` (cloud/iris/iris_backend.py),
             # which beats anything in the YAML body -- so `resume_mode: null` there is inert. Spec
@@ -360,6 +411,13 @@ def build_workflow(
                 # an undeclared key fails Hydra's struct check after the gang has started.
                 f"++trainer.policy_train_spans={str(policy_train_spans).lower()}",
                 f"++trainer.policy_train_spans_synchronize={str(spans_synchronize).lower()}",
+                # NCCL_DEBUG=INFO + NCCL_DEBUG_SUBSYS=...NET,GRAPH + TORCH_NCCL_ENABLE_TIMING=1 and
+                # the flight-recorder artifact dirs, all from one switch. This is what answers H10:
+                # whether the collectives ran on InfiniBand or fell back to sockets. Exposure is
+                # ~34-42 TB/rank/step, so a 2x fabric inefficiency is ~1,900 s -- half of
+                # policy_train. ⚠️ It is also a timing contaminant: enable it in BOTH cells of a
+                # comparison, or in a separate diagnostic attempt.
+                *(("++trainer.debug_mode=distributed",) if debug_distributed else ()),
             ),
             retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
             seed=17,
@@ -415,6 +473,23 @@ def build_workflow(
     "explicitly because inheriting it silently attributes an optimizer change to the model.",
 )
 @click.option(
+    "--smoke",
+    is_flag=True,
+    default=False,
+    help="Reduced geometry (2 policy nodes + 1 engine, batch 32) on the SAME model, data and code "
+    "path. For proving telemetry arrives and the decomposition is sane -- its timings are NOT "
+    "comparable to the 4209.7 s baseline, and its batch change alters RL semantics.",
+)
+@click.option(
+    "--debug-distributed",
+    is_flag=True,
+    default=False,
+    help="trainer.debug_mode=distributed: NCCL_DEBUG=INFO, NCCL_DEBUG_SUBSYS with NET and GRAPH, "
+    "TORCH_NCCL_ENABLE_TIMING=1 and the flight-recorder dirs. This is what answers whether the "
+    "collectives ran on InfiniBand or fell back to sockets. It is a timing contaminant -- use it in "
+    "both cells of a comparison, or in a separate diagnostic attempt.",
+)
+@click.option(
     "--policy-train-spans/--no-policy-train-spans",
     default=True,
     show_default=True,
@@ -445,6 +520,8 @@ def main(
     bf16_update_mode: str,
     policy_train_spans: bool,
     spans_synchronize: bool,
+    smoke: bool,
+    debug_distributed: bool,
 ) -> ArtifactStep[SkyRLModel]:
     return build_workflow(
         wandb_entity=wandb_entity,
@@ -453,6 +530,8 @@ def main(
         bf16_update_mode=bf16_update_mode,
         policy_train_spans=policy_train_spans,
         spans_synchronize=spans_synchronize,
+        smoke=smoke,
+        debug_distributed=debug_distributed,
     )
 
 
