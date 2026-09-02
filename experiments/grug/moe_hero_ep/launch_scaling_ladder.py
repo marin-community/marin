@@ -141,6 +141,7 @@ def build_ladder_run(
     num_steps: int | None = None,
     checkpoint_every: int | None = None,
     version: str | None = None,
+    initialize_from_path: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """One scaling-ladder rung at width ``size`` on ``LADDER_RACKS[size]`` GB200 racks.
 
@@ -150,7 +151,9 @@ def build_ladder_run(
     checkpoint; the d6144 hero evals every 3000 steps and keeps a permanent checkpoint every 6000.
     ``checkpoint_every`` overrides that cadence for any rung. A rolling temporary checkpoint every
     ``RESUME_SAVE_INTERVAL`` on region-local storage covers a crash or a preemption, and a rung
-    resumes from the newest checkpoint it finds.
+    resumes from the newest checkpoint it finds. ``initialize_from_path`` is another run's output
+    path whose checkpoint roots are appended as resume fallbacks, so a relaunch under a new run id
+    continues that lineage's full state while writing only to its own tree.
     """
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
@@ -230,6 +233,13 @@ def build_ladder_run(
         permanent_checkpoint_path = prefix_join(ctx.output_path, "checkpoints")
         temporary_checkpoint_path = temporary_checkpoint_base_path(ctx.output_path)
         data_local_checkpoint_path = data_local_temporary_checkpoint_base_path(ctx.output_path)
+        load_checkpoint_path = [permanent_checkpoint_path, temporary_checkpoint_path, data_local_checkpoint_path]
+        if initialize_from_path is not None:
+            load_checkpoint_path += [
+                prefix_join(initialize_from_path, "checkpoints"),
+                temporary_checkpoint_base_path(initialize_from_path),
+                data_local_temporary_checkpoint_base_path(initialize_from_path),
+            ]
         trainer = hero_trainer_config(
             run_id=run_id,
             seed=0,
@@ -261,11 +271,7 @@ def build_ladder_run(
                 startup_timeout=HERO_STARTUP_TIMEOUT,
             ),
             # Existing 02A temporaries remain valid resume candidates for this lineage.
-            load_checkpoint_path=[
-                permanent_checkpoint_path,
-                temporary_checkpoint_path,
-                data_local_checkpoint_path,
-            ],
+            load_checkpoint_path=load_checkpoint_path,
             # load_checkpoint stays None: the trainer resumes from the newest checkpoint that
             # exists, so a retry after a hardware or memory fault continues the run.
             checkpointer=CheckpointerConfig(
@@ -341,11 +347,27 @@ def build_ladder_run(
     "the rung (6000 at d6144, final only elsewhere). Resume uses the rolling temporary checkpoint "
     "and is not affected by this option.",
 )
+@click.option(
+    "--initialize-from-path",
+    default=None,
+    help="Output path of another run whose checkpoint roots are added as resume fallbacks, to continue "
+    "that lineage under a new --run-id without writing to its tree.",
+)
 @build_options
 def main(
-    run_id: str, size: str, num_steps: int | None, checkpoint_every: int | None
+    run_id: str,
+    size: str,
+    num_steps: int | None,
+    checkpoint_every: int | None,
+    initialize_from_path: str | None,
 ) -> ArtifactStep[HeroThroughputResult]:
-    return build_ladder_run(run_id=run_id, size=size, num_steps=num_steps, checkpoint_every=checkpoint_every)
+    return build_ladder_run(
+        run_id=run_id,
+        size=size,
+        num_steps=num_steps,
+        checkpoint_every=checkpoint_every,
+        initialize_from_path=initialize_from_path,
+    )
 
 
 if __name__ == "__main__":
