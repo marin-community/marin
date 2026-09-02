@@ -25,12 +25,12 @@ from levanter.grug._moe.common import (
 )
 from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
 from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
-from levanter.grug._moe.ep_ragged_all_to_all import _loop_local_zeros, _LoopLocalZeroSite
 from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import (
     _moe_mlp_ep_fixed_pooled_wave_a2a_local,
     _interleaved_receiver_ranks,
     _receiver_ranks,
 )
+from levanter.grug._moe.ep_ragged_all_to_all import _loop_local_zeros, _LoopLocalZeroSite
 from levanter.grug._moe.sonic import sonic_gather_sum
 from levanter.grug.grug_moe import (
     MoEExpertMlp,
@@ -1423,9 +1423,7 @@ def test_loop_local_zeros_is_not_a_foldable_constant():
         == 1
     )
     assert (
-        _optimized_hlo_opcode_count(
-            lambda tie: jnp.broadcast_to((tie.reshape(-1)[0] * 0).astype(jnp.float32), (4, 3)), "kMinimum"
-        )
+        _optimized_hlo_opcode_count(lambda tie: jnp.broadcast_to((tie[0] * 0).astype(jnp.float32), (4, 3)), "kMinimum")
         == 0
     ), "the folding probe no longer folds, so this test can no longer detect a foldable fill"
 

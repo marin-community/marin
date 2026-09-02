@@ -23,7 +23,7 @@ import functools
 import logging
 import math
 from collections.abc import Callable
-from enum import auto, IntEnum, unique
+from enum import auto, IntEnum
 from typing import Protocol
 
 import jax
@@ -211,7 +211,6 @@ def _gather_dispatch_rows_bwd(
 _gather_dispatch_rows.defvjp(_gather_dispatch_rows_fwd, _gather_dispatch_rows_bwd)
 
 
-@unique
 class _LoopLocalZeroSite(IntEnum):
     DISPATCH_OUTPUT = auto()
     DISPATCH_COTANGENT = auto()
@@ -221,7 +220,7 @@ class _LoopLocalZeroSite(IntEnum):
 
 
 def _loop_local_zeros(
-    rows: int, hidden_dim: int, dtype, tie: Int[Array, "..."], site: _LoopLocalZeroSite
+    rows: int, hidden_dim: int, dtype, tie: Int[Array, "N"], site: _LoopLocalZeroSite
 ) -> Float[Array, "rows H"]:
     """Return an exact-zero output init for an in-place collective.
 
@@ -229,7 +228,7 @@ def _loop_local_zeros(
     """
     # The traced minimum keeps the fill inside the loop; unique site values keep separate
     # collective output buffers from merging under CSE.
-    zero = (jnp.minimum(tie.reshape(-1)[0], -site) + site).astype(dtype)
+    zero = (jnp.minimum(tie[0], -site) + site).astype(dtype)
     return jax.lax.broadcast(zero, (rows, hidden_dim))
 
 
