@@ -106,6 +106,54 @@ Resolver options:
 The actor system also provides `ActorPool` for round-robin calls and broadcast
 RPCs across all resolved endpoints.
 
+Each actor server has a built-in HTTP application. Use `@web_endpoint` to add
+an actor method to it:
+
+```python
+from iris.actor.web import web_endpoint
+
+class CounterActor:
+    def __init__(self) -> None:
+        self.value = 0
+
+    @web_endpoint("/increment", method="POST")
+    def increment(self, amount: int = 1) -> int:
+        self.value += amount
+        return self.value
+```
+
+A decorated public method is also an RPC method. Both transports call the same
+actor instance through the actor server executor. Register actors with HTTP
+methods before the server starts. Actors on one server can use the same HTTP
+path because the Iris proxy sends the selected actor name to the server.
+
+The HTTP adapter supplies path parameters, query parameters, and JSON object
+fields as keyword arguments. Path and query values are strings. A parameter
+named `request` receives the Starlette `Request`. A method can return a
+Starlette `Response`; other return values become JSON responses.
+
+The RPC application keeps the `/iris.actor.ActorService/...` path. The HTTP
+application receives the remaining paths.
+
+Run the local counter demo:
+
+```bash
+uv run --package marin-iris python lib/iris/examples/actor_dashboard.py
+```
+
+The command calls `increment` through `ActorClient` and prints the dashboard
+URL. RPC and HTTP requests call the same `increment` method and update the same
+counter.
+
+The controller serves a registered actor named `/alice/job/counter` at
+`<controller>/proxy/alice.job.counter/`. Keep the trailing slash so relative
+browser URLs stay inside the actor endpoint. Proxy requests include the
+`X-Forwarded-Prefix` header. Use this header for root-relative asset URLs.
+State-changing HTTP routes require application CSRF protection.
+
+The current Uvicorn listener supports Connect RPC and ordinary HTTP. Native
+gRPC requires an HTTP/2 listener with trailer support.
+
 Example:
 
 ```python
