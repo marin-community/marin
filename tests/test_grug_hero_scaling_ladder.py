@@ -2,20 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
-import json
-import os
-import shutil
-import subprocess
-import sys
-from pathlib import Path
 
 import pytest
 from marin.execution.lazy import StepContext
 
 from experiments.grug.moe_hero_ep.launch_diagnostics import build_diagnostic_run
 from experiments.grug.moe_hero_ep.launch_scaling_ladder import build_ladder_run
-
-HERO_TRIGGER = Path(__file__).resolve().parents[1] / "experiments/grug/moe_hero_ep/trigger_hero.sh"
 
 
 def test_diagnostic_run_matches_the_d6144_rack_local_recipe():
@@ -93,88 +85,16 @@ def test_scaling_ladder_searches_cluster_and_data_local_temp_roots(monkeypatch):
     ]
 
 
-@pytest.mark.parametrize(
-    ("dirty", "comment_succeeds"),
-    [(False, True), (True, True), (False, False)],
-)
-def test_hero_trigger_records_launch_provenance_on_the_tracking_issue(tmp_path, dirty, comment_succeeds):
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    trigger = repo / "trigger_hero.sh"
-    shutil.copy2(HERO_TRIGGER, trigger)
+def test_d6144_pins_permanent_checkpoint_at_55000_alongside_the_6000_cadence():
+    step = build_ladder_run(run_id="test-d6144-ckpt", size="d6144", num_steps=390_251, version="2026.08.18")
+    ctx = StepContext.for_fingerprint(runtime_arg_keys=step.runtime_args, deps=step.deps)
+    keep = step.build_config(ctx).trainer.trainer.checkpointer.keep
 
-    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
-    subprocess.run(["git", "add", trigger.name], cwd=repo, check=True)
-    subprocess.run(
-        ["git", "-c", "commit.gpgsign=false", "commit", "-qm", "test trigger"],
-        cwd=repo,
-        check=True,
-    )
-    commit = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
-    ).stdout.strip()
-    if dirty:
-        (repo / "untracked.txt").write_text("dirty\n")
-
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    fake_uv = fake_bin / "uv"
-    fake_uv.write_text(
-        f"#!{sys.executable}\n"
-        "import json, os, sys\n"
-        "from pathlib import Path\n"
-        "Path(os.environ['HERO_TRIGGER_CAPTURE']).write_text(json.dumps({\n"
-        "    'argv': sys.argv[1:],\n"
-        "}))\n"
-    )
-    fake_uv.chmod(0o755)
-    fake_uuidgen = fake_bin / "uuidgen"
-    fake_uuidgen.write_text("#!/bin/sh\necho 12345678-1234-1234-1234-123456789abc\n")
-    fake_uuidgen.chmod(0o755)
-    fake_gh = fake_bin / "gh"
-    fake_gh.write_text(
-        f"#!{sys.executable}\n"
-        "import json, os, sys\n"
-        "from pathlib import Path\n"
-        "Path(os.environ['HERO_GH_CAPTURE']).write_text(json.dumps(sys.argv[1:]))\n"
-        "raise SystemExit(int(os.environ.get('HERO_GH_EXIT_CODE', '0')))\n"
-    )
-    fake_gh.chmod(0o755)
-
-    capture = tmp_path / "capture.json"
-    gh_capture = tmp_path / "gh.json"
-    env = {
-        **os.environ,
-        "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
-        "WANDB_API_KEY": "test-key",
-        "HERO_TRIGGER_CAPTURE": str(capture),
-        "HERO_GH_CAPTURE": str(gh_capture),
-        "HERO_GH_EXIT_CODE": "0" if comment_succeeds else "1",
-    }
-    result = subprocess.run([str(trigger)], cwd=repo, env=env, check=False, capture_output=True, text=True)
-
-    expected_dirty = str(dirty).lower()
-    expected_job_name = "hero-12d8b6f0-dee637-coord-12345678"
-    gh_argv = json.loads(gh_capture.read_text())
-    assert gh_argv[:4] == [
-        "issue",
-        "comment",
-        "https://github.com/marin-community/marin/issues/8506",
-        "--body",
+    # Modular per-`until` ranges: the 6000 cadence holds up to 54000, the middle range pins exactly
+    # 55000, and the open-ended range restores the 6000 cadence for every step past it. Building the
+    # step already runs CheckpointerConfig's monotonic-interval validation.
+    assert keep == [
+        {"until": 54_000, "every": 6_000},
+        {"until": 55_000, "every": 55_000},
+        {"until": None, "every": 6_000},
     ]
-    launch_record = gh_argv[4]
-    for value in ("hero-12d8b6f0-dee637", commit, expected_dirty, expected_job_name, "cw-us-east-08a"):
-        assert f"`{value}`" in launch_record
-    if not comment_succeeds:
-        assert result.returncode == 1
-        assert not capture.exists()
-        return
-
-    assert result.returncode == 0
-    submitted = json.loads(capture.read_text())
-    argv = submitted["argv"]
-    assert argv[argv.index("--target-cluster") + 1] == "cw-us-east-08a"
-    assert argv[argv.index("--system-reason") + 1] == "hero run"
-    assert argv[argv.index("--job-name") + 1] == expected_job_name

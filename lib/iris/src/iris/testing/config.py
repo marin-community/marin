@@ -16,6 +16,7 @@ from iris.cluster.config import (
 )
 from iris.cluster.types import AcceleratorType, CapacityType
 
+# Resolves to lib/iris/config/ci-test.yaml.
 DEFAULT_CONFIG = Path(__file__).resolve().parents[3] / "config" / "ci-test.yaml"
 
 

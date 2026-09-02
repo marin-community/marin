@@ -141,16 +141,19 @@ def build_ladder_run(
     num_steps: int | None = None,
     checkpoint_every: int | None = None,
     version: str | None = None,
+    initialize_from_checkpoint: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """One scaling-ladder rung at width ``size`` on ``LADDER_RACKS[size]`` GB200 racks.
 
     ``num_steps`` defaults to the steps needed to train ``TOKENS_PER_ACTIVE_PARAM`` tokens per active
-    parameter at the rung's (rack-scaled) batch. Every eval scores the held-out set both as-trained
-    and dropless. The narrow rungs eval every 5% of the run and keep only the forced final
+    parameter at the rung's (rack-scaled) batch. Every eval scores the held-out set dropless. The
+    narrow rungs eval every 5% of the run and keep only the forced final
     checkpoint; the d6144 hero evals every 3000 steps and keeps a permanent checkpoint every 6000.
     ``checkpoint_every`` overrides that cadence for any rung. A rolling temporary checkpoint every
     ``RESUME_SAVE_INTERVAL`` on region-local storage covers a crash or a preemption, and a rung
-    resumes from the newest checkpoint it finds.
+    resumes from the newest checkpoint it finds. ``initialize_from_checkpoint`` is another run's
+    checkpoint directory, added as the resume fallback so a relaunch under a new run id continues
+    that lineage's full state from exactly that step while writing only to its own tree.
     """
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
@@ -176,7 +179,14 @@ def build_ladder_run(
     # `keep_permanent=None` still writes the final checkpoint; restore is not used (see run_grug).
     if size == "d6144":
         steps_per_eval = 3000
-        keep_permanent: list[dict[str, int]] | None = [{"every": 6000}]
+        # Permanent checkpoint every 6000 steps, plus a one-off at step 55000 for the post-handoff
+        # weight-decay comparison (#8818). Interval keeps are modular within each `until` range, so
+        # the 6000 cadence brackets the pinned 55000 range on both sides.
+        keep_permanent: list[dict[str, int | None]] | None = [
+            {"until": 54000, "every": 6000},
+            {"until": 55000, "every": 55000},
+            {"until": None, "every": 6000},
+        ]
     else:
         steps_per_eval = max(1, round(num_steps / 20))
         keep_permanent = None
@@ -223,6 +233,9 @@ def build_ladder_run(
         permanent_checkpoint_path = prefix_join(ctx.output_path, "checkpoints")
         temporary_checkpoint_path = temporary_checkpoint_base_path(ctx.output_path)
         data_local_checkpoint_path = data_local_temporary_checkpoint_base_path(ctx.output_path)
+        load_checkpoint_path = [permanent_checkpoint_path, temporary_checkpoint_path, data_local_checkpoint_path]
+        if initialize_from_checkpoint is not None:
+            load_checkpoint_path.append(initialize_from_checkpoint)
         trainer = hero_trainer_config(
             run_id=run_id,
             seed=0,
@@ -254,13 +267,11 @@ def build_ladder_run(
                 startup_timeout=HERO_STARTUP_TIMEOUT,
             ),
             # Existing 02A temporaries remain valid resume candidates for this lineage.
-            load_checkpoint_path=[
-                permanent_checkpoint_path,
-                temporary_checkpoint_path,
-                data_local_checkpoint_path,
-            ],
+            load_checkpoint_path=load_checkpoint_path,
             # load_checkpoint stays None: the trainer resumes from the newest checkpoint that
-            # exists, so a retry after a hardware or memory fault continues the run.
+            # exists, so a retry after a hardware or memory fault continues the run. Continuing
+            # another run requires a checkpoint, so a wrong path fails instead of starting fresh.
+            load_checkpoint=True if initialize_from_checkpoint is not None else None,
             checkpointer=CheckpointerConfig(
                 base_path=permanent_checkpoint_path,
                 # Rolling resume checkpoints go to region-local temp storage with a lifecycle TTL.
@@ -290,6 +301,9 @@ def build_ladder_run(
             eval=GrugEvalConfig(
                 steps_per_eval=steps_per_eval,
                 eval_batch_size=eval_batch_size,
+                # The capacity-limited eval breaks the ragged train step at d6144 (#8861). The
+                # dropless eval is the reported metric.
+                eval_current=False,
                 eval_ema=False,
                 compute_bpb=True,
                 dropless_eval=True,
@@ -331,11 +345,27 @@ def build_ladder_run(
     "the rung (6000 at d6144, final only elsewhere). Resume uses the rolling temporary checkpoint "
     "and is not affected by this option.",
 )
+@click.option(
+    "--initialize-from-checkpoint",
+    default=None,
+    help="Checkpoint directory of another run to resume from under a new --run-id; this run writes only "
+    "to its own tree and later restarts prefer its own, newer checkpoints.",
+)
 @build_options
 def main(
-    run_id: str, size: str, num_steps: int | None, checkpoint_every: int | None
+    run_id: str,
+    size: str,
+    num_steps: int | None,
+    checkpoint_every: int | None,
+    initialize_from_checkpoint: str | None,
 ) -> ArtifactStep[HeroThroughputResult]:
-    return build_ladder_run(run_id=run_id, size=size, num_steps=num_steps, checkpoint_every=checkpoint_every)
+    return build_ladder_run(
+        run_id=run_id,
+        size=size,
+        num_steps=num_steps,
+        checkpoint_every=checkpoint_every,
+        initialize_from_checkpoint=initialize_from_checkpoint,
+    )
 
 
 if __name__ == "__main__":

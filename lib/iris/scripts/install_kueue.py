@@ -83,10 +83,9 @@ from collections.abc import Sequence
 
 import click
 import yaml
+from iris.cluster.platforms.k8s.constants import CW_REPO_NAME, CW_REPO_URL
 from iris.cluster.platforms.k8s.kueue_manifests import (
     CW_CHART,
-    CW_REPO_NAME,
-    CW_REPO_URL,
     DEFAULT_POD_NAMESPACES,
     INFINIBAND_TOPOLOGY_NAME,
     MULTINODE_TOPOLOGY_NAME,
