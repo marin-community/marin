@@ -5,6 +5,7 @@ from collections.abc import Mapping
 
 import jax
 import numpy as np
+import requests
 from haliax import Axis
 from jax import random
 from levanter.models.qwen import QwenConfig, QwenLMHeadModel
@@ -156,8 +157,11 @@ def test_levanter_policy_http_client_runs_forward_and_training() -> None:
         policy = LevanterPolicy(_tiny_qwen(), learning_rate=0.05, weight_publisher=publisher)
         socket = bind_serving_socket("127.0.0.1", 0)
         port = socket.getsockname()[1]
-        with serve_app_background(build_levanter_policy_app(policy), socket, name="test-levanter-policy"):
+        app = build_levanter_policy_app(policy, weight_sync_address=lambda: ("10.0.0.7", 23456))
+        with serve_app_background(app, socket, name="test-levanter-policy"):
             client = LevanterPolicyClient(f"http://127.0.0.1:{port}")
+            rendezvous = requests.get(f"http://127.0.0.1:{port}/weight_sync_address", timeout=5)
+            rendezvous.raise_for_status()
             attention_mask = np.ones_like(sequences)
             initial = client.forward(
                 PolicyBatch(sequences, action_count=2, attention_mask=attention_mask)
@@ -179,5 +183,6 @@ def test_levanter_policy_http_client_runs_forward_and_training() -> None:
     assert trained.step == 1
     assert published_step == 1
     assert publisher.step == 1
+    assert rendezvous.json() == {"master_addr": "10.0.0.7", "master_port": 23456}
     assert not np.allclose(initial, updated)
     assert updated.shape == (1, 2)

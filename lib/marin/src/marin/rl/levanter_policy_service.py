@@ -5,6 +5,7 @@
 
 import contextlib
 import logging
+import socket
 import time
 import uuid
 from collections.abc import Iterator
@@ -99,9 +100,22 @@ def run_iris_levanter_policy_service(config: LevanterPolicyServiceConfig) -> Non
             clip_epsilon=config.clip_epsilon,
         )
 
+        rendezvous_socket = socket.socket()
+        rendezvous_socket.bind((job_info.advertise_host, 0))
+        rendezvous_port = rendezvous_socket.getsockname()[1]
+
+        def weight_sync_address() -> tuple[str, int]:
+            return job_info.advertise_host, rendezvous_port
+
         def configure_weight_sync(payload: dict) -> TorchDistributedWeightPublisher:
             if jax.process_index() != 0:
                 raise RuntimeError("Only Levanter process zero can source the NCCL weight broadcast")
+            rendezvous_socket.close()
+            logger.info(
+                "Levanter policy joining SkyRL weight-sync group at %s:%d",
+                payload["master_addr"],
+                int(payload["master_port"]),
+            )
             process_group = init_custom_process_group(
                 backend=payload["backend"],
                 master_addr=payload["master_addr"],
@@ -135,8 +149,8 @@ def run_iris_levanter_policy_service(config: LevanterPolicyServiceConfig) -> Non
 
         ctx = iris_ctx()
         port = ctx.get_port(config.port_name) if config.port_name is not None else 0
-        socket = bind_serving_socket(job_info.advertise_host, port)
-        port = socket.getsockname()[1]
+        serving_socket = bind_serving_socket(job_info.advertise_host, port)
+        port = serving_socket.getsockname()[1]
         address = f"http://{job_info.advertise_host}:{port}"
         metadata = {
             "kind": "levanter-policy",
@@ -145,13 +159,16 @@ def run_iris_levanter_policy_service(config: LevanterPolicyServiceConfig) -> Non
         }
         with (
             serve_app_background(
-                build_levanter_policy_app(policy, configure_weight_sync), socket, name="levanter-policy"
+                build_levanter_policy_app(policy, configure_weight_sync, weight_sync_address),
+                serving_socket,
+                name="levanter-policy",
             ),
             ctx.registry.registered(config.endpoint_name, address, metadata),
         ):
             deadline = Deadline.from_seconds(config.timeout_hours * 3600)
             while not deadline.expired():
                 time.sleep(min(_ENDPOINT_POLL_SECONDS, deadline.remaining_seconds()))
+        rendezvous_socket.close()
 
 
 def _wait_for_policy_clients(

@@ -338,6 +338,7 @@ class TorchDistributedWeightPublisher:
 def build_levanter_policy_app(
     policy: LevanterPolicy,
     configure_weight_sync: Callable[[dict], WeightPublisher] | None = None,
+    weight_sync_address: Callable[[], tuple[str, int]] | None = None,
 ) -> Starlette:
     """Expose policy operations as a serialized, single-flight HTTP API."""
     operation_lock = asyncio.Lock()
@@ -370,12 +371,19 @@ def build_levanter_policy_app(
             policy.weight_publisher = await asyncio.to_thread(configure_weight_sync, payload)
         return JSONResponse({"status": "ready"})
 
+    async def rendezvous_address(_request: Request) -> Response:
+        if weight_sync_address is None:
+            return JSONResponse({"error": "weight sync configuration is disabled"}, status_code=404)
+        host, port = weight_sync_address()
+        return JSONResponse({"master_addr": host, "master_port": port})
+
     return Starlette(
         routes=[
             Route("/health", health),
             Route("/forward", forward, methods=["POST"]),
             Route("/ppo_train", ppo_train, methods=["POST"]),
             Route("/broadcast_weights", broadcast_weights, methods=["POST"]),
+            Route("/weight_sync_address", rendezvous_address),
             Route("/configure_weight_sync", configure, methods=["POST"]),
         ]
     )
