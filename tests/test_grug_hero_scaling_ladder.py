@@ -80,7 +80,7 @@ def test_ladder_defaults_gate_router_weight_decay_on_with_opt_out():
         ctx = StepContext.for_fingerprint(runtime_arg_keys=step.runtime_args, deps=step.deps)
         return step.build_config(ctx).optimizer
 
-    assert optimizer_of(default_step).gate_router_weight_decay == 0.05
+    assert optimizer_of(default_step).gate_router_weight_decay == 0.03
     assert optimizer_of(opt_out_step).gate_router_weight_decay == 0.0
 
 

@@ -22,7 +22,7 @@ analytic estimate (forward+backward, including attention and the latent-MoE corr
 
 Changelog:
     2026-09-01 (#8818, PR #8833): decoupled weight decay on the attn_gate and router weights is on by
-        default (0.05, annealed linearly to 0 over training and read from the Adam step count so it
+        default (0.03, annealed linearly to 0 over training and read from the Adam step count so it
         resumes at the right step). A hero resumed from a no-decay checkpoint therefore continues with
         decay rather than reverting to the no-decay recipe; pass ``--gate-router-weight-decay 0`` to
         opt out.
@@ -145,7 +145,7 @@ def build_ladder_run(
     size: str,
     num_steps: int | None = None,
     checkpoint_every: int | None = None,
-    gate_router_weight_decay: float = 0.05,
+    gate_router_weight_decay: float = 0.03,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """One scaling-ladder rung at width ``size`` on ``LADDER_RACKS[size]`` GB200 racks.
@@ -345,7 +345,7 @@ def build_ladder_run(
 @click.option(
     "--gate-router-weight-decay",
     type=click.FloatRange(min=0.0),
-    default=0.05,
+    default=0.03,
     show_default=True,
     help="Decoupled weight decay on attn_gate and the router weight, annealed linearly to 0 over "
     "training. Defaults on for the hero recipe; pass 0 to opt out.",
