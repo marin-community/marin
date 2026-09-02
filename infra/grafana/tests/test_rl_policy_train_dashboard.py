@@ -52,7 +52,6 @@ WORKER_SPANS = {
         "policy_backward": 700.0,
         "policy_optimizer_step": 60.0,
         "policy_entropy_allreduce": 10.0,
-        "policy_training_step_other": 20.0,
         "policy_metric_allreduce": 40.0,
         "policy_final_barrier": 10.0,
     },
@@ -62,13 +61,23 @@ WORKER_SPANS = {
         "policy_backward": 1200.0,
         "policy_optimizer_step": 90.0,
         "policy_entropy_allreduce": 15.0,
-        "policy_training_step_other": 30.0,
         "policy_metric_allreduce": 50.0,
         "policy_final_barrier": 60.0,
     },
 }
 PPO_TRAIN = {"0": 1900.0, "1": 2000.0}
 CRITICAL_RANK = "1"
+
+# policy_training_step wraps these four. The first instrumented run published it as
+# policy_training_step_other under clock_domain=exclusive_wall, so it arrives looking exactly like
+# a leaf; both spellings have to be excluded from the bands.
+CONTAINER_SPAN = "policy_training_step_other"
+CONTAINED_SPANS = (
+    "policy_forward",
+    "policy_backward",
+    "policy_optimizer_step",
+    "policy_entropy_allreduce",
+)
 
 WORKER_COUNTERS = {
     "0": {"micro_step_count": 64.0, "tokens_real": 6000.0, "tokens_padded": 8000.0, "attention_work_ratio": 1.9},
@@ -205,9 +214,12 @@ def _worker_rows(moment: datetime, seq: int) -> list[tuple]:
     rows = []
     for rank, spans in WORKER_SPANS.items():
         rank_node = NODES[int(rank) % len(NODES)]
-        covered = sum(spans.values())
         emitted = dict(spans)
-        emitted["policy_span_residual"] = PPO_TRAIN[rank] - covered
+        # The container span, as the first instrumented run actually published it: exclusive_wall,
+        # and wrapping four of the spans beside it. Banding it counts that time twice, and the
+        # producer's own residual goes sharply negative as a result.
+        emitted[CONTAINER_SPAN] = sum(spans[phase] for phase in CONTAINED_SPANS)
+        emitted["policy_span_residual"] = PPO_TRAIN[rank] - sum(emitted.values())
         for phase, seconds in emitted.items():
             rows.append(
                 _row(
@@ -303,7 +315,7 @@ def _node_agent_rows(moment: datetime, seq: int) -> list[tuple]:
 
 
 def _vllm_rows(moment: datetime, seq: int) -> list[tuple]:
-    """The engine registry: Prometheus-imported cumulative histograms plus native gauges."""
+    """The engine registry, split across the two namespaces a run's metrics can land in."""
     rows = []
     histograms = {
         "request_generation_tokens_bucket": GENERATION_TOKEN_BUCKETS,
@@ -316,11 +328,15 @@ def _vllm_rows(moment: datetime, seq: int) -> list[tuple]:
         "e2e_request_latency_seconds_bucket": LATENCY_BUCKETS,
     }
     for engine in ("0", "1"):
+        # Engine 0 is forwarded by the MarinSkyRL process under its own service name, as the
+        # first instrumented run's engine rows actually were; engine 1 publishes its own
+        # registry as service='vllm'. The panels have to read both.
+        engine_service = "marinskyrl" if engine == "0" else "vllm"
         for name, buckets in histograms.items():
             for upper_bound, count in buckets.items():
                 rows.append(
                     _row(
-                        service="vllm",
+                        service=engine_service,
                         name=name,
                         value=count * (seq + 1),
                         moment=moment,
@@ -339,7 +355,7 @@ def _vllm_rows(moment: datetime, seq: int) -> list[tuple]:
         for name, value in (("queue_depth", 6.0), ("kv_cache_usage_perc", 0.42)):
             rows.append(
                 _row(
-                    service="vllm",
+                    service=engine_service,
                     name=name,
                     value=value,
                     moment=moment,
@@ -353,7 +369,7 @@ def _vllm_rows(moment: datetime, seq: int) -> list[tuple]:
         for reason, value in (("kv_cache", 3.0), ("scheduler", 1.0)):
             rows.append(
                 _row(
-                    service="vllm",
+                    service=engine_service,
                     name="num_requests_waiting_by_reason",
                     value=value,
                     moment=moment,
@@ -467,8 +483,19 @@ def test_the_decomposition_reads_the_critical_rank_and_never_a_per_phase_maximum
 
     bands = {series: seconds for _, series, seconds in rows}
     expected = dict(WORKER_SPANS[CRITICAL_RANK])
-    expected["policy_span_residual"] = PPO_TRAIN[CRITICAL_RANK] - sum(WORKER_SPANS[CRITICAL_RANK].values())
+    expected["unattributed"] = PPO_TRAIN[CRITICAL_RANK] - sum(WORKER_SPANS[CRITICAL_RANK].values())
     assert bands == pytest.approx(expected)
+
+    # The container span and the producer's own residual are both excluded, and the residual is
+    # recomputed. Reading the published one would put a -1949 s band in a 2000 s stack.
+    assert CONTAINER_SPAN not in bands
+    assert "policy_span_residual" not in bands
+    published = (
+        PPO_TRAIN[CRITICAL_RANK]
+        - sum(WORKER_SPANS[CRITICAL_RANK].values())
+        - sum(WORKER_SPANS[CRITICAL_RANK][phase] for phase in CONTAINED_SPANS)
+    )
+    assert published < 0, "the fixture no longer reproduces the double-count"
 
     # The bands close on the parent they decompose. A per-phase maximum over the two ranks would
     # sum to 2645 s inside a 2000 s span, because the barrier and the compute come from different
@@ -536,14 +563,9 @@ def test_the_accelerator_panels_join_dcgm_to_the_run_through_its_nodes(store) ->
     memory = store.execute(_panel_sql("GPU memory in use on this run's nodes")).fetchall()
     assert [row[2] for row in memory] == [pytest.approx(GPU_MEMORY_USED)] * len(memory)
 
-    fabric = store.execute(_panel_sql("NVLink against PCIe traffic on this run's nodes")).fetchall()
+    fabric = store.execute(_panel_sql("NVLink against PCIe receive traffic")).fetchall()
     # Four GPUs across the run's two nodes, summed per direction.
-    assert {series for _, series, _ in fabric} == {
-        "NVLink receive",
-        "NVLink transmit",
-        "PCIe receive",
-        "PCIe transmit",
-    }
+    assert {series for _, series, _ in fabric} == {"NVLink receive", "PCIe receive"}
     assert {round(value) for _, series, value in fabric if series == "NVLink receive"} == {round(4 * NVLINK_RATE)}
 
 
@@ -581,7 +603,7 @@ def test_the_engine_histograms_interpolate_quantiles_from_cumulative_buckets(sto
 
     stages = store.execute(_panel_sql("Request latency by stage")).fetchall()
     assert {series for _, series, _ in stages} == {
-        f"{stage} · {quantile}" for stage in ("queue", "prefill", "decode", "end to end") for quantile in ("p50", "p99")
+        f"{stage} · {quantile}" for stage in ("queue", "decode", "end to end") for quantile in ("p50", "p99")
     }
 
     tokens = store.execute(_panel_sql("Time to first token and inter-token latency")).fetchall()
@@ -601,15 +623,30 @@ def test_the_engine_histograms_interpolate_quantiles_from_cumulative_buckets(sto
 def test_a_counter_reset_drops_the_sample_rather_than_reading_as_a_giant_delta(store) -> None:
     # An engine that restarts republishes its histogram from zero. Clamping the negative step to
     # zero would keep the sample and understate the bucket; the panel drops it.
-    store.execute(
-        """UPDATE "telemetry_v1.vllm" SET value = 1.0
-           WHERE name = 'request_generation_tokens_bucket' AND seq >= 3"""
-    )
+    for stream in ("telemetry_v1.vllm", "telemetry_v1.marinskyrl"):
+        store.execute(
+            f"""UPDATE "{stream}" SET value = 1.0
+                WHERE name = 'request_generation_tokens_bucket' AND seq >= 3"""
+        )
     rows = store.execute(_panel_sql("Generated tokens per request")).fetchall()
 
     # Buckets 1 and 2 still difference cleanly; 3 is the reset and 4-5 are flat at 1.0, so no
     # quantile survives there.
     assert len({t for t, _, value in rows if value is not None}) == 2
+
+
+def test_engine_rows_are_read_from_whichever_namespace_the_run_wrote_them_to(store) -> None:
+    # An RL run's engine metrics are forwarded by the MarinSkyRL process under its own service
+    # name, so they land in telemetry_v1.marinskyrl rather than telemetry_v1.vllm. Reading only
+    # the latter renders every engine panel blank for exactly the runs this dashboard is for.
+    both = store.execute(_panel_sql("Generated tokens per request")).fetchall()
+    assert both
+
+    store.execute('DELETE FROM "telemetry_v1.vllm"')
+    marinskyrl_only = store.execute(_panel_sql("Generated tokens per request")).fetchall()
+
+    assert {series for _, series, _ in marinskyrl_only} == {series for _, series, _ in both}
+    assert {round(v, 6) for _, _, v in marinskyrl_only} == {round(v, 6) for _, _, v in both}
 
 
 def test_the_engine_gauges_are_averaged_and_never_differenced(store) -> None:
