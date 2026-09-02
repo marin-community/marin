@@ -21,15 +21,23 @@ the gist is what survived. Where the gist and this file disagree, the disagreeme
 Defaults are set for a **timing run**: four steps, no checkpoint, no Hub upload, no resume. Pass
 ``--max-steps 20 --ckpt-interval 2`` to run it as the science configuration instead.
 
-Two caveats that are not fixable from this file, and that any measurement taken here must carry:
+One property of this run is a deliberate choice rather than a default, and it must be stated
+wherever a number from it is quoted:
 
-* **Preemption still retries.** ``max_retries=0`` bounds *failure* retries only; Iris's
-  ``max_retries_preemption`` defaults to 1000 and is not exposed by ``IrisSkyRLExecution``. A
-  preempted gang can relaunch. Check the attempt count before trusting a step time.
-* **The optimizer is not the one E6 ran.** At the current MarinSkyRL pin, ``AdamW`` resolves to a
-  custom stochastic-BF16 implementation (``distributed/bf16_adamw.py``), not ``torch.optim.AdamW``
-  as at the pin E6 used. The name matches; the implementation, and therefore the timing, may not.
-  This run is the control for *our* arms; it is not a reproduction of run ``nk0ehfrv``.
+**The optimizer implementation is selected, not inherited.** At the current MarinSkyRL pin every
+``AdamW`` is routed through ``build_adamw`` (``distributed/fsdp_strategy.py``), which returns a
+custom stochastic-rounding BF16 optimizer for ``bf16_update_mode`` of ``stochastic`` (the default)
+or ``kahan``, and plain ``torch.optim.AdamW`` for ``nearest``. E6 ran ``torch.optim.AdamW``, because
+``build_adamw`` did not exist at its pin.
+
+``--bf16-update-mode`` therefore chooses what is being measured:
+
+* ``stochastic`` (default) -- the stack as it runs today. This is what we are trying to make
+  faster, and what an arm result has to generalise to.
+* ``nearest`` -- E6's optimizer implementation, for a comparison against run ``nk0ehfrv``.
+
+Neither is free: they differ numerically, so runs under different modes are not paired
+observations. **Hold the mode fixed across every arm and record it in the decision record.**
 
 Print the plan (this is the dry run -- there is no ``--dry-run`` flag)::
 
@@ -142,7 +150,7 @@ E6_ROLE_PLAN = SkyRLRolePlan(
 )
 
 
-def _rl_config(*, max_steps: int, ckpt_interval: int) -> str:
+def _rl_config(*, max_steps: int, ckpt_interval: int, bf16_update_mode: str) -> str:
     """Render the SkyRL config.
 
     ``ckpt_interval`` must be **0** for a timing run, and 0 is not merely "an interval past the end".
@@ -250,6 +258,7 @@ trainer:
     optimizer_config:
       lr: 1.0e-5
       max_grad_norm: 0.5
+      bf16_update_mode: {bf16_update_mode}
     fsdp_config:
       cpu_offload: false
       reshard_after_forward: true
@@ -295,6 +304,7 @@ def build_workflow(
     wandb_entity: str = "dogml",
     max_steps: int = 4,
     ckpt_interval: int = 0,
+    bf16_update_mode: str = "stochastic",
 ) -> ArtifactStep[SkyRLModel]:
     """Compose the E6 baseline as one inspectable artifact step."""
     base_name = f"checkpoints/{E6_MODEL_NAME}"
@@ -305,7 +315,7 @@ def build_workflow(
         SkyRLSpec(
             name=user_owned_name(base_name),
             version=version or resolve_version(base_name, None),
-            config_yaml=_rl_config(max_steps=max_steps, ckpt_interval=ckpt_interval),
+            config_yaml=_rl_config(max_steps=max_steps, ckpt_interval=ckpt_interval, bf16_update_mode=bf16_update_mode),
             runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.FSDP),
             model=ExternalModel(
                 uri=SNOWBALL_SFT_MIRROR,
@@ -340,11 +350,15 @@ def build_workflow(
             # every interactive task. This is the documented exception to the house `batch` default;
             # matching the workflow's own precedent is what keeps the comparison honest.
             priority="interactive",
-            # Zero, not the gist's default. A retry is a second attempt writing into the same
+            # Both budgets, because they are separate axes and only bounding the first leaves the
+            # other at iris's default of 1000. A retry is a second attempt writing into the same
             # W&B run and the same attempt directory, on possibly different hardware -- which is
-            # indistinguishable from one slow attempt when you are reading a step time. One attempt,
-            # or a clean failure.
+            # indistinguishable from one slow attempt when you are reading a step time. And with
+            # resume disabled a preempted relaunch restarts from step 0, so an unbounded preemption
+            # budget can spend the 80-GPU gang's cost repeatedly and never finish. One attempt, or a
+            # clean failure.
             max_retries=0,
+            max_retries_preemption=0,
             wandb_entity=wandb_entity,
         ),
     )
@@ -368,6 +382,15 @@ def build_workflow(
     "steps yield a single observation with no stability check. Pass 20 for the science configuration.",
 )
 @click.option(
+    "--bf16-update-mode",
+    type=click.Choice(["stochastic", "nearest", "kahan"]),
+    default="stochastic",
+    show_default=True,
+    help="Which AdamW implementation runs. `stochastic` is the stack's own default and measures "
+    "today's code; `nearest` falls through to torch.optim.AdamW, which is what E6 ran. Stated "
+    "explicitly because inheriting it silently attributes an optimizer change to the model.",
+)
+@click.option(
     "--ckpt-interval",
     default=0,
     show_default=True,
@@ -375,8 +398,13 @@ def build_workflow(
     "~539 GB checkpoint at train end regardless of how large it is. See _rl_config.",
 )
 @build_options
-def main(wandb_entity: str, max_steps: int, ckpt_interval: int) -> ArtifactStep[SkyRLModel]:
-    return build_workflow(wandb_entity=wandb_entity, max_steps=max_steps, ckpt_interval=ckpt_interval)
+def main(wandb_entity: str, max_steps: int, ckpt_interval: int, bf16_update_mode: str) -> ArtifactStep[SkyRLModel]:
+    return build_workflow(
+        wandb_entity=wandb_entity,
+        max_steps=max_steps,
+        ckpt_interval=ckpt_interval,
+        bf16_update_mode=bf16_update_mode,
+    )
 
 
 if __name__ == "__main__":

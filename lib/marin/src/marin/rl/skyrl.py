@@ -293,6 +293,11 @@ class IrisSkyRLExecution:
     disk: str
     priority: str
     max_retries: int
+    # Failure retries and preemption relaunches are separate budgets in iris, and only the first was
+    # reachable from here. The default mirrors iris's own so no existing caller changes behaviour;
+    # a measurement run sets 0, because with resume disabled a preempted relaunch restarts from
+    # step 0 and can spend a whole gang's cost repeatedly without ever finishing.
+    max_retries_preemption: int = 1000
     target_cluster: str | None = None
     parent_cluster_config: str | None = None
     wandb_entity: str | None = None
