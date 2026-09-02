@@ -32,6 +32,10 @@ from marin.inference.types import (
 
 logger = logging.getLogger(__name__)
 
+# Extra forwarding-limiter capacity beyond max_pending_requests: keeps the over-capacity 429 path
+# reachable while the pending budget is fully parked.
+_FORWARD_LIMITER_HEADROOM = 16
+
 
 @dataclass
 class ProxyStats:
@@ -71,6 +75,11 @@ class InferenceProxy:
             backoff = ExponentialBackoff(initial=0.01, maximum=0.25, factor=2.0)
         self._backoff = backoff
         self._pending: dict[str, Future[InferenceResponse]] = {}
+        # Each in-flight request parks a thread in forward_raw_request until its brokered response
+        # lands. anyio's default to_thread limiter is 40 threads, which silently caps the whole
+        # fleet's concurrency at 40 no matter how many workers sit behind the broker; size the
+        # limiter to the pending budget instead.
+        self._forward_limiter = anyio.CapacityLimiter(max_pending_requests + _FORWARD_LIMITER_HEADROOM)
         self._lock = threading.Lock()
         self._poll_stop_event: threading.Event | None = None
         self._poll_thread: threading.Thread | None = None
@@ -148,7 +157,8 @@ class InferenceProxy:
                 query_string=request.url.query,
                 headers=forwardable_request_headers(request.headers),
                 timeout_seconds=timeout_seconds,
-            )
+            ),
+            limiter=self._forward_limiter,
         )
 
     def forward_raw_request(
@@ -194,7 +204,10 @@ class InferenceProxy:
                     headers=tuple((headers or {}).items()),
                 ),
             )
-            logger.info(
+            # DEBUG, not INFO: this fires once per request, and a brokered fleet at full tilt sees
+            # hundreds of requests per second -- at that rate per-request logging is a measurable
+            # cost in the proxy's own event loop and the aggregate story lives in ProxyStats.
+            logger.debug(
                 "InferenceProxy submitted request request_id=%s method=%s path=%s pending=%d/%d",
                 request_id,
                 method,
@@ -219,7 +232,7 @@ class InferenceProxy:
                 if not future.done():
                     future.cancel()
 
-        logger.info(
+        logger.debug(
             "InferenceProxy returning response request_id=%s method=%s path=%s status_code=%d",
             request_id,
             method,
@@ -261,7 +274,11 @@ class InferenceProxy:
         self.stats.matched_responses += len(matched_ids)
         self.stats.dropped_responses += len(dropped_ids)
         if responses:
-            logger.info(
+            # A drop means a response arrived for a request nobody is waiting on -- worth a line.
+            # A clean batch is routine (the poller fetches many times per second at load) and logs
+            # at DEBUG so the fetch loop is not spending its time formatting request ids.
+            log = logger.info if dropped_ids else logger.debug
+            log(
                 "InferenceProxy fetched responses count=%d matched=%d dropped=%d "
                 "pending=%d matched_ids=%s dropped_ids=%s",
                 len(responses),
