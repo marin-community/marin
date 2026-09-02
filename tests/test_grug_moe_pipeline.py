@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import dataclasses
-
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -15,11 +13,8 @@ from experiments.grug.moe_pipeline.pipeline import (
     AutomaticPipelineSchedule,
     GrugMoePipelineConfig,
     automatic_stage_to_mpmd_indices,
-    merge_stages,
-    microbatched_staged_loss,
     split_automatic_stages,
     split_transformer,
-    staged_loss,
 )
 from experiments.grug.moe_pipeline.train import _validate_local_mesh
 
@@ -66,12 +61,36 @@ def _assert_trees_close(actual, expected) -> None:
         np.testing.assert_allclose(actual_leaf, expected_leaf, rtol=1e-5, atol=1e-5)
 
 
-def test_split_and_merge_transformer_round_trip_with_uneven_stages():
+def _staged_loss(stages, batch: GrugLmExample, *, logsumexp_weight: float | None = None):
+    hidden = stages[0].embed(batch.tokens)
+    router_loss = jnp.array(0.0, dtype=jnp.float32)
+    for stage in stages:
+        hidden, metrics = stage.run_blocks(hidden, batch.attn_mask)
+        router_loss = router_loss + stage.local_router_loss(metrics)
+    hidden = stages[-1].finish(hidden)
+    return (
+        stages[-1].cross_entropy_loss(
+            hidden,
+            batch.tokens,
+            batch.loss_weight,
+            logsumexp_weight=logsumexp_weight,
+        )
+        + router_loss
+    )
+
+
+def test_split_transformer_assigns_uneven_contiguous_stages():
     _, model = _tiny_model(num_layers=4)
 
     stages = split_transformer(model, 2, layer_counts=(3, 1))
 
-    _assert_trees_close(merge_stages(stages), model)
+    assert [(stage.start_layer, stage.end_layer) for stage in stages] == [(0, 3), (3, 4)]
+    assert all(actual is expected for actual, expected in zip(stages[0].blocks, model.blocks[:3], strict=True))
+    assert stages[1].blocks[0] is model.blocks[3]
+    assert stages[0].token_embed is model.token_embed
+    assert stages[0].output_proj is None
+    assert stages[1].token_embed is None
+    assert stages[1].output_proj is model.output_proj
 
 
 def test_staged_loss_and_gradients_match_the_unsplit_model():
@@ -88,7 +107,7 @@ def test_staged_loss_and_gradients_match_the_unsplit_model():
         )
 
     def pipeline_loss(params):
-        return staged_loss(split_transformer(params, 2), batch, logsumexp_weight=0.01)
+        return _staged_loss(split_transformer(params, 2), batch, logsumexp_weight=0.01)
 
     with jax.set_mesh(mesh):
         ordinary_value, ordinary_grads = jax.value_and_grad(ordinary_loss)(model)
@@ -113,20 +132,6 @@ def test_automatic_pipeline_excludes_qb_bias_from_differentiated_parameters():
     for trainable_stage in trainable_stages:
         for trainable_block in trainable_stage.blocks:
             assert trainable_block.mlp.router_bias is None
-
-
-def test_microbatched_loss_matches_full_batch_with_uneven_loss_weights():
-    mesh, model = _tiny_model()
-    batch = dataclasses.replace(
-        _batch(),
-        loss_weight=jnp.array([[1, 0, 0, 0], [1, 1, 1, 1]], dtype=jnp.float32),
-    )
-
-    with jax.set_mesh(mesh):
-        ordinary_loss = model.next_token_loss(batch.tokens, batch.loss_weight, mask=batch.attn_mask)
-        pipeline_loss = microbatched_staged_loss(split_transformer(model, 2), batch, num_microbatches=2)
-
-    np.testing.assert_allclose(pipeline_loss, ordinary_loss, rtol=1e-5, atol=1e-5)
 
 
 def test_pipeline_mesh_validation_uses_full_stage_shard_count():

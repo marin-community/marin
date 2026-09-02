@@ -27,7 +27,7 @@ from levanter.data.text.examples import GrugLmExample
 from levanter.grug.attention import AttentionMask
 from levanter.grug.grug_moe import MOE_REMAT_SAVE_NAMES
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
-from levanter.pipeline import evenly_partition_layers, split_batch_into_microbatches
+from levanter.pipeline import evenly_partition_layers
 
 from experiments.grug.moe_pipeline.model import (
     BATCH_AXES,
@@ -268,32 +268,6 @@ def split_transformer(
     return tuple(stages)
 
 
-def merge_stages(stages: tuple[GrugMoePipelineStage, ...]) -> Transformer:
-    """Reassemble stage-local parameters into the ordinary Grug model pytree."""
-    if len(stages) < 2:
-        raise ValueError("at least two pipeline stages are required")
-    for expected_index, stage in enumerate(stages):
-        if stage.stage_index != expected_index:
-            raise ValueError(f"expected stage {expected_index}, got {stage.stage_index}")
-
-    first = stages[0]
-    last = stages[-1]
-    if first.token_embed is None or first.embed_norm is None or first.embed_gated_norm is None:
-        raise ValueError("stage 0 is missing embedding parameters")
-    if last.output_proj is None or last.final_norm is None or last.final_gated_norm is None:
-        raise ValueError("final stage is missing output parameters")
-    return Transformer(
-        token_embed=first.token_embed,
-        embed_norm=first.embed_norm,
-        embed_gated_norm=first.embed_gated_norm,
-        output_proj=last.output_proj,
-        blocks=tuple(block for stage in stages for block in stage.blocks),
-        final_norm=last.final_norm,
-        final_gated_norm=last.final_gated_norm,
-        config=first.config,
-    )
-
-
 def split_automatic_stages(
     model: Transformer,
     *,
@@ -377,7 +351,7 @@ def _initialize_mpmd_stage_state(
     )
 
 
-def make_mpmd_automatic_pipeline_state(
+def initialize_mpmd_automatic_pipeline_state(
     model: Transformer,
     optimizer: optax.GradientTransformation,
     mpmd_mesh,
@@ -424,63 +398,6 @@ def make_mpmd_automatic_pipeline_state(
         ),
         static_stages,
     )
-
-
-def staged_loss(
-    stages: tuple[GrugMoePipelineStage, ...],
-    batch: GrugLmExample,
-    *,
-    logsumexp_weight: float | None = None,
-) -> jax.Array:
-    """Return the loss from sequential execution of split stages."""
-    hidden = stages[0].embed(batch.tokens)
-    router_loss = jnp.array(0.0, dtype=jnp.float32)
-    for stage in stages:
-        hidden, metrics = stage.run_blocks(hidden, batch.attn_mask)
-        router_loss = router_loss + stage.local_router_loss(metrics)
-    hidden = stages[-1].finish(hidden)
-    return (
-        stages[-1].cross_entropy_loss(
-            hidden,
-            batch.tokens,
-            batch.loss_weight,
-            logsumexp_weight=logsumexp_weight,
-        )
-        + router_loss
-    )
-
-
-def microbatched_staged_loss(
-    stages: tuple[GrugMoePipelineStage, ...],
-    batch: GrugLmExample,
-    *,
-    num_microbatches: int,
-    logsumexp_weight: float | None = None,
-) -> jax.Array:
-    """Return the loss after sequential microbatch accumulation."""
-    cross_entropy_sum = jnp.array(0.0, dtype=jnp.float32)
-    loss_denominator = jnp.array(0.0, dtype=jnp.float32)
-    router_loss = jnp.array(0.0, dtype=jnp.float32)
-    for microbatch in split_batch_into_microbatches(batch, num_microbatches):
-        hidden = stages[0].embed(microbatch.tokens)
-        for stage in stages:
-            hidden, metrics = stage.run_blocks(hidden, microbatch.attn_mask)
-            router_loss = router_loss + stage.local_router_loss(metrics) / num_microbatches
-        hidden = stages[-1].finish(hidden)
-        cross_entropy_sum = cross_entropy_sum + stages[-1].cross_entropy_loss(
-            hidden,
-            microbatch.tokens,
-            microbatch.loss_weight,
-            logsumexp_weight=logsumexp_weight,
-            reduction="sum",
-        )
-        loss_denominator = loss_denominator + jnp.sum(microbatch.loss_weight.astype(jnp.float32))
-    cross_entropy = jnp.where(
-        loss_denominator != 0,
-        cross_entropy_sum / loss_denominator,
-        jnp.zeros_like(cross_entropy_sum),
-    )
-    return cross_entropy + router_loss
 
 
 def _stack_router_metrics(block_metrics: list[dict[str, jax.Array]]) -> dict[str, jax.Array]:

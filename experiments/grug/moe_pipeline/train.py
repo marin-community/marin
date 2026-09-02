@@ -125,8 +125,8 @@ def _run_grug_local(config: GrugPipelineTrainConfig) -> None:
         TRAIN_LOSS_KEY,
         GrugMoePipelineConfig,
         automatic_stage_to_mpmd_indices,
+        initialize_mpmd_automatic_pipeline_state,
         make_automatic_pipeline_step,
-        make_mpmd_automatic_pipeline_state,
         make_pipeline_mesh,
         prepare_automatic_mpmd_step,
     )
@@ -228,7 +228,7 @@ def _run_grug_local(config: GrugPipelineTrainConfig) -> None:
             stage_to_mpmd_index = automatic_stage_to_mpmd_indices(pipeline_config, config.schedule.automatic_schedule)
         else:
             stage_to_mpmd_index = None
-        state, static_stages = make_mpmd_automatic_pipeline_state(
+        state, static_stages = initialize_mpmd_automatic_pipeline_state(
             model,
             optimizer,
             mpmd_mesh,

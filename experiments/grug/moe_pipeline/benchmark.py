@@ -9,6 +9,8 @@ from collections.abc import Mapping
 
 from experiments.grug.moe_pipeline.train import GrugPipelineTrainConfig, PipelineSchedule, _run_grug_local
 
+_ATTENTION_HEAD_DIM = 128
+
 
 def _env_int(environ: Mapping[str, str], name: str, default: int) -> int:
     value = environ.get(name)
@@ -47,9 +49,9 @@ def _resolve_benchmark_config(environ: Mapping[str, str]) -> GrugPipelineTrainCo
     layer_counts = None if not layer_counts_value else tuple(int(value) for value in layer_counts_value.split(","))
     memory_threshold_value = environ.get("PIPELINE_RESHARD_THRESHOLD_BYTES")
     memory_threshold = None if not memory_threshold_value else int(memory_threshold_value)
-    if hidden_dim % 128 != 0:
-        raise ValueError(f"PIPELINE_HIDDEN_DIM must be divisible by 128, got {hidden_dim}")
-    num_heads = hidden_dim // 128
+    if hidden_dim % _ATTENTION_HEAD_DIM != 0:
+        raise ValueError(f"PIPELINE_HIDDEN_DIM must be divisible by {_ATTENTION_HEAD_DIM}, got {hidden_dim}")
+    num_heads = hidden_dim // _ATTENTION_HEAD_DIM
     num_kv_heads = _default_num_kv_heads(num_heads)
     return GrugPipelineTrainConfig(
         stages=stages,
