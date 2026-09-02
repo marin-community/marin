@@ -44,14 +44,12 @@ Usage:
 from fray.cluster import ResourceConfig
 from marin.datakit.download.huggingface import DownloadConfig, download_hf
 from marin.execution.types import ExecutorStep, this_output_path, versioned
-from marin.processing.tokenize import TokenizeConfig, tokenize
+from marin.processing.tokenize import HistoricalFullDocumentTokenizeConfig, TokenizeConfig, tokenize
 from marin.transform.stack_edu.hydrate import StackEduHydrationConfig
 from marin.transform.stack_edu.hydrate import hydrate_stack_edu as hydrate_stack_edu_text
 
 from experiments.llama import llama3_tokenizer
 from experiments.marin_tokenizer import marin_tokenizer
-from experiments.midtraining_datasets import finemath_3_plus_tokenized
-from experiments.pretraining_datasets.dolma import tokenize_dolma
 
 # =============================================================================
 # CONSTANTS
@@ -789,34 +787,47 @@ def tokenize_dolma3_pool_subset(
     tokenizer: str | None = None,
     *,
     worker_resources: ResourceConfig | None = None,
+    split_long_documents: bool = True,
 ) -> ExecutorStep:
     """Create a tokenization step for a specific partition.
 
     Args:
         partition_name: Name of the partition (e.g., "common_crawl/adult_content")
         tokenizer: Tokenizer to use. Defaults to marin_tokenizer.
+        worker_resources: Optional worker resources and placement.
+        split_long_documents: Split long text before encoding. Disable only to
+            reproduce historical full-document tokenization.
 
     Returns:
         ExecutorStep for tokenizing the partition.
     """
     if partition_name not in DOLMA3_POOL_PARTITIONS:
         raise KeyError(
-            f"Partition '{partition_name}' not found. " f"Available partitions: {list(DOLMA3_POOL_PARTITIONS.keys())}"
+            f"Partition '{partition_name}' not found. Available partitions: {list(DOLMA3_POOL_PARTITIONS.keys())}"
         )
 
     if tokenizer is None:
         tokenizer = marin_tokenizer
 
-    cache_key = f"{partition_name}:{tokenizer}:{_worker_resources_cache_key(worker_resources)}"
+    cache_key = (
+        f"{partition_name}:{tokenizer}:{_worker_resources_cache_key(worker_resources)}:"
+        f"split_long_documents={split_long_documents}"
+    )
     if cache_key in _tokenize_cache:
         return _tokenize_cache[cache_key]
 
     if _uses_reused_equivalent_cache(partition_name, tokenizer):
         if partition_name == "finemath_3plus":
+            from experiments.midtraining_datasets import finemath_3_plus_tokenized  # noqa: PLC0415
+
             step = finemath_3_plus_tokenized
         elif partition_name == "arxiv":
+            from experiments.pretraining_datasets.dolma import tokenize_dolma  # noqa: PLC0415
+
             step = tokenize_dolma(tokenizer=llama3_tokenizer)["dolma/arxiv"]
         elif partition_name == "wikipedia":
+            from experiments.pretraining_datasets.dolma import tokenize_dolma  # noqa: PLC0415
+
             step = tokenize_dolma(tokenizer=llama3_tokenizer)["dolma/wiki"]
         else:
             raise ValueError(f"Unexpected reused-cache partition: {partition_name}")
@@ -826,7 +837,8 @@ def tokenize_dolma3_pool_subset(
 
     # Create output path
     safe_name = partition_name.replace("/", "_")
-    output_path = f"tokenized/dolma3_pool/{safe_name}"
+    output_namespace = "dolma3_pool" if split_long_documents else "dolma3_pool_historical_full_document_v1"
+    output_path = f"tokenized/{output_namespace}/{safe_name}"
 
     # Get data paths
     train_paths = _resolve_partition_paths(partition_name, worker_resources=worker_resources)
@@ -835,10 +847,11 @@ def tokenize_dolma3_pool_subset(
     if worker_resources is not None:
         config_kwargs["worker_resources"] = worker_resources
 
+    config_type = TokenizeConfig if split_long_documents else HistoricalFullDocumentTokenizeConfig
     step = ExecutorStep(
         name=output_path,
         fn=tokenize,
-        config=TokenizeConfig(
+        config=config_type(
             train_paths=train_paths,
             validation_paths=versioned([]),
             cache_path=this_output_path(),

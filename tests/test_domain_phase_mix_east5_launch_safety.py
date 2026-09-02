@@ -184,6 +184,81 @@ def test_rejects_child_tpu_zone_mismatch() -> None:
     assert any("--tpu-zone" in error for error in result.errors)
 
 
+def test_accepts_explicit_different_child_zone_in_same_region() -> None:
+    command = (
+        "uv run iris --cluster=marin job run --no-wait "
+        "--job-name dm-safe --region us-east5 --zone us-east5-a -- "
+        "python -m experiments.domain_phase_mix.launch_delphi_one_phase_dsp_epoch_cap_sweep_3e18 "
+        "--tpu-region us-east5 --tpu-zone us-east5-b"
+    )
+
+    result = validate_regional_iris_command(
+        command,
+        expected_region="us-east5",
+        expected_zone="us-east5-a",
+        expected_child_zone="us-east5-b",
+        expected_bucket_prefix="gs://marin-us-east5",
+    )
+
+    assert result.ok
+    assert result.parent_zone == "us-east5-a"
+    assert result.child_tpu_zone == "us-east5-b"
+
+
+def test_accepts_separate_table9_child_zone() -> None:
+    command = (
+        "uv run iris --cluster=marin job run --no-wait "
+        "--job-name dm-safe --region us-east5 --zone us-east5-a -- "
+        "python -m experiments.domain_phase_mix.launch_delphi_augmented_swarm_tpp40 "
+        "--tpu-region us-east5 --tpu-zone us-east5-a --table9-tpu-zone us-east5-b"
+    )
+
+    result = validate_regional_iris_command(
+        command,
+        expected_region="us-east5",
+        expected_zone="us-east5-a",
+        expected_bucket_prefix="gs://marin-us-east5",
+        expected_table9_child_zone="us-east5-b",
+    )
+
+    assert result.ok
+    assert result.child_table9_tpu_zone == "us-east5-b"
+
+
+def test_rejects_unexpected_table9_child_zone() -> None:
+    command = (
+        "uv run iris --cluster=marin job run --no-wait "
+        "--job-name dm-unsafe --region us-east5 --zone us-east5-a -- "
+        "python -m experiments.domain_phase_mix.launch_delphi_augmented_swarm_tpp40 "
+        "--tpu-region us-east5 --tpu-zone us-east5-a --table9-tpu-zone us-east5-b"
+    )
+
+    result = validate_east5_iris_command(command)
+
+    assert not result.ok
+    assert any("--table9-tpu-zone" in error for error in result.errors)
+
+
+def test_rejects_missing_expected_table9_child_zone() -> None:
+    command = (
+        "uv run iris --cluster=marin job run --no-wait "
+        "--job-name dm-unsafe --region us-east5 --zone us-east5-a -- "
+        "python -m experiments.domain_phase_mix.launch_delphi_augmented_swarm_tpp40 "
+        "--tpu-region us-east5 --tpu-zone us-east5-a"
+    )
+
+    result = validate_regional_iris_command(
+        command,
+        expected_region="us-east5",
+        expected_zone="us-east5-a",
+        expected_bucket_prefix="gs://marin-us-east5",
+        expected_table9_child_zone="us-east5-b",
+    )
+
+    assert not result.ok
+    assert any("must include --table9-tpu-zone us-east5-b" in error for error in result.errors)
+
+
 def test_rejects_non_iris_job_run_command() -> None:
     with pytest.raises(ValueError, match="Iris job run"):
         validate_east5_iris_command("uv run python -m experiments.foo")

@@ -26,8 +26,8 @@ import s3fs
 from fray.types import ResourceConfig
 from marin.utils import fsspec_glob
 from rigging.filesystem import open_url, url_to_fs
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
 from zephyr.readers import InputFileSpec, load_jsonl, load_parquet
 from zephyr.writers import write_jsonl_file
 
@@ -183,14 +183,15 @@ def _fetch_blob_text(
     raise AssertionError("unreachable")
 
 
-def _record_id(language: str, row: dict) -> str:
+def stack_edu_record_id(language: str, row: dict) -> str:
+    """Return the stable document id used by Stack-Edu hydration."""
     fingerprint = "\t".join([language, row["blob_id"], row["repo_name"], row["path"]])
     return hashlib.sha1(fingerprint.encode("utf-8")).hexdigest()
 
 
 def _hydrate_row(language: str, row: dict, text: str) -> dict:
     return {
-        "id": _record_id(language, row),
+        "id": stack_edu_record_id(language, row),
         "text": text,
         "source": f"stack_edu/{language}",
         "metadata": {
@@ -302,7 +303,7 @@ def _build_hydration_tasks(cfg: StackEduHydrationConfig) -> list[HydrationTask]:
     return all_tasks
 
 
-def hydrate_stack_edu(cfg: StackEduHydrationConfig) -> str:
+def hydrate_stack_edu(cfg: StackEduHydrationConfig) -> dict[str, object]:
     """Hydrate Stack-Edu metadata parquet into text JSONL shards."""
 
     tasks = _build_hydration_tasks(cfg)
@@ -386,7 +387,18 @@ def hydrate_stack_edu(cfg: StackEduHydrationConfig) -> str:
             cfg.language,
             ", ".join(issue_examples["fetch_error"]),
         )
-    return cfg.output_path
+    return {
+        "output_path": cfg.output_path,
+        "language": cfg.language,
+        "tasks": total_tasks,
+        "skipped_tasks": skipped_tasks,
+        "rows_written": total_written,
+        "decoded_fallback": total_fallback,
+        "missing_blob": total_missing,
+        "corrupt_blob": total_corrupt,
+        "empty_blob": total_empty,
+        "fetch_error": total_fetch_error,
+    }
 
 
 if __name__ == "__main__":

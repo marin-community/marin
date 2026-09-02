@@ -39,6 +39,7 @@ class LaunchSafetyResult:
     allows_region_only_parent: bool
     child_tpu_regions: list[str]
     child_tpu_zone: str | None
+    child_table9_tpu_zone: str | None
     marin_gcs_paths: list[str]
 
     def to_dict(self) -> dict[str, object]:
@@ -51,6 +52,7 @@ class LaunchSafetyResult:
             "allows_region_only_parent": self.allows_region_only_parent,
             "child_tpu_regions": self.child_tpu_regions,
             "child_tpu_zone": self.child_tpu_zone,
+            "child_table9_tpu_zone": self.child_table9_tpu_zone,
             "marin_gcs_paths": self.marin_gcs_paths,
         }
 
@@ -145,6 +147,8 @@ def validate_regional_iris_command(
     expected_region: str,
     expected_zone: str,
     expected_bucket_prefix: str,
+    expected_child_zone: str | None = None,
+    expected_table9_child_zone: str | None = None,
     allow_region_only_parent: bool = False,
 ) -> LaunchSafetyResult:
     """Validate a live data-mixing Iris parent command for one GCS region.
@@ -165,6 +169,7 @@ def validate_regional_iris_command(
     parent_zone_values = _option_values(parent_tokens, "--zone")
     child_tpu_regions = _option_values(child_tokens, "--tpu-region")
     child_tpu_zone_values = _option_values(child_tokens, "--tpu-zone")
+    child_table9_tpu_zone_values = _option_values(child_tokens, "--table9-tpu-zone")
     gcs_paths = _marin_gcs_paths(command)
 
     errors: list[str] = []
@@ -190,9 +195,17 @@ def validate_regional_iris_command(
     if child_tpu_regions and any(region != expected_region for region in child_tpu_regions):
         errors.append(f"Child --tpu-region values must all be {expected_region}: got {child_tpu_regions}.")
 
+    required_child_zone = expected_child_zone or expected_zone
     child_tpu_zone = child_tpu_zone_values[-1] if child_tpu_zone_values else None
-    if child_tpu_zone is not None and child_tpu_zone != expected_zone:
-        errors.append(f"Child --tpu-zone must be {expected_zone}: got {child_tpu_zone!r}.")
+    if child_tpu_zone is not None and child_tpu_zone != required_child_zone:
+        errors.append(f"Child --tpu-zone must be {required_child_zone}: got {child_tpu_zone!r}.")
+
+    required_table9_child_zone = expected_table9_child_zone or required_child_zone
+    child_table9_tpu_zone = child_table9_tpu_zone_values[-1] if child_table9_tpu_zone_values else None
+    if expected_table9_child_zone is not None and child_table9_tpu_zone is None:
+        errors.append(f"Child must include --table9-tpu-zone {expected_table9_child_zone}.")
+    elif child_table9_tpu_zone is not None and child_table9_tpu_zone != required_table9_child_zone:
+        errors.append(f"Child --table9-tpu-zone must be {required_table9_child_zone}: got {child_table9_tpu_zone!r}.")
 
     bad_gcs_paths = [
         path
@@ -213,6 +226,7 @@ def validate_regional_iris_command(
         allows_region_only_parent=allow_region_only_parent,
         child_tpu_regions=child_tpu_regions,
         child_tpu_zone=child_tpu_zone,
+        child_table9_tpu_zone=child_table9_tpu_zone,
         marin_gcs_paths=gcs_paths,
     )
 
@@ -234,6 +248,14 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--json", action="store_true", help="Emit a JSON validation result.")
     parser.add_argument("--expected-region", default=EAST5_REGION, help="Expected Iris parent and child TPU region.")
     parser.add_argument("--expected-zone", default=EAST5_ZONE, help="Expected Iris parent and child TPU zone.")
+    parser.add_argument(
+        "--expected-child-zone",
+        help="Expected child TPU zone when it intentionally differs from the CPU parent zone.",
+    )
+    parser.add_argument(
+        "--expected-table9-child-zone",
+        help="Expected Table-9 TPU zone when it intentionally differs from the training TPU zone.",
+    )
     parser.add_argument(
         "--expected-bucket-prefix",
         default=EAST5_BUCKET_PREFIX,
@@ -258,6 +280,8 @@ def main(argv: Sequence[str] | None = None) -> None:
             expected_region=args.expected_region,
             expected_zone=args.expected_zone,
             expected_bucket_prefix=args.expected_bucket_prefix,
+            expected_child_zone=args.expected_child_zone,
+            expected_table9_child_zone=args.expected_table9_child_zone,
             allow_region_only_parent=args.allow_region_only_parent,
         )
     except ValueError as exc:
@@ -270,6 +294,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             allows_region_only_parent=args.allow_region_only_parent,
             child_tpu_regions=[],
             child_tpu_zone=None,
+            child_table9_tpu_zone=None,
             marin_gcs_paths=[],
         )
 

@@ -37,7 +37,9 @@ Usage:
 from fray.cluster import ResourceConfig
 from marin.datakit.download.huggingface import DownloadConfig, download_hf
 from marin.execution.types import ExecutorStep, this_output_path, versioned
-from marin.processing.tokenize import TokenizeConfig, tokenize
+from marin.processing.tokenize import HistoricalFullDocumentTokenizeConfig, TokenizeConfig, tokenize
+
+from experiments.marin_tokenizer import marin_tokenizer
 
 # =============================================================================
 # CONSTANTS
@@ -188,6 +190,18 @@ KNOWN_CORRUPTED_DOLMINO_SOURCE_FILES: tuple[str, ...] = (
     "dolmino_1-flan/tulu_flan-0122.jsonl.zst.corrupted",
     "dolmino_1-flan/tulu_flan-0163.jsonl.zst.corrupted",
 )
+
+# At the pinned revision, these partitions contain 98 selected training shards
+# whose filenames include "test". The validator exception is partition-scoped,
+# so this inventory must be re-audited if HF_REVISION changes.
+DOLMINO_TEST_NAMED_TRAIN_SHARD_COUNTS: dict[str, int] = {
+    "synth_math/dolmino_math": 2,
+    "synth_math/verifiable_o4mini": 5,
+    "synth_thinking/code_meta_reasoning": 50,
+    "synth_thinking/math_meta_reasoning": 36,
+    "synth_thinking/program_verifiable": 5,
+}
+DOLMINO_PARTITIONS_WITH_TEST_NAMED_TRAIN_SHARDS = frozenset(DOLMINO_TEST_NAMED_TRAIN_SHARD_COUNTS)
 
 # =============================================================================
 # TOKEN COUNTS
@@ -411,12 +425,17 @@ def tokenize_dolmino_pool_subset(
     partition_name: str,
     tokenizer: str | None = None,
     worker_resources: ResourceConfig | None = None,
+    *,
+    split_long_documents: bool = True,
 ) -> ExecutorStep:
     """Create a tokenization step for a specific partition.
 
     Args:
         partition_name: Name of the partition (e.g., "common_crawl_hq/19_adult_content")
         tokenizer: Tokenizer to use. Defaults to marin_tokenizer.
+        worker_resources: Optional worker resources and placement.
+        split_long_documents: Split long text before encoding. Disable only to
+            reproduce historical full-document tokenization.
 
     Returns:
         ExecutorStep for tokenizing the partition.
@@ -427,17 +446,21 @@ def tokenize_dolmino_pool_subset(
         )
 
     if tokenizer is None:
-        from experiments.marin_tokenizer import marin_tokenizer
-
         tokenizer = marin_tokenizer
 
-    cache_key = f"{partition_name}:{tokenizer}:{_worker_resources_cache_key(worker_resources)}"
+    cache_key = (
+        f"{partition_name}:{tokenizer}:{_worker_resources_cache_key(worker_resources)}:"
+        f"split_long_documents={split_long_documents}"
+    )
     if cache_key in _tokenize_cache:
         return _tokenize_cache[cache_key]
 
     # Create output path
     safe_name = partition_name.replace("/", "_")
-    output_path = f"tokenized/dolma3_dolmino_pool/{safe_name}"
+    output_namespace = (
+        "dolma3_dolmino_pool" if split_long_documents else "dolma3_dolmino_pool_historical_full_document_v1"
+    )
+    output_path = f"tokenized/{output_namespace}/{safe_name}"
 
     # Get data paths
     train_paths = _resolve_partition_paths(partition_name, worker_resources=worker_resources)
@@ -446,14 +469,16 @@ def tokenize_dolmino_pool_subset(
     if worker_resources is not None:
         config_kwargs["worker_resources"] = worker_resources
 
+    config_type = TokenizeConfig if split_long_documents else HistoricalFullDocumentTokenizeConfig
     step = ExecutorStep(
         name=output_path,
         fn=tokenize,
-        config=TokenizeConfig(
+        config=config_type(
             train_paths=train_paths,
             validation_paths=versioned([]),
             cache_path=this_output_path(),
             tokenizer=versioned(tokenizer),
+            allow_test_in_train=partition_name in DOLMINO_PARTITIONS_WITH_TEST_NAMED_TRAIN_SHARDS,
             **config_kwargs,
         ),
     )
@@ -466,12 +491,17 @@ def tokenize_dolmino_pool(
     tokenizer: str | None = None,
     partitions: list[str] | None = None,
     worker_resources: ResourceConfig | None = None,
+    *,
+    split_long_documents: bool = True,
 ) -> dict[str, ExecutorStep]:
     """Create tokenization steps for Dolmino Pool partitions.
 
     Args:
         tokenizer: Tokenizer to use. Defaults to marin_tokenizer.
         partitions: List of partition names to tokenize. If None, tokenizes all.
+        worker_resources: Optional worker resources and placement.
+        split_long_documents: Split long text before encoding. Disable only to
+            reproduce historical full-document tokenization.
 
     Returns:
         Dictionary mapping partition names to ExecutorSteps.
@@ -485,6 +515,7 @@ def tokenize_dolmino_pool(
             partition,
             tokenizer=tokenizer,
             worker_resources=worker_resources,
+            split_long_documents=split_long_documents,
         )
 
     return steps

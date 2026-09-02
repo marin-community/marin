@@ -21,6 +21,7 @@ from .data_configs import (
 from .merge_tokenized_caches import MergeTokenizedCachesConfig, merge_tokenized_caches
 from .tokenize import (
     HfDatasetSpec,
+    HistoricalFullDocumentTokenizeConfig,
     TokenizeConfig,
     tokenize,
 )

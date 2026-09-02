@@ -583,6 +583,7 @@ class HfMarinTokenizer:
     _all_special_ids: list[int]
     _id_to_token: dict[int, str] = dataclasses.field(default_factory=dict, repr=False)
     _vocab: dict[str, int] = dataclasses.field(default_factory=dict, repr=False)
+    _split_long_documents: bool = dataclasses.field(default=True, repr=False)
 
     @property
     def name_or_path(self) -> str:
@@ -620,7 +621,7 @@ class HfMarinTokenizer:
         return self._vocab_size
 
     def encode(self, text: str, *, add_special_tokens: bool = False) -> list[int]:
-        parts = _safe_split_for_tokenizer(text)
+        parts = _safe_split_for_tokenizer(text) if self._split_long_documents else [text]
         if len(parts) <= 1:
             return self._tokenizer.encode(text, add_special_tokens=add_special_tokens).ids
         # Multi-chunk path: encode each chunk without specials and prepend BOS
@@ -651,7 +652,8 @@ class HfMarinTokenizer:
         flat_parts: list[str] = []
         origin: list[int] = []
         for orig_idx, text in enumerate(texts):
-            for part in _safe_split_for_tokenizer(text):
+            parts = _safe_split_for_tokenizer(text) if self._split_long_documents else [text]
+            for part in parts:
                 flat_parts.append(part)
                 origin.append(orig_idx)
 
@@ -740,16 +742,28 @@ def load_tokenizer(
     name_or_path: str,
     *,
     backend: TokenizerBackend = TokenizerBackend.HF,
+    split_long_documents: bool = True,
 ) -> MarinTokenizer:
     """Load a tokenizer by HF model name or local path.
 
     Files are staged once via mirror://tokenizers/ (GCS/S3) before falling back
-    to HF Hub. Cached per (name_or_path, backend).
+    to HF Hub. Cached per ``(name_or_path, backend, split_long_documents)``.
+
+    Args:
+        name_or_path: Hugging Face model name or local tokenizer path.
+        backend: Tokenizer implementation to load.
+        split_long_documents: Split long text into memory-safe chunks before
+            encoding. Disable only to reproduce historical full-document BPE
+            tokenization; unsplit documents require more worker memory.
     """
     local_dir = _stage_tokenizer(name_or_path) if not os.path.isdir(name_or_path) else name_or_path
     if backend == TokenizerBackend.HF:
         tok = _load_hf_tokenizer(local_dir)
-        return dataclasses.replace(tok, _name_or_path=name_or_path)
+        return dataclasses.replace(
+            tok,
+            _name_or_path=name_or_path,
+            _split_long_documents=split_long_documents,
+        )
     raise ValueError(f"Unknown backend: {backend}")
 
 

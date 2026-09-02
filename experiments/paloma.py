@@ -9,6 +9,7 @@ https://huggingface.co/datasets/allenai/paloma
 
 import os.path
 
+from fray.cluster import ResourceConfig
 from marin.evaluation.perplexity_gap import raw_text_dataset
 from marin.execution.lazy import ArtifactStep
 from marin.experiment.data import dataset_main, hf_download, tokenized
@@ -48,7 +49,11 @@ paloma = hf_download(
 
 
 def paloma_tokenized(
-    *, base_path="tokenized/", tokenizer: str = llama3_tokenizer, paloma_raw: ArtifactStep = paloma
+    *,
+    base_path="tokenized/",
+    tokenizer: str = llama3_tokenizer,
+    paloma_raw: ArtifactStep = paloma,
+    resources: ResourceConfig | None = None,
 ) -> dict[str, ArtifactStep[TokenizedCache]]:
     """
     Returns a dictionary of steps to tokenize the Paloma eval sets. Keys are the subset names (with `paloma/` prefix)
@@ -63,6 +68,7 @@ def paloma_tokenized(
             raw=paloma_raw,
             glob=f"{path_part}/val/val*.jsonl.gz",
             validation=True,
+            resources=resources,
         )
 
     return paloma_steps

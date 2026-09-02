@@ -13,7 +13,13 @@ import os
 import transformers
 from levanter.data.text.datasets import LmDatasetSourceConfigBase, UrlDatasetSourceConfig
 from levanter.data.text.formats import LmDatasetFormatBase, TextLmDatasetFormat, preprocessor_for_format
-from levanter.store.cache import CacheMetadata, consolidate_shard_caches
+from levanter.store.cache import (
+    CACHE_LAYOUT_CONSOLIDATED,
+    CACHE_LAYOUT_SHARDED,
+    CacheLedger,
+    CacheMetadata,
+    consolidate_shard_caches,
+)
 from levanter.store.tree_store import TreeStore
 from rigging.filesystem import open_url
 
@@ -35,6 +41,7 @@ class MergeTokenizedCachesConfig(TokenizeConfigBase):
     tags: list[str] = dataclasses.field(default_factory=list)
     format: LmDatasetFormatBase = dataclasses.field(default_factory=TextLmDatasetFormat)
     enforce_eos: bool = True
+    preprocessor_metadata: dict[str, object] | None = None
 
     def as_lm_dataset_source_config(
         self, actual_output_path: str | InputName | None, *, include_raw_paths: bool = True
@@ -63,8 +70,18 @@ def _cache_paths_for_split(cfg: MergeTokenizedCachesConfig, split: str) -> list[
 
         split_cache_path = os.path.join(input_config.cache_dir, split)
         ledger_path = os.path.join(split_cache_path, "shard_ledger.json")
-        if fsspec_exists(ledger_path):
+        if not fsspec_exists(ledger_path):
+            continue
+
+        ledger = CacheLedger.load(split_cache_path)
+        if not ledger.is_finished:
+            raise ValueError(f"Input cache {name} has an unfinished {split} ledger at {ledger_path}")
+        if ledger.layout == CACHE_LAYOUT_CONSOLIDATED:
             cache_paths.append(split_cache_path)
+        elif ledger.layout == CACHE_LAYOUT_SHARDED:
+            cache_paths.extend(os.path.join(split_cache_path, shard_name) for shard_name in ledger.finished_shards)
+        else:
+            raise ValueError(f"Input cache {name} has unknown {split} layout {ledger.layout!r} at {ledger_path}")
     return cache_paths
 
 
@@ -127,7 +144,10 @@ def _merge_tokenized_caches(cfg: MergeTokenizedCachesConfig) -> MergeTokenizedCa
 
     tokenizer = transformers.AutoTokenizer.from_pretrained(cfg.tokenizer)
     processor = preprocessor_for_format(cfg.format, tokenizer, enforce_bos=True, enforce_eos=cfg.enforce_eos)
-    metadata = CacheMetadata(preprocessor_metadata=processor.metadata)
+    preprocessor_metadata = cfg.preprocessor_metadata
+    if preprocessor_metadata is None:
+        preprocessor_metadata = processor.metadata
+    metadata = CacheMetadata(preprocessor_metadata=preprocessor_metadata)
     exemplar = processor.output_exemplar
 
     merged_any = False
@@ -147,6 +167,7 @@ def merge_tokenized_caches(
     tokenizer: str,
     tags: list[str] | None = None,
     dataset_format: LmDatasetFormatBase | None = None,
+    preprocessor_metadata: dict[str, object] | None = None,
 ) -> ExecutorStep[MergeTokenizedCachesConfig]:
     """Create a shared cache-merge step from existing tokenized cache steps."""
     if not input_steps:
@@ -162,6 +183,7 @@ def merge_tokenized_caches(
         tokenizer=ensure_versioned(tokenizer),
         tags=tags or [],
         format=resolved_format,
+        preprocessor_metadata=ensure_versioned(preprocessor_metadata) if preprocessor_metadata is not None else None,
     )
     return ExecutorStep(
         name=os.path.join("tokenized", "merged", output_cache_path_name),

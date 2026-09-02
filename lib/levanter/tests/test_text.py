@@ -37,7 +37,7 @@ from levanter.data.text.formats import (
     preprocessor_for_format,
 )
 from levanter.data.text.preference import PreferenceChatLmDatasetFormat, PreferenceChatProcessor
-from levanter.tokenizers import load_tokenizer
+from levanter.tokenizers import HfMarinTokenizer, load_tokenizer
 from levanter.models.lm_model import LmExample
 from levanter.models.loss import maybe_fused_next_token_loss
 from levanter.schedule import BatchSchedule
@@ -218,6 +218,22 @@ def marin_tokenizer_with_bos():
         return load_tokenizer("marin-community/marin-tokenizer")
     except Exception as e:
         pytest.skip(f"Cannot load marin-community/marin-tokenizer: {e}")
+
+
+def test_historical_full_document_tokenization_matches_hf_reference(marin_tokenizer_with_bos):
+    tokenizer = load_tokenizer(
+        "marin-community/marin-tokenizer",
+        split_long_documents=False,
+    )
+    assert isinstance(tokenizer, HfMarinTokenizer)
+    reference = tokenizer.as_hf_tokenizer()
+    text = "abc" * 30_000
+
+    expected = reference(text, add_special_tokens=True)["input_ids"]
+    actual = tokenizer.encode(text, add_special_tokens=True)
+
+    assert actual == expected
+    assert marin_tokenizer_with_bos.encode(text, add_special_tokens=True) != expected
 
 
 def test_batch_tokenizer_prepends_bos(marin_tokenizer_with_bos):

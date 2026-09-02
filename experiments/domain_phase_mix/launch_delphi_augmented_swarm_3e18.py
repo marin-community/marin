@@ -64,7 +64,6 @@ from experiments.domain_phase_mix.dolma3_dolmino_top_level_domains import (
 )
 from experiments.domain_phase_mix.qsplit240_replay import SKIP_EVAL_HARNESS_ENV_VAR
 from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
-    DEFAULT_RUNTIME_CACHE_REGION,
     DOMAIN_NAMES,
     PHASE_BOUNDARIES,
     PHASE_NAMES,
@@ -163,6 +162,7 @@ class DelphiSwarmTrainingConfig:
     wandb_tags: tuple[str, ...]
     steps_per_eval: int
     permanent_checkpoint_interval: int | None
+    wandb_group: str | None = None
 
 
 @dataclass(frozen=True)
@@ -198,12 +198,16 @@ def _run_name(run_order: int, source_run_name: str) -> str:
     return f"fit_{run_order:03d}_{slug}"
 
 
-def _default_validation_sets(tokenizer: str, base_path: str = "tokenized/"):
-    validation_sets = dict(paloma_tokenized(base_path=base_path, tokenizer=tokenizer))
+def _default_validation_sets(
+    tokenizer: str,
+    base_path: str = "tokenized/",
+    resources: ResourceConfig | None = None,
+):
+    validation_sets = dict(paloma_tokenized(base_path=base_path, tokenizer=tokenizer, resources=resources))
     validation_sets.update(
         {
             os.path.join("uncheatable_eval", subset): step
-            for subset, step in uncheatable_datasets(tokenizer=tokenizer).items()
+            for subset, step in uncheatable_datasets(tokenizer=tokenizer, resources=resources).items()
         }
     )
     return validation_sets
@@ -352,6 +356,7 @@ def load_source_panel(
     analysis_output_path: str,
     tpu_region: str,
     tpu_zone: str,
+    tpu_type: str = TARGET_TPU_TYPE,
 ) -> list[DelphiSwarmRunSpec]:
     """Load and strictly validate the canonical 280-row panel."""
     with fsspec.open(source_panel, "rb") as handle:
@@ -379,7 +384,7 @@ def load_source_panel(
             f"{dict(qsplit_experiment_counts)} != {EXPECTED_QSPLIT_EXPERIMENT_COUNTS}"
         )
 
-    tpu_type, batch_size = TARGET_TPU_TYPE, TARGET_BATCH_SIZE
+    batch_size = TARGET_BATCH_SIZE
     scaling_fits = _read_scaling_fits(analysis_output_path)
     candidate = _candidate_for_budget(scaling_fits=scaling_fits)
     realized_train_tokens = candidate.train_steps * batch_size * SEQ_LEN_DELPHI
@@ -435,7 +440,7 @@ def load_source_panel(
 
 
 def _build_mixture_data(run_spec: DelphiSwarmRunSpec):
-    domains = build_top_level_domains(runtime_cache_region=DEFAULT_RUNTIME_CACHE_REGION)
+    domains = build_top_level_domains(runtime_cache_region=run_spec.tpu_region)
     runtime_components: dict[str, TokenizerConfigLike | TokenizedMixtureGroup] = {}
     for domain in domains:
         if len(domain.components) == 1:
@@ -488,6 +493,7 @@ def run_delphi_swarm_training(config: DelphiSwarmTrainingConfig) -> None:
             tracker=WandbConfig(
                 entity="marin-community",
                 project="marin",
+                group=config.wandb_group,
                 tags=[
                     _wandb_tag(tag)
                     for tag in (
@@ -626,11 +632,14 @@ def build_launch_artifacts(
     experiment_name: str = EXPERIMENT_NAME,
     architecture_target_flops: float = TARGET_FLOPS,
     wandb_tags: tuple[str, ...] = ("delphi-3e18-augmented-swarm", "fit-panel", "two-phase"),
+    training_wandb_group: str | None = None,
     table9_wandb_group: str = "olmo_base_eval_table9_delphi_3e18_augmented_swarm",
     provenance_panel: str = "delphi_3e18_augmented_fit_swarm",
     provenance_scale: str = "3e18",
     steps_per_eval: int = 1000,
     permanent_checkpoint_interval: int | None = 5000,
+    table9_request_set_dir: InputName = TABLE9_REQUEST_SET_DIR,
+    table9_eval_resources: ResourceConfig = TABLE9_EVAL_RESOURCES,
 ) -> LaunchArtifacts:
     """Build the full 280-train plus 280-native-eval graph."""
     training_steps: list[ExecutorStep] = []
@@ -655,6 +664,7 @@ def build_launch_artifacts(
                 run_spec=run_spec,
                 validation_configs=validation_configs,
                 wandb_tags=wandb_tags,
+                wandb_group=training_wandb_group,
                 steps_per_eval=steps_per_eval,
                 permanent_checkpoint_interval=permanent_checkpoint_interval,
             ),
@@ -664,8 +674,8 @@ def build_launch_artifacts(
             olmo_base_eval_step(
                 name=f"t9_{run_spec.run_name}",
                 checkpoint=training_step / f"hf/step-{run_spec.expected_checkpoint_step}",
-                request_set_dir=TABLE9_REQUEST_SET_DIR,
-                resource_config=TABLE9_EVAL_RESOURCES,
+                request_set_dir=table9_request_set_dir,
+                resource_config=table9_eval_resources,
                 wandb_group=table9_wandb_group,
                 provenance={
                     "evaluator": "marin-native-table9-bpb",

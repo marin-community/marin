@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
@@ -15,10 +16,17 @@ from fray.cluster import ResourceConfig
 from levanter.main.train_lm import LmConfig
 from levanter.optim.muonh import MuonHConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
+from marin.execution.step_status import STATUS_SUCCESS, StatusFile
 from marin.processing.tokenize.data_configs import ExistingTokenizedCacheConfig
 from marin.processing.tokenize.merge_tokenized_caches import merge_tokenized_caches
 
 from experiments.domain_phase_mix.config import DatasetComponent, Domain, PhaseSchedule, WeightConfig
+from experiments.domain_phase_mix.delphi_tpp40_europe_runtime_caches import (
+    EUROPE_HISTORICAL_NONSTACK_REPAIR_PATHS,
+    EUROPE_HISTORICAL_STACK_MERGED_PATH,
+    EUROPE_RUNTIME_CACHE_REGION,
+    EUROPE_SOURCE_RUNTIME_CACHE_PATHS,
+)
 from experiments.domain_phase_mix.dolma3_dolmino_top_level_domains import (
     TARGET_BUDGET_DOLMA3_COMMON_CRAWL,
     TOP_LEVEL_DOMAIN_PARTITIONS,
@@ -65,6 +73,10 @@ STRATIFIED_RUN_NAME = "baseline_stratified"
 MIN_RECOMMENDED_SWARM_RUNS = 6 * len(DOMAIN_NAMES)
 MIN_RECOMMENDED_SAMPLED_RUNS = MIN_RECOMMENDED_SWARM_RUNS - INITIAL_BASELINE_RUNS
 DEFAULT_RUNTIME_CACHE_REGION = "us-east5"
+PARTITION_TOKENIZATION_RAM_OVERRIDES = {
+    "stack_edu/SQL": "20g",
+    "synth_math/dolmino_math": "20g",
+}
 MERGED_CC_DOMAIN_NAMES = tuple(name for name in DOMAIN_NAMES if name.startswith("dolma3_cc/"))
 PREFERRED_MERGED_RUNTIME_DOMAIN_NAMES = (
     *MERGED_CC_DOMAIN_NAMES,
@@ -170,8 +182,19 @@ PREBUILT_MERGED_RUNTIME_CACHE_PATHS_BY_REGION = {
         ),
     },
 }
+PREBUILT_MERGED_RUNTIME_CACHE_PATHS_BY_REGION[EUROPE_RUNTIME_CACHE_REGION] = {
+    domain_name: path.replace("gs://marin-us-east5/", "gs://marin-eu-west4/")
+    for domain_name, path in PREBUILT_MERGED_RUNTIME_CACHE_PATHS_BY_REGION["us-east5"].items()
+}
+PREBUILT_MERGED_RUNTIME_CACHE_PATHS_BY_REGION[EUROPE_RUNTIME_CACHE_REGION][
+    "dolma3_stack_edu"
+] = EUROPE_HISTORICAL_STACK_MERGED_PATH
+PREBUILT_MERGED_RUNTIME_CACHE_PATHS_BY_REGION[EUROPE_RUNTIME_CACHE_REGION]["dolmino_stem_heavy_crawl"] = (
+    EUROPE_HISTORICAL_NONSTACK_REPAIR_PATHS["dolmino_stem_heavy_crawl"]
+)
 PREBUILT_MERGED_RUNTIME_CACHE_CANONICAL_REGION = "us-central1"
 SOURCE_TOKENIZED_RUNTIME_CACHE_EXACT_PATHS_BY_REGION = {
+    EUROPE_RUNTIME_CACHE_REGION: EUROPE_SOURCE_RUNTIME_CACHE_PATHS,
     "us-east5": {
         "arxiv": "gs://marin-us-east5/tokenized/dolma/arxiv-07a51f",
         "finemath_3plus": "gs://marin-us-east5/tokenized/finemath_3_plus-a26b0f",
@@ -249,10 +272,17 @@ def _data_prep_worker_resources(runtime_cache_regions: Sequence[str]) -> Resourc
     return ResourceConfig(regions=list(normalized_regions))
 
 
-def _prebuilt_merged_runtime_cache_paths(runtime_cache_regions: Sequence[str]) -> dict[str, str]:
+def _prebuilt_merged_runtime_cache_paths(
+    runtime_cache_regions: Sequence[str],
+    *,
+    require_finished: bool = True,
+) -> dict[str, str]:
     normalized_regions = _normalize_regions(runtime_cache_regions)
     if len(normalized_regions) == 1:
-        return dict(PREBUILT_MERGED_RUNTIME_CACHE_PATHS_BY_REGION.get(normalized_regions[0], {}))
+        configured = PREBUILT_MERGED_RUNTIME_CACHE_PATHS_BY_REGION.get(normalized_regions[0], {})
+        if require_finished:
+            return {domain_name: _resolve_finished_gcs_cache_path(path) for domain_name, path in configured.items()}
+        return {domain_name: path for domain_name, path in configured.items() if _runtime_cache_is_complete(path)}
 
     prebuilt_paths: dict[str, str] = {}
     canonical_paths = PREBUILT_MERGED_RUNTIME_CACHE_PATHS_BY_REGION.get(
@@ -282,28 +312,61 @@ def _read_executor_status(cache_path: str) -> str | None:
         raise ValueError(f"Expected one executor-status path for {cache_path!r}, got {paths}")
     try:
         with fs.open(paths[0], "rt") as handle:
-            last_line = ""
-            for line in handle:
-                stripped = line.strip()
-                if stripped:
-                    last_line = stripped
+            status = handle.read().strip()
     except FileNotFoundError:
         return None
-    return last_line or None
+    return status or None
 
 
-def _executor_status_is_success(status: str | None) -> bool:
+def executor_status_succeeded(status: str | None) -> bool:
     if status is None:
         return False
-    if status == "SUCCESS":
-        return True
-    return '"SUCCESS"' in status
+    lines = [line.strip() for line in status.splitlines() if line.strip()]
+    if len(lines) == 1 and not lines[0].startswith("{"):
+        return lines[0] == STATUS_SUCCESS
+    legacy_status = StatusFile._parse_legacy_status(lines)
+    return (legacy_status or lines[-1]) == STATUS_SUCCESS
+
+
+@cache
+def _read_runtime_cache_json(cache_path: str, relative_path: str) -> dict[str, object] | None:
+    uri = f"{cache_path.rstrip('/')}/{relative_path.lstrip('/')}"
+    fs, _, paths = fsspec.get_fs_token_paths(uri)
+    if len(paths) != 1:
+        raise ValueError(f"Expected one cache path for {uri!r}, got {paths}")
+    try:
+        with fs.open(paths[0], "rt") as handle:
+            payload = json.load(handle)
+    except FileNotFoundError:
+        return None
+    if not isinstance(payload, dict):
+        raise ValueError(f"Expected a JSON object at {uri!r}")
+    return payload
+
+
+def _runtime_cache_path_exists(cache_path: str, relative_path: str) -> bool:
+    uri = f"{cache_path.rstrip('/')}/{relative_path.lstrip('/')}"
+    fs, _, paths = fsspec.get_fs_token_paths(uri)
+    if len(paths) != 1:
+        raise ValueError(f"Expected one cache path for {uri!r}, got {paths}")
+    return fs.exists(paths[0])
+
+
+@cache
+def _runtime_cache_is_complete(cache_path: str) -> bool:
+    ledger = _read_runtime_cache_json(cache_path, "train/shard_ledger.json")
+    if ledger is None or ledger.get("is_finished") is not True:
+        return False
+    return executor_status_succeeded(_read_executor_status(cache_path)) or _runtime_cache_path_exists(
+        cache_path,
+        "train/.stats.json",
+    )
 
 
 @cache
 def _resolve_finished_gcs_cache_path(cache_pattern: str) -> str:
     if "*" not in cache_pattern:
-        if _executor_status_is_success(_read_executor_status(cache_pattern)):
+        if _runtime_cache_is_complete(cache_pattern):
             return cache_pattern.rstrip("/")
         raise ValueError(f"Runtime cache is not complete: {cache_pattern}")
 
@@ -320,7 +383,9 @@ def _resolve_finished_gcs_cache_path(cache_pattern: str) -> str:
     ]
     if not candidate_paths:
         raise ValueError(f"No complete runtime cache matched {cache_pattern!r}")
-    return sorted(candidate_paths)[0]
+    if len(candidate_paths) != 1:
+        raise ValueError(f"Multiple complete runtime caches matched {cache_pattern!r}: {sorted(candidate_paths)}")
+    return candidate_paths[0]
 
 
 @cache
@@ -330,9 +395,7 @@ def _finished_cache_paths_under(parent_uri: str) -> tuple[str, ...]:
     fs = fsspec.filesystem("gcs")
     train_paths = fs.glob(f"{parent_uri[len('gs://') :].rstrip('/')}/*/train")
     cache_paths = sorted(fs.unstrip_protocol(path).rsplit("/", maxsplit=1)[0].rstrip("/") for path in train_paths)
-    return tuple(
-        cache_path for cache_path in cache_paths if _executor_status_is_success(_read_executor_status(cache_path))
-    )
+    return tuple(cache_path for cache_path in cache_paths if _runtime_cache_is_complete(cache_path))
 
 
 @cache
@@ -374,6 +437,9 @@ class TwoPhaseWsdBoundarySchedule:
 def _partition_step_fn(partition_name: str, *, worker_resources: ResourceConfig | None = None):
     if partition_name in TOP_LEVEL_DOMAIN_PARTITIONS:
         raise ValueError(f"Expected a raw partition name, got coarse domain {partition_name}")
+    partition_ram = PARTITION_TOKENIZATION_RAM_OVERRIDES.get(partition_name)
+    if partition_ram is not None and worker_resources is not None:
+        worker_resources = replace(worker_resources, ram=partition_ram)
     if partition_name.startswith(("common_crawl/", "stack_edu/")) or partition_name in {
         "arxiv",
         "finemath_3plus",
@@ -436,7 +502,11 @@ def _merged_top_level_domain_step(domain_name: str, worker_regions: tuple[str, .
     )
 
 
-def build_top_level_domains(*, runtime_cache_region: str | Sequence[str] = DEFAULT_RUNTIME_CACHE_REGION) -> list[Domain]:
+def build_top_level_domains(
+    *,
+    runtime_cache_region: str | Sequence[str] = DEFAULT_RUNTIME_CACHE_REGION,
+    require_prebuilt_complete: bool = True,
+) -> list[Domain]:
     """Build top-level domains with hybrid runtime loading.
 
     The runtime uses:
@@ -448,8 +518,13 @@ def build_top_level_domains(*, runtime_cache_region: str | Sequence[str] = DEFAU
     """
     domains: list[Domain] = []
     normalized_regions = _resolved_runtime_cache_regions(runtime_cache_region=runtime_cache_region)
+    if require_prebuilt_complete and len(normalized_regions) != 1:
+        raise ValueError("Strict runtime loading requires exactly one region; cross-region mirror fallback is disabled")
     worker_resources = _data_prep_worker_resources(normalized_regions)
-    prebuilt_merged_runtime_cache_paths = _prebuilt_merged_runtime_cache_paths(normalized_regions)
+    prebuilt_merged_runtime_cache_paths = _prebuilt_merged_runtime_cache_paths(
+        normalized_regions,
+        require_finished=require_prebuilt_complete,
+    )
     for domain_name in DOMAIN_NAMES:
         partition_counts = top_level_domain_partition_counts(domain_name)
         if domain_name in prebuilt_merged_runtime_cache_paths:

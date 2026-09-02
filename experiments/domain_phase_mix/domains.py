@@ -28,6 +28,8 @@ tokenization/download operations.
 from functools import partial
 
 from levanter.data.text.formats import ChatLmDatasetFormat
+from marin.execution.executor import ExecutorStep, this_output_path, versioned
+from marin.processing.tokenize import TokenizeConfig, tokenize
 
 from experiments.defaults import default_tokenize
 from experiments.domain_phase_mix.config import DatasetComponent, Domain
@@ -360,9 +362,6 @@ def _create_pretokenized_step(cache_path: str, tokenizer: str, dataset_format: C
         tokenizer: Tokenizer identifier used for the cache
         dataset_format: Dataset format used during tokenization
     """
-    from marin.execution.executor import ExecutorStep, this_output_path, versioned
-    from marin.processing.tokenize import TokenizeConfig, tokenize
-
     config = TokenizeConfig(
         # Placeholder path - won't be used since cache exists with SUCCESS status.
         # We need at least one path due to validation in TokenizeConfig.__post_init__.
@@ -564,7 +563,7 @@ def _dolma_split(split: str):
     created by experiments/pretraining_datasets/dolma.py.
     """
     if split not in _dolma_cache:
-        from experiments.pretraining_datasets import tokenize_dolma
+        from experiments.pretraining_datasets.dolma import tokenize_dolma  # noqa: PLC0415
 
         dolma_components = tokenize_dolma()
         _dolma_cache[split] = dolma_components[split]

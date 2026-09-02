@@ -9,10 +9,10 @@ author: Calvin Xu
 
 ## Current TL;DR
 
-- Production is gated on the paired run-order-2 bridge. The frozen threshold is an absolute BPB difference of at most `0.002` for phase-boundary Uncheatable, endpoint Uncheatable, and endpoint Table 9.
-- Candidate assignment semantic SHA-256: `873959336b2fb3488317d1824c74954767f264d48c308ecd15dc8b1403837a3f`; byte SHA-256: `72f88de70e32e2f50d7a26018236c4c4228232bc900f294623b8155bb36a0f58`.
-- The assignment covers 27 completed East5 rows, 126 East5-assigned rows including two resumable rows, and 127 fresh Europe rows.
-- The exact East lineage audit passed for all 153 East rows. Production commands have passed locality checks and dry runs. They remain unsubmitted until the bridge gate passes and the assignment is re-materialized byte-identically.
+- The strict one-pair v4 equivalence gate remains failed. A separate user-authorized operational screen passed at an absolute `0.005` BPB bound for phase-boundary Uncheatable, endpoint Uncheatable, and endpoint Table-9 macro; this permits launch but does not establish cross-accelerator equivalence.
+- Frozen assignment semantic SHA-256: `8074b0d3a92e5e002336389849f33bbd630d9be2ea1580ccf436dfb2b40ea836`; byte SHA-256: `eeb657d51d9891c25e66f9c559c93337aa1a8b154c6122539ca0e652d70c0473`.
+- The assignment covers 29 completed East5 rows, 125 East5-assigned rows including resumable row 30, and 126 fresh Europe rows. All 280 rows are covered exactly once.
+- The exact East lineage audit passed for all 154 East graph rows: 29 completed, 1 resumable, and 124 fresh. Both v2 production commands passed locality checks and received a final subscription-safe CC `GO`; their launch bundle identities are recorded after submission.
 
 ## Scope
 
@@ -56,3 +56,17 @@ UV_FROZEN=1 uv run python -m marin.run.iris_run --config lib/iris/config/marin.y
 - Result: the East resolved-path audit passed 153 of 153 rows. All 27 completed rows have successful executor status and final markers; run orders 27 and 29 have phase-boundary metadata; all 124 fresh East rows are noncolliding. Audit artifact SHA-256: `3f9468e84ffc1f447de121f2fa15b0353838cc65556712277f21721203267934`.
 - Interpretation: assignment arithmetic, locality, lineage identity, and launch commands are ready. The run-order-2 numerical and idempotence gate remains the only scientific launch blocker.
 - Next action: finish the Europe bridge, materialize paired Uncheatable and Table-9 results, prove no-op idempotent reruns, pass the final gate, re-materialize the assignment byte-identically, and submit both parents.
+
+### 2026-08-30 23:05 PDT - Operational bridge acceptance and v2 production freeze
+
+- Code ref: `3a5552e10d73af82d394d60fbdb6e56e7d804e97` with dirty-tree Iris bundle `e5fffed68c0cc120d6e38bd53d9572cc17de38b9612ffa556213f22d49011980`. Both regional parents use this same content-addressed bundle.
+- Strict result: `bridge_acceptance_report_v3.json` preserves `numerical_acceptance_passed=false` and `production_launch_authorized=false`; SHA-256 `1a2d9e9bf11f461f92827826ca7302e2031d5407279b20930925e487d494f393`.
+- Operational result: Europe-minus-East5 deltas are `+0.0036705732` phase-0 Uncheatable, `+0.0022144914` endpoint Uncheatable, and `+0.0018861420` endpoint Table-9 macro. All pass the separate `0.005` BPB operational screen. `bridge_operational_authorization_v2.json` has no blockers and SHA-256 `a938a89287267b51a59bc7edeb894eed9176f28cf0f3df1c4ec7002a6662e6a4`.
+- Idempotence: three unchanged parents succeeded with one zero-exit task each, emitted zero child jobs, and left East5 and Europe result inventories unchanged. Evidence SHA-256: `74d273cdd4fa38796692c171e5356141a1e9ae93c186f099db62610e943aa510`.
+- Quiescence: the legacy East5 parent was killed and its complete Iris root tree contained 20 succeeded jobs, 57 killed jobs, and zero active jobs at the `2026-08-31T05:48:57Z` assignment observation.
+- Assignment: `assignment_v2.json` contains 29 completed, 125 East5, and 126 Europe rows. Row 30 is the sole resumable East5 row. Byte-identical copies were verified in both regional buckets. File SHA-256 is `eeb657d51d9891c25e66f9c559c93337aa1a8b154c6122539ca0e652d70c0473`; semantic SHA-256 is `8074b0d3a92e5e002336389849f33bbd630d9be2ea1580ccf436dfb2b40ea836`.
+- East resolved-path audit: 29 completed, 1 resumable, and 124 fresh rows all resolve under the frozen East5 root. Audit SHA-256: `89b38aeb2fc399c87c5c5eafb9ab79260243238e88c85b11dd7fc41c0f5578e0`.
+- East command: `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_tpp40_multiregion_assignment_20260830/east5_production_command_v2.txt`, SHA-256 `3b8edb0118c6f8544a160d9e3fa4fe7237095ae32ed6eb3f4c432a848938f3fc`.
+- Europe command: `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_tpp40_multiregion_assignment_20260830/europe_production_command_v2.txt`, SHA-256 `2af54cdfb6ba43c83c4693333a261eacbd3c2990f5c862ce7890b9dd587e1bc7`.
+- Verification: 88 focused tests and targeted pre-commit passed. East5 launch safety passed with Table-9 explicitly placed in `us-east5-b`; Europe launch safety passed with training and Table-9 in `europe-west4-a`. Subscription-safe Claude Code review used `claude-opus-5`, max effort, read-only tools, and returned `GO` with no launch blockers.
+- Required follow-up: retain row-to-region assignment; estimate a region fixed effect and region-by-mixture interaction; pool only if the 95% upper bound on interaction RMS is below `0.002` BPB; re-evaluate selected and near-frontier checkpoints in one common region. The single `ngd3dm2_stratified_300m_6b` row is Europe-only and must be excluded from the region fixed-effect estimate or modeled explicitly.
