@@ -33,6 +33,7 @@ from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import (
     _interleaved_receiver_ranks,
     _receiver_ranks,
 )
+from levanter.grug._moe.ep_ragged_all_to_all import _loop_local_zeros, _LoopLocalZeroSite
 from levanter.grug._moe.sonic import sonic_gather_sum
 from levanter.grug.grug_moe import (
     MoEExpertMlp,
@@ -1443,3 +1444,68 @@ def test_ragged_a2a_receiver_clipping_respects_capacity():
         ),
     )
     assert int(jnp.sum(clipped)) < int(jnp.sum(group_sizes))
+
+
+@pytest.mark.parametrize("site", list(_LoopLocalZeroSite))
+@pytest.mark.parametrize(
+    "tie",
+    [
+        np.array([0, 0, 0, 0], dtype=np.int32),
+        np.array([1, 7, 0, 3], dtype=np.int32),
+        np.array([2**20, 5, 5, 5], dtype=np.int32),
+    ],
+    ids=["all-empty-groups", "mixed", "large-first-group"],
+)
+def test_loop_local_zeros_fills_exact_zeros(site: _LoopLocalZeroSite, tie: np.ndarray):
+    filled = _loop_local_zeros(4, 3, jnp.float32, jnp.asarray(tie), site=site)
+
+    assert filled.shape == (4, 3)
+    np.testing.assert_array_equal(np.asarray(filled), np.zeros((4, 3), dtype=np.float32))
+
+
+# The zero fill's traced minimum, as XLA names the opcode in optimized HLO.
+MINIMUM_OPCODE = "kMinimum"
+
+
+def _optimized_hlo_opcode_count(fill_fn, opcode_name: str) -> int:
+    tie = jnp.asarray([1, 7, 0, 3], dtype=jnp.int32)
+    executable = jax.jit(fill_fn).lower(tie).compile().runtime_executable()
+    return sum(
+        instruction.opcode.name == opcode_name
+        for module in executable.hlo_modules()
+        for computation in module.computations()
+        for instruction in computation.instructions()
+    )
+
+
+def test_loop_local_zeros_is_not_a_foldable_constant():
+    assert (
+        _optimized_hlo_opcode_count(
+            lambda tie: _loop_local_zeros(4, 3, jnp.float32, tie, site=_LoopLocalZeroSite.DISPATCH_OUTPUT),
+            MINIMUM_OPCODE,
+        )
+        == 1
+    )
+    assert (
+        _optimized_hlo_opcode_count(
+            lambda tie: jnp.broadcast_to((jnp.minimum(tie[0], 5) * 0).astype(jnp.float32), (4, 3)), MINIMUM_OPCODE
+        )
+        == 0
+    ), "the folding probe no longer folds, so this test can no longer detect a foldable fill"
+
+
+def test_loop_local_zeros_sites_prevent_cse():
+    def distinct_sites(tie):
+        return (
+            _loop_local_zeros(4, 3, jnp.float32, tie, site=_LoopLocalZeroSite.DISPATCH_OUTPUT),
+            _loop_local_zeros(4, 3, jnp.float32, tie, site=_LoopLocalZeroSite.OPERAND_COTANGENT),
+        )
+
+    def repeated_site(tie):
+        fill = _loop_local_zeros(4, 3, jnp.float32, tie, site=_LoopLocalZeroSite.DISPATCH_OUTPUT)
+        return fill, fill
+
+    assert _optimized_hlo_opcode_count(distinct_sites, MINIMUM_OPCODE) == 2
+    assert (
+        _optimized_hlo_opcode_count(repeated_site, MINIMUM_OPCODE) == 1
+    ), "the CSE probe no longer merges repeated sites, so this test can no longer detect a site collision"

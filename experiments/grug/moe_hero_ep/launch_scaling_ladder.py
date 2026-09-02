@@ -145,8 +145,8 @@ def build_ladder_run(
     """One scaling-ladder rung at width ``size`` on ``LADDER_RACKS[size]`` GB200 racks.
 
     ``num_steps`` defaults to the steps needed to train ``TOKENS_PER_ACTIVE_PARAM`` tokens per active
-    parameter at the rung's (rack-scaled) batch. Every eval scores the held-out set both as-trained
-    and dropless. The narrow rungs eval every 5% of the run and keep only the forced final
+    parameter at the rung's (rack-scaled) batch. Every eval scores the held-out set dropless. The
+    narrow rungs eval every 5% of the run and keep only the forced final
     checkpoint; the d6144 hero evals every 3000 steps and keeps a permanent checkpoint every 6000.
     ``checkpoint_every`` overrides that cadence for any rung. A rolling temporary checkpoint every
     ``RESUME_SAVE_INTERVAL`` on region-local storage covers a crash or a preemption, and a rung
@@ -176,7 +176,14 @@ def build_ladder_run(
     # `keep_permanent=None` still writes the final checkpoint; restore is not used (see run_grug).
     if size == "d6144":
         steps_per_eval = 3000
-        keep_permanent: list[dict[str, int]] | None = [{"every": 6000}]
+        # Permanent checkpoint every 6000 steps, plus a one-off at step 55000 for the post-handoff
+        # weight-decay comparison (#8818). Interval keeps are modular within each `until` range, so
+        # the 6000 cadence brackets the pinned 55000 range on both sides.
+        keep_permanent: list[dict[str, int | None]] | None = [
+            {"until": 54000, "every": 6000},
+            {"until": 55000, "every": 55000},
+            {"until": None, "every": 6000},
+        ]
     else:
         steps_per_eval = max(1, round(num_steps / 20))
         keep_permanent = None
@@ -290,6 +297,9 @@ def build_ladder_run(
             eval=GrugEvalConfig(
                 steps_per_eval=steps_per_eval,
                 eval_batch_size=eval_batch_size,
+                # The capacity-limited eval breaks the ragged train step at d6144 (#8861). The
+                # dropless eval is the reported metric.
+                eval_current=False,
                 eval_ema=False,
                 compute_bpb=True,
                 dropless_eval=True,

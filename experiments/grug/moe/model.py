@@ -57,7 +57,7 @@ GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY = "grugmoe_artifact_schema_version"
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION = 1
 
 
-BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
+_BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
 
 
 def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> int:
@@ -74,7 +74,7 @@ RematMode = Literal["recompute_all", "save_moe"]
 
 
 def _batch_spec() -> P:
-    return P(BATCH_AXES)
+    return P(_BATCH_AXES)
 
 
 def _batch_reshard(x: jax.Array) -> jax.Array:
@@ -349,7 +349,7 @@ class CausalSelfAttention(eqx.Module):
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
         # GPU XSA with GQA can give attn_out a backend-specific head sharding;
         # match v to that dynamic sharding before the per-head projection math.
-        aligned_v = reshard(aligned_v, _partition_spec_of(attn_out) or P(BATCH_AXES, None, None, "model"))
+        aligned_v = reshard(aligned_v, _partition_spec_of(attn_out) or P(_BATCH_AXES, None, None, "model"))
         # Exclusive Self Attention: subtract the component of yᵢ parallel to vᵢ.
         # zᵢ = yᵢ - (yᵢᵀvᵢ / ‖vᵢ‖²) vᵢ, per head.
         dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
@@ -362,7 +362,7 @@ class CausalSelfAttention(eqx.Module):
         attn_out = jnp.reshape(
             attn_out,
             (*attn_out.shape[:-2], attn_out.shape[-2] * attn_out.shape[-1]),
-            out_sharding=P(BATCH_AXES, None, "model"),
+            out_sharding=P(_BATCH_AXES, None, "model"),
         )
         return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec)
 
@@ -444,7 +444,7 @@ class DenseMLP(eqx.Module):
         # Reshard after the reshape so the shared-expert output carries the same
         # canonical batch sharding as the routed MoE output (MoEMLP reshards its
         # routed result identically). Splitting the fused
-        # batch axes token dimension back into (b, s) otherwise
+        # ("replica_dcn", "data", "expert") token axis back into (b, s) otherwise
         # leaks the `expert` mesh axis onto the seq dim, so the shared+routed
         # residual add fails with a ShardingTypeError on a multi-node mesh.
         return _batch_reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s))
@@ -573,60 +573,67 @@ class MoEMLP(eqx.Module):
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
-        # Keep the router path in fp32 before top-k, softmax, and QB statistics.
-        router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
-        biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
-        router_probs = jax.nn.softmax(router_logits, axis=-1)
-        # Select top-(K+1) on biased logits; the (K+1)-th is the QB threshold alpha.
-        _topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.cfg.num_experts_per_token + 1)
-        qb_alpha = _topk_logits[:, -1:]
-        selected_experts = selected_experts[:, :-1]
-        # Sigmoid combine weights on unbiased logits for selected experts.
-        unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
-        combine_weights_f = jax.nn.sigmoid(unbiased_topk)
-        # Renormalize K combine weights to sum to ``_ROUTING_RENORM_SUM`` (baked in).
-        denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
-        combine_weights_f = combine_weights_f * (_ROUTING_RENORM_SUM / (denom + 1e-9))
-        combine_weights = combine_weights_f.astype(x.dtype)
-        router_stats = _routing_stats(
-            selected_experts,
-            router_probs,
-            router_logits,
-            num_experts=self.cfg.num_experts,
-            num_experts_per_token=self.cfg.num_experts_per_token,
-        )
-        # Sharded QB: compute beta locally per device, then average.
-        mesh = get_abstract_mesh()
-        s_minus_alpha = reshard(router_logits - qb_alpha, P(BATCH_AXES, None))
-        num_devices = 1
-        for a in BATCH_AXES:
-            num_devices *= mesh.shape[a]
-        local_tokens = s_minus_alpha.shape[0] // num_devices
-        qb_count = max(1, local_tokens * self.cfg.num_experts_per_token // self.cfg.num_experts)
+        with jax.named_scope("moe_route"):
+            # Keep the router path in fp32 before top-k, softmax, and QB statistics.
+            router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
+            biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
+            router_probs = jax.nn.softmax(router_logits, axis=-1)
+            # Select top-(K+1) on biased logits; the (K+1)-th is the QB threshold alpha.
+            _topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.cfg.num_experts_per_token + 1)
+            qb_alpha = _topk_logits[:, -1:]
+            selected_experts = selected_experts[:, :-1]
+            # Sigmoid combine weights on unbiased logits for selected experts.
+            unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
+            combine_weights_f = jax.nn.sigmoid(unbiased_topk)
+            # Renormalize K combine weights to sum to ``_ROUTING_RENORM_SUM`` (baked in).
+            denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
+            combine_weights_f = combine_weights_f * (_ROUTING_RENORM_SUM / (denom + 1e-9))
+            combine_weights = combine_weights_f.astype(x.dtype)
 
-        def _local_qb_beta(s_ma):
-            topk_vals, _ = jax.lax.top_k(s_ma.T, qb_count)
-            beta = topk_vals[:, -1]
-            return jax.lax.pmean(beta, axis_name=BATCH_AXES)
+        with jax.named_scope("moe_router_stats"):
+            router_stats = _routing_stats(
+                selected_experts,
+                router_probs,
+                router_logits,
+                num_experts=self.cfg.num_experts,
+                num_experts_per_token=self.cfg.num_experts_per_token,
+            )
 
-        router_stats["qb_beta"] = shard_map(
-            _local_qb_beta,
-            mesh=mesh,
-            in_specs=(P(BATCH_AXES, None),),
-            out_specs=P(),
-        )(s_minus_alpha)
+        with jax.named_scope("moe_qb_beta"):
+            # Sharded QB: compute beta locally per device, then average.
+            mesh = get_abstract_mesh()
+            s_minus_alpha = reshard(router_logits - qb_alpha, P(_BATCH_AXES, None))
+            num_devices = 1
+            for a in _BATCH_AXES:
+                num_devices *= mesh.shape[a]
+            local_tokens = s_minus_alpha.shape[0] // num_devices
+            qb_count = max(1, local_tokens * self.cfg.num_experts_per_token // self.cfg.num_experts)
 
-        routed_flat, capacity_overflow = self.expert_mlp(
-            x_flat,
-            selected_experts.astype(jnp.int32),
-            combine_weights,
-            mesh=get_abstract_mesh(),
-            report_capacity_overflow=True,
-        )
+            def _local_qb_beta(s_ma):
+                topk_vals, _ = jax.lax.top_k(s_ma.T, qb_count)
+                beta = topk_vals[:, -1]
+                return jax.lax.pmean(beta, axis_name=_BATCH_AXES)
+
+            router_stats["qb_beta"] = shard_map(
+                _local_qb_beta,
+                mesh=mesh,
+                in_specs=(P(_BATCH_AXES, None),),
+                out_specs=P(),
+            )(s_minus_alpha)
+
+        with jax.named_scope("moe_experts"):
+            routed_flat, capacity_overflow = self.expert_mlp(
+                x_flat,
+                selected_experts.astype(jnp.int32),
+                combine_weights,
+                mesh=get_abstract_mesh(),
+                report_capacity_overflow=True,
+            )
         router_stats["capacity_overflow"] = capacity_overflow.total.astype(jnp.float32)
 
-        routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
-        routed = reshard(routed, _batch_spec())
+        with jax.named_scope("moe_output"):
+            routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
+            routed = reshard(routed, _batch_spec())
         return routed, router_stats
 
 
@@ -665,12 +672,15 @@ class Block(eqx.Module):
         use_pko: bool = False,
         disable_rope: bool = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        attn_in = self.attn_gated_norm(self.rms_attn(x))
-        x = x + self.attn(attn_in, mask, use_pko=use_pko, disable_rope=disable_rope)
-        mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
-        mlp_out, router_stats = self.mlp(mlp_in)
+        with jax.named_scope("attention"):
+            attn_in = self.attn_gated_norm(self.rms_attn(x))
+            x = x + self.attn(attn_in, mask, use_pko=use_pko, disable_rope=disable_rope)
+        with jax.named_scope("routed_moe"):
+            mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
+            mlp_out, router_stats = self.mlp(mlp_in)
         if self.shared is not None:
-            mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
+            with jax.named_scope("shared_expert"):
+                mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
         x = x + mlp_out
         return x, router_stats
 
@@ -844,7 +854,7 @@ def debug_mesh_and_token_pspec(num_devices: int) -> tuple[jax.sharding.AbstractM
             jax.sharding.AxisType.Explicit,
         ),
     )
-    return mesh, P(BATCH_AXES, None)
+    return mesh, P(("replica_dcn", "data", "expert"), None)
 
 
 def _with_state_dict_prefix(prefix: str | None, name: str) -> str:
