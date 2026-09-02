@@ -11,9 +11,10 @@ fi
 
 : "${WANDB_API_KEY:?Set WANDB_API_KEY before you start the hero.}"
 
-# This run continues the previous hero's full state from this checkpoint without writing to that run's tree.
-RUN_ID=hero-ragged_a2a-ep-step54k
-HANDOFF_CHECKPOINT=s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-54000
+# Gate/router weight-decay continuation: forks the ragged-a2a hero's full state from its step-55000
+# checkpoint under its own run id and tree, and trains with the decay on by default (0.02, annealed).
+RUN_ID=hero-wd-gate-router-p02
+HANDOFF_CHECKPOINT=s3://marin-us-east-02a/marin/grug/hero-ragged_a2a-ep-step54k/2026.08.19.2/checkpoints/step-55000
 short_uuid=$(uuidgen | tr '[:upper:]' '[:lower:]')
 short_uuid=${short_uuid:0:8}
 

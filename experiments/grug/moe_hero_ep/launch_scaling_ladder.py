@@ -21,11 +21,14 @@ device). Tokens/steps hold 791 tokens per active parameter (18T at d6144); FLOPs
 analytic estimate (forward+backward, including attention and the latent-MoE correction).
 
 Changelog:
+    2026-09-02 (PR #8868): a continuation runs under its own run id, forking another run's full state
+        from a pinned checkpoint via ``--initialize-from-checkpoint`` and writing only to its own tree.
+        hero-ragged_a2a-ep-step54k forks hero-12d8b6f0-dee637 at step 54000 onto the ragged all-to-all
+        expert-parallel transport.
     2026-09-01 (#8818, PR #8833): decoupled weight decay on the attn_gate and router weights is on by
         default (0.02, annealed linearly to 0 over training and read from the Adam step count so it
-        resumes at the right step). A hero resumed from a no-decay checkpoint therefore continues with
-        decay rather than reverting to the no-decay recipe; pass ``--gate-router-weight-decay 0`` to
-        opt out.
+        resumes at the right step); pass ``--gate-router-weight-decay 0`` to opt out.
+        hero-wd-gate-router-p02 forks the ragged-a2a run at step 55000 (see ``trigger_hero.sh``).
 """
 
 import dataclasses
