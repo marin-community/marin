@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
+import aiohttp
 import fsspec
 from rigging.filesystem.distributed_lock import HEARTBEAT_INTERVAL, LeaseLostError, create_lock
 
@@ -69,6 +70,23 @@ def convert_mirror_path(*, ledger_prefix: str, output_path: str) -> str:
     return os.path.join(ledger_prefix.rstrip("/"), relative_path, "ledger")
 
 
+_REQUESTS_TIMEOUT = aiohttp.ClientTimeout(
+    total=120.0,
+    connect=60.0,
+    sock_connect=60.0,
+    sock_read=60.0,
+)
+
+
+def _fs(path: str) -> tuple[Any, str]:
+    # Ledger files are KBs. Bound every request phase and the request as a
+    # whole so a silently dropped connection cannot hang the step.
+    protocol, _ = fsspec.core.split_protocol(path)
+    if protocol in ("gs", "gcs"):
+        return fsspec.core.url_to_fs(path, requests_timeout=_REQUESTS_TIMEOUT)
+    return fsspec.core.url_to_fs(path)
+
+
 def _manifest_path(ledger_path: str) -> str:
     return f"{ledger_path.rstrip('/')}/manifest.jsonl"
 
@@ -78,7 +96,7 @@ def _state_path(ledger_path: str, chunk_id: int) -> str:
 
 
 def _ensure_parent(path: str) -> None:
-    fs, fs_path = fsspec.core.url_to_fs(path)
+    fs, fs_path = _fs(path)
     parent = os.path.dirname(fs_path)
     if parent:
         fs.makedirs(parent, exist_ok=True)
@@ -113,7 +131,7 @@ def ensure_manifest(ledger_path: str, chunks: Sequence[Any]) -> None:
 
     expected = _normalize_chunks(chunks)
     try:
-        fs, fs_path = fsspec.core.url_to_fs(manifest_path)
+        fs, fs_path = _fs(manifest_path)
         if fs.exists(fs_path):
             actual = read_manifest(ledger_path)
             if actual != expected:
@@ -121,7 +139,7 @@ def ensure_manifest(ledger_path: str, chunks: Sequence[Any]) -> None:
             return
 
         _ensure_parent(manifest_path)
-        with fsspec.open(manifest_path, "wt") as f:
+        with fs.open(fs_path, "wt") as f:
             for record in expected:
                 f.write(json.dumps(record, sort_keys=True) + "\n")
     finally:
@@ -130,13 +148,14 @@ def ensure_manifest(ledger_path: str, chunks: Sequence[Any]) -> None:
 
 def read_manifest(ledger_path: str) -> list[dict[str, Any]]:
     path = _manifest_path(ledger_path)
-    with fsspec.open(path, "rt") as f:
+    fs, fs_path = _fs(path)
+    with fs.open(fs_path, "rt") as f:
         return [json.loads(line) for line in f if line.strip()]
 
 
 def read_chunk_state(ledger_path: str, chunk_id: int) -> ChunkState | None:
     path = _state_path(ledger_path, chunk_id)
-    fs, fs_path = fsspec.core.url_to_fs(path)
+    fs, fs_path = _fs(path)
     if not fs.exists(fs_path):
         return None
     with fs.open(fs_path, "rt") as f:
@@ -147,7 +166,8 @@ def read_chunk_state(ledger_path: str, chunk_id: int) -> ChunkState | None:
 def write_chunk_state(ledger_path: str, chunk_id: int, state: ChunkState) -> None:
     path = _state_path(ledger_path, chunk_id)
     _ensure_parent(path)
-    with fsspec.open(path, "wt") as f:
+    fs, fs_path = _fs(path)
+    with fs.open(fs_path, "wt") as f:
         json.dump({"status": state.status.value, "owner": state.owner}, f, sort_keys=True)
 
 

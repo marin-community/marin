@@ -6,9 +6,9 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from collections.abc import Callable, Iterator
-from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from math import prod
 
@@ -81,9 +81,8 @@ def validate_pool_placements(pool: WorkerPoolConfig, placements: tuple[EnginePla
 class PoolRun:
     pool: WorkerPoolConfig
     context: ZephyrContext
-    future: Future[None] | None = None
-    shutdown_requested: bool = False
-    error_recorded: bool = False
+    thread: threading.Thread | None = None
+    error: Exception | None = None
 
 
 ShardFn = Callable[[Iterator[int], ShardInfo], Iterator[dict[str, object]]]
@@ -120,27 +119,12 @@ def _is_complete(ledger_path: str) -> bool:
     return summary.done == summary.total
 
 
-def _shutdown_unfinished(runs: tuple[PoolRun, ...]) -> None:
-    for run in runs:
-        if run.future is None or run.future.done():
-            continue
-        if not run.shutdown_requested:
-            logger.info("Shutting down unfinished xregion pool %s", run.pool.pool_id)
-            run.shutdown_requested = True
-        run.context.shutdown()
-
-
-def _wait_for_unfinished(runs: tuple[PoolRun, ...]) -> None:
-    for run in runs:
-        if run.future is None or run.future.done():
-            continue
-        try:
-            run.future.result()
-        except Exception:
-            if run.shutdown_requested:
-                logger.info("Ignored shutdown error from xregion pool %s", run.pool.pool_id, exc_info=True)
-                continue
-            raise
+def _run_pool_thread(run: PoolRun, *, ledger_path: str, make_process_shard: MakeShardFn) -> None:
+    try:
+        run_pool(run, ledger_path=ledger_path, make_process_shard=make_process_shard)
+    except Exception as error:
+        run.error = error
+        logger.warning("xregion pool %s failed", run.pool.pool_id, exc_info=True)
 
 
 def run_worker_pools(
@@ -162,45 +146,34 @@ def run_worker_pools(
         for pool in worker_pools
     )
 
-    first_error: Exception | None = None
-    with ThreadPoolExecutor(max_workers=len(runs)) as executor:
-        for run in runs:
-            run.future = executor.submit(
-                run_pool,
-                run,
-                ledger_path=ledger_path,
-                make_process_shard=make_process_shard,
-            )
+    # Daemon threads: a pool whose workers never schedule blocks inside
+    # execute() with no way to cancel it (#8594). On ledger completion we
+    # return without joining; abandoned threads die with the step process,
+    # and Iris cascading termination retires their coordinator/worker child
+    # jobs. Completion implies every chunk is written and marked done, so
+    # nothing in flight is lost.
+    for run in runs:
+        run.thread = threading.Thread(
+            target=_run_pool_thread,
+            args=(run,),
+            kwargs={"ledger_path": ledger_path, "make_process_shard": make_process_shard},
+            name=f"xregion-pool-{run.pool.pool_id}",
+            daemon=True,
+        )
+        run.thread.start()
 
-        while True:
-            if _is_complete(ledger_path):
-                _shutdown_unfinished(runs)
-                _wait_for_unfinished(runs)
-                return
-
-            all_done = True
-            for run in runs:
-                assert run.future is not None
-                if not run.future.done():
-                    all_done = False
-                    continue
-                if run.error_recorded:
-                    continue
-                try:
-                    run.future.result()
-                except Exception as error:
-                    run.error_recorded = True
-                    logger.warning("xregion pool %s failed before ledger completion", run.pool.pool_id, exc_info=True)
-                    if first_error is None:
-                        first_error = error
-
-            if all_done:
-                break
-
-            time.sleep(poll_backoff)
+    while True:
+        if _is_complete(ledger_path):
+            return
+        if all(run.thread is not None and not run.thread.is_alive() for run in runs):
+            break
+        time.sleep(poll_backoff)
 
     summary = ledger.summarize(ledger_path)
+    if summary.done == summary.total:
+        return
     error = RuntimeError(f"xregion incomplete: {summary.done}/{summary.total} chunks done")
+    first_error = next((run.error for run in runs if run.error is not None), None)
     if first_error is not None:
         raise error from first_error
     raise error

@@ -3,15 +3,19 @@
 
 """Cross-tokenizer joint-decode-avg completion algorithm (xregion worker pools).
 
-Decodes from two models with **different tokenizers**. Candidates are
-compared as byte strings; each decision round commits one byte chunk, forced
-on each side as that side's own token segmentation (the joint-decode
-package's variable-length forcing keeps the engines in sync). The selection
-rules live in ``xtok_selection``:
+Decodes from two models, jointly selecting each committed chunk. With
+**different tokenizers**, candidates are compared as byte strings: each
+decision round commits one byte chunk, forced on each side as that side's
+own token segmentation (the joint-decode package's variable-length forcing
+keeps the engines in sync). The byte-based rules live in
+``xtok_selection``; ``avg_logits`` dispatches to the package directly:
 
 - ``bytes_union``: the package's ``select_avg_logits`` re-keyed on bytes.
 - ``anchored_prefix_mass``: the decoder proposes its top-k; the advisor
   scores each candidate by byte-prefix probability mass.
+- ``avg_logits``: the package's ``select_avg_logits`` on raw token ids —
+  same-tokenizer pairs only; retains the special and out-of-vocabulary
+  candidates the byte rules filter.
 
 Scale-out shape is cloned from ``joint_decode_avg_xregion``: the executor
 step is a CPU coordinator that fans out single-VM TPU worker pools via
@@ -107,6 +111,7 @@ TOKEN_PATHS_FILENAME = "token_paths.jsonl.gz"
 class XtokSelectionRule(StrEnum):
     BYTES_UNION = "bytes_union"
     ANCHORED_PREFIX_MASS = "anchored_prefix_mass"
+    AVG_LOGITS = "avg_logits"
 
 
 @dataclass(frozen=True)
@@ -348,8 +353,9 @@ def sweep_chunk_specs(
 
 @dataclass(frozen=True)
 class XtokPathStep:
-    """One committed decision: the chunk's bytes (hex; empty for a
-    selector-chosen EOS) and each side's exact forced token ids."""
+    """One committed decision: the chunk's bytes (hex; special forced tokens,
+    EOS included, contribute no bytes) and each side's exact forced token
+    ids."""
 
     bytes_hex: str
     tokens_a: list[int]
@@ -357,13 +363,11 @@ class XtokPathStep:
 
 
 def _path_step(vocab_a: xtok_selection.Vocab, tokens_a: list[int], tokens_b: list[int]) -> XtokPathStep:
-    if tokens_a == [vocab_a.eos_id]:
-        chunk = b""  # selector-chosen EOS commits no text bytes
-    else:
-        pieces = [vocab_a.token_bytes[token_id] for token_id in tokens_a]
-        if any(piece is None for piece in pieces):
-            raise ValueError(f"non-EOS forced tokens include a special id: {tokens_a}")
-        chunk = b"".join(piece for piece in pieces if piece is not None)
+    # Special forced tokens (EOS included) commit no text bytes: vLLM
+    # detokenizes with skip_special_tokens, and load_vocab's None entries are
+    # exactly the ids it skips, so the joined bytes match the output text.
+    pieces = [vocab_a.token_bytes[token_id] for token_id in tokens_a]
+    chunk = b"".join(piece for piece in pieces if piece is not None)
     return XtokPathStep(bytes_hex=chunk.hex(), tokens_a=list(tokens_a), tokens_b=list(tokens_b))
 
 
@@ -502,6 +506,25 @@ def _make_select_token(
     vocab_b: xtok_selection.Vocab,
     state: _SweepState,
 ) -> Callable[..., tuple[list[int], list[int]]]:
+    if sampling.selection_rule is XtokSelectionRule.AVG_LOGITS:
+        # Lazy: the joint-decode package rides the linux-only vllm extra; this
+        # module must stay importable for step construction everywhere.
+        from joint_decode.selection import select_avg_logits  # noqa: PLC0415
+
+        def select_token(a_topk, b_topk, *, rng, request_index: int):
+            tokens_a, tokens_b = select_avg_logits(
+                a_topk,
+                b_topk,
+                advisor_weight=state.advisor_weight,
+                temperature=sampling.temperature,
+                rng=rng,
+                request_index=request_index,
+            )
+            state.token_paths.setdefault(request_index, []).append(_path_step(vocab_a, tokens_a, tokens_b))
+            return tokens_a, tokens_b
+
+        return select_token
+
     if sampling.selection_rule is XtokSelectionRule.BYTES_UNION:
         rule = xtok_selection.select_avg_bytes_union
         rule_kwargs: dict[str, float] = {}

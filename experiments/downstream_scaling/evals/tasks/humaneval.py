@@ -218,6 +218,10 @@ def grade_humaneval(config: HumanEvalGradeConfig) -> None:
     ZephyrContext(
         name="grade-humaneval",
         max_workers=config.num_workers,
+        # The single-file completions input funnels the whole flattened stream through
+        # one stage0 shard before the reshard; the 1g zephyr default OOMs on large
+        # high-temperature sweeps (~210K completions of up to 1024 tokens each).
+        resources=ResourceConfig(cpu=1, ram="8g"),
         coordinator_resources=ResourceConfig(cpu=0.1, ram="1g", preemptible=True),
     ).execute(pipeline)
     logger.info("Wrote HumanEval grade rows to %s", path)

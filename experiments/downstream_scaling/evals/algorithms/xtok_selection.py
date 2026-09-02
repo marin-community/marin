@@ -423,3 +423,22 @@ def select_entropy_gate(
     source = b if _advisor_wins(entropy, entropy_threshold, gate) else a
     key = _temperature_sample(list(source), [candidate.logit for candidate in source.values()], temperature, rng)
     return force(vocab_a, key, a), force(vocab_b, key, b), entropy
+
+
+def select_random_gate(
+    a_topk: list[dict[str, Any]],
+    b_topk: list[dict[str, Any]],
+    *,
+    decoder_probability: float,
+    temperature: float,
+    rng: random.Random,
+    vocab_a: Vocab,
+    vocab_b: Vocab,
+) -> tuple[list[int], list[int], float]:
+    """Choose the decoder with the configured probability and return the routing draw."""
+    a = candidates(vocab_a, a_topk)
+    b = candidates(vocab_b, b_topk)
+    gate_value = rng.random()
+    source = a if gate_value < decoder_probability else b
+    key = _temperature_sample(list(source), [candidate.logit for candidate in source.values()], temperature, rng)
+    return force(vocab_a, key, a), force(vocab_b, key, b), gate_value
