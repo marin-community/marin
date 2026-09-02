@@ -46,7 +46,7 @@ goes stale on the next commit.
 ### grug-moe-pipeline
 - Path: `experiments/grug/moe_pipeline/`
 - Origin: `moe`
-- Introduced: pending
+- Introduced: 734108b003
 - Status: active
 - Purpose: canonical automatic JaxPP ZeroBubble and DualPipeV implementation for Grug MoE.
 - Issue: https://github.com/marin-community/marin/issues/7024
