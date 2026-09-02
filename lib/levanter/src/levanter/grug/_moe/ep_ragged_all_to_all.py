@@ -34,6 +34,7 @@ from haliax.nn.ragged_dot import ragged_dot
 from levanter.grug._moe.common import CapacityOverflow
 from levanter.grug._moe.sonic import sonic_gather_sum, sonic_gather_sum_available
 from levanter.grug._moe.ep_common import (
+    ExpertA2aParams,
     _clip_receiver_group_sizes,
     _expert_granular_a2a_params,
     _sort_activations,
@@ -243,49 +244,45 @@ def _ragged_a2a(
     operand_rows: int,
     operand: Float[Array, "R H"],
     output_init: Float[Array, "O H"],
-    input_offsets: Int[Array, "U"],
-    send_sizes: Int[Array, "U"],
-    output_offsets: Int[Array, "U"],
-    recv_sizes: Int[Array, "U"],
+    params: ExpertA2aParams,
 ) -> Float[Array, "O H"]:
     """``ragged_all_to_all`` over the expert axis whose transpose builds its zero inits in the loop.
 
     ``operand_rows`` is ``operand.shape[0]``. The backward needs it and does not see the operand.
     """
     del operand_rows
-    return jax.lax.ragged_all_to_all(
-        operand, output_init, input_offsets, send_sizes, output_offsets, recv_sizes, axis_name="expert"
-    )
+    return jax.lax.ragged_all_to_all(operand, output_init, *params, axis_name="expert")
 
 
 def _ragged_a2a_fwd(
     operand_rows: int,
     operand: Float[Array, "R H"],
     output_init: Float[Array, "O H"],
-    input_offsets: Int[Array, "U"],
-    send_sizes: Int[Array, "U"],
-    output_offsets: Int[Array, "U"],
-    recv_sizes: Int[Array, "U"],
-) -> tuple[Float[Array, "O H"], tuple[jax.Array, jax.Array, jax.Array, jax.Array]]:
-    result = _ragged_a2a(operand_rows, operand, output_init, input_offsets, send_sizes, output_offsets, recv_sizes)
-    return result, (input_offsets, send_sizes, output_offsets, recv_sizes)
+    params: ExpertA2aParams,
+) -> tuple[Float[Array, "O H"], ExpertA2aParams]:
+    return _ragged_a2a(operand_rows, operand, output_init, params), params
 
 
 def _ragged_a2a_bwd(
     operand_rows: int,
-    residuals: tuple[jax.Array, jax.Array, jax.Array, jax.Array],
+    params: ExpertA2aParams,
     cotangent: Float[Array, "O H"],
-) -> tuple[Float[Array, "R H"], Float[Array, "O H"], None, None, None, None]:
-    input_offsets, send_sizes, output_offsets, recv_sizes = residuals
+) -> tuple[Float[Array, "R H"], Float[Array, "O H"], None]:
     hidden_dim = cotangent.shape[1]
     # Reverse the collective with exchanged offsets, matching JAX's transpose rule.
-    exchanged_output_offsets = jax.lax.all_to_all(output_offsets, "expert", 0, 0, tiled=True)
-    exchanged_input_offsets = jax.lax.all_to_all(input_offsets, "expert", 0, 0, tiled=True)
+    exchanged_output_offsets = jax.lax.all_to_all(params.output_offsets, "expert", 0, 0, tiled=True)
+    exchanged_input_offsets = jax.lax.all_to_all(params.input_offsets, "expert", 0, 0, tiled=True)
     init = _loop_local_zeros(
-        operand_rows, hidden_dim, cotangent.dtype, recv_sizes, site=_LoopLocalZeroSite.OPERAND_COTANGENT
+        operand_rows, hidden_dim, cotangent.dtype, params.recv_sizes, site=_LoopLocalZeroSite.OPERAND_COTANGENT
     )
     operand_ct = jax.lax.ragged_all_to_all(
-        cotangent, init, exchanged_output_offsets, recv_sizes, exchanged_input_offsets, send_sizes, axis_name="expert"
+        cotangent,
+        init,
+        exchanged_output_offsets,
+        params.recv_sizes,
+        exchanged_input_offsets,
+        params.send_sizes,
+        axis_name="expert",
     )
     # Match JAX's transpose rule when masking rows overwritten in the primal. When ``output_init``
     # carries no gradient, JAX drops this branch at lowering.
@@ -293,15 +290,15 @@ def _ragged_a2a_bwd(
         jnp.zeros(cotangent.shape[0], jnp.int32)
         .at[exchanged_output_offsets]
         .set(1)
-        .at[exchanged_output_offsets + recv_sizes]
+        .at[exchanged_output_offsets + params.recv_sizes]
         .add(-1)
     )
     written = jnp.broadcast_to(jnp.cumsum(interval_marks)[:, None], cotangent.shape)
     passthrough_zero = _loop_local_zeros(
-        cotangent.shape[0], hidden_dim, cotangent.dtype, send_sizes, site=_LoopLocalZeroSite.OUTPUT_PASSTHROUGH
+        cotangent.shape[0], hidden_dim, cotangent.dtype, params.send_sizes, site=_LoopLocalZeroSite.OUTPUT_PASSTHROUGH
     )
     output_ct = jax.lax.select_n(written, cotangent, passthrough_zero)
-    return operand_ct, output_ct, None, None, None, None
+    return operand_ct, output_ct, None
 
 
 _ragged_a2a.defvjp(_ragged_a2a_fwd, _ragged_a2a_bwd)
@@ -388,7 +385,7 @@ def _moe_mlp_ep_ragged_a2a_local(
                 dispatch_params.send_sizes,
                 site=_LoopLocalZeroSite.DISPATCH_OUTPUT,
             )
-            x_dispatch = _ragged_a2a(assignments_per_shard, chunk_source, dispatch_init, *dispatch_params)  # [C, H]
+            x_dispatch = _ragged_a2a(assignments_per_shard, chunk_source, dispatch_init, dispatch_params)  # [C, H]
             active_all = jnp.sum(  # [Elocal]
                 clipped_group_sizes.reshape(ep_size, ep_size, local_experts)[:, shard_id, :], axis=0
             )
@@ -409,7 +406,7 @@ def _moe_mlp_ep_ragged_a2a_local(
             # Chaining every chunk through one output buffer composes the disjoint writes;
             # dropped rows keep the buffer's zeros, so the final gather-sum reads dropped
             # slots as zero contributions with no expansion step.
-            returned = _ragged_a2a(chunk_capacity, out_dispatch, returned, *return_params)
+            returned = _ragged_a2a(chunk_capacity, out_dispatch, returned, return_params)
             accepted_local = accepted_local + jnp.sum(clipped_group_sizes[shard_id], dtype=jnp.int32)
 
     with jax.named_scope("combine"):
