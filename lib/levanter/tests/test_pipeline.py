@@ -64,8 +64,10 @@ def test_split_batch_into_microbatches_accepts_explicitly_sharded_batch_axis():
     mesh = Mesh(np.asarray(jax.devices()[:1]), ("batch",), axis_types=(AxisType.Explicit,))
     batch = jax.device_put(jnp.arange(24).reshape(6, 4), NamedSharding(mesh, P("batch", None)))
 
+    reshaped = reshape_batch_into_microbatches(batch, 3)
     microbatches = split_batch_into_microbatches(batch, 3)
 
+    assert reshaped.sharding.spec == P(None, "batch", None)
     np.testing.assert_array_equal(microbatches[1], np.arange(8, 16).reshape(2, 4))
 
 

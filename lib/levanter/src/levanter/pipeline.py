@@ -6,8 +6,8 @@
 from typing import TypeVar
 
 import jax
-import jax.numpy as jnp
 from jax import core
+from jax.sharding import NamedSharding, PartitionSpec as P
 
 BatchT = TypeVar("BatchT")
 type ArrayValue = jax.Array | core.Tracer
@@ -42,7 +42,17 @@ def reshape_array_into_microbatches(value: ArrayValue, num_microbatches: int) ->
     if value.shape[0] % num_microbatches != 0:
         raise ValueError(f"batch axis size {value.shape[0]} must be divisible by num_microbatches={num_microbatches}")
     microbatch_size = value.shape[0] // num_microbatches
-    return jnp.reshape(value, (num_microbatches, microbatch_size, *value.shape[1:]))
+    sharding = getattr(value, "sharding", None)
+    if sharding is None:
+        sharding = getattr(getattr(value, "aval", None), "sharding", None)
+    out_sharding = None
+    if isinstance(sharding, NamedSharding):
+        out_sharding = NamedSharding(sharding.mesh, P(None, *sharding.spec))
+    return jax.lax.reshape(
+        value,
+        (num_microbatches, microbatch_size, *value.shape[1:]),
+        out_sharding=out_sharding,
+    )
 
 
 def reshape_batch_into_microbatches(batch: BatchT, num_microbatches: int) -> BatchT:
