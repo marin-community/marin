@@ -1,0 +1,6 @@
+{
+  "three_phase_oracle_bank": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/starcoder_subset_selection_outputs/three_phase_oracle_k16_longrun_proc2_20260308",
+  "three_phase_oracle_bank_exists": true,
+  "two_phase_oracle_bank": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/starcoder_subset_selection_outputs/two_phase_oracle_k10_top100_proc",
+  "two_phase_oracle_bank_exists": true
+}

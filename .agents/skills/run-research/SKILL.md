@@ -22,8 +22,37 @@ research directly requires its workflow.
 3. A long-lived branch, for example `research/<topic>` or
    `research/<user>/<issue>-<topic>`, with the logbook, research code, configs,
    small artifacts, and test harnesses needed to reproduce results.
-4. One or more commit or tag snapshots for meaningful milestones.
-5. Often a "production" branch that gets PR'd and merged.
+4. A Fieldbook experiment row when the repo has an active Fieldbook ledger.
+5. One or more commit or tag snapshots for meaningful milestones.
+6. Often a "production" branch that gets PR'd and merged.
+
+## Fieldbook First
+
+If `.experiments/ledger.sqlite` exists, use Fieldbook as the local source of
+truth for experiment state. Before checking or fixing active experiments, run:
+
+```bash
+fieldbook db where --json
+fieldbook experiment list --json
+fieldbook experiment status "$EXP_ID" --json
+```
+
+Use Iris, W&B, GCS, and logbooks as evidence sources, but reconcile important
+changes back into Fieldbook. Record planned datapoints as `run` rows, execution
+attempts as `job` rows, job fan-out with `run link-job`, and readiness checks as
+`validation` rows. Before switching away from an experiment, write a checkpoint
+note with `fieldbook experiment checkpoint "$EXP_ID" --json`.
+
+## Research Logbook
+
+Use the term **logbook** consistently. Follow `.agents/skills/task-logbook/SKILL.md` for
+formatting and issue-update rules.
+
+## Branches
+
+Use a research branch for the logbook, one-off scripts, harnesses, and small
+artifacts. Extract a clean production branch only when the final code/docs shape
+is clear.
 
 ## Standard Workflow
 

@@ -271,9 +271,12 @@ class DataLoaderIterator(Iterator[Ex]):
     async def _produce_batches(self):
         with local_cpu_mesh():
             batch_number = self._start_from_batch or 0
+            first_batch_number = batch_number
             done = False
             while not done:
-                target_next_batch_number = batch_number + self.dl.fetch_batch_size
+                # we try to prefetch multiple batches at a time
+                fetch_batch_size = 1 if batch_number == first_batch_number else self.dl.fetch_batch_size
+                target_next_batch_number = batch_number + fetch_batch_size
                 max_achievable_batch_number, final_batch_size = await self._dataset_get_available_batch_number(
                     target_next_batch_number
                 )
@@ -446,9 +449,7 @@ class DataLoaderIterator(Iterator[Ex]):
             global_indices_for_each_batch.append(global_indices_for_this_batch)
 
         # flattened view so we can load all the data at once
-        indices_for_this_batch_of_batches: list[int] = [
-            i for indices in global_indices_for_each_batch for i in indices
-        ]
+        indices_for_this_batch_of_batches: list[int] = [i for indices in global_indices_for_each_batch for i in indices]
         individual_datums = await self.run_and_report_slowness(
             self.dl.data_store.get_batch(indices_for_this_batch_of_batches),
             f"Waiting for {len(indices_for_this_batch_of_batches)} items.",
@@ -571,9 +572,7 @@ def _stack_tree_on_host(batch_name, individual_datums):
     def _stack_leaves_on_host(*leaves):
         if is_named_array(leaves[0]):
             batch_axis = hax.Axis(batch_name, len(leaves)) if isinstance(batch_name, str) else batch_name
-            return hax.NamedArray(
-                np.stack([np.asarray(leaf.array) for leaf in leaves]), (batch_axis,) + leaves[0].axes
-            )
+            return hax.NamedArray(np.stack([np.asarray(leaf.array) for leaf in leaves]), (batch_axis,) + leaves[0].axes)
         else:
             return np.stack([np.asarray(leaf) for leaf in leaves])
 

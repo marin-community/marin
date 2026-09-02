@@ -1,0 +1,78 @@
+{
+  "objective_metric": "eval/uncheatable_eval/bpb",
+  "detail_csv": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/two_phase_many_grp_proposal_bank_curve_points.csv",
+  "variants": {
+    "trustblend_top8actual_cap": {
+      "mean_predicted_value_after80": 1.0423571866993768,
+      "mean_holdout_value_after80": 1.0866872519254684,
+      "mean_holdout_regret_after80": 0.02540907263755815,
+      "mean_global_regret_after80": 0.029488489031791854,
+      "num_zero_holdout_regret_after80": 1,
+      "mean_nearest_full_observed_tv_after80": 0.23165852064202147,
+      "mean_bank_oracle_gap_after80": 0.0
+    },
+    "sobol_argmin_pool512_subset": {
+      "mean_predicted_value_after80": 1.063873152288446,
+      "mean_holdout_value_after80": 1.0812953561544418,
+      "mean_holdout_regret_after80": 0.0200171768665314,
+      "mean_global_regret_after80": 0.024096593260765103,
+      "num_zero_holdout_regret_after80": 0,
+      "mean_nearest_full_observed_tv_after80": 0.4037171531055349,
+      "mean_bank_oracle_gap_after80": 0.0
+    },
+    "sobol_fbl_top8_pool512_subset": {
+      "mean_predicted_value_after80": 1.0766295424781265,
+      "mean_holdout_value_after80": 1.1239713430404663,
+      "mean_holdout_regret_after80": 0.0626931637525559,
+      "mean_global_regret_after80": 0.0667725801467896,
+      "num_zero_holdout_regret_after80": 2,
+      "mean_nearest_full_observed_tv_after80": 0.44718133637267443,
+      "mean_bank_oracle_gap_after80": 0.03164340555667883
+    },
+    "sobol_fbl_top16_pool2048_subset": {
+      "mean_predicted_value_after80": 1.0766295424781265,
+      "mean_holdout_value_after80": 1.1239713430404663,
+      "mean_holdout_regret_after80": 0.0626931637525559,
+      "mean_global_regret_after80": 0.0667725801467896,
+      "num_zero_holdout_regret_after80": 2,
+      "mean_nearest_full_observed_tv_after80": 0.44718133637267443,
+      "mean_bank_oracle_gap_after80": 0.035091057419776944
+    },
+    "sobol_fbl_top16_pool2048_all_observed": {
+      "mean_predicted_value_after80": 1.0766295424781265,
+      "mean_holdout_value_after80": 1.1239713430404663,
+      "mean_holdout_regret_after80": 0.0626931637525559,
+      "mean_global_regret_after80": 0.0667725801467896,
+      "num_zero_holdout_regret_after80": 2,
+      "mean_nearest_full_observed_tv_after80": 0.44718133637267443,
+      "mean_bank_oracle_gap_after80": 0.035091057419776944
+    },
+    "sobol_local_trustblend_cap015_pool2048_subset": {
+      "mean_predicted_value_after80": 1.0624975242942345,
+      "mean_holdout_value_after80": 1.1051067262887955,
+      "mean_holdout_regret_after80": 0.04382854700088501,
+      "mean_global_regret_after80": 0.04790796339511871,
+      "num_zero_holdout_regret_after80": 0,
+      "mean_nearest_full_observed_tv_after80": 0.40597311783177603,
+      "mean_bank_oracle_gap_after80": 0.04382854700088501
+    },
+    "sobol_local_top4actual_cap015_pool2048_subset": {
+      "mean_predicted_value_after80": 1.0699124218581013,
+      "mean_holdout_value_after80": 1.1154301762580872,
+      "mean_holdout_regret_after80": 0.05415199697017667,
+      "mean_global_regret_after80": 0.05823141336441037,
+      "num_zero_holdout_regret_after80": 0,
+      "mean_nearest_full_observed_tv_after80": 0.40477115605058345,
+      "mean_bank_oracle_gap_after80": 0.05415199697017667
+    },
+    "sobol_local_top4plustrustblend_cap015_pool2048_subset": {
+      "mean_predicted_value_after80": 1.0624975242942345,
+      "mean_holdout_value_after80": 1.10571850836277,
+      "mean_holdout_regret_after80": 0.04444032907485962,
+      "mean_global_regret_after80": 0.04851974546909332,
+      "num_zero_holdout_regret_after80": 0,
+      "mean_nearest_full_observed_tv_after80": 0.40597311783177603,
+      "mean_bank_oracle_gap_after80": 0.04291731119155884
+    }
+  }
+}

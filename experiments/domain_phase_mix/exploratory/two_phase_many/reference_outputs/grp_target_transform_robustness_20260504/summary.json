@@ -1,0 +1,19 @@
+{
+  "metrics": [
+    "eval/uncheatable_eval/bpb",
+    "lm_eval/mmlu_sl_verb_5shot/choice_prob_norm",
+    "lm_eval/mmlu_sl_verb_5shot/choice_logprob_norm",
+    "eval/agentic_coding/success_macro_bpb"
+  ],
+  "noise_rows": 10,
+  "report_md": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/grp_target_transform_robustness_20260504/report.md",
+  "signal_rows": 240,
+  "summary_csv": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/grp_target_transform_robustness_20260504/summary.csv",
+  "transforms": [
+    "canonical",
+    "affine_large",
+    "affine_small",
+    "wrong_sign_negation",
+    "rank_normal"
+  ]
+}

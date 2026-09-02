@@ -1,0 +1,20 @@
+{
+  "objective_metric": "eval/uncheatable_eval/bpb",
+  "policy": "random_power_family_penalty_no_l2_raw_optimum",
+  "raw_csv": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/two_phase_many_grp_power_family_penalty_no_l2_random_subset_raw.csv",
+  "replicates": 16,
+  "seed": 20260427,
+  "subset_sizes": [
+    20,
+    40,
+    60,
+    80,
+    100,
+    140,
+    180,
+    220,
+    242
+  ],
+  "summary_csv": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/two_phase_many_grp_power_family_penalty_no_l2_random_subset_summary.csv",
+  "variant_name": "power_family_penalty_no_l2"
+}

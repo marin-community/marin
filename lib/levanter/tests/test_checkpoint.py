@@ -850,6 +850,30 @@ def test_checkpointer_force_save_uses_permanent_path_even_when_time_policy_elaps
         assert list(pathlib.Path(temporary_dir).iterdir()) == []
 
 
+def test_checkpointer_force_does_not_repeat_same_step_permanent_save():
+    with tempfile.TemporaryDirectory(prefix="checkpoints") as permanent_dir:
+        checkpointer = Checkpointer(
+            permanent_dir,
+            None,
+            [CheckpointInterval(every=1)],
+        )
+        save_count = 0
+        original_save = checkpointer.save_checkpoint
+
+        def counted_save(*args, **kwargs):
+            nonlocal save_count
+            save_count += 1
+            return original_save(*args, **kwargs)
+
+        checkpointer.save_checkpoint = counted_save  # type: ignore[method-assign]
+        _on_step(checkpointer, 1)
+        _on_step(checkpointer, 1, force=True)
+        checkpointer.wait_until_finished()
+
+        assert save_count == 1
+        assert _get_checkpoint_steps(permanent_dir) == [1]
+
+
 def test_checkpointer_coalesces_requests_into_one_temporary_checkpoint(tmp_path):
     permanent_path = tmp_path / "checkpoints"
     temporary_path = tmp_path / "temporary"
@@ -909,9 +933,7 @@ def test_load_from_checkpoint_or_initialize():
         filtered = eqx.filter(model0, is_checkpointed)
         save_checkpoint(filtered, step=0, checkpoint_path=tmpdir)
 
-        loaded = load_checkpoint_or_initialize(init_fn, [tmpdir], is_checkpointed=is_checkpointed, donate_args=False)(
-            k1
-        )
+        loaded = load_checkpoint_or_initialize(init_fn, [tmpdir], is_checkpointed=is_checkpointed, donate_args=False)(k1)
         assert not any(jax.tree_util.tree_leaves(eqx.filter(loaded, lambda x: isinstance(x, ShapeDtypeStruct))))
 
         latest_checkpoint = discover_latest_checkpoint(tmpdir)
@@ -997,9 +1019,9 @@ def test_load_from_checkpoint_or_initialize_works_if_file_not_found():
         is_checkpointed = jtu.tree_map(lambda _: False, model0)
         is_checkpointed = eqx.tree_at(lambda t: t.layers[-1], is_checkpointed, replace=True)
 
-        loaded = load_checkpoint_or_initialize(
-            init_fn, ["kanmfklafnmjlkanfjklanfjkh"], is_checkpointed=is_checkpointed
-        )(k1)
+        loaded = load_checkpoint_or_initialize(init_fn, ["kanmfklafnmjlkanfjklanfjkh"], is_checkpointed=is_checkpointed)(
+            k1
+        )
 
         assert not any(jax.tree_util.tree_leaves(eqx.filter(loaded, lambda x: isinstance(x, ShapeDtypeStruct))))
         # should be the same as model1

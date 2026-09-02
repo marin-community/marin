@@ -1,0 +1,81 @@
+{
+  "metrics_missing_at_300m": [
+    "lm_eval/arc_challenge_5shot/bpb",
+    "lm_eval/arc_easy_5shot/bpb",
+    "lm_eval/csqa_5shot/bpb",
+    "lm_eval/hellaswag_5shot/bpb",
+    "lm_eval/lambada_0shot/perplexity",
+    "lm_eval/medmcqa_5shot/acc_norm",
+    "lm_eval/mmlu_humanities_5shot/bpb",
+    "lm_eval/mmlu_other_5shot/bpb",
+    "lm_eval/mmlu_sl_verb_5shot/bpb",
+    "lm_eval/mmlu_social_sciences_5shot/bpb",
+    "lm_eval/mmlu_stem_5shot/bpb",
+    "lm_eval/olmo_base_easy_overlap/macro_bpb",
+    "lm_eval/piqa_5shot/bpb",
+    "lm_eval/sciq_5shot/acc_norm",
+    "lm_eval/socialiqa_5shot/acc",
+    "lm_eval/socialiqa_5shot/choice_logprob",
+    "lm_eval/winogrande_5shot/bpb"
+  ],
+  "n_metrics_compared": 30,
+  "noise_n_300m": 10,
+  "signal_n_300m_current_max": 234,
+  "signal_n_300m_current_min": 234,
+  "signal_rows_from_checkpoint_fallback": 0,
+  "signal_rows_from_harvest": 148,
+  "signal_rows_from_parity_overlay": 0,
+  "signal_rows_from_wandb": 86,
+  "top_300m_metrics": [
+    {
+      "metric": "eval/uncheatable_eval/github_python/bpb",
+      "signal_to_noise_300m_current": 51.6915630109113,
+      "signal_to_noise_60m": 20.530359730365813
+    },
+    {
+      "metric": "eval/paloma/m2d2_s2orc_unsplit/bpb",
+      "signal_to_noise_300m_current": 37.625163248865206,
+      "signal_to_noise_60m": 12.717204079042792
+    },
+    {
+      "metric": "eval/uncheatable_eval/ao3_english/bpb",
+      "signal_to_noise_300m_current": 36.07965762980994,
+      "signal_to_noise_60m": 10.717362685513644
+    },
+    {
+      "metric": "eval/paloma/redpajama/bpb",
+      "signal_to_noise_300m_current": 31.6781551413455,
+      "signal_to_noise_60m": 18.883727297958742
+    },
+    {
+      "metric": "eval/uncheatable_eval/github_cpp/bpb",
+      "signal_to_noise_300m_current": 28.6278570818372,
+      "signal_to_noise_60m": 12.531462257076408
+    },
+    {
+      "metric": "eval/uncheatable_eval/macro_bpb",
+      "signal_to_noise_300m_current": 25.624788005236216,
+      "signal_to_noise_60m": 13.43506723185028
+    },
+    {
+      "metric": "eval/uncheatable_eval/bpb",
+      "signal_to_noise_300m_current": 25.535850048894027,
+      "signal_to_noise_60m": 13.687934573940185
+    },
+    {
+      "metric": "eval/uncheatable_eval/arxiv_physics/bpb",
+      "signal_to_noise_300m_current": 24.815626644953678,
+      "signal_to_noise_60m": 14.4133856109406
+    },
+    {
+      "metric": "eval/paloma/c4_en/bpb",
+      "signal_to_noise_300m_current": 24.315215981902295,
+      "signal_to_noise_60m": 13.474887057931827
+    },
+    {
+      "metric": "eval/paloma/dolma_100_programing_languages/bpb",
+      "signal_to_noise_300m_current": 23.401233088551297,
+      "signal_to_noise_60m": 15.702530916561235
+    }
+  ]
+}

@@ -4645,6 +4645,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "cloud-sql-python-connector", extra = ["pg8000"] },
+    { name = "joblib" },
     { name = "marin-core" },
     { name = "marin-deploy" },
     { name = "marin-ducky" },
@@ -4656,6 +4657,7 @@ dependencies = [
     { name = "marin-levanter" },
     { name = "marin-rigging", extra = ["secrets"] },
     { name = "marin-zephyr" },
+    { name = "scikit-learn" },
     { name = "seaborn" },
     { name = "sqlalchemy" },
     { name = "watchdog" },
@@ -4664,6 +4666,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "cloud-sql-python-connector", extras = ["pg8000"], specifier = ">=1.9" },
+    { name = "joblib" },
     { name = "marin-core", editable = "lib/marin" },
     { name = "marin-deploy", editable = "infra/deploy" },
     { name = "marin-ducky", editable = "lib/ducky" },
@@ -4675,6 +4678,7 @@ requires-dist = [
     { name = "marin-levanter", editable = "lib/levanter" },
     { name = "marin-rigging", extras = ["secrets"], editable = "lib/rigging" },
     { name = "marin-zephyr", editable = "lib/zephyr" },
+    { name = "scikit-learn" },
     { name = "seaborn", specifier = ">=0.13" },
     { name = "sqlalchemy", specifier = ">=2" },
     { name = "watchdog" },

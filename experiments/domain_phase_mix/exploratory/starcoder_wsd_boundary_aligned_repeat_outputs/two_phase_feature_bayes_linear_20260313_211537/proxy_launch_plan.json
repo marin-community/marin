@@ -1,0 +1,2935 @@
+{
+  "data_seed": 0,
+  "dataset": "two_phase_starcoder",
+  "n_runs": 96,
+  "name_prefix": "t2s-wsdb-proxy-two-phase-featur",
+  "policy": "feature_bayes_linear_wsd_boundary_aligned",
+  "runs": [
+    {
+      "included_subset_sizes": [
+        4,
+        6,
+        8,
+        10,
+        12,
+        16,
+        24,
+        32,
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.0,
+      "phase_0_starcoder": 1.0,
+      "phase_1_nemotron_full": 1.0,
+      "phase_1_starcoder": 0.0,
+      "rank": 1,
+      "run_name": "fbl_wsdba_rank001",
+      "selector_seed": 0,
+      "source_idx": 68,
+      "source_run_id": 8,
+      "source_wandb_run_id": "run_00008-a9d0bd",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.0,
+            "starcoder": 1.0
+          },
+          "phase_1": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          }
+        },
+        "run_id": 96001
+      }
+    },
+    {
+      "included_subset_sizes": [
+        4,
+        6,
+        8,
+        10,
+        12,
+        16,
+        24,
+        32,
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 1.0,
+      "phase_0_starcoder": 0.0,
+      "phase_1_nemotron_full": 0.0,
+      "phase_1_starcoder": 1.0,
+      "rank": 2,
+      "run_name": "fbl_wsdba_rank002",
+      "selector_seed": 0,
+      "source_idx": 50,
+      "source_run_id": 90000,
+      "source_wandb_run_id": "base_90000-9fdf45",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          },
+          "phase_1": {
+            "nemotron_full": 0.0,
+            "starcoder": 1.0
+          }
+        },
+        "run_id": 96002
+      }
+    },
+    {
+      "included_subset_sizes": [
+        4,
+        6,
+        8,
+        10,
+        12,
+        16,
+        24,
+        32,
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.0,
+      "phase_0_starcoder": 1.0,
+      "phase_1_nemotron_full": 0.0,
+      "phase_1_starcoder": 1.0,
+      "rank": 3,
+      "run_name": "fbl_wsdba_rank003",
+      "selector_seed": 0,
+      "source_idx": 56,
+      "source_run_id": 90006,
+      "source_wandb_run_id": "base_90006-a8a32b",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.0,
+            "starcoder": 1.0
+          },
+          "phase_1": {
+            "nemotron_full": 0.0,
+            "starcoder": 1.0
+          }
+        },
+        "run_id": 96003
+      }
+    },
+    {
+      "included_subset_sizes": [
+        4,
+        6,
+        8,
+        10,
+        12,
+        16,
+        24,
+        32,
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 1.0,
+      "phase_0_starcoder": 0.0,
+      "phase_1_nemotron_full": 1.0,
+      "phase_1_starcoder": 0.0,
+      "rank": 4,
+      "run_name": "fbl_wsdba_rank004",
+      "selector_seed": 0,
+      "source_idx": 55,
+      "source_run_id": 90005,
+      "source_wandb_run_id": "base_90005-3bcf24",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          },
+          "phase_1": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          }
+        },
+        "run_id": 96004
+      }
+    },
+    {
+      "included_subset_sizes": [
+        6,
+        8,
+        10,
+        12,
+        16,
+        24,
+        32,
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.5571394643133137,
+      "phase_0_starcoder": 0.4428605356866863,
+      "phase_1_nemotron_full": 0.0,
+      "phase_1_starcoder": 1.0,
+      "rank": 5,
+      "run_name": "fbl_wsdba_rank005",
+      "selector_seed": 0,
+      "source_idx": 70,
+      "source_run_id": 10,
+      "source_wandb_run_id": "run_00010-d9a64f",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.5571394643133137,
+            "starcoder": 0.4428605356866863
+          },
+          "phase_1": {
+            "nemotron_full": 0.0,
+            "starcoder": 1.0
+          }
+        },
+        "run_id": 96005
+      }
+    },
+    {
+      "included_subset_sizes": [
+        6,
+        8,
+        10,
+        12,
+        16,
+        24,
+        32,
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.0553533240601406,
+      "phase_0_starcoder": 0.9446466759398594,
+      "phase_1_nemotron_full": 0.1393622344516346,
+      "phase_1_starcoder": 0.8606377655483654,
+      "rank": 6,
+      "run_name": "fbl_wsdba_rank006",
+      "selector_seed": 0,
+      "source_idx": 78,
+      "source_run_id": 18,
+      "source_wandb_run_id": "run_00018-52998a",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.0553533240601406,
+            "starcoder": 0.9446466759398594
+          },
+          "phase_1": {
+            "nemotron_full": 0.1393622344516346,
+            "starcoder": 0.8606377655483654
+          }
+        },
+        "run_id": 96006
+      }
+    },
+    {
+      "included_subset_sizes": [
+        8,
+        10,
+        12,
+        16,
+        24,
+        32,
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.9244081168015476,
+      "phase_0_starcoder": 0.0755918831984524,
+      "phase_1_nemotron_full": 0.9244081168015476,
+      "phase_1_starcoder": 0.0755918831984524,
+      "rank": 7,
+      "run_name": "fbl_wsdba_rank007",
+      "selector_seed": 0,
+      "source_idx": 115,
+      "source_run_id": 90015,
+      "source_wandb_run_id": "base_90015-a2e5d1",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.9244081168015476,
+            "starcoder": 0.0755918831984524
+          },
+          "phase_1": {
+            "nemotron_full": 0.9244081168015476,
+            "starcoder": 0.0755918831984524
+          }
+        },
+        "run_id": 96007
+      }
+    },
+    {
+      "included_subset_sizes": [
+        8,
+        10,
+        12,
+        16,
+        24,
+        32,
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.0,
+      "phase_0_starcoder": 1.0,
+      "phase_1_nemotron_full": 0.5698030059760949,
+      "phase_1_starcoder": 0.4301969940239051,
+      "rank": 8,
+      "run_name": "fbl_wsdba_rank008",
+      "selector_seed": 0,
+      "source_idx": 72,
+      "source_run_id": 12,
+      "source_wandb_run_id": "run_00012-2fb6b7",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.0,
+            "starcoder": 1.0
+          },
+          "phase_1": {
+            "nemotron_full": 0.5698030059760949,
+            "starcoder": 0.4301969940239051
+          }
+        },
+        "run_id": 96008
+      }
+    },
+    {
+      "included_subset_sizes": [
+        10,
+        12,
+        16,
+        24,
+        32,
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 1.0,
+      "phase_0_starcoder": 0.0,
+      "phase_1_nemotron_full": 0.9,
+      "phase_1_starcoder": 0.1,
+      "rank": 9,
+      "run_name": "fbl_wsdba_rank009",
+      "selector_seed": 0,
+      "source_idx": 112,
+      "source_run_id": 90012,
+      "source_wandb_run_id": "base_90012-c84611",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          },
+          "phase_1": {
+            "nemotron_full": 0.9,
+            "starcoder": 0.1
+          }
+        },
+        "run_id": 96009
+      }
+    },
+    {
+      "included_subset_sizes": [
+        10,
+        12,
+        16,
+        24,
+        32,
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.369250398868719,
+      "phase_0_starcoder": 0.6307496011312811,
+      "phase_1_nemotron_full": 0.5419775463932354,
+      "phase_1_starcoder": 0.4580224536067647,
+      "rank": 10,
+      "run_name": "fbl_wsdba_rank010",
+      "selector_seed": 0,
+      "source_idx": 94,
+      "source_run_id": 34,
+      "source_wandb_run_id": "run_00034-c0fd49",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.369250398868719,
+            "starcoder": 0.6307496011312811
+          },
+          "phase_1": {
+            "nemotron_full": 0.5419775463932354,
+            "starcoder": 0.4580224536067647
+          }
+        },
+        "run_id": 96010
+      }
+    },
+    {
+      "included_subset_sizes": [
+        12,
+        16,
+        24,
+        32,
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.4597472574428206,
+      "phase_0_starcoder": 0.5402527425571795,
+      "phase_1_nemotron_full": 1.0,
+      "phase_1_starcoder": 0.0,
+      "rank": 11,
+      "run_name": "fbl_wsdba_rank011",
+      "selector_seed": 0,
+      "source_idx": 49,
+      "source_run_id": 49,
+      "source_wandb_run_id": "run_00049-d7ffdc",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.4597472574428206,
+            "starcoder": 0.5402527425571795
+          },
+          "phase_1": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          }
+        },
+        "run_id": 96011
+      }
+    },
+    {
+      "included_subset_sizes": [
+        12,
+        16,
+        24,
+        32,
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.95,
+      "phase_0_starcoder": 0.05,
+      "phase_1_nemotron_full": 0.2,
+      "phase_1_starcoder": 0.8,
+      "rank": 12,
+      "run_name": "fbl_wsdba_rank012",
+      "selector_seed": 0,
+      "source_idx": 53,
+      "source_run_id": 90003,
+      "source_wandb_run_id": "base_90003-df3a1a",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.95,
+            "starcoder": 0.05
+          },
+          "phase_1": {
+            "nemotron_full": 0.2,
+            "starcoder": 0.8
+          }
+        },
+        "run_id": 96012
+      }
+    },
+    {
+      "included_subset_sizes": [
+        16,
+        24,
+        32,
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.1029528473089581,
+      "phase_0_starcoder": 0.897047152691042,
+      "phase_1_nemotron_full": 0.8791359471012669,
+      "phase_1_starcoder": 0.1208640528987332,
+      "rank": 13,
+      "run_name": "fbl_wsdba_rank013",
+      "selector_seed": 0,
+      "source_idx": 60,
+      "source_run_id": 0,
+      "source_wandb_run_id": "run_00000-c3f26c",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.1029528473089581,
+            "starcoder": 0.897047152691042
+          },
+          "phase_1": {
+            "nemotron_full": 0.8791359471012669,
+            "starcoder": 0.1208640528987332
+          }
+        },
+        "run_id": 96013
+      }
+    },
+    {
+      "included_subset_sizes": [
+        16,
+        24,
+        32,
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.2490237068750943,
+      "phase_0_starcoder": 0.7509762931249057,
+      "phase_1_nemotron_full": 0.0,
+      "phase_1_starcoder": 1.0,
+      "rank": 14,
+      "run_name": "fbl_wsdba_rank014",
+      "selector_seed": 0,
+      "source_idx": 71,
+      "source_run_id": 11,
+      "source_wandb_run_id": "run_00011-52cb90",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.2490237068750943,
+            "starcoder": 0.7509762931249057
+          },
+          "phase_1": {
+            "nemotron_full": 0.0,
+            "starcoder": 1.0
+          }
+        },
+        "run_id": 96014
+      }
+    },
+    {
+      "included_subset_sizes": [
+        16,
+        24,
+        32,
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 1.0,
+      "phase_0_starcoder": 0.0,
+      "phase_1_nemotron_full": 0.5799861307622644,
+      "phase_1_starcoder": 0.4200138692377357,
+      "rank": 15,
+      "run_name": "fbl_wsdba_rank015",
+      "selector_seed": 0,
+      "source_idx": 5,
+      "source_run_id": 5,
+      "source_wandb_run_id": "run_00005-728761",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          },
+          "phase_1": {
+            "nemotron_full": 0.5799861307622644,
+            "starcoder": 0.4200138692377357
+          }
+        },
+        "run_id": 96015
+      }
+    },
+    {
+      "included_subset_sizes": [
+        16,
+        24,
+        32,
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 1.0,
+      "phase_0_starcoder": 0.0,
+      "phase_1_nemotron_full": 0.1075774603426029,
+      "phase_1_starcoder": 0.8924225396573972,
+      "rank": 16,
+      "run_name": "fbl_wsdba_rank016",
+      "selector_seed": 0,
+      "source_idx": 77,
+      "source_run_id": 17,
+      "source_wandb_run_id": "run_00017-e5195c",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          },
+          "phase_1": {
+            "nemotron_full": 0.1075774603426029,
+            "starcoder": 0.8924225396573972
+          }
+        },
+        "run_id": 96016
+      }
+    },
+    {
+      "included_subset_sizes": [
+        24,
+        32,
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.0,
+      "phase_0_starcoder": 1.0,
+      "phase_1_nemotron_full": 0.2188567038520604,
+      "phase_1_starcoder": 0.7811432961479395,
+      "rank": 17,
+      "run_name": "fbl_wsdba_rank017",
+      "selector_seed": 0,
+      "source_idx": 100,
+      "source_run_id": 40,
+      "source_wandb_run_id": "run_00040-575b4b",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.0,
+            "starcoder": 1.0
+          },
+          "phase_1": {
+            "nemotron_full": 0.2188567038520604,
+            "starcoder": 0.7811432961479395
+          }
+        },
+        "run_id": 96017
+      }
+    },
+    {
+      "included_subset_sizes": [
+        24,
+        32,
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.5,
+      "phase_0_starcoder": 0.5,
+      "phase_1_nemotron_full": 0.5,
+      "phase_1_starcoder": 0.5,
+      "rank": 18,
+      "run_name": "fbl_wsdba_rank018",
+      "selector_seed": 0,
+      "source_idx": 51,
+      "source_run_id": 90001,
+      "source_wandb_run_id": "base_90001-576131",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.5,
+            "starcoder": 0.5
+          },
+          "phase_1": {
+            "nemotron_full": 0.5,
+            "starcoder": 0.5
+          }
+        },
+        "run_id": 96018
+      }
+    },
+    {
+      "included_subset_sizes": [
+        24,
+        32,
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.3349257295883307,
+      "phase_0_starcoder": 0.6650742704116693,
+      "phase_1_nemotron_full": 1.0,
+      "phase_1_starcoder": 0.0,
+      "rank": 19,
+      "run_name": "fbl_wsdba_rank019",
+      "selector_seed": 0,
+      "source_idx": 63,
+      "source_run_id": 3,
+      "source_wandb_run_id": "run_00003-4d17c3",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.3349257295883307,
+            "starcoder": 0.6650742704116693
+          },
+          "phase_1": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          }
+        },
+        "run_id": 96019
+      }
+    },
+    {
+      "included_subset_sizes": [
+        24,
+        32,
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.8763124079046947,
+      "phase_0_starcoder": 0.1236875920953053,
+      "phase_1_nemotron_full": 0.8484466622320136,
+      "phase_1_starcoder": 0.1515533377679864,
+      "rank": 20,
+      "run_name": "fbl_wsdba_rank020",
+      "selector_seed": 0,
+      "source_idx": 74,
+      "source_run_id": 14,
+      "source_wandb_run_id": "run_00014-c0c23d",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.8763124079046947,
+            "starcoder": 0.1236875920953053
+          },
+          "phase_1": {
+            "nemotron_full": 0.8484466622320136,
+            "starcoder": 0.1515533377679864
+          }
+        },
+        "run_id": 96020
+      }
+    },
+    {
+      "included_subset_sizes": [
+        24,
+        32,
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.1756192919977888,
+      "phase_0_starcoder": 0.8243807080022112,
+      "phase_1_nemotron_full": 0.1756743018505376,
+      "phase_1_starcoder": 0.8243256981494624,
+      "rank": 21,
+      "run_name": "fbl_wsdba_rank021",
+      "selector_seed": 0,
+      "source_idx": 99,
+      "source_run_id": 39,
+      "source_wandb_run_id": "run_00039-ab1d1d",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.1756192919977888,
+            "starcoder": 0.8243807080022112
+          },
+          "phase_1": {
+            "nemotron_full": 0.1756743018505376,
+            "starcoder": 0.8243256981494624
+          }
+        },
+        "run_id": 96021
+      }
+    },
+    {
+      "included_subset_sizes": [
+        24,
+        32,
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 1.0,
+      "phase_0_starcoder": 0.0,
+      "phase_1_nemotron_full": 0.95,
+      "phase_1_starcoder": 0.05,
+      "rank": 22,
+      "run_name": "fbl_wsdba_rank022",
+      "selector_seed": 0,
+      "source_idx": 111,
+      "source_run_id": 90011,
+      "source_wandb_run_id": "base_90011-b2c8fd",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          },
+          "phase_1": {
+            "nemotron_full": 0.95,
+            "starcoder": 0.05
+          }
+        },
+        "run_id": 96022
+      }
+    },
+    {
+      "included_subset_sizes": [
+        24,
+        32,
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.83360008295662,
+      "phase_0_starcoder": 0.1663999170433799,
+      "phase_1_nemotron_full": 1.0,
+      "phase_1_starcoder": 0.0,
+      "rank": 23,
+      "run_name": "fbl_wsdba_rank023",
+      "selector_seed": 0,
+      "source_idx": 43,
+      "source_run_id": 43,
+      "source_wandb_run_id": "run_00043-dd6ce7",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.83360008295662,
+            "starcoder": 0.1663999170433799
+          },
+          "phase_1": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          }
+        },
+        "run_id": 96023
+      }
+    },
+    {
+      "included_subset_sizes": [
+        24,
+        32,
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.8724141321639484,
+      "phase_0_starcoder": 0.1275858678360516,
+      "phase_1_nemotron_full": 0.0,
+      "phase_1_starcoder": 1.0,
+      "rank": 24,
+      "run_name": "fbl_wsdba_rank024",
+      "selector_seed": 0,
+      "source_idx": 87,
+      "source_run_id": 27,
+      "source_wandb_run_id": "run_00027-dd4d27",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.8724141321639484,
+            "starcoder": 0.1275858678360516
+          },
+          "phase_1": {
+            "nemotron_full": 0.0,
+            "starcoder": 1.0
+          }
+        },
+        "run_id": 96024
+      }
+    },
+    {
+      "included_subset_sizes": [
+        32,
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.0,
+      "phase_0_starcoder": 1.0,
+      "phase_1_nemotron_full": 0.7735933762478688,
+      "phase_1_starcoder": 0.2264066237521311,
+      "rank": 25,
+      "run_name": "fbl_wsdba_rank025",
+      "selector_seed": 0,
+      "source_idx": 101,
+      "source_run_id": 41,
+      "source_wandb_run_id": "run_00041-783525",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.0,
+            "starcoder": 1.0
+          },
+          "phase_1": {
+            "nemotron_full": 0.7735933762478688,
+            "starcoder": 0.2264066237521311
+          }
+        },
+        "run_id": 96025
+      }
+    },
+    {
+      "included_subset_sizes": [
+        32,
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 1.0,
+      "phase_0_starcoder": 0.0,
+      "phase_1_nemotron_full": 0.875,
+      "phase_1_starcoder": 0.125,
+      "rank": 26,
+      "run_name": "fbl_wsdba_rank026",
+      "selector_seed": 0,
+      "source_idx": 113,
+      "source_run_id": 90013,
+      "source_wandb_run_id": "base_90013-66c112",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          },
+          "phase_1": {
+            "nemotron_full": 0.875,
+            "starcoder": 0.125
+          }
+        },
+        "run_id": 96026
+      }
+    },
+    {
+      "included_subset_sizes": [
+        32,
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.1278148525136676,
+      "phase_0_starcoder": 0.8721851474863324,
+      "phase_1_nemotron_full": 1.0,
+      "phase_1_starcoder": 0.0,
+      "rank": 27,
+      "run_name": "fbl_wsdba_rank027",
+      "selector_seed": 0,
+      "source_idx": 64,
+      "source_run_id": 4,
+      "source_wandb_run_id": "run_00004-322690",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.1278148525136676,
+            "starcoder": 0.8721851474863324
+          },
+          "phase_1": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          }
+        },
+        "run_id": 96027
+      }
+    },
+    {
+      "included_subset_sizes": [
+        32,
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.4457752811558578,
+      "phase_0_starcoder": 0.5542247188441423,
+      "phase_1_nemotron_full": 0.0,
+      "phase_1_starcoder": 1.0,
+      "rank": 28,
+      "run_name": "fbl_wsdba_rank028",
+      "selector_seed": 0,
+      "source_idx": 98,
+      "source_run_id": 38,
+      "source_wandb_run_id": "run_00038-2ff003",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.4457752811558578,
+            "starcoder": 0.5542247188441423
+          },
+          "phase_1": {
+            "nemotron_full": 0.0,
+            "starcoder": 1.0
+          }
+        },
+        "run_id": 96028
+      }
+    },
+    {
+      "included_subset_sizes": [
+        32,
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 1.0,
+      "phase_0_starcoder": 0.0,
+      "phase_1_nemotron_full": 0.305489224427211,
+      "phase_1_starcoder": 0.694510775572789,
+      "rank": 29,
+      "run_name": "fbl_wsdba_rank029",
+      "selector_seed": 0,
+      "source_idx": 67,
+      "source_run_id": 7,
+      "source_wandb_run_id": "run_00007-9f2cb6",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          },
+          "phase_1": {
+            "nemotron_full": 0.305489224427211,
+            "starcoder": 0.694510775572789
+          }
+        },
+        "run_id": 96029
+      }
+    },
+    {
+      "included_subset_sizes": [
+        32,
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.0,
+      "phase_0_starcoder": 1.0,
+      "phase_1_nemotron_full": 0.340435400513786,
+      "phase_1_starcoder": 0.6595645994862139,
+      "rank": 30,
+      "run_name": "fbl_wsdba_rank030",
+      "selector_seed": 0,
+      "source_idx": 93,
+      "source_run_id": 33,
+      "source_wandb_run_id": "run_00033-9a2be6",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.0,
+            "starcoder": 1.0
+          },
+          "phase_1": {
+            "nemotron_full": 0.340435400513786,
+            "starcoder": 0.6595645994862139
+          }
+        },
+        "run_id": 96030
+      }
+    },
+    {
+      "included_subset_sizes": [
+        32,
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 1.0,
+      "phase_0_starcoder": 0.0,
+      "phase_1_nemotron_full": 0.975,
+      "phase_1_starcoder": 0.025,
+      "rank": 31,
+      "run_name": "fbl_wsdba_rank031",
+      "selector_seed": 0,
+      "source_idx": 110,
+      "source_run_id": 90010,
+      "source_wandb_run_id": "base_90010-c4b43b",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          },
+          "phase_1": {
+            "nemotron_full": 0.975,
+            "starcoder": 0.025
+          }
+        },
+        "run_id": 96031
+      }
+    },
+    {
+      "included_subset_sizes": [
+        32,
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.5228636386711684,
+      "phase_0_starcoder": 0.4771363613288316,
+      "phase_1_nemotron_full": 0.6674975673088847,
+      "phase_1_starcoder": 0.3325024326911154,
+      "rank": 32,
+      "run_name": "fbl_wsdba_rank032",
+      "selector_seed": 0,
+      "source_idx": 88,
+      "source_run_id": 28,
+      "source_wandb_run_id": "run_00028-0a6eda",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.5228636386711684,
+            "starcoder": 0.4771363613288316
+          },
+          "phase_1": {
+            "nemotron_full": 0.6674975673088847,
+            "starcoder": 0.3325024326911154
+          }
+        },
+        "run_id": 96032
+      }
+    },
+    {
+      "included_subset_sizes": [
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.0,
+      "phase_0_starcoder": 1.0,
+      "phase_1_nemotron_full": 0.8829819414344868,
+      "phase_1_starcoder": 0.1170180585655131,
+      "rank": 33,
+      "run_name": "fbl_wsdba_rank033",
+      "selector_seed": 0,
+      "source_idx": 91,
+      "source_run_id": 31,
+      "source_wandb_run_id": "run_00031-005fbc",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.0,
+            "starcoder": 1.0
+          },
+          "phase_1": {
+            "nemotron_full": 0.8829819414344868,
+            "starcoder": 0.1170180585655131
+          }
+        },
+        "run_id": 96033
+      }
+    },
+    {
+      "included_subset_sizes": [
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.2312454455180997,
+      "phase_0_starcoder": 0.7687545544819003,
+      "phase_1_nemotron_full": 0.9413569388818466,
+      "phase_1_starcoder": 0.0586430611181535,
+      "rank": 34,
+      "run_name": "fbl_wsdba_rank034",
+      "selector_seed": 0,
+      "source_idx": 82,
+      "source_run_id": 22,
+      "source_wandb_run_id": "run_00022-81fdfa",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.2312454455180997,
+            "starcoder": 0.7687545544819003
+          },
+          "phase_1": {
+            "nemotron_full": 0.9413569388818466,
+            "starcoder": 0.0586430611181535
+          }
+        },
+        "run_id": 96034
+      }
+    },
+    {
+      "included_subset_sizes": [
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.7550645535991576,
+      "phase_0_starcoder": 0.2449354464008425,
+      "phase_1_nemotron_full": 0.0,
+      "phase_1_starcoder": 1.0,
+      "rank": 35,
+      "run_name": "fbl_wsdba_rank035",
+      "selector_seed": 0,
+      "source_idx": 66,
+      "source_run_id": 6,
+      "source_wandb_run_id": "run_00006-917c16",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.7550645535991576,
+            "starcoder": 0.2449354464008425
+          },
+          "phase_1": {
+            "nemotron_full": 0.0,
+            "starcoder": 1.0
+          }
+        },
+        "run_id": 96035
+      }
+    },
+    {
+      "included_subset_sizes": [
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 1.0,
+      "phase_0_starcoder": 0.0,
+      "phase_1_nemotron_full": 0.85,
+      "phase_1_starcoder": 0.15,
+      "rank": 36,
+      "run_name": "fbl_wsdba_rank036",
+      "selector_seed": 0,
+      "source_idx": 114,
+      "source_run_id": 90014,
+      "source_wandb_run_id": "base_90014-7a9356",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          },
+          "phase_1": {
+            "nemotron_full": 0.85,
+            "starcoder": 0.15
+          }
+        },
+        "run_id": 96036
+      }
+    },
+    {
+      "included_subset_sizes": [
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.7709173468187216,
+      "phase_0_starcoder": 0.2290826531812785,
+      "phase_1_nemotron_full": 0.8948200882092965,
+      "phase_1_starcoder": 0.1051799117907035,
+      "rank": 37,
+      "run_name": "fbl_wsdba_rank037",
+      "selector_seed": 0,
+      "source_idx": 69,
+      "source_run_id": 9,
+      "source_wandb_run_id": "run_00009-52cfe5",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.7709173468187216,
+            "starcoder": 0.2290826531812785
+          },
+          "phase_1": {
+            "nemotron_full": 0.8948200882092965,
+            "starcoder": 0.1051799117907035
+          }
+        },
+        "run_id": 96037
+      }
+    },
+    {
+      "included_subset_sizes": [
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.5052775253935211,
+      "phase_0_starcoder": 0.4947224746064789,
+      "phase_1_nemotron_full": 1.0,
+      "phase_1_starcoder": 0.0,
+      "rank": 38,
+      "run_name": "fbl_wsdba_rank038",
+      "selector_seed": 0,
+      "source_idx": 8,
+      "source_run_id": 8,
+      "source_wandb_run_id": "run_00008-6af82c",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.5052775253935211,
+            "starcoder": 0.4947224746064789
+          },
+          "phase_1": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          }
+        },
+        "run_id": 96038
+      }
+    },
+    {
+      "included_subset_sizes": [
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 1.0,
+      "phase_0_starcoder": 0.0,
+      "phase_1_nemotron_full": 0.4561021936614428,
+      "phase_1_starcoder": 0.5438978063385572,
+      "rank": 39,
+      "run_name": "fbl_wsdba_rank039",
+      "selector_seed": 0,
+      "source_idx": 41,
+      "source_run_id": 41,
+      "source_wandb_run_id": "run_00041-caedc7",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          },
+          "phase_1": {
+            "nemotron_full": 0.4561021936614428,
+            "starcoder": 0.5438978063385572
+          }
+        },
+        "run_id": 96039
+      }
+    },
+    {
+      "included_subset_sizes": [
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.7950754672934174,
+      "phase_0_starcoder": 0.2049245327065826,
+      "phase_1_nemotron_full": 0.0915796784882811,
+      "phase_1_starcoder": 0.9084203215117188,
+      "rank": 40,
+      "run_name": "fbl_wsdba_rank040",
+      "selector_seed": 0,
+      "source_idx": 102,
+      "source_run_id": 42,
+      "source_wandb_run_id": "run_00042-0a543a",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.7950754672934174,
+            "starcoder": 0.2049245327065826
+          },
+          "phase_1": {
+            "nemotron_full": 0.0915796784882811,
+            "starcoder": 0.9084203215117188
+          }
+        },
+        "run_id": 96040
+      }
+    },
+    {
+      "included_subset_sizes": [
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.6908262851481639,
+      "phase_0_starcoder": 0.3091737148518361,
+      "phase_1_nemotron_full": 0.48623826911072,
+      "phase_1_starcoder": 0.5137617308892801,
+      "rank": 41,
+      "run_name": "fbl_wsdba_rank041",
+      "selector_seed": 0,
+      "source_idx": 80,
+      "source_run_id": 20,
+      "source_wandb_run_id": "run_00020-eee85a",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.6908262851481639,
+            "starcoder": 0.3091737148518361
+          },
+          "phase_1": {
+            "nemotron_full": 0.48623826911072,
+            "starcoder": 0.5137617308892801
+          }
+        },
+        "run_id": 96041
+      }
+    },
+    {
+      "included_subset_sizes": [
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.2064692713186991,
+      "phase_0_starcoder": 0.7935307286813009,
+      "phase_1_nemotron_full": 0.3541024802813426,
+      "phase_1_starcoder": 0.6458975197186573,
+      "rank": 42,
+      "run_name": "fbl_wsdba_rank042",
+      "selector_seed": 0,
+      "source_idx": 84,
+      "source_run_id": 24,
+      "source_wandb_run_id": "run_00024-e0aa77",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.2064692713186991,
+            "starcoder": 0.7935307286813009
+          },
+          "phase_1": {
+            "nemotron_full": 0.3541024802813426,
+            "starcoder": 0.6458975197186573
+          }
+        },
+        "run_id": 96042
+      }
+    },
+    {
+      "included_subset_sizes": [
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.7983297288955992,
+      "phase_0_starcoder": 0.2016702711044007,
+      "phase_1_nemotron_full": 1.0,
+      "phase_1_starcoder": 0.0,
+      "rank": 43,
+      "run_name": "fbl_wsdba_rank043",
+      "selector_seed": 0,
+      "source_idx": 48,
+      "source_run_id": 48,
+      "source_wandb_run_id": "run_00048-5709ea",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.7983297288955992,
+            "starcoder": 0.2016702711044007
+          },
+          "phase_1": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          }
+        },
+        "run_id": 96043
+      }
+    },
+    {
+      "included_subset_sizes": [
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.99,
+      "phase_0_starcoder": 0.01,
+      "phase_1_nemotron_full": 0.2,
+      "phase_1_starcoder": 0.8,
+      "rank": 44,
+      "run_name": "fbl_wsdba_rank044",
+      "selector_seed": 0,
+      "source_idx": 52,
+      "source_run_id": 90002,
+      "source_wandb_run_id": "base_90002-4eddd2",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.99,
+            "starcoder": 0.01
+          },
+          "phase_1": {
+            "nemotron_full": 0.2,
+            "starcoder": 0.8
+          }
+        },
+        "run_id": 96044
+      }
+    },
+    {
+      "included_subset_sizes": [
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.8291950905724041,
+      "phase_0_starcoder": 0.1708049094275958,
+      "phase_1_nemotron_full": 0.7922372135848303,
+      "phase_1_starcoder": 0.2077627864151696,
+      "rank": 45,
+      "run_name": "fbl_wsdba_rank045",
+      "selector_seed": 0,
+      "source_idx": 86,
+      "source_run_id": 26,
+      "source_wandb_run_id": "run_00026-50f614",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.8291950905724041,
+            "starcoder": 0.1708049094275958
+          },
+          "phase_1": {
+            "nemotron_full": 0.7922372135848303,
+            "starcoder": 0.2077627864151696
+          }
+        },
+        "run_id": 96045
+      }
+    },
+    {
+      "included_subset_sizes": [
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 1.0,
+      "phase_0_starcoder": 0.0,
+      "phase_1_nemotron_full": 0.8405184314179429,
+      "phase_1_starcoder": 0.1594815685820571,
+      "rank": 46,
+      "run_name": "fbl_wsdba_rank046",
+      "selector_seed": 0,
+      "source_idx": 6,
+      "source_run_id": 6,
+      "source_wandb_run_id": "run_00006-07b728",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          },
+          "phase_1": {
+            "nemotron_full": 0.8405184314179429,
+            "starcoder": 0.1594815685820571
+          }
+        },
+        "run_id": 96046
+      }
+    },
+    {
+      "included_subset_sizes": [
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.5622741302018189,
+      "phase_0_starcoder": 0.4377258697981811,
+      "phase_1_nemotron_full": 1.0,
+      "phase_1_starcoder": 0.0,
+      "rank": 47,
+      "run_name": "fbl_wsdba_rank047",
+      "selector_seed": 0,
+      "source_idx": 47,
+      "source_run_id": 47,
+      "source_wandb_run_id": "run_00047-40ae9d",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.5622741302018189,
+            "starcoder": 0.4377258697981811
+          },
+          "phase_1": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          }
+        },
+        "run_id": 96047
+      }
+    },
+    {
+      "included_subset_sizes": [
+        48,
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.9725,
+      "phase_0_starcoder": 0.0275,
+      "phase_1_nemotron_full": 0.6874,
+      "phase_1_starcoder": 0.3126,
+      "rank": 48,
+      "run_name": "fbl_wsdba_rank048",
+      "selector_seed": 0,
+      "source_idx": 57,
+      "source_run_id": 90007,
+      "source_wandb_run_id": "base_90007-b87b92",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.9725,
+            "starcoder": 0.0275
+          },
+          "phase_1": {
+            "nemotron_full": 0.6874,
+            "starcoder": 0.3126
+          }
+        },
+        "run_id": 96048
+      }
+    },
+    {
+      "included_subset_sizes": [
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.0621296693789745,
+      "phase_0_starcoder": 0.9378703306210256,
+      "phase_1_nemotron_full": 0.6787746659392957,
+      "phase_1_starcoder": 0.3212253340607043,
+      "rank": 49,
+      "run_name": "fbl_wsdba_rank049",
+      "selector_seed": 0,
+      "source_idx": 75,
+      "source_run_id": 15,
+      "source_wandb_run_id": "run_00015-9ead08",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.0621296693789745,
+            "starcoder": 0.9378703306210256
+          },
+          "phase_1": {
+            "nemotron_full": 0.6787746659392957,
+            "starcoder": 0.3212253340607043
+          }
+        },
+        "run_id": 96049
+      }
+    },
+    {
+      "included_subset_sizes": [
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.4251683353008047,
+      "phase_0_starcoder": 0.5748316646991953,
+      "phase_1_nemotron_full": 0.2712882176930277,
+      "phase_1_starcoder": 0.7287117823069723,
+      "rank": 50,
+      "run_name": "fbl_wsdba_rank050",
+      "selector_seed": 0,
+      "source_idx": 89,
+      "source_run_id": 29,
+      "source_wandb_run_id": "run_00029-0f18d8",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.4251683353008047,
+            "starcoder": 0.5748316646991953
+          },
+          "phase_1": {
+            "nemotron_full": 0.2712882176930277,
+            "starcoder": 0.7287117823069723
+          }
+        },
+        "run_id": 96050
+      }
+    },
+    {
+      "included_subset_sizes": [
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.936768242742394,
+      "phase_0_starcoder": 0.0632317572576058,
+      "phase_1_nemotron_full": 0.3601234350503365,
+      "phase_1_starcoder": 0.6398765649496635,
+      "rank": 51,
+      "run_name": "fbl_wsdba_rank051",
+      "selector_seed": 0,
+      "source_idx": 79,
+      "source_run_id": 19,
+      "source_wandb_run_id": "run_00019-12159e",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.936768242742394,
+            "starcoder": 0.0632317572576058
+          },
+          "phase_1": {
+            "nemotron_full": 0.3601234350503365,
+            "starcoder": 0.6398765649496635
+          }
+        },
+        "run_id": 96051
+      }
+    },
+    {
+      "included_subset_sizes": [
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 1.0,
+      "phase_0_starcoder": 0.0,
+      "phase_1_nemotron_full": 0.8328192961514238,
+      "phase_1_starcoder": 0.1671807038485762,
+      "rank": 52,
+      "run_name": "fbl_wsdba_rank052",
+      "selector_seed": 0,
+      "source_idx": 18,
+      "source_run_id": 18,
+      "source_wandb_run_id": "run_00018-549800",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          },
+          "phase_1": {
+            "nemotron_full": 0.8328192961514238,
+            "starcoder": 0.1671807038485762
+          }
+        },
+        "run_id": 96052
+      }
+    },
+    {
+      "included_subset_sizes": [
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.5834839720606992,
+      "phase_0_starcoder": 0.4165160279393008,
+      "phase_1_nemotron_full": 1.0,
+      "phase_1_starcoder": 0.0,
+      "rank": 53,
+      "run_name": "fbl_wsdba_rank053",
+      "selector_seed": 0,
+      "source_idx": 39,
+      "source_run_id": 39,
+      "source_wandb_run_id": "run_00039-579140",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.5834839720606992,
+            "starcoder": 0.4165160279393008
+          },
+          "phase_1": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          }
+        },
+        "run_id": 96053
+      }
+    },
+    {
+      "included_subset_sizes": [
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.5997217685936601,
+      "phase_0_starcoder": 0.4002782314063399,
+      "phase_1_nemotron_full": 0.0647274727785204,
+      "phase_1_starcoder": 0.9352725272214796,
+      "rank": 54,
+      "run_name": "fbl_wsdba_rank054",
+      "selector_seed": 0,
+      "source_idx": 109,
+      "source_run_id": 49,
+      "source_wandb_run_id": "run_00049-1193d0",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.5997217685936601,
+            "starcoder": 0.4002782314063399
+          },
+          "phase_1": {
+            "nemotron_full": 0.0647274727785204,
+            "starcoder": 0.9352725272214796
+          }
+        },
+        "run_id": 96054
+      }
+    },
+    {
+      "included_subset_sizes": [
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.4258291928655903,
+      "phase_0_starcoder": 0.5741708071344097,
+      "phase_1_nemotron_full": 0.6869275882361532,
+      "phase_1_starcoder": 0.3130724117638468,
+      "rank": 55,
+      "run_name": "fbl_wsdba_rank055",
+      "selector_seed": 0,
+      "source_idx": 106,
+      "source_run_id": 46,
+      "source_wandb_run_id": "run_00046-1cc7ae",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.4258291928655903,
+            "starcoder": 0.5741708071344097
+          },
+          "phase_1": {
+            "nemotron_full": 0.6869275882361532,
+            "starcoder": 0.3130724117638468
+          }
+        },
+        "run_id": 96055
+      }
+    },
+    {
+      "included_subset_sizes": [
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 1.0,
+      "phase_0_starcoder": 0.0,
+      "phase_1_nemotron_full": 0.4764963756336087,
+      "phase_1_starcoder": 0.5235036243663914,
+      "rank": 56,
+      "run_name": "fbl_wsdba_rank056",
+      "selector_seed": 0,
+      "source_idx": 22,
+      "source_run_id": 22,
+      "source_wandb_run_id": "run_00022-262a8f",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          },
+          "phase_1": {
+            "nemotron_full": 0.4764963756336087,
+            "starcoder": 0.5235036243663914
+          }
+        },
+        "run_id": 96056
+      }
+    },
+    {
+      "included_subset_sizes": [
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.7134676735949325,
+      "phase_0_starcoder": 0.2865323264050675,
+      "phase_1_nemotron_full": 0.6608505330601209,
+      "phase_1_starcoder": 0.3391494669398791,
+      "rank": 57,
+      "run_name": "fbl_wsdba_rank057",
+      "selector_seed": 0,
+      "source_idx": 97,
+      "source_run_id": 37,
+      "source_wandb_run_id": "run_00037-c4505c",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.7134676735949325,
+            "starcoder": 0.2865323264050675
+          },
+          "phase_1": {
+            "nemotron_full": 0.6608505330601209,
+            "starcoder": 0.3391494669398791
+          }
+        },
+        "run_id": 96057
+      }
+    },
+    {
+      "included_subset_sizes": [
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.7822197483744548,
+      "phase_0_starcoder": 0.2177802516255451,
+      "phase_1_nemotron_full": 1.0,
+      "phase_1_starcoder": 0.0,
+      "rank": 58,
+      "run_name": "fbl_wsdba_rank058",
+      "selector_seed": 0,
+      "source_idx": 30,
+      "source_run_id": 30,
+      "source_wandb_run_id": "run_00030-41922a",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.7822197483744548,
+            "starcoder": 0.2177802516255451
+          },
+          "phase_1": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          }
+        },
+        "run_id": 96058
+      }
+    },
+    {
+      "included_subset_sizes": [
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 1.0,
+      "phase_0_starcoder": 0.0,
+      "phase_1_nemotron_full": 0.5021873370291726,
+      "phase_1_starcoder": 0.4978126629708273,
+      "rank": 59,
+      "run_name": "fbl_wsdba_rank059",
+      "selector_seed": 0,
+      "source_idx": 23,
+      "source_run_id": 23,
+      "source_wandb_run_id": "run_00023-c9d911",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          },
+          "phase_1": {
+            "nemotron_full": 0.5021873370291726,
+            "starcoder": 0.4978126629708273
+          }
+        },
+        "run_id": 96059
+      }
+    },
+    {
+      "included_subset_sizes": [
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.4389184157652767,
+      "phase_0_starcoder": 0.5610815842347233,
+      "phase_1_nemotron_full": 0.1736102678820754,
+      "phase_1_starcoder": 0.8263897321179244,
+      "rank": 60,
+      "run_name": "fbl_wsdba_rank060",
+      "selector_seed": 0,
+      "source_idx": 81,
+      "source_run_id": 21,
+      "source_wandb_run_id": "run_00021-add2a0",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.4389184157652767,
+            "starcoder": 0.5610815842347233
+          },
+          "phase_1": {
+            "nemotron_full": 0.1736102678820754,
+            "starcoder": 0.8263897321179244
+          }
+        },
+        "run_id": 96060
+      }
+    },
+    {
+      "included_subset_sizes": [
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 1.0,
+      "phase_0_starcoder": 0.0,
+      "phase_1_nemotron_full": 0.8247670017424007,
+      "phase_1_starcoder": 0.1752329982575993,
+      "rank": 61,
+      "run_name": "fbl_wsdba_rank061",
+      "selector_seed": 0,
+      "source_idx": 42,
+      "source_run_id": 42,
+      "source_wandb_run_id": "run_00042-665309",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          },
+          "phase_1": {
+            "nemotron_full": 0.8247670017424007,
+            "starcoder": 0.1752329982575993
+          }
+        },
+        "run_id": 96061
+      }
+    },
+    {
+      "included_subset_sizes": [
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.3830060635227112,
+      "phase_0_starcoder": 0.6169939364772887,
+      "phase_1_nemotron_full": 0.9396877489067428,
+      "phase_1_starcoder": 0.0603122510932571,
+      "rank": 62,
+      "run_name": "fbl_wsdba_rank062",
+      "selector_seed": 0,
+      "source_idx": 73,
+      "source_run_id": 13,
+      "source_wandb_run_id": "run_00013-e5601b",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.3830060635227112,
+            "starcoder": 0.6169939364772887
+          },
+          "phase_1": {
+            "nemotron_full": 0.9396877489067428,
+            "starcoder": 0.0603122510932571
+          }
+        },
+        "run_id": 96062
+      }
+    },
+    {
+      "included_subset_sizes": [
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.6364528489932603,
+      "phase_0_starcoder": 0.3635471510067398,
+      "phase_1_nemotron_full": 0.7112723917088487,
+      "phase_1_starcoder": 0.2887276082911513,
+      "rank": 63,
+      "run_name": "fbl_wsdba_rank063",
+      "selector_seed": 0,
+      "source_idx": 104,
+      "source_run_id": 44,
+      "source_wandb_run_id": "run_00044-5504f6",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.6364528489932603,
+            "starcoder": 0.3635471510067398
+          },
+          "phase_1": {
+            "nemotron_full": 0.7112723917088487,
+            "starcoder": 0.2887276082911513
+          }
+        },
+        "run_id": 96063
+      }
+    },
+    {
+      "included_subset_sizes": [
+        64,
+        96
+      ],
+      "phase_0_nemotron_full": 0.6840791407997007,
+      "phase_0_starcoder": 0.3159208592002993,
+      "phase_1_nemotron_full": 1.0,
+      "phase_1_starcoder": 0.0,
+      "rank": 64,
+      "run_name": "fbl_wsdba_rank064",
+      "selector_seed": 0,
+      "source_idx": 32,
+      "source_run_id": 32,
+      "source_wandb_run_id": "run_00032-1f9178",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.6840791407997007,
+            "starcoder": 0.3159208592002993
+          },
+          "phase_1": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          }
+        },
+        "run_id": 96064
+      }
+    },
+    {
+      "included_subset_sizes": [
+        96
+      ],
+      "phase_0_nemotron_full": 1.0,
+      "phase_0_starcoder": 0.0,
+      "phase_1_nemotron_full": 0.5109126865083728,
+      "phase_1_starcoder": 0.4890873134916272,
+      "rank": 65,
+      "run_name": "fbl_wsdba_rank065",
+      "selector_seed": 0,
+      "source_idx": 15,
+      "source_run_id": 15,
+      "source_wandb_run_id": "run_00015-cb5af9",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          },
+          "phase_1": {
+            "nemotron_full": 0.5109126865083728,
+            "starcoder": 0.4890873134916272
+          }
+        },
+        "run_id": 96065
+      }
+    },
+    {
+      "included_subset_sizes": [
+        96
+      ],
+      "phase_0_nemotron_full": 0.0726142884380043,
+      "phase_0_starcoder": 0.9273857115619956,
+      "phase_1_nemotron_full": 0.4650714855457238,
+      "phase_1_starcoder": 0.5349285144542762,
+      "rank": 66,
+      "run_name": "fbl_wsdba_rank066",
+      "selector_seed": 0,
+      "source_idx": 105,
+      "source_run_id": 45,
+      "source_wandb_run_id": "run_00045-7621d2",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.0726142884380043,
+            "starcoder": 0.9273857115619956
+          },
+          "phase_1": {
+            "nemotron_full": 0.4650714855457238,
+            "starcoder": 0.5349285144542762
+          }
+        },
+        "run_id": 96066
+      }
+    },
+    {
+      "included_subset_sizes": [
+        96
+      ],
+      "phase_0_nemotron_full": 0.7726653607827009,
+      "phase_0_starcoder": 0.2273346392172991,
+      "phase_1_nemotron_full": 0.7167920234069234,
+      "phase_1_starcoder": 0.2832079765930766,
+      "rank": 67,
+      "run_name": "fbl_wsdba_rank067",
+      "selector_seed": 0,
+      "source_idx": 83,
+      "source_run_id": 23,
+      "source_wandb_run_id": "run_00023-13e8ba",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.7726653607827009,
+            "starcoder": 0.2273346392172991
+          },
+          "phase_1": {
+            "nemotron_full": 0.7167920234069234,
+            "starcoder": 0.2832079765930766
+          }
+        },
+        "run_id": 96067
+      }
+    },
+    {
+      "included_subset_sizes": [
+        96
+      ],
+      "phase_0_nemotron_full": 0.7577459345340817,
+      "phase_0_starcoder": 0.2422540654659183,
+      "phase_1_nemotron_full": 1.0,
+      "phase_1_starcoder": 0.0,
+      "rank": 68,
+      "run_name": "fbl_wsdba_rank068",
+      "selector_seed": 0,
+      "source_idx": 9,
+      "source_run_id": 9,
+      "source_wandb_run_id": "run_00009-6b00fa",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.7577459345340817,
+            "starcoder": 0.2422540654659183
+          },
+          "phase_1": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          }
+        },
+        "run_id": 96068
+      }
+    },
+    {
+      "included_subset_sizes": [
+        96
+      ],
+      "phase_0_nemotron_full": 0.945036929256838,
+      "phase_0_starcoder": 0.054963070743162,
+      "phase_1_nemotron_full": 0.6658917310579927,
+      "phase_1_starcoder": 0.3341082689420073,
+      "rank": 69,
+      "run_name": "fbl_wsdba_rank069",
+      "selector_seed": 0,
+      "source_idx": 46,
+      "source_run_id": 46,
+      "source_wandb_run_id": "run_00046-97ca1f",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.945036929256838,
+            "starcoder": 0.054963070743162
+          },
+          "phase_1": {
+            "nemotron_full": 0.6658917310579927,
+            "starcoder": 0.3341082689420073
+          }
+        },
+        "run_id": 96069
+      }
+    },
+    {
+      "included_subset_sizes": [
+        96
+      ],
+      "phase_0_nemotron_full": 0.99,
+      "phase_0_starcoder": 0.01,
+      "phase_1_nemotron_full": 0.5,
+      "phase_1_starcoder": 0.5,
+      "rank": 70,
+      "run_name": "fbl_wsdba_rank070",
+      "selector_seed": 0,
+      "source_idx": 54,
+      "source_run_id": 90004,
+      "source_wandb_run_id": "base_90004-6cd837",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.99,
+            "starcoder": 0.01
+          },
+          "phase_1": {
+            "nemotron_full": 0.5,
+            "starcoder": 0.5
+          }
+        },
+        "run_id": 96070
+      }
+    },
+    {
+      "included_subset_sizes": [
+        96
+      ],
+      "phase_0_nemotron_full": 0.2006976686258785,
+      "phase_0_starcoder": 0.7993023313741215,
+      "phase_1_nemotron_full": 0.8253156519901539,
+      "phase_1_starcoder": 0.1746843480098462,
+      "rank": 71,
+      "run_name": "fbl_wsdba_rank071",
+      "selector_seed": 0,
+      "source_idx": 76,
+      "source_run_id": 16,
+      "source_wandb_run_id": "run_00016-eedaf8",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.2006976686258785,
+            "starcoder": 0.7993023313741215
+          },
+          "phase_1": {
+            "nemotron_full": 0.8253156519901539,
+            "starcoder": 0.1746843480098462
+          }
+        },
+        "run_id": 96071
+      }
+    },
+    {
+      "included_subset_sizes": [
+        96
+      ],
+      "phase_0_nemotron_full": 1.0,
+      "phase_0_starcoder": 0.0,
+      "phase_1_nemotron_full": 0.814,
+      "phase_1_starcoder": 0.186,
+      "rank": 72,
+      "run_name": "fbl_wsdba_rank072",
+      "selector_seed": 0,
+      "source_idx": 59,
+      "source_run_id": 90009,
+      "source_wandb_run_id": "base_90009-b615cf",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          },
+          "phase_1": {
+            "nemotron_full": 0.814,
+            "starcoder": 0.186
+          }
+        },
+        "run_id": 96072
+      }
+    },
+    {
+      "included_subset_sizes": [
+        96
+      ],
+      "phase_0_nemotron_full": 0.2253750654951136,
+      "phase_0_starcoder": 0.7746249345048863,
+      "phase_1_nemotron_full": 0.5474117755711035,
+      "phase_1_starcoder": 0.4525882244288965,
+      "rank": 73,
+      "run_name": "fbl_wsdba_rank073",
+      "selector_seed": 0,
+      "source_idx": 107,
+      "source_run_id": 47,
+      "source_wandb_run_id": "run_00047-4a32c4",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.2253750654951136,
+            "starcoder": 0.7746249345048863
+          },
+          "phase_1": {
+            "nemotron_full": 0.5474117755711035,
+            "starcoder": 0.4525882244288965
+          }
+        },
+        "run_id": 96073
+      }
+    },
+    {
+      "included_subset_sizes": [
+        96
+      ],
+      "phase_0_nemotron_full": 0.7001890173358573,
+      "phase_0_starcoder": 0.2998109826641427,
+      "phase_1_nemotron_full": 0.7719483514184416,
+      "phase_1_starcoder": 0.2280516485815584,
+      "rank": 74,
+      "run_name": "fbl_wsdba_rank074",
+      "selector_seed": 0,
+      "source_idx": 65,
+      "source_run_id": 5,
+      "source_wandb_run_id": "run_00005-922c8d",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.7001890173358573,
+            "starcoder": 0.2998109826641427
+          },
+          "phase_1": {
+            "nemotron_full": 0.7719483514184416,
+            "starcoder": 0.2280516485815584
+          }
+        },
+        "run_id": 96074
+      }
+    },
+    {
+      "included_subset_sizes": [
+        96
+      ],
+      "phase_0_nemotron_full": 1.0,
+      "phase_0_starcoder": 0.0,
+      "phase_1_nemotron_full": 0.5153850962379678,
+      "phase_1_starcoder": 0.4846149037620321,
+      "rank": 75,
+      "run_name": "fbl_wsdba_rank075",
+      "selector_seed": 0,
+      "source_idx": 26,
+      "source_run_id": 26,
+      "source_wandb_run_id": "run_00026-4079c7",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          },
+          "phase_1": {
+            "nemotron_full": 0.5153850962379678,
+            "starcoder": 0.4846149037620321
+          }
+        },
+        "run_id": 96075
+      }
+    },
+    {
+      "included_subset_sizes": [
+        96
+      ],
+      "phase_0_nemotron_full": 1.0,
+      "phase_0_starcoder": 0.0,
+      "phase_1_nemotron_full": 0.8055215056876613,
+      "phase_1_starcoder": 0.1944784943123386,
+      "rank": 76,
+      "run_name": "fbl_wsdba_rank076",
+      "selector_seed": 0,
+      "source_idx": 7,
+      "source_run_id": 7,
+      "source_wandb_run_id": "run_00007-ef86fb",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          },
+          "phase_1": {
+            "nemotron_full": 0.8055215056876613,
+            "starcoder": 0.1944784943123386
+          }
+        },
+        "run_id": 96076
+      }
+    },
+    {
+      "included_subset_sizes": [
+        96
+      ],
+      "phase_0_nemotron_full": 0.7374458942379922,
+      "phase_0_starcoder": 0.2625541057620078,
+      "phase_1_nemotron_full": 0.5705789660985753,
+      "phase_1_starcoder": 0.4294210339014248,
+      "rank": 77,
+      "run_name": "fbl_wsdba_rank077",
+      "selector_seed": 0,
+      "source_idx": 61,
+      "source_run_id": 1,
+      "source_wandb_run_id": "run_00001-80fbb6",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.7374458942379922,
+            "starcoder": 0.2625541057620078
+          },
+          "phase_1": {
+            "nemotron_full": 0.5705789660985753,
+            "starcoder": 0.4294210339014248
+          }
+        },
+        "run_id": 96077
+      }
+    },
+    {
+      "included_subset_sizes": [
+        96
+      ],
+      "phase_0_nemotron_full": 0.2308726797912192,
+      "phase_0_starcoder": 0.7691273202087807,
+      "phase_1_nemotron_full": 0.6871164434921494,
+      "phase_1_starcoder": 0.3128835565078506,
+      "rank": 78,
+      "run_name": "fbl_wsdba_rank078",
+      "selector_seed": 0,
+      "source_idx": 90,
+      "source_run_id": 30,
+      "source_wandb_run_id": "run_00030-5eb52f",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.2308726797912192,
+            "starcoder": 0.7691273202087807
+          },
+          "phase_1": {
+            "nemotron_full": 0.6871164434921494,
+            "starcoder": 0.3128835565078506
+          }
+        },
+        "run_id": 96078
+      }
+    },
+    {
+      "included_subset_sizes": [
+        96
+      ],
+      "phase_0_nemotron_full": 1.0,
+      "phase_0_starcoder": 0.0,
+      "phase_1_nemotron_full": 0.5377187187328332,
+      "phase_1_starcoder": 0.4622812812671668,
+      "rank": 79,
+      "run_name": "fbl_wsdba_rank079",
+      "selector_seed": 0,
+      "source_idx": 21,
+      "source_run_id": 21,
+      "source_wandb_run_id": "run_00021-0988a3",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          },
+          "phase_1": {
+            "nemotron_full": 0.5377187187328332,
+            "starcoder": 0.4622812812671668
+          }
+        },
+        "run_id": 96079
+      }
+    },
+    {
+      "included_subset_sizes": [
+        96
+      ],
+      "phase_0_nemotron_full": 0.8862658498898589,
+      "phase_0_starcoder": 0.1137341501101411,
+      "phase_1_nemotron_full": 0.6796567236805446,
+      "phase_1_starcoder": 0.3203432763194553,
+      "rank": 80,
+      "run_name": "fbl_wsdba_rank080",
+      "selector_seed": 0,
+      "source_idx": 44,
+      "source_run_id": 44,
+      "source_wandb_run_id": "run_00044-e72e6b",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.8862658498898589,
+            "starcoder": 0.1137341501101411
+          },
+          "phase_1": {
+            "nemotron_full": 0.6796567236805446,
+            "starcoder": 0.3203432763194553
+          }
+        },
+        "run_id": 96080
+      }
+    },
+    {
+      "included_subset_sizes": [
+        96
+      ],
+      "phase_0_nemotron_full": 0.6391103387943088,
+      "phase_0_starcoder": 0.3608896612056912,
+      "phase_1_nemotron_full": 0.1884502298317404,
+      "phase_1_starcoder": 0.8115497701682596,
+      "rank": 81,
+      "run_name": "fbl_wsdba_rank081",
+      "selector_seed": 0,
+      "source_idx": 92,
+      "source_run_id": 32,
+      "source_wandb_run_id": "run_00032-19187b",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.6391103387943088,
+            "starcoder": 0.3608896612056912
+          },
+          "phase_1": {
+            "nemotron_full": 0.1884502298317404,
+            "starcoder": 0.8115497701682596
+          }
+        },
+        "run_id": 96081
+      }
+    },
+    {
+      "included_subset_sizes": [
+        96
+      ],
+      "phase_0_nemotron_full": 1.0,
+      "phase_0_starcoder": 0.0,
+      "phase_1_nemotron_full": 0.8013376580968571,
+      "phase_1_starcoder": 0.1986623419031429,
+      "rank": 82,
+      "run_name": "fbl_wsdba_rank082",
+      "selector_seed": 0,
+      "source_idx": 20,
+      "source_run_id": 20,
+      "source_wandb_run_id": "run_00020-dbabe5",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          },
+          "phase_1": {
+            "nemotron_full": 0.8013376580968571,
+            "starcoder": 0.1986623419031429
+          }
+        },
+        "run_id": 96082
+      }
+    },
+    {
+      "included_subset_sizes": [
+        96
+      ],
+      "phase_0_nemotron_full": 0.9347,
+      "phase_0_starcoder": 0.0653,
+      "phase_1_nemotron_full": 0.6536,
+      "phase_1_starcoder": 0.3464,
+      "rank": 83,
+      "run_name": "fbl_wsdba_rank083",
+      "selector_seed": 0,
+      "source_idx": 58,
+      "source_run_id": 90008,
+      "source_wandb_run_id": "base_90008-3cb3be",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.9347,
+            "starcoder": 0.0653
+          },
+          "phase_1": {
+            "nemotron_full": 0.6536,
+            "starcoder": 0.3464
+          }
+        },
+        "run_id": 96083
+      }
+    },
+    {
+      "included_subset_sizes": [
+        96
+      ],
+      "phase_0_nemotron_full": 0.3965192662182392,
+      "phase_0_starcoder": 0.6034807337817608,
+      "phase_1_nemotron_full": 0.7705118852110492,
+      "phase_1_starcoder": 0.2294881147889508,
+      "rank": 84,
+      "run_name": "fbl_wsdba_rank084",
+      "selector_seed": 0,
+      "source_idx": 95,
+      "source_run_id": 35,
+      "source_wandb_run_id": "run_00035-431a0e",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.3965192662182392,
+            "starcoder": 0.6034807337817608
+          },
+          "phase_1": {
+            "nemotron_full": 0.7705118852110492,
+            "starcoder": 0.2294881147889508
+          }
+        },
+        "run_id": 96084
+      }
+    },
+    {
+      "included_subset_sizes": [
+        96
+      ],
+      "phase_0_nemotron_full": 1.0,
+      "phase_0_starcoder": 0.0,
+      "phase_1_nemotron_full": 0.554299250982473,
+      "phase_1_starcoder": 0.445700749017527,
+      "rank": 85,
+      "run_name": "fbl_wsdba_rank085",
+      "selector_seed": 0,
+      "source_idx": 19,
+      "source_run_id": 19,
+      "source_wandb_run_id": "run_00019-15cfa4",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          },
+          "phase_1": {
+            "nemotron_full": 0.554299250982473,
+            "starcoder": 0.445700749017527
+          }
+        },
+        "run_id": 96085
+      }
+    },
+    {
+      "included_subset_sizes": [
+        96
+      ],
+      "phase_0_nemotron_full": 0.697819875971697,
+      "phase_0_starcoder": 0.3021801240283029,
+      "phase_1_nemotron_full": 0.3207304082846747,
+      "phase_1_starcoder": 0.6792695917153253,
+      "rank": 86,
+      "run_name": "fbl_wsdba_rank086",
+      "selector_seed": 0,
+      "source_idx": 108,
+      "source_run_id": 48,
+      "source_wandb_run_id": "run_00048-e83d12",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.697819875971697,
+            "starcoder": 0.3021801240283029
+          },
+          "phase_1": {
+            "nemotron_full": 0.3207304082846747,
+            "starcoder": 0.6792695917153253
+          }
+        },
+        "run_id": 96086
+      }
+    },
+    {
+      "included_subset_sizes": [
+        96
+      ],
+      "phase_0_nemotron_full": 1.0,
+      "phase_0_starcoder": 0.0,
+      "phase_1_nemotron_full": 0.5627772448863854,
+      "phase_1_starcoder": 0.4372227551136147,
+      "rank": 87,
+      "run_name": "fbl_wsdba_rank087",
+      "selector_seed": 0,
+      "source_idx": 1,
+      "source_run_id": 1,
+      "source_wandb_run_id": "run_00001-eefd2b",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          },
+          "phase_1": {
+            "nemotron_full": 0.5627772448863854,
+            "starcoder": 0.4372227551136147
+          }
+        },
+        "run_id": 96087
+      }
+    },
+    {
+      "included_subset_sizes": [
+        96
+      ],
+      "phase_0_nemotron_full": 0.5074732199780895,
+      "phase_0_starcoder": 0.4925267800219105,
+      "phase_1_nemotron_full": 0.7649373432198752,
+      "phase_1_starcoder": 0.2350626567801249,
+      "rank": 88,
+      "run_name": "fbl_wsdba_rank088",
+      "selector_seed": 0,
+      "source_idx": 103,
+      "source_run_id": 43,
+      "source_wandb_run_id": "run_00043-bd8036",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.5074732199780895,
+            "starcoder": 0.4925267800219105
+          },
+          "phase_1": {
+            "nemotron_full": 0.7649373432198752,
+            "starcoder": 0.2350626567801249
+          }
+        },
+        "run_id": 96088
+      }
+    },
+    {
+      "included_subset_sizes": [
+        96
+      ],
+      "phase_0_nemotron_full": 1.0,
+      "phase_0_starcoder": 0.0,
+      "phase_1_nemotron_full": 0.7906426743744428,
+      "phase_1_starcoder": 0.2093573256255571,
+      "rank": 89,
+      "run_name": "fbl_wsdba_rank089",
+      "selector_seed": 0,
+      "source_idx": 2,
+      "source_run_id": 2,
+      "source_wandb_run_id": "run_00002-b6d9e3",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          },
+          "phase_1": {
+            "nemotron_full": 0.7906426743744428,
+            "starcoder": 0.2093573256255571
+          }
+        },
+        "run_id": 96089
+      }
+    },
+    {
+      "included_subset_sizes": [
+        96
+      ],
+      "phase_0_nemotron_full": 1.0,
+      "phase_0_starcoder": 0.0,
+      "phase_1_nemotron_full": 0.568523933274793,
+      "phase_1_starcoder": 0.431476066725207,
+      "rank": 90,
+      "run_name": "fbl_wsdba_rank090",
+      "selector_seed": 0,
+      "source_idx": 28,
+      "source_run_id": 28,
+      "source_wandb_run_id": "run_00028-fb5484",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          },
+          "phase_1": {
+            "nemotron_full": 0.568523933274793,
+            "starcoder": 0.431476066725207
+          }
+        },
+        "run_id": 96090
+      }
+    },
+    {
+      "included_subset_sizes": [
+        96
+      ],
+      "phase_0_nemotron_full": 0.4827824658613658,
+      "phase_0_starcoder": 0.5172175341386341,
+      "phase_1_nemotron_full": 0.909297855065567,
+      "phase_1_starcoder": 0.090702144934433,
+      "rank": 91,
+      "run_name": "fbl_wsdba_rank091",
+      "selector_seed": 0,
+      "source_idx": 96,
+      "source_run_id": 36,
+      "source_wandb_run_id": "run_00036-543078",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.4827824658613658,
+            "starcoder": 0.5172175341386341
+          },
+          "phase_1": {
+            "nemotron_full": 0.909297855065567,
+            "starcoder": 0.090702144934433
+          }
+        },
+        "run_id": 96091
+      }
+    },
+    {
+      "included_subset_sizes": [
+        96
+      ],
+      "phase_0_nemotron_full": 1.0,
+      "phase_0_starcoder": 0.0,
+      "phase_1_nemotron_full": 0.7839558669191322,
+      "phase_1_starcoder": 0.2160441330808679,
+      "rank": 92,
+      "run_name": "fbl_wsdba_rank092",
+      "selector_seed": 0,
+      "source_idx": 36,
+      "source_run_id": 36,
+      "source_wandb_run_id": "run_00036-fb20da",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          },
+          "phase_1": {
+            "nemotron_full": 0.7839558669191322,
+            "starcoder": 0.2160441330808679
+          }
+        },
+        "run_id": 96092
+      }
+    },
+    {
+      "included_subset_sizes": [
+        96
+      ],
+      "phase_0_nemotron_full": 0.6075094558105552,
+      "phase_0_starcoder": 0.3924905441894449,
+      "phase_1_nemotron_full": 0.8409292947456944,
+      "phase_1_starcoder": 0.1590707052543056,
+      "rank": 93,
+      "run_name": "fbl_wsdba_rank093",
+      "selector_seed": 0,
+      "source_idx": 35,
+      "source_run_id": 35,
+      "source_wandb_run_id": "run_00035-ff5875",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.6075094558105552,
+            "starcoder": 0.3924905441894449
+          },
+          "phase_1": {
+            "nemotron_full": 0.8409292947456944,
+            "starcoder": 0.1590707052543056
+          }
+        },
+        "run_id": 96093
+      }
+    },
+    {
+      "included_subset_sizes": [
+        96
+      ],
+      "phase_0_nemotron_full": 0.8801866099065156,
+      "phase_0_starcoder": 0.1198133900934843,
+      "phase_1_nemotron_full": 0.6316004693987757,
+      "phase_1_starcoder": 0.3683995306012242,
+      "rank": 94,
+      "run_name": "fbl_wsdba_rank094",
+      "selector_seed": 0,
+      "source_idx": 13,
+      "source_run_id": 13,
+      "source_wandb_run_id": "run_00013-3cd263",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.8801866099065156,
+            "starcoder": 0.1198133900934843
+          },
+          "phase_1": {
+            "nemotron_full": 0.6316004693987757,
+            "starcoder": 0.3683995306012242
+          }
+        },
+        "run_id": 96094
+      }
+    },
+    {
+      "included_subset_sizes": [
+        96
+      ],
+      "phase_0_nemotron_full": 1.0,
+      "phase_0_starcoder": 0.0,
+      "phase_1_nemotron_full": 0.5936962605837611,
+      "phase_1_starcoder": 0.4063037394162389,
+      "rank": 95,
+      "run_name": "fbl_wsdba_rank095",
+      "selector_seed": 0,
+      "source_idx": 29,
+      "source_run_id": 29,
+      "source_wandb_run_id": "run_00029-5a800f",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          },
+          "phase_1": {
+            "nemotron_full": 0.5936962605837611,
+            "starcoder": 0.4063037394162389
+          }
+        },
+        "run_id": 96095
+      }
+    },
+    {
+      "included_subset_sizes": [
+        96
+      ],
+      "phase_0_nemotron_full": 0.8117596836214899,
+      "phase_0_starcoder": 0.1882403163785101,
+      "phase_1_nemotron_full": 0.3866927043255334,
+      "phase_1_starcoder": 0.6133072956744666,
+      "rank": 96,
+      "run_name": "fbl_wsdba_rank096",
+      "selector_seed": 0,
+      "source_idx": 62,
+      "source_run_id": 2,
+      "source_wandb_run_id": "run_00002-2ab7b6",
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.8117596836214899,
+            "starcoder": 0.1882403163785101
+          },
+          "phase_1": {
+            "nemotron_full": 0.3866927043255334,
+            "starcoder": 0.6133072956744666
+          }
+        },
+        "run_id": 96096
+      }
+    }
+  ],
+  "source_policy": "feature_bayes_linear_observed",
+  "subset_sizes": [
+    4,
+    6,
+    8,
+    10,
+    12,
+    16,
+    24,
+    32,
+    48,
+    64,
+    96
+  ]
+}

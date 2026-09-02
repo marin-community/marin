@@ -197,6 +197,12 @@ def test_run_iris_job_default_priority_inherit(recorded_job_submissions):
     assert recorded_job_submissions[0]["priority_band"] == job_pb2.PRIORITY_BAND_INHERIT
 
 
+def test_run_iris_job_passes_preemption_retry_budget(recorded_job_submissions):
+    result = _invoke_run(["--max-preemption-retries", "0"])
+    assert result.exit_code == 0, result.output
+    assert recorded_job_submissions[0]["max_retries_preemption"] == 0
+
+
 def test_no_wait_prints_job_id(recorded_job_submissions):
     """--no-wait prints the job ID to stdout."""
     runner = CliRunner()

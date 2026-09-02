@@ -1,0 +1,433 @@
+{
+  "balanced_seeded": {
+    "model": "Balanced Seeded",
+    "optimum": {
+      "gap_below_observed_best": -0.10612746597597944,
+      "nearest_observed_run_name": "run_00056",
+      "nearest_observed_tv_distance": 0.870830493521553,
+      "nearest_observed_value": 1.0958056449890137,
+      "observed_best_run_name": "run_00125",
+      "observed_best_value": 1.0571987628936768,
+      "optimizer_message": "CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH",
+      "optimizer_success": true,
+      "phase0_entropy": 0.30353931929453365,
+      "phase0_max_weight": 0.9337820343853328,
+      "phase0_support_below_1e4": 30,
+      "phase0_support_below_1e6": 4,
+      "phase0_top_domains": [
+        {
+          "domain": "dolma3_cc/finance_and_business_low",
+          "epochs": 18.22985775263946,
+          "weight": 0.9337820343853328
+        },
+        {
+          "domain": "dolmino_synth_code",
+          "epochs": 12.795791291481958,
+          "weight": 0.04769406445926402
+        },
+        {
+          "domain": "dolmino_stem_heavy_crawl",
+          "epochs": 11.778370982589646,
+          "weight": 0.01213591637132191
+        },
+        {
+          "domain": "dolmino_stack_edu_fim",
+          "epochs": 0.16114182562666055,
+          "weight": 0.004263544561886101
+        },
+        {
+          "domain": "dolma3_cc/science_math_and_technology_high",
+          "epochs": 0.018055138460264835,
+          "weight": 0.0008671828908564406
+        },
+        {
+          "domain": "dolmino_synth_qa",
+          "epochs": 0.002826159808882744,
+          "weight": 0.00029442220114990394
+        },
+        {
+          "domain": "dolma3_stack_edu",
+          "epochs": 0.008930556271639965,
+          "weight": 0.0002366194329776086
+        },
+        {
+          "domain": "dolma3_cc/education_and_jobs_high",
+          "epochs": 0.002874876258787545,
+          "weight": 0.00014275157194319077
+        },
+        {
+          "domain": "dolma3_cc/health_high",
+          "epochs": 0.001353358211398554,
+          "weight": 0.00011646791281735906
+        },
+        {
+          "domain": "dolma3_cc/entertainment_high",
+          "epochs": 0.0010629256223344823,
+          "weight": 8.894131677563391e-05
+        }
+      ],
+      "phase1_entropy": 0.3496651961642795,
+      "phase1_max_weight": 0.8888567063052174,
+      "phase1_support_below_1e4": 37,
+      "phase1_support_below_1e6": 19,
+      "phase1_top_domains": [
+        {
+          "domain": "dolmino_stack_edu_fim",
+          "epochs": 8.398645205619731,
+          "weight": 0.8888567063052174
+        },
+        {
+          "domain": "dolma3_stack_edu",
+          "epochs": 1.0480772218665155,
+          "weight": 0.1110772634588692
+        },
+        {
+          "domain": "dolmino_olmocr_pdfs_hq",
+          "epochs": 4.681747829474042e-05,
+          "weight": 7.620198070240832e-06
+        },
+        {
+          "domain": "dolma3_cc/finance_and_business_high",
+          "epochs": 1.4435624532775708e-05,
+          "weight": 6.207296789074049e-06
+        },
+        {
+          "domain": "dolma3_cc/games_high",
+          "epochs": 2.8894286332594897e-05,
+          "weight": 5.1606782546948615e-06
+        },
+        {
+          "domain": "dolma3_cc/entertainment_low",
+          "epochs": 4.087501093927833e-05,
+          "weight": 4.978694551500634e-06
+        },
+        {
+          "domain": "dolma3_cc/literature_high",
+          "epochs": 2.1073485859691577e-05,
+          "weight": 4.303542132459387e-06
+        },
+        {
+          "domain": "dolma3_cc/games_low",
+          "epochs": 5.883806267074026e-05,
+          "weight": 3.939955655431879e-06
+        },
+        {
+          "domain": "dolma3_cc/science_math_and_technology_low",
+          "epochs": 3.745508320129702e-05,
+          "weight": 3.2847910266853506e-06
+        },
+        {
+          "domain": "dolma3_cc/history_and_geography_high",
+          "epochs": 2.860291141388905e-05,
+          "weight": 3.0549219998286363e-06
+        }
+      ],
+      "predicted_optimum_value": 0.9510712969176973
+    },
+    "parameter_count": {
+      "linear_coefficients": 9,
+      "reported_total": 10,
+      "total_with_shapes": 10
+    },
+    "reproduction": {
+      "cv_r2_mean": 0.7421440535082884,
+      "cv_spearman_mean": 0.8469704732957013,
+      "fold_metrics": [
+        {
+          "fold": 1.0,
+          "r2": 0.739333800882573,
+          "spearman": 0.8682653061224488
+        },
+        {
+          "fold": 2.0,
+          "r2": 0.7796534452632359,
+          "spearman": 0.8996960486322189
+        },
+        {
+          "fold": 3.0,
+          "r2": 0.7159809961894869,
+          "spearman": 0.8054711246200608
+        },
+        {
+          "fold": 4.0,
+          "r2": 0.7650662472889209,
+          "spearman": 0.8380373425966131
+        },
+        {
+          "fold": 5.0,
+          "r2": 0.7106857779172255,
+          "spearman": 0.8233825445071645
+        }
+      ],
+      "full_fit_coefficients": {
+        "exp(expneg_phase_sum__dolmino_stem_heavy_crawl)": 0.00229095913037413,
+        "exp_phase_gap__dolma3_stack_edu": -0.002699050522174991,
+        "expneg_phase0_phase1_epoch_prod_total": -0.005060143243134032,
+        "expneg_phase_sum__dolma3_stack_edu": 0.008483186652715755,
+        "expneg_phase_sum__dolmino_stack_edu_fim": 0.007568485521725721,
+        "expneg_phase_sum__dolmino_stem_heavy_crawl": -0.004702819484501009,
+        "invsq1p_phase_sum__dolmino_synth_code": -0.003756349352225368,
+        "negrelu_phase_alr__phase_1_dolma3_arxiv__over__phase_1_dolmino_synth_thinking": 0.002577732260053672,
+        "phase_epochs__phase_1_dolmino_stack_edu_fim": -0.002690752456142819
+      },
+      "full_fit_intercept": 1.1176876690377833,
+      "outlier_filter": {
+        "dropped_rows": 0,
+        "kept_rows": 241,
+        "lower": 1.0420054197311401,
+        "upper": 1.1920489072799683
+      },
+      "rows": 241,
+      "selected_terms": [
+        "expneg_phase_sum__dolmino_stack_edu_fim",
+        "expneg_phase_sum__dolma3_stack_edu",
+        "exp(expneg_phase_sum__dolmino_stem_heavy_crawl)",
+        "negrelu_phase_alr__phase_1_dolma3_arxiv__over__phase_1_dolmino_synth_thinking",
+        "exp_phase_gap__dolma3_stack_edu",
+        "invsq1p_phase_sum__dolmino_synth_code",
+        "expneg_phase_sum__dolmino_stem_heavy_crawl",
+        "expneg_phase0_phase1_epoch_prod_total",
+        "phase_epochs__phase_1_dolmino_stack_edu_fim"
+      ],
+      "target": "eval/uncheatable_eval/bpb",
+      "train_r2": 0.7578511086382397,
+      "train_spearman": 0.854273687459278,
+      "variant_key": "balanced_seeded",
+      "variant_name": "Balanced Seeded"
+    },
+    "selected_terms": [
+      "expneg_phase_sum__dolmino_stack_edu_fim",
+      "expneg_phase_sum__dolma3_stack_edu",
+      "exp(expneg_phase_sum__dolmino_stem_heavy_crawl)",
+      "negrelu_phase_alr__phase_1_dolma3_arxiv__over__phase_1_dolmino_synth_thinking",
+      "exp_phase_gap__dolma3_stack_edu",
+      "invsq1p_phase_sum__dolmino_synth_code",
+      "expneg_phase_sum__dolmino_stem_heavy_crawl",
+      "expneg_phase0_phase1_epoch_prod_total",
+      "phase_epochs__phase_1_dolmino_stack_edu_fim"
+    ]
+  },
+  "high_spearman": {
+    "model": "High Spearman",
+    "optimum": {
+      "gap_below_observed_best": -0.1524004685721757,
+      "nearest_observed_run_name": "run_00178",
+      "nearest_observed_tv_distance": 0.7296566397155486,
+      "nearest_observed_value": 1.0749270915985107,
+      "observed_best_run_name": "run_00125",
+      "observed_best_value": 1.0571987628936768,
+      "optimizer_message": "CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH",
+      "optimizer_success": true,
+      "phase0_entropy": 2.1247196573165197,
+      "phase0_max_weight": 0.4078761222890519,
+      "phase0_support_below_1e4": 1,
+      "phase0_support_below_1e6": 0,
+      "phase0_top_domains": [
+        {
+          "domain": "dolma3_cc/finance_and_business_low",
+          "epochs": 7.962804397840089,
+          "weight": 0.4078761222890519
+        },
+        {
+          "domain": "dolmino_stack_edu_fim",
+          "epochs": 6.336882459196397,
+          "weight": 0.16766336513285862
+        },
+        {
+          "domain": "dolma3_stack_edu",
+          "epochs": 5.646129814153034,
+          "weight": 0.14959695617006932
+        },
+        {
+          "domain": "dolma3_cc/literature_high",
+          "epochs": 0.8755700433765266,
+          "weight": 0.04470134410460227
+        },
+        {
+          "domain": "dolmino_synth_qa",
+          "epochs": 0.20278029080092883,
+          "weight": 0.021125139271946997
+        },
+        {
+          "domain": "dolma3_cc/science_math_and_technology_high",
+          "epochs": 0.4268214157576494,
+          "weight": 0.020500104721474843
+        },
+        {
+          "domain": "dolma3_cc/health_high",
+          "epochs": 0.20356476820600164,
+          "weight": 0.017518468855043174
+        },
+        {
+          "domain": "dolma3_cc/science_math_and_technology_low",
+          "epochs": 0.7988226843045539,
+          "weight": 0.01751408194192343
+        },
+        {
+          "domain": "dolma3_cc/entertainment_high",
+          "epochs": 0.20894704712815781,
+          "weight": 0.01748384375864707
+        },
+        {
+          "domain": "dolma3_cc/education_and_jobs_high",
+          "epochs": 0.3222296527060525,
+          "weight": 0.016000267597568542
+        }
+      ],
+      "phase1_entropy": 0.155669762700043,
+      "phase1_max_weight": 0.9704468463761606,
+      "phase1_support_below_1e4": 22,
+      "phase1_support_below_1e6": 1,
+      "phase1_top_domains": [
+        {
+          "domain": "dolmino_stack_edu_fim",
+          "epochs": 9.169575586041892,
+          "weight": 0.9704468463761606
+        },
+        {
+          "domain": "dolma3_stack_edu",
+          "epochs": 0.2445663304590824,
+          "weight": 0.02591961561114075
+        },
+        {
+          "domain": "dolma3_cc/finance_and_business_high",
+          "epochs": 0.001158262881461641,
+          "weight": 0.0004980512930823684
+        },
+        {
+          "domain": "dolma3_cc/food_and_dining_high",
+          "epochs": 0.0020070547350997236,
+          "weight": 0.00027104669947514663
+        },
+        {
+          "domain": "dolma3_cc/health_high",
+          "epochs": 0.0007773329645906841,
+          "weight": 0.00026758428681331693
+        },
+        {
+          "domain": "dolma3_cc/literature_low",
+          "epochs": 0.00441065407580886,
+          "weight": 0.00024016104839473846
+        },
+        {
+          "domain": "dolma3_cc/education_and_jobs_low",
+          "epochs": 0.0022697983406059015,
+          "weight": 0.00022082510958349697
+        },
+        {
+          "domain": "dolma3_cc/electronics_and_hardware_high",
+          "epochs": 0.0016794329807655833,
+          "weight": 0.00017599993867435426
+        },
+        {
+          "domain": "dolma3_cc/entertainment_low",
+          "epochs": 0.0013854847299508526,
+          "weight": 0.00016875604722016554
+        },
+        {
+          "domain": "dolma3_cc/crime_and_law_high",
+          "epochs": 0.0013382632275513624,
+          "weight": 0.0001625701298545893
+        }
+      ],
+      "predicted_optimum_value": 0.904798294321501
+    },
+    "parameter_count": {
+      "linear_coefficients": 14,
+      "reported_total": 15,
+      "total_with_shapes": 15
+    },
+    "reproduction": {
+      "cv_r2_mean": 0.6852727832299544,
+      "cv_spearman_mean": 0.8568128528006949,
+      "fold_metrics": [
+        {
+          "fold": 1.0,
+          "r2": 0.7130140375649374,
+          "spearman": 0.8948979591836733
+        },
+        {
+          "fold": 2.0,
+          "r2": 0.7551964688721965,
+          "spearman": 0.8922058184976118
+        },
+        {
+          "fold": 3.0,
+          "r2": 0.6365068580291138,
+          "spearman": 0.8403169778549718
+        },
+        {
+          "fold": 4.0,
+          "r2": 0.6587319262176772,
+          "spearman": 0.8287016934433347
+        },
+        {
+          "fold": 5.0,
+          "r2": 0.6629146254658475,
+          "spearman": 0.8279418150238819
+        }
+      ],
+      "full_fit_coefficients": {
+        "exp_phase_epoch_sum__dolmino_stack_edu_fim": -0.00186011241711822,
+        "exp_phase_ilr__32": -0.0005040126522867895,
+        "exp_phase_sum__dolma3_stack_edu": -0.003231875898684428,
+        "expneg_phase0_phase1_epoch_prod_total": -0.004421247936784891,
+        "expneg_phase_alr__phase_0_dolma3_cc_entertainment_high__over__phase_1_dolmino_synth_thinking": 0.0008438603353180033,
+        "expneg_phase_sum__dolmino_stack_edu_fim": 0.006403402726545201,
+        "invsq1p_phase_gap__dolmino_stack_edu_fim": -0.001066415042058662,
+        "negrelu_phase_alr__phase_1_dolma3_cc_history_and_geography_high__over__phase_1_dolmino_synth_thinking": 0.0014809429021321236,
+        "negrelu_phase_epoch_sum__dolma3_stack_edu": 0.00495534418773214,
+        "negrelu_phase_epochs__phase_1_dolma3_stack_edu": 0.005247793068675514,
+        "negrelu_phase_ilr__66": 0.00045274763546380135,
+        "phase_epochs__phase_1_dolmino_stack_edu_fim": -0.00390087149743462,
+        "phase_sum__dolma3_cc_history_and_geography_low": 0.0018168618576030425,
+        "phase_sum__dolmino_stem_heavy_crawl": 0.0028337566158045053
+      },
+      "full_fit_intercept": 1.1176876690377833,
+      "outlier_filter": {
+        "dropped_rows": 0,
+        "kept_rows": 241,
+        "lower": 1.0420054197311401,
+        "upper": 1.1920489072799683
+      },
+      "rows": 241,
+      "selected_terms": [
+        "exp_phase_epoch_sum__dolmino_stack_edu_fim",
+        "exp_phase_ilr__32",
+        "exp_phase_sum__dolma3_stack_edu",
+        "expneg_phase0_phase1_epoch_prod_total",
+        "expneg_phase_alr__phase_0_dolma3_cc_entertainment_high__over__phase_1_dolmino_synth_thinking",
+        "expneg_phase_sum__dolmino_stack_edu_fim",
+        "invsq1p_phase_gap__dolmino_stack_edu_fim",
+        "negrelu_phase_alr__phase_1_dolma3_cc_history_and_geography_high__over__phase_1_dolmino_synth_thinking",
+        "negrelu_phase_epoch_sum__dolma3_stack_edu",
+        "negrelu_phase_epochs__phase_1_dolma3_stack_edu",
+        "negrelu_phase_ilr__66",
+        "phase_epochs__phase_1_dolmino_stack_edu_fim",
+        "phase_sum__dolma3_cc_history_and_geography_low",
+        "phase_sum__dolmino_stem_heavy_crawl"
+      ],
+      "target": "eval/uncheatable_eval/bpb",
+      "train_r2": 0.7218863128072557,
+      "train_spearman": 0.8540996536469944,
+      "variant_key": "high_spearman",
+      "variant_name": "High Spearman"
+    },
+    "selected_terms": [
+      "exp_phase_epoch_sum__dolmino_stack_edu_fim",
+      "exp_phase_ilr__32",
+      "exp_phase_sum__dolma3_stack_edu",
+      "expneg_phase0_phase1_epoch_prod_total",
+      "expneg_phase_alr__phase_0_dolma3_cc_entertainment_high__over__phase_1_dolmino_synth_thinking",
+      "expneg_phase_sum__dolmino_stack_edu_fim",
+      "invsq1p_phase_gap__dolmino_stack_edu_fim",
+      "negrelu_phase_alr__phase_1_dolma3_cc_history_and_geography_high__over__phase_1_dolmino_synth_thinking",
+      "negrelu_phase_epoch_sum__dolma3_stack_edu",
+      "negrelu_phase_epochs__phase_1_dolma3_stack_edu",
+      "negrelu_phase_ilr__66",
+      "phase_epochs__phase_1_dolmino_stack_edu_fim",
+      "phase_sum__dolma3_cc_history_and_geography_low",
+      "phase_sum__dolmino_stem_heavy_crawl"
+    ]
+  }
+}

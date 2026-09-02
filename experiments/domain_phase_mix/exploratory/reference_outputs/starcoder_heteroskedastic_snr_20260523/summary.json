@@ -1,0 +1,22 @@
+{
+  "anchor_count": 10,
+  "cohort": "two_phase_starcoder_heteroskedastic_snr",
+  "excluded_inline_eval_tasks": [
+    "wsc273"
+  ],
+  "experiment_budget": 1000000000,
+  "name_prefix": "pinlin_calvin_xu/data_mixture/t2s_heteroskedastic_snr_20260523",
+  "natural_starcoder_proportion": 0.03648954523000533,
+  "num_train_steps": 3814,
+  "outputs": {
+    "anchor_manifest_csv": "anchor_manifest.csv",
+    "run_specs_json": "run_specs.json",
+    "training_manifest_csv": "training_manifest.csv"
+  },
+  "repeats": 5,
+  "source_panel_csv": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/paper_plots/data/two_phase_starcoder_combined_143_from_wandb.csv",
+  "source_panel_csv_sha256": "sha256:3a953d2836dd0b5fcdd0ac335eff3e91b4360d34bb37a2e062372f1ded82ba04",
+  "target_budget": 5729908864777,
+  "target_metric": "eval/paloma/dolma_100_programing_languages/bpb",
+  "training_run_count": 50
+}

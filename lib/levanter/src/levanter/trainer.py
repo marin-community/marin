@@ -640,6 +640,10 @@ class Trainer:
                 ProgressEvent.CHECKPOINT_FINISHED,
             ):
                 checkpointer.on_step(tree=info.state.saveable_state, step=info.step, force=force)
+                if force:
+                    # Complete a permanent final checkpoint before later force hooks,
+                    # such as evaluation, can terminate the process.
+                    checkpointer.wait_until_finished()
 
         self.add_hook(checkpoint_hook, every=1)  # checkpointer manages its own frequency
 
