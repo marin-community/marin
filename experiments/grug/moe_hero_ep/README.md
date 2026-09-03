@@ -27,10 +27,11 @@ data-parallel rack uses one 64-device expert mesh.
   (NCCL LSA) kernel, which needs Marin's patched PJRT build, installed on GB200 through the `gpu`
   extra (`lib/marin/pyproject.toml`).
 - Optimizer: MuonH, with its state offloaded to pinned host memory.
-- Weights: fp32 on device with bf16 compute. A checkpoint written with a pinned-host fp32 master
-  migrates in process on restore: its stored fp32 master is read directly into the run's params
-  (the bf16 compute copy goes unread), and the next save writes the new layout. The reverse
-  (synthesizing a master) is refused.
+- Weights: bf16 on device with a pinned-host fp32 master, which the pooled-wave device peak needs.
+  A checkpoint written with a master restores natively here. A master-less checkpoint, which the
+  hero writes when it keeps fp32 weights on device under the ragged transport, cannot restore into
+  this mode: synthesizing a master is refused. The reverse direction migrates in process, so a
+  master-bearing checkpoint reaches either mode.
 - Runtime: Each GPU has one JAX process. The recipe uses `cuda_async`, no PGLE, and no GPU
   command buffers. The layer carry stays in HBM, which only the ragged transport offloads. Inline
   watch uses collective overlap limit 1. A disabled watch uses limit 4.

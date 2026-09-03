@@ -80,9 +80,9 @@ def test_diagnostic_run_without_shape_overrides_uses_the_selected_model():
         4,
         10,
         1_000_000_000,
-        jnp.float32,
         jnp.bfloat16,
-        train.MasterParamMode.DEVICE,
+        jnp.bfloat16,
+        train.MasterParamMode.FP32_PINNED_HOST,
     )
 
 
