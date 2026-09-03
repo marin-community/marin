@@ -5,9 +5,8 @@
 aggregates, and head-to-head difference intervals."""
 
 import pytest
-from evaldash.metrics import build_comparison, build_meta, build_panel, eval_suites, panel_request
-from marin.evaluation.eval_stats import Completeness, MissingPolicy
-from marin.evaluation.records import (
+from evaldash.marin_evaluation.eval_stats import Completeness, MissingPolicy
+from evaldash.marin_evaluation.records import (
     EvalRef,
     EvalRunRecord,
     EvalTaskRef,
@@ -17,6 +16,7 @@ from marin.evaluation.records import (
     RunStatus,
     TaskCoverage,
 )
+from evaldash.metrics import build_comparison, build_meta, build_panel, eval_suites, panel_request
 
 ITEMS = 1000
 

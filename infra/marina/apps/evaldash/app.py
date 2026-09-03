@@ -37,14 +37,6 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Protocol
 
-from marin.evaluation.eval_stats import DEFAULT_MIN_COVERAGE, Completeness, MissingPolicy, SelectionRequest
-from marin.evaluation.records import (
-    DEFAULT_SCAN_PREFIXES,
-    EvalRunRecord,
-    RecordParseFailure,
-    list_record_paths,
-    scan_records,
-)
 from marina.apps import Services
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.server_auth import get_verified_identity
@@ -54,6 +46,15 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
+
+from evaldash.marin_evaluation.eval_stats import DEFAULT_MIN_COVERAGE, Completeness, MissingPolicy, SelectionRequest
+from evaldash.marin_evaluation.records import (
+    DEFAULT_SCAN_PREFIXES,
+    EvalRunRecord,
+    RecordParseFailure,
+    list_record_paths,
+    scan_records,
+)
 
 from . import review, samples
 from .metrics import (

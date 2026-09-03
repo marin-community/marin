@@ -10,7 +10,7 @@ import pytest
 import sqlalchemy
 from evaldash import app as evaldash_app
 from evaldash import fixtures, results_db
-from marin.evaluation.records import EvalRunRecord, list_records, write_record
+from evaldash.marin_evaluation.records import EvalRunRecord, list_records, write_record
 from sqlalchemy.pool import StaticPool
 
 

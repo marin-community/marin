@@ -19,6 +19,8 @@ dependencies = [
     # evaldash: the per-sample parquet reader and the finestore archive behind it, the LLM
     # sample review, and the Connect clients plus GCE lookup its live job/log panels use.
     "marin-finestore",
+    "marin-iris",
+    "marin-finelog",
     "pyarrow>=17",
     "anthropic>=0.71.0",
     "connect-python>=0.4",

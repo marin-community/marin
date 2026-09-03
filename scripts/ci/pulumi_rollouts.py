@@ -54,12 +54,10 @@ ROLLOUTS = (
         source_roots=(
             *CLOUD_RUN_SOURCE_ROOTS,
             "config",
-            "lib/finelog/src/finelog/__init__.py",
-            "lib/finelog/src/finelog/rpc",
+            "lib/finelog",
             "lib/finestore",
-            "lib/iris/src/iris/__init__.py",
-            "lib/iris/src/iris/rpc",
-            "lib/marin/src/marin/__init__.py",
+            "lib/iris",
+            # Vendored into apps/evaldash; the change runs the drift guard, not a deploy.
             "lib/marin/src/marin/evaluation",
             "lib/rigging",
         ),

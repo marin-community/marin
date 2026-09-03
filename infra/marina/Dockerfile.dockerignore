@@ -2,14 +2,13 @@
 *
 !lib/rigging
 !lib/finestore
+!lib/finelog
+!lib/iris
 !infra/marina
-# evaldash imports these as modules; infra/marina/Dockerfile copies them one by one.
-!lib/marin/src/marin/__init__.py
-!lib/marin/src/marin/evaluation
-!lib/iris/src/iris/__init__.py
-!lib/iris/src/iris/rpc
-!lib/finelog/src/finelog/__init__.py
-!lib/finelog/src/finelog/rpc
+lib/finelog/rust
+lib/finelog/dashboard
+lib/iris/rust
+lib/iris/dashboard
 **/node_modules
 **/dist
 **/__pycache__

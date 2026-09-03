@@ -18,8 +18,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from marin.evaluation.eval_measurements import measurement_from_record, measurements_from_records
-from marin.evaluation.eval_stats import (
+from evaldash.marin_evaluation.eval_measurements import measurement_from_record, measurements_from_records
+from evaldash.marin_evaluation.eval_stats import (
     DEFAULT_EXCLUDE_FLAGS,
     DEFAULT_MIN_COVERAGE,
     Aggregate,
@@ -37,7 +37,7 @@ from marin.evaluation.eval_stats import (
     panel_aggregate,
     select,
 )
-from marin.evaluation.records import EvalRunRecord, RunStatus
+from evaldash.marin_evaluation.records import EvalRunRecord, RunStatus
 
 # Capped-instance launcher validation runs; kept out of the headline panel (they stay visible in the
 # runs list and history).

@@ -10,9 +10,10 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from marin.evaluation.records import RECORD_FILE, EvalRunRecord
 from rigging.filesystem.conditional_object import conditional_object
 from rigging.filesystem.storage_path import StoragePath
+
+from evaldash.marin_evaluation.records import RECORD_FILE, EvalRunRecord
 
 from .results_db import ObservationKind, RecordObservation, SourceState
 

@@ -14,7 +14,7 @@ import asyncio
 import pytest
 from evaldash import app as evaldash_app
 from evaldash import fixtures, results_db
-from marin.evaluation.records import write_record
+from evaldash.marin_evaluation.records import write_record
 from marina.apps import Services
 from marina.db import UrlDatabase, engine_for
 from starlette.testclient import TestClient
