@@ -16,10 +16,13 @@ same builders so the only difference between a parent and its ablation is the na
 from __future__ import annotations
 
 import dataclasses
+import functools
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
 from experiments.domain_phase_mix.exploratory.two_phase_many import (
     single_phase_observatory_models_20260902 as models,
@@ -1395,6 +1398,20 @@ SUCCESSOR_SHAPES = tuple(
 SUCCESSOR_EXP_SHAPES = tuple(
     {"rate": rate, "threshold": threshold} for rate in SUCCESSOR_RATES for threshold in SUCCESSOR_THRESHOLDS
 )
+# Budget-matched exponential benefit: 28 log-spaced rates x 6 thresholds = 168 shapes, the successor's grid size.
+SUCCESSOR_EXP_MATCHED_RATES = tuple(float(f"{rate:.4g}") for rate in np.geomspace(0.05, 4.0, 28))
+# Wide successor grid for sub-epoch and hundred-epoch curves: knee from 0.005 to 20 epochs, shape down to 0.15.
+SUCCESSOR_WIDE_RATES = (0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 4.0, 10.0, 25.0, 60.0, 150.0, 400.0)
+SUCCESSOR_WIDE_POWERS = (0.15, 0.3, 0.5, 0.7, 1.0)
+SUCCESSOR_WIDE_SHAPES = tuple(
+    {"rate": rate, "power": power, "threshold": threshold}
+    for rate in SUCCESSOR_WIDE_RATES
+    for power in SUCCESSOR_WIDE_POWERS
+    for threshold in SUCCESSOR_THRESHOLDS
+)
+SUCCESSOR_EXP_MATCHED_SHAPES = tuple(
+    {"rate": rate, "threshold": threshold} for rate in SUCCESSOR_EXP_MATCHED_RATES for threshold in SUCCESSOR_THRESHOLDS
+)
 SUCCESSOR_OPTIONS = models.FamilyOptions(family_signal="none", harm="softplus_bucket", benefit="weibull")
 SUCCESSOR_HEAD = models.HeadSpec(kind=models.HeadKind.NNLS, scale_columns=True)
 
@@ -1411,6 +1428,88 @@ def _successor(
         dof -= 1
     return _family_grid_model(model_id, options, shapes, ridge_grid, head, dof)
 
+
+# Significance prior from the 2026-06-23 domain-ablation p-value matrix (300M, one bucket deleted at a time,
+# renormalized proportional baseline with repeats): bucket columns whose deletion has no significant effect on
+# a metric get a larger ridge multiplier for that metric's head. Keyed by the benchmark's component names.
+ABLATION_PVALUE_DIR = (
+    Path(__file__).resolve().parent / "reference_outputs" / "domain_ablation_pvalue_matrix_with_training_eval_20260623"
+)
+ABLATION_PVALUE_FILE = "domain_ablation_cell_pvalues.csv"
+PRIOR_ALPHA = 0.05
+PRIOR_SHRINK = 10.0
+PRIOR_SCRAMBLE_SEED = 20_260_905
+TABLE9_COMPONENT_PREFIX = "olmo_base_eval/easy_bpb/"
+LM_EVAL_SUFFIXES = ("_5shot", "_0shot", "_10shot", "")
+
+
+def _component_aliases(metric: str) -> tuple[str, ...]:
+    """Benchmark component names that a p-value-matrix metric stands for."""
+    aliases = [metric]
+    if metric.startswith("lm_eval/") and metric.endswith("/bpb"):
+        task = metric[len("lm_eval/") : -len("/bpb")]
+        for suffix in LM_EVAL_SUFFIXES:
+            if suffix and task.endswith(suffix):
+                task = task[: -len(suffix)]
+                break
+        aliases.append(f"{TABLE9_COMPONENT_PREFIX}{task}/bpb")
+    return tuple(aliases)
+
+
+@functools.cache
+def ablation_prior_table(scrambled: bool = False) -> tuple[tuple[str, tuple[tuple[str, float], ...]], ...]:
+    """Per-component bucket ridge multipliers: 1 where the deletion effect is significant, PRIOR_SHRINK otherwise."""
+    cells = pd.read_csv(ABLATION_PVALUE_DIR / ABLATION_PVALUE_FILE)
+    generator = np.random.default_rng(PRIOR_SCRAMBLE_SEED)
+    table: dict[str, tuple[tuple[str, float], ...]] = {}
+    shot_rank = {suffix: rank for rank, suffix in enumerate(LM_EVAL_SUFFIXES)}
+    chosen_rank: dict[str, int] = {}
+    for metric, block in cells.groupby("metric", sort=True):
+        block = block.sort_values("target_domain")
+        factors = np.where(block["p_two_sided"].to_numpy(float) < PRIOR_ALPHA, 1.0, PRIOR_SHRINK)
+        if scrambled:
+            factors = factors[generator.permutation(len(factors))]
+        entries = tuple(zip(block["target_domain"].tolist(), factors.tolist(), strict=True))
+        rank = next((shot_rank[s] for s in LM_EVAL_SUFFIXES if s and metric.endswith(f"{s}/bpb")), shot_rank[""])
+        for alias in _component_aliases(str(metric)):
+            if alias in table and chosen_rank.get(alias, 99) <= rank:
+                continue
+            table[alias] = entries
+            chosen_rank[alias] = rank
+    return tuple(sorted(table.items()))
+
+
+def _successor_prior(model_id: str, *, scrambled: bool) -> Builder:
+    def build(features: models.Features) -> models.GridModel:
+        options = _options(SUCCESSOR_OPTIONS, component_ridge=ablation_prior_table(scrambled))
+        return _successor(model_id, options, head=NNLS)(features)
+
+    return build
+
+
+def _refined(builder: Builder, *, bounded: bool = False) -> Builder:
+    """Wrap a grid builder so the fitted grid argmin is refined continuously (GridModel.refine)."""
+
+    def build(features: models.Features) -> models.GridModel:
+        return dataclasses.replace(builder(features), refine=True, refine_bounded=bounded)
+
+    return build
+
+
+def _with_link_candidates(builder: Builder, links: tuple[models.LinkKind, ...]) -> Builder:
+    """Wrap a grid builder so every candidate is also tried under each link; inner CV picks the link."""
+
+    def build(features: models.Features) -> models.GridModel:
+        return dataclasses.replace(builder(features), link_candidates=links)
+
+    return build
+
+
+SHARED_SHAPE_UNITS: dict[str, tuple[str, str]] = {
+    "weibull_softplus_unscaled@shared_shape_target": ("weibull_softplus_unscaled", "target"),
+    "weibull_softplus_unscaled@shared_shape_panel": ("weibull_softplus_unscaled", "panel"),
+    "weibull_softplus_unscaled@shared_shape_scale": ("weibull_softplus_unscaled", "scale"),
+}
 
 SUCCESSORS: tuple[ModelEntry, ...] = (
     ModelEntry(
@@ -1642,6 +1741,155 @@ SUCCESSOR_ABLATIONS: tuple[ModelEntry, ...] = (
         "harm=softplus_log_quadratic_family,families=domain_quality",
         _successor(
             "weibull_softplus_unscaled@family_harm", _options(SUCCESSOR_OPTIONS, harm="softplus_family"), head=NNLS
+        ),
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@exp_benefit_matched",
+        "weibull_softplus_unscaled",
+        "benefit=exp_saturation_budget_matched",
+        _successor(
+            "weibull_softplus_unscaled@exp_benefit_matched",
+            _options(SUCCESSOR_OPTIONS, benefit="saturation"),
+            SUCCESSOR_EXP_MATCHED_SHAPES,
+            head=NNLS,
+        ),
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@huber_head",
+        "weibull_softplus_unscaled",
+        "estimator=huber_irls",
+        _successor(
+            "weibull_softplus_unscaled@huber_head",
+            head=models.HeadSpec(kind=models.HeadKind.HUBER_NNLS),
+        ),
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@wide_grid",
+        "weibull_softplus_unscaled",
+        "search=wide_grid",
+        _successor("weibull_softplus_unscaled@wide_grid", shapes=SUCCESSOR_WIDE_SHAPES, head=NNLS),
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@interaction_total",
+        "weibull_softplus_unscaled",
+        "interaction=total_benefit_square",
+        _successor(
+            "weibull_softplus_unscaled@interaction_total",
+            _options(SUCCESSOR_OPTIONS, interaction="total_square"),
+            head=NNLS,
+        ),
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@interaction_family",
+        "weibull_softplus_unscaled",
+        "interaction=family_pair_products",
+        _successor(
+            "weibull_softplus_unscaled@interaction_family",
+            _options(SUCCESSOR_OPTIONS, interaction="family_products"),
+            head=NNLS,
+        ),
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@quality_benefit",
+        "weibull_softplus_unscaled",
+        "families=quality_axis_benefit",
+        _successor(
+            "weibull_softplus_unscaled@quality_benefit", _options(SUCCESSOR_OPTIONS, quality_axis="benefit"), head=NNLS
+        ),
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@quality_both",
+        "weibull_softplus_unscaled",
+        "families=quality_axis_benefit_and_harm",
+        _successor(
+            "weibull_softplus_unscaled@quality_both", _options(SUCCESSOR_OPTIONS, quality_axis="both"), head=NNLS
+        ),
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@quality_both_shuffled",
+        "weibull_softplus_unscaled",
+        "families=quality_axis_shuffled_control",
+        _successor(
+            "weibull_softplus_unscaled@quality_both_shuffled",
+            _options(SUCCESSOR_OPTIONS, quality_axis="both", shuffled_quality=True),
+            head=NNLS,
+        ),
+        role="control",
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@log_deficit_bounded_link",
+        "weibull_softplus_unscaled",
+        "link=log_deficit_bounded",
+        _successor(
+            "weibull_softplus_unscaled@log_deficit_bounded_link",
+            head=models.HeadSpec(kind=models.HeadKind.NNLS, link=models.LinkKind.LOG_DEFICIT_BOUNDED),
+        ),
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@ablation_prior",
+        "weibull_softplus_unscaled",
+        "estimator=significance_prior_ridge",
+        _successor_prior("weibull_softplus_unscaled@ablation_prior", scrambled=False),
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@scrambled_prior",
+        "weibull_softplus_unscaled",
+        "estimator=scrambled_prior_control",
+        _successor_prior("weibull_softplus_unscaled@scrambled_prior", scrambled=True),
+        role="control",
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@shared_shape_target",
+        "weibull_softplus_unscaled",
+        "search=shared_shape_per_target_group",
+        _successor("weibull_softplus_unscaled@shared_shape_target", head=NNLS),
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@shared_shape_panel",
+        "weibull_softplus_unscaled",
+        "search=shared_shape_per_panel",
+        _successor("weibull_softplus_unscaled@shared_shape_panel", head=NNLS),
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@shared_shape_scale",
+        "weibull_softplus_unscaled",
+        "search=shared_shape_across_39bucket_panels",
+        _successor("weibull_softplus_unscaled@shared_shape_scale", head=NNLS),
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@refined_shape",
+        "weibull_softplus_unscaled",
+        "search=grid_then_nelder_mead",
+        _refined(_successor("weibull_softplus_unscaled@refined_shape", head=NNLS)),
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@wide_grid_refined",
+        "weibull_softplus_unscaled",
+        "search=wide_grid_then_nelder_mead",
+        _refined(_successor("weibull_softplus_unscaled@wide_grid_refined", shapes=SUCCESSOR_WIDE_SHAPES, head=NNLS)),
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@refined_bounded",
+        "weibull_softplus_unscaled",
+        "search=grid_then_bounded_nelder_mead",
+        _refined(_successor("weibull_softplus_unscaled@refined_bounded", head=NNLS), bounded=True),
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@wide_grid_refined_bounded",
+        "weibull_softplus_unscaled",
+        "search=wide_grid_then_bounded_nelder_mead",
+        _refined(
+            _successor("weibull_softplus_unscaled@wide_grid_refined_bounded", shapes=SUCCESSOR_WIDE_SHAPES, head=NNLS),
+            bounded=True,
+        ),
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@link_by_cv",
+        "weibull_softplus_unscaled",
+        "link=selected_by_inner_cv",
+        _with_link_candidates(
+            _successor("weibull_softplus_unscaled@link_by_cv", head=NNLS),
+            (models.LinkKind.IDENTITY, models.LinkKind.LOG_DEFICIT_BOUNDED),
         ),
     ),
     _ablation(

@@ -83,9 +83,12 @@ LOG_LINK_FLOOR_SPAN_FRACTION = 0.05
 QUALITY_SUFFIXES = ("_high", "_low")
 # scrambled_harm permutes the harm block's bucket columns (a no-op for one-column-per-bucket harms);
 # row_scrambled_harm permutes its mixture rows, which is information-free for every harm form.
-# scrambled_harm permutes the harm block's bucket columns (a no-op for one-column-per-bucket harms);
-# row_scrambled_harm permutes its mixture rows, which is information-free for every harm form.
 HARM_SCRAMBLE_SEED = 20_260_903
+REFINE_EVALUATIONS = 80
+LOG_SPACE_SHAPE_KEYS = frozenset({"rate", "saturation_epochs", "benefit_offset"})
+QUALITY_SCRAMBLE_SEED = 20_260_904
+# Bounded log-deficit link: the linear predictor is capped at the largest training log-deficit plus this margin.
+LINK_CAP_MARGIN = 0.5
 CC_PREFIX = "dolma3_cc/"
 
 
@@ -229,6 +232,8 @@ class Features:
     early_fraction: np.ndarray
     families: Families
     label: str
+    buckets_names: tuple[str, ...] = ()
+    component: str = ""
 
     def __post_init__(self) -> None:
         if self.exposures.shape != self.weights.shape or self.exposures.ndim != 2:
@@ -291,6 +296,7 @@ def features_from_panel(
         inventory=inventory,
         early_fraction=fraction,
         families=families_from_buckets(buckets),
+        buckets_names=tuple(str(bucket) for bucket in buckets),
         label=label,
     )
 
@@ -310,6 +316,7 @@ class HeadKind(StrEnum):
 class LinkKind(StrEnum):
     IDENTITY = "identity"
     LOG_DEFICIT = "log_deficit"
+    LOG_DEFICIT_BOUNDED = "log_deficit_bounded"
     LOG_FLOOR_MARGIN = "log_floor_margin"
 
 
@@ -320,6 +327,7 @@ class HeadSpec:
     link: LinkKind = LinkKind.IDENTITY
     floor_fraction: float = DEFICIT_FLOOR_FRACTION
     floor_margin: float = 0.0
+    cap_margin: float = LINK_CAP_MARGIN
     huber_scale: float = HUBER_SCALE
     tie_pairs: tuple[tuple[int, int], ...] = ()
     # Solve the nonnegative least squares on the QR-reduced system when the row count exceeds the
@@ -337,6 +345,7 @@ class FittedHead:
     coefficients: np.ndarray
     floor: float
     active: int
+    cap: float = float("inf")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -353,7 +362,7 @@ class Design:
 def link_floor(response: np.ndarray, spec: HeadSpec) -> float:
     if spec.link is LinkKind.IDENTITY:
         return float("nan")
-    if spec.link is LinkKind.LOG_DEFICIT:
+    if spec.link in (LinkKind.LOG_DEFICIT, LinkKind.LOG_DEFICIT_BOUNDED):
         return spec.floor_fraction * float(np.min(response))
     low = float(np.min(response))
     span = float(np.max(response) - low)
@@ -367,10 +376,10 @@ def link_forward(response: np.ndarray, floor: float, spec: HeadSpec) -> np.ndarr
     return np.log(np.maximum(response - floor, 1e-9))
 
 
-def link_inverse(linear: np.ndarray, floor: float, spec: HeadSpec) -> np.ndarray:
+def link_inverse(linear: np.ndarray, floor: float, spec: HeadSpec, cap: float = float("inf")) -> np.ndarray:
     if spec.link is LinkKind.IDENTITY:
         return linear
-    return floor + np.exp(np.clip(linear, -LINK_CLIP, LINK_CLIP))
+    return floor + np.exp(np.clip(linear, -LINK_CLIP, min(LINK_CLIP, cap)))
 
 
 def _tie_rows(width: int, pairs: tuple[tuple[int, int], ...]) -> np.ndarray:
@@ -462,13 +471,18 @@ def fit_head(design: Design, response: np.ndarray, ridge: float, spec: HeadSpec)
             np.abs(coefficients) > DSP_ACTIVE_TOL * max(1.0, float(np.max(np.abs(coefficients), initial=0.0)))
         )
     )
+    cap = float(np.max(target)) + spec.cap_margin if spec.link is LinkKind.LOG_DEFICIT_BOUNDED else float("inf")
     return FittedHead(
-        intercept=float(intercept), coefficients=np.asarray(coefficients, dtype=float), floor=floor, active=active
+        intercept=float(intercept),
+        coefficients=np.asarray(coefficients, dtype=float),
+        floor=floor,
+        active=active,
+        cap=cap,
     )
 
 
 def predict_head(head: FittedHead, matrix: np.ndarray, spec: HeadSpec) -> np.ndarray:
-    return link_inverse(head.intercept + matrix @ head.coefficients, head.floor, spec)
+    return link_inverse(head.intercept + matrix @ head.coefficients, head.floor, spec, head.cap)
 
 
 def effective_rank(matrix: np.ndarray) -> int:
@@ -544,6 +558,12 @@ class FamilyOptions:
     # keeping column count, ridge, and threshold search identical while removing bucket alignment.
     scrambled_harm: bool = False
     row_scrambled_harm: bool = False
+    # Round-2 mechanisms: additive interaction columns, quality-axis pooling across families, and a
+    # per-(component, bucket) ridge multiplier table keyed by bucket name.
+    interaction: str = "none"
+    quality_axis: str = "none"
+    shuffled_quality: bool = False
+    component_ridge: tuple[tuple[str, tuple[tuple[str, float], ...]], ...] = ()
 
 
 def _benefit(values: np.ndarray, shape: Shape, options: FamilyOptions) -> np.ndarray:
@@ -673,6 +693,51 @@ def family_design(features: Features, shape: Shape, options: FamilyOptions) -> D
         ridge.extend([1.0] * len(families.members))
         names.extend(f"family_member_replay:{name}" for name in families.names)
 
+    if options.interaction == "total_square":
+        total = bucket_signal.sum(axis=1, keepdims=True) ** 2
+        pieces.extend([total, -total])
+        ridge.extend([1.0, 1.0])
+        names.extend(["interaction:total_square_plus", "interaction:total_square_minus"])
+    elif options.interaction == "family_products":
+        for high, low in families.pairs:
+            product = bucket_signal[:, [high]] * bucket_signal[:, [low]]
+            pieces.extend([product, -product])
+            ridge.extend([1.0, 1.0])
+            names.extend([f"interaction:pair_plus:{high}+{low}", f"interaction:pair_minus:{high}+{low}"])
+    elif options.interaction != "none":
+        raise ValueError(f"unknown interaction {options.interaction}")
+
+    if options.quality_axis != "none":
+        if options.quality_axis not in ("benefit", "harm", "both"):
+            raise ValueError(f"unknown quality axis {options.quality_axis}")
+        quality = np.asarray(families.quality, dtype=int).copy()
+        if options.shuffled_quality:
+            known = np.flatnonzero(quality >= 0)
+            quality[known] = quality[np.random.default_rng(QUALITY_SCRAMBLE_SEED).permutation(known)]
+        levels = sorted({int(level) for level in quality if level >= 0})
+        if options.quality_axis in ("benefit", "both"):
+            for level in levels:
+                pieces.append(-bucket_signal[:, quality == level].sum(axis=1, keepdims=True))
+                ridge.append(1.0)
+                names.append(f"quality_benefit:{level}")
+        if options.quality_axis in ("harm", "both"):
+            quality_harm = softplus_harm(exposure, float(shape["threshold"]))
+            for level in levels:
+                pieces.append(quality_harm[:, quality == level].sum(axis=1, keepdims=True))
+                ridge.append(1.0)
+                names.append(f"quality_harm:{level}")
+
+    if options.component_ridge:
+        factors = dict(dict(options.component_ridge).get(features.component, ()))
+        if factors:
+            position = {name: index for index, name in enumerate(features.buckets_names)}
+            for index, name in enumerate(names):
+                if name.startswith(("bucket_signal:", "bucket_overexposure:")):
+                    bucket = features.buckets_names[int(name.split(":")[1])] if features.buckets_names else None
+                    if bucket in factors:
+                        ridge[index] *= float(factors[bucket])
+            del position
+
     return Design(np.hstack(pieces), np.asarray(ridge, dtype=float), tuple(names))
 
 
@@ -775,6 +840,8 @@ class Fitted:
     ridge: float
     head: Any
     diagnostics: dict[str, float | int | bool | str]
+    # Inner-CV RMSE for every (candidate shape, ridge) pair when the model searched a grid.
+    cv_table: np.ndarray | None = None
 
 
 class SinglePhaseModel(Protocol):
@@ -883,7 +950,8 @@ def _shape_key(shape: Shape) -> str:
 def cached_design(
     model_id: str, features: Features, shape: Shape, builder: Callable[[Features, Shape], Design]
 ) -> Design:
-    key = (model_id, features.cache_key, _shape_key(shape))
+    # The component is part of the identity because component-dependent designs (ridge priors) exist.
+    key = (model_id, features.cache_key, features.component, _shape_key(shape))
     design = _DESIGN_CACHE.get(key)
     if design is None:
         design = builder(features, shape)
@@ -891,6 +959,82 @@ def cached_design(
             _DESIGN_CACHE.clear()
         _DESIGN_CACHE[key] = design
     return design
+
+
+def _refine_shape(
+    model: GridModel,
+    features: Features,
+    response: np.ndarray,
+    ridge: float,
+    inner: InnerFolds,
+    shape: Shape,
+    score: float,
+    evaluations: int,
+    hull: tuple[Shape, ...] | None = None,
+    link: LinkKind | None = None,
+) -> tuple[Shape, float, int]:
+    """Nelder-Mead from the grid argmin on the inner-CV objective; returns the better of grid and refined.
+
+    With ``hull`` the refined parameters are clipped to the candidate grid's range per key.
+    """
+    keys = [key for key, value in shape.items() if isinstance(value, (int, float)) and not isinstance(value, bool)]
+    if not keys:
+        return shape, score, 0
+    bounds = None
+    if hull is not None:
+        bounds = {
+            key: (min(float(c[key]) for c in hull), max(float(c[key]) for c in hull))
+            for key in keys
+            if all(key in c for c in hull)
+        }
+
+    def encode(values: Shape) -> np.ndarray:
+        return np.asarray(
+            [
+                math.log(max(float(values[key]), 1e-12)) if key in LOG_SPACE_SHAPE_KEYS else float(values[key])
+                for key in keys
+            ]
+        )
+
+    def decode(vector: np.ndarray) -> Shape:
+        decoded = dict(shape)
+        for key, value in zip(keys, vector, strict=True):
+            raw = float(math.exp(np.clip(value, -30.0, 30.0))) if key in LOG_SPACE_SHAPE_KEYS else float(value)
+            if bounds is not None and key in bounds:
+                raw = float(np.clip(raw, bounds[key][0], bounds[key][1]))
+            decoded[key] = raw
+        return decoded
+
+    spec = model.head_for(shape, link)
+    counter = 0
+
+    def objective(vector: np.ndarray) -> float:
+        nonlocal counter
+        counter += 1
+        candidate = decode(vector)
+        if candidate.get("power", 1.0) <= 0.0 or candidate.get("threshold", 0.0) < 0.0:
+            return float("inf")
+        value = _cv_rmse(model.design(features, candidate), response, ridge, spec, inner)
+        return value if math.isfinite(value) else float("inf")
+
+    start = encode(shape)
+    result = minimize(
+        objective,
+        start,
+        method="Nelder-Mead",
+        options={"maxfev": evaluations, "xatol": 1e-3, "fatol": 1e-7, "initial_simplex": _initial_simplex(start)},
+    )
+    if math.isfinite(result.fun) and result.fun < score:
+        return decode(result.x), float(result.fun), counter
+    return shape, score, counter
+
+
+def _initial_simplex(start: np.ndarray) -> np.ndarray:
+    """Simplex spanning about a quarter of a grid step in every direction."""
+    simplex = np.tile(start, (len(start) + 1, 1))
+    for index in range(len(start)):
+        simplex[index + 1, index] += 0.25 if start[index] == 0.0 else 0.25 * max(abs(start[index]), 1.0)
+    return simplex
 
 
 @dataclasses.dataclass(frozen=True)
@@ -909,6 +1053,14 @@ class GridModel:
     # selection-equivalent to the exhaustive search: on crs_plus it chose a different shape and ridge
     # with inner RMSE 0.02900 against 0.02599, so it is never used for reported fits.
     screen_top: int = 1_000_000
+    # Continuous refinement of the grid argmin: Nelder-Mead over the shape's numeric parameters on the
+    # inner-CV objective at the selected ridge (rates and epoch scales move in log space).
+    refine: bool = False
+    refine_evaluations: int = REFINE_EVALUATIONS
+    # Clip every refined parameter to the candidate grid's range (in log space for rates).
+    refine_bounded: bool = False
+    # Alternative links tried for every (shape, ridge) candidate; the inner-CV winner is stored on the fit.
+    link_candidates: tuple[LinkKind, ...] = ()
     screen_ridge_index: int = 2
 
     def candidate_shapes(self, features: Features) -> tuple[Shape, ...]:
@@ -924,10 +1076,11 @@ class GridModel:
     def design(self, features: Features, shape: Shape) -> Design:
         return cached_design(self.model_id, features, shape, self.builder)
 
-    def head_for(self, shape: Shape) -> HeadSpec:
+    def head_for(self, shape: Shape, link: LinkKind | None = None) -> HeadSpec:
+        spec = self.head
         if "floor_margin" in shape:
-            return dataclasses.replace(self.head, floor_margin=float(shape["floor_margin"]))
-        return self.head
+            spec = dataclasses.replace(spec, floor_margin=float(shape["floor_margin"]))
+        return spec if link is None else dataclasses.replace(spec, link=link)
 
     def _shortlist(
         self, features: Features, response: np.ndarray, inner: InnerFolds, candidates: tuple[Shape, ...]
@@ -951,22 +1104,43 @@ class GridModel:
         candidates = self.candidate_shapes(features)
         shortlist, screened = self._shortlist(features, response, inner, candidates)
         best: tuple[float, int, int] | None = None
+        table = np.full((len(candidates), len(self.ridge_grid)), np.inf)
+        links: tuple[LinkKind | None, ...] = self.link_candidates or (None,)
+        best_link: LinkKind | None = None
         for shape_index in shortlist:
             shape = candidates[shape_index]
             design = self.design(features, shape)
-            spec = self.head_for(shape)
-            for ridge_index, ridge in enumerate(self.ridge_grid):
-                score = _cv_rmse(design, response, ridge, spec, inner)
-                candidate = (score, shape_index, ridge_index)
-                if best is None or candidate < best:
-                    best = candidate
+            for link in links:
+                spec = self.head_for(shape, link)
+                for ridge_index, ridge in enumerate(self.ridge_grid):
+                    score = _cv_rmse(design, response, ridge, spec, inner)
+                    table[shape_index, ridge_index] = min(table[shape_index, ridge_index], score)
+                    candidate = (score, shape_index, ridge_index)
+                    if best is None or candidate < best:
+                        best = candidate
+                        best_link = link
         if best is None or not math.isfinite(best[0]):
             raise ValueError(f"{self.model_id}: no finite inner-CV candidate")
         score, shape_index, ridge_index = best
         shape = dict(candidates[shape_index])
         ridge = self.ridge_grid[ridge_index]
+        refined_evaluations = 0
+        chosen_link = best_link
+        if self.refine:
+            shape, score, refined_evaluations = _refine_shape(
+                self,
+                features,
+                response,
+                ridge,
+                inner,
+                shape,
+                score,
+                self.refine_evaluations,
+                candidates if self.refine_bounded else None,
+                chosen_link,
+            )
         design = self.design(features, shape)
-        spec = self.head_for(shape)
+        spec = self.head_for(shape, chosen_link)
         head = fit_head(Design(design.values[train], design.ridge, design.names), response[train], ridge, spec)
         rank = effective_rank(design.values[train])
         return Fitted(
@@ -975,7 +1149,7 @@ class GridModel:
             head=head,
             diagnostics={
                 "inner_cv_rmse": score,
-                "candidates": screened + len(shortlist) * len(self.ridge_grid),
+                "candidates": screened + len(shortlist) * len(self.ridge_grid) * len(links),
                 "converged": True,
                 "boundary_hits": (
                     _grid_edges(shape, candidates)
@@ -985,12 +1159,16 @@ class GridModel:
                 "columns": design.values.shape[1],
                 "fitted_dof": head.active + 1 + self.shape_dof,
                 "nonlinear_dof": self.shape_dof,
+                "refine_evaluations": refined_evaluations,
+                "link": str(spec.link),
             },
+            cv_table=table,
         )
 
     def predict(self, fitted: Fitted, features: Features, rows: np.ndarray) -> np.ndarray:
         design = self.design(features, fitted.shape)
-        return predict_head(fitted.head, design.values[rows], self.head_for(fitted.shape))
+        link = LinkKind(str(fitted.diagnostics["link"])) if "link" in fitted.diagnostics else None
+        return predict_head(fitted.head, design.values[rows], self.head_for(fitted.shape, link))
 
     def nonlinear_dof(self, features: Features) -> int:
         del features

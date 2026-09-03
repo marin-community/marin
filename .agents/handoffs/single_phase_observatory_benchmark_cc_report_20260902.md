@@ -33,9 +33,7 @@ confirmation runs. No fresh runs were made; nothing here is a frontier claim.
 Successor. The smallest model the ablations support is `weibull_softplus_unscaled`: materialized epochs from
 the true inventory, one shared Weibull saturating benefit per bucket, one shared-threshold softplus
 overexposure harm per bucket, no families, an unscaled nonnegative head and the identity link (three nonlinear
-parameters, 2B amplitudes). At Screen it beats canonical DSP in 35 of 38 family-macro units and every retained
-mechanism survives its matched ablation (harm 31 / 7, row-scrambled harm 34 / 4, inventory 33 / 1, Weibull
-shape 27 / 11, unscaled head 35 / 3). At Certify it is the best model on 300M Uncheatable, 300M Table 9 and
+parameters, 2B amplitudes). At Screen it beats canonical DSP in 35 of 38 family-macro units; the harm (31 / 7), the row-scrambled harm control (34 / 4) and the inventory coordinate (33 / 1) survive their matched ablations at p <= 1e-4. The Weibull shape (27 / 11, p = 0.014) is the weak link: its ablation was not budget-matched and ties at Certify, and a budget-matched rerun is in section 12.2. The unscaled head's 35 / 3 is the Screen result that selected the revision, so the independent support for the head is the finalist replication, where the scaled predecessor explodes and the revision does not. At Certify it is the best model on 300M Uncheatable, 300M Table 9 and
 dclm and within 0.0034 of the best elsewhere, with no five-fold interval against DSP excluding zero; its heldout
 shortlist regret is zero on every cell. The successor registered before the gate (`weibull_softplus_shared`,
 column-scaled head) is kept in every table: it ties DSP and explodes on the Michael panels, and its unscaled-head
@@ -108,6 +106,17 @@ coefficients up to 196 and explodes out of fold (9e7 RMSE against 0.38 for the n
 so the repository solver's unconverged early stop is the baseline's only regularization; the analytic
 solver remains as the estimator ablation `olmix_loglinear_taskwise@analytic_gradient`.
 
+
+Cache generations and inputs (added after the DeepSeek review). Acceptance of a shard written under an earlier
+models-module hash proves configuration equality (the built model's description and the entry identity are
+unchanged), not behaviour equality: a change inside a shared helper such as `family_design`, `softplus_harm`,
+`weibull_response`, or `_nonnegative_solve`, or in a module constant used as a dataclass default, does not
+change the description and must be accompanied by a `DESIGN_REVISIONS` bump to invalidate shards. Panel inputs
+are part of every key, and the StarCoder curve inputs are now loaded through the frozen module
+`single_phase_observatory_starcoder_inputs_20260902.py`: a concurrent edit to the original loader script on
+2026-09-02 (new input files, new curve order) silently invalidated every curve shard and every pre-fingerprint
+shard until the harness was decoupled from it.
+
 ## 4. Which models predict the full mixture panel accurately (Certify, fit-panel nested CV)
 
 Reconstructed-aggregate RMSE, Uncheatable / Table 9, one frozen five-fold partition
@@ -157,7 +166,7 @@ External heldout selection (retrospective; `external_heldout_selection_metrics.c
   both hierarchical forms, GRP pairs, and family onset all select one coordinate from the
   symmetric-sepheads geometry-frontier archive (56% weight on the two stack_edu code buckets at 13
   epochs each) with predicted 0.99-1.01 and measured 1.1646 BPB: regret 0.1067, rank 129 of 146,
-  worse than the fold-mean baseline (0.0735). Their top-5 shortlists still contain the best coordinate.
+  worse than the fold-mean baseline (0.0735). The top-5 shortlists of GRP pairs and the family-onset model contain the best coordinate; those of the bucket-family and both hierarchical models do not (top-5 regret 0.0132).
   By proposal-source stratum the failure is confined to that frontier stratum (18 coordinates: 0.097
   for the power models against 0.016 for DSP); on the three epoch-cap validation strata every model is
   within 0.003 of the best.
@@ -314,10 +323,7 @@ the signed-head control uses the parent's ridge grid; ablation rows now carry th
 Delphi basin-hit sentence was corrected; the verifier exits nonzero on failure. Affected entries were
 refit (sections 8 and 10 report the post-fix numbers).
 
-DeepSeek (deepseek-v4-pro) could not run: the harness returned `QUOTA: Insufficient Balance` and the
-skill forbids routing around it. That second independent review is outstanding; rerun
-`uv run ~/.claude/skills/deepseek-subscription-review/scripts/deepseek_review.py` with the brief in the
-Fieldbook experiment once the balance is restored.
+DeepSeek (deepseek-v4-pro, maximum reasoning, read-only) ran after the successor work, once the account balance was restored (`.agents/handoffs/single_phase_observatory_deepseek_review_20260902.md`). It verified the panels, splits, reconstruction, Nadeau-Bengio contrasts, heldout stage, scramble controls, Michael family construction and every quoted number, and returned three blockers, all accepted. B1: the successor's log-deficit-link ablation beats it on all eight Certify cells (section 12.2), so the earlier sentence that everything dropped ties or hurts was false, and the claim that it is the only model whose Delphi Table 9 shortlist holds the optimum was wrong (GRP pairs and the family-onset model do too); both corrected. B2: the exponential-benefit ablation changed the benefit family, the nonlinear degrees of freedom and the grid size at once; a budget-matched exponential ablation (168 shapes) was added and run (section 12.2). B3: the shared-to-unscaled revision was chosen on the registered successor's Screen ablation and its scaled-head mirror is the same comparison, so the revision is supported by the finalist replication and the code mechanism, not by an independent ablation; the report now says so. DeepSeek also noted that the 38 Screen units are correlated and about 90 contrasts were tested without multiplicity correction (the p <= 1e-4 results survive any reasonable correction, the p = 0.014 and p = 0.002 results do not), that the cache generations prove configuration equality rather than behaviour equality (section 3), that the promotion-rule pooled contrasts use a fixed 1/4 test/train ratio, and a duplicated comment in the models module.
 
 ## 12. Successor model
 
@@ -381,9 +387,7 @@ Its matched Screen ablations (`screen/pooled_screen_contrasts.csv`):
 
 ### 12.2 Revised successor `weibull_softplus_unscaled`
 
-The revision keeps the design and grid of the registered successor and drops column scaling from the
-nonnegative head, the one change its matched ablations supported (35 of 38 units). Its ablation set was rebuilt on
-the revised base and adds the row-scrambled harm control and the reciprocal scaled-head ablation.
+The revision keeps the design and grid of the registered successor and drops column scaling from the nonnegative head. That choice was made on the registered successor's own Screen ablation (35 of 38 units), so it is a selection on Screen, and the reciprocal scaled-head ablation of the revised base is the same comparison seen from the other side rather than independent evidence. The independent support is the five-repeat finalist (the scaled predecessor explodes on the Michael repeats, 38 +- 54 and 4,546 +- 5,709, the revision does not), heldout parity or better, and the mechanism visible in the solver: columns are divided by their training RMS with a 1e-8 floor, so a harm column that is almost zero in training is amplified on extrapolated mixtures. Its ablation set was rebuilt on the revised base and adds the row-scrambled harm control.
 
 Screen (5,925 new fits, 0 failed; `screen/`):
 
@@ -398,9 +402,7 @@ Screen (5,925 new fits, 0 failed; `screen/`):
   coordinate 29 / 9 (p = 0.002); the exponential benefit 27 / 11 (p = 0.014, matched-onset curve 0.099 against
   0.012); the scaled head 35 / 3 and the signed head 35 / 3 (p < 0.001); family harm 23 / 11 (p = 0.058); the
   outcome permutation 38 / 0.
-- The log-deficit link is the one alternative that is not rejected on the tabular anchors (300M 0.0112, 60M
-  0.0183; 25 of 38 units, p = 0.073) but it explodes on the dense-horizon StarCoder curve (RMSE 120) and is worse
-  on matched onset (0.0276), so the identity link is kept.
+- The log-deficit link improves every tabular cell: at Screen 300M 0.0112 and 60M 0.0183 (25 of 38 units, p = 0.073), and at Certify all eight aggregates (-0.0019 / -0.0021 on 60M, -0.0015 / +0.0002 on 300M, -0.0013 / -0.0051 on Delphi, -0.015 on dclm, -0.019 on high quality; 135 of 194 Certify-scope units). It is dropped only because it explodes on the dense-horizon StarCoder family (RMSE 120 with Spearman 0.98, a calibration blow-up of the exponential inverse link on extrapolated rows, not a ranking failure) and is worse on matched onset (0.0276 against 0.0117). The identity link is therefore the choice under the StarCoder shape gate, and a bounded log-deficit link is the first candidate for another round.
 - Row-scrambled parent controls cost the bucket-family model 0.0028 / 0.0050 / 0.0088 (300M / 60M / Delphi) and
   the Weibull family onset model 0.0025 / 0.0041 / 0.0029, so the column-scrambled controls in section 10
   understated the harm block's information: pooled family totals of permuted columns still measure overexposure.
@@ -424,7 +426,7 @@ Certify (1,175 fits, 0 failed; top-level tables, `paired_model_contrasts.csv`):
 Heldout optimum selection (`external_heldout_selection_metrics.csv`): rank 1 / 1 on 60M (regret 0), rank 3 / 3
 on 300M (0.0029 / 0.0124; canonical DSP 0 / 0.0124), rank 3 on Delphi Uncheatable (0.0012; DSP rank 6, 0.0045)
 and rank 8 on Delphi Table 9 (0.0132, the same coordinate as DSP). Its top-5 shortlist regret is zero on every
-cell; it is the only model whose Delphi Table 9 shortlist contains the measured optimum. Like every parent it
+cell; it is one of three models, with GRP pairs and the family-onset model, whose Delphi Table 9 shortlist contains the measured optimum. Like every parent it
 never proposes the extrapolated stack_edu coordinate that the power-benefit family models select.
 
 StarCoder equal-family macro (`starcoder_family_summary.csv`): out-of-fold RMSE 0.0478, Spearman 0.981,
@@ -440,16 +442,18 @@ Delphi cells (0.0074 / 0.0273). Its 25-fold contrasts against canonical DSP are 
 panels; against OLMix -0.0055, -0.0044, -0.0041 on the three Uncheatable cells and -0.127 on dclm, all
 excluding zero. Unlike its column-scaled predecessor it never explodes on any repeat.
 
-The revised successor is therefore the smallest model that the benchmark supports: every mechanism it keeps has a
-matched ablation that loses at Screen with p <= 0.014, everything it drops (families, hierarchy, literal replay,
-retention gate, per-bucket shapes, column scaling, signed head, log-deficit link) either ties or hurts, and it
-is best or within run-noise of best on every Certify and finalist cell. What it does not deliver is a
-five-fold interval against canonical DSP that excludes zero on any 39-bucket cell; with 39 mixtures per panel no
-model pair achieves that, and the unit-level Screen tests are the evidence of ordering.
+The revised successor is therefore the smallest model that the benchmark supports under the StarCoder shape gate: the harm, its information content, and the inventory coordinate lose their matched ablations at p <= 1e-4; the Weibull shape is supported at p = 0.014 on a non-budget-matched ablation and ties at Certify (section 12.3 reports the budget-matched rerun); the nonnegative head loses its signed ablation at p < 0.001; the unscaled head is supported by the finalist replication rather than an independent ablation; families, hierarchy, literal replay, the retention gate and per-bucket shapes tie or hurt; the log-deficit link improves every tabular cell and is excluded only by the StarCoder gate. The 38 Screen units are correlated and about 90 contrasts were tested without a multiplicity correction, so only the p <= 1e-4 results should be read as established. It is best or within run noise of best on every Certify and finalist cell. What it does not deliver is a
+five-fold interval against canonical DSP that excludes zero on any 39-bucket cell; with five mixture-blocked folds
+and the Nadeau-Bengio correction no model pair achieves that (the panels hold 242 to 280 mixtures), and the unit-level
+Screen tests are the evidence of ordering.
 
 
 
 
+
+### 12.3 Budget-matched exponential benefit
+
+SUCCESSOR_EXP_MATCHED_PLACEHOLDER
 
 ## 13. Post-hoc choices, corrections, and open items
 

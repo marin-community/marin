@@ -1,0 +1,150 @@
+{
+ "constants": {
+  "sha256": "68a1c82235f0b2e1c8eff1d35f1f8b4add7c3e38ea5dd712322f447ba68baf6c",
+  "values": {
+   "CC_PREFIX": "'dolma3_cc/'",
+   "DEFICIT_FLOOR_FRACTION": "0.95",
+   "DSP_ACTIVE_TOL": "1e-10",
+   "DSP_DAMAGE_KNEE": "105.0",
+   "EPSILON": "1e-12",
+   "HARM_SCRAMBLE_SEED": "20260903",
+   "HUBER_ITERATIONS": "50",
+   "HUBER_SCALE": "2.5",
+   "HUBER_TOLERANCE": "0.001",
+   "LINK_CAP_MARGIN": "0.5",
+   "LINK_CLIP": "30.0",
+   "LOG_LINK_FLOOR_SPAN_FRACTION": "0.05",
+   "LOG_SPACE_SHAPE_KEYS": "frozenset({'benefit_offset', 'saturation_epochs', 'rate'})",
+   "MAD_TO_SIGMA": "1.4826",
+   "NNLS_MAXITER_FACTOR": "200",
+   "PAIR_SHRINKAGE": "1.0",
+   "QUALITY_SCRAMBLE_SEED": "20260904",
+   "QUALITY_SUFFIXES": "('_high', '_low')",
+   "REFINE_EVALUATIONS": "80",
+   "RPL_COLUMN_SCALE_FLOOR": "1e-12"
+  }
+ },
+ "note": "Source pins for the models-module helpers whose behaviour the cache-key description does not capture. A helper may change only together with a DESIGN_REVISIONS bump above the pinned revision (or a pin refresh in the same change). Refreshed 2026-09-02 22:2x after the Codex round-2 fixes; the pin now also records the resolved module constants that helper bodies read (constants block), since a changed default escapes both the description hash and the body hash.",
+ "pins": {
+  "GridModel.fit": {
+   "design_revision": 1,
+   "source_sha256": "2373547c72031c2cd8cc0302e970b958fd7aaca34ca03bd9276d1bb51622f87e"
+  },
+  "GridModel.head_for": {
+   "design_revision": 1,
+   "source_sha256": "471632e85931dc250a98cbaf8c205d94c57167474051d292ac149d432cdadafc"
+  },
+  "GridModel.predict": {
+   "design_revision": 1,
+   "source_sha256": "b3d9f29419fc7a25e6b77e24eb1ec2b56825647b65e8ebac8087122789327098"
+  },
+  "_benefit": {
+   "design_revision": 1,
+   "source_sha256": "70983c65840bfe6e8cdda0f34117b1bec461ef12fcfb93233fa0f48c0f75a972"
+  },
+  "_cv_rmse": {
+   "design_revision": 1,
+   "source_sha256": "5468adf1cb380b839ba1ad3ddb07e52d64c7ee4c104c3c737dd440bd4ba9ad69"
+  },
+  "_describe_value": {
+   "design_revision": 1,
+   "source_sha256": "50f1a4a735049ab1fd097f9b34192e43c49314f161fd976fcf3b0606dfc8ebeb"
+  },
+  "_grid_edges": {
+   "design_revision": 1,
+   "source_sha256": "21c6410e245f452f4ff7e7fb98061dfe4a02e3d93724d2fae7ac8f36b73cf164"
+  },
+  "_initial_simplex": {
+   "design_revision": 1,
+   "source_sha256": "e1cb2cb68306d3a646f192c65367bdff832b66909d6f17a00a361440b877f072"
+  },
+  "_nonnegative_solve": {
+   "design_revision": 1,
+   "source_sha256": "ae7b605d5eb4bbcac200d6e89e66e6982cc1a0bf75aa210d11e1e6d06dfa2841"
+  },
+  "_refine_shape": {
+   "design_revision": 1,
+   "source_sha256": "a0cf3f96ec478844c87cd99c44de6a4b0d66f4fd91aed3c30fa91d14d7f43936"
+  },
+  "bounded_harm": {
+   "design_revision": 1,
+   "source_sha256": "55dd7db59d03cc7b840224ce41722565a7aa3a939fd15452b0eba9f92e7cee21"
+  },
+  "bowl_design": {
+   "design_revision": 1,
+   "source_sha256": "edea35519a14134328b99dcad7b701cc469570edd80c0b4c44b3f031ed408584"
+  },
+  "cached_design": {
+   "design_revision": 1,
+   "source_sha256": "17bbf8814f8a33b896cff5781fa4e039fe5856e10f9f94886547e92b634bc479"
+  },
+  "crs_plus_design": {
+   "design_revision": 2,
+   "source_sha256": "84816615d622082edd8ae3ba12fd73a82fbf0480eeab21a0c297107b64ffb441"
+  },
+  "describe_model": {
+   "design_revision": 1,
+   "source_sha256": "1b640022eb97ca5747cb6b10eb993e4db4855627dd167c24b1465b792eb87be9"
+  },
+  "families_from_buckets": {
+   "design_revision": 1,
+   "source_sha256": "3d379280af8461baa56d5cc186525862236d7f77cf6537e9edfb4607abc08bb0"
+  },
+  "family_design": {
+   "design_revision": 1,
+   "source_sha256": "79cd2c8c58fa5654cc42ab8401313e85d8a85098f280468332ed1b6c90c775d9"
+  },
+  "features_from_panel": {
+   "design_revision": 1,
+   "source_sha256": "8ded36d70d7f199a66998db49020ab433084a2ad561c89313342b29b476509ef"
+  },
+  "fit_head": {
+   "design_revision": 1,
+   "source_sha256": "652edd331aa6628ca1d916eda55aed4c31f33bb57dd8959fc44e2cafc3ce626c"
+  },
+  "link_floor": {
+   "design_revision": 1,
+   "source_sha256": "3b29a1a083f2a3ea2c9922fc4997e121b90e0e6b0855fb43ca9740ce54cd8d66"
+  },
+  "link_inverse": {
+   "design_revision": 1,
+   "source_sha256": "a52fca8a0cb8c39478625534ae30daef466bd8eb487e1bae6388612b99446157"
+  },
+  "log_epoch_design": {
+   "design_revision": 1,
+   "source_sha256": "5e7f3b21a6fabe0dd83b75180af12f9a40c6d41a31bfa2f4a60a1ff03bd6d2fb"
+  },
+  "power_response": {
+   "design_revision": 1,
+   "source_sha256": "535a87061b758d3081a84e062cc77020dc1565bac68e3fb1c8a99fa3d1098c2d"
+  },
+  "predict_head": {
+   "design_revision": 1,
+   "source_sha256": "51eb9ba1323360e0eaf734b4868fdf1fb9709782fa72428cffcf6d3bbf4db70b"
+  },
+  "retained_power_law_design": {
+   "design_revision": 1,
+   "source_sha256": "c5d1ad1fbc2b976c4e6b66189f9978cad439e26da55566ca554a45fb641e0c31"
+  },
+  "retained_state": {
+   "design_revision": 1,
+   "source_sha256": "ba46c31bc386b0c60fb39762704c39d7866371d515bb404b2e7e58d685c65aef"
+  },
+  "saturation_response": {
+   "design_revision": 1,
+   "source_sha256": "cec878dcfe90592f4dd655802a583197dead01aa41de3cfb853c3d002f582c73"
+  },
+  "softplus": {
+   "design_revision": 1,
+   "source_sha256": "94a5207ba08307a8efd9c07fe671d01ecfc83e11380a5c6faa0d857ca18f8e50"
+  },
+  "softplus_harm": {
+   "design_revision": 1,
+   "source_sha256": "04c69239040bc9772b8745cec4e3fd876c300ade70fb1f2adfef7b5ee566cc12"
+  },
+  "weibull_response": {
+   "design_revision": 1,
+   "source_sha256": "c6706d3280029b554856ec134695f61d609a3c3489fafe095dcf0123905bd61b"
+  }
+ }
+}

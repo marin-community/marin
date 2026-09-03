@@ -4,6 +4,10 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
+import inspect
+import json
+import pathlib
 
 import numpy as np
 import pytest
@@ -230,3 +234,165 @@ def test_row_scrambled_harm_permutes_mixtures_while_column_scrambling_only_reord
     assert not np.allclose(rows.values[:, harm], plain.values[:, harm])
     assert np.allclose(np.sort(rows.values[:, harm], axis=0), np.sort(plain.values[:, harm], axis=0))
     assert np.allclose(rows.values[:, benefit], plain.values[:, benefit])
+
+
+def test_fit_helpers_change_only_with_a_design_revision_bump():
+    """Cache acceptance compares built-model descriptions, which do not see helper bodies or default constants.
+
+    A helper listed in the pin file may change its source only together with a higher DESIGN_REVISIONS entry
+    (which changes every dependent description and refits the affected shards) or a deliberate pin refresh.
+    """
+    pins = json.loads(
+        (pathlib.Path(__file__).parent / "data" / "single_phase_observatory_helper_pins.json").read_text()
+    )["pins"]
+    drifted = []
+    for name, pin in pins.items():
+        target = models
+        for part in name.split("."):
+            target = getattr(target, part)
+        source = inspect.getsource(target)
+        if hashlib.sha256(source.encode()).hexdigest() == pin["source_sha256"]:
+            continue
+        if models.DESIGN_REVISIONS.get(name, 1) > pin["design_revision"]:
+            continue
+        drifted.append(name)
+
+    assert not drifted, f"helpers changed without a DESIGN_REVISIONS bump or pin refresh: {drifted}"
+
+    constants = json.loads(
+        (pathlib.Path(__file__).parent / "data" / "single_phase_observatory_helper_pins.json").read_text()
+    )["constants"]
+    current = {name: repr(getattr(models, name)) for name in constants["values"]}
+    assert current == constants["values"], "module constants read by the pinned helpers changed without a pin refresh"
+
+
+def test_interaction_columns_come_in_signed_pairs():
+    features = _features()
+    shape = {"rate": 0.5, "power": 0.5, "threshold": 2.0}
+    base = models.FamilyOptions(family_signal="none", harm="softplus_bucket", benefit="weibull")
+    plain = models.family_design(features, shape, base)
+    total = models.family_design(features, shape, dataclasses.replace(base, interaction="total_square"))
+    pairs = models.family_design(features, shape, dataclasses.replace(base, interaction="family_products"))
+
+    assert total.values.shape[1] == plain.values.shape[1] + 2
+    assert np.allclose(total.values[:, -1], -total.values[:, -2])
+    assert pairs.values.shape[1] == plain.values.shape[1] + 2 * len(features.families.pairs)
+
+
+def test_quality_axis_pools_across_families_and_the_shuffled_control_differs():
+    features = _features()
+    shape = {"rate": 0.5, "power": 0.5, "threshold": 2.0}
+    base = models.FamilyOptions(family_signal="none", harm="softplus_bucket", benefit="weibull")
+    plain = models.family_design(features, shape, base)
+    both = models.family_design(features, shape, dataclasses.replace(base, quality_axis="both"))
+    shuffled = models.family_design(
+        features, shape, dataclasses.replace(base, quality_axis="both", shuffled_quality=True)
+    )
+    levels = sorted({int(level) for level in features.families.quality if level >= 0})
+
+    assert both.values.shape[1] == plain.values.shape[1] + 2 * len(levels)
+    assert [name for name in both.names if name.startswith("quality_")] == [
+        f"quality_benefit:{level}" for level in levels
+    ] + [f"quality_harm:{level}" for level in levels]
+    assert not np.allclose(both.values[:, -2 * len(levels) :], shuffled.values[:, -2 * len(levels) :])
+
+
+def test_bounded_log_deficit_link_caps_extrapolated_predictions():
+    features = _features()
+    response = _response(features)
+    design = models.family_design(
+        features,
+        {"rate": 0.5, "power": 0.5, "threshold": 2.0},
+        models.FamilyOptions(family_signal="none", harm="softplus_bucket", benefit="weibull"),
+    )
+    spec = models.HeadSpec(kind=models.HeadKind.NNLS, link=models.LinkKind.LOG_DEFICIT_BOUNDED)
+    head = models.fit_head(design, response, 0.01, spec)
+    extreme = models.predict_head(head, design.values * 50.0, spec)
+
+    assert np.isfinite(head.cap)
+    assert np.all(extreme <= head.floor + np.exp(head.cap) + 1e-9)
+    assert np.exp(head.cap) <= (response.max() - head.floor) * np.exp(models.LINK_CAP_MARGIN) + 1e-9
+
+
+def test_grid_model_records_the_full_inner_cv_table():
+    features = _features()
+    response = _response(features)
+    train, inner = _folds(features.rows)
+    options = models.FamilyOptions(family_signal="none", harm="softplus_bucket", benefit="weibull")
+    shapes = ({"rate": 0.5, "power": 0.5, "threshold": 2.0}, {"rate": 1.0, "power": 0.7, "threshold": 3.0})
+    model = models.GridModel(
+        "grid",
+        lambda feats, shape: models.family_design(feats, shape, options),
+        shapes,
+        (0.0, 0.1),
+        models.HeadSpec(),
+        3,
+    )
+    fitted = model.fit(features, response, train, inner, 0)
+
+    assert fitted.cv_table is not None and fitted.cv_table.shape == (2, 2)
+    assert np.isfinite(fitted.cv_table).all()
+    assert fitted.diagnostics["inner_cv_rmse"] == fitted.cv_table.min()
+
+
+def test_component_ridge_prior_scales_only_the_named_component():
+    features = dataclasses.replace(_features(), component="metric_a")
+    shape = {"rate": 0.5, "power": 0.5, "threshold": 2.0}
+    bucket = features.buckets_names[0]
+    table = (("metric_a", ((bucket, 10.0),)),)
+    options = models.FamilyOptions(
+        family_signal="none", harm="softplus_bucket", benefit="weibull", component_ridge=table
+    )
+    prior = models.family_design(features, shape, options)
+    other = models.family_design(dataclasses.replace(features, component="metric_b"), shape, options)
+
+    assert prior.ridge[prior.names.index("bucket_signal:0")] == 10.0
+    assert prior.ridge[prior.names.index("bucket_overexposure:0")] == 10.0
+    assert prior.ridge[prior.names.index("bucket_signal:1")] == 1.0
+    assert np.all(other.ridge == 1.0)
+
+
+def test_refined_grid_model_never_scores_worse_than_its_grid_argmin():
+    features = _features()
+    response = _response(features)
+    train, inner = _folds(features.rows)
+    options = models.FamilyOptions(family_signal="none", harm="softplus_bucket", benefit="weibull")
+    shapes = ({"rate": 0.5, "power": 0.5, "threshold": 2.0}, {"rate": 1.0, "power": 0.7, "threshold": 3.0})
+    grid = models.GridModel(
+        "grid",
+        lambda feats, shape: models.family_design(feats, shape, options),
+        shapes,
+        (0.0, 0.1),
+        models.HeadSpec(),
+        3,
+    )
+    refined = dataclasses.replace(grid, refine=True, refine_evaluations=40)
+    plain = grid.fit(features, response, train, inner, 0)
+    better = refined.fit(features, response, train, inner, 0)
+
+    assert better.diagnostics["inner_cv_rmse"] <= plain.diagnostics["inner_cv_rmse"]
+    assert better.diagnostics["refine_evaluations"] > 0
+    assert set(better.shape) == set(plain.shape)
+
+
+def test_grid_model_selects_a_link_by_inner_cv_and_predicts_with_it():
+    features = _features()
+    response = _response(features)
+    train, inner = _folds(features.rows)
+    options = models.FamilyOptions(family_signal="none", harm="softplus_bucket", benefit="weibull")
+    shapes = ({"rate": 0.5, "power": 0.5, "threshold": 2.0},)
+    grid = models.GridModel(
+        "grid",
+        lambda feats, shape: models.family_design(feats, shape, options),
+        shapes,
+        (0.0, 0.1),
+        models.HeadSpec(),
+        3,
+    )
+    both = dataclasses.replace(grid, link_candidates=(models.LinkKind.IDENTITY, models.LinkKind.LOG_DEFICIT_BOUNDED))
+    plain = grid.fit(features, response, train, inner, 0)
+    chosen = both.fit(features, response, train, inner, 0)
+
+    assert chosen.diagnostics["link"] in {"identity", "log_deficit_bounded"}
+    assert chosen.diagnostics["inner_cv_rmse"] <= plain.diagnostics["inner_cv_rmse"]
+    assert np.isfinite(both.predict(chosen, features, train)).all()

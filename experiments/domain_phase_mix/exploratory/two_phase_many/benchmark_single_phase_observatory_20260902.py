@@ -56,13 +56,13 @@ from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E
     benchmark_single_phase_surrogates_20260824 as single_phase,
 )
 from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E402
-    fit_starcoder_all_tied_curves_canonical_dsp_20260902 as starcoder_curves,
-)
-from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E402
     single_phase_observatory_models_20260902 as models,
 )
 from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E402
     single_phase_observatory_registry_20260902 as registry,
+)
+from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E402
+    single_phase_observatory_starcoder_inputs_20260902 as starcoder_curves,
 )
 from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E402
     starcoder_wsd80_epoch_accounting as epoch_accounting,
@@ -651,6 +651,9 @@ def fit_path_hash() -> str:
         heldout_inner_folds,
         plan_tasks,
         tier_plan,
+        component_cv_table,
+        fit_shared_unit,
+        shared_unit_key,
     )
     return hashlib.sha256("".join(inspect.getsource(function) for function in functions).encode()).hexdigest()
 
@@ -664,8 +667,7 @@ def legacy_snapshot(output_dir: Path) -> dict[str, Any]:
 @functools.cache
 def cache_generations(output_dir: Path) -> tuple[dict[str, Any], ...]:
     """Recorded models-module, fit-path, and configuration hashes whose keys stay valid for unchanged configurations."""
-    path = output_dir / "legacy_entry_descriptions_gen2.json"
-    return (json.loads(path.read_text()),) if path.is_file() else ()
+    return tuple(json.loads(path.read_text()) for path in sorted(output_dir.glob("legacy_entry_descriptions_gen*.json")))
 
 
 def legacy_accepted(entry: registry.ModelEntry, panel: BenchPanel, output_dir: Path) -> bool:
@@ -810,7 +812,7 @@ def fit_one(task: FitTask, output_dir: Path, legacy_split_hash: str) -> str:
     if entry.feature_transform == "outcome_permutation":
         generator = np.random.default_rng(OUTCOME_PERMUTATION_SEED + _seed(task))
         training_response[split.train] = response[split.train][generator.permutation(len(split.train))]
-    features = registry.apply_transform(panel.features, entry)
+    features = dataclasses.replace(registry.apply_transform(panel.features, entry), component=task.component)
     started = time.monotonic()
     payload: dict[str, Any] = {
         "protocol_hash": protocol_hash,
@@ -836,6 +838,7 @@ def fit_one(task: FitTask, output_dir: Path, legacy_split_hash: str) -> str:
                 "train_prediction": np.asarray(model.predict(fitted, features, split.train), dtype=float),
                 "shape_json": json.dumps(fitted.shape, sort_keys=True),
                 "ridge": float(fitted.ridge),
+                "cv_table": fitted.cv_table if fitted.cv_table is not None else np.zeros((0, 0)),
                 "diagnostics_json": json.dumps(
                     {
                         key: value if not isinstance(value, np.generic) else value.item()
@@ -861,6 +864,171 @@ def fit_one(task: FitTask, output_dir: Path, legacy_split_hash: str) -> str:
     payload["elapsed"] = time.monotonic() - started
     atomic_save(path, payload)
     return str(payload["status"]) if payload["status"] != "ok" else "fitted"
+
+
+SHARED_CACHE_DIR = "shared_cache"
+SCALE_SHARING_PANELS = frozenset({"60m_39bucket", "300m_39bucket", "delphi_3e18_39bucket"})
+
+
+def shared_unit_key(unit: str, task: FitTask) -> tuple[str, ...]:
+    """Grouping key of one task under a shared-shape sharing unit."""
+    if unit == "target":
+        return (task.panel, task.target, str(task.repeat), str(task.fold))
+    if unit == "panel":
+        return (task.panel, str(task.repeat), str(task.fold))
+    if unit == "scale":
+        head = "39bucket" if task.panel in SCALE_SHARING_PANELS else task.panel
+        return (head, str(task.repeat), str(task.fold))
+    raise ValueError(f"unknown sharing unit {unit}")
+
+
+def shared_cache_path(output_dir: Path, task: FitTask) -> Path:
+    shard = shard_path(output_dir, task)
+    return output_dir / SHARED_CACHE_DIR / shard.relative_to(output_dir / "shards")
+
+
+def component_cv_table(task: FitTask, output_dir: Path, legacy_split_hash: str) -> str:
+    """Pass 1 of the shared-shape fit: cache the parent's inner-CV table for one component fit."""
+    panel = load_panel(task.panel)
+    entry = registry.ENTRY_BY_ID[task.model_id]
+    hashes = task_protocol_hashes(task, entry, legacy_split_hash, panel, output_dir)
+    path = shared_cache_path(output_dir, task)
+    cached = load_shard(path)
+    if cached is not None and str(cached["protocol_hash"]) in hashes:
+        return "cached"
+    split = next(
+        item for item in panel_splits(panel, task.repeat + 1) if item.repeat == task.repeat and item.fold == task.fold
+    )
+    response = panel.group(task.target).outcomes[:, task.component_index].copy()
+    features = dataclasses.replace(registry.apply_transform(panel.features, entry), component=task.component)
+    model = entry.build(features)
+    fitted = model.fit(features, response, split.train, split.inner, _seed(task))
+    if fitted.cv_table is None:
+        raise ValueError(f"{task.model_id} does not expose an inner-CV table")
+    atomic_save(
+        path,
+        {
+            "protocol_hash": hashes[0],
+            "cv_table": fitted.cv_table,
+            "train_response_sd": float(np.std(response[split.train])),
+        },
+    )
+    return "fitted"
+
+
+def fit_shared_unit(
+    shared_id: str, parent_id: str, tasks: list[FitTask], output_dir: Path, legacy_split_hash: str
+) -> int:
+    """Pass 2: one shape per sharing unit (repeat-SD-normalized CV error summed over components), per-component ridge."""
+    parent = registry.ENTRY_BY_ID[parent_id]
+    shared = registry.ENTRY_BY_ID[shared_id]
+    tables: list[np.ndarray] = []
+    for task in tasks:
+        panel = load_panel(task.panel)
+        cached = load_shard(shared_cache_path(output_dir, task))
+        if cached is None:
+            raise FileNotFoundError(f"missing CV table for {task}")
+        scale = float(panel.component_repeat_sd.get(task.component, 0.0)) or float(cached["train_response_sd"])
+        tables.append(np.asarray(cached["cv_table"], dtype=float) / max(scale, 1e-9))
+    combined = np.sum([np.min(table, axis=1) for table in tables], axis=0)
+    shape_index = int(np.argmin(combined))
+    # A shared shard is only valid for the exact sharing unit that selected its shape.
+    unit_hash = hashlib.sha256(
+        json.dumps(sorted(f"{task.panel}|{task.target}|{task.component}" for task in tasks)).encode()
+    ).hexdigest()
+    written = 0
+    for task, table in zip(tasks, tables, strict=True):
+        panel = load_panel(task.panel)
+        shared_task = dataclasses.replace(task, model_id=shared_id)
+        hashes = task_protocol_hashes(shared_task, shared, legacy_split_hash, panel, output_dir)
+        path = shard_path(output_dir, shared_task)
+        split = next(
+            item
+            for item in panel_splits(panel, task.repeat + 1)
+            if item.repeat == task.repeat and item.fold == task.fold
+        )
+        existing = load_shard(path) if valid_shard(path, hashes, task.component, split.test) else None
+        if existing is not None and str(existing.get("shared_unit_hash", "")) == unit_hash:
+            continue
+        response = panel.group(task.target).outcomes[:, task.component_index].copy()
+        features = dataclasses.replace(registry.apply_transform(panel.features, parent), component=task.component)
+        model = parent.build(features)
+        candidates = model.candidate_shapes(features)
+        shape = dict(candidates[shape_index])
+        ridge_index = int(np.argmin(table[shape_index]))
+        ridge = float(model.ridge_grid[ridge_index])
+        design = model.design(features, shape)
+        spec = model.head_for(shape)
+        started = time.monotonic()
+        head = models.fit_head(
+            models.Design(design.values[split.train], design.ridge, design.names), response[split.train], ridge, spec
+        )
+        prediction = np.asarray(models.predict_head(head, design.values[split.test], spec), dtype=float)
+        payload = {
+            "protocol_hash": hashes[0],
+            "model_id": shared_id,
+            "component": task.component,
+            "component_index": task.component_index,
+            "test": split.test,
+            "train_rows": len(split.train),
+            "observed": response[split.test],
+            "constant_prediction": np.full(len(split.test), float(response[split.train].mean())),
+            "status": "ok" if np.isfinite(prediction).all() else "failed",
+            "error": "" if np.isfinite(prediction).all() else "non-finite shared-shape prediction",
+            "prediction": prediction,
+            "train_prediction": np.asarray(models.predict_head(head, design.values[split.train], spec), dtype=float),
+            "shape_json": json.dumps(shape, sort_keys=True),
+            "ridge": ridge,
+            "cv_table": np.zeros((0, 0)),
+            "shared_unit_hash": unit_hash,
+            "diagnostics_json": json.dumps(
+                {
+                    "inner_cv_rmse": float(table[shape_index, ridge_index]),
+                    "shared_unit_size": len(tasks),
+                    "shared_shape_index": shape_index,
+                    "candidates": int(table.size),
+                    "converged": True,
+                    "boundary_hits": 0,
+                    "effective_rank": models.effective_rank(design.values[split.train]),
+                    "columns": int(design.values.shape[1]),
+                    "fitted_dof": head.active + 1 + model.shape_dof,
+                    "nonlinear_dof": model.shape_dof,
+                },
+                sort_keys=True,
+            ),
+            "elapsed": time.monotonic() - started,
+        }
+        atomic_save(path, payload)
+        written += 1
+    return written
+
+
+def run_shared_stage(
+    plan: TierPlan, model_ids: tuple[str, ...], output_dir: Path, legacy_split_hash: str, workers: int
+) -> dict[str, int]:
+    """Fit every shared-shape entry in ``model_ids``: cache parent CV tables, then refit per sharing unit."""
+    counts: dict[str, int] = {}
+    for shared_id in model_ids:
+        if shared_id not in registry.SHARED_SHAPE_UNITS:
+            continue
+        parent_id, unit = registry.SHARED_SHAPE_UNITS[shared_id]
+        parent_tasks = plan_tasks(plan, (parent_id,))
+        print(f"{shared_id}: caching {len(parent_tasks)} parent CV tables", flush=True)
+        with parallel_config(backend="loky", inner_max_num_threads=1):
+            Parallel(n_jobs=workers, verbose=5, batch_size=1)(
+                delayed(component_cv_table)(task, output_dir, legacy_split_hash) for task in parent_tasks
+            )
+        groups: dict[tuple[str, ...], list[FitTask]] = {}
+        for task in parent_tasks:
+            groups.setdefault(shared_unit_key(unit, task), []).append(task)
+        with parallel_config(backend="loky", inner_max_num_threads=1):
+            written = Parallel(n_jobs=workers, verbose=5, batch_size=1)(
+                delayed(fit_shared_unit)(shared_id, parent_id, tasks, output_dir, legacy_split_hash)
+                for tasks in groups.values()
+            )
+        counts[shared_id] = int(sum(written))
+        print(f"{shared_id}: {len(groups)} units, {counts[shared_id]} shards written", flush=True)
+    return counts
 
 
 def run_tasks(tasks: list[FitTask], output_dir: Path, legacy_split_hash: str, workers: int) -> dict[str, int]:
@@ -1228,6 +1396,30 @@ def paired_contrasts(fold_metrics: pd.DataFrame, fits: pd.DataFrame, level: str)
     return pd.DataFrame(rows)
 
 
+def holm_adjusted(p_values: pd.Series) -> pd.Series:
+    """Holm step-down adjustment over the finite entries of one family of tests."""
+    values = p_values.to_numpy(float)
+    adjusted = np.full(len(values), np.nan)
+    finite = np.flatnonzero(np.isfinite(values))
+    order = finite[np.argsort(values[finite])]
+    running = 0.0
+    for rank, index in enumerate(order):
+        running = max(running, (len(finite) - rank) * values[index])
+        adjusted[index] = min(1.0, running)
+    return pd.Series(adjusted, index=p_values.index)
+
+
+def with_holm_correction(frame: pd.DataFrame) -> pd.DataFrame:
+    """Add Holm-corrected sign-test p-values, one family per (comparator kind, metric)."""
+    if frame.empty or "sign_test_p" not in frame.columns:
+        return frame
+    frame = frame.copy()
+    frame["sign_test_p_holm"] = frame.groupby(["comparator_kind", "metric"], dropna=False)["sign_test_p"].transform(
+        holm_adjusted
+    )
+    return frame
+
+
 def pooled_anchor_contrasts(component_fold_metrics: pd.DataFrame, fits: pd.DataFrame) -> pd.DataFrame:
     """Contrasts pooled over every Screen unit (anchors, Michael tasks, curves).
 
@@ -1294,12 +1486,12 @@ def pooled_anchor_contrasts(component_fold_metrics: pd.DataFrame, fits: pd.DataF
                         "sign_test_p": sign_p,
                     }
                 )
-    return pd.DataFrame(rows)
+    return with_holm_correction(pd.DataFrame(rows))
 
 
 def ablation_promotions(pooled: pd.DataFrame) -> pd.DataFrame:
     rows = []
-    for entry in registry.ABLATIONS:
+    for entry in registry.ABLATIONS + registry.ROW_SCRAMBLED_CONTROLS + registry.SUCCESSOR_ABLATIONS:
         subset = pooled[pooled["model"].eq(entry.model_id) & pooled["comparator"].eq(entry.parent)]
         frozen_hits = []
         posthoc_hits = []
@@ -1808,7 +2000,9 @@ def fit_heldout_component(
     ):
         return "cached"
     response = group.outcomes[:, component_index]
-    features = registry.apply_transform(panel.features, entry)
+    features = dataclasses.replace(
+        registry.apply_transform(panel.features, entry), component=str(group.components[component_index])
+    )
     started = time.monotonic()
     result: dict[str, Any] = {
         "protocol_hash": protocol_hash,
@@ -2458,7 +2652,7 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--tier", choices=TIERS, default="smoke")
     parser.add_argument("--models", default="parents")
-    parser.add_argument("--stage", choices=("fit", "report", "heldout", "all"), default="all")
+    parser.add_argument("--stage", choices=("fit", "report", "heldout", "shared", "all"), default="all")
     parser.add_argument("--workers", type=int, default=max(1, min(16, (os.cpu_count() or 1) - 2)))
     parser.add_argument("--heldout-models", default="parents")
     parser.add_argument(
@@ -2493,8 +2687,11 @@ def main() -> None:
 
     counts: dict[str, int] = {}
     if args.stage in ("fit", "all"):
-        tasks = plan_tasks(plan, model_ids)
+        fit_ids = tuple(model_id for model_id in model_ids if model_id not in registry.SHARED_SHAPE_UNITS)
+        tasks = plan_tasks(plan, fit_ids)
         counts = run_tasks(tasks, args.output_dir, split_hash, args.workers)
+    if args.stage in ("fit", "shared", "all"):
+        counts.update(run_shared_stage(plan, model_ids, args.output_dir, split_hash, args.workers))
     if args.stage in ("heldout", "all") and args.tier in ("certify", "finalist"):
         heldout_ids = parse_models(args.heldout_models)
         counts["heldout"] = run_heldout(args.output_dir, heldout_ids, args.workers, split_hash)["fitted"]

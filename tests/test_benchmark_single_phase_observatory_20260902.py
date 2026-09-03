@@ -170,3 +170,25 @@ def test_second_cache_generation_accepts_only_unchanged_configurations(tmp_path)
     path.write_text(json.dumps({**generation, "entries": {key: "changed"}}))
     harness.cache_generations.cache_clear()
     assert harness.task_protocol_hashes(task, entry, "legacy", panel, tmp_path) == primary
+
+
+def test_holm_correction_is_monotone_and_bounded():
+    raw = pd.Series([0.001, 0.04, 0.03, np.nan, 0.5])
+    adjusted = harness.holm_adjusted(raw)
+
+    assert np.isnan(adjusted[3])
+    assert np.all(adjusted.dropna() >= raw.dropna())
+    assert np.all(adjusted.dropna() <= 1.0)
+    assert adjusted[0] == pytest.approx(0.004)
+    assert adjusted[1] >= adjusted[2]
+
+
+def test_shared_shape_unit_keys_group_by_target_panel_and_scale():
+    task = harness.FitTask("m", "300m_39bucket", "table9", 3, "x", 0, 2)
+    other = harness.FitTask("m", "delphi_3e18_39bucket", "uncheatable", 0, "y", 0, 2)
+    curve = harness.FitTask("m", "starcoder::coupled_onset__0p60__endpoint", "programming_languages_bpb", 0, "z", 0, 2)
+
+    assert harness.shared_unit_key("target", task) != harness.shared_unit_key("target", other)
+    assert harness.shared_unit_key("panel", task)[0] == "300m_39bucket"
+    assert harness.shared_unit_key("scale", task) == harness.shared_unit_key("scale", other)
+    assert harness.shared_unit_key("scale", curve) != harness.shared_unit_key("scale", task)
