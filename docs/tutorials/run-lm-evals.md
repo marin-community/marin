@@ -170,12 +170,12 @@ uv run python -m experiments.evaluation.cli launch \
 `agentic` runs seven full Harbor datasets and can consume substantial Daytona and inference
 capacity. Use `tb2-lite`, `swebench-lite`, `aime-smoke`, or `--limit N` for validation runs.
 
-Run one Grug/OpenCode trial with the model and agent policy registered for that benchmark:
+Run one OT-TBLite trial with the registered Grug model and OpenCode agent policy:
 
 ```bash
 uv run python -m experiments.evaluation.cli launch \
   --model grug-agentic-s3-step1903 \
-  --evals grug-opencode-id \
+  --evals ot-tblite \
   --limit 1
 ```
 
@@ -210,7 +210,7 @@ For example, retry a model-load failure with half the default reader concurrency
 RUNAI_STREAMER_CONCURRENCY=4 \
 uv run python -m experiments.evaluation.cli launch \
   --model grug-agentic-s3-step1903 \
-  --evals grug-opencode-id \
+  --evals ot-tblite \
   --limit 1
 ```
 
@@ -233,7 +233,7 @@ when RunAI reports a transient read failure.
 The `code` suite is registered but is not runnable with the current pinned evaluation image because
 its HumanEvalPlus and MBPPPlus dependencies are absent. Individual evaluation keys are defined in
 `experiments/evaluation/evals.py`. Useful Harbor keys outside `agentic` include `tb2-lite`,
-`swebench-lite`, `swebench-full`, `aime-smoke`, `aime-harbor`, and `grug-opencode-id`.
+`swebench-lite`, `swebench-full`, `aime-smoke`, `aime-harbor`, and `ot-tblite`.
 
 ### Choose a model
 
@@ -245,7 +245,7 @@ its HumanEvalPlus and MBPPPlus dependencies are absent. Individual evaluation ke
 | `llama-3.1-8b-base` | Base, TPU | `nlp` |
 | `llama3.1-8b-instruct` | Instruct, TPU | `core`, `nlp`, or `chat` |
 | `qwen3-32b` | Instruct, CoreWeave H100x2 | `tb2-lite`, `tb2`, or `agentic` |
-| `grug-agentic-s3-step1903` | Instruct export, CoreWeave H100x8 | `grug-opencode-id` |
+| `grug-agentic-s3-step1903` | Instruct export, CoreWeave H100x8 | `ot-tblite` |
 
 The complete catalog is the union of `experiments/evaluation/models.py` and YAML files under
 `experiments/evaluation/serve/models/`. The
