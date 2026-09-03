@@ -4676,25 +4676,21 @@ dependencies = [
     { name = "fastapi" },
     { name = "fastembed" },
     { name = "google-cloud-compute" },
+    { name = "httpx" },
     { name = "marin-finelog" },
     { name = "marin-finestore" },
     { name = "marin-iris" },
     { name = "marin-rigging" },
     { name = "pg8000" },
     { name = "pgvector" },
+    { name = "playwright" },
     { name = "pyarrow" },
+    { name = "pytest" },
+    { name = "pytest-timeout" },
     { name = "pyyaml" },
     { name = "requests" },
     { name = "sqlalchemy" },
     { name = "uvicorn" },
-]
-
-[package.dev-dependencies]
-test = [
-    { name = "httpx" },
-    { name = "playwright" },
-    { name = "pytest" },
-    { name = "pytest-timeout" },
 ]
 
 [package.metadata]
@@ -4706,25 +4702,21 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
     { name = "fastembed", specifier = ">=0.8,<0.9" },
     { name = "google-cloud-compute", specifier = ">=1.19" },
+    { name = "httpx", specifier = ">=0.27" },
     { name = "marin-finelog", editable = "lib/finelog" },
     { name = "marin-finestore", editable = "lib/finestore" },
     { name = "marin-iris", editable = "lib/iris" },
     { name = "marin-rigging", editable = "lib/rigging" },
     { name = "pg8000", specifier = ">=1.31" },
     { name = "pgvector", specifier = ">=0.3" },
+    { name = "playwright", specifier = ">=1.49" },
     { name = "pyarrow", specifier = ">=17" },
+    { name = "pytest", specifier = ">=8.4" },
+    { name = "pytest-timeout" },
     { name = "pyyaml", specifier = ">=6" },
     { name = "requests", specifier = ">=2.32" },
     { name = "sqlalchemy", specifier = ">=2" },
     { name = "uvicorn", specifier = ">=0.30" },
-]
-
-[package.metadata.requires-dev]
-test = [
-    { name = "httpx", specifier = ">=0.27" },
-    { name = "playwright", specifier = ">=1.49" },
-    { name = "pytest", specifier = ">=8.4" },
-    { name = "pytest-timeout" },
 ]
 
 [[package]]
