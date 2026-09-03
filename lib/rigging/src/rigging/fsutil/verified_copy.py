@@ -57,6 +57,13 @@ class _DestinationFile:
 
 
 @dataclass(frozen=True)
+class _CopiedFile:
+    sha256: str
+    size: int
+    expected_etag: str | None
+
+
+@dataclass(frozen=True)
 class _ResumeMarker:
     source_path: str
     source_identity: str | None
@@ -240,8 +247,8 @@ def _copy_or_resume(
         ):
             return expected, False
 
-    sha256, copied_size, expected_etag = _copy_with_hash(source_fs, source.source_path, destination_fs, destination_path)
-    if copied_size != source.size:
+    copied = _copy_with_hash(source_fs, source.source_path, destination_fs, destination_path)
+    if copied.size != source.size:
         destination_fs.rm(destination_path)
         raise VerifiedCopyError(f"source size changed while copying {source.path}")
     current_info = source_fs.info(source.source_path)
@@ -255,13 +262,13 @@ def _copy_or_resume(
             destination_fs,
             destination_path,
             expected_size=source.size,
-            expected_sha256=sha256,
-            expected_etag=expected_etag,
+            expected_sha256=copied.sha256,
+            expected_etag=copied.expected_etag,
         )
     except VerifiedCopyError:
         destination_fs.rm(destination_path)
         raise
-    verified = VerifiedFile(source.path, source.size, sha256, source.identity)
+    verified = VerifiedFile(source.path, source.size, copied.sha256, source.identity)
     _write_json_atomic(
         status_fs,
         marker_path,
@@ -271,7 +278,7 @@ def _copy_or_resume(
                 source.identity,
                 source.path,
                 source.size,
-                sha256,
+                copied.sha256,
                 destination_identity,
             )
         ),
@@ -284,7 +291,7 @@ def _copy_with_hash(
     source_path: str,
     destination_fs: AbstractFileSystem,
     destination_path: str,
-) -> tuple[str, int, str | None]:
+) -> _CopiedFile:
     parent, separator, _ = destination_path.rpartition("/")
     if separator:
         destination_fs.makedirs(parent, exist_ok=True)
@@ -303,7 +310,7 @@ def _copy_with_hash(
             destination.write(chunk)
             copied_size += len(chunk)
     expected_etag = multipart_etag.etag(copied_size) if multipart_etag is not None else None
-    return digest.hexdigest(), copied_size, expected_etag
+    return _CopiedFile(digest.hexdigest(), copied_size, expected_etag)
 
 
 def _verify_destination(
