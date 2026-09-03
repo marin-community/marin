@@ -53,13 +53,15 @@ def _record(
     attributes: str,
     *,
     job: str = "/serve",
+    run: str = "run-1",
     kind: str = "gauge",
+    service: str = "vllm",
 ) -> TelemetryRow:
     return TelemetryRow(
         "cw-a",
-        "vllm",
+        service,
         job,
-        "run-1",
+        run,
         "execution-1",
         name,
         kind,
@@ -90,15 +92,35 @@ def _database(rows: list[TelemetryRow]) -> duckdb.DuckDBPyConnection:
         )
         """
     )
+    database.execute(
+        """
+        CREATE TABLE "telemetry_v1.marinskyrl"(
+            cluster VARCHAR,
+            service VARCHAR,
+            job_id VARCHAR,
+            run_id VARCHAR,
+            execution_uid VARCHAR,
+            name VARCHAR,
+            kind VARCHAR,
+            value DOUBLE,
+            resource_attributes_json VARCHAR,
+            attributes_json VARCHAR,
+            timestamp_ms BIGINT,
+            seq BIGINT
+        )
+        """
+    )
     database.execute('CREATE VIEW telemetry_v1 AS SELECT * FROM "telemetry_v1.vllm" WHERE FALSE')
     database.execute(
         "CREATE MACRO json_get(document, field_name) " "AS json_extract_string(document, concat('$.', field_name))"
     )
-    if rows:
-        database.executemany(
-            'INSERT INTO "telemetry_v1.vllm" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            [(*row, seq) for seq, row in enumerate(rows)],
-        )
+    for service in ("vllm", "marinskyrl"):
+        service_rows = [row for row in rows if row.service == service]
+        if service_rows:
+            database.executemany(
+                f'INSERT INTO "telemetry_v1.{service}" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                [(*row, seq) for seq, row in enumerate(service_rows)],
+            )
     return database
 
 
@@ -113,6 +135,59 @@ def test_dashboard_run_identity_variable_reads_promoted_column():
     database = _database([_record("a", "num_requests_running", 1, 150_000, _attributes())])
 
     assert database.execute(sql).fetchall() == [("run-1",)]
+
+
+def test_dashboard_identity_variable_includes_embedded_vllm_and_excludes_ray():
+    dashboard = json.loads((Path(__file__).parents[1] / "dashboards" / "inference.json").read_text())
+    sql = dashboard["templating"]["list"][1]["query"]["infinityQuery"]["url_options"]["params"][0]["value"]
+    sql = (
+        sql.replace("${identity_kind}", "run_id")
+        .replace("{{from}}", "TIMESTAMP '1970-01-01 00:02:00'")
+        .replace("{{to}}", "TIMESTAMP '1970-01-01 00:03:00'")
+    )
+    database = _database(
+        [
+            _record(
+                "driver",
+                "num_requests_running",
+                1,
+                150_000,
+                _attributes("current_snapshot", metric_source="vllm"),
+                run="embedded-run",
+                service="marinskyrl",
+            ),
+            _record(
+                "driver",
+                "num_requests_running",
+                1,
+                150_000,
+                _attributes("current_snapshot", metric_source="ray"),
+                run="ray-run",
+                service="marinskyrl",
+            ),
+        ]
+    )
+
+    assert database.execute(sql).fetchall() == [("embedded-run",)]
+
+
+def test_dashboard_exposes_iteration_occupancy_and_time_resolved_tpot():
+    dashboard = json.loads((Path(__file__).parents[1] / "dashboards" / "inference.json").read_text())
+    panels = {panel["id"]: panel for panel in dashboard["panels"]}
+
+    assert panels[3]["title"] == "Running, waiting, and iteration tokens"
+    assert panels[3]["targets"][0]["url_options"]["params"][-1] == {"key": "view", "value": "saturation"}
+    assert panels[3]["fieldConfig"]["overrides"] == [
+        {
+            "matcher": {"id": "byName", "options": "iteration_tokens"},
+            "properties": [
+                {"id": "custom.axisPlacement", "value": "right"},
+                {"id": "custom.axisLabel", "value": "tokens / iteration"},
+            ],
+        }
+    ]
+    assert panels[11]["title"] == "Time per output token"
+    assert panels[11]["targets"][0]["filterExpression"] == "metric == 'tpot' && stat == 'mean_over_time'"
 
 
 def _query_rows(
@@ -262,6 +337,20 @@ def test_query_preserves_replicas_discards_resets_and_keeps_native_counter_delta
     assert _one(overview_rows, "counter_total", "preemptions", "total")["value"] == pytest.approx(3)
 
 
+def test_standalone_token_rate_keeps_the_sixty_second_source_floor():
+    cumulative = _attributes("cumulative_snapshot")
+    records = [
+        _record("a", "generation_tokens_total", value, timestamp_ms, cumulative)
+        for timestamp_ms, value in ((0, 0), (60_000, 600), (120_000, 1_200))
+    ]
+
+    rows = _query_rows(_database(records), start_ms=0, end_ms=135_000, bucket_ms=15_000)
+    rates = [row for row in rows if row["section"] == "token_rate"]
+
+    assert len(rates) == 2
+    assert all(row["value"] == pytest.approx(10) for row in rates)
+
+
 def test_query_aggregates_request_and_kv_gauges_after_replica_bins(overview_rows):
     assert _one(overview_rows, "saturation_summary", "num_requests_running", "average")["value"] == pytest.approx(7)
     assert _one(overview_rows, "saturation_summary", "num_requests_waiting", "peak")["value"] == pytest.approx(2)
@@ -310,6 +399,20 @@ def test_query_derives_histogram_means_and_only_bounded_quantiles(overview_rows)
     assert _one(overview_rows, "latency", "inter_token_latency", "mean")["value"] == pytest.approx(0.1)
     assert _one(overview_rows, "latency", "queue", "mean")["value"] == pytest.approx(0.2)
     assert _one(overview_rows, "latency", "e2e", "mean")["value"] == pytest.approx(1.5)
+
+
+def test_standalone_fixture_preserves_all_nine_overview_sections(overview_rows):
+    assert {row["section"] for row in overview_rows} == {
+        "counter_total",
+        "freshness",
+        "freshness_detail",
+        "latency",
+        "request_outcome",
+        "saturation",
+        "saturation_summary",
+        "telemetry_health",
+        "token_rate",
+    }
 
 
 def test_query_discards_an_entire_histogram_sample_when_one_component_resets():
@@ -550,6 +653,346 @@ def test_query_reports_combined_collector_loss_across_replicas():
         ("dropped samples", "total", "telemetry_loss", 2.0, "samples", None),
         ("source availability", "unavailable polls", "all resources", 1.0, "polls", None),
     ]
+
+
+def _embedded_observability_records() -> list[TelemetryRow]:
+    cumulative = _attributes("cumulative_snapshot", metric_source="vllm", engine="physical-a", engine_index="0")
+    current = _attributes("current_snapshot", metric_source="vllm", engine="physical-a", engine_index="0", step="7")
+    rows: list[TelemetryRow] = []
+    for sample, timestamp_ms in enumerate(range(0, 150_000, 15_000)):
+        rows.extend(
+            [
+                _record(
+                    "driver",
+                    "generation_tokens_total",
+                    sample * 150,
+                    timestamp_ms,
+                    cumulative,
+                    job="/train",
+                    service="marinskyrl",
+                ),
+                _record(
+                    "driver",
+                    "num_requests_running",
+                    sample + 1,
+                    timestamp_ms,
+                    current,
+                    job="/train",
+                    service="marinskyrl",
+                ),
+                _record(
+                    "driver",
+                    "iteration_tokens_total_sum",
+                    sample * 100,
+                    timestamp_ms,
+                    cumulative,
+                    job="/train",
+                    service="marinskyrl",
+                ),
+                _record(
+                    "driver",
+                    "iteration_tokens_total_count",
+                    sample,
+                    timestamp_ms,
+                    cumulative,
+                    job="/train",
+                    service="marinskyrl",
+                ),
+                _record(
+                    "driver",
+                    "iteration_tokens_total_bucket",
+                    sample,
+                    timestamp_ms,
+                    _attributes(
+                        "cumulative_snapshot",
+                        metric_source="vllm",
+                        engine="physical-a",
+                        engine_index="0",
+                        le="+Inf",
+                    ),
+                    job="/train",
+                    service="marinskyrl",
+                ),
+            ]
+        )
+        finished = sample // 2
+        rows.extend(
+            [
+                _record(
+                    "driver",
+                    "request_time_per_output_token_seconds_sum",
+                    finished * 0.1,
+                    timestamp_ms,
+                    cumulative,
+                    job="/train",
+                    service="marinskyrl",
+                ),
+                _record(
+                    "driver",
+                    "request_time_per_output_token_seconds_count",
+                    finished,
+                    timestamp_ms,
+                    cumulative,
+                    job="/train",
+                    service="marinskyrl",
+                ),
+                _record(
+                    "driver",
+                    "request_time_per_output_token_seconds_bucket",
+                    finished,
+                    timestamp_ms,
+                    _attributes(
+                        "cumulative_snapshot",
+                        metric_source="vllm",
+                        engine="physical-a",
+                        engine_index="0",
+                        le="+Inf",
+                    ),
+                    job="/train",
+                    service="marinskyrl",
+                ),
+            ]
+        )
+    rows.append(
+        _record(
+            "driver",
+            "generation_tokens_total",
+            100_000,
+            135_000,
+            _attributes("cumulative_snapshot", metric_source="ray"),
+            job="/train",
+            service="marinskyrl",
+        )
+    )
+    return rows
+
+
+def test_embedded_source_has_dense_running_token_and_iteration_bins_and_finish_tpot():
+    rows = _query_rows(
+        _database(_embedded_observability_records()),
+        job="/train",
+        start_ms=0,
+        end_ms=150_000,
+        bucket_ms=15_000,
+    )
+
+    assert len([row for row in rows if row["section"] == "token_rate" and row["metric"] == "generated_tokens"]) >= 8
+    assert len([row for row in rows if row["section"] == "saturation" and row["metric"] == "num_requests_running"]) >= 8
+    iteration = [row for row in rows if row["section"] == "saturation" and row["metric"] == "iteration_tokens"]
+    assert len(iteration) >= 8
+    assert all(row["value"] == pytest.approx(100) for row in iteration)
+    tpot = [row for row in rows if row["section"] == "latency" and row["stat"] == "mean_over_time"]
+    assert len(tpot) == 4
+    assert all(row["value"] == pytest.approx(0.1) for row in tpot)
+    assert _one(rows, "counter_total", "generated_tokens", "total")["value"] == pytest.approx(1_350)
+
+
+def test_embedded_gauge_step_changes_do_not_create_extra_replicas():
+    records = [
+        _record(
+            "driver",
+            "num_requests_running",
+            value,
+            timestamp_ms,
+            _attributes(
+                "current_snapshot",
+                metric_source="vllm",
+                engine="physical-a",
+                engine_index="0",
+                step=step,
+            ),
+            job="/train",
+            service="marinskyrl",
+        )
+        for timestamp_ms, value, step in ((0, 4, "7"), (5_000, 6, "8"))
+    ]
+
+    rows = _query_rows(_database(records), job="/train", start_ms=0, end_ms=15_000, bucket_ms=15_000)
+
+    assert _one(rows, "saturation", "num_requests_running", "value")["value"] == pytest.approx(5)
+
+
+def test_embedded_histogram_validity_is_independent_per_physical_engine():
+    def histogram_sample(engine: str, timestamp_ms: int, total: float, count: float) -> list[TelemetryRow]:
+        base = dict(metric_source="vllm", engine=engine, engine_index="0")
+        return [
+            _record(
+                "driver",
+                "time_to_first_token_seconds_sum",
+                total,
+                timestamp_ms,
+                _attributes("cumulative_snapshot", **base),
+                job="/train",
+                service="marinskyrl",
+            ),
+            _record(
+                "driver",
+                "time_to_first_token_seconds_count",
+                count,
+                timestamp_ms,
+                _attributes("cumulative_snapshot", **base),
+                job="/train",
+                service="marinskyrl",
+            ),
+            _record(
+                "driver",
+                "time_to_first_token_seconds_bucket",
+                count,
+                timestamp_ms,
+                _attributes("cumulative_snapshot", le="+Inf", **base),
+                job="/train",
+                service="marinskyrl",
+            ),
+        ]
+
+    records = [
+        *histogram_sample("physical-a", 0, 0, 0),
+        *histogram_sample("physical-a", 15_000, 10, 1),
+        *histogram_sample("physical-b", 15_000, 20, 1),
+    ]
+
+    rows = _query_rows(_database(records), job="/train", start_ms=0, end_ms=30_000, bucket_ms=15_000)
+
+    assert _one(rows, "latency", "ttft", "mean")["value"] == pytest.approx(10)
+
+
+def test_embedded_histograms_require_the_new_unique_engine_contract():
+    old_attributes = _attributes("cumulative_snapshot", metric_source="vllm", engine="0")
+    records = [
+        _record(
+            "driver",
+            name,
+            value,
+            timestamp_ms,
+            old_attributes,
+            service="marinskyrl",
+        )
+        for name in ("time_to_first_token_seconds_sum", "time_to_first_token_seconds_count")
+        for timestamp_ms, value in ((105_000, 1), (135_000, 2))
+    ]
+
+    rows = _query_rows(_database(records))
+
+    assert [row for row in rows if row["section"] == "latency"] == []
+
+
+@pytest.mark.parametrize(
+    ("sample_limit", "telemetry_loss", "status"),
+    [(0, 0, "healthy"), (2, 0, "incomplete"), (0, 3, "incomplete")],
+)
+def test_embedded_publication_health_uses_only_fresh_vllm_loss_signals(sample_limit, telemetry_loss, status):
+    records = [
+        _record(
+            "driver",
+            "metric_publication_dropped_records",
+            sample_limit,
+            165_000,
+            _attributes("current_snapshot", metric_source="vllm", drop_reason="sample_limit"),
+            job="/train",
+            service="marinskyrl",
+        ),
+        _record(
+            "driver",
+            "metric_publication_dropped_records",
+            telemetry_loss,
+            165_000,
+            _attributes("current_snapshot", metric_source="vllm", drop_reason="telemetry_loss"),
+            job="/train",
+            service="marinskyrl",
+        ),
+        _record(
+            "driver",
+            "metric_publication_dropped_records",
+            99,
+            165_000,
+            _attributes("current_snapshot", metric_source="ray", drop_reason="telemetry_loss"),
+            job="/train",
+            service="marinskyrl",
+        ),
+    ]
+
+    rows = _query_rows(_database(records), job="/train")
+
+    assert _one(rows, "telemetry_health", "collector", "polls")["status"] == status
+
+
+def test_embedded_publication_health_is_unknown_when_one_signal_is_absent_or_stale():
+    one_signal = [
+        _record(
+            "driver",
+            "metric_publication_dropped_records",
+            0,
+            165_000,
+            _attributes("current_snapshot", metric_source="vllm", drop_reason="sample_limit"),
+            job="/train",
+            service="marinskyrl",
+        )
+    ]
+    assert (
+        _one(_query_rows(_database(one_signal), job="/train"), "telemetry_health", "collector", "polls")["status"]
+        == "unknown"
+    )
+
+    stale = [
+        _record(
+            "driver",
+            "metric_publication_dropped_records",
+            0,
+            105_000,
+            _attributes("current_snapshot", metric_source="vllm", drop_reason=reason),
+            job="/train",
+            service="marinskyrl",
+        )
+        for reason in ("sample_limit", "telemetry_loss")
+    ]
+    assert (
+        _one(
+            _query_rows(_database(stale), job="/train", end_ms=360_000),
+            "telemetry_health",
+            "collector",
+            "polls",
+        )["status"]
+        == "unknown"
+    )
+
+
+def test_embedded_publication_health_reports_a_fresh_positive_without_its_companion():
+    records = [
+        _record(
+            "driver",
+            "metric_publication_dropped_records",
+            2,
+            165_000,
+            _attributes("current_snapshot", metric_source="vllm", drop_reason="sample_limit"),
+            job="/train",
+            service="marinskyrl",
+        )
+    ]
+
+    rows = _query_rows(_database(records), job="/train")
+
+    assert _one(rows, "telemetry_health", "collector", "polls")["status"] == "incomplete"
+
+
+def test_embedded_publication_health_uses_the_latest_current_value():
+    records = [
+        _record(
+            "driver",
+            "metric_publication_dropped_records",
+            value,
+            timestamp_ms,
+            _attributes("current_snapshot", metric_source="vllm", drop_reason=reason),
+            job="/train",
+            service="marinskyrl",
+        )
+        for reason in ("sample_limit", "telemetry_loss")
+        for timestamp_ms, value in ((135_000, 2), (165_000, 0))
+    ]
+
+    rows = _query_rows(_database(records), job="/train")
+
+    assert _one(rows, "telemetry_health", "collector", "polls")["status"] == "healthy"
+    assert [row for row in rows if row["metric"] == "dropped samples"] == []
 
 
 def test_query_returns_explicit_no_data_row():
