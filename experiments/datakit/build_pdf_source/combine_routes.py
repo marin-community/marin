@@ -52,6 +52,8 @@ from zephyr.runners import SubprocessRunner
 
 from experiments.datakit.build_pdf_source.classify import shard_routing
 from experiments.datakit.build_pdf_source.common import (
+    CORPUS,
+    MAIN_OUTPUT_SUBDIR,
     SHARD_PATTERN,
     SOURCE_FILE_COLUMN,
     PdfClassificationData,
@@ -65,8 +67,7 @@ logger = logging.getLogger(__name__)
 
 _COUNTER_PREFIX = "focus_crawl_pdf_combine"
 
-_CORPUS = "common_crawl_focus_2026_22_pdf"
-_COMBINED_NAME = f"data/datakit/combine/{_CORPUS}"
+_COMBINED_NAME = f"data/datakit/combine/{CORPUS}"
 
 
 def _route_fields(*routes: tuple[pa.Field, ...]) -> tuple[pa.Field, ...]:
@@ -161,12 +162,7 @@ def tag_batch(batch: pa.RecordBatch, route_dirs: tuple[tuple[bool, str], ...], r
 def combine_routes(
     output_path: str, inspector_output_path: str, ocr_output_path: str, classification_output_path: str
 ) -> PdfDocumentsData:
-    """Write the chosen extraction of every document into one directory.
-
-    A pure 1:1 shard map -- no shuffle. The global sort and the exact dedup both belong to the
-    normalize step that consumes this, so doing either here would be paid for twice. Nothing is
-    broadcast: a task reads the routing shard named after the shard it is tagging.
-    """
+    """Write the chosen extraction of every document into one directory, one shard per input shard."""
     routing_dir = read_artifact(classification_output_path, PdfClassificationData).main_output_dir
 
     shards: list[str] = []
@@ -182,7 +178,7 @@ def combine_routes(
         shards.extend(found)
     logger.info("Combining %d shards across %d extraction routes", len(shards), len(route_dirs))
 
-    main_output_dir = prefix_join(output_path, "outputs/main")
+    main_output_dir = prefix_join(output_path, MAIN_OUTPUT_SUBDIR)
     pipeline = (
         Dataset.from_list(shards)
         .load_parquet(batch_mode=True, include_file_paths=True, file_path_column=SOURCE_FILE_COLUMN)

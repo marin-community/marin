@@ -114,18 +114,10 @@ def route(monkeypatch):
 # --- the feature contract ------------------------------------------------------------------------
 
 
-def test_the_shipped_contract_is_forty_three_free_features_at_the_price_of_one_library_call():
-    """The shipped contract is ``free + detect``."""
+def test_the_booster_is_fed_the_forty_three_contract_columns():
+    """The booster was fit on 43 columns; ``inspector_detect`` is the only group that costs a call."""
     assert len(contract.ROUTER_FEATURES) == 43
-    assert contract.cost_of(contract.FREE_GROUPS) == 0.0
-    assert contract.ROUTER_CORE_HOURS == pytest.approx(contract.INSPECTOR_DETECT_CORE_HOURS)
     assert contract.PAID_GROUPS == ("inspector_detect",)
-
-
-def test_the_retired_pass_keeps_its_price_so_reintroducing_it_has_a_number_to_clear():
-    retired = contract.ROUTE_FEATURES_CORE_HOURS + contract.INCUMBENT_FEATURES_CORE_HOURS
-    assert retired == pytest.approx(3.40)
-    assert retired * contract.CRAWL_PAGES / 1e6 == pytest.approx(190.4, abs=0.5)
 
 
 def test_feature_groups_do_not_overlap_and_columns_survive_selection():
@@ -136,18 +128,6 @@ def test_feature_groups_do_not_overlap_and_columns_survive_selection():
         seen.update(group.columns)
 
     assert len(contract.columns_for(contract.ALL_GROUPS)) == len(seen)
-    assert contract.ROUTER_FEATURES == tuple(contract.columns_for(contract.ALL_GROUPS))
-
-
-def test_the_legibility_arithmetic_tracks_the_budget_it_is_asked_about():
-    """DPI scales with the square root of the visual-token budget, so raising it rescues pages."""
-    frame = pl.DataFrame({"mean_render_dpi": [40.0, 80.0, 146.0]})
-
-    at_default = frame.select(contract.legible_at_budget(DEFAULT_MAX_VISUAL_TOKENS))
-    at_four_x = frame.select(contract.legible_at_budget(4 * DEFAULT_MAX_VISUAL_TOKENS))
-
-    assert at_default.to_series().to_list() == [False, False, True]
-    assert at_four_x.to_series().to_list() == [False, True, True], "80 DPI doubles to 160 at 4x the budget"
 
 
 # --- the gates -------------------------------------------------------------------------------------

@@ -50,6 +50,7 @@ from experiments.datakit.build_pdf_source.boilerplate import BoilerplateOptions,
 from experiments.datakit.build_pdf_source.classify import shard_routing
 from experiments.datakit.build_pdf_source.common import (
     FOCUS_CRAWL,
+    MAIN_OUTPUT_SUBDIR,
     SHARD_PATTERN,
     SOURCE_FILE_COLUMN,
     PdfClassificationData,
@@ -57,7 +58,7 @@ from experiments.datakit.build_pdf_source.common import (
     PdfSourceData,
 )
 from experiments.datakit.build_pdf_source.document_record import PDF_DOCUMENT_FIELDS, source_id
-from experiments.datakit.build_pdf_source.extract import SOURCE_COLUMNS
+from experiments.datakit.build_pdf_source.extract import BOILERPLATE_OPTIONS, RENDER_OPTIONS, SOURCE_COLUMNS
 from experiments.datakit.build_pdf_source.loop_repair import LoopOptions, repair_page
 from experiments.datakit.build_pdf_source.ocr_extract import fleet
 from experiments.datakit.build_pdf_source.ocr_extract.client import (
@@ -77,11 +78,9 @@ from experiments.datakit.build_pdf_source.ocr_extract.render_worker import (
 
 logger = logging.getLogger(__name__)
 
-RENDER_OPTIONS = RenderOptions()
 # The router's render policy for documents whose pages fall below the legibility floor at the
 # default budget.
 RAISED_RENDER_OPTIONS = RenderOptions(max_visual_tokens=RAISED_MAX_VISUAL_TOKENS)
-BOILERPLATE_OPTIONS = BoilerplateOptions()
 LOOP_OPTIONS = LoopOptions()
 
 _COUNTER_PREFIX = "focus_crawl_pdf_ocr"
@@ -422,9 +421,6 @@ def ocr_batch(
             # is data, counted under the name it carries.
             _count_render_failure(error.reason)
             logger.warning("Could not render %s (%s): %s", row["url"], error.reason, error)
-        except Exception as error:
-            _count_render_failure(type(error).__name__)
-            logger.warning("Could not render %s: %s", row["url"], error)
         yield from emit_ready()
 
     while inflight:
@@ -438,16 +434,14 @@ def ocr_pdf_text(
     source_output_path: str,
     classification_output_path: str | None = None,
     *,
-    ocr_route_only: bool = True,
     instances: int = fleet.INSTANCES,
     partition: tuple[int, int] = (0, 1),
 ) -> PdfDocumentsData:
     """Run the OCR route: one map over the fetched shards, holding the fleet only while it runs.
 
-    The map writes one output shard per fetched shard inside the ``remote_inference`` context, so
-    the fleet is released when the last page lands. The output is also the checkpoint: the map
-    writes with ``skip_existing``, so a retry re-OCRs only the shards whose file never landed, and
-    with every shard present the fleet is never started.
+    The output is also the checkpoint: the map writes with ``skip_existing``, so a retry re-OCRs
+    only the shards whose file never landed, and with every shard present the fleet is never
+    started. With no ``classification_output_path`` every document in the shard is OCR'd.
 
     ``partition`` is ``(index, count)`` over the sorted source shards, so several of these steps can
     run side by side, each with its own fleet, over disjoint slices of the corpus.
@@ -455,9 +449,7 @@ def ocr_pdf_text(
     partition_index, partition_count = partition
     source = read_artifact(source_output_path, PdfSourceData)
     routing_dir = None
-    if ocr_route_only:
-        if classification_output_path is None:
-            raise ValueError("ocr_route_only requires classification_output_path")
+    if classification_output_path is not None:
         routing_dir = read_artifact(classification_output_path, PdfClassificationData).main_output_dir
 
     shards = sorted(str(shard) for shard in StoragePath(prefix_join(source.main_output_dir, "*.parquet")).glob())
@@ -477,7 +469,7 @@ def ocr_pdf_text(
         max_workers,
     )
 
-    output_dir = prefix_join(output_path, "outputs/main")
+    output_dir = prefix_join(output_path, MAIN_OUTPUT_SUBDIR)
     shards_present = len(StoragePath(prefix_join(output_dir, "*.parquet")).glob())
     if shards_present >= num_shards:
         logger.info("All %d output shards already written under %s; skipping the OCR phase", num_shards, output_dir)

@@ -181,7 +181,7 @@ def page_rectangles(document: "pdfium.PdfDocument") -> list[tuple[float, float]]
         try:
             width, height = document[page_index].get_size()
         except Exception:
-            logger.debug("Could not read the size of page %d", page_index, exc_info=True)
+            logger.warning("Could not read the size of page %d", page_index, exc_info=True)
             continue
         sizes.append((width, height))
     return sizes
@@ -203,20 +203,18 @@ def open_pdf(pdf: bytes) -> Iterator["pdfium.PdfDocument"]:  # noqa: F821
 
 
 def rasterise_page(page: "pdfium.PdfPage", height: int, width: int) -> "np.ndarray":  # noqa: F821
-    """One page onto an exactly ``width`` x ``height`` RGB buffer.
-
-    ``FPDF_RenderPageBitmap`` takes ``size_x`` and ``size_y`` independently, so the aligned pair from
-    :func:`target_dimensions` rasterises straight to the target with no resize round trip.
-    ``FPDF_ANNOT`` draws annotation appearance streams, and the bitmap is filled white first because
-    PDFium leaves it transparent. ``FPDF_REVERSE_BYTE_ORDER`` is what makes an ``FPDFBitmap_BGR``
-    buffer hold RGB; ``new_native``'s ``rev_byteorder`` only records the claim on the wrapper.
-    """
+    """One page onto an exactly ``width`` x ``height`` RGB buffer."""
     import pypdfium2 as pdfium  # noqa: PLC0415
     import pypdfium2.raw as pdfium_c  # noqa: PLC0415
 
+    # ``rev_byteorder`` only labels the wrapper RGB; FPDF_REVERSE_BYTE_ORDER below is what reverses it.
     bitmap = pdfium.PdfBitmap.new_native(width, height, pdfium_c.FPDFBitmap_BGR, rev_byteorder=True)
+    # PDFium leaves the bitmap transparent.
     bitmap.fill_rect((255, 255, 255, 255), 0, 0, width, height)
+    # FPDF_ANNOT draws annotation appearance streams.
     flags = pdfium_c.FPDF_ANNOT | pdfium_c.FPDF_REVERSE_BYTE_ORDER
+    # size_x and size_y are independent, so the aligned pair from target_dimensions rasterises
+    # straight to the target with no resize round trip.
     pdfium_c.FPDF_RenderPageBitmap(bitmap, page, 0, 0, width, height, 0, flags)
     return bitmap.to_numpy()
 

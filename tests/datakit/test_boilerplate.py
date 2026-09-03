@@ -5,12 +5,7 @@
 
 import pytest
 
-from experiments.datakit.build_pdf_source.boilerplate import (
-    BoilerplateOptions,
-    split_pages,
-    strip_boilerplate,
-    strip_document_boilerplate,
-)
+from experiments.datakit.build_pdf_source.boilerplate import BoilerplateOptions, strip_boilerplate
 
 _OPTIONS = BoilerplateOptions(min_pages=3, min_page_fraction=0.25)
 
@@ -145,31 +140,6 @@ def test_a_page_that_is_entirely_boilerplate_becomes_empty_and_is_kept():
 
     assert len(result.pages) == 6
     assert result.pages[-1] == ""
-
-
-def test_page_offsets_track_the_stripped_text():
-    result = strip_boilerplate(_pages(6, header="ACME Annual Report"), _OPTIONS)
-
-    offsets = result.page_offsets
-    assert len(offsets) == 6
-    assert offsets[-1] == len(result.text)
-    assert split_pages(result.text, offsets) == result.pages
-
-
-def test_stripping_a_document_round_trips_through_its_offsets():
-    """The step hands text plus offsets, which is also what the OCR route will produce."""
-    pages = _pages(6, header="ACME", footer="Page {page}")
-    text = "".join(pages)
-    offsets = []
-    total = 0
-    for page in pages:
-        total += len(page)
-        offsets.append(total)
-
-    result = strip_document_boilerplate(text, offsets, _OPTIONS)
-
-    assert result.top_lines == 1
-    assert "ACME" not in result.text
 
 
 @pytest.mark.parametrize("count", [0, 1])

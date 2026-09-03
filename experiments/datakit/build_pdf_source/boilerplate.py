@@ -49,20 +49,6 @@ class BoilerplateResult:
     pages_stripped: int
     lines_removed: int
 
-    @property
-    def text(self) -> str:
-        return "".join(self.pages)
-
-    @property
-    def page_offsets(self) -> list[int]:
-        """Cumulative character counts, one per page, matching :attr:`text`."""
-        offsets: list[int] = []
-        total = 0
-        for page in self.pages:
-            total += len(page)
-            offsets.append(total)
-        return offsets
-
 
 def split_pages(text: str, page_offsets: Sequence[int]) -> list[str]:
     """Split extracted text back into pages using the cumulative offsets recorded with it."""
@@ -82,9 +68,6 @@ def _line_key(line: str, page_index: int) -> int:
     Digits fold to zero and whitespace is dropped, so a page number does not make two copies of one
     header look different. Table rows are keyed by page index as well, which makes them unique and
     therefore never part of a repeated pattern.
-
-    Hashing rather than keeping the strings keeps the pattern tuples small and makes comparing them
-    an integer compare, which is the whole cost of the search.
     """
     normalized = line.translate(_DIGIT_FOLD).translate(_DROPPED_WHITESPACE)
     if any(marker in line for marker in _TABLE_MARKERS) or (normalized.startswith("|") and normalized.endswith("|")):
@@ -100,9 +83,7 @@ def _longest_repeated_edge(
 ) -> tuple[int, frozenset[int]]:
     """Find the longest edge pattern shared by enough pages.
 
-    Returns the pattern's length in lines and the pages carrying it. Growing the pattern one line
-    at a time and stopping at the first length that fails its support test finds the longest run,
-    because a pattern of length *k+1* can never hold on more pages than its length-*k* prefix.
+    Returns the pattern's length in lines and the pages carrying it.
     """
     num_pages = len(page_keys)
     best_length = 0
@@ -185,10 +166,3 @@ def strip_boilerplate(pages: Sequence[str], options: BoilerplateOptions | None =
         pages_stripped=pages_stripped,
         lines_removed=lines_removed,
     )
-
-
-def strip_document_boilerplate(
-    text: str, page_offsets: Sequence[int], options: BoilerplateOptions | None = None
-) -> BoilerplateResult:
-    """Strip boilerplate from one extracted document, given its text and page offsets."""
-    return strip_boilerplate(split_pages(text, page_offsets), options)

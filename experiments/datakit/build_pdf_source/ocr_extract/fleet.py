@@ -3,11 +3,10 @@
 
 """The OCR serving fleet, at the operating point the throughput sweep measured.
 
-Four one-GPU vLLM instances behind the Marin broker pack one GB200 node, each holding
-:data:`MAX_IN_FLIGHT` requests. The fleet only reaches its throughput if the senders keep
-:data:`CLIENT_CONCURRENCY` requests in flight, and the extraction step sizes its Zephyr fleet from
-that number. The numbers come from ``ocr-budget-sweep.md`` on the ``mark/pdf_pipeline`` campaign
-branch.
+Four one-GPU vLLM instances behind the Marin broker pack one GB200 node. The fleet only reaches
+its throughput if the senders keep :data:`MAX_IN_FLIGHT` requests per instance in flight, and
+``sender_fleet_size`` in the extraction step sizes its Zephyr fleet from that number. The numbers
+come from ``ocr-budget-sweep.md`` on the ``mark/pdf_pipeline`` campaign branch.
 """
 
 import math
@@ -41,7 +40,6 @@ MAX_MODEL_LEN = 24_576
 
 # Per instance. Total in-flight across the fleet is this times INSTANCES.
 MAX_IN_FLIGHT = 512
-CLIENT_CONCURRENCY = MAX_IN_FLIGHT * INSTANCES
 
 # Broker memory is in-flight payload: every leased request holds its base64 PNG in the broker
 # process until the worker reports the response.

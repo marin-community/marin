@@ -14,16 +14,9 @@ Nothing here opens a PDF. A group is a declaration: column names, a source, and 
 stores into the columns the model was trained on, and that is the only computation in the module.
 """
 
-import math
 from dataclasses import dataclass
 
 import polars as pl
-
-from experiments.datakit.build_pdf_source.ocr_extract.render import (
-    DEFAULT_LEGIBILITY_FLOOR_DPI,
-    DEFAULT_MAX_RENDER_DPI,
-    DEFAULT_MAX_VISUAL_TOKENS,
-)
 
 # ---------------------------------------------------------------------------
 # What each pass costs, per million crawl pages
@@ -177,33 +170,6 @@ def cost_of(names: tuple[str, ...]) -> float:
 # score confident nonsense rather than fail. `classify.load_router` checks it.
 ROUTER_FEATURES: tuple[str, ...] = tuple(columns_for(ALL_GROUPS))
 ROUTER_CORE_HOURS = cost_of(ALL_GROUPS)
-
-
-# ---------------------------------------------------------------------------
-# The legibility floor, which is arithmetic rather than a learned decision
-# ---------------------------------------------------------------------------
-
-
-def dpi_at_budget(dpi_at_default: float, max_visual_tokens: int) -> float:
-    """The DPI a page rendered at :data:`DEFAULT_MAX_VISUAL_TOKENS` would get at another budget.
-
-    A page is scaled to fill the visual-token budget, so its DPI goes with the square root of the
-    budget until the upscale cap binds.
-    """
-    scaled = dpi_at_default * math.sqrt(max_visual_tokens / DEFAULT_MAX_VISUAL_TOKENS)
-    return min(scaled, DEFAULT_MAX_RENDER_DPI)
-
-
-def legible_at_budget(max_visual_tokens: int) -> pl.Expr:
-    """Whether the VLM could read this document's pages at a given budget.
-
-    Arithmetic, computable before routing, and it decides **how to render** rather than whether to
-    route. Read off the document's mean render DPI, which is a good proxy for its pages: a document
-    below the floor is almost always below it on every page.
-    """
-    scale = math.sqrt(max_visual_tokens / DEFAULT_MAX_VISUAL_TOKENS)
-    rendered = pl.min_horizontal(pl.col("mean_render_dpi") * scale, pl.lit(DEFAULT_MAX_RENDER_DPI))
-    return rendered >= DEFAULT_LEGIBILITY_FLOOR_DPI
 
 
 # ---------------------------------------------------------------------------

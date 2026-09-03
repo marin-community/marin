@@ -51,9 +51,15 @@ from zephyr.runners import SubprocessRunner
 
 from experiments.datakit.build_pdf_source.boilerplate import BoilerplateOptions, strip_boilerplate
 from experiments.datakit.build_pdf_source.child_framing import READ_CHUNK, read_frame, write_frame
-from experiments.datakit.build_pdf_source.common import FOCUS_CRAWL, SHARD_PATTERN, PdfDocumentsData, PdfSourceData
+from experiments.datakit.build_pdf_source.common import (
+    FOCUS_CRAWL,
+    MAIN_OUTPUT_SUBDIR,
+    SHARD_PATTERN,
+    PdfDocumentsData,
+    PdfSourceData,
+)
 from experiments.datakit.build_pdf_source.document_record import PDF_DOCUMENT_FIELDS, source_id
-from experiments.datakit.build_pdf_source.extract import BOILERPLATE_OPTIONS, SOURCE_COLUMNS
+from experiments.datakit.build_pdf_source.extract import BOILERPLATE_OPTIONS, RENDER_OPTIONS, SOURCE_COLUMNS
 from experiments.datakit.build_pdf_source.ocr_extract.render import (
     RenderGeometry,
     RenderOptions,
@@ -61,6 +67,7 @@ from experiments.datakit.build_pdf_source.ocr_extract.render import (
     page_rectangles,
     render_geometry,
 )
+from experiments.datakit.build_pdf_source.ocr_extract.render_worker import DEADLINE_EXCEEDED, WORKER_DIED
 
 logger = logging.getLogger(__name__)
 
@@ -78,8 +85,6 @@ OP_EXTRACT = "extract"
 OP_GEOMETRY = "geometry"
 
 CALL_DEADLINE = 30.0
-
-RENDER_OPTIONS = RenderOptions()
 
 # A token this long is not a word. Long runs come from tables serialized without separators and from
 # CID-mapped subsets that decode into one unbroken string, and both are extraction damage.
@@ -175,7 +180,7 @@ _HEARTBEAT_TIMEOUT = 30 * 60
 
 
 # ---------------------------------------------------------------------------
-# Measuring the output, which is the signal router v1 structurally could not have
+# Measuring the output
 # ---------------------------------------------------------------------------
 
 
@@ -276,10 +281,7 @@ def _extract_reply(payload: bytes) -> dict:
     """Both pdf-inspector calls against one document, each allowed to fail on its own.
 
     ``detect_pdf_bytes`` refusing a document the extraction reads fine must not discard the
-    extraction, and the reverse is worth the same care, so neither failure aborts the other.
-
-    ``BaseException`` and not ``Exception``: PyO3 derives ``PanicException`` from the former, and a
-    panic reported as a worker death would turn a catchable failure into a respawn.
+    extraction, and the reverse is worth the same care.
     """
     import pdf_inspector  # noqa: PLC0415 - the whole point is to import it out of process
 
@@ -292,6 +294,8 @@ def _extract_reply(payload: bytes) -> dict:
             reply.update(flatten(call(payload)))
         except (KeyboardInterrupt, SystemExit):
             raise
+        # BaseException: PyO3 derives PanicException from it, and a panic reported as a worker death
+        # would turn a catchable failure into a respawn.
         except BaseException as error:
             reply[f"{name}_error"] = f"{type(error).__name__}: {error}"[:500]
     return reply
@@ -330,14 +334,8 @@ def worker_main() -> None:
 class InspectorWorker:
     """A pdf-inspector subprocess, bounded by a deadline and replaced whenever it stops answering.
 
-    Deliberately ``subprocess`` rather than ``multiprocessing``: an Iris callable entrypoint runs at
-    module top level of ``__main__`` with no ``if __name__ == "__main__"`` guard, so both ``spawn``
-    and ``forkserver`` would re-execute the job body in every child.
-
-    It replaces itself rather than being replaced by its caller, so the caller can hold one handle
-    for the life of the process (see :func:`inspector_worker`). Starting one costs an interpreter
-    and the crate's import, which is why a per-document child is not an option against a 7.7
-    ms/page call.
+    ``subprocess`` rather than ``multiprocessing``, because an Iris callable entrypoint runs at
+    module top level of ``__main__`` and ``spawn`` would re-execute the job body in every child.
     """
 
     def __init__(self, deadline: float = CALL_DEADLINE) -> None:
@@ -412,7 +410,7 @@ class InspectorWorker:
         # longer usable: a worker mid-document cannot be handed the next one.
         died = self._eof
         reason = failure or (self._death() if died else f"no reply within {self._deadline:.0f}s")
-        outcome = "worker_died" if died else "deadline_exceeded"
+        outcome = WORKER_DIED if died else DEADLINE_EXCEEDED
         counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/{outcome}/{op}", 1)
         counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/worker_respawned", 1)
         self.stop()
@@ -508,12 +506,8 @@ def extract_document(row: dict, reply: dict, geometry: RenderGeometry | None, bo
 
 @cache
 def inspector_worker(deadline: float) -> InspectorWorker:
-    """One pdf-inspector child per task process, shared by every batch the process runs.
-
-    Never shut down: it lives as long as the process. Rebuilding it per Parquet row group would pay
-    an interpreter start and the crate's import for every few hundred documents, against a call that
-    costs 7.7 ms/page.
-    """
+    """One pdf-inspector child per task process, shared by every batch the process runs and never
+    shut down."""
     return InspectorWorker(deadline)
 
 
@@ -537,17 +531,14 @@ def extract_batch(
 def extract_pdf_text(output_path: str, source_output_path: str) -> PdfDocumentsData:
     """Extract every fetched PDF: one map over the fetched shards, one output shard per input shard.
 
-    No shuffle. The output for ``part-00012-of-01773.parquet`` is written as
-    ``part-00012-of-01773.parquet``, which is what keeps the routing table this feeds co-partitioned
-    with the fetch, and ``skip_existing`` makes the output its own checkpoint: a retry re-extracts
-    only the shards whose file never landed. The global sort by content hash and the exact dedup
-    belong to the normalize step over the union of both routes, where they are paid for once.
+    The output shard keeps its input's basename, which is what keeps the routing table this feeds
+    co-partitioned with the fetch; ``skip_existing`` makes the output its own checkpoint.
     """
     source = read_artifact(source_output_path, PdfSourceData)
     shards = sorted(str(shard) for shard in StoragePath(prefix_join(source.main_output_dir, "*.parquet")).glob())
     if not shards:
         raise RuntimeError(f"No fetched PDFs under {source.main_output_dir}")
-    output_dir = prefix_join(output_path, "outputs/main")
+    output_dir = prefix_join(output_path, MAIN_OUTPUT_SUBDIR)
     logger.info(
         "Extracting %d shards from %s with pdf-inspector %s", len(shards), source.main_output_dir, LIBRARY_VERSION
     )
@@ -569,11 +560,7 @@ def extract_pdf_text(output_path: str, source_output_path: str) -> PdfDocumentsD
 
 
 def inspector_extract_step(source: StepSpec) -> StepSpec:
-    """Build the pdf-inspector extraction step, which runs over every fetched PDF.
-
-    It depends on the fetch step alone. That is the shape change router v2 makes: extraction no
-    longer waits on a routing decision, the routing decision waits on extraction.
-    """
+    """Build the pdf-inspector extraction step, which runs over every fetched PDF."""
     return StepSpec(
         name="data/datakit/extract/common_crawl_focus_2026_22_pdf_inspector",
         deps=[source],
