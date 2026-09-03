@@ -15,6 +15,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 
 use tokio::sync::RwLock;
 
@@ -23,7 +24,7 @@ use crate::indices::SegmentIndexConfig;
 use crate::store::catalog::Catalog;
 use crate::store::compaction::config::{CompactionConfig, CompactionJob};
 use crate::store::compaction::executor::{
-    run_job_with_partition_policy, CompactionExecution, OutputPolicy,
+    run_job_with_partition_policy, run_low_priority, CompactionExecution, OutputPolicy,
 };
 use crate::store::compaction::planner::plan;
 use crate::store::compaction::staging::StagingDir;
@@ -106,6 +107,7 @@ pub async fn compact_once(
     // encoding, and uploading then run outside the controller; only the
     // replacement commit is serialized against concurrent flushes.
     let lease = compaction.controller.begin_compaction()?;
+    let localize_started = Instant::now();
     for input in &job.inputs {
         let record = object_records.get(&input.path).ok_or_else(|| {
             StatsError::Internal(format!("object compaction lost input {}", input.path))
@@ -118,6 +120,17 @@ pub async fn compact_once(
                 localized.display()
             )));
         }
+    }
+    let localize_ms = localize_started.elapsed().as_millis() as u64;
+    if localize_ms > 1_000 {
+        // Uncached inputs are fetched from remote storage one at a time; when
+        // that dominates a cycle it explains a table's stalled maintenance.
+        tracing::info!(
+            namespace = %compaction.table,
+            inputs = job.inputs.len(),
+            localize_ms,
+            "object compaction localized inputs"
+        );
     }
 
     let staging = StagingDir::create(compaction.table_dir)?;
@@ -156,7 +169,11 @@ async fn run(
         .collect();
     let job_for_run = job.clone();
     let staging_dir = staging.path().to_path_buf();
-    let swap = tokio::task::spawn_blocking(move || {
+    // Same dedicated low-priority thread as a migration rewrite: an ordinary
+    // compaction merge at blocking-pool priority competes with query threads
+    // for cores, and a backlog of large merges makes dashboards unusable.
+    let merge_started = Instant::now();
+    let swap = run_low_priority("finelog-compact", move || {
         run_job_with_partition_policy(
             &job_for_run,
             &staging_dir,
@@ -172,11 +189,11 @@ async fn run(
                 max_merge_arrow_bytes,
                 output: OutputPolicy::PromoteWhenUnchanged,
             },
-            |path| key_bounds.get(path).copied().unwrap_or((None, None)),
+            move |path| key_bounds.get(path).copied().unwrap_or((None, None)),
         )
     })
-    .await
-    .map_err(|error| StatsError::Internal(format!("object compaction task panicked: {error}")))??;
+    .await??;
+    let merge_ms = merge_started.elapsed().as_millis() as u64;
 
     // A single-input run is a level promotion. An immutable object is never
     // renamed, so the promotion re-advertises the same source and artifacts at
@@ -201,6 +218,7 @@ async fn run(
         return Ok(false);
     }
 
+    let upload_started = Instant::now();
     let mut outputs = Vec::with_capacity(swap.added.len());
     let mut published = Vec::with_capacity(swap.added.len());
     for staged in swap.added {
@@ -230,6 +248,13 @@ async fn run(
         });
         published.push(segment);
     }
+    tracing::info!(
+        namespace = %compaction.table,
+        inputs = job.inputs.len(),
+        merge_ms,
+        upload_ms = upload_started.elapsed().as_millis() as u64,
+        "object compaction rewrite finished"
+    );
     commit_replacement(
         compaction,
         &swap.removed,

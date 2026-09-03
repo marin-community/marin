@@ -27,6 +27,9 @@ use crate::maintenance::{
 use crate::store::store::ServeMode;
 use crate::store::table::{TableManager, TableRuntime, TableWork};
 
+/// Report a maintenance cycle that sat in the slot queue at least this long.
+const SLOW_CYCLE_WAIT: Duration = Duration::from_secs(5);
+
 /// What one table's scheduling decisions are based on between rounds.
 struct TableCadence {
     last_flush: Instant,
@@ -232,6 +235,7 @@ impl MaintenanceScheduler {
         entry.last_maintenance = now;
         entry.maintenance_running = true;
         let table = runtime.name().to_string();
+        let migration_owned = entry.migration_pending;
         let limits = Arc::clone(&self.limits);
         let wake = Arc::clone(&self.wake);
         let cadence = Arc::clone(&self.cadence);
@@ -239,7 +243,28 @@ impl MaintenanceScheduler {
         let dispatched = runtime.clone().spawn_tracked({
             let runtime = Arc::clone(runtime);
             async move {
-                let _permit = limits.maintenance_cycles().acquire().await;
+                let queued = Instant::now();
+                // A migrating table cycles in its own slot (see
+                // `MaintenanceLimits::spec_migration`); everything else shares
+                // the maintenance slots.
+                let mut _migration_slot = None;
+                let mut _cycle_slot = None;
+                if migration_owned {
+                    _migration_slot = Some(limits.spec_migration().lock().await);
+                } else {
+                    _cycle_slot = Some(limits.maintenance_cycles().acquire().await);
+                }
+                let waited = queued.elapsed();
+                if waited >= SLOW_CYCLE_WAIT {
+                    // A long wait means another table's cycle is hogging the
+                    // process's few maintenance slots (e.g. a legacy backlog
+                    // drain); it shows up here rather than as a mystery stall.
+                    tracing::info!(
+                        namespace = %runtime.name(),
+                        waited_ms = waited.as_millis() as u64,
+                        "maintenance cycle waited for a slot"
+                    );
+                }
                 let cycle = TableWork::Cycle {
                     force_compact_l0: false,
                 };

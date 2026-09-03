@@ -19,6 +19,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 
 use arrow::array::RecordBatch;
 use sha2::{Digest, Sha256};
@@ -30,7 +31,8 @@ use crate::proto::finelog::stats::{MigrationPhase, SourceLayout, TableMigrationS
 use crate::store::catalog::{Catalog, ObjectSegmentRecord, SpecLifecycle};
 use crate::store::compaction::config::CompactionJob;
 use crate::store::compaction::executor::{
-    run_job_with_partition_policy, CompactionExecution, CompactionLayout, OutputPolicy,
+    run_job_with_partition_policy, run_low_priority, CompactionExecution, CompactionLayout,
+    OutputPolicy,
 };
 use crate::store::compaction::staging::StagingDir;
 use crate::store::object_store::OBJECTS_PREFIX;
@@ -294,6 +296,7 @@ async fn backfill(
     // post-fence rows at the target version, and both commits serialize in the
     // controller. A WriteRows ack waits on this very gate, so any expensive
     // work held under it stalls every write to the table.
+    let snapshot_started = Instant::now();
     let (object_records, sources, covered) = {
         let _flush_guard = migration.flush_gate.lock().await;
         let object_records: HashMap<_, _> = migration
@@ -321,6 +324,8 @@ async fn backfill(
         sources.sort_by_key(|row| row.min_seq);
         (object_records, sources, covered)
     };
+    let snapshot_ms = snapshot_started.elapsed().as_millis() as u64;
+    let select_started = Instant::now();
     let mut batch: Vec<BatchSource> = Vec::new();
     let mut batch_bytes: i64 = 0;
     let mut unexamined = false;
@@ -355,6 +360,15 @@ async fn backfill(
         });
     }
     if !batch.is_empty() {
+        tracing::info!(
+            namespace = %table,
+            batch_sources = batch.len(),
+            batch_bytes,
+            universe = sources.len(),
+            snapshot_ms,
+            select_ms = select_started.elapsed().as_millis() as u64,
+            "migration backfill batch selected"
+        );
         let staging = StagingDir::create(migration.table_dir)?;
         let outcome = rewrite_batch(
             migration,
@@ -471,40 +485,30 @@ async fn rewrite_batch(
     // of the very table being migrated. At nice(19) the OS grants it only
     // cycles the serving threads leave idle, which is all the pacing a
     // migration needs.
-    let (send_swap, receive_swap) = tokio::sync::oneshot::channel();
-    std::thread::Builder::new()
-        .name("finelog-migration".to_string())
-        .spawn(move || {
-            #[cfg(unix)]
-            unsafe {
-                libc::nice(19);
-            }
-            let _ = send_swap.send(run_job_with_partition_policy(
-                &job,
-                &staging_dir,
-                &arrow_schema,
-                CompactionExecution {
-                    layout: CompactionLayout {
-                        sort_columns: &sort_columns,
-                        key_column: &key_column,
-                        max_row_group_rows,
-                    },
-                    index_config: &index_config,
-                    partition_policy: partitions
-                        .as_ref()
-                        .map(|policy| policy as &dyn PhysicalPartitionPolicy),
-                    max_merge_arrow_bytes,
-                    output: OutputPolicy::AlwaysRewrite,
+    let merge_started = Instant::now();
+    let swap = run_low_priority("finelog-rewrite", move || {
+        run_job_with_partition_policy(
+            &job,
+            &staging_dir,
+            &arrow_schema,
+            CompactionExecution {
+                layout: CompactionLayout {
+                    sort_columns: &sort_columns,
+                    key_column: &key_column,
+                    max_row_group_rows,
                 },
-                move |path| bounds_by_path.get(path).copied().unwrap_or((None, None)),
-            ));
-        })
-        .map_err(|error| {
-            StatsError::Internal(format!("spawn migration rewrite thread: {error}"))
-        })?;
-    let swap = receive_swap
-        .await
-        .map_err(|_| StatsError::Internal("migration rewrite thread died".to_string()))??;
+                index_config: &index_config,
+                partition_policy: partitions
+                    .as_ref()
+                    .map(|policy| policy as &dyn PhysicalPartitionPolicy),
+                max_merge_arrow_bytes,
+                output: OutputPolicy::AlwaysRewrite,
+            },
+            move |path| bounds_by_path.get(path).copied().unwrap_or((None, None)),
+        )
+    })
+    .await??;
+    let merge_ms = merge_started.elapsed().as_millis() as u64;
 
     let consumed: Vec<&BatchSource> = swap
         .removed
@@ -528,6 +532,7 @@ async fn rewrite_batch(
         .map(|source| source.row.created_at_ms)
         .max()
         .unwrap_or(0);
+    let upload_started = Instant::now();
     let mut migrated = Vec::with_capacity(swap.added.len());
     for staged in swap.added {
         let staged_path = PathBuf::from(&staged.path);
@@ -552,11 +557,14 @@ async fn rewrite_batch(
             artifacts: references,
         });
     }
+    let upload_ms = upload_started.elapsed().as_millis() as u64;
     let source_ids: Vec<String> = consumed
         .iter()
         .map(|source| source.source_id.clone())
         .collect();
     let joined_ids = source_ids.join(&SOURCE_ID_SEPARATOR.to_string());
+    let commit_started = Instant::now();
+    let outputs = migrated.len();
     migration
         .controller
         .commit(|| {
@@ -573,7 +581,10 @@ async fn rewrite_batch(
         namespace = %migration.table,
         sources = consumed.len(),
         rows = consumed_rows,
-        outputs = migrated.len(),
+        outputs,
+        merge_ms,
+        upload_ms,
+        commit_ms = commit_started.elapsed().as_millis() as u64,
         "migration backfill batch committed"
     );
     Ok(consumed.len())

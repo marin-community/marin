@@ -67,6 +67,12 @@ pub struct MaintenanceLimits {
     layout_migration: Mutex<()>,
     /// How many tables may run a maintenance cycle concurrently.
     maintenance_cycles: tokio::sync::Semaphore,
+    /// A table whose spec migration is mid-flight cycles in this dedicated
+    /// slot instead of a shared maintenance slot. Its heavy CPU is already
+    /// paced by the nice(19) rewrite thread, and queuing a many-hundred-batch
+    /// backfill behind other tables' multi-minute backlog drains stretches it
+    /// from hours into days.
+    spec_migration: tokio::sync::Mutex<()>,
     /// How many tables may flush concurrently. Flushes are short and are the
     /// durability path, so this is looser than the maintenance limit.
     flushes: tokio::sync::Semaphore,
@@ -84,6 +90,7 @@ impl MaintenanceLimits {
             index_backfill: tokio::sync::Mutex::new(()),
             layout_migration: Mutex::new(()),
             maintenance_cycles: tokio::sync::Semaphore::new(MAX_CONCURRENT_MAINTENANCE_CYCLES),
+            spec_migration: tokio::sync::Mutex::new(()),
             flushes: tokio::sync::Semaphore::new(MAX_CONCURRENT_FLUSHES),
         })
     }
@@ -98,6 +105,10 @@ impl MaintenanceLimits {
 
     pub fn maintenance_cycles(&self) -> &tokio::sync::Semaphore {
         &self.maintenance_cycles
+    }
+
+    pub fn spec_migration(&self) -> &tokio::sync::Mutex<()> {
+        &self.spec_migration
     }
 
     pub fn flushes(&self) -> &tokio::sync::Semaphore {

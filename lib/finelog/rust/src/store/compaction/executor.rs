@@ -135,6 +135,34 @@ fn run_job(
     run_job_with_partition_policy(job, dir, arrow_schema, execution, input_key_bounds)
 }
 
+/// Run CPU-heavy compaction work on a dedicated thread at the lowest
+/// scheduling priority.
+///
+/// A merge is minutes of saturated CPU per job; on the shared blocking pool at
+/// normal priority it starves the query path of the very tables it maintains.
+/// At nice(19) the OS grants the work only cycles the serving threads leave
+/// idle. `name` must fit the kernel's 15-character comm limit so the thread
+/// stays identifiable in `/proc/<pid>/task`.
+pub async fn run_low_priority<T: Send + 'static>(
+    name: &'static str,
+    work: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, StatsError> {
+    let (send, receive) = tokio::sync::oneshot::channel();
+    std::thread::Builder::new()
+        .name(name.to_string())
+        .spawn(move || {
+            #[cfg(unix)]
+            unsafe {
+                libc::nice(19);
+            }
+            let _ = send.send(work());
+        })
+        .map_err(|error| StatsError::Internal(format!("spawn {name} thread: {error}")))?;
+    receive
+        .await
+        .map_err(|_| StatsError::Internal(format!("{name} thread died")))
+}
+
 pub fn run_job_with_partition_policy(
     job: &CompactionJob,
     dir: &Path,
