@@ -253,8 +253,27 @@ def _apply_hero_ep_runtime_defaults(
         # branch no longer carries, so honoring a partial override would run a configuration
         # nothing here measures. Drop any conflicting entry rather than relying on which
         # occurrence XLA's parser keeps.
-        xla_flags = [f for f in xla_flags if f.partition("=")[0] not in _RAGGED_REQUIRED_XLA_FLAG_NAMES]
-        xla_flags.extend(RAGGED_REQUIRED_XLA_FLAGS)
+        # MARIN_DEBUG_RAGGED_XLA_FLAGS replaces the required set wholesale, for the #8870 hunt.
+        # Clearing the device-kernel flag routes the transport to the one-shot NCCL path, which is
+        # the only path that calls CheckRaggedAllToAllBounds (under VLOG_IS_ON(5)); the ragged
+        # metadata it validates comes from the same HLO operands either way, so the check covers
+        # the offsets the device kernel would have used.
+        ragged_override = os.environ.get("MARIN_DEBUG_RAGGED_XLA_FLAGS")
+        required = tuple(ragged_override.split()) if ragged_override else RAGGED_REQUIRED_XLA_FLAGS
+        if ragged_override:
+            logger.warning(
+                "MARIN_DEBUG_RAGGED_XLA_FLAGS=%r replaces the required ragged flags; this is a "
+                "diagnostic configuration and its throughput and loss are not comparable.",
+                ragged_override,
+            )
+        override_names = {flag.partition("=")[0] for flag in required}
+        xla_flags = [
+            f
+            for f in xla_flags
+            if f.partition("=")[0] not in _RAGGED_REQUIRED_XLA_FLAG_NAMES
+            and f.partition("=")[0] not in override_names
+        ]
+        xla_flags.extend(required)
     os.environ["XLA_FLAGS"] = " ".join(xla_flags)
 
 
