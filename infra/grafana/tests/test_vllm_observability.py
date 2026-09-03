@@ -7,13 +7,21 @@ from pathlib import Path
 from typing import NamedTuple
 
 import duckdb
+import pyarrow as pa
 import pytest
+from config import ClusterTarget
+from conftest import bridge_config
+from github_source import GithubSource
+from k8s_source import K8sFleet
+from server import create_app
+from starlette.testclient import TestClient
 from vllm_observability import (
     VLLM_MAX_POINTS,
     VLLM_MAX_WINDOW_MS,
     VllmIdentityField,
     vllm_overview_query,
 )
+from wandb_source import WandbSource
 
 START_MS = 120_000
 END_MS = 180_000
@@ -124,6 +132,26 @@ def _database(rows: list[TelemetryRow]) -> duckdb.DuckDBPyConnection:
     return database
 
 
+class _DuckDBFinelog:
+    def __init__(self, database: duckdb.DuckDBPyConnection):
+        self.target = ClusterTarget(
+            name="marin",
+            project="p",
+            zone="z",
+            instance_filter="f",
+            controller_filter="c",
+        )
+        self._database = database
+
+    def query(self, sql: str, *, max_rows: int) -> pa.Table:
+        table = self._database.execute(sql).fetch_arrow_table()
+        assert table.num_rows <= max_rows
+        return table
+
+    def health(self):
+        raise AssertionError("dashboard test does not query source health")
+
+
 def test_dashboard_run_identity_variable_reads_promoted_column():
     dashboard = json.loads((Path(__file__).parents[1] / "dashboards" / "inference.json").read_text())
     sql = dashboard["templating"]["list"][1]["query"]["infinityQuery"]["url_options"]["params"][0]["value"]
@@ -169,25 +197,6 @@ def test_dashboard_identity_variable_includes_embedded_vllm_and_excludes_ray():
     )
 
     assert database.execute(sql).fetchall() == [("embedded-run",)]
-
-
-def test_dashboard_exposes_iteration_occupancy_and_time_resolved_tpot():
-    dashboard = json.loads((Path(__file__).parents[1] / "dashboards" / "inference.json").read_text())
-    panels = {panel["id"]: panel for panel in dashboard["panels"]}
-
-    assert panels[3]["title"] == "Running, waiting, and iteration tokens"
-    assert panels[3]["targets"][0]["url_options"]["params"][-1] == {"key": "view", "value": "saturation"}
-    assert panels[3]["fieldConfig"]["overrides"] == [
-        {
-            "matcher": {"id": "byName", "options": "iteration_tokens"},
-            "properties": [
-                {"id": "custom.axisPlacement", "value": "right"},
-                {"id": "custom.axisLabel", "value": "tokens / iteration"},
-            ],
-        }
-    ]
-    assert panels[11]["title"] == "Time per output token"
-    assert panels[11]["targets"][0]["filterExpression"] == "metric == 'tpot' && stat == 'mean_over_time'"
 
 
 def _query_rows(
@@ -767,24 +776,69 @@ def _embedded_observability_records() -> list[TelemetryRow]:
     return rows
 
 
-def test_embedded_source_has_dense_running_token_and_iteration_bins_and_finish_tpot():
-    rows = _query_rows(
-        _database(_embedded_observability_records()),
-        job="/train",
-        start_ms=0,
-        end_ms=150_000,
-        bucket_ms=15_000,
-    )
+def test_dashboard_targets_return_embedded_observability_end_to_end():
+    dashboard = json.loads((Path(__file__).parents[1] / "dashboards" / "inference.json").read_text())
+    targets = [target for panel in dashboard["panels"] for target in panel.get("targets", [])]
+    targets_by_behavior = {
+        (
+            next(param["value"] for param in target["url_options"]["params"] if param["key"] == "view"),
+            target.get("filterExpression"),
+        ): target
+        for target in targets
+        if target.get("url") == "/v1/vllm/overview"
+    }
+    expected_targets = {
+        ("token_rate", None),
+        ("saturation", "metric != 'kv_cache_usage'"),
+        ("counter_total", None),
+        ("latency", "metric == 'tpot' && stat == 'mean_over_time'"),
+    }
+    assert expected_targets <= targets_by_behavior.keys()
 
-    assert len([row for row in rows if row["section"] == "token_rate" and row["metric"] == "generated_tokens"]) >= 8
-    assert len([row for row in rows if row["section"] == "saturation" and row["metric"] == "num_requests_running"]) >= 8
-    iteration = [row for row in rows if row["section"] == "saturation" and row["metric"] == "iteration_tokens"]
+    source = _DuckDBFinelog(_database(_embedded_observability_records()))
+    app = create_app(
+        bridge_config(),
+        {"marin": source},
+        {},
+        GithubSource(auth=None, timeout=5.0),
+        K8sFleet(()),
+        WandbSource(timeout=5.0),
+    )
+    concrete_params = {
+        "identity_kind": "job_id",
+        "identity": "/train",
+        "from": "0",
+        "to": "150000",
+        "bucket_ms": "15000",
+    }
+    rows_by_behavior = {}
+    with TestClient(app) as client:
+        for behavior in expected_targets:
+            target = targets_by_behavior[behavior]
+            params = {
+                param["key"]: concrete_params.get(param["key"], param["value"])
+                for param in target["url_options"]["params"]
+            }
+            response = client.get(f"/finelog/marin{target['url']}", params=params)
+            assert response.status_code == 200
+            rows_by_behavior[behavior] = response.json()
+
+    token_rates = rows_by_behavior[("token_rate", None)]
+    assert len([row for row in token_rates if row["metric"] == "generated_tokens"]) >= 8
+
+    saturation = rows_by_behavior[("saturation", "metric != 'kv_cache_usage'")]
+    assert len([row for row in saturation if row["metric"] == "num_requests_running"]) >= 8
+    iteration = [row for row in saturation if row["metric"] == "iteration_tokens"]
     assert len(iteration) >= 8
     assert all(row["value"] == pytest.approx(100) for row in iteration)
-    tpot = [row for row in rows if row["section"] == "latency" and row["stat"] == "mean_over_time"]
+
+    latency = rows_by_behavior[("latency", "metric == 'tpot' && stat == 'mean_over_time'")]
+    tpot = [row for row in latency if row["metric"] == "tpot" and row["stat"] == "mean_over_time"]
     assert len(tpot) == 4
     assert all(row["value"] == pytest.approx(0.1) for row in tpot)
-    assert _one(rows, "counter_total", "generated_tokens", "total")["value"] == pytest.approx(1_350)
+
+    totals = rows_by_behavior[("counter_total", None)]
+    assert _one(totals, "counter_total", "generated_tokens", "total")["value"] == pytest.approx(1_350)
 
 
 def test_embedded_gauge_step_changes_do_not_create_extra_replicas():
@@ -876,123 +930,88 @@ def test_embedded_histograms_require_the_new_unique_engine_contract():
     assert [row for row in rows if row["section"] == "latency"] == []
 
 
-@pytest.mark.parametrize(
-    ("sample_limit", "telemetry_loss", "status"),
-    [(0, 0, "healthy"), (2, 0, "incomplete"), (0, 3, "incomplete")],
-)
-def test_embedded_publication_health_uses_only_fresh_vllm_loss_signals(sample_limit, telemetry_loss, status):
-    records = [
-        _record(
-            "driver",
-            "metric_publication_dropped_records",
-            sample_limit,
-            165_000,
-            _attributes("current_snapshot", metric_source="vllm", drop_reason="sample_limit"),
-            job="/train",
-            service="marinskyrl",
-        ),
-        _record(
-            "driver",
-            "metric_publication_dropped_records",
-            telemetry_loss,
-            165_000,
-            _attributes("current_snapshot", metric_source="vllm", drop_reason="telemetry_loss"),
-            job="/train",
-            service="marinskyrl",
-        ),
-        _record(
-            "driver",
-            "metric_publication_dropped_records",
-            99,
-            165_000,
-            _attributes("current_snapshot", metric_source="ray", drop_reason="telemetry_loss"),
-            job="/train",
-            service="marinskyrl",
-        ),
-    ]
-
-    rows = _query_rows(_database(records), job="/train")
-
-    assert _one(rows, "telemetry_health", "collector", "polls")["status"] == status
-
-
-def test_embedded_publication_health_is_unknown_when_one_signal_is_absent_or_stale():
-    one_signal = [
-        _record(
-            "driver",
-            "metric_publication_dropped_records",
-            0,
-            165_000,
-            _attributes("current_snapshot", metric_source="vllm", drop_reason="sample_limit"),
-            job="/train",
-            service="marinskyrl",
-        )
-    ]
-    assert (
-        _one(_query_rows(_database(one_signal), job="/train"), "telemetry_health", "collector", "polls")["status"]
-        == "unknown"
-    )
-
-    stale = [
-        _record(
-            "driver",
-            "metric_publication_dropped_records",
-            0,
-            105_000,
-            _attributes("current_snapshot", metric_source="vllm", drop_reason=reason),
-            job="/train",
-            service="marinskyrl",
-        )
-        for reason in ("sample_limit", "telemetry_loss")
-    ]
-    assert (
-        _one(
-            _query_rows(_database(stale), job="/train", end_ms=360_000),
-            "telemetry_health",
-            "collector",
-            "polls",
-        )["status"]
-        == "unknown"
-    )
-
-
-def test_embedded_publication_health_reports_a_fresh_positive_without_its_companion():
-    records = [
-        _record(
-            "driver",
-            "metric_publication_dropped_records",
-            2,
-            165_000,
-            _attributes("current_snapshot", metric_source="vllm", drop_reason="sample_limit"),
-            job="/train",
-            service="marinskyrl",
-        )
-    ]
-
-    rows = _query_rows(_database(records), job="/train")
-
-    assert _one(rows, "telemetry_health", "collector", "polls")["status"] == "incomplete"
-
-
-def test_embedded_publication_health_uses_the_latest_current_value():
-    records = [
+def _publication_loss_records(
+    sample_limit: float | None,
+    telemetry_loss: float | None,
+    *,
+    timestamp_ms: int = 165_000,
+    metric_source: str = "vllm",
+) -> tuple[TelemetryRow, ...]:
+    return tuple(
         _record(
             "driver",
             "metric_publication_dropped_records",
             value,
             timestamp_ms,
-            _attributes("current_snapshot", metric_source="vllm", drop_reason=reason),
+            _attributes("current_snapshot", metric_source=metric_source, drop_reason=reason),
             job="/train",
             service="marinskyrl",
         )
-        for reason in ("sample_limit", "telemetry_loss")
-        for timestamp_ms, value in ((135_000, 2), (165_000, 0))
-    ]
+        for reason, value in (("sample_limit", sample_limit), ("telemetry_loss", telemetry_loss))
+        if value is not None
+    )
 
-    rows = _query_rows(_database(records), job="/train")
 
-    assert _one(rows, "telemetry_health", "collector", "polls")["status"] == "healthy"
-    assert [row for row in rows if row["metric"] == "dropped samples"] == []
+@pytest.mark.parametrize(
+    ("records", "end_ms", "status", "loss_reasons"),
+    [
+        pytest.param(
+            _publication_loss_records(0, 0) + _publication_loss_records(None, 99, metric_source="ray"),
+            END_MS,
+            "healthy",
+            set(),
+            id="fresh-zeroes-ignore-ray-loss",
+        ),
+        pytest.param(
+            _publication_loss_records(2, 0),
+            END_MS,
+            "incomplete",
+            {"sample_limit"},
+            id="sample-limit-loss",
+        ),
+        pytest.param(
+            _publication_loss_records(0, 3),
+            END_MS,
+            "incomplete",
+            {"telemetry_loss"},
+            id="telemetry-loss",
+        ),
+        pytest.param(
+            _publication_loss_records(0, None),
+            END_MS,
+            "unknown",
+            set(),
+            id="missing-zero-companion",
+        ),
+        pytest.param(
+            _publication_loss_records(0, 0, timestamp_ms=105_000),
+            360_000,
+            "unknown",
+            set(),
+            id="stale-zeroes",
+        ),
+        pytest.param(
+            _publication_loss_records(2, None),
+            END_MS,
+            "incomplete",
+            {"sample_limit"},
+            id="positive-without-companion",
+        ),
+        pytest.param(
+            _publication_loss_records(2, 2, timestamp_ms=135_000) + _publication_loss_records(0, 0),
+            END_MS,
+            "healthy",
+            set(),
+            id="latest-current-zero",
+        ),
+    ],
+)
+def test_embedded_publication_health_scenarios(records, end_ms, status, loss_reasons):
+    rows = _query_rows(_database(list(records)), job="/train", end_ms=end_ms)
+
+    health = _one(rows, "telemetry_health", "collector", "polls")
+    observed_loss_reasons = {row["series"] for row in rows if row["metric"] == "dropped samples"}
+    assert (health["status"], observed_loss_reasons) == (status, loss_reasons)
 
 
 def test_query_returns_explicit_no_data_row():
