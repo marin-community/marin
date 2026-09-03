@@ -296,7 +296,7 @@ def _copy_with_hash(
     if separator:
         destination_fs.makedirs(parent, exist_ok=True)
     digest = hashlib.sha256()
-    multipart_etag = _MultipartEtag(S3_UPLOAD_PART_BYTES) if _is_s3(destination_fs) else None
+    multipart_etag = _MultipartEtag(S3_UPLOAD_PART_BYTES) if _has_fixed_s3_uploads(destination_fs) else None
     copied_size = 0
     destination_options = {"block_size": S3_UPLOAD_PART_BYTES} if multipart_etag is not None else {}
     with (
@@ -469,11 +469,13 @@ def _etag(info: dict[str, Any]) -> str | None:
     return str(value).strip('"')
 
 
-def _is_s3(filesystem: AbstractFileSystem) -> bool:
+def _has_fixed_s3_uploads(filesystem: AbstractFileSystem) -> bool:
     protocol = filesystem.protocol
     if isinstance(protocol, str):
-        return protocol == "s3"
-    return "s3" in protocol
+        is_s3 = protocol == "s3"
+    else:
+        is_s3 = "s3" in protocol
+    return is_s3 and bool(getattr(filesystem, "fixed_upload_size", False))
 
 
 def _result(
