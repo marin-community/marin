@@ -157,6 +157,24 @@ def _log_state_layout_drift(before: dict[str, str], after: dict[str, str]) -> No
         logger.warning("STATE LAYOUT STRUCTURE: only-before=%s only-after=%s", only_before[:10], only_after[:10])
 
 
+def canonicalize_step_sharding(state: "GrugTrainState", mesh: Mesh) -> "GrugTrainState":
+    """Place the step counter on the mesh sharding the train step returns it with.
+
+    `_init_state` is jitted without explicit out_shardings, so the scalar step comes back under a
+    `GSPMDSharding`, while `train_step` runs under the explicit mesh and returns it under a
+    `NamedSharding`. JAX keys its compilation cache on the input shardings, so the second call
+    misses and compiles a second executable that then lives for the whole run. That matters well
+    beyond a wasted compile: `CollectiveMemoryCache` is a member of `GpuExecutable`, so each
+    executable registers its own NCCL symmetric window over the same collective-memory arena, at the
+    same base address. NCCL 2.30.7 accepts the duplicate -- 52f6d00 dropped the dedup from
+    symMemoryObtain -- and nothing checks window overlap, which is the aliasing #8861 fails on.
+    Every other leaf already carries an explicit sharding and matches across the step.
+    """
+    if not isinstance(state.step, jax.Array):
+        return state
+    return dataclasses.replace(state, step=jax.device_put(state.step, NamedSharding(mesh, P())))
+
+
 def restore_template_from(state):
     """ShapeDtypeStructs carrying each leaf's concrete sharding, releasing the leaves.
 
@@ -1034,6 +1052,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             state = take_master_as_params(state)
         if released_initial_state and any(isinstance(leaf, jax.ShapeDtypeStruct) for leaf in jax.tree.leaves(state)):
             state = _init_state(model_key)
+        state = canonicalize_step_sharding(state, mesh)
         dump_grug_state_sharding_run_artifact(
             state,
             log_dir=trainer.log_dir,
