@@ -277,8 +277,9 @@ class IsolatedCudaVllm:
             identity += ":" + ",".join(self.with_packages)
         if self.extra_index_urls:
             # Distinct indexes can serve different builds of the same requirement
-            # (e.g. cu130-vs-cu129 FlashInfer), so they must not share a compilation cache.
-            identity += ":" + ",".join(sorted(self.extra_index_urls))
+            # (e.g. cu130-vs-cu129 FlashInfer), and uv gives earlier --index flags priority, so
+            # the identity keeps the URLs in resolution order rather than sorting them.
+            identity += ":" + ",".join(self.extra_index_urls)
         return identity
 
 

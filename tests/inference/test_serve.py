@@ -219,6 +219,18 @@ def test_isolated_cuda_vllm_marin_fork_uses_verified_wheel(monkeypatch, machine)
     assert requirement in launcher.cache_identity()
 
 
+def test_isolated_cuda_vllm_cache_identity_keeps_the_index_order(monkeypatch):
+    """uv gives earlier --index flags priority, so reversed indexes are different environments."""
+    monkeypatch.setattr("platform.machine", lambda: "x86_64")
+    indexes = ("https://flashinfer.ai/whl/cu130/", "https://flashinfer.ai/whl/cu129/")
+    forward = IsolatedCudaVllm(source=VllmType.MARIN_FORK, extra_index_urls=indexes)
+    backward = IsolatedCudaVllm(source=VllmType.MARIN_FORK, extra_index_urls=indexes[::-1])
+
+    assert forward.cache_identity() != backward.cache_identity()
+    cmd = forward.command()
+    assert [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "--index"] == list(indexes)
+
+
 def test_isolated_cuda_vllm_marin_fork_rejects_unpublished_architecture(monkeypatch):
     monkeypatch.setattr("platform.machine", lambda: "ppc64le")
 

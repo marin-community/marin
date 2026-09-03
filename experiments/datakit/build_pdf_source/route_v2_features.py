@@ -7,7 +7,7 @@
 :mod:`~experiments.datakit.build_pdf_source.classify` was trained on, **in the order it was trained
 on them**. Every group but ``inspector_detect`` is free: pdf-inspector's extraction runs on every
 document regardless, and these are the signals it reports. Costs are denominated in CPU core-hours
-per million crawl pages (see ``pdf-router-v2.md`` on the ``mark/pdf_pipeline`` campaign branch).
+per million crawl pages (see ``pdf-router-v2.md`` on the ``mark/pdf_campaign`` campaign branch).
 
 Nothing here opens a PDF. A group is a declaration: column names, a source, and a price.
 :func:`with_derived` turns the columns :mod:`~experiments.datakit.build_pdf_source.extract_inspector`
@@ -34,7 +34,7 @@ INSPECTOR_DETECT_CORE_HOURS = 0.12
 # measured before the feed switched renderer and compression level.
 VLM_FEED_CORE_HOURS = 17.8
 # Serving those pages, from the full-node brokered measurement in `ocr-budget-sweep.md` on the
-# `mark/pdf_pipeline` campaign branch.
+# `mark/pdf_campaign` campaign branch.
 VLM_GPU_HOURS = 15.6
 
 # The corpus this is all scaled to.

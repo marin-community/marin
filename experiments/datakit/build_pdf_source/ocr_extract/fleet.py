@@ -6,7 +6,7 @@
 Four one-GPU vLLM instances behind the Marin broker pack one GB200 node. The fleet only reaches
 its throughput if the senders keep :data:`MAX_IN_FLIGHT` requests per instance in flight, and
 ``sender_fleet_size`` in the extraction step sizes its Zephyr fleet from that number. The numbers
-come from ``ocr-budget-sweep.md`` on the ``mark/pdf_pipeline`` campaign branch.
+come from ``ocr-budget-sweep.md`` on the ``mark/pdf_campaign`` campaign branch.
 """
 
 import math
