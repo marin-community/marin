@@ -53,8 +53,12 @@ APPS_DIR_ENV = "MARINA_APPS_DIR"
 DATA_ROOT_ENV = "MARINA_DATA_ROOT"
 IAP_AUDIENCE_ENV = "MARINA_IAP_AUDIENCE"
 # `host=app,host=app`: a vanity host that used to be one app's own origin (echo.oa.dev)
-# redirects into that app's prefix, so links from before the move keep resolving.
+# redirects into that app's prefix on the canonical origin, so links from before the move
+# keep resolving.
 HOST_APPS_ENV = "MARINA_HOST_APPS"
+# The origin the apps are served from. Aliased hosts send every request here, so one URL
+# space holds the apps and a link from one app to another resolves against this origin.
+CANONICAL_ORIGIN_ENV = "MARINA_CANONICAL_ORIGIN"
 DATA_PREFIX = "data/"
 API_PREFIX = "/api"
 DATA_CACHE_CONTROL = "private, max-age=300"
@@ -71,6 +75,8 @@ class MarinaConfig:
     database: DatabaseSpec | None = None
     # Hosts that redirect into one app's prefix, by host name.
     host_apps: dict[str, str] = field(default_factory=dict)
+    # Scheme and host the aliased hosts redirect to, e.g. https://marina.oa.dev.
+    canonical_origin: str | None = None
 
     @classmethod
     def from_env(cls, default_apps_dir: Path) -> "MarinaConfig":
@@ -88,6 +94,7 @@ class MarinaConfig:
             iap_audience=audience,
             database=database_from_env(os.environ),
             host_apps=parse_host_apps(os.environ.get(HOST_APPS_ENV, "")),
+            canonical_origin=(os.environ.get(CANONICAL_ORIGIN_ENV) or "").rstrip("/") or None,
         )
 
 
@@ -103,14 +110,23 @@ def parse_host_apps(spec: str) -> dict[str, str]:
     return result
 
 
-def host_redirect(host: str, path: str, host_apps: dict[str, str]) -> str | None:
-    """Where a request on an aliased host should go, or None when it is already inside the app."""
+def host_redirect(host: str, path: str, host_apps: dict[str, str], canonical_origin: str) -> str | None:
+    """The canonical URL for a request on an aliased host, or None on any other host.
+
+    Every path on an aliased host moves to the canonical origin. Serving the app on the alias
+    too would put the same pages at two origins, and a root-relative link to another app
+    would take this host's prefix with it: ``/evaldash/`` on echo.oa.dev became
+    ``/echo/evaldash/``.
+
+    A path already inside the app keeps the prefix it has, so a link that was written or
+    cached against the alias's own prefix does not collect a second copy of it.
+    """
     app = host_apps.get(host.split(":")[0].lower())
     if app is None:
         return None
-    if path.startswith(f"/{app}/") or path.startswith("/api/") or path == "/healthz":
-        return None
-    return f"/{app}{'' if path == '/' else path}"
+    if path == f"/{app}" or path.startswith(f"/{app}/"):
+        return f"{canonical_origin}{path}"
+    return f"{canonical_origin}/{app}{'' if path == '/' else path}"
 
 
 def content_security_policy(app: AppManifest) -> str:
@@ -262,17 +278,24 @@ def create_app(config: MarinaConfig) -> RouteAuthMiddleware:
         return HTMLResponse(landing_page(apps))
 
     if config.host_apps:
+        origin = config.canonical_origin
+        if origin is None:
+            raise ValueError(f"{HOST_APPS_ENV} needs {CANONICAL_ORIGIN_ENV} to redirect to")
         for host, app_name in config.host_apps.items():
             if app_name not in {app.name for app in apps}:
                 raise ValueError(f"{HOST_APPS_ENV}: {host} points at unknown app {app_name!r}")
+            if origin.endswith(f"//{host}"):
+                raise ValueError(f"{HOST_APPS_ENV}: {host} is the canonical origin and would redirect to itself")
 
         @api.middleware("http")
         async def redirect_aliased_hosts(request: Request, call_next):
-            target = host_redirect(request.headers.get("host", ""), request.url.path, config.host_apps)
+            target = host_redirect(request.headers.get("host", ""), request.url.path, config.host_apps, origin)
             if target is None:
                 return await call_next(request)
             query = f"?{request.url.query}" if request.url.query else ""
-            return RedirectResponse(target + query, status_code=308)
+            # 307, not 308: a permanent redirect is cached hard, and a browser that kept an
+            # earlier target would keep following it after this mapping changes.
+            return RedirectResponse(target + query, status_code=307, headers={"Cache-Control": "no-store"})
 
     for app in apps:
         if is_python_app(app):

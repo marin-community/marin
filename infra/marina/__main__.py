@@ -16,8 +16,10 @@ keeps Echo's corpus mirror current). IAP is the front door; the container verifi
 signed assertion against the service's audience so each request carries the caller's
 email. IAM grants live in the ``marin`` stack (iac.gcp.marina).
 
-Vanity hosts: ``marina.oa.dev`` is the service; ``echo.oa.dev`` and ``evaldash.oa.dev`` are
-mapped to the same service and the kernel redirects them into ``/echo/`` and ``/evaldash/``.
+Vanity hosts: the apps are served from ``marina.oa.dev``. ``echo.oa.dev`` and
+``evaldash.oa.dev`` map to the same service, where every request redirects to
+``marina.oa.dev/echo/`` or ``marina.oa.dev/evaldash/`` with its path, so the old links keep
+resolving and one origin holds the apps.
 """
 
 from pathlib import Path
@@ -226,6 +228,7 @@ def main() -> None:
                 "MARINA_IAP_AUDIENCE": iap_audience(project_number),
                 "MARINA_DATA_ROOT": f"gs://{DATA_BUCKET}",
                 "MARINA_HOST_APPS": ",".join(f"{host}={app}" for host, app in HOST_APPS.items()),
+                "MARINA_CANONICAL_ORIGIN": f"https://{MARINA_HOST}",
                 **DATABASE_ENV,
             },
             secrets=coreweave_keys,

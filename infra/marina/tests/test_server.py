@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 from marina.manifest import discover_apps, load_manifest
-from marina.server import MarinaConfig, create_app, serve_app_file
+from marina.server import CANONICAL_ORIGIN_ENV, MarinaConfig, create_app, serve_app_file
 from starlette.testclient import TestClient
 
 TASKTROVE_MANIFEST = """
@@ -112,12 +112,43 @@ def test_non_loopback_without_iap_is_denied(tmp_path: Path) -> None:
     assert remote.get("/healthz").status_code == 200
 
 
-def test_aliased_host_redirects_into_its_app(tmp_path: Path) -> None:
+def aliased_client(tmp_path: Path) -> TestClient:
+    write_app(tmp_path / "apps", "tasktrove")
+    config = replace(
+        config_for(tmp_path),
+        host_apps={"old.example": "tasktrove"},
+        canonical_origin="https://marina.example",
+    )
+    return TestClient(create_app(config), client=("127.0.0.1", 40000))
+
+
+def test_aliased_host_redirects_into_its_app_on_the_canonical_origin(tmp_path: Path) -> None:
+    client = aliased_client(tmp_path)
+    response = client.get("/wiki/59?x=1", headers={"host": "old.example"}, follow_redirects=False)
+    assert response.status_code == 307
+    assert response.headers["location"] == "https://marina.example/tasktrove/wiki/59?x=1"
+    assert response.headers["cache-control"] == "no-store"
+    assert client.get("/", headers={"host": "other.example"}).status_code == 200
+
+
+def test_aliased_host_does_not_prefix_a_path_already_inside_its_app(tmp_path: Path) -> None:
+    # A link written or cached against the alias's own prefix must not collect a second copy.
+    client = aliased_client(tmp_path)
+    for path in ("/tasktrove", "/tasktrove/", "/tasktrove/wiki/59"):
+        response = client.get(path, headers={"host": "old.example"}, follow_redirects=False)
+        assert response.headers["location"] == f"https://marina.example{path}"
+
+
+def test_aliased_host_keeps_another_apps_name_inside_its_own_app(tmp_path: Path) -> None:
+    # The alias belongs to one app, so a path is that app's even when it reads like another
+    # app's name: an app could otherwise shadow a route the alias's own app serves.
+    client = aliased_client(tmp_path)
+    response = client.get("/notes/", headers={"host": "old.example"}, follow_redirects=False)
+    assert response.headers["location"] == "https://marina.example/tasktrove/notes/"
+
+
+def test_aliased_hosts_need_a_canonical_origin(tmp_path: Path) -> None:
     write_app(tmp_path / "apps", "tasktrove")
     config = replace(config_for(tmp_path), host_apps={"old.example": "tasktrove"})
-    client = TestClient(create_app(config), client=("127.0.0.1", 40000))
-    response = client.get("/wiki/59?x=1", headers={"host": "old.example"}, follow_redirects=False)
-    assert response.status_code == 308
-    assert response.headers["location"] == "/tasktrove/wiki/59?x=1"
-    assert client.get("/tasktrove/", headers={"host": "old.example"}).status_code == 200
-    assert client.get("/", headers={"host": "other.example"}).status_code == 200
+    with pytest.raises(ValueError, match=CANONICAL_ORIGIN_ENV):
+        create_app(config)
