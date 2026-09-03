@@ -156,12 +156,34 @@ E6_TRAIN_BATCH_SIZE = 256
 # change semantics (32 GRPO groups per update, not 256) and must never be carried into a science run.
 # ⚠️ Timings from a smoke run are NOT comparable to the 4209.7 s baseline. It answers "do rows
 # arrive, and is the decomposition sane", nothing else.
+# ── PR488-MATCHED GEOMETRY ───────────────────────────────────────────────────────────────────
+# Russell Power's PR #488 published a Megatron-vs-FSDP2 table at a specific shape, and the whole
+# value of matching it is that his numbers become a DIRECT comparison for ours rather than an
+# analogy. His stated setup: 1024 prompt + 8192 response tokens, 64 prompts x 8 samples, four
+# PP2xEP8 policy nodes and four vLLM nodes, no KL loss.
+#   phase           Megatron     FSDP2 (his)
+#   step            190-196 s    634 s
+#   policy_train     26-27 s     457 s
+#   generate        134-139 s    131 s
+#   fwd_logprobs      6-7 s       32 s
+#   sync_weights     15-17 s      11.3 s
+# ⚠️ We cannot match PP2xEP8 -- that is Megatron's parallelism, and our path is FSDP2 with
+# expert_model_parallel_size 1. So this matches the WORKLOAD (tokens, prompts, samples) and the
+# NODE COUNT (4 policy + 4 inference), not the sharding. His FSDP2 column is the honest comparand.
+PR488_POLICY_NODES = 4
+PR488_INFERENCE_ENGINES = 4
+PR488_BATCH = 64
+PR488_N_SAMPLES = 8
+PR488_CONTEXT_WINDOW = 1024 + 8192
+PR488_MAX_NEW_TOKENS = 8192
+
 SMOKE_POLICY_NODES = 2
 SMOKE_INFERENCE_ENGINES = 1
 SMOKE_BATCH = 32
 
 
-def _role_plan(*, policy_nodes: int, inference_engines: int, batch: int) -> SkyRLRolePlan:
+def _role_plan(*, policy_nodes: int, inference_engines: int, batch: int,
+               n_samples: int = 16) -> SkyRLRolePlan:
     return SkyRLRolePlan(
         colocate_all=False,
         policy_num_nodes=policy_nodes,
@@ -171,7 +193,7 @@ def _role_plan(*, policy_nodes: int, inference_engines: int, batch: int) -> SkyR
         train_batch_size=batch,
         policy_mini_batch_size=batch,
         micro_train_batch_size_per_gpu=1,
-        n_samples_per_prompt=16,
+        n_samples_per_prompt=n_samples,
     )
 
 
@@ -189,7 +211,8 @@ E6_ROLE_PLAN = SkyRLRolePlan(
 
 
 def _rl_config(*, role_plan: SkyRLRolePlan, max_steps: int, ckpt_interval: int, debug_distributed: bool,
-               reshard_after_forward: bool = True, flash_attn: bool = False) -> str:
+               reshard_after_forward: bool = True, flash_attn: bool = False,
+               pr488_geometry: bool = False) -> str:
     """Render the SkyRL config.
 
     ``ckpt_interval`` defaults to ``max_steps + 1``: no periodic checkpoint, but one terminal
@@ -261,8 +284,8 @@ def _rl_config(*, role_plan: SkyRLRolePlan, max_steps: int, ckpt_interval: int, 
 entrypoint: standard
 
 context_budget:
-  request_window_tokens: {E6_CONTEXT_WINDOW}
-  max_new_tokens_per_turn: {E6_MAX_NEW_TOKENS}
+  request_window_tokens: {PR488_CONTEXT_WINDOW if pr488_geometry else E6_CONTEXT_WINDOW}
+  max_new_tokens_per_turn: {PR488_MAX_NEW_TOKENS if pr488_geometry else E6_MAX_NEW_TOKENS}
   max_turns: 1
 
 model_num_attention_heads: 20
@@ -386,25 +409,32 @@ def build_workflow(
     grouped_mm: bool = False,
     reshard_after_forward: bool = True,
     flash_attn: bool = False,
+    pr488_geometry: bool = False,
     label: str = "",
 ) -> ArtifactStep[SkyRLModel] | ArtifactStep[SkyRLTelemetryRun]:
     """Compose the E6 baseline as one inspectable artifact step."""
-    role_plan = (
-        _role_plan(
+    if pr488_geometry:
+        role_plan = _role_plan(
+            policy_nodes=PR488_POLICY_NODES,
+            inference_engines=PR488_INFERENCE_ENGINES,
+            batch=PR488_BATCH,
+            n_samples=PR488_N_SAMPLES,
+        )
+    elif smoke:
+        role_plan = _role_plan(
             policy_nodes=SMOKE_POLICY_NODES,
             inference_engines=SMOKE_INFERENCE_ENGINES,
             batch=SMOKE_BATCH,
         )
-        if smoke
-        else E6_ROLE_PLAN
-    )
+    else:
+        role_plan = E6_ROLE_PLAN
     num_nodes = role_plan.policy_num_nodes + role_plan.num_inference_engines
     # The artifact name IS the telemetry identity, so it has to separate every variant we intend to
     # compare. run_id is f"{step_name}-{version}" (marin/rl/skyrl.py) and is passed through to
     # SKYRL_RUN_ID, which becomes the `run_id` resource attribute on every row. Override strings
     # change the FINGERPRINT but not the name -- so without this, a spans-on and a spans-off run at
     # the same version publish into the same run_id and their rows are indistinguishable.
-    variant = "-smoke" if smoke else ""
+    variant = "-pr488" if pr488_geometry else ("-smoke" if smoke else "")
     if not policy_train_spans:
         variant += "-nospans"
     if policy_train_spans and not spans_synchronize:
@@ -443,6 +473,7 @@ def build_workflow(
                 debug_distributed=debug_distributed,
                 reshard_after_forward=reshard_after_forward,
                 flash_attn=flash_attn,
+                pr488_geometry=pr488_geometry,
             ),
             runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.FSDP),
             model=ExternalModel(
@@ -614,6 +645,17 @@ def build_workflow(
     "(tests/gpu/test_grug_flash_attention.py). use_sample_packing stays false either way.",
 )
 @click.option(
+    "--pr488-geometry",
+    is_flag=True,
+    default=False,
+    help="Match Russell Power's PR #488 comparison shape so his published table is a DIRECT "
+    "comparand rather than an analogy: 1024+8192 tokens, 64 prompts x 8 samples, 4 policy + 4 "
+    "inference nodes. His numbers -- step 190-196s Megatron vs 634s FSDP2, policy_train 26-27 vs "
+    "457, generate 134-139 vs 131, fwd_logprobs 6-7 vs 32. We cannot match PP2xEP8 (that is "
+    "Megatron parallelism; we run FSDP2 at EP1), so this matches workload and node count, not "
+    "sharding -- his FSDP2 column is the honest comparand.",
+)
+@click.option(
     "--label",
     default="",
     help="Extra suffix on the artifact name, and therefore on run_id. The flags that change "
@@ -676,6 +718,7 @@ def main(
     grouped_mm: bool,
     reshard_after_forward: bool,
     flash_attn: bool,
+    pr488_geometry: bool,
     label: str,
 ) -> ArtifactStep[SkyRLModel] | ArtifactStep[SkyRLTelemetryRun]:
     return build_workflow(
@@ -692,6 +735,7 @@ def main(
         grouped_mm=grouped_mm,
         reshard_after_forward=reshard_after_forward,
         flash_attn=flash_attn,
+        pr488_geometry=pr488_geometry,
         label=label,
     )
 
