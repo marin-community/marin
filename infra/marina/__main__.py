@@ -20,6 +20,8 @@ Vanity hosts: ``marina.oa.dev`` is the service; ``echo.oa.dev`` and ``evaldash.o
 mapped to the same service and the kernel redirects them into ``/echo/`` and ``/evaldash/``.
 """
 
+from pathlib import Path
+
 import pulumi
 import pulumi_cloudflare as cloudflare
 import pulumi_command as command
@@ -47,6 +49,8 @@ MARINMIRROR_TOKEN_SECRET = "marinmirror-token"
 # Google's shared frontend for Cloud Run domain mappings; vanity CNAMEs point here.
 CLOUD_RUN_FRONTEND = "ghs.googlehosted.com"
 HOST_APPS = {"echo.oa.dev": "echo", "evaldash.oa.dev": "evaldash"}
+MARINA_HOST = "marina.oa.dev"
+GRANTS_SCRIPT = Path(__file__).parent / "database_grants.py"
 
 DATABASE_ENV = {"CLOUDSQL_CONNECTION": CONNECTION_NAME, "PGDATABASE": DATABASE, "PGUSER": DATABASE_USER}
 
@@ -105,21 +109,38 @@ def job_template(
 
 
 def main() -> None:
+    config = pulumi.Config()
+    # First bring-up: `pulumi config set marin-marina:import true` adopts the secret, the
+    # context database, and the Loom SQL user that the retired echo stack created.
+    adopt = config.get_bool("import") or False
+    # Set once the old echo-api and marin-evaldash services are gone: the old vanity hosts
+    # then map here and the kernel redirects them into their apps.
+    alias_hosts = config.get_bool("alias_hosts") or False
     gcp_provider = gcp.Provider("gcp", project=PROJECT)
     child = pulumi.ResourceOptions(provider=gcp_provider)
+
+    def adopted(resource_id: str) -> pulumi.ResourceOptions:
+        return pulumi.ResourceOptions.merge(child, pulumi.ResourceOptions(import_=resource_id if adopt else None))
+
     project_number = gcp.organizations.get_project(
         project_id=PROJECT, opts=pulumi.InvokeOptions(provider=gcp_provider)
     ).number
 
     database = gcp.sql.Database("database", name=DATABASE, instance=INSTANCE, project=PROJECT, opts=child)
-    gcp.sql.Database("codehealth-database", name=CODEHEALTH_DATABASE, instance=INSTANCE, project=PROJECT, opts=child)
-    gcp.sql.User(
+    codehealth_database = gcp.sql.Database(
+        "codehealth-database",
+        name=CODEHEALTH_DATABASE,
+        instance=INSTANCE,
+        project=PROJECT,
+        opts=adopted(f"projects/{PROJECT}/instances/{INSTANCE}/databases/{CODEHEALTH_DATABASE}"),
+    )
+    loom_user = gcp.sql.User(
         "loom-db-user",
         name=LOOM_DATABASE_USER,
         instance=INSTANCE,
         project=PROJECT,
         type="CLOUD_IAM_SERVICE_ACCOUNT",
-        opts=child,
+        opts=adopted(f"{PROJECT}/{INSTANCE}//{LOOM_DATABASE_USER}"),
     )
     bucket = gcp.storage.Bucket(
         "data",
@@ -134,7 +155,7 @@ def main() -> None:
         secret_id=MARINMIRROR_TOKEN_SECRET,
         project=PROJECT,
         replication=gcp.secretmanager.SecretReplicationArgs(auto=gcp.secretmanager.SecretReplicationAutoArgs()),
-        opts=child,
+        opts=adopted(f"projects/{PROJECT}/secrets/{MARINMIRROR_TOKEN_SECRET}"),
     )
     # CoreWeave object-storage keys for evaldash's s3:// record prefixes. Values stay in Secret Manager.
     coreweave_keys = (
@@ -181,6 +202,16 @@ def main() -> None:
         opts=pulumi.ResourceOptions.merge(child, pulumi.ResourceOptions(depends_on=[service, database])),
     )
 
+    # IAM users can connect but not create schemas; grant the service account the database
+    # and the Loom VM the codehealth schema, as the native admin user, once per user change.
+    grants = command.local.Command(
+        "database-grants",
+        create=f"uv run {GRANTS_SCRIPT}",
+        triggers=[GRANTS_SCRIPT.read_text()],
+        environment={"GOOGLE_CLOUD_QUOTA_PROJECT": PROJECT},
+        opts=pulumi.ResourceOptions(depends_on=[database_user, loom_user, database, codehealth_database]),
+    )
+
     migrate = gcp.cloudrunv2.Job(
         "migrate",
         name=MIGRATE_JOB,
@@ -197,7 +228,7 @@ def main() -> None:
         "run-migrate",
         create=f"gcloud run jobs execute {MIGRATE_JOB} --project {PROJECT} --region {REGION} --wait",
         triggers=[service.image_ref],
-        opts=pulumi.ResourceOptions(depends_on=[migrate]),
+        opts=pulumi.ResourceOptions(depends_on=[migrate, grants]),
     )
 
     sync = gcp.cloudrunv2.Job(
@@ -239,10 +270,9 @@ def main() -> None:
     # the managed cert; a DNS-only Cloudflare CNAME points the host at Cloud Run's frontend
     # (a Cloudflare proxy would block cert issuance). Mappings are immutable and carry
     # server-set metadata, so those fields are ignored. Set marin-marina:dns_zone_id to enable.
-    config = pulumi.Config()
     dns_zone_id = config.get("dns_zone_id")
     if dns_zone_id:
-        for host in ("marina.oa.dev", *HOST_APPS):
+        for host in (MARINA_HOST, *(HOST_APPS if alias_hosts else ())):
             slug = host.split(".")[0]
             gcp.cloudrun.DomainMapping(
                 f"{slug}-domain",
