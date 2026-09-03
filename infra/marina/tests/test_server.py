@@ -147,6 +147,21 @@ def test_aliased_host_keeps_another_apps_name_inside_its_own_app(tmp_path: Path)
     assert response.headers["location"] == "https://marina.example/tasktrove/notes/"
 
 
+def test_an_api_call_to_an_aliased_host_is_told_where_the_api_moved(tmp_path: Path) -> None:
+    # A redirect would be followed without the Authorization header, and the retry would come
+    # back from IAP as a sign-in page with status 200 -- a success the caller cannot parse.
+    client = aliased_client(tmp_path)
+    response = client.post("/api/feedback", headers={"host": "old.example"}, follow_redirects=False)
+    assert response.status_code == 421
+    assert response.json() == {"error": "moved", "url": "https://marina.example/tasktrove/api/feedback"}
+
+
+def test_a_page_whose_path_merely_starts_with_an_app_still_redirects(tmp_path: Path) -> None:
+    client = aliased_client(tmp_path)
+    response = client.get("/wiki/api/59", headers={"host": "old.example"}, follow_redirects=False)
+    assert response.status_code == 307
+
+
 def test_aliased_hosts_need_a_canonical_origin(tmp_path: Path) -> None:
     write_app(tmp_path / "apps", "tasktrove")
     config = replace(config_for(tmp_path), host_apps={"old.example": "tasktrove"})

@@ -130,6 +130,12 @@ def host_redirect(host: str, path: str, host_apps: dict[str, str], canonical_ori
     return f"{canonical_origin}/{app}{'' if path == '/' else path}"
 
 
+def is_api_target(target: str, canonical_origin: str) -> bool:
+    """Whether a redirect target addresses an app's API rather than one of its pages."""
+    segments = target[len(canonical_origin) :].split("/")
+    return len(segments) > 2 and f"/{segments[2]}" == API_PREFIX
+
+
 def content_security_policy(app: AppManifest) -> str:
     connect = " ".join(("'self'", *app.connect_src))
     return (
@@ -293,6 +299,11 @@ def create_app(config: MarinaConfig) -> RouteAuthMiddleware:
             target = host_redirect(request.headers.get("host", ""), request.url.path, config.host_apps, origin)
             if target is None:
                 return await call_next(request)
+            if is_api_target(target, origin):
+                # A client follows a cross-origin redirect without its Authorization header --
+                # requests and curl both drop it -- so the retry would reach IAP anonymous and
+                # come back as a sign-in page with status 200. Name the move instead.
+                return JSONResponse({"error": "moved", "url": target}, status_code=421)
             query = f"?{request.url.query}" if request.url.query else ""
             # 307, not 308: a permanent redirect is cached hard, and a browser that kept an
             # earlier target would keep following it after this mapping changes.
