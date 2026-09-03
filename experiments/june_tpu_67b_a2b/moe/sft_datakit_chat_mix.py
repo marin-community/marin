@@ -5,6 +5,7 @@
 
 import dataclasses
 import logging
+from dataclasses import dataclass
 
 from fray.cluster import ResourceConfig
 from levanter.data.text.datasets import (
@@ -19,6 +20,7 @@ from marin.datakit.chat import render_chat_source
 from marin.datakit.sft_sources import all_sft_sources
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
+from rigging.filesystem.storage_path import prefix_join
 from rigging.log_setup import configure_logging
 
 from experiments.june_tpu_67b_a2b.moe.heuristic_muonh import MoeMuonHHeuristic
@@ -45,16 +47,17 @@ _MIXTURE_BLOCK_SIZE = 49_152
 _SFT_FRACTION = 0.8
 _PRETRAIN_FRACTION = 0.2
 _LONG_CONTEXT_SKEW = 4
-_TAIL_BUCKETS_WITHOUT_LONG = frozenset(
-    {"c07q3", "c38q1", "c38q3", "c38q4", "c39q0", "c39q1", "c39q2", "c39q3", "c39q4"}
-)
+_TAIL_BUCKETS_WITHOUT_LONG = frozenset({"c07q3", "c38q1", "c38q3", "c38q4", "c39q0", "c39q1", "c39q2", "c39q3", "c39q4"})
 
 
-def _normalized_parquet_glob(step: StepSpec) -> str:
-    return f"{step.output_path}/outputs/main/*.parquet"
+@dataclass(frozen=True)
+class _SftMixture:
+    components: dict[str, DatasetComponent]
+    weights: dict[str, float]
+    deps: list[StepSpec]
 
 
-def _sft_components() -> tuple[dict[str, DatasetComponent], dict[str, float], list[StepSpec]]:
+def _sft_mixture() -> _SftMixture:
     sources = all_sft_sources()
     total_tokens = sum(source.rough_token_count_b for source in sources.values())
     components: dict[str, DatasetComponent] = {}
@@ -64,8 +67,8 @@ def _sft_components() -> tuple[dict[str, DatasetComponent], dict[str, float], li
         rendered = render_chat_source(source, tokenizer=_TOKENIZER)
         terminal = rendered.normalized
         source_config = UrlDatasetSourceConfig(
-            train_urls=[_normalized_parquet_glob(terminal)],
-            cache_dir=f"{terminal.output_path}/levanter-cache",
+            train_urls=[prefix_join(terminal.output_path, "outputs/main/*.parquet")],
+            cache_dir=prefix_join(terminal.output_path, "levanter-cache"),
             format=TextLmDatasetFormat(),
         )
         components[f"sft/{name}"] = DatasetComponent(
@@ -78,7 +81,7 @@ def _sft_components() -> tuple[dict[str, DatasetComponent], dict[str, float], li
         )
         weights[f"sft/{name}"] = _SFT_FRACTION * source.rough_token_count_b / total_tokens
         deps.append(terminal)
-    return components, weights, deps
+    return _SftMixture(components=components, weights=weights, deps=deps)
 
 
 def _pretrain_child(bucket: str, length: str) -> DatasetComponent:
@@ -129,15 +132,15 @@ def _model_config():
 
 
 def build() -> StepSpec:
-    sft_components, sft_weights, deps = _sft_components()
+    sft = _sft_mixture()
     pretrain_components, pretrain_weights = _pretrain_components()
-    weights = {**sft_weights, **pretrain_weights}
+    weights = {**sft.weights, **pretrain_weights}
     assert abs(sum(weights.values()) - 1.0) < 1e-9
 
     data = LmDataConfig(
         tokenizer=_TOKENIZER,
         cache_dir=None,
-        components={**sft_components, **pretrain_components},
+        components={**sft.components, **pretrain_components},
         train_weights=weights,
         auto_build_caches=True,
         mixture_block_size=_MIXTURE_BLOCK_SIZE,
@@ -180,7 +183,7 @@ def build() -> StepSpec:
 
     return StepSpec(
         name=_RUN_NAME,
-        deps=deps,
+        deps=sft.deps,
         fn=train,
         hash_attrs={
             "base_checkpoint": _BASE_CHECKPOINT,

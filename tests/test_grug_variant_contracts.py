@@ -93,7 +93,6 @@ def test_compact_grug_mesh_shape_keeps_expert_axis_at_size_one():
 
 
 def test_compact_grug_mesh_shape_allocates_context_axis():
-    """Contract: context_axis_size shards the sequence dim; data absorbs the remainder."""
     assert _compact_grug_mesh_shape(
         process_count=1,
         local_device_count=8,

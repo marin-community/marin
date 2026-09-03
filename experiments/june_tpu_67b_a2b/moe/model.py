@@ -69,12 +69,7 @@ RematMode = Literal["recompute_all", "save_moe"]
 
 
 def _seq_axis() -> str | None:
-    """Return the sequence-sharding axis name if the current mesh carries it.
-
-    Returns ``"context"`` when the compact grug mesh has that axis (always true
-    for meshes built by ``compact_grug_mesh`` after the CP change), else ``None``
-    for backwards compatibility with meshes lacking it.
-    """
+    """Return the sequence-sharding axis when the active mesh defines one."""
     mesh = get_abstract_mesh()
     if mesh is None or mesh.empty:
         return None
@@ -82,28 +77,23 @@ def _seq_axis() -> str | None:
 
 
 def _token_axes() -> tuple[str, ...]:
-    """Axes that partition the flat token dim ``[B*S]`` after context sharding."""
     seq = _seq_axis()
     return (*_BATCH_AXES, seq) if seq is not None else _BATCH_AXES
 
 
 def _seq_spec_3d() -> P:
-    """PartitionSpec for ``[B, S, D]``: batch on batch axes, seq on context, D free."""
     return P(_BATCH_AXES, _seq_axis(), None)
 
 
 def _seq_spec_4d(head_axis: str | None = "model") -> P:
-    """PartitionSpec for ``[B, S, N, D]``: seq on context, heads on ``head_axis``."""
     return P(_BATCH_AXES, _seq_axis(), head_axis, None)
 
 
 def _kv_spec_4d() -> P:
-    """PartitionSpec for K/V ``[B, S, M, D]`` before splash: seq MUST be replicated."""
     return P(_BATCH_AXES, None, "model", None)
 
 
 def _token_spec() -> P:
-    """PartitionSpec for ``[T=B*S, ...]`` fused-token tensors (includes context)."""
     return P(_token_axes())
 
 
@@ -112,22 +102,13 @@ def _batch_reshard(x: jax.Array) -> jax.Array:
 
 
 def _flatten_bs(x: jax.Array) -> jax.Array:
-    """Reshape ``[B, S, D] -> [B*S, D]`` under context sharding.
-
-    JAX can't infer the output sharding for a reshape that fuses two sharded
-    axes (batch on ``_BATCH_AXES``, seq on ``"context"``) into one, so provide
-    ``out_sharding`` explicitly with the fused-token spec ``_token_spec()``.
-    """
+    """Flatten batch and sequence while preserving their combined sharding."""
     b, s, d = x.shape
     return jnp.reshape(x, (b * s, d), out_sharding=_token_spec())
 
 
 def _unflatten_bs(x: jax.Array, b: int, s: int) -> jax.Array:
-    """Reshape ``[B*S, D] -> [B, S, D]`` under context sharding.
-
-    Inverse of ``_flatten_bs``; splits the fused token axis back to
-    ``(batch, seq)`` with the seq axis sharded on ``"context"``.
-    """
+    """Restore batch and sequence axes with context sharding."""
     d = x.shape[-1]
     return jnp.reshape(x, (b, s, d), out_sharding=_seq_spec_3d())
 

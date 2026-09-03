@@ -41,12 +41,7 @@ def _mesh_axis_size(mesh: Mesh | jax.sharding.AbstractMesh | None, axis_name: st
 
 
 def _batch_axes(mesh: Mesh | jax.sharding.AbstractMesh | None) -> tuple[str, ...]:
-    """Axes that partition the flat token dim (batch and, if present, context).
-
-    Used for token-space psums and shard_map in_specs on tensors already flattened
-    to ``[T = B*S, ...]``. Adding "context" here matches the flat-token sharding
-    that context-parallel produces when the seq dim is sharded on "context".
-    """
+    """Return mesh axes that partition flattened tokens."""
     axes = tuple(axis for axis in ("replica_dcn", "data", "expert", "context") if _mesh_has_axis(mesh, axis))
     if axes:
         return axes
