@@ -33,7 +33,7 @@ from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import experiment_main
 from marin.experiment.data import mixture, tokenized
-from marin.experiment.namespacing import user_namespaced_name
+from marin.experiment.namespacing import user_owned_name
 from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.training.training import LevanterCheckpoint, resolve_checkpointer_output_path
 
@@ -241,7 +241,7 @@ def grug_moe_baseline(*, version: str | None = None) -> ArtifactStep[LevanterChe
         )
 
     return ArtifactStep(
-        name=user_namespaced_name(name, version),
+        name=user_owned_name(name),
         version=version,
         artifact_type=LevanterCheckpoint,
         run=run_grug_moe_trial,

@@ -16,7 +16,7 @@ from levanter.tracker.wandb import WandbConfig
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import build_options
-from marin.experiment.namespacing import user_namespaced_name
+from marin.experiment.namespacing import user_owned_name
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import (
@@ -281,7 +281,7 @@ def build_diagnostic_run(
         )
 
     return ArtifactStep(
-        name=user_namespaced_name(name, version),
+        name=user_owned_name(name),
         version=version,
         artifact_type=HeroThroughputResult,
         run=run_grug,

@@ -27,7 +27,7 @@ from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import build_options
 from marin.experiment.data import mixture, tokenized
-from marin.experiment.namespacing import user_namespaced_name
+from marin.experiment.namespacing import user_owned_name
 from marin.processing.tokenize.tokenize import TokenizedCache
 from rigging.filesystem.storage_path import prefix_join
 
@@ -324,7 +324,7 @@ def build_hero_run(
         )
 
     return ArtifactStep(
-        name=user_namespaced_name(name, version),
+        name=user_owned_name(name),
         version=version,
         artifact_type=HeroThroughputResult,
         run=run_grug,
@@ -414,7 +414,7 @@ def build_hero_sweep_run(
         )
 
     return ArtifactStep(
-        name=user_namespaced_name(name, version),
+        name=user_owned_name(name),
         version=version,
         artifact_type=HeroThroughputResult,
         run=run_grug_ablation_sweep,

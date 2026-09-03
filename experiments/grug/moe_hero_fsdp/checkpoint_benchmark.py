@@ -27,7 +27,7 @@ from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import build_options
 from marin.experiment.data import mixture
-from marin.experiment.namespacing import user_namespaced_name
+from marin.experiment.namespacing import user_owned_name
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import prefix_join
 
@@ -142,7 +142,7 @@ def build_checkpoint_benchmark_run(
     )
     name = f"grug/checkpoint-benchmark/{run_id}"
     version = resolve_version(name, version)
-    step_name = user_namespaced_name(name, version)
+    step_name = user_owned_name(name)
     slim = _slimpajama_6b_dataset()
     output_path = marin_temp_bucket(
         ttl_days=CHECKPOINT_OUTPUT_TTL_DAYS,

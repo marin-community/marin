@@ -8,8 +8,9 @@ from unittest.mock import patch
 from experiments.grug.moe_hero_fsdp import launch, train
 
 
-def test_build_hero_run_uses_run_id_argument(monkeypatch):
+def test_build_hero_run_puts_fixed_version_checkpoint_under_user_directory(monkeypatch):
     monkeypatch.setenv("RUN_ID", "ignored-environment-run")
+    monkeypatch.setattr("marin.experiment.namespacing.username_segment", lambda: "alice")
 
     step = launch.build_hero_run(
         run_id="cli-run",
@@ -18,7 +19,7 @@ def test_build_hero_run_uses_run_id_argument(monkeypatch):
         version="2026.08.01",
     )
 
-    assert step.name == "grug/cli-run"
+    assert step.name == "users/alice/grug/cli-run"
 
 
 def test_run_grug_applies_runtime_defaults_and_keeps_overrides(monkeypatch):

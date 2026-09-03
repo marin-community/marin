@@ -56,7 +56,7 @@ from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import experiment_main
 from marin.experiment.data import mixture
-from marin.experiment.namespacing import user_namespaced_name
+from marin.experiment.namespacing import user_owned_name
 from marin.training.training import LevanterCheckpoint
 
 from experiments.grug.moe.launch import GrugMoeLaunchConfig, env_int, run_grug_moe_trial, slimpajama_6b_dataset
@@ -224,7 +224,7 @@ def build_scale_checkpoint(*, version: str | None = None) -> ArtifactStep[Levant
     step_name = f"{OUTPUT_SUBDIR}/{name}-{run_id}"
     version = resolve_version(step_name, version)
     return ArtifactStep(
-        name=user_namespaced_name(step_name, version),
+        name=user_owned_name(step_name),
         version=version,
         artifact_type=LevanterCheckpoint,
         run=run_grug_moe_trial,

@@ -34,8 +34,9 @@ Variant-specific guidance lives in `experiments/grug/variants.md`.
 
 The launcher takes the shared experiment CLI (`marin.experiment.cli`): `--version` sets the
 checkpoint version and is required, and `--run` builds the trial (without it the lowered plan is
-printed and nothing runs). The checkpoint version is deferred to `--version`, so pass `--version dev`
-to iterate (per-user namespace, rebuilds each run) or a calendar version `YYYY.MM.DD` to keep a run.
+printed and nothing runs). Default Grug artifact and benchmark checkpoint paths use
+`users/<username>/grug/...`; pass `--version dev` to rebuild on each run or a calendar version
+`YYYY.MM.DD` to keep a run.
 
 Print the plan (no run):
 

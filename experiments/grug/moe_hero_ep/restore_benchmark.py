@@ -44,6 +44,7 @@ from levanter.tensorstore_serialization import (
 )
 from levanter.tracker.telemetry import TelemetryConfig
 from levanter.trainer import TrainerConfig
+from marin.experiment.namespacing import user_owned_name
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import prefix_join
 
@@ -289,7 +290,11 @@ def main(
 
     config = RestoreBenchmarkConfig(
         checkpoint_path=prefix_join(
-            marin_temp_bucket(ttl_days=CHECKPOINT_TTL_DAYS, prefix=f"restore-benchmark/{run_id}"), "checkpoint"
+            marin_temp_bucket(
+                ttl_days=CHECKPOINT_TTL_DAYS,
+                prefix=user_owned_name(f"grug/restore-benchmark/{run_id}"),
+            ),
+            "checkpoint",
         ),
         model=model,
         optimizer=optimizer,
