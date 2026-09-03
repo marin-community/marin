@@ -216,7 +216,7 @@ def _rl_config(
     ckpt_interval: int,
     debug_distributed: bool,
     reshard_after_forward: bool = True,
-    flash_attn: bool = False,
+    flash_attn: bool = True,
     pr488_geometry: bool = False,
 ) -> str:
     """Render the SkyRL config.
@@ -412,11 +412,14 @@ def build_workflow(
     debug_distributed: bool = False,
     collective_diagnostics: bool = False,
     telemetry_only: bool = False,
-    grouped_mm: bool = False,
+    # Every throughput flag defaults ON, and each default must match its click option -- otherwise a
+    # programmatic caller silently gets the old behaviour while the CLI gets the new one, which is
+    # exactly the skew the merge gate caught on bf16_grad_reduce.
+    grouped_mm: bool = True,
     reshard_after_forward: bool = True,
-    flash_attn: bool = False,
+    flash_attn: bool = True,
     pr488_geometry: bool = False,
-    bf16_grad_reduce: bool = False,
+    bf16_grad_reduce: bool = True,
     label: str = "",
 ) -> ArtifactStep[SkyRLModel] | ArtifactStep[SkyRLTelemetryRun]:
     """Compose the E6 baseline as one inspectable artifact step."""
@@ -452,12 +455,13 @@ def build_workflow(
         variant += "-colldiag"
     if telemetry_only:
         variant += "-telonly"
-    if grouped_mm:
-        variant += "-groupedmm"
+    if not grouped_mm:
+        # Every throughput flag is ON by default now, so it is the ABSENCE that names a run.
+        variant += "-eagermoe"
     if not reshard_after_forward:
         variant += "-noreshard"
-    if flash_attn:
-        variant += "-flashattn"
+    if not flash_attn:
+        variant += "-eagerattn"
     if not bf16_grad_reduce:
         # A9 is the default now, so it is its ABSENCE that distinguishes a run.
         variant += "-fp32grad"
@@ -633,9 +637,9 @@ def build_workflow(
     "be fed to an evaluation step -- read the rows in finelog and W&B, keyed by run_id.",
 )
 @click.option(
-    "--grouped-mm",
-    is_flag=True,
-    default=False,
+    "--grouped-mm/--no-grouped-mm",
+    default=True,
+    show_default=True,
     help="Route Grug MoE blocks through torch._grouped_mm instead of the eager 256-expert Python "
     "loop. This is the workstream's headline arm: the baseline inherits use_grouped_mm=false, and "
     "F2 measures that path at ~0.6% MFU against Megatron's 10%. Needs no expert parallelism -- the "
@@ -655,7 +659,7 @@ def build_workflow(
 )
 @click.option(
     "--flash-attn/--no-flash-attn",
-    default=False,
+    default=True,
     show_default=True,
     help="trainer.flash_attn. False is E6's behaviour: eager attention materialises an fp32 "
     "[b,heads,L,L] score tensor (3.42 GiB at L=6775 -- the allocation behind every OOM here) and "
@@ -668,7 +672,10 @@ def build_workflow(
     "--pr488-geometry",
     is_flag=True,
     default=False,
-    help="Match Russell Power's PR #488 comparison shape so his published table is a DIRECT "
+    help="⚠️ TEMPORARY -- REMOVE BEFORE OPENING A PR. This exists only to produce the three-way "
+    "comparison table for the PR body; it is a benchmarking shape, not a configuration anyone "
+    "should train with, and leaving it in ships a permanent flag for a one-off measurement. "
+    "Match Russell Power's PR #488 comparison shape so his published table is a DIRECT "
     "comparand rather than an analogy: 1024+8192 tokens, 64 prompts x 8 samples, 4 policy + 4 "
     "inference nodes. His numbers -- step 190-196s Megatron vs 634s FSDP2, policy_train 26-27 vs "
     "457, generate 134-139 vs 131, fwd_logprobs 6-7 vs 32. We cannot match PP2xEP8 (that is "
