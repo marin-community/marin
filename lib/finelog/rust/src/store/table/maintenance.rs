@@ -202,16 +202,23 @@ async fn cycle(
     let _cycle_guard = runtime.maint_lock.lock().await;
     run_one(runtime, TableWork::Flush).await?;
     if run_one(runtime, TableWork::SpecMigration).await?.pending {
-        // The migration owns the table's maintenance while it runs: eviction,
-        // placement, and legacy compaction would destroy the sources it
-        // rewrites. Object compaction stays on: it folds only ordinary-stream
-        // objects at the target version — the dual-write flush L0s that would
-        // otherwise stack up for the whole backfill (see `compact_once`). The
-        // cycle reports pending so the scheduler re-polls immediately and
-        // routes the next tick through the dedicated migration slot instead of
-        // the shared queue.
+        // The migration owns the table's maintenance while it runs: placement
+        // and legacy compaction would destroy the sources it rewrites. Object
+        // compaction stays on: it folds only ordinary-stream objects at the
+        // target version — the dual-write flush L0s that would otherwise stack
+        // up for the whole backfill (see `compact_once`). Cache eviction and
+        // superseded-state collection also stay on: each backfill commit
+        // publishes a fresh full catalog snapshot, so without them the
+        // superseded snapshots pile up locally and remotely for the whole
+        // backfill (a full disk on the marin hub). Both only touch synced
+        // cache copies and states older than the retention window, never the
+        // sources or coverage the migration reads. The cycle reports pending
+        // so the scheduler re-polls immediately and routes the next tick
+        // through the dedicated migration slot instead of the shared queue.
         if runtime.policy().object_backed() {
             run_one(runtime, TableWork::Compaction { force_compact_l0 }).await?;
+            runtime.controller.gc_objects().await?;
+            run_one(runtime, TableWork::ObjectCollection).await?;
         }
         return Ok(WorkOutcome::pending(true));
     }
