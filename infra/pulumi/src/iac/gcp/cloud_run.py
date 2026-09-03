@@ -255,6 +255,10 @@ class CloudRunService(pulumi.ComponentResource):
             # IAP is the gate; ingress stays open so IAP (not the network) authorizes.
             ingress="INGRESS_TRAFFIC_ALL",
             iap_enabled=True,
+            # The provider defaults this on and then refuses to destroy the service, which
+            # makes retiring a stack a two-step edit. Pulumi's own `protect` marks what
+            # must survive a destroy; this flag only hides the service from it.
+            deletion_protection=False,
             scaling=gcp.cloudrunv2.ServiceScalingArgs(
                 min_instance_count=args.min_instances,
                 max_instance_count=args.max_instances,
