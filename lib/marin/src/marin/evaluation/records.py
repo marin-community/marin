@@ -58,7 +58,7 @@ class RunStatus(StrEnum):
 class ModelResourceConfig(BaseModel):
     """Normalized placement and inference-worker resources for an evaluated model."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="ignore")
 
     hbm_gb: int | None
     gpu: dict[str, int]
@@ -68,9 +68,15 @@ class ModelResourceConfig(BaseModel):
 
 
 class ModelServeConfig(BaseModel):
-    """Normalized model-server configuration preserved in an evaluation record."""
+    """Normalized model-server configuration preserved in an evaluation record.
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    Extra keys are ignored rather than forbidden: this schema is vendored into both the launcher that
+    writes records and the dashboard that reads them. When a launcher runs ahead of the dashboard and
+    adds a serve knob, the reader keeps the typed fields it knows and drops the unknown key instead of
+    discarding the entire run.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
 
     backend: str
     tensor_parallel_size: int | None
@@ -92,7 +98,7 @@ class ModelServeConfig(BaseModel):
 class ModelGenerationConfig(BaseModel):
     """Normalized generation overrides preserved in an evaluation record."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="ignore")
 
     max_gen_toks: int | None
     extra_gen_kwargs: dict[str, str]
@@ -101,7 +107,7 @@ class ModelGenerationConfig(BaseModel):
 class ModelAgentConfig(BaseModel):
     """Normalized agent request arguments preserved in an evaluation record."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="ignore")
 
     agent_kwargs: dict[str, str]
 
@@ -109,7 +115,7 @@ class ModelAgentConfig(BaseModel):
 class ModelConfigRef(BaseModel):
     """The complete normalized model catalog schema used by one launch."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="ignore")
 
     name: str
     location: str

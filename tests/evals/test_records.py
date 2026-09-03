@@ -151,6 +151,56 @@ def test_serving_round_trips_and_defaults_to_none(tmp_path):
     assert read_record(path) == served
 
 
+def _record_with_model_config(serve_extra: dict) -> dict:
+    """A ``record.json`` dict whose ``model.config.serve`` carries the given extra keys.
+
+    Mirrors what a launcher running ahead of the dashboard writes: the typed serve fields plus one or
+    more keys the reader's schema does not declare.
+    """
+    raw = _RECORD.model_dump(mode="json", by_alias=True)
+    raw["model"]["config"] = {
+        "name": "qwen3-8b",
+        "location": "gs://marin-models/qwen3-8b",
+        "revision": None,
+        "tokenizer": None,
+        "apply_chat_template": True,
+        "resource_hint": {"hbm_gb": None, "gpu": {}, "cpu": None, "memory": None, "disk": None},
+        "serve": {
+            "backend": "vllm",
+            "tensor_parallel_size": 4,
+            "data_parallel_size": None,
+            "max_model_len": None,
+            "max_num_batched_tokens": None,
+            "max_num_seqs": None,
+            "hf_overrides": None,
+            "limit_mm_per_prompt": None,
+            "tool_call_parser": None,
+            "reasoning_parser": None,
+            "vllm_extra_args": [],
+            "chat_template": None,
+            "auto_overrides": True,
+            **serve_extra,
+        },
+        "generation": {"max_gen_toks": None, "extra_gen_kwargs": {}},
+        "agent": {"agent_kwargs": {}},
+    }
+    return raw
+
+
+def test_unknown_serve_config_key_is_ignored_not_rejected(tmp_path):
+    """A serve field a newer launcher wrote but the reader's schema does not declare is dropped, and
+    the run still parses -- one unknown key must not discard the whole record (issue #8885)."""
+    raw = _record_with_model_config({"pipeline_parallel_size": 2, "endpoint_ready_timeout_seconds": None})
+    path = tmp_path / "record.json"
+    path.write_text(json.dumps(raw))
+
+    record = read_record(str(path))
+
+    assert record.model.config is not None
+    assert record.model.config.serve.tensor_parallel_size == 4
+    assert not hasattr(record.model.config.serve, "pipeline_parallel_size")
+
+
 def test_read_records_collects_parse_failures_without_dropping_good_ones(tmp_path):
     """A malformed record.json alongside a valid one is reported as a failure (path + error) rather
     than silently skipped, and the valid record still comes back."""
