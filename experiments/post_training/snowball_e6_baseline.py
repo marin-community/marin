@@ -652,13 +652,17 @@ def build_workflow(
 )
 @click.option(
     "--grouped-mm/--no-grouped-mm",
-    default=True,
+    default=False,
     show_default=True,
     help="Route Grug MoE blocks through torch._grouped_mm instead of the eager 256-expert Python "
-    "loop. This is the workstream's headline arm: the baseline inherits use_grouped_mm=false, and "
-    "F2 measures that path at ~0.6% MFU against Megatron's 10%. Needs no expert parallelism -- the "
-    "EP constraint runs the other way. Encodes itself into the artifact name as -eagermoe when OFF, so its "
-    "rows are separable from the baseline's by run_id.",
+    "loop. This is the workstream's headline arm -- 22x on policy_train at PR488 geometry, and F2 "
+    "measures the eager path at ~0.6% MFU against Megatron's 10%. Needs no expert parallelism; the "
+    "EP constraint runs the other way. Encodes itself into the artifact name as -eagermoe when OFF, "
+    "so its rows are separable by run_id. "
+    "DEFAULT OFF, deliberately: this flag alone breaks the exact PPO ratio invariant (F25/F26), and "
+    "shipping it on would default a known correctness defect into a config other people copy. Turn "
+    "it on to reproduce the timing; do not turn it on to train. See notes/workstreams/rl-perf/"
+    "grouped-mm-fix/ for the whole picture and the plan to make it correct.",
 )
 @click.option(
     "--reshard-after-forward/--no-reshard-after-forward",
