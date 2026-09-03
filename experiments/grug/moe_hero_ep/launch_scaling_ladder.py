@@ -4,7 +4,7 @@
 """Hero-shape scaling ladder: one recipe, five widths.
 
 Every rung trains the *same* EP hero recipe -- 384 routed experts, top-8, hidden/2-wide experts in a
-hidden/2 latent, ragged all-to-all transport, the Harrier 2026.08.18 two-phase mixture on the
+hidden/2 latent, pooled-wave all-to-all transport, the Harrier 2026.08.18 two-phase mixture on the
 Marin tokenizer, offloaded MuonH state, the QB histogram estimator, and a dropless held-out eval --
 and differs only in width and the rack count it spans. Behaviour is uniform across the ladder so a
 rung predicts the d6144 hero. ``d6144`` is the hero itself.
@@ -19,6 +19,13 @@ rung predicts the d6144 hero. ``d6144`` is the hero itself.
 Train batch is 1024 x racks (constant per-rack load); eval batch is 64 x racks (one sequence per
 device). Tokens/steps hold 791 tokens per active parameter (18T at d6144); FLOPs are the levanter
 analytic estimate (forward+backward, including attention and the latent-MoE correction).
+
+Changelog:
+    2026-09-02 (#8818, PR #8833): decoupled weight decay on the attn_gate and router weights is on by
+        default (0.02, annealed linearly to 0 over training and read from the Adam step count so it
+        resumes at the right step); pass ``--gate-router-weight-decay 0`` to opt out.
+        hero-wd-gate-router-p02-step54k forks hero-12d8b6f0-dee637 at step 54000 on the pooled-wave transport
+        (see ``trigger_hero.sh``).
 """
 
 import dataclasses
@@ -140,6 +147,7 @@ def build_ladder_run(
     size: str,
     num_steps: int | None = None,
     checkpoint_every: int | None = None,
+    gate_router_weight_decay: float = 0.02,
     version: str | None = None,
     initialize_from_checkpoint: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
@@ -154,6 +162,10 @@ def build_ladder_run(
     resumes from the newest checkpoint it finds. ``initialize_from_checkpoint`` is another run's
     checkpoint directory, added as the resume fallback so a relaunch under a new run id continues
     that lineage's full state from exactly that step while writing only to its own tree.
+
+    ``gate_router_weight_decay`` is on by default (see ``GrugMoeMuonHConfig``): the recipe decays the
+    attn_gate and router weights, and because the decay reads the Adam step count it also applies at
+    the right point when a run resumes an existing checkpoint. Pass 0 to opt out.
     """
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
@@ -207,6 +219,7 @@ def build_ladder_run(
             ),
             use_syrk=True,  # GB200 SM100 symmetric GEMM for MuonH Newton-Schulz
         )
+    optimizer = dataclasses.replace(optimizer, gate_router_weight_decay=gate_router_weight_decay)
 
     # Uniform hero trainer: expert-parallel within each rack, replicated across racks, MuonH state
     # offloaded to FP32 pinned host.
@@ -346,6 +359,14 @@ def build_ladder_run(
     "and is not affected by this option.",
 )
 @click.option(
+    "--gate-router-weight-decay",
+    type=click.FloatRange(min=0.0),
+    default=0.02,
+    show_default=True,
+    help="Decoupled weight decay on attn_gate and the router weight, annealed linearly to 0 over "
+    "training. Defaults on for the hero recipe; pass 0 to opt out.",
+)
+@click.option(
     "--initialize-from-checkpoint",
     default=None,
     help="Checkpoint directory of another run to resume from under a new --run-id; this run writes only "
@@ -357,6 +378,7 @@ def main(
     size: str,
     num_steps: int | None,
     checkpoint_every: int | None,
+    gate_router_weight_decay: float,
     initialize_from_checkpoint: str | None,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_ladder_run(
@@ -364,6 +386,7 @@ def main(
         size=size,
         num_steps=num_steps,
         checkpoint_every=checkpoint_every,
+        gate_router_weight_decay=gate_router_weight_decay,
         initialize_from_checkpoint=initialize_from_checkpoint,
     )
 
