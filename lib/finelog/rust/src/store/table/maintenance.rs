@@ -16,7 +16,9 @@ use std::time::Instant;
 
 use crate::errors::StatsError;
 use crate::indices::SegmentIndexConfig;
-use crate::maintenance::{OBJECT_GC_INTERVAL, OBJECT_ORPHAN_GRACE, REWRITE_LAYOUT_BUDGET};
+use crate::maintenance::{
+    OBJECT_GC_INTERVAL, OBJECT_ORPHAN_GRACE, OBJECT_ORPHAN_SWEEP_INTERVAL, REWRITE_LAYOUT_BUDGET,
+};
 use crate::policies::{physical_partition_policy_for, segment_indexes_enabled_for};
 use crate::store::catalog::SpecLifecycle;
 use crate::store::compaction::local_driver::{self, LocalCompaction};
@@ -224,11 +226,17 @@ async fn cycle(
     }
     if runtime.policy().object_backed() {
         runtime.controller.publish_owed().await?;
-        run_one(runtime, TableWork::Compaction { force_compact_l0 }).await?;
+        // Report pending while compaction keeps finding runs: an L0 backlog
+        // then drains at the fast re-poll cadence through the dedicated slot
+        // instead of one run per shared-queue visit, mirroring how a legacy
+        // table drains its whole backlog in one cycle.
+        let compacted = run_one(runtime, TableWork::Compaction { force_compact_l0 })
+            .await?
+            .pending;
         runtime.controller.gc_objects().await?;
         run_one(runtime, TableWork::ObjectCollection).await?;
         run_one(runtime, TableWork::IndexArtifacts).await?;
-        return Ok(WorkOutcome::done());
+        return Ok(WorkOutcome::pending(compacted));
     }
 
     let placement_pending = run_one(runtime, TableWork::Placement).await?.pending;
@@ -347,12 +355,22 @@ async fn collect_objects(runtime: &Arc<TableRuntime>) -> Result<(), StatsError> 
     let policy = runtime.policy();
     let state_retention_ms = policy.max_query_time_ms.max(policy.rollback_window_ms);
     let orphan_grace_ms = u64::try_from(OBJECT_ORPHAN_GRACE.as_millis()).unwrap_or(u64::MAX);
+    let sweep_orphans = {
+        let mut last = runtime.last_orphan_sweep.lock().unwrap();
+        let due = last.is_none_or(|instant| instant.elapsed() >= OBJECT_ORPHAN_SWEEP_INTERVAL);
+        if due {
+            *last = Some(Instant::now());
+        }
+        due
+    };
     let removed = runtime
         .controller
         .gc_published(
             crate::store::table::now_ms(),
+            policy.max_query_time_ms,
             state_retention_ms,
             orphan_grace_ms,
+            sweep_orphans,
         )
         .await?;
     if removed > 0 {

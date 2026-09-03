@@ -34,6 +34,12 @@ pub const MIN_POLL_INTERVAL: Duration = Duration::from_millis(10);
 /// How often an object-backed table collects superseded state documents.
 pub const OBJECT_GC_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
+/// How often state collection also sweeps for unreferenced data objects.
+/// The sweep re-reads every retained state document to build the referenced
+/// set, so it runs far less often than the state trim; orphans only appear
+/// when a commit or upload was abandoned, which is rare.
+pub const OBJECT_ORPHAN_SWEEP_INTERVAL: Duration = Duration::from_secs(60 * 60);
+
 /// How long an object must have been unreferenced by every retained state
 /// before object GC deletes it. A sweep deletes an object only once it is both
 /// unreferenced and older than this, so a reader that opened a stale state, or

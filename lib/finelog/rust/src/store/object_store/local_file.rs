@@ -31,25 +31,37 @@ pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), StatsError> 
                 staging.display()
             ))
         })?;
-    staging_file.write_all(bytes).map_err(|error| {
-        StatsError::Internal(format!(
-            "write local object staging {}: {error}",
-            staging.display()
-        ))
-    })?;
-    staging_file.sync_all().map_err(|error| {
-        StatsError::Internal(format!(
-            "fsync local object staging {}: {error}",
-            staging.display()
-        ))
-    })?;
-    std::fs::rename(&staging, path).map_err(|error| {
-        StatsError::Internal(format!(
-            "publish local object {} -> {}: {error}",
-            staging.display(),
-            path.display()
-        ))
-    })?;
+    let published = staging_file
+        .write_all(bytes)
+        .map_err(|error| {
+            StatsError::Internal(format!(
+                "write local object staging {}: {error}",
+                staging.display()
+            ))
+        })
+        .and_then(|()| {
+            staging_file.sync_all().map_err(|error| {
+                StatsError::Internal(format!(
+                    "fsync local object staging {}: {error}",
+                    staging.display()
+                ))
+            })
+        })
+        .and_then(|()| {
+            std::fs::rename(&staging, path).map_err(|error| {
+                StatsError::Internal(format!(
+                    "publish local object {} -> {}: {error}",
+                    staging.display(),
+                    path.display()
+                ))
+            })
+        });
+    if let Err(error) = published {
+        // A failed write (e.g. a full disk) must not leave the staging file
+        // behind: staging files are exempt from cache eviction.
+        let _ = std::fs::remove_file(&staging);
+        return Err(error);
+    }
     std::fs::File::open(parent)
         .and_then(|directory| directory.sync_all())
         .map_err(|error| {

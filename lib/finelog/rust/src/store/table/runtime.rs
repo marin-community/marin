@@ -103,6 +103,7 @@ pub struct TableRuntime {
     /// migration would re-hash the covered prefix of the table each tick.
     pub(super) migration_identities: Mutex<std::collections::HashMap<String, (i64, String)>>,
     pub(super) last_object_gc: Mutex<Option<Instant>>,
+    pub(super) last_orphan_sweep: Mutex<Option<Instant>>,
     /// Latched stop flag the dispatched work checks at the top of each loop
     /// iteration.
     pub(super) stopped: AtomicBool,
@@ -227,6 +228,7 @@ impl TableRuntime {
             migration_block: Mutex::new(MigrationBlock::default()),
             migration_identities: Mutex::new(std::collections::HashMap::new()),
             last_object_gc: Mutex::new(None),
+            last_orphan_sweep: Mutex::new(None),
             stopped: AtomicBool::new(false),
             task_handles: Mutex::new(Vec::new()),
         });

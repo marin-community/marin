@@ -85,8 +85,10 @@ enum ControllerCommand {
     Tombstone(oneshot::Sender<Result<(), StatsError>>),
     GcStates {
         now_ms: i64,
+        pin_retention_ms: u64,
         state_retention_ms: u64,
         orphan_grace_ms: u64,
+        sweep_orphans: bool,
         reply: oneshot::Sender<Result<usize, StatsError>>,
     },
 }
@@ -507,13 +509,17 @@ impl TableController {
     pub async fn gc_published(
         &self,
         now_ms: i64,
+        pin_retention_ms: u64,
         state_retention_ms: u64,
         orphan_grace_ms: u64,
+        sweep_orphans: bool,
     ) -> Result<usize, StatsError> {
         self.dispatch(|reply| ControllerCommand::GcStates {
             now_ms,
+            pin_retention_ms,
             state_retention_ms,
             orphan_grace_ms,
+            sweep_orphans,
             reply,
         })
         .await?
@@ -969,8 +975,10 @@ impl TableController {
     async fn run_gc_states(
         &self,
         now_ms: i64,
+        pin_retention_ms: u64,
         state_retention_ms: u64,
         orphan_grace_ms: u64,
+        sweep_orphans: bool,
     ) -> Result<usize, StatsError> {
         let objects = self.require_objects()?;
         objects
@@ -978,8 +986,10 @@ impl TableController {
             .gc_obsolete_states(
                 &self.table,
                 now_ms,
+                pin_retention_ms,
                 state_retention_ms,
                 orphan_grace_ms,
+                sweep_orphans,
                 self.fence,
             )
             .await
@@ -1022,13 +1032,21 @@ async fn run_controller(
             }
             ControllerCommand::GcStates {
                 now_ms,
+                pin_retention_ms,
                 state_retention_ms,
                 orphan_grace_ms,
+                sweep_orphans,
                 reply,
             } => {
                 let _ = reply.send(
                     controller
-                        .run_gc_states(now_ms, state_retention_ms, orphan_grace_ms)
+                        .run_gc_states(
+                            now_ms,
+                            pin_retention_ms,
+                            state_retention_ms,
+                            orphan_grace_ms,
+                            sweep_orphans,
+                        )
                         .await,
                 );
             }

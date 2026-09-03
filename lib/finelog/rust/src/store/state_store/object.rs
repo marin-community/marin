@@ -5,6 +5,7 @@
 //! and the [`WriterFence`] that owns it, so every commit is checked against
 //! both the backend token and the fence.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -324,13 +325,26 @@ impl ObjectTableStateStore {
             .collect())
     }
 
-    /// Remove superseded state documents after the maximum query lifetime.
+    /// Remove superseded state documents and thin the rollback history.
+    ///
+    /// A superseded state stays untouchable for `pin_retention_ms` (the maximum
+    /// query lifetime — a running query may hold it pinned). Between that
+    /// horizon and `state_retention_ms` only rollback reads it, and rollback
+    /// does not need one state per commit: the window keeps a single state per
+    /// `pin_retention_ms`-sized bucket, so a busy table retains tens of
+    /// snapshots instead of thousands. States that never won HEAD are removed
+    /// as soon as they leave the pin window. When `sweep_orphans` is set, data
+    /// objects no retained state references are also removed after
+    /// `orphan_grace_ms`; that pass re-reads every retained state document, so
+    /// callers run it on a slower cadence than the state trim.
     pub async fn gc_obsolete_states(
         &self,
         table: &str,
         now_ms: i64,
+        pin_retention_ms: u64,
         state_retention_ms: u64,
         orphan_grace_ms: u64,
+        sweep_orphans: bool,
         fence: WriterFence,
     ) -> Result<usize, StatsError> {
         let Some(selected) = self.load(table).await? else {
@@ -358,13 +372,16 @@ impl ObjectTableStateStore {
         let current = current_id.table_relative(table).ok_or_else(|| {
             StatsError::Internal(format!("table HEAD for {table:?} points outside its table"))
         })?;
+        let pin_cutoff =
+            now_ms.saturating_sub(i64::try_from(pin_retention_ms).unwrap_or(i64::MAX));
         let state_cutoff =
             now_ms.saturating_sub(i64::try_from(state_retention_ms).unwrap_or(i64::MAX));
         let orphan_cutoff =
             now_ms.saturating_sub(i64::try_from(orphan_grace_ms).unwrap_or(i64::MAX));
+        let bucket_ms = i64::try_from(pin_retention_ms).unwrap_or(i64::MAX).max(1);
         let current_revision = selected.revision().get();
         let state_objects = self.table_objects(table, STATES_PREFIX).await?;
-        let mut removed = 0;
+        let mut candidates = Vec::new();
         for (key, meta) in &state_objects {
             if key == current {
                 continue;
@@ -373,7 +390,12 @@ impl ObjectTableStateStore {
                 tracing::warn!(table, key, "retaining unrecognized table state key");
                 continue;
             };
-            let obsolete_at_ms = if revision < current_revision {
+            // A rollback target won HEAD and was later replaced; it became
+            // obsolete when the first newer revision was published. Same- and
+            // future-revision objects never won HEAD and are obsolete from
+            // their own write.
+            let rollbackable = revision < current_revision;
+            let obsolete_at_ms = if rollbackable {
                 state_objects
                     .iter()
                     .filter_map(|(candidate_key, candidate_meta)| {
@@ -383,14 +405,40 @@ impl ObjectTableStateStore {
                     })
                     .min()
             } else {
-                // Same-revision and future-revision objects never won HEAD.
                 Some(meta.modified_at_ms)
             };
-            if obsolete_at_ms.is_none_or(|obsolete_at_ms| obsolete_at_ms > state_cutoff) {
+            let Some(obsolete_at_ms) = obsolete_at_ms else {
+                continue;
+            };
+            candidates.push((key, revision, obsolete_at_ms, rollbackable));
+        }
+        // Elect the newest rollback target per bucket of the rollback window.
+        let mut keepers: HashMap<i64, (i64, u64)> = HashMap::new();
+        for (_, revision, obsolete_at_ms, rollbackable) in &candidates {
+            if !rollbackable || *obsolete_at_ms > pin_cutoff || *obsolete_at_ms <= state_cutoff {
+                continue;
+            }
+            let elected = keepers
+                .entry(obsolete_at_ms / bucket_ms)
+                .or_insert((*obsolete_at_ms, *revision));
+            *elected = (*elected).max((*obsolete_at_ms, *revision));
+        }
+        let mut removed = 0;
+        for (key, revision, obsolete_at_ms, rollbackable) in candidates {
+            if obsolete_at_ms > pin_cutoff {
+                continue;
+            }
+            let kept_for_rollback = rollbackable
+                && obsolete_at_ms > state_cutoff
+                && keepers.get(&(obsolete_at_ms / bucket_ms)) == Some(&(obsolete_at_ms, revision));
+            if kept_for_rollback {
                 continue;
             }
             self.storage.delete(&ObjectId::table(table, key)?).await?;
             removed += 1;
+        }
+        if !sweep_orphans {
+            return Ok(removed);
         }
         let mut referenced = referenced_object_keys(&selected.catalog);
         for (key, _) in self.table_objects(table, STATES_PREFIX).await? {
@@ -726,7 +774,7 @@ mod tests {
             .modified_at_ms;
         assert_eq!(
             states
-                .gc_obsolete_states(TABLE, current_modified_ms + 5, 10, 10, fence)
+                .gc_obsolete_states(TABLE, current_modified_ms + 5, 10, 10, 10, true, fence)
                 .await
                 .unwrap(),
             0
@@ -735,7 +783,7 @@ mod tests {
         // A fenced writer collects nothing.
         assert_eq!(
             states
-                .gc_obsolete_states(TABLE, future, 0, 0, WriterFence::new(12))
+                .gc_obsolete_states(TABLE, future, 0, 0, 0, true, WriterFence::new(12))
                 .await
                 .unwrap(),
             0
@@ -743,7 +791,7 @@ mod tests {
         assert_eq!(states.state_keys(TABLE).await.unwrap().len(), 2);
         assert_eq!(
             states
-                .gc_obsolete_states(TABLE, future, 600_000, 600_000, fence)
+                .gc_obsolete_states(TABLE, future, 600_000, 600_000, 600_000, true, fence)
                 .await
                 .unwrap(),
             1
@@ -769,14 +817,105 @@ mod tests {
             .await
             .unwrap();
 
+        // Without the orphan sweep the unreferenced object survives.
         assert_eq!(
             states
-                .gc_obsolete_states(TABLE, i64::MAX, 600_000, 600_000, WriterFence::new(1))
+                .gc_obsolete_states(
+                    TABLE,
+                    i64::MAX,
+                    600_000,
+                    600_000,
+                    600_000,
+                    false,
+                    WriterFence::new(1)
+                )
+                .await
+                .unwrap(),
+            0
+        );
+        assert!(remote.read(&orphan_id).await.unwrap().is_some());
+        assert_eq!(
+            states
+                .gc_obsolete_states(
+                    TABLE,
+                    i64::MAX,
+                    600_000,
+                    600_000,
+                    600_000,
+                    true,
+                    WriterFence::new(1)
+                )
                 .await
                 .unwrap(),
             1
         );
         assert!(remote.read(&orphan_id).await.unwrap().is_none());
+        std::fs::remove_dir_all(remote_dir).ok();
+    }
+
+    #[tokio::test]
+    async fn garbage_collection_thins_rollback_states_to_one_per_bucket() {
+        let remote_dir = crate::test_support::unique_dir("object_state_store_gc_thin");
+        let remote = build_remote_object_store(remote_dir.to_str().unwrap())
+            .unwrap()
+            .unwrap();
+        let states = ObjectTableStateStore::new(Arc::new(remote.clone()));
+        let fence = WriterFence::new(7);
+        let mut previous = None;
+        for revision in 1..=5 {
+            let committed = states
+                .commit(TABLE, fence, previous.as_ref(), state(TABLE, revision, 1))
+                .await
+                .unwrap();
+            previous = Some(committed);
+        }
+        // Pin the state files to known modification times so each revision's
+        // obsolete-at instant (the next revision's write) is deterministic.
+        let base_ms: i64 = 1_000_000_000_000;
+        for metadata in remote
+            .list(&ObjectPrefix::table(TABLE, STATES_PREFIX).unwrap())
+            .await
+            .unwrap()
+        {
+            let revision = state_revision_from_key(
+                metadata.id.table_relative(TABLE).unwrap(),
+            )
+            .unwrap();
+            let modified = std::time::UNIX_EPOCH
+                + std::time::Duration::from_millis((base_ms + revision as i64 * 1_000) as u64);
+            let file = std::fs::OpenOptions::new()
+                .append(true)
+                .open(remote_dir.join(metadata.id.as_str()))
+                .unwrap();
+            file.set_modified(modified).unwrap();
+        }
+        // Revisions 1-4 became obsolete at base+2000..base+5000: all past the
+        // 10s pin horizon, all inside the 99s rollback window, all in one
+        // 10s bucket. Only the newest (revision 4) is kept as the bucket's
+        // rollback target.
+        assert_eq!(
+            states
+                .gc_obsolete_states(TABLE, base_ms + 100_000, 10_000, 99_000, 99_000, false, fence)
+                .await
+                .unwrap(),
+            3
+        );
+        let keys = states.state_keys(TABLE).await.unwrap();
+        assert_eq!(keys.len(), 2);
+        assert!(keys
+            .iter()
+            .any(|key| state_revision_from_key(key) == Some(4)));
+        assert!(keys
+            .iter()
+            .any(|key| state_revision_from_key(key) == Some(5)));
+        // The elected keeper survives a repeated pass.
+        assert_eq!(
+            states
+                .gc_obsolete_states(TABLE, base_ms + 100_000, 10_000, 99_000, 99_000, false, fence)
+                .await
+                .unwrap(),
+            0
+        );
         std::fs::remove_dir_all(remote_dir).ok();
     }
 }

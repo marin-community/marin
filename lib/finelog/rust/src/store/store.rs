@@ -3623,7 +3623,7 @@ mod tests {
             "the retained HEAD must keep the aborted table on the maintenance GC path"
         );
         let removed = controller
-            .gc_published(crate::store::table::now_ms(), 0, 0)
+            .gc_published(crate::store::table::now_ms(), 0, 0, 0, true)
             .await
             .unwrap();
         assert!(removed > 0, "GC removed nothing after the abort");

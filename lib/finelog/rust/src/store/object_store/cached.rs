@@ -37,6 +37,11 @@ const MAX_PARALLEL_FETCHES: usize = 8;
 /// immediately.
 const CACHE_GC_INTERVAL: Duration = Duration::from_secs(300);
 
+/// Age past which a `tmp-*` staging file is treated as abandoned and removed.
+/// An atomic write stages, fsyncs, and renames within seconds; an hour covers
+/// any slow disk with a wide margin.
+const STALE_STAGING_GRACE: Duration = Duration::from_secs(60 * 60);
+
 #[derive(Clone)]
 struct FileCache {
     root: PathBuf,
@@ -447,10 +452,35 @@ fn scan_cache_files(root: &Path) -> Result<Vec<CacheFile>, StatsError> {
                 continue;
             }
             // A staging file is invisible until its atomic rename publishes it.
+            // A live write stages for seconds; one this old was abandoned by a
+            // failed write or a crashed process and would otherwise sit in the
+            // cache forever (staging files are exempt from eviction).
             if path
                 .extension()
                 .is_some_and(|extension| extension.to_string_lossy().starts_with("tmp-"))
             {
+                let age = metadata
+                    .modified()
+                    .ok()
+                    .and_then(|modified| modified.elapsed().ok());
+                if age.is_some_and(|age| age >= STALE_STAGING_GRACE) {
+                    match std::fs::remove_file(&path) {
+                        Ok(()) => {
+                            tracing::info!(
+                                path = %path.display(),
+                                "removed abandoned object staging file"
+                            );
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(error) => {
+                            tracing::warn!(
+                                path = %path.display(),
+                                %error,
+                                "failed to remove abandoned object staging file"
+                            );
+                        }
+                    }
+                }
                 continue;
             }
             files.push(CacheFile {
