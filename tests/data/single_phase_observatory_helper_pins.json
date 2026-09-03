@@ -14,7 +14,7 @@
    "LINK_CAP_MARGIN": "0.5",
    "LINK_CLIP": "30.0",
    "LOG_LINK_FLOOR_SPAN_FRACTION": "0.05",
-   "LOG_SPACE_SHAPE_KEYS": "frozenset({'benefit_offset', 'saturation_epochs', 'rate'})",
+   "LOG_SPACE_SHAPE_KEYS": "frozenset({'benefit_offset', 'rate', 'saturation_epochs'})",
    "MAD_TO_SIGMA": "1.4826",
    "NNLS_MAXITER_FACTOR": "200",
    "PAIR_SHRINKAGE": "1.0",

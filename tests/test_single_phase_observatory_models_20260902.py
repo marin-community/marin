@@ -236,6 +236,12 @@ def test_row_scrambled_harm_permutes_mixtures_while_column_scrambling_only_reord
     assert np.allclose(rows.values[:, benefit], plain.values[:, benefit])
 
 
+def _constant_repr(value: object) -> str:
+    if isinstance(value, (set, frozenset)):
+        return f"{type(value).__name__}({{{', '.join(repr(item) for item in sorted(value))}}})"
+    return repr(value)
+
+
 def test_fit_helpers_change_only_with_a_design_revision_bump():
     """Cache acceptance compares built-model descriptions, which do not see helper bodies or default constants.
 
@@ -262,7 +268,8 @@ def test_fit_helpers_change_only_with_a_design_revision_bump():
     constants = json.loads(
         (pathlib.Path(__file__).parent / "data" / "single_phase_observatory_helper_pins.json").read_text()
     )["constants"]
-    current = {name: repr(getattr(models, name)) for name in constants["values"]}
+    # Set-valued constants are compared in sorted form: their repr order is hash-randomized per process.
+    current = {name: _constant_repr(getattr(models, name)) for name in constants["values"]}
     assert current == constants["values"], "module constants read by the pinned helpers changed without a pin refresh"
 
 
