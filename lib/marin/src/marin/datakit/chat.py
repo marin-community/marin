@@ -59,7 +59,7 @@ def _render_chat_artifact(
     if chat_format.chat_template is not None:
         tokenizer = tokenizer.with_chat_template(chat_format.chat_template)
     pipeline = (
-        Dataset.from_files(prefix_join(normalized.main_output_dir.resolve(), "*.parquet"))
+        Dataset.from_files(prefix_join(normalized.main_output_dir, "*.parquet"))
         .flat_map(load_parquet)
         .flat_map(lambda record: _render_messages(record, tokenizer, chat_format))
         .write_parquet(prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"), skip_existing=True)
