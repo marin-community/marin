@@ -176,6 +176,16 @@ datakit = [
     "duckdb>=1.0.0",
 ]
 
+# PDF-only dependencies for experiments/datakit/build_pdf_source/*; kept out of `datakit` so plain
+# datakit fleet jobs don't install the PDF toolchain.
+pdf = [
+    "warcio>=1.7.5",
+    "pypdfium2==5.13.0",
+    "pillow>=12.2.0",
+    "xgboost-cpu>=3.0.5",
+    "pdf-inspector==1.17.0",
+]
+
 [[tool.uv.index]]
 name = "marin-resiliparse"
 url = "https://marin-community.github.io/chatnoir-resiliparse/simple"
