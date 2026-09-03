@@ -24,7 +24,7 @@ Changelog:
     2026-09-02 (#8818, PR #8833): decoupled weight decay on the attn_gate and router weights is on by
         default (0.02, annealed linearly to 0 over training and read from the Adam step count so it
         resumes at the right step); pass ``--gate-router-weight-decay 0`` to opt out.
-        hero-wd-gate-router-p02-step54k forks hero-12d8b6f0-dee637 at step 54000 on the pooled-wave transport
+        hero-wd-gate-router-p02-step58k forks hero-12d8b6f0-dee637 at step 58014 on the pooled-wave transport
         (see ``trigger_hero.sh``).
 """
 
