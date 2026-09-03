@@ -11,10 +11,10 @@ fi
 
 : "${WANDB_API_KEY:?Set WANDB_API_KEY before you start the hero.}"
 
-# Gate/router weight-decay continuation: forks the hero's full state from its step-54000 checkpoint
+# Gate/router weight-decay continuation: forks the hero's full state from its step-58014 checkpoint
 # under its own run id and tree, and trains with the decay on by default (0.02, annealed).
-RUN_ID=hero-wd-gate-router-p02-step54k
-HANDOFF_CHECKPOINT=s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-54000
+RUN_ID=hero-wd-gate-router-p02-step58k
+HANDOFF_CHECKPOINT=s3://hero-checkpoints/tmp/ttl=14d/checkpoints-temp/marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-58014
 short_uuid=$(uuidgen | tr '[:upper:]' '[:lower:]')
 short_uuid=${short_uuid:0:8}
 
