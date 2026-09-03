@@ -59,6 +59,7 @@ from zephyr.runners import SubprocessRunner
 
 from experiments.datakit.build_pdf_source import route_v2_features as contract
 from experiments.datakit.build_pdf_source.common import (
+    MAIN_OUTPUT_SUBDIR,
     SHARD_PATTERN,
     PdfClassificationData,
     PdfDocumentsData,
@@ -73,18 +74,15 @@ from experiments.datakit.build_pdf_source.ocr_extract.render import (
 
 logger = logging.getLogger(__name__)
 
-# The shipped booster and the sidecar that calibrates it, fit on the preference label by
-# `quality/fit_route_v2.py` on the `mark/pdf_processing` campaign branch and staged
-# content-addressed. Both are pinned: the booster decides the ranking and the sidecar decides where
-# the cut falls, so a run's decisions are only attributable if both are. Regenerate with that
-# module, not by editing these.
+# The shipped booster and the sidecar that calibrates its threshold, both pinned by content hash;
+# regenerate them with `quality/fit_route_v2.py` on the `mark/pdf_processing` campaign branch.
 MODEL_PREFIX = "s3://marin-us-east-02a/marin/data/pdf_quality/model/pdf_route_v2"
-ROUTE_MODEL_SOURCE = f"{MODEL_PREFIX}/route_v2_classifier.ubj"
-ROUTE_MODEL_SHA256 = "5edde108ec41c50680f34802a09a368309e7d8c68c470f7a922a04d5a78f37c6"
 ROUTE_MODEL_FILENAME = "route_v2_classifier.ubj"
-ROUTE_SIDECAR_SOURCE = f"{MODEL_PREFIX}/route_v2_classifier.json"
-ROUTE_SIDECAR_SHA256 = "d30ce417098bead8071b020405ab0098802ebcc5b6035313fb42c59b70387372"
+ROUTE_MODEL_SOURCE = prefix_join(MODEL_PREFIX, ROUTE_MODEL_FILENAME)
+ROUTE_MODEL_SHA256 = "5edde108ec41c50680f34802a09a368309e7d8c68c470f7a922a04d5a78f37c6"
 ROUTE_SIDECAR_FILENAME = "route_v2_classifier.json"
+ROUTE_SIDECAR_SOURCE = prefix_join(MODEL_PREFIX, ROUTE_SIDECAR_FILENAME)
+ROUTE_SIDECAR_SHA256 = "d30ce417098bead8071b020405ab0098802ebcc5b6035313fb42c59b70387372"
 
 # The escalation threshold, restated from the sidecar so that the value this pipeline routes on is
 # visible in the code and re-keys the step when it moves. :func:`load_router` refuses a sidecar that
@@ -196,12 +194,7 @@ def router_threshold(trained_on: tuple[str, ...], sidecar: dict) -> float:
 
 @cache
 def load_router(model_dir: str) -> tuple["xgboost.Booster", float]:  # noqa: F821
-    """Load the booster and its calibrated threshold once per worker process.
-
-    Loading through :class:`xgboost.Booster` rather than ``XGBClassifier`` keeps scikit-learn out of
-    the inference path. One thread is right because Zephyr costs each map task at one CPU and runs
-    several per worker; the default would have every task claim every core.
-    """
+    """Load the booster and its calibrated threshold once per worker process."""
     import xgboost as xgb  # noqa: PLC0415
 
     booster = xgb.Booster()
@@ -224,14 +217,8 @@ def render_budget(mean_render_dpi: float | None, floor_dpi: float) -> int:
     """The visual-token budget an escalated document is rendered at.
 
     A document whose mean render DPI falls below the legibility floor at the default budget is
-    rendered at :data:`RAISED_MAX_VISUAL_TOKENS` instead. These are large-format sheets -- posters,
-    maps and plans, 77% of them single-page, a median implied 787 square inches against US Letter's
-    93.5 -- not damaged files, and their pages reach 0.0% of the 300-DPI upscale cap at any budget,
-    which is why the published sweep's reason for stopping at 8192 does not apply to them. Targeted,
-    the policy rescues 1,890 of 2,234 documents for +0.29% GPU crawl-wide; raising the budget for the
-    whole corpus costs +53% to rescue 0.47% of its pages.
-
-    A document with no geometry gets the default budget. It is not going to be rendered at all.
+    rendered at :data:`RAISED_MAX_VISUAL_TOKENS` instead. A document with no geometry gets the
+    default budget: it is not going to be rendered at all.
     """
     if mean_render_dpi is None or mean_render_dpi >= floor_dpi:
         return DEFAULT_MAX_VISUAL_TOKENS
@@ -239,12 +226,7 @@ def render_budget(mean_render_dpi: float | None, floor_dpi: float) -> int:
 
 
 def gate(row: dict) -> str | None:
-    """The arithmetic decision for a document, or ``None`` if the score has to make it.
-
-    Ordered as the report orders them: the no-text gate is consulted first because it is the one
-    validated against the label, and because a document with no text has nothing to keep whatever
-    else is true of it.
-    """
+    """The arithmetic decision for a document, or ``None`` if the score has to make it."""
     if not row.get("inspector_markdown_chars"):
         return GATE_NO_TEXT
     if row.get("mean_render_dpi") is None:
@@ -325,7 +307,7 @@ def classify_pdfs(output_path: str, extraction_output_path: str, model_output_pa
         model.revision,
     )
 
-    output_dir = prefix_join(output_path, "outputs/main")
+    output_dir = prefix_join(output_path, MAIN_OUTPUT_SUBDIR)
     pipeline = (
         Dataset.from_list(shards)
         # Column projection is what makes this step cheap: the extraction's rows carry the corpus's
@@ -359,14 +341,10 @@ def shard_routing(classification_dir: str, shard_basename: str) -> dict[tuple[st
     The routing table is co-partitioned with the fetch: the extraction maps the fetched shards 1:1
     and names its outputs after them, and this step does the same over the extraction, so the
     decisions for ``part-00012-of-01773.parquet`` sit in the routing shard of that name. A consumer
-    reads that one shard -- a few hundred rows -- as it reads the documents, and never holds the
-    corpus-wide table. At full-crawl scale the table is ~3.17M keys, ~0.85 GB as Python objects,
-    and a closure that size is held by the Zephyr coordinator for the whole execution and
-    re-serialized on every task it dispatches.
+    reads that one shard as it reads the documents, and never holds the corpus-wide table.
 
-    A fetched shard with no routing shard is an error, not an empty route. The fetch, the
-    extraction and the routing each write one shard per input shard, so a name that is missing
-    here means the step outputs are not the co-partitioned set this pipeline was built from.
+    A fetched shard with no routing shard is an error, not an empty route: a name missing here
+    means the step outputs are not the co-partitioned set this pipeline was built from.
     """
     path = StoragePath(prefix_join(classification_dir, shard_basename))
     if not path.exists():

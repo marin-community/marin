@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the PDF exact-dedup wiring (#7620), driven through the step the pipeline builds."""
+"""Tests for the PDF exact-dedup wiring, driven through the step the pipeline builds."""
 
 import subprocess
 import sys

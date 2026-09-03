@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Exact-dedup the combined corpus into a datakit source (#7620).
+"""Exact-dedup the combined corpus into a datakit source.
 
 The one stage here is existing datakit tooling: the standard normalize pass with
 ``DedupMode.EXACT``, wired over the combined corpus the same way the reference pipeline wires it
@@ -26,10 +26,10 @@ from fray.types import ResourceConfig
 from marin.datakit.normalize import DedupMode, normalize_step
 from marin.execution.step_spec import StepSpec
 
-_CORPUS = "common_crawl_focus_2026_22_pdf"
+from experiments.datakit.build_pdf_source.common import CORPUS, MAIN_OUTPUT_SUBDIR
 
-# Normalize workers re-shuffle whole documents rather than attributes, so they get more RAM
-# (the library default of 32 GB is sized for multi-TB sources; this corpus is far smaller).
+# Below the library default of 32 GB, which is sized for multi-TB sources; this corpus is far
+# smaller.
 _NORMALIZE_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="16g", disk="10g")
 _MAX_WORKERS = 32
 
@@ -50,9 +50,9 @@ def exact_dedup_step(combined: StepSpec, schema: pa.Schema) -> StepSpec:
     them. The others are in the dups output, not discarded.
     """
     return normalize_step(
-        name=f"data/datakit/normalize/{_CORPUS}",
+        name=f"data/datakit/normalize/{CORPUS}",
         download=combined,
-        relative_input_path="outputs/main",
+        relative_input_path=MAIN_OUTPUT_SUBDIR,
         text_field="text",
         id_field="source_id",
         file_extensions=(".parquet",),

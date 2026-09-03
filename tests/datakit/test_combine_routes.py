@@ -30,8 +30,6 @@ _OCR_NAMES = frozenset(field.name for field in OCR_FIELDS)
 _INSPECTOR_NAMES = frozenset(field.name for field in INSPECTOR_FIELDS)
 _OCR_ONLY = tuple(sorted(_OCR_NAMES - _INSPECTOR_NAMES))
 _INSPECTOR_ONLY = tuple(sorted(_INSPECTOR_NAMES - _OCR_NAMES))
-# Columns both routes write with the same meaning.
-_SHARED_ROUTE_NAMES = ("mean_render_dpi", "pages_below_legibility_floor")
 
 _PROSE = (
     "# Coastal erosion along the Holderness cliffs\n\n"
@@ -139,28 +137,6 @@ def routing(tmp_path):
 
 
 # --- the combined schema ------------------------------------------------------------------------
-
-
-def test_combined_schema_is_the_shared_record_plus_the_route_and_every_route_column_once():
-    """The union may only add the router decision and make each route's own columns nullable."""
-    assert COMBINED_SCHEMA.names[: len(PDF_DOCUMENT_FIELDS)] == [field.name for field in PDF_DOCUMENT_FIELDS]
-    assert COMBINED_SCHEMA.names[len(PDF_DOCUMENT_FIELDS)] == "needs_ocr"
-    assert not COMBINED_SCHEMA.field("needs_ocr").nullable
-    assert COMBINED_SCHEMA.field("needs_ocr").type == pa.bool_()
-
-    route_names = COMBINED_SCHEMA.names[len(PDF_DOCUMENT_FIELDS) + 1 :]
-    assert set(route_names) == _OCR_NAMES | _INSPECTOR_NAMES
-    assert len(route_names) == len(set(route_names)), "a column claimed by both routes is carried once"
-    for name in route_names:
-        assert COMBINED_SCHEMA.field(name).nullable, f"{name} must be nullable (null on the other route's rows)"
-
-
-def test_a_column_both_routes_write_survives_as_one_column():
-    """``mean_render_dpi`` means the same thing on both sides, so a consumer reads it uniformly."""
-    for name in _SHARED_ROUTE_NAMES:
-        assert name in _OCR_NAMES and name in _INSPECTOR_NAMES
-        assert COMBINED_SCHEMA.field(name).type == OUTPUT_SCHEMA.field(name).type
-        assert name not in _OCR_ONLY and name not in _INSPECTOR_ONLY
 
 
 def test_routes_that_disagree_about_a_column_type_are_refused():

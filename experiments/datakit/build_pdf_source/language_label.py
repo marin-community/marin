@@ -39,7 +39,7 @@ from zephyr.dataset import Dataset
 from zephyr.runners import InlineRunner
 
 from experiments.datakit.build_pdf_source.boilerplate import split_pages
-from experiments.datakit.build_pdf_source.common import StagedModelData
+from experiments.datakit.build_pdf_source.common import MAIN_OUTPUT_SUBDIR, SHARD_PATTERN, StagedModelData
 
 logger = logging.getLogger(__name__)
 
@@ -272,13 +272,13 @@ def label_languages(
     if not shards:
         raise RuntimeError(f"No normalized shards under {normalized.main_output_dir}")
 
-    main_output_dir = prefix_join(output_path, "outputs/main")
+    main_output_dir = prefix_join(output_path, MAIN_OUTPUT_SUBDIR)
     pipeline = (
         Dataset.from_list(shards)
         .load_parquet(batch_mode=True)
         .flat_map(partial(label_batch, model_path=model.model_path, thresholds=thresholds))
         .write_parquet(
-            prefix_join(main_output_dir, "part-{shard:05d}-of-{total:05d}.parquet"),
+            prefix_join(main_output_dir, SHARD_PATTERN),
             schema=schema,
             skip_existing=True,
         )

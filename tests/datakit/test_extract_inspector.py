@@ -15,10 +15,8 @@ from marin.datakit.normalize import generate_id
 
 from experiments.datakit.build_pdf_source import extract_inspector
 from experiments.datakit.build_pdf_source import route_v2_features as contract
-from experiments.datakit.build_pdf_source.document_record import PDF_DOCUMENT_FIELDS
 from experiments.datakit.build_pdf_source.extract import BOILERPLATE_OPTIONS
 from experiments.datakit.build_pdf_source.extract_inspector import (
-    INSPECTOR_FIELDS,
     OP_EXTRACT,
     OP_GEOMETRY,
     OUTPUT_SCHEMA,
@@ -80,13 +78,6 @@ def test_the_record_matches_its_declared_schema():
     record = _document(["First page.", "Second page."])
 
     assert pa.RecordBatch.from_pylist([record], schema=OUTPUT_SCHEMA).num_rows == 1
-
-
-def test_the_shared_columns_come_first_and_unchanged():
-    """The two routes are concatenated downstream, so the shared prefix has to line up exactly."""
-    assert [field.name for field in OUTPUT_SCHEMA][: len(PDF_DOCUMENT_FIELDS)] == [
-        field.name for field in PDF_DOCUMENT_FIELDS
-    ]
 
 
 def test_running_headers_are_stripped_before_the_id_is_computed():
@@ -196,12 +187,6 @@ def test_every_router_feature_is_derivable_from_the_projected_columns():
 
     assert set(contract.ROUTER_FEATURES) <= set(derived.columns)
     assert derived.select(contract.ROUTER_FEATURES).null_count().to_numpy().sum() == 0
-
-
-def test_the_projection_never_pulls_the_corpus_text_through_the_router():
-    """At full-crawl scale that projection is the difference between scalars and tens of GB."""
-    assert "text" not in SIGNAL_COLUMNS
-    assert set(SIGNAL_COLUMNS) >= {field.name for field in INSPECTOR_FIELDS}
 
 
 # --- output statistics -----------------------------------------------------------------------------

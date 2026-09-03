@@ -22,6 +22,10 @@ from marin.datakit.download.http_session import build_retrying_session
 from pydantic import BaseModel
 
 FOCUS_CRAWL = "CC-SUPPLEMENTAL-2026-22"
+# The datakit source name every step of this pipeline is registered under.
+CORPUS = "common_crawl_focus_2026_22_pdf"
+# Where each step writes its main output, relative to the step's output path.
+MAIN_OUTPUT_SUBDIR = "outputs/main"
 COMMON_CRAWL_BASE_URL = "https://data.commoncrawl.org"
 
 # One Parquet shard per input shard, numbered by the input's position in the sorted listing the

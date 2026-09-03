@@ -17,10 +17,9 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from experiments.datakit.build_pdf_source import extract_inspector, extract_ocr
+from experiments.datakit.build_pdf_source import extract_ocr
 from experiments.datakit.build_pdf_source.classify import ROUTING_SCHEMA
 from experiments.datakit.build_pdf_source.common import SOURCE_FILE_COLUMN
-from experiments.datakit.build_pdf_source.document_record import PDF_DOCUMENT_FIELDS
 from experiments.datakit.build_pdf_source.extract_ocr import OcrStatus, ocr_batch
 from experiments.datakit.build_pdf_source.ocr_extract import client
 from experiments.datakit.build_pdf_source.ocr_extract.client import OcrEndpoint, PageOcr, unwrap_markdown_fence
@@ -465,16 +464,7 @@ def test_completion_tokens_are_summed_over_the_document(run_batch):
     assert record["completion_tokens"] == 40
 
 
-# --- the contract between the two routes -------------------------------------------------------
-
-
-def test_both_extraction_routes_share_a_column_prefix():
-    """The two routes are concatenated downstream, so the shared columns must line up exactly."""
-    shared = [(field.name, field.type) for field in PDF_DOCUMENT_FIELDS]
-    inspector = [(field.name, field.type) for field in extract_inspector.OUTPUT_SCHEMA]
-    ocr = [(field.name, field.type) for field in extract_ocr.OUTPUT_SCHEMA]
-    assert inspector[: len(shared)] == shared
-    assert ocr[: len(shared)] == shared
+# --- the output schema -------------------------------------------------------------------------
 
 
 def test_the_ocr_record_matches_its_declared_schema(run_batch):

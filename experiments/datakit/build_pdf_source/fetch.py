@@ -6,8 +6,8 @@
 One Zephyr shard per packed task, one output Parquet file per shard. A task issues its coalesced
 range GETs in order, streams each into a temp file, and walks the WARC records inside it.
 
-The output carries no ``id`` or ``text``: extraction (#7618) mints the text-derived id, and
-``content_digest`` is the identity that survives an extractor swap in the meantime.
+The output carries no ``id`` or ``text``: extraction mints the text-derived id, and
+``content_digest`` is the identity that survives an extractor swap.
 """
 
 import http.client
@@ -35,6 +35,7 @@ from experiments.datakit.build_pdf_source.common import (
     COMMON_CRAWL_BASE_URL,
     DOWNLOAD_CHUNK_BYTES,
     FOCUS_CRAWL,
+    MAIN_OUTPUT_SUBDIR,
     PDF_MIME_TYPE,
     REQUEST_TIMEOUT,
     SHARD_PATTERN,
@@ -225,7 +226,7 @@ def fetch_planned_pdfs(output_path: str, plan_output_path: str) -> PdfSourceData
         raise ValueError(f"Plan declares {plan.num_tasks} tasks, {plan.plan_path} holds {len(tasks)}")
     logger.info("Fetching %d PDFs over %d ranges in %d tasks", plan.num_pdfs, plan.num_ranges, len(tasks))
 
-    output_dir = prefix_join(output_path, "outputs/main")
+    output_dir = prefix_join(output_path, MAIN_OUTPUT_SUBDIR)
     pipeline = (
         Dataset.from_list(tasks)
         .flat_map(partial(fetch_task_pdfs, base_url=COMMON_CRAWL_BASE_URL))

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-r"""Turn the focus crawl's PDFs into a datakit source (#7616).
+r"""Turn the focus crawl's PDFs into a datakit source.
 
 Launch it at the CoreWeave fleet *through the marin hub*. ``cw-us-east-08a``'s controller surface
 is IP-locked to the marin egress and has no off-cluster user surface, so connecting to it directly
