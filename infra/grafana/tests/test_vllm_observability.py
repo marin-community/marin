@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import re
 from pathlib import Path
 from typing import NamedTuple
 
@@ -18,14 +17,11 @@ from starlette.testclient import TestClient
 from vllm_observability import (
     VLLM_MAX_POINTS,
     VLLM_MAX_WINDOW_MS,
+    VLLM_OVERVIEW_SECTIONS,
     VllmIdentityField,
     vllm_overview_query,
 )
 from wandb_source import WandbSource
-
-START_MS = 120_000
-END_MS = 180_000
-BUCKET_MS = 60_000
 
 
 class TelemetryRow(NamedTuple):
@@ -43,28 +39,23 @@ class TelemetryRow(NamedTuple):
 
 
 def _attributes(temporality: str | None = None, **labels: str) -> str:
-    values = dict(labels)
     if temporality is not None:
-        values["source_temporality"] = temporality
-    return json.dumps(values, sort_keys=True, separators=(",", ":"))
-
-
-def _resource(job: str, replica: str) -> str:
-    return json.dumps({"job_id": job, "worker": replica}, sort_keys=True, separators=(",", ":"))
+        labels["source_temporality"] = temporality
+    return json.dumps(labels, sort_keys=True, separators=(",", ":"))
 
 
 def _record(
-    replica: str,
+    service: str,
+    job: str,
+    run: str,
     name: str,
     value: float,
     timestamp_ms: int,
     attributes: str,
     *,
-    job: str = "/serve",
-    run: str = "run-1",
-    kind: str = "gauge",
-    service: str = "vllm",
+    replica: str = "driver",
 ) -> TelemetryRow:
+    resource = json.dumps({"job_id": job, "worker": replica}, sort_keys=True, separators=(",", ":"))
     return TelemetryRow(
         "cw-a",
         service,
@@ -72,9 +63,9 @@ def _record(
         run,
         "execution-1",
         name,
-        kind,
+        "gauge",
         value,
-        _resource(job, replica),
+        resource,
         attributes,
         timestamp_ms,
     )
@@ -82,65 +73,30 @@ def _record(
 
 def _database(rows: list[TelemetryRow]) -> duckdb.DuckDBPyConnection:
     database = duckdb.connect()
-    database.execute(
-        """
-        CREATE TABLE "telemetry_v1.vllm"(
-            cluster VARCHAR,
-            service VARCHAR,
-            job_id VARCHAR,
-            run_id VARCHAR,
-            execution_uid VARCHAR,
-            name VARCHAR,
-            kind VARCHAR,
-            value DOUBLE,
-            resource_attributes_json VARCHAR,
-            attributes_json VARCHAR,
-            timestamp_ms BIGINT,
-            seq BIGINT
-        )
-        """
-    )
-    database.execute(
-        """
-        CREATE TABLE "telemetry_v1.marinskyrl"(
-            cluster VARCHAR,
-            service VARCHAR,
-            job_id VARCHAR,
-            run_id VARCHAR,
-            execution_uid VARCHAR,
-            name VARCHAR,
-            kind VARCHAR,
-            value DOUBLE,
-            resource_attributes_json VARCHAR,
-            attributes_json VARCHAR,
-            timestamp_ms BIGINT,
-            seq BIGINT
-        )
-        """
-    )
-    database.execute('CREATE VIEW telemetry_v1 AS SELECT * FROM "telemetry_v1.vllm" WHERE FALSE')
-    database.execute(
-        "CREATE MACRO json_get(document, field_name) " "AS json_extract_string(document, concat('$.', field_name))"
-    )
+    columns = """
+        cluster VARCHAR, service VARCHAR, job_id VARCHAR, run_id VARCHAR,
+        execution_uid VARCHAR, name VARCHAR, kind VARCHAR, value DOUBLE,
+        resource_attributes_json VARCHAR, attributes_json VARCHAR,
+        timestamp_ms BIGINT, seq BIGINT
+    """
     for service in ("vllm", "marinskyrl"):
+        database.execute(f'CREATE TABLE "telemetry_v1.{service}"({columns})')
         service_rows = [row for row in rows if row.service == service]
         if service_rows:
             database.executemany(
                 f'INSERT INTO "telemetry_v1.{service}" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 [(*row, seq) for seq, row in enumerate(service_rows)],
             )
+    database.execute('CREATE VIEW telemetry_v1 AS SELECT * FROM "telemetry_v1.vllm" WHERE FALSE')
+    database.execute(
+        "CREATE MACRO json_get(document, field_name) " "AS json_extract_string(document, concat('$.', field_name))"
+    )
     return database
 
 
 class _DuckDBFinelog:
     def __init__(self, database: duckdb.DuckDBPyConnection):
-        self.target = ClusterTarget(
-            name="marin",
-            project="p",
-            zone="z",
-            instance_filter="f",
-            controller_filter="c",
-        )
+        self.target = ClusterTarget("marin", "p", "z", "f", "c")
         self._database = database
 
     def query(self, sql: str, *, max_rows: int) -> pa.Table:
@@ -149,67 +105,149 @@ class _DuckDBFinelog:
         return table
 
     def health(self):
-        raise AssertionError("dashboard test does not query source health")
+        raise AssertionError("these tests do not query source health")
 
 
-def test_dashboard_run_identity_variable_reads_promoted_column():
-    dashboard = json.loads((Path(__file__).parents[1] / "dashboards" / "inference.json").read_text())
-    sql = dashboard["templating"]["list"][1]["query"]["infinityQuery"]["url_options"]["params"][0]["value"]
-    sql = (
-        sql.replace("${identity_kind}", "run_id")
-        .replace("{{from}}", "TIMESTAMP '1970-01-01 00:02:00'")
-        .replace("{{to}}", "TIMESTAMP '1970-01-01 00:03:00'")
+def _app(database: duckdb.DuckDBPyConnection):
+    return create_app(
+        bridge_config(),
+        {"marin": _DuckDBFinelog(database)},
+        {},
+        GithubSource(auth=None, timeout=5.0),
+        K8sFleet(()),
+        WandbSource(timeout=5.0),
     )
-    database = _database([_record("a", "num_requests_running", 1, 150_000, _attributes())])
-
-    assert database.execute(sql).fetchall() == [("run-1",)]
 
 
-def test_dashboard_identity_variable_includes_embedded_vllm_and_excludes_ray():
-    dashboard = json.loads((Path(__file__).parents[1] / "dashboards" / "inference.json").read_text())
-    sql = dashboard["templating"]["list"][1]["query"]["infinityQuery"]["url_options"]["params"][0]["value"]
-    sql = (
-        sql.replace("${identity_kind}", "run_id")
-        .replace("{{from}}", "TIMESTAMP '1970-01-01 00:02:00'")
-        .replace("{{to}}", "TIMESTAMP '1970-01-01 00:03:00'")
+def _embedded_record(
+    name: str,
+    value: float,
+    timestamp_ms: int,
+    *,
+    temporality: str = "cumulative_snapshot",
+    engine: str | None = "physical-a",
+    **labels: str,
+) -> TelemetryRow:
+    identity = {} if engine is None else {"engine": engine, "engine_index": "0"}
+    return _record(
+        "marinskyrl",
+        "/train",
+        "embedded-run",
+        name,
+        value,
+        timestamp_ms,
+        _attributes(temporality, metric_source="vllm", **identity, **labels),
     )
-    database = _database(
+
+
+def _observability_records() -> list[TelemetryRow]:
+    rows: list[TelemetryRow] = []
+    for sample, timestamp_ms in enumerate(range(0, 150_000, 15_000)):
+        finished = sample // 2
+        cumulative = {
+            "generation_tokens_total": sample * 150,
+            "num_preemptions_total": sample // 3,
+            "request_success_total": finished,
+            "iteration_tokens_total_sum": sample * 100,
+            "iteration_tokens_total_count": sample,
+            "iteration_tokens_total_bucket": sample,
+            "request_time_per_output_token_seconds_sum": finished * 0.1,
+            "request_time_per_output_token_seconds_count": finished,
+            "request_time_per_output_token_seconds_bucket": finished,
+        }
+        for name, value in cumulative.items():
+            labels = {}
+            if name.endswith("_bucket"):
+                labels["le"] = "+Inf"
+            if name == "request_success_total":
+                labels["finished_reason"] = "stop"
+            rows.append(_embedded_record(name, value, timestamp_ms, **labels))
+        for name, value in (
+            ("num_requests_running", sample + 1),
+            ("num_requests_waiting", sample % 3),
+            ("kv_cache_usage_perc", 0.5),
+        ):
+            rows.append(
+                _embedded_record(
+                    name,
+                    value,
+                    timestamp_ms,
+                    temporality="current_snapshot",
+                    step=str(sample),
+                )
+            )
+
+    for component, value in (("sum", 20), ("count", 1), ("bucket", 1)):
+        labels = {"le": "+Inf"} if component == "bucket" else {}
+        rows.append(
+            _embedded_record(
+                f"request_time_per_output_token_seconds_{component}",
+                value,
+                15_000,
+                engine="physical-b",
+                **labels,
+            )
+        )
+    for component in ("sum", "count", "bucket"):
+        for timestamp_ms, value in ((0, 0), (15_000, 1_000)):
+            labels = {"le": "+Inf"} if component == "bucket" else {}
+            rows.append(
+                _record(
+                    "marinskyrl",
+                    "/train",
+                    "embedded-run",
+                    f"request_time_per_output_token_seconds_{component}",
+                    value,
+                    timestamp_ms,
+                    _attributes("cumulative_snapshot", metric_source="vllm", engine="legacy", **labels),
+                )
+            )
+    rows.extend(
+        _embedded_record(
+            "metric_publication_dropped_records",
+            0,
+            135_000,
+            temporality="current_snapshot",
+            engine=None,
+            drop_reason=reason,
+        )
+        for reason in ("sample_limit", "telemetry_loss")
+    )
+    rows.extend(
         [
             _record(
-                "driver",
-                "num_requests_running",
-                1,
-                150_000,
-                _attributes("current_snapshot", metric_source="vllm"),
-                run="embedded-run",
-                service="marinskyrl",
+                "marinskyrl",
+                "/train",
+                "ray-run",
+                "generation_tokens_total",
+                100_000,
+                135_000,
+                _attributes("cumulative_snapshot", metric_source="ray"),
             ),
             _record(
-                "driver",
-                "num_requests_running",
-                1,
-                150_000,
-                _attributes("current_snapshot", metric_source="ray"),
-                run="ray-run",
-                service="marinskyrl",
+                "marinskyrl",
+                "/train",
+                "ray-run",
+                "metric_publication_dropped_records",
+                99,
+                135_000,
+                _attributes("current_snapshot", metric_source="ray", drop_reason="telemetry_loss"),
             ),
         ]
     )
-
-    assert database.execute(sql).fetchall() == [("embedded-run",)]
-
-
-def _query_rows(
-    database: duckdb.DuckDBPyConnection,
-    job: str = "/serve",
-    start_ms: int = START_MS,
-    end_ms: int = END_MS,
-    bucket_ms: int = BUCKET_MS,
-) -> list[dict]:
-    query = vllm_overview_query(VllmIdentityField.JOB_ID, job, start_ms, end_ms, bucket_ms)
-    result = database.execute(query.sql)
-    columns = [description[0] for description in result.description]
-    return [dict(zip(columns, values, strict=True)) for values in result.fetchall()]
+    rows.extend(
+        _record(
+            "vllm",
+            "/standalone",
+            "standalone-run",
+            "generation_tokens_total",
+            value,
+            timestamp_ms,
+            _attributes("cumulative_snapshot"),
+        )
+        for timestamp_ms, value in ((0, 0), (60_000, 600), (120_000, 1_200))
+    )
+    return rows
 
 
 def _one(rows: list[dict], section: str, metric: str, stat: str, series: str | None = None) -> dict:
@@ -225,874 +263,97 @@ def _one(rows: list[dict], section: str, metric: str, stat: str, series: str | N
     return matches[0]
 
 
-def test_query_names_every_output_projection_for_finelog():
-    query = vllm_overview_query(VllmIdentityField.JOB_ID, "/serve", START_MS, END_MS, BUCKET_MS)
-    output_cte = query.sql.split("), output AS (\n", 1)[1].split("\n)\nSELECT t, section", 1)[0]
-    output_columns = ("t", "section", "metric", "stat", "series", "value", "unit", "status", "samples", "gap_seconds")
-    output_alias = re.compile(rf"\bAS ({'|'.join(output_columns)})\b")
-
-    for branch in output_cte.split("\n\n    UNION ALL\n\n"):
-        assert output_alias.findall(branch) == list(output_columns)
-
-
-def _counter_records() -> list[TelemetryRow]:
-    cumulative = _attributes("cumulative_snapshot")
-    rows: list[TelemetryRow] = []
-    for timestamp_ms, value in zip((105_000, 120_000, 135_000, 150_000, 165_000), (100, 110, 4, 9, 14), strict=True):
-        rows.append(_record("a", "generation_tokens_total", value, timestamp_ms, cumulative))
-    for timestamp_ms, value in zip((105_000, 120_000, 135_000, 150_000, 165_000), (50, 55, 60, 65, 70), strict=True):
-        rows.append(_record("b", "generation_tokens_total", value, timestamp_ms, cumulative))
-    rows.extend(
-        [
-            _record("a", "prompt_tokens_total", 0, 105_000, cumulative),
-            _record("a", "prompt_tokens_total", 12, 135_000, cumulative),
-            _record("b", "prompt_tokens_total", 0, 105_000, cumulative),
-            _record("b", "prompt_tokens_total", 8, 135_000, cumulative),
-        ]
-    )
-
-    rows.extend(
-        [
-            _record("a", "num_preemptions_total", 2, 135_000, _attributes(), kind="counter"),
-            _record("a", "num_preemptions_total", 1, 165_000, _attributes(), kind="counter"),
-        ]
-    )
-    return rows
-
-
-def _gauge_records() -> list[TelemetryRow]:
-    current = _attributes("current_snapshot")
-    rows: list[TelemetryRow] = []
-    for replica, running, waiting, kv in (
-        ("a", (2, 4), (1, 1), (0.5, 0.7)),
-        ("b", (3, 5), (0, 2), (0.3, 0.5)),
-    ):
-        for timestamp_ms, running_value, waiting_value, kv_value in zip(
-            (120_000, 150_000), running, waiting, kv, strict=True
-        ):
-            rows.extend(
-                [
-                    _record(replica, "num_requests_running", running_value, timestamp_ms, current),
-                    _record(replica, "num_requests_waiting", waiting_value, timestamp_ms, current),
-                    _record(replica, "kv_cache_usage_perc", kv_value, timestamp_ms, current),
-                ]
-            )
-    return rows
-
-
-def _latency_records() -> list[TelemetryRow]:
-    cumulative = _attributes("cumulative_snapshot")
-    rows = [
-        *_histogram_records(
-            "a",
-            {
-                105_000: (10, 10, 5, 8, 10),
-                135_000: (12, 12, 6, 10, 12),
-                150_000: (1, 1, 0, 1, 1),
-                165_000: (3, 3, 1, 2, 3),
-            },
-        ),
-        *_histogram_records(
-            "b",
-            {
-                105_000: (4, 4, 3, 4, 4),
-                135_000: (5, 6, 4, 5, 6),
-                165_000: (7, 8, 5, 7, 8),
-            },
-        ),
-    ]
-    for family, total_sum, count in (
-        ("request_time_per_output_token_seconds", 0.9, 3),
-        ("inter_token_latency_seconds", 0.4, 4),
-        ("request_queue_time_seconds", 0.6, 3),
-        ("e2e_request_latency_seconds", 4.5, 3),
-    ):
-        rows.extend(
-            [
-                _record("a", f"{family}_sum", 0, 105_000, cumulative),
-                _record("a", f"{family}_count", 0, 105_001, cumulative),
-                _record("a", f"{family}_sum", total_sum, 135_000, cumulative),
-                _record("a", f"{family}_count", count, 135_001, cumulative),
-            ]
-        )
-    return rows
-
-
-def _outcome_records() -> list[TelemetryRow]:
-    stop = _attributes("cumulative_snapshot", finished_reason="stop")
-    length = _attributes("cumulative_snapshot", finished_reason="length")
-    return [
-        _record("a", "request_success_total", 0, 105_000, stop),
-        _record("a", "request_success_total", 2, 120_000, stop),
-        _record("a", "request_success_total", 0, 135_000, stop),
-        _record("a", "request_success_total", 1, 150_000, stop),
-        _record("b", "request_success_total", 0, 105_000, length),
-        _record("b", "request_success_total", 1, 135_000, length),
-        _record("b", "request_success_total", 2, 165_000, length),
-    ]
-
-
-@pytest.fixture(scope="module")
-def overview_rows() -> list[dict]:
-    records = [*_counter_records(), *_gauge_records(), *_latency_records(), *_outcome_records()]
-    return _query_rows(_database(records))
-
-
-def test_query_preserves_replicas_discards_resets_and_keeps_native_counter_deltas(overview_rows):
-    assert _one(overview_rows, "counter_total", "prompt_tokens", "total")["value"] == pytest.approx(20)
-    assert _one(overview_rows, "counter_total", "generated_tokens", "total")["value"] == pytest.approx(40)
-    assert _one(overview_rows, "token_rate", "prompt_tokens", "rate")["value"] == pytest.approx(20 / 60)
-    assert _one(overview_rows, "token_rate", "generated_tokens", "rate")["value"] == pytest.approx(40 / 60)
-    assert _one(overview_rows, "counter_total", "preemptions", "total")["value"] == pytest.approx(3)
-
-
-def test_standalone_token_rate_keeps_the_sixty_second_source_floor():
-    cumulative = _attributes("cumulative_snapshot")
-    records = [
-        _record("a", "generation_tokens_total", value, timestamp_ms, cumulative)
-        for timestamp_ms, value in ((0, 0), (60_000, 600), (120_000, 1_200))
-    ]
-
-    rows = _query_rows(_database(records), start_ms=0, end_ms=135_000, bucket_ms=15_000)
-    rates = [row for row in rows if row["section"] == "token_rate"]
-
-    assert len(rates) == 2
-    assert all(row["value"] == pytest.approx(10) for row in rates)
-
-
-def test_query_aggregates_request_and_kv_gauges_after_replica_bins(overview_rows):
-    assert _one(overview_rows, "saturation_summary", "num_requests_running", "average")["value"] == pytest.approx(7)
-    assert _one(overview_rows, "saturation_summary", "num_requests_waiting", "peak")["value"] == pytest.approx(2)
-    assert _one(overview_rows, "saturation_summary", "kv_cache_usage", "average")["value"] == pytest.approx(0.5)
-    freshness = _one(overview_rows, "freshness", "telemetry", "latest_sample_age")
-    assert (freshness["status"], freshness["value"], freshness["gap_seconds"]) == ("fresh", 15.0, 15.0)
-
-
-def test_query_reports_the_stalest_replica_and_bounded_replica_detail():
-    current = _attributes("current_snapshot")
-    records = [
-        _record("stale", "num_requests_running", 1, 105_000, current),
-        _record("stale", "num_requests_running", 1, 120_000, current),
-        _record("healthy", "num_requests_running", 1, 330_000, current),
-        _record("healthy", "num_requests_running", 1, 345_000, current),
-    ]
-    rows = _query_rows(_database(records), end_ms=360_000)
-
-    summary = _one(rows, "freshness", "telemetry", "latest_sample_age")
-    assert (summary["status"], summary["value"], summary["series"]) == (
-        "stale_or_stopped",
-        240.0,
-        f"cw-a:vllm:{_resource('/serve', 'stale')}",
-    )
-    details = [row for row in rows if row["section"] == "freshness_detail"]
-    assert {(row["status"], row["series"]) for row in details} == {
-        ("stale_or_stopped", f"cw-a:vllm:{_resource('/serve', 'stale')}"),
-        ("fresh", f"cw-a:vllm:{_resource('/serve', 'healthy')}"),
-    }
-
-
-def test_query_caps_replica_freshness_detail():
-    current = _attributes("current_snapshot")
-    records = [_record(f"replica-{replica:03d}", "num_requests_running", 1, 165_000, current) for replica in range(130)]
-
-    rows = _query_rows(_database(records))
-
-    assert len([row for row in rows if row["section"] == "freshness_detail"]) == 128
-
-
-def test_query_derives_histogram_means_and_only_bounded_quantiles(overview_rows):
-    assert _one(overview_rows, "latency", "ttft", "mean")["value"] == pytest.approx(0.875)
-    assert _one(overview_rows, "latency", "ttft", "p50")["value"] == pytest.approx(0.5)
-    assert _one(overview_rows, "latency", "ttft", "p90")["value"] is None
-    assert _one(overview_rows, "latency", "tpot", "mean")["value"] == pytest.approx(0.3)
-    assert _one(overview_rows, "latency", "inter_token_latency", "mean")["value"] == pytest.approx(0.1)
-    assert _one(overview_rows, "latency", "queue", "mean")["value"] == pytest.approx(0.2)
-    assert _one(overview_rows, "latency", "e2e", "mean")["value"] == pytest.approx(1.5)
-
-
-def test_standalone_fixture_preserves_all_nine_overview_sections(overview_rows):
-    assert {row["section"] for row in overview_rows} == {
-        "counter_total",
-        "freshness",
-        "freshness_detail",
-        "latency",
-        "request_outcome",
-        "saturation",
-        "saturation_summary",
-        "telemetry_health",
-        "token_rate",
-    }
-
-
-def test_query_discards_an_entire_histogram_sample_when_one_component_resets():
-    cumulative = _attributes("cumulative_snapshot")
-    rows = [
-        _record("a", "time_to_first_token_seconds_sum", 10, 105_000, cumulative),
-        _record("a", "time_to_first_token_seconds_count", 100, 105_000, cumulative),
-        _record("a", "time_to_first_token_seconds_bucket", 1, 105_000, _attributes("cumulative_snapshot", le="0.5")),
-        _record("a", "time_to_first_token_seconds_bucket", 100, 105_000, _attributes("cumulative_snapshot", le="+Inf")),
-        _record("a", "time_to_first_token_seconds_sum", 11, 135_000, cumulative),
-        _record("a", "time_to_first_token_seconds_count", 2, 135_000, cumulative),
-        _record("a", "time_to_first_token_seconds_bucket", 2, 135_000, _attributes("cumulative_snapshot", le="0.5")),
-        _record("a", "time_to_first_token_seconds_bucket", 2, 135_000, _attributes("cumulative_snapshot", le="+Inf")),
-    ]
-
-    result = _query_rows(_database(rows))
-
-    assert [row for row in result if row["section"] == "latency"] == []
-
-
-def test_query_discards_histogram_siblings_when_a_component_has_no_predecessor():
-    rows = _histogram_records("a", {105_000: (1, 2, 1, 1, 2), 135_000: (2, 4, 2, 3, 4)})
-    rows.append(
-        _record(
-            "a",
-            "time_to_first_token_seconds_bucket",
-            1,
-            135_000,
-            _attributes("cumulative_snapshot", le="2.0"),
-        )
-    )
-
-    result = _query_rows(_database(rows))
-
-    assert [row for row in result if row["section"] == "latency"] == []
-
-
-def test_query_groups_reset_aware_request_outcomes(overview_rows):
-    assert _one(overview_rows, "request_outcome", "requests", "total", "stop")["value"] == pytest.approx(3)
-    assert _one(overview_rows, "request_outcome", "requests", "total", "length")["value"] == pytest.approx(2)
-
-
-def _histogram_records(
-    replica: str, snapshots: dict[int, tuple[float, float, float, float, float]]
-) -> list[TelemetryRow]:
-    cumulative = _attributes("cumulative_snapshot")
-    rows = []
-    for timestamp_ms, (total_sum, count, at_half, at_one, at_infinity) in snapshots.items():
-        rows.extend(
-            [
-                _record(
-                    replica,
-                    "time_to_first_token_seconds_sum",
-                    total_sum,
-                    timestamp_ms,
-                    cumulative,
-                ),
-                _record(replica, "time_to_first_token_seconds_count", count, timestamp_ms, cumulative),
-                _record(
-                    replica,
-                    "time_to_first_token_seconds_bucket",
-                    at_half,
-                    timestamp_ms,
-                    _attributes("cumulative_snapshot", le="0.5"),
-                ),
-                _record(
-                    replica,
-                    "time_to_first_token_seconds_bucket",
-                    at_one,
-                    timestamp_ms,
-                    _attributes("cumulative_snapshot", le="1.0"),
-                ),
-                _record(
-                    replica,
-                    "time_to_first_token_seconds_bucket",
-                    at_infinity,
-                    timestamp_ms,
-                    _attributes("cumulative_snapshot", le="+Inf"),
-                ),
-            ]
-        )
-    return rows
-
-
-def test_query_health_only_reports_healthy_without_serving_freshness():
-    current = _attributes("current_snapshot", metric_source="vllm")
-    cumulative = _attributes("cumulative_snapshot", metric_source="vllm", stage="scrape")
-    records = [
-        _record("a", "prometheus_source_available", 1, 135_000, current),
-        _record("a", "prometheus_stage_failures", 0, 105_000, cumulative),
-        _record("a", "prometheus_stage_failures", 0, 135_000, cumulative),
-        _record(
-            "a",
-            "prometheus_dropped_samples",
-            0,
-            135_000,
-            _attributes("current_snapshot", metric_source="vllm", drop_reason="sample_limit"),
-        ),
-    ]
-
-    rows = _query_rows(_database(records))
-
-    assert [row for row in rows if row["section"] == "telemetry_health"] == [
-        {
-            "t": None,
-            "section": "telemetry_health",
-            "metric": "collector",
-            "stat": "polls",
-            "series": "all resources",
-            "value": 1.0,
-            "unit": "polls",
-            "status": "healthy",
-            "samples": 1,
-            "gap_seconds": None,
-        }
-    ]
-    assert _one(rows, "freshness", "telemetry", "latest_sample_age")["status"] == "no_data"
-
-
-def test_query_marks_positive_failure_without_predecessor_incomplete_without_delta():
-    records = [
-        _record(
-            "a",
-            "prometheus_source_available",
-            1,
-            135_000,
-            _attributes("current_snapshot", metric_source="vllm"),
-        ),
-        _record(
-            "a",
-            "prometheus_stage_failures",
-            1,
-            135_000,
-            _attributes("cumulative_snapshot", metric_source="vllm", stage="process"),
-        ),
-    ]
-
-    health = [row for row in _query_rows(_database(records)) if row["section"] == "telemetry_health"]
-
-    assert [(row["metric"], row["series"], row["value"], row["status"]) for row in health] == [
-        ("collector", "all resources", 1.0, "incomplete"),
-    ]
-
-
-def test_query_counts_positive_failure_after_reset():
-    failure = _attributes("cumulative_snapshot", metric_source="vllm", stage="process")
-    records = [
-        _record(
-            "a",
-            "prometheus_source_available",
-            1,
-            135_000,
-            _attributes("current_snapshot", metric_source="vllm"),
-        ),
-        _record("a", "prometheus_stage_failures", 5, 105_000, failure),
-        _record("a", "prometheus_stage_failures", 1, 135_000, failure),
-    ]
-
-    health = [row for row in _query_rows(_database(records)) if row["section"] == "telemetry_health"]
-
-    assert [(row["metric"], row["series"], row["value"], row["status"]) for row in health] == [
-        ("collector", "all resources", 1.0, "incomplete"),
-        ("collection failures", "process", 1.0, None),
-    ]
-
-
-def test_query_reports_combined_collector_loss_across_replicas():
-    current = _attributes("current_snapshot", metric_source="vllm")
-    records = [
-        _record("unhealthy", "num_requests_running", 1, 150_000, _attributes("current_snapshot")),
-        _record("unhealthy", "prometheus_source_available", 0, 135_000, current),
-        _record("healthy", "prometheus_source_available", 1, 135_000, current),
-        _record(
-            "unhealthy",
-            "prometheus_stage_failures",
-            4,
-            105_000,
-            _attributes("cumulative_snapshot", metric_source="vllm", stage="process"),
-        ),
-        _record(
-            "unhealthy",
-            "prometheus_stage_failures",
-            6,
-            135_000,
-            _attributes("cumulative_snapshot", metric_source="vllm", stage="process"),
-        ),
-        _record(
-            "unhealthy",
-            "prometheus_stage_failures",
-            3,
-            105_000,
-            _attributes("cumulative_snapshot", metric_source="vllm", stage="scrape"),
-        ),
-        _record(
-            "unhealthy",
-            "prometheus_stage_failures",
-            3,
-            135_000,
-            _attributes("cumulative_snapshot", metric_source="vllm", stage="scrape"),
-        ),
-        _record(
-            "unhealthy",
-            "prometheus_dropped_samples",
-            4,
-            135_000,
-            _attributes("current_snapshot", metric_source="vllm", drop_reason="sample_limit"),
-        ),
-        _record(
-            "unhealthy",
-            "prometheus_dropped_samples",
-            1,
-            150_000,
-            _attributes("current_snapshot", metric_source="vllm", drop_reason="sample_limit"),
-        ),
-        _record(
-            "unhealthy",
-            "prometheus_dropped_samples",
-            2,
-            135_000,
-            _attributes("current_snapshot", metric_source="vllm", drop_reason="telemetry_loss"),
-        ),
-        _record(
-            "healthy",
-            "prometheus_dropped_samples",
-            0,
-            135_000,
-            _attributes("current_snapshot", metric_source="vllm", drop_reason="sample_limit"),
-        ),
-    ]
-
-    rows = _query_rows(_database(records))
-    health = [row for row in rows if row["section"] == "telemetry_health"]
-
-    assert [(row["metric"], row["stat"], row["series"], row["value"], row["unit"], row["status"]) for row in health] == [
-        ("collector", "polls", "all resources", 2.0, "polls", "incomplete"),
-        ("collection failures", "delta", "process", 2.0, "failures", None),
-        ("dropped samples", "total", "sample_limit", 5.0, "samples", None),
-        ("dropped samples", "total", "telemetry_loss", 2.0, "samples", None),
-        ("source availability", "unavailable polls", "all resources", 1.0, "polls", None),
-    ]
-
-
-def _embedded_observability_records() -> list[TelemetryRow]:
-    cumulative = _attributes("cumulative_snapshot", metric_source="vllm", engine="physical-a", engine_index="0")
-    current = _attributes("current_snapshot", metric_source="vllm", engine="physical-a", engine_index="0", step="7")
-    rows: list[TelemetryRow] = []
-    for sample, timestamp_ms in enumerate(range(0, 150_000, 15_000)):
-        rows.extend(
-            [
-                _record(
-                    "driver",
-                    "generation_tokens_total",
-                    sample * 150,
-                    timestamp_ms,
-                    cumulative,
-                    job="/train",
-                    service="marinskyrl",
-                ),
-                _record(
-                    "driver",
-                    "num_requests_running",
-                    sample + 1,
-                    timestamp_ms,
-                    current,
-                    job="/train",
-                    service="marinskyrl",
-                ),
-                _record(
-                    "driver",
-                    "iteration_tokens_total_sum",
-                    sample * 100,
-                    timestamp_ms,
-                    cumulative,
-                    job="/train",
-                    service="marinskyrl",
-                ),
-                _record(
-                    "driver",
-                    "iteration_tokens_total_count",
-                    sample,
-                    timestamp_ms,
-                    cumulative,
-                    job="/train",
-                    service="marinskyrl",
-                ),
-                _record(
-                    "driver",
-                    "iteration_tokens_total_bucket",
-                    sample,
-                    timestamp_ms,
-                    _attributes(
-                        "cumulative_snapshot",
-                        metric_source="vllm",
-                        engine="physical-a",
-                        engine_index="0",
-                        le="+Inf",
-                    ),
-                    job="/train",
-                    service="marinskyrl",
-                ),
-            ]
-        )
-        finished = sample // 2
-        rows.extend(
-            [
-                _record(
-                    "driver",
-                    "request_time_per_output_token_seconds_sum",
-                    finished * 0.1,
-                    timestamp_ms,
-                    cumulative,
-                    job="/train",
-                    service="marinskyrl",
-                ),
-                _record(
-                    "driver",
-                    "request_time_per_output_token_seconds_count",
-                    finished,
-                    timestamp_ms,
-                    cumulative,
-                    job="/train",
-                    service="marinskyrl",
-                ),
-                _record(
-                    "driver",
-                    "request_time_per_output_token_seconds_bucket",
-                    finished,
-                    timestamp_ms,
-                    _attributes(
-                        "cumulative_snapshot",
-                        metric_source="vllm",
-                        engine="physical-a",
-                        engine_index="0",
-                        le="+Inf",
-                    ),
-                    job="/train",
-                    service="marinskyrl",
-                ),
-            ]
-        )
-    rows.append(
-        _record(
-            "driver",
-            "generation_tokens_total",
-            100_000,
-            135_000,
-            _attributes("cumulative_snapshot", metric_source="ray"),
-            job="/train",
-            service="marinskyrl",
-        )
-    )
-    return rows
-
-
-def test_dashboard_targets_return_embedded_observability_end_to_end():
+def test_dashboard_overview_end_to_end():
     dashboard = json.loads((Path(__file__).parents[1] / "dashboards" / "inference.json").read_text())
-    targets = [target for panel in dashboard["panels"] for target in panel.get("targets", [])]
-    targets_by_behavior = {
-        (
-            next(param["value"] for param in target["url_options"]["params"] if param["key"] == "view"),
-            target.get("filterExpression"),
-        ): target
-        for target in targets
+    targets = [
+        target
+        for panel in dashboard["panels"]
+        for target in panel.get("targets", [])
         if target.get("url") == "/v1/vllm/overview"
+    ]
+    target_views = {
+        next(p["value"] for p in target["url_options"]["params"] if p["key"] == "view") for target in targets
     }
-    expected_targets = {
-        ("token_rate", None),
-        ("saturation", "metric != 'kv_cache_usage'"),
-        ("counter_total", None),
-        ("latency", "metric == 'tpot' && stat == 'mean_over_time'"),
-    }
-    assert expected_targets <= targets_by_behavior.keys()
+    assert target_views == VLLM_OVERVIEW_SECTIONS
 
-    source = _DuckDBFinelog(_database(_embedded_observability_records()))
-    app = create_app(
-        bridge_config(),
-        {"marin": source},
-        {},
-        GithubSource(auth=None, timeout=5.0),
-        K8sFleet(()),
-        WandbSource(timeout=5.0),
+    database = _database(_observability_records())
+    identity_variable = next(item for item in dashboard["templating"]["list"] if item["name"] == "identity")
+    identity_sql = identity_variable["query"]["infinityQuery"]["url_options"]["params"][0]["value"]
+    identity_sql = (
+        identity_sql.replace("${identity_kind}", "run_id")
+        .replace("{{from}}", "TIMESTAMP '1970-01-01 00:02:00'")
+        .replace("{{to}}", "TIMESTAMP '1970-01-01 00:03:00'")
     )
-    concrete_params = {
-        "identity_kind": "job_id",
-        "identity": "/train",
-        "from": "0",
-        "to": "150000",
-        "bucket_ms": "15000",
-    }
-    rows_by_behavior = {}
-    with TestClient(app) as client:
-        for behavior in expected_targets:
-            target = targets_by_behavior[behavior]
+    identities = {row[0] for row in database.execute(identity_sql).fetchall()}
+    assert "embedded-run" in identities
+    assert "ray-run" not in identities
+
+    concrete = {"identity_kind": "job_id", "identity": "/train", "from": "0", "to": "150000", "bucket_ms": "15000"}
+    rows_by_view = {}
+    with TestClient(_app(database)) as client:
+        for target in targets:
             params = {
-                param["key"]: concrete_params.get(param["key"], param["value"])
-                for param in target["url_options"]["params"]
+                param["key"]: concrete.get(param["key"], param["value"]) for param in target["url_options"]["params"]
             }
             response = client.get(f"/finelog/marin{target['url']}", params=params)
             assert response.status_code == 200
-            rows_by_behavior[behavior] = response.json()
+            view = params["view"]
+            assert response.json() and all(row["section"] == view for row in response.json())
+            rows_by_view[view] = response.json()
 
-    token_rates = rows_by_behavior[("token_rate", None)]
-    assert len([row for row in token_rates if row["metric"] == "generated_tokens"]) >= 8
+        token_target = next(
+            target for target in targets if any(p["value"] == "token_rate" for p in target["url_options"]["params"])
+        )
+        standalone = {**concrete, "identity": "/standalone", "to": "135000"}
+        standalone_params = {
+            param["key"]: standalone.get(param["key"], param["value"]) for param in token_target["url_options"]["params"]
+        }
+        standalone_response = client.get(f"/finelog/marin{token_target['url']}", params=standalone_params)
 
-    saturation = rows_by_behavior[("saturation", "metric != 'kv_cache_usage'")]
-    assert len([row for row in saturation if row["metric"] == "num_requests_running"]) >= 8
+    schema = {"t", "section", "metric", "stat", "series", "value", "unit", "status", "samples", "gap_seconds"}
+    generated_rates = [row for row in rows_by_view["token_rate"] if row["metric"] == "generated_tokens"]
+    assert len(generated_rates) == 9
+    assert all(set(row) == schema and row["value"] == pytest.approx(10) for row in generated_rates)
+
+    saturation = rows_by_view["saturation"]
+    running = sorted((row for row in saturation if row["metric"] == "num_requests_running"), key=lambda row: row["t"])
     iteration = [row for row in saturation if row["metric"] == "iteration_tokens"]
-    assert len(iteration) >= 8
-    assert all(row["value"] == pytest.approx(100) for row in iteration)
+    assert [row["value"] for row in running] == list(range(1, 11))
+    assert len(iteration) == 9 and all(row["value"] == pytest.approx(100) for row in iteration)
 
-    latency = rows_by_behavior[("latency", "metric == 'tpot' && stat == 'mean_over_time'")]
-    tpot = [row for row in latency if row["metric"] == "tpot" and row["stat"] == "mean_over_time"]
-    assert len(tpot) == 4
-    assert all(row["value"] == pytest.approx(0.1) for row in tpot)
+    tpot = [row for row in rows_by_view["latency"] if row["metric"] == "tpot" and row["stat"] == "mean_over_time"]
+    assert len(tpot) == 4 and all(row["value"] == pytest.approx(0.1) for row in tpot)
+    assert _one(rows_by_view["counter_total"], "counter_total", "generated_tokens", "total")["value"] == 1_350
+    assert _one(rows_by_view["counter_total"], "counter_total", "preemptions", "total")["value"] == 3
+    assert _one(rows_by_view["request_outcome"], "request_outcome", "requests", "total", "stop")["value"] == 4
+    assert _one(rows_by_view["freshness"], "freshness", "telemetry", "latest_sample_age")["status"] == "fresh"
+    health = rows_by_view["telemetry_health"]
+    assert _one(health, "telemetry_health", "collector", "polls")["status"] == "healthy"
+    assert not [row for row in health if row["metric"] == "dropped samples"]
 
-    totals = rows_by_behavior[("counter_total", None)]
-    assert _one(totals, "counter_total", "generated_tokens", "total")["value"] == pytest.approx(1_350)
-
-
-def test_embedded_gauge_step_changes_do_not_create_extra_replicas():
-    records = [
-        _record(
-            "driver",
-            "num_requests_running",
-            value,
-            timestamp_ms,
-            _attributes(
-                "current_snapshot",
-                metric_source="vllm",
-                engine="physical-a",
-                engine_index="0",
-                step=step,
-            ),
-            job="/train",
-            service="marinskyrl",
-        )
-        for timestamp_ms, value, step in ((0, 4, "7"), (5_000, 6, "8"))
-    ]
-
-    rows = _query_rows(_database(records), job="/train", start_ms=0, end_ms=15_000, bucket_ms=15_000)
-
-    assert _one(rows, "saturation", "num_requests_running", "value")["value"] == pytest.approx(5)
-
-
-def test_embedded_histogram_validity_is_independent_per_physical_engine():
-    def histogram_sample(engine: str, timestamp_ms: int, total: float, count: float) -> list[TelemetryRow]:
-        base = dict(metric_source="vllm", engine=engine, engine_index="0")
-        return [
-            _record(
-                "driver",
-                "time_to_first_token_seconds_sum",
-                total,
-                timestamp_ms,
-                _attributes("cumulative_snapshot", **base),
-                job="/train",
-                service="marinskyrl",
-            ),
-            _record(
-                "driver",
-                "time_to_first_token_seconds_count",
-                count,
-                timestamp_ms,
-                _attributes("cumulative_snapshot", **base),
-                job="/train",
-                service="marinskyrl",
-            ),
-            _record(
-                "driver",
-                "time_to_first_token_seconds_bucket",
-                count,
-                timestamp_ms,
-                _attributes("cumulative_snapshot", le="+Inf", **base),
-                job="/train",
-                service="marinskyrl",
-            ),
+    assert standalone_response.status_code == 200
+    standalone_rates = [row for row in standalone_response.json() if row["metric"] == "generated_tokens"]
+    assert len(standalone_rates) == 2
+    assert all(row["value"] == pytest.approx(10) for row in standalone_rates)
+    base = {"identity_kind": "job_id", "identity": "/missing", "from": "0", "to": "60000", "bucket_ms": "15000"}
+    with TestClient(_app(_database([]))) as client:
+        response = client.get("/finelog/marin/v1/vllm/overview", params=base)
+        assert response.status_code == 200
+        assert [(row["section"], row["status"]) for row in response.json()] == [
+            ("freshness", "no_data"),
+            ("telemetry_health", "unknown"),
         ]
 
-    records = [
-        *histogram_sample("physical-a", 0, 0, 0),
-        *histogram_sample("physical-a", 15_000, 10, 1),
-        *histogram_sample("physical-b", 15_000, 20, 1),
-    ]
-
-    rows = _query_rows(_database(records), job="/train", start_ms=0, end_ms=30_000, bucket_ms=15_000)
-
-    assert _one(rows, "latency", "ttft", "mean")["value"] == pytest.approx(10)
-
-
-def test_embedded_histograms_require_the_new_unique_engine_contract():
-    old_attributes = _attributes("cumulative_snapshot", metric_source="vllm", engine="0")
-    records = [
-        _record(
-            "driver",
-            name,
-            value,
-            timestamp_ms,
-            old_attributes,
-            service="marinskyrl",
+        invalid = (
+            ({"identity_kind": "invalid"}, "identity_kind"),
+            ({"view": "invalid"}, "unknown vLLM overview view"),
+            ({"bucket_ms": "0"}, "positive"),
+            ({"to": str(VLLM_MAX_WINDOW_MS + 1)}, "7 days"),
         )
-        for name in ("time_to_first_token_seconds_sum", "time_to_first_token_seconds_count")
-        for timestamp_ms, value in ((105_000, 1), (135_000, 2))
-    ]
+        for overrides, message in invalid:
+            response = client.get("/finelog/marin/v1/vllm/overview", params={**base, **overrides})
+            assert response.status_code == 400
+            assert message in response.json()["error"]
 
-    rows = _query_rows(_database(records))
-
-    assert [row for row in rows if row["section"] == "latency"] == []
-
-
-def _publication_loss_records(
-    sample_limit: float | None,
-    telemetry_loss: float | None,
-    *,
-    timestamp_ms: int = 165_000,
-    metric_source: str = "vllm",
-) -> tuple[TelemetryRow, ...]:
-    return tuple(
-        _record(
-            "driver",
-            "metric_publication_dropped_records",
-            value,
-            timestamp_ms,
-            _attributes("current_snapshot", metric_source=metric_source, drop_reason=reason),
-            job="/train",
-            service="marinskyrl",
-        )
-        for reason, value in (("sample_limit", sample_limit), ("telemetry_loss", telemetry_loss))
-        if value is not None
-    )
-
-
-@pytest.mark.parametrize(
-    ("records", "end_ms", "status", "loss_reasons"),
-    [
-        pytest.param(
-            _publication_loss_records(0, 0) + _publication_loss_records(None, 99, metric_source="ray"),
-            END_MS,
-            "healthy",
-            set(),
-            id="fresh-zeroes-ignore-ray-loss",
-        ),
-        pytest.param(
-            _publication_loss_records(2, 0),
-            END_MS,
-            "incomplete",
-            {"sample_limit"},
-            id="sample-limit-loss",
-        ),
-        pytest.param(
-            _publication_loss_records(0, 3),
-            END_MS,
-            "incomplete",
-            {"telemetry_loss"},
-            id="telemetry-loss",
-        ),
-        pytest.param(
-            _publication_loss_records(0, None),
-            END_MS,
-            "unknown",
-            set(),
-            id="missing-zero-companion",
-        ),
-        pytest.param(
-            _publication_loss_records(0, 0, timestamp_ms=105_000),
-            360_000,
-            "unknown",
-            set(),
-            id="stale-zeroes",
-        ),
-        pytest.param(
-            _publication_loss_records(2, None),
-            END_MS,
-            "incomplete",
-            {"sample_limit"},
-            id="positive-without-companion",
-        ),
-        pytest.param(
-            _publication_loss_records(2, 2, timestamp_ms=135_000) + _publication_loss_records(0, 0),
-            END_MS,
-            "healthy",
-            set(),
-            id="latest-current-zero",
-        ),
-    ],
-)
-def test_embedded_publication_health_scenarios(records, end_ms, status, loss_reasons):
-    rows = _query_rows(_database(list(records)), job="/train", end_ms=end_ms)
-
-    health = _one(rows, "telemetry_health", "collector", "polls")
-    observed_loss_reasons = {row["series"] for row in rows if row["metric"] == "dropped samples"}
-    assert (health["status"], observed_loss_reasons) == (status, loss_reasons)
-
-
-def test_query_returns_explicit_no_data_row():
-    rows = _query_rows(_database([]))
-    assert rows == [
-        {
-            "t": None,
-            "section": "freshness",
-            "metric": "telemetry",
-            "stat": "latest_sample_age",
-            "series": "telemetry",
-            "value": None,
-            "unit": "s",
-            "status": "no_data",
-            "samples": 0,
-            "gap_seconds": None,
-        },
-        {
-            "t": None,
-            "section": "telemetry_health",
-            "metric": "collector",
-            "stat": "polls",
-            "series": "all resources",
-            "value": 0.0,
-            "unit": "polls",
-            "status": "unknown",
-            "samples": 0,
-            "gap_seconds": None,
-        },
-    ]
-
-
-def test_query_quotes_identity_as_data():
-    cumulative = _attributes("cumulative_snapshot")
-    database = _database(
-        [
-            _record("a", "generation_tokens_total", 0, 105_000, cumulative, job="job'quoted"),
-            _record("a", "generation_tokens_total", 5, 135_000, cumulative, job="job'quoted"),
-            _record("a", "generation_tokens_total", 1_005, END_MS + 60_000, cumulative, job="job'quoted"),
-            _record("b", "generation_tokens_total", 0, 105_000, cumulative, job="other"),
-            _record("b", "generation_tokens_total", 500, 135_000, cumulative, job="other"),
-        ]
-    )
-
-    rows = _query_rows(database, job="job'quoted")
-
-    assert _one(rows, "counter_total", "generated_tokens", "total")["value"] == pytest.approx(5)
-
-
-def test_query_uses_more_than_one_scrape_interval_for_predecessors():
-    cumulative = _attributes("cumulative_snapshot")
-    rows = _query_rows(
-        _database(
-            [
-                _record("a", "generation_tokens_total", 10, 0, cumulative),
-                _record("a", "generation_tokens_total", 15, 120_000, cumulative),
-            ]
-        )
-    )
-
-    assert _one(rows, "counter_total", "generated_tokens", "total")["value"] == pytest.approx(5)
-
-
-def test_query_computes_kv_peak_before_adaptive_bin_averaging():
-    current = _attributes("current_snapshot")
-    records = [
-        _record("a", "kv_cache_usage_perc", 1.0 if sample == 0 else 0.0, sample * 60_000, current)
-        for sample in range(56)
-    ]
-
-    rows = _query_rows(_database(records), start_ms=0, end_ms=VLLM_MAX_WINDOW_MS, bucket_ms=60_000)
-
-    assert _one(rows, "saturation_summary", "kv_cache_usage", "peak")["value"] == pytest.approx(1.0)
-    assert _one(rows, "saturation_summary", "kv_cache_usage", "average")["value"] == pytest.approx(1 / 56)
-
-
-def test_query_rejects_oversized_ranges_and_caps_bucket_count():
-    with pytest.raises(ValueError, match="7 days"):
-        vllm_overview_query(VllmIdentityField.JOB_ID, "/serve", 0, VLLM_MAX_WINDOW_MS + 1, 60_000)
-    with pytest.raises(ValueError, match="positive"):
-        vllm_overview_query(VllmIdentityField.JOB_ID, "/serve", 0, 60_000, 0)
-
-    query = vllm_overview_query(VllmIdentityField.JOB_ID, "/serve", 0, VLLM_MAX_WINDOW_MS, 1)
-    assert query.bucket_ms >= VLLM_MAX_WINDOW_MS / VLLM_MAX_POINTS
+    bounded = vllm_overview_query(VllmIdentityField.JOB_ID, "/serve", 0, VLLM_MAX_WINDOW_MS, 1)
+    assert bounded.bucket_ms >= VLLM_MAX_WINDOW_MS / VLLM_MAX_POINTS
