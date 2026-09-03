@@ -16,6 +16,7 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.fsutil.transfer import _join_path, _join_url, _relative_path
 
 COPY_CHUNK_BYTES = 8 * 1024 * 1024
+S3_UPLOAD_PART_BYTES = 50 * 1024 * 1024
 COMPLETION_MANIFEST = ".verified-copy-manifest.json"
 MANIFEST_SCHEMA_VERSION = 1
 
@@ -50,12 +51,50 @@ class _SourceFile:
 
 
 @dataclass(frozen=True)
+class _DestinationFile:
+    size: int
+    identity: str | None
+
+
+@dataclass(frozen=True)
 class _ResumeMarker:
     source_path: str
     source_identity: str | None
     path: str
     size: int
     sha256: str
+    destination_identity: str
+
+
+class _MultipartEtag:
+    """Hash a byte stream using the content-derived S3/R2 multipart ETag rules."""
+
+    def __init__(self, part_size: int):
+        self.part_size = part_size
+        self.part_hashes: list[bytes] = []
+        self.current_hash = hashlib.md5(usedforsecurity=False)
+        self.current_size = 0
+
+    def update(self, data: bytes) -> None:
+        offset = 0
+        while offset < len(data):
+            length = min(self.part_size - self.current_size, len(data) - offset)
+            self.current_hash.update(data[offset : offset + length])
+            self.current_size += length
+            offset += length
+            if self.current_size == self.part_size:
+                self.part_hashes.append(self.current_hash.digest())
+                self.current_hash = hashlib.md5(usedforsecurity=False)
+                self.current_size = 0
+
+    def etag(self, total_size: int) -> str:
+        if total_size < self.part_size:
+            return self.current_hash.hexdigest()
+        part_hashes = [*self.part_hashes]
+        if self.current_size:
+            part_hashes.append(self.current_hash.digest())
+        digest = hashlib.md5(b"".join(part_hashes), usedforsecurity=False).hexdigest()
+        return f"{digest}-{len(part_hashes)}"
 
 
 def verified_copy_prefix(
@@ -68,7 +107,7 @@ def verified_copy_prefix(
     """Copy and verify a prefix before publishing its completion manifest.
 
     Verified per-object records allow retries to reuse destination objects when
-    their source identity and content hash still match.
+    their source and destination identities still match.
     """
     if workers < 1:
         raise VerifiedCopyError("workers must be at least 1")
@@ -116,7 +155,7 @@ def verified_copy_prefix(
                 destination_root=destination_root,
                 status_fs=status_fs,
                 status_root=status_root,
-                destination_size=destination_files.get(source.path),
+                destination=destination_files.get(source.path),
             ): source.path
             for source in sources
         }
@@ -150,13 +189,16 @@ def _source_files(filesystem: AbstractFileSystem, root: str) -> list[_SourceFile
     return files
 
 
-def _destination_files(filesystem: AbstractFileSystem, root: str) -> dict[str, int]:
+def _destination_files(filesystem: AbstractFileSystem, root: str) -> dict[str, _DestinationFile]:
     if not filesystem.exists(root):
         return {}
     if not filesystem.isdir(root):
         raise VerifiedCopyError(f"destination is not a directory: {root}")
     return {
-        _relative_path(path, root): int(info.get("size") or 0)
+        _relative_path(path, root): _DestinationFile(
+            size=int(info.get("size") or 0),
+            identity=_destination_identity(info),
+        )
         for path, info in _find_files(filesystem, root).items()
         if _relative_path(path, root) != COMPLETION_MANIFEST
     }
@@ -177,23 +219,28 @@ def _copy_or_resume(
     destination_root: str,
     status_fs: AbstractFileSystem,
     status_root: str,
-    destination_size: int | None,
+    destination: _DestinationFile | None,
 ) -> tuple[VerifiedFile, bool]:
     destination_path = _join_path(destination_root, source.path)
     marker_path = _join_path(status_root, f"{hashlib.sha256(source.path.encode()).hexdigest()}.json")
     marker = _resume_marker(status_fs, marker_path)
-    if destination_size == source.size and source.identity is not None and marker is not None:
+    if (
+        destination is not None
+        and destination.size == source.size
+        and source.identity is not None
+        and marker is not None
+    ):
         expected = VerifiedFile(source.path, source.size, marker.sha256, source.identity)
         if (
             marker.source_path == source.source_path
             and marker.source_identity == source.identity
             and marker.path == source.path
             and marker.size == source.size
-            and _sha256(destination_fs, destination_path) == marker.sha256
+            and _destination_matches_marker(destination_fs, destination_path, destination, marker)
         ):
             return expected, False
 
-    sha256, copied_size = _copy_with_hash(source_fs, source.source_path, destination_fs, destination_path)
+    sha256, copied_size, expected_etag = _copy_with_hash(source_fs, source.source_path, destination_fs, destination_path)
     if copied_size != source.size:
         destination_fs.rm(destination_path)
         raise VerifiedCopyError(f"source size changed while copying {source.path}")
@@ -203,15 +250,31 @@ def _copy_or_resume(
     if current_size != source.size or current_identity != source.identity:
         destination_fs.rm(destination_path)
         raise VerifiedCopyError(f"source identity changed while copying {source.path}")
-    destination_sha256 = _sha256(destination_fs, destination_path)
-    if destination_sha256 != sha256:
+    try:
+        destination_identity = _verify_destination(
+            destination_fs,
+            destination_path,
+            expected_size=source.size,
+            expected_sha256=sha256,
+            expected_etag=expected_etag,
+        )
+    except VerifiedCopyError:
         destination_fs.rm(destination_path)
-        raise VerifiedCopyError(f"destination hash mismatch for {source.path}")
+        raise
     verified = VerifiedFile(source.path, source.size, sha256, source.identity)
     _write_json_atomic(
         status_fs,
         marker_path,
-        asdict(_ResumeMarker(source.source_path, source.identity, source.path, source.size, sha256)),
+        asdict(
+            _ResumeMarker(
+                source.source_path,
+                source.identity,
+                source.path,
+                source.size,
+                sha256,
+                destination_identity,
+            )
+        ),
     )
     return verified, True
 
@@ -221,18 +284,60 @@ def _copy_with_hash(
     source_path: str,
     destination_fs: AbstractFileSystem,
     destination_path: str,
-) -> tuple[str, int]:
+) -> tuple[str, int, str | None]:
     parent, separator, _ = destination_path.rpartition("/")
     if separator:
         destination_fs.makedirs(parent, exist_ok=True)
     digest = hashlib.sha256()
+    multipart_etag = _MultipartEtag(S3_UPLOAD_PART_BYTES) if _is_s3(destination_fs) else None
     copied_size = 0
-    with source_fs.open(source_path, "rb") as source, destination_fs.open(destination_path, "wb") as destination:
+    destination_options = {"block_size": S3_UPLOAD_PART_BYTES} if multipart_etag is not None else {}
+    with (
+        source_fs.open(source_path, "rb") as source,
+        destination_fs.open(destination_path, "wb", **destination_options) as destination,
+    ):
         while chunk := source.read(COPY_CHUNK_BYTES):
             digest.update(chunk)
+            if multipart_etag is not None:
+                multipart_etag.update(chunk)
             destination.write(chunk)
             copied_size += len(chunk)
-    return digest.hexdigest(), copied_size
+    expected_etag = multipart_etag.etag(copied_size) if multipart_etag is not None else None
+    return digest.hexdigest(), copied_size, expected_etag
+
+
+def _verify_destination(
+    filesystem: AbstractFileSystem,
+    path: str,
+    *,
+    expected_size: int,
+    expected_sha256: str,
+    expected_etag: str | None,
+) -> str:
+    filesystem.invalidate_cache(path)
+    info = filesystem.info(path)
+    if int(info.get("size") or 0) != expected_size:
+        raise VerifiedCopyError(f"destination size mismatch for {path}")
+    if expected_etag is None:
+        if _sha256(filesystem, path) != expected_sha256:
+            raise VerifiedCopyError(f"destination hash mismatch for {path}")
+        return _destination_identity(info) or f"sha256={expected_sha256}"
+
+    actual_etag = _etag(info)
+    if actual_etag != expected_etag:
+        raise VerifiedCopyError(f"destination ETag mismatch for {path}")
+    return f"etag={actual_etag}"
+
+
+def _destination_matches_marker(
+    filesystem: AbstractFileSystem,
+    path: str,
+    destination: _DestinationFile,
+    marker: _ResumeMarker,
+) -> bool:
+    if marker.destination_identity.startswith("sha256="):
+        return _sha256(filesystem, path) == marker.destination_identity.removeprefix("sha256=")
+    return destination.identity == marker.destination_identity
 
 
 def _sha256(filesystem: AbstractFileSystem, path: str) -> str:
@@ -254,6 +359,7 @@ def _resume_marker(filesystem: AbstractFileSystem, path: str) -> _ResumeMarker |
             path=str(data["path"]),
             size=int(data["size"]),
             sha256=str(data["sha256"]),
+            destination_identity=str(data["destination_identity"]),
         )
     except (KeyError, TypeError, ValueError, json.JSONDecodeError):
         return None
@@ -336,6 +442,31 @@ def _source_identity(info: dict[str, Any]) -> str | None:
         if value is not None:
             return f"{key}={value!s}"
     return None
+
+
+def _destination_identity(info: dict[str, Any]) -> str | None:
+    etag = _etag(info)
+    if etag is not None:
+        return f"etag={etag}"
+    for key in ("ChecksumSHA256", "checksum", "md5Hash", "crc32c", "version_id", "VersionId"):
+        value = info.get(key)
+        if value is not None:
+            return f"{key}={value!s}"
+    return None
+
+
+def _etag(info: dict[str, Any]) -> str | None:
+    value = info.get("etag") or info.get("ETag")
+    if value is None:
+        return None
+    return str(value).strip('"')
+
+
+def _is_s3(filesystem: AbstractFileSystem) -> bool:
+    protocol = filesystem.protocol
+    if isinstance(protocol, str):
+        return protocol == "s3"
+    return "s3" in protocol
 
 
 def _result(

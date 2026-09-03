@@ -360,6 +360,97 @@ def test_verified_copy_hash_mismatch_removes_object_and_withholds_completion(tmp
     assert not (destination / COMPLETION_MANIFEST).exists()
 
 
+def test_verified_copy_uses_s3_etag_without_destination_reads(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    (source / "weights.bin").write_bytes(b"abcdefghij")
+
+    destination_filesystem, destination_path = verified_copy_module.filesystem_for(str(destination))
+    original_filesystem_for = verified_copy_module.filesystem_for
+
+    class EtagDestination:
+        protocol = "s3"
+
+        def __getattr__(self, name):
+            return getattr(destination_filesystem, name)
+
+        def open(self, path, mode, **kwargs):
+            if mode == "rb" and path.endswith("weights.bin"):
+                raise AssertionError("S3 verification must not download the destination object")
+            kwargs.pop("block_size", None)
+            return destination_filesystem.open(path, mode, **kwargs)
+
+        def info(self, path):
+            info = destination_filesystem.info(path)
+            if path.endswith("weights.bin"):
+                info["ETag"] = '"446feba4c1b5cc7ad93bf4d44a0e36ac-3"'
+            return info
+
+        def find(self, path, *, detail):
+            found = destination_filesystem.find(path, detail=detail)
+            if detail:
+                for name, info in found.items():
+                    if name.endswith("weights.bin"):
+                        info["ETag"] = '"446feba4c1b5cc7ad93bf4d44a0e36ac-3"'
+            return found
+
+    def routed_filesystem(url, *, fixed_upload_size=False):
+        if url == str(destination):
+            return EtagDestination(), destination_path
+        return original_filesystem_for(url, fixed_upload_size=fixed_upload_size)
+
+    monkeypatch.setattr(verified_copy_module, "S3_UPLOAD_PART_BYTES", 4)
+    monkeypatch.setattr(verified_copy_module, "filesystem_for", routed_filesystem)
+
+    first = verified_copy_prefix(str(source), str(destination), workers=1)
+    (destination / COMPLETION_MANIFEST).unlink()
+    second = verified_copy_prefix(str(source), str(destination), workers=1)
+
+    assert first.copied_files == 1
+    assert second.resumed_files == 1
+
+
+def test_verified_copy_rejects_s3_etag_mismatch(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    (source / "weights.bin").write_bytes(b"abcdefghij")
+
+    destination_filesystem, destination_path = verified_copy_module.filesystem_for(str(destination))
+    original_filesystem_for = verified_copy_module.filesystem_for
+
+    class WrongEtagDestination:
+        protocol = "s3"
+
+        def __getattr__(self, name):
+            return getattr(destination_filesystem, name)
+
+        def open(self, path, mode, **kwargs):
+            kwargs.pop("block_size", None)
+            return destination_filesystem.open(path, mode, **kwargs)
+
+        def info(self, path):
+            info = destination_filesystem.info(path)
+            if path.endswith("weights.bin"):
+                info["ETag"] = '"00000000000000000000000000000000-3"'
+            return info
+
+    def routed_filesystem(url, *, fixed_upload_size=False):
+        if url == str(destination):
+            return WrongEtagDestination(), destination_path
+        return original_filesystem_for(url, fixed_upload_size=fixed_upload_size)
+
+    monkeypatch.setattr(verified_copy_module, "S3_UPLOAD_PART_BYTES", 4)
+    monkeypatch.setattr(verified_copy_module, "filesystem_for", routed_filesystem)
+
+    with pytest.raises(VerifiedCopyError, match="destination ETag mismatch"):
+        verified_copy_prefix(str(source), str(destination), workers=1)
+
+    assert not (destination / "weights.bin").exists()
+    assert not (destination / COMPLETION_MANIFEST).exists()
+
+
 @pytest.mark.parametrize(("command", "destination"), [(["cp", "-r"], "copy"), (["rsync"], "sync")])
 def test_recursive_transfers_accept_relative_local_directories(tmp_path, monkeypatch, command, destination):
     source = tmp_path / "source"

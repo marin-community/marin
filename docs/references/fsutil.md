@@ -87,16 +87,17 @@ Extra destination files remain by default. `--delete` removes them after all cop
 `--dry-run` prints the same copy and delete plan without changing the destination. Source and
 destination directories may not overlap.
 
-`verified-copy` hashes each source object while uploading it, reads the destination object back,
-and records the verified SHA-256 plus source object identity under a sibling
-`<DST>.verified-copy-status` prefix. A retry skips the source read when the source identity,
-destination path and size, verified record, and destination hash still match. Sources without stable
-generation, version, checksum, ETag, or modification metadata are read again. The command writes
-`<DST>/.verified-copy-manifest.json` after every object verifies;
-consumers should treat that manifest as the prefix's readiness marker. R2 uploads use fixed-size
-multipart parts. An existing completion manifest makes the destination immutable: the command
-returns immediately when source paths and sizes still match and fails if they changed. Use a fresh
-destination prefix for a changed export.
+`verified-copy` hashes each source object while uploading it. For S3-compatible destinations, it
+uses fixed-size multipart parts, calculates the corresponding content-derived ETag, and compares
+that value with destination metadata after the upload. Other destinations are read back and checked
+against the source SHA-256. The command records the SHA-256 and source and destination identities
+under a sibling `<DST>.verified-copy-status` prefix. A retry skips both object reads when those
+identities, the destination path and size, and the verified record still match. Sources without
+stable generation, version, checksum, ETag, or modification metadata are read again. The command
+writes `<DST>/.verified-copy-manifest.json` after every object verifies; consumers should treat that
+manifest as the prefix's readiness marker. An existing completion manifest makes the destination
+immutable: the command returns immediately when source paths and sizes still match and fails if they
+changed. Use a fresh destination prefix for a changed export.
 
 `hash` reads each complete object. Its columns are `url` and `md5`; digests use base64
 by default. `--hex` selects hexadecimal output.
