@@ -19,15 +19,16 @@ or use it as a dependency of a step you do intend to run::
     step = hero_data.tokenized("stack-v3", hero_data.NEMOTRON_TOKENIZER)
     data = read_artifact(step.output_path, TokenizedAttrData)
 
-:func:`harrier` returns a path string. It reads the fixed source-to-path
-map in ``hero_data_emb_paths.json`` and adds the active Marin prefix.
-
 :func:`normalized` and :func:`minhash` follow current code, so they track main
 as the registry moves. :func:`tokenized` pins the artifact version instead,
 because the tokenize hash includes one and it has changed under the runs that
 produced this data: each tokenizer was applied to the whole registry in a single
 fleet run, and each of those runs wrote a different version. The dedup stages
-and domain cluster assignment are pinned to specific runs outright.
+and domain cluster assignment are pinned to specific runs outright, as are the
+three leaves whose producers ran from branches: :func:`harrier`,
+:func:`fusion_scores` and :func:`content_type` read fixed source-to-path maps
+from JSON files beside this module. :func:`quality` is the bucket step over the
+pinned scores and types, so its path recomputes from that step's identity.
 
 All paths resolve against ``MARIN_PREFIX``. CoreWeave Datakit has one storage
 root, ``s3://marin-us-east-02a/marin``; use it regardless of worker placement.
@@ -46,10 +47,10 @@ from levanter.tokenizers import TokenizerBackend
 from marin.datakit.sources import all_sources
 from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize.attributes import tokenize_attributes_step
-from rigging.filesystem.cluster_config import marin_prefix
-from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datakit.cluster.domain.v0.assign import assign_hash_attrs
+from experiments.datakit.cluster.quality.fast_transformer.bucket import quality_step
+from experiments.datakit.cluster.quality.fast_transformer.quality_model import QualityPin
 from experiments.datakit.reference_pipeline import select_sources, zephyr_datakit_steps
 
 _MARIN_PREFIX_ENV = "MARIN_PREFIX"
@@ -71,6 +72,30 @@ def harrier_paths_path() -> pathlib.Path:
 def harrier_paths() -> dict[str, str]:
     """Load the complete Harrier path map."""
     return json.loads(harrier_paths_path().read_text())
+
+
+@cache
+def fusion_score_paths_path() -> pathlib.Path:
+    """Return the path to the fusion score path map."""
+    return pathlib.Path(__file__).with_name("hero_data_fusion_score_paths.json")
+
+
+@cache
+def fusion_score_paths() -> dict[str, str]:
+    """Load the fusion score path map."""
+    return json.loads(fusion_score_paths_path().read_text())
+
+
+@cache
+def content_type_paths_path() -> pathlib.Path:
+    """Return the path to the content-type path map."""
+    return pathlib.Path(__file__).with_name("hero_data_content_type_paths.json")
+
+
+@cache
+def content_type_paths() -> dict[str, str]:
+    """Load the content-type path map."""
+    return json.loads(content_type_paths_path().read_text())
 
 
 # The manifest records paths relative to the sole CoreWeave Datakit root.
@@ -119,37 +144,18 @@ FUZZY_DUPS_ID = "dedup_709f5997"
 VERIFIED_FUZZY_DUPS_PATH = "datakit/verify_fuzzy_dups_c757e4f0"
 
 
-@dataclass(frozen=True)
-class QualityPin:
-    """A quality scorer's identity: the bytes it reads and the tokens it eats."""
-
-    name: str
-    """Value written into the score rows' ``model`` column."""
-
-    model_sha256: str
-    """Digest over the deployed model directory, as
-    ``score_corpus.model_dir_sha256`` computes it: every file under the root,
-    addressed relative to it, folded in bytewise path order. Scoring refuses to
-    write from a directory that digests to anything else, so the path's claim
-    about which model produced the scores under it is checked, not asserted."""
-
-    calibration_sha256: str
-    """Digest checked against the calibration file before scoring."""
-
-    tokenizer: TokenizerPin
-    """Which tokenization the scorer reads. Folded in structurally: :func:`quality`
-    makes :func:`tokenized` a dependency rather than naming its leaf."""
-
-    version: int
-    """Bump to rescore the corpus under an unchanged model and calibration."""
-
-
+# The fusion quality scorer: Nemotron-tokenized text plus the Harrier document
+# embedding. ``model_path`` holds the folded checkpoint, its remap and meta, and
+# the per-type calibration; the digests are what a step checks before it writes
+# under a path naming this pin. The tokenizer is the corpus tokenizer whose ids the
+# scorer reads -- its vocabulary is shared with the Nemotron-Flash-1B tokenizer the
+# checkpoint was trained on.
 NEMOTRON_88K = QualityPin(
     name="nemotron88k_v1",
-    model_sha256="e1be09c903bf7a926046bac97d40db050ca399fbb336c7541df42dc8cf6eda10",
-    calibration_sha256="1a1dcfd31c20d9f3879878d617f0f8fb0b6898c4445885ffae29ebea63738fd8",
-    tokenizer=NEMOTRON_TOKENIZER,
-    version=1,
+    model_path="datakit/models/quality/nemotron_88k",
+    model_sha256="453745d4e06854eb8b9545f3014a8c5b59ad3a3072a18d1e26e0b916ca393196",
+    calibration_sha256="b89b7b782e606394fd341e7705d438521e96fcb553f769c6c1dd520331da5758",
+    tokenizer=NEMOTRON_TOKENIZER.name,
 )
 
 
@@ -213,23 +219,51 @@ def minhash(source: str) -> StepSpec:
     return _read_only(steps.minhash[source])
 
 
-def quality(source: str, quality_model: QualityPin = NEMOTRON_88K) -> StepSpec:
-    """Return scorer-keyed quality scores for ``source``.
+def fusion_scores(source: str, quality_model: QualityPin = NEMOTRON_88K) -> StepSpec:
+    """Return the pinned fusion scores for ``source``: one raw score per document.
 
-    Model and calibration digests are part of the step hash and are validated by
-    the corpus scorer. Tokenization is a dependency, so every scorer input moves
-    the output path when its identity changes.
+    Written by the :data:`NEMOTRON_88K` run of August 14, 2026 over all 292 sources
+    from the Nemotron tokenization and the Harrier embeddings; the tokenization it
+    read has since been deleted, so the leaves are pinned by path. The producer of
+    record is :func:`score_fusion.fusion_score_step`, which tokenizes the normalized
+    text itself; a rerun lands at that step's own identity and repoints this map.
     """
-    return StepSpec(
-        name=f"datakit/quality/{source}",
-        deps=[tokenized(source, quality_model.tokenizer)],
-        hash_attrs={
-            "model": quality_model.name,
-            "model_sha256": quality_model.model_sha256,
-            "calibration_sha256": quality_model.calibration_sha256,
-            "version": quality_model.version,
-        },
-        fn=_refuse_to_run,
+    if quality_model.model_sha256 != NEMOTRON_88K.model_sha256:
+        raise ValueError(
+            f"the pinned fusion scores were written by {NEMOTRON_88K.name}; score the corpus under "
+            f"{quality_model.name} with run.py --stage score before bucketing it"
+        )
+    return _frozen_step(f"hero/fusion_scores/{source}", fusion_score_paths()[source])
+
+
+def content_type(source: str) -> StepSpec:
+    """Return the pinned predicted content types for ``source``.
+
+    One row per document from the ``domain_mlp_v1`` classifier over the Harrier
+    embeddings, written beside the fusion scores in their row order. The calibration
+    in :data:`NEMOTRON_88K` carries one curve per predicted type, which is what
+    :func:`quality` applies.
+    """
+    return _frozen_step(f"hero/content_type/{source}", content_type_paths()[source])
+
+
+def quality(source: str, quality_model: QualityPin = NEMOTRON_88K) -> StepSpec:
+    """Return the store-ready quality dataset for ``source``.
+
+    The bucket step over :func:`fusion_scores` and :func:`content_type`: one row per
+    normalized document, in the normalized order, with ``raw_score``, the per-type
+    calibrated ``score`` and ``quality_bucket``. Its identity is the step's own, so
+    a refit calibration or a repointed input moves the path.
+    """
+    return _read_only(
+        quality_step(
+            name=f"datakit/quality/{source}",
+            source=source,
+            normalized=_normalize_step(source),
+            scores=fusion_scores(source, quality_model),
+            content_type=content_type(source),
+            quality_model=quality_model,
+        )
     )
 
 
@@ -275,9 +309,9 @@ def assigned_clusters(source: str) -> StepSpec:
     )
 
 
-def harrier(source: str) -> str:
-    """Return the fixed complete Harrier path for ``source``."""
-    return prefix_join(marin_prefix(), harrier_paths()[source])
+def harrier(source: str) -> StepSpec:
+    """Return the pinned complete Harrier embeddings for ``source``."""
+    return _frozen_step(f"hero/harrier/{source}", harrier_paths()[source])
 
 
 def all_paths() -> dict[str, str]:
@@ -300,8 +334,11 @@ def all_paths() -> dict[str, str]:
         paths[f"minhash/{source}"] = _read_only(minhash_steps[source]).output_path
         paths[f"tokenize.marin/{source}"] = tokenized(source, MARIN_TOKENIZER).output_path
         paths[f"tokenize.nemotron/{source}"] = tokenized(source, NEMOTRON_TOKENIZER).output_path
-        paths[f"harrier/{source}"] = harrier(source)
+        paths[f"harrier/{source}"] = harrier(source).output_path
         paths[f"cluster_assign/{source}"] = assigned_clusters(source).output_path
+        paths[f"fusion_scores/{source}"] = fusion_scores(source).output_path
+        paths[f"content_type/{source}"] = content_type(source).output_path
+        paths[f"quality/{source}"] = quality(source).output_path
     return paths
 
 

@@ -19,6 +19,13 @@ embeddings collapses to one super-token: plain ``mean`` / ``max``, the
 multi-statistic ``meanmaxmin`` concat (captures spread, not just centroid, which
 a bag-of-words mean cannot), or a learned ``attn`` pool.
 
+A model with ``doc_embed_dim > 0`` is a fusion scorer: it also reads one
+document embedding per row (a 1024-d Harrier vector), projected and layer-normed
+to ``hidden_dim``. That vector enters twice: as a gated extra super-token the real
+tokens attend to when ``doc_embed_super_token`` is set, and always as a head-side
+skip whose zero-initialized weights make the forward exactly the text-only model
+at step 0.
+
 The model is written batched (leading ``B`` axis) with explicit einsums and a
 bf16 matmul cast so XLA emits dense MXU matmuls on TPU. ``PAD_ID`` (0) positions
 are masked everywhere: pooling ignores them, empty windows become inactive
@@ -39,17 +46,6 @@ POOL_KINDS = ("mean", "max", "meanmaxmin", "attn")
 FINAL_POOLS = ("mean", "attn")
 NEG_INF = -1e30
 COMPUTE_DTYPE = jnp.bfloat16
-# Dtypes a config may name for the residual stream and the embedding table. Both
-# default to f32, which is what every trained checkpoint was fit with.
-NAMED_DTYPES = ("float32", "bfloat16")
-
-
-def _named_dtype(name: str):
-    if name == "float32":
-        return jnp.float32
-    if name == "bfloat16":
-        return jnp.bfloat16
-    raise ValueError(f"unknown dtype {name!r}")
 
 
 @dataclass(frozen=True)
@@ -65,44 +61,11 @@ class FastTransformerConfig:
     mlp_ratio: int = 4
     dropout: float = 0.1
     final_pool: str = "mean"
-    # Per-document embedding side input (e.g. a 1024-d harrier doc vector). 0
-    # disables it; a non-zero dim makes ``doc_embed`` a required forward input, so
-    # a checkpoint that was trained with doc embeddings fails loudly when scored
-    # without them. ``doc_embed_super_token`` additionally appends the projected
-    # vector as an extra always-valid super-token so attention can condition on
-    # it; the head-side skip connection is present in both cases.
+    # Per-document embedding side input. 0 disables it; a non-zero dim makes
+    # ``doc_embed`` a required forward input, so a checkpoint that was trained with
+    # doc embeddings fails loudly when scored without them.
     doc_embed_dim: int = 0
     doc_embed_super_token: bool = False
-    # Frozen donor embedding: when > 0 the token embedding is a frozen
-    # [vocab, frozen_donor_dim] donor table read through a learned projection to
-    # embed_dim, replacing the trainable [vocab, embed_dim] table. The donor
-    # rows are filled in by the caller, and must be excluded from optimization
-    # via ``train_regressor``'s ``params_filter`` (the forward also
-    # stop-gradients them, but weight decay is only stopped by the filter).
-    frozen_donor_dim: int = 0
-    # Two arms that were tried and removed: a hashed side table over adjacent
-    # token-id pairs, and a per-document-routed FFN mixture. Neither reached a
-    # deployed checkpoint. The fields stay because every config written by this
-    # module carries them and ``PooledScorer.load`` rebuilds from the full saved
-    # dict, so dropping them would strand the checkpoints already written.
-    # Nonzero is rejected rather than ignored, so a config asking for an arm
-    # fails instead of quietly training the dense model.
-    bigram_buckets: int = 0
-    bigram_seed: int = 0
-    moe_experts: int = 0
-    moe_expert_ratio: int = 1
-    moe_top_k: int = 2
-    # Numerics, independent of the bf16 matmul inputs (which are always bf16 with
-    # f32 accumulation). ``stream_dtype`` is what a matmul hands back, and so the
-    # dtype of the residual stream, the layernorm output, GELU and the attention
-    # probabilities; layernorm *statistics*, both pooling reductions and the final
-    # head stay f32 at either setting. ``embed_dtype`` is the dtype of the token
-    # embedding table, and therefore of the gather every document pays; the window
-    # pooling upcasts to f32 regardless, so this trades table bytes for table
-    # rounding and nothing else. f32/f32 is what every checkpoint was trained
-    # with; bf16 is an inference-time choice that changes scores slightly.
-    stream_dtype: str = "float32"
-    embed_dtype: str = "float32"
 
     def __post_init__(self) -> None:
         if self.max_tokens % self.pool_window != 0:
@@ -115,20 +78,6 @@ class FastTransformerConfig:
             raise ValueError(f"hidden_dim={self.hidden_dim} not divisible by num_heads={self.num_heads}")
         if self.doc_embed_super_token and not self.doc_embed_dim:
             raise ValueError("doc_embed_super_token requires doc_embed_dim > 0")
-        if self.bigram_buckets or self.moe_experts:
-            raise ValueError("bigram_buckets and moe_experts name removed arms and must stay 0")
-        for name in ("stream_dtype", "embed_dtype"):
-            value = getattr(self, name)
-            if value not in NAMED_DTYPES:
-                raise ValueError(f"{name}={value!r} not in {tuple(NAMED_DTYPES)}")
-
-    @property
-    def stream_dtype_value(self):
-        return _named_dtype(self.stream_dtype)
-
-    @property
-    def embed_dtype_value(self):
-        return _named_dtype(self.embed_dtype)
 
     @property
     def num_super_tokens(self) -> int:
@@ -157,11 +106,6 @@ class FastTransformerConfig:
         per_layer = attn_proj + attn_scores + mlp
         head = 2 * d  # final linear to scalar
         total = proj + self.num_layers * per_layer + head
-        if self.frozen_donor_dim:
-            # Training-time cost only: at deployment the frozen donor table and
-            # the learned projection fold into one [vocab, embed_dim] table,
-            # recovering the base model's inference cost.
-            total += 2 * self.frozen_donor_dim * self.embed_dim * t
         return total / t
 
 
@@ -170,18 +114,16 @@ def _glorot(key: PRNGKeyArray, shape: tuple[int, ...]) -> Array:
     return jax.random.normal(key, shape) * math.sqrt(2.0 / (fan_in + fan_out))
 
 
-def _matmul(x: Array, w: Array, out_dtype=jnp.float32) -> Array:
-    """Multiply in bf16 with f32 accumulation, then cast to ``out_dtype``."""
+def _matmul(x: Array, w: Array) -> Array:
+    """``x @ w`` in bf16 (TPU MXU) with f32 accumulation/output."""
     out = jnp.matmul(x.astype(COMPUTE_DTYPE), w.astype(COMPUTE_DTYPE), preferred_element_type=jnp.float32)
-    return out.astype(out_dtype)
+    return out.astype(jnp.float32)
 
 
 def _layer_norm(x: Array, gamma: Array, beta: Array) -> Array:
-    """Pre-norm in f32 statistics, handed back in ``x``'s dtype."""
-    f = x.astype(jnp.float32)
-    mu = f.mean(axis=-1, keepdims=True)
-    var = f.var(axis=-1, keepdims=True)
-    return ((f - mu) * jax.lax.rsqrt(var + 1e-5) * gamma + beta).astype(x.dtype)
+    mu = x.mean(axis=-1, keepdims=True)
+    var = x.var(axis=-1, keepdims=True)
+    return (x - mu) * jax.lax.rsqrt(var + 1e-5) * gamma + beta
 
 
 def _dropout(x: Array, p: float, key: PRNGKeyArray | None, inference: bool) -> Array:
@@ -219,14 +161,7 @@ class TransformerLayer(eqx.Module):
         self.dropout = dropout
 
     def __call__(
-        self,
-        x: Array,
-        valid: Array,
-        *,
-        key: PRNGKeyArray | None,
-        inference: bool,
-        dropout: float | None = None,
-        stream_dtype=jnp.float32,
+        self, x: Array, valid: Array, *, key: PRNGKeyArray | None, inference: bool, dropout: float | None = None
     ) -> Array:
         b, s, d = x.shape
         h, hd = self.num_heads, d // self.num_heads
@@ -234,27 +169,23 @@ class TransformerLayer(eqx.Module):
         ka, km = (None, None) if key is None else jax.random.split(key)
 
         normed = _layer_norm(x, self.ln1_g, self.ln1_b)
-        qkv = _matmul(normed, self.wqkv, stream_dtype).reshape(b, s, 3, h, hd)
+        qkv = _matmul(normed, self.wqkv).reshape(b, s, 3, h, hd)
         q, k, v = qkv[:, :, 0], qkv[:, :, 1], qkv[:, :, 2]  # [b, s, h, hd]
-        # Scores and softmax stay f32 at either stream dtype: the masked rows use
-        # NEG_INF and the S x S tensor is small enough that its bytes do not matter.
-        scores = jnp.einsum("bqhd,bkhd->bhqk", q, k, preferred_element_type=jnp.float32) / math.sqrt(hd)
+        scores = jnp.einsum("bqhd,bkhd->bhqk", q, k) / math.sqrt(hd)
         scores = jnp.where(valid[:, None, None, :].astype(bool), scores, NEG_INF)
-        attn = jax.nn.softmax(scores, axis=-1).astype(stream_dtype)
-        ctx = jnp.einsum("bhqk,bkhd->bqhd", attn, v, preferred_element_type=stream_dtype).reshape(b, s, d)
-        x = x + _dropout(_matmul(ctx, self.wo, stream_dtype), p, ka, inference)
+        attn = jax.nn.softmax(scores, axis=-1)
+        ctx = jnp.einsum("bhqk,bkhd->bqhd", attn, v).reshape(b, s, d)
+        x = x + _dropout(_matmul(ctx, self.wo), p, ka, inference)
 
         normed = _layer_norm(x, self.ln2_g, self.ln2_b)
-        mlp = _matmul(jax.nn.gelu(_matmul(normed, self.w1, stream_dtype)), self.w2, stream_dtype)
+        mlp = _matmul(jax.nn.gelu(_matmul(normed, self.w1)), self.w2)
         x = x + _dropout(mlp, p, km, inference)
         return x
 
 
 class FastTransformer(eqx.Module):
     config: FastTransformerConfig = eqx.field(static=True)
-    embed: Array | None  # [vocab, E]; None when a frozen donor table replaces it
-    donor_embed: Array | None  # [vocab, frozen_donor_dim] frozen donor rows
-    donor_proj: Array | None  # [frozen_donor_dim, E], learned
+    embed: Array  # [vocab, E]
     pool_query: Array  # [E]
     proj_w: Array  # [pool_out_dim, D]
     proj_b: Array  # [D]
@@ -279,18 +210,7 @@ class FastTransformer(eqx.Module):
         # any retrain of an existing arm) is unchanged when doc embeddings are off.
         kdoc_proj, kdoc_type = jax.random.split(jax.random.fold_in(key, 7))
         self.config = config
-        if config.frozen_donor_dim:
-            self.embed = None
-            # Zeros, not random: the caller fills the donor rows, and tokens the
-            # donor lacks (reserved ids, tail specials) then embed to zero.
-            self.donor_embed = jnp.zeros((config.vocab_size, config.frozen_donor_dim))
-            self.donor_proj = _glorot(jax.random.fold_in(key, 8), (config.frozen_donor_dim, config.embed_dim))
-        else:
-            self.embed = (jax.random.normal(ke, (config.vocab_size, config.embed_dim)) * 0.02).astype(
-                config.embed_dtype_value
-            )
-            self.donor_embed = None
-            self.donor_proj = None
+        self.embed = jax.random.normal(ke, (config.vocab_size, config.embed_dim)) * 0.02
         self.pool_query = jax.random.normal(kpq, (config.embed_dim,)) * 0.02
         self.proj_w = _glorot(kpr, (config.pool_out_dim, config.hidden_dim))
         self.proj_b = jnp.zeros(config.hidden_dim)
@@ -330,10 +250,7 @@ class FastTransformer(eqx.Module):
         cfg = self.config
         b = emb.shape[0]
         s, w, e = cfg.num_super_tokens, cfg.pool_window, cfg.embed_dim
-        # f32 regardless of the table dtype: a bf16 table is about halving the
-        # gather's bytes, not about summing 16 vectors in half precision. XLA fuses
-        # the convert into the reduction, so it costs no extra HBM traffic.
-        wemb = emb.reshape(b, s, w, e).astype(jnp.float32)
+        wemb = emb.reshape(b, s, w, e)
         wmask = mask.reshape(b, s, w)
         counts = wmask.sum(axis=2, keepdims=True)  # [b, s, 1]
         valid = (counts[..., 0] > 0).astype(jnp.float32)  # [b, s]
@@ -373,31 +290,24 @@ class FastTransformer(eqx.Module):
                 f"{'is missing' if doc_embed is None else 'was passed'}; the two must agree"
             )
         mask = (ids != PAD_ID).astype(jnp.float32)  # [b, t]
-        if cfg.frozen_donor_dim:
-            # stop_gradient guards the gather; the optimizer-side params_filter is
-            # still required so weight decay cannot erode the frozen table.
-            donor = jnp.take(jax.lax.stop_gradient(self.donor_embed), ids, axis=0)
-            emb = _matmul(donor, self.donor_proj)  # [b, t, e]
-        else:
-            emb = jnp.take(self.embed, ids, axis=0)  # [b, t, e]
+        emb = jnp.take(self.embed, ids, axis=0)  # [b, t, e]
 
-        stream = cfg.stream_dtype_value
         pooled, valid = self._pool_windows(emb, mask)  # [b, s, pool_out], [b, s]
-        h = _matmul(pooled, self.proj_w, stream) + self.proj_b.astype(stream) + self.pos_embed.astype(stream)
+        h = _matmul(pooled, self.proj_w) + self.proj_b + self.pos_embed  # [b, s, d]
 
         doc_vec = None
         if doc_embed is not None:
-            projected = _matmul(doc_embed, self.doc_proj_w, stream) + self.doc_proj_b.astype(stream)
+            projected = _matmul(doc_embed, self.doc_proj_w) + self.doc_proj_b
             doc_vec = _layer_norm(projected, self.doc_ln_g, self.doc_ln_b)
             if cfg.doc_embed_super_token:
-                token = self.doc_gate.astype(stream) * (doc_vec + self.doc_type_embed.astype(stream))  # [b, d]
+                token = self.doc_gate * (doc_vec + self.doc_type_embed)  # [b, d]
                 h = jnp.concatenate([h, token[:, None, :]], axis=1)  # [b, s+1, d]
                 valid = jnp.concatenate([valid, jnp.ones((valid.shape[0], 1))], axis=1)
 
         n = cfg.num_layers
         layer_keys = [None] * n if key is None else list(jax.random.split(key, n)) if n else []
         for layer, lk in zip(self.layers, layer_keys, strict=True):
-            h = layer(h, valid, key=lk, inference=inference, stream_dtype=stream)
+            h = layer(h, valid, key=lk, inference=inference)
 
         if doc_vec is not None and cfg.doc_embed_super_token:
             # The doc token is a conditioning input the real tokens attend to, not
@@ -405,10 +315,6 @@ class FastTransformer(eqx.Module):
             # stays the only direct readout of the embedding.
             h, valid = h[:, : cfg.num_super_tokens], valid[:, : cfg.num_super_tokens]
 
-        # The final pool and the head stay f32 at either stream dtype: one reduction
-        # over S and one [d, 1] matmul are free, and the score is what gets
-        # thresholded.
-        h = h.astype(jnp.float32)
         if cfg.final_pool == "mean":
             pooled_doc = (h * valid[..., None]).sum(axis=1) / jnp.maximum(valid.sum(axis=1, keepdims=True), 1.0)
         else:  # attn pool over super-tokens

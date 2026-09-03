@@ -25,17 +25,13 @@ from rigging.filesystem.storage_path import StoragePath
 from experiments.datakit.cluster.quality.fast_transformer.data import PAD_ID, UNK_ID, encode_texts
 from experiments.datakit.cluster.quality.fast_transformer.inference import predict
 from experiments.datakit.cluster.quality.fast_transformer.model import FastTransformer, FastTransformerConfig
+from experiments.datakit.cluster.quality.fast_transformer.quality_model import artifact_names, model_stem
 
 # bme scores begin/middle/end ~512-token (~2000-char) windows of the whole doc and
 # mean-pools them, so a shared boilerplate prefix no longer dominates the score.
 CHUNK_CHARS = 2_000
 
 MODEL_STEM = "pooled_junkgate2"  # default name for a newly trained model
-
-
-def artifact_names(stem: str) -> tuple[str, str, str]:
-    """The (.eqx, remap.json, meta.json) artifact filenames for a model stem."""
-    return f"{stem}.eqx", f"{stem}_remap.json", f"{stem}_meta.json"
 
 
 @dataclass(frozen=True)
@@ -87,22 +83,11 @@ class PooledScorer:
         return out
 
 
-def _model_stem(model_dir: str) -> str:
-    """Return the sole ``.eqx`` artifact stem under ``model_dir``."""
-    root = StoragePath(model_dir)
-    found = sorted(path.name for path in (root / "*.eqx").glob())
-    if not found:
-        raise ValueError(f"no .eqx artifact under {model_dir}")
-    if len(found) > 1:
-        raise ValueError(f"{model_dir} holds several models ({', '.join(found)}); it must hold one")
-    return found[0][: -len(".eqx")]
-
-
 def load_pooled_scorer(model_dir: str) -> PooledScorer:
     """Load a `PooledScorer` from a model dir (streams the .eqx to a local path,
     which eqx deserialisation requires)."""
     root = StoragePath(model_dir)
-    eqx_name, remap_name, meta_name = artifact_names(_model_stem(model_dir))
+    eqx_name, remap_name, meta_name = artifact_names(model_stem(model_dir))
     fd, local_eqx = tempfile.mkstemp(suffix=".eqx")
     with os.fdopen(fd, "wb") as out, (root / eqx_name).open("rb") as fh:
         out.write(fh.read())
