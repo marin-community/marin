@@ -4,7 +4,16 @@ WORKDIR /build
 COPY infra/marina/web web
 COPY infra/marina/apps apps
 # Every app with a web/ directory is built in place so its dist/ lands beside app.toml.
-RUN set -e; for dir in apps/*/web; do (cd "$dir" && npm ci && npm run build); done \
+# This stage has no Python, so it runs the conventional build rather than calling
+# `marina build`; an app whose app.toml asks for anything else fails here instead of
+# shipping a dist/ that does not match what `marina build` produces.
+RUN set -e; \
+    for dir in apps/*/web; do \
+      app="$(dirname "$dir")"; \
+      grep -qxF 'build_command = "cd web && npm ci && npm run build"' "$app/app.toml" \
+        || { echo "$app/app.toml declares a build_command this image cannot run" >&2; exit 1; }; \
+      (cd "$dir" && npm ci && npm run build); \
+    done \
     && rm -rf apps/*/web/node_modules
 
 FROM python:3.12-slim AS runtime

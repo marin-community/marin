@@ -28,15 +28,20 @@ START_TIMEOUT = 60.0
 def _wait_ready(url: str) -> None:
     deadline = time.monotonic() + START_TIMEOUT
     engine = sqlalchemy.create_engine(url)
+    refused: Exception | None = None
     try:
         while time.monotonic() < deadline:
             try:
                 with engine.connect() as conn:
                     conn.execute(sqlalchemy.text("SELECT 1"))
                 return
-            except Exception:
+            except sqlalchemy.exc.SQLAlchemyError as error:
+                # A container that is still starting refuses the connection; anything else
+                # (bad credentials, bad URL) refuses it just as often, so keep the last one
+                # to report instead of a bare timeout.
+                refused = error
                 time.sleep(0.3)
-        raise RuntimeError(f"postgres at {url} did not become ready within {START_TIMEOUT}s")
+        raise RuntimeError(f"postgres at {url} did not become ready within {START_TIMEOUT}s") from refused
     finally:
         engine.dispose()
 

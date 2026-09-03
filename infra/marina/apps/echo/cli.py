@@ -53,7 +53,7 @@ from echo.search_result import SearchResult
 
 # The Marina service hosting Echo. Its IAP token audience is the shared Marin desktop
 # OAuth client, which Marina's IAP settings admit as a programmatic client.
-MARINA_URL = os.environ.get("ECHO_API_URL", search_config.MARINA_URL).rstrip("/")
+MARINA_URL = os.environ.get("ECHO_MARINA_URL", search_config.MARINA_URL).rstrip("/")
 # Marina serves Echo's pages under /echo/ and mounts its API under /echo/api/.
 APP_URL = f"{MARINA_URL}{search_config.APP_PATH}"
 API_BASE = f"{APP_URL}/api"

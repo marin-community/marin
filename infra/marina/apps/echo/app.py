@@ -92,8 +92,10 @@ DEFAULT_CONFIG = EchoConfig(
 
 
 def environment_config() -> EchoConfig:
+    # The kernel mounts the app at its directory name, so the path the API hands out is
+    # fixed by the deployment rather than configurable.
     return EchoConfig(
-        public_path=os.environ.get("ECHO_PUBLIC_PATH", DEFAULT_CONFIG.public_path).rstrip("/"),
+        public_path=search_config.PUBLIC_PATH,
         service_revision=os.environ.get("K_REVISION"),
     )
 

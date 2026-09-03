@@ -1,16 +1,14 @@
-// The subset of Markdown an ACP agent actually emits, turned into a tree.
+// The subset of Markdown the apps display, turned into a tree.
 //
 // A parser rather than a dependency, and a tree rather than a string of HTML.
-// The text is written by a model, and a model reads files, feed titles and
-// command output before it writes — so this is attacker-influenced text, and
-// handing it to `v-html` would put an injection point in the one screen an
-// operator watches. A tree renders through `{{ }}`, where markup is text.
+// The text comes from wiki notes, dataset files and model output, so it is
+// attacker-influenced, and handing it to `v-html` would put an injection point
+// on the page. A tree renders through `{{ }}`, where markup is text.
 //
-// What is here is what turns up in a transcript: headings, paragraphs, fenced
-// code, bullet and numbered lists, block quotes, and inline code, bold, italic
-// and links. Tables, footnotes and reference links are not, and their source
-// stays on the screen as the characters the model typed, which is the failure
-// this is allowed to have.
+// Covered: headings, paragraphs, fenced code, bullet and numbered lists, block
+// quotes, and inline code, bold, italic and links. Tables, footnotes and
+// reference links are not, and their source stays on the screen as the
+// characters the author typed, which is the failure this is allowed to have.
 
 /**
  * A run of text inside a paragraph, heading or list item.

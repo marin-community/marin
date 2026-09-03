@@ -13,7 +13,7 @@ from typing import Literal
 # origin-relative, so they follow whatever host the kernel is reached on.
 APP_PATH = "/echo"
 PUBLIC_PATH = APP_PATH
-# The Marina deployment the CLI talks to when ECHO_API_URL names no other one.
+# The Marina deployment the CLI talks to when ECHO_MARINA_URL names no other one.
 MARINA_URL = "https://marina.oa.dev"
 EMBED_MODEL = "BAAI/bge-small-en-v1.5"
 # ONNX threads per model. Sized for a search having the machine largely to itself: the

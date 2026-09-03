@@ -62,7 +62,7 @@ def test_the_mounted_api_serves_what_the_reconciler_committed(engine, records, d
         assert client.get("/status").json()["store"]["catalog_generation"] > 0
 
 
-def test_a_second_instance_serves_the_generation_the_first_committed(engine, records, tmp_path):
+def test_a_second_instance_serves_the_generation_the_first_committed(engine, records):
     evaldash_app.migrate(engine)
     config = evaldash_app.EvaldashConfig.from_env({"RECORDS_PREFIXES": records})
     writer = evaldash_app.PgRecordStore(engine)

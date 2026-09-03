@@ -15,6 +15,7 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from rigging.filesystem.storage_path import prefix_join
 from sqlalchemy.engine import Engine
 from starlette.types import ASGIApp
 
@@ -65,7 +66,7 @@ def migration(manifest: AppManifest) -> Callable[[Engine], None] | None:
 
 def data_url_for(data_root: str, app: str) -> str:
     """The app's directory under the data root, whether that root is local or ``gs://``."""
-    return f"{data_root.rstrip('/')}/{app}"
+    return prefix_join(data_root, app)
 
 
 def services_for(manifest: AppManifest, data_root: str, database: DatabaseSpec | None) -> Services:

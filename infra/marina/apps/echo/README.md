@@ -37,7 +37,7 @@ uv run infra/marina/apps/echo/cli.py history export > echo-search-history.jsonl
 
 Authentication reuses Marin's shared IAP login: run `iris login` once and the CLI mints
 Marina tokens from the same cached credential (`~/.config/marin/credentials`). Agents and CI
-need no login — ambient service-account credentials mint the token instead. `ECHO_API_URL`
+need no login — ambient service-account credentials mint the token instead. `ECHO_MARINA_URL`
 overrides the Marina origin; `ECHO_LOGIN_CLUSTER` selects which cached login to reuse.
 
 `search` returns one ranked result set across five domains: `wiki`, `file`, `discord`, `pr`,

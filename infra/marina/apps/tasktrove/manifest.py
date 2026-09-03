@@ -21,7 +21,6 @@ from huggingface_hub import HfFileSystem
 
 DATASET = "datasets/open-thoughts/TaskTrove"
 # The app's data directory: uploaded to the Marina bucket, served at /tasktrove/data/.
-# The app's data directory: uploaded to the Marina bucket, served at /tasktrove/data/.
 DATA_DIR = Path(__file__).parents[2] / ".data" / "tasktrove"
 OUT = DATA_DIR / "files.json"
 
