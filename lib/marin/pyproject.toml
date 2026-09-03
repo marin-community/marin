@@ -127,14 +127,14 @@ gpu = [
   # This module imports Triton directly; stay on the tested minor without
   # forcing an exact patch version.
   "triton>=3.6.0,<3.7; sys_platform == 'linux'",
-  "torch==2.11.0",
+  "torch==2.13.0",
   "torchvision==0.26.0",
 ]
 tpu = [
   "jax==0.11.1",
   "jaxlib==0.11.1",
   "libtpu==0.0.46.*",
-  "torch==2.11.0",
+  "torch==2.13.0",
   # Linux x86_64
   "torchvision==0.26.0+cpu; sys_platform == 'linux' and platform_machine == 'x86_64'",
   # Windows x86_64 (AMD64)
@@ -145,7 +145,7 @@ tpu = [
 
 cpu = [
   "jax==0.11.1",
-  "torch==2.11.0",
+  "torch==2.13.0",
   # Linux x86_64
   "torchvision==0.26.0+cpu; sys_platform == 'linux' and platform_machine == 'x86_64'",
   # Windows x86_64 (AMD64)
