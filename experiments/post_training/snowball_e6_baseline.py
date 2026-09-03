@@ -189,7 +189,7 @@ E6_ROLE_PLAN = SkyRLRolePlan(
 
 
 def _rl_config(*, role_plan: SkyRLRolePlan, max_steps: int, ckpt_interval: int, debug_distributed: bool,
-               reshard_after_forward: bool = True) -> str:
+               reshard_after_forward: bool = True, flash_attn: bool = False) -> str:
     """Render the SkyRL config.
 
     ``ckpt_interval`` defaults to ``max_steps + 1``: no periodic checkpoint, but one terminal
@@ -227,7 +227,11 @@ def _rl_config(*, role_plan: SkyRLRolePlan, max_steps: int, ckpt_interval: int, 
     #                           override in build_workflow below. ResumeMode._missing_ maps None to
     #                           ResumeMode.NONE (trainer_utils.py), so null and "none" are equivalent.
     #
-    #   flash_attn: false    -- eager attention, via attn_backend "auto". This is E6's behaviour and
+    #   flash_attn: false    -- eager attention, via attn_backend "auto". This is E6's behaviour, and
+    #                           A12's arm. It is expensive twice over: eager materialises an fp32
+    #                           [b,heads,L,L] score tensor (3.42 GiB at L=6775, the allocation behind
+    #                           every OOM here) AND computes the full L^2 before masking a 2048
+    #                           sliding window, discarding ~3.3x of that on 24 of 26 layers.
     #   use_sample_packing   -- packing off; Grug rejects it, and the base config defaults it TRUE.
     #   use_grouped_mm       -- ABSENT, inheriting false: the eager 256-expert path.
     #                           These three are the slow defaults this workstream exists to
@@ -287,7 +291,17 @@ trainer:
   micro_train_batch_size_per_gpu: {role_plan.micro_train_batch_size_per_gpu}
 
   use_sample_packing: false
-  flash_attn: false
+  # A12's arm. false is E6's behaviour and it is expensive twice over: eager attention
+  # materialises an fp32 [b, num_heads, L, L] score tensor -- 3.42 GiB at L=6775, the exact
+  # allocation behind every OOM in this workstream (F6, F12) -- and it computes the full L^2
+  # before masking a 2048-token sliding window, so ~3.3x of that work is discarded on 24 of 26
+  # layers. After use_grouped_mm removed the expert cost, policy_forward (44.04 s) and
+  # fwd_logprobs (43.60 s) CONVERGED to within 1%, which says both are now bound by the same
+  # non-MoE term. This is the arm that tests whether that term is attention.
+  # ⚠️ Grug supports it -- tests/gpu/test_grug_flash_attention.py is an H100 correctness and
+  # memory gate -- but use_sample_packing must stay false regardless, because packing needs
+  # flash-attn's varlen kernel AND Grug rejects packing separately.
+  flash_attn: {str(flash_attn).lower()}
   attn_backend: "auto"
   gradient_checkpointing: true
   gradient_checkpointing_use_reentrant: false
@@ -371,6 +385,7 @@ def build_workflow(
     telemetry_only: bool = False,
     grouped_mm: bool = False,
     reshard_after_forward: bool = True,
+    flash_attn: bool = False,
     label: str = "",
 ) -> ArtifactStep[SkyRLModel] | ArtifactStep[SkyRLTelemetryRun]:
     """Compose the E6 baseline as one inspectable artifact step."""
@@ -404,6 +419,8 @@ def build_workflow(
         variant += "-groupedmm"
     if not reshard_after_forward:
         variant += "-noreshard"
+    if flash_attn:
+        variant += "-flashattn"
     if bf16_update_mode != "stochastic":
         variant += f"-{bf16_update_mode}"
     if label:
@@ -425,6 +442,7 @@ def build_workflow(
                 ckpt_interval=(0 if telemetry_only else (max_steps + 1 if ckpt_interval is None else ckpt_interval)),
                 debug_distributed=debug_distributed,
                 reshard_after_forward=reshard_after_forward,
+                flash_attn=flash_attn,
             ),
             runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.FSDP),
             model=ExternalModel(
@@ -585,6 +603,17 @@ def build_workflow(
     "OOM is an informative result, not a failed run.",
 )
 @click.option(
+    "--flash-attn/--no-flash-attn",
+    default=False,
+    show_default=True,
+    help="trainer.flash_attn. False is E6's behaviour: eager attention materialises an fp32 "
+    "[b,heads,L,L] score tensor (3.42 GiB at L=6775 -- the allocation behind every OOM here) and "
+    "computes the full L^2 before masking a 2048 sliding window. After use_grouped_mm removed the "
+    "expert cost, policy_forward and fwd_logprobs converged to within 1%, so both are now bound by "
+    "the same non-MoE term; this arm tests whether that term is attention. Grug supports it "
+    "(tests/gpu/test_grug_flash_attention.py). use_sample_packing stays false either way.",
+)
+@click.option(
     "--label",
     default="",
     help="Extra suffix on the artifact name, and therefore on run_id. The flags that change "
@@ -646,6 +675,7 @@ def main(
     telemetry_only: bool,
     grouped_mm: bool,
     reshard_after_forward: bool,
+    flash_attn: bool,
     label: str,
 ) -> ArtifactStep[SkyRLModel] | ArtifactStep[SkyRLTelemetryRun]:
     return build_workflow(
@@ -661,6 +691,7 @@ def main(
         telemetry_only=telemetry_only,
         grouped_mm=grouped_mm,
         reshard_after_forward=reshard_after_forward,
+        flash_attn=flash_attn,
         label=label,
     )
 
