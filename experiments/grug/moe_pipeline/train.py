@@ -14,9 +14,33 @@ from enum import StrEnum
 from types import SimpleNamespace
 from typing import cast
 
+import jax
+import jax.numpy as jnp
+import jmp
+import numpy as np
+import optax
 from fray.cluster import ResourceConfig
+from fray.device_flops import device_flops
+from iris.runtime.jax_init import initialize_jax
+from jax.sharding import NamedSharding
+from jax.sharding import PartitionSpec as P
+from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig
+from levanter.data.text.examples import GrugLmExample
+from levanter.pipeline import reshape_batch_into_microbatches
+from levanter.utils.flop_utils import lm_flops_per_token
 
 from experiments.grug.dispatch import dispatch_grug_training_run
+from experiments.grug.moe_pipeline.model import BATCH_AXES, GrugModelConfig, Transformer
+from experiments.grug.moe_pipeline.pipeline import (
+    TRAIN_LOSS_KEY,
+    AutomaticPipelineSchedule,
+    GrugMoePipelineConfig,
+    automatic_stage_to_mpmd_indices,
+    initialize_mpmd_automatic_pipeline_state,
+    make_automatic_pipeline_step,
+    make_pipeline_mesh,
+    prepare_automatic_mpmd_step,
+)
 
 
 class PipelineSchedule(StrEnum):
@@ -24,9 +48,7 @@ class PipelineSchedule(StrEnum):
     DUALPIPE_V = "automatic_dualpipe_v"
 
     @property
-    def automatic_schedule(self):
-        from experiments.grug.moe_pipeline.pipeline import AutomaticPipelineSchedule  # noqa: PLC0415
-
+    def automatic_schedule(self) -> AutomaticPipelineSchedule:
         if self == self.DUALPIPE_V:
             return AutomaticPipelineSchedule.DUALPIPE_V
         if self == self.ZERO_BUBBLE:
@@ -69,6 +91,8 @@ class GrugPipelineTrainConfig:
     schedule: PipelineSchedule
 
     def __post_init__(self) -> None:
+        if not isinstance(self.schedule, PipelineSchedule):
+            raise ValueError(f"unknown pipeline schedule: {self.schedule!r}")
         if self.schedule == PipelineSchedule.ZERO_BUBBLE and self.stages != self.physical_stages:
             raise ValueError(
                 "automatic_zero_bubble requires one logical stage per physical stage; "
@@ -102,6 +126,7 @@ def _log(event: str, **values) -> None:
 def _validate_local_mesh(
     *,
     local_device_count: int,
+    devices_per_stage: int,
     expert_axis_size: int,
     batch_size: int,
     microbatches: int,
@@ -111,42 +136,17 @@ def _validate_local_mesh(
     if batch_size % microbatches != 0:
         raise ValueError(f"batch size {batch_size} must be divisible by {microbatches} microbatches")
     microbatch_size = batch_size // microbatches
-    if microbatch_size % local_device_count != 0:
+    if microbatch_size % devices_per_stage != 0:
         raise ValueError(
-            f"microbatch size {microbatch_size} must be divisible by the {local_device_count} devices in each stage"
+            f"microbatch size {microbatch_size} must be divisible by the {devices_per_stage} devices in each stage"
         )
 
 
 def _run_grug_local(config: GrugPipelineTrainConfig) -> None:
     os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
-
-    from iris.runtime.jax_init import initialize_jax  # noqa: PLC0415
-
     initialize_jax()
 
-    import jax  # noqa: PLC0415
-    import jax.numpy as jnp  # noqa: PLC0415
-    import jmp  # noqa: PLC0415
-    import numpy as np  # noqa: PLC0415
-    import optax  # noqa: PLC0415
-    from fray.device_flops import device_flops  # noqa: PLC0415
-    from jax.sharding import NamedSharding  # noqa: PLC0415
-    from jax.sharding import PartitionSpec as P  # noqa: PLC0415
     from jaxpp.array import MpmdArray  # noqa: PLC0415  # pyrefly: ignore[missing-import]
-    from levanter.data.text.examples import GrugLmExample  # noqa: PLC0415
-    from levanter.pipeline import reshape_batch_into_microbatches  # noqa: PLC0415
-    from levanter.utils.flop_utils import lm_flops_per_token  # noqa: PLC0415
-
-    from experiments.grug.moe_pipeline.model import BATCH_AXES, GrugModelConfig, Transformer  # noqa: PLC0415
-    from experiments.grug.moe_pipeline.pipeline import (  # noqa: PLC0415
-        TRAIN_LOSS_KEY,
-        GrugMoePipelineConfig,
-        automatic_stage_to_mpmd_indices,
-        initialize_mpmd_automatic_pipeline_state,
-        make_automatic_pipeline_step,
-        make_pipeline_mesh,
-        prepare_automatic_mpmd_step,
-    )
 
     mp_policy = jmp.get_policy(config.mp_policy_string)
     pipeline_config = GrugMoePipelineConfig(
@@ -155,12 +155,14 @@ def _run_grug_local(config: GrugPipelineTrainConfig) -> None:
         physical_stages=None if config.physical_stages == config.stages else config.physical_stages,
     )
 
-    if jax.process_count() != config.physical_stages:
+    if jax.process_count() % config.physical_stages != 0:
         raise ValueError(
-            f"expected one process per physical stage ({config.physical_stages}), got {jax.process_count()}"
+            f"process count {jax.process_count()} must be divisible by {config.physical_stages} physical stages"
         )
+    replica_axis_size = jax.process_count() // config.physical_stages
     _validate_local_mesh(
         local_device_count=jax.local_device_count(),
+        devices_per_stage=jax.device_count() // config.physical_stages,
         expert_axis_size=config.expert_axis_size,
         batch_size=config.batch_size,
         microbatches=config.microbatches,
@@ -187,7 +189,7 @@ def _run_grug_local(config: GrugPipelineTrainConfig) -> None:
     mesh, mpmd_mesh = make_pipeline_mesh(
         pipeline_config,
         expert_axis_size=config.expert_axis_size,
-        replica_axis_size=1,
+        replica_axis_size=replica_axis_size,
     )
     optimizer = optax.adamw(learning_rate=1e-4, b1=0.9, b2=0.95, weight_decay=0.1)
     peak_flops_per_device = device_flops("h100")
@@ -298,8 +300,6 @@ def _run_grug_local(config: GrugPipelineTrainConfig) -> None:
 
     profiler_callback = None
     if config.profile_steps > 0:
-        from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig  # noqa: PLC0415
-
         profiler_callback = ProfilerConfig(
             enabled=True,
             start_step=config.profile_start_step,
@@ -397,9 +397,10 @@ def _run_grug_local(config: GrugPipelineTrainConfig) -> None:
 
 def run_grug(config: GrugRunConfig) -> None:
     """Dispatch pipeline-parallel Grug training through Fray."""
-    if config.resources.replicas != config.train.physical_stages:
+    if config.resources.replicas % config.train.physical_stages != 0:
         raise ValueError(
-            f"training resources must have {config.train.physical_stages} replicas, got {config.resources.replicas}"
+            f"training resource replicas ({config.resources.replicas}) must be divisible by "
+            f"{config.train.physical_stages} physical stages"
         )
     dispatch_grug_training_run(
         run_id=config.run_id,

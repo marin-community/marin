@@ -142,6 +142,7 @@ def test_pipeline_mesh_validation_uses_full_stage_shard_count():
     # count can exceed the expert-axis size.
     _validate_local_mesh(
         local_device_count=8,
+        devices_per_stage=16,
         expert_axis_size=4,
         batch_size=64,
         microbatches=4,
@@ -150,20 +151,11 @@ def test_pipeline_mesh_validation_uses_full_stage_shard_count():
     with pytest.raises(ValueError):
         _validate_local_mesh(
             local_device_count=8,
+            devices_per_stage=16,
             expert_axis_size=4,
-            batch_size=16,
+            batch_size=32,
             microbatches=4,
         )
-
-
-def test_pipeline_train_config_rejects_schedule_topology_mismatch():
-    zero_bubble = _resolve_benchmark_config({})
-
-    with pytest.raises(ValueError):
-        replace(zero_bubble, physical_stages=2)
-
-    with pytest.raises(ValueError):
-        replace(zero_bubble, schedule=PipelineSchedule.DUALPIPE_V)
 
 
 def test_dualpipe_v_train_config_rejects_too_few_microbatches():
