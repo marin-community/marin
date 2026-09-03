@@ -182,8 +182,7 @@ SMOKE_INFERENCE_ENGINES = 1
 SMOKE_BATCH = 32
 
 
-def _role_plan(*, policy_nodes: int, inference_engines: int, batch: int,
-               n_samples: int = 16) -> SkyRLRolePlan:
+def _role_plan(*, policy_nodes: int, inference_engines: int, batch: int, n_samples: int = 16) -> SkyRLRolePlan:
     return SkyRLRolePlan(
         colocate_all=False,
         policy_num_nodes=policy_nodes,
@@ -210,9 +209,16 @@ E6_ROLE_PLAN = SkyRLRolePlan(
 )
 
 
-def _rl_config(*, role_plan: SkyRLRolePlan, max_steps: int, ckpt_interval: int, debug_distributed: bool,
-               reshard_after_forward: bool = True, flash_attn: bool = False,
-               pr488_geometry: bool = False) -> str:
+def _rl_config(
+    *,
+    role_plan: SkyRLRolePlan,
+    max_steps: int,
+    ckpt_interval: int,
+    debug_distributed: bool,
+    reshard_after_forward: bool = True,
+    flash_attn: bool = False,
+    pr488_geometry: bool = False,
+) -> str:
     """Render the SkyRL config.
 
     ``ckpt_interval`` defaults to ``max_steps + 1``: no periodic checkpoint, but one terminal
@@ -452,8 +458,9 @@ def build_workflow(
         variant += "-noreshard"
     if flash_attn:
         variant += "-flashattn"
-    if bf16_grad_reduce:
-        variant += "-bf16grad"
+    if not bf16_grad_reduce:
+        # A9 is the default now, so it is its ABSENCE that distinguishes a run.
+        variant += "-fp32grad"
     if bf16_update_mode != "stochastic":
         variant += f"-{bf16_update_mode}"
     if label:
@@ -526,8 +533,7 @@ def build_workflow(
                 # `++` is REQUIRED and is not belt-and-braces here, unlike use_grouped_mm:
                 # `mixed_precision` is absent from ppo_base_config.yaml entirely, so a plain
                 # override fails Hydra's struct check and would abort the run after the gang started.
-                *(("++trainer.policy.fsdp_config.mixed_precision.reduce_dtype=bf16",)
-                  if bf16_grad_reduce else ()),
+                *(("++trainer.policy.fsdp_config.mixed_precision.reduce_dtype=bf16",) if bf16_grad_reduce else ()),
                 # The Hugging Face upload gate, and it is NOT ckpt_interval. The Hub callback
                 # needs `trainer.hf_hub_repo_id` truthy AND `trainer.hf_save_interval > 0`
                 # (skyrl_train/config/callbacks.py); hf_save_interval merely DEFAULTS to
@@ -670,14 +676,20 @@ def build_workflow(
     "sharding -- his FSDP2 column is the honest comparand.",
 )
 @click.option(
-    "--bf16-grad-reduce",
-    is_flag=True,
-    default=False,
-    help="A9. Set fsdp_config.mixed_precision.reduce_dtype=bf16. FSDP2 defaults it to fp32 "
-    "(fsdp_strategy.py:357-362), so every gradient reduce-scatter moves twice the bytes it needs. "
-    "Russell's PR488 sets grad_reduce_in_fp32: false explicitly, overriding megatron's own true "
-    "default. Affects policy_train's backward only -- fwd_logprobs runs under no_grad and generate "
-    "has no gradients at all.",
+    "--bf16-grad-reduce/--no-bf16-grad-reduce",
+    default=True,
+    show_default=True,
+    help="A9. Set fsdp_config.mixed_precision.reduce_dtype=bf16. ON BY DEFAULT since 2026-09-03: "
+    "measured -10.3% on policy_ppo_train at steady state (83.05 -> 74.49 s, smoke geometry), with "
+    "policy_backward -15.5% against policy_forward -1.7%. That split is the mechanism check -- "
+    "reduce_dtype touches only the gradient reduce-scatter and there are no gradients in forward, "
+    "so a single-number speedup could be noise but the asymmetry cannot be. FSDP2 defaults it to "
+    "fp32 (fsdp_strategy.py:357-362), so every reduce-scatter moved twice the bytes it needed. "
+    "Russell Power's PR488 sets grad_reduce_in_fp32: false explicitly, overriding megatron's own "
+    "true default -- so this is a MATCHED setting in the three-way comparison, not an advantage we "
+    "hold alone. It reduces peak memory rather than raising it. The one condition on reverting: if "
+    "A10 (deferred gradient sync) ever becomes feasible at a smaller geometry, re-examine, because "
+    "reduce_dtype then starts governing the accumulator rather than only the wire.",
 )
 @click.option(
     "--label",
