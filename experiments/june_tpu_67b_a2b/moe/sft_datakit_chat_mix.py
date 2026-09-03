@@ -201,4 +201,4 @@ def build() -> StepSpec:
 
 if __name__ == "__main__":
     configure_logging(logging.INFO)
-    StepRunner().run([build()], max_concurrent=4)
+    StepRunner().run([build()], max_concurrent=12)
