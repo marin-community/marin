@@ -30,7 +30,7 @@ from levanter.trainer import TrainerConfig
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import build_options
-from marin.experiment.namespacing import user_owned_name
+from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import data_local_temporary_checkpoint_base_path, temporary_checkpoint_base_path
 from rigging.filesystem.storage_path import prefix_join
 
@@ -274,7 +274,7 @@ def build_h100_ladder_run(
         )
 
     return ArtifactStep(
-        name=user_owned_name(name),
+        name=user_namespaced_name(name, version),
         version=version,
         artifact_type=HeroThroughputResult,
         run=run_grug,

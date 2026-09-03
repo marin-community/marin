@@ -17,7 +17,7 @@ from levanter.tracker.wandb import WandbConfig
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import experiment_main
-from marin.experiment.namespacing import user_owned_name
+from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import LevanterCheckpoint
 
 from experiments.datasets.paloma import paloma_datasets
@@ -452,7 +452,7 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
         )
 
     return ArtifactStep(
-        name=user_owned_name(name),
+        name=user_namespaced_name(name, version),
         version=version,
         artifact_type=LevanterCheckpoint,
         run=run_grug_moe_trial,

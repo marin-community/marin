@@ -18,7 +18,7 @@ from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import build_options
-from marin.experiment.namespacing import user_owned_name
+from marin.experiment.namespacing import user_namespaced_name
 
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.recovery.ablation_catalog import (
@@ -124,7 +124,7 @@ def build_supervised_wedge_run(
         )
 
     return ArtifactStep(
-        name=user_owned_name(name),
+        name=user_namespaced_name(name, version),
         version=version,
         artifact_type=SupervisedWedgeResult,
         run=_run_dispatch,
