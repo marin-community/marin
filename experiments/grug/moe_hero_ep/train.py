@@ -172,7 +172,11 @@ def canonicalize_step_sharding(state: "GrugTrainState", mesh: Mesh) -> "GrugTrai
     """
     if not isinstance(state.step, jax.Array):
         return state
-    return dataclasses.replace(state, step=jax.device_put(state.step, NamedSharding(mesh, P())))
+    # `jax.device_put` asserts inside `_different_device_order_reshard` when the source is a
+    # GSPMDSharding whose device order differs from the mesh's, so reshard through a jit instead.
+    # The step is a scalar, so the extra executable costs nothing.
+    place = jax.jit(lambda leaf: leaf, out_shardings=NamedSharding(mesh, P()))
+    return dataclasses.replace(state, step=place(state.step))
 
 
 def restore_template_from(state):
