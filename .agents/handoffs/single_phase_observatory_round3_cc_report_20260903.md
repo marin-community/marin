@@ -54,7 +54,13 @@ reproduce exactly; 56 change; 49 of those are eligible heldout rows). Across the
 
 - Fix: prefer the persisted final-step payload whenever the training run is not `finished` (or whenever it
   exists), then regenerate the canonical registry with the two refresh commands and rerun the heldout stage.
-- Until then every round-3 table uses a corrected view,
+- Update 2026-09-03: the registry owner repaired the materializer (all 84 non-finished runs now require exact
+  step-3006 metrics) and canonicalized the Table-9 names; the rebuilt canonical registry (manifest SHA-256
+  `6cce727e50cc...`) matches the corrected view on all 779 Uncheatable rows exactly and adds 8 dose-response
+  Table-9 rows (food-and-dining-low at multipliers 4, 8, 32; games-high at 0.25 to 8), so Delphi Table-9 coverage
+  is 247 coordinates with complete components (34 repaired epoch-cap coordinates, 8 new). The heldout stage and the
+  Table-9 scoring were rerun on the canonical registry (section 2a); the corrected view is superseded.
+- Before that repair every round-3 table used a corrected view,
   `reference_outputs/single_phase_heldout_round3_corrected_20260903/` (same rows and order, 49 Uncheatable values and
   their 343 component cells replaced), built by `scratchpad/r3_corrected_registry.py` from
   `scratchpad/dose_uncheatable_final_step.csv`. Table 9 is unaffected (separate eval runs on the exported checkpoints).
@@ -117,6 +123,32 @@ the panel); Table 9 1.0579 (HPR-280 tied control, L1 0.68).
 - The pick is the same neighbourhood for every model: the successor's own epoch-cap runs (caps 4-6) on Uncheatable
   and caps 6-8 on Table 9; the true frontier (shared-shape DSP caps 4-10 for Uncheatable, the HPR-280 tied controls
   for Table 9) is ranked 6th-35th.
+
+## 2a. Rerun on the repaired canonical registry
+
+Heldout stage (22 models, 3828 fits) and scoring rerun on the canonical registry (manifest SHA-256 `6cce727e50cc...`),
+tables under `heldout_round3_canonical/`. Every Uncheatable number in section 2 is reproduced exactly (408 / 171 /
+237 coordinates). Table 9 now has 247 coordinates (158 archive, 89 dose-response); the archive stratum is
+unchanged to the last digit, the pooled stratum keeps every pick and regret (successor 0.0157, rank 14, frontier
+10th; bounded and CV links and DSP-concentration 0.0143, rank 10), and the dose stratum keeps regret 0.0015 (rank
+4) for every model with RMSE 0.016-0.032 over 89 coordinates.
+
+Componentwise scoring on the coordinates with complete components (harness stratum `component_complete_subset`,
+mean over components of the per-component RMSE / Spearman):
+
+| Model | Table 9 (247 coordinates, 51 components) | Uncheatable (403 coordinates, 7 components) |
+|---|---|---|
+| @log_deficit_bounded_link | 0.0368 / 0.79 | 0.0165 / 0.93 |
+| @link_by_cv | 0.0391 / 0.79 | 0.0191 / 0.93 |
+| olmix_loglinear_taskwise | 0.0478 / 0.75 | 0.0271 / 0.79 |
+| weibull_softplus_unscaled | 0.0530 / 0.78 | 0.0237 / 0.92 |
+| bucket_family_power_grp | 0.0671 / 0.76 | 0.0211 / 0.90 |
+| dsp_total_exposure_concentration | 0.0731 / 0.74 | 0.0264 / 0.86 |
+| dsp_total_exposure | 0.0755 / 0.72 | 0.0310 / 0.82 |
+
+The two link candidates are the best componentwise predictors on both targets (the bounded link's Table-9
+component RMSE is 30 % below the successor's), which restates the round-2 finding: calibration and selection are
+different properties, and on this bank the better-calibrated links do not select better.
 
 ## 3. Why the frontier is misranked
 
@@ -202,6 +234,10 @@ over sources (2000 draws):
   improves for the bounded link (-0.0026 [-0.0057, +0.0002]). The bank data teach the tested models to rank inside
   a family, not which family holds the frontier; the frontier region (section 3) stays misranked. For the four
   models tested this is not a coverage limit; whether a different additive form would transfer is untested.
+- Rerun on the repaired canonical registry (Table 9 only; 89 dose-response coordinates instead of 81): every
+  pooled archive number above is reproduced, and the paired-over-sources differences move within their intervals
+  (successor loso +0.0020 [-0.0020, +0.0055], bounded link loso -0.0026 [-0.0056, +0.0002], successor panel_dose
+  +0.0026 [-0.0005, +0.0056]); tables under `heldout_round3_canonical/`.
 - The dose runs alone (no panel) predict nothing in the archive region (pooled frontier ranks 73-149, within-source
   regret 0.007-0.039): single-bucket curves around the anchor plus additivity do not carry to the frontier
   composition, though extrapolation and additivity are confounded in this check.
@@ -303,9 +339,9 @@ checked against the code and the output tables before it was acted on.
 
 ## 9. Limitations and open items
 
-- The corrected registry view is a temporary artifact of this session; the canonical registry must be regenerated
-  by its owner after the materializer fix, and the heldout stage rerun (shard hashes will invalidate on their own).
-  181 Table-9 dose-response payloads are pending; the Table-9 dose anatomy (section 4) covers 96 runs and 15 buckets.
+- The corrected registry view is superseded by the repaired canonical registry (identical Uncheatable values,
+  plus 8 Table-9 rows). 173 Table-9 dose-response payloads are still pending; the Table-9 dose anatomy (section 4)
+  covers 96 runs and 15 buckets.
 - Every bank number in sections 5-7 is development evidence: the archive coordinates were used to select, score and
   refute candidates. The only prospective evidence of the round is the frozen-model refresh in section 2 restricted
   to the 237 corrected dose-response coordinates, which no model had seen before.
