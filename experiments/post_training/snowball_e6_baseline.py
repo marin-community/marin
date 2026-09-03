@@ -418,7 +418,7 @@ def build_workflow(
     debug_distributed: bool = False,
     collective_diagnostics: bool = False,
     telemetry_only: bool = False,
-    # Every throughput flag defaults ON, and each default must match its click option -- otherwise a
+    # Every MEASURED throughput flag defaults ON, and each default must match its click option -- otherwise a
     # programmatic caller silently gets the old behaviour while the CLI gets the new one, which is
     # exactly the skew the merge gate caught on bf16_grad_reduce.
     grouped_mm: bool = True,
@@ -426,6 +426,7 @@ def build_workflow(
     flash_attn: bool = True,
     pr488_geometry: bool = False,
     bf16_grad_reduce: bool = True,
+    log_ratio_probe: bool = False,
     label: str = "",
 ) -> ArtifactStep[SkyRLModel] | ArtifactStep[SkyRLTelemetryRun]:
     """Compose the E6 baseline as one inspectable artifact step."""
@@ -462,12 +463,16 @@ def build_workflow(
     if telemetry_only:
         variant += "-telonly"
     if not grouped_mm:
-        # Every throughput flag is ON by default now, so it is the ABSENCE that names a run.
+        # Every measured throughput flag is ON by default now, so it is the ABSENCE that names a run.
+        # NB: 'measured', not 'maximal' -- these three were each measured on their own arm; nothing
+        # here establishes a global optimum, and the PR must not claim one.
         variant += "-eagermoe"
     if not reshard_after_forward:
         variant += "-noreshard"
     if not flash_attn:
         variant += "-eagerattn"
+    if log_ratio_probe:
+        variant += "-ratioprobe"
     if not bf16_grad_reduce:
         # A9 is the default now, so it is its ABSENCE that distinguishes a run.
         variant += "-fp32grad"
@@ -544,6 +549,9 @@ def build_workflow(
                 # `mixed_precision` is absent from ppo_base_config.yaml entirely, so a plain
                 # override fails Hydra's struct check and would abort the run after the gang started.
                 *(("++trainer.policy.fsdp_config.mixed_precision.reduce_dtype=bf16",) if bf16_grad_reduce else ()),
+                # F25 diagnostic. Repeats the old-logprob forward on the same micro-batch and logs
+                # the delta, which separates nondeterminism from a deterministic eval/train seam.
+                *(("++trainer.log_ratio_repeat_probe=true",) if log_ratio_probe else ()),
                 # The Hugging Face upload gate, and it is NOT ckpt_interval. The Hub callback
                 # needs `trainer.hf_hub_repo_id` truthy AND `trainer.hf_save_interval > 0`
                 # (skyrl_train/config/callbacks.py); hf_save_interval merely DEFAULTS to
@@ -705,6 +713,17 @@ def build_workflow(
     "reduce_dtype then starts governing the accumulator rather than only the wire.",
 )
 @click.option(
+    "--log-ratio-probe",
+    is_flag=True,
+    default=False,
+    help="F25 diagnostic. Repeat the old-logprob forward on the same micro-batch and log the max "
+    "delta. Repeats disagreeing means the forward is NONDETERMINISTIC; repeats agreeing while eval "
+    "still differs from train means a deterministic eval/train SEAM. Those need opposite fixes, and "
+    "no offline probe separates them -- two came back bitwise clean, the second with four layers at "
+    "production width, real weights and production tokens-per-expert. One extra forward per "
+    "micro-batch, so a diagnostic run rather than a default.",
+)
+@click.option(
     "--label",
     default="",
     help="Extra suffix on the artifact name, and therefore on run_id. The flags that change "
@@ -769,6 +788,7 @@ def main(
     flash_attn: bool,
     pr488_geometry: bool,
     bf16_grad_reduce: bool,
+    log_ratio_probe: bool,
     label: str,
 ) -> ArtifactStep[SkyRLModel] | ArtifactStep[SkyRLTelemetryRun]:
     return build_workflow(
@@ -787,6 +807,7 @@ def main(
         flash_attn=flash_attn,
         pr488_geometry=pr488_geometry,
         bf16_grad_reduce=bf16_grad_reduce,
+        log_ratio_probe=log_ratio_probe,
         label=label,
     )
 
