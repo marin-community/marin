@@ -142,6 +142,10 @@ The selected E384 model runs at expert width 3072 and receiver capacity factor 1
 
 ## Launch
 
+Use `--version dev` for diagnostics, ablations, profiles, and scaling runs in this guide. These
+runs write under `users/<username>/grug/...`. Reserve calendar versions for coordinated major
+production runs that need a shared checkpoint path under `grug/...`.
+
 ### Bounded diagnostics
 
 `launch_diagnostics.py` uses the d6144 model, Harrier 2026.08.18 data, process layout, watch config,
