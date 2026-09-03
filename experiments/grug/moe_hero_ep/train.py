@@ -127,6 +127,36 @@ class TrainingDataMode(StrEnum):
     SYNTHETIC = "synthetic"
 
 
+def _state_leaf_formats(state) -> dict[str, str]:
+    """Map each state leaf's path to its `Format`, which carries layout and sharding."""
+    flat, _ = jax.tree_util.tree_flatten_with_path(state)
+    formats = {}
+    for path, leaf in flat:
+        if isinstance(leaf, jax.Array):
+            formats[jax.tree_util.keystr(path)] = str(getattr(leaf, "format", leaf.sharding))
+    return formats
+
+
+def _log_state_layout_drift(before: dict[str, str], after: dict[str, str]) -> None:
+    """Report leaves whose format changed across one step.
+
+    A train state that comes back in a different layout than it went in makes the next call miss
+    the compilation cache, so `jit_train_step` is compiled twice and each executable registers its
+    own NCCL symmetric window over the same collective-memory arena (#8861, #8870).
+    """
+    drifted = sorted(k for k in before.keys() & after.keys() if before[k] != after[k])
+    only_before = sorted(before.keys() - after.keys())
+    only_after = sorted(after.keys() - before.keys())
+    if not drifted and not only_before and not only_after:
+        logger.warning("STATE LAYOUT: identical across the step; the second compile is not layout drift")
+        return
+    logger.warning("STATE LAYOUT DRIFT: %d leaves changed format across one step", len(drifted))
+    for key in drifted[:20]:
+        logger.warning("STATE LAYOUT DRIFT %s\n  before=%s\n  after =%s", key, before[key], after[key])
+    if only_before or only_after:
+        logger.warning("STATE LAYOUT STRUCTURE: only-before=%s only-after=%s", only_before[:10], only_after[:10])
+
+
 def restore_template_from(state):
     """ShapeDtypeStructs carrying each leaf's concrete sharding, releasing the leaves.
 
@@ -1183,6 +1213,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 for hook in eval_hooks:
                     state_callbacks.add_hook(_first_step_only(hook), every=1)
 
+        log_state_layout = os.environ.get("MARIN_DEBUG_LOG_STATE_LAYOUT") == "1"
         last_loss: float | jax.Array = 0.0
         last_step_duration = 0.0
 
@@ -1202,7 +1233,11 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     watch_stats = None
                 step_start = time.perf_counter()
                 state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_STARTED)
+                layout_before = _state_leaf_formats(state) if log_state_layout else None
                 state, metrics, inline_watch_stats = train_step(state, batch)
+                if log_state_layout:
+                    _log_state_layout_drift(layout_before, _state_leaf_formats(state))
+                    log_state_layout = False
                 if inline_watch_stats is not None and watch_due:
                     watch_stats = inline_watch_stats
                 step = int(state.step) - 1
