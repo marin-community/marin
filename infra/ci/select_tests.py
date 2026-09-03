@@ -94,13 +94,6 @@ UV_PACKAGE: dict[str, str] = {
 }
 
 UV_EXTRAS: dict[str, list[str]] = {
-    # `pdf` carries the PDF pipeline's toolchain: pypdfium2 and pillow render and encode the VLM
-    # feed, warcio reads WARC ranges, xgboost-cpu loads the router's booster, pdf-inspector is the
-    # CPU extraction route. tests/datakit/test_ocr_extract.py and test_build_pdf_source.py guard
-    # their imports, so without the extra the leg goes green having skipped every test that
-    # actually renders a page or reads a record -- which is the opposite of what they are for.
-    # It adds no torch: `cpu` already installs it, and docling, openvino and nncf retired with the
-    # route they served, so what is left is a handful of wheels rather than a second model stack.
     "marin": ["cpu", "dedup", "pdf"],
     "iac": ["deploy"],
 }

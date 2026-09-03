@@ -4,9 +4,9 @@
 """Time a hero-shaped checkpoint save and restore on one or more replica groups.
 
 Builds a hero or hero-shaped small train state, writes it to a one-day temporary prefix, and
-reads it back into the same exemplar a resume restores into. Offloaded optimizer state and
-FP32 pinned-host master params are included. It trains nothing, so a run measures the
-checkpoint paths alone.
+reads it back into the same exemplar a resume restores into. Offloaded optimizer state is
+included, and the master-parameter mode matches the hero's. It trains nothing, so a run
+measures the checkpoint paths alone.
 
 The save timing is what a training step is blocked for. The first read is the only one that
 can miss the node-local cache.
@@ -52,18 +52,19 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     HERO_EP_BATCH_SIZE,
     HERO_EP_EXPERT_AXIS_SIZE,
     HERO_GPUS_PER_NODE,
-    HERO_MIXED_PRECISION,
+    HERO_MASTER_PARAM_MODE,
+    HERO_MIXED_PRECISION_BY_MASTER_PARAM_MODE,
     HERO_MODEL_CONFIG,
     HERO_NODE_CPU,
     HERO_NODE_DISK,
     HERO_NODE_RAM,
     HERO_QB_HIST_BINS,
+    with_transport_remat_mode,
 )
 from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic, build_hero_configs
 from experiments.grug.moe_hero_ep.model import GrugModelConfig
 from experiments.grug.moe_hero_ep.small_scale_abl_launch import SMALL_SHAPES, _small_model
 from experiments.grug.moe_hero_ep.train import (
-    MasterParamMode,
     _apply_hero_ep_runtime_defaults,
     initial_state,
     restore_template_from,
@@ -106,7 +107,7 @@ def _benchmark_state(config: RestoreBenchmarkConfig, mesh):
             key=key,
             ema_beta=None,
             offload_opt_state=True,
-            master_param_mode=MasterParamMode.FP32_PINNED_HOST,
+            master_param_mode=HERO_MASTER_PARAM_MODE,
         )
 
     with set_mesh(mesh):
@@ -243,14 +244,16 @@ def main(
 ) -> None:
     batch_size = HERO_EP_BATCH_SIZE * replica_groups
     if model_size == HERO_MODEL_SIZE:
-        model = HERO_MODEL_CONFIG
+        model = with_transport_remat_mode(HERO_MODEL_CONFIG)
         _, optimizer = build_hero_configs(num_train_steps=HERO_SCHEDULE_STEPS, batch_size=batch_size)
     else:
         shape = SMALL_SHAPES[model_size]
         model = _small_model(
             shape=shape,
             capacity_factor=HERO_MODEL_CONFIG.capacity_factor,
-            attention_implementation=HERO_MODEL_CONFIG.attention_implementation,
+            # The wide forward tile is measured only at the hero shape, so the small
+            # stand-ins keep the plain FA4 name.
+            attention_implementation="gpu_fa4_cute",
             moe_implementation=HERO_MODEL_CONFIG.moe_implementation,
             expert_chunks=HERO_MODEL_CONFIG.expert_chunks,
             seq_len=HERO_MODEL_CONFIG.max_seq_len,
@@ -295,7 +298,7 @@ def main(
             seed=0,
             train_batch_size=batch_size,
             num_train_steps=HERO_SCHEDULE_STEPS,
-            mp=jmp.get_policy(HERO_MIXED_PRECISION),
+            mp=jmp.get_policy(HERO_MIXED_PRECISION_BY_MASTER_PARAM_MODE[HERO_MASTER_PARAM_MODE]),
             tracker=TelemetryConfig(),
             use_explicit_mesh_axes=True,
             require_accelerator=True,
@@ -311,7 +314,12 @@ def main(
         replica_axis_size=replica_groups,
     )
 
-    _apply_hero_ep_runtime_defaults(inline_watch_enabled=False, processes_per_task=HERO_GPUS_PER_NODE)
+    _apply_hero_ep_runtime_defaults(
+        inline_watch_enabled=False,
+        moe_implementation=model.moe_implementation,
+        remat_mode=model.remat_mode,
+        processes_per_task=HERO_GPUS_PER_NODE,
+    )
     dispatch_grug_training_run(
         run_id=run_id,
         config=config,

@@ -3,31 +3,16 @@
 
 """Step 4: decide which extracted PDFs to escalate to the VLM, on signals the extraction produced.
 
-Router v2 runs *after* extraction, which is the whole shape of the pipeline in one sentence. Router
-v1 had to decide before it: its cheap route was Docling at ~1000 ms/page, nothing that expensive can
-run before the decision about whether to run it, and so v1 paid a separate 3.4 CPU core-hour per
-million pages PyMuPDF pass to predict from fonts and geometry what an extraction would produce.
-pdf-inspector is 2.1 core-h/M, so the pipeline now extracts everything and routes on the result --
-which costs less *and* replaces predictions with observations
-(``experiments/datakit/build_pdf_source/pdf-router-v2.md``).
+Router v2 runs *after* extraction (see ``pdf-router-v2.md`` on the ``mark/pdf_pipeline`` campaign
+branch for more).
 
 Two steps. :func:`model_step` stages the booster and its calibration sidecar into the marin prefix,
 each pinned by content hash. :func:`classify_step` maps over
 :mod:`~experiments.datakit.build_pdf_source.extract_inspector`'s output -- reading only the signal
-columns, never ``text`` -- and writes one narrow row per document.
-
-**What the model is asked.** Not "is this a scan?" and not "will the cheap route agree with the
-VLM?", which is what v1's ``docling_ok`` label measured and which turned out not to rank quality at
-all: blind adjudication of 605 documents separated preference by 0.015 between its two classes, well
-inside the noise. The target here is a judged preference against the rendered page -- a blind judge
-sees both routes' transcription of the same page image and says which reproduces it better -- over
-19,977 documents from 2,588 domains, with inter-judge agreement 0.878 (kappa 0.757).
-
-**The base rate is what to read first.** 0.762 of labelled documents prefer the VLM, 0.768
-page-weighted. The router's job is therefore to find the quarter that does *not*, and against simply
-escalating everything it removes 10.1% of the routing error (0.2320 to 0.2129 misrouted pages) while
-saving 63 crawl core-hours and 62 GPU-hours. That is a real win on both axes and a thin one; the
-report says so plainly.
+columns, never ``text`` -- and writes one narrow row per document, one routing shard per extraction
+shard and named after it, so the routing table stays co-partitioned with the fetch. The two
+consumers, the OCR route and the union, read their decisions shard by shard through
+:func:`shard_routing` instead of holding the corpus-wide table.
 
 **Three decisions, and only one of them is the model's.**
 
@@ -39,32 +24,30 @@ report says so plainly.
   slot on a page that will never reach the model.
 * Everything else -> the booster, thresholded at :data:`ESCALATION_THRESHOLD`.
 
-The legibility floor is deliberately **not** a fourth decision. v1 skipped documents rendering below
-100 DPI on the grounds that the VLM cannot read a blur; the judges escalated 79.0% of them (n=558).
-What the floor earns instead is a *render* policy: a flagged document is escalated like any other
-and rendered at :data:`~experiments.datakit.build_pdf_source.ocr_extract.render.RAISED_MAX_VISUAL_TOKENS`
-rather than being skipped. See :func:`render_budget`.
+The legibility floor is deliberately **not** a fourth decision. What the floor earns instead is a
+*render* policy: a flagged document is escalated like any other and rendered at
+:data:`~experiments.datakit.build_pdf_source.ocr_extract.render.RAISED_MAX_VISUAL_TOKENS` rather
+than being skipped. See :func:`render_budget`.
 
 XGBoost is imported inside the functions that use it. It lives in marin-core's ``pdf`` extra, which
 the Zephyr workers get via ``pip_dependency_groups`` but the entrypoint job does not: its ``uv sync``
 carries no extras. Since :mod:`~experiments.datakit.build_pdf_source.pipeline` imports this module to
 build its steps, a module-scope ``import xgboost`` here would kill the driver before it submitted
-anything. Polars is *not* deferred -- it is a Zephyr dependency and therefore in the base environment
--- which is what lets the feature contract be shared verbatim with the fit rather than restated.
+anything.
 """
 
 import hashlib
 import json
 import logging
 from collections.abc import Iterator
-from functools import cache, partial
+from dataclasses import dataclass
+from functools import cache, lru_cache, partial
 
 import numpy as np
 import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
 from fray.types import ResourceConfig
-from marin.datakit.normalize import NormalizedData
 from marin.execution.artifact import read_artifact
 from marin.execution.remote import remote
 from marin.execution.step_spec import StepSpec
@@ -75,7 +58,13 @@ from zephyr.dataset import Dataset
 from zephyr.runners import SubprocessRunner
 
 from experiments.datakit.build_pdf_source import route_v2_features as contract
-from experiments.datakit.build_pdf_source.common import PdfClassificationData, StagedModelData
+from experiments.datakit.build_pdf_source.common import (
+    MAIN_OUTPUT_SUBDIR,
+    SHARD_PATTERN,
+    PdfClassificationData,
+    PdfDocumentsData,
+    StagedModelData,
+)
 from experiments.datakit.build_pdf_source.extract_inspector import SIGNAL_COLUMNS
 from experiments.datakit.build_pdf_source.ocr_extract.render import (
     DEFAULT_LEGIBILITY_FLOOR_DPI,
@@ -85,18 +74,15 @@ from experiments.datakit.build_pdf_source.ocr_extract.render import (
 
 logger = logging.getLogger(__name__)
 
-# The shipped booster and the sidecar that calibrates it, fit on the preference label by
-# `quality/fit_route_v2.py` on the `mark/pdf_processing` campaign branch and staged
-# content-addressed. Both are pinned: the booster decides the ranking and the sidecar decides where
-# the cut falls, so a run's decisions are only attributable if both are. Regenerate with that
-# module, not by editing these.
+# The shipped booster and the sidecar that calibrates its threshold, both pinned by content hash;
+# regenerate them with `quality/fit_route_v2.py` on the `mark/pdf_processing` campaign branch.
 MODEL_PREFIX = "s3://marin-us-east-02a/marin/data/pdf_quality/model/pdf_route_v2"
-ROUTE_MODEL_SOURCE = f"{MODEL_PREFIX}/route_v2_classifier.ubj"
-ROUTE_MODEL_SHA256 = "5edde108ec41c50680f34802a09a368309e7d8c68c470f7a922a04d5a78f37c6"
 ROUTE_MODEL_FILENAME = "route_v2_classifier.ubj"
-ROUTE_SIDECAR_SOURCE = f"{MODEL_PREFIX}/route_v2_classifier.json"
-ROUTE_SIDECAR_SHA256 = "d30ce417098bead8071b020405ab0098802ebcc5b6035313fb42c59b70387372"
+ROUTE_MODEL_SOURCE = prefix_join(MODEL_PREFIX, ROUTE_MODEL_FILENAME)
+ROUTE_MODEL_SHA256 = "5edde108ec41c50680f34802a09a368309e7d8c68c470f7a922a04d5a78f37c6"
 ROUTE_SIDECAR_FILENAME = "route_v2_classifier.json"
+ROUTE_SIDECAR_SOURCE = prefix_join(MODEL_PREFIX, ROUTE_SIDECAR_FILENAME)
+ROUTE_SIDECAR_SHA256 = "d30ce417098bead8071b020405ab0098802ebcc5b6035313fb42c59b70387372"
 
 # The escalation threshold, restated from the sidecar so that the value this pipeline routes on is
 # visible in the code and re-keys the step when it moves. :func:`load_router` refuses a sidecar that
@@ -116,6 +102,9 @@ ESCALATION_THRESHOLD = 0.5809440612792969
 
 _COUNTER_PREFIX = "focus_crawl_pdf_route"
 _ROUTING_COLUMNS = ["warc_filename", "warc_record_offset", "needs_ocr", "render_visual_tokens"]
+# Routing shards a worker process keeps decoded. A task reads one shard's documents, so one entry
+# serves every row group of the shard; a couple more cover a process that interleaves shards.
+_ROUTING_SHARDS_CACHED = 4
 
 # Why a document went where it did. Stored per row because a routing decision that cannot be
 # explained cannot be audited, and because two of the three are gates whose correctness is checkable
@@ -152,7 +141,6 @@ _MAP_TASK_RESOURCES = ResourceConfig(cpu=1, ram="4g", disk="2g")
 _TASKS_PER_WORKER = 8
 _WORKER_RESOURCES = ResourceConfig(cpu=_TASKS_PER_WORKER, ram="32g", disk="32g")
 _MAX_WORKERS = 16
-_COORDINATOR_RESOURCES = ResourceConfig(cpu=1, ram="8g", preemptible=False)
 _HEARTBEAT_TIMEOUT = 15 * 60
 
 
@@ -206,12 +194,7 @@ def router_threshold(trained_on: tuple[str, ...], sidecar: dict) -> float:
 
 @cache
 def load_router(model_dir: str) -> tuple["xgboost.Booster", float]:  # noqa: F821
-    """Load the booster and its calibrated threshold once per worker process.
-
-    Loading through :class:`xgboost.Booster` rather than ``XGBClassifier`` keeps scikit-learn out of
-    the inference path. One thread is right because Zephyr costs each map task at one CPU and runs
-    several per worker; the default would have every task claim every core.
-    """
+    """Load the booster and its calibrated threshold once per worker process."""
     import xgboost as xgb  # noqa: PLC0415
 
     booster = xgb.Booster()
@@ -234,14 +217,8 @@ def render_budget(mean_render_dpi: float | None, floor_dpi: float) -> int:
     """The visual-token budget an escalated document is rendered at.
 
     A document whose mean render DPI falls below the legibility floor at the default budget is
-    rendered at :data:`RAISED_MAX_VISUAL_TOKENS` instead. These are large-format sheets -- posters,
-    maps and plans, 77% of them single-page, a median implied 787 square inches against US Letter's
-    93.5 -- not damaged files, and their pages reach 0.0% of the 300-DPI upscale cap at any budget,
-    which is why the published sweep's reason for stopping at 8192 does not apply to them. Targeted,
-    the policy rescues 1,890 of 2,234 documents for +0.29% GPU crawl-wide; raising the budget for the
-    whole corpus costs +53% to rescue 0.47% of its pages.
-
-    A document with no geometry gets the default budget. It is not going to be rendered at all.
+    rendered at :data:`RAISED_MAX_VISUAL_TOKENS` instead. A document with no geometry gets the
+    default budget: it is not going to be rendered at all.
     """
     if mean_render_dpi is None or mean_render_dpi >= floor_dpi:
         return DEFAULT_MAX_VISUAL_TOKENS
@@ -249,12 +226,7 @@ def render_budget(mean_render_dpi: float | None, floor_dpi: float) -> int:
 
 
 def gate(row: dict) -> str | None:
-    """The arithmetic decision for a document, or ``None`` if the score has to make it.
-
-    Ordered as the report orders them: the no-text gate is consulted first because it is the one
-    validated against the label, and because a document with no text has nothing to keep whatever
-    else is true of it.
-    """
+    """The arithmetic decision for a document, or ``None`` if the score has to make it."""
     if not row.get("inspector_markdown_chars"):
         return GATE_NO_TEXT
     if row.get("mean_render_dpi") is None:
@@ -317,84 +289,77 @@ def classify_pdfs(output_path: str, extraction_output_path: str, model_output_pa
 
     The output is a routing table, not a copy of the corpus: one narrow row per document keyed by
     ``(warc_filename, warc_record_offset)``, which is unique where ``content_digest`` is not (the
-    crawl holds ~9.8% exact-duplicate PDFs). At full-crawl scale that is ~3.17M rows of scalars, so
-    the OCR route and the union can each broadcast the part of it they need and join in a map,
-    rather than paying to have the corpus shuffled through this step.
+    crawl holds ~9.8% exact-duplicate PDFs). It is written as one shard per extraction shard, named
+    after it, over the extraction's sorted listing -- the same 1:1 map the extraction ran over the
+    fetch -- so the decisions for a fetched shard sit in the routing shard of the same name and a
+    consumer reads them by name as it reads the shard.
     """
-    extraction = read_artifact(extraction_output_path, NormalizedData)
+    extraction = read_artifact(extraction_output_path, PdfDocumentsData)
     model = read_artifact(model_output_path, StagedModelData)
-    logger.info("Routing %s with %s (%s)", extraction.main_output_dir, model.model_path, model.revision)
+    shards = sorted(str(shard) for shard in StoragePath(prefix_join(extraction.main_output_dir, "*.parquet")).glob())
+    if not shards:
+        raise RuntimeError(f"No extraction shards under {extraction.main_output_dir}")
+    logger.info(
+        "Routing %d shards under %s with %s (%s)",
+        len(shards),
+        extraction.main_output_dir,
+        model.model_path,
+        model.revision,
+    )
 
-    output_dir = prefix_join(output_path, "outputs/main")
+    output_dir = prefix_join(output_path, MAIN_OUTPUT_SUBDIR)
     pipeline = (
-        Dataset.from_files(prefix_join(extraction.main_output_dir, "*.parquet"))
+        Dataset.from_list(shards)
         # Column projection is what makes this step cheap: the extraction's rows carry the corpus's
         # text and this reads none of it.
         .load_parquet(columns=SIGNAL_COLUMNS, batch_mode=True)
         .flat_map(partial(route_batch, model_dir=model.model_path, floor_dpi=DEFAULT_LEGIBILITY_FLOOR_DPI))
-        .write_parquet(
-            prefix_join(output_dir, "part-{shard:05d}-of-{total:05d}.parquet"),
-            schema=ROUTING_SCHEMA,
-            skip_existing=True,
-        )
+        .write_parquet(prefix_join(output_dir, SHARD_PATTERN), schema=ROUTING_SCHEMA, skip_existing=True)
     )
     outcome = ZephyrContext(
         name="focus-crawl-pdf-route",
         resources=_WORKER_RESOURCES,
         max_workers=_MAX_WORKERS,
         stage_runner_factory=SubprocessRunner,
-        coordinator_resources=_COORDINATOR_RESOURCES,
         heartbeat_timeout=_HEARTBEAT_TIMEOUT,
     ).execute(pipeline, map_task_resources=_MAP_TASK_RESOURCES)
     return PdfClassificationData(main_output_dir=output_dir, counters=dict(outcome.counters))
 
 
-def _read_routing_table(classification_dir: str) -> Iterator[dict]:
-    shards = sorted(StoragePath(prefix_join(classification_dir, "*.parquet")).glob(), key=str)
-    if not shards:
-        raise RuntimeError(f"No routing table under {classification_dir}")
-    logger.info("Reading the routing table from %d shards under %s", len(shards), classification_dir)
-    for shard in shards:
-        with shard.open("rb") as stream:
-            table = pq.read_table(stream, columns=_ROUTING_COLUMNS)
-        yield from table.to_pylist()
+@dataclass(frozen=True)
+class RouteDecision:
+    """What the router decided for one document: the route, and the budget it is rendered at."""
+
+    needs_ocr: bool
+    render_visual_tokens: int
 
 
-def routing_keys(classification_dir: str, needs_ocr: bool) -> frozenset[tuple[str, int]]:
-    """The keys of the documents on one route.
+@lru_cache(maxsize=_ROUTING_SHARDS_CACHED)
+def shard_routing(classification_dir: str, shard_basename: str) -> dict[tuple[str, int], RouteDecision]:
+    """The routing decisions for the documents of one fetched shard, keyed by WARC record.
 
-    The routing decision is a join, and this is the cheap side of it. The table is narrow precisely
-    so a consumer can hold one route's keys in memory and filter as it reads, rather than paying to
-    have TiB of PDF bytes or a whole corpus shuffled into two datasets. At full-crawl scale that is
-    ~3.17M routed documents; one key costs ~350 bytes as Python objects (a ~100-char WARC path
-    string, an int, the tuple, and the set slot), so the escalated set is ~0.85 GB and the kept set
-    ~0.27 GB against tasks sized at 4-6 GB.
+    The routing table is co-partitioned with the fetch: the extraction maps the fetched shards 1:1
+    and names its outputs after them, and this step does the same over the extraction, so the
+    decisions for ``part-00012-of-01773.parquet`` sit in the routing shard of that name. A consumer
+    reads that one shard as it reads the documents, and never holds the corpus-wide table.
 
-    Unlike router v1's, this partition is total: every extracted document is on exactly one route,
-    because the gates decide the cases the score cannot.
+    A fetched shard with no routing shard is an error, not an empty route: a name missing here
+    means the step outputs are not the co-partitioned set this pipeline was built from.
     """
-    keys = {
-        (row["warc_filename"], row["warc_record_offset"])
-        for row in _read_routing_table(classification_dir)
-        if row["needs_ocr"] is needs_ocr
+    path = StoragePath(prefix_join(classification_dir, shard_basename))
+    if not path.exists():
+        raise FileNotFoundError(
+            f"No routing shard {shard_basename} under {classification_dir}: the routing table is "
+            "not co-partitioned with the shard being read"
+        )
+    with path.open("rb") as stream:
+        table = pq.read_table(stream, columns=_ROUTING_COLUMNS)
+    return {
+        (row["warc_filename"], row["warc_record_offset"]): RouteDecision(
+            needs_ocr=row["needs_ocr"], render_visual_tokens=row["render_visual_tokens"]
+        )
+        for row in table.to_pylist()
     }
-    logger.info("The %s route holds %d documents", "VLM" if needs_ocr else "pdf-inspector", len(keys))
-    return frozenset(keys)
-
-
-def raised_render_keys(classification_dir: str) -> frozenset[tuple[str, int]]:
-    """The escalated documents the render policy flagged for a raised visual-token budget.
-
-    Small by construction -- 1.63% of documents in the 100k sample -- because it is the population
-    the floor arithmetic picks out, not a budget anyone chose.
-    """
-    keys = {
-        (row["warc_filename"], row["warc_record_offset"])
-        for row in _read_routing_table(classification_dir)
-        if row["needs_ocr"] and row["render_visual_tokens"] != DEFAULT_MAX_VISUAL_TOKENS
-    }
-    logger.info("The render policy raised the budget for %d documents", len(keys))
-    return frozenset(keys)
 
 
 def model_step() -> StepSpec:

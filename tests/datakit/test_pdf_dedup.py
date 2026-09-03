@@ -1,11 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the PDF dedup + decontamination wiring (#7620).
-
-The stages themselves (normalize, decon, consolidate) have their own suites; these tests pin the
-contracts this pipeline leans on when it reuses them over the combined corpus.
-"""
+"""Tests for the PDF exact-dedup wiring, driven through the step the pipeline builds."""
 
 import subprocess
 import sys
@@ -17,11 +13,11 @@ import pyarrow.parquet as pq
 import pytest
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
-from marin.datakit.normalize import DedupMode, generate_id, normalize_to_parquet
+from marin.datakit.normalize import generate_id
 from marin.execution.step_spec import StepSpec
 
 from experiments.datakit.build_pdf_source.combine_routes import COMBINED_SCHEMA
-from experiments.datakit.build_pdf_source.dedup import dedup_steps
+from experiments.datakit.build_pdf_source.dedup import exact_dedup_step
 from experiments.datakit.build_pdf_source.document_record import source_id
 
 
@@ -32,11 +28,7 @@ def local_fray():
 
 
 def _record(text: str, offset: int) -> dict:
-    """A combined-corpus record on the pdf-inspector side: the shared columns, the route, and nulls.
-
-    Every route-specific column the combine may carry is defaulted to null off the schema itself,
-    so a column added to either route does not silently drop out of this round-trip assertion.
-    """
+    """A combined-corpus record on the pdf-inspector side, every other column nulled off the schema."""
     return {
         **dict.fromkeys(COMBINED_SCHEMA.names),
         "id": generate_id(text),
@@ -61,20 +53,17 @@ def _record(text: str, offset: int) -> dict:
     }
 
 
-def _run_normalize(combined_dir: Path, output_dir: Path):
-    """Run the exact normalize pass the dedup step configures (see ``dedup._normalize_combined_step``)."""
-    return normalize_to_parquet(
-        input_path=str(combined_dir),
-        output_path=str(output_dir),
-        text_field="text",
-        id_field="source_id",
-        file_extensions=(".parquet",),
-        dedup_mode=DedupMode.EXACT,
-        output_schema=COMBINED_SCHEMA,
+def _run_normalize(combined_step_dir: Path, output_dir: Path):
+    """Run the exact normalize pass as the pipeline configures it, through the step it builds."""
+    combined = StepSpec(
+        name="data/datakit/combine/common_crawl_focus_2026_22_pdf", override_output_path=str(combined_step_dir)
     )
+    return exact_dedup_step(combined, COMBINED_SCHEMA).fn(str(output_dir))
 
 
-def _write_shard(directory: Path, records: list[dict]) -> None:
+def _write_shard(step_dir: Path, records: list[dict]) -> None:
+    """Write one combined shard where the combine step would leave it under its output path."""
+    directory = step_dir / "outputs" / "main"
     directory.mkdir(parents=True, exist_ok=True)
     table = pa.Table.from_pylist(records, schema=COMBINED_SCHEMA)
     pq.write_table(table, directory / "part-00000-of-00001.parquet")
@@ -118,31 +107,13 @@ def test_normalize_pass_rekeys_the_id_when_it_caps_whitespace(tmp_path):
     assert record["source_id"] == "crawl.warc.gz:100"
 
 
-def test_dedup_dag_ends_in_a_decontaminated_dataset_and_runs_no_fuzzy_dedup(tmp_path, monkeypatch):
-    """Fuzzy dedup elects a canonical member, and the quality signal to elect it does not exist
-    yet at this point of the chain -- it lands in fuzzy_dedup, after the quality step."""
-    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
-    combined = StepSpec(name="data/datakit/combine/common_crawl_focus_2026_22_pdf", hash_attrs={}, fn=lambda p: None)
-    names = [step.name for step in dedup_steps(combined, COMBINED_SCHEMA)]
-    assert names[-1] == "data/datakit/clean/common_crawl_focus_2026_22_pdf"
-    assert not [name for name in names if "minhash" in name or "fuzzy" in name]
-    # Exact dedup has to precede the attribute join: consolidate joins by id, so a corpus still
-    # holding repeated ids would drop every copy of a marked id, canonical included.
-    assert names.index("data/datakit/normalize/common_crawl_focus_2026_22_pdf") < names.index(
-        "data/datakit/decontam/common_crawl_focus_2026_22_pdf"
-    )
-
-
 def test_pipeline_dag_builds_without_worker_only_dependencies(tmp_path):
     """The entrypoint job syncs no extras, so building the full DAG must not import them.
 
-    Runs in a subprocess because this process may already have the rasteriser loaded for other
-    tests. Pillow is in the same extra but is deliberately not blocked: the blocker refuses at
-    ``find_spec``, and third-party libraries probe for Pillow with ``find_spec`` as a capability
-    check rather than importing it, so blocking it fails the build on a question rather than on an
-    import. Anything in this module that reaches Pillow reaches pypdfium2 first.
-    Also checks the invariant ``StepRunner`` needs: every dependency of every step is itself in
-    the list the runner is given.
+    Runs in a subprocess because this process may already have the rasteriser loaded. Pillow is not
+    blocked: third-party libraries probe for it with ``find_spec`` without importing it, and anything
+    here that reaches Pillow reaches pypdfium2 first. Also checks that every step's dependencies are
+    in the list the runner is given.
     """
     script = textwrap.dedent(
         """

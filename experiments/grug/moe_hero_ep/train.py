@@ -4,6 +4,7 @@
 import dataclasses
 import functools
 import gc
+import importlib.metadata
 import itertools
 import logging
 import os
@@ -31,12 +32,14 @@ from jax.tree_util import register_dataclass
 from jaxtyping import PRNGKeyArray
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
+from levanter.checkpoint_manifest import read_manifest
 from levanter.data.dataset import AsyncDataset
 from levanter.data.loader import DataLoader
 from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_batch_schedule
 from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample, grug_lm_example_from_named
 from levanter.eval import TaggedEvaluator, cb_tagged_evaluate, eval_model
+from levanter.grug._moe.ep_ragged_all_to_all import RAGGED_REQUIRED_XLA_FLAGS
 from levanter.grug.grug_moe import MoeImplementation
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmExample
@@ -49,9 +52,13 @@ from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 
-from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
+from experiments.grug.checkpointing import (
+    LEGACY_STATE_KEY,
+    MASTER_PARAMS_KEY,
+    restore_grug_state_from_checkpoint,
+)
 from experiments.grug.dispatch import dispatch_grug_training_run
-from experiments.grug.moe_hero_ep.model import GrugModelConfig, Transformer
+from experiments.grug.moe_hero_ep.model import OFFLOAD_CARRY_REMAT_MODE, GrugModelConfig, RematMode, Transformer
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
@@ -75,25 +82,23 @@ HERO_EP_RUNTIME_ENV = {
     # allocation below has no room to remap into.
     "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.75",
 }
-# The scheduler sizes the single `jit_train_step` temp arena against this percentage of its
-# memory budget, roughly `133.6 GiB x percentage`. The pool holds 138.2 GiB and persistent state
-# occupies 18.1 GiB of it, so an arena above 120.2 GiB cannot be served from pool free space and
-# forces a fresh mapping against the ~17 GiB of physical memory outside the pool. The default 95
-# asks for 125.7 GiB and fails that way. 85 sizes the arena at 113.6 GiB, leaving enough slack
-# for per-node variation in fragmentation. A lower percentage costs throughput, because a
-# smaller arena makes `HloRematerialization` recompute more of the step.
-_XLA_FLAG_DEFAULTS = (
-    "--xla_gpu_enable_latency_hiding_scheduler=true",
-    "--xla_gpu_memory_limit_slop_factor=85",
-)
 XLA_COLLECTIVE_OVERLAP_FLAG = "--xla_gpu_experimental_parallel_collective_overlap_limit"
 DEFAULT_COLLECTIVE_OVERLAP_LIMIT = 4
 DEFAULT_DROPLESS_MOE_IMPLEMENTATION: MoeImplementation = "sonic_cute"
 # Full inline norm watch failed with overlap 4. Overlap 1 completed the selected full-watch gate.
 INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT = 1
+# The ragged transport wants the opposite scheduling posture from the fixed and pooled ones. Its
+# dispatch and combine form one long dependent chain, so admitting several concurrent collectives
+# only contends for the SMs the transport itself needs.
+RAGGED_COLLECTIVE_OVERLAP_LIMIT = 1
+# Offload and latency hiding race the reloaded residual with its consumer when overlap exceeds 1.
+OFFLOAD_CARRY_COLLECTIVE_OVERLAP_LIMIT = 1
+RAGGED_MOE_IMPLEMENTATION = "ragged_all_to_all"
 # TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU
 # command buffers after the CUDA graph failure is fixed.
 XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
+_RAGGED_REQUIRED_XLA_FLAG_NAMES = frozenset(flag.partition("=")[0] for flag in RAGGED_REQUIRED_XLA_FLAGS)
+PJRT_DISTRIBUTION = "jax-cuda13-pjrt"
 _FP32_POLICY = jmp.get_policy("params=float32,compute=float32,output=float32")
 
 
@@ -105,9 +110,13 @@ class WatchMode(StrEnum):
 
 
 class MasterParamMode(StrEnum):
-    """Storage mode for optimizer master parameters."""
+    """Where the authoritative fp32 weights live.
 
-    DISABLED = "disabled"
+    DEVICE keeps them as the device params themselves, with no separate master copy;
+    FP32_PINNED_HOST keeps a pinned-host fp32 master while the device params are its bf16 cast.
+    """
+
+    DEVICE = "device"
     FP32_PINNED_HOST = "fp32_pinned_host"
 
 
@@ -136,7 +145,58 @@ def restore_template_from(state):
     return template
 
 
-def _apply_hero_ep_runtime_defaults(*, inline_watch_enabled: bool, processes_per_task: int = 1) -> None:
+def checkpoint_stores_master(candidate: str) -> bool:
+    """Whether checkpoint ``candidate``'s manifest lists fp32 master parameters.
+
+    A missing manifest raises ``FileNotFoundError``, which restore treats like any other
+    unreadable candidate.
+    """
+    manifest = read_manifest(candidate)
+    if manifest is None:
+        raise FileNotFoundError(f"{candidate} has no manifest.json, so its layout cannot be read")
+    markers = (MASTER_PARAMS_KEY, f"{LEGACY_STATE_KEY}/{MASTER_PARAMS_KEY}")
+    return any(path == marker or path.startswith(marker + "/") for path in manifest.array_paths for marker in markers)
+
+
+def template_for_candidate_layout(
+    state: "GrugTrainState", candidate: str, run_mode: MasterParamMode
+) -> "GrugTrainState":
+    """Pick the template restore reads checkpoint ``candidate`` with.
+
+    Restore reads only the leaves the template names and takes each dtype from storage, checking
+    neither against the checkpoint, so reading a master-bearing checkpoint with the run's own
+    master-less template would silently return the bf16 compute copy. When the layouts match the
+    template is ``state`` itself. A master-bearing checkpoint read by a master-less run migrates
+    in process: the run's device fp32 ``params`` template is presented under ``master_params``, so
+    the checkpoint's authoritative fp32 master loads directly into it and the bf16 copy goes
+    unread; ``take_master_as_params`` then moves it back, and the next save writes the new layout.
+    """
+    has_master = checkpoint_stores_master(candidate)
+    if has_master == (run_mode != MasterParamMode.DEVICE):
+        return state
+    if not has_master:
+        raise ValueError(
+            f"checkpoint {candidate} stores no master parameters, but this run trains with {run_mode}. "
+            "Synthesizing a master from stored weights is not a conversion this supports."
+        )
+    logger.info("Checkpoint %s stores a pinned-host fp32 master; restoring it as the parameters.", candidate)
+    return dataclasses.replace(state, params=None, master_params=state.params)
+
+
+def take_master_as_params(state: "GrugTrainState") -> "GrugTrainState":
+    """Move a master restored through ``template_for_candidate_layout`` into ``params``."""
+    if state.master_params is None:
+        return state
+    return dataclasses.replace(state, params=state.master_params, master_params=None)
+
+
+def _apply_hero_ep_runtime_defaults(
+    *,
+    inline_watch_enabled: bool,
+    moe_implementation: MoeImplementation | None,
+    remat_mode: RematMode,
+    processes_per_task: int = 1,
+) -> None:
     env_defaults = dict(HERO_EP_RUNTIME_ENV)
     if processes_per_task > 1:
         # With one process per GPU, the per-process CUPTI sessions collide with each
@@ -146,15 +206,63 @@ def _apply_hero_ep_runtime_defaults(*, inline_watch_enabled: bool, processes_per
     for name, value in env_defaults.items():
         os.environ.setdefault(name, value)
     xla_flags = os.environ.get("XLA_FLAGS", "").split()
-    overlap_limit = INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT if inline_watch_enabled else DEFAULT_COLLECTIVE_OVERLAP_LIMIT
+    ragged = moe_implementation == RAGGED_MOE_IMPLEMENTATION
+    if ragged:
+        overlap_limit = RAGGED_COLLECTIVE_OVERLAP_LIMIT
+    elif inline_watch_enabled:
+        overlap_limit = INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT
+    else:
+        overlap_limit = DEFAULT_COLLECTIVE_OVERLAP_LIMIT
+    # The scheduler's longer buffer live ranges fit on the ragged transport only once the layer
+    # carry leaves HBM. Without that offload its first-step NCCL allocations fail.
+    latency_hiding = not ragged or remat_mode == OFFLOAD_CARRY_REMAT_MODE
     flag_defaults = (
         f"{XLA_COLLECTIVE_OVERLAP_FLAG}={overlap_limit}",
-        *_XLA_FLAG_DEFAULTS,
+        f"--xla_gpu_enable_latency_hiding_scheduler={'true' if latency_hiding else 'false'}",
+        # The scheduler sizes the single `jit_train_step` temp arena against this percentage of
+        # its memory budget, roughly `133.6 GiB x percentage`. The pool holds 138.2 GiB and
+        # persistent state occupies 18.1 GiB of it, so an arena above 120.2 GiB cannot be served
+        # from pool free space and forces a fresh mapping against the ~17 GiB of physical memory
+        # outside the pool. The default 95 asks for 125.7 GiB and fails that way. 85 sizes the
+        # arena at 113.6 GiB, leaving enough slack for per-node variation in fragmentation. A
+        # lower percentage costs throughput, because a smaller arena makes `HloRematerialization`
+        # recompute more of the step.
+        "--xla_gpu_memory_limit_slop_factor=85",
         XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG,
     )
     explicit_names = {flag.partition("=")[0] for flag in xla_flags}
     xla_flags.extend(flag for flag in flag_defaults if flag.partition("=")[0] not in explicit_names)
+    if remat_mode == OFFLOAD_CARRY_REMAT_MODE:
+        # A wrong overlap limit corrupts training silently, so the offload takes the flag
+        # away from the caller instead of defaulting it.
+        xla_flags = [f for f in xla_flags if f.partition("=")[0] != XLA_COLLECTIVE_OVERLAP_FLAG]
+        xla_flags.append(f"{XLA_COLLECTIVE_OVERLAP_FLAG}={OFFLOAD_CARRY_COLLECTIVE_OVERLAP_LIMIT}")
+    if ragged:
+        # Unlike the defaults above, these are not overridable. Selecting the host-launched
+        # one-shot kernel needs both flags cleared together plus a splits-per-peer count this
+        # branch no longer carries, so honoring a partial override would run a configuration
+        # nothing here measures. Drop any conflicting entry rather than relying on which
+        # occurrence XLA's parser keeps.
+        xla_flags = [f for f in xla_flags if f.partition("=")[0] not in _RAGGED_REQUIRED_XLA_FLAG_NAMES]
+        xla_flags.extend(RAGGED_REQUIRED_XLA_FLAGS)
     os.environ["XLA_FLAGS"] = " ".join(xla_flags)
+
+
+def verify_ragged_pjrt() -> None:
+    """Raise unless this process runs Marin's patched GPU PJRT plugin."""
+    try:
+        installed = importlib.metadata.version(PJRT_DISTRIBUTION)
+    except importlib.metadata.PackageNotFoundError as missing:
+        raise RuntimeError(
+            f"{PJRT_DISTRIBUTION} is not installed, so this process has no GPU PJRT plugin at all."
+        ) from missing
+    expected_prefix = f"{jax.__version__}+marin."
+    if not installed.startswith(expected_prefix):
+        raise RuntimeError(
+            f"{RAGGED_MOE_IMPLEMENTATION} needs Marin's patched {PJRT_DISTRIBUTION} "
+            f"({expected_prefix}*), found {installed}. The patched wheel is aarch64-only and the "
+            "expert MLP is SM100-specialized; run the ragged transport on GB200."
+        )
 
 
 @dataclass(frozen=True)
@@ -169,7 +277,7 @@ class GrugTrainerConfig:
     # Keep disabled except on model sizes where Grace-Blackwell host offload has been measured.
     # The d6144 EP64 runs used it; d5120 required a 135 GiB pinned-host arena and regressed.
     offload_opt_state: bool = False
-    master_param_mode: MasterParamMode = MasterParamMode.DISABLED
+    master_param_mode: MasterParamMode = MasterParamMode.DEVICE
     training_data_mode: TrainingDataMode = TrainingDataMode.MIXTURE
     # Inline watch computes statistics on every step and uses the watch interval only for logging.
     # This keeps one training executable resident. A diagnostic watch repeats forward and backward
@@ -200,12 +308,14 @@ class GrugEvalConfig:
     steps_per_eval: int | None = 1000
     max_eval_batches: int | None = None
     prefix: str = "eval"
+    # Evaluate with the training MoE backend (capacity-limited, with drops): `eval_current` scores
+    # the live parameters and `eval_ema` the EMA parameters; either one schedules the
+    # training-mesh evaluator.
     eval_current: bool = True
     eval_ema: bool = True
     compute_bpb: bool = True
-    # For expert-parallel runs, also evaluate under the dropless local backend on an
-    # expert-collapsed mesh, logging a separate `eval_dropless` macro loss alongside the
-    # as-trained (with-drop) eval. No-op when the mesh has no expert parallelism.
+    # For expert-parallel runs, evaluate under the dropless local backend on an expert-collapsed
+    # mesh, logging an `eval_dropless` macro loss. No-op when the mesh has no expert parallelism.
     dropless_eval: bool = False
     # Local MoE kernel used after collapsing the expert axis. ``sonic`` is the Hopper Triton path;
     # ``sonic_cute`` is the Blackwell QuACK/CUTLASS path.
@@ -575,7 +685,7 @@ def initial_state(
     key: PRNGKeyArray,
     ema_beta: float | None,
     offload_opt_state: bool = False,
-    master_param_mode: MasterParamMode = MasterParamMode.DISABLED,
+    master_param_mode: MasterParamMode = MasterParamMode.DEVICE,
 ) -> GrugTrainState:
     initialized_params = Transformer.init(model_config, key=key)
     num_moe_layers = model_config.num_layers
@@ -690,7 +800,7 @@ def _make_train_step(
     ema_beta: float | None,
     watch_config: WatchConfig | None = None,
     offload_opt_state: bool = False,
-    master_param_mode: MasterParamMode = MasterParamMode.DISABLED,
+    master_param_mode: MasterParamMode = MasterParamMode.DEVICE,
 ):
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
@@ -776,6 +886,8 @@ def _make_train_step(
 
 def _run_grug_local(config: GrugRunConfig) -> None:
     """Entry point for the grug template training loop."""
+    if config.model.moe_implementation == RAGGED_MOE_IMPLEMENTATION:
+        verify_ragged_pjrt()
     if config.tensorstore_cache_bytes is not None:
         set_jagged_array_read_cache_bytes(config.tensorstore_cache_bytes)
 
@@ -855,7 +967,12 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             load_checkpoint_setting=trainer.load_checkpoint,
             mesh=mesh,
             allow_partial=trainer.allow_partial_checkpoint,
+            template_for_candidate=lambda candidate: template_for_candidate_layout(
+                state, candidate, config.trainer.master_param_mode
+            ),
         )
+        if config.trainer.master_param_mode == MasterParamMode.DEVICE:
+            state = take_master_as_params(state)
         if released_initial_state and any(isinstance(leaf, jax.ShapeDtypeStruct) for leaf in jax.tree.leaves(state)):
             state = _init_state(model_key)
         dump_grug_state_sharding_run_artifact(
@@ -889,18 +1006,23 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         evaluator = None
         dropless_evaluator = None
         dropless_eval_mesh = None
+        eval_ema = False
         if eval_cfg is not None:
-            evaluator = build_tagged_evaluator(
-                data_config=config.data,
-                max_seq_len=config.model.max_seq_len,
-                mesh=mesh,
-                eval_cfg=eval_cfg,
-                mp=trainer.mp,
-            )
+            eval_ema = eval_cfg.eval_ema and config.trainer.ema_beta is not None
+            train_mesh_eval = eval_cfg.eval_current or eval_ema
+            dropless = eval_cfg.dropless_eval and mesh.shape["expert"] > 1
+            if train_mesh_eval:
+                evaluator = build_tagged_evaluator(
+                    data_config=config.data,
+                    max_seq_len=config.model.max_seq_len,
+                    mesh=mesh,
+                    eval_cfg=eval_cfg,
+                    mp=trainer.mp,
+                )
             # Expert-parallel runs drop tokens over capacity; a second evaluator scores the same
             # weights dropless under the local backend on an expert-collapsed mesh (expert folded
             # into `data`), which the local backend requires. FSDP runs already have expert=1.
-            if eval_cfg.dropless_eval and mesh.shape["expert"] > 1:
+            if dropless:
                 dropless_eval_mesh = compact_grug_mesh(
                     expert_axis_size=1,
                     replica_axis_size=mesh.shape["replica_dcn"],
@@ -973,58 +1095,64 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         if train_dataset is not None:
             state_callbacks.add_hook(_make_mixture_stage_callback(train_dataset, batch_schedule), every=1)
         state_callbacks.add_hook(log_device_memory, every=1)
-        if evaluator is not None and eval_cfg is not None:
+        if eval_cfg is not None:
             interval = eval_cfg.steps_per_eval
-            eval_ema = eval_cfg.eval_ema and config.trainer.ema_beta is not None
-            if eval_cfg.eval_current or eval_ema:
-                tagged_eval_hook = cb_tagged_evaluate(
-                    evaluator,
-                    prefix=eval_cfg.prefix,
-                    eval_current=eval_cfg.eval_current,
-                    eval_ema=eval_ema,
+            eval_hooks: list[Callable[..., None]] = []
+            if evaluator is not None:
+                eval_hooks.append(
+                    cb_tagged_evaluate(
+                        evaluator,
+                        prefix=eval_cfg.prefix,
+                        eval_current=eval_cfg.eval_current,
+                        eval_ema=eval_ema,
+                    )
                 )
-                eval_hooks: list[Callable[..., None]] = [tagged_eval_hook]
-                if dropless_evaluator is not None and dropless_eval_mesh is not None:
-                    # The training loop runs under `set_mesh(mesh)` (expert-parallel). The dropless
-                    # evaluator runs under the expert-collapsed mesh, so the model params -- sharded on
-                    # the train mesh -- must be resharded onto the eval mesh before its eval jit (JAX
-                    # does not auto-reshard across explicit meshes), then the local backend sees
-                    # expert=1. PGLE is disabled for the eval module as in `cb_tagged_evaluate`.
-                    dropless_prefix = f"{eval_cfg.prefix}_dropless"
+            if dropless_evaluator is not None and dropless_eval_mesh is not None:
+                # The training loop runs under `set_mesh(mesh)` (expert-parallel). The dropless
+                # evaluator runs under the expert-collapsed mesh, so the model params -- sharded on
+                # the train mesh -- must be resharded onto the eval mesh before its eval jit (JAX
+                # does not auto-reshard across explicit meshes), then the local backend sees
+                # expert=1. PGLE is disabled for the eval module as in `cb_tagged_evaluate`.
+                dropless_prefix = f"{eval_cfg.prefix}_dropless"
+                # The forced end-of-run callback pass revisits the last step; skip it when the
+                # periodic cadence already scored that step, as `cb_tagged_evaluate` does.
+                last_dropless_eval_step: int | None = None
 
-                    def dropless_eval_hook(
-                        step, *args, _mesh=dropless_eval_mesh, _ev=dropless_evaluator, _prefix=dropless_prefix, **kwargs
-                    ):
-                        step_count = int(step.step)
-                        if step_count < 0:
-                            return
-                        # `model` must stay a local. The eval mesh has expert=1, so a leaf sharded on
-                        # the expert axis lands replicated, and the copy is much larger than the
-                        # train-mesh params. The train step needs almost the whole device budget for
-                        # its temporary buffer, thus this copy must die before the next step.
-                        with set_mesh(_mesh):
-                            model = _reshard_tree_to_mesh(step.model, _mesh)
-                            with jax_config.enable_pgle(False):
-                                log_dict = eval_model(_ev, model, prefix=_prefix)
-                            levanter.tracker.log(log_dict, step=step_count)
+                def dropless_eval_hook(
+                    step, *args, _mesh=dropless_eval_mesh, _ev=dropless_evaluator, _prefix=dropless_prefix, **kwargs
+                ):
+                    nonlocal last_dropless_eval_step
+                    step_count = int(step.step)
+                    if step_count < 0 or step_count == last_dropless_eval_step:
+                        return
+                    last_dropless_eval_step = step_count
+                    # `model` must stay a local. The eval mesh has expert=1, so a leaf sharded on
+                    # the expert axis lands replicated, and the copy is much larger than the
+                    # train-mesh params. The train step needs almost the whole device budget for
+                    # its temporary buffer, thus this copy must die before the next step.
+                    with set_mesh(_mesh):
+                        model = _reshard_tree_to_mesh(step.model, _mesh)
+                        with jax_config.enable_pgle(False):
+                            log_dict = eval_model(_ev, model, prefix=_prefix)
+                        levanter.tracker.log(log_dict, step=step_count)
 
-                    eval_hooks.append(dropless_eval_hook)
+                eval_hooks.append(dropless_eval_hook)
 
-                if interval is not None and interval > 0:
-                    for hook in eval_hooks:
-                        state_callbacks.add_hook(hook, every=interval)
+            if interval is not None and interval > 0:
+                for hook in eval_hooks:
+                    state_callbacks.add_hook(hook, every=interval)
 
-                # Baseline point at the start of the loss curve. The periodic cadence first fires at
-                # `steps_per_eval` (step 3000 on the hero), thus a fresh run gets no early point.
-                # These run after the first optimization step, not before it: the first train step
-                # then allocates against a clean pool, and the eval-to-train handoff gets a gate at
-                # step 2 instead of first at step 3000. `every=1` is the only interval that covers
-                # the first step, and `_first_step_only` makes the hook fire once. A resumed run
-                # starts above step 1, thus it never fires. The hooks log at `StepInfo.step`, which
-                # is 0 there, so the point lands at step 0 on the curve.
-                if eval_cfg.eval_at_first_step:
-                    for hook in eval_hooks:
-                        state_callbacks.add_hook(_first_step_only(hook), every=1)
+            # Baseline point at the start of the loss curve. The periodic cadence first fires at
+            # `steps_per_eval` (step 3000 on the hero), thus a fresh run gets no early point.
+            # These run after the first optimization step, not before it: the first train step
+            # then allocates against a clean pool, and the eval-to-train handoff gets a gate at
+            # step 2 instead of first at step 3000. `every=1` is the only interval that covers
+            # the first step, and `_first_step_only` makes the hook fire once. A resumed run
+            # starts above step 1, thus it never fires. The hooks log at `StepInfo.step`, which
+            # is 0 there, so the point lands at step 0 on the curve.
+            if eval_cfg.eval_at_first_step:
+                for hook in eval_hooks:
+                    state_callbacks.add_hook(_first_step_only(hook), every=1)
 
         last_loss: float | jax.Array = 0.0
         last_step_duration = 0.0
@@ -1130,7 +1258,10 @@ def run_grug(config: GrugRunConfig) -> None:
     # Dispatch snapshots os.environ for the child task, so apply the hero defaults first.
     inline_watch_enabled = trainer.watch.is_enabled and config.trainer.watch_mode == WatchMode.INLINE
     _apply_hero_ep_runtime_defaults(
-        inline_watch_enabled=inline_watch_enabled, processes_per_task=config.processes_per_task
+        inline_watch_enabled=inline_watch_enabled,
+        processes_per_task=config.processes_per_task,
+        moe_implementation=config.model.moe_implementation,
+        remat_mode=config.model.remat_mode,
     )
     dispatch_grug_training_run(
         run_id=trainer.id,

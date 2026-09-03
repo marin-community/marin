@@ -3,49 +3,22 @@
 
 """Rasterise a document in a child process the sender task is willing to lose.
 
-The rasteriser is the only native library the OCR route's map tasks touch, and in process it is the
-only thing in them that can end a task without raising: a native abort is a signal no ``except``
-catches. Zephyr answers a dead task by restarting its shard from row zero, three times, with no
-poison-pill detection, so a deterministic abort exhausts the retry budget and fails the stage
-permanently -- throwing away every page the shard had already OCR'd.
+A native abort in the rasteriser is a signal no ``except`` catches, and Zephyr answers a dead task
+by restarting its shard from row zero, so the render runs out here where the task survives it.
 
-PDFium makes that unlikely rather than impossible. Rendering every page of the 100,000-document
-oracle sample on both architectures found zero native aborts in 3,577,944 renders, against MuPDF's
-one deterministic ``SIGSEGV`` repeating on 3 of 3 retries (``pdfium-evaluation.md`` on the
-``mark/pdf_processing`` campaign branch). The point estimate is zero blocking documents crawl-wide
-and the 95% bound on 0/3,577,944 is still tens of them; the cost of meeting one in process is the
-whole stage, so the render runs out here where the task survives it.
-
-**The child streams, one page at a time.** :func:`~...render.iter_rendered_pages` is lazy for two
-reasons a render-the-whole-document round trip would break, and both of them outrank the simpler
-protocol. The sender overlaps rendering with waiting on the GPU fleet -- a page is submitted the
-moment it is rendered -- so a batched render would idle the fleet for the length of every document.
-And an encoded page is well over a megabyte, so a thousand-page document would arrive as a
-multi-gigabyte payload. The pipe supplies the backpressure for nothing: the child blocks writing a
-page the parent has not read yet, so it runs at most one page and one pipe buffer ahead.
-
-**A page crosses as PNG bytes, not as a base64 data URI.** The encoder's output is ~458 KiB per
-page; the data URI is ~610 KiB of it, and sending that would run ``json.dumps`` over the string in
-the child and ``json.loads`` over it in the parent to deliver exactly what
-:func:`~...client.ocr_page` builds for itself in one line. Base64 stays where the wire format asks
-for it and the pipe carries the bytes as themselves. Measured against handing the same page over
-in process, on a 400-page stream repeated 15 times: this protocol adds **0.055 ms of CPU per page
-on Grace and 0.147 on x86**, where carrying the data URI inside the JSON header adds 0.446 and
-0.607 -- 8.1x and 4.1x. The page costs the feed ~50 ms, so one of those is worth paying and the
-other is a third of a per-cent of the fleet for nothing.
+The child streams one page at a time, so the sender can submit a page the moment it is rendered and
+a long document never crosses as one payload; the child blocks writing a page the parent has not
+read yet, so the pipe supplies the backpressure. A page crosses as PNG bytes, not as a base64 data
+URI, which stays where the wire format asks for it in :func:`~...client.ocr_page`.
 
 Deliberately ``subprocess`` rather than ``multiprocessing``: an Iris callable entrypoint runs at
-module top level of ``__main__`` with no ``if __name__ == "__main__"`` guard, so both ``spawn`` and
-``forkserver`` would re-execute the job body in every child. A child per document is not an option
-either -- an interpreter start and the rasteriser's import per document, against a page that costs
-tens of milliseconds -- so :class:`RenderWorker` keeps one for the life of the task process and
-replaces it whenever it stops answering.
+module top level of ``__main__`` with no ``if __name__ == "__main__"`` guard, so ``spawn`` and
+``forkserver`` would re-execute the job body in every child. :class:`RenderWorker` keeps one child
+for the life of the task process and replaces it whenever it stops answering.
 
-**Nothing here imports the pipeline.** The child is this module and what it pulls in: the render
-module's arithmetic, and ``pypdfium2`` and Pillow inside the functions that touch a document.
-Starting one therefore costs an interpreter rather than pyarrow, Zephyr and the Marin execution
-stack, and it reports failures to its caller instead of counting them for the same reason -- the
-counters are the caller's, and the caller already has to record the failure against the document.
+**Nothing here imports the pipeline.** The child is this module, the render module's arithmetic,
+and ``pypdfium2`` and Pillow inside the functions that touch a document. It reports failures to its
+caller instead of counting them; the counters are the caller's.
 """
 
 import json
@@ -72,20 +45,15 @@ logger = logging.getLogger(__name__)
 
 MODULE_NAME = "experiments.datakit.build_pdf_source.ocr_extract.render_worker"
 
-# How long the parent will wait for the *next* page, not for the document. A page is tens of
-# milliseconds and a thousand-page document is legitimately minutes, so a whole-document deadline
-# would have to be loose enough to be no bound at all; a per-page one stays tight while a document
-# is progressing. Breaching it ends the document, so a task's exposure to a stalled child is this
-# long once per document rather than once per page.
+# How long the parent waits for the *next* page, not for the document: a per-page deadline stays
+# tight while a document is progressing. Breaching it ends the document.
 PAGE_DEADLINE = 30.0
 
-# Why a document stopped, when the child did not say. Named as
-# :mod:`~experiments.datakit.build_pdf_source.extract_inspector` names them, because they are the
-# same two things happening to the same kind of child.
+# Why a document stopped, when the child did not say; named as
+# :mod:`~experiments.datakit.build_pdf_source.extract_inspector` names them.
 WORKER_DIED = "worker_died"
 DEADLINE_EXCEEDED = "deadline_exceeded"
-# The child wrote something that is not a frame. Anything printing to its stdout desynchronises the
-# stream for every document after this one, so the child is retired rather than reused.
+# The child wrote something that is not a frame, so its stream is desynchronised and it is retired.
 PROTOCOL_ERROR = "protocol_error"
 
 _ERROR_CHARS = 500
@@ -107,11 +75,8 @@ class RenderFailure(Exception):
     """A document the isolated rasteriser did not finish, and why.
 
     ``reason`` is what the caller counts under ``render_failed/``: :data:`WORKER_DIED`,
-    :data:`DEADLINE_EXCEEDED`, :data:`PROTOCOL_ERROR`, or the exception type the child reported,
-    which keeps the counter vocabulary the in-process render loop already used.
-
-    Raised after the pages the child did stream, never instead of them: a document that fails
-    part-way keeps what it produced, exactly as it did when the loop ran in the map task.
+    :data:`DEADLINE_EXCEEDED`, :data:`PROTOCOL_ERROR`, or the exception type the child reported.
+    Raised after the pages the child did stream, never instead of them.
     """
 
     def __init__(self, reason: str, detail: str) -> None:
@@ -127,9 +92,8 @@ class RenderStream:
     """
 
     def __init__(self, declared_pages: int, pages: Iterator[RenderedPage]) -> None:
-        # Every page the document declares, before the page budget truncates anything. It is the
-        # denominator ``pages_unrendered`` is measured against, so it has to arrive before the
-        # pages rather than be inferred from how many turned up.
+        # Every page the document declares, before the page budget truncates anything: the
+        # denominator ``pages_unrendered`` is measured against.
         self.declared_pages = declared_pages
         self._pages = pages
 
@@ -151,10 +115,8 @@ class RenderStream:
 def render_document(pdf: bytes, options: RenderOptions, stdout) -> None:
     """Stream one document's pages, then one frame saying how it ended.
 
-    Per-page failures are :func:`~...render.iter_rendered_pages`'s own business and stay there: a
-    page PDFium refuses is skipped, visible to the parent as a gap in ``page_index``. What reaches
-    the ``END`` frame is a failure of the *document* -- bytes that are not a PDF, a page tree that
-    cannot be walked -- which the parent records against the row and counts by exception type.
+    Per-page failures stay in :func:`~...render.iter_rendered_pages`, visible to the parent as a gap
+    in ``page_index``; the ``END`` frame carries a failure of the document itself.
     """
     error_type: str | None = None
     error: str | None = None
@@ -253,7 +215,7 @@ class RenderWorker:
         self._streaming = True
         header = self._read_header(deadline)
         if header["frame"] == Frame.END:
-            # The child is alive and well; this document is not. Its own failure, its own name.
+            # The child is alive; this document is not.
             self._streaming = False
             raise RenderFailure(header["error_type"], header["error"])
         return RenderStream(header["declared_pages"], self._stream_pages())
@@ -275,9 +237,8 @@ class RenderWorker:
                     dpi=header["dpi"],
                 )
         finally:
-            # Still mid-document means the caller stopped consuming -- a deadline or a death has
-            # already replaced the child by the time it raises. Either way this one is part-way
-            # through a reply and cannot be handed the next document.
+            # Still mid-document means the caller stopped consuming; a child part-way through a
+            # reply cannot be handed the next document.
             if self._streaming:
                 self._replace("the stream was abandoned mid-document")
 
@@ -309,8 +270,7 @@ class RenderWorker:
     def _fill(self, deadline: float) -> bool:
         """Take whatever the child has ready, or report that it has stopped talking.
 
-        Reads the descriptor rather than ``Popen``'s file object: a buffered reader has no way to
-        bound how long it blocks, and mixing the two loses whatever it has already buffered.
+        Reads the descriptor rather than ``Popen``'s file object, which cannot bound how long it blocks.
         """
         remaining = deadline - time.monotonic()
         if remaining <= 0 or not self._selector.select(remaining):
@@ -325,10 +285,8 @@ class RenderWorker:
     def _silence(self) -> tuple[str, str]:
         """Why nothing came back: the child is gone, or it is still inside the library.
 
-        The descriptor decides, not ``poll()``. A child that aborts closes its stdout and reports
-        its status through a separate mechanism that can lag by enough for ``poll()`` to still say
-        "running" on the read that saw the EOF -- which would file a native abort under the
-        deadline's counter and send the next reader looking for a hang that never happened.
+        The descriptor decides, not ``poll()``, which can still say "running" on the read that saw
+        the EOF.
         """
         if not self._eof:
             return DEADLINE_EXCEEDED, f"no page within {self._deadline:.0f}s"

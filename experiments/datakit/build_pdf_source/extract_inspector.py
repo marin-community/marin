@@ -3,51 +3,15 @@
 
 """Step 3: read every fetched PDF's text layer with pdf-inspector, and measure what came out.
 
-This is the cheap route, and under router v2 it is also the pass the router reads. Both facts follow
-from one number: pdf-inspector extracts a page for **2.1 CPU core-hours per million crawl pages**
-against Docling's 278 -- 132x -- for corpus-wide quality parity, ~0.51 page-weighted in the blind
-head-to-head (``pdf-inspector-evaluation.md``). At that price the pipeline stops routing *before*
-extraction and starts routing *after* it: running the cheap extractor on 100% of documents and then
-deciding costs less than running a 3.4 core-h/M PyMuPDF feature pass on 100% of documents to decide
-first, and it gives the router signals measured on real output instead of predicted from font tables
-(``pdf-router-v2.md``, "Free features against paid ones").
-
-So this step has two outputs in one table. Every fetched PDF gets exactly one row:
+This step has two outputs in one table. Every fetched PDF gets exactly one row:
 
 * the shared document record -- text, provenance, page offsets, extraction status -- which is what
   :mod:`~experiments.datakit.build_pdf_source.combine_routes` unions into the corpus, and
 * :data:`INSPECTOR_FIELDS`, the raw columns
   :mod:`~experiments.datakit.build_pdf_source.classify` turns into the router's 43 features.
 
-They live in one table rather than two because Parquet is columnar: the router reads its ~30 narrow
-columns without touching ``text``, and the union reads ``text`` without paying for the signals. A
-document pdf-inspector produced nothing for is still a row -- with ``text`` empty -- because that is
-the router's single most decisive input. Every one of the 2,054 labelled such documents was
-escalated by the judge, an escalation rate of 1.000, so the gate keeps them out of the corpus and
-they never reach the score (``pdf-router-v2.md``, "One gate is arithmetic").
-
 **Nothing opens a PDF in the map task.** Both native libraries this step touches run in a child
-process the task is willing to lose, for reasons that are measured rather than precautionary and
-that differ between them.
-
-pdf-inspector itself is bought isolation for its *deadline*, not for a crash: no panic and no worker
-death in 100,000 crawl PDFs on either architecture, but ``extract_pages_markdown_bytes`` has no page
-cap, byte cap or deadline of its own and 17 of those documents ran past 30 seconds -- 1.77x slower at
-1.17.0 than at 1.14.1, with a p99 ratio of 10.5x. In-process one of those holds a Zephyr map task
-until its heartbeat expires, the task retries onto the same document, and the shard is lost. The
-residual crash risk rides along for free: three unbounded-depth recursions over nested Form XObjects
-remain in the crate, and a stack overflow there is a ``SIGSEGV`` no ``except`` can catch.
-
-The rasteriser is bought isolation for exactly the crash. Rendering every page of the 100,000
-document sample through MuPDF found one abort -- a ``SIGSEGV`` on page 48 of a 58-page document,
-deterministic across re-renders into fresh processes -- against zero in 3,577,944 PDFium page
-renders. Zephyr gives a shard three attempts, restarts it from row zero and has no poison-pill
-detection, so a deterministic abort exhausts the budget and fails the stage permanently; at ~1 in
-100,000 documents that is ~10 blocking documents crawl-wide. This step reads page geometry from
-every fetched document, so it would meet all of them.
-
-Each library gets its own round trip and therefore its own deadline, so a document that hangs one
-does not cost the other's result.
+process the task is willing to lose for crash and timeout isolation.
 
 ``pdf_inspector`` and the rasteriser are both imported inside the child alone -- the latter
 through :mod:`~experiments.datakit.build_pdf_source.ocr_extract.render`'s own deferred imports. Both
@@ -75,7 +39,7 @@ from itertools import accumulate
 
 import pyarrow as pa
 from fray.types import ResourceConfig
-from marin.datakit.normalize import NormalizedData, generate_id, make_split_writer
+from marin.datakit.normalize import generate_id
 from marin.execution.artifact import read_artifact
 from marin.execution.remote import remote
 from marin.execution.step_spec import StepSpec
@@ -87,9 +51,15 @@ from zephyr.runners import SubprocessRunner
 
 from experiments.datakit.build_pdf_source.boilerplate import BoilerplateOptions, strip_boilerplate
 from experiments.datakit.build_pdf_source.child_framing import READ_CHUNK, read_frame, write_frame
-from experiments.datakit.build_pdf_source.common import FOCUS_CRAWL, PdfSourceData
+from experiments.datakit.build_pdf_source.common import (
+    FOCUS_CRAWL,
+    MAIN_OUTPUT_SUBDIR,
+    SHARD_PATTERN,
+    PdfDocumentsData,
+    PdfSourceData,
+)
 from experiments.datakit.build_pdf_source.document_record import PDF_DOCUMENT_FIELDS, source_id
-from experiments.datakit.build_pdf_source.extract import BOILERPLATE_OPTIONS, SOURCE_COLUMNS, keep_all
+from experiments.datakit.build_pdf_source.extract import BOILERPLATE_OPTIONS, RENDER_OPTIONS, SOURCE_COLUMNS
 from experiments.datakit.build_pdf_source.ocr_extract.render import (
     RenderGeometry,
     RenderOptions,
@@ -97,34 +67,24 @@ from experiments.datakit.build_pdf_source.ocr_extract.render import (
     page_rectangles,
     render_geometry,
 )
+from experiments.datakit.build_pdf_source.ocr_extract.render_worker import DEADLINE_EXCEEDED, WORKER_DIED
 
 logger = logging.getLogger(__name__)
 
-# Pinned, and checked inside the worker before a single document is read. The library is a native
-# extension whose parsing limits, timings and failure rate move release to release -- 1.17.0 is
-# 1.77x slower than 1.14.1 at extraction -- and the router's booster was fit on columns this build
-# produced, so a different build silently shifts the feature distribution the threshold was
-# calibrated against.
+# Pinned, and checked inside the worker before a single document is read: the router's booster was
+# fit on columns this build produced, so a different build silently shifts the feature distribution
+# the threshold was calibrated against.
 LIBRARY_VERSION = "1.17.0"
 
 MODULE_NAME = "experiments.datakit.build_pdf_source.extract_inspector"
 WORKER_FLAG = "--worker"
 
 # The two things the child is asked to do, each in its own round trip so that one hanging or dying
-# does not cost the other's result. They are separate for a measured reason on each side: the
-# library's own p99 latency ratio is 10.5x and it has no deadline, and the rasteriser has a
-# deterministic SIGSEGV on ~1 crawl document in 100,000.
+# does not cost the other's result.
 OP_EXTRACT = "extract"
 OP_GEOMETRY = "geometry"
 
-# The deadline the evaluation measured against: 17 of 100,000 documents exceeded it on
-# ``extract_pages_markdown_bytes`` alone. ``detect_pdf_bytes`` runs inside the same deadline and
-# costs 0.461 ms/page against extraction's 7.709, so the measured rate carries. Generous against a
-# library that claims single-digit milliseconds per page: a document still running after this long
-# is a hang for any practical purpose.
 CALL_DEADLINE = 30.0
-
-RENDER_OPTIONS = RenderOptions()
 
 # A token this long is not a word. Long runs come from tables serialized without separators and from
 # CID-mapped subsets that decode into one unbroken string, and both are extraction damage.
@@ -142,9 +102,8 @@ class InspectorStatus(StrEnum):
     """What pdf-inspector did with a document.
 
     ``EMPTY`` and ``FAILED`` are held apart because they are different facts about the corpus even
-    though the router treats them alike. ``EMPTY`` is the library succeeding on a scan: 12,127 of the
-    12,396 no-text documents in the 100k sample. ``FAILED`` is the 269 it refused, crashed on or ran
-    past the deadline. Collapsing them would hide a library regression inside the corpus's scan rate.
+    though the router treats them alike. Collapsing them would hide a library regression inside the
+    corpus's scan rate.
     """
 
     SUCCESS = "success"
@@ -152,8 +111,7 @@ class InspectorStatus(StrEnum):
     FAILED = "failed"
 
 
-# Every statistic measured on the markdown pdf-inspector actually produced. Router v1 could only
-# predict extraction damage from a page's fonts and geometry; these observe it.
+# Every statistic measured on the markdown pdf-inspector actually produced.
 OUTPUT_STATISTIC_NAMES: tuple[str, ...] = (
     "replacement_ratio",
     "alpha_ratio",
@@ -171,11 +129,7 @@ OUTPUT_STATISTIC_NAMES: tuple[str, ...] = (
     "heading_ratio",
 )
 
-# The route's own columns, appended to the shared document record. Everything the router reads is
-# here, which is why almost all of it is nullable: a document the library refused has provenance and
-# an error and nothing else, and a null is what tells XGBoost the feature is missing rather than
-# zero. ``inspector_ocr_reasons`` is carried as a JSON reason-to-page-count histogram because the
-# library reports reasons per page and a variable-length index list is not a feature.
+# The route's own columns, appended to the shared document record.
 INSPECTOR_FIELDS: tuple[pa.Field, ...] = (
     pa.field("pdf_bytes", pa.int64(), nullable=False),
     # Null, not zero, when the geometry pass found no readable page: the router keeps such a
@@ -215,25 +169,18 @@ SIGNAL_COLUMNS: list[str] = [
 
 _DRIVER_RESOURCES = ResourceConfig(cpu=2, ram="16g", disk="8g")
 # The library is internally parallel -- lopdf is built against rayon -- so a task is costed at two
-# CPUs rather than one, and its child process is where the work happens. Task disk is unused: shards
-# stream from object storage.
+# CPUs rather than one, and its child process is where the work happens.
 _MAP_TASK_RESOURCES = ResourceConfig(cpu=2, ram="8g", disk="4g")
-# Phase 2 merge-sorts extracted text. No PDFs, no child processes, one CPU.
-_NORMALIZE_TASK_RESOURCES = ResourceConfig(cpu=1, ram="4g", disk="4g")
 _TASKS_PER_WORKER = 8
 _WORKER_RESOURCES = ResourceConfig(cpu=2 * _TASKS_PER_WORKER, ram="64g", disk="32g")
 _MAX_WORKERS = 32
-# Not Zephyr's 1 GB default: a shared-pool coordinator holds both executions' shard, retry and
-# result state, and across this pipeline family the default is what gets OOM-killed (exit 137) one
-# task short of the end of a stage, after the work is already on disk.
-_COORDINATOR_RESOURCES = ResourceConfig(cpu=1, ram="8g", preemptible=False)
 # A task holding a pathological document can legitimately go a long time without finishing one, and
 # CALL_DEADLINE bounds how long that can be.
 _HEARTBEAT_TIMEOUT = 30 * 60
 
 
 # ---------------------------------------------------------------------------
-# Measuring the output, which is the signal router v1 structurally could not have
+# Measuring the output
 # ---------------------------------------------------------------------------
 
 
@@ -304,15 +251,7 @@ def output_statistics(pages: list[str], source_pages: int) -> dict[str, float]:
 
 
 def _detect_signals(result) -> dict:
-    """The classification signals ``detect_pdf_bytes`` reports, flattened for a row.
-
-    ``pages_needing_ocr`` and friends arrive as page-index lists; the routing question is how much of
-    the document is affected, so they are carried as counts. ``has_encoding_issues``,
-    ``is_complex_layout``, ``pages_with_tables`` and ``pages_with_columns`` are *not* carried from
-    this call: the evaluation found all four constant across all 100,000 documents in both 1.14.1 and
-    1.17.0, so detect populates none of its declared layout signals and the extraction's own read of
-    them is the only one worth storing.
-    """
+    """The classification signals ``detect_pdf_bytes`` reports, flattened for a row."""
     reasons: Counter[str] = Counter()
     for page in result.ocr_reasons_by_page:
         reasons.update(page.reasons)
@@ -342,10 +281,7 @@ def _extract_reply(payload: bytes) -> dict:
     """Both pdf-inspector calls against one document, each allowed to fail on its own.
 
     ``detect_pdf_bytes`` refusing a document the extraction reads fine must not discard the
-    extraction, and the reverse is worth the same care, so neither failure aborts the other.
-
-    ``BaseException`` and not ``Exception``: PyO3 derives ``PanicException`` from the former, and a
-    panic reported as a worker death would turn a catchable failure into a respawn.
+    extraction, and the reverse is worth the same care.
     """
     import pdf_inspector  # noqa: PLC0415 - the whole point is to import it out of process
 
@@ -358,17 +294,15 @@ def _extract_reply(payload: bytes) -> dict:
             reply.update(flatten(call(payload)))
         except (KeyboardInterrupt, SystemExit):
             raise
+        # BaseException: PyO3 derives PanicException from it, and a panic reported as a worker death
+        # would turn a catchable failure into a respawn.
         except BaseException as error:
             reply[f"{name}_error"] = f"{type(error).__name__}: {error}"[:500]
     return reply
 
 
 def _geometry_reply(payload: bytes) -> dict:
-    """Every page's size in points, read by the rasteriser and measured by nobody yet.
-
-    The rectangles cross the pipe rather than the DPIs, so the arithmetic that turns them into the
-    router's features stays in the parent where it is testable without a PDF library.
-    """
+    """Every page's size in points."""
     try:
         with open_pdf(payload) as document:
             return {"page_rectangles": page_rectangles(document)}
@@ -400,14 +334,8 @@ def worker_main() -> None:
 class InspectorWorker:
     """A pdf-inspector subprocess, bounded by a deadline and replaced whenever it stops answering.
 
-    Deliberately ``subprocess`` rather than ``multiprocessing``: an Iris callable entrypoint runs at
-    module top level of ``__main__`` with no ``if __name__ == "__main__"`` guard, so both ``spawn``
-    and ``forkserver`` would re-execute the job body in every child.
-
-    It replaces itself rather than being replaced by its caller, so the caller can hold one handle
-    for the life of the process (see :func:`inspector_worker`). Starting one costs an interpreter
-    and the crate's import, which is why a per-document child is not an option against a 7.7
-    ms/page call.
+    ``subprocess`` rather than ``multiprocessing``, because an Iris callable entrypoint runs at
+    module top level of ``__main__`` and ``spawn`` would re-execute the job body in every child.
     """
 
     def __init__(self, deadline: float = CALL_DEADLINE) -> None:
@@ -441,23 +369,14 @@ class InspectorWorker:
         self._process = None
 
     def _death(self) -> str:
-        """How the worker died, named rather than numbered.
-
-        ``wait()`` and not ``poll()``: the child's stdout reaches EOF before its exit status is
-        necessarily reapable, and ``poll()`` would then answer ``None`` -- writing "worker exited
-        with None" into the document's ``extraction_error`` for what was really a signal.
-        """
+        """How the worker died."""
         code = self._process.wait()
         if code < 0:
             return f"worker killed by {signal.Signals(-code).name}"
         return f"worker exited with {code}"
 
     def _read_reply(self, deadline: float) -> str | None:
-        """One newline-terminated reply, or ``None`` on timeout or on the worker's EOF.
-
-        The two ``None``s are told apart by :attr:`_eof` rather than by the caller re-checking the
-        process, because only the read that saw the empty chunk knows which one happened.
-        """
+        """One newline-terminated reply, or ``None`` on timeout or on the worker's EOF."""
         buffer = bytearray()
         while True:
             remaining = deadline - time.monotonic()
@@ -472,12 +391,7 @@ class InspectorWorker:
                 return buffer.split(b"\n", 1)[0].decode()
 
     def call(self, op: str, pdf: bytes) -> dict:
-        """Run one operation on one document, replacing the child if it does not come back.
-
-        Returns the worker's reply, or a dict carrying ``<op>_error`` when the child died or ran
-        past its deadline -- which the caller records against the document rather than raising,
-        because on a crawl corpus that is data.
-        """
+        """Run one operation on one document, replacing the child if it does not come back."""
         deadline = time.monotonic() + self._deadline
         try:
             write_frame(self._process.stdin, {"op": op, "size": len(pdf)}, pdf)
@@ -493,13 +407,10 @@ class InspectorWorker:
             return json.loads(line)
 
         # Either the child is gone or it is still inside the library. Both mean this process is no
-        # longer usable: a worker mid-document cannot be handed the next one. The descriptor decides
-        # which it was -- ``poll()`` can still say "running" on the read that saw the EOF, filing a
-        # native abort under the deadline's counter and sending the next reader after a hang that
-        # never happened.
+        # longer usable: a worker mid-document cannot be handed the next one.
         died = self._eof
         reason = failure or (self._death() if died else f"no reply within {self._deadline:.0f}s")
-        outcome = "worker_died" if died else "deadline_exceeded"
+        outcome = WORKER_DIED if died else DEADLINE_EXCEEDED
         counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/{outcome}/{op}", 1)
         counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/worker_respawned", 1)
         self.stop()
@@ -513,14 +424,7 @@ class InspectorWorker:
 
 
 def document_geometry(reply: dict, options: RenderOptions) -> RenderGeometry | None:
-    """What the render budget would resolve this document to, or ``None`` if nothing can render it.
-
-    A PDF the rasteriser cannot open, or one with no page it will accept, is not an error here. It is
-    the fact that decides the document's route: the VLM route renders through this same library, so
-    escalating a document nothing can open buys nothing, and the router keeps it on whatever text
-    pdf-inspector managed instead. ``None`` and not a zero geometry, because a mean DPI of 0.0 reads
-    as "renders far below the legibility floor", which is a different document.
-    """
+    """What the render budget would resolve this document to, or ``None`` if nothing can render it."""
     if "geometry_error" in reply:
         counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/geometry_failed", 1)
         logger.debug("Could not measure render geometry: %s", reply["geometry_error"])
@@ -547,15 +451,11 @@ def extract_document(row: dict, reply: dict, geometry: RenderGeometry | None, bo
     "no text" as a decision rather than as a missing row, and it is why this function never raises.
 
     Page furniture is stripped before the text is hashed into ``id``, so the id is computed over the
-    text a consumer actually reads. The stripping does not overlap the library's own: 1.17.0's
-    ``extract_pages_markdown_mem`` passes ``strip_headers_footers=false``, and running headers still
-    reach its output on 12.1% of multi-page documents (``pdf-inspector-evaluation.md``).
+    text a consumer actually reads.
     """
     pages: list[str] = reply.get("pages") or []
     # Per *source* page, so the denominator is the document's page count rather than the number of
-    # pages the extraction produced -- a scan yields one and has forty. The rasteriser's count is
-    # preferred because it is what the training table used; the library's is the fallback for the
-    # documents where the rasteriser had no answer, which the study would simply have dropped.
+    # pages the extraction produced.
     source_pages = (geometry.pages if geometry else 0) or reply.get("inspector_page_count") or len(pages)
     signals = _blank_signals() | {
         name: value for name, value in reply.items() if name in {field.name for field in INSPECTOR_FIELDS}
@@ -565,10 +465,8 @@ def extract_document(row: dict, reply: dict, geometry: RenderGeometry | None, bo
         signals["inspector_markdown_chars"] = sum(len(page) for page in pages)
 
     stripped = strip_boilerplate(pages, boilerplate)
-    # Give every page a trailing newline so the last line of one cannot fuse with the first line of
-    # the next. After stripping, not before: a blank line at the foot of every page is itself a
-    # repeated edge pattern, so adding the newlines first would have the boilerplate pass take them
-    # straight back off again.
+    # Every page ends in a newline so two pages cannot fuse; added after stripping, since a trailing
+    # blank line on every page would itself read as boilerplate.
     normalized = [page if not page or page.endswith("\n") else page + "\n" for page in stripped.pages]
     text = "".join(normalized)
 
@@ -608,13 +506,8 @@ def extract_document(row: dict, reply: dict, geometry: RenderGeometry | None, bo
 
 @cache
 def inspector_worker(deadline: float) -> InspectorWorker:
-    """One pdf-inspector child per task process, shared by every batch the process runs.
-
-    Never shut down: it lives as long as the process. Rebuilding it per Parquet row group would pay
-    an interpreter start and the crate's import for every few hundred documents, against a call that
-    costs 7.7 ms/page. It replaces itself when a document kills it, so a long-lived handle is safe,
-    and a child orphaned by a dying parent reads EOF on its stdin pipe and exits on its own.
-    """
+    """One pdf-inspector child per task process, shared by every batch the process runs and never
+    shut down."""
     return InspectorWorker(deadline)
 
 
@@ -626,8 +519,7 @@ def extract_batch(
     """Extract one Parquet row group. Every line that opens a PDF runs in the child, not here.
 
     Two round trips per document rather than one, so that the rasteriser and the extractor get their
-    own deadline and their own chance to die: neither of them can then cost the other's result. The
-    extra cost is a second pipe write of the document's bytes against ~140 ms of parsing.
+    own deadline and their own chance to die.
     """
     worker = inspector_worker(CALL_DEADLINE)
     for row in batch.to_pylist():
@@ -636,76 +528,39 @@ def extract_batch(
         yield extract_document(row, extracted, geometry, boilerplate)
 
 
-def extract_pdf_text(output_path: str, source_output_path: str) -> NormalizedData:
-    """Extract every fetched PDF, in two phases on one warm worker pool.
+def extract_pdf_text(output_path: str, source_output_path: str) -> PdfDocumentsData:
+    """Extract every fetched PDF: one map over the fetched shards, one output shard per input shard.
 
-    Phase 1 maps the fetch shards and writes **raw per-source-shard Parquet** -- no shuffle -- with
-    ``skip_existing``, so it is the checkpoint: a retry re-extracts only the shards whose raw file
-    never landed. Phase 2 runs the one legitimate shuffle, the normalized format's global sort by
-    content-hash ``id``, on the same Zephyr worker pool. The sort key is a hash of the extracted
-    text, so the repartition cannot begin until extraction ends and is pure CPU-and-storage work.
-
-    This is the shape :mod:`~experiments.datakit.build_pdf_source.extract_ocr` runs for the same
-    reason, minus the fleet: there are no GPUs to release here, only child processes.
+    The output shard keeps its input's basename, which is what keeps the routing table this feeds
+    co-partitioned with the fetch; ``skip_existing`` makes the output its own checkpoint.
     """
     source = read_artifact(source_output_path, PdfSourceData)
     shards = sorted(str(shard) for shard in StoragePath(prefix_join(source.main_output_dir, "*.parquet")).glob())
     if not shards:
         raise RuntimeError(f"No fetched PDFs under {source.main_output_dir}")
-    raw_dir = prefix_join(output_path, "raw")
+    output_dir = prefix_join(output_path, MAIN_OUTPUT_SUBDIR)
     logger.info(
         "Extracting %d shards from %s with pdf-inspector %s", len(shards), source.main_output_dir, LIBRARY_VERSION
     )
 
-    tallies: dict[str, int | float] = {}
-    with ZephyrContext(
+    pipeline = (
+        Dataset.from_list(shards)
+        .load_parquet(columns=SOURCE_COLUMNS, batch_mode=True)
+        .flat_map(partial(extract_batch, render_options=RENDER_OPTIONS, boilerplate=BOILERPLATE_OPTIONS))
+        .write_parquet(prefix_join(output_dir, SHARD_PATTERN), schema=OUTPUT_SCHEMA, skip_existing=True)
+    )
+    outcome = ZephyrContext(
         name="focus-crawl-pdf-inspector",
         resources=_WORKER_RESOURCES,
         max_workers=_MAX_WORKERS,
         stage_runner_factory=SubprocessRunner,
-        coordinator_resources=_COORDINATOR_RESOURCES,
         heartbeat_timeout=_HEARTBEAT_TIMEOUT,
-    ) as pool:
-        extraction = (
-            Dataset.from_list(shards)
-            .load_parquet(columns=SOURCE_COLUMNS, batch_mode=True)
-            .flat_map(partial(extract_batch, render_options=RENDER_OPTIONS, boilerplate=BOILERPLATE_OPTIONS))
-            .write_parquet(
-                prefix_join(raw_dir, "part-{shard:05d}-of-{total:05d}.parquet"),
-                schema=OUTPUT_SCHEMA,
-                skip_existing=True,
-            )
-        )
-        outcome = pool.execute(extraction, map_task_resources=_MAP_TASK_RESOURCES)
-        tallies.update(outcome.counters)
-
-        normalize = (
-            Dataset.from_files(prefix_join(raw_dir, "*.parquet"))
-            .load_parquet()
-            .group_by(
-                key=lambda record: record["id"],
-                reducer=keep_all,
-                sort_by=lambda record: record["id"],
-                num_output_shards=len(shards),
-            )
-            .map_shard(make_split_writer(output_path, output_schema=OUTPUT_SCHEMA))
-        )
-        outcome = pool.execute(normalize, map_task_resources=_NORMALIZE_TASK_RESOURCES)
-        tallies.update(outcome.counters)
-
-    return NormalizedData(
-        main_output_dir=prefix_join(output_path, "outputs/main"),
-        dup_output_dir=prefix_join(output_path, "outputs/dups"),
-        counters=tallies,
-    )
+    ).execute(pipeline, map_task_resources=_MAP_TASK_RESOURCES)
+    return PdfDocumentsData(main_output_dir=output_dir, counters=dict(outcome.counters))
 
 
 def inspector_extract_step(source: StepSpec) -> StepSpec:
-    """Build the pdf-inspector extraction step, which runs over every fetched PDF.
-
-    It depends on the fetch step alone. That is the shape change router v2 makes: extraction no
-    longer waits on a routing decision, the routing decision waits on extraction.
-    """
+    """Build the pdf-inspector extraction step, which runs over every fetched PDF."""
     return StepSpec(
         name="data/datakit/extract/common_crawl_focus_2026_22_pdf_inspector",
         deps=[source],
@@ -721,7 +576,9 @@ def inspector_extract_step(source: StepSpec) -> StepSpec:
             "boilerplate_min_page_fraction": BOILERPLATE_OPTIONS.min_page_fraction,
             "boilerplate_max_page_fraction": BOILERPLATE_OPTIONS.max_page_fraction,
             "boilerplate_max_edge_lines": BOILERPLATE_OPTIONS.max_edge_lines,
-            "schema_version": 1,
+            # 2: one unsorted shard per fetched shard, named after it. 1 was the normalized layout,
+            # sorted by content hash into as many shards as there were fetched files.
+            "schema_version": 2,
         },
         fn=remote(
             partial(extract_pdf_text, source_output_path=source.output_path),

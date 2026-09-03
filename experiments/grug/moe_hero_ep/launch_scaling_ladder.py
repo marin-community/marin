@@ -4,10 +4,10 @@
 """Hero-shape scaling ladder: one recipe, five widths.
 
 Every rung trains the *same* EP hero recipe -- 384 routed experts, top-8, hidden/2-wide experts in a
-hidden/2 latent, pooled-wave transport, the Harrier 2026.08.18 two-phase mixture on the Marin
-tokenizer, offloaded MuonH state on FP32 pinned-host master params, the QB histogram estimator, and
-a dropless held-out eval -- and differs only in width and the rack count it spans. Behaviour is
-uniform across the ladder so a rung predicts the d6144 hero. ``d6144`` is the hero itself.
+hidden/2 latent, pooled-wave all-to-all transport, the Harrier 2026.08.18 two-phase mixture on the
+Marin tokenizer, offloaded MuonH state, the QB histogram estimator, and a dropless held-out eval --
+and differs only in width and the rack count it spans. Behaviour is uniform across the ladder so a
+rung predicts the d6144 hero. ``d6144`` is the hero itself.
 
     size   racks  batch    steps  eval        checkpoints  tokens  active  total   FLOPs
     d768     1     1024    11420  every 5%    final only     48B     61M    1.6B    5.5e19
@@ -19,6 +19,13 @@ uniform across the ladder so a rung predicts the d6144 hero. ``d6144`` is the he
 Train batch is 1024 x racks (constant per-rack load); eval batch is 64 x racks (one sequence per
 device). Tokens/steps hold 791 tokens per active parameter (18T at d6144); FLOPs are the levanter
 analytic estimate (forward+backward, including attention and the latent-MoE correction).
+
+Changelog:
+    2026-09-02 (#8818, PR #8833): decoupled weight decay on the attn_gate and router weights is on by
+        default (0.02, annealed linearly to 0 over training and read from the Adam step count so it
+        resumes at the right step); pass ``--gate-router-weight-decay 0`` to opt out.
+        hero-wd-gate-router-p02-step54k forks hero-12d8b6f0-dee637 at step 54000 on the pooled-wave transport
+        (see ``trigger_hero.sh``).
 """
 
 import dataclasses
@@ -67,6 +74,7 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     hero_grug_trainer_config,
     hero_trainer_config,
     validation_datasets,
+    with_transport_remat_mode,
 )
 from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic, build_hero_configs
 from experiments.grug.moe_hero_ep.small_scale_abl_launch import (
@@ -114,21 +122,20 @@ LADDER_MAX_TASK_FAILURES = 1000
 def _ladder_model(size: str):
     """The GrugModelConfig for ``size`` at the hero routing geometry with the QB histogram estimator."""
     if size == "d6144":
-        return HERO_MODEL_CONFIG
+        # Only the hero rung is measured with the layer-carry offload.
+        return with_transport_remat_mode(HERO_MODEL_CONFIG)
     shape = SMALL_SHAPES[size]
     return _small_model(
         shape,
         _EP_CAPACITY_FACTOR,
         attention_implementation="gpu_fa4_cute",
-        moe_implementation="fixed_pooled_wave_all_to_all",
+        moe_implementation="ragged_all_to_all",
         expert_chunks=1,
         seq_len=SEQ_LEN,
         num_experts=384,
         num_experts_per_token=8,
         intermediate_dim=None,
         latent_dim=None,
-        pooled_transport_capacity_factor=_EP_CAPACITY_FACTOR,
-        num_expert_waves=3,
         qb_use_histogram=True,
         qb_hist_bins=HERO_QB_HIST_BINS,
     )
@@ -140,17 +147,25 @@ def build_ladder_run(
     size: str,
     num_steps: int | None = None,
     checkpoint_every: int | None = None,
+    gate_router_weight_decay: float = 0.02,
     version: str | None = None,
+    initialize_from_checkpoint: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """One scaling-ladder rung at width ``size`` on ``LADDER_RACKS[size]`` GB200 racks.
 
     ``num_steps`` defaults to the steps needed to train ``TOKENS_PER_ACTIVE_PARAM`` tokens per active
-    parameter at the rung's (rack-scaled) batch. Every eval scores the held-out set both as-trained
-    and dropless. The narrow rungs eval every 5% of the run and keep only the forced final
+    parameter at the rung's (rack-scaled) batch. Every eval scores the held-out set dropless. The
+    narrow rungs eval every 5% of the run and keep only the forced final
     checkpoint; the d6144 hero evals every 3000 steps and keeps a permanent checkpoint every 6000.
     ``checkpoint_every`` overrides that cadence for any rung. A rolling temporary checkpoint every
     ``RESUME_SAVE_INTERVAL`` on region-local storage covers a crash or a preemption, and a rung
-    resumes from the newest checkpoint it finds.
+    resumes from the newest checkpoint it finds. ``initialize_from_checkpoint`` is another run's
+    checkpoint directory, added as the resume fallback so a relaunch under a new run id continues
+    that lineage's full state from exactly that step while writing only to its own tree.
+
+    ``gate_router_weight_decay`` is on by default (see ``GrugMoeMuonHConfig``): the recipe decays the
+    attn_gate and router weights, and because the decay reads the Adam step count it also applies at
+    the right point when a run resumes an existing checkpoint. Pass 0 to opt out.
     """
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
@@ -158,8 +173,7 @@ def build_ladder_run(
         raise ValueError(f"size must be one of {sorted(LADDER_RACKS)}, got {size!r}")
 
     dp_racks = LADDER_RACKS[size]
-    # Weak scaling: batch grows with racks so per-rack token load (and the pooled-wave drop dynamics)
-    # stays constant across rungs. Eval batch is one sequence per device (64 per rack).
+    # Weak scaling holds per-rack token load constant; eval is one sequence per device.
     batch_size = HERO_EP_BATCH_SIZE * dp_racks
     eval_batch_size = HERO_EP_EXPERT_AXIS_SIZE * dp_racks
     global_tokens_per_step = batch_size * SEQ_LEN
@@ -177,7 +191,14 @@ def build_ladder_run(
     # `keep_permanent=None` still writes the final checkpoint; restore is not used (see run_grug).
     if size == "d6144":
         steps_per_eval = 3000
-        keep_permanent: list[dict[str, int]] | None = [{"every": 6000}]
+        # Permanent checkpoint every 6000 steps, plus a one-off at step 55000 for the post-handoff
+        # weight-decay comparison (#8818). Interval keeps are modular within each `until` range, so
+        # the 6000 cadence brackets the pinned 55000 range on both sides.
+        keep_permanent: list[dict[str, int | None]] | None = [
+            {"until": 54000, "every": 6000},
+            {"until": 55000, "every": 55000},
+            {"until": None, "every": 6000},
+        ]
     else:
         steps_per_eval = max(1, round(num_steps / 20))
         keep_permanent = None
@@ -198,9 +219,10 @@ def build_ladder_run(
             ),
             use_syrk=True,  # GB200 SM100 symmetric GEMM for MuonH Newton-Schulz
         )
+    optimizer = dataclasses.replace(optimizer, gate_router_weight_decay=gate_router_weight_decay)
 
     # Uniform hero trainer: expert-parallel within each rack, replicated across racks, MuonH state
-    # offloaded to FP32 pinned host so the pooled all-to-all buffers keep their HBM.
+    # offloaded to FP32 pinned host.
     grug_trainer = hero_grug_trainer_config(
         replica_axis_size=dp_racks,
         training_data_mode=TrainingDataMode.MIXTURE,
@@ -224,6 +246,9 @@ def build_ladder_run(
         permanent_checkpoint_path = prefix_join(ctx.output_path, "checkpoints")
         temporary_checkpoint_path = temporary_checkpoint_base_path(ctx.output_path)
         data_local_checkpoint_path = data_local_temporary_checkpoint_base_path(ctx.output_path)
+        load_checkpoint_path = [permanent_checkpoint_path, temporary_checkpoint_path, data_local_checkpoint_path]
+        if initialize_from_checkpoint is not None:
+            load_checkpoint_path.append(initialize_from_checkpoint)
         trainer = hero_trainer_config(
             run_id=run_id,
             seed=0,
@@ -255,13 +280,11 @@ def build_ladder_run(
                 startup_timeout=HERO_STARTUP_TIMEOUT,
             ),
             # Existing 02A temporaries remain valid resume candidates for this lineage.
-            load_checkpoint_path=[
-                permanent_checkpoint_path,
-                temporary_checkpoint_path,
-                data_local_checkpoint_path,
-            ],
+            load_checkpoint_path=load_checkpoint_path,
             # load_checkpoint stays None: the trainer resumes from the newest checkpoint that
-            # exists, so a retry after a hardware or memory fault continues the run.
+            # exists, so a retry after a hardware or memory fault continues the run. Continuing
+            # another run requires a checkpoint, so a wrong path fails instead of starting fresh.
+            load_checkpoint=True if initialize_from_checkpoint is not None else None,
             checkpointer=CheckpointerConfig(
                 base_path=permanent_checkpoint_path,
                 # Rolling resume checkpoints go to region-local temp storage with a lifecycle TTL.
@@ -291,6 +314,9 @@ def build_ladder_run(
             eval=GrugEvalConfig(
                 steps_per_eval=steps_per_eval,
                 eval_batch_size=eval_batch_size,
+                # The capacity-limited eval breaks the ragged train step at d6144 (#8861). The
+                # dropless eval is the reported metric.
+                eval_current=False,
                 eval_ema=False,
                 compute_bpb=True,
                 dropless_eval=True,
@@ -332,11 +358,37 @@ def build_ladder_run(
     "the rung (6000 at d6144, final only elsewhere). Resume uses the rolling temporary checkpoint "
     "and is not affected by this option.",
 )
+@click.option(
+    "--gate-router-weight-decay",
+    type=click.FloatRange(min=0.0),
+    default=0.02,
+    show_default=True,
+    help="Decoupled weight decay on attn_gate and the router weight, annealed linearly to 0 over "
+    "training. Defaults on for the hero recipe; pass 0 to opt out.",
+)
+@click.option(
+    "--initialize-from-checkpoint",
+    default=None,
+    help="Checkpoint directory of another run to resume from under a new --run-id; this run writes only "
+    "to its own tree and later restarts prefer its own, newer checkpoints.",
+)
 @build_options
 def main(
-    run_id: str, size: str, num_steps: int | None, checkpoint_every: int | None
+    run_id: str,
+    size: str,
+    num_steps: int | None,
+    checkpoint_every: int | None,
+    gate_router_weight_decay: float,
+    initialize_from_checkpoint: str | None,
 ) -> ArtifactStep[HeroThroughputResult]:
-    return build_ladder_run(run_id=run_id, size=size, num_steps=num_steps, checkpoint_every=checkpoint_every)
+    return build_ladder_run(
+        run_id=run_id,
+        size=size,
+        num_steps=num_steps,
+        checkpoint_every=checkpoint_every,
+        gate_router_weight_decay=gate_router_weight_decay,
+        initialize_from_checkpoint=initialize_from_checkpoint,
+    )
 
 
 if __name__ == "__main__":

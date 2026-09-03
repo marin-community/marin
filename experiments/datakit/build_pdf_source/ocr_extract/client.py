@@ -3,10 +3,8 @@
 
 """Send one rendered page to the OCR endpoint and get Markdown back.
 
-The senders are deliberately thin. All they do is render a page, post it, and keep the answer; the
-model, the batching, and the queueing all live behind the endpoint. What the client is responsible
-for is not under-driving the fleet -- every default in this path that bounds concurrency has to be
-raised, because each one silently caps throughput rather than failing.
+The senders are thin: render a page, post it, keep the answer. Every default in this path that
+bounds concurrency has to be raised, because each one silently caps throughput rather than failing.
 """
 
 import base64
@@ -22,12 +20,8 @@ from experiments.datakit.build_pdf_source.ocr_extract.render import MIN_PIXELS, 
 logger = logging.getLogger(__name__)
 
 # The doc2md prompt from ``infinity_parser2/prompts.py`` (PROMPT_DOC2MD), with one added line under
-# "Output Format" forbidding stray ```markdown fences -- the model wrapped whole pages in them
-# otherwise, which is transcription of nothing and would have to be stripped downstream.
-#
-# Treat the rest as fixed. It is part of the model's validated input distribution, and the tag
-# vocabulary it asks for is what the boilerplate pass and every downstream consumer expect. Any
-# change here re-keys the extraction step, by design: ``prompt_digest`` is in its hash_attrs.
+# "Output Format" forbidding stray ```markdown fences. Any change here re-keys the extraction step:
+# ``prompt_digest`` is in its hash_attrs.
 PROMPT_DOC2MD = """
 You are an AI assistant specialized in converting PDF images to Markdown format. Please follow these instructions for the conversion:
 
@@ -55,12 +49,9 @@ You are an AI assistant specialized in converting PDF images to Markdown format.
 Please strictly follow these guidelines to ensure accuracy and consistency in the conversion. Your task is to accurately convert the content of the PDF image into Markdown format without adding any extra explanations or comments.
 """  # noqa: E501 -- the prompt's line breaks are part of the input; rewrapping it changes the input
 
-# Measured mean completion length is ~708 tokens per page across every pod shape and page size in
-# the sweep, so this is roughly 6x the mean and exists to bound a runaway repetition loop.
+# Roughly 6x the mean completion length per page; bounds a runaway repetition loop.
 DEFAULT_MAX_TOKENS = 4096
-# Well past the measured p50 of 21s at the fleet's operating point. The cost of a timeout that is
-# too tight is a lost page; the cost of one that is too loose is a stalled sender thread, and the
-# broker's own lease timeout is the backstop that actually matters.
+# Bounds a hung request; the broker's own lease timeout is the backstop.
 DEFAULT_REQUEST_TIMEOUT = 900.0
 DEFAULT_MAX_RETRIES = 2
 
@@ -69,8 +60,7 @@ DEFAULT_MAX_RETRIES = 2
 class OcrEndpoint:
     """Where the OCR fleet is and how to talk to it.
 
-    Frozen and hashable so a sender process can cache one client per endpoint, and cheap to pickle
-    so the driver can hand it to every Zephyr map task.
+    Frozen and hashable so a sender process can cache one client per endpoint.
     """
 
     base_url: str
@@ -87,9 +77,7 @@ class PageOcr:
 
     text: str
     completion_tokens: int
-    # The model hit ``max_tokens`` and was cut off mid-page. The text is real but incomplete, and
-    # nothing else about the response says so -- a truncated page is a normal 200 with a shorter
-    # body. Dense pages (formal proofs, packed tables) are where this happens.
+    # The model hit ``max_tokens`` and was cut off mid-page; the text is real but incomplete.
     truncated: bool = False
 
 
@@ -98,8 +86,7 @@ def _client(endpoint: OcrEndpoint, connections: int) -> OpenAI:
     """One OpenAI client per process, with a connection pool sized for the sender's thread count.
 
     httpx defaults to 100 connections, which silently caps in-flight requests below the sender's
-    concurrency instead of failing -- during the throughput campaign this pinned engine-side
-    ``num_requests_running`` at ~99 no matter what the client asked for.
+    concurrency instead of failing.
     """
     limits = httpx.Limits(max_connections=connections, max_keepalive_connections=connections)
     return OpenAI(
@@ -112,26 +99,11 @@ def _client(endpoint: OcrEndpoint, connections: int) -> OpenAI:
 
 
 def unwrap_markdown_fence(text: str, *, truncated: bool = False) -> str:
-    """Drop a fence wrapping the whole page.
+    """Drop a ```markdown fence wrapping the whole page.
 
-    The model returns the page as one ```markdown block, which is a transcription of nothing -- the
-    page is not a code listing. Asking it not to in the prompt has no effect: measured over 3,000
-    raw responses, 3,000 of them were wrapped. So the wrapper is removed here instead, which handles
-    99.0% of pages.
-
-    Only an explicit ``markdown``/``md`` info string is unwrapped. A bare ``` wrapper is left alone:
-    a page really can be a code listing, and on that page the fence is content. Fences *inside* the
-    page are untouched either way.
-
-    ``truncated`` is what the remaining 1% needs. A page cut off at ``max_tokens`` has an opening
-    fence and no closing one, so the usual both-ends test fails and the marker survives into the
-    corpus. Since wrapping is universal, an opener on a page the model never finished can only be a
-    wrapper -- there was never going to be a closer. Without this the leftover markers are
-    concentrated exactly on the pages that are already damaged.
-
-    Leaving any of this to the boilerplate pass would be wrong even though it often works by
-    accident: a fence on every page is a repeated edge pattern, so long documents lose it there,
-    and documents under ``BoilerplateOptions.min_pages`` keep it.
+    Only an explicit ``markdown``/``md`` info string is unwrapped: a bare ``` wrapper may be a real
+    code listing and is left alone, as are fences inside the page. A ``truncated`` page has an
+    opening fence and no closing one, so its opener alone is unwrapped.
     """
     lines = text.strip().split("\n")
     if not lines or lines[0].strip().removeprefix("```").strip().lower() not in ("markdown", "md"):
@@ -144,9 +116,7 @@ def unwrap_markdown_fence(text: str, *, truncated: bool = False) -> str:
 def ocr_page(endpoint: OcrEndpoint, connections: int, page: RenderedPage) -> PageOcr:
     """Convert one rendered page to Markdown.
 
-    Exceptions propagate. A page request fails for reasons the caller has to distinguish between --
-    a single bad page versus an endpoint that has gone away -- and the extraction step is what holds
-    the document-level policy for that.
+    Exceptions propagate: the extraction step holds the document-level policy for a failed page.
     """
     response = _client(endpoint, connections).chat.completions.create(
         model=endpoint.model,
@@ -156,13 +126,9 @@ def ocr_page(endpoint: OcrEndpoint, connections: int, page: RenderedPage) -> Pag
                 "content": [
                     {
                         "type": "image_url",
-                        # The page arrives as PNG bytes -- it crossed a pipe from the rasteriser's
-                        # child process -- and this is the one place that wants it base64'd.
+                        # The page crossed the pipe as PNG bytes; this is the one place that wants base64.
                         "image_url": {"url": f"data:image/png;base64,{base64.b64encode(page.png).decode()}"},
-                        # Restate the budget the page was rendered at so the server's own
-                        # smart_resize cannot re-size it: the model's ``preprocessor_config``
-                        # defaults are unrelated to our budget, and a lower server-side cap would
-                        # quietly undo the render decision this pipeline is built around.
+                        # Restate the render budget so the server's own smart_resize cannot re-size the page.
                         "max_pixels": endpoint.max_visual_tokens * VISUAL_TOKEN_PIXELS,
                         "min_pixels": MIN_PIXELS,
                     },
@@ -174,8 +140,7 @@ def ocr_page(endpoint: OcrEndpoint, connections: int, page: RenderedPage) -> Pag
         temperature=0.0,
         top_p=1.0,
         timeout=endpoint.request_timeout,
-        # This is a reasoning-capable hybrid. Thinking tokens would be spent on, and billed for,
-        # a transcription task that has nothing to reason about.
+        # A reasoning-capable hybrid; transcription has nothing to reason about.
         extra_body={"chat_template_kwargs": {"enable_thinking": False}},
     )
     usage = response.usage

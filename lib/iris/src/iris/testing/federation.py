@@ -116,7 +116,7 @@ def make_service(
     """Build a controller service and its test state inside ``stack``."""
     state = stack.enter_context(make_controller_state())
     mock = MockController()
-    mock.provider.health = state._health
+    mock.worker_health = state._health
     service = ControllerServiceImpl(
         controller=mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / subdir / "bundles")),

@@ -3,13 +3,8 @@
 
 """Behaviour of router v2: the two gates, the score, the render policy, and the feature contract.
 
-Every decision this module makes is silent when it is wrong. A gate that stops firing routes 12.4%
-of the corpus on a transcription that does not exist. A feature list that drifts from the booster's
-scores a bare float matrix by position and returns confident nonsense. A render policy that does not
-reach the request sends 16,384 tokens of pixels under a 2,048-token declaration and has the server
-throw them away. So each is asserted against a case with a known answer, and the booster itself is
-replaced by a stand-in whose ranking is trivially known -- what is under test is the routing, not
-XGBoost.
+The booster is replaced by a stand-in whose ranking is known; what is under test is the routing,
+not XGBoost.
 """
 
 import json
@@ -17,6 +12,7 @@ import json
 import numpy as np
 import polars as pl
 import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 from experiments.datakit.build_pdf_source import classify
@@ -26,10 +22,12 @@ from experiments.datakit.build_pdf_source.classify import (
     ESCALATION_THRESHOLD,
     GATE_NO_TEXT,
     GATE_UNRENDERABLE,
+    RouteDecision,
     gate,
     render_budget,
     route_batch,
     router_threshold,
+    shard_routing,
 )
 from experiments.datakit.build_pdf_source.extract_inspector import SIGNAL_COLUMNS
 from experiments.datakit.build_pdf_source.ocr_extract.render import (
@@ -82,9 +80,7 @@ def _batch(rows: list[dict]) -> pa.RecordBatch:
 class _ScriptedBooster:
     """A booster that returns a prepared score per row, in order.
 
-    The threshold is a quantile of a real model's output over a real corpus and means nothing on
-    three fixture rows, so the ranking is supplied rather than learned. What is being tested is that
-    a score at or above the threshold escalates and one below it does not.
+    The threshold means nothing on three fixture rows, so the ranking is supplied rather than learned.
     """
 
     def __init__(self, scores: list[float]) -> None:
@@ -118,19 +114,10 @@ def route(monkeypatch):
 # --- the feature contract ------------------------------------------------------------------------
 
 
-def test_the_shipped_contract_is_forty_three_free_features_at_the_price_of_one_library_call():
-    """`free + detect`: the paid PyMuPDF pass measured worse on all five splits and is deleted."""
+def test_the_booster_is_fed_the_forty_three_contract_columns():
+    """The booster was fit on 43 columns; ``inspector_detect`` is the only group that costs a call."""
     assert len(contract.ROUTER_FEATURES) == 43
-    assert contract.cost_of(contract.FREE_GROUPS) == 0.0
-    assert contract.ROUTER_CORE_HOURS == pytest.approx(contract.INSPECTOR_DETECT_CORE_HOURS)
     assert contract.PAID_GROUPS == ("inspector_detect",)
-
-
-def test_the_retired_pass_keeps_its_price_so_reintroducing_it_has_a_number_to_clear():
-    """3.40 core-h/M over 56M crawl pages is the 190 crawl core-hours deleting it saved."""
-    retired = contract.ROUTE_FEATURES_CORE_HOURS + contract.INCUMBENT_FEATURES_CORE_HOURS
-    assert retired == pytest.approx(3.40)
-    assert retired * contract.CRAWL_PAGES / 1e6 == pytest.approx(190.4, abs=0.5)
 
 
 def test_feature_groups_do_not_overlap_and_columns_survive_selection():
@@ -141,27 +128,13 @@ def test_feature_groups_do_not_overlap_and_columns_survive_selection():
         seen.update(group.columns)
 
     assert len(contract.columns_for(contract.ALL_GROUPS)) == len(seen)
-    assert contract.ROUTER_FEATURES == tuple(contract.columns_for(contract.ALL_GROUPS))
-
-
-def test_the_legibility_arithmetic_tracks_the_budget_it_is_asked_about():
-    """DPI scales with the square root of the visual-token budget, so raising it rescues pages."""
-    frame = pl.DataFrame({"mean_render_dpi": [40.0, 80.0, 146.0]})
-
-    at_default = frame.select(contract.legible_at_budget(DEFAULT_MAX_VISUAL_TOKENS))
-    at_four_x = frame.select(contract.legible_at_budget(4 * DEFAULT_MAX_VISUAL_TOKENS))
-
-    assert at_default.to_series().to_list() == [False, False, True]
-    assert at_four_x.to_series().to_list() == [False, True, True], "80 DPI doubles to 160 at 4x the budget"
 
 
 # --- the gates -------------------------------------------------------------------------------------
 
 
 def test_a_document_with_no_extracted_text_is_gated_rather_than_scored(route):
-    """Validated at an escalation rate of 1.000 over 2,054 labelled documents, and 12.4% of the
-    corpus. The model was neither trained nor calibrated on them, so a score would be an
-    extrapolation presented as a probability."""
+    """The model was neither trained nor calibrated on no-text documents, so a score would be an extrapolation."""
     records, booster = route([_signals(1, inspector_markdown_chars=0)])
 
     (record,) = records
@@ -172,13 +145,13 @@ def test_a_document_with_no_extracted_text_is_gated_rather_than_scored(route):
 
 
 def test_a_failed_extraction_is_gated_by_the_same_rule_as_an_empty_one():
-    """269 of the 12,396 no-text documents are library refusals rather than scans; same decision."""
+    """A library refusal is a no-text document too."""
     assert gate(_signals(1, inspector_markdown_chars=None)) == GATE_NO_TEXT
 
 
 def test_a_document_nothing_can_render_is_kept_rather_than_escalated(route):
-    """The VLM route rasterises through the library the geometry pass used, so escalating a document
-    it cannot open spends a routing slot on a page that never reaches the model."""
+    """The VLM route renders through the same library, so escalating a document it cannot open buys
+    nothing."""
     records, booster = route([_signals(1, mean_render_dpi=None, pages_below_legibility_floor=None, num_pages=0)])
 
     (record,) = records
@@ -193,8 +166,7 @@ def test_the_no_text_gate_wins_over_the_unrenderable_one():
 
 
 def test_the_legibility_floor_is_not_a_gate(route):
-    """Router v1 skipped below-floor documents; the judges escalated 79.0% of them (n=558). The
-    score decides them like anything else and only the render budget changes."""
+    """The score decides a below-floor document like any other; only the render budget changes."""
     records, _ = route([_signals(1, mean_render_dpi=36.5, pages_below_legibility_floor=4)], scores=[0.0])
 
     (record,) = records
@@ -255,7 +227,6 @@ def test_a_batch_of_nothing_but_gated_documents_never_loads_the_model(route):
 
 
 def test_an_escalated_document_below_the_floor_is_flagged_for_the_raised_budget(route):
-    """1,890 of 2,234 documents rescued for +0.29% GPU crawl-wide, against +53% to raise it globally."""
     records, _ = route([_signals(1, mean_render_dpi=36.5, pages_below_legibility_floor=4)], scores=[0.99])
 
     (record,) = records
@@ -313,6 +284,45 @@ def test_the_routing_table_records_the_gates_own_inputs(route):
     assert record["num_pages"] == 4
 
 
+# --- the routing shard a consumer reads -------------------------------------------------------------
+
+
+def _routing_row(offset: int, needs_ocr: bool, tokens: int) -> dict:
+    return {
+        "warc_filename": _WARC,
+        "warc_record_offset": offset,
+        "content_digest": f"sha1:{offset}",
+        "url": f"https://example.org/{offset}.pdf",
+        "needs_ocr": needs_ocr,
+        "route_reason": DECIDED_BY_SCORE,
+        "escalation_score": None,
+        "render_visual_tokens": tokens,
+        "inspector_markdown_chars": None,
+        "mean_render_dpi": None,
+        "num_pages": None,
+    }
+
+
+def test_shard_routing_reads_the_decisions_of_one_fetched_shard(tmp_path):
+    """The consumer's side of the join: one shard, keyed by WARC record, carrying route and budget."""
+    rows = [_routing_row(1, True, RAISED_MAX_VISUAL_TOKENS), _routing_row(2, False, DEFAULT_MAX_VISUAL_TOKENS)]
+    pq.write_table(pa.Table.from_pylist(rows, schema=classify.ROUTING_SCHEMA), tmp_path / "part-00003-of-00010.parquet")
+
+    routing = shard_routing(str(tmp_path), "part-00003-of-00010.parquet")
+
+    assert routing == {
+        (_WARC, 1): RouteDecision(needs_ocr=True, render_visual_tokens=RAISED_MAX_VISUAL_TOKENS),
+        (_WARC, 2): RouteDecision(needs_ocr=False, render_visual_tokens=DEFAULT_MAX_VISUAL_TOKENS),
+    }
+
+
+def test_a_fetched_shard_without_a_routing_shard_is_an_error_rather_than_an_empty_route(tmp_path):
+    """A missing routing shard is the co-partitioning invariant broken, not a shard with no
+    escalations."""
+    with pytest.raises(FileNotFoundError, match="part-00004-of-00010"):
+        shard_routing(str(tmp_path), "part-00004-of-00010.parquet")
+
+
 # --- the pinned artifact ------------------------------------------------------------------------------
 
 
@@ -321,8 +331,7 @@ def _sidecar(features, threshold=ESCALATION_THRESHOLD) -> dict:
 
 
 def test_the_shipped_sidecar_and_this_module_agree():
-    """The happy path, which is the one that has to keep working: the pinned artifact's own
-    calibration, its feature list, and the contract this pipeline builds its matrix from."""
+    """The happy path: the pinned artifact's calibration and feature list against this module's contract."""
     assert router_threshold(contract.ROUTER_FEATURES, _sidecar(contract.ROUTER_FEATURES)) == ESCALATION_THRESHOLD
 
 

@@ -29,14 +29,14 @@ jobs:
       # pull_request_target can expose credentials, so execute only the
       # default-branch cleaner. Never check out or execute the PR head.
       - name: Checkout default branch
-        uses: actions/checkout@v6
+        uses: actions/checkout@v5
         with:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
 
       - name: Rewrite for a technical reader
         id: rewrite
-        uses: marin-community/marin-style/actions/consult-agent@main
+        uses: marin-community/marin-style/actions/consult-agent@4b2fc2b0ec0bb9ad1304ef76936eb68e97f893cb  # main 2026-08-24
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -96,7 +96,7 @@ jobs:
       # The publisher also executes only default-branch code. The model output is
       # untrusted data and passes through the Python validator before any write.
       - name: Checkout default branch
-        uses: actions/checkout@v6
+        uses: actions/checkout@v5
         with:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false

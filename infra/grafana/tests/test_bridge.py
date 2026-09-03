@@ -663,6 +663,7 @@ def _signals(now: datetime, metrics: dict[str, dict], run_id: str = "hero-a") ->
             latest=values["latest"],
             observed_at=values.get("observed_at", now - timedelta(seconds=30)),
             previous=values.get("previous"),
+            two_samples_ago=values.get("two_samples_ago"),
             recent_samples=values.get("recent_samples", 0),
             recent_total=values.get("recent_total", 0.0),
             recent_below_floor=values.get("recent_below_floor", 0),
@@ -877,7 +878,7 @@ def test_health_alert_reads_routing_throughput_and_evaluation():
             "train_router_bias_max": {"latest": 120.0},
             "throughput_tokens_per_second": {"latest": 1.4e6, "recent_samples": 100, "recent_below_floor": 62},
             "throughput_mfu": {"latest": 31.0, "recent_samples": 100, "recent_below_floor": 4},
-            "eval_paloma_macro_loss": {"latest": 2.31, "previous": 2.17},
+            "eval_dropless_paloma_macro_loss": {"latest": 2.31, "previous": 2.17},
         },
     )
 
@@ -888,6 +889,30 @@ def test_health_alert_reads_routing_throughput_and_evaluation():
         "throughput_low",
         "eval_regressed",
     }
+
+
+@pytest.mark.parametrize(
+    ("latest", "previous", "two_samples_ago", "should_alert"),
+    [
+        pytest.param(2.01, 2.00, 1.99, True, id="higher-than-two-evals-ago"),
+        pytest.param(2.05, 2.00, 2.10, True, id="one-step-rise-over-two-percent"),
+        pytest.param(2.01, 2.00, 2.02, False, id="small-one-step-rise"),
+        pytest.param(2.04, 2.00, 2.05, False, id="exactly-two-percent-one-step-rise"),
+    ],
+)
+def test_eval_regression_uses_two_eval_history_and_two_percent_jump(
+    latest: float, previous: float, two_samples_ago: float, should_alert: bool
+):
+    now = datetime(2026, 8, 21, 12, tzinfo=UTC)
+    evaluation = {
+        "latest": latest,
+        "previous": previous,
+        "two_samples_ago": two_samples_ago,
+    }
+    signals = _signals(now, {"eval_dropless_paloma_macro_loss": evaluation})
+
+    reasons = _reasons(health_alert_rows((_watched(),), signals, pa.table({}), now))
+    assert ("eval_regressed" in reasons) is should_alert
 
 
 def test_throughput_floor_needs_most_of_the_window_below_it():
@@ -988,9 +1013,10 @@ def test_signal_query_reduces_the_newest_sample_and_the_health_window():
             ("attempt-1", "throughput_tokens_per_second", 0.1e6, now - timedelta(minutes=40), 0),
             ("attempt-1", "optim_skipped_step", 1.0, now - timedelta(minutes=9), 4),
             ("attempt-1", "optim_skipped_step", 1.0, now - timedelta(minutes=2), 5),
-            # Hours apart, so only the eval lookback keeps the previous value.
-            ("attempt-1", "eval_paloma_macro_loss", 2.17, now - timedelta(hours=6), 6),
-            ("attempt-1", "eval_paloma_macro_loss", 2.31, now - timedelta(minutes=12), 7),
+            # Hours apart, so only the eval lookback keeps the comparison history.
+            ("attempt-1", "eval_dropless_paloma_macro_loss", 2.19, now - timedelta(hours=12), 9),
+            ("attempt-1", "eval_dropless_paloma_macro_loss", 2.17, now - timedelta(hours=6), 6),
+            ("attempt-1", "eval_dropless_paloma_macro_loss", 2.31, now - timedelta(minutes=12), 7),
         ]
     )
 
@@ -1001,8 +1027,8 @@ def test_signal_query_reduces_the_newest_sample_and_the_health_window():
     throughput = signals["throughput_tokens_per_second"]
     assert (throughput.latest, throughput.recent_samples, throughput.recent_below_floor) == (2.6e6, 3, 2)
     assert signals["optim_skipped_step"].recent_total == 2.0
-    evaluation = signals["eval_paloma_macro_loss"]
-    assert (evaluation.latest, evaluation.previous) == (2.31, 2.17)
+    evaluation = signals["eval_dropless_paloma_macro_loss"]
+    assert (evaluation.latest, evaluation.previous, evaluation.two_samples_ago) == (2.31, 2.17, 2.19)
 
 
 def test_signal_query_reduces_one_task_attempt_at_a_time():

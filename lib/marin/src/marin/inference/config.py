@@ -7,11 +7,14 @@ These dataclasses are safe to construct in CPU coordinators and CLI processes.
 Accelerator-heavy serving implementations translate them inside worker jobs.
 """
 
+import tomllib
 from dataclasses import dataclass, field
 from enum import StrEnum
+from pathlib import Path
 from typing import Any
 
 from fray.types import CpuConfig, EnvironmentConfig, ResourceConfig, TpuConfig
+from rigging.filesystem.storage_path import StoragePath
 
 # Worker and isolated vLLM environments use one Python version so cloudpickle
 # and the launched callable stay compatible.
@@ -19,6 +22,55 @@ WORKER_PYTHON_VERSION = "3.12"
 # Stock CUDA vLLM runs in an isolated uv-tool environment and does not
 # participate in Marin's workspace dependency resolution.
 DEFAULT_CUDA_VLLM_VERSION = "0.25.1"
+VLLM_METRIC_PREFIX = "vllm:"
+
+# This standard set includes families consumed by Marin's inference dashboards or needed for
+# basic serving diagnosis: request volume, latency, scheduler pressure, KV-cache use, and
+# preemption. Selection is made per complete Prometheus family and was sized against Marin's
+# pinned GPU and TPU vLLM definitions using representative label cardinalities. Add a family
+# only for a concrete consumer, and recheck that the complete selected scrape fits the limit.
+STANDARD_VLLM_METRIC_FAMILIES = frozenset(
+    {
+        "vllm:e2e_request_latency_seconds",
+        "vllm:generation_tokens",
+        "vllm:inter_token_latency_seconds",
+        "vllm:kv_cache_usage_perc",
+        "vllm:num_preemptions",
+        "vllm:num_requests_running",
+        "vllm:num_requests_waiting",
+        "vllm:prompt_tokens",
+        "vllm:request_queue_time_seconds",
+        "vllm:request_success",
+        "vllm:request_time_per_output_token_seconds",
+        "vllm:time_to_first_token_seconds",
+    }
+)
+
+
+def _normalize_vllm_metric_families(families: object, *, source: str) -> frozenset[str]:
+    if not isinstance(families, (list, tuple, frozenset)) or not all(isinstance(family, str) for family in families):
+        raise ValueError(f"Invalid vLLM metrics config {source}: every family must be a string")
+    invalid = [family for family in families if not family.startswith(VLLM_METRIC_PREFIX)]
+    if invalid:
+        raise ValueError(f"Invalid vLLM metrics config {source}: every family must start with 'vllm:'")
+    return frozenset(families)
+
+
+def _parse_vllm_metric_families(contents: bytes, *, source: str) -> frozenset[str]:
+    try:
+        document = tomllib.loads(contents.decode())
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+        raise ValueError(f"Invalid vLLM metrics config {source}: {exc}") from exc
+    if set(document) != {"families"} or not isinstance(document["families"], list):
+        raise ValueError(f"Invalid vLLM metrics config {source}: expected one 'families' array")
+    return _normalize_vllm_metric_families(document["families"], source=source)
+
+
+def load_vllm_metric_family_additions(path: Path | None) -> frozenset[str]:
+    """Load optional additions for the standard contract."""
+    if path is None:
+        return frozenset()
+    return _parse_vllm_metric_families(StoragePath(str(path)).read_bytes(), source=str(path))
 
 
 class VllmLauncherType(StrEnum):
@@ -83,12 +135,12 @@ class VllmEngineConfig:
     max_num_batched_tokens: int | None = None
     max_num_seqs: int | None = None
     extra_args: tuple[str, ...] = ()
+    extra_metric_families: frozenset[str] = frozenset()
     uv_with_packages: tuple[str, ...] = ()
     """Extra packages installed into the isolated CUDA vLLM env (``uvx --with``).
 
-    For kernel artifact packages the runtime image cannot JIT-compile itself, e.g.
-    ``flashinfer-cubin`` / ``flashinfer-jit-cache`` (no nvcc on CoreWeave images).
-    CUDA launcher only."""
+    For prebuilt kernel artifacts such as ``flashinfer-cubin`` / ``flashinfer-jit-cache``,
+    which let the engine skip FlashInfer's JIT build at startup. CUDA launcher only."""
     uv_extra_index_urls: tuple[str, ...] = ()
     """Additional package indexes for ``uv_with_packages`` (``uvx --index``), e.g.
     ``https://flashinfer.ai/whl/cu130/`` for ``flashinfer-jit-cache``."""
@@ -102,6 +154,11 @@ class VllmEngineConfig:
             raise ValueError("max_num_seqs must be positive")
         if self.source is VllmSource.MARIN_FORK and self.launcher is not VllmLauncherType.CUDA:
             raise ValueError("the Marin vLLM fork source requires the CUDA launcher")
+        extra_metric_families = _normalize_vllm_metric_families(
+            self.extra_metric_families,
+            source="VllmEngineConfig.extra_metric_families",
+        )
+        object.__setattr__(self, "extra_metric_families", extra_metric_families)
         if (self.uv_with_packages or self.uv_extra_index_urls) and self.launcher is not VllmLauncherType.CUDA:
             raise ValueError("uv_with_packages / uv_extra_index_urls require the CUDA launcher")
 

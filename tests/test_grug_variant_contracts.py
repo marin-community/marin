@@ -364,7 +364,6 @@ async def test_grug_moe_tagged_evaluator_shuffles_by_default():
         max_seq_len=4,
         mesh=mesh,
         eval_cfg=eval_config,
-        mp=jmp.get_policy("f32"),
     )
     assert evaluator is not None
 

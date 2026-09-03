@@ -12,6 +12,8 @@ import levanter.grug.attention._fa4_cute as fa4_cute
 import levanter.grug.attention._fa4_cute_backend as fa4_cute_backend
 from levanter.grug.attention import (
     AttentionMask,
+    GrugAttentionImplementation,
+    attention,
     gpu_fa4_cute_attention,
     reference_attention,
 )
@@ -174,8 +176,32 @@ def test_fa4_frontend_shards_metadata_with_qkv_batch_axis(monkeypatch):
     assert out.sharding.spec == qkv_sharding.spec
 
 
-def _assert_real_gpu_fa4_cute_matches_reference(q, k, v, mask, cotangent, *, valid_tokens=None):
-    actual = jax.jit(gpu_fa4_cute_attention)(q, k, v, mask)
+def test_fa4_wide_attention_rejects_unsupported_hardware(monkeypatch):
+    q = jnp.zeros((1, 1, 2, 128), dtype=jnp.bfloat16)
+    k = jnp.zeros((1, 1, 1, 128), dtype=jnp.bfloat16)
+    v = jnp.zeros((1, 1, 1, 128), dtype=jnp.bfloat16)
+    monkeypatch.setattr(jax, "default_backend", lambda: "gpu")
+    monkeypatch.setattr(fa4_cute, "gpu_compute_capability", lambda: 90)
+    monkeypatch.setattr(fa4_cute, "fa4_cute_attention_forward", lambda q, *_args, **_kwargs: q)
+
+    with pytest.raises(ValueError):
+        attention(q, k, v, AttentionMask.causal(), implementation="gpu_fa4_cute_wide")
+
+
+def _assert_real_gpu_fa4_cute_matches_reference(
+    q,
+    k,
+    v,
+    mask,
+    cotangent,
+    *,
+    valid_tokens=None,
+    implementation: GrugAttentionImplementation = "gpu_fa4_cute",
+):
+    def fa4(q_arg, k_arg, v_arg):
+        return attention(q_arg, k_arg, v_arg, mask, implementation=implementation)
+
+    actual = jax.jit(fa4)(q, k, v)
     expected = reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
     if valid_tokens is not None:
         actual = jnp.where(valid_tokens[..., None, None], actual, expected)
@@ -187,7 +213,7 @@ def _assert_real_gpu_fa4_cute_matches_reference(q, k, v, mask, cotangent, *, val
         return jnp.sum(out.astype(jnp.float32) * cotangent.astype(jnp.float32))
 
     def fa4_loss(q_arg, k_arg, v_arg):
-        out = gpu_fa4_cute_attention(q_arg, k_arg, v_arg, mask)
+        out = attention(q_arg, k_arg, v_arg, mask, implementation=implementation)
         return jnp.sum(out.astype(jnp.float32) * cotangent.astype(jnp.float32))
 
     actual_grads = jax.jit(jax.grad(fa4_loss, argnums=(0, 1, 2)))(q, k, v)
@@ -195,6 +221,31 @@ def _assert_real_gpu_fa4_cute_matches_reference(q, k, v, mask, cotangent, *, val
 
     for actual_grad, expected_grad in zip(actual_grads, expected_grads, strict=True):
         np.testing.assert_allclose(actual_grad, expected_grad, atol=7e-2, rtol=7e-2)
+
+
+def test_real_gpu_fa4_cute_wide_attention_matches_reference():
+    if jax.default_backend() != "gpu":
+        pytest.skip("FA4/CuTe correctness requires a GPU backend.")
+    if fa4_cute.gpu_compute_capability() // 10 != 10:
+        pytest.skip("The wide FA4 tile requires SM100.")
+    pytest.importorskip("cutlass")
+    pytest.importorskip("cutlass.cute")
+    pytest.importorskip("flash_attn.cute.flash_bwd_preprocess")
+    key = jax.random.PRNGKey(7)
+    q_key, k_key, v_key, cotangent_key = jax.random.split(key, 4)
+    q = jax.random.normal(q_key, (1, 128, 4, 128), dtype=jnp.bfloat16)
+    k = jax.random.normal(k_key, (1, 128, 1, 128), dtype=jnp.bfloat16)
+    v = jax.random.normal(v_key, (1, 128, 1, 128), dtype=jnp.bfloat16)
+    cotangent = jax.random.normal(cotangent_key, q.shape, dtype=jnp.bfloat16)
+
+    _assert_real_gpu_fa4_cute_matches_reference(
+        q,
+        k,
+        v,
+        AttentionMask.causal(),
+        cotangent,
+        implementation="gpu_fa4_cute_wide",
+    )
 
 
 @pytest.mark.parametrize(("q_heads", "kv_heads", "head_dim"), [(4, 1, 64), (2, 2, 64), (4, 1, 128)])

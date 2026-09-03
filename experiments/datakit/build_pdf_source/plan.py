@@ -49,27 +49,16 @@ from experiments.datakit.build_pdf_source.common import (
 
 logger = logging.getLogger(__name__)
 
-# Coalesce gap inherited from the HTML extraction run. PDF records are sparser than HTML ones, but
-# still dense enough that this collapses a WARC's ~686 kept PDF records into ~74 range GETs, at the
-# cost of also transferring the non-PDF records in the gaps -- 5.4% of the fetched bytes. Ranges
-# run p50 5.4 MiB / p90 33 / p99 82, with a single 294 MiB worst case across the whole crawl.
-#
-# There is deliberately no cap on coalesced range size. Capping at 64 MiB was measured to add 2.5%
-# more range GETs (348,265 vs 339,856) while changing total fetched bytes by 0.00 TiB and leaving
-# the packed task distribution identical -- TASK_BYTES already bounds what a worker takes on, so a
-# range cap only splits ranges that packing would have kept together anyway.
+# Records closer than this are fetched in one range GET, gap bytes included. There is deliberately
+# no cap on coalesced range size: TASK_BYTES already bounds what a worker takes on.
 COALESCE_GAP_BYTES = 1 << 20
 
-# One task per this many fetched bytes. Sets both the shard count and the output file size, and
-# decouples them from WARC size and range size -- which is what makes a sampled run's per-task
-# profile match a full run's. It is the only bound on per-task work: a range wider than this
-# becomes its own task rather than being split.
+# One task per this many fetched bytes; sets both the shard count and the output file size. A range
+# wider than this becomes its own task rather than being split.
 TASK_BYTES = 256 << 20
 
-# Fraction of coalesced ranges to fetch. At 1.0 the plan keeps all 339,856 ranges -- ~4.1 TiB,
-# ~3.16M PDFs across all 4,573 WARCs. The pipeline was validated end to end at 0.1 (33,986
-# ranges, 411 GiB, 316,297 PDFs, 1,773 tasks); sampling ranges rather than records keeps every
-# PDF's inclusion probability equal, so a sampled run's per-task profile matches a full run's.
+# Fraction of coalesced ranges to fetch. Sampling ranges rather than records keeps every PDF's
+# inclusion probability equal, so a sampled run's per-task profile matches a full run's.
 SAMPLE_FRACTION = 1.0
 SAMPLE_SEED = 20260729
 
@@ -128,11 +117,7 @@ def _download_index_part(url: str, destination: Path) -> Path:
 
 
 def _pdf_mask(batch: pa.RecordBatch) -> pa.Array:
-    """Untruncated 200 responses that Tika identified as PDFs.
-
-    Truncated records are dropped here rather than downstream: they are 1.0% of PDF records but
-    765 GB of bytes, and a truncated PDF is unusable for extraction.
-    """
+    """Untruncated 200 responses that Tika identified as PDFs."""
     is_pdf = pc.equal(batch.column("content_mime_detected"), PDF_MIME_TYPE)
     is_success = pc.equal(batch.column("fetch_status"), FETCH_SUCCESS_STATUS)
     is_whole = pc.is_null(batch.column("content_truncated"))
@@ -186,8 +171,7 @@ def coalesce_ranges(scan: IndexScan, *, gap_bytes: int) -> list[RangeFetch]:
     """Merge each WARC's PDF records into range GETs, in (WARC, offset) order.
 
     A record is folded into the open range when it starts within ``gap_bytes`` of the range's end.
-    Ranges never span WARCs and are never bounded from above -- see ``COALESCE_GAP_BYTES`` for why
-    a size cap here is not worth its cost.
+    Ranges never span WARCs and are never bounded from above.
     """
     order = np.lexsort((scan.offsets, scan.warc_ids))
     warc_ids = scan.warc_ids[order]
@@ -235,14 +219,7 @@ def sample_ranges(ranges: list[RangeFetch], *, fraction: float, seed: int) -> li
 
 
 def pack_tasks(ranges: list[RangeFetch], *, task_bytes: int) -> list[FetchTask]:
-    """Group consecutive ranges into tasks of at most ``task_bytes``, one range minimum.
-
-    Packing exists for scheduling economics, not locality: at a 10% sample it turns 33,986 shards
-    into 1,773, and so 33,986 output files averaging 12 MiB into 1,773 averaging 244 MiB. Whether
-    a task's ranges share a WARC (median 3 WARCs per task, max 57) does not affect connection
-    reuse -- every range GET in the job addresses the same host, and the pooled session in
-    ``common.session`` is per worker process, so its connections are reused across tasks anyway.
-    """
+    """Group consecutive ranges into tasks of at most ``task_bytes``, one range minimum."""
     tasks: list[FetchTask] = []
     current: list[RangeFetch] = []
     current_bytes = 0

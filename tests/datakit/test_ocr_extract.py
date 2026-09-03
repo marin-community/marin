@@ -3,10 +3,9 @@
 
 """Tests for the OCR extraction route: page rendering and the sender's document assembly.
 
-Rendering runs where it runs in production -- in a child process the sender task is willing to lose
--- so every test that goes through ``ocr_batch`` exercises the real protocol against the real
-rasteriser. What the child cannot be made to do here, dying and stalling, has its own module
-(``test_ocr_render_isolation.py``) where the child is a stub the test steers.
+Rendering runs in a child process, as in production, so every test through ``ocr_batch`` exercises
+the real protocol against the real rasteriser. A child that dies or stalls is covered in
+``test_ocr_render_isolation.py`` with a stub child.
 """
 
 import base64
@@ -15,14 +14,17 @@ import threading
 from types import SimpleNamespace
 
 import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
-from experiments.datakit.build_pdf_source import extract_inspector, extract_ocr
-from experiments.datakit.build_pdf_source.document_record import PDF_DOCUMENT_FIELDS
+from experiments.datakit.build_pdf_source import extract_ocr
+from experiments.datakit.build_pdf_source.classify import ROUTING_SCHEMA
+from experiments.datakit.build_pdf_source.common import SOURCE_FILE_COLUMN
 from experiments.datakit.build_pdf_source.extract_ocr import OcrStatus, ocr_batch
 from experiments.datakit.build_pdf_source.ocr_extract import client
 from experiments.datakit.build_pdf_source.ocr_extract.client import OcrEndpoint, PageOcr, unwrap_markdown_fence
 from experiments.datakit.build_pdf_source.ocr_extract.render import (
+    DEFAULT_MAX_VISUAL_TOKENS,
     MAX_PIXELS,
     RAISED_MAX_VISUAL_TOKENS,
     VISUAL_TOKEN_PIXELS,
@@ -35,42 +37,34 @@ from experiments.datakit.build_pdf_source.ocr_extract.render import (
 )
 from experiments.datakit.build_pdf_source.ocr_extract.render_worker import RenderWorker
 
-# The rasteriser ships in marin-core's ``pdf`` extra, which the workspace root does not install.
-# The modules above are importable without it -- they defer the import to the functions that
-# rasterise -- so only the tests that actually render are skipped.
+# The rasteriser ships in the ``pdf`` extra, which the workspace root does not install.
 pytest.importorskip("pypdfium2")
 pytest.importorskip("PIL")
 
-# US Letter and ISO A0, in points. A0 is the case the visual-token budget handles badly on purpose:
-# it costs the model the same as a Letter page and therefore gets far less resolution.
+# US Letter and ISO A0, in points; A0 is the sheet the default budget renders below the legibility floor.
 _LETTER = (612, 792)
 _A0 = (2384, 3370)
+
+# The fetched shard a batch comes from, and therefore the routing shard it reads its decisions from.
+_SHARD = "part-00000-of-00001.parquet"
+_WARC = "crawl.warc.gz"
+# ``run_batch``'s default routing: every document in the batch escalated at the default budget.
+_ALL_ESCALATED = object()
 
 
 def _word(index: int) -> str:
     """A digit-free, fixed-length token unique to ``index``.
 
-    Page bodies have to differ by more than a digit. Boilerplate detection folds digits to zero, so
-    "body 1" and "body 2" are the same line to it, and a fixture with numbered bodies would have
-    every page's body detected as a running header and stripped.
+    Boilerplate detection folds digits to zero, so numbered bodies would be stripped as a running header.
     """
     return "abcdefghijklmnopqrstuvwxyz"[index % 26] * 5
 
 
 def _pdf(page_count: int, size: tuple[float, float] = _LETTER) -> bytes:
-    """A real PDF with ``page_count`` numbered pages, so rendering is exercised for real.
-
-    Written out directly rather than through a PDF library. The renderer this pipeline ships,
-    PDFium, cannot author PDFs, and the only libraries that can are either AGPL -- which is the
-    dependency the render swap exists to remove -- or a new dependency carried for one fixture.
-    A page of Helvetica in a Letter or A0 MediaBox is a few hundred bytes of PDF syntax, and
-    writing it here keeps the fixture legible instead of checking in opaque binaries nobody can
-    regenerate.
+    """A real PDF with ``page_count`` numbered pages, written out directly rather than through a library.
 
     Object numbering: 1 catalog, 2 page tree, 3 the shared font, then a page and a content stream
-    per page. Offsets are collected while the body is written so the xref table is exact; PDFium
-    accepts a broken one by repairing it, which would make the fixture silently stop testing what
-    it claims to.
+    per page. Offsets are collected while the body is written so the xref table is exact.
     """
     width, height = size
     bodies = [
@@ -103,8 +97,9 @@ def _pdf(page_count: int, size: tuple[float, float] = _LETTER) -> bytes:
 
 
 def _batch(rows: list[dict]) -> pa.RecordBatch:
+    """One fetched row group as the reader hands it over, with the shard's own path injected."""
     return pa.RecordBatch.from_pylist(
-        rows,
+        [{**row, SOURCE_FILE_COLUMN: f"s3://bucket/fetch/{_SHARD}"} for row in rows],
         schema=pa.schema(
             [
                 pa.field("pdf", pa.binary()),
@@ -112,6 +107,7 @@ def _batch(rows: list[dict]) -> pa.RecordBatch:
                 pa.field("warc_record_offset", pa.int64()),
                 pa.field("content_digest", pa.string()),
                 pa.field("url", pa.string()),
+                pa.field(SOURCE_FILE_COLUMN, pa.string()),
             ]
         ),
     )
@@ -120,15 +116,28 @@ def _batch(rows: list[dict]) -> pa.RecordBatch:
 def _row(offset: int, pdf: bytes) -> dict:
     return {
         "pdf": pdf,
-        "warc_filename": "crawl.warc.gz",
+        "warc_filename": _WARC,
         "warc_record_offset": offset,
         "content_digest": f"sha1:{offset}",
         "url": f"https://example.org/{offset}.pdf",
     }
 
 
-def _keys(*offsets: int) -> frozenset[tuple[str, int]]:
-    return frozenset(("crawl.warc.gz", offset) for offset in offsets)
+def _routing_row(offset: int, budget: int | None) -> dict:
+    """One routing decision: escalated at ``budget``, or kept on the cheap route when ``None``."""
+    return {
+        "warc_filename": _WARC,
+        "warc_record_offset": offset,
+        "content_digest": f"sha1:{offset}",
+        "url": f"https://example.org/{offset}.pdf",
+        "needs_ocr": budget is not None,
+        "route_reason": "score",
+        "escalation_score": None,
+        "render_visual_tokens": DEFAULT_MAX_VISUAL_TOKENS if budget is None else budget,
+        "inspector_markdown_chars": None,
+        "mean_render_dpi": None,
+        "num_pages": None,
+    }
 
 
 @pytest.fixture
@@ -145,21 +154,32 @@ def worker():
 
 
 @pytest.fixture
-def run_batch(monkeypatch, endpoint, worker):
-    """Run ``ocr_batch`` with a stand-in for the endpoint call.
+def run_batch(monkeypatch, endpoint, worker, tmp_path):
+    """Run ``ocr_batch`` with a stand-in for the endpoint call; everything else runs for real.
 
-    The substitute replaces the network, not the logic under test: rendering in the child process,
-    the in-flight bound, page ordering, boilerplate removal and record assembly all run for real.
+    ``routing`` maps an offset to the render budget it is escalated at, or to ``None`` to keep it
+    on the cheap route; an offset absent from the map is absent from the shard. The default
+    escalates every document at the default budget, and ``None`` runs without a routing table.
     """
+    runs = iter(range(1_000))
 
-    def run(rows, respond, *, keys=None, raised_keys=frozenset(), render_options=None, boilerplate=None, loop=None):
+    def run(rows, respond, *, routing=_ALL_ESCALATED, render_options=None, boilerplate=None, loop=None):
         monkeypatch.setattr(extract_ocr, "ocr_page", respond)
         monkeypatch.setattr(extract_ocr, "render_worker", lambda deadline: worker)
+        routing_dir = None
+        if routing is not None:
+            if routing is _ALL_ESCALATED:
+                routing = {row["warc_record_offset"]: DEFAULT_MAX_VISUAL_TOKENS for row in rows}
+            # A fresh directory per run: the lookup caches a shard by its path.
+            directory = tmp_path / f"routing-{next(runs)}"
+            directory.mkdir()
+            decisions = [_routing_row(offset, budget) for offset, budget in routing.items()]
+            pq.write_table(pa.Table.from_pylist(decisions, schema=ROUTING_SCHEMA), directory / _SHARD)
+            routing_dir = str(directory)
         return list(
             ocr_batch(
                 _batch(rows),
-                keys=keys if keys is not None else _keys(*(row["warc_record_offset"] for row in rows)),
-                raised_keys=raised_keys,
+                routing_dir=routing_dir,
                 endpoint=endpoint,
                 render_options=render_options or RenderOptions(),
                 raised_render_options=RenderOptions(max_visual_tokens=RAISED_MAX_VISUAL_TOKENS),
@@ -195,7 +215,7 @@ def test_a_small_page_is_not_upscaled_past_the_dpi_cap():
 
 
 def test_a_large_format_page_lands_below_the_legibility_floor():
-    """The budget holds cost constant, so paper size comes out of resolution. This is the cost."""
+    """The budget holds cost constant, so paper size comes out of resolution."""
     options = RenderOptions(max_visual_tokens=2048)
     height, width = target_dimensions(*_A0, options)
     assert effective_dpi(height * width, *_A0) < options.legibility_floor_dpi
@@ -237,14 +257,8 @@ def _blue_page_pdf() -> bytes:
 
 
 def test_a_coloured_page_keeps_its_channels():
-    """Guards the byte-order trap: the render flag, not the wrapper's ``rev_byteorder``, does it.
-
-    ``PdfBitmap.new_native(..., rev_byteorder=True)`` only labels the buffer RGB on the Python
-    side; what actually reverses an ``FPDFBitmap_BGR`` buffer is ``FPDF_REVERSE_BYTE_ORDER`` in the
-    render flags. Drop the flag and red and blue come back swapped -- invisible on black-on-white
-    text, which is why this fixture is neither black nor white nor grey. Mutation-checked by
-    removing the flag from :func:`rasterise_page` and confirming this fails.
-    """
+    """The render flag, not the wrapper's ``rev_byteorder``, reverses the BGR buffer; dropping it
+    swaps red and blue, which black-on-white text cannot show."""
     from PIL import Image  # noqa: PLC0415
 
     with open_pdf(_blue_page_pdf()) as document:
@@ -269,10 +283,7 @@ def test_rendered_pages_come_back_as_png_bytes():
 def _reverse_completion_responder(total: int, text):
     """A responder whose requests complete in strictly reverse submission order.
 
-    Request *k* blocks until request *k+1* has returned, so the last submission resolves first --
-    deterministically, with no timing involved. The request pool has 32 threads, far more than any
-    fixture submits, so every blocked request holds a thread without starving the one that unblocks
-    the chain.
+    Request *k* blocks until request *k+1* has returned, so the last submission resolves first.
     """
     returned = [threading.Event() for _ in range(total + 1)]
     returned[total].set()
@@ -291,7 +302,7 @@ def _reverse_completion_responder(total: int, text):
 
 
 def test_pages_are_assembled_in_reading_order_when_requests_finish_out_of_order(run_batch):
-    """The whole point of the in-order queue: completion order must not reach the document."""
+    """Completion order must not reach the document."""
     respond = _reverse_completion_responder(5, lambda page: f"page {_word(page.page_index)}")
 
     (record,) = run_batch([_row(0, _pdf(5))], respond)
@@ -348,15 +359,29 @@ def test_an_unreadable_pdf_is_dropped_without_blocking_later_documents(run_batch
 
 def test_documents_routed_to_text_extraction_are_not_ocred(run_batch):
     rows = [_row(0, _pdf(1)), _row(1, _pdf(1))]
-    records = run_batch(rows, _page_text, keys=_keys(1))
+    records = run_batch(rows, _page_text, routing={0: None, 1: DEFAULT_MAX_VISUAL_TOKENS})
     assert [record["warc_record_offset"] for record in records] == [1]
 
 
-def test_no_key_set_ocrs_every_route(run_batch):
-    """``keys=None`` is the all-routes comparison run: no document is filtered."""
+def test_without_a_routing_table_every_document_is_ocred(run_batch):
+    """``routing_dir=None`` is the all-routes comparison run: no document is filtered."""
     rows = [_row(0, _pdf(1)), _row(1, _pdf(1))]
-    records = run_batch(rows, _page_text, keys=None)
+    records = run_batch(rows, _page_text, routing=None)
     assert [record["warc_record_offset"] for record in records] == [0, 1]
+
+
+def test_a_document_absent_from_its_routing_shard_is_an_error_rather_than_a_skip(run_batch):
+    """The table is total over the extraction, so an unknown key is a broken join, not a kept document."""
+    rows = [_row(0, _pdf(1)), _row(1, _pdf(1))]
+    with pytest.raises(ValueError, match="no routing decision"):
+        run_batch(rows, _page_text, routing={1: DEFAULT_MAX_VISUAL_TOKENS})
+
+
+def test_a_render_budget_this_step_does_not_render_at_is_refused(run_batch):
+    """A budget neither option set renders at means the routing table was built for other render
+    options than this step's."""
+    with pytest.raises(ValueError, match="render budget"):
+        run_batch([_row(0, _pdf(1))], _page_text, routing={0: 4 * DEFAULT_MAX_VISUAL_TOKENS})
 
 
 def test_truncated_documents_report_the_pages_they_lost(run_batch):
@@ -395,16 +420,14 @@ def _budget_recorder(seen: list[tuple[int, int]]):
 
 
 def test_the_render_policy_lifts_a_flagged_document_over_the_legibility_floor(run_batch):
-    """The policy's entire purpose: the same sheet, read at a resolution the model can use.
-
-    An A0 page renders at ~36 DPI under the default budget, well under the 100-DPI floor, and at
-    ~104 DPI at 16,384 visual tokens. Nothing else about the document changes.
-    """
+    """The same sheet, read at a resolution the model can use; nothing else about the document changes."""
     default_pages: list[tuple[int, int]] = []
     raised_pages: list[tuple[int, int]] = []
 
     (baseline,) = run_batch([_row(0, _pdf(1, size=_A0))], _budget_recorder(default_pages))
-    (rescued,) = run_batch([_row(0, _pdf(1, size=_A0))], _budget_recorder(raised_pages), raised_keys=_keys(0))
+    (rescued,) = run_batch(
+        [_row(0, _pdf(1, size=_A0))], _budget_recorder(raised_pages), routing={0: RAISED_MAX_VISUAL_TOKENS}
+    )
 
     assert baseline["mean_render_dpi"] < 100 <= rescued["mean_render_dpi"]
     assert baseline["pages_below_legibility_floor"] == 1
@@ -413,25 +436,25 @@ def test_the_render_policy_lifts_a_flagged_document_over_the_legibility_floor(ru
 
 
 def test_a_raised_render_declares_its_own_budget_to_the_endpoint(run_batch):
-    """The request restates the budget as ``max_pixels``; leaving it stale undoes the whole policy.
-
-    The server runs its own ``smart_resize`` against that declaration, so a 16,384-token render sent
-    under a 2,048-token cap would be shrunk straight back to where it started and the extra GPU
-    would buy nothing at all.
-    """
+    """The request restates the budget as ``max_pixels``; the server resizes against that
+    declaration, so a stale one would shrink the raised render straight back."""
     seen: list[tuple[int, int]] = []
 
-    run_batch([_row(0, _pdf(1, size=_A0)), _row(1, _pdf(1, size=_A0))], _budget_recorder(seen), raised_keys=_keys(1))
+    run_batch(
+        [_row(0, _pdf(1, size=_A0)), _row(1, _pdf(1, size=_A0))],
+        _budget_recorder(seen),
+        routing={0: DEFAULT_MAX_VISUAL_TOKENS, 1: RAISED_MAX_VISUAL_TOKENS},
+    )
 
     declared = [tokens for _pixels, tokens in seen]
     assert declared == [2048, RAISED_MAX_VISUAL_TOKENS]
 
 
 def test_a_document_the_policy_did_not_flag_keeps_the_default_budget(run_batch):
-    """The policy is targeted: applied corpus-wide this budget costs x1.53 GPU instead of x1.0029."""
+    """The raised budget is applied only to flagged documents."""
     seen: list[tuple[int, int]] = []
 
-    run_batch([_row(0, _pdf(2))], _budget_recorder(seen), raised_keys=_keys(7))
+    run_batch([_row(0, _pdf(2))], _budget_recorder(seen), routing={0: DEFAULT_MAX_VISUAL_TOKENS})
 
     assert {tokens for _pixels, tokens in seen} == {2048}
 
@@ -441,16 +464,7 @@ def test_completion_tokens_are_summed_over_the_document(run_batch):
     assert record["completion_tokens"] == 40
 
 
-# --- the contract between the two routes -------------------------------------------------------
-
-
-def test_both_extraction_routes_share_a_column_prefix():
-    """The two routes are concatenated downstream, so the shared columns must line up exactly."""
-    shared = [(field.name, field.type) for field in PDF_DOCUMENT_FIELDS]
-    inspector = [(field.name, field.type) for field in extract_inspector.OUTPUT_SCHEMA]
-    ocr = [(field.name, field.type) for field in extract_ocr.OUTPUT_SCHEMA]
-    assert inspector[: len(shared)] == shared
-    assert ocr[: len(shared)] == shared
+# --- the output schema -------------------------------------------------------------------------
 
 
 def test_the_ocr_record_matches_its_declared_schema(run_batch):
@@ -463,11 +477,7 @@ def test_the_ocr_record_matches_its_declared_schema(run_batch):
 
 
 def test_a_rendered_page_reaches_the_endpoint_as_a_png_data_uri(monkeypatch, endpoint):
-    """The page travels as PNG bytes and is base64'd once, here, at the only boundary that wants it.
-
-    Nothing else in the pipeline would notice this going wrong. The endpoint would reject every
-    image in the run, which reads as a fleet problem rather than as a malformed request.
-    """
+    """The page travels as PNG bytes and is base64'd once, at the boundary that wants it."""
     sent: dict = {}
 
     class Completions:
@@ -521,15 +531,11 @@ def test_fences_that_are_not_page_wrappers_are_left_alone(text):
 
 
 def test_a_truncated_page_loses_its_unterminated_opening_fence():
-    """A page cut off at the token cap never emits a closing fence, so both-ends matching fails.
-
-    Wrapping is universal (3,000 of 3,000 raw responses), so an opener on an unfinished page can
-    only be a wrapper. Without this the leftover markers land exactly on the damaged pages.
-    """
+    """A page cut off at the token cap never emits a closing fence, so an opener on an unfinished page
+    can only be a wrapper."""
     cut_off = "```markdown\n# Title\n\nhalf a sen"
     assert unwrap_markdown_fence(cut_off, truncated=True) == "# Title\n\nhalf a sen"
-    # Absent the truncation signal the same text must be left alone: an unterminated fence is
-    # otherwise indistinguishable from a page whose content legitimately opens with one.
+    # Without the truncation signal an unterminated fence is indistinguishable from content.
     assert unwrap_markdown_fence(cut_off) == cut_off
 
 

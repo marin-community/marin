@@ -358,13 +358,35 @@ def test_merge_sorted_chunks_skips_empty_target_shard(tmp_path):
     scatter_paths = _build_shard(tmp_path, [{"k": key, "v": 1}], num_output_shards=2)
     reader = ScatterReader.from_sidecars(scatter_paths, empty_shard)
 
-    assert reader.total_chunks > 0
+    assert reader.total_chunks == 0
     assert reader.shard_payload_bytes == 0
     with patch(
         "zephyr.shuffle.memory_budget.read_merge_fan_in",
         side_effect=AssertionError("empty target shards do not need memory planning"),
     ):
         assert list(reader.merge_sorted_chunks(external_sort_dir=str(tmp_path / "sort"))) == []
+
+
+def test_scatter_reader_skips_mappers_with_no_rows_for_target(tmp_path):
+    """A reducer opens only the chunk files of mappers that routed rows to it."""
+    keys = [next(k for k in range(100) if _target(k, 2) == target) for target in (0, 1)]
+
+    # Each mapper writes one item, and the two items route to different targets.
+    scatter_paths = []
+    for source_shard, key in enumerate(keys):
+        scatter_paths.extend(
+            _build_shard(
+                tmp_path,
+                [{"k": key, "v": source_shard}],
+                num_output_shards=2,
+                source_shard=source_shard,
+            )
+        )
+
+    reader = ScatterReader.from_sidecars(scatter_paths, 0)
+
+    assert reader.total_chunks == 1, "reducer kept a chunk file from the mapper that wrote nothing for it"
+    assert list(reader.merge_sorted_chunks(external_sort_dir=str(tmp_path / "sort"))) == [{"k": keys[0], "v": 0}]
 
 
 def test_scatter_null_keys(tmp_path):

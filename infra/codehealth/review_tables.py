@@ -13,7 +13,7 @@ Four append-only namespaces under ``codehealth.autolint``:
 - ``pr_review_outcomes`` — one row per PR, rolling up the two above.
 
 Re-running the aggregator appends a fresh row per PR to both comment tables, so
-a reader must take the highest ``seq`` per natural key. ``review.py`` exposes
+a reader must take the highest ``seq`` per natural key. ``review_quality.py`` exposes
 that as ``LATEST_HUMAN_COMMENTS_SQL`` and ``LATEST_PR_OUTCOMES_SQL``.
 
 Every row type declares a ``key_column``. With none declared the server looks
@@ -22,6 +22,7 @@ fails.
 """
 
 import datetime as dt
+import logging
 from collections.abc import Iterator, Sequence
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
@@ -32,8 +33,23 @@ from finelog.deploy.config import load_finelog_config
 from finelog.deploy.connect import open_client
 
 RowT = TypeVar("RowT")
+logger = logging.getLogger("codehealth.review_tables")
 
 DEFAULT_DEPLOYMENT = "marin"
+DEFAULT_REPOSITORY = "marin-community/marin"
+DEFAULT_BOT_LOGINS = frozenset(
+    {
+        "claude",
+        "claude-review",
+        "dependabot",
+        "github-actions",
+        "loom-oa-dev",
+        "mcwitt-agent",
+        "ravwojdyla-agent",
+        "renovate",
+        "weaverbot",
+    }
+)
 
 NAMESPACE_PREFIX = "codehealth.autolint"
 
@@ -120,6 +136,9 @@ class HumanComment:
     file: str | None
     line: int | None
     body: str | None
+    source_url: str | None
+    context_hash: str | None
+    context: str | None
     comment_class: str | None
     catchable_strict: bool | None
     catchable_generous: bool | None
@@ -175,6 +194,20 @@ def row_count(client: LogClient, namespace: str) -> int | None:
         if info.namespace == namespace:
             return info.row_count
     return None
+
+
+def query_rows(client: LogClient, sql: str, namespace: str) -> list[dict]:
+    """Run a query, treating an unregistered namespace as an empty table."""
+    if row_count(client, namespace) is None:
+        logger.info("namespace %s does not exist yet; treating as empty", namespace)
+        return []
+    return [
+        {
+            key: value.replace(tzinfo=dt.UTC) if isinstance(value, dt.datetime) and value.tzinfo is None else value
+            for key, value in row.items()
+        }
+        for row in client.query(sql).to_pylist()
+    ]
 
 
 def append_rows(

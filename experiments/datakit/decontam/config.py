@@ -1,28 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared decontamination policy for the reference pipeline, testbed, and PDF pipeline."""
-
-from rigging.filesystem.cluster_config import marin_prefix
-
-from experiments.datakit.decontam.prepare_eval_corpus import EVALS_RELATIVE
-
-# The shared eval bloom. Every consumer must build it with exactly this step name and these
-# parameters: step identity is name + params, so keeping them identical is what makes the ~270 MB
-# bloom already built under a prefix a cache hit rather than a rebuild.
-BLOOM_STEP_NAME = "datakit/bloom/_combined_fixed"
-# The combined eval corpus written by decontam/prepare_eval_corpus.py, staged per-region under one
-# versioned root: mandatory AA artifacts plus best-effort lm-eval ones.
-EVAL_ROOT = f"{marin_prefix()}/{EVALS_RELATIVE}"
-# Bloom capacity -- unique ngram hashes the filter must hold: ~21.78M unique hashes across the
-# AA + LMH corpus, with 2.3x headroom. At FPR=1e-9 this is a ~270 MB filter.
-ESTIMATED_DOC_COUNT = 50_000_000
-FALSE_POSITIVE_RATE = 1e-9
-NGRAM_LENGTH = 13
-OVERLAP_THRESHOLD = 0.5
-# Contaminated docs reservoir-sampled per shard into the flagged side output the decontam stage
-# report reads.
-FLAGGED_SAMPLE_SIZE = 8
+"""Shared decontamination policy for the reference pipeline and testbed."""
 
 # Source-local DF needs only enough documents to find high-density boilerplate
 # such as legal enacting clauses and license headers.

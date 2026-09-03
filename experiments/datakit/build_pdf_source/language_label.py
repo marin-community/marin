@@ -1,31 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Label every fuzzy-clean document with its FinePDFs-style GlotLID language bucket.
+"""Label every document of the exact-deduplicated corpus with its FinePDFs-style GlotLID bucket.
 
-The final step of the pipeline: a 1:1 map over the fuzzy-clean corpus that appends ``language``
-and ``language_score`` and drops nothing, emitting the dataset #7621 trains on. The tagger is a
-deliberate port of FinePDFs' page-level averaging (``postprocessing/language.py`` +
-``pipeline_utils/language.py`` in the FinePDFs repo), because the vendored per-language thresholds
-in ``lid_th_values.json`` were calibrated against exactly that behavior:
-
-* Each page is cleaned (table lines, markdown punctuation, whitespace collapse) and gated on the
-  UTF-8 **byte** length and ratio of its alphabetic characters. A gated page contributes no scores
-  but still counts in the averaging denominator, so mostly-empty documents average down.
-* GlotLID scores each surviving page with ``k=1000``; per-language scores are summed and divided
-  by the total page count, and languages averaging strictly above ``LANGUAGE_THRESHOLD`` become
-  the document's candidates.
-* :func:`select_bucket` walks the candidates by descending score: a top-1 ``zxx_*`` sticks, the
-  first candidate strictly above its per-language threshold wins, and a document whose candidates
-  all fail is bucketed ``{top}_removed`` (threshold known) or kept under its raw top label
-  (threshold unknown) -- ``"unknown"`` when no page produced a candidate at all.
-
-The thresholds transfer un-recalibrated from FinePDFs' extraction distribution. That is expected:
-this corpus is OCR text like theirs, and recalibrating would need per-language labels this project
-does not have. Do not tune the vendored values.
-
-No document is dropped here -- ``{lang}_removed`` and ``"unknown"`` are labels, so the training
-side decides what to keep with full information.
+The final step of the pipeline: a 1:1 map over the normalized corpus that appends ``language``
+and ``language_score`` and drops nothing; ``{lang}_removed`` and ``"unknown"`` are labels for the
+training side to act on. The tagger is a deliberate port of FinePDFs' page-level averaging
+(``postprocessing/language.py`` + ``pipeline_utils/language.py`` in the FinePDFs repo), because the
+vendored per-language thresholds in ``lid_th_values.json`` were calibrated against exactly that
+behavior. Do not tune the vendored values.
 """
 
 import hashlib
@@ -56,7 +39,7 @@ from zephyr.dataset import Dataset
 from zephyr.runners import InlineRunner
 
 from experiments.datakit.build_pdf_source.boilerplate import split_pages
-from experiments.datakit.build_pdf_source.common import StagedModelData
+from experiments.datakit.build_pdf_source.common import MAIN_OUTPUT_SUBDIR, SHARD_PATTERN, StagedModelData
 
 logger = logging.getLogger(__name__)
 
@@ -64,24 +47,18 @@ _COUNTER_PREFIX = "focus_crawl_pdf_lid"
 
 GLOTLID_REPO = "cis-lmu/glotlid"
 GLOTLID_FILENAME = "model_v3.bin"
-# Repo head at pin time; model_v3.bin has never been re-uploaded, so any revision holding it
-# resolves to the same LFS object. The sha256 below is that object's LFS metadata hash.
+# Repo head at pin time; the sha256 is the model file's LFS metadata hash.
 GLOTLID_REVISION = "85cd6716494360367b75f642b5bc78667605d0b4"
 GLOTLID_SHA256 = "a818b6bd42a628ab47d3dfc1578c7ea615c45381f3494c42535e31e8c4cafc9e"
 
-# The FinePDFs thresholds file, vendored from their repo's thresholds/th_values.json (identical
-# JSON; this repo's lint adds a trailing newline).
+# The FinePDFs thresholds file, vendored verbatim from their repo's thresholds/th_values.json.
 _THRESHOLDS_PATH = Path(__file__).with_name("lid_th_values.json")
-# FinePDFs floors every threshold at 0.05 when loading. The file's minimum is 0.10003, so the
-# floor never fires; it is kept for load-path fidelity with the shipped pipeline.
+# FinePDFs floors every threshold at 0.05 when loading; kept for load-path fidelity.
 THRESHOLD_FLOOR = 0.05
 # zxx_* ("no linguistic content") gets a threshold no score can fail, so a zxx candidate is never
-# re-routed to a weaker real language -- at any rank, not only top-1, which is FinePDFs' shipped
-# behavior. These keys are absent from the file; the overrides add them.
+# re-routed to a weaker real language. These keys are absent from the file.
 _ZXX_OVERRIDES = {"zxx_Latn": -1.0, "zxx_Zzzz": -1.0, "zxx_Arab": -1.0}
-# A candidate whose language has no threshold entry compares against this, which no score in [0, 1]
-# exceeds -- unknown-threshold languages are unselectable mid-list and survive only as the raw
-# fallback bucket when they are the top candidate.
+# A candidate whose language has no threshold entry compares against this, which no score exceeds.
 UNSELECTABLE_THRESHOLD = 10_000.0
 
 # A language becomes a document candidate only when its page-average score is strictly above this.
@@ -92,9 +69,8 @@ MIN_ALPHA_LENGTH_BYTES = 50
 MIN_ALPHA_RATIO = 0.2
 PREDICT_TOP_K = 1000
 
-# FinePDFs called ``table_pattern.sub("", page_text, re.MULTILINE)``, passing the flag where
-# ``count`` goes -- and re.MULTILINE == 8, so only the first 8 table lines of a page are removed.
-# The thresholds were calibrated with that behavior, so the 8 is replicated deliberately.
+# FinePDFs passed re.MULTILINE (== 8) where ``count`` goes, so only the first 8 table lines of a
+# page are removed; the thresholds were calibrated with that behavior.
 TABLE_LINES_REMOVED = 8
 _TABLE_LINE = re.compile(r"^\s*\|.*\|\s*$", re.MULTILINE)
 _WHITESPACE = re.compile(r"\s+")
@@ -103,21 +79,17 @@ _MODEL_RESOURCES = ResourceConfig(cpu=1, ram="4g", disk="4g")
 _DRIVER_RESOURCES = ResourceConfig(cpu=2, ram="8g")
 # Each worker holds one ~1.7 GB fasttext model in memory and a local copy on disk.
 _WORKER_RESOURCES = ResourceConfig(cpu=4, ram="8g", disk="6g")
-# One task per worker: prediction is sequential per shard, so multiplexing tasks buys nothing and
-# would multiply the model's memory accounting.
+# One task per worker: prediction is sequential per shard.
 _MAP_TASK_RESOURCES = ResourceConfig(cpu=4, ram="8g", disk="6g")
-# The fuzzy-clean corpus has ~23 shards; more workers than tasks would queue for unusable capacity.
+# A cap on concurrent model-holding workers, not a shard count.
 _MAX_WORKERS = 23
-# Not Zephyr's 1 GB default: that default is OOM-killed at run end across this pipeline family.
-_COORDINATOR_RESOURCES = ResourceConfig(cpu=1, ram="8g", preemptible=False)
 
 
 class LidModel(Protocol):
     """The slice of fasttext's API the tagger uses: the list path of ``predict``.
 
-    The list path is load-bearing, not a convenience: fasttext-wheel 0.9.2's single-string
-    ``predict`` crashes under numpy 2.x (``np.array(probs, copy=False)`` raises), while the list
-    path builds its arrays differently and works.
+    The list path is load-bearing: fasttext-wheel 0.9.2's single-string ``predict`` crashes under
+    numpy 2.x.
     """
 
     def predict(self, lines: list[str], k: int) -> tuple[Sequence[Sequence[str]], Sequence[Sequence[float]]]: ...
@@ -161,10 +133,8 @@ def _alpha_byte_length(page: str) -> int:
 def page_scores(pages: Sequence[str], model: LidModel) -> PageScores:
     """Average per-language GlotLID scores over a document's cleaned pages.
 
-    A page whose cleaned text is too short or insufficiently alphabetic (both measured in UTF-8
-    bytes -- the gates predate this port and were calibrated on bytes, unlike ``page_offsets``,
-    which are character offsets) is not scored at all, but still divides the average: the
-    denominator is the total page count.
+    A gated page (too short or insufficiently alphabetic, both in UTF-8 bytes) is not scored but
+    still divides the average: the denominator is the total page count.
     """
     totals: defaultdict[str, float] = defaultdict(float)
     gated = 0
@@ -188,9 +158,7 @@ def page_scores(pages: Sequence[str], model: LidModel) -> PageScores:
 def select_bucket(averages: dict[str, float], thresholds: dict[str, float]) -> tuple[str, float]:
     """Pick the document's language bucket, re-routing sub-threshold candidates to the next best.
 
-    A port of FinePDFs' ``SelectBestLanguage``: candidates descend by score; a top-1 ``zxx_*``
-    label is taken as-is; otherwise the first candidate strictly above its threshold wins, with
-    unknown-threshold languages unselectable. When nothing passes, the top candidate becomes
+    A port of FinePDFs' ``SelectBestLanguage``. When nothing passes, the top candidate becomes
     ``{lang}_removed`` if its threshold is known and stays the raw label if not; with no candidates
     at all the bucket is ``"unknown"`` with score 0.0.
     """
@@ -214,17 +182,12 @@ def label_document(row: dict, model: LidModel, thresholds: dict[str, float]) -> 
     text = row["text"]
     offsets = row["page_offsets"]
     if not offsets or offsets[-1] < len(text):
-        # Text longer than the recorded pages has no known upstream cause, so slicing would
-        # silently mislabel; refuse instead.
+        # Text longer than the recorded pages has no known upstream cause; refuse rather than mislabel.
         end = offsets[-1] if offsets else None
         raise ValueError(f"document {row['id']}: page_offsets end at {end} but text holds {len(text)} characters")
     if offsets[-1] > len(text):
-        # normalize's whitespace-run capping shrank text on a few documents without updating
-        # page_offsets. The drift equals the characters removed (tens, against ~2000-char pages),
-        # so clamped slicing shifts page boundaries immaterially for page-averaged LID; exact
-        # page recovery is impossible after the mutation, and this is a label-only step, so
-        # degrading beats dropping. Trailing pages clamped to empty gate out but still count in
-        # the averaging denominator, like any other gated page.
+        # normalize's whitespace-run capping shrinks text without updating page_offsets. The drift is
+        # a few characters per document, so clamped slicing is close enough for page-averaged LID.
         counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/docs_stale_offsets", 1)
         offsets = [min(offset, len(text)) for offset in offsets]
 
@@ -247,14 +210,12 @@ def label_document(row: dict, model: LidModel, thresholds: dict[str, float]) -> 
 def load_lid_model(model_path: str) -> LidModel:
     """Copy the staged GlotLID model to local disk and load it, once per worker process.
 
-    fasttext only loads from a local filesystem path, and the file is ~1.7 GB, so both the copy
-    and the load are cached for the life of the process. The LID stage runs under ``InlineRunner``
-    precisely so this cache survives across the shards a worker handles.
+    The LID stage runs under ``InlineRunner`` so this cache survives across the shards a worker
+    handles.
     """
     local_path = os.path.join(tempfile.mkdtemp(prefix="glotlid-"), GLOTLID_FILENAME)
     StoragePath(model_path).download_to(local_path)
-    # fasttext's own signature is untyped (``text``, ndarray scores); the list path satisfies the
-    # protocol at runtime.
+    # fasttext's own signature is untyped; the list path satisfies the protocol at runtime.
     return cast(LidModel, fasttext.load_model(local_path))
 
 
@@ -293,43 +254,41 @@ def stage_glotlid_model(output_path: str) -> StagedModelData:
 
 
 def label_languages(
-    output_path: str, clean_output_path: str, model_output_path: str, schema: pa.Schema
+    output_path: str, normalized_output_path: str, model_output_path: str, schema: pa.Schema
 ) -> NormalizedData:
-    """Run the LID map over every fuzzy-clean shard and write the final labeled corpus."""
-    clean = read_artifact(clean_output_path, NormalizedData)
+    """Run the LID map over every normalized shard and write the final labeled corpus."""
+    normalized = read_artifact(normalized_output_path, NormalizedData)
     model = read_artifact(model_output_path, StagedModelData)
     thresholds = load_thresholds()
     logger.info(
         "Labeling %s with %s (%s) under %d language thresholds",
-        clean.main_output_dir,
+        normalized.main_output_dir,
         model.model_path,
         model.revision,
         len(thresholds),
     )
 
-    shards = sorted(str(shard) for shard in StoragePath(prefix_join(clean.main_output_dir, "*.parquet")).glob())
+    shards = sorted(str(shard) for shard in StoragePath(prefix_join(normalized.main_output_dir, "*.parquet")).glob())
     if not shards:
-        raise RuntimeError(f"No fuzzy-clean shards under {clean.main_output_dir}")
+        raise RuntimeError(f"No normalized shards under {normalized.main_output_dir}")
 
-    main_output_dir = prefix_join(output_path, "outputs/main")
+    main_output_dir = prefix_join(output_path, MAIN_OUTPUT_SUBDIR)
     pipeline = (
         Dataset.from_list(shards)
         .load_parquet(batch_mode=True)
         .flat_map(partial(label_batch, model_path=model.model_path, thresholds=thresholds))
         .write_parquet(
-            prefix_join(main_output_dir, "part-{shard:05d}-of-{total:05d}.parquet"),
+            prefix_join(main_output_dir, SHARD_PATTERN),
             schema=schema,
             skip_existing=True,
         )
     )
-    with ZephyrContext(
+    outcome = ZephyrContext(
         name="focus-crawl-pdf-lid",
         resources=_WORKER_RESOURCES,
         max_workers=_MAX_WORKERS,
         stage_runner_factory=InlineRunner,
-        coordinator_resources=_COORDINATOR_RESOURCES,
-    ) as pool:
-        outcome = pool.execute(pipeline, map_task_resources=_MAP_TASK_RESOURCES)
+    ).execute(pipeline, map_task_resources=_MAP_TASK_RESOURCES)
 
     return NormalizedData(
         main_output_dir=main_output_dir,
@@ -352,11 +311,11 @@ def glotlid_model_step() -> StepSpec:
     )
 
 
-def language_label_step(clean: StepSpec, model: StepSpec, input_schema: pa.Schema) -> StepSpec:
-    """Build the LID labeling step over the fuzzy-clean corpus -- the pipeline's final dataset."""
+def language_label_step(normalized: StepSpec, model: StepSpec, input_schema: pa.Schema) -> StepSpec:
+    """Build the LID labeling step over the normalized corpus -- the pipeline's final dataset."""
     return StepSpec(
         name="data/datakit/final/common_crawl_focus_2026_22_pdf",
-        deps=[clean, model],
+        deps=[normalized, model],
         hash_attrs={
             "model_sha256": GLOTLID_SHA256,
             "thresholds_sha256": _thresholds_sha256(),
@@ -373,7 +332,7 @@ def language_label_step(clean: StepSpec, model: StepSpec, input_schema: pa.Schem
         fn=remote(
             partial(
                 label_languages,
-                clean_output_path=clean.output_path,
+                normalized_output_path=normalized.output_path,
                 model_output_path=model.output_path,
                 schema=label_output_schema(input_schema),
             ),

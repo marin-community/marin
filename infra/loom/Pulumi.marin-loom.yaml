@@ -80,6 +80,61 @@ config:
         - marin-community/marin
         - marin-community/tpu-inference
         - marin-community/vllm
+        - marin-community/xla
+      allowedTools: []
+      mcpAccess:
+        mode: all
+        groups: []
+    pr-review:
+      agent: codex
+      description: Review trusted Marin pull requests from immutable head commits
+      model: gpt-5.6-sol
+      effort: xhigh
+      protocol: acp
+      mode: auto
+      class: automation
+      strict: true
+      envClear: true
+      ambientAllowlist: []
+      idleArchiveSeconds: 3600
+      maxConcurrent: 4
+      turnBudget: 200
+      prelude: weaver
+      instructionsFile: profiles/pr-review/AGENTS.md
+      env: *loomIrisUser
+      restricted: false
+      githubRepositories:
+        - marin-community/marin
+      allowedTools: []
+      mcpAccess:
+        mode: all
+        groups: []
+    codehealth-refinement:
+      agent: codex
+      description: Refine agentic-lint from persisted review and lint activity
+      model: gpt-5.6-sol
+      effort: xhigh
+      protocol: acp
+      mode: auto
+      class: automation
+      strict: true
+      envClear: true
+      ambientAllowlist: []
+      idleArchiveSeconds: 3600
+      maxConcurrent: 1
+      turnBudget: 400
+      prelude: weaver
+      instructionsFile: profiles/codehealth-refinement/AGENTS.md
+      env:
+        CLOUDSQL_CONNECTION:
+          value: hai-gcp-models:us-central1:marin-metadata
+        PGDATABASE:
+          value: context
+        PGUSER:
+          value: loom-vm@hai-gcp-models.iam
+      restricted: false
+      githubRepositories:
+        - marin-community/marin
       allowedTools: []
       mcpAccess:
         mode: all
@@ -131,10 +186,23 @@ config:
       createServiceAccount: false
   marin-loom:githubFederations:
     - name: fork-ferry
-      repositoryId: "775839592"
+      repositoryId: &marinRepositoryId "775839592"
       workflowRef: marin-community/marin/.github/workflows/ops-fork-ferry.yaml@refs/heads/main
       profile: fork-ferry
       serviceTag: fork-ferry
+      ref: refs/heads/main
+    - name: pr-review
+      repositoryId: *marinRepositoryId
+      workflowRef: marin-community/marin/.github/workflows/ops-loom-review.yaml@refs/heads/main
+      profile: pr-review
+      serviceTag: pr-review
+      event: pull_request_target
+      ref: refs/heads/main
+    - name: codehealth-refinement
+      repositoryId: *marinRepositoryId
+      workflowRef: marin-community/marin/.github/workflows/ops-codehealth-refinement.yaml@refs/heads/main
+      profile: codehealth-refinement
+      serviceTag: codehealth-refinement
       ref: refs/heads/main
 secretsprovider: gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key
 encryptedkey: CiQAKk3j6Qz1jQpqEr5LUAHWIXJ1B28qzqFuiJjtH5MdH2gce7ASSQCdtF6iKzVxOIFfT2S6vbjMsFHA0EBoefdLu86Qy6HXIN3WI1ybrmlHggGITXPSMgzZ7SWRrVR2iNAzI2PoriKx7a5plvnC6r8=

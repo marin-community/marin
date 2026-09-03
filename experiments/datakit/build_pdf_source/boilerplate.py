@@ -1,35 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Strip running headers and footers from a paginated document.
-
-A PDF repeats its chrome on every page: a journal name, a document number, a confidentiality
-notice, a date. Extraction faithfully reproduces all of it, so a 40-page report can carry forty
-copies of the same header. That is noise for a language model and it is the kind of near-duplicate
-text that survives exact deduplication, because each copy sits inside a different document.
-
-The heuristic is the one FinePDFs uses. Take the first *k* lines of every page, normalise them, and
-ask how many pages agree; grow *k* while a single pattern still holds across enough pages, and take
-the longest one that does. Repeat from the bottom. Only pages carrying the winning pattern are
-stripped, so a title page with no header keeps its first line.
-
-Normalisation is what makes the comparison work: page numbers, dates and section numbers differ per
-page, so every digit is folded to ``0`` and whitespace is dropped before comparing. ``Page 3 of 40``
-and ``Page 4 of 40`` become the same string.
-
-Two guards keep content from being mistaken for chrome:
-
-* a pattern must appear on at least :attr:`BoilerplateOptions.min_pages` pages *and* on at least
-  :attr:`~BoilerplateOptions.min_page_fraction` of them, so a two-page document is left alone and a
-  heading that happens to recur twice in a long report is not stripped;
-* table rows are never candidates. A table repeated across pages is content, and its header row
-  looks exactly like a running header after digits are folded.
-
-This module deliberately imports nothing from either extraction route. It works on page text alone,
-which is what pdf-inspector and the vision model both produce, so the two routes strip boilerplate
-with the same code and the same knobs and a document's furniture is gone before its text is hashed
-into ``id`` whichever route read it.
-"""
+"""Strip running headers and footers from a paginated document."""
 
 import logging
 from collections.abc import Sequence
@@ -39,19 +11,13 @@ import dupekit
 
 logger = logging.getLogger(__name__)
 
-# Digits carry the variation this heuristic is trying to see past -- page numbers, dates, section
-# numbers. ``str.translate`` with a prebuilt table does the fold in C, which matters because this
-# runs over every line of every page of every document.
+# Convert all digits to zeroes so e.g. "Page 3 of 40" and "Page 4 of 40" are recognized as the same
+# boilerplate.
 _DIGIT_FOLD = str.maketrans("0123456789", "0000000000")
-# Dropped entirely rather than collapsed: PDF extraction is inconsistent about how much whitespace
-# it puts between a header's parts, and none of it distinguishes one page's header from another's.
+# PDF extraction is inconsistent about how much whitespace it puts between a header's parts, and
+# none of it distinguishes one page's header from another's.
 _DROPPED_WHITESPACE = str.maketrans("", "", " \t\r ")  # noqa: RUF001 -- the last entry is U+00A0, which PDFs emit
-
-# A line belonging to a table, which is content even when it repeats. The two routes write tables
-# two ways -- the HTML the OCR prompt asks the model for, matched by these markers, and a bare
-# Markdown row, matched by the pipe test in :func:`_line_key` -- so both are recognised. A false
-# positive costs only that one line's exemption from stripping, which is the safe direction to be
-# wrong in.
+# A line belonging to a table, which is content even when it repeats.
 _TABLE_MARKERS = ("<table", "</table>", "<tr", "<td", "<th")
 
 
@@ -83,20 +49,6 @@ class BoilerplateResult:
     pages_stripped: int
     lines_removed: int
 
-    @property
-    def text(self) -> str:
-        return "".join(self.pages)
-
-    @property
-    def page_offsets(self) -> list[int]:
-        """Cumulative character counts, one per page, matching :attr:`text`."""
-        offsets: list[int] = []
-        total = 0
-        for page in self.pages:
-            total += len(page)
-            offsets.append(total)
-        return offsets
-
 
 def split_pages(text: str, page_offsets: Sequence[int]) -> list[str]:
     """Split extracted text back into pages using the cumulative offsets recorded with it."""
@@ -116,9 +68,6 @@ def _line_key(line: str, page_index: int) -> int:
     Digits fold to zero and whitespace is dropped, so a page number does not make two copies of one
     header look different. Table rows are keyed by page index as well, which makes them unique and
     therefore never part of a repeated pattern.
-
-    Hashing rather than keeping the strings keeps the pattern tuples small and makes comparing them
-    an integer compare, which is the whole cost of the search.
     """
     normalized = line.translate(_DIGIT_FOLD).translate(_DROPPED_WHITESPACE)
     if any(marker in line for marker in _TABLE_MARKERS) or (normalized.startswith("|") and normalized.endswith("|")):
@@ -134,9 +83,7 @@ def _longest_repeated_edge(
 ) -> tuple[int, frozenset[int]]:
     """Find the longest edge pattern shared by enough pages.
 
-    Returns the pattern's length in lines and the pages carrying it. Growing the pattern one line
-    at a time and stopping at the first length that fails its support test finds the longest run,
-    because a pattern of length *k+1* can never hold on more pages than its length-*k* prefix.
+    Returns the pattern's length in lines and the pages carrying it.
     """
     num_pages = len(page_keys)
     best_length = 0
@@ -219,10 +166,3 @@ def strip_boilerplate(pages: Sequence[str], options: BoilerplateOptions | None =
         pages_stripped=pages_stripped,
         lines_removed=lines_removed,
     )
-
-
-def strip_document_boilerplate(
-    text: str, page_offsets: Sequence[int], options: BoilerplateOptions | None = None
-) -> BoilerplateResult:
-    """Strip boilerplate from one extracted document, given its text and page offsets."""
-    return strip_boilerplate(split_pages(text, page_offsets), options)

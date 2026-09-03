@@ -16,14 +16,25 @@ data-parallel rack uses one 64-device expert mesh.
   diagnostic uses 1024 sequences.
 - Router: top-8 quantile balancing uses a global histogram with 10,000 bins. It has next-step,
   stop-gradient expert biases and no auxiliary balancing loss.
-- MoE backend: `fixed_pooled_wave_all_to_all`. Each sender uses one fixed pool per
-  destination and stripes it over three static waves. The receiver runs all six local experts in
-  each wave and drops rows above the fixed expert capacity. Expert IDs travel in the activation
-  payload, so the method does not use a metadata collective. The receiver and sender capacity
-  factors are 1.15.
+- MoE backend: `fixed_pooled_wave_all_to_all`, as a temporary fallback. Each sender uses one fixed
+  pool per destination and stripes it over three static waves. The receiver runs all six local
+  experts in each wave and drops rows above the fixed expert capacity. Expert IDs travel in the
+  activation payload, so the method does not use a metadata collective. The receiver and sender
+  capacity factors are 1.15. `ragged_all_to_all` is the intended default and takes the hero back
+  once it stops hanging an 11-rack run after a watch step
+  ([#8870](https://github.com/marin-community/marin/issues/8870)): one update carries each (peer,
+  local expert) pair, so rows arrive grouped by expert, and it reaches XLA's device-initiated
+  (NCCL LSA) kernel, which needs Marin's patched PJRT build, installed on GB200 through the `gpu`
+  extra (`lib/marin/pyproject.toml`).
 - Optimizer: MuonH, with its state offloaded to pinned host memory.
-- Runtime: Each GPU has one JAX process. The recipe uses BF16, `cuda_async`, no PGLE, and no GPU
-  command buffers. Inline watch uses collective overlap limit 1. A disabled watch uses limit 4.
+- Weights: bf16 on device with a pinned-host fp32 master, which the pooled-wave device peak needs.
+  A checkpoint written with a master restores natively here. A master-less checkpoint, which the
+  hero writes when it keeps fp32 weights on device under the ragged transport, cannot restore into
+  this mode: synthesizing a master is refused. The reverse direction migrates in process, so a
+  master-bearing checkpoint reaches either mode.
+- Runtime: Each GPU has one JAX process. The recipe uses `cuda_async`, no PGLE, and no GPU
+  command buffers. The layer carry stays in HBM, which only the ragged transport offloads. Inline
+  watch uses collective overlap limit 1. A disabled watch uses limit 4.
 - Resources: Each four-GPU worker requests 120 CPU, 890 GB of RAM, and 1 TB of disk.
 
 The attention, shared-expert, language-model-head, and optimizer states use the combined `data` and
@@ -34,10 +45,33 @@ Bounded diagnostics write metrics only by default. `--save-checkpoints` writes c
 [#8480](https://github.com/marin-community/marin/pull/8480) bounded pinned-host restore memory. Its
 d6144 run restored step 164 with a 735 GiB fleet peak against a 940 GiB request.
 
-## Historical results
+## Results
 
-These results used earlier capacity or process settings. They do not measure the selected 1.15
-sender and receiver recipe.
+### Transport
+
+[#8549](https://github.com/marin-community/marin/pull/8549) compared the ragged and pooled-wave
+transports head to head: both runs restored the live hero's step-6000 checkpoint on one NVL72
+rack and ran back to back, with the transport the only variable and fp32 weights on device in
+both:
+
+| | ragged | pooled-wave |
+| --- | --- | --- |
+| MFU | 22.87% | 22.71% |
+| assignments dropped | 0.018% | 2.67% |
+| loss at the scored step | 1.4727 | 1.4777 |
+| runtime device peak | 137.9 GiB | 149.9 GiB |
+
+The throughput gap is inside the run-to-run spread (standard deviation over the scored steps was
+0.11 for ragged and 0.59 for pooled-wave, and three earlier ragged runs ranged 22.34–22.58), so
+this buys the drop rate and the headroom at parity rather than a speedup. At d768 over 10.8k steps
+ragged also finished ahead on train loss (1.939 vs 1.956) and eval bpb (0.975 vs 1.033).
+
+Dropping the pinned-host fp32 master is worth about 0.4 MFU on the ragged path, measured on a
+paired hero. Pooled-wave needed the master to fit at all.
+
+### Earlier pooled-wave gates
+
+These ran before the ragged transport, at capacity and process settings the recipe no longer uses.
 
 The 1.10 sender and 1.15 receiver configuration completed a 20-step, one-rack gate. Median
 throughput over steps 2 through 19 was 250,691 tokens/s, and final throughput was 246,947 tokens/s.
@@ -82,14 +116,14 @@ compute-scaled optimizer values stay constant across a sweep.
 | `--intermediate-dim` | routed expert width |
 | `--num-experts-per-token` | routed top-k |
 | `--latent-dim` | routed input and output width |
-| `--capacity-factor` | pooled receiver capacity factor |
+| `--capacity-factor` | receiver capacity factor |
 
 Three quantities set what a sweep can fit on one rack:
 
 - Active routed neurons are top-k multiplied by width.
 - Parameters are expert count multiplied by width.
-- The sender pool is token assignments multiplied by the sender capacity factor and divided across
-  three waves.
+- The receiver buffer is token assignments multiplied by the receiver capacity factor, split
+  across the transport's two expert chunks.
 
 The selected E384 model runs at expert width 3072 and receiver capacity factor 1.15.
 
@@ -125,7 +159,7 @@ Print the plan without a GPU run:
 
 ```bash
 python -m experiments.grug.moe_hero_ep.launch_diagnostics \
-  --run-id mhep-pooled-wave \
+  --run-id mhep-ragged \
   --num-steps 200 \
   --version 2026.08.14
 ```
@@ -133,7 +167,7 @@ python -m experiments.grug.moe_hero_ep.launch_diagnostics \
 Submit the one-rack gate through the Marin Iris controller:
 
 ```bash
-run_id="mhep-pooled-wave"
+run_id="mhep-ragged"
 uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources \
   --target-cluster cw-us-east-08a --priority interactive \
   --cpu 2 --memory 8GB --disk 32GB \
@@ -170,15 +204,16 @@ the 11-rack `replica_dcn` collectives or their global histogram reduction.
 
 ### Small-scale hero-shape ablations
 
-`small_scale_abl_launch.py` runs the hero shape — pooled-wave transport, 384 experts / top-8,
-hidden/2-wide experts in a hidden/2 latent, receiver/sender capacity 1.15 with 3 waves — at a
-downsized width (`--size` in `d768`…`d2048`) on one GB200 rack. It fixes the batch at ~4M tokens per
-step per rack to hold the pooled-wave drop dynamics, and sizes the step count from the model's
-active-parameter count: `num_steps` trains `--tokens-per-active-param` (default 750) tokens per
-active parameter. `--flavor ep` keeps the 64-way expert axis; `--flavor fsdp-nodrop` runs the same
-shape dropless, and `--flavor fsdp-chunk4` runs it with four-chunk capacity. Both pooled-wave gates
-are tunable: `--capacity-factor` (receiver) and `--transport-capacity-factor` (sender). Print the
-plan without a GPU run:
+`small_scale_abl_launch.py` runs the hero shape — 384 experts / top-8, hidden/2-wide experts in a
+hidden/2 latent, capacity 1.15 — at a downsized width (`--size` in `d768`…`d2048`) on one GB200 rack.
+It fixes the batch at ~4M tokens per step per rack to hold the drop dynamics, and sizes the step
+count from the model's active-parameter count: `num_steps` trains `--tokens-per-active-param`
+(default 750) tokens per active parameter. Each flavor names its own transport rather than
+following the hero default, because comparing them is what this launcher is for: `--flavor ragged`
+is the hero's and needs a GB200 fleet, `--flavor ep` is the pooled-wave arm it replaced at a 1.15
+sender capacity over 3 waves, and `--flavor fsdp-nodrop` / `--flavor fsdp-chunk4` run the same
+shape dropless and at four-chunk capacity. The pooled gates are tunable with `--capacity-factor`
+(receiver) and `--transport-capacity-factor` (sender). Print the plan without a GPU run:
 
 ```bash
 python -m experiments.grug.moe_hero_ep.small_scale_abl_launch \
@@ -211,10 +246,10 @@ group `moe-hero-ep-small-abl` and carry Paloma and uncheatable evaluation at `--
 `launch_scaling_ladder.py` trains one uniform hero recipe at five widths so a narrow rung predicts
 the `d6144` hero (which is the hero itself). Every rung shares the hero data (the Harrier
 2026.08.18 two-phase mixture on the Marin tokenizer, simulated against the 18.75T target budget),
-the offloaded MuonH optimizer on FP32 pinned-host master params, the hero mixed precision, 384
-experts / top-8, pooled-wave transport, the QB histogram estimator at 10k bins, and a dropless
-held-out eval. Only the width and the rack count vary; the rack count, batch, step budget, eval
-cadence, and checkpoint policy all follow `--size`:
+the offloaded MuonH optimizer, the hero mixed precision, 384 experts / top-8, the ragged
+all-to-all transport, the QB histogram estimator at 10k bins, and a dropless held-out eval. Only
+the width and the rack count vary; the rack count, batch, step budget, eval cadence, and
+checkpoint policy all follow `--size`:
 
 | size | racks | batch | steps | eval | checkpoints |
 |---|---|---|---|---|---|

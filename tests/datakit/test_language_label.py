@@ -3,11 +3,8 @@
 
 """Tests for the FinePDFs-style GlotLID labeling step.
 
-The vendored thresholds in ``lid_th_values.json`` are only meaningful if the tagger reproduces the
-pipeline they were calibrated against, so these tests pin the port-fidelity points: the count=8
-table substitution, byte-not-character gate math, gated pages diluting the page average, and the
-strict comparisons and fallback order of the bucket selection. The model is faked -- the real one
-is a 1.7 GB download and none of the ported behavior lives inside it.
+The thresholds in ``lid_th_values.json`` assume the pipeline they were calibrated against, so these
+tests pin the port-fidelity points. The model is faked; none of the ported behavior lives inside it.
 """
 
 from collections.abc import Sequence
@@ -25,8 +22,7 @@ from experiments.datakit.build_pdf_source.language_label import (
     select_bucket,
 )
 
-# 30 alphabetic characters. As ASCII that is 30 bytes (under the 50-byte gate); the same count of
-# Greek letters is 60 bytes (over it). The gate is bytes, not characters.
+# 30 letters: 30 bytes as ASCII (under the 50-byte gate), 60 bytes as Greek (over it).
 _LATIN_30 = "abcdefghij" * 3
 _GREEK_30 = "αβγδεζηθικ" * 3
 

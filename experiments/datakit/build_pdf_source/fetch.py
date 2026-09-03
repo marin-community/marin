@@ -6,8 +6,8 @@
 One Zephyr shard per packed task, one output Parquet file per shard. A task issues its coalesced
 range GETs in order, streams each into a temp file, and walks the WARC records inside it.
 
-The output carries no ``id`` or ``text``: extraction (#7618) mints the text-derived id, and
-``content_digest`` is the identity that survives an extractor swap in the meantime.
+The output carries no ``id`` or ``text``: extraction mints the text-derived id, and
+``content_digest`` is the identity that survives an extractor swap.
 """
 
 import http.client
@@ -35,8 +35,10 @@ from experiments.datakit.build_pdf_source.common import (
     COMMON_CRAWL_BASE_URL,
     DOWNLOAD_CHUNK_BYTES,
     FOCUS_CRAWL,
+    MAIN_OUTPUT_SUBDIR,
     PDF_MIME_TYPE,
     REQUEST_TIMEOUT,
+    SHARD_PATTERN,
     USER_AGENT,
     FetchTask,
     PdfFetchPlan,
@@ -66,12 +68,10 @@ _OUTPUT_SCHEMA = pa.schema(
 )
 
 _DRIVER_RESOURCES = ResourceConfig(cpu=1, ram="4g", disk="4g")
-# Sized against cw-us-east-08a at plan time: four cd-gp-i64-erapids nodes (64 vCPU / 512 GB /
-# 15.36 TB each), 256 vCPU in all. Seven cpu=8 workers per node -- 28, not the 32 that would pack
-# the fleet exactly -- leaves the controller and system pods headroom.
+# Sized to leave the cw-us-east-08a CPU pool headroom for the controller and system pods.
 _WORKER_RESOURCES = ResourceConfig(cpu=8, ram="64g", disk="64g")
 # Fetching is I/O bound, so tasks are costed at one CPU and multiplex eight-deep per worker. Task
-# disk holds one range's temp file at a time; the widest range in the whole crawl is 294 MiB.
+# disk holds one range's temp file at a time.
 _MAP_TASK_RESOURCES = ResourceConfig(cpu=1, ram="4g", disk="2g")
 _MAX_WORKERS = 28
 _HEARTBEAT_TIMEOUT = 15 * 60
@@ -162,10 +162,8 @@ def _is_pdf_record(record) -> bool:
 def iter_planned_pdfs(stream: BinaryIO, selected: RangeFetch) -> Iterator[dict]:
     """Yield the planned PDF records from one downloaded range.
 
-    A coalesced range spans the records between the PDFs it was built from, and those gaps hold
-    PDFs the plan deliberately excluded (truncated payloads, non-200 responses). Selection is
-    therefore by absolute record offset, not by MIME type -- the MIME check only avoids reading
-    payloads we are certain to drop.
+    Selection is by absolute record offset, since a coalesced range also spans PDFs the plan
+    excluded; the MIME check only avoids reading payloads that are certain to be dropped.
     """
     from warcio.archiveiterator import ArchiveIterator  # noqa: PLC0415
 
@@ -228,12 +226,12 @@ def fetch_planned_pdfs(output_path: str, plan_output_path: str) -> PdfSourceData
         raise ValueError(f"Plan declares {plan.num_tasks} tasks, {plan.plan_path} holds {len(tasks)}")
     logger.info("Fetching %d PDFs over %d ranges in %d tasks", plan.num_pdfs, plan.num_ranges, len(tasks))
 
-    output_dir = prefix_join(output_path, "outputs/main")
+    output_dir = prefix_join(output_path, MAIN_OUTPUT_SUBDIR)
     pipeline = (
         Dataset.from_list(tasks)
         .flat_map(partial(fetch_task_pdfs, base_url=COMMON_CRAWL_BASE_URL))
         .write_parquet(
-            prefix_join(output_dir, "part-{shard:05d}-of-{total:05d}.parquet"),
+            prefix_join(output_dir, SHARD_PATTERN),
             schema=_OUTPUT_SCHEMA,
             skip_existing=True,
         )
@@ -260,8 +258,7 @@ def fetch_step(plan: StepSpec) -> StepSpec:
         fn=remote(
             partial(fetch_planned_pdfs, plan_output_path=plan.output_path),
             resources=_DRIVER_RESOURCES,
-            # The fetch tasks walk WARC records with warcio at runtime; it lives in the ``pdf``
-            # extra.
+            # warcio lives in the ``pdf`` extra.
             pip_dependency_groups=["datakit", "pdf"],
         ),
     )

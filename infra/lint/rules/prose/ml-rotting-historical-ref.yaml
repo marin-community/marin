@@ -1,0 +1,18 @@
+schema_version: 1
+code: ml-rotting-historical-ref
+lane: prose
+title: Source reference to a rollout phase / kata / migration
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** "Phase B+", "kata h9r9", "see migration 0047 which added
+  this column" are scaffolding vocabulary that mean nothing once the work
+  lands. Six months later the comment is actively misleading.
+
+  **When allowed:** Durable identifiers — a stable issue URL, an ADR path,
+  a module-level invariant. Rolling project vocabulary, never.
+
+  **Bad example:**
+  ```python
+  # Phase C: re-enabled after kata h9r9 unblocked
+  timeout = 60
+  ```

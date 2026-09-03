@@ -3,43 +3,18 @@
 
 """Detect and repair repetition loops in a vision model's page transcription.
 
-A VLM asked to transcribe a page can fall into a degenerate cycle: it emits one unit -- a row of
-empty table cells, a run of leader dots, a fabricated URL, a counter -- over and over until the
-token cap stops it. The result is not an obvious failure. It is ordinary-looking Markdown that
-nothing in the response distinguishes from a faithful transcription of a repetitive page, and in the
-10% sample it accounts for roughly 3% of all extracted characters.
+A VLM asked to transcribe a page can fall into a degenerate cycle, emitting one unit over and over
+until the token cap stops it. The feature here is the extent of the maximal *exactly periodic* span
+ending at the end of the page, which is at once the evidence and the salvage cut point; the period
+is recovered with a single ``str.rfind`` of the page's tail and grown by slice comparison.
 
-What separates a loop from a page that is *genuinely* repetitive is not redundancy but **invariance**.
-A real table is redundant -- ``| 1.000 | 1.000 | 1.000 |`` -- yet its rows keep introducing new cell
-values, while a loop repeats one fixed unit to the end of the output. A detector built on
-compressibility cannot tell them apart: measured against hand labels it scored 0.98 precision inside
-``partial`` documents and 0.04 inside ``success`` ones, condemning benchmark tables, census counts
-and cross-tabs. So the feature here is the extent of the maximal *exactly periodic* span ending at
-the end of the page, which is at once the evidence and the salvage cut point.
+Digits are folded to a single symbol before the search so that an incrementing counter reads as a
+loop. A span that is periodic only after folding has to earn it: :func:`counter_score` requires the
+swallowed digits to be themselves near-constant or near-arithmetic.
 
-The period is recovered rather than searched. The last :data:`_PROBE_CHARS` characters of a periodic
-tail must occur again exactly one period earlier, so a single ``str.rfind`` hands back the period and
-slice comparisons grow the span -- all at C speed, over the ~3% of pages that survive a compression
-gate. The whole pass costs about 23 microseconds per KB, against roughly 15 milliseconds per page for
-rendering alone.
-
-Digits are folded to a single symbol before the search, because an incrementing counter (``Fig. 1``,
-``Fig. 2``, ... ``Fig. 525``) is a loop that no exact-repetition test would see. Folding is also
-dangerous: a register of filings whose blocks differ *only* in reference numbers and dates folds to
-an exactly repeating template, and one such document supplied 61 of the 67 false positives an
-unguarded folded search produced across the whole sample. A span that is periodic only after folding
-therefore has to earn it -- :func:`counter_score` requires the swallowed digits to be themselves
-degenerate, near-constant or near-arithmetic. Real record numbers are neither; a counter is both.
-
-Thresholds are calibrated against 897 hand-labeled pages, each labeled by looking at the rendered
-page beside its transcription. At the settings here the detector scores precision 1.000 [0.964,
-1.000] and recall 0.866 inside ``partial`` documents. It does not catch near-periodic block cycling,
-and it does not address bounded fabricated fill (a model inventing plausible values for empty table
-cells), which is a distinct defect with no detector.
-
-**The calibration assumes the token cap.** A runaway loop hits ``max_tokens`` and marks the page
-truncated, which is why :func:`repair_page` only examines truncated pages: the gate costs no measured
-recall and removes every remaining false positive. Raise the cap and this reasoning has to be redone.
+The calibration assumes the token cap: a runaway loop hits ``max_tokens`` and marks the page
+truncated, which is why :func:`repair_page` only examines truncated pages. Raise the cap and this
+reasoning has to be redone.
 """
 
 import re
@@ -47,15 +22,12 @@ import zlib
 from dataclasses import dataclass
 from itertools import pairwise
 
-# Probe taken from the end of the text; its earlier occurrence gives the period. Long enough that a
-# chance re-occurrence of ordinary prose is negligible, short enough that a period of a few dozen
-# characters still has room to repeat inside one page.
+# Probe taken from the end of the text; its earlier occurrence gives the period.
 _PROBE_CHARS = 64
-# Characters back from the end at which to take the probe. The later anchors let the search tolerate
-# a short non-periodic coda after the loop -- a closing table row, a stray fence.
+# Characters back from the end at which to take the probe; the later anchors tolerate a short
+# non-periodic coda after the loop.
 _PROBE_ANCHORS = (0, 250, 1200)
-# A span must hold at least this many whole periods to be degeneracy rather than a document that
-# happens to repeat a heading twice.
+# A span must hold at least this many whole periods to count as degeneracy.
 _MIN_PERIODS = 4
 # Below this many digit runs, folding cannot have been what created the periodicity.
 _MIN_DIGIT_RUNS = 4
@@ -64,16 +36,15 @@ _DIGIT_FOLD = str.maketrans("0123456789", "0000000000")
 _DIGIT_RUN = re.compile(r"[0-9]+")
 
 # Cheap gate before the period search: no periodic span of the sizes acted on here leaves a page this
-# incompressible. Skips the scan on the great majority of pages, which are ordinary prose.
+# incompressible.
 _GATE_COMPRESSION_RATIO = 0.42
-# zlib runs on at most this many characters; the ratio of a long tail is already decisive.
+# zlib runs on at most this many characters.
 _GATE_SAMPLE_CHARS = 8000
 
 # Length of the probe used to walk the cut back to where the repeated unit *first* appears.
 _ONSET_PROBE_CHARS = 40
-# ...but only this many periods back. The repeated unit often has a legitimate first occurrence -- a
-# real figure caption the model then got stuck on -- and an unbounded search walks the cut back to it,
-# discarding the entire correct transcription in front.
+# ...but only this many periods back, so a unit with a legitimate earlier occurrence does not drag
+# the cut through good text.
 _ONSET_WALKBACK_PERIODS = 3
 
 
@@ -85,21 +56,17 @@ class LoopOptions:
     step's ``hash_attrs``.
     """
 
-    # Nothing shorter is worth acting on. A genuine runaway fills thousands of characters before the
-    # cap stops it; a short page that repeats is almost always a form, a stub table, or three lines.
+    # Nothing shorter is worth acting on.
     min_page_chars: int = 3000
     # The span must be this long in absolute terms...
     min_loop_chars: int = 1200
-    # ...and this much of the page, so a long page with one repetitive block is not condemned for it.
+    # ...and this much of the page...
     min_loop_fraction: float = 0.15
-    # ...and must run to (near) the end. A repetitive block the model exits and continues past is a
-    # table it transcribed, not a cycle it fell into.
+    # ...and must run to (near) the end.
     max_trailing_chars: int = 1500
-    # How degenerate the digits inside a folded-only span must be. This guard, not the size
-    # thresholds, is what holds precision: switching it off multiplies false positives by 67.
+    # How degenerate the digits inside a folded-only span must be. This guard is what holds precision.
     min_counter_score: float = 0.5
-    # A retained prefix shorter than this is not a transcription of anything -- it is the first
-    # fragment of the loop itself. A policy floor, not a fitted discriminator.
+    # A retained prefix shorter than this is the first fragment of the loop itself, not a transcription.
     min_salvage_prefix: int = 250
 
 
@@ -114,8 +81,7 @@ class PageLoop:
     start: int
     end: int
     period: int
-    # Whether the span repeats exactly, without folding digits. A folded-only span is believed only
-    # when :attr:`counter_score` vouches for the digits it ignored.
+    # Whether the span repeats exactly, without folding digits.
     exact: bool
     counter_score: float
 
@@ -167,12 +133,8 @@ def _periodic_span(text: str, nchars: int) -> tuple[int, int, int]:
         period = (end - _PROBE_CHARS) - previous
         if period <= 0:
             continue
-        # Deliberately not reduced to the unit's minimal period. ``rfind`` requires a match to lie
-        # entirely before the probe, so this is the true period rounded up to a multiple that clears
-        # it, and the backward walk strides in that multiple -- which can leave a repetition or two
-        # in the salvaged text. Reducing it is worse: measured over 60k corpus pages, the shorter
-        # stride is a weaker constraint and walks back through legitimate table rows and prose that
-        # merely align with it, taking real content off 24 of the 39 pages it changed.
+        # Deliberately not reduced to the unit's minimal period: the shorter stride is a weaker
+        # constraint and walks back through legitimate rows that merely align with it.
         start = end - period
         while start - period >= 0 and text[start - period : start] == text[start : start + period]:
             start -= period
@@ -193,9 +155,8 @@ def _periodic_span(text: str, nchars: int) -> tuple[int, int, int]:
 def counter_score(span: str) -> float:
     """How degenerate the digit runs inside ``span`` are, in ``[0, 1]``.
 
-    1.0 means they are all the same value or step by a constant -- a counter. Values near 0 mean
-    unrelated numbers, which is what a genuine list of records, dates or measurements looks like. A
-    span with almost no digits scores 1.0, because there folding cannot have created the periodicity.
+    1.0 means they are all the same value or step by a constant, as a counter does. A span with almost
+    no digits scores 1.0, because there folding cannot have created the periodicity.
     """
     runs = _DIGIT_RUN.findall(span)
     if len(runs) < _MIN_DIGIT_RUNS:
@@ -213,9 +174,8 @@ def counter_score(span: str) -> float:
 def find_loop(text: str, options: LoopOptions) -> PageLoop:
     """Locate the degenerate span at the end of one page's transcription.
 
-    Two searches run: one on the raw text, one with digits folded. A raw span is self-evidently
-    degenerate. A folded-only span is scored by :func:`counter_score`, and the caller decides whether
-    that score is good enough.
+    Two searches run: one on the raw text, one with digits folded. A folded-only span is scored by
+    :func:`counter_score`, and the caller decides whether that score is good enough.
     """
     nchars = len(text)
     empty = PageLoop(nchars=nchars, start=nchars, end=nchars, period=0, exact=True, counter_score=1.0)
@@ -224,8 +184,7 @@ def find_loop(text: str, options: LoopOptions) -> PageLoop:
 
     body = text.rstrip()
     folded = body.translate(_DIGIT_FOLD)
-    # Gate on the *folded* tail: an incrementing counter does not compress until its digits are
-    # folded, and counters are exactly the class an unfolded test misses.
+    # Gate on the *folded* tail: an incrementing counter does not compress until its digits are folded.
     sample = folded[-_GATE_SAMPLE_CHARS:].encode()
     if len(zlib.compress(sample, 1)) / max(len(sample), 1) > _GATE_COMPRESSION_RATIO:
         return empty
@@ -261,10 +220,8 @@ def is_loop(loop: PageLoop, options: LoopOptions) -> bool:
 def loop_onset(text: str, loop: PageLoop) -> int:
     """Character offset where the degeneracy begins, at or before the exactly periodic span.
 
-    :attr:`PageLoop.start` is where *exact* repetition begins, but a cycle that drifts -- an extra
-    space, a separator that changes every few rounds -- was already degenerate before that. The first
-    occurrence of the repeated unit is the better onset, bounded to a few periods back so that a unit
-    with a legitimate earlier occurrence does not drag the cut through good text.
+    A cycle that drifts was already degenerate before exact repetition began, so the first occurrence
+    of the repeated unit is the better onset, bounded to a few periods back.
     """
     if not loop.period:
         return loop.start
@@ -280,10 +237,8 @@ def salvage(text: str, loop: PageLoop, options: LoopOptions) -> str:
     """The transcription to keep from a page that looped.
 
     Everything from the onset of the degeneracy onwards is dropped, including whatever the model
-    emitted *after* the span: that text sits on the far side of a several-thousand-character cycle,
-    so its place on the page is unknown. The cut snaps back to the preceding newline so the retained
-    text does not end mid-row, and a prefix too short to be a transcription becomes an empty page
-    rather than a stub.
+    emitted after the span. The cut snaps back to the preceding newline, and a prefix too short to be
+    a transcription becomes an empty page rather than a stub.
     """
     cut = loop_onset(text, loop)
     newline = text.rfind("\n", 0, cut)
@@ -296,9 +251,8 @@ def salvage(text: str, loop: PageLoop, options: LoopOptions) -> str:
 def repair_page(text: str, truncated: bool, options: LoopOptions) -> PageRepair:
     """Detect a repetition loop in one page and cut it out.
 
-    Only truncated pages are examined. A runaway cycle runs until the token cap stops it, so the cap
-    is the loop's own signature; gating on it costs no measured recall and removes the last false
-    positives, at the price of not seeing a bounded cycle that stops on its own.
+    Only truncated pages are examined: a runaway cycle runs until the token cap stops it, so the cap
+    is the loop's own signature.
     """
     if not truncated:
         return PageRepair(text=text, looped=False, dropped_chars=0, loop_period=0)

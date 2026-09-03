@@ -3,10 +3,9 @@
 
 """Tests for detecting and cutting out a vision model's repetition loops.
 
-The fixtures are built to hold the distinction the detector exists for: a page that is *genuinely*
-repetitive (a results table whose cells happen to repeat, a register whose blocks differ only in
-their reference numbers) must survive untouched, while a page where the model emitted one invariant
-unit until the token cap stopped it must be cut back to the transcription in front of it.
+The fixtures hold the distinction the detector exists for: a genuinely repetitive page (a results
+table, a register differing only in reference numbers) survives untouched, while a page that looped
+to the token cap is cut back to the transcription in front of it.
 """
 
 from concurrent.futures import Future
@@ -41,8 +40,7 @@ def _table_page(rows: int = 260) -> str:
     """A faithfully transcribed results table: repetitive in form, varying in content."""
     lines = ["| dataset | method | resolution | error |", "| --- | --- | --- | --- |"]
     for index in range(rows):
-        # Vary the cells the way a real benchmark table does. Most resolutions really are 1.000,
-        # which is what makes this page look degenerate to a redundancy-based detector.
+        # Most resolutions really are 1.000, which is what makes this page look degenerate.
         lines.append(f"| 1000M{index % 4 + 1} | PASTA-{index % 7} | 1.000 | 0.{index % 97:03d} |")
     return "# Table S3: resolution by dataset\n\n" + "\n".join(lines) + "\n"
 
@@ -50,8 +48,8 @@ def _table_page(rows: int = 260) -> str:
 def _register_page(entries: int = 150) -> str:
     """A parliamentary-style register: identical block structure, unrelated reference numbers.
 
-    Folding digits makes this exactly periodic, so only the counter guard keeps it out of the
-    detector's jaws. The numbers must be unrelated -- neither constant nor an arithmetic run.
+    The numbers must be neither constant nor an arithmetic run, or the counter guard cannot tell it
+    from a loop.
     """
     references = [(index * 7919 + 104729) % 899999 + 100000 for index in range(entries)]
     blocks = []
@@ -80,13 +78,8 @@ def test_a_repeated_unit_running_to_the_cap_is_cut_back_to_the_transcription():
 
 
 def test_the_cut_can_leave_up_to_one_period_of_the_loop_behind():
-    """A known, measured limitation, pinned so a change to the period search has to face it.
-
-    The period comes from an ``rfind`` that requires the match to clear the probe, so it is the true
-    unit rounded up to a multiple of itself; the backward walk strides in that multiple and can stop
-    a repetition or two short. Shortening the stride was tried and is worse -- it walks back through
-    real content -- so the residue is accepted and bounded here.
-    """
+    """A known limitation: the period search rounds the unit up to a multiple of itself, so the
+    backward walk can stop a repetition or two short. The residue is accepted and bounded here."""
     unit = "|  |  |  |\n"
     repair = _repair(_looping_page(unit))
     loop = find_loop(_looping_page(unit), _OPTIONS)

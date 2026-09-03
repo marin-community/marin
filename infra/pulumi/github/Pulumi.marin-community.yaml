@@ -232,6 +232,14 @@ config:
       source_kind: manual
       source_ref: owner-recovery:claude-nightshift-private-key
       disposition: keep
+    - name: OPENAI_API_KEY
+      scope: repository
+      repository: marin-community/marin
+      presence: present
+      source_kind: gcp-secret
+      source_ref: gcp-secret://projects/hai-gcp-models/secrets/OPENAI_API_KEY/versions/2
+      disposition: keep
+      note: Mirrored from Secret Manager for scheduled code-health classification.
     - name: DEPENDENCY_UPDATER_PRIVATE_KEY
       scope: environment
       repository: marin-community/marin

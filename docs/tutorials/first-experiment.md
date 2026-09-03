@@ -59,11 +59,11 @@ from levanter.models.llama import LlamaConfig
 
 # A tiny Llama for fast local testing.
 llama_nano = LlamaConfig(
-    max_seq_len=2048,
-    hidden_dim=128,
-    intermediate_dim=512,
-    num_heads=4,
-    num_kv_heads=4,
+    max_seq_len=512,
+    hidden_dim=32,
+    intermediate_dim=128,
+    num_heads=2,
+    num_kv_heads=2,
     num_layers=2,
 )
 ```
@@ -89,7 +89,7 @@ from marin.experiment.train import train_lm
 from marin.training.training import LevanterCheckpoint
 
 BATCH_SIZE = 4
-SEQ_LEN = 2048
+SEQ_LEN = llama_nano.max_seq_len
 NUM_TRAIN_STEPS = 100
 
 

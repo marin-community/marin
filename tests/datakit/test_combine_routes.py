@@ -1,28 +1,20 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for choosing one extraction per document and joining the two routes into one corpus.
-
-Under router v2 the routes overlap: pdf-inspector reads every fetched PDF and the VLM re-reads the
-escalated subset, so an escalated document exists on both sides and the corpus must take exactly
-one. That makes the union's job selection as well as concatenation, and both halves are asserted
-here -- a document the router escalated must not arrive from the cheap route, and a record that does
-arrive must come back with only ``needs_ocr`` and the other route's null columns added.
-"""
+"""Tests for choosing one extraction per document and joining the two routes into one corpus."""
 
 import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from marin.datakit.normalize import generate_id
 
-from experiments.datakit.build_pdf_source.combine_routes import (
-    _SOURCE_FILE_COLUMN,
-    COMBINED_SCHEMA,
-    _route_fields,
-    tag_batch,
-)
+from experiments.datakit.build_pdf_source.classify import ROUTING_SCHEMA
+from experiments.datakit.build_pdf_source.combine_routes import COMBINED_SCHEMA, _route_fields, tag_batch
+from experiments.datakit.build_pdf_source.common import SOURCE_FILE_COLUMN
 from experiments.datakit.build_pdf_source.document_record import PDF_DOCUMENT_FIELDS
 from experiments.datakit.build_pdf_source.extract_inspector import INSPECTOR_FIELDS
 from experiments.datakit.build_pdf_source.extract_ocr import OCR_FIELDS, OUTPUT_SCHEMA
+from experiments.datakit.build_pdf_source.ocr_extract.render import DEFAULT_MAX_VISUAL_TOKENS
 
 _INSPECTOR_MAIN = (
     "s3://bucket/marin/data/datakit/extract/common_crawl_focus_2026_22_pdf_inspector_84cbb532/outputs/main/"
@@ -38,9 +30,6 @@ _OCR_NAMES = frozenset(field.name for field in OCR_FIELDS)
 _INSPECTOR_NAMES = frozenset(field.name for field in INSPECTOR_FIELDS)
 _OCR_ONLY = tuple(sorted(_OCR_NAMES - _INSPECTOR_NAMES))
 _INSPECTOR_ONLY = tuple(sorted(_INSPECTOR_NAMES - _OCR_NAMES))
-# Both routes report what the render budget resolved the document to: one measured it while
-# rendering, the other computed it from page geometry before deciding not to.
-_SHARED_ROUTE_NAMES = ("mean_render_dpi", "pages_below_legibility_floor")
 
 _PROSE = (
     "# Coastal erosion along the Holderness cliffs\n\n"
@@ -105,44 +94,49 @@ def _ocr_document(text: str = _PROSE, offset: int = 4096, **overrides) -> dict:
 def _inspector_batch(shard: str, rows: list[dict]) -> pa.RecordBatch:
     """One pdf-inspector row group as the reader hands it over, source path column injected."""
     schema = pa.schema(
-        [*PDF_DOCUMENT_FIELDS, *INSPECTOR_FIELDS, pa.field(_SOURCE_FILE_COLUMN, pa.string(), nullable=False)]
+        [*PDF_DOCUMENT_FIELDS, *INSPECTOR_FIELDS, pa.field(SOURCE_FILE_COLUMN, pa.string(), nullable=False)]
     )
-    return pa.RecordBatch.from_pylist([{**row, _SOURCE_FILE_COLUMN: shard} for row in rows], schema=schema)
+    return pa.RecordBatch.from_pylist([{**row, SOURCE_FILE_COLUMN: shard} for row in rows], schema=schema)
 
 
 def _ocr_batch(shard: str, rows: list[dict]) -> pa.RecordBatch:
     """One OCR-route row group, carrying the route's own wider schema."""
-    schema = pa.schema([*OUTPUT_SCHEMA, pa.field(_SOURCE_FILE_COLUMN, pa.string(), nullable=False)])
-    return pa.RecordBatch.from_pylist([{**row, _SOURCE_FILE_COLUMN: shard} for row in rows], schema=schema)
+    schema = pa.schema([*OUTPUT_SCHEMA, pa.field(SOURCE_FILE_COLUMN, pa.string(), nullable=False)])
+    return pa.RecordBatch.from_pylist([{**row, SOURCE_FILE_COLUMN: shard} for row in rows], schema=schema)
 
 
-def _keys(*offsets: int) -> frozenset[tuple[str, int]]:
-    return frozenset((_WARC, offset) for offset in offsets)
+def _routing_row(offset: int, needs_ocr: bool) -> dict:
+    return {
+        "warc_filename": _WARC,
+        "warc_record_offset": offset,
+        "content_digest": "sha1:ABCDEF",
+        "url": "https://example.org/report.pdf",
+        "needs_ocr": needs_ocr,
+        "route_reason": "score",
+        "escalation_score": None,
+        "render_visual_tokens": DEFAULT_MAX_VISUAL_TOKENS,
+        "inspector_markdown_chars": None,
+        "mean_render_dpi": None,
+        "num_pages": None,
+    }
+
+
+@pytest.fixture
+def routing(tmp_path):
+    """Write the routing shard co-partitioned with ``_SHARD`` into a directory and return it.
+
+    ``kept`` and ``escalated`` are the offsets on each route.
+    """
+
+    def write(kept: tuple[int, ...] = (), escalated: tuple[int, ...] = ()) -> str:
+        rows = [_routing_row(offset, False) for offset in kept] + [_routing_row(offset, True) for offset in escalated]
+        pq.write_table(pa.Table.from_pylist(rows, schema=ROUTING_SCHEMA), tmp_path / _SHARD)
+        return str(tmp_path)
+
+    return write
 
 
 # --- the combined schema ------------------------------------------------------------------------
-
-
-def test_combined_schema_is_the_shared_record_plus_the_route_and_every_route_column_once():
-    """The union may only add the router decision and make each route's own columns nullable."""
-    assert COMBINED_SCHEMA.names[: len(PDF_DOCUMENT_FIELDS)] == [field.name for field in PDF_DOCUMENT_FIELDS]
-    assert COMBINED_SCHEMA.names[len(PDF_DOCUMENT_FIELDS)] == "needs_ocr"
-    assert not COMBINED_SCHEMA.field("needs_ocr").nullable
-    assert COMBINED_SCHEMA.field("needs_ocr").type == pa.bool_()
-
-    route_names = COMBINED_SCHEMA.names[len(PDF_DOCUMENT_FIELDS) + 1 :]
-    assert set(route_names) == _OCR_NAMES | _INSPECTOR_NAMES
-    assert len(route_names) == len(set(route_names)), "a column claimed by both routes is carried once"
-    for name in route_names:
-        assert COMBINED_SCHEMA.field(name).nullable, f"{name} must be nullable (null on the other route's rows)"
-
-
-def test_a_column_both_routes_write_survives_as_one_column():
-    """``mean_render_dpi`` means the same thing on both sides, so a consumer reads it uniformly."""
-    for name in _SHARED_ROUTE_NAMES:
-        assert name in _OCR_NAMES and name in _INSPECTOR_NAMES
-        assert COMBINED_SCHEMA.field(name).type == OUTPUT_SCHEMA.field(name).type
-        assert name not in _OCR_ONLY and name not in _INSPECTOR_ONLY
 
 
 def test_routes_that_disagree_about_a_column_type_are_refused():
@@ -154,69 +148,81 @@ def test_routes_that_disagree_about_a_column_type_are_refused():
 # --- selection: exactly one reading of each document ---------------------------------------------
 
 
-def test_the_cheap_reading_of_an_escalated_document_is_dropped():
-    """Both routes read it; keeping both would put two disagreeing copies in the corpus.
-
-    Exact dedup keys on a hash of the text, so the VLM's reading and pdf-inspector's are two
-    different documents and neither would remove the other.
-    """
+def test_the_cheap_reading_of_an_escalated_document_is_dropped(routing):
+    """Both routes read it; keeping both would put two disagreeing copies in the corpus."""
     escalated = _inspector_document(offset=4096)
     kept = _inspector_document("A document the router left alone.\n", offset=8192)
+    routing_dir = routing(kept=(8192,), escalated=(4096,))
 
-    records = list(tag_batch(_inspector_batch(_INSPECTOR_SHARD, [escalated, kept]), _ROUTES, _keys(8192)))
+    records = list(tag_batch(_inspector_batch(_INSPECTOR_SHARD, [escalated, kept]), _ROUTES, routing_dir))
 
     assert [record["warc_record_offset"] for record in records] == [8192]
 
 
-def test_the_ocr_route_is_not_filtered_against_the_kept_keys():
-    """It only ever read the escalated subset, and those keys are by construction not in the set."""
-    records = list(tag_batch(_ocr_batch(_OCR_SHARD, [_ocr_document(offset=4096)]), _ROUTES, _keys(8192)))
+def test_the_ocr_route_never_opens_the_routing_table(tmp_path):
+    """It only ever read the escalated subset. The directory holds no routing shard at all, so
+    consulting it would fail rather than filter."""
+    records = list(tag_batch(_ocr_batch(_OCR_SHARD, [_ocr_document(offset=4096)]), _ROUTES, str(tmp_path)))
 
     assert [record["warc_record_offset"] for record in records] == [4096]
 
 
-def test_a_document_with_no_extracted_text_never_reaches_the_corpus_from_the_cheap_route():
-    """pdf-inspector stores a row for a document it read nothing from; the gate escalates every one.
-
-    That row is what makes the no-text gate expressible, and this is where it stops being a
-    document: it is absent from the kept keys, so the filter removes it.
-    """
+def test_a_document_with_no_extracted_text_never_reaches_the_corpus_from_the_cheap_route(routing):
+    """pdf-inspector stores a row for a document it read nothing from; the gate escalates it and the
+    filter drops it here."""
     empty = _inspector_document("", offset=4096, inspector_markdown_chars=0, extraction_status="empty")
 
-    assert list(tag_batch(_inspector_batch(_INSPECTOR_SHARD, [empty]), _ROUTES, _keys(8192))) == []
+    assert list(tag_batch(_inspector_batch(_INSPECTOR_SHARD, [empty]), _ROUTES, routing(escalated=(4096,)))) == []
+
+
+def test_a_kept_shard_whose_routing_shard_is_missing_is_an_error_rather_than_an_empty_route(tmp_path):
+    """A shard name with no counterpart in the routing table is a broken co-partitioning, not a
+    shard with nothing escalated."""
+    with pytest.raises(FileNotFoundError, match=_SHARD):
+        list(tag_batch(_inspector_batch(_INSPECTOR_SHARD, [_inspector_document()]), _ROUTES, str(tmp_path)))
+
+
+def test_a_document_absent_from_its_routing_shard_is_an_error_rather_than_a_drop(routing):
+    """The table is total over the extraction, so an unknown key is a broken join, not a kept document."""
+    batch = _inspector_batch(_INSPECTOR_SHARD, [_inspector_document(offset=4096)])
+
+    with pytest.raises(ValueError, match="no routing decision"):
+        list(tag_batch(batch, _ROUTES, routing(kept=(8192,))))
 
 
 # --- concatenation ------------------------------------------------------------------------------
 
 
-def test_inspector_records_pass_through_with_the_route_and_null_ocr_columns_added():
+def test_inspector_records_pass_through_with_the_route_and_null_ocr_columns_added(routing):
     document = _inspector_document()
-    records = list(tag_batch(_inspector_batch(_INSPECTOR_SHARD, [document]), _ROUTES, _keys(4096)))
+    records = list(tag_batch(_inspector_batch(_INSPECTOR_SHARD, [document]), _ROUTES, routing(kept=(4096,))))
     assert records == [{**document, **dict.fromkeys(_OCR_ONLY), "needs_ocr": False}]
 
 
-def test_ocr_records_pass_through_with_the_route_and_null_inspector_columns_added():
+def test_ocr_records_pass_through_with_the_route_and_null_inspector_columns_added(tmp_path):
     document = _ocr_document()
-    records = list(tag_batch(_ocr_batch(_OCR_SHARD, [document]), _ROUTES, frozenset()))
+    records = list(tag_batch(_ocr_batch(_OCR_SHARD, [document]), _ROUTES, str(tmp_path)))
     assert records == [{**document, **dict.fromkeys(_INSPECTOR_ONLY), "needs_ocr": True}]
 
 
-def test_a_shard_under_neither_route_is_an_error_rather_than_a_guess():
+def test_a_shard_under_neither_route_is_an_error_rather_than_a_guess(tmp_path):
     """The tag comes from the driver's own listing; a stray path means that listing is wrong."""
+    batch = _inspector_batch("s3://bucket/elsewhere/" + _SHARD, [_inspector_document()])
     with pytest.raises(ValueError, match="belongs to neither extraction route"):
-        list(tag_batch(_inspector_batch("s3://bucket/elsewhere/" + _SHARD, [_inspector_document()]), _ROUTES, _keys()))
+        list(tag_batch(batch, _ROUTES, str(tmp_path)))
 
 
-def test_an_empty_row_group_yields_nothing_rather_than_reaching_for_a_missing_path():
-    assert list(tag_batch(_inspector_batch(_INSPECTOR_SHARD, []), _ROUTES, _keys())) == []
+def test_an_empty_row_group_yields_nothing_rather_than_reaching_for_a_missing_path(tmp_path):
+    assert list(tag_batch(_inspector_batch(_INSPECTOR_SHARD, []), _ROUTES, str(tmp_path))) == []
 
 
-def test_tagged_records_from_both_routes_satisfy_the_combined_schema():
+def test_tagged_records_from_both_routes_satisfy_the_combined_schema(routing):
     inspector_rows = [_inspector_document(offset=1), _inspector_document("A second cheap reading.\n", offset=2)]
     ocr_rows = [_ocr_document("A transcribed document.\n", offset=3), _ocr_document("Another one.\n", offset=4)]
+    routing_dir = routing(kept=(1, 2))
     records = [
-        *tag_batch(_inspector_batch(_INSPECTOR_SHARD, inspector_rows), _ROUTES, _keys(1, 2)),
-        *tag_batch(_ocr_batch(_OCR_SHARD, ocr_rows), _ROUTES, _keys(1, 2)),
+        *tag_batch(_inspector_batch(_INSPECTOR_SHARD, inspector_rows), _ROUTES, routing_dir),
+        *tag_batch(_ocr_batch(_OCR_SHARD, ocr_rows), _ROUTES, routing_dir),
     ]
     table = pa.Table.from_pylist(records, schema=COMBINED_SCHEMA)
     assert table.num_rows == 4

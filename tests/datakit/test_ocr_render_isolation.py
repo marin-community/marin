@@ -3,19 +3,10 @@
 
 """What the sender does when the rasteriser's child dies, stalls, or refuses a document.
 
-This is the machinery the isolation exists for, and none of it can be exercised against the real
-rasteriser: PDFium recorded zero native aborts in 3,577,944 page renders, which is the whole reason
-the residual risk is a bound rather than an observation. So the child here is a stub the test
-steers, and what runs for real is everything on this side of the pipe -- the framing, the deadline,
-the respawn, and the sender's decision to keep the pages a dying document had already produced.
-
-The stub reads its instructions out of the document itself: the "PDF" a row carries is a JSON plan
-naming how many pages to stream and where to misbehave. That lets one shard mix a document that
-kills the child with documents that do not, which is the case that matters -- Zephyr restarts a
-failed shard from row zero, so a document that costs the shard costs every document beside it too.
-
-No PDF library is imported here, by either process. That is itself the claim under test: after the
-render moved out, the sender task opens nothing.
+The child is a stub the test steers; what runs for real is everything on this side of the pipe.
+The "PDF" a row carries is a JSON plan naming how many pages to stream and where to misbehave, so
+one shard can mix a document that kills the child with documents that do not. No PDF library is
+imported here by either process.
 """
 
 import json
@@ -36,8 +27,7 @@ from experiments.datakit.build_pdf_source.ocr_extract.render_worker import (
     RenderWorker,
 )
 
-# A page payload chosen to break a protocol that framed on anything but a byte count: it holds a
-# newline, a NUL, and something that reads as a frame header of its own.
+# A payload that breaks any framing but a byte count: a newline, a NUL, and a fake frame header.
 _PAGE = b'\x89PNG\r\n\x1a\n{"frame": "page", "size": 0}\n\x00\xff' * 8
 
 _COUNTER_PREFIX = "focus_crawl_pdf_ocr"
@@ -139,8 +129,7 @@ def _batch(rows: list[dict]) -> pa.RecordBatch:
 def _word(index: int) -> str:
     """A digit-free, fixed-length token unique to ``index``.
 
-    Page bodies have to differ by more than a digit: boilerplate detection folds digits to zero, so
-    numbered bodies would all be detected as a running header and stripped.
+    Boilerplate detection folds digits to zero, so numbered bodies would be stripped as a running header.
     """
     return "abcdefghijklmnopqrstuvwxyz"[index % 26] * 5
 
@@ -151,7 +140,7 @@ def _page_text(_endpoint, _connections, page) -> PageOcr:
 
 @pytest.fixture
 def tallies(monkeypatch) -> Counter:
-    """Every counter the batch emits, which on a run whose logs are gone is the only diagnosis."""
+    """Every counter the batch emits."""
     recorded: Counter = Counter()
 
     class Recorder:
@@ -187,8 +176,7 @@ def run_batch(monkeypatch, tallies):
         return list(
             extract_ocr.ocr_batch(
                 _batch(rows),
-                keys=None,
-                raised_keys=frozenset(),
+                routing_dir=None,
                 endpoint=OcrEndpoint(base_url="http://unused/v1", model="test-model", max_visual_tokens=2048),
                 render_options=RenderOptions(),
                 raised_render_options=RenderOptions(max_visual_tokens=RAISED_MAX_VISUAL_TOKENS),
@@ -204,8 +192,7 @@ def run_batch(monkeypatch, tallies):
 
 
 def test_a_page_crosses_the_pipe_byte_for_byte(worker):
-    """PNG is binary, so the framing has to be a byte count. Anything that framed on content would
-    be cut short by the newline in this payload and confused by the header inside it."""
+    """PNG is binary, so the framing has to be a byte count."""
     rendered = []
     child = worker()
     try:
@@ -221,12 +208,7 @@ def test_a_page_crosses_the_pipe_byte_for_byte(worker):
 
 
 def test_the_render_budget_travels_with_the_document(worker):
-    """The router's render policy is a per-document choice, so the budget has to cross the pipe.
-
-    A budget that stopped at the parent would leave every flagged document rendered at the default
-    while the request still declared the raised one -- the policy silently doing nothing, which is
-    exactly what it looks like when it works.
-    """
+    """The render budget is a per-document choice, so it has to cross the pipe with the document."""
     options = RenderOptions(max_visual_tokens=RAISED_MAX_VISUAL_TOKENS)
     child = worker()
     try:
@@ -247,9 +229,7 @@ def test_the_render_budget_travels_with_the_document(worker):
 
 
 def test_a_child_that_dies_mid_document_keeps_the_pages_it_streamed(run_batch, worker, tallies):
-    """The failure the isolation is bought for. In process this is a signal, not an exception: the
-    map task is gone, Zephyr restarts its shard from row zero, and three attempts later the stage
-    has failed with the shard's finished pages thrown away."""
+    """In process this is a signal, not an exception, and it would cost the shard rather than the document."""
     (record,) = run_batch([_row(0, _plan(pages=6, mode="die", at=3))], worker())
 
     assert record["pages_ocred"] == 3
@@ -260,13 +240,8 @@ def test_a_child_that_dies_mid_document_keeps_the_pages_it_streamed(run_batch, w
 
 
 def test_a_child_the_kernel_kills_is_named_by_the_signal_that_killed_it(run_batch, worker, tallies):
-    """The failure this whole module exists for, injected: a ``SIGSEGV`` mid-document.
-
-    It has to be reported as a death rather than as a stall. The two are told apart by the
-    descriptor, not by ``poll()``, whose answer can still be "running" on the read that saw the
-    child's stdout close -- and a native abort filed under the deadline's counter sends the next
-    reader hunting a hang that never happened.
-    """
+    """A ``SIGSEGV`` mid-document is reported as a death, not a stall: the descriptor's EOF tells them
+    apart, where ``poll()`` can still answer "running"."""
     (record,) = run_batch([_row(0, _plan(pages=5, mode="abort", at=2))], worker())
 
     assert record["pages_ocred"] == 2
@@ -275,8 +250,7 @@ def test_a_child_the_kernel_kills_is_named_by_the_signal_that_killed_it(run_batc
 
 
 def test_a_dead_child_is_replaced_and_the_documents_behind_it_still_render(run_batch, worker):
-    """Zephyr restarts a shard from row zero, so a document that costs the shard costs every
-    document beside it. Replacing the child is what keeps the cost to the one document."""
+    """Replacing the child keeps the cost to the one document rather than the shard."""
     child = worker()
     rows = [_row(0, _plan(pages=4, mode="die", at=1)), _row(1, _plan(pages=2)), _row(2, _plan(pages=3))]
 
@@ -288,7 +262,7 @@ def test_a_dead_child_is_replaced_and_the_documents_behind_it_still_render(run_b
 
 
 def test_a_child_that_dies_before_its_first_page_costs_only_that_document(run_batch, worker, tallies):
-    """Nothing was rendered, so there is no row -- but the shard keeps going, which is the point."""
+    """Nothing was rendered, so there is no row, but the shard keeps going."""
     records = run_batch([_row(0, _plan(pages=5, mode="die", at=0)), _row(1, _plan(pages=2))], worker())
 
     assert [record["warc_record_offset"] for record in records] == [1]
@@ -299,8 +273,7 @@ def test_a_child_that_dies_before_its_first_page_costs_only_that_document(run_ba
 
 
 def test_a_child_that_stops_answering_is_bounded_by_the_page_deadline(run_batch, worker, tallies):
-    """A hang is the other way a native library ends a task: in process the map task holds the
-    document until its heartbeat expires and the retry lands on the same one."""
+    """In process a hang would hold the map task until its heartbeat expired."""
     child = worker(deadline=0.5)
 
     (record,) = run_batch([_row(0, _plan(pages=8, mode="hang", at=2))], child)
@@ -324,8 +297,7 @@ def test_a_stalled_child_does_not_cost_the_documents_behind_it(run_batch, worker
 
 
 def test_a_document_the_child_refuses_is_data_rather_than_a_failure(run_batch, worker, tallies):
-    """A crawl PDF that no library will open is an ordinary outcome, and the child survives it, so
-    there is nothing to replace and nothing to raise."""
+    """A PDF the library will not open is data, and the child survives it."""
     child = worker()
 
     records = run_batch([_row(0, _plan(mode="refuse")), _row(1, _plan(pages=2))], child)
@@ -336,8 +308,7 @@ def test_a_document_the_child_refuses_is_data_rather_than_a_failure(run_batch, w
 
 
 def test_a_document_that_fails_part_way_keeps_its_pages_and_its_child(run_batch, worker, tallies):
-    """The library raising half-way down a document is the in-process failure mode, unchanged: the
-    pages before it are still worth keeping and the process is still fine."""
+    """A library error half-way down a document keeps the pages before it and the child."""
     child = worker()
 
     (record,) = run_batch([_row(0, _plan(pages=5, mode="fail", at=2))], child)
@@ -349,8 +320,7 @@ def test_a_document_that_fails_part_way_keeps_its_pages_and_its_child(run_batch,
 
 
 def test_a_child_that_writes_something_that_is_not_a_frame_is_retired(run_batch, worker, tallies):
-    """Anything printing to the child's stdout desynchronises every document after it, so the
-    stream is not recoverable and the child goes."""
+    """Anything else printing to the child's stdout desynchronises the stream, so the child goes."""
     child = worker(deadline=1.0)
 
     records = run_batch([_row(0, _plan(mode="garbage")), _row(1, _plan(pages=2))], child)
@@ -364,10 +334,8 @@ def test_a_child_that_writes_something_that_is_not_a_frame_is_retired(run_batch,
 
 
 def test_the_in_flight_bound_caps_the_pages_a_task_holds(run_batch, worker, monkeypatch):
-    """The bound is what keeps a long document from accumulating encoded pages -- over a megabyte
-    each -- and it is also what stops the child running ahead of the fleet, since the child blocks
-    writing a page nothing has read. Measured on the queue itself: submissions in, absorptions out.
-    """
+    """The bound caps the encoded pages a task holds and stops the child running ahead of the fleet.
+    Measured on the queue itself: submissions in, absorptions out."""
     depth = {"held": 0, "peak": 0}
     pool = extract_ocr._request_pool(4)
 
