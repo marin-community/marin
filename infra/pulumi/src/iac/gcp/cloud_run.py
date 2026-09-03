@@ -14,6 +14,7 @@ confirmed by the live-policy inventory. The project-level OAuth consent screen r
 """
 
 import re
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
 import pulumi
@@ -99,6 +100,10 @@ class CloudRunServiceArgs:
     # Cloud SQL connection names (project:region:instance) to attach. The service mounts the
     # connector socket at /cloudsql; its centrally declared IAM includes cloudsql.client.
     cloudsql_instances: tuple[str, ...] = ()
+    # Builds the resources that must run between the image push and the service revision,
+    # given the digest-pinned image ref: typically a migration job and the command that
+    # executes it. The Service waits on everything returned.
+    before_deploy: Callable[[pulumi.Output[str]], Sequence[pulumi.Resource]] | None = None
 
 
 def resource_slug(identifier: str) -> str:
@@ -220,6 +225,8 @@ class CloudRunService(pulumi.ComponentResource):
             gcp_provider=gcp_provider,
         )
 
+        before_deploy = args.before_deploy(image.ref) if args.before_deploy else ()
+
         # Cloud SQL connector: a "cloudsql" volume exposes the auth-proxy sockets under
         # /cloudsql, one per attached connection name. Empty when no instances are attached.
         cloudsql_volumes = (
@@ -299,7 +306,12 @@ class CloudRunService(pulumi.ComponentResource):
             # comes from the marin stack; wait here for secrets created by this stack.
             opts=pulumi.ResourceOptions.merge(
                 child,
-                pulumi.ResourceOptions(depends_on=[r for secret in args.secrets for r in secret.wait_for]),
+                pulumi.ResourceOptions(
+                    depends_on=[
+                        *before_deploy,
+                        *(r for secret in args.secrets for r in secret.wait_for),
+                    ]
+                ),
             ),
         )
 

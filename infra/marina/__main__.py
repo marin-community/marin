@@ -163,6 +163,48 @@ def main() -> None:
         SecretEnv(name="CW_KEY_SECRET", secret="cw-object-storage-key-secret"),
     )
 
+    # The one IAM database user; Cloud SQL registers the name without needing the account yet.
+    database_user = gcp.sql.User(
+        "service-db-user",
+        name=DATABASE_USER,
+        instance=INSTANCE,
+        project=PROJECT,
+        type="CLOUD_IAM_SERVICE_ACCOUNT",
+        opts=pulumi.ResourceOptions.merge(child, pulumi.ResourceOptions(depends_on=[database])),
+    )
+
+    # IAM users can connect but not create schemas; grant the service account the database
+    # and the Loom VM the codehealth schema, as the native admin user, once per user change.
+    grants = command.local.Command(
+        "database-grants",
+        create=f"uv run {GRANTS_SCRIPT}",
+        triggers=[GRANTS_SCRIPT.read_text()],
+        environment={"GOOGLE_CLOUD_QUOTA_PROJECT": PROJECT},
+        opts=pulumi.ResourceOptions(depends_on=[database_user, loom_user, database, codehealth_database]),
+    )
+
+    # Every app's migrate() is idempotent, so the job runs after each image change and the
+    # new revision only starts once its schema is in place.
+    def migrate_before_deploy(image_ref: pulumi.Output[str]) -> tuple[pulumi.Resource, ...]:
+        migrate = gcp.cloudrunv2.Job(
+            "migrate",
+            name=MIGRATE_JOB,
+            project=PROJECT,
+            location=REGION,
+            deletion_protection=False,
+            template=gcp.cloudrunv2.JobTemplateArgs(
+                template=job_template(image_ref, ["marina", "migrate"], DATABASE_ENV, (), cpu="1", memory="1Gi")
+            ),
+            opts=pulumi.ResourceOptions.merge(child, pulumi.ResourceOptions(depends_on=[database_user, grants])),
+        )
+        run = command.local.Command(
+            "run-migrate",
+            create=f"gcloud run jobs execute {MIGRATE_JOB} --project {PROJECT} --region {REGION} --wait",
+            triggers=[image_ref],
+            opts=pulumi.ResourceOptions(depends_on=[migrate]),
+        )
+        return (run,)
+
     service = CloudRunService(
         "service",
         CloudRunServiceArgs(
@@ -188,47 +230,9 @@ def main() -> None:
             cpu="4",
             memory="4Gi",
             cloudsql_instances=(CONNECTION_NAME,),
+            before_deploy=migrate_before_deploy,
         ),
         gcp_provider=gcp_provider,
-    )
-
-    # The service account exists once the service does; register it as the one IAM database user.
-    database_user = gcp.sql.User(
-        "service-db-user",
-        name=DATABASE_USER,
-        instance=INSTANCE,
-        project=PROJECT,
-        type="CLOUD_IAM_SERVICE_ACCOUNT",
-        opts=pulumi.ResourceOptions.merge(child, pulumi.ResourceOptions(depends_on=[service, database])),
-    )
-
-    # IAM users can connect but not create schemas; grant the service account the database
-    # and the Loom VM the codehealth schema, as the native admin user, once per user change.
-    grants = command.local.Command(
-        "database-grants",
-        create=f"uv run {GRANTS_SCRIPT}",
-        triggers=[GRANTS_SCRIPT.read_text()],
-        environment={"GOOGLE_CLOUD_QUOTA_PROJECT": PROJECT},
-        opts=pulumi.ResourceOptions(depends_on=[database_user, loom_user, database, codehealth_database]),
-    )
-
-    migrate = gcp.cloudrunv2.Job(
-        "migrate",
-        name=MIGRATE_JOB,
-        project=PROJECT,
-        location=REGION,
-        deletion_protection=False,
-        template=gcp.cloudrunv2.JobTemplateArgs(
-            template=job_template(service.image_ref, ["marina", "migrate"], DATABASE_ENV, (), cpu="1", memory="1Gi")
-        ),
-        opts=pulumi.ResourceOptions.merge(child, pulumi.ResourceOptions(depends_on=[database_user])),
-    )
-    # Every app's migrate() is idempotent, so the job simply runs after each image change.
-    command.local.Command(
-        "run-migrate",
-        create=f"gcloud run jobs execute {MIGRATE_JOB} --project {PROJECT} --region {REGION} --wait",
-        triggers=[service.image_ref],
-        opts=pulumi.ResourceOptions(depends_on=[migrate, grants]),
     )
 
     sync = gcp.cloudrunv2.Job(

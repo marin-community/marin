@@ -8,7 +8,8 @@ Run by the Pulumi program after the databases and IAM users exist, as the native
 connect but cannot create schemas, so the Marina service account gets every privilege on
 the ``marina`` database (each app's schema is created and owned by it from there), and the
 Loom VM gets CREATE on ``context``'s public schema for the codehealth workbench tables.
-Every statement is idempotent.
+It also installs the pgvector extension Echo needs, which only the Cloud SQL superuser may
+do. Every statement is idempotent.
 
     uv run infra/marina/database_grants.py
 """
@@ -23,7 +24,11 @@ CONNECTION_NAME = f"{PROJECT}:us-central1:marin-metadata"
 ADMIN_USER = "pulumi_db_admin"
 ADMIN_PASSWORD_SECRET = "cloudsql-pulumi-admin-password"
 GRANTS = {
-    "marina": ['GRANT ALL PRIVILEGES ON DATABASE marina TO "marina@hai-gcp-models.iam"'],
+    "marina": [
+        'GRANT ALL PRIVILEGES ON DATABASE marina TO "marina@hai-gcp-models.iam"',
+        # Only the Cloud SQL superuser can install extensions; Echo's search needs pgvector.
+        "CREATE EXTENSION IF NOT EXISTS vector",
+    ],
     "context": ['GRANT CREATE ON SCHEMA public TO "loom-vm@hai-gcp-models.iam"'],
 }
 
