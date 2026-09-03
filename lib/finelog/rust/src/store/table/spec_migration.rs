@@ -31,7 +31,7 @@ use crate::proto::finelog::stats::{MigrationPhase, SourceLayout, TableMigrationS
 use crate::store::catalog::{Catalog, ObjectSegmentRecord, SpecLifecycle};
 use crate::store::compaction::config::CompactionJob;
 use crate::store::compaction::executor::{
-    run_job_with_partition_policy, run_low_priority, CompactionExecution, CompactionLayout,
+    run_job_with_partition_policy, run_merge_thread, CompactionExecution, CompactionLayout,
     OutputPolicy,
 };
 use crate::store::compaction::staging::StagingDir;
@@ -321,7 +321,12 @@ async fn backfill(
             })
             .cloned()
             .collect();
-        sources.sort_by_key(|row| row.min_seq);
+        // Newest first: checkpointing is order-independent (each source is
+        // identified by content), and dashboards read the most recent window,
+        // so rewriting the newest sources first collapses the hottest part of
+        // the query view from thousands of small files into a few objects
+        // within the first batches instead of the last.
+        sources.sort_by_key(|row| std::cmp::Reverse(row.min_seq));
         (object_records, sources, covered)
     };
     let snapshot_ms = snapshot_started.elapsed().as_millis() as u64;
@@ -479,14 +484,12 @@ async fn rewrite_batch(
         })
         .collect();
     let staging_dir = staging.path().to_path_buf();
-    // The rewrite runs on one dedicated thread at the lowest scheduling
-    // priority, NOT on the shared blocking pool: a backfill is minutes of
-    // saturated CPU per batch, and at pool priority it starves the query path
-    // of the very table being migrated. At nice(19) the OS grants it only
-    // cycles the serving threads leave idle, which is all the pacing a
-    // migration needs.
+    // One dedicated thread at normal priority: the single thread caps the
+    // rewrite at one core, which is the pacing, while a fair share of that
+    // core keeps a many-hundred-batch backfill finishing in hours even when
+    // queries saturate the box (a deprioritized thread would starve outright).
     let merge_started = Instant::now();
-    let swap = run_low_priority("finelog-rewrite", move || {
+    let swap = run_merge_thread("finelog-rewrite", 0, move || {
         run_job_with_partition_policy(
             &job,
             &staging_dir,

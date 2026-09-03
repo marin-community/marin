@@ -202,9 +202,18 @@ async fn cycle(
     let _cycle_guard = runtime.maint_lock.lock().await;
     run_one(runtime, TableWork::Flush).await?;
     if run_one(runtime, TableWork::SpecMigration).await?.pending {
-        // The migration owns the table's maintenance while it runs: ordinary
-        // compaction and eviction would destroy the sources it rewrites.
-        return Ok(WorkOutcome::done());
+        // The migration owns the table's maintenance while it runs: eviction,
+        // placement, and legacy compaction would destroy the sources it
+        // rewrites. Object compaction stays on: it folds only ordinary-stream
+        // objects at the target version — the dual-write flush L0s that would
+        // otherwise stack up for the whole backfill (see `compact_once`). The
+        // cycle reports pending so the scheduler re-polls immediately and
+        // routes the next tick through the dedicated migration slot instead of
+        // the shared queue.
+        if runtime.policy().object_backed() {
+            run_one(runtime, TableWork::Compaction { force_compact_l0 }).await?;
+        }
+        return Ok(WorkOutcome::pending(true));
     }
     if runtime.policy().object_backed() {
         runtime.controller.publish_owed().await?;

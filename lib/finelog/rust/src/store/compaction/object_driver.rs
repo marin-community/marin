@@ -24,7 +24,7 @@ use crate::indices::SegmentIndexConfig;
 use crate::store::catalog::Catalog;
 use crate::store::compaction::config::{CompactionConfig, CompactionJob};
 use crate::store::compaction::executor::{
-    run_job_with_partition_policy, run_low_priority, CompactionExecution, OutputPolicy,
+    run_job_with_partition_policy, run_merge_thread, CompactionExecution, OutputPolicy,
 };
 use crate::store::compaction::planner::plan;
 use crate::store::compaction::staging::StagingDir;
@@ -65,26 +65,38 @@ pub async fn compact_once(
     compaction: ObjectCompaction<'_>,
     force_compact_l0: bool,
 ) -> Result<bool, StatsError> {
-    let active_version = compaction
-        .catalog
-        .spec_lifecycle(compaction.table)?
-        .active_version();
-    if active_version == 0 {
+    let lifecycle = compaction.catalog.spec_lifecycle(compaction.table)?;
+    // While a spec migration is pending, dual-write flushes commit ordinary L0
+    // objects at the target version; compact those so a many-hour backfill does
+    // not stack hundreds of small objects into the query view.
+    let migration_pending = lifecycle.desired_version() != 0;
+    let table_spec_version = if migration_pending {
+        lifecycle.desired_version()
+    } else {
+        lifecycle.active_version()
+    };
+    if table_spec_version == 0 {
         return Ok(false);
     }
     let object_records: HashMap<_, _> = compaction
         .catalog
         .object_segments(compaction.table)?
         .into_iter()
-        .filter(|record| record.table_spec_version == active_version)
+        .filter(|record| record.table_spec_version == table_spec_version)
         .map(|record| (record.path.clone(), record))
         .collect();
     // A backfilled run and an ordinary run are separate compaction streams: a
     // checkpointed migration output must not be merged with a segment the
-    // migration has not accounted for.
+    // migration has not accounted for. While the transition is pending the
+    // backfilled stream is untouchable outright: a replacement re-inserts its
+    // outputs without `migration_source_id`, which would erase the coverage
+    // checkpoints the backfill reads and make it rewrite those sources again.
     let mut rows_by_class: BTreeMap<bool, Vec<SegmentRow>> = BTreeMap::new();
     for row in compaction.catalog.list_segments(compaction.table)? {
         if let Some(record) = object_records.get(&row.path) {
+            if migration_pending && record.migration_backfill {
+                continue;
+            }
             rows_by_class
                 .entry(record.migration_backfill)
                 .or_default()
@@ -139,7 +151,7 @@ pub async fn compact_once(
         &staging,
         &job,
         &lease,
-        active_version,
+        table_spec_version,
         migration_backfill,
     )
     .await;
@@ -153,7 +165,7 @@ async fn run(
     staging: &StagingDir,
     job: &CompactionJob,
     lease: &MaintenanceLease,
-    active_version: u64,
+    table_spec_version: u64,
     migration_backfill: bool,
 ) -> Result<bool, StatsError> {
     let index_config = compaction.index_config.clone();
@@ -169,11 +181,13 @@ async fn run(
         .collect();
     let job_for_run = job.clone();
     let staging_dir = staging.path().to_path_buf();
-    // Same dedicated low-priority thread as a migration rewrite: an ordinary
-    // compaction merge at blocking-pool priority competes with query threads
-    // for cores, and a backlog of large merges makes dashboards unusable.
+    // Same dedicated merge thread as a migration rewrite, mildly deprioritized:
+    // an ordinary compaction merge at blocking-pool priority competes with
+    // query threads for cores, and a backlog of large merges makes dashboards
+    // unusable. nice(10) yields to busy serving threads but still finishes
+    // (nice(19) would starve outright on a saturated box).
     let merge_started = Instant::now();
-    let swap = run_low_priority("finelog-compact", move || {
+    let swap = run_merge_thread("finelog-compact", 10, move || {
         run_job_with_partition_policy(
             &job_for_run,
             &staging_dir,
@@ -204,7 +218,7 @@ async fn run(
             &swap.removed,
             swap.added,
             lease,
-            active_version,
+            table_spec_version,
             migration_backfill,
         )
         .await;
@@ -261,7 +275,7 @@ async fn run(
         outputs,
         published,
         lease,
-        active_version,
+        table_spec_version,
         migration_backfill,
     )
     .await
@@ -273,7 +287,7 @@ async fn commit_level_bump(
     removed: &[String],
     added: Vec<LocalSegment>,
     lease: &MaintenanceLease,
-    active_version: u64,
+    table_spec_version: u64,
     migration_backfill: bool,
 ) -> Result<bool, StatsError> {
     let records: HashMap<_, _> = compaction
@@ -306,7 +320,7 @@ async fn commit_level_bump(
         outputs,
         published,
         lease,
-        active_version,
+        table_spec_version,
         migration_backfill,
     )
     .await
@@ -319,7 +333,7 @@ async fn commit_replacement(
     outputs: Vec<SegmentDescriptor>,
     published: Vec<LocalSegment>,
     lease: &MaintenanceLease,
-    active_version: u64,
+    table_spec_version: u64,
     migration_backfill: bool,
 ) -> Result<bool, StatsError> {
     let removed_paths = removed.to_vec();
@@ -341,7 +355,7 @@ async fn commit_replacement(
                 compaction.table,
                 &removed_paths,
                 &outputs,
-                active_version,
+                table_spec_version,
                 migration_backfill,
             )?;
             Ok((revision, ()))

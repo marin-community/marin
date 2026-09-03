@@ -135,16 +135,18 @@ fn run_job(
     run_job_with_partition_policy(job, dir, arrow_schema, execution, input_key_bounds)
 }
 
-/// Run CPU-heavy compaction work on a dedicated thread at the lowest
-/// scheduling priority.
+/// Run one merge on a dedicated thread instead of the shared blocking pool.
 ///
-/// A merge is minutes of saturated CPU per job; on the shared blocking pool at
-/// normal priority it starves the query path of the very tables it maintains.
-/// At nice(19) the OS grants the work only cycles the serving threads leave
-/// idle. `name` must fit the kernel's 15-character comm limit so the thread
-/// stays identifiable in `/proc/<pid>/task`.
-pub async fn run_low_priority<T: Send + 'static>(
+/// The dedicated thread is itself the pacing: a merge is single-threaded, so
+/// whatever `nice` it runs at it can occupy at most one core. `nice` then sets
+/// how it shares that core with serving threads — 0 competes fairly (for work
+/// that must finish, like a migration), a positive value yields when queries
+/// are busy. Avoid nice(19): on a saturated box it rounds down to no CPU at
+/// all and the merge never finishes. `name` must fit the kernel's 15-character
+/// comm limit so the thread stays identifiable in `/proc/<pid>/task`.
+pub async fn run_merge_thread<T: Send + 'static>(
     name: &'static str,
+    nice: i32,
     work: impl FnOnce() -> T + Send + 'static,
 ) -> Result<T, StatsError> {
     let (send, receive) = tokio::sync::oneshot::channel();
@@ -152,8 +154,10 @@ pub async fn run_low_priority<T: Send + 'static>(
         .name(name.to_string())
         .spawn(move || {
             #[cfg(unix)]
-            unsafe {
-                libc::nice(19);
+            if nice > 0 {
+                unsafe {
+                    libc::nice(nice);
+                }
             }
             let _ = send.send(work());
         })
