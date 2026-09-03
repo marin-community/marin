@@ -85,6 +85,7 @@ from experiments.grug.moe_hero_ep.train import (
     _compute_flops,
     run_grug,
 )
+from experiments.grug.sharding_dump import GRUG_SHARDING_DUMP_FILENAME
 from experiments.marin_tokenizer import marin_tokenizer
 
 # Deadlines for the progress watchdog. A stalled process exits so the scheduler can replace the
@@ -236,6 +237,10 @@ def build_ladder_run(
     wandb_project = os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT
 
     def build_config(ctx: StepContext) -> GrugRunConfig:
+        # Persist the state shardings next to the run rather than in the pod-local log dir, which
+        # dies with the pod. Comparing a multi-rack dump against a one-rack one is how a sharding
+        # that is only inferred wrong once `replica_dcn` is wide would be found (#8870).
+        sharding_dump_path = prefix_join(ctx.output_path, "artifacts", GRUG_SHARDING_DUMP_FILENAME)
         permanent_checkpoint_path = prefix_join(ctx.output_path, "checkpoints")
         temporary_checkpoint_path = temporary_checkpoint_base_path(ctx.output_path)
         data_local_checkpoint_path = data_local_temporary_checkpoint_base_path(ctx.output_path)
@@ -304,7 +309,7 @@ def build_ladder_run(
             resources=ctx.runtime_arg("train_resources"),
             tensorstore_cache_bytes=HERO_TENSORSTORE_CACHE_BYTES,
             optimizer=optimizer,
-            trainer=dataclasses.replace(grug_trainer, trainer=trainer),
+            trainer=dataclasses.replace(grug_trainer, trainer=trainer, sharding_dump_path=sharding_dump_path),
             eval=GrugEvalConfig(
                 steps_per_eval=steps_per_eval,
                 eval_batch_size=eval_batch_size,
