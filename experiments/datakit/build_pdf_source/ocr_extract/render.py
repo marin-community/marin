@@ -41,7 +41,7 @@ MAX_PIXELS = 16_777_216
 # 32x32, not the 28 of Qwen2.5-VL.
 VISUAL_TOKEN_PIXELS = RESIZE_FACTOR * RESIZE_FACTOR
 
-# The sweep behind this budget is ``ocr-budget-sweep.md`` on the ``mark/pdf_pipeline`` campaign branch.
+# The sweep behind this budget is ``ocr-budget-sweep.md`` on the ``mark/pdf_campaign`` campaign branch.
 DEFAULT_MAX_VISUAL_TOKENS = 2048
 # The budget the router's render policy raises a flagged document to. 16384 tokens is exactly
 # MAX_PIXELS, so it is the largest budget this path can express; it is per-document, never global.

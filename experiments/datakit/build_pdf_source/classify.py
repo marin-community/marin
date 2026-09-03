@@ -3,7 +3,7 @@
 
 """Step 4: decide which extracted PDFs to escalate to the VLM, on signals the extraction produced.
 
-Router v2 runs *after* extraction (see ``pdf-router-v2.md`` on the ``mark/pdf_pipeline`` campaign
+Router v2 runs *after* extraction (see ``pdf-router-v2.md`` on the ``mark/pdf_campaign`` campaign
 branch for more).
 
 Two steps. :func:`model_step` stages the booster and its calibration sidecar into the marin prefix,
