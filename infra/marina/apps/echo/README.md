@@ -120,6 +120,23 @@ uv run marina journey echo                     # a browser walk; screenshots in 
 The journey seeds its own rows and needs every app's schema present, so run `marina migrate`
 (without `--only`) against the journey database first.
 
+## Search quality
+
+`benchmarks/search_queries.jsonl` holds graded relevance judgments for federated search, split
+into a `dev` half to tune on and a held-out `test` half. `search_benchmark.py collect` captures
+live results and `evaluate` scores them; `benchmarks/README.md` carries the judgment format and
+the figures past ranking changes were measured against. Collect serially -- a burst of
+concurrent queries scales Cloud Run out, and each new instance loads the ONNX models on its
+first search, past the client's timeout.
+
+```bash
+uv run infra/marina/apps/echo/search_benchmark.py collect \
+  infra/marina/apps/echo/benchmarks/search_queries.jsonl /tmp/echo-search-dev.jsonl \
+  --split dev --workers 1
+uv run infra/marina/apps/echo/search_benchmark.py evaluate \
+  infra/marina/apps/echo/benchmarks/search_queries.jsonl /tmp/echo-search-dev.jsonl --split dev
+```
+
 Migrations are `migrations/mNNNN_*.py` modules applied in name order and recorded in
 `schema_migrations`; `migrate(engine)` is what `marina migrate` calls. `m0001_init` is the
 schema as it stood when Echo moved into Marina and must not be edited — add a new module.
