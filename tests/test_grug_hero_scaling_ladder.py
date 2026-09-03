@@ -3,11 +3,85 @@
 
 import dataclasses
 
+import jax
+import jax.numpy as jnp
+import jax.tree_util as jtu
+import optax
 import pytest
 from marin.execution.lazy import StepContext
 
 from experiments.grug.moe_hero_ep.launch_diagnostics import build_diagnostic_run
 from experiments.grug.moe_hero_ep.launch_scaling_ladder import build_ladder_run
+from experiments.grug.moe_hero_ep.optimizer import _gate_router_decay_mask, _scale_by_adam_gate_router_decay
+
+# A miniature stacked-hero parameter tree: the two decay targets plus leaves that must be left alone.
+_MOCK_PARAMS = {
+    "token_embed": jnp.ones((5, 4)),
+    "stacked_blocks": {
+        "stacked": {
+            "attn": {"attn_gate": jnp.ones((2, 4, 3))},
+            "mlp": {"router": jnp.ones((2, 4, 6)), "router_bias": jnp.ones((2, 6))},
+            "rms_attn": {"weight": jnp.ones((2, 4))},
+        }
+    },
+}
+
+
+def test_gate_router_decay_state_matches_plain_adam():
+    # The decay must not change the optimizer-state tree, so a checkpoint written without it restores
+    # unchanged (moments + step count preserved) when the decay is switched on for a continuation.
+    plain = optax.scale_by_adam(0.9, 0.95, 1e-8).init(_MOCK_PARAMS)
+    decayed = _scale_by_adam_gate_router_decay(0.9, 0.95, 1e-8, 0.05, 390_251).init(_MOCK_PARAMS)
+    assert type(decayed) is type(plain)
+    assert jtu.tree_structure(decayed) == jtu.tree_structure(plain)
+
+
+@pytest.mark.parametrize(("count", "expected_wd"), [(0, 0.05), (54_000, 0.05 * (1 - 54_000 / 390_251)), (390_251, 0.0)])
+def test_gate_router_decay_anneals_from_the_step_count(count, expected_wd):
+    total_steps = 390_251
+    adam = optax.scale_by_adam(0.9, 0.95, 1e-8)
+    decay = _scale_by_adam_gate_router_decay(0.9, 0.95, 1e-8, 0.05, total_steps)
+    grads = jax.tree.map(lambda x: jnp.full_like(x, 0.01), _MOCK_PARAMS)
+
+    def state_at_count(transform):
+        return transform.init(_MOCK_PARAMS)._replace(count=jnp.asarray(count, jnp.int32))
+
+    decayed_updates, _ = decay.update(grads, state_at_count(decay), _MOCK_PARAMS)
+    adam_updates, _ = adam.update(grads, state_at_count(adam), _MOCK_PARAMS)
+    # Decoupled decay adds wd * param (param == 1) on top of the identical Adam step for the router.
+    applied_wd = float(
+        (
+            decayed_updates["stacked_blocks"]["stacked"]["mlp"]["router"]
+            - adam_updates["stacked_blocks"]["stacked"]["mlp"]["router"]
+        ).mean()
+    )
+    assert applied_wd == pytest.approx(expected_wd, abs=1e-6)
+
+
+def test_gate_router_decay_mask_selects_only_gate_and_router():
+    mask = _gate_router_decay_mask(_MOCK_PARAMS)
+    stacked = mask["stacked_blocks"]["stacked"]
+    assert bool(stacked["attn"]["attn_gate"]) is True
+    assert bool(stacked["mlp"]["router"]) is True
+    assert bool(stacked["mlp"]["router_bias"]) is False
+    assert bool(stacked["rms_attn"]["weight"]) is False
+    assert bool(mask["token_embed"]) is False
+
+
+def test_ladder_defaults_gate_router_weight_decay_on_with_opt_out():
+    # Weight decay is on by default for the hero recipe, so a resume can never silently continue
+    # without it; passing 0 is the explicit opt-out.
+    default_step = build_ladder_run(run_id="test-wd-default", size="d6144", num_steps=1, version="2026.08.18")
+    opt_out_step = build_ladder_run(
+        run_id="test-wd-off", size="d6144", num_steps=1, gate_router_weight_decay=0.0, version="2026.08.18"
+    )
+
+    def optimizer_of(step):
+        ctx = StepContext.for_fingerprint(runtime_arg_keys=step.runtime_args, deps=step.deps)
+        return step.build_config(ctx).optimizer
+
+    assert optimizer_of(default_step).gate_router_weight_decay == 0.02
+    assert optimizer_of(opt_out_step).gate_router_weight_decay == 0.0
 
 
 def test_diagnostic_run_matches_the_d6144_rack_local_recipe():
