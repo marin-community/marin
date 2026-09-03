@@ -4,7 +4,7 @@
 """Hero-shape scaling ladder: one recipe, five widths.
 
 Every rung trains the *same* EP hero recipe -- 384 routed experts, top-8, hidden/2-wide experts in a
-hidden/2 latent, ragged all-to-all transport, the Harrier 2026.08.18 two-phase mixture on the
+hidden/2 latent, pooled-wave all-to-all transport, the Harrier 2026.08.18 two-phase mixture on the
 Marin tokenizer, offloaded MuonH state, the QB histogram estimator, and a dropless held-out eval --
 and differs only in width and the rack count it spans. Behaviour is uniform across the ladder so a
 rung predicts the d6144 hero. ``d6144`` is the hero itself.
@@ -28,7 +28,8 @@ Changelog:
     2026-09-02 (#8818, PR #8833): decoupled weight decay on the attn_gate and router weights is on by
         default (0.02, annealed linearly to 0 over training and read from the Adam step count so it
         resumes at the right step); pass ``--gate-router-weight-decay 0`` to opt out.
-        hero-wd-gate-router-p02 forks the ragged-a2a run at step 55000 (see ``trigger_hero.sh``).
+        hero-wd-gate-router-p02 forks hero-12d8b6f0-dee637 at step 54000 on the pooled-wave transport
+        (see ``trigger_hero.sh``).
 """
 
 import dataclasses
