@@ -27,7 +27,7 @@ INHERIT_PRIORITY = priority_band_value("inherit")
 # given (e.g. `iris job run -e XLA_FLAGS ...`) must be re-exported explicitly.
 # JAX_PLATFORMS is excluded: the dispatcher runs CPU-only and its value must
 # not leak onto accelerator tasks.
-_FORWARDED_ENV_PREFIXES = ("XLA_", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_", "MALLOC_", "WANDB_")
+_FORWARDED_ENV_PREFIXES = ("XLA_", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_", "MALLOC_", "WANDB_", "TF_CPP_")
 _FORWARDED_ENV_NAMES = ("LD_PRELOAD", "UV_PYTHON")
 _FORWARDED_ENV_EXCLUDE = ("JAX_PLATFORMS",)
 
