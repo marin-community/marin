@@ -94,6 +94,12 @@ HERO_PROCESS_STALL_TIMEOUT = timedelta(hours=1)
 # Twice the restore barrier, which keeps a barrier expiry ahead of this deadline: the barrier
 # names the ranks that never arrived, while this one only reports that nothing progressed.
 HERO_STARTUP_TIMEOUT = timedelta(seconds=2 * RESTORE_BARRIER_TIMEOUT)
+# The watchdog holds every step and process deadline for this long after the first completed step.
+# Levanter's one-hour default covers a slow warmup, but it also hid #8870's second hang entirely:
+# that attempt restored, completed one step, stalled on the next, and stayed inside the grace
+# window until a human killed it 18 minutes later. The step deadline is only armed after a step
+# has completed, so a shorter grace still cannot fire during compile or restore.
+HERO_STARTUP_GRACE_PERIOD = timedelta(minutes=5)
 
 LADDER_RACKS: dict[str, int] = {"d768": 1, "d1024": 2, "d1536": 6, "d2048": 11, "d6144": 11}
 # Each rung uses the rack count that holds its batch. d6144 uses the shared hero recipe. Narrower
@@ -265,6 +271,7 @@ def build_ladder_run(
                 step_timeout=HERO_STEP_TIMEOUT,
                 process_timeout=HERO_PROCESS_STALL_TIMEOUT,
                 startup_timeout=HERO_STARTUP_TIMEOUT,
+                startup_grace_period=HERO_STARTUP_GRACE_PERIOD,
             ),
             # Existing 02A temporaries remain valid resume candidates for this lineage.
             load_checkpoint_path=load_checkpoint_path,
