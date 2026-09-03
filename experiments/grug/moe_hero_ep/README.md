@@ -16,21 +16,24 @@ data-parallel rack uses one 64-device expert mesh.
   diagnostic uses 1024 sequences.
 - Router: top-8 quantile balancing uses a global histogram with 10,000 bins. It has next-step,
   stop-gradient expert biases and no auxiliary balancing loss.
-- MoE backend: `ragged_all_to_all`. One update carries each (peer, local expert) pair, so rows
-  arrive grouped by expert, and local experts run in two chunks that share the 1.15 receiver
-  capacity. The transport reaches XLA's device-initiated (NCCL LSA) kernel, which needs Marin's patched
-  PJRT build, installed on GB200 through the `gpu` extra (`lib/marin/pyproject.toml`); a run that
-  reaches the stock plugin fails at startup.
+- MoE backend: `fixed_pooled_wave_all_to_all`, as a temporary fallback. Each sender uses one fixed
+  pool per destination and stripes it over three static waves. The receiver runs all six local
+  experts in each wave and drops rows above the fixed expert capacity. Expert IDs travel in the
+  activation payload, so the method does not use a metadata collective. The receiver and sender
+  capacity factors are 1.15. `ragged_all_to_all` is the intended default and takes the hero back
+  once it stops hanging an 11-rack run after a watch step
+  ([#8870](https://github.com/marin-community/marin/issues/8870)): one update carries each (peer,
+  local expert) pair, so rows arrive grouped by expert, and it reaches XLA's device-initiated
+  (NCCL LSA) kernel, which needs Marin's patched PJRT build, installed on GB200 through the `gpu`
+  extra (`lib/marin/pyproject.toml`).
 - Optimizer: MuonH, with its state offloaded to pinned host memory.
 - Weights: fp32 on device with bf16 compute. A checkpoint written with a pinned-host fp32 master
   migrates in process on restore: its stored fp32 master is read directly into the run's params
   (the bf16 compute copy goes unread), and the next save writes the new layout. The reverse
   (synthesizing a master) is refused.
 - Runtime: Each GPU has one JAX process. The recipe uses `cuda_async`, no PGLE, and no GPU
-  command buffers. The ragged transport stages each layer's residual carry on pinned host, which
-  frees the HBM the latency-hiding scheduler needs to run. Collective overlap stays at 1: the
-  offload, the scheduler, and a higher limit corrupt training together, though no pair of them
-  does.
+  command buffers. The layer carry stays in HBM, which only the ragged transport offloads. Inline
+  watch uses collective overlap limit 1. A disabled watch uses limit 4.
 - Resources: Each four-GPU worker requests 120 CPU, 890 GB of RAM, and 1 TB of disk.
 
 The attention, shared-expert, language-model-head, and optimizer states use the combined `data` and
