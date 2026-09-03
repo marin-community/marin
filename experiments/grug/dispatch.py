@@ -25,11 +25,25 @@ INHERIT_PRIORITY = priority_band_value("inherit")
 # Runtime-tuning env vars forwarded from the dispatcher to the train tasks.
 # Iris tasks don't inherit the submitter's shell, so anything the launcher was
 # given (e.g. `iris job run -e XLA_FLAGS ...`) must be re-exported explicitly.
-# JAX_PLATFORMS is excluded: the dispatcher runs CPU-only and its value must
-# not leak onto accelerator tasks.
-_FORWARDED_ENV_PREFIXES = ("XLA_", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_", "MALLOC_", "WANDB_", "TF_CPP_", "MARIN_DEBUG_")
+_FORWARDED_ENV_PREFIXES = (
+    "XLA_",
+    "LIBTPU_INIT_ARGS",
+    "NCCL_",
+    "JAX_",
+    "MALLOC_",
+    "WANDB_",
+    "TF_CPP_",
+    "MARIN_DEBUG_",
+    # CUDA_ENABLE_USER_TRIGGERED_COREDUMP and its CUDA_COREDUMP_* siblings arm the driver to
+    # write a GPU core dump on demand. The driver reads them once at process start, so a hang
+    # cannot be dumped unless the gang was launched with them set.
+    "CUDA_",
+)
 _FORWARDED_ENV_NAMES = ("LD_PRELOAD", "UV_PYTHON")
-_FORWARDED_ENV_EXCLUDE = ("JAX_PLATFORMS",)
+# JAX_PLATFORMS: the dispatcher runs CPU-only and its value must not leak onto accelerator tasks.
+# CUDA_VISIBLE_DEVICES: the task runtime assigns devices per process, so a submitter-side value
+# would override that assignment and starve ranks of their GPUs.
+_FORWARDED_ENV_EXCLUDE = ("JAX_PLATFORMS", "CUDA_VISIBLE_DEVICES")
 
 
 def _forwarded_env_vars() -> dict[str, str]:

@@ -170,6 +170,16 @@ def canonicalize_step_sharding(state: "GrugTrainState", mesh: Mesh) -> "GrugTrai
     symMemoryObtain -- and nothing checks window overlap, which is the aliasing #8861 fails on.
     Every other leaf already carries an explicit sharding and matches across the step.
     """
+    # The eleven-rack reproduction of #8870 has to run the shape that hung, and the hero hung with
+    # two executables aliasing one symmetric window. Removing the second executable here would
+    # change the configuration under test, so the hunt can put it back.
+    if os.environ.get("MARIN_DEBUG_SKIP_STEP_CANONICALIZE") == "1":
+        logger.warning(
+            "MARIN_DEBUG_SKIP_STEP_CANONICALIZE=1: leaving the step counter under its inferred "
+            "sharding, so jit_train_step compiles twice and registers two overlapping NCCL "
+            "symmetric windows per rank. This reproduces #8861's precondition on purpose."
+        )
+        return state
     if not isinstance(state.step, jax.Array):
         return state
     # `jax.device_put` asserts inside `_different_device_order_reshard` when the source is a
