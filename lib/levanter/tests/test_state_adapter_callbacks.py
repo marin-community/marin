@@ -59,7 +59,7 @@ def test_state_callback_runner_supports_grug_style_state_and_force_flag():
     runner.add_hook(lambda info: calls.append(info.step), every=2)
 
     state = _GrugLikeState(
-        step=jnp.array(1, dtype=jnp.int32),
+        step=jnp.array(3, dtype=jnp.int32),  # 3 completed steps — not a multiple of 2
         params="params",
         ema_params="ema_params",
         opt_state="opt_state",
@@ -69,7 +69,7 @@ def test_state_callback_runner_supports_grug_style_state_and_force_flag():
     assert calls == []
 
     runner.run(state, loss=1.0, step_duration=0.1, force=True)
-    assert calls == [0]
+    assert calls == [2]
 
 
 def test_state_callback_runner_broadcasts_progress_events_from_callbacks():
