@@ -66,7 +66,7 @@ HARBOR = ExternalDependency(
     distribution="harbor",
     repository="https://github.com/marin-community/harbor.git",
     version="0.8.1",
-    commit="2a688903e0362645b558f839808b64b76601013d",
+    commit="90eadebacd9265d8f7f96e41e5b41b86b118f29a",
     runtime_requirements=("daytona==0.200.2", "gcsfs==2026.7.0", "pydantic-settings==2.14.2", "s3fs==2026.7.0"),
 )
 
@@ -75,7 +75,7 @@ MARIN_SKYRL = ExternalDependency(
     distribution="marinskyrl",
     repository="https://github.com/marin-community/MarinSkyRL.git",
     version="0.1.0",
-    commit="bae4465817fecc9746c7e328a20db0c3cee0eb26",
+    commit="ecb89179b1eaf8d3b9104b58018859157ccd50a8",
     runtime_requirements=(),
 )
 
