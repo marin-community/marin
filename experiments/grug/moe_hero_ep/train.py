@@ -349,6 +349,7 @@ class GrugRunConfig:
     # restores checkpoints benefits from a deep budget.
     max_retries_failure: int = 0
     max_task_failures: int = 10
+    task_timeout: float | None = None
 
 
 def build_train_dataset(
@@ -1271,6 +1272,7 @@ def run_grug(config: GrugRunConfig) -> None:
         processes_per_task=config.processes_per_task,
         max_retries_failure=config.max_retries_failure,
         max_task_failures=config.max_task_failures,
+        timeout=config.task_timeout,
     )
 
 

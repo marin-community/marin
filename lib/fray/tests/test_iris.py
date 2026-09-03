@@ -37,6 +37,7 @@ from iris.cluster.constraints import ConstraintOp
 from iris.cluster.types import Entrypoint as IrisEntrypoint
 from iris.cluster.types import JobName, ResourceSpec, gpu_device
 from iris.resources.state import JobState as IrisJobState
+from rigging.timing import Duration
 
 
 class TestConvertConstraints:
@@ -321,6 +322,20 @@ class TestImagePlumbing:
 
         kwargs = fake_iris.submit.call_args.kwargs
         assert kwargs["task_image"] == "custom/swetrace:dev"
+
+    def test_submit_job_passes_execution_timeout_to_iris(self):
+        fake_iris = MagicMock()
+        fake_iris.submit.return_value = MagicMock(job_id="job-timeout")
+        client = FrayIrisClient.from_iris_client(fake_iris)
+        timeout = Duration.from_minutes(30)
+
+        def _noop():
+            return None
+
+        request = JobRequest(name="bounded-job", entrypoint=Entrypoint.from_callable(_noop), timeout=timeout)
+        client.submit(request)
+
+        assert fake_iris.submit.call_args.kwargs["timeout"] is timeout
 
 
 class TestActorGroupEnvironment:

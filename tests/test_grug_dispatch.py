@@ -12,7 +12,7 @@ def _noop(_: object) -> None:
     pass
 
 
-def test_dispatch_forwards_allocator_environment(monkeypatch):
+def test_dispatch_forwards_allocator_environment_and_timeout(monkeypatch):
     monkeypatch.setenv("LD_PRELOAD", "libjemalloc.so.2")
     monkeypatch.setenv("MALLOC_CONF", "background_thread:true,narenas:2")
     submitted = []
@@ -25,7 +25,9 @@ def test_dispatch_forwards_allocator_environment(monkeypatch):
         config=object(),
         local_entrypoint=_noop,
         resources=ResourceConfig.with_cpu(),
+        timeout=30 * 60,
     )
 
     assert submitted[0].environment.env_vars["LD_PRELOAD"] == "libjemalloc.so.2"
     assert submitted[0].environment.env_vars["MALLOC_CONF"] == "background_thread:true,narenas:2"
+    assert submitted[0].timeout.to_seconds() == 30 * 60

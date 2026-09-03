@@ -690,6 +690,7 @@ class FrayIrisClient:
                 max_retries_failure=request.max_retries_failure,
                 max_retries_preemption=request.max_retries_preemption,
                 max_task_failures=request.max_task_failures,
+                timeout=request.timeout,
                 existing_job_policy=policy,
                 task_image=request.resources.image,
                 priority_band=request.priority,

@@ -125,6 +125,25 @@ def test_checkpoint_path_defaults_under_the_step_output_path():
     assert config.trainer.trainer.checkpointer.base_path == f"{ctx.output_path}/checkpoints"
 
 
+def test_diagnostic_restore_requires_the_exact_checkpoint_and_bounds_every_task():
+    checkpoint = "s3://marin-us-east-02a/marin/grug/control/checkpoints/step-54000"
+    timeout = 30 * 60
+    step = launch.build_diagnostic_run(
+        run_id="bounded-restore",
+        restore_from=checkpoint,
+        dp_racks=1,
+        num_steps=54_020,
+        schedule_steps=390_251,
+        task_timeout=timeout,
+        version="dev",
+    )
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert config.trainer.trainer.load_checkpoint_path == checkpoint
+    assert config.trainer.trainer.load_checkpoint is True
+    assert config.task_timeout is timeout
+
+
 def test_checkpoint_interval_must_be_positive():
     with pytest.raises(ValueError, match="checkpoint_interval must be positive"):
         launch.build_diagnostic_run(
@@ -227,6 +246,7 @@ def _runtime_env_config(
         processes_per_task=processes_per_task,
         max_retries_failure=0,
         max_task_failures=10,
+        task_timeout=None,
     )
 
 

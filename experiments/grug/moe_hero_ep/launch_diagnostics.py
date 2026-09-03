@@ -63,7 +63,10 @@ HERO_CHECKPOINT_INTERVAL = timedelta(minutes=15)
 def build_diagnostic_run(
     *,
     run_id: str,
+    restore_from: str | None = None,
     dp_racks: int,
+    expert_axis_size: int = HERO_EP_EXPERT_AXIS_SIZE,
+    eval_current: bool = False,
     num_steps: int,
     schedule_steps: int | None = None,
     seed: int = 0,
@@ -71,6 +74,7 @@ def build_diagnostic_run(
     num_experts: int | None = None,
     num_experts_per_token: int | None = None,
     intermediate_dim: int | None = None,
+    num_layers: int | None = None,
     capacity_factor: float | None = None,
     latent_dim: int | None = None,
     moe_implementation: str | None = None,
@@ -86,6 +90,7 @@ def build_diagnostic_run(
     profile_steps: int = 0,
     profile_start_step: int = 5,
     training_data_mode: TrainingDataMode = TrainingDataMode.MIXTURE,
+    task_timeout: float | None = None,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """Build a bounded diagnostic run for the production EP64 hero recipe.
@@ -135,6 +140,7 @@ def build_diagnostic_run(
             ("num_experts", num_experts),
             ("num_experts_per_token", num_experts_per_token),
             ("intermediate_dim", intermediate_dim),
+            ("num_layers", num_layers),
             ("capacity_factor", capacity_factor),
             ("latent_dim", latent_dim),
             ("moe_implementation", moe_implementation),
@@ -146,9 +152,11 @@ def build_diagnostic_run(
     model = with_transport_remat_mode(model)
     # A bank that is not divisible by the expert axis fails inside `moe_mlp`, which is after the rack
     # is already allocated and the workspace is built. Reject it here instead.
-    if model.num_experts % HERO_EP_EXPERT_AXIS_SIZE != 0:
-        raise ValueError(f"num_experts={model.num_experts} must be divisible by {HERO_EP_EXPERT_AXIS_SIZE}")
-    local_experts = model.num_experts // HERO_EP_EXPERT_AXIS_SIZE
+    if HERO_EP_EXPERT_AXIS_SIZE % expert_axis_size != 0:
+        raise ValueError(f"expert_axis_size={expert_axis_size} must divide the {HERO_EP_EXPERT_AXIS_SIZE}-GPU rack")
+    if model.num_experts % expert_axis_size != 0:
+        raise ValueError(f"num_experts={model.num_experts} must be divisible by {expert_axis_size}")
+    local_experts = model.num_experts // expert_axis_size
     if local_experts % model.num_expert_waves != 0:
         raise ValueError(
             f"local expert count={local_experts} must be divisible by num_expert_waves={model.num_expert_waves}"
@@ -169,13 +177,18 @@ def build_diagnostic_run(
     wave_tag = f"expert-waves-{model.num_expert_waves}"
     size_tag = f"e{model.num_experts}-i{model.intermediate_dim}"
     wandb_project = os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT
+    # Splitting a rack into several expert domains puts more than one EP clique in the job, which
+    # is the topology #8870 needs; the extra domains join the replica axis, as extra racks would.
+    domains_per_rack = HERO_EP_EXPERT_AXIS_SIZE // expert_axis_size
+    replica_axis_size = dp_racks * domains_per_rack
     grug_trainer = hero_grug_trainer_config(
-        replica_axis_size=dp_racks,
+        replica_axis_size=replica_axis_size,
         training_data_mode=training_data_mode,
         watch_mode=watch_mode,
         save_checkpoints=save_checkpoints,
         master_param_mode=master_param_mode,
     )
+    grug_trainer = dataclasses.replace(grug_trainer, expert_axis_size=expert_axis_size)
     train_resources = ResourceConfig.with_gpu(
         "GB200",
         count=HERO_GPUS_PER_NODE,
@@ -197,6 +210,9 @@ def build_diagnostic_run(
             train_batch_size=batch_size,
             num_train_steps=total_schedule_steps,
             master_param_mode=master_param_mode,
+            load_checkpoint_path=restore_from,
+            # A bad explicit path must fail. Starting from step 0 would still report plausible MFU.
+            load_checkpoint=True if restore_from is not None else None,
             profiler=ProfilerConfig(
                 enabled=profile_steps > 0,
                 start_step=profile_start_step,
@@ -267,8 +283,8 @@ def build_diagnostic_run(
             eval=(
                 GrugEvalConfig(
                     steps_per_eval=eval_every,
-                    eval_batch_size=HERO_EP_EXPERT_AXIS_SIZE * dp_racks,
-                    eval_current=False,  # matches the ladder; see #8861
+                    eval_batch_size=expert_axis_size * replica_axis_size,
+                    eval_current=eval_current,  # off matches the ladder; on reproduces #8861
                     eval_ema=False,
                     compute_bpb=True,
                     dropless_eval=True,
@@ -278,6 +294,7 @@ def build_diagnostic_run(
             ),
             stop_after_steps=num_steps,
             processes_per_task=processes_per_task,
+            task_timeout=task_timeout,
         )
 
     return ArtifactStep(
@@ -294,11 +311,32 @@ def build_diagnostic_run(
 @click.command()
 @click.option("--run-id", required=True, help="Run identifier for artifact and W&B names.")
 @click.option(
+    "--restore-from",
+    default=None,
+    help="Checkpoint directory to restore as a read-only starting state; a missing checkpoint fails the run.",
+)
+@click.option(
     "--dp-racks",
     type=click.IntRange(min=1),
     default=1,
     show_default=True,
     help="Data-parallel NVL72 rack count. --batch-size stays global across all racks.",
+)
+@click.option(
+    "--expert-axis-size",
+    type=click.IntRange(min=1),
+    default=HERO_EP_EXPERT_AXIS_SIZE,
+    show_default=True,
+    help=(
+        "Devices per expert-parallel domain. Below the 64-GPU rack, a rack carries several EP "
+        "domains and they join the replica axis, which puts more than one EP clique in one rack."
+    ),
+)
+@click.option(
+    "--eval-current/--no-eval-current",
+    default=False,
+    show_default=True,
+    help="Run the capacity-limited evaluator, which is the #8861 reproducer. Needs --eval-every.",
 )
 @click.option(
     "--num-steps",
@@ -350,6 +388,13 @@ def build_diagnostic_run(
     default=HERO_MODEL_CONFIG.intermediate_dim,
     show_default=True,
     help="Override the routed expert width.",
+)
+@click.option(
+    "--num-layers",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Override the layer count. Fewer layers cut compile and step time without changing the "
+    "expert-parallel transport, so a structural failure gets more steps per bounded run.",
 )
 @click.option(
     "--batch-size",
@@ -450,6 +495,12 @@ def build_diagnostic_run(
     help="Use the configured mixture or reuse a deterministic synthetic batch without opening TensorStore.",
 )
 @click.option(
+    "--task-timeout-minutes",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Hard execution deadline for every task in the 64-GPU training gang.",
+)
+@click.option(
     "--capacity-factor",
     type=click.FloatRange(min=0, min_open=True),
     default=HERO_MODEL_CONFIG.capacity_factor,
@@ -459,7 +510,10 @@ def build_diagnostic_run(
 @build_options
 def main(
     run_id: str,
+    restore_from: str | None,
     dp_racks: int,
+    expert_axis_size: int,
+    eval_current: bool,
     num_steps: int,
     schedule_steps: int | None,
     seed: int,
@@ -467,6 +521,7 @@ def main(
     num_experts: int | None,
     num_experts_per_token: int | None,
     intermediate_dim: int | None,
+    num_layers: int | None,
     capacity_factor: float | None,
     latent_dim: int | None,
     moe_implementation: str | None,
@@ -482,10 +537,14 @@ def main(
     profile_steps: int,
     profile_start_step: int,
     training_data: str,
+    task_timeout_minutes: int | None,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_diagnostic_run(
         run_id=run_id,
+        restore_from=restore_from,
         dp_racks=dp_racks,
+        expert_axis_size=expert_axis_size,
+        eval_current=eval_current,
         num_steps=num_steps,
         schedule_steps=schedule_steps,
         seed=seed,
@@ -493,6 +552,7 @@ def main(
         num_experts=num_experts,
         num_experts_per_token=num_experts_per_token,
         intermediate_dim=intermediate_dim,
+        num_layers=num_layers,
         capacity_factor=capacity_factor,
         latent_dim=latent_dim,
         moe_implementation=moe_implementation,
@@ -518,6 +578,7 @@ def main(
         profile_steps=profile_steps,
         profile_start_step=profile_start_step,
         training_data_mode=TrainingDataMode(training_data),
+        task_timeout=task_timeout_minutes * 60 if task_timeout_minutes is not None else None,
     )
 
 
