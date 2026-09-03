@@ -410,6 +410,7 @@ def build_workflow(
     reshard_after_forward: bool = True,
     flash_attn: bool = False,
     pr488_geometry: bool = False,
+    bf16_grad_reduce: bool = False,
     label: str = "",
 ) -> ArtifactStep[SkyRLModel] | ArtifactStep[SkyRLTelemetryRun]:
     """Compose the E6 baseline as one inspectable artifact step."""
@@ -451,6 +452,8 @@ def build_workflow(
         variant += "-noreshard"
     if flash_attn:
         variant += "-flashattn"
+    if bf16_grad_reduce:
+        variant += "-bf16grad"
     if bf16_update_mode != "stochastic":
         variant += f"-{bf16_update_mode}"
     if label:
@@ -514,6 +517,17 @@ def build_workflow(
                 # ppo_base_config.yaml, so a plain override fails closed if it is ever renamed, while
                 # `++` would silently add a dead key and the arm would read as a null result.
                 *(("trainer.policy.fsdp_config.use_grouped_mm=true",) if grouped_mm else ()),
+                # A9. FSDP2's MixedPrecisionPolicy takes reduce_dtype from fsdp_config, defaulting
+                # to fp32 (fsdp_strategy.py:357-362, and the fsdp2 branch builds the policy from
+                # those same vars at :400-402). Every gradient reduce-scatter therefore moves 2x the
+                # bytes it needs to. Russell's PR488 config sets grad_reduce_in_fp32: false
+                # explicitly, overriding megatron's own `true` default -- so this is his setting,
+                # not an invention.
+                # `++` is REQUIRED and is not belt-and-braces here, unlike use_grouped_mm:
+                # `mixed_precision` is absent from ppo_base_config.yaml entirely, so a plain
+                # override fails Hydra's struct check and would abort the run after the gang started.
+                *(("++trainer.policy.fsdp_config.mixed_precision.reduce_dtype=bf16",)
+                  if bf16_grad_reduce else ()),
                 # The Hugging Face upload gate, and it is NOT ckpt_interval. The Hub callback
                 # needs `trainer.hf_hub_repo_id` truthy AND `trainer.hf_save_interval > 0`
                 # (skyrl_train/config/callbacks.py); hf_save_interval merely DEFAULTS to
@@ -656,6 +670,16 @@ def build_workflow(
     "sharding -- his FSDP2 column is the honest comparand.",
 )
 @click.option(
+    "--bf16-grad-reduce",
+    is_flag=True,
+    default=False,
+    help="A9. Set fsdp_config.mixed_precision.reduce_dtype=bf16. FSDP2 defaults it to fp32 "
+    "(fsdp_strategy.py:357-362), so every gradient reduce-scatter moves twice the bytes it needs. "
+    "Russell's PR488 sets grad_reduce_in_fp32: false explicitly, overriding megatron's own true "
+    "default. Affects policy_train's backward only -- fwd_logprobs runs under no_grad and generate "
+    "has no gradients at all.",
+)
+@click.option(
     "--label",
     default="",
     help="Extra suffix on the artifact name, and therefore on run_id. The flags that change "
@@ -719,6 +743,7 @@ def main(
     reshard_after_forward: bool,
     flash_attn: bool,
     pr488_geometry: bool,
+    bf16_grad_reduce: bool,
     label: str,
 ) -> ArtifactStep[SkyRLModel] | ArtifactStep[SkyRLTelemetryRun]:
     return build_workflow(
@@ -736,6 +761,7 @@ def main(
         reshard_after_forward=reshard_after_forward,
         flash_attn=flash_attn,
         pr488_geometry=pr488_geometry,
+        bf16_grad_reduce=bf16_grad_reduce,
         label=label,
     )
 
