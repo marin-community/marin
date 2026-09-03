@@ -270,8 +270,7 @@ def _apply_hero_ep_runtime_defaults(
         xla_flags = [
             f
             for f in xla_flags
-            if f.partition("=")[0] not in _RAGGED_REQUIRED_XLA_FLAG_NAMES
-            and f.partition("=")[0] not in override_names
+            if f.partition("=")[0] not in _RAGGED_REQUIRED_XLA_FLAG_NAMES and f.partition("=")[0] not in override_names
         ]
         xla_flags.extend(required)
     os.environ["XLA_FLAGS"] = " ".join(xla_flags)
