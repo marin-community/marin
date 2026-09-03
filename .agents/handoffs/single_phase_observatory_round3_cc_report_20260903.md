@@ -102,6 +102,16 @@ the panel); Table 9 1.0579 (HPR-280 tied control, L1 0.68).
 - Bias at L1 > 0.75 from the panel: successor -0.033 (U) / -0.030 (T9); bounded link -0.005 / +0.010; CV link
   -0.017 / -0.001; canonical DSP -0.027 / -0.054; OLMix -0.011 / +0.009. Calibration far from the panel does not
   translate into selection: the bounded link ranks the Table-9 frontier 35th.
+- The historical Table-9 best of 1.05753 (`origstyle_sep_t9_1p_kl0p075_3e18`, also registered as
+  `dphase_t9b075_tied_3e18`, one training run) is in the bank and eligible, but it is one seed of the "frontier
+  centre" coordinate that the phase-fiber, random-phase and aggressive-asymmetry studies reran 26 times with
+  different seeds: mean 1.06385, SD 0.0041 (SE 0.0008), best seed 1.0553, worst 1.0717. At coordinate level that
+  makes it the second-best Table-9 coordinate after the single-run HPR-280 control (1.05789, n = 1), which is
+  itself one seed draw. Only 7 of the 239 Table-9 coordinates are replicated. Against the replicated frontier the
+  successor's pick (1.0736, n = 1) has regret 0.0098 and the link candidates 0.0083, not 0.0143-0.0157; the models
+  rank the 26-seed centre 14th-30th (successor 18th, predicted 1.039 against 1.004 for its own pick, a relative
+  error of 0.045 against the measured +0.010 in the centre's favour). Seed noise at this coordinate (0.0041) is
+  larger than the 0.003 Table-9 repeat SD used elsewhere in the harness.
 - Dose-response stratum (near the anchor): every model except GRP pairs selects the measured best Uncheatable
   coordinate (regret 0); Table 9 regret 0.0015 (rank 4) for all.
 - The pick is the same neighbourhood for every model: the successor's own epoch-cap runs (caps 4-6) on Uncheatable
