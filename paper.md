@@ -134,6 +134,29 @@ Final evals (round-3 values in parentheses; "metered" excludes DAPO redraw gener
 5. **A real regression: peak val-math500 fell from 0.656 to 0.562**, in both arms equally. Candidate causes we cannot separate at one seed each: half the per-step rollout count, lr-driven drift, or interaction between the anti-`\boxed{}` contract and the model's native math register. This is the main open question for round 5.
 6. **The binding constraint is now generation budget, not sampling.** Retained-trajectory analysis (`trajectory_stats.py`; failures and truncations are retained exhaustively, successes sampled) shows 40–48% of rollouts still hit the 2048-token cap at end of training, and frontier bins truncate almost totally: AIME 98%, Omni-MATH 99%, TheoremQA 88%. Successful rollouts are short (~500–700 tokens), carry canonical think-token structure 85–100% of the time (rising to ~100% by step 100), and always end with the graded answer line; RL ground `\boxed{}` out of successful responses entirely (0.39 → 0.00 over the run). Grades 11+ (except theoremqa) are budget-starved, not merely hard — the model cannot finish its reasoning inside the cap. Raising the generation budget on high grades, or shaping for brevity, is the highest-leverage round-5 change.
 
+## 8. Round 5: an 8192-token budget, and what it refutes
+
+Round 4 concluded that generation budget, not sampling, had become the binding constraint: 40–48% of rollouts truncated at the 2048-token cap and frontier bins truncated almost totally. Round 5 tested that directly — the same recipe (MuonH 1e-5, reversion 2.0, per-bin prompt contracts) with `max_new_tokens=8192` and a 9216-token request window, micro batch cut 8 → 2 to hold activation memory (tokens per micro batch, not sequences, set the footprint), and a pool rebuilt with a 37-token system prompt after a served-model A/B showed the 111-token version bought nothing (compliance flat at 0.77–0.80; the minimal variant scored *better* on gsm8k pass, 0.52 vs 0.38).
+
+| arm | grade-weighted | frontier grade | metered tokens |
+|---|---|---|---|
+| naive | 0.270 (r4: 0.285) | 5 | 211M |
+| grade-prior-dapo | 0.280 (r4: 0.292) | 5 (r4: **13**) | 260M† |
+
+† includes steps retraced across two crash-resumes (an inference-engine death and a coscheduled-sibling failure; both resumed cleanly from checkpoint).
+
+![Snowball round-5 grade-weighted pass@1 vs tokens](https://raw.githubusercontent.com/marin-community/marin/assets/curriculum-rl-paper/snowball-r5-grade-weighted-tokens.png)
+
+1. **The long budget cost 2.4× the tokens and returned a *lower* composite.** Both arms finished below their round-4 counterparts on the grade-weighted metric. Training-time truncation only fell to 0.25–0.35 (from 0.40–0.48): given room, the model fills it — mean generation length drifted toward the cap late in training (~8.2k by step 110 on the dapo arm), and val-gsm8k slipped (0.934 → 0.891 naive), consistent with longer preambles degrading answer-line hygiene rather than better reasoning.
+2. **Round 4's math500 "regression" was an evaluation artifact, not a policy regression.** Post-RL Evalchemy at an 8192-token evaluation cap scores round-5 checkpoints at math500 0.656 (naive) / 0.648 (dapo) — matching round 3's 0.656 peak. Round 4's 0.562 was measured under a 2048-token evaluation cap that truncated long solutions. The policies never got worse at math; the eval got too small for them. Evaluate at a generous budget even when training at a tight one.
+3. **DAPO stops paying at the long budget.** At matched token or wall-clock budgets the grade-weighted gap is ≤ 0.01 (within eval noise), and the frontier edge — the durable curriculum win of rounds 3 and 4 — vanished: both arms end at frontier grade 5, with val-theoremqa at 0.223/0.241 against round 4's sustained 0.268. The mechanism reads cleanly: redraws buy signal by replacing degenerate all-fail groups, and at 2048 tokens truncation manufactured such groups constantly; at 8192 most groups already carry gradient, so redraws re-purchase what naive gets free — while costing 1.7× per step (~1.3× per generated token, the rest being longer generations).
+
+   ![Snowball round-5 pass@1 by grade](https://raw.githubusercontent.com/marin-community/marin/assets/curriculum-rl-paper/snowball-r5-grades-tokens.png)
+
+4. **Grades 11+ did not open.** val-amc 0.07–0.117, val-omni 0.013–0.027. Round 4's "budget-starved, not merely hard" hypothesis for the top of the ladder is refuted at this model scale: with 4× the budget the frontier bins barely moved. What separates grade 10+ from this checkpoint is capability, not room to think.
+
+The five-round summary inverts round 4's closing recommendation: **train at a modest generation budget and evaluate at a generous one.** Short-budget training is where curriculum machinery earns its keep — truncation-driven degenerate groups make DAPO redraws and the grade prior worth ~2 frontier grades at equal token spend — and it reaches the same composite as long-budget training at ~40% of the cost. The next lever is not budget but selection granularity: per-instance evidence (visit-decayed pass rates per problem, already tracked upstream) enabling retirement of mastered instances and replay of frontier ones.
+
 ## Appendix: reproduction
 
 - Experiment code (pool build, launch presets, chart script): `experiments/post_training/curriculum_rl/` in [marin PR #8769](https://github.com/marin-community/marin/pull/8769); the [tracking issue](https://github.com/marin-community/marin/issues/8765) has per-round reports and mid-run findings.
