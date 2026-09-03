@@ -234,9 +234,19 @@ def _apply_hero_ep_runtime_defaults(
     xla_flags.extend(flag for flag in flag_defaults if flag.partition("=")[0] not in explicit_names)
     if remat_mode == OFFLOAD_CARRY_REMAT_MODE:
         # A wrong overlap limit corrupts training silently, so the offload takes the flag
-        # away from the caller instead of defaulting it.
+        # away from the caller instead of defaulting it. MARIN_DEBUG_COLLECTIVE_OVERLAP_LIMIT
+        # hands it back, for the #8870 hang hunt only: more concurrent collectives is the one
+        # 11-rack property a single rack can emulate, and corrupt loss does not matter to it.
+        overlap_override = os.environ.get("MARIN_DEBUG_COLLECTIVE_OVERLAP_LIMIT")
+        offload_overlap = overlap_override or OFFLOAD_CARRY_COLLECTIVE_OVERLAP_LIMIT
+        if overlap_override:
+            logger.warning(
+                "MARIN_DEBUG_COLLECTIVE_OVERLAP_LIMIT=%s overrides the offload path's forced "
+                "overlap limit; this run's loss is not trustworthy (see #8317).",
+                overlap_override,
+            )
         xla_flags = [f for f in xla_flags if f.partition("=")[0] != XLA_COLLECTIVE_OVERLAP_FLAG]
-        xla_flags.append(f"{XLA_COLLECTIVE_OVERLAP_FLAG}={OFFLOAD_CARRY_COLLECTIVE_OVERLAP_LIMIT}")
+        xla_flags.append(f"{XLA_COLLECTIVE_OVERLAP_FLAG}={offload_overlap}")
     if ragged:
         # Unlike the defaults above, these are not overridable. Selecting the host-launched
         # one-shot kernel needs both flags cleared together plus a splits-per-peer count this
