@@ -59,7 +59,7 @@ _ROUTER_BIAS_MAX = "train_router_bias_max"
 _ROUTER_BIAS_MIN = "train_router_bias_min"
 _TOKENS_PER_SECOND = "throughput_tokens_per_second"
 _MFU = "throughput_mfu"
-_EVAL_LOSS = "eval_paloma_macro_loss"
+_EVAL_LOSS = "eval_dropless_paloma_macro_loss"
 
 _SIGNAL_METRICS = (
     PHASE_METRIC,
