@@ -123,7 +123,11 @@ sudo docker run -d --name {{ container_name }} \\
 
 echo "[finelog-init] Container started; waiting for /health on port {{ port }}..."
 
-for i in $(seq 1 60); do
+# A boot that adopts ~100k legacy files spends 70s+ reconciling parquet
+# footers before it can serve, plus per-namespace remote fence claims; 300s
+# covers that with margin. (The count shrinks permanently as big tables
+# migrate to object storage.)
+for i in $(seq 1 150); do
     if ! sudo docker ps -q -f name={{ container_name }} | grep -q .; then
         echo "[finelog-init] ERROR: finelog container exited unexpectedly"
         sudo docker ps -a -f name={{ container_name }}
@@ -140,7 +144,7 @@ for i in $(seq 1 60); do
     sleep 2
 done
 
-echo "[finelog-init] ERROR: finelog failed to become healthy after 120s (last /health: ${health:-unreachable})"
+echo "[finelog-init] ERROR: finelog failed to become healthy after 300s (last /health: ${health:-unreachable})"
 sudo docker ps -a -f name={{ container_name }}
 sudo docker logs {{ container_name }} --tail 200 || true
 exit 1
