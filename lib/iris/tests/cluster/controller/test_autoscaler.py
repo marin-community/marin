@@ -776,7 +776,7 @@ class TestAutoscalerQuotaHandling:
         ts = Timestamp.from_ms(1000)
         group.begin_scale_up(timestamp=ts)
         with pytest.raises(QuotaExhaustedError):
-            group.scale_up(timestamp=ts)
+            group.scale_up()
         group.cancel_scale_up()
         group.record_quota_exceeded("quota exceeded", ts)
 

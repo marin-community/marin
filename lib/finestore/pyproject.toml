@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "marin-finestore"
 version = "0.1.0"
-description = "finestore — an append-only columnar archive of Parquet shards on object storage."
+description = "Transactional Parquet tables and named objects on conditional object storage."
 requires-python = ">=3.12"
 dependencies = [
     "marin-rigging",

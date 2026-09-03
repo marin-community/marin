@@ -35,6 +35,12 @@ from iris.cluster.setup_scripts import (
     wants_gpu_extra,
 )
 from iris.cluster.tpu_topology import get_tpu_topology
+from iris.resources.state import (
+    TERMINAL_JOB_STATES as NATIVE_TERMINAL_JOB_STATES,
+)
+from iris.resources.state import (
+    TERMINAL_TASK_STATES as NATIVE_TERMINAL_TASK_STATES,
+)
 from iris.rpc import controller_pb2, job_pb2
 
 
@@ -64,9 +70,8 @@ class GcpSliceMode(StrEnum):
 DEFAULT_BACKEND_ID = "default"
 """Backend id of the implicit single backend synthesized from top-level config.
 
-Shared by the runtime config synthesis (``iris.cluster.config.resolve_backends``)
-and the ``0032_backend_id`` migration backfill — the migration has only a raw DB
-connection (no config object), so both must agree on this exact literal.
+Shared by controller composition and the backend-ID migration backfill. The
+migration has only a raw DB connection, so both must agree on this literal.
 """
 
 
@@ -435,6 +440,7 @@ class PendingTask:
 
     task_id: JobName
     job_id: JobName
+    submitting_user: str
     backend_id: str
     state: int
     current_attempt_id: int
@@ -457,6 +463,10 @@ class PendingTask:
     res_device_json: str | None
 
 
+DEFAULT_USER_BUDGET_LIMIT = 1000
+DEFAULT_USER_BUDGET_MAX_BAND = job_pb2.PRIORITY_BAND_INTERACTIVE
+
+
 @dataclass
 class UserBudgetDefaults:
     """Budget settings applied when a user has no override row in ``user_budgets``.
@@ -465,8 +475,8 @@ class UserBudgetDefaults:
     ``compute_effective_band`` downgrades INTERACTIVE work to BATCH.
     """
 
-    budget_limit: int = 1000
-    max_band: int = job_pb2.PRIORITY_BAND_INTERACTIVE
+    budget_limit: int = DEFAULT_USER_BUDGET_LIMIT
+    max_band: int = DEFAULT_USER_BUDGET_MAX_BAND
 
 
 class WorkerUsability(StrEnum):
@@ -667,7 +677,6 @@ CALLABLE_RUNNER = """\
 import cloudpickle
 import os
 import sys
-import traceback
 import logging
 
 # Reinitialize logging with the unified Iris format.
@@ -704,9 +713,12 @@ try:
     with open(os.path.join(workdir, "_callable.pkl"), "rb") as f:
         fn, args, kwargs = cloudpickle.loads(f.read())
     fn(*args, **kwargs)
-except Exception:
-    traceback.print_exc()
-    sys.exit(1)
+except BaseException as exc:
+    if not isinstance(exc, SystemExit) or exc.code not in (None, 0):
+        # The callable runner is an exception boundary. Retain the failure for
+        # atexit hooks before re-raising it with its original exit semantics.
+        sys.last_exc = exc
+    raise
 """
 
 
@@ -829,25 +841,11 @@ class Namespace(str):
 
 
 TERMINAL_JOB_STATES: frozenset[int] = frozenset(
-    {
-        job_pb2.JOB_STATE_SUCCEEDED,
-        job_pb2.JOB_STATE_FAILED,
-        job_pb2.JOB_STATE_KILLED,
-        job_pb2.JOB_STATE_WORKER_FAILED,
-        job_pb2.JOB_STATE_UNSCHEDULABLE,
-    }
+    job_pb2.JobState.Value(f"JOB_STATE_{state.name}") for state in NATIVE_TERMINAL_JOB_STATES
 )
 
 TERMINAL_TASK_STATES: frozenset[int] = frozenset(
-    {
-        job_pb2.TASK_STATE_SUCCEEDED,
-        job_pb2.TASK_STATE_FAILED,
-        job_pb2.TASK_STATE_KILLED,
-        job_pb2.TASK_STATE_UNSCHEDULABLE,
-        job_pb2.TASK_STATE_WORKER_FAILED,
-        job_pb2.TASK_STATE_PREEMPTED,
-        job_pb2.TASK_STATE_COSCHED_FAILED,
-    }
+    job_pb2.TaskState.Value(f"TASK_STATE_{state.name}") for state in NATIVE_TERMINAL_TASK_STATES
 )
 
 

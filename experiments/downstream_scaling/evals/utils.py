@@ -9,9 +9,10 @@ import os
 import re
 
 import fsspec
+from rigging.filesystem.cluster_config import data_config, marin_region
+from rigging.filesystem.cross_region import mirror_budget
 from thalas.execution.executor import InputName, MirroredValue
 from thalas.execution.types import versioned
-from rigging.filesystem import data_config, marin_region, mirror_budget
 
 _STEP_CHECKPOINT_RE = re.compile(r"(?:^|/)step-(\d+)/?$")
 

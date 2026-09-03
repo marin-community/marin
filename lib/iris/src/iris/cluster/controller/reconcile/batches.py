@@ -5,7 +5,7 @@
 
 :class:`ReconcileState` is one batch session over a closed
 :class:`TransitionSnapshot`. Its public methods are the controller's state
-operations — ``reconcile``, ``fail_workers``, ``record_updates``,
+operations — ``apply_updates``, ``fail_workers``,
 ``finalize_tasks``, ``cancel_job`` — each of which runs the same
 two-pass contract and returns the accumulated effects:
 
@@ -17,7 +17,7 @@ two-pass contract and returns the accumulated effects:
   once, finalize the ones that go terminal, then drain the deferred child
   cascades. Folding recompute out of the per-update loop makes a batch
   order-independent and keeps ``job.recompute_state`` (which rescans a job's
-  whole task histogram) off the O(tasks_per_job²) per-dispatch path.
+whole task histogram) off the O(tasks_per_job²) per-update path.
 
 The cross-aggregate primitives below the facade (``_kill_non_terminal_tasks``,
 ``_cascade_to_children``, ``_finalize_terminal_job``, ``_cascade_to_peers``) stay
@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 
 from rigging.timing import Timestamp
 
-from iris.cluster.controller.reconcile import job, peers, task, worker
+from iris.cluster.controller.reconcile import job, peers, task
 from iris.cluster.controller.reconcile.effects import (
     ControllerEffects,
     JobRowDelta,
@@ -41,7 +41,8 @@ from iris.cluster.controller.reconcile.overlay import Overlay
 from iris.cluster.controller.reconcile.policy import (
     FAILURE_TASK_STATES,
     NON_TERMINAL_TASK_STATES,
-    TERMINAL_STATE_REASONS,
+    PARENT_JOB_TERMINATED_REASON,
+    TERMINAL_STATE_FALLBACK_REASONS,
 )
 from iris.cluster.controller.reconcile.snapshot import (
     TaskUpdate,
@@ -58,6 +59,7 @@ from iris.cluster.types import (
 from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
+_TASK_UPDATES_APPLIED_EVENT = "task_updates_applied"
 
 
 # ---------------------------------------------------------------------------
@@ -68,28 +70,62 @@ logger = logging.getLogger(__name__)
 # ``task.merge_task_termination``, and job.py is forbidden from importing task.
 
 
-def _kill_non_terminal_tasks(overlay: Overlay, job_id: JobName, reason: str, now_ms: int) -> None:
-    """Kill all non-terminal tasks for a single job and delete endpoints."""
+def _finish_non_terminal_tasks(
+    overlay: Overlay,
+    job_id: JobName,
+    *,
+    task_state: int,
+    error: str | None,
+    exit_code: int | None,
+    message: str,
+    action_reason: TaskActionReason,
+    severity: TaskEventSeverity,
+    now_ms: int,
+) -> None:
+    """Finish all non-terminal tasks for a job and stop their active attempts."""
     for row in overlay.active_tasks_for_job(job_id, states=NON_TERMINAL_TASK_STATES):
         task.merge_task_termination(
             overlay,
             row.task_id.to_wire(),
             row.current_attempt_id,
-            job_pb2.TASK_STATE_KILLED,
-            reason,
+            task_state,
+            error,
             now_ms,
             stamp_attempt_finished=False,
+            exit_code=exit_code,
         )
         overlay.emit_task_event(
             TaskActionEvent(
                 task_id=row.task_id,
                 attempt_id=row.current_attempt_id,
                 ts=Timestamp.from_ms(now_ms),
-                reason=TaskActionReason.JOB_FINALIZED_TASK_KILLED,
-                message=reason,
-                severity=TaskEventSeverity.WARNING,
+                reason=action_reason,
+                message=message,
+                severity=severity,
             )
         )
+
+
+def _kill_non_terminal_tasks(
+    overlay: Overlay,
+    job_id: JobName,
+    reason: str,
+    now_ms: int,
+    *,
+    action_reason: TaskActionReason,
+) -> None:
+    """Kill all non-terminal tasks for a single job and delete endpoints."""
+    _finish_non_terminal_tasks(
+        overlay,
+        job_id,
+        task_state=job_pb2.TASK_STATE_KILLED,
+        error=reason,
+        exit_code=None,
+        message=reason,
+        action_reason=action_reason,
+        severity=TaskEventSeverity.WARNING,
+        now_ms=now_ms,
+    )
 
 
 def _cascade_to_children(
@@ -97,11 +133,19 @@ def _cascade_to_children(
     job_id: JobName,
     now_ms: int,
     reason: str,
+    *,
+    action_reason: TaskActionReason,
 ) -> None:
     """Kill descendant jobs (not the job itself) on a parent terminal/preempt."""
     descendants = overlay.job_descendants(job_id)
     for child_job_id in descendants:
-        _kill_non_terminal_tasks(overlay, child_job_id, reason, now_ms)
+        _kill_non_terminal_tasks(
+            overlay,
+            child_job_id,
+            reason,
+            now_ms,
+            action_reason=action_reason,
+        )
         overlay.merge_cascade_kill(
             JobRowDelta(
                 job_id=child_job_id,
@@ -113,16 +157,32 @@ def _cascade_to_children(
         )
 
 
+def _terminal_job_reason(overlay: Overlay, job_id: JobName, terminal_state: int) -> str:
+    return overlay.job_delta_error(job_id) or TERMINAL_STATE_FALLBACK_REASONS.get(terminal_state, "Job finalized")
+
+
 def _finalize_terminal_job(overlay: Overlay, job_id: JobName, terminal_state: int, now_ms: int) -> None:
     """Kill remaining tasks and optionally cascade to children when a job goes terminal."""
-    reason = TERMINAL_STATE_REASONS.get(terminal_state, "Job finalized")
-    _kill_non_terminal_tasks(overlay, job_id, reason, now_ms)
+    reason = _terminal_job_reason(overlay, job_id, terminal_state)
+    _kill_non_terminal_tasks(
+        overlay,
+        job_id,
+        reason,
+        now_ms,
+        action_reason=TaskActionReason.JOB_FINALIZED_TASK_KILLED,
+    )
     should_cascade = True
     if terminal_state != job_pb2.JOB_STATE_SUCCEEDED:
         policy = overlay.job_preemption_policy(job_id)
         should_cascade = policy == job_pb2.JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN
     if should_cascade:
-        _cascade_to_children(overlay, job_id, now_ms, reason)
+        _cascade_to_children(
+            overlay,
+            job_id,
+            now_ms,
+            PARENT_JOB_TERMINATED_REASON,
+            action_reason=TaskActionReason.PARENT_JOB_TERMINATED,
+        )
 
 
 def _cascade_to_peers(overlay: Overlay, outcome: task.TransitionOutcome, now_ms: int) -> None:
@@ -172,45 +232,24 @@ class ReconcileState:
     # Public operations
     # ------------------------------------------------------------------
 
-    def reconcile(
-        self,
-        plan_results: list[tuple[worker.WorkerReconcilePlan, worker.WorkerReconcileResult]],
-        now: Timestamp,
-    ) -> ControllerEffects:
-        """Apply many workers' reconcile outcomes against the shared overlay.
-
-        Each worker's task updates are applied (with their per-update peer
-        cascades) in turn, so a sibling requeued/terminated by an earlier worker
-        is visible to a later worker's overlay-aware guards; the recompute pass
-        then recomputes/finalizes every touched job once for the whole batch.
-        """
-        now_ms = now.epoch_ms()
-        # Liveness (REACHED/UNREACHABLE) is observed by the backend from its own
-        # RPC outcomes and folded by the controller through
-        # ``WorkerHealthTracker.apply``; the kernel only derives build failures.
-        for plan, result in plan_results:
-            for update in self._reconcile_updates_for_plan(plan, result):
-                self._apply_update(update, now_ms, source=task.TransitionSource.WORKER_RECONCILE)
-
-        self._recompute_and_finalize(now_ms)
-        return self.overlay.effects
-
-    def record_updates(self, updates: list[TaskUpdate]) -> ControllerEffects:
-        """Apply a batch of task-state updates from a direct (e.g. Kubernetes) provider."""
+    def apply_updates(self, updates: list[TaskUpdate]) -> ControllerEffects:
+        """Apply one backend-neutral batch of exact task observations."""
         now_ms = self._snapshot.now.epoch_ms()
-        # Direct providers manage their own hosts -> no build-failed reaping.
         for update in updates:
-            self._apply_update(update, now_ms, source=task.TransitionSource.DISPATCH)
+            self._apply_update(update, now_ms)
         cascaded_jobs = self._recompute_and_finalize(now_ms)
 
         if cascaded_jobs:
-            self.overlay.emit_log_event(LogEvent(action="dispatch_updates_applied", entity_id="direct"))
+            self.overlay.emit_log_event(LogEvent(action=_TASK_UPDATES_APPLIED_EVENT, entity_id="backend"))
             for job_id in cascaded_jobs:
+                basis = self.overlay.job_basis(job_id)
+                assert basis is not None
                 self.overlay.emit_log_event(
                     LogEvent(
                         action="job_terminated",
                         entity_id=job_id.to_wire(),
-                        trigger="dispatch_updates_applied",
+                        trigger=_TASK_UPDATES_APPLIED_EVENT,
+                        details=(("reason", _terminal_job_reason(self.overlay, job_id, basis.state)),),
                     )
                 )
         return self.overlay.effects
@@ -300,12 +339,23 @@ class ReconcileState:
         finished_at = Timestamp.from_ms(now_ms)
 
         for jid in subtree:
-            _kill_non_terminal_tasks(self.overlay, jid, reason, now_ms)
+            is_root = jid == job_id
+            job_reason = reason if is_root else PARENT_JOB_TERMINATED_REASON
+            action_reason = (
+                TaskActionReason.JOB_FINALIZED_TASK_KILLED if is_root else TaskActionReason.PARENT_JOB_TERMINATED
+            )
+            _kill_non_terminal_tasks(
+                self.overlay,
+                jid,
+                job_reason,
+                now_ms,
+                action_reason=action_reason,
+            )
             self.overlay.merge_cascade_kill(
                 JobRowDelta(
                     job_id=jid,
                     state=job_pb2.JOB_STATE_KILLED,
-                    error=reason,
+                    error=job_reason,
                     finished_at=finished_at,
                     is_cascade_kill=True,
                     allow_overwrite_worker_failed=True,
@@ -315,6 +365,36 @@ class ReconcileState:
         self.overlay.emit_log_event(
             LogEvent(action="job_cancelled", entity_id=job_id.to_wire(), details=(("reason", reason),))
         )
+        return self.overlay.effects
+
+    def complete_job(self, job_id: JobName, now: Timestamp) -> ControllerEffects:
+        """Complete a running job successfully and stop its unfinished tasks."""
+        basis = self._snapshot.job_state_basis.get(job_id)
+        if basis is None or basis.state in TERMINAL_JOB_STATES:
+            return self.overlay.effects
+
+        now_ms = now.epoch_ms()
+        reason = TERMINAL_STATE_FALLBACK_REASONS[job_pb2.JOB_STATE_SUCCEEDED]
+        _finish_non_terminal_tasks(
+            self.overlay,
+            job_id,
+            task_state=job_pb2.TASK_STATE_SUCCEEDED,
+            error=None,
+            exit_code=0,
+            message=reason,
+            action_reason=TaskActionReason.JOB_COMPLETED_TASK_SUCCEEDED,
+            severity=TaskEventSeverity.NORMAL,
+            now_ms=now_ms,
+        )
+        self.overlay.merge_job_state(
+            JobRowDelta(
+                job_id=job_id,
+                state=job_pb2.JOB_STATE_SUCCEEDED,
+                finished_at=Timestamp.from_ms(now_ms),
+            )
+        )
+        _finalize_terminal_job(self.overlay, job_id, job_pb2.JOB_STATE_SUCCEEDED, now_ms)
+        self.overlay.emit_log_event(LogEvent(action="job_completed", entity_id=job_id.to_wire()))
         return self.overlay.effects
 
     # ------------------------------------------------------------------
@@ -356,8 +436,12 @@ class ReconcileState:
             )
         )
 
-    def _apply_update(self, update: TaskUpdate, now_ms: int, *, source: task.TransitionSource) -> None:
+    def _apply_update(self, update: TaskUpdate, now_ms: int) -> None:
         """Apply pass for one worker/provider task update.
+
+        ``observed_task_state`` fences an observation derived from an older
+        controller plan; the update is ignored if an earlier item in this batch
+        has already moved the task elsewhere.
 
         Applies the per-update transition, runs the peer cascade unconditionally
         (so later updates see requeued/terminated siblings), but gates the
@@ -365,7 +449,12 @@ class ReconcileState:
         change: ``apply_one_transition`` emits no-op outcomes (new data, unchanged
         state) that must not touch the work-list.
         """
-        outcome = task.apply_one_transition(self.overlay, self._snapshot, update, now_ms, source=source)
+        if (
+            update.observed_task_state is not None
+            and self.overlay.task_state(update.task_id) != update.observed_task_state
+        ):
+            return
+        outcome = task.apply_one_transition(self.overlay, self._snapshot, update, now_ms)
         if outcome is None:
             return
         if outcome.new_task_state != outcome.prior_state:
@@ -417,7 +506,13 @@ class ReconcileState:
         for job_id, reason in self.pending_child_cascades.items():
             if job_id in cascaded_jobs:
                 continue
-            _cascade_to_children(self.overlay, job_id, now_ms, reason)
+            _cascade_to_children(
+                self.overlay,
+                job_id,
+                now_ms,
+                reason,
+                action_reason=TaskActionReason.JOB_FINALIZED_TASK_KILLED,
+            )
         return cascaded_jobs
 
     def _note(self, job_id: JobName) -> None:
@@ -436,57 +531,6 @@ class ReconcileState:
             return
         if self.overlay.job_preemption_policy(outcome.job_id) == job_pb2.JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN:
             self.pending_child_cascades.setdefault(outcome.job_id, reason)
-
-    # ------------------------------------------------------------------
-    # reconcile() helpers
-    # ------------------------------------------------------------------
-
-    def _reconcile_updates_for_plan(
-        self,
-        plan: worker.WorkerReconcilePlan,
-        result: worker.WorkerReconcileResult,
-    ) -> list[TaskUpdate]:
-        """Derive the task updates one worker's reconcile result contributes."""
-        worker_id = plan.worker_id
-
-        if result.error is not None:
-            self.overlay.emit_log_event(
-                LogEvent(
-                    action="reconcile_rpc_failed",
-                    entity_id=str(worker_id),
-                    details=(("error", result.error),),
-                )
-            )
-            candidates: list[tuple[JobName, int]] = []
-            for desired in plan.request.desired:
-                if not desired.HasField("run") or not desired.run.HasField("request"):
-                    continue
-                req_proto = desired.run.request
-                cand_task_id = JobName.from_wire(req_proto.task_id)
-                # Overlay-aware gate: a sibling already requeued to PENDING earlier
-                # in this same batch is no longer ASSIGNED, so it must not be
-                # fabricated into a synthetic WORKER_FAILED (split-slice corruption).
-                # ``assigned_updates_from_plan`` re-checks the snapshot, but that
-                # read is blind to same-batch overlay mutations.
-                if self.overlay.task_state(cand_task_id) != job_pb2.TASK_STATE_ASSIGNED:
-                    continue
-                candidates.append((cand_task_id, req_proto.attempt_id))
-            if not candidates:
-                return []
-            return worker.assigned_updates_from_plan(self._snapshot, candidates, result.error)
-
-        if worker_id not in self._snapshot.active_workers:
-            logger.warning(
-                "reconcile: worker %s no longer present; dropping %d observations",
-                worker_id,
-                len(result.observations),
-            )
-            return []
-
-        observations = worker.filter_observations_to_plan(plan, result.observations, worker_id)
-        if not observations:
-            return []
-        return worker.observations_to_updates(self._snapshot, observations)
 
     # ------------------------------------------------------------------
     # fail_workers() helpers

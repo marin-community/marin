@@ -1,14 +1,13 @@
-# Autoscaling Cluster for Marin Data Processing
-In Marin, we use GCP TPUs (provided by TRC) to do all of our work, including non-training tasks.
-We have several clusters for Marin, each with a different TPU type:
+# Autoscaling Clusters for Marin Data Processing
+Marin compute runs on GCP TPUs (provided by TRC) and CoreWeave GPUs. The named
+cluster configs in `lib/iris/config/` are the source of truth:
 
-- `marin-us-central2` (default): v4's
-- `marin-us-west4`: v5e's
-- `marin-eu-west4`: v5e's
-- `marin-us-east5` (v6e's)
-- `marin-us-east1` (v6e's)
-- `marin-us-central1` (v6e's)
-- `marin-big-run` (v4, reserved for the hero run, whatever it may be. Do not use for anything else.)
+- `marin` (production GCP): a single multi-region cluster whose TPU pools span
+  v4 (us-central2), v5e (us-west4, europe-west4), v5p (us-central1, us-east5),
+  and v6e (us-east1, us-east5, europe-west4).
+- `marin-dev`: dev cluster with smaller scale caps.
+- `cw-rno2a`, `cw-us-east-02a`, `cw-us-east-08a`, `cw-us-west-04a`: CoreWeave
+  GPU clusters (see `lib/iris/docs/coreweave.md`).
 
 
 
@@ -72,9 +71,9 @@ To keep our Docker artifact registries tidy, we provide a script and Makefile ta
 except we keep the most recent 16 tags.
 
 The canonical region list is sourced from `config/marin.yaml`
-(us-central1, us-central2, us-east1, us-east5, us-west4, europe-west4) — the same
-single source of truth used by `infra/configure_buckets.py`. Scripts read that map
-rather than hardcoding regions, so they never drift from the runtime view of the fleet.
+(us-central1, us-central2, us-east1, us-east5, us-west1, us-west4, europe-west4) — the same
+single source of truth used by the regional data-bucket Pulumi component. Scripts read that
+map rather than hardcoding regions, so they never drift from the runtime view of the fleet.
 
 ### Script: `infra/configure_gcp_registry.py`
 - This script sets a cleanup policy on a GCP Artifact Registry repository to delete images older than 30 days (keeping the 16 most recent tags).

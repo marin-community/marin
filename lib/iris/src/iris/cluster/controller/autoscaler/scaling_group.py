@@ -606,7 +606,6 @@ class ScalingGroup:
     def scale_up(
         self,
         tags: dict[str, str] | None = None,
-        timestamp: Timestamp | None = None,
         worker_config: WorkerConfig | None = None,
     ) -> SliceHandle:
         """Create a new slice via the platform.
@@ -616,7 +615,6 @@ class ScalingGroup:
 
         Args:
             tags: Optional extra labels/tags for the slice (merged with managed labels)
-            timestamp: Optional timestamp (for testing)
             worker_config: Worker settings passed to platform.create_slice()
 
         Returns:

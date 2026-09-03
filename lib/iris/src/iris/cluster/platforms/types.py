@@ -13,6 +13,8 @@ import os
 import socket
 import threading
 import time
+import urllib.error
+import urllib.request
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -139,6 +141,24 @@ def wait_for_port(port: int, host: str = "localhost", timeout: float = 30.0) -> 
         except (ConnectionRefusedError, OSError, TimeoutError):
             time.sleep(0.5)
     return False
+
+
+# Worker addresses are private cluster IPs, never reachable via an upstream
+# proxy, so health probes must ignore any HTTP_PROXY in the environment.
+_WORKER_HEALTH_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def probe_worker_health(worker_url: str, *, timeout: float) -> bool:
+    """Probe a worker's ``/health`` endpoint over an ``http://host:port`` base URL.
+
+    Returns True iff the worker answers 2xx within ``timeout`` seconds. Callers
+    poll, so an unreachable worker reads as unhealthy rather than raising.
+    """
+    try:
+        response = _WORKER_HEALTH_OPENER.open(f"{worker_url}/health", timeout=timeout)
+        return 200 <= response.status < 300
+    except (urllib.error.URLError, urllib.error.HTTPError, OSError, TimeoutError):
+        return False
 
 
 # ---------------------------------------------------------------------------

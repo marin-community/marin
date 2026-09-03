@@ -44,6 +44,7 @@ from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
 from levanter.trainer import TrainerConfig
+from levanter.training_control import TrainingDashboard
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
@@ -446,7 +447,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     # Grug uses raw PartitionSpecs rather than Trainer's logical axis mapping.
     # Keep the mesh compact so P(("replica_dcn", "data")) spans slices directly.
     mesh = compact_grug_mesh()
-    with set_mesh(mesh):
+    checkpointer = trainer.checkpointer.create(run_id)
+    with set_mesh(mesh), TrainingDashboard(config, checkpointer.request_checkpoint, run_id):
         batch_schedule = trainer.batch_schedule
 
         train_dataset = build_train_dataset(
@@ -474,7 +476,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         state = _init_state(model_key)
 
-        checkpointer = trainer.checkpointer.create(run_id)
         state = restore_grug_state_from_checkpoint(
             state,
             checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),

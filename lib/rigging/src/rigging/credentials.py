@@ -14,7 +14,7 @@ nothing for ordinary user / CLI traffic. A client may set ``$MARIN_CLUSTER_TOKEN
 to inject an explicit bearer (e.g. a worker JWT) for CI / headless runs.
 
 IAP edge-token resolution (the ``Proxy-Authorization`` bearer, IAP clusters only)
-is the sole per-request auth. Precedence (see :func:`_edge_provider`): the cached
+is the sole per-request auth. Precedence (see :func:`iap_provider_for`): the cached
 desktop-OAuth refresh token (the human path), otherwise an ambient service-account
 ID token — a key, GCE metadata, or an impersonated ADC (the in-cluster / CI path).
 The machine path mints for a dedicated programmatic audience if one is configured,
@@ -23,6 +23,7 @@ else for the desktop client id, which is the app's public identity
 """
 
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from rigging.auth import (
@@ -112,27 +113,38 @@ def _desktop_client(auth: ClusterAuth) -> OAuthClient:
     return MARIN_DESKTOP_OAUTH_CLIENT
 
 
-def _edge_provider(cluster: str, auth: ClusterAuth) -> TokenProvider | None:
-    """Resolve the IAP edge provider.
+def iap_provider_for(
+    cluster: str,
+    *,
+    audiences: Sequence[str] = (),
+    desktop_client: OAuthClient = MARIN_DESKTOP_OAUTH_CLIENT,
+) -> TokenProvider:
+    """The IAP edge provider for ``cluster``, human login first.
 
-    Precedence: a cached human login, then ambient service-account credentials.
+    A cached desktop login wins; otherwise the token is minted from ambient
+    service-account credentials (a key, GCE metadata, an impersonated ADC, or a
+    Workload Identity Federation ADC). ``audiences`` is the cluster's configured
+    programmatic audience list; when it is empty the machine path mints for
+    ``desktop_client``'s id, which IAP registers as a programmatic client and
+    admits -- the same ``aud`` the human path presents. Either way IAP still
+    checks the caller against the backend allowlist for authorization.
     """
-    if auth.provider is not AuthProvider.IAP or auth.iap is None:
-        return None
-    # The audience clears IAP's authentication step for both machine paths.
-    # Prefer a dedicated programmatic audience when the cluster configures one;
-    # otherwise use the desktop client id, which IAP registers as a programmatic
-    # client and admits for service-account tokens too -- the same aud the human
-    # login path presents. The caller's identity is still checked against the
-    # backend allowlist for authorization.
-    audiences = auth.iap.programmatic_audiences
-    audience = audiences[0] if audiences else _desktop_client(auth).client_id
-    human = iap_edge_provider(cluster, desktop_client=_desktop_client(auth))
+    human = iap_edge_provider(cluster, desktop_client=desktop_client)
     if human is not None:
         return human
-    # No cached login: mint an ID token from ambient service-account credentials
-    # (a key, GCE metadata, or an impersonated ADC).
-    return IapServiceAccountTokenProvider(audience)
+    return IapServiceAccountTokenProvider(audiences[0] if audiences else desktop_client.client_id)
+
+
+def _edge_provider(cluster: str, auth: ClusterAuth) -> TokenProvider | None:
+    """Resolve the IAP edge provider, or None for a non-IAP cluster."""
+    if auth.provider is not AuthProvider.IAP or auth.iap is None:
+        return None
+    desktop_client = _desktop_client(auth)
+    return iap_provider_for(
+        cluster,
+        audiences=auth.iap.programmatic_audiences,
+        desktop_client=desktop_client,
+    )
 
 
 def credentials_for(

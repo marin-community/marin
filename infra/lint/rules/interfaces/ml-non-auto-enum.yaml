@@ -1,0 +1,21 @@
+schema_version: 1
+code: ml-non-auto-enum
+lane: interfaces
+title: Manually numbered enum
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** Hand-numbered enums (`A = 1; B = 2`) are fragile to reorder
+  and add nothing over `auto()`. Prefer `enum.auto()` unless the integer values
+  cross a wire.
+
+  **When allowed:** Wire identifiers that must stay stable across versions
+  (proto enum numbers, serialized IDs). Document that the integer values are
+  load-bearing.
+
+  **Bad example:**
+  ```python
+  class JobState(Enum):
+      PENDING = 1
+      RUNNING = 2
+      DONE = 3   # use auto() unless these ints cross a wire
+  ```

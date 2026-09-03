@@ -34,8 +34,8 @@ does not fit, which is the backstop.
 
 A peer reports its capacity per priority band: a free amount plus what its admitted
 work holds at each band. A candidate's effective capacity on a backend is that free
-amount plus everything held below its own band (a numerically higher band is lower
-priority), which is what the peer's scheduler would preempt to admit the job.
+amount plus everything held below its own band, which is what the peer's scheduler
+would preempt to admit the job.
 Placement spends idle capacity first, reclaims from the lowest-priority band upward,
 and prefers a peer that needs no preemption at all.
 """
@@ -47,6 +47,7 @@ from typing import NamedTuple
 from iris.cluster.constraints import AVAILABLE_PREFIX, AttributeValue, Constraint, evaluate_constraint
 from iris.cluster.federation.router import backend_satisfies
 from iris.cluster.types import JobName
+from iris.rpc.proto_display import priority_band_rank
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +59,8 @@ logger = logging.getLogger(__name__)
 # v1: free amounts only, computed from every non-terminal pod.
 # v2: free amounts count only capacity admitted work holds (queued, unadmitted work
 #     no longer subtracts), plus the ``held_by_band`` split of the held remainder.
-AVAILABILITY_METRIC_VERSION = 2
+# v3: held-band ordering follows the explicit PriorityBand rank rather than wire values.
+AVAILABILITY_METRIC_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -178,6 +180,10 @@ class ReservationLedger:
 ANY_BAND = 0
 
 
+def _reclaimable(held_band: int, candidate_band: int) -> bool:
+    return candidate_band == ANY_BAND or priority_band_rank(held_band) > priority_band_rank(candidate_band)
+
+
 @dataclass
 class _WorkingCapacity:
     """One peer backend's spendable capacity for a single assignment pass.
@@ -191,9 +197,9 @@ class _WorkingCapacity:
     held: dict[int, dict[str, int]]
 
     def available(self, token: str, band: int) -> int:
-        """Idle capacity plus everything held below ``band`` (a higher band number)."""
+        """Idle capacity plus everything held below ``band``."""
         return self.free.get(token, 0) + sum(
-            amounts.get(token, 0) for held_band, amounts in self.held.items() if held_band > band
+            amounts.get(token, 0) for held_band, amounts in self.held.items() if _reclaimable(held_band, band)
         )
 
     def would_preempt(self, token: str, amount: int) -> bool:
@@ -212,7 +218,8 @@ class _WorkingCapacity:
         take = min(self.free.get(token, 0), amount)
         self.free[token] = self.free.get(token, 0) - take
         remaining = amount - take
-        for held_band in sorted((b for b in self.held if b > band), reverse=True):
+        reclaimable = (held_band for held_band in self.held if _reclaimable(held_band, band))
+        for held_band in sorted(reclaimable, key=priority_band_rank, reverse=True):
             if remaining <= 0:
                 return
             amounts = self.held[held_band]

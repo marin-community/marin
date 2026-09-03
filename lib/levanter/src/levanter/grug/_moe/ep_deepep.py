@@ -19,6 +19,7 @@ from levanter.grug._moe.common import (
     _CHECKPOINT_DISPATCH_INPUT,
     _CHECKPOINT_DISPATCH_OUTPUT,
     _CHECKPOINT_EXPERT_HIDDEN,
+    CapacityOverflow,
     split_moe_w13_output,
 )
 from levanter.kernels.deepep import deepep_combine_intranode, deepep_dispatch_intranode, deepep_get_dispatch_layout
@@ -107,7 +108,7 @@ def _moe_mlp_ep_deepep_local(
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
     capacity_factor: float,
-) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
+) -> tuple[Float[Array, "Tlocal H"], CapacityOverflow]:
     """DeepEP dispatch/combine path for an intranode expert mesh."""
     del capacity_factor
     local_experts = moe_w13_local.shape[0]
@@ -192,4 +193,7 @@ def _moe_mlp_ep_deepep_local(
                 is_token_in_rank,
             )
         dropped_total = jnp.array(0, dtype=jnp.int32)
-    return out_local.astype(x_local.dtype), dropped_total
+    return out_local.astype(x_local.dtype), CapacityOverflow(
+        sender=dropped_total,
+        receiver=jnp.zeros_like(dropped_total),
+    )

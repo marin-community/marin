@@ -12,6 +12,7 @@ from jax.sharding import NamedSharding, PartitionSpec as P
 from jax.sharding import get_abstract_mesh, reshard
 from jaxtyping import Array, Bool, Float, Int
 
+from levanter.cutlass_kernel_cache import gpu_compute_capability
 from levanter.grug.attention._core import AttentionMask
 from levanter.grug.attention._fa4_cute_backend import fa4_cute_attention_forward
 from levanter.grug.attention._fa4_cute_config import Flash4CuteKernelConfig, flash4_cute_kernel_config
@@ -280,22 +281,8 @@ def _fa4_cute_attention_forward_sharded(
     return _local_fa4_attention(q, k, v, lower_bounds, valid)
 
 
-def _gpu_compute_arch() -> int:
-    for device in jax.local_devices(backend="gpu"):
-        compute_capability = getattr(device, "compute_capability", None)
-        if callable(compute_capability):
-            compute_capability = compute_capability()
-        if isinstance(compute_capability, tuple) and len(compute_capability) >= 2:
-            return int(compute_capability[0]) * 10 + int(compute_capability[1])
-        if isinstance(compute_capability, str):
-            major, _, minor = compute_capability.partition(".")
-            if major.isdigit() and minor.isdigit():
-                return int(major) * 10 + int(minor)
-    raise RuntimeError("Could not determine CUDA compute capability for FA4/CuTe attention.")
-
-
-def _segmented_kernel_config(head_dim: int):
-    arch = _gpu_compute_arch()
+def _segmented_kernel_config(head_dim: int) -> Flash4CuteKernelConfig:
+    arch = gpu_compute_capability()
     kernel_config = flash4_cute_kernel_config(head_dim, arch=arch)
 
     # Upstream flash-attn-4 4.0.0b15 dense SM100 FA4 uses 128x128 tiles in
@@ -308,16 +295,22 @@ def _segmented_kernel_config(head_dim: int):
     return kernel_config
 
 
-def gpu_fa4_cute_attention(
+def _wide_segmented_kernel_config(head_dim: int) -> Flash4CuteKernelConfig:
+    arch = gpu_compute_capability()
+    if arch // 10 != 10 or head_dim != 128:
+        raise ValueError(f"gpu_fa4_cute_wide requires sm100 and head_dim=128, got sm{arch} and head_dim={head_dim}.")
+    kernel_config = flash4_cute_kernel_config(head_dim, arch=arch)
+    return replace(kernel_config, forward_tile=(128, 64), backward_tile=(64, 64), num_threads=128)
+
+
+def _gpu_fa4_cute_attention(
     q: Float[Array, "B Q Hq D"],
     k: Float[Array, "B K Hkv D"],
     v: Float[Array, "B K Hkv D"],
     mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+    *,
+    kernel_config: Flash4CuteKernelConfig,
 ) -> Float[Array, "B Q Hq D"]:
-    """Run causal self-attention through a FlashAttention-4/CuTe JAX FFI backend."""
-    if jax.default_backend() != "gpu":
-        raise RuntimeError("gpu_fa4_cute_attention requires the JAX GPU backend.")
-
     _validate_head_layout(q, k, backend_name="gpu_fa4_cute_attention")
     if isinstance(mask, AttentionMask) and mask.fa4_bounds is not None:
         # The caller precomputed and selected the per-token metadata outside any per-layer scan/cond
@@ -330,7 +323,6 @@ def gpu_fa4_cute_attention(
             mask,
             backend_name="gpu_fa4_cute_attention",
         )
-    kernel_config = _segmented_kernel_config(q.shape[-1])
 
     return _fa4_cute_attention_forward_sharded(
         q,
@@ -341,6 +333,30 @@ def gpu_fa4_cute_attention(
         sm_scale=1.0 / math.sqrt(q.shape[-1]),
         kernel_config=kernel_config,
     )
+
+
+def gpu_fa4_cute_attention(
+    q: Float[Array, "B Q Hq D"],
+    k: Float[Array, "B K Hkv D"],
+    v: Float[Array, "B K Hkv D"],
+    mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+) -> Float[Array, "B Q Hq D"]:
+    """Run causal self-attention through the segmented FA4/CuTe kernel."""
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("gpu_fa4_cute_attention requires the JAX GPU backend.")
+    return _gpu_fa4_cute_attention(q, k, v, mask, kernel_config=_segmented_kernel_config(q.shape[-1]))
+
+
+def gpu_fa4_cute_wide_attention(
+    q: Float[Array, "B Q Hq D"],
+    k: Float[Array, "B K Hkv D"],
+    v: Float[Array, "B K Hkv D"],
+    mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+) -> Float[Array, "B Q Hq D"]:
+    """Run segmented FA4/CuTe attention with the SM100 128x64 forward tile."""
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("gpu_fa4_cute_wide_attention requires the JAX GPU backend.")
+    return _gpu_fa4_cute_attention(q, k, v, mask, kernel_config=_wide_segmented_kernel_config(q.shape[-1]))
 
 
 def fa4_cute_segment_bounds(

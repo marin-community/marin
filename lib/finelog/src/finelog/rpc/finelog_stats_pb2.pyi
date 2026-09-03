@@ -18,6 +18,8 @@ class ColumnType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     COLUMN_TYPE_BYTES: _ClassVar[ColumnType]
     COLUMN_TYPE_INT32: _ClassVar[ColumnType]
     COLUMN_TYPE_MAP: _ClassVar[ColumnType]
+    COLUMN_TYPE_FLOAT64_LIST: _ClassVar[ColumnType]
+    COLUMN_TYPE_INT64_LIST: _ClassVar[ColumnType]
 COLUMN_TYPE_UNKNOWN: ColumnType
 COLUMN_TYPE_STRING: ColumnType
 COLUMN_TYPE_INT64: ColumnType
@@ -27,6 +29,8 @@ COLUMN_TYPE_TIMESTAMP_MS: ColumnType
 COLUMN_TYPE_BYTES: ColumnType
 COLUMN_TYPE_INT32: ColumnType
 COLUMN_TYPE_MAP: ColumnType
+COLUMN_TYPE_FLOAT64_LIST: ColumnType
+COLUMN_TYPE_INT64_LIST: ColumnType
 
 class ColumnIndex(_message.Message):
     __slots__ = ("trigram", "exact_values", "value_counts")
@@ -75,16 +79,20 @@ class GroupedExtrema(_message.Message):
     def __init__(self, filter_column: _Optional[str] = ..., group_json_column: _Optional[str] = ..., group_json_key: _Optional[str] = ..., extrema_column: _Optional[str] = ...) -> None: ...
 
 class Schema(_message.Message):
-    __slots__ = ("columns", "key_column", "projections", "grouped_extrema")
+    __slots__ = ("columns", "key_column", "projections", "grouped_extrema", "sort_columns", "max_row_group_rows")
     COLUMNS_FIELD_NUMBER: _ClassVar[int]
     KEY_COLUMN_FIELD_NUMBER: _ClassVar[int]
     PROJECTIONS_FIELD_NUMBER: _ClassVar[int]
     GROUPED_EXTREMA_FIELD_NUMBER: _ClassVar[int]
+    SORT_COLUMNS_FIELD_NUMBER: _ClassVar[int]
+    MAX_ROW_GROUP_ROWS_FIELD_NUMBER: _ClassVar[int]
     columns: _containers.RepeatedCompositeFieldContainer[Column]
     key_column: str
     projections: _containers.RepeatedCompositeFieldContainer[CoveringProjection]
     grouped_extrema: _containers.RepeatedCompositeFieldContainer[GroupedExtrema]
-    def __init__(self, columns: _Optional[_Iterable[_Union[Column, _Mapping]]] = ..., key_column: _Optional[str] = ..., projections: _Optional[_Iterable[_Union[CoveringProjection, _Mapping]]] = ..., grouped_extrema: _Optional[_Iterable[_Union[GroupedExtrema, _Mapping]]] = ...) -> None: ...
+    sort_columns: _containers.RepeatedScalarFieldContainer[str]
+    max_row_group_rows: int
+    def __init__(self, columns: _Optional[_Iterable[_Union[Column, _Mapping]]] = ..., key_column: _Optional[str] = ..., projections: _Optional[_Iterable[_Union[CoveringProjection, _Mapping]]] = ..., grouped_extrema: _Optional[_Iterable[_Union[GroupedExtrema, _Mapping]]] = ..., sort_columns: _Optional[_Iterable[str]] = ..., max_row_group_rows: _Optional[int] = ...) -> None: ...
 
 class StoragePolicy(_message.Message):
     __slots__ = ("max_segments", "max_bytes", "max_age_seconds")

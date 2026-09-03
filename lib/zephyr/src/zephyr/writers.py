@@ -3,6 +3,7 @@
 
 """Writers for common output formats."""
 
+import functools
 import itertools
 import logging
 import os
@@ -20,7 +21,10 @@ import pyarrow.parquet as pq
 import vortex
 import zstandard as zstd
 from pyarrow import fs as pa_fs
-from rigging.filesystem import StoragePath, atomic_rename, url_to_fs
+from rigging.filesystem.atomic import atomic_rename
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.s3_compat import S3_RETRY_MAX_ATTEMPTS
+from rigging.filesystem.storage_path import StoragePath
 
 from zephyr import counters
 
@@ -39,7 +43,7 @@ DEFAULT_TARGET_BUFFER_BYTES = 64 * 1024 * 1024  # 64 MB
 _MICRO_BATCH_SIZE = 8
 
 # Number of items per intermediate pickle chunk between non-scatter stages.
-# Used by ``_write_pickle_chunks`` in execution.py.
+# Used by ``_write_pickle_chunks`` in stage_io.py.
 INTERMEDIATE_CHUNK_SIZE = 100_000
 
 
@@ -297,6 +301,31 @@ def _s3_filesystem_kwargs() -> dict[str, str | bool | int]:
     return kwargs
 
 
+@functools.cache
+def _native_s3_filesystem(kwargs: tuple[tuple[str, str | bool | int], ...]) -> pa_fs.S3FileSystem:
+    """One S3 filesystem per configuration, held for the life of the process.
+
+    Each filesystem owns a connection pool that dies with it, so one per file
+    exhausts the pod's ephemeral ports via ``TIME_WAIT`` (#8402). The retry
+    strategy is explicit because pyarrow otherwise uses the AWS C++ SDK
+    default.
+    """
+    return pa_fs.S3FileSystem(
+        retry_strategy=pa_fs.AwsStandardS3RetryStrategy(max_attempts=S3_RETRY_MAX_ATTEMPTS),
+        **dict(kwargs),
+    )
+
+
+@functools.cache
+def _native_gcs_filesystem() -> pa_fs.GcsFileSystem:
+    return pa_fs.GcsFileSystem()
+
+
+@functools.cache
+def _native_local_filesystem() -> pa_fs.LocalFileSystem:
+    return pa_fs.LocalFileSystem()
+
+
 def _pyarrow_filesystem(path: str) -> tuple[pa_fs.FileSystem, str] | None:
     """Resolve ``path`` to a native pyarrow ``(filesystem, path)``, or ``None``.
 
@@ -308,13 +337,13 @@ def _pyarrow_filesystem(path: str) -> tuple[pa_fs.FileSystem, str] | None:
     in tests); those fall back to an fsspec handle.
     """
     if "://" not in path:
-        return pa_fs.LocalFileSystem(), path
+        return _native_local_filesystem(), path
     if path.startswith("file://"):
-        return pa_fs.LocalFileSystem(), path[len("file://") :]
+        return _native_local_filesystem(), path[len("file://") :]
     if path.startswith("gs://"):
-        return pa_fs.GcsFileSystem(), path[len("gs://") :]
+        return _native_gcs_filesystem(), path[len("gs://") :]
     if path.startswith("s3://"):
-        return pa_fs.S3FileSystem(**_s3_filesystem_kwargs()), path[len("s3://") :]
+        return _native_s3_filesystem(tuple(sorted(_s3_filesystem_kwargs().items()))), path[len("s3://") :]
     return None
 
 

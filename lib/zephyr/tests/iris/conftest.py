@@ -41,5 +41,5 @@ def iris_integration_client(iris_cluster):
         with iris_ctx_scope(IrisContext(job_id=parent_job.job_id, client=iris_client)):
             yield client
     finally:
-        iris_client.terminate(parent_job.job_id)
+        iris_client.cancel_job(parent_job.job_id)
         client.shutdown(wait=True)

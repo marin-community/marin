@@ -3,9 +3,7 @@
 
 """Federation: remote Iris clusters as peers.
 
-A controller has two kinds of downstream, kept deliberately distinct. A
-*backend* is a local execution substrate this controller drives — it shares the
-controller's one job DAG, and the meta-scheduler folds its tasks. A *peer* is a
+A controller drives one local execution *backend* for its job DAG. A *peer* is a
 full remote Iris cluster that owns its own DAG; whole jobs are handed off to it
 and the parent caches what the peer reports. The two meet only at the submit-time
 router.

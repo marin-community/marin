@@ -72,7 +72,7 @@ def test_dense_router_delta_gradient_matches_naive_dense():
 
         return jax.grad(scalar)(logits)
 
-    with use_test_mesh():
+    with jax.default_matmul_precision("float32"), use_test_mesh():
         g_helper = jax.jit(helper_grad)(logits)
         g_naive = jax.jit(naive_grad)(logits)
 

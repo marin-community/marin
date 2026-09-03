@@ -39,10 +39,10 @@ from marin.datakit.copartitioned import (
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.source_key import DatakitArtifactPath, datakit_source_key
 from pydantic import BaseModel
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 from zephyr import counters
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
 from zephyr.worker_context import zephyr_worker_ctx
 from zephyr.writers import write_parquet_file
 

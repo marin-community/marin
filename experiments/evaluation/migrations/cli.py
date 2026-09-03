@@ -3,9 +3,10 @@
 
 """Administrative sweeps over the eval archive fleet.
 
+``upgrade-format`` moves sealed FineStore v1 archives onto transactional manifests;
 ``backfill-samples`` brings archives up to the current contract from each run's kept
 ``samples_*.jsonl``; ``rebuild-samples`` re-derives them from the sources preserved inside the
-archive, for a run whose results tree is gone. Both are operator tools, not part of launching an
+archive, for a run whose results tree is gone. These are operator tools, not part of launching an
 evaluation.
 """
 
@@ -16,18 +17,36 @@ import logging
 from collections import Counter, defaultdict
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from enum import StrEnum
 
 import click
-from finestore.eval import ARCHIVE_SAMPLES_TABLE, SCHEMA_VERSION
-from finestore.reader import CompositeReader
+from finestore.migrations import migrate
+from finestore.reader import ReadView
+from marin.evaluation.archive import ARCHIVE_SAMPLES_TABLE, SCHEMA_VERSION
 from marin.evaluation.lm_eval_samples import (
     export_lm_eval_samples,
     preserved_sample_sources,
     rebuild_lm_eval_samples,
 )
-from marin.evaluation.records import DEFAULT_SCAN_PREFIXES, list_records
+from marin.evaluation.records import (
+    CW_RECORDS_PREFIX,
+    DEFAULT_SCAN_PREFIXES,
+    LEGACY_CW_RECORDS_PREFIX,
+    list_records,
+)
 from rigging.filesystem.s3_compat import configure_coreweave_s3
+
+from experiments.evaluation.migrations.format_smoke import (
+    FleetSelection,
+    SmokeUpgradeResult,
+    fleet_destination,
+    select_v1_archive,
+    select_v1_fleet,
+    smoke_destination,
+    smoke_upgrade,
+    smoke_upgrade_fleet,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +58,18 @@ def cli() -> None:
 
 # One worker holds a run's whole sample file in memory while normalizing it, and the largest are a
 # few hundred megabytes, so this trades throughput against a bounded footprint on a CPU node.
-_DEFAULT_BACKFILL_WORKERS = 8
+_DEFAULT_SWEEP_WORKERS = 8
+_DEFAULT_SMOKE_MAX_BYTES = 256 * 1024 * 1024
+_DEFAULT_FLEET_SMOKE_WORKERS = 4
+_CW_RECORDS_PREFIXES = (CW_RECORDS_PREFIX, LEGACY_CW_RECORDS_PREFIX)
+
+
+class FleetSmokeMode(StrEnum):
+    """Write behavior for a fleet migration rehearsal."""
+
+    INVENTORY = "inventory"
+    KEEP_TEMP = "keep-temp"
+    CLEANUP = "cleanup"
 
 
 @dataclass(frozen=True)
@@ -48,6 +78,201 @@ class SweepOutcome:
 
     category: str
     detail: str
+
+
+@cli.command("upgrade-format")
+@click.argument("results_paths", nargs=-1)
+@click.option(
+    "--prefix",
+    "prefixes",
+    multiple=True,
+    help=f"Object-store prefix(es) to scan for records; repeatable. Defaults to {DEFAULT_SCAN_PREFIXES}.",
+)
+@click.option(
+    "--workers",
+    default=_DEFAULT_SWEEP_WORKERS,
+    show_default=True,
+    help="Sealed archives to migrate concurrently.",
+)
+def upgrade_format(results_paths: tuple[str, ...], prefixes: tuple[str, ...], workers: int) -> None:
+    """Upgrade named RESULTS_PATHS, or every recorded run, from FineStore v1 to v2."""
+    configure_coreweave_s3()
+    resolved_prefixes = _resolve_prefixes(prefixes, results_paths)
+    if results_paths:
+        targets = selected_archives(resolved_prefixes, results_paths)
+    else:
+        selection = select_v1_fleet(resolved_prefixes)
+        click.echo(
+            json.dumps(
+                {
+                    "status": "upgrade_selection",
+                    "records": selection.records,
+                    "unique_results": selection.unique_results,
+                    "sealed_v1": len(selection.sources) - len(selection.unsealed_v1),
+                    "unsealed_v1": selection.unsealed_v1,
+                    "already_current": selection.already_current,
+                    "missing_archive": selection.missing_archive,
+                    "foreign_results": selection.foreign_results,
+                    "record_failures": selection.record_failures,
+                    "unsupported": selection.unsupported,
+                },
+                sort_keys=True,
+            )
+        )
+        _raise_for_selection_blockers(selection)
+        unsealed = set(selection.unsealed_v1)
+        targets = {source: [] for source in selection.sources if source not in unsealed}
+    _sweep_archives(targets, workers, _upgrade_one)
+
+
+def _upgrade_one(results_path: str) -> SweepOutcome:
+    result = migrate(results_path)
+    if not result.applied:
+        return SweepOutcome("already_current", "current")
+    token = result.token
+    assert token is not None
+    return SweepOutcome("upgraded", f"commit {token.sequence}:{token.commit_id}")
+
+
+def _raise_for_selection_blockers(selection: FleetSelection) -> None:
+    blockers = selection.record_failures + selection.unsupported
+    if blockers:
+        raise click.ClickException(f"fleet selection has {len(blockers)} blocking record or archive issue(s)")
+
+
+@cli.command("smoke-upgrade")
+@click.argument("results_path", required=False)
+@click.option("--records-prefix", help="Choose one sealed v1 archive recorded under this prefix.")
+@click.option("--destination", help="Temporary destination. Defaults to a same-region one-day prefix.")
+@click.option(
+    "--max-bytes",
+    default=_DEFAULT_SMOKE_MAX_BYTES,
+    show_default=True,
+    type=click.IntRange(min=1),
+    help="Maximum FineStore-owned bytes when selecting from --records-prefix.",
+)
+@click.option("--ttl-days", default=1, show_default=True, type=click.IntRange(min=1))
+def smoke_upgrade_command(
+    results_path: str | None,
+    records_prefix: str | None,
+    destination: str | None,
+    max_bytes: int,
+    ttl_days: int,
+) -> None:
+    """Clone one v1 archive to temporary storage, migrate it, and validate exact contents."""
+    if (results_path is None) == (records_prefix is None):
+        raise click.UsageError("pass exactly one RESULTS_PATH or --records-prefix")
+    if any(path and path.startswith("s3://") for path in (results_path, records_prefix, destination)):
+        configure_coreweave_s3()
+    if results_path is not None:
+        source = results_path
+    else:
+        assert records_prefix is not None
+        source = select_v1_archive(records_prefix, max_bytes=max_bytes)
+    resolved_destination = destination or smoke_destination(source, ttl_days=ttl_days)
+    click.echo(json.dumps({"status": "copying", "source": source, "destination": resolved_destination}, sort_keys=True))
+    result = smoke_upgrade(source, resolved_destination)
+    click.echo(json.dumps({"status": "validated", **asdict(result)}, sort_keys=True))
+
+
+@cli.command("smoke-upgrade-fleet")
+@click.option(
+    "--records-prefix",
+    "records_prefixes",
+    multiple=True,
+    help=f"Record roots to scan; repeatable. Defaults to the CoreWeave roots {_CW_RECORDS_PREFIXES}.",
+)
+@click.option("--destination-root", help="Generated fleet root. Defaults to same-region one-day storage.")
+@click.option(
+    "--workers",
+    default=_DEFAULT_FLEET_SMOKE_WORKERS,
+    show_default=True,
+    type=click.IntRange(min=1),
+    help="Archives to clone and validate concurrently.",
+)
+@click.option("--ttl-days", default=1, show_default=True, type=click.IntRange(min=1))
+@click.option(
+    "--mode",
+    type=click.Choice(tuple(mode.value for mode in FleetSmokeMode)),
+    default=FleetSmokeMode.KEEP_TEMP.value,
+    show_default=True,
+    help="Inventory only, retain the validated temporary fleet, or delete it after complete success.",
+)
+def smoke_upgrade_fleet_command(
+    records_prefixes: tuple[str, ...],
+    destination_root: str | None,
+    workers: int,
+    ttl_days: int,
+    mode: str,
+) -> None:
+    """Clone and validate every v1 archive selected from the record roots."""
+    resolved_prefixes = records_prefixes or _CW_RECORDS_PREFIXES
+    if any(path.startswith("s3://") for path in (*resolved_prefixes, destination_root or "")):
+        configure_coreweave_s3()
+    selection = select_v1_fleet(resolved_prefixes)
+    click.echo(
+        json.dumps(
+            {
+                "status": "selected_summary",
+                "records": selection.records,
+                "unique_results": selection.unique_results,
+                "v1_archives": len(selection.sources),
+                "unsealed_v1": len(selection.unsealed_v1),
+                "already_current": selection.already_current,
+                "missing_archive": selection.missing_archive,
+                "foreign_results": selection.foreign_results,
+                "record_failures": len(selection.record_failures),
+                "unsupported": len(selection.unsupported),
+            },
+            sort_keys=True,
+        )
+    )
+    click.echo(json.dumps({"status": "selected", **asdict(selection)}, sort_keys=True))
+    _raise_for_selection_blockers(selection)
+    fleet_mode = FleetSmokeMode(mode)
+    if fleet_mode is FleetSmokeMode.INVENTORY:
+        return
+
+    root = destination_root or fleet_destination(resolved_prefixes[0], ttl_days=ttl_days)
+    completed = 0
+
+    def report(result: SmokeUpgradeResult) -> None:
+        nonlocal completed
+        completed += 1
+        click.echo(
+            json.dumps(
+                {
+                    "status": "validated_archive",
+                    "completed": completed,
+                    "total": len(selection.sources),
+                    **asdict(result),
+                },
+                sort_keys=True,
+            )
+        )
+
+    click.echo(json.dumps({"status": "starting", "destination_root": root}, sort_keys=True))
+    result = smoke_upgrade_fleet(
+        selection.sources,
+        root,
+        workers=workers,
+        cleanup=fleet_mode is FleetSmokeMode.CLEANUP,
+        on_result=report,
+    )
+    click.echo(
+        json.dumps(
+            {
+                "status": "validated_fleet",
+                "destination_root": result.destination_root,
+                "archives": len(result.results),
+                "source_objects": result.source_objects,
+                "source_bytes": result.source_bytes,
+                "rows": result.rows,
+                "cleaned_up": result.cleaned_up,
+            },
+            sort_keys=True,
+        )
+    )
 
 
 @cli.command("backfill-samples")
@@ -60,7 +285,7 @@ class SweepOutcome:
 )
 @click.option(
     "--workers",
-    default=_DEFAULT_BACKFILL_WORKERS,
+    default=_DEFAULT_SWEEP_WORKERS,
     show_default=True,
     help="Archives to export concurrently. Each holds one run's sample file in memory.",
 )
@@ -84,7 +309,7 @@ def _resolve_prefixes(prefixes: tuple[str, ...], results_paths: tuple[str, ...])
 
 def _backfill_one(results_path: str) -> SweepOutcome:
     """Export one archive unless a completed export already brought it to the current contract."""
-    reader = CompositeReader(results_path)
+    reader = ReadView(results_path)
     # The version alone is stamped as soon as the new table is created, so an export that died
     # partway would read as current and never be retried. The seal is what says it finished.
     if reader.schema_version(ARCHIVE_SAMPLES_TABLE) == SCHEMA_VERSION and reader.is_sealed():
@@ -144,7 +369,7 @@ def _sweep_archives(runs_by_path: dict[str, list[str]], workers: int, work: Call
 )
 @click.option(
     "--workers",
-    default=_DEFAULT_BACKFILL_WORKERS,
+    default=_DEFAULT_SWEEP_WORKERS,
     show_default=True,
     help="Archives to rebuild concurrently. Each holds one run's sample file in memory.",
 )

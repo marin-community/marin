@@ -189,7 +189,7 @@ def test_opts_in_cross_region(sql, opted_in):
 
 
 # Stub region checker: any GCS bucket other than us-east5 counts as cross-region. Stands in for
-# rigging.filesystem.is_cross_region_url so the tests don't depend on live GCS metadata.
+# rigging.filesystem.cross_region.is_cross_region_url so the tests don't depend on live GCS metadata.
 def _stub_cross_region(url: str) -> bool:
     return url.lower().startswith(("gs://", "gcs://")) and "us-east5" not in url
 

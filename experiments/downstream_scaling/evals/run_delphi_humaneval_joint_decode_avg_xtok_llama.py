@@ -30,7 +30,7 @@ import sys
 from dataclasses import replace
 
 from fray.cluster import ANY_REGION, ResourceConfig, get_tpu_topology
-from rigging.filesystem import data_config
+from rigging.filesystem.cluster_config import data_config
 from rigging.log_setup import configure_logging
 from thalas.execution.executor import ExecutorStep, executor_main, output_path_of
 
@@ -88,7 +88,7 @@ STOP_TOKENS = ("\nclass", "\ndef", "\n#", "\nif", "\nprint")
 NUM_FEWSHOT = 0
 FEWSHOT_SEED = 1234
 
-TEMPERATURE = 0.7 # 0.4
+TEMPERATURE = 0.7  # 0.4
 # Same top-k both sides, matching the joint_decode_avg runs this baselines.
 TOP_K_A = 16
 TOP_K_B = 16

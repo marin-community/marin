@@ -4,5 +4,5 @@ task_options:
     num_fewshot: 0
     task_alias: olympiadbench
     generation: true
-max_tokens: 8192
+max_tokens: 32768
 runtime_extras: [olympiadbench]

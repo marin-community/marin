@@ -15,7 +15,7 @@ from typing import Optional, Union
 import jax.numpy as jnp
 from jax.experimental.array_serialization.serialization import GlobalAsyncCheckpointManager
 
-from rigging.filesystem import StoragePath, prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 import levanter
 import levanter.config

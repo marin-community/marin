@@ -38,7 +38,7 @@ from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from iris.test_util import wait_for_condition
 from rigging.auth import IapCredentialsUnavailable
-from rigging.filesystem import load_cluster_config, use_data_config
+from rigging.filesystem.cluster_config import load_cluster_config, use_data_config
 from rigging.timing import Duration
 
 # kubernetes ships with iris[controller]. A kube-fronted cluster (CoreWeave) needs it to discover
@@ -69,6 +69,9 @@ MARIN_TPU_CLUSTER = "marin"
 # open. GPU jobs instead submit through the IAP-fronted marin hub with target_cluster set to this peer,
 # so the marin controller federates the work to CoreWeave without a direct tunnel.
 MARIN_GPU_CLUSTER = "cw-us-east-02a"
+# The CoreWeave GB200 peer (NVL72 racks). Federated the same way as the H100 peer above:
+# submit through the marin hub with target_cluster set to it.
+MARIN_GB200_CLUSTER = "cw-us-east-08a"
 
 # Region the TPU smokes pin. v6e lives in us-east5-b, so the slice and its artifacts colocate here.
 MARIN_SMOKE_REGION = "us-east5"

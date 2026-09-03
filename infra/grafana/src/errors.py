@@ -5,10 +5,11 @@
 
 
 class UpstreamError(Exception):
-    """An upstream (controller, GitHub) failed.
+    """An upstream (controller, GitHub, W&B) failed, or lacks what was asked for.
 
-    Surfaced as an HTTP 5xx with the source named, so an Infinity panel renders an
-    error rather than empty or stale data. The failed call is never cached.
+    Surfaced with the source named and `status_code` (a 5xx for a failure, 404 for
+    an absent object), so an Infinity panel renders an error rather than empty or
+    stale data.
     """
 
     def __init__(self, source: str, message: str, *, status_code: int = 502) -> None:

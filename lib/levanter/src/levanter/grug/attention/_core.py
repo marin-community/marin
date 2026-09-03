@@ -3,6 +3,7 @@
 import functools
 import inspect
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
@@ -13,9 +14,10 @@ from haliax.partitioning import _get_mesh
 from jax import numpy as jnp
 from jax import shard_map
 from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_kernel
-from jax.sharding import NamedSharding
+from jax.sharding import NamedSharding, auto_axes
 from jaxtyping import Array, Bool, Float, Int
 
+from levanter.kernels.pallas.autotune_utils import named_sharding_of
 from levanter.kernels.pallas.splash_attention import (
     DEFAULT_SPLASH_BLOCK_SIZE,
     SplashAttentionMaskSpec,
@@ -31,6 +33,7 @@ GrugAttentionImplementation = Literal[
     "reference",
     "tpu_splash",
     "gpu_fa4_cute",
+    "gpu_fa4_cute_wide",  # 128x64 forward tile. Measured faster only at the hero shape.
     "gpu_fa4_thd",
 ]
 
@@ -255,7 +258,7 @@ def align_kv_heads(x: Float[Array, "B K Hkv D"], *, num_q_heads: int) -> Float[A
     return tiled.reshape(*x.shape[:2], num_q_heads, x.shape[3])
 
 
-def reference_attention(
+def _reference_attention_math(
     q: Float[Array, "B Q Hq D"],
     k: Float[Array, "B K Hkv D"],
     v: Float[Array, "B K Hkv D"],
@@ -303,6 +306,27 @@ def reference_attention(
     weights = jax.nn.softmax(scores, axis=-1).astype(v.dtype)
     ctx = jnp.einsum("bhqk,bkhd->bqhd", weights, v)
     return ctx.astype(v.dtype)
+
+
+def reference_attention(
+    q: Float[Array, "B Q Hq D"],
+    k: Float[Array, "B K Hkv D"],
+    v: Float[Array, "B K Hkv D"],
+    mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+    *,
+    logits_dtype: jnp.dtype | None,
+) -> Float[Array, "B Q Hq D"]:
+    """Reference attention whose output sharding follows ``q``."""
+    out_sharding = named_sharding_of(q)
+    if out_sharding is None:
+        return _reference_attention_math(q, k, v, mask, logits_dtype=logits_dtype)
+    # jax 0.11.1 explicit-sharding mode cannot infer layouts for the two contractions
+    # (align_kv_heads drops the head-axis sharding, and a sharded head_dim makes the
+    # score contraction ambiguous), so run the math under Auto axes and pin only the
+    # output to q's sharding.
+    # pyrefly: ignore[bad-assignment]  # auto_axes's decorator overload erases the wrapped signature
+    wrapped: Callable[..., Float[Array, "B Q Hq D"]] = auto_axes(_reference_attention_math, out_sharding=out_sharding)
+    return wrapped(q, k, v, mask, logits_dtype=logits_dtype)
 
 
 def _tpu_splash_attention(
@@ -454,6 +478,10 @@ def attention(
         from levanter.grug.attention._fa4_cute import gpu_fa4_cute_attention  # noqa: PLC0415
 
         return gpu_fa4_cute_attention(q, k, v, mask)
+    if implementation == "gpu_fa4_cute_wide":
+        from levanter.grug.attention._fa4_cute import gpu_fa4_cute_wide_attention  # noqa: PLC0415
+
+        return gpu_fa4_cute_wide_attention(q, k, v, mask)
     if implementation == "gpu_fa4_thd":
         from levanter.grug.attention._fa4_thd import gpu_fa4_thd_attention  # noqa: PLC0415
 

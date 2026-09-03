@@ -28,9 +28,11 @@ import yaml
 from iris.cli.build import get_git_sha
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS, connect_controller, rpc_client
 from iris.client.client import IrisClient
+from iris.client.workload import JobStatus
 from iris.cluster.config import IrisClusterConfig, load_config
 from iris.cluster.provenance import provenance_from_proto
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
+from iris.resources.state import JobState
 from iris.rpc import controller_pb2, job_pb2
 from rigging.config_discovery import list_cluster_configs, resolve_cluster_config
 from rigging.filesystem.cluster_config import StoreType, store_config
@@ -91,9 +93,9 @@ JOB_PENDING = "pending"
 JOB_BUILDING = "building"
 
 WATCHED_JOB_STATES = (
-    (JOB_RUNNING, job_pb2.JOB_STATE_RUNNING),
-    (JOB_PENDING, job_pb2.JOB_STATE_PENDING),
-    (JOB_BUILDING, job_pb2.JOB_STATE_BUILDING),
+    (JOB_RUNNING, JobState.RUNNING),
+    (JOB_PENDING, JobState.PENDING),
+    (JOB_BUILDING, JobState.BUILDING),
 )
 
 
@@ -641,7 +643,7 @@ def take_snapshot(cluster: str) -> Snapshot:
         return Snapshot(cluster=cluster, captured_at=_now(), reachable=False, error=f"{type(exc).__name__}: {exc}")
 
 
-def run_smoke_job(cluster: str, *, workspace: Path, timeout: float) -> job_pb2.JobStatus:
+def run_smoke_job(cluster: str, *, workspace: Path, timeout: float) -> JobStatus:
     """Submit one throwaway `echo hello world` job and wait for it to finish.
 
     ``setup_scripts=[]`` skips the default workspace ``uv sync`` so the job tests
@@ -831,10 +833,10 @@ def verify(cluster: str, baseline: Path, duration: int, interval: int, expect_tr
 def smoke(cluster: str, timeout: int, workspace: Path) -> None:
     """Run one `echo hello world` job end to end through the restarted controller."""
     status = run_smoke_job(cluster, workspace=workspace, timeout=timeout)
-    state = job_pb2.JobState.Name(status.state)
+    state = status.state.name
     click.echo(f"Smoke job finished: {state}")
-    if status.state != job_pb2.JOB_STATE_SUCCEEDED:
-        raise click.ClickException(f"Smoke job ended {state}: {status.error or 'no error text'}")
+    if status.state is not JobState.SUCCEEDED:
+        raise click.ClickException(f"Smoke job ended {state}: {status.error_message or 'no error text'}")
 
 
 def main() -> None:

@@ -12,7 +12,7 @@ and appends to the logbook, and the sync job's service account writes
 `chunks`/`sync_state`. The API owns wiki writes and serves the compiled Vue dashboard.
 Every principal authenticates through the Cloud SQL connector with a short-lived OAuth
 token, so no database password exists. Table grants are applied by migrate.py (see
-README.md); this program owns the users and their login IAM roles.
+README.md); the ``marin`` infrastructure stack owns their GCP login roles.
 """
 
 import hashlib
@@ -22,7 +22,6 @@ import pulumi
 import pulumi_cloudflare as cloudflare
 import pulumi_command as command
 import pulumi_gcp as gcp
-import search_config
 from iac.gcp.cloud_run import CloudRunService, CloudRunServiceArgs, SecretEnv
 from iac.gcp.cloud_run_job import ScheduledCloudRunJob, ScheduledCloudRunJobArgs
 
@@ -56,14 +55,6 @@ API_DB_USER = API_SA.removesuffix(".gserviceaccount.com")
 LOOM_VM_DB_USER = LOOM_VM_SA.removesuffix(".gserviceaccount.com")
 # marinmirror bearer token: a GitHub PAT (read:org) of an Open-Athena member.
 MARINMIRROR_TOKEN_SECRET = "marinmirror-token"
-
-# Login roles for Cloud SQL IAM auth: instanceUser carries the cloudsql.instances.login
-# permission, client lets the connector reach the instance.
-LOGIN_ROLES = ("roles/cloudsql.instanceUser", "roles/cloudsql.client")
-
-
-def role_slug(role: str) -> str:
-    return role.removeprefix("roles/").replace(".", "-")
 
 
 def main() -> None:
@@ -101,24 +92,6 @@ def main() -> None:
             pulumi.ResourceOptions(import_=f"{PROJECT}/{INSTANCE}//{OPENATHENA_GROUP}" if adopt else None),
         ),
     )
-    login_grants: list[pulumi.Resource] = []
-    for member, roles in (
-        (f"group:{OPENATHENA_GROUP}", LOGIN_ROLES),
-        (f"serviceAccount:{SYNC_SA}", ("roles/cloudsql.instanceUser",)),
-        (f"serviceAccount:{API_SA}", ("roles/cloudsql.instanceUser",)),
-        (f"serviceAccount:{LOOM_VM_SA}", LOGIN_ROLES),
-    ):
-        for role in roles:
-            login_grants.append(
-                gcp.projects.IAMMember(
-                    f"login-{role_slug(member.split(':', 1)[1])}-{role_slug(role)}",
-                    project=PROJECT,
-                    role=role,
-                    member=member,
-                    opts=child,
-                )
-            )
-
     mirror_token = gcp.secretmanager.Secret(
         "marinmirror-token",
         secret_id=MARINMIRROR_TOKEN_SECRET,
@@ -135,15 +108,13 @@ def main() -> None:
             job_name="echo-sync",
             build_context=".",
             dockerfile="sync/Dockerfile",
-            # Activity checks retain their ten-minute cadence. The repository phase uses its
-            # database watermark to query GitHub no more than once per hour.
+            # Activity checks retain their ten-minute cadence. The repository phase advances
+            # one durable turn; in steady state, the six targets rotate about once per hour.
             schedule="*/10 * * * *",
             env={
                 "CLOUDSQL_CONNECTION": CONNECTION_NAME,
                 "PGDATABASE": DATABASE,
                 "PGUSER": SYNC_DB_USER,
-                "GITHUB_REPOSITORY": search_config.INDEXED_REPOSITORY,
-                "GITHUB_BRANCH": search_config.INDEXED_BRANCH,
             },
             secrets=(SecretEnv(name="MARINMIRROR_TOKEN", secret=MARINMIRROR_TOKEN_SECRET, wait_for=(mirror_token,)),),
             cloudsql_instances=(CONNECTION_NAME,),
@@ -151,6 +122,12 @@ def main() -> None:
             # attempt; incremental hourly refreshes normally embed only changed files.
             cpu="4",
             memory="4Gi",
+            # A scheduled attempt is one durable repository turn; Cloud Run must not replay it.
+            max_retries=0,
+            # Manually cold-start or resume one target with a longer attempt:
+            # gcloud run jobs execute echo-sync --project hai-gcp-models --region us-central1
+            #   --tasks=1 --task-timeout=21600s
+            #   --update-env-vars=ECHO_REPOSITORY_TARGET=marin-community/vllm --wait
             timeout=7200,
         ),
         gcp_provider=gcp_provider,
@@ -168,17 +145,15 @@ def main() -> None:
                 "CLOUDSQL_CONNECTION": CONNECTION_NAME,
                 "PGDATABASE": DATABASE,
                 "PGUSER": API_DB_USER,
-                "GITHUB_REPOSITORY": search_config.INDEXED_REPOSITORY,
-                "GITHUB_BRANCH": search_config.INDEXED_BRANCH,
             },
-            # Keep one instance warm. Four concurrent embedding/reranking requests peak
-            # around 2.7 GiB; bound concurrency and leave headroom for the DB pool.
+            # Keep one instance warm and give each CPU-bound search all four inference threads.
+            # Concurrent searches scale out instead of sharing one instance's CPU.
             min_instances=1,
-            max_instances=1,
-            cpu_always_allocated=True,
-            cpu="1",
+            max_instances=4,
+            startup_cpu_boost=True,
+            cpu="4",
             memory="4Gi",
-            max_instance_request_concurrency=4,
+            max_instance_request_concurrency=1,
             cloudsql_instances=(CONNECTION_NAME,),
         ),
         gcp_provider=gcp_provider,
@@ -210,10 +185,7 @@ def main() -> None:
             instance=INSTANCE,
             project=PROJECT,
             type="CLOUD_IAM_SERVICE_ACCOUNT",
-            opts=pulumi.ResourceOptions.merge(
-                child,
-                pulumi.ResourceOptions(depends_on=login_grants),
-            ),
+            opts=child,
         )
     )
 

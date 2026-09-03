@@ -12,7 +12,7 @@ import numpy as np
 from fsspec import AbstractFileSystem
 from jax.random import PRNGKey
 from numpy.testing import assert_allclose
-from rigging.filesystem import filesystem
+from rigging.filesystem.factory import filesystem
 from levanter.testing.helpers import arrays_only, skip_if_hf_model_not_accessible, skip_if_no_torch
 from transformers import AutoModelForCausalLM
 from transformers import GPT2Config as HfGpt2Config

@@ -267,6 +267,31 @@ def test_pyarrow_filesystem_selection():
     assert _pyarrow_filesystem("memory://bucket/out.parquet") is None
 
 
+def test_pyarrow_filesystem_cached_per_config(monkeypatch):
+    """One S3 filesystem per process, not one per file (#8402).
+
+    Each filesystem owns a connection pool that dies with the object, so a
+    per-file client parks a local port in TIME_WAIT for every file a task
+    writes. A changed endpoint must still build a new filesystem.
+    """
+    monkeypatch.setitem(
+        fsspec.config.conf,
+        "s3",
+        {"endpoint_url": "https://object.example.com", "client_kwargs": {"region_name": "auto"}},
+    )
+    first, path = _pyarrow_filesystem("s3://bucket/a.parquet")
+    second, _ = _pyarrow_filesystem("s3://bucket/b.parquet")
+    assert path == "bucket/a.parquet"
+    assert first is second
+
+    monkeypatch.setitem(
+        fsspec.config.conf,
+        "s3",
+        {"endpoint_url": "https://other.example.com", "client_kwargs": {"region_name": "auto"}},
+    )
+    assert _pyarrow_filesystem("s3://bucket/a.parquet")[0] is not first
+
+
 def test_s3_filesystem_kwargs_from_fsspec_conf(monkeypatch):
     """The iris-exported FSSPEC_S3 block maps onto native S3FileSystem kwargs.
 

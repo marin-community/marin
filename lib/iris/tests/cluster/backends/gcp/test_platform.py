@@ -255,7 +255,7 @@ def test_gcp_tunnel_prefers_ssh_impersonation_config():
             "iris.cluster.platforms.gcp.controller.subprocess.Popen", return_value=ssh_proc
         ) as popen_mock,
     ):
-        with controller.tunnel("unused") as tunneled:
+        with controller.tunnel("http://10.0.0.7:10000") as tunneled:
             assert tunneled == "http://127.0.0.1:10042"
 
     ssh_cmd = popen_mock.call_args.args[0]
@@ -264,6 +264,42 @@ def test_gcp_tunnel_prefers_ssh_impersonation_config():
     assert "iris-controller-iris" in ssh_cmd
     assert "@iris-controller-iris" not in " ".join(ssh_cmd)
     assert not any("--ssh-key-file" in arg for arg in ssh_cmd)
+
+
+@pytest.mark.parametrize(
+    ("address", "expected_remote_port"),
+    [
+        ("http://10.0.0.7:10007", 10007),  # start_controller / restart_controller form
+        ("10.0.0.7:10007", 10007),  # discover_controller form
+        ("http://10.0.0.7", 10000),  # no explicit port: platform default
+    ],
+)
+def test_gcp_tunnel_forwards_the_controller_port_from_the_address(address, expected_remote_port):
+    """The SSH forward targets the port the controller actually listens on."""
+    gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    _register_controller_vm(gcp_service, os_login=True)
+
+    gcp_config = GcpPlatformConfig(project_id="test-project", zones=["us-central2-b"])
+    worker_provider = GcpWorkerProvider(gcp_config, label_prefix="iris", worker_port=10001, gcp_service=gcp_service)
+    controller = GcpControllerProvider(worker_provider=worker_provider)
+
+    ssh_proc = unittest.mock.Mock()
+    ssh_proc.poll.return_value = None
+    ssh_proc.wait.return_value = 0
+
+    with (
+        unittest.mock.patch("iris.cluster.platforms.gcp.controller._check_gcloud_ssh_key"),
+        unittest.mock.patch("iris.cluster.platforms.gcp.controller.find_free_port", return_value=10042),
+        unittest.mock.patch("iris.cluster.platforms.gcp.controller.wait_for_port"),
+        unittest.mock.patch(
+            "iris.cluster.platforms.gcp.controller.subprocess.Popen", return_value=ssh_proc
+        ) as popen_mock,
+    ):
+        with controller.tunnel(address):
+            pass
+
+    ssh_cmd = popen_mock.call_args.args[0]
+    assert f"127.0.0.1:10042:localhost:{expected_remote_port}" in ssh_cmd
 
 
 def test_gce_remote_exec_builds_optional_flags_inline():
@@ -1026,7 +1062,7 @@ def test_vm_bootstrap_health_probe_succeeds_without_serial_port():
     handle, _vm_name = _make_vm_slice_for_bootstrap(gcp_service)
 
     with unittest.mock.patch(
-        "iris.cluster.platforms.gcp.workers._probe_worker_health",
+        "iris.cluster.platforms.gcp.workers.probe_worker_health",
         return_value=True,
     ):
         _run_vm_slice_bootstrap(
@@ -1052,7 +1088,7 @@ def test_vm_bootstrap_serial_port_succeeds_without_health_probe():
     )
 
     with unittest.mock.patch(
-        "iris.cluster.platforms.gcp.workers._probe_worker_health",
+        "iris.cluster.platforms.gcp.workers.probe_worker_health",
         return_value=False,
     ):
         _run_vm_slice_bootstrap(
@@ -1078,7 +1114,7 @@ def test_vm_bootstrap_serial_port_error_raises():
     )
 
     with unittest.mock.patch(
-        "iris.cluster.platforms.gcp.workers._probe_worker_health",
+        "iris.cluster.platforms.gcp.workers.probe_worker_health",
         return_value=False,
     ):
         with pytest.raises(InfraError, match="bootstrap failed"):
@@ -1099,7 +1135,7 @@ def test_vm_bootstrap_phase2_has_independent_timeout():
     # Health probe never succeeds, serial port never shows complete.
     # With a very short bootstrap_timeout, this should fail with phase 2 message.
     with unittest.mock.patch(
-        "iris.cluster.platforms.gcp.workers._probe_worker_health",
+        "iris.cluster.platforms.gcp.workers.probe_worker_health",
         return_value=False,
     ):
         with pytest.raises(InfraError, match=r"bootstrap did not complete within 0\.05s"):
@@ -1190,10 +1226,9 @@ def test_tpu_bootstrap_marks_ready_while_cloud_stuck_creating():
     handle = _make_tpu_slice_for_bootstrap(gcp_service)
     assert gcp_service.tpu_describe(handle.slice_id, handle.zone).state == "CREATING"
 
-    with unittest.mock.patch("iris.cluster.platforms.gcp.workers._probe_worker_health", return_value=True):
+    with unittest.mock.patch("iris.cluster.platforms.gcp.workers.probe_worker_health", return_value=True):
         _run_tpu_bootstrap(
             gcp_service,
-            "test-project",
             handle,
             poll_interval=0.01,
             ip_wait_timeout=5.0,
@@ -1221,11 +1256,10 @@ def test_tpu_bootstrap_fails_fast_on_create_operation_error(error_code, expected
         OperationStatus(done=True, error_code=error_code, error_message="boom"),
     )
 
-    with unittest.mock.patch("iris.cluster.platforms.gcp.workers._probe_worker_health", return_value=False):
+    with unittest.mock.patch("iris.cluster.platforms.gcp.workers.probe_worker_health", return_value=False):
         with pytest.raises(expected_exc):
             _run_tpu_bootstrap(
                 gcp_service,
-                "test-project",
                 handle,
                 poll_interval=0.01,
                 ip_wait_timeout=5.0,
@@ -1239,11 +1273,10 @@ def test_tpu_bootstrap_aborts_when_slice_enters_deleting():
     handle = _make_tpu_slice_for_bootstrap(gcp_service)
     gcp_service.advance_tpu_state(handle.slice_id, handle.zone, "DELETING")
 
-    with unittest.mock.patch("iris.cluster.platforms.gcp.workers._probe_worker_health", return_value=False):
+    with unittest.mock.patch("iris.cluster.platforms.gcp.workers.probe_worker_health", return_value=False):
         with pytest.raises(InfraError):
             _run_tpu_bootstrap(
                 gcp_service,
-                "test-project",
                 handle,
                 poll_interval=0.01,
                 ip_wait_timeout=5.0,

@@ -13,7 +13,7 @@ from datasets import load_dataset
 from huggingface_hub import hf_hub_download, snapshot_download
 from levanter.tokenizers import load_tokenizer
 from marin.transform.evaluation.raw_lm_eval import GSM8K_COT_FEWSHOT_EXAMPLES, _render_mmlu_description
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 
 TOKENIZER_NAME = "marin-community/marin-tokenizer"
 TOKENIZER_REVISION = "a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2"

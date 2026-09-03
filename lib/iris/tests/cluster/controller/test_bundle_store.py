@@ -3,11 +3,15 @@
 
 """Tests for controller-side BundleStore behavior."""
 
+import concurrent.futures
 import hashlib
+import threading
 
 import pytest
 from fsspec.implementations.local import LocalFileSystem
 from iris.cluster.bundle import BundleStore
+
+_THREAD_TIMEOUT = 5
 
 
 @pytest.fixture
@@ -105,3 +109,64 @@ def test_write_when_cached_file_is_missing_restores_persistent_content(tmp_path)
     # Fresh store (cold cache) should still load from disk.
     store2 = BundleStore(storage_dir=storage_dir)
     assert store2.get(cid) == data
+
+
+def test_blocked_write_does_not_delay_unrelated_content(tmp_path, monkeypatch):
+    store = BundleStore(storage_dir=str(tmp_path / "bundles"))
+    blocked_data = b"blocked bundle"
+    ready_data = b"unrelated bundle"
+    blocked_id = hashlib.sha256(blocked_data).hexdigest()
+    blocked_opened = threading.Event()
+    release_blocked = threading.Event()
+    ready_opened = threading.Event()
+    original_open = LocalFileSystem.open
+
+    def blocking_open(filesystem, path, mode="rb", *args, **kwargs):
+        if "w" in mode and path.endswith(blocked_id):
+            blocked_opened.set()
+            assert release_blocked.wait(timeout=_THREAD_TIMEOUT)
+        elif "w" in mode:
+            ready_opened.set()
+        return original_open(filesystem, path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(LocalFileSystem, "open", blocking_open)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        blocked = pool.submit(store.write, blocked_data)
+        assert blocked_opened.wait(timeout=_THREAD_TIMEOUT)
+        ready = pool.submit(store.write, ready_data)
+        try:
+            assert ready_opened.wait(timeout=_THREAD_TIMEOUT)
+            assert ready.result(timeout=_THREAD_TIMEOUT) == hashlib.sha256(ready_data).hexdigest()
+        finally:
+            release_blocked.set()
+        assert blocked.result(timeout=_THREAD_TIMEOUT) == blocked_id
+
+
+def test_concurrent_writes_of_same_content_persist_once(tmp_path, monkeypatch):
+    store = BundleStore(storage_dir=str(tmp_path / "bundles"))
+    data = b"shared bundle"
+    content_hash = hashlib.sha256(data).hexdigest()
+    first_opened = threading.Event()
+    release_first = threading.Event()
+    original_open = LocalFileSystem.open
+    write_count = 0
+
+    def blocking_open(filesystem, path, mode="rb", *args, **kwargs):
+        nonlocal write_count
+        if "w" in mode and path.endswith(content_hash):
+            write_count += 1
+            if write_count == 1:
+                first_opened.set()
+                assert release_first.wait(timeout=_THREAD_TIMEOUT)
+        return original_open(filesystem, path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(LocalFileSystem, "open", blocking_open)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(store.write, data)
+        assert first_opened.wait(timeout=_THREAD_TIMEOUT)
+        second = pool.submit(store.write, data)
+        release_first.set()
+        assert first.result(timeout=_THREAD_TIMEOUT) == content_hash
+        assert second.result(timeout=_THREAD_TIMEOUT) == content_hash
+
+    assert write_count == 1

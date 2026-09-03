@@ -13,8 +13,8 @@ import argparse
 import sys
 
 from fray.cluster import ResourceConfig
+from rigging.filesystem.cluster_config import marin_region
 from thalas.execution.executor import InputName, executor_main, output_path_of
-from rigging.filesystem import marin_region
 
 from experiments.downstream_scaling.evals.algorithms.joint_decode_avg import (
     JointDecodeCompletionAlgorithm,

@@ -35,8 +35,8 @@ from joint_decode.tpu.config import JointDecodeConfig as PackageConfig
 from joint_decode.tpu.config import JointDecodeModelConfig as PackageModelConfig
 from joint_decode.tpu.config import TpuPlacement
 from joint_decode.tpu.decoder import joint_decoder
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
 
 from experiments.downstream_scaling.evals.framework.schema import (
     completions_file,

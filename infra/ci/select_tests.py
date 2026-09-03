@@ -42,6 +42,7 @@ SCOPES: tuple[str, ...] = (
     "finelog",
     "finestore",
     "ducky",
+    "deploy",
     "iac",
 )
 
@@ -57,7 +58,8 @@ class SourceRoot:
 
 
 SOURCE_ROOTS: tuple[SourceRoot, ...] = (
-    *(SourceRoot(f"lib/{scope}/src/{scope}", f"lib/{scope}/src") for scope in SCOPES if scope != "iac"),
+    *(SourceRoot(f"lib/{scope}/src/{scope}", f"lib/{scope}/src") for scope in SCOPES if scope not in {"deploy", "iac"}),
+    SourceRoot("infra/deploy/src/marin_deploy", "infra/deploy/src"),
     SourceRoot("infra/pulumi/src/iac", "infra/pulumi/src"),
     SourceRoot("experiments", "."),
     SourceRoot("infra/ci", "."),
@@ -87,6 +89,7 @@ UV_PACKAGE: dict[str, str] = {
     "finelog": "marin-finelog",
     "finestore": "marin-finestore",
     "ducky": "marin-ducky",
+    "deploy": "marin-deploy",
     "iac": "marin-iac",
 }
 
@@ -109,7 +112,8 @@ BROAD_TRIGGER_REASON = "broad-trigger"
 DIFF_DRIVEN_REASON = "diff-driven"
 
 TEST_DIR: dict[str, str] = {
-    **{scope: f"lib/{scope}/tests" for scope in UV_PACKAGE if scope not in {"iac", "marin"}},
+    **{scope: f"lib/{scope}/tests" for scope in UV_PACKAGE if scope not in {"deploy", "iac", "marin"}},
+    "deploy": "infra/deploy/tests",
     "iac": "infra/pulumi/tests",
     "marin": "tests",
 }
@@ -469,7 +473,7 @@ def classify(
                     forced.add(scope)
                 break
 
-            package_root = "infra/pulumi" if scope == "iac" else f"lib/{scope}"
+            package_root = {"deploy": "infra/deploy", "iac": "infra/pulumi"}.get(scope, f"lib/{scope}")
             if filepath in (f"{package_root}/conftest.py", f"{package_root}/pyproject.toml"):
                 forced.add(scope)
                 break

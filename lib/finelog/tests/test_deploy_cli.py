@@ -1,13 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Unit tests for namespace discovery + view registration in ``finelog gcs-query``.
+"""Tests for Finelog query and namespace-inspection commands.
 
-The CLI command itself opens a real connection (gcsfs in production); these
-tests cover the testable seams against a local parquet directory.
+RPC commands use a fake client at the network boundary. GCS query helpers run
+against a local parquet directory.
 """
 
+import json
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -16,11 +18,22 @@ import fsspec
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from click.testing import CliRunner
+from finelog.client.log_client import NamespaceInfo
+from finelog.deploy import connect as deploy_connect
 from finelog.deploy.cli import (
     _list_namespace_dirs,
     _list_namespace_segments,
     _register_namespace_views,
+    cli,
 )
+from finelog.deploy.config import load_finelog_config
+from finelog.errors import SchemaValidationError
+from finelog.policy import StoragePolicy
+from finelog.rpc import finelog_stats_pb2 as stats_pb2
+from finelog.schema import Column, Schema
+from rigging import credentials as rigging_credentials
+from rigging.auth import MARIN_DESKTOP_OAUTH_CLIENT, IapServiceAccountTokenProvider
 
 
 def _write_segment(path: Path, level: int, seq: int, rows: list[dict[str, object]]) -> Path:
@@ -28,6 +41,113 @@ def _write_segment(path: Path, level: int, seq: int, rows: list[dict[str, object
     out = path / f"seg_L{level}_{seq:019d}.parquet"
     pq.write_table(pa.Table.from_pylist(rows), out)
     return out
+
+
+class _FakeLogClient:
+    def __init__(self) -> None:
+        self.queries: list[str] = []
+        self.query_error: Exception | None = None
+
+    def query(self, sql: str, *, max_rows: int) -> pa.Table:
+        del max_rows
+        self.queries.append(sql)
+        if self.query_error is not None:
+            raise self.query_error
+        return pa.table({"task_id": ["task-1"], "memory_mb": [42]})
+
+    def list_namespaces(self) -> list[NamespaceInfo]:
+        task = NamespaceInfo(
+            namespace="iris.task",
+            schema=Schema(
+                columns=(
+                    Column(name="task_id", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
+                    Column(name="memory_mb", type=stats_pb2.COLUMN_TYPE_INT64),
+                ),
+                key_column="task_id",
+            ),
+            row_count=7,
+            byte_size=128,
+            min_seq=1,
+            max_seq=7,
+            segment_count=2,
+            storage_policy=StoragePolicy(max_bytes=1024),
+        )
+        return [task, replace(task, namespace="iris.worker", row_count=3)]
+
+    def get_table_schema(self, namespace: str) -> Schema:
+        assert namespace == "iris.task"
+        return self.list_namespaces()[0].schema
+
+    def close(self) -> None:
+        pass
+
+
+@contextmanager
+def _fake_log_client(client: _FakeLogClient):
+    yield client
+
+
+def _patch_cli_client(client: _FakeLogClient):
+    return patch("finelog.deploy.cli.open_client", return_value=_fake_log_client(client))
+
+
+def test_query_reads_multiline_sql_from_stdin_without_shell_escaping() -> None:
+    client = _FakeLogClient()
+    sql = "SELECT task_id, memory_mb\nFROM \"iris.task\"\nWHERE task_id = 'task-1'\n"
+
+    with _patch_cli_client(client):
+        result = CliRunner().invoke(cli, ["query", "marin"], input=sql)
+
+    assert result.exit_code == 0, result.output
+    assert client.queries == [sql]
+    assert result.output == '{"task_id": "task-1", "memory_mb": 42}\n'
+
+
+def test_query_reports_sql_errors_without_python_traceback() -> None:
+    client = _FakeLogClient()
+    client.query_error = SchemaValidationError('query failed: table "iris.task" not found')
+
+    with _patch_cli_client(client):
+        result = CliRunner().invoke(cli, ["query", "marin", 'SELECT * FROM "iris.task"'])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert result.output.startswith("Error: ")
+    assert "Traceback" not in result.output
+
+
+def test_namespaces_defaults_to_jsonl_with_schema_metadata() -> None:
+    with _patch_cli_client(_FakeLogClient()):
+        result = CliRunner().invoke(cli, ["namespaces", "marin"])
+
+    assert result.exit_code == 0, result.output
+    records = [json.loads(line) for line in result.output.splitlines()]
+    assert [record["namespace"] for record in records] == ["iris.task", "iris.worker"]
+    payload = records[0]
+    assert payload["namespace"] == "iris.task"
+    assert payload["row_count"] == 7
+    assert payload["storage_policy"]["max_bytes"] == 1024
+    assert payload["schema"]["columns"][1]["type"] == "int64"
+    assert payload["schema"]["implicit_columns"] == [
+        {"name": "seq", "type": "int64", "nullable": False, "server_assigned": True}
+    ]
+
+
+def test_schema_returns_one_machine_readable_schema() -> None:
+    with _patch_cli_client(_FakeLogClient()):
+        result = CliRunner().invoke(cli, ["schema", "marin", "iris.task"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["namespace"] == "iris.task"
+    assert payload["schema"]["columns"][0] == {
+        "name": "task_id",
+        "type": "string",
+        "nullable": False,
+        "trigram_index": False,
+        "exact_values": [],
+        "value_counts": False,
+    }
 
 
 @contextmanager
@@ -123,3 +243,25 @@ def test_register_namespace_views_empty_filter_skips_view(tmp_path: Path) -> Non
         )
     with pytest.raises(duckdb.CatalogException):
         conn.execute("SELECT * FROM log").fetchall()
+
+
+def test_iap_client_mints_a_service_account_token_without_a_cached_login(monkeypatch) -> None:
+    """With no cached desktop login, the IAP client mints its edge token for the
+    Marin desktop client id. open_client used to raise IapLoginRequired here, so
+    an unattended caller could not reach an IAP-fronted deployment at all."""
+    monkeypatch.setattr(rigging_credentials, "load_credentials", lambda cluster: None)
+    minted_for: list[str] = []
+
+    class _RecordingProvider(IapServiceAccountTokenProvider):
+        def __init__(self, audience: str) -> None:
+            minted_for.append(audience)
+            super().__init__(audience)
+
+    monkeypatch.setattr(rigging_credentials, "IapServiceAccountTokenProvider", _RecordingProvider)
+    monkeypatch.setattr(deploy_connect, "connect", lambda url, factory, **kw: _FakeLogClient())
+    monkeypatch.setattr(deploy_connect, "disconnect", lambda client: None)
+
+    with deploy_connect.open_client(load_finelog_config("marin"), "marin"):
+        pass
+
+    assert minted_for == [MARIN_DESKTOP_OAUTH_CLIENT.client_id]

@@ -21,3 +21,15 @@ profile-processing work; it does not establish that the training job stalled.
 The hosted service has dedicated memory, disk, and proxy-timeout settings for these
 profiles. Its summary path decodes Perfetto trace JSON into compact typed events and
 computes exclusive-time and breakdown data in one pass.
+
+## Deploy
+
+Changes deploy automatically from `main` through
+`.github/workflows/ops-pulumi-rollout.yaml`. Dispatch that workflow to redeploy the
+current `main` revision with its GitHub-held credentials. A local deploy is for an
+unmerged checkout and requires `CW_KEY_ID` and `CW_KEY_SECRET` in the operator
+environment:
+
+```bash
+uv run --all-packages --extra deploy marin-deploy xprof rollout
+```

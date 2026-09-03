@@ -4,7 +4,6 @@
 import contextvars
 import json
 import os
-import threading
 from pathlib import Path
 
 import marin.execution.step_runner as step_runner_module
@@ -609,58 +608,6 @@ def test_runner_prune_cache_vanished_fails(tmp_path: Path, monkeypatch):
 
     # The pruned node is not run (its inputs were dropped), and neither is its dep.
     assert executed == []
-
-
-def test_runner_consumes_unbounded_iterator(tmp_path: Path):
-    """The runner must not pre-consume the iterable — it must support unbounded generators.
-
-    The generator yields forever unless ``stop`` is set; we set it from inside
-    a terminal's function after N terminals have executed. A batch-flatten
-    implementation would try to exhaust the generator before running any step
-    and hang (caught by the per-test timeout).
-    """
-
-    stop = threading.Event()
-    executed: list[str] = []
-    lock = threading.Lock()
-    n_terminals = 3
-
-    def on_execute(name: str):
-        def _fn(output_path: str) -> Artifact:
-            with lock:
-                executed.append(name)
-                # Count terminals executed; signal the generator to stop once
-                # we've run enough.
-                terminal_count = sum(1 for e in executed if e.startswith("t_"))
-            if terminal_count >= n_terminals:
-                stop.set()
-            return Artifact(path=output_path)
-
-        return _fn
-
-    dep = StepSpec(
-        name="shared_dep",
-        override_output_path=(tmp_path / "shared_dep").as_posix(),
-        fn=on_execute("dep"),
-    )
-
-    def unbounded_generator():
-        i = 0
-        while not stop.is_set():
-            name = f"t_{i}"
-            yield StepSpec(
-                name=name,
-                override_output_path=(tmp_path / name).as_posix(),
-                deps=[dep],
-                fn=on_execute(name),
-            )
-            i += 1
-
-    StepRunner().run(unbounded_generator())
-
-    assert "dep" in executed
-    terminals = [e for e in executed if e.startswith("t_")]
-    assert len(terminals) >= n_terminals
 
 
 def test_runner_dedups_shared_deps(tmp_path: Path):

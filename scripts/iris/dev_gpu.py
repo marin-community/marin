@@ -10,6 +10,7 @@ import logging
 import os
 import shlex
 import subprocess
+import sys
 import time
 from collections.abc import Iterable
 from contextlib import contextmanager
@@ -19,12 +20,15 @@ from pathlib import Path
 from types import MappingProxyType
 
 import click
+from iris.cli.job import validate_system_reason
 from iris.client.client import IrisClient, Job, JobAlreadyExists
 from iris.cluster.backends.k8s.tasks import _LABEL_TASK_ID, _sanitize_label_value
 from iris.cluster.composer import provider_bundle
 from iris.cluster.config import IrisClusterConfig, load_config
 from iris.cluster.platforms.k8s.coreweave_topology import NVL72_GPUS_PER_NODE, gpu_gang_coscheduling_level
+from iris.cluster.redaction import redact_submit_argv
 from iris.cluster.types import CoschedulingConfig, Entrypoint, JobName, ResourceSpec, gpu_device
+from iris.resources.state import TERMINAL_JOB_STATES, JobState, TaskState
 from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
@@ -43,6 +47,7 @@ DEFAULT_GPU_VARIANT = "H100"
 
 
 class Priority(StrEnum):
+    SYSTEM = "system"
     PRODUCTION = "production"
     INTERACTIVE = "interactive"
     BATCH = "batch"
@@ -50,6 +55,7 @@ class Priority(StrEnum):
 
 PRIORITY_BANDS = MappingProxyType(
     {
+        Priority.SYSTEM: job_pb2.PRIORITY_BAND_SYSTEM,
         Priority.PRODUCTION: job_pb2.PRIORITY_BAND_PRODUCTION,
         Priority.INTERACTIVE: job_pb2.PRIORITY_BAND_INTERACTIVE,
         Priority.BATCH: job_pb2.PRIORITY_BAND_BATCH,
@@ -69,13 +75,7 @@ DEFAULT_CPU = 8.0
 DEFAULT_MEMORY = "64GB"
 DEFAULT_DISK = "100GB"
 
-TERMINAL_JOB_STATES = {
-    job_pb2.JOB_STATE_FAILED,
-    job_pb2.JOB_STATE_KILLED,
-    job_pb2.JOB_STATE_UNSCHEDULABLE,
-    job_pb2.JOB_STATE_WORKER_FAILED,
-}
-INACTIVE_JOB_STATES = TERMINAL_JOB_STATES | {job_pb2.JOB_STATE_SUCCEEDED}
+FAILED_JOB_STATES = TERMINAL_JOB_STATES - {JobState.SUCCEEDED}
 
 
 @dataclass(frozen=True)
@@ -268,7 +268,7 @@ def save_state(path: Path, state: DevGpuState) -> None:
 
 
 def is_job_active(client: IrisClient, job_id: str) -> bool:
-    return client.job_state(JobName.from_wire(job_id)) not in INACTIVE_JOB_STATES
+    return client.job_state(JobName.from_wire(job_id)) not in TERMINAL_JOB_STATES
 
 
 def wait_for_running_tasks(job: Job, *, node_count: int, timeout: float) -> list[str]:
@@ -280,11 +280,11 @@ def wait_for_running_tasks(job: Job, *, node_count: int, timeout: float) -> list
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         state = job.state_only()
-        if state in TERMINAL_JOB_STATES:
-            error = job.status().error or job_pb2.JobState.Name(state)
+        if state in FAILED_JOB_STATES:
+            error = job.status().error_message or state.name
             raise click.ClickException(f"Dev GPU allocation failed: {error}")
         tasks = job.tasks()
-        if len(tasks) == node_count and all(task.status().state == job_pb2.TASK_STATE_RUNNING for task in tasks):
+        if len(tasks) == node_count and all(task.status().state is TaskState.RUNNING for task in tasks):
             return [str(task.task_id) for task in sorted(tasks, key=lambda task: task.task_index)]
         time.sleep(5)
     raise click.ClickException(f"Timed out waiting for {node_count} dev GPU task(s) after {int(timeout)}s")
@@ -368,6 +368,13 @@ def cli(ctx, config: str | None, session_name: str | None, verbose: bool) -> Non
     help="Iris scheduling priority for the holder job.",
 )
 @click.option(
+    "--system-reason",
+    type=str,
+    default=None,
+    metavar="REASON",
+    help="Required justification for --priority system; must contain hero, finelog, or iris.",
+)
+@click.option(
     "--cpu",
     type=click.FloatRange(min=0, min_open=True),
     default=DEFAULT_CPU,
@@ -395,6 +402,7 @@ def allocate(
     gpus_per_node: int | None,
     node_count: int,
     priority: str,
+    system_reason: str | None,
     cpu: float,
     memory: str,
     disk: str,
@@ -411,6 +419,7 @@ def allocate(
         gpus_per_node = GPUS_PER_NODE[gpu_variant]
     coscheduling = resolve_coscheduling(gpu_variant, gpus_per_node, node_count)
     resolved_priority = Priority(priority)
+    validate_system_reason(priority, system_reason)
 
     session_name = ctx.obj.session_name
     state_file = state_path(ctx.obj.state_dir, session_name)
@@ -430,6 +439,7 @@ def allocate(
                 name=f"dev-gpu-{session_name}",
                 resources=resources,
                 priority_band=PRIORITY_BANDS[resolved_priority],
+                submit_argv=redact_submit_argv(list(sys.argv)),
                 replicas=node_count,
                 coscheduling=coscheduling,
             )
@@ -464,7 +474,7 @@ def allocate(
         finally:
             terminated = False
             try:
-                client.terminate(JobName.from_wire(str(job.job_id)))
+                client.cancel_job(JobName.from_wire(str(job.job_id)))
                 terminated = True
             except Exception:
                 logger.warning(
@@ -535,7 +545,7 @@ def release(ctx, force: bool) -> None:
     state = load_state(state_file)
     try:
         with controller_client(state.config_file) as client:
-            client.terminate(JobName.from_wire(state.job_id))
+            client.cancel_job(JobName.from_wire(state.job_id))
     except Exception as exc:
         # Keep the state file on failure so the job id isn't lost while the pod may
         # still be running; --force is the escape hatch for already-dead jobs.

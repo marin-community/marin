@@ -47,10 +47,12 @@ from marin.processing.classification.deduplication.verify_fuzzy_dups import (
 from marin.processing.tokenize._core import CHUNK_INDEX_FIELD
 from marin.processing.tokenize.attributes import TokenizedAttrData
 from pydantic import BaseModel
-from rigging.filesystem import StoragePath, atomic_rename, marin_temp_bucket, prefix_join
+from rigging.filesystem.atomic import atomic_rename
+from rigging.filesystem.cluster_config import marin_temp_bucket
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr import counters
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, format_shard_path
-from zephyr.execution import ZephyrContext
 
 from experiments.datakit.cluster.domain.v0.assign import AssignmentAttrData
 from experiments.datakit.cluster.quality.fast_transformer.artifact import QualityScores

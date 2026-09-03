@@ -23,6 +23,9 @@ backend service, certificate, firewall rule, and URL-map route. The optional
 capability backend uses the same NEG and health check but leaves IAP disabled
 only for `/proxy/t` and `/proxy/t/*`. Each finelog contributes an IAP-free
 backend protected by Cloud Armor and its own firewall rules.
+`finelog-dev.oa.dev` remains on the shared frontend, but its CIDR-only
+application auth does not admit requests forwarded by the load balancer. It
+must gain a JWT auth layer before it can accept external pushes.
 
 ## Configuration sources
 
@@ -57,6 +60,11 @@ https://iap.googleapis.com/v1/oauth/clientIds/<CLIENT_ID>:handleRedirect
 The controller and finelog VMs must exist before preview because their current
 internal addresses become NEG endpoint inputs.
 
+Deletion protection is declared only on the shared static address, URL map,
+HTTPS proxy, and forwarding rule because each one serves every configured host.
+The bulk-import CLI temporarily protects every imported resource; the first
+normal update removes that metadata from leaf resources.
+
 ```bash
 cd infra/pulumi
 pulumi stack select marin
@@ -75,10 +83,11 @@ uv run --package marin-iac --extra deploy python infra/pulumi/import_resources.p
 ```
 
 Inspect the generated transaction before applying it. Keep existing GCLB,
-firewall, IAP settings, NEG endpoint, certificate, and Armor entries in the
-import; remove entries that should be created. The final preview must not
-replace or delete the shared IP, URL map, proxy, forwarding rule, certificates,
-or backend services. Then reconcile the declaration normally:
+firewall, IAP settings, backend-service IAM bindings, NEG endpoint, certificate,
+and Armor entries in the import; remove entries that should be created. The
+final preview must not replace or delete the shared IP, URL map, proxy,
+forwarding rule, certificates, or backend services. Then reconcile the
+declaration normally:
 
 ```bash
 cd infra/pulumi
@@ -103,8 +112,11 @@ IAP authentication and authorization are separate checks:
 - The caller identity must hold `roles/iap.httpsResourceAccessor` on that
   backend service. Failure is normally `403`.
 
-Backend IAM access policies remain externally managed and are not part of the
-GCLB import.
+The global IAM graph in `iac.gcp.iris` owns each backend access policy as an
+authoritative `WebBackendServiceIamBinding`. Each Iris backend and Cloud Run
+service lists its accessors in its owning module, without a project-level role
+or shared grant. Existing backend bindings must be included in the Program-first
+import before applying policy changes.
 
 The three common caller paths are:
 

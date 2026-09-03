@@ -15,8 +15,9 @@ from iris.cluster.config import UserBudgetTier
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.codec import device_counts_from_json
 from iris.cluster.controller.db import ControllerDB, Tx
-from iris.cluster.types import UserBudgetDefaults
+from iris.cluster.types import LOCAL_ADMIN_SUBMITTER, JobName, UserBudgetDefaults
 from iris.rpc import job_pb2
+from iris.rpc.proto_display import ADMIN_PRIORITY_BAND_VALUES, PRIORITY_BAND_VALUES
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,13 @@ T = TypeVar("T")
 class UserTask(Generic[T]):
     user_id: str
     task: T
+
+
+def budget_user_id(job_id: JobName, submitting_user: str) -> str:
+    """Use the authenticated submitter, with job-owner fallback for local or empty identities."""
+    if submitting_user and submitting_user != LOCAL_ADMIN_SUBMITTER:
+        return submitting_user
+    return job_id.user
 
 
 def resource_value(cpu_millicores: int, memory_bytes: int, accelerator_count: int) -> int:
@@ -46,14 +54,13 @@ def compute_user_spend(tx: Tx) -> dict[str, int]:
     Sums ``resource_value * task_count`` per user over the active, non-BATCH
     task rows returned by :func:`reads.user_spend_rows`.
 
-    Returns ``{user_id: total_resource_value}`` for users with active tasks.
+    Returns ``{budget_user_id: total_resource_value}`` for principals with active tasks.
     """
     rows = reads.user_spend_rows(tx)
 
     spend: dict[str, int] = defaultdict(int)
     for row in rows:
-        # job_id is decoded by JobNameType to JobName
-        user_id = row.job_id.user
+        user_id = budget_user_id(row.job_id, str(row.submitting_user))
         cpu = row.res_cpu_millicores
         mem = row.res_memory_bytes
         counts = device_counts_from_json(row.res_device_json)
@@ -72,17 +79,18 @@ def compute_effective_band(
 ) -> int:
     """Downgrade task to BATCH if its user exceeds their budget.
 
-    PRODUCTION tasks are never downgraded. Users without a ``user_budgets``
-    row fall back to ``defaults.budget_limit``; a limit of 0 means unlimited.
+    SYSTEM and PRODUCTION tasks are never downgraded. Users without a
+    ``user_budgets`` row fall back to ``defaults.budget_limit``; a limit of 0
+    means unlimited.
 
     ``task_band`` is a real band: ``LaunchJob`` resolves INHERIT once at ingestion (see
     :func:`iris.cluster.controller.ops.job.resolve_priority_band`).
     """
-    if task_band == job_pb2.PRIORITY_BAND_PRODUCTION:
+    if task_band in ADMIN_PRIORITY_BAND_VALUES:
         return task_band
     limit = user_budgets.get(user_id, defaults.budget_limit)
     if limit > 0 and user_spend.get(user_id, 0) > limit:
-        return max(task_band, job_pb2.PRIORITY_BAND_BATCH)
+        return job_pb2.PRIORITY_BAND_BATCH
     return task_band
 
 
@@ -121,15 +129,9 @@ def interleave_by_user(
 
 
 # Bands accepted in user_budgets config entries. UNSPECIFIED is kept out of the
-# set so a missing/zeroed max_band field surfaces as a config error rather than
-# silently granting BATCH; callers must pick a real band.
-_VALID_TIER_BANDS = frozenset(
-    (
-        job_pb2.PRIORITY_BAND_PRODUCTION,
-        job_pb2.PRIORITY_BAND_INTERACTIVE,
-        job_pb2.PRIORITY_BAND_BATCH,
-    )
-)
+# set so a missing/zeroed max_band field surfaces as a config error; callers
+# must pick a real band.
+_VALID_TIER_BANDS = frozenset(PRIORITY_BAND_VALUES)
 
 
 def reconcile_user_budget_tiers(
@@ -159,7 +161,7 @@ def reconcile_user_budget_tiers(
         for tier in tiers:
             if tier.max_band not in _VALID_TIER_BANDS:
                 raise ValueError(
-                    f"UserBudgetTier.max_band must be one of PRODUCTION/INTERACTIVE/BATCH; "
+                    f"UserBudgetTier.max_band must be one of SYSTEM/PRODUCTION/INTERACTIVE/BATCH; "
                     f"got {tier.max_band} for users {list(tier.user_ids)}"
                 )
             for user_id in tier.user_ids:

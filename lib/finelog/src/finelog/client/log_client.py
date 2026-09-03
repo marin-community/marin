@@ -89,8 +89,31 @@ _OVERFLOW_LOG_INTERVAL = 5.0
 
 
 class FlushResult(StrEnum):
+    """Whether the rows a flush waited on reached the server.
+
+    Only ``SUCCEEDED`` means they were recorded. ``DROPPED`` means the server
+    refused a batch or the client buffer overflowed, and those rows are gone.
+    ``TIMEOUT`` leaves it open: the queue had not drained yet and the flush
+    thread may still deliver them.
+    """
+
     SUCCEEDED = "succeeded"
     TIMEOUT = "timeout"
+    DROPPED = "dropped"
+
+
+@dataclass(frozen=True)
+class NamespaceInfo:
+    """Registered namespace schema and current storage statistics."""
+
+    namespace: str
+    schema: Schema
+    row_count: int
+    byte_size: int
+    min_seq: int
+    max_seq: int
+    segment_count: int
+    storage_policy: StoragePolicy
 
 
 def _format_exc_summary(exc: BaseException) -> str:
@@ -117,7 +140,7 @@ _PRIMITIVE_TYPE_MAP: dict[Any, ColumnTypeValue] = {
 
 # Human-readable list of the dataclass field types finelog can infer a column
 # from, for the unsupported-type error message.
-_SUPPORTED_FIELD_TYPES = "str, int, float, bool, bytes, datetime, dict[str, str]"
+_SUPPORTED_FIELD_TYPES = "str, int, float, bool, bytes, datetime, dict[str, str], list[float], list[int]"
 
 
 def _column_type_for_annotation(inner: Any) -> ColumnTypeValue | None:
@@ -132,6 +155,12 @@ def _column_type_for_annotation(inner: Any) -> ColumnTypeValue | None:
         return primitive
     if typing.get_origin(inner) is dict and typing.get_args(inner) == (str, str):
         return stats_pb2.COLUMN_TYPE_MAP
+    if typing.get_origin(inner) is list:
+        element_type = typing.get_args(inner)
+        if element_type == (float,):
+            return stats_pb2.COLUMN_TYPE_FLOAT64_LIST
+        if element_type == (int,):
+            return stats_pb2.COLUMN_TYPE_INT64_LIST
     return None
 
 
@@ -211,10 +240,12 @@ class Table:
     LogClient drains every Table.
 
     Registration is deferred to the flush thread: if a ``registrar`` is given,
-    it is invoked once before the first send to register the namespace and
-    return its effective schema. A failing registration is treated like any
-    other flush failure (retried with backoff, or the batch dropped on a
-    non-retryable error) and never blocks the caller that created the Table.
+    it is invoked before the first send to register the namespace and return
+    its effective schema. If a later write reports that the namespace no longer
+    exists, the same batch is retained while the table registers again. A
+    failing registration is treated like any other flush failure (retried with
+    backoff, or the batch dropped on a non-retryable error) and never blocks the
+    caller that created the Table.
     """
 
     def __init__(
@@ -236,10 +267,10 @@ class Table:
         self._arrow_schema = schema_to_arrow(schema)
         self._flusher = flusher
         self._querier = querier
-        # When set, the flush thread calls this once before its first send to
-        # register the namespace; the returned effective schema replaces the
-        # locally-requested one for Arrow encoding. ``None`` means the
-        # namespace is already registered server-side (e.g. ``log``).
+        # When set, the flush thread calls this before its first send and again
+        # after WriteRows reports a missing namespace. The returned effective
+        # schema replaces the locally-requested one for Arrow encoding. ``None``
+        # means the namespace is registered server-side (e.g. ``log``).
         self._registrar = registrar
         self._registered = registrar is None
         self._flush_interval = flush_interval
@@ -255,6 +286,8 @@ class Table:
 
         self._pushed_seq = 0
         self._processed_seq = 0
+        # Rows discarded without reaching the server since the last flush.
+        self._dropped_since_flush = 0
 
         self._overflow_dropped_pending = 0
         self._overflow_log_limiter = RateLimiter(interval_seconds=_OVERFLOW_LOG_INTERVAL)
@@ -315,16 +348,21 @@ class Table:
         return result
 
     def flush(self, timeout: float | None = None) -> FlushResult:
-        """Block until rows enqueued before this call have been processed."""
+        """Block until rows enqueued before this call have been handled.
+
+        Reports ``DROPPED`` when any row written since the previous flush was
+        discarded instead of sent, and clears that state so the next flush
+        answers for its own rows.
+        """
         with self._cond:
             target = self._pushed_seq
             if target == 0 or self._processed_seq >= target:
-                return FlushResult.SUCCEEDED
+                return self._settle_locked()
             self._cond.notify_all()
             deadline = (time.monotonic() + timeout) if timeout is not None else None
             while self._processed_seq < target:
                 if self._closed:
-                    return FlushResult.SUCCEEDED if self._processed_seq >= target else FlushResult.TIMEOUT
+                    return self._settle_locked() if self._processed_seq >= target else FlushResult.TIMEOUT
                 if deadline is None:
                     self._cond.wait(timeout=1.0)
                 else:
@@ -332,7 +370,14 @@ class Table:
                     if remaining <= 0:
                         return FlushResult.TIMEOUT
                     self._cond.wait(timeout=remaining)
+            return self._settle_locked()
+
+    def _settle_locked(self) -> FlushResult:
+        """The verdict for a drained queue, consuming the drop count."""
+        if self._dropped_since_flush == 0:
             return FlushResult.SUCCEEDED
+        self._dropped_since_flush = 0
+        return FlushResult.DROPPED
 
     def close(self) -> None:
         """Stop the flush thread after one best-effort drain."""
@@ -364,6 +409,7 @@ class Table:
                 max_dropped_seq = item.seq
             dropped += 1
         if dropped:
+            self._dropped_since_flush += dropped
             self._overflow_dropped_pending += dropped
             if self._overflow_log_limiter.should_run():
                 logger.warning(
@@ -401,8 +447,9 @@ class Table:
                     return
                 items = self._take_queue_locked()
 
-            sent_max_seq, unsent = self._send(items)
+            sent_max_seq, unsent, dropped = self._send(items)
             with self._cond:
+                self._dropped_since_flush += dropped
                 if sent_max_seq > self._processed_seq:
                     self._processed_seq = sent_max_seq
                     self._cond.notify_all()
@@ -425,22 +472,29 @@ class Table:
                         break
                     self._cond.wait(timeout=remaining)
 
-    def _send(self, items: list[_PendingItem]) -> tuple[int, list[_PendingItem]]:
-        """Send ``items`` via the flusher. Returns ``(max_sent_seq, unsent)``.
+    def _send(self, items: list[_PendingItem]) -> tuple[int, list[_PendingItem], int]:
+        """Send ``items`` via the flusher. Returns ``(max_sent_seq, unsent, dropped)``.
 
         Builds the entire batch's RecordBatch in one pass on the bg thread,
         amortizing Arrow construction across the whole queue rather than
         per-row at write time.
         """
         if not items:
-            return 0, []
+            return 0, [], 0
         rows = [item.payload for item in items]
         try:
             self._ensure_registered()
             batch = _rows_to_record_batch(rows, self._arrow_schema, self._schema)
             self._flusher(self._namespace, batch)
         except Exception as exc:
-            retryable = is_retryable_error(exc) or isinstance(exc, (ConnectionError, OSError, TimeoutError))
+            namespace_missing = self._registrar is not None and (
+                isinstance(exc, NamespaceNotFoundError) or (isinstance(exc, ConnectError) and exc.code == Code.NOT_FOUND)
+            )
+            if namespace_missing:
+                self._registered = False
+            retryable = (
+                namespace_missing or is_retryable_error(exc) or isinstance(exc, (ConnectionError, OSError, TimeoutError))
+            )
             summary = _format_exc_summary(exc)
             logger.warning(
                 "Table(%s) send failure (%d rows, retryable=%s): %s",
@@ -452,9 +506,9 @@ class Table:
             if not retryable:
                 # Non-retryable failures drop the batch; rebuffering would
                 # back up the queue indefinitely.
-                return items[-1].seq, []
-            return 0, items
-        return items[-1].seq, []
+                return items[-1].seq, [], len(items)
+            return 0, items, 0
+        return items[-1].seq, [], 0
 
     def _ensure_registered(self) -> None:
         """Register the namespace on first send, adopting its effective schema.
@@ -474,6 +528,7 @@ class Table:
 
 
 _ClientT = TypeVar("_ClientT")
+_ResponseT = TypeVar("_ResponseT")
 
 
 class LogClient:
@@ -598,8 +653,33 @@ class LogClient:
             )
         return result
 
+    def list_namespaces(self) -> list[NamespaceInfo]:
+        """Return every queryable namespace with its schema and storage statistics."""
+        response = self._stats_rpc(lambda client: client.list_namespaces(stats_pb2.ListNamespacesRequest()))
+        return [
+            NamespaceInfo(
+                namespace=info.namespace,
+                schema=schema_from_proto(info.schema),
+                row_count=info.row_count,
+                byte_size=info.byte_size,
+                min_seq=info.min_seq,
+                max_seq=info.max_seq,
+                segment_count=info.segment_count,
+                storage_policy=StoragePolicy.from_proto(info.storage_policy),
+            )
+            for info in response.namespaces
+        ]
+
+    def get_table_schema(self, namespace: str) -> Schema:
+        """Return the registered schema for ``namespace`` without creating a Table handle."""
+        response = self._stats_rpc(
+            lambda client: client.get_table_schema(stats_pb2.GetTableSchemaRequest(namespace=namespace))
+        )
+        return schema_from_proto(response.schema)
+
     def flush(self, timeout: float | None = None) -> FlushResult:
-        """Flush the ``log`` namespace's Table, if any."""
+        """Flush the ``log`` namespace's Table, if any. Tables from
+        :meth:`get_table` are flushed through their own handles."""
         table = self._tables.get(LOG_NAMESPACE)
         if table is None:
             return FlushResult.SUCCEEDED
@@ -792,9 +872,14 @@ class LogClient:
             log_service_client.close()
 
     def _stats_query(self, sql: str) -> pa.Table:
+        response = self._stats_rpc(lambda client: client.query(stats_pb2.QueryRequest(sql=sql)))
+        reader = paipc.open_stream(pa.BufferReader(bytes(response.arrow_ipc)))
+        return reader.read_all()
+
+    def _stats_rpc(self, call: Callable[[StatsServiceClientSync], _ResponseT]) -> _ResponseT:
         client = self._get_stats_client()
         try:
-            response = client.query(stats_pb2.QueryRequest(sql=sql))
+            return call(client)
         except ConnectError as exc:
             if is_retryable_error(exc):
                 self._invalidate(_format_exc_summary(exc))
@@ -802,8 +887,6 @@ class LogClient:
         except (ConnectionError, OSError, TimeoutError) as exc:
             self._invalidate(_format_exc_summary(exc))
             raise
-        reader = paipc.open_stream(pa.BufferReader(bytes(response.arrow_ipc)))
-        return reader.read_all()
 
     def _stats_flush(self, namespace: str, batch: pa.RecordBatch) -> None:
         sink = io.BytesIO()

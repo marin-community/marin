@@ -39,6 +39,7 @@ class Presence(StrEnum):
 class Management(StrEnum):
     EXTERNAL = "external"
     PULUMI = "pulumi"
+    SEALED = "sealed"
 
 
 class SourceKind(StrEnum):
@@ -93,6 +94,8 @@ class Credential(BaseModel):
     name: str = Field(pattern=SECRET_NAME)
     presence: Presence
     management: Management = Management.EXTERNAL
+    key_id: str | None = Field(default=None, min_length=1)
+    value_encrypted: str | None = Field(default=None, min_length=1)
     source: ValueSource
     disposition: Disposition
     note: str = ""
@@ -101,6 +104,19 @@ class Credential(BaseModel):
     def validate_disposition(self) -> Self:
         if self.disposition is Disposition.REMOVE_CANDIDATE and self.presence is not Presence.PRESENT:
             raise ValueError("cannot remove a credential that is not present")
+        return self
+
+    @model_validator(mode="after")
+    def validate_management(self) -> Self:
+        sealed_value_is_complete = self.key_id is not None and self.value_encrypted is not None
+        sealed_value_is_absent = self.key_id is None and self.value_encrypted is None
+        if self.management is Management.SEALED:
+            if self.presence is not Presence.PRESENT:
+                raise ValueError("sealed credentials must be present")
+            if not sealed_value_is_complete:
+                raise ValueError("sealed credentials require key_id and value_encrypted")
+        elif not sealed_value_is_absent:
+            raise ValueError("only sealed credentials can declare key_id or value_encrypted")
         return self
 
     @property

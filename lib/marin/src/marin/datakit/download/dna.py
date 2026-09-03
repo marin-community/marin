@@ -14,10 +14,10 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 
 from fray.types import ResourceConfig
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 from zephyr import counters
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
 from zephyr.readers import load_file
 
 from marin.datakit.download.huggingface import download_hf_step

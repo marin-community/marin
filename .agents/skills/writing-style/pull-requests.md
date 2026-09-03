@@ -31,9 +31,9 @@ Prefer `[sft] Add the OpenCode chat template` over
   explain the change or affect the review decision. State them once and link
   detailed evidence when the full record belongs elsewhere.
 - End with `Fixes #NNNN` or `Part of #NNNN` when applicable.
-- Put specifications, extended raw benchmark output, and research history in an
-  issue, design doc, logbook, or artifact and link it. Keep the reproduction
-  detail and result summary needed to evaluate the change.
+- Put extended raw benchmark output and research history in an issue, logbook,
+  or artifact and link it. Keep the reproduction detail and result summary
+  needed to evaluate the change.
 
 The body must stand alone, but it does not need to reproduce the diff. Delete:
 
@@ -42,7 +42,7 @@ The body must stand alone, but it does not need to reproduce the diff. Delete:
 - `Testing`, `Validation`, `Verification`, `What`, `Changes`, or `Summary`
   scaffolds;
 - claims framed as verdicts, such as `why this is correct`, `cleaner`, or
-  `provably`, when a measured result or explicit design choice says more;
+  `provably`, when a measured result or explicit technical choice says more;
 - boldface, all-caps emphasis, checkboxes, emoji, and attribution or session
   trailers;
 - filler openers such as `This PR`, `In this change`, or `Summary of changes`.

@@ -1,6 +1,6 @@
 ---
 name: write-ops-log
-description: Publish a tagged postmortem incident record to Echo. Use after an infrastructure or durable debugging session, then link the canonical Echo URL from the associated PR or issue.
+description: Publish a tagged Echo record after every incident, then link its canonical URL from the associated pull request or issue.
 ---
 
 # Skill: Write an Ops Log
@@ -15,7 +15,7 @@ consume limited model context whenever they are retrieved.
 
 Invoke `consult-echo` and run its complete search-before-write sequence. Edit
 the existing entry when it covers the same incident. Start with a natural-language
-`infra/echo/cli.py search`, fetch likely matches with `get <domain:id>`, and use
+`infra/echo/cli.py search`, fetch likely matches with `get <source-id>`, and use
 `grep` for the exact error or run identifier. Create a new entry for a different
 incident even when the symptom resembles an older one; link related incidents
 and create or extend a separate synthesis only when they establish a reusable

@@ -1,12 +1,9 @@
 ---
 name: background-research
-description: "Forage prior work before or during Marin research threads: search internal Marin artifacts and external literature/code; produce a cited brief with negative results and ranked experiment hypotheses."
+description: Perform an explicitly requested prior-work search for a Marin research, design, or experiment decision and produce a cited brief.
 ---
 
-# Skill: Background Research
-
-Use this when a research, design, or experiment thread needs a compact prior-work
-pass before choosing hypotheses, drafting a design, or launching runs.
+# Background research
 
 ## Effort
 
@@ -52,17 +49,9 @@ When `write-design-doc` uses this skill, the output usually lands in
 `.agents/projects/<slug>/research.md`. Keep it focused on design inputs, not
 experiment execution.
 
-Include:
-
-- Relevant code paths. Use pinned GitHub links for claims tied to a fixed
-  revision; use paths or section links for draft-local notes.
-- Related designs in `.agents/projects/`, with overlap and differences.
-- Related GitHub issues/PRs when known or discoverable.
-- Existing utilities or abstractions the proposal might reuse.
-- Prior-art shape when the proposal reinvents a category of system such as a
-  logger, stats store, queue, scheduler, KV store, service-discovery layer, or
-  workflow engine.
-- What surprised you and what remains unclear.
+Include relevant code paths, related designs and GitHub work, reusable
+abstractions, external prior art for a known system category, surprises, and
+open questions. Pin links for claims tied to a fixed revision.
 
 For design-doc prior art, use `low` or `medium` effort by default. Skip
 external prior art for narrow in-repo refactors, internal API tweaks, or designs
@@ -82,64 +71,45 @@ where the category is novel to this repo rather than novel to the world.
 
 ## Output Contract
 
-Write a compact brief in the research logbook, issue comment, or
-`.agents/projects/<slug>/research.md`, depending on the parent workflow. If an
-experiment issue exists, also provide a short issue-ready `Prior work` block.
+Write the compact brief in the parent workflow's logbook, issue, or
+`.agents/projects/<slug>/research.md`. Use this structure, omitting empty
+sections:
 
 ```md
 ## Background Research Brief
-
-- Effort:
-- Stop rule:
-- Date:
+- Effort / stop rule / date:
 
 ### Question
-
 ### Current Marin Context
-
 ### Internal Prior Work
-
 ### External Prior Art
-
 ### Negative / Failed Leads
 
 ### Evidence Map
-
 #### Claim: <short claim>
 - Support:
-  - <source>: <one-line evidence>
 - Contradictions:
-  - <source>: <one-line caveat or failed result>
 - Directness to Marin:
 - Confidence:
 - Action:
 
 ### Recommended Next Experiments
-
-#### 1. <hypothesis>
-- Minimum experiment:
-- Baseline/control:
-- Expected signal:
-- Falsifier:
-- Cost/risk:
-- Sources:
+#### 1. <falsifiable hypothesis>
+- Minimum experiment / baseline:
+- Expected signal / falsifier:
+- Cost or risk / sources:
 
 ### Hypothesis Queue Update
-- Add:
-- Revise:
-- Falsify / stop:
-- Promote:
-
 ### Source Ledger
 | Source | Type | Location | Claim used for | Confidence | Notes |
 |---|---|---|---|---|---|
-
 ### Handoff
-- Suggested issue `Prior work` block:
-- Suggested logbook entry:
-- Open questions:
-- Stop reason:
+- Issue `Prior work` block:
+- Logbook entry / open questions / stop reason:
 ```
+
+If an experiment issue exists, include the short issue-ready `Prior work`
+block.
 
 Use source types such as `paper`, `external code`, `official docs`, `GitHub
 issue`, `PR`, `report`, `logbook`, `W&B`, `Data Browser`, and `Marin code`.
@@ -150,20 +120,6 @@ cell likely to contain prose, use block-style cards so GitHub remains readable.
 For research threads with a logbook, treat the hypothesis queue as a living
 index derived from append-only entries. Link each queue change to the supporting
 logbook entry, issue comment, W&B run, commit, tag, or pinned source.
-
-## Hypothesis Quality
-
-Recommended experiments should be actionable without re-reading the full source
-set. Each candidate needs:
-
-- A falsifiable hypothesis.
-- The smallest experiment that could change the decision.
-- Baseline or control.
-- Primary metric and expected direction.
-- Cost/risk.
-- Source links.
-- Confidence: `exploratory`, `replicated`, or `stable` when evidence supports
-  those labels; otherwise say why confidence is weak.
 
 ## What To Skip
 

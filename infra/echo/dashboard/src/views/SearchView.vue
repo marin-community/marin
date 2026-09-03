@@ -19,7 +19,7 @@ const defaultDomains = ref<SearchDomain[]>([])
 const displayShaCharacters = ref<number | null>(null)
 const selectedDomains = ref<SearchDomain[]>([])
 const results = ref<FederatedResult[]>([])
-const index = ref<RepositoryIndexStatus | null>(null)
+const indexes = ref<RepositoryIndexStatus[]>([])
 const indexError = ref('')
 const loading = ref(false)
 const error = ref('')
@@ -34,11 +34,6 @@ function domainsFromQuery(value: unknown): SearchDomain[] {
   )
   return valid.length ? [...new Set(valid)] : defaultDomains.value
 }
-
-const indexPercent = computed(() => {
-  if (index.value?.status !== 'building' || !index.value.total_files) return 0
-  return Math.round(((index.value.completed_files || 0) / index.value.total_files) * 100)
-})
 
 const resultLabel = computed(() => {
   if (loading.value) return 'Searching…'
@@ -70,23 +65,28 @@ function wikiPath(result: FederatedResult): string {
   return new URL(result.url).pathname
 }
 
-function indexLabel(): string {
-  if (!index.value || index.value.status === 'empty') return 'The repository index has not started.'
-  const commit = index.value.commit_sha?.slice(0, displayShaCharacters.value || undefined)
-  if (index.value.status === 'building') {
-    return `Indexing ${index.value.completed_files || 0} of ${index.value.total_files || 0} files from ${
-      index.value.branch
-    }@${commit}. Partial results are available.`
+function indexPercent(index: RepositoryIndexStatus): number {
+  if (index.status !== 'building' || !index.total_files) return 0
+  return Math.round(((index.completed_files || 0) / index.total_files) * 100)
+}
+
+function indexLabel(index: RepositoryIndexStatus): string {
+  if (index.status === 'empty') return `${index.repository}@${index.branch} has not started.`
+  const commit = index.commit_sha?.slice(0, displayShaCharacters.value || undefined)
+  if (index.status === 'building') {
+    return `Indexing ${index.completed_files || 0} of ${index.total_files || 0} files from ${
+      index.repository
+    } ${index.branch}@${commit}. Partial results are available.`
   }
-  return `Files reflect ${index.value.branch}@${commit}, indexed ${formatDate(index.value.indexed_at)}.`
+  return `${index.repository} reflects ${index.branch}@${commit}, indexed ${formatDate(index.indexed_at)}.`
 }
 
 async function loadIndex(): Promise<void> {
   indexError.value = ''
   try {
-    index.value = await fetchJson<RepositoryIndexStatus>('/api/repository-index')
+    indexes.value = await fetchJson<RepositoryIndexStatus[]>('/api/repository-index')
   } catch (reason) {
-    index.value = null
+    indexes.value = []
     indexError.value = reason instanceof Error ? reason.message : 'Index status unavailable'
   }
 }
@@ -163,13 +163,15 @@ onMounted(async () => {
     <p class="font-mono text-xs uppercase tracking-[0.18em] text-fern">Wiki · code · GitHub · Discord</p>
     <h1 class="mt-2 text-3xl font-semibold tracking-[-0.03em] sm:text-5xl">Search across Marin.</h1>
 
-    <div v-if="index" class="mt-6 border-l-2 border-fern/40 pl-4 text-sm text-ink/60">
-      <div class="flex items-center justify-between gap-4">
-        <p>{{ indexLabel() }}</p>
-        <span v-if="index.status === 'building'" class="font-mono text-xs">{{ indexPercent }}%</span>
-      </div>
-      <div v-if="index.status === 'building'" class="mt-2 h-1.5 overflow-hidden rounded bg-line/60">
-        <div class="h-full bg-fern transition-all" :style="{ width: `${indexPercent}%` }" />
+    <div v-if="indexes.length" class="mt-6 space-y-3 border-l-2 border-fern/40 pl-4 text-sm text-ink/60">
+      <div v-for="index in indexes" :key="`${index.repository}@${index.branch}`">
+        <div class="flex items-center justify-between gap-4">
+          <p>{{ indexLabel(index) }}</p>
+          <span v-if="index.status === 'building'" class="font-mono text-xs">{{ indexPercent(index) }}%</span>
+        </div>
+        <div v-if="index.status === 'building'" class="mt-2 h-1.5 overflow-hidden rounded bg-line/60">
+          <div class="h-full bg-fern transition-all" :style="{ width: `${indexPercent(index)}%` }" />
+        </div>
       </div>
     </div>
     <p v-else-if="indexError" class="mt-6 border-l-2 border-amber-500 pl-4 text-sm text-ink/60">

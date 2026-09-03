@@ -16,6 +16,10 @@ import re
 # Container/host conventions baked into the bootstrap.
 CONTAINER_NAME = "finelog"
 CACHE_DIR = "/var/cache/finelog"
+# Axum may spend 10 seconds draining requests, followed by 10 seconds stopping
+# the forwarder, 2 seconds stopping diagnostics, and 10 seconds draining the
+# store. Docker must not SIGKILL the process before those bounded phases finish.
+CONTAINER_STOP_TIMEOUT = 45
 
 # `/health` answers 200 whenever the process is listening; the body says whether
 # its namespaces accept rows (`rust/src/server/ingest_health.rs`). A namespace
@@ -81,7 +85,7 @@ sudo docker pull {{ docker_image }}
 # (seg_L*.parquet.tmp, _finelog_catalog.sqlite-journal). One vanishing between
 # readdir and the chown syscall makes `chown -R` exit non-zero, and `set -e`
 # would then abort the whole bootstrap before the new image is ever started.
-sudo docker stop --timeout 5 {{ container_name }} 2>/dev/null || true
+sudo docker stop --timeout {{ stop_timeout }} {{ container_name }} 2>/dev/null || true
 sudo docker rm -f {{ container_name }} 2>/dev/null || true
 
 # Own the cache dir as UID/GID 1000 to match the in-container `finelog` user
@@ -150,6 +154,7 @@ def render_bootstrap(
     auth_policy: str,
     query_metadata_cache_mb: int | None,
     query_index_cache_mb: int | None,
+    telemetry_migration_mode: str = "normal",
 ) -> str:
     """Render the finelog bootstrap script.
 
@@ -173,15 +178,17 @@ def render_bootstrap(
     )
     if query_index_cache_mb is not None:
         query_env += f"-e FINELOG_INDEX_CACHE_MB={query_index_cache_mb} "
+    migration_env = f"-e FINELOG_TELEMETRY_MIGRATION_MODE={telemetry_migration_mode} "
     return render_template(
         BOOTSTRAP_SCRIPT,
         docker_image=image,
         port=port,
         remote_log_dir=remote_log_dir,
         auth_env=auth_env,
-        query_env=query_env,
+        query_env=query_env + migration_env,
         cache_dir=CACHE_DIR,
         container_name=CONTAINER_NAME,
+        stop_timeout=CONTAINER_STOP_TIMEOUT,
         health_probe=health_probe_command(port),
         health_ok=HEALTH_OK,
     )

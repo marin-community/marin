@@ -23,6 +23,7 @@ import levanter.callbacks
 import levanter.eval
 import levanter.eval_harness
 from levanter import callbacks
+from levanter.callbacks._iris_status import iris_status_reporter
 from levanter.callbacks.labeled_eval import LabeledLmEvalConfig, add_labeled_lm_eval_callbacks
 from levanter.adaptor import AdaptorConfig, AdaptorExportConfig, NoAdaptorConfig
 from levanter.callbacks.tensorstore_callbacks import install_tensorstore_metrics_hook_if_enabled
@@ -36,6 +37,7 @@ from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, split_act
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.trainer_state import trainables_only
+from levanter.training_control import TrainingDashboard
 from levanter.utils.jax_utils import parameter_count
 
 logger = logging.getLogger(__name__)
@@ -206,7 +208,10 @@ def main(config: TrainLmConfig):
     # 1. Sets the device mesh
     # 2. Sets the axis mapping (for fsdp)
     # 3. Sets the global metrics tracker
-    with Trainer(config.trainer, optimizer, loss_function) as trainer:
+    with (
+        Trainer(config.trainer, optimizer, loss_function) as trainer,
+        TrainingDashboard(config, trainer.request_checkpoint, config.trainer.id or "unknown"),
+    ):
         # randomness in jax is tightly controlled by "keys" which are the states of the random number generators
         # this makes deterministic training pretty easy
         seed = config.trainer.seed
@@ -386,7 +391,7 @@ def main(config: TrainLmConfig):
             callbacks.log_performance_stats(Pos.size, trainer.config.batch_schedule, flops_per_example), every=1
         )
         trainer.add_hook(
-            callbacks.iris_status_reporter(
+            iris_status_reporter(
                 Pos.size, trainer.config.batch_schedule, trainer.config.num_train_steps, flops_per_example
             ),
             every=10,

@@ -4,10 +4,14 @@
 """Verify a Marin vLLM wheel before invoking its normal CLI.
 
 The launcher already names one promoted wheel URL, so startup only checks what building that command
-cannot settle: the PEP 610 record identifies the promoted wheel, ``vllm._C_stable_libtorch`` comes from
+cannot settle: the PEP 610 record identifies the promoted wheel, vLLM's compiled extension comes from
 inside that distribution, and the GPU this process was scheduled onto is one the wheel was compiled for.
 The first two are a pair. A leaked ``PYTHONPATH`` entry holding a complete vLLM install would satisfy the
 extension check on its own, because its metadata and its extension agree with each other.
+
+The extension is discovered from the wheel's own ``RECORD`` rather than hardcoded: vLLM renames its
+core extension across CUDA toolchains (``vllm._C`` on CUDA 12, ``vllm._C_stable_libtorch`` on CUDA 13),
+and a hardcoded name breaks the check when it next moves.
 """
 
 import dataclasses
@@ -60,6 +64,24 @@ def installed_wheel_url_matches(direct_url: dict, expected_wheel_url: str) -> bo
     return unquote(installed_url_without_fragment) == unquote(expected_wheel_url)
 
 
+def _core_extension_module(distribution: importlib.metadata.Distribution) -> str:
+    """The dotted module name of vLLM's core compiled extension, read from the wheel's ``RECORD``.
+
+    Selecting the ``_C`` family by shape rather than a literal name keeps the verifier working across
+    the toolchain rename (``_C`` -> ``_C_stable_libtorch``) that broke a hardcoded check once.
+    """
+    stems = {
+        file.name.split(".", 1)[0]
+        for file in distribution.files or ()
+        if file.parts[:-1] == ("vllm",)
+        and file.suffix in (".so", ".pyd", ".py")
+        and (file.name.split(".", 1)[0] == "_C" or file.name.split(".", 1)[0].startswith("_C_"))
+    }
+    if len(stems) != 1:
+        raise RuntimeError(f"Expected exactly one vLLM core (_C) extension under vllm/, found {sorted(stems)}")
+    return f"vllm.{stems.pop()}"
+
+
 def main() -> None:
     expected = _WheelProvenance.from_json(sys.argv.pop(1))
     print(f"{_SELECTED_SENTINEL}{json.dumps(expected.record(), sort_keys=True)}", flush=True)
@@ -83,15 +105,14 @@ def main() -> None:
             f"targets {expected.sm_targets}"
         )
 
-    vllm_extension = importlib.import_module("vllm._C_stable_libtorch")
+    distribution_root = Path(distribution.locate_file("")).resolve()
+    extension_module = _core_extension_module(distribution)
+    vllm_extension = importlib.import_module(extension_module)
     extension_path = vllm_extension.__file__
     assert extension_path is not None
     resolved_extension_path = Path(extension_path).resolve()
-    distribution_root = Path(distribution.locate_file("")).resolve()
     if not resolved_extension_path.is_relative_to(distribution_root):
-        raise RuntimeError(
-            f"vllm._C_stable_libtorch loaded outside the verified distribution: {resolved_extension_path}"
-        )
+        raise RuntimeError(f"{extension_module} loaded outside the verified distribution: {resolved_extension_path}")
 
     provenance = {
         **expected.record(),

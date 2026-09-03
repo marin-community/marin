@@ -45,7 +45,8 @@ from marin.processing.classification.deduplication.verify_fuzzy_dups import (
     FuzzyVerificationStoreConfig,
     verify_fuzzy_dups,
 )
-from rigging.filesystem import StoragePath, url_to_fs
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.reference_pipeline import DEFAULT_SCALE, select_sources, zephyr_datakit_steps

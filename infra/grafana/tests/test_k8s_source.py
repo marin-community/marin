@@ -447,6 +447,9 @@ def test_nodes_report_coreweave_kernel_deadlock_and_pending_reboot():
             "compute_class": "default",
             "gpu_model": "NVIDIA H100 80GB HBM3",
             "gpu_capacity": 0,
+            "cpu_allocatable": "",
+            "memory_allocatable": "",
+            "gpu_allocatable": 0,
             "rack": "14",
             "rack_name": "dh1-r014-us-east-02a",
             "rack_slot": "dh1-r014-node-01",
@@ -463,6 +466,78 @@ def test_nodes_report_coreweave_kernel_deadlock_and_pending_reboot():
             "pending_phase": "production-reboot",
         }
     ]
+
+
+def test_workload_allocations_report_live_iris_jobs_and_requested_resources():
+    workload = {
+        "metadata": {
+            "namespace": "iris",
+            "name": "train-worker-0",
+            "creationTimestamp": "2026-07-19T00:00:00Z",
+            "labels": {"iris.managed": "true", "iris.job_id": "alice-train"},
+            "annotations": {"iris.task_id": "/alice/train/0"},
+        },
+        "spec": {
+            "nodeName": "gpu-a",
+            "priorityClassName": "iris-production",
+            "containers": [
+                {
+                    "name": "task",
+                    "env": [
+                        {
+                            "name": "IRIS_TASK_RESOURCES",
+                            "value": (
+                                '{"cpu_millicores": 8000, "memory_bytes": "68719476736", '
+                                '"device": {"gpu": {"count": 4, "variant": "H100"}}}'
+                            ),
+                        }
+                    ],
+                }
+            ],
+        },
+        "status": {
+            "phase": "Running",
+            "conditions": [{"type": "Ready", "status": "True"}],
+        },
+    }
+    terminal = {
+        **workload,
+        "metadata": {**workload["metadata"], "name": "finished-worker"},
+        "status": {"phase": "Succeeded"},
+    }
+    unmanaged = {
+        **workload,
+        "metadata": {
+            **workload["metadata"],
+            "name": "other-workload",
+            "labels": {},
+            "annotations": {},
+        },
+    }
+    routes = {
+        "/api/v1/namespaces": [_namespace("iris")],
+        "/api/v1/namespaces/iris/pods": [workload, terminal, unmanaged],
+    }
+
+    (row,) = make_k8s_source(k8s_api(routes)).workload_allocations()
+
+    row_dict = asdict(row)
+    age_seconds = row_dict.pop("age_seconds")
+    assert row_dict == {
+        "namespace": "iris",
+        "pod": "train-worker-0",
+        "node": "gpu-a",
+        "job": "/alice/train",
+        "task": "/alice/train/0",
+        "phase": "Running",
+        "ready": True,
+        "priority_class": "iris-production",
+        "cpu_request_millicores": 8000,
+        "memory_request_bytes": 68719476736,
+        "gpu_request_count": 4,
+        "gpu_variant": "H100",
+    }
+    assert age_seconds > 0
 
 
 def test_node_pools_project_capacity_policy_and_problem_conditions():
@@ -966,7 +1041,9 @@ def test_k8s_routes_serve_fleet_rows():
 def test_node_routes_filter_cached_fleet_rows():
     routes_a = healthy_k8s_routes()
     routes_b = healthy_k8s_routes()
-    routes_b["/api/v1/nodes"] = [node("g2", gpu_capacity=8)]
+    gpu_node = node("g2", gpu_capacity=8)
+    gpu_node["status"]["allocatable"] = {"cpu": "94", "memory": "1000Gi", "nvidia.com/gpu": "7"}
+    routes_b["/api/v1/nodes"] = [gpu_node]
     routes_b[NODE_POOLS] = [
         {
             "metadata": {"name": "h100"},
@@ -993,6 +1070,9 @@ def test_node_routes_filter_cached_fleet_rows():
             "compute_class": "",
             "gpu_model": "",
             "gpu_capacity": 8,
+            "cpu_allocatable": "94",
+            "memory_allocatable": "1000Gi",
+            "gpu_allocatable": 7,
             "rack": "",
             "rack_name": "",
             "rack_slot": "",
@@ -1014,6 +1094,25 @@ def test_node_routes_filter_cached_fleet_rows():
     assert error_row["cluster"] == "cw-c"
     assert error_row["error_class"] == "http"
     assert "node" not in error_row
+
+
+def test_workload_route_filters_cached_fleet_rows_by_cluster_and_job():
+    routes_a = healthy_k8s_routes()
+    routes_b = healthy_k8s_routes()
+    for routes, task in ((routes_a, "/alice/train/0"), (routes_b, "/bob/eval/0")):
+        routes["/api/v1/namespaces"] = [_namespace("iris")]
+        workload = pod("iris", task.replace("/", "-").strip("-"))
+        workload["metadata"]["labels"] = {"iris.managed": "true"}
+        workload["metadata"]["annotations"] = {"iris.task_id": task}
+        workload["spec"]["containers"] = [{"name": "task", "env": []}]
+        workload["status"]["phase"] = "Running"
+        routes["/api/v1/namespaces/iris/pods"] = [workload]
+
+    client = _client(_fleet(("cw-a", k8s_api(routes_a)), ("cw-b", k8s_api(routes_b))))
+
+    assert [
+        row["task"] for row in client.get("/k8s/workloads", params={"cluster": "cw-b", "job": "/bob/eval"}).json()
+    ] == ["/bob/eval/0"]
 
 
 def test_finelog_route_serializes_pod_diagnostics():

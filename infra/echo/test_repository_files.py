@@ -29,6 +29,12 @@ def test_indexed_file_rejects_generated_vendored_secret_binary_and_oversized_con
     )
     assert kept is not None
     assert kept.title == "Collective diagnosis"
+    mdx = repository_files.indexed_file(
+        PurePosixPath("docs/runbook.mdx"),
+        b"# MDX diagnosis\n\n<Callout>Inspect the topology.</Callout>",
+    )
+    assert mdx is not None
+    assert mdx.title == "MDX diagnosis"
 
 
 def test_text_chunks_cover_long_files_with_bounded_overlap():

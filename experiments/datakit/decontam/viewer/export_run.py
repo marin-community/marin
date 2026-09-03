@@ -26,7 +26,9 @@ from collections import Counter
 
 import pyarrow.parquet as pq
 from marin.datakit.decon import _bloom_hash, _extract_ngrams, bloom_paths
-from rigging.filesystem import marin_prefix, prefix_join, url_to_fs
+from rigging.filesystem.cluster_config import marin_prefix
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datakit.testbed.decon_arm import NGRAM_LENGTH, PARAGRAPH_DELIMITER, build_testbed_decon_steps
 

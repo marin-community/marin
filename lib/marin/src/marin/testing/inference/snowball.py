@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 
 from marin.testing.inference.backend_parity import TokenScore
 

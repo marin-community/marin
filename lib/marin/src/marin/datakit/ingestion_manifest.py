@@ -10,7 +10,9 @@ from enum import StrEnum, auto
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
-from rigging.filesystem import StoragePath, atomic_rename, open_url
+from rigging.filesystem.atomic import atomic_rename
+from rigging.filesystem.factory import open_url
+from rigging.filesystem.storage_path import StoragePath
 
 JsonScalar = str | int | float | bool | None
 type JsonValue = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
@@ -152,6 +154,17 @@ class IngestionSourceManifest(ManifestModel):
         """Return an exact hash over the full manifest payload."""
         blob = json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
         return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def verify_content_fingerprint(manifest: IngestionSourceManifest | None, content_fingerprint: str) -> None:
+    """Reject a staging config whose recorded fingerprint no longer matches its source manifest."""
+    if manifest is None or not content_fingerprint:
+        return
+    expected = manifest.fingerprint()
+    if content_fingerprint != expected:
+        raise ValueError(
+            f"content_fingerprint mismatch: config has {content_fingerprint}, source manifest has {expected}"
+        )
 
 
 class MaterializedOutputMetadata(ManifestModel):

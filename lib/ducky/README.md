@@ -125,7 +125,7 @@ Read access on the literal URIs in a query is enforced in two stages:
   (default `gs://marin-,s3://marin-`, i.e. any marin GCS bucket plus the R2/CoreWeave S3
   stores). A URI outside it is hard-refused.
 - Among the allowed URIs, whether a **GCS** read is same-region or egress-costly cross-region
-  is decided at query time by `rigging.filesystem.is_cross_region_url`, which compares the
+  is decided at query time by `rigging.filesystem.cross_region.is_cross_region_url`, which compares the
   bucket's live GCS location metadata against this VM's region (multi-region aware, and
   honoring the `MARIN_I_WILL_PAY_FOR_ALL_FEES` override). A cross-region GCS read must **opt
   in** with a leading comment:
@@ -176,18 +176,24 @@ Ducky deploys through Pulumi: the `infra/ducky` project declares it as an always
 job (`iac.iris.service.IrisService`), with the job shape and `DUCKY_*` task environment in
 the committed `infra/ducky/Pulumi.ducky-marin.yaml`. CI supplies the five repository secrets
 to the deploy process, which resolves their `env:` references only when submitting the Iris
-job. CI rolls the stack on merge to main (`ops-ducky.yaml`); to force a redeploy with unchanged
-code, dispatch that workflow with a `deploy_generation` override. The deploy builds the Vue
-dashboard itself on every roll (node/npm required on the deploying machine).
-
-A manual deploy must export `DUCKY_GCS_HMAC_KEY_ID`, `DUCKY_GCS_HMAC_SECRET`,
-`R2_KEY_ID`, `R2_KEY_SECRET`, and `DUCKY_CW_SECRET_KEY` before rolling the stack:
+job. CI rolls the stack on merge to main (`ops-pulumi-rollout.yaml`). Use the workflow for a
+normal manual redeploy because it supplies the production identity and repository secrets. To
+force a redeploy with unchanged code, dispatch it with a `deploy_generation` override. The
+deploy builds the Vue dashboard itself on every roll (node/npm required on the deploying
+machine).
 
 ```bash
-uv sync --all-packages --extra deploy
-cd infra/ducky
-pulumi stack select ducky-marin
-pulumi up
+gh workflow run ops-pulumi-rollout.yaml --ref main \
+  -f service=ducky -f deploy_generation=1
+```
+
+A local deploy is for deliberately rolling an unmerged checkout. The five credentials are
+held in GitHub rather than Secret Manager, so it requires `DUCKY_GCS_HMAC_KEY_ID`,
+`DUCKY_GCS_HMAC_SECRET`, `R2_KEY_ID`, `R2_KEY_SECRET`, and `DUCKY_CW_SECRET_KEY` in the
+operator environment:
+
+```bash
+uv run --all-packages --extra deploy marin-deploy ducky rollout
 ```
 
 The stack uses the shared `marin-iac-key` KMS secrets provider. The operator needs

@@ -15,11 +15,11 @@ from typing import cast
 import requests
 from fray.client import JobHandle
 from fray.current_client import current_client
-from fray.types import ActorConfig, CpuConfig, Entrypoint, JobRequest, JobStatus
+from fray.types import ActorConfig, Entrypoint, JobRequest, JobStatus
 from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
-from iris.cluster.types import PROXY_TIMEOUT_METADATA_KEY, EndpointAccess, JobName, is_job_finished
-from iris.rpc import job_pb2
+from iris.cluster.types import PROXY_TIMEOUT_METADATA_KEY, EndpointAccess, JobName
+from iris.resources.state import TaskState, is_job_finished
 from rigging.connect import capability_path, proxy_path
 from rigging.log_setup import configure_logging
 from rigging.timing import Deadline, Duration
@@ -50,11 +50,14 @@ logger = logging.getLogger(__name__)
 
 _TIMEOUT_POLL_SECONDS = 30
 _ENDPOINT_READY_POLL_SECONDS = 2.0
+# Bound on time spent queued (pending/building) before the server job is placed.
+# Distinct from the readiness timeout, which budgets server startup and only
+# counts while the job is actually running.
+_ENDPOINT_PLACEMENT_TIMEOUT_SECONDS = 4 * 3600.0
 _ENDPOINT_PROBE_TIMEOUT_SECONDS = 5.0
 _METADATA_MODEL = "model"
 _METADATA_KIND = "kind"
 _METADATA_BACKEND = "backend"
-_METADATA_ACCELERATOR = "accelerator"
 _METADATA_TENSOR_PARALLEL_SIZE = "tensor_parallel_size"
 _METADATA_STREAMING = "streaming"
 _MARIN_SERVE_KIND = "marin-serve"
@@ -103,11 +106,11 @@ class RemoteInferenceSession:
         client = iris_ctx().client
         for job in self.jobs:
             job_id = JobName.from_string(str(job.job_id))
-            status = client.status(job_id)
+            status = client.job_status(job_id)
             if is_job_finished(status.state):
                 return InferenceBackendState.FINISHED
             tasks = client.list_tasks(job_id)
-            if not tasks or any(task.state != job_pb2.TASK_STATE_RUNNING for task in tasks):
+            if not tasks or any(task.state is not TaskState.RUNNING for task in tasks):
                 state = InferenceBackendState.RECOVERING
         if state is InferenceBackendState.READY and not client.list_endpoint_instances(self.endpoint_name):
             state = InferenceBackendState.RECOVERING
@@ -180,15 +183,6 @@ def _broker_config(instances: int, broker: BrokerConfig | None) -> BrokerConfig 
     return None
 
 
-def _accelerator_label(iris: IrisConfig) -> str:
-    device = iris.worker_resources.device
-    if isinstance(device, CpuConfig):
-        raise ValueError("Inference workers require an accelerator")
-    if device.kind == "gpu":
-        return f"{device.variant}x{device.chip_count()}"
-    return device.variant
-
-
 def _resolved_model(model: ServedModelConfig, iris: IrisConfig) -> tuple[ServedModelConfig, int]:
     # Keep model-cache and Transformers imports inside accelerator workers.
     from marin.inference.model_preparation import (  # noqa: PLC0415
@@ -235,7 +229,6 @@ def _endpoint_metadata(
     *,
     model: str,
     backend: str,
-    accelerator: str,
     tensor_parallel_size: int,
     streaming: bool,
     proxy_timeout_seconds: float,
@@ -244,7 +237,6 @@ def _endpoint_metadata(
         _METADATA_MODEL: model,
         _METADATA_KIND: _MARIN_SERVE_KIND,
         _METADATA_BACKEND: backend,
-        _METADATA_ACCELERATOR: accelerator,
         _METADATA_TENSOR_PARALLEL_SIZE: str(tensor_parallel_size),
         _METADATA_STREAMING: str(streaming).lower(),
         PROXY_TIMEOUT_METADATA_KEY: str(proxy_timeout_seconds),
@@ -305,7 +297,6 @@ def _register_dashboard(
         max_model_len=service.model.max_model_len,
         dtype=service.model.dtype,
         has_chat_template=has_chat_template,
-        tpu_type=_accelerator_label(service.iris),
         endpoint=service.endpoint_name,
         streaming=streaming,
     )
@@ -320,7 +311,6 @@ def _register_dashboard(
         metadata = _endpoint_metadata(
             model=model.endpoint.model,
             backend=backend_name,
-            accelerator=_accelerator_label(service.iris),
             tensor_parallel_size=tensor_parallel_size,
             streaming=streaming,
             proxy_timeout_seconds=service.controller_proxy_timeout_seconds,
@@ -384,17 +374,42 @@ def run_iris_service(service: IrisServiceConfig) -> None:
             _block_until_timeout(session.check_alive, service.timeout_hours)
 
 
+_PLACED_TASK_STATES = frozenset({TaskState.ASSIGNED, TaskState.BUILDING, TaskState.RUNNING})
+
+
 def _wait_for_endpoint(job: JobHandle, endpoint_name: str, timeout_seconds: float) -> tuple[str, dict[str, str]]:
+    """Wait for the serving job to register its endpoint.
+
+    ``timeout_seconds`` budgets server startup and counts only while a task of
+    the serving job is placed (assigned, building, or running); queue time is
+    bounded separately so a long scheduling wait cannot consume the startup
+    budget, and a preemption requeue resets the startup clock. Placement is
+    read from task state because Iris keeps a started job RUNNING while a
+    preempted task requeues.
+    """
     ctx = iris_ctx()
-    deadline = time.monotonic() + timeout_seconds
-    while time.monotonic() < deadline:
+    job_name = JobName.from_string(str(job.job_id))
+    placement_deadline = Deadline.from_seconds(_ENDPOINT_PLACEMENT_TIMEOUT_SECONDS)
+    ready_deadline: Deadline | None = None
+    while True:
         endpoints = ctx.client.list_endpoint_instances(endpoint_name)
         if endpoints:
             return endpoints[0].address, dict(endpoints[0].metadata)
         if job.status().value in {"succeeded", "failed", "stopped"}:
             raise RuntimeError(f"Inference job {job.job_id} finished before registering {endpoint_name!r}")
+        if any(task.state in _PLACED_TASK_STATES for task in ctx.client.list_tasks(job_name)):
+            if ready_deadline is None:
+                ready_deadline = Deadline.from_seconds(timeout_seconds)
+            if ready_deadline.expired():
+                raise TimeoutError(f"Timed out waiting for inference endpoint {endpoint_name!r}")
+        else:
+            ready_deadline = None
+            if placement_deadline.expired():
+                raise TimeoutError(
+                    f"Timed out waiting for inference job {job.job_id} to be placed "
+                    f"(queued for {_ENDPOINT_PLACEMENT_TIMEOUT_SECONDS:.0f}s)"
+                )
         time.sleep(_ENDPOINT_READY_POLL_SECONDS)
-    raise TimeoutError(f"Timed out waiting for inference endpoint {endpoint_name!r}")
 
 
 @contextlib.contextmanager
@@ -575,7 +590,6 @@ def _expose_brokered_inference(
             _endpoint_metadata(
                 model=model.model_id,
                 backend=worker_metadata.backend_name,
-                accelerator=_accelerator_label(iris),
                 tensor_parallel_size=worker_metadata.tensor_parallel_size,
                 streaming=False,
                 proxy_timeout_seconds=proxy.request_timeout_seconds,

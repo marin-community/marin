@@ -17,8 +17,8 @@ from fray.cluster import ResourceConfig
 from thalas.execution.executor import ExecutorStep, InputName, MirroredValue
 from thalas.execution.remote import remote
 from thalas.execution.types import this_output_path, versioned
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
 
 from experiments.downstream_scaling.evals.framework.schema import (
     completions_file,
@@ -137,9 +137,9 @@ def _reseed_sampler(worker, seed: int) -> None:
     import jax
     from flax import nnx
 
-    assert hasattr(worker.model_runner, "rng_params_for_sampling"), (
-        "tpu_inference runner missing rng_params_for_sampling; upstream API may have changed"
-    )
+    assert hasattr(
+        worker.model_runner, "rng_params_for_sampling"
+    ), "tpu_inference runner missing rng_params_for_sampling; upstream API may have changed"
     worker.model_runner.rng_params_for_sampling = nnx.Rngs(jax.random.key(seed)).params()
 
 

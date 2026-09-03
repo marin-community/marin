@@ -77,7 +77,7 @@ class DataLoader(Iterable[Ex]):
         max_buffered_batches: int | None = 64,
         mesh: Mesh | None = None,
         axis_resources: ResourceMapping | None = None,
-        prefetch_size: int = 32,
+        fetch_batch_size: int = 32,
         pad_final_batch: bool = True,
         allow_nondivisible_batch_size: bool = False,
     ):
@@ -95,14 +95,17 @@ class DataLoader(Iterable[Ex]):
             max_buffered_batches (Optional[int]): The maximum number of batches to buffer. If None, the buffer is unbounded.
              If <0, the buffer is disabled and single threaded operation is used.
             axis_resources (Optional[ResourceMapping]): axis mapping
-            prefetch_size (int): The number of batches to prefetch at once
+            fetch_batch_size (int): The number of batches to retrieve in each background storage request
             mesh (Mesh): The mesh to use
             batch_axis_name (str | None): The name of the batch axis. If None, defaults to "batch" unless batch_size is an Axis.
             pad_final_batch (bool): If True, the final batch will be padded to the size of the previous batch.
             allow_nondivisible_batch_size (bool): All the batch size to be non-divisible by the data axis size (typically the number of devices).
         """
+        if fetch_batch_size < 1:
+            raise ValueError("fetch_batch_size must be at least 1")
+
         self.max_buffered_batches = max_buffered_batches
-        self.prefetch_size = prefetch_size
+        self.fetch_batch_size = fetch_batch_size
         self.axis_resources = axis_resources
         self.data_store = data
 
@@ -253,10 +256,10 @@ class DataLoaderIterator(Iterator[Ex]):
         if elapsed > 0.5:
             qsize = self._batches.qsize() if isinstance(self._batches, BackgroundIterator) else "N/A"
             logger.warning(
-                "Data loader stalled %.3fs. queue_size=%s prefetch_size=%d max_buffered=%s",
+                "Data loader stalled %.3fs. queue_size=%s fetch_batch_size=%d max_buffered=%s",
                 elapsed,
                 qsize,
-                self.dl.prefetch_size,
+                self.dl.fetch_batch_size,
                 self.dl.max_buffered_batches,
             )
         return batch
@@ -270,8 +273,7 @@ class DataLoaderIterator(Iterator[Ex]):
             batch_number = self._start_from_batch or 0
             done = False
             while not done:
-                # we try to prefetch multiple batches at a time
-                target_next_batch_number = batch_number + self.dl.prefetch_size
+                target_next_batch_number = batch_number + self.dl.fetch_batch_size
                 max_achievable_batch_number, final_batch_size = await self._dataset_get_available_batch_number(
                     target_next_batch_number
                 )

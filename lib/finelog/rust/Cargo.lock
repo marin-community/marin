@@ -1893,6 +1893,7 @@ dependencies = [
  "hyper-rustls",
  "hyper-util",
  "jsonwebtoken",
+ "libc",
  "object_store",
  "parquet",
  "protoc-bin-vendored",

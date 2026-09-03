@@ -16,7 +16,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from marin.datakit.decon import DeconAttributes
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.datakit.reports.common import StageReport, render_template, sample_rows, write_report
 

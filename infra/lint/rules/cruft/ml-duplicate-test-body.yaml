@@ -1,0 +1,24 @@
+schema_version: 1
+code: ml-duplicate-test-body
+lane: cruft
+title: Copy-pasted test bodies that should be parametrized
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** Five test functions differing only in input/expected pair
+  should be one `@pytest.mark.parametrize`. Copying invites the "fix one,
+  forget the others" failure.
+
+  **When allowed:** When the assertions or setup genuinely differ; pytest
+  parametrize hurts when the bodies are not actually similar.
+
+  **Bad example:**
+  ```python
+  def test_dedupe_empty():
+      assert dedupe([]) == []
+
+  def test_dedupe_one():
+      assert dedupe([1]) == [1]
+
+  def test_dedupe_dup():
+      assert dedupe([1, 1]) == [1]   # @pytest.mark.parametrize with (input, expected).
+  ```

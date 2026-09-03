@@ -2,10 +2,10 @@
 //!
 //! The mapping is load-bearing:
 //!
-//! - `SchemaConflict` -> `failed_precondition` (NOT `already_exists`)
+//! - `SchemaConflict` / `BatchSchemaConflict` -> `failed_precondition`
 //! - `SchemaValidation` / `InvalidNamespace` -> `invalid_argument`
 //! - `NamespaceNotFound` -> `not_found`
-//! - `QueryResultTooLarge` -> `resource_exhausted`
+//! - `ResourceExhausted` -> `resource_exhausted`
 //! - `Internal` -> `internal`
 
 use connectrpc::ConnectError;
@@ -16,6 +16,9 @@ pub enum StatsError {
     /// Requested schema differs from the registered one in a non-additive way
     /// (type change, new non-nullable column).
     SchemaConflict(String),
+    /// A well-formed write batch conflicts with the namespace's registered schema.
+    /// Re-registering or upgrading the receiver can make the same bytes valid.
+    BatchSchemaConflict(String),
     /// A schema or write batch is structurally invalid (missing ordering key,
     /// unknown column type, reserved column).
     SchemaValidation(String),
@@ -24,8 +27,8 @@ pub enum StatsError {
     InvalidNamespace(String),
     /// Named namespace is not registered.
     NamespaceNotFound(String),
-    /// Query result exceeds the size cap.
-    QueryResultTooLarge(String),
+    /// A query or ingest buffer exceeds its capacity.
+    ResourceExhausted(String),
     /// A durability await exceeded its budget (write not durable in time).
     DeadlineExceeded(String),
     /// Unexpected internal failure.
@@ -36,10 +39,11 @@ impl std::fmt::Display for StatsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             StatsError::SchemaConflict(m) => write!(f, "{m}"),
+            StatsError::BatchSchemaConflict(m) => write!(f, "{m}"),
             StatsError::SchemaValidation(m) => write!(f, "{m}"),
             StatsError::InvalidNamespace(m) => write!(f, "{m}"),
             StatsError::NamespaceNotFound(m) => write!(f, "{m}"),
-            StatsError::QueryResultTooLarge(m) => write!(f, "{m}"),
+            StatsError::ResourceExhausted(m) => write!(f, "{m}"),
             StatsError::DeadlineExceeded(m) => write!(f, "{m}"),
             StatsError::Internal(m) => write!(f, "{m}"),
         }
@@ -52,10 +56,11 @@ impl From<StatsError> for ConnectError {
     fn from(err: StatsError) -> ConnectError {
         match err {
             StatsError::SchemaConflict(m) => ConnectError::failed_precondition(m),
+            StatsError::BatchSchemaConflict(m) => ConnectError::failed_precondition(m),
             StatsError::SchemaValidation(m) => ConnectError::invalid_argument(m),
             StatsError::InvalidNamespace(m) => ConnectError::invalid_argument(m),
             StatsError::NamespaceNotFound(m) => ConnectError::not_found(m),
-            StatsError::QueryResultTooLarge(m) => ConnectError::resource_exhausted(m),
+            StatsError::ResourceExhausted(m) => ConnectError::resource_exhausted(m),
             StatsError::DeadlineExceeded(m) => ConnectError::deadline_exceeded(m),
             StatsError::Internal(m) => ConnectError::internal(m),
         }
@@ -75,6 +80,10 @@ mod tests {
     fn schema_conflict_maps_to_failed_precondition_not_already_exists() {
         assert_eq!(
             code_of(StatsError::SchemaConflict("x".into())),
+            ErrorCode::FailedPrecondition
+        );
+        assert_eq!(
+            code_of(StatsError::BatchSchemaConflict("x".into())),
             ErrorCode::FailedPrecondition
         );
     }
@@ -100,9 +109,9 @@ mod tests {
     }
 
     #[test]
-    fn too_large_maps_to_resource_exhausted() {
+    fn resource_exhaustion_maps_to_resource_exhausted() {
         assert_eq!(
-            code_of(StatsError::QueryResultTooLarge("x".into())),
+            code_of(StatsError::ResourceExhausted("x".into())),
             ErrorCode::ResourceExhausted
         );
     }

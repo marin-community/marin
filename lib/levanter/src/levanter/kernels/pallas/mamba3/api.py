@@ -15,7 +15,6 @@ from jaxtyping import Array, Float
 from levanter.kernels.pallas.autotune_utils import named_sharding_of
 
 from .config import (
-    BlockSizes,
     HybridModeConfig,
     Mamba3Mode,
     mamba3_tpu_default_chunk_size,
@@ -148,9 +147,6 @@ def mamba3_intra_chunk(
     x: Float[Array, "... chunk value"],
     *,
     implementation: Implementation | Sequence[Implementation] | None = None,
-    block_sizes: BlockSizes | None = None,
-    interpret: bool = False,
-    backend: str | None = None,
 ) -> Float[Array, "... chunk value"]:
     """Dispatch the quadratic intra-chunk Mamba-3 block to the requested backend."""
 
@@ -209,13 +205,9 @@ def mamba3_chunked_forward_from_transformed(
     x: Float[Array, "... chunks chunk value"],
     *,
     implementation: Implementation | Sequence[Implementation] | None = None,
-    block_sizes: BlockSizes | None = None,
-    interpret: bool = False,
-    backend: str | None = None,
 ) -> tuple[Float[Array, "... chunks chunk value"], Float[Array, "... value state"]]:
     """Chunked Mamba-3 forward pass on transformed inputs."""
 
-    del block_sizes, interpret, backend
     if a_log_cumsum.ndim < 2 or src_scale.shape != a_log_cumsum.shape or out_correction.shape != a_log_cumsum.shape:
         raise ValueError("Expected transformed inputs with shape `[..., chunks, chunk]`.")
     leading_shape = a_log_cumsum.shape[:-2]
@@ -264,9 +256,6 @@ def mamba3_chunked_forward(
     x: Float[Array, "... chunks chunk value"],
     *,
     implementation: Implementation | Sequence[Implementation] | None = None,
-    block_sizes: BlockSizes | None = None,
-    interpret: bool = False,
-    backend: str | None = None,
 ) -> tuple[Float[Array, "... chunks chunk value"], Float[Array, "... value state"]]:
     """Stable Mamba-3 entrypoint on native chunked inputs."""
 
@@ -295,9 +284,6 @@ def mamba3_chunked_forward(
         c,
         x,
         implementation=implementation,
-        block_sizes=block_sizes,
-        interpret=interpret,
-        backend=backend,
     )
 
 
@@ -314,13 +300,9 @@ def mamba3_mimo_chunked_forward_from_transformed(
     w_o: Float[Array, "... value rank"] | Float[Array, "value rank"],
     *,
     implementation: Implementation | Sequence[Implementation] | None = None,
-    block_sizes: BlockSizes | None = None,
-    interpret: bool = False,
-    backend: str | None = None,
 ) -> tuple[Float[Array, "... chunks chunk value"], Float[Array, "... value state"]]:
     """Chunked real-valued MIMO Mamba-3 forward pass on transformed schedules."""
 
-    del block_sizes, interpret, backend
     if implementation not in (None, "xla", "reference"):
         raise ValueError("MIMO is currently available only for the XLA and reference implementations.")
     if a_log_cumsum.ndim < 2 or src_scale.shape != a_log_cumsum.shape or out_correction.shape != a_log_cumsum.shape:
@@ -382,9 +364,6 @@ def mamba3_mimo_chunked_forward(
     w_o: Float[Array, "... value rank"] | Float[Array, "value rank"],
     *,
     implementation: Implementation | Sequence[Implementation] | None = None,
-    block_sizes: BlockSizes | None = None,
-    interpret: bool = False,
-    backend: str | None = None,
 ) -> tuple[Float[Array, "... chunks chunk value"], Float[Array, "... value state"]]:
     """Stable MIMO Mamba-3 entrypoint on native chunked inputs."""
 
@@ -421,9 +400,6 @@ def mamba3_mimo_chunked_forward(
         w_z,
         w_o,
         implementation=implementation,
-        block_sizes=block_sizes,
-        interpret=interpret,
-        backend=backend,
     )
 
 
@@ -563,13 +539,10 @@ def mamba3_attentionish_forward_from_transformed(
     return_final_state: bool = False,
     return_final_k: bool = False,
     implementation: Implementation | Sequence[Implementation] | None = None,
-    block_sizes: BlockSizes | None = None,
-    interpret: bool = False,
-    backend: str | None = None,
 ) -> jax.Array | tuple[jax.Array, ...]:
     """Attention-like real-valued SISO entrypoint mapped onto the chunked Mamba-3 kernel family."""
 
-    del block_sizes, interpret, backend, da_cs_rev
+    del da_cs_rev
     _require_none_or_zero("angles", angles)
     _require_none_or_zero("segsum", segsum)
     batch, seq_len, heads, state_dim = _validate_attentionish_siso_inputs(q, k, v, chunk_size=chunk_size)
@@ -694,9 +667,6 @@ def mamba3_attentionish_forward(
     return_final_state: bool = False,
     return_final_k: bool = False,
     implementation: Implementation | Sequence[Implementation] | None = None,
-    block_sizes: BlockSizes | None = None,
-    interpret: bool = False,
-    backend: str | None = None,
 ) -> jax.Array | tuple[jax.Array, ...]:
     """Native attention-like SISO Mamba-3 entrypoint."""
 
@@ -717,9 +687,6 @@ def mamba3_attentionish_forward(
         return_final_state=return_final_state,
         return_final_k=return_final_k,
         implementation=implementation,
-        block_sizes=block_sizes,
-        interpret=interpret,
-        backend=backend,
     )
 
 
@@ -746,9 +713,6 @@ def mamba3_mimo_attentionish_forward_from_transformed(
     return_final_state: bool = False,
     return_final_k: bool = False,
     implementation: Implementation | Sequence[Implementation] | None = None,
-    block_sizes: BlockSizes | None = None,
-    interpret: bool = False,
-    backend: str | None = None,
 ) -> jax.Array | tuple[jax.Array, ...]:
     """Attention-like real-valued MIMO entrypoint mapped onto the current chunked Mamba-3 kernel family.
 
@@ -756,7 +720,7 @@ def mamba3_mimo_attentionish_forward_from_transformed(
     must therefore be `None` or all-zero, and `da_cs`/`dt`/`trap` are required.
     """
 
-    del block_sizes, interpret, backend, da_cs_rev
+    del da_cs_rev
     _require_none_or_zero("angles", angles)
     _require_none_or_zero("segsum", segsum)
     batch, seq_len, heads, rank, _, state_dim = _validate_attentionish_mimo_inputs(q, k, v, chunk_size=chunk_size)
@@ -916,9 +880,6 @@ def mamba3_mimo_attentionish_forward(
     return_final_state: bool = False,
     return_final_k: bool = False,
     implementation: Implementation | Sequence[Implementation] | None = None,
-    block_sizes: BlockSizes | None = None,
-    interpret: bool = False,
-    backend: str | None = None,
 ) -> jax.Array | tuple[jax.Array, ...]:
     """Native attention-like MIMO Mamba-3 entrypoint.
 
@@ -947,9 +908,6 @@ def mamba3_mimo_attentionish_forward(
         return_final_state=return_final_state,
         return_final_k=return_final_k,
         implementation=implementation,
-        block_sizes=block_sizes,
-        interpret=interpret,
-        backend=backend,
     )
 
 
@@ -967,9 +925,6 @@ def mamba3_hybrid_chunked_forward_from_transformed(
     w_z: Float[Array, "... value rank"] | Float[Array, "value rank"] | None = None,
     w_o: Float[Array, "... value rank"] | Float[Array, "value rank"] | None = None,
     implementation: Implementation | Sequence[Implementation] | None = None,
-    block_sizes: BlockSizes | None = None,
-    interpret: bool = False,
-    backend: str | None = None,
 ) -> tuple[Float[Array, "... chunks chunk value"], Float[Array, "... value state"]]:
     """Dispatch transformed Mamba-3 inputs to the stable SISO or MIMO API."""
 
@@ -984,9 +939,6 @@ def mamba3_hybrid_chunked_forward_from_transformed(
             cast(Float[Array, "... chunks chunk state"], c),
             x,
             implementation=implementation,
-            block_sizes=block_sizes,
-            interpret=interpret,
-            backend=backend,
         )
 
     if mode == "mimo":
@@ -1004,9 +956,6 @@ def mamba3_hybrid_chunked_forward_from_transformed(
             w_z,
             w_o,
             implementation=implementation,
-            block_sizes=block_sizes,
-            interpret=interpret,
-            backend=backend,
         )
 
     raise ValueError(f"Unsupported hybrid Mamba-3 mode: {mode}.")
@@ -1026,9 +975,6 @@ def mamba3_hybrid_chunked_forward(
     w_z: Float[Array, "... value rank"] | Float[Array, "value rank"] | None = None,
     w_o: Float[Array, "... value rank"] | Float[Array, "value rank"] | None = None,
     implementation: Implementation | Sequence[Implementation] | None = None,
-    block_sizes: BlockSizes | None = None,
-    interpret: bool = False,
-    backend: str | None = None,
 ) -> tuple[Float[Array, "... chunks chunk value"], Float[Array, "... value state"]]:
     """Dispatch native Mamba-3 inputs to the stable SISO or MIMO API."""
 
@@ -1043,9 +989,6 @@ def mamba3_hybrid_chunked_forward(
             cast(Float[Array, "... chunks chunk state"], c),
             x,
             implementation=implementation,
-            block_sizes=block_sizes,
-            interpret=interpret,
-            backend=backend,
         )
 
     if mode == "mimo":
@@ -1063,16 +1006,12 @@ def mamba3_hybrid_chunked_forward(
             w_z,
             w_o,
             implementation=implementation,
-            block_sizes=block_sizes,
-            interpret=interpret,
-            backend=backend,
         )
 
     raise ValueError(f"Unsupported hybrid Mamba-3 mode: {mode}.")
 
 
 __all__ = [
-    "BlockSizes",
     "HybridModeConfig",
     "IMPLEMENTATIONS",
     "Implementation",

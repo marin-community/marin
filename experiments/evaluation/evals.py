@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -25,6 +26,8 @@ from marin.evaluation.records import EvalchemyRef, EvalRef, EvalTaskRef, HarborR
 from marin.evaluation.runner import EvalExecutor
 from marin.external_dependencies import EVALCHEMY
 from rigging.secrets import SecretSpec
+
+logger = logging.getLogger(__name__)
 
 _DAYTONA_ENVIRONMENT_TYPE = "daytona"
 _EVALCHEMY_CONFIG_DIR = Path(__file__).with_name("configs") / "evalchemy"
@@ -76,14 +79,25 @@ class EvalchemyDefinition:
     def config_for(self, source: EvalchemyConfig, model: ModelConfig, limit: int | None) -> EvalchemyRunConfig:
         config = evalchemy_run_config(self.name, source)
         effective_limit = config.max_eval_instances if limit is None else limit
+        model_max_gen_toks = model.generation.max_gen_toks
+        max_gen_toks = config.max_gen_toks
+        if model_max_gen_toks is not None:
+            if source.max_tokens is None or model_max_gen_toks < max_gen_toks:
+                max_gen_toks = model_max_gen_toks
+            elif model_max_gen_toks > max_gen_toks:
+                logger.warning(
+                    "Model generation limit %d exceeds the %s benchmark limit %d; using the benchmark limit. "
+                    "Pass an Evalchemy config with a larger max_tokens value to evaluate longer generations.",
+                    model_max_gen_toks,
+                    self.name,
+                    max_gen_toks,
+                )
         return replace(
             config,
             apply_chat_template=(
                 model.apply_chat_template if source.apply_chat_template is None else source.apply_chat_template
             ),
-            max_gen_toks=(
-                model.generation.max_gen_toks if model.generation.max_gen_toks is not None else config.max_gen_toks
-            ),
+            max_gen_toks=max_gen_toks,
             max_eval_instances=effective_limit,
             extra_gen_kwargs={
                 **config.extra_gen_kwargs,

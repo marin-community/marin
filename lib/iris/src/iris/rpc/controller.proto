@@ -110,9 +110,9 @@ message Controller {
     // ISO date (YYYY-MM-DD) of the client's marin-iris build. For wheels this
     // is stamped at build time by scripts/python_libs_package.py; for editable
     // installs it's derived from `git log` on the iris source tree. Root
-    // submissions older than FRESHNESS_WINDOW (today - 14d) are rejected.
-    // Nested submissions (is_root == false) are exempt. Empty string is
-    // interpreted as FEATURE_INTRODUCTION_DATE — see service.py.
+    // submissions more than FRESHNESS_WINDOW (14d) older than the controller's
+    // own build are rejected. Nested submissions (is_root == false) are exempt,
+    // as is an empty string, which means the build can't identify itself.
     string client_revision_date = 36;
 
     // Requested container security profile. UNSPECIFIED => DEFAULT. Elevated
@@ -176,6 +176,10 @@ message Controller {
   }
 
   message TerminateJobRequest {
+    string job_id = 1;
+  }
+
+  message CompleteJobRequest {
     string job_id = 1;
   }
 
@@ -542,7 +546,7 @@ message Controller {
   }
 
   message GetKubernetesClusterStatusRequest {
-    // Filter to one backend. Empty = single CLUSTER_VIEW backend, or error if >1.
+    // If set, must match this controller's backend ID.
     string backend_id = 1;
   }
 
@@ -607,7 +611,7 @@ message Controller {
   message SetUserBudgetRequest {
     string user_id = 1;
     int64 budget_limit = 2;      // max budget value (0 = unlimited)
-    iris.job.PriorityBand max_band = 3;   // highest band this user can submit to (lower number = higher priority)
+    iris.job.PriorityBand max_band = 3;   // highest-priority band this user can submit to
   }
   message SetUserBudgetResponse {}
 
@@ -676,8 +680,7 @@ message Controller {
   message ListBackendsRequest {}
 
   // Worker-daemon fleet detail: the backend's own autoscaler view plus the
-  // controller's DB-derived worker health counts. Populated for backends that
-  // carry WORKER_DAEMON.
+  // controller's DB-derived worker health counts. Populated by a worker backend.
   message WorkerFleetDetail {
     iris.vm.AutoscalerStatus autoscaler = 1;
     int32 healthy_worker_count = 2;
@@ -685,8 +688,8 @@ message Controller {
   }
 
   // The expanded, backend-authored status each TaskBackend.status() returns. The
-  // variant follows the backend's BackendCapability: a CLUSTER_VIEW backend
-  // fills ``kubernetes``; a WORKER_DAEMON backend fills ``worker``.
+  // variant follows the backend kind: Kubernetes fills ``kubernetes`` and a
+  // worker backend fills ``worker``.
   message BackendStatus {
     oneof detail {
       GetKubernetesClusterStatusResponse kubernetes = 1;
@@ -750,7 +753,7 @@ message Controller {
     int32 running_task_count = 11;
     bool has_autoscaler = 12;
     map<string, int32> capacity_health = 13;
-    // Expanded per-backend status for the always-on Backends tab's detail panel.
+    // Expanded status for the always-on Backends tab's detail panel.
     BackendStatus detail = 14;
     // Free consumable capacity for federation queueing; unset on a legacy peer.
     ResourceAvailability availability = 15;
@@ -765,6 +768,11 @@ message Controller {
     repeated BackendSummary backends = 1;
     int32 unroutable_job_count = 2;
     repeated UnroutableJob unroutable_sample = 3;
+  }
+
+  message BackendListMetadata {
+    int32 unroutable_job_count = 1;
+    repeated UnroutableJob unroutable_sample = 2;
   }
 
   message ListPeersRequest {}
@@ -858,6 +866,7 @@ service ControllerService {
   rpc GetJobStatus(Controller.GetJobStatusRequest) returns (Controller.GetJobStatusResponse);
   rpc GetJobState(Controller.GetJobStateRequest) returns (Controller.GetJobStateResponse);
   rpc TerminateJob(Controller.TerminateJobRequest) returns (iris.job.Empty);
+  rpc CompleteJob(Controller.CompleteJobRequest) returns (iris.job.Empty);
   rpc ListJobs(Controller.ListJobsRequest) returns (Controller.ListJobsResponse);
 
   // Task operations

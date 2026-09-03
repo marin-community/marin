@@ -47,7 +47,7 @@ from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.training.training import temporary_checkpoint_base_path
-from rigging.filesystem import prefix_join
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig
 from experiments.june_tpu_67b_a2b.moe.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug

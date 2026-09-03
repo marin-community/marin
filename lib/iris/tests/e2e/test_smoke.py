@@ -8,14 +8,17 @@ submits its own jobs and is independently runnable. In local mode the cluster
 has workers across CPU, TPU coscheduling, and multi-region scale groups.
 """
 
+import contextlib
 import logging
 import os
 import uuid
 from pathlib import Path
 
 import pytest
+from finelog.client import FlushResult, LogClient
 from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
+from google.protobuf.message import Message
 from iris.client.client import IrisClient, iris_ctx
 from iris.cluster.config import (
     IrisClusterConfig,
@@ -29,9 +32,11 @@ from iris.cluster.config import (
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, region_constraint
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.lifecycle import connect_cluster
+from iris.cluster.stats.tables import TASK_EVENT_NAMESPACE, TASK_EVENT_STORAGE_POLICY, TaskEventRow
 from iris.cluster.types import AcceleratorType, CapacityType, Entrypoint, EnvironmentSpec, ResourceSpec
-from iris.rpc import controller_pb2, job_pb2
+from iris.rpc import controller_pb2, job_pb2, resource_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
+from iris.rpc.resource_connect import ResourceServiceClientSync
 from iris.testing.e2e import (
     DEFAULT_CONFIG,
     MARIN_ROOT,
@@ -45,7 +50,7 @@ from iris.testing.e2e import (
 )
 from iris.testing.e2e_helpers import TestJobs
 from rigging.connect import proxy_path
-from rigging.timing import Duration, ExponentialBackoff
+from rigging.timing import Duration, ExponentialBackoff, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -200,6 +205,26 @@ def smoke_screenshot(smoke_page, tmp_path_factory):
     return capture
 
 
+def _wait_for_rows(page, text: str, *, present: bool) -> None:
+    """Wait until `text` is or is not among the log viewer's rows.
+
+    Both directions require at least one row. Re-querying the viewer empties the
+    list until the response lands, and a bare "the text is gone" check is also
+    true of that empty list, so anything asserted after it would race the fetch.
+    """
+    page.wait_for_function(
+        """
+        ({ text, present }) => {
+            const rows = [...document.querySelectorAll("[data-row]")];
+            if (rows.length === 0) return false;
+            return rows.some((row) => row.innerText.includes(text)) === present;
+        }
+        """,
+        arg={"text": text, "present": present},
+        timeout=15000,
+    )
+
+
 def _await_stable_screenshot(page, check: str, *, arg=None) -> None:
     """Wait for a screenshot-readiness predicate, settle briefly, then re-verify.
 
@@ -276,6 +301,103 @@ def verbose_job(smoke_cluster):
 def capabilities(smoke_cluster) -> ClusterCapabilities:
     """Discover cluster capabilities from live workers for topology-dependent tests."""
     return discover_capabilities(smoke_cluster.controller_client)
+
+
+def test_resource_reads_match_controller_views(smoke_cluster):
+    job = smoke_cluster.submit(TestJobs.quick, "smoke-resource-read")
+    smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout)
+    resources = ResourceServiceClientSync(address=smoke_cluster.url, timeout_ms=30_000)
+    try:
+        job_request = controller_pb2.Controller.GetJobStatusRequest(job_id=job.job_id.to_wire())
+        legacy_job = smoke_cluster.controller_client.get_job_status(job_request)
+        job_response = resources.get(
+            _resource_request("job", job_request),
+        )
+        generic_job = controller_pb2.Controller.GetJobStatusResponse()
+        assert job_response.resource.body.Unpack(generic_job)
+
+        task_request = controller_pb2.Controller.ListTasksRequest(job_id=job.job_id.to_wire())
+        legacy_tasks = smoke_cluster.controller_client.list_tasks(task_request)
+        task_response = resources.list(
+            _resource_request("task", task_request),
+        )
+        generic_tasks = [job_pb2.TaskStatus() for _ in task_response.resources]
+        assert all(
+            resource.body.Unpack(task) for resource, task in zip(task_response.resources, generic_tasks, strict=True)
+        )
+
+        task_id = legacy_tasks.tasks[0].task_id
+        attempt_list_request = job_pb2.TaskAttemptSelector(task_id=task_id)
+        attempt_list_response = resources.list(_resource_request("attempt", attempt_list_request))
+        generic_attempts = [job_pb2.TaskAttempt() for _ in attempt_list_response.resources]
+        assert all(
+            resource.body.Unpack(attempt)
+            for resource, attempt in zip(attempt_list_response.resources, generic_attempts, strict=True)
+        )
+        attempt_get_response = resources.get(
+            _resource_request("attempt", job_pb2.TaskAttemptSelector(task_id=task_id, attempt_id=0))
+        )
+        generic_attempt = job_pb2.TaskAttempt()
+        assert attempt_get_response.resource.body.Unpack(generic_attempt)
+
+        state_request = controller_pb2.Controller.GetJobStateRequest(job_ids=[job.job_id.to_wire()])
+        legacy_states = smoke_cluster.controller_client.get_job_state(state_request)
+        state_response = resources.batch_get(
+            _resource_request("job", state_request),
+        )
+        generic_states = [job_pb2.JobStateSnapshot() for _ in state_response.resources]
+        assert all(
+            resource.body.Unpack(state) for resource, state in zip(state_response.resources, generic_states, strict=True)
+        )
+
+        worker_request = controller_pb2.Controller.ListWorkersRequest()
+        legacy_workers = smoke_cluster.controller_client.list_workers(worker_request)
+        worker_response = resources.list(_resource_request("worker", worker_request))
+        generic_workers = [controller_pb2.Controller.WorkerHealthStatus() for _ in worker_response.resources]
+        assert all(
+            resource.body.Unpack(worker)
+            for resource, worker in zip(worker_response.resources, generic_workers, strict=True)
+        )
+
+        backend_request = controller_pb2.Controller.ListBackendsRequest()
+        legacy_backends = smoke_cluster.controller_client.list_backends(backend_request)
+        backend_response = resources.list(_resource_request("backend", backend_request))
+        generic_backends = [controller_pb2.Controller.BackendSummary() for _ in backend_response.resources]
+        assert all(
+            resource.body.Unpack(backend)
+            for resource, backend in zip(backend_response.resources, generic_backends, strict=True)
+        )
+        backend_metadata = controller_pb2.Controller.BackendListMetadata()
+        assert backend_response.metadata.Unpack(backend_metadata)
+    finally:
+        resources.close()
+
+    assert generic_job == legacy_job
+    assert generic_tasks == list(legacy_tasks.tasks)
+    assert task_response.page.total_count == len(legacy_tasks.tasks)
+    assert not task_response.page.has_more
+    assert generic_attempts == list(legacy_tasks.tasks[0].attempts)
+    assert generic_attempt == legacy_tasks.tasks[0].attempts[0]
+    assert attempt_list_response.page.total_count == len(generic_attempts)
+    assert {state.job_id: state.state for state in generic_states} == dict(legacy_states.states)
+    assert generic_workers == list(legacy_workers.workers)
+    assert worker_response.page.total_count == legacy_workers.total_count
+    assert worker_response.page.has_more == legacy_workers.has_more
+    assert [
+        (backend.backend_id, backend.name, backend.kind, tuple(backend.capabilities), tuple(backend.scale_groups))
+        for backend in generic_backends
+    ] == [
+        (backend.backend_id, backend.name, backend.kind, tuple(backend.capabilities), tuple(backend.scale_groups))
+        for backend in legacy_backends.backends
+    ]
+    assert backend_metadata.unroutable_job_count == legacy_backends.unroutable_job_count
+    assert backend_metadata.unroutable_sample == legacy_backends.unroutable_sample
+
+
+def _resource_request(resource_type: str, message: Message) -> resource_pb2.ResourceRequest:
+    request = resource_pb2.ResourceRequest(resource_type=resource_type)
+    request.input.Pack(message)
+    return request
 
 
 # ============================================================================
@@ -382,15 +504,28 @@ def test_dashboard_job_expand(smoke_cluster, smoke_page, smoke_screenshot):
 
 def test_dashboard_job_detail(smoke_cluster, smoke_page, smoke_screenshot):
     """SUCCEEDED job detail page."""
-    job = smoke_cluster.submit(TestJobs.quick, "smoke-detail")
+    job = smoke_cluster.submit(
+        TestJobs.quick,
+        "smoke-detail",
+        max_retries_failure=2,
+        max_task_failures=5,
+    )
     smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout)
 
     job_id = job.job_id.to_wire()
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{job_id}")
     wait_for_dashboard_ready(smoke_page)
     _wait_for_job_detail_screenshot_ready(smoke_page, job_id)
+    job_budget = smoke_page.get_by_test_id("job-failure-budget")
+    retry_budget = smoke_page.get_by_test_id("task-failure-retry-budget")
+    assert job_budget.is_visible()
+    assert job_budget.text_content() == "5"
+    assert retry_budget.is_visible()
+    assert retry_budget.text_content() == "2"
     smoke_screenshot(
-        "job-detail", "Job detail page for succeeded job with state badge, task table, and job-level log viewer"
+        "job-detail",
+        "Job detail page for succeeded job with explicit per-task retry and job-wide failure budgets, "
+        "state badge, task table, and job-level log viewer",
     )
 
 
@@ -417,6 +552,61 @@ def _wait_for_task_log_marker(
         timeout=Duration.from_seconds(timeout),
         error_message=f"log marker {marker!r} for {source} not queryable within {timeout:.0f}s",
     )
+
+
+def test_dashboard_task_events_exclude_prior_incarnations(smoke_cluster, smoke_page):
+    """The task timeline excludes retained events from a prior run with reused IDs."""
+    job = smoke_cluster.submit(TestJobs.quick, "smoke-event-incarnation")
+    smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout)
+    task_status = smoke_cluster.task_status(job)
+    task_id = task_status.task_id
+    job_id = job.job_id.to_wire()
+    current_attempt = next(
+        attempt for attempt in task_status.attempts if attempt.attempt_id == task_status.current_attempt_id
+    )
+
+    log_server_url = f"{smoke_cluster.url.rstrip('/')}{proxy_path(LOG_SERVER_ENDPOINT_NAME)}"
+    with contextlib.closing(LogClient.connect(log_server_url)) as log_client:
+        table = log_client.get_table(
+            TASK_EVENT_NAMESPACE,
+            TaskEventRow,
+            storage_policy=TASK_EVENT_STORAGE_POLICY,
+        )
+        now = Timestamp.now()
+        event_source = "iris/controller"
+        table.write(
+            [
+                TaskEventRow(
+                    task_id=task_id,
+                    attempt_id=current_attempt.attempt_id,
+                    attempt_uid="prior-incarnation",
+                    ts=now.add_ms(-1_000).as_naive_utc(),
+                    type="Warning",
+                    reason="PriorIncarnationEvent",
+                    message="This retained event belongs to an earlier run.",
+                    source=event_source,
+                    count=1,
+                ),
+                TaskEventRow(
+                    task_id=task_id,
+                    attempt_id=current_attempt.attempt_id,
+                    attempt_uid=current_attempt.attempt_uid,
+                    ts=now.as_naive_utc(),
+                    type="Normal",
+                    reason="CurrentIncarnationEvent",
+                    message="This event belongs to the task shown by the controller.",
+                    source=event_source,
+                    count=1,
+                ),
+            ]
+        )
+        assert table.flush(timeout=5) == FlushResult.SUCCEEDED
+
+    dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{job_id}/task/{task_id}")
+    wait_for_dashboard_ready(smoke_page)
+    smoke_page.get_by_text("CurrentIncarnationEvent", exact=True).wait_for(timeout=10_000)
+
+    assert smoke_page.get_by_text("PriorIncarnationEvent", exact=True).count() == 0
 
 
 def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_screenshot):
@@ -451,7 +641,7 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
     # Search marks matching lines in place. "validation failed" only appears in
     # ERROR lines, so the INFO lines around them must survive — that is the whole
     # point of search being distinct from filter.
-    search_input = "input[placeholder^='Search loaded lines']"
+    search_input = "[data-log-search]"
     smoke_page.fill(search_input, "validation failed")
     smoke_page.wait_for_function(
         "() => document.querySelectorAll('mark').length > 0 && "
@@ -464,22 +654,41 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
         "and non-matching log lines are still visible around the highlights.",
     )
 
-    # The regex filter re-queries the server and drops non-matching lines entirely. It
-    # applies on Enter, not on every keystroke. Keep this pattern literal-compatible
-    # because CI runs Iris smoke tests against the latest published Finelog server;
-    # the Rust test covers regex metacharacters against this branch's server source.
-    filter_input = "input[placeholder^='Filter regex']"
-    smoke_page.fill(filter_input, "validation failed")
-    smoke_page.press(filter_input, "Enter")
+    # The pager moves a window through the stream: paging back leaves the newest
+    # line behind, and Follow returns to it. A 100-line page gives the verbose
+    # job's few hundred lines somewhere to step back to.
+    page_size = "[data-log-page-size]"
+    smoke_page.select_option(page_size, "100")
     smoke_page.wait_for_function(
-        "() => document.body.textContent.includes('validation failed') && "
-        "!document.body.textContent.includes('processing data batch')",
-        timeout=5000,
+        "() => document.querySelectorAll('[data-row]').length === 100",
+        timeout=10000,
     )
+    smoke_page.get_by_role("button", name="← Older").click()
+    _wait_for_rows(smoke_page, "DONE: all lines emitted", present=False)
+    smoke_page.get_by_role("button", name="Follow").click()
+    _wait_for_rows(smoke_page, "DONE: all lines emitted", present=True)
+    smoke_page.select_option(page_size, "500")
+
+    # The regex filter re-queries the server and drops non-matching lines entirely. It
+    # applies on Enter, not on every keystroke. The alternation is deliberate: a
+    # server that ignores FetchLogs.regex (anything below the pinned floor) returns
+    # every line, and one that treats the pattern literally returns none, so this
+    # fails on either rather than passing on a filter that never ran.
+    filter_input = "[data-log-filter]"
+    smoke_page.fill(filter_input, "validation (failed|skipped)")
+    smoke_page.press(filter_input, "Enter")
+    _wait_for_rows(smoke_page, "processing data batch", present=False)
     smoke_screenshot(
         "task-logs-filtered",
         "Task detail page with log filter input populated and filtered log lines visible in the log viewer.",
     )
+
+    # Expanding context brings back the lines the filter hides, around every
+    # loaded hit at once, and collapsing puts them away again.
+    smoke_page.get_by_role("button", name="Expand all").click()
+    _wait_for_rows(smoke_page, "processing data batch", present=True)
+    smoke_page.get_by_role("button", name="Collapse").click()
+    _wait_for_rows(smoke_page, "processing data batch", present=False)
 
     # The timestamp action still makes a permalink. The next control sets an
     # exact start time. The start time stays set after the string filter clears.
@@ -489,22 +698,48 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
 
     selected_message = filtered_row.locator(":scope > span").last.inner_text()
     filtered_row.locator("[data-log-start]").click()
-    since_input = "input[type='datetime-local']"
+    # The time control collapses to a trigger labelled with the bound in force,
+    # so the bound is readable without opening the menu.
+    since_trigger = smoke_page.locator("[data-log-since]")
     smoke_page.wait_for_function(
-        "() => document.querySelector(\"input[type='datetime-local']\")?.value.length > 0",
+        "() => document.querySelector('[data-log-since]')?.textContent.includes('Since')",
         timeout=5000,
     )
-    locked_since = smoke_page.input_value(since_input)
-    assert locked_since
+    locked_since = since_trigger.inner_text()
     smoke_page.locator("[data-row]").filter(has_text=selected_message).wait_for(timeout=5000)
 
     smoke_page.get_by_role("button", name="Clear filter").click()
     smoke_page.wait_for_function(
-        "() => document.querySelector(\"input[placeholder^='Filter regex']\")?.value === '' && "
+        "() => document.querySelector('[data-log-filter]')?.value === '' && "
         "document.body.textContent.includes('processing data batch')",
         timeout=5000,
     )
-    assert smoke_page.input_value(since_input) == locked_since
+    assert since_trigger.inner_text() == locked_since
+
+    # A start time can also be typed or pasted, which the native date input this
+    # replaced could not accept at all. An unreadable value is refused in place,
+    # and so is a date that reads cleanly but does not exist.
+    since_trigger.click()
+    smoke_page.fill("[data-log-since-field]", "not a time")
+    smoke_page.press("[data-log-since-field]", "Enter")
+    assert_visible(smoke_page, "text=Unrecognized time")
+    smoke_page.fill("[data-log-since-field]", "2026-02-31 12:00")
+    smoke_page.press("[data-log-since-field]", "Enter")
+    assert_visible(smoke_page, "text=Unrecognized time")
+    smoke_page.fill("[data-log-since-field]", "1970-01-01 00:00:00.000")
+    smoke_page.press("[data-log-since-field]", "Enter")
+    smoke_page.wait_for_function(
+        "() => document.querySelector('[data-log-since]')?.textContent.includes('1970-01-01')",
+        timeout=5000,
+    )
+
+    # A start time is only a lower bound, so the stream still has a live end.
+    # With more lines than fit one page the window opens on the oldest of them,
+    # and Follow has to cross the rest of the stream to reach the newest line.
+    smoke_page.select_option(page_size, "100")
+    _wait_for_rows(smoke_page, "DONE: all lines emitted", present=False)
+    smoke_page.get_by_role("button", name="Follow").click()
+    _wait_for_rows(smoke_page, "DONE: all lines emitted", present=True)
 
 
 def test_dashboard_jump_to_exception(smoke_cluster, smoke_page, smoke_screenshot):

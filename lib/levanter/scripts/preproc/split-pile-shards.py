@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 import tqdm
-from rigging.filesystem import open_url
+from rigging.filesystem.factory import open_url
 
 
 OUT_PATH = "gs://levanter-data/pile-domains"

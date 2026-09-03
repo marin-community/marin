@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import logging
 from concurrent.futures import ThreadPoolExecutor
 
@@ -10,8 +11,9 @@ import jax
 import jax.numpy as jnp
 import pytest
 
-from levanter.compat.hf_checkpoints import HFCheckpointConverter, load_tokenizer
-from levanter.models.llama import LlamaConfig
+from levanter.models.llama import LlamaLMHeadModel
+from levanter.testing.helpers import skip_if_no_torch
+from levanter.testing.model_configs import llama_test_config
 from levanter.trainer import TrainerConfig
 
 try:
@@ -33,6 +35,13 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+TEST_MODEL_NAME = "tiny-random-llama"
+TEST_MAX_SEQ_LEN = 64
+TEST_CHAT_TEMPLATE = (
+    "{% for message in messages %}{{ message['role'] }}: {{ message['content'] }}\n{% endfor %}"
+    "{% if add_generation_prompt %}assistant: {% endif %}"
+)
+
 
 @pytest.fixture(scope="module")
 def trainer_config():
@@ -40,88 +49,92 @@ def trainer_config():
 
 
 @pytest.fixture(scope="module")
-def baby_llama_config():
+def inference_server_config():
     return InferenceServerConfig(
         service=InferenceEngineConfig(
-            max_seq_len=32,
+            max_seq_len=TEST_MAX_SEQ_LEN,
             max_seqs=2,
             page_size=4,
             max_queued_tokens=32,
             hbm_utilization=0.1,
         ),
-        model_name="timinar/baby-llama-58m",
+        model_name=TEST_MODEL_NAME,
         temperature=0.7,
         seed=42,
     )
 
 
-# baby-llama is a base checkpoint and ships no chat template, so the chat tests below bring one:
-# the server refuses to invent a conversation format a model was never trained on.
-BABY_LLAMA_CHAT_TEMPLATE = (
-    "{% for message in messages %}{{ message['role'] }}: {{ message['content'] }}\n{% endfor %}"
-    "{% if add_generation_prompt %}assistant: {% endif %}"
-)
+@pytest.fixture(scope="module")
+def llama_model_config(local_gpt2_tokenizer_path):
+    return dataclasses.replace(
+        llama_test_config(seq_len=TEST_MAX_SEQ_LEN, num_kv_heads=2),
+        tie_word_embeddings=True,
+        reference_checkpoint=None,
+        tokenizer=local_gpt2_tokenizer_path,
+    )
 
 
 @pytest.fixture(scope="module")
-def loaded_model(trainer_config):
-    """Load the baby llama model and tokenizer."""
-    hf_checkpoint = "timinar/baby-llama-58m"
-    model_config = LlamaConfig()
-    tokenizer = load_tokenizer(hf_checkpoint)
-    tokenizer.chat_template = BABY_LLAMA_CHAT_TEMPLATE
+def generated_model_and_tokenizer(trainer_config, llama_model_config, local_gpt2_tokenizer):
+    tokenizer = local_gpt2_tokenizer.with_chat_template(TEST_CHAT_TEMPLATE)
 
     with trainer_config.use_device_mesh(), hax.axis_mapping(trainer_config.compute_axis_mapping):
-        converter = HFCheckpointConverter(
-            LlamaConfig,
-            reference_checkpoint=hf_checkpoint,
-            tokenizer=tokenizer,
-        )
-
-        model = converter.load_pretrained(
-            model_config.model_type,
-            ref=hf_checkpoint,
-            dtype=trainer_config.mp.compute_dtype,
-            axis_mapping=trainer_config.parameter_axis_mapping,
+        model = LlamaLMHeadModel.init(
+            hax.Axis("vocab", len(tokenizer)),
+            llama_model_config,
+            key=jax.random.PRNGKey(0),
         )
 
     return model, tokenizer
 
 
 @pytest.fixture(scope="module")
-def inference_server(trainer_config, baby_llama_config, loaded_model):
+def inference_server(trainer_config, inference_server_config, generated_model_and_tokenizer):
     """Create an InferenceServer instance."""
-    model, tokenizer = loaded_model
+    model, tokenizer = generated_model_and_tokenizer
     with trainer_config.use_device_mesh(), hax.axis_mapping(trainer_config.compute_axis_mapping):
-        return InferenceServer.create(baby_llama_config, model, tokenizer)
+        return InferenceServer.create(inference_server_config, model, tokenizer)
 
 
 @pytest.fixture(scope="module")
-def test_client(baby_llama_config, loaded_model, inference_server):
+def test_client(inference_server):
     """Create a test client for the inference server."""
     with TestClient(inference_server.app) as client:
         yield client, inference_server
 
 
 @pytest.fixture(scope="module")
-def hf_reference_model_and_tokenizer():
-    """Load the HF reference model used for correctness comparisons."""
+def local_hf_checkpoint(tmp_path_factory, trainer_config, generated_model_and_tokenizer):
+    model, _tokenizer = generated_model_and_tokenizer
+    checkpoint_path = tmp_path_factory.mktemp("tiny_llama_hf")
+    converter = model.config.hf_checkpoint_converter()
+    with trainer_config.use_device_mesh(), hax.axis_mapping(trainer_config.compute_axis_mapping):
+        converter.save_pretrained(
+            model,
+            str(checkpoint_path),
+            save_reference_code=False,
+            chat_template=TEST_CHAT_TEMPLATE,
+        )
+    return checkpoint_path
+
+
+@pytest.fixture(scope="module")
+def hf_reference_model_and_tokenizer(local_hf_checkpoint):
     pytest.importorskip("torch")
     transformers = pytest.importorskip("transformers")
 
-    model_name = "timinar/baby-llama-58m"
-
-    tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
+    tokenizer = transformers.AutoTokenizer.from_pretrained(local_hf_checkpoint, local_files_only=True)
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    model = transformers.AutoModelForCausalLM.from_pretrained(model_name)
+    model = transformers.AutoModelForCausalLM.from_pretrained(local_hf_checkpoint, local_files_only=True)
     model.to("cpu")
     model.eval()
 
     return model, tokenizer
 
 
+@skip_if_no_torch
 def test_greedy_correctness_against_hf(test_client, hf_reference_model_and_tokenizer):
     """Ensure deterministic (greedy) Levanter generations match HF reference outputs."""
     (client, _server) = test_client
@@ -140,7 +153,7 @@ def test_greedy_correctness_against_hf(test_client, hf_reference_model_and_token
         response = client.post(
             "/v1/completions",
             json={
-                "model": "timinar/baby-llama-58m",
+                "model": TEST_MODEL_NAME,
                 "prompt": prompt,
                 "max_tokens": max_tokens,
                 "temperature": 0.0,
@@ -201,18 +214,18 @@ def test_models_endpoint_reports_the_configured_model(test_client):
     assert [model["id"] for model in payload["data"]] == [server.config.model_name]
 
 
-def test_chat_completion_without_a_chat_template_is_rejected(test_client, monkeypatch):
+def test_chat_completion_without_a_chat_template_is_rejected(test_client, monkeypatch, local_gpt2_tokenizer):
     """A model with no chat template cannot represent a conversation, so chat requests are refused.
 
     Rendering one anyway would feed the model a prompt format it was never trained on and return
     it as a normal completion, leaving callers unable to tell a chat model from a base one.
     """
     client, server = test_client
-    monkeypatch.setattr(server.inference_context.tokenizer, "chat_template", None)
+    monkeypatch.setattr(server.inference_context, "tokenizer", local_gpt2_tokenizer)
 
     response = client.post(
         "/v1/chat/completions",
-        json={"model": "timinar/baby-llama-58m", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 4},
+        json={"model": TEST_MODEL_NAME, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 4},
     )
 
     assert response.status_code == 400
@@ -386,7 +399,7 @@ def test_logprobs_deterministic_behavior(test_client):
 
     # Make the same request twice with same seed
     request_data = {
-        "model": "timinar/baby-llama-58m",
+        "model": TEST_MODEL_NAME,
         "prompt": "Once upon a time",
         "max_tokens": 4,
         "temperature": 0.0,  # Deterministic
@@ -428,7 +441,7 @@ def test_many_requests_threaded(test_client):
                 client.post,
                 "/v1/completions",
                 json={
-                    "model": "timinar/baby-llama-58m",
+                    "model": TEST_MODEL_NAME,
                     "prompt": "The quick brown fox",
                     "max_tokens": 16,
                     "temperature": 0.0,
@@ -454,7 +467,7 @@ def test_reload_with_zeros_clears_outputs(test_client):
     response1 = client.post(
         "/v1/completions",
         json={
-            "model": "timinar/baby-llama-58m",
+            "model": TEST_MODEL_NAME,
             "prompt": "The quick brown fox",
             "max_tokens": 16,
             "temperature": 0.0,
@@ -479,7 +492,7 @@ def test_reload_with_zeros_clears_outputs(test_client):
     response2 = client.post(
         "/v1/completions",
         json={
-            "model": "timinar/baby-llama-58m",
+            "model": TEST_MODEL_NAME,
             "prompt": "The quick brown fox",
             "max_tokens": 16,
             "temperature": 0.0,
@@ -505,7 +518,7 @@ def test_reload_with_zeros_clears_outputs(test_client):
     response3 = client.post(
         "/v1/completions",
         json={
-            "model": "timinar/baby-llama-58m",
+            "model": TEST_MODEL_NAME,
             "prompt": "The quick brown fox",
             "max_tokens": 16,
             "temperature": 0.0,
@@ -525,7 +538,7 @@ def test_tokens_endpoint(test_client):
     response = client.post(
         "/v1/tokens",
         json={
-            "model": "timinar/baby-llama-58m",
+            "model": TEST_MODEL_NAME,
             "message_list": [
                 [{"role": "user", "content": "Hello, how are you?"}],
                 [

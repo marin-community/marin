@@ -27,7 +27,7 @@ from iris.rpc import controller_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import EndpointServiceClientSync
 
-DEFAULT_COLLECTION_INTERVAL = 30.0
+DEFAULT_COLLECTION_INTERVAL = 60.0
 _BOOT_ID_PATH = Path("/proc/sys/kernel/random/boot_id")
 
 

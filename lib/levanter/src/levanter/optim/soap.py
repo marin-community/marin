@@ -103,8 +103,6 @@ def scale_by_soap(
     precond_dtype: Optional[Union[str, jnp.dtype]] = None,
     partition_grads_into_blocks: Optional[bool] = True,
     block_size: Optional[int] = 256,
-    lax_map_scanned_layers: Optional[bool] = True,
-    lax_map_batch_size: Optional[int] = 4,
     merge_small_dims: bool = False,
     target_merged_dim_size: int = 2048,
     one_diag: bool = False,

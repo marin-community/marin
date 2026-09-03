@@ -33,6 +33,7 @@ class SearchResult:
     score: float
     distance: float | None
     lexical_score: float | None
+    key: str | None = None
     references: tuple[SearchReference, ...] = ()
 
     @classmethod
@@ -50,6 +51,7 @@ class SearchResult:
                 score=float(value["score"]),
                 distance=optional_float(value.get("distance")),
                 lexical_score=optional_float(value.get("lexical_score")),
+                key=str(value["key"]) if value.get("key") is not None else None,
                 references=tuple(SearchReference.from_json(reference) for reference in value.get("references", [])),
             )
         except (KeyError, TypeError, ValueError) as error:

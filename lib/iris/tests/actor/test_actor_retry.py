@@ -220,6 +220,30 @@ def test_actor_client_does_not_retry_on_application_error():
         server.stop()
 
 
+def test_actor_client_preserves_actor_connect_error():
+    class UnavailableActor:
+        def fail(self) -> None:
+            raise ConnectError(Code.UNAVAILABLE, "coordinator unreachable")
+
+    server = ActorServer(host="127.0.0.1")
+    server.register("unavailable", UnavailableActor())
+    port = server.serve_background()
+
+    try:
+        client = ActorClient(
+            FixedResolver({"unavailable": f"http://127.0.0.1:{port}"}),
+            "unavailable",
+            max_call_attempts=1,
+        )
+
+        with pytest.raises(ConnectError) as exc_info:
+            client.fail()
+        assert exc_info.value.code is Code.UNAVAILABLE
+        assert exc_info.value.message == "coordinator unreachable"
+    finally:
+        server.stop()
+
+
 def test_actor_pool_retries_on_transient_rpc_error():
     """ActorPool should retry with re-resolution when an RPC call fails
     with a transient error."""

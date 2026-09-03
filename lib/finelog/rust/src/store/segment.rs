@@ -2,7 +2,7 @@
 //!
 //! CRITICAL: L0 is written **UNSORTED**. Rows already arrive seq-monotonic (seq
 //! is allocated under the insertion lock at append time); the explicit
-//! `ORDER BY (key, seq)` sort happens only at L0->L1 compaction, so a single
+//! configured sort plus `seq` happens only at L0->L1 compaction, so a single
 //! write's sort cost lands once in the bg compactor, not on every flush.
 //! `write_segment` therefore writes the batch verbatim.
 
@@ -26,6 +26,7 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::errors::StatsError;
+use crate::partition_policy::SegmentPartition;
 use crate::store::types::{parse_seg_filename, seg_filename};
 
 /// Encoded size at which the parquet writer closes a row group.
@@ -64,6 +65,7 @@ pub const MAX_ROW_GROUP_ROWS: usize = 1_048_576;
 pub const LAYOUT_VERSION: u32 = 1;
 const LAYOUT_VERSION_KEY: &str = "finelog.layout_version";
 const SEGMENT_ID_KEY: &str = "finelog.segment_id";
+const PARTITION_KEY: &str = "finelog.partition";
 
 /// Rows per batch when streaming a segment through a re-encode. Bounds the
 /// rewrite's memory to one batch rather than the whole segment, which for a
@@ -73,8 +75,8 @@ const REWRITE_BATCH_ROWS: usize = 8_192;
 /// Parquet `WriterProperties` shared by every finelog segment writer — the L0
 /// flush (`write_segment`) and the compaction output (`write_merged_segment`).
 ///
-/// Sets the row-group bounds ([`TARGET_ROW_GROUP_BYTES`] and
-/// [`MAX_ROW_GROUP_ROWS`]) and zstd level 1 (not the library default 3).
+/// Sets the row-group bounds ([`TARGET_ROW_GROUP_BYTES`] and the caller's row
+/// ceiling) and zstd level 1 (not the library default 3).
 /// Centralizing this keeps L0 and compacted segments on one consistent on-disk
 /// layout.
 ///
@@ -82,44 +84,74 @@ const REWRITE_BATCH_ROWS: usize = 8_192;
 /// 15% of each segment and pruned nothing measurable; the key-column bloom that
 /// outlived that only served exact-key lookups against unsorted L0, which is a
 /// few hundred KiB that compaction consumes within a tick or two, while its write
-/// cost fell on every flush. L1+ is sorted by `(key, seq)`, so min/max statistics
-/// prune the key band, and substring queries prune from the trigram sidecar.
-pub fn segment_writer_properties() -> Result<WriterProperties, StatsError> {
-    parquet_writer_properties_with_id(TARGET_ROW_GROUP_BYTES, MAX_ROW_GROUP_ROWS, Uuid::new_v4())
+/// cost fell on every flush. Multi-input compaction uses the schema's configured
+/// sort order plus `seq`; single-input promotions retain their input order.
+/// Substring queries prune from the trigram sidecar.
+pub fn segment_writer_properties_with_max_rows(
+    max_row_group_rows: usize,
+) -> Result<WriterProperties, StatsError> {
+    segment_writer_properties_with_partition(max_row_group_rows, None)
+}
+
+pub fn segment_writer_properties_with_partition(
+    max_row_group_rows: usize,
+    partition: Option<&SegmentPartition>,
+) -> Result<WriterProperties, StatsError> {
+    parquet_writer_properties_with_id(
+        TARGET_ROW_GROUP_BYTES,
+        max_row_group_rows,
+        Uuid::new_v4(),
+        partition,
+    )
 }
 
 pub(crate) fn parquet_writer_properties(
     target_row_group_bytes: usize,
     max_row_group_rows: usize,
 ) -> Result<WriterProperties, StatsError> {
-    parquet_writer_properties_with_id(target_row_group_bytes, max_row_group_rows, Uuid::new_v4())
+    parquet_writer_properties_with_id(
+        target_row_group_bytes,
+        max_row_group_rows,
+        Uuid::new_v4(),
+        None,
+    )
 }
 
 fn parquet_writer_properties_with_id(
     target_row_group_bytes: usize,
     max_row_group_rows: usize,
     segment_id: Uuid,
+    partition: Option<&SegmentPartition>,
 ) -> Result<WriterProperties, StatsError> {
     let zstd =
         ZstdLevel::try_new(1).map_err(|e| StatsError::Internal(format!("zstd level 1: {e}")))?;
+    let mut metadata = vec![
+        KeyValue::new(LAYOUT_VERSION_KEY.to_string(), LAYOUT_VERSION.to_string()),
+        KeyValue::new(SEGMENT_ID_KEY.to_string(), segment_id.to_string()),
+    ];
+    if let Some(partition) = partition {
+        metadata.push(KeyValue::new(
+            PARTITION_KEY.to_string(),
+            serde_json::to_string(partition).map_err(|error| {
+                StatsError::Internal(format!("serialize segment partition: {error}"))
+            })?,
+        ));
+    }
     Ok(WriterProperties::builder()
         .set_max_row_group_bytes(Some(target_row_group_bytes))
         .set_max_row_group_row_count(Some(max_row_group_rows))
         .set_compression(Compression::ZSTD(zstd))
         .set_bloom_filter_enabled(false)
-        .set_key_value_metadata(Some(vec![
-            KeyValue::new(LAYOUT_VERSION_KEY.to_string(), LAYOUT_VERSION.to_string()),
-            KeyValue::new(SEGMENT_ID_KEY.to_string(), segment_id.to_string()),
-        ]))
+        .set_key_value_metadata(Some(metadata))
         .build())
 }
 
 /// Per-segment metadata recovered from filename + parquet footer.
 ///
-/// `min_seq` comes from the FILENAME (`seg_L{level}_{min_seq}`); `max_seq` is
-/// `min_seq + row_count - 1`. `min_key_value`/`max_key_value` are the parquet
-/// column statistics for the key column when it is an Int64 column carrying
-/// statistics, else `None`.
+/// `min_seq`/`max_seq` come from Parquet statistics because partitioned files
+/// contain sparse namespace-wide sequence ranges. Files written before `seq`
+/// statistics were available fall back to the filename and row count.
+/// `min_key_value`/`max_key_value` are the Parquet statistics for an Int64 key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SegmentMetadata {
     pub level: i32,
@@ -128,11 +160,19 @@ pub struct SegmentMetadata {
     pub row_count: i64,
     pub min_key_value: Option<i64>,
     pub max_key_value: Option<i64>,
+    pub partition: Option<SegmentPartition>,
 }
 
 /// Encode `batch` to parquet bytes (UNSORTED L0, zstd-1).
 pub fn write_segment(batch: &RecordBatch) -> Result<Vec<u8>, StatsError> {
-    let props = segment_writer_properties()?;
+    write_segment_with_max_row_group_rows(batch, MAX_ROW_GROUP_ROWS)
+}
+
+pub fn write_segment_with_max_row_group_rows(
+    batch: &RecordBatch,
+    max_row_group_rows: usize,
+) -> Result<Vec<u8>, StatsError> {
+    let props = segment_writer_properties_with_max_rows(max_row_group_rows)?;
     let mut buf: Vec<u8> = Vec::new();
     let opts = ArrowWriterOptions::new().with_properties(props);
     let mut writer = ArrowWriter::try_new_with_options(&mut buf, batch.schema(), opts)
@@ -155,7 +195,17 @@ pub fn write_segment_to_dir(
     min_seq: i64,
     batch: &RecordBatch,
 ) -> Result<(PathBuf, i64), StatsError> {
-    let bytes = write_segment(batch)?;
+    write_segment_to_dir_with_max_row_group_rows(dir, level, min_seq, batch, MAX_ROW_GROUP_ROWS)
+}
+
+pub fn write_segment_to_dir_with_max_row_group_rows(
+    dir: &Path,
+    level: i32,
+    min_seq: i64,
+    batch: &RecordBatch,
+    max_row_group_rows: usize,
+) -> Result<(PathBuf, i64), StatsError> {
+    let bytes = write_segment_with_max_row_group_rows(batch, max_row_group_rows)?;
     let filename = seg_filename(level, min_seq);
     let final_path = dir.join(&filename);
     let staging_path = dir.join(format!("{filename}.tmp"));
@@ -271,6 +321,14 @@ fn segment_id_of(meta: &ParquetMetaData) -> Option<Uuid> {
         .and_then(|value| Uuid::parse_str(value).ok())
 }
 
+fn partition_of(meta: &ParquetMetaData) -> Option<SegmentPartition> {
+    meta.file_metadata()
+        .key_value_metadata()
+        .and_then(|kvs| kvs.iter().find(|kv| kv.key == PARTITION_KEY))
+        .and_then(|kv| kv.value.as_deref())
+        .and_then(|value| serde_json::from_str(value).ok())
+}
+
 /// Immutable logical identity stamped into a segment's Parquet metadata.
 pub fn segment_id(path: &Path) -> Option<Uuid> {
     let file = std::fs::File::open(path).ok()?;
@@ -334,12 +392,16 @@ pub fn segment_layout_is_current(path: &Path) -> bool {
 ///
 /// Streams a batch at a time rather than materializing the segment, which for a
 /// terminal-level file would be hundreds of MiB of Arrow.
-pub fn stage_rewritten_segment(path: &Path) -> Result<(PathBuf, i64), StatsError> {
+pub fn stage_rewritten_segment(
+    path: &Path,
+    max_row_group_rows: usize,
+) -> Result<(PathBuf, i64), StatsError> {
     let file = std::fs::File::open(path)
         .map_err(|e| StatsError::Internal(format!("open {}: {e}", path.display())))?;
     let builder = ParquetRecordBatchReaderBuilder::try_new(file)
         .map_err(|e| StatsError::Internal(format!("read {}: {e}", path.display())))?;
     let segment_id = segment_id_of(builder.metadata()).unwrap_or_else(Uuid::new_v4);
+    let partition = partition_of(builder.metadata());
     let schema = Arc::clone(builder.schema());
     let reader = builder
         .with_batch_size(REWRITE_BATCH_ROWS)
@@ -351,8 +413,9 @@ pub fn stage_rewritten_segment(path: &Path) -> Result<(PathBuf, i64), StatsError
         .map_err(|e| StatsError::Internal(format!("create {}: {e}", staging.display())))?;
     let opts = ArrowWriterOptions::new().with_properties(parquet_writer_properties_with_id(
         TARGET_ROW_GROUP_BYTES,
-        MAX_ROW_GROUP_ROWS,
+        max_row_group_rows,
         segment_id,
+        partition.as_ref(),
     )?);
     let mut writer = ArrowWriter::try_new_with_options(out, schema, opts)
         .map_err(|e| StatsError::Internal(format!("parquet writer init: {e}")))?;
@@ -375,39 +438,52 @@ pub fn stage_rewritten_segment(path: &Path) -> Result<(PathBuf, i64), StatsError
     Ok((staging, size))
 }
 
-/// Read a segment's footer metadata: row count from the footer, `min_seq` from
-/// the FILENAME, `max_seq = min_seq + row_count - 1`, and the Int64 key-column
-/// min/max from row-group statistics.
+/// Read a segment's footer metadata, including actual seq statistics and the
+/// optional hidden partition stamp.
 ///
 /// Returns `None` for an unparseable filename or footer-read failure (the caller
 /// treats that as an empty/discardable segment).
 pub fn read_segment_footer(path: &Path, key_column: Option<&str>) -> Option<SegmentMetadata> {
     let name = path.file_name()?.to_str()?;
-    let (level, min_seq) = parse_seg_filename(name)?;
+    let (level, filename_min_seq) = parse_seg_filename(name)?;
     let file = std::fs::File::open(path).ok()?;
     let reader = SerializedFileReader::new(file).ok()?;
-    let md = reader.metadata();
-    let num_rows = md.file_metadata().num_rows();
+    segment_metadata_from_parquet(reader.metadata(), level, filename_min_seq, key_column)
+}
+
+pub(crate) fn segment_metadata_from_parquet(
+    metadata: &ParquetMetaData,
+    level: i32,
+    filename_min_seq: i64,
+    key_column: Option<&str>,
+) -> Option<SegmentMetadata> {
+    let partition = partition_of(metadata);
+    let num_rows = metadata.file_metadata().num_rows();
     if num_rows <= 0 {
         return Some(SegmentMetadata {
             level,
-            min_seq,
-            max_seq: min_seq,
+            min_seq: filename_min_seq,
+            max_seq: filename_min_seq,
             row_count: 0,
             min_key_value: None,
             max_key_value: None,
+            partition,
         });
     }
+    let (seq_min, seq_max) = metadata_int64_bounds(metadata, "seq")?;
+    let min_seq = seq_min.unwrap_or(filename_min_seq);
+    let max_seq = seq_max.unwrap_or(filename_min_seq + num_rows - 1);
     let (min_key, max_key) = key_column
-        .and_then(|kc| key_int64_bounds(&reader, kc))
+        .and_then(|kc| metadata_int64_bounds(metadata, kc))
         .unwrap_or((None, None));
     Some(SegmentMetadata {
         level,
         min_seq,
-        max_seq: min_seq + num_rows - 1,
+        max_seq,
         row_count: num_rows,
         min_key_value: min_key,
         max_key_value: max_key,
+        partition,
     })
 }
 
@@ -417,7 +493,13 @@ fn key_int64_bounds(
     reader: &SerializedFileReader<std::fs::File>,
     key_column: &str,
 ) -> Option<(Option<i64>, Option<i64>)> {
-    let md = reader.metadata();
+    metadata_int64_bounds(reader.metadata(), key_column)
+}
+
+fn metadata_int64_bounds(
+    md: &ParquetMetaData,
+    key_column: &str,
+) -> Option<(Option<i64>, Option<i64>)> {
     let schema = md.file_metadata().schema_descr();
     let col_idx = (0..schema.num_columns()).find(|&i| schema.column(i).name() == key_column)?;
     let mut lo: Option<i64> = None;
@@ -535,23 +617,63 @@ fn cached_segment_identity_and_row_group_rows(path: &Path) -> Option<(Uuid, Arc<
     Some((segment_identity, rows))
 }
 
-/// All `seg_L*_*.parquet` files in `dir`, sorted by filename (== by min_seq for
-/// a fixed level width). Returns an empty list if the dir does not exist.
-pub fn discover_segments(dir: &Path) -> Vec<PathBuf> {
+pub(crate) fn discover_files(dir: &Path) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = Vec::new();
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return out;
-    };
-    for entry in entries.flatten() {
-        let p = entry.path();
-        if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
-            if parse_seg_filename(name).is_some() {
-                out.push(p);
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        let entries = match std::fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => panic!(
+                "file discovery could not read directory {}: {error}",
+                directory.display()
+            ),
+        };
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => panic!(
+                    "file discovery could not read an entry in {}: {error}",
+                    directory.display()
+                ),
+            };
+            let file_type = match entry.file_type() {
+                Ok(file_type) => file_type,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => panic!(
+                    "file discovery could not read the type of {}: {error}",
+                    entry.path().display()
+                ),
+            };
+            let path = entry.path();
+            if file_type.is_dir() {
+                pending.push(path);
+                continue;
+            }
+            if file_type.is_file() {
+                out.push(path);
             }
         }
     }
     out.sort();
     out
+}
+
+/// All `seg_L*_*.parquet` files under `dir`, sorted by path.
+///
+/// L0 lives directly in the namespace directory. Physical policies may place
+/// L1+ segments in bounded subdirectories, so discovery is recursive. Symlinked
+/// directories are not followed. Returns an empty list if `dir` does not exist.
+pub fn discover_segments(dir: &Path) -> Vec<PathBuf> {
+    discover_files(dir)
+        .into_iter()
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| parse_seg_filename(name).is_some())
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -732,7 +854,7 @@ mod tests {
         let first_id = segment_id(&first).unwrap();
         assert_ne!(first_id, segment_id(&second).unwrap());
 
-        let (staging, _) = stage_rewritten_segment(&first).unwrap();
+        let (staging, _) = stage_rewritten_segment(&first, MAX_ROW_GROUP_ROWS).unwrap();
         std::fs::rename(staging, &first).unwrap();
 
         assert_eq!(segment_id(&first), Some(first_id));
@@ -783,7 +905,8 @@ mod tests {
         let before_rows = read_all(&path);
         assert!(before_groups > 1, "fixture must have several row groups");
 
-        let (staging, size) = stage_rewritten_segment(&path).unwrap();
+        let max_row_group_rows = 32;
+        let (staging, size) = stage_rewritten_segment(&path, max_row_group_rows).unwrap();
         std::fs::rename(&staging, &path).unwrap();
 
         // Same file, same rows in the same order, now on the current layout.
@@ -795,6 +918,10 @@ mod tests {
             segment_row_group_rows(&path).unwrap().len() < before_groups,
             "the byte target should coalesce the legacy row groups"
         );
+        assert!(segment_row_group_rows(&path)
+            .unwrap()
+            .iter()
+            .all(|&rows| rows <= max_row_group_rows));
         // No stray staging file survives.
         assert!(!dir.join("seg_L1_0000000000000000001.parquet.tmp").exists());
 
@@ -836,5 +963,24 @@ mod tests {
         let name = seg_filename(0, 42);
         assert_eq!(name, "seg_L0_0000000000000000042.parquet");
         assert_eq!(parse_seg_filename(&name), Some((0, 42)));
+    }
+
+    #[test]
+    fn discover_segments_includes_nested_physical_directories() {
+        let dir = tempdir();
+        let nested = dir.join("run_id/07");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(dir.join(seg_filename(0, 1)), b"l0").unwrap();
+        std::fs::write(nested.join(seg_filename(1, 2)), b"l1").unwrap();
+        std::fs::write(nested.join("ignored.parquet.tmp"), b"tmp").unwrap();
+
+        let discovered = discover_segments(&dir);
+        assert_eq!(discovered.len(), 2);
+        assert!(discovered.iter().any(|path| path.parent() == Some(&dir)));
+        assert!(discovered
+            .iter()
+            .any(|path| path.parent() == Some(nested.as_path())));
+
+        std::fs::remove_dir_all(dir).ok();
     }
 }

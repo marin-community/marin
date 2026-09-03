@@ -23,6 +23,16 @@ import logging
 from dataclasses import dataclass
 
 from fray.cluster import ResourceConfig
+from thalas.execution.executor import (
+    ExecutorStep,
+    InputName,
+    executor_main,
+    output_path_of,
+)
+from thalas.execution.remote import remote
+from thalas.execution.types import this_output_path, versioned
+from zephyr.context import ZephyrContext
+from zephyr.dataset import Dataset
 
 from experiments.evals.delphi.delphi_checkpoints import DELPHI_CHECKPOINTS
 from experiments.evals.delphi.grade import GSM8K_LM_EVAL, GradingConfig, grade_rollouts
@@ -35,16 +45,6 @@ from experiments.evals.delphi.rollout import (
     init_chunks_root,
     run_rollout_worker,
 )
-from thalas.execution.executor import (
-    ExecutorStep,
-    InputName,
-    executor_main,
-    output_path_of,
-)
-from thalas.execution.remote import remote
-from thalas.execution.types import this_output_path, versioned
-from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
 
 logger = logging.getLogger(__name__)
 

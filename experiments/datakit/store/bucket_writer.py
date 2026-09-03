@@ -10,7 +10,7 @@ from collections.abc import Iterable, Iterator, Sequence
 import numpy as np
 from levanter.store.cache import CacheLedger, CacheMetadata
 from levanter.store.jagged_array import DEFAULT_WRITE_CHUNK_SIZE, JaggedArrayStore
-from rigging.filesystem import prefix_join
+from rigging.filesystem.storage_path import prefix_join
 
 
 @dataclasses.dataclass(frozen=True)

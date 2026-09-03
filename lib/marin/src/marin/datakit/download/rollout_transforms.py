@@ -9,7 +9,7 @@ import logging
 from collections.abc import Iterator
 
 import pyarrow.parquet as pq
-from rigging.filesystem import open_url
+from rigging.filesystem.factory import open_url
 from zephyr import counters
 
 logger = logging.getLogger(__name__)

@@ -21,7 +21,7 @@ dependencies = [
     "pyjwt[crypto] >= 2.8",
     # marin-finelog pulls s3fs -> aiobotocore, which breaks at import under the
     # httpx 1.0 prereleases (no httpx.TimeoutException). Pin to the 0.28 stable
-    # line, matching infra/probes.
+    # line.
     "httpx >= 0.28.1, < 1",
     # Startup role migration for the production PostgreSQL-backed Grafana database.
     "psycopg[binary] >= 3.2",

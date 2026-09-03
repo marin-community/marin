@@ -91,6 +91,10 @@ class Overlay:
     def job_config(self, job_id: JobName) -> JobConfigRow | None:
         return self._snapshot.job_configs.get(job_id)
 
+    def job_delta_error(self, job_id: JobName) -> str | None:
+        delta = self._effects.jobs.get(job_id)
+        return delta.error if delta is not None else None
+
     def _job_state(self, job_id: JobName, fallback: int) -> int:
         delta = self._effects.jobs.get(job_id)
         return delta.state if delta is not None else fallback
@@ -281,6 +285,7 @@ class Overlay:
                 pod_uid=_last_non_null(old.pod_uid, delta.pod_uid),
                 node_name=_last_non_null(old.node_name, delta.node_name),
                 terminal_reason=_last_non_null(old.terminal_reason, delta.terminal_reason),
+                output_archive=_last_non_null(old.output_archive, delta.output_archive),
             )
         self._effects.attempts[key] = merged
         # The job-wide failure budget counts FAILED attempt deltas (job_basis); a

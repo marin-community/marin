@@ -7,7 +7,7 @@ import logging
 import threading
 
 import pytest
-from rigging import telemetry
+import zephyr.coordinator as coordinator_module
 from zephyr import counters
 from zephyr.coordinator import ZephyrCoordinator, ZephyrExecutionResult, _PipelineExecution
 from zephyr.counters import ScopedCounters
@@ -341,6 +341,23 @@ def test_coordinator_stage_filter_aggregates_same_name_across_stages():
     assert coord.get_counters() == {"errors": 10}
 
 
+def test_coordinator_stage_filter_splits_same_name_across_stages():
+    """Each stage's total is reported on its own, not folded across stages.
+
+    ``zephyr/item_count`` is recorded under every stage's label, so a shared
+    counter name across stages is the normal case rather than a corner one.
+    """
+    coord = _make_coordinator(
+        [
+            CounterSnapshot(counters={"zephyr/item_count": CounterEntry(10, stage="stage0")}, generation=1),
+            CounterSnapshot(counters={"zephyr/item_count": CounterEntry(7, stage="stage1")}, generation=2),
+        ]
+    )
+    assert coord.get_counters(stage="stage0") == {"zephyr/item_count": 10}
+    assert coord.get_counters(stage="stage1") == {"zephyr/item_count": 7}
+    assert coord.get_counters() == {"zephyr/item_count": 17}
+
+
 # ---------------------------------------------------------------------------
 # update_counter
 # ---------------------------------------------------------------------------
@@ -453,7 +470,7 @@ def test_publish_telemetry_exports_aggregated_counter_snapshots_as_gauges(monkey
         def set(self, value, *, attributes=None):
             emitted.append((value, attributes))
 
-    monkeypatch.setattr(telemetry, "gauge", lambda name, **kwargs: Gauge())
+    monkeypatch.setattr(coordinator_module.telemetry, "gauge", lambda _name, **_kwargs: Gauge())
     coord._publish_telemetry()
 
     assert (15, {"source_kind": "gauge", "source_temporality": "current_snapshot", "run": "run-1"}) in emitted

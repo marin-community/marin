@@ -1,20 +1,13 @@
 ---
 name: add-pallas-kernel
-description: Add, modify, or autotune a TPU/GPU Pallas kernel.
+description: Add or change a named Pallas/Mosaic kernel, including its reference implementation, correctness tests, wrapper, or requested tuning.
 ---
 
-# Skill: Add or Update a Pallas Kernel
-
-Use this skill to build or change Pallas kernels with explicit standards for
-reference numerics, gradient safety, backend/fallback API design, performance
-measurement, and block-size autotuning.
+# Add or update a Pallas kernel
 
 ## How to apply this skill
 
-1. For long-running kernel research, load `.agents/skills/run-research/SKILL.md`
-   first.
-2. Apply the core workflow in this file.
-3. Load only the detail files needed for the task:
+Load only the detail files needed for the requested work:
    - [Kernel sources](docs/kernel-sources.md): read when choosing an in-repo or
      external kernel to imitate.
    - [Performance workflow](docs/performance-workflow.md): read before
@@ -26,27 +19,21 @@ measurement, and block-size autotuning.
    - [GPU tips](docs/gpu-tips.md): read for GPU Pallas/Mosaic work.
    - Deep references live under `docs/reference/`; read them only when the
      routed detail files point there.
-4. For atomic kernel changes, use only the task skills needed for the work.
+
+Use `run-research` only when the user explicitly requests its multi-session
+research workflow.
 
 ## Kernel Deliverables
 
 For a kernel `K`, produce:
 
-- A readable vanilla JAX reference with the target public API.
-- A correctness harness validating value parity vs reference, gradient parity on
-  small shapes, and CPU + accelerator numerics where applicable.
-- A Pallas kernel implementation plus wrapper with the same API.
-- A roofline estimate for the relevant hardware type(s).
-- A performance harness with steady-state timing on representative shape/dtype
-  grids and progress against the roofline.
-- Autotuned block/tile sizes for requested hardware/shape regimes.
-- A checked-in tuned table module for runtime selection, with explicit fallback
-  behavior.
-- An autotune-on-miss fallback path that sweeps a bounded candidate set and
-  caches winning configs.
-
-The general flow is: make it right, make it fast, make it usable, make it easy
-to use.
+- Vanilla JAX reference and Pallas wrapper with the same public API.
+- Value, gradient, CPU, and applicable accelerator parity harness.
+- Explicit backend and shape validation, with tests for ordered implementation
+  selection and each fallback path.
+- Roofline estimate and steady-state benchmark on representative shapes/dtypes.
+- When tuning is requested, bounded autotuning, a checked-in tuned table,
+  explicit fallback, and cached autotune-on-miss results.
 
 ## Correctness Workflow
 
@@ -160,17 +147,3 @@ def _cost_estimate(
 - Tuned table is checked in for requested hardware/shape regimes.
 - Research artifacts, issue summaries, and snapshot links follow the
   `run-research` workflow when the task is long-running.
-
-## PR Checklist
-
-- Reference implementation and public wrapper are in place.
-- Correctness tests cover values, gradients, and relevant backend paths.
-- Pallas implementation has explicit backend/shape validation.
-- Pallas, Mosaic, and FFI calls use an explicit `shard_map` boundary when
-  operating on sharded inputs.
-- Fallback behavior is tested for explicit and ordered implementation choices.
-- Cost estimates are attached to Pallas calls.
-- Benchmark or tuning script emits machine-readable rows.
-- Tuned table and autotune-on-miss behavior are checked in when tuning is part
-  of the task.
-- Long-running work has the required logbook/artifact/snapshot updates.

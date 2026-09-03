@@ -30,14 +30,13 @@ import pyarrow as pa
 from rigging.log_setup import configure_logging
 
 from zephyr.runners import (
-    SUBPROCESS_STATS_INTERVAL,
     _InProcessWorkerContext,
     _run_stage_with_ctx,
     _set_counter_aggregations,
-    _shard_stats_session,
+    _shard_counter_session,
 )
 from zephyr.stage_io import _ensure_picklable_exception, _stage_throughput
-from zephyr.stats import StatsWriter
+from zephyr.stats import WORKER_STATS_INTERVAL
 from zephyr.worker_context import _worker_ctx_var
 
 logger = logging.getLogger(__name__)
@@ -107,61 +106,51 @@ def _execute_shard_subprocess(task_file: str, result_file: str, external_sort_di
     ctx: _InProcessWorkerContext | None = None
     try:
         with open(task_file, "rb") as f:
-            task, chunk_prefix, execution_id, finelog_url = cloudpickle.load(f)
+            task, chunk_prefix, execution_id = cloudpickle.load(f)
 
-        stats_writer = StatsWriter.connect(finelog_url) if finelog_url else StatsWriter(None)
-        try:
-            ctx = _InProcessWorkerContext(
-                chunk_prefix, execution_id, task.stage_name, task_memory_bytes=task.cost.memory
+        ctx = _InProcessWorkerContext(chunk_prefix, execution_id, task.stage_name, task_memory_bytes=task.cost.memory)
+        _worker_ctx_var.set(ctx)
+        _set_counter_aggregations()
+
+        with _shard_counter_session(ctx, sample_interval=None, sampler_thread_name=None) as start_time:
+            # The parent polls the counter file for live heartbeat counters.
+            stop_event = threading.Event()
+            flusher = threading.Thread(
+                target=_periodic_counter_writer,
+                args=(stop_event, ctx, counter_file, WORKER_STATS_INTERVAL),
+                daemon=True,
+                name="zephyr-subprocess-counter-flusher",
             )
-            _worker_ctx_var.set(ctx)
-            _set_counter_aggregations()
+            flusher.start()
 
-            with _shard_stats_session(
-                ctx, task, execution_id, stats_writer, sampler_thread_name="zephyr-subprocess-stats-sampler"
-            ) as start_time:
-                # Threads unique to the child: the parent polls the counter file
-                # for live heartbeat counters, and the shard has no coordinator
-                # of its own to log progress.
-                stop_event = threading.Event()
-                flusher = threading.Thread(
-                    target=_periodic_counter_writer,
-                    args=(stop_event, ctx, counter_file, SUBPROCESS_STATS_INTERVAL),
-                    daemon=True,
-                    name="zephyr-subprocess-counter-flusher",
+            status_logger = threading.Thread(
+                target=_periodic_status_logger,
+                args=(
+                    stop_event,
+                    ctx,
+                    task.stage_name,
+                    execution_id,
+                    task.shard_idx,
+                    task.total_shards,
+                    start_time,
+                    WORKER_STATS_INTERVAL,
+                ),
+                daemon=True,
+                name="zephyr-subprocess-status-logger",
+            )
+            status_logger.start()
+
+            try:
+                result_or_error = _run_stage_with_ctx(
+                    task,
+                    chunk_prefix,
+                    execution_id,
+                    external_sort_dir=external_sort_dir,
                 )
-                flusher.start()
-
-                status_logger = threading.Thread(
-                    target=_periodic_status_logger,
-                    args=(
-                        stop_event,
-                        ctx,
-                        task.stage_name,
-                        execution_id,
-                        task.shard_idx,
-                        task.total_shards,
-                        start_time,
-                        SUBPROCESS_STATS_INTERVAL,
-                    ),
-                    daemon=True,
-                    name="zephyr-subprocess-status-logger",
-                )
-                status_logger.start()
-
-                try:
-                    result_or_error = _run_stage_with_ctx(
-                        task,
-                        chunk_prefix,
-                        execution_id,
-                        external_sort_dir=external_sort_dir,
-                    )
-                finally:
-                    stop_event.set()
-                    flusher.join(timeout=2.0)
-                    status_logger.join(timeout=2.0)
-        finally:
-            stats_writer.close()
+            finally:
+                stop_event.set()
+                flusher.join(timeout=2.0)
+                status_logger.join(timeout=2.0)
     except Exception as e:
         # Cloudpickling an exception drops ``__traceback__``, so a naive
         # parent re-raise would otherwise show only the parent stack at the

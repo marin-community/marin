@@ -1,6 +1,6 @@
 ---
 name: lint-review
-description: In CI, run the infra/lint catalog review over a PR.
+description: Run the read-only infra/lint PR reporter only when invoked by CI or explicitly requested; do not select it for the commit workflow's fix-and-respond review.
 allowed-tools: Bash(./infra/pre-commit.py:*), Bash(gh pr comment:*), Bash(gh pr view:*), Bash(gh pr diff:*), Bash(gh api:*), Bash(git diff:*), Bash(git log:*), Bash(git show:*), Bash(git merge-base:*), Bash(git rev-parse:*), Bash(git status:*), mcp__github_inline_comment__create_inline_comment
 ---
 
@@ -36,7 +36,11 @@ unforgivable error; so is fabricating one.
 2. **Run the review.** From the repo root:
 
    ```bash
-   ./infra/pre-commit.py --review
+   head_sha="$(git rev-parse HEAD)"
+   MARIN_REVIEW_TRIGGER=ci \
+     MARIN_REVIEW_PR_NUMBER=<PR> \
+     MARIN_REVIEW_HEAD_SHA="$head_sha" \
+     ./infra/pre-commit.py --review --agent-command='codex exec'
    ```
 
    The command writes its raw per-arm prompts/outputs and the

@@ -15,6 +15,8 @@ from iac.imports import ImportCatalog
 
 PROJECT = "example"
 PROJECT_NUMBER = "123456789"
+MARIN_BACKEND_SERVICE_ID = "2663834686758326555"
+ROUNDED_BACKEND_SERVICE_ID = 2663834686758326784
 
 
 def _args() -> GcpGclbIapArgs:
@@ -31,7 +33,7 @@ def _args() -> GcpGclbIapArgs:
                 zone="us-central1-a",
                 instance="iris-controller-marin",
                 ip_address="10.0.0.2",
-                backend_service_id="111",
+                backend_service_id=MARIN_BACKEND_SERVICE_ID,
                 network_tag="iris-marin-controller",
                 programmatic_clients=("desktop-client.apps.googleusercontent.com",),
             ),
@@ -48,6 +50,16 @@ def _args() -> GcpGclbIapArgs:
         ),
         finelogs=(
             FinelogIngress(
+                cluster="marin-dev",
+                domain="finelog-dev.example.com",
+                zone="us-central1-a",
+                instance="finelog-marin-dev",
+                ip_address="10.0.0.5",
+                port=10001,
+                network_tag="finelog-marin-dev-lb",
+                sender_source_ranges=("192.0.2.0/24",),
+            ),
+            FinelogIngress(
                 cluster="marin",
                 domain="finelog.example.com",
                 zone="us-central1-a",
@@ -55,7 +67,7 @@ def _args() -> GcpGclbIapArgs:
                 ip_address="10.0.0.4",
                 port=10001,
                 network_tag="finelog-marin-lb",
-                sender_source_ranges=("192.0.2.0/24", "198.51.100.0/24"),
+                sender_source_ranges=("198.51.100.0/24", "192.0.2.0/24"),
             ),
         ),
     )
@@ -81,7 +93,12 @@ def _record_gclb(monkeypatch) -> RecordedGclb:
             resource._type = resource_type
             resource._name = logical_name
             for output in ("id", "name", "self_link", "generated_id", "address"):
-                setattr(resource, output, logical_name)
+                value = (
+                    ROUNDED_BACKEND_SERVICE_ID
+                    if output == "generated_id" and resource_type == "gcp:compute/backendService:BackendService"
+                    else logical_name
+                )
+                setattr(resource, output, value)
             return resource
 
         return record
@@ -137,7 +154,7 @@ def test_gclb_preserves_ingress_security_boundaries(monkeypatch) -> None:
     ]
     url_map = inputs_by_name["url-map"]
     matchers = {matcher.name: matcher for matcher in url_map["path_matchers"]}
-    assert set(matchers) == {"marin", "marin-dev", "finelog-marin"}
+    assert set(matchers) == {"marin", "marin-dev", "finelog-marin", "finelog-marin-dev"}
     for cluster in ("marin", "marin-dev"):
         assert matchers[cluster].path_rules == [
             gcp.compute.URLMapPathMatcherPathRuleArgs(
@@ -145,7 +162,8 @@ def test_gclb_preserves_ingress_security_boundaries(monkeypatch) -> None:
                 service=f"{cluster}-token-proxy-backend",
             )
         ]
-    assert matchers["finelog-marin"].path_rules == []
+    for cluster in ("finelog-marin", "finelog-marin-dev"):
+        assert matchers[cluster].path_rules == []
 
     controller_allow = inputs_by_name["marin-allow-lb"]
     assert controller_allow["source_ranges"] == ["130.211.0.0/22", "35.191.0.0/16"]
@@ -166,8 +184,37 @@ def test_gclb_preserves_ingress_security_boundaries(monkeypatch) -> None:
     assert rules[2147483647].action == "deny(403)"
 
 
+def test_gclb_preserves_aggregate_route_order(monkeypatch) -> None:
+    inputs_by_name = _record_gclb(monkeypatch).inputs_by_name
+    url_map = inputs_by_name["url-map"]
+    expected_matchers = ["marin-dev", "marin", "finelog-marin-dev", "finelog-marin"]
+
+    assert [rule.path_matcher for rule in url_map["host_rules"]] == expected_matchers
+    assert [matcher.name for matcher in url_map["path_matchers"]] == expected_matchers
+    assert inputs_by_name["https-proxy"]["ssl_certificates"] == [
+        "marin-certificate",
+        "marin-dev-certificate",
+        "finelog-marin-dev-certificate",
+        "finelog-marin-certificate",
+    ]
+
+
 def test_gclb_catalogs_every_existing_leaf(monkeypatch) -> None:
     recording = _record_gclb(monkeypatch)
     cataloged = {spec.identity.logical_name for spec in recording.imports.specs}
 
     assert cataloged == set(recording.inputs_by_name)
+
+
+def test_gclb_protects_only_shared_frontend(monkeypatch) -> None:
+    recording = _record_gclb(monkeypatch)
+    protected = {name for name, options in recording.options_by_name.items() if options.protect}
+
+    assert protected == {"global-address", "url-map", "https-proxy", "forwarding-rule"}
+
+
+def test_iap_settings_name_uses_exact_configured_backend_service_id(monkeypatch) -> None:
+    recording = _record_gclb(monkeypatch)
+    settings_name = recording.inputs_by_name["marin-iap-settings"]["name"]
+
+    assert settings_name == f"projects/{PROJECT_NUMBER}/iap_web/compute/services/{MARIN_BACKEND_SERVICE_ID}"

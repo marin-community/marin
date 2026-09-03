@@ -25,7 +25,8 @@ import pyarrow.parquet as pq
 from levanter.data._preprocessor import BatchProcessor
 from levanter.data.text.formats import LmDatasetFormatBase, preprocessor_for_format
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
-from rigging.filesystem import StoragePath, url_to_fs
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import StoragePath
 from zephyr import counters
 from zephyr.dataset import Dataset, FileEntry
 from zephyr.input_file import InputFileSpec

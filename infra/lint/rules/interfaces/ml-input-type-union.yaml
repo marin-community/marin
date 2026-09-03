@@ -1,0 +1,23 @@
+schema_version: 1
+code: ml-input-type-union
+lane: interfaces
+title: '`X | str` parameter union forcing `isinstance` checks'
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** Pick one input type. Polymorphic parameters mean every
+  callee branches on `isinstance` and every caller has to guess which form is
+  preferred. Normalize once at the boundary.
+
+  **When allowed:** Backward-compat adapters that must accept both old and new
+  calling conventions for one release. New code does not introduce them.
+
+  **Bad example:**
+  ```python
+  def open_dataset(source: Path | str) -> Dataset:
+      if isinstance(source, str):
+          source = Path(source)
+      # normalize once at the public entry point; internal code takes Path.
+      ...
+  ```
+
+  ## Types & data structures

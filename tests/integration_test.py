@@ -41,7 +41,7 @@ from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
 from marin.schemas.web.convert import ResiliparseConfig
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 from marin.transform.simple_html_to_md.process import SimpleHtmlToMdConfig, html_to_md
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 
 configure_logging(level=logging.INFO)
@@ -87,12 +87,11 @@ def create_steps(prefix: str, synth_data: str, tokenizer: str) -> list[StepSpec]
     # Transform HTML to markdown
     transform_hq_data_spec = StepSpec(
         name=os.path.join(prefix, "hq-transformed"),
-        hash_attrs={"extract_method": "resiliparse"},
+        hash_attrs={"extractor": "resiliparse"},
         fn=lambda output_path: html_to_md(
             SimpleHtmlToMdConfig(
                 input_path=os.path.join(synth_data, "pos"),
                 output_path=output_path,
-                extract_method="resiliparse",
                 config=ResiliparseConfig(),
             )
         ),

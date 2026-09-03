@@ -6,7 +6,7 @@
 Downloading a large model repo from HuggingFace on every job is slow and wastes
 bandwidth. :func:`cache_to_prefix` mirrors a snapshot once to a shared cache
 prefix (typically a region-local TTL bucket from
-:func:`rigging.filesystem.marin_temp_bucket`) under a distributed lock, so
+:func:`rigging.filesystem.cluster_config.marin_temp_bucket`) under a distributed lock, so
 concurrent workers do not all hammer HuggingFace at the same time: the first
 worker populates the cache while the rest **block** until it is complete, then
 read the snapshot from the nearby cache.
@@ -35,7 +35,8 @@ from dataclasses import asdict, dataclass
 import fsspec
 from huggingface_hub import hf_hub_download, list_repo_files, model_info
 from rigging.filesystem.distributed_lock import HEARTBEAT_INTERVAL, DistributedLease, LeaseLostError, create_lock
-from rigging.filesystem import marin_temp_bucket, url_to_fs
+from rigging.filesystem.cluster_config import marin_temp_bucket
+from rigging.filesystem.factory import url_to_fs
 
 logger = logging.getLogger(__name__)
 

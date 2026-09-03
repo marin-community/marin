@@ -1,6 +1,6 @@
 ---
 name: noslop
-description: Clean a branch with strict gates for low-value tests and agentic prose. Use when asked to deslop, simplify, clean up, make a diff minimal, review test quality, tighten comments/docs/PR text, or remove AI-writing patterns such as rhetorical "X, not Y" contrasts.
+description: Deslop, simplify, or review low-value tests and prose only when explicitly requested for a branch or diff.
 ---
 
 # No-Slop Review

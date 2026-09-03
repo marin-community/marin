@@ -15,10 +15,13 @@ import yaml
 from marin.datakit.ingestion_manifest import (
     IngestionSourceManifest,
     MaterializedOutputMetadata,
+    verify_content_fingerprint,
     write_ingestion_metadata_json,
 )
 from marin.transform.hf_parquet_splits import load_hf_split_iterable
-from rigging.filesystem import StoragePath, atomic_rename, open_url
+from rigging.filesystem.atomic import atomic_rename
+from rigging.filesystem.factory import open_url
+from rigging.filesystem.storage_path import StoragePath
 
 
 class LmEvalRawRenderer(StrEnum):
@@ -26,11 +29,8 @@ class LmEvalRawRenderer(StrEnum):
     GSM8K = "gsm8k_qa"
 
 
-MMLU_DEFAULT_NUM_FEWSHOT = 5
-MMLU_DEFAULT_FEWSHOT_SPLIT = "dev"
 MMLU_CHOICE_LABELS = ("A", "B", "C", "D")
 MMLU_DESCRIPTION_TEMPLATE = "The following are multiple choice questions (with answers) about {subject}."
-GSM8K_COT_DEFAULT_NUM_FEWSHOT = 8
 # Fallback for environments that do not install Marin's optional lm-eval extra.
 GSM8K_COT_FEWSHOT_EXAMPLES: tuple[tuple[str, str], ...] = (
     (
@@ -225,12 +225,7 @@ def _validate_mmlu_fewshot_config(cfg: LmEvalRawStagingConfig) -> None:
 
 def stage_lm_eval_source(cfg: LmEvalRawStagingConfig) -> dict[str, int | str]:
     """Stage one LM-eval-style dataset split into raw-text JSONL."""
-    if cfg.source_manifest is not None and cfg.content_fingerprint:
-        expected = cfg.source_manifest.fingerprint()
-        if cfg.content_fingerprint != expected:
-            raise ValueError(
-                f"content_fingerprint mismatch: config has {cfg.content_fingerprint}, source manifest has {expected}"
-            )
+    verify_content_fingerprint(cfg.source_manifest, cfg.content_fingerprint)
 
     if cfg.renderer_name is LmEvalRawRenderer.MMLU:
         _validate_mmlu_fewshot_config(cfg)

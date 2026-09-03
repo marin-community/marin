@@ -99,7 +99,7 @@ def _tracked_scale_up(group: ScalingGroup, timestamp: Timestamp | None = None, *
     """
     timestamp = timestamp or Timestamp.from_ms(1000000)
     group.begin_scale_up(timestamp=timestamp)
-    handle = group.scale_up(timestamp=timestamp, **kwargs)
+    handle = group.scale_up(**kwargs)
     group.complete_scale_up(handle, timestamp)
     return handle
 
@@ -834,7 +834,7 @@ class TestScalingGroupAvailability:
         ts = Timestamp.from_ms(1000)
         group.begin_scale_up(timestamp=ts)
         with pytest.raises(QuotaExhaustedError):
-            group.scale_up(timestamp=ts)
+            group.scale_up()
         group.cancel_scale_up()
         group.record_quota_exceeded("quota exceeded", ts)
 
@@ -860,7 +860,7 @@ class TestScalingGroupAvailability:
         ts1 = Timestamp.from_ms(1000)
         group.begin_scale_up(timestamp=ts1)
         with pytest.raises(QuotaExhaustedError):
-            group.scale_up(timestamp=ts1)
+            group.scale_up()
         group.cancel_scale_up()
         group.record_quota_exceeded("quota exceeded", ts1)
         assert not group.can_accept_demand(timestamp=Timestamp.from_ms(2000))
@@ -868,7 +868,7 @@ class TestScalingGroupAvailability:
         # Second attempt succeeds via complete_scale_up, which clears quota state
         ts2 = Timestamp.from_ms(3000)
         group.begin_scale_up(timestamp=ts2)
-        handle = group.scale_up(timestamp=ts2)
+        handle = group.scale_up()
         group.complete_scale_up(handle, ts2)
         assert group.can_accept_demand(timestamp=Timestamp.from_ms(4000))
 
@@ -902,7 +902,7 @@ class TestScalingGroupAvailability:
 
         ts = Timestamp.from_ms(1_000_000)
         group.begin_scale_up(timestamp=ts)
-        handle = group.scale_up(timestamp=ts)
+        handle = group.scale_up()
         group.complete_scale_up(handle, ts)
 
         state = group.availability(Timestamp.from_ms(1_001_000))
@@ -924,7 +924,7 @@ class TestScalingGroupAvailability:
 
         ts = Timestamp.from_ms(1_000_000)
         group.begin_scale_up(timestamp=ts)
-        handle = group.scale_up(timestamp=ts)
+        handle = group.scale_up()
         group.complete_scale_up(handle, ts)
 
         # Slice is at max_slices but still BOOTING — accepts demand.
@@ -993,7 +993,7 @@ class TestCanScaleUpQuotaExhausted:
         ts = Timestamp.from_ms(1000000)
         group.begin_scale_up(timestamp=ts)
         with pytest.raises(QuotaExhaustedError):
-            group.scale_up(timestamp=ts)
+            group.scale_up()
         group.cancel_scale_up()
         group.record_quota_exceeded("quota exceeded", ts)
 

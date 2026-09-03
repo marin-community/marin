@@ -160,6 +160,37 @@ def test_gpu_lowering_emits_no_swap_space_or_trust_remote_code():
     assert "--trust-remote-code" not in engine_args
 
 
+@pytest.mark.parametrize(
+    ("serve", "accelerator"),
+    [
+        (
+            ServeConfig(backend=ServeBackend.LEVANTER, vllm_batch_invariant=True),
+            AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=1),
+        ),
+        (
+            ServeConfig(vllm_use_flashinfer_sampler=False, auto_overrides=False),
+            AcceleratorChoice(platform=Platform.TPU, tpu_type="v6e-4"),
+        ),
+    ],
+    ids=("levanter-gpu", "vllm-tpu"),
+)
+def test_vllm_process_settings_reject_unsupported_lowering(serve, accelerator):
+    model = ModelConfig(
+        name="unsupported-vllm-settings",
+        location="org/model",
+        resource_hint=ResourceHint(memory="32g"),
+        serve=serve,
+    )
+
+    with pytest.raises(ValueError, match="require the vLLM backend on GPU"):
+        inference_config_for_model(
+            model,
+            accelerator,
+            env_vars={},
+            priority=job_pb2.PRIORITY_BAND_INHERIT,
+        )
+
+
 def _gib(memory: str) -> int:
     return int(memory.removesuffix("g"))
 

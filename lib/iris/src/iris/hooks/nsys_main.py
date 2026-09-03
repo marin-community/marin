@@ -56,8 +56,8 @@ from pathlib import Path
 from types import FrameType
 from typing import NoReturn
 
-from rigging.filesystem import StoragePath
 from rigging.filesystem.cluster_config import marin_temp_bucket
+from rigging.filesystem.storage_path import StoragePath
 
 from iris.cluster.client.job_info import get_job_info
 from iris.hooks.multigpu import IRIS_MULTIGPU_PROCESS_INDEX_ENV

@@ -3,9 +3,9 @@
 
 """Sync MarinMirror activity and GitHub repository files into Echo.
 
-The MarinMirror phase refreshes GitHub and Discord activity. An independently
-watermarked hourly phase indexes the configured GitHub branch head, fetching only
-changed blobs when GitHub can compare it with the previously indexed commit.
+The MarinMirror phase refreshes GitHub and Discord activity first. One globally
+serialized repository phase then advances a durable fair turn and indexes that
+repository's configured branch head.
 
 This mirror duplicates what marinmirror itself could push; it is the interim answer
 until marinmirror runs as a service in this project (see README.md).
@@ -28,6 +28,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import github_repository
+import repository_identity
 import schema
 import sqlalchemy
 from google.cloud.sql.connector import Connector
@@ -225,19 +226,28 @@ def sync_corpus(engine: sqlalchemy.Engine, token: str) -> int:
     return 0
 
 
-def run(engine: sqlalchemy.Engine, target: github_repository.RepositoryTarget, token: str) -> int:
-    github_repository.sync_repository(engine, target, token, datetime.now(UTC))
+def run(
+    engine: sqlalchemy.Engine,
+    token: str,
+    repository_override: github_repository.RepositoryTarget | None = None,
+    now: datetime | None = None,
+) -> int:
     sync_corpus(engine, token)
+    with github_repository.repository_sync_lock(engine) as locked:
+        if not locked:
+            print("another repository sync is running; repository turn not consumed")
+            return 0
+        target = repository_override or github_repository.claim_repository_turn(engine)
+        print(f"repository turn: {target.repository}@{target.branch}", flush=True)
+        github_repository.sync_repository_locked(engine, target, token, now or datetime.now(UTC))
     return 0
 
 
 def main() -> int:
-    target = github_repository.RepositoryTarget(
-        repository=os.environ["GITHUB_REPOSITORY"],
-        branch=os.environ["GITHUB_BRANCH"],
-    )
+    override = os.environ.get("ECHO_REPOSITORY_TARGET")
+    target = repository_identity.configured_repository_target(override) if override else None
     with Connector() as connector:
-        return run(make_engine(connector), target, os.environ["MARINMIRROR_TOKEN"])
+        return run(make_engine(connector), os.environ["MARINMIRROR_TOKEN"], target)
 
 
 if __name__ == "__main__":

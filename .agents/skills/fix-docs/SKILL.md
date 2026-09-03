@@ -1,6 +1,6 @@
 ---
 name: fix-docs
-description: De-rot markdown docs in lib/iris, lib/zephyr, and lib/fray.
+description: De-rot Markdown under lib/iris, lib/zephyr, or lib/fray only when explicitly requested.
 ---
 
 Fix the markdown docs within `lib/iris`, `lib/zephyr` and `lib/fray` so they

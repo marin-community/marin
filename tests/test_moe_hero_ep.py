@@ -6,9 +6,12 @@ import os
 import subprocess
 import sys
 import textwrap
+import tomllib
 from datetime import timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+from urllib.parse import unquote
 
 import equinox as eqx
 import jax
@@ -17,17 +20,25 @@ import jmp
 import numpy as np
 import optax
 import pytest
+from fray.cluster import ResourceConfig
 from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, set_mesh, use_abstract_mesh
 from jax.sharding import PartitionSpec as P
+from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
+from levanter.checkpoint import save_checkpoint
 from marin.execution.lazy import StepContext
+from marin.testing.moe import ragged_ep
 
-from experiments.grug.moe_hero_ep import grugmuon_hero, launch, model, train
+from experiments.grug.checkpointing import LEGACY_STATE_KEY, restore_grug_state_from_checkpoint
+from experiments.grug.moe_hero_ep import grugmuon_hero, model, train
+from experiments.grug.moe_hero_ep import launch_diagnostics as launch
 from experiments.grug.moe_hero_ep import small_scale_abl_launch as abl
 
+GPU_EXTRA_PYPROJECT = Path(__file__).resolve().parents[1] / "lib/marin/pyproject.toml"
 
-def test_hero_run_without_shape_overrides_uses_the_selected_model():
-    step = launch.build_hero_run(run_id="selected-default", dp_racks=1, num_steps=1, version="dev")
+
+def test_diagnostic_run_without_shape_overrides_uses_the_selected_model():
+    step = launch.build_diagnostic_run(run_id="selected-default", dp_racks=1, num_steps=1, version="dev")
     config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
 
     assert (
@@ -38,9 +49,41 @@ def test_hero_run_without_shape_overrides_uses_the_selected_model():
         config.model.num_experts_per_token,
         config.model.latent_dim,
         config.model.capacity_factor,
+        config.model.pooled_transport_capacity_factor,
+        config.model.num_expert_waves,
+        config.model.moe_implementation,
+        config.model.qb_estimator,
+        config.model.qb_hist_bins,
         config.trainer.trainer.train_batch_size,
         config.model.max_seq_len,
-    ) == (6144, 48, 192, 6144, 4, 3072, 1.33, 1024, 4096)
+        config.processes_per_task,
+        config.trainer.trainer.watch.interval,
+        config.tensorstore_cache_bytes,
+        config.trainer.trainer.mp.param_dtype,
+        config.trainer.trainer.mp.compute_dtype,
+        config.trainer.master_param_mode,
+    ) == (
+        6144,
+        48,
+        384,
+        3072,
+        8,
+        3072,
+        1.15,
+        1.15,
+        3,
+        "ragged_all_to_all",
+        model.QbEstimator.HIST,
+        10_000,
+        1024,
+        4096,
+        4,
+        10,
+        1_000_000_000,
+        jnp.float32,
+        jnp.bfloat16,
+        train.MasterParamMode.DEVICE,
+    )
 
 
 def test_full_bank_top_k_is_rejected_before_launch():
@@ -48,7 +91,7 @@ def test_full_bank_top_k_is_rejected_before_launch():
     # more entries than there are experts. Without this the job dies in the router, which is after
     # the 16-node gang is allocated.
     with pytest.raises(ValueError, match="must be < num_experts"):
-        launch.build_hero_run(
+        launch.build_diagnostic_run(
             run_id="full-bank",
             dp_racks=1,
             num_steps=1,
@@ -61,7 +104,7 @@ def test_full_bank_top_k_is_rejected_before_launch():
 def test_checkpoint_path_overrides_the_step_output_path():
     """A run that only exercises the checkpoint write sends it to disposable storage."""
     temp_path = "s3://marin-us-east-02a/tmp/ttl=1d/hero-ckpt-smoke"
-    step = launch.build_hero_run(
+    step = launch.build_diagnostic_run(
         run_id="ckpt-elsewhere",
         dp_racks=1,
         num_steps=1,
@@ -75,7 +118,7 @@ def test_checkpoint_path_overrides_the_step_output_path():
 
 
 def test_checkpoint_path_defaults_under_the_step_output_path():
-    step = launch.build_hero_run(run_id="ckpt-default", dp_racks=1, num_steps=1, version="dev")
+    step = launch.build_diagnostic_run(run_id="ckpt-default", dp_racks=1, num_steps=1, version="dev")
     ctx = StepContext.for_fingerprint(step.runtime_args, step.deps)
     config = step.build_config(ctx)
 
@@ -84,7 +127,7 @@ def test_checkpoint_path_defaults_under_the_step_output_path():
 
 def test_checkpoint_interval_must_be_positive():
     with pytest.raises(ValueError, match="checkpoint_interval must be positive"):
-        launch.build_hero_run(
+        launch.build_diagnostic_run(
             run_id="bad-checkpoint-interval",
             dp_racks=1,
             num_steps=1,
@@ -99,7 +142,7 @@ def test_checkpoint_interval_must_be_positive():
 )
 def test_profile_window_must_fall_inside_the_run(profile_steps, profile_start_step):
     with pytest.raises(ValueError, match="profile"):
-        launch.build_hero_run(
+        launch.build_diagnostic_run(
             run_id="bad-profile-window",
             dp_racks=1,
             num_steps=3,
@@ -110,7 +153,7 @@ def test_profile_window_must_fall_inside_the_run(profile_steps, profile_start_st
 
 
 def test_data_parallel_racks_keep_the_global_batch_explicit():
-    step = launch.build_hero_run(run_id="two-racks", dp_racks=2, num_steps=1, version="dev")
+    step = launch.build_diagnostic_run(run_id="two-racks", dp_racks=2, num_steps=1, version="dev")
     config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
 
     assert config.trainer.replica_axis_size == 2
@@ -119,7 +162,7 @@ def test_data_parallel_racks_keep_the_global_batch_explicit():
 
 
 def test_schedule_steps_do_not_extend_the_run():
-    step = launch.build_hero_run(
+    step = launch.build_diagnostic_run(
         run_id="schedule-head",
         dp_racks=1,
         num_steps=5,
@@ -132,11 +175,59 @@ def test_schedule_steps_do_not_extend_the_run():
     assert config.stop_after_steps == 5
 
 
-def test_expert_bank_override_must_divide_the_expert_axis():
+def test_synthetic_training_data_builds_a_reusable_global_batch():
+    device_count = len(jax.devices())
+    mesh = Mesh(
+        np.asarray(jax.devices()).reshape(1, device_count, 1, 1),
+        ("replica_dcn", "data", "expert", "model"),
+    )
+    batch = train._make_synthetic_batch(
+        batch_size=device_count,
+        max_seq_len=8,
+        vocab_size=11,
+        seed=3,
+        mesh=mesh,
+    )
+
+    expected_tokens = (np.arange(device_count * 8).reshape(device_count, 8) + 3) % 11
+    np.testing.assert_array_equal(batch.tokens, expected_tokens)
+    np.testing.assert_array_equal(batch.loss_weight[:, :-1], 1)
+    np.testing.assert_array_equal(batch.loss_weight[:, -1], 0)
+    assert batch.tokens.sharding == NamedSharding(mesh, P(train._BATCH_AXES, None))
+
+
+def test_expert_bank_override_must_be_divisible_by_the_expert_axis():
     # `moe_mlp` raises on an indivisible bank only once the 16-node gang is already allocated and
     # its workspace is built, so the launcher has to reject it while it is still free to do so.
-    with pytest.raises(ValueError, match="must divide the expert axis"):
-        launch.build_hero_run(run_id="bad-bank", dp_racks=1, num_steps=1, num_experts=200, version="dev")
+    with pytest.raises(ValueError, match="must be divisible by 64"):
+        launch.build_diagnostic_run(run_id="bad-bank", dp_racks=1, num_steps=1, num_experts=200, version="dev")
+
+
+def test_expert_bank_override_must_support_three_waves():
+    with pytest.raises(ValueError, match="local expert count=4 must be divisible by num_expert_waves=3"):
+        launch.build_diagnostic_run(run_id="bad-waves", dp_racks=1, num_steps=1, num_experts=256, version="dev")
+
+
+def _runtime_env_config(
+    *,
+    processes_per_task=1,
+    watch_mode=train.WatchMode.INLINE,
+    watch_interval=1,
+    moe_implementation="fixed_pooled_wave_all_to_all",
+    remat_mode="recompute_all",
+):
+    """A stand-in for GrugRunConfig holding only the fields ``run_grug``'s env setup and dispatch read."""
+    return SimpleNamespace(
+        trainer=SimpleNamespace(
+            trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=watch_interval)),
+            watch_mode=watch_mode,
+        ),
+        model=SimpleNamespace(moe_implementation=moe_implementation, remat_mode=remat_mode),
+        resources=ResourceConfig.with_gpu("GB200", count=4),
+        processes_per_task=processes_per_task,
+        max_retries_failure=0,
+        max_task_failures=10,
+    )
 
 
 def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch):
@@ -144,14 +235,7 @@ def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch)
     monkeypatch.setenv("XLA_FLAGS", explicit_overlap)
     for name in train.HERO_EP_RUNTIME_ENV:
         monkeypatch.delenv(name, raising=False)
-    config = SimpleNamespace(
-        trainer=SimpleNamespace(
-            trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=1)),
-            watch_mode=train.WatchMode.INLINE,
-        ),
-        resources=object(),
-        processes_per_task=1,
-    )
+    config = _runtime_env_config()
 
     with patch.object(train, "dispatch_grug_training_run"):
         train.run_grug(config)
@@ -161,8 +245,11 @@ def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch)
     assert "--xla_gpu_experimental_parallel_collective_overlap_limit=4" not in flags
     assert "--xla_gpu_enable_latency_hiding_scheduler=true" in flags
     assert train.XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG in flags
-    assert os.environ["JAX_ENABLE_PGLE"] == "true"
+    assert os.environ["JAX_ENABLE_PGLE"] == "false"
+    assert os.environ["XLA_PJRT_GPU_HOST_MEMORY_LIMIT_GB"] == "192"
     assert os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] == "cuda_async"
+    assert os.environ["LD_PRELOAD"] == "libjemalloc.so.2"
+    assert os.environ["MALLOC_CONF"] == "background_thread:true,dirty_decay_ms:0,muzzy_decay_ms:0,narenas:2"
 
 
 def test_run_grug_defaults_pgle_off_for_per_gpu_processes(monkeypatch):
@@ -173,14 +260,7 @@ def test_run_grug_defaults_pgle_off_for_per_gpu_processes(monkeypatch):
     for name in train.HERO_EP_RUNTIME_ENV:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.delenv("XLA_FLAGS", raising=False)
-    config = SimpleNamespace(
-        trainer=SimpleNamespace(
-            trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=1)),
-            watch_mode=train.WatchMode.INLINE,
-        ),
-        resources=object(),
-        processes_per_task=4,
-    )
+    config = _runtime_env_config(processes_per_task=4)
 
     with patch.object(train, "dispatch_grug_training_run"):
         train.run_grug(config)
@@ -196,21 +276,18 @@ def test_run_grug_defaults_pgle_off_for_per_gpu_processes(monkeypatch):
 def test_run_grug_keeps_explicit_ep_runtime_values(monkeypatch):
     monkeypatch.setenv("JAX_ENABLE_PGLE", "false")
     monkeypatch.setenv("XLA_PYTHON_CLIENT_ALLOCATOR", "platform")
+    monkeypatch.setenv("LD_PRELOAD", "/opt/custom/liballocator.so")
+    monkeypatch.setenv("MALLOC_CONF", "narenas:8")
     monkeypatch.delenv("XLA_FLAGS", raising=False)
-    config = SimpleNamespace(
-        trainer=SimpleNamespace(
-            trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=1)),
-            watch_mode=train.WatchMode.INLINE,
-        ),
-        resources=object(),
-        processes_per_task=1,
-    )
+    config = _runtime_env_config()
 
     with patch.object(train, "dispatch_grug_training_run"):
         train.run_grug(config)
 
     assert os.environ["JAX_ENABLE_PGLE"] == "false"
     assert os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] == "platform"
+    assert os.environ["LD_PRELOAD"] == "/opt/custom/liballocator.so"
+    assert os.environ["MALLOC_CONF"] == "narenas:8"
 
 
 @pytest.mark.parametrize(
@@ -225,20 +302,186 @@ def test_run_grug_reduces_collective_overlap_only_for_inline_watch(
     monkeypatch, watch_mode, watch_interval, expected_overlap_limit
 ):
     monkeypatch.delenv("XLA_FLAGS", raising=False)
-    config = SimpleNamespace(
-        trainer=SimpleNamespace(
-            trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=watch_interval)),
-            watch_mode=watch_mode,
-        ),
-        resources=object(),
-        processes_per_task=1,
-    )
+    config = _runtime_env_config(watch_mode=watch_mode, watch_interval=watch_interval)
 
     with patch.object(train, "dispatch_grug_training_run"):
         train.run_grug(config)
 
     flags = os.environ["XLA_FLAGS"].split()
     assert f"{train.XLA_COLLECTIVE_OVERLAP_FLAG}={expected_overlap_limit}" in flags
+
+
+def test_the_stock_pjrt_plugin_fails_a_ragged_run_rather_than_running_it_slowly(monkeypatch):
+    """jax reports the stock generation either way, so nothing else catches a stock runtime."""
+    monkeypatch.setattr("importlib.metadata.version", lambda name: jax.__version__)
+    with pytest.raises(RuntimeError, match=r"\+marin\."):
+        train.verify_ragged_pjrt()
+
+    monkeypatch.setattr("importlib.metadata.version", lambda name: f"{jax.__version__}+marin.abc123def456")
+    train.verify_ragged_pjrt()
+
+
+def test_the_patched_pjrt_wheel_pairs_with_the_pinned_jax():
+    """The patched wheel swaps in for the stock plugin, whose ABI follows the jax pin; a jax bump
+    without a fork rebuild would otherwise be caught only on a GB200, at the first collective."""
+    project = tomllib.loads(GPU_EXTRA_PYPROJECT.read_text())
+    gpu_extra = project["project"]["optional-dependencies"]["gpu"]
+    jax_pins = [requirement for requirement in gpu_extra if requirement.startswith("jax[cuda13]==")]
+    assert len(jax_pins) == 1
+    jax_version = jax_pins[0].removeprefix("jax[cuda13]==")
+
+    source = project["tool"]["uv"]["sources"]["jax-cuda13-pjrt"]
+    assert source["extra"] == "gpu"
+    assert source["marker"] == "platform_machine == 'aarch64'"
+    filename = unquote(source["url"].rsplit("/", 1)[-1])
+    assert filename.startswith(f"jax_cuda13_pjrt-{jax_version}+marin.")
+    assert filename.endswith("aarch64.whl")
+
+
+def _tiny_state(params, master_params):
+    return train.GrugTrainState(
+        step=jnp.array(0, dtype=jnp.int32),
+        params=params,
+        master_params=master_params,
+        opt_state=(),
+        ema_params=None,
+        pending_qb_betas=jnp.zeros((1, 2)),
+    )
+
+
+def test_master_layout_detection_and_the_synthesize_refusal(tmp_path):
+    """A run wanting a master cannot synthesize one from a master-less checkpoint; refuse loudly.
+
+    The same-layout cases pass the template through unchanged.
+    """
+    state = _tiny_state(jnp.zeros(4), None)
+    master_less = str(tmp_path / "step-1")
+    save_checkpoint({"params": jnp.zeros(4)}, step=1, checkpoint_path=master_less)
+    assert not train.checkpoint_stores_master(master_less)
+    assert train.template_for_candidate_layout(state, master_less, train.MasterParamMode.DEVICE) is state
+    with pytest.raises(ValueError, match="Synthesizing a master"):
+        train.template_for_candidate_layout(state, master_less, train.MasterParamMode.FP32_PINNED_HOST)
+
+    master_bearing = str(tmp_path / "step-2")
+    save_checkpoint(
+        {"params": jnp.zeros(4, jnp.bfloat16), "master_params": jnp.zeros(4)}, step=2, checkpoint_path=master_bearing
+    )
+    assert train.checkpoint_stores_master(master_bearing)
+    assert train.template_for_candidate_layout(state, master_bearing, train.MasterParamMode.FP32_PINNED_HOST) is state
+    migrating = train.template_for_candidate_layout(state, master_bearing, train.MasterParamMode.DEVICE)
+    assert migrating.params is None and migrating.master_params is state.params
+
+
+def test_a_master_is_detected_through_the_legacy_wrapped_checkpoint_layout(tmp_path):
+    """Old runs saved `{"train_state": state}`, and those are the checkpoints most likely to hold
+    a master; missing the prefix would let exactly them restore silently from the bf16 copy."""
+    checkpoint = str(tmp_path / "step-1")
+    save_checkpoint(
+        {LEGACY_STATE_KEY: {"params": jnp.zeros(4, jnp.bfloat16), "master_params": jnp.zeros(4)}},
+        step=1,
+        checkpoint_path=checkpoint,
+    )
+
+    assert train.checkpoint_stores_master(checkpoint)
+
+
+def test_a_master_bearing_checkpoint_migrates_in_process_into_a_master_less_restore(tmp_path, monkeypatch):
+    """Restore reads the stored fp32 master directly into the run's fp32 params template.
+
+    Reading with the run's own exemplar instead succeeds and returns bf16 weights, so a test that
+    only checked the restore did not raise would pass against the bug this migration exists for.
+    """
+    cfg = _latent_config()
+    mesh = _explicit_mesh(1, 1, 1, 1)
+    monkeypatch.setattr(train, "_tree_to_memory_kind", lambda tree, memory_kind: tree)
+
+    def build(mp, key, master_param_mode):
+        with set_mesh(mesh):
+            return train.initial_state(
+                cfg,
+                optimizer=optax.sgd(0.1),
+                mp=mp,
+                key=jax.random.key(key),
+                ema_beta=None,
+                master_param_mode=master_param_mode,
+            )
+
+    written = build(
+        jmp.get_policy("params=bfloat16,compute=bfloat16,output=bfloat16"), 17, train.MasterParamMode.FP32_PINNED_HOST
+    )
+    checkpoint_root = tmp_path / "checkpoints"
+    save_checkpoint(written, step=1, checkpoint_path=str(checkpoint_root / "step-1"))
+
+    template = build(jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16"), 23, train.MasterParamMode.DEVICE)
+    with set_mesh(mesh):
+        restored = train.take_master_as_params(
+            restore_grug_state_from_checkpoint(
+                template,
+                checkpoint_search_paths=[str(checkpoint_root)],
+                load_checkpoint_setting=True,
+                mesh=None,
+                allow_partial=False,
+                template_for_candidate=lambda candidate: train.template_for_candidate_layout(
+                    template, candidate, train.MasterParamMode.DEVICE
+                ),
+            )
+        )
+
+    assert restored.master_params is None
+    got = jax.tree.leaves(restored.params)
+    assert all(leaf.dtype == jnp.float32 for leaf in got)
+    for want, have in zip(jax.tree.leaves(written.master_params), got, strict=True):
+        np.testing.assert_array_equal(np.asarray(want), np.asarray(have))
+
+
+def test_the_carry_offload_overrides_an_inherited_collective_overlap_limit(monkeypatch):
+    inherited = f"{train.XLA_COLLECTIVE_OVERLAP_FLAG}={train.DEFAULT_COLLECTIVE_OVERLAP_LIMIT}"
+    monkeypatch.setenv("XLA_FLAGS", inherited)
+    config = _runtime_env_config(
+        moe_implementation=train.RAGGED_MOE_IMPLEMENTATION,
+        remat_mode=model.OFFLOAD_CARRY_REMAT_MODE,
+    )
+
+    with patch.object(train, "dispatch_grug_training_run"):
+        train.run_grug(config)
+
+    flags = os.environ["XLA_FLAGS"].split()
+    assert inherited not in flags
+    assert f"{train.XLA_COLLECTIVE_OVERLAP_FLAG}=1" in flags
+    assert "--xla_gpu_enable_latency_hiding_scheduler=true" in flags
+
+
+def test_a_ragged_run_without_the_offload_keeps_the_scheduler_off(monkeypatch):
+    # The scheduler's longer live ranges do not fit until the carry leaves HBM, so an arm that
+    # skips the offload has to keep the posture it was measured under.
+    monkeypatch.delenv("XLA_FLAGS", raising=False)
+    config = _runtime_env_config(moe_implementation=train.RAGGED_MOE_IMPLEMENTATION)
+
+    with patch.object(train, "dispatch_grug_training_run"):
+        train.run_grug(config)
+
+    assert "--xla_gpu_enable_latency_hiding_scheduler=false" in os.environ["XLA_FLAGS"].split()
+
+
+@pytest.mark.parametrize(
+    ("moe_implementation", "expected_remat_mode"),
+    [
+        (train.RAGGED_MOE_IMPLEMENTATION, model.OFFLOAD_CARRY_REMAT_MODE),
+        ("fixed_pooled_wave_all_to_all", "recompute_all"),
+    ],
+)
+def test_only_the_ragged_transport_offloads_the_layer_carry(moe_implementation, expected_remat_mode):
+    step = launch.build_diagnostic_run(
+        run_id="carry-offload",
+        dp_racks=1,
+        num_steps=1,
+        version="dev",
+        moe_implementation=moe_implementation,
+        processes_per_task=4,
+    )
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert config.model.remat_mode == expected_remat_mode
 
 
 def test_ep_newton_schulz_returns_to_expert_sharding():
@@ -398,8 +641,8 @@ def test_dropless_local_transform_swaps_moe_backend_and_shares_weights():
 
 def test_eval_every_adds_the_held_out_suites_as_dependencies():
     # Held-out sets are what make a run scoreable; a throughput-only run should not pay for them.
-    off = launch.build_hero_run(run_id="eval-off", dp_racks=1, num_steps=1, version="dev")
-    on = launch.build_hero_run(run_id="eval-on", dp_racks=1, num_steps=1, eval_every=50, version="dev")
+    off = launch.build_diagnostic_run(run_id="eval-off", dp_racks=1, num_steps=1, version="dev")
+    on = launch.build_diagnostic_run(run_id="eval-on", dp_racks=1, num_steps=1, eval_every=50, version="dev")
     off_config = off.build_config(StepContext.for_fingerprint(off.runtime_args, off.deps))
     on_config = on.build_config(StepContext.for_fingerprint(on.runtime_args, on.deps))
 
@@ -408,15 +651,23 @@ def test_eval_every_adds_the_held_out_suites_as_dependencies():
     assert off_config.eval is None
     assert on_config.eval is not None
     assert on_config.eval.steps_per_eval == 50
+    assert on_config.eval.eval_batch_size == launch.HERO_EP_EXPERT_AXIS_SIZE
+    assert on_config.eval.dropless_eval is True
 
 
 def test_ep_ablation_defaults_match_the_documented_arm_and_scale_per_rack():
     one = abl.build_small_run(run_id="d768", size="d768", flavor="ep", version="dev")
     cfg = one.build_config(StepContext.for_fingerprint(one.runtime_args, one.deps))
     m = cfg.model
-    # The EP rung is a downsized hero: latent = hidden/2, capacity 1.33, top-k QB (the hero default).
+    # The EP rung is a downsized hero: pooled-wave transport, 384 experts / top-8, hidden/2-wide experts
+    # in a hidden/2 latent, receiver/sender capacity 1.15 with 3 waves, and the selected top-k QB arm.
+    assert m.moe_implementation == "fixed_pooled_wave_all_to_all"
+    assert (m.num_experts, m.num_experts_per_token) == (384, 8)
+    assert m.intermediate_dim == m.hidden_dim // 2
     assert m.latent_dim == m.hidden_dim // 2
-    assert m.capacity_factor == 1.33
+    assert m.capacity_factor == 1.15
+    assert m.pooled_transport_capacity_factor == 1.15
+    assert m.num_expert_waves == 3
     assert m.qb_estimator == model.QbEstimator.TOPK
     assert m.num_layers % 2 == 0  # even depth applied in the launcher, not GrugModelConfig
     # The histogram QB estimator is selectable on through the builder.
@@ -702,6 +953,7 @@ def test_inline_watch_computes_stats_on_every_train_step(monkeypatch):
     state = train.GrugTrainState(
         step=jnp.array(0, dtype=jnp.int32),
         params=params,
+        master_params=None,
         opt_state=optimizer.init(params),
         ema_params=None,
         pending_qb_betas=jnp.zeros((1, 1)),
@@ -731,3 +983,214 @@ def test_inline_watch_computes_stats_on_every_train_step(monkeypatch):
     assert step_one_stats is not None
     np.testing.assert_allclose(step_zero_stats["grad/norm/total"], 4.0)
     np.testing.assert_allclose(step_one_stats["grad/norm/total"], 3.2)
+
+
+def test_offloaded_optimizer_scalar_state_uses_the_active_mesh():
+    mesh = AbstractMesh(
+        axis_sizes=(1, 1, 1, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 4,
+    )
+
+    with use_abstract_mesh(mesh):
+        state = eqx.filter_eval_shape(
+            lambda: train.initial_state(
+                _latent_config(),
+                optimizer=optax.adam(0.1),
+                mp=jmp.get_policy("f32"),
+                key=jax.random.key(0),
+                ema_beta=None,
+                offload_opt_state=True,
+            )
+        )
+
+    count_sharding = state.opt_state[0].count.sharding
+    assert isinstance(count_sharding, NamedSharding)
+    assert count_sharding.mesh == mesh
+    assert count_sharding.spec == P()
+
+
+def test_fp32_host_master_accumulates_updates_before_bfloat16_cast(monkeypatch):
+    params = _TinyWatchModel(weight=jnp.array(1.0, dtype=jnp.bfloat16))
+    master_params = _TinyWatchModel(weight=jnp.array(1.0, dtype=jnp.float32))
+    optimizer = optax.sgd(0.1)
+    state = train.GrugTrainState(
+        step=jnp.array(0, dtype=jnp.int32),
+        params=params,
+        master_params=master_params,
+        opt_state=optimizer.init(master_params),
+        ema_params=None,
+        pending_qb_betas=jnp.zeros((1, 1)),
+    )
+
+    def loss_and_grads(current_params, batch, mp, z_loss):
+        del current_params, batch, mp, z_loss
+        loss = jnp.array(0.0)
+        grads = _TinyWatchModel(weight=jnp.array(0.01, dtype=jnp.bfloat16))
+        metrics = {"qb_beta_per_layer": jnp.zeros((1, 1))}
+        return (loss, metrics), grads
+
+    monkeypatch.setattr(train, "_apply_qb_betas", lambda model, qb_betas: model)
+    monkeypatch.setattr(train, "_loss_and_grads", loss_and_grads)
+    train_step = train._make_train_step(
+        optimizer,
+        jmp.get_policy("params=bfloat16,compute=bfloat16,output=bfloat16"),
+        z_loss_weight=0,
+        ema_beta=None,
+        master_param_mode=train.MasterParamMode.FP32_PINNED_HOST,
+    )
+
+    for _ in range(10):
+        state, _, _ = train_step(state, jnp.array(0))
+
+    assert state.master_params is not None
+    assert state.master_params.weight.dtype == jnp.float32
+    assert state.params.weight.dtype == jnp.bfloat16
+    expected_master = 1.0 - 10 * 0.1 * float(jnp.array(0.01, dtype=jnp.bfloat16))
+    np.testing.assert_allclose(state.master_params.weight, expected_master, rtol=1e-6)
+    np.testing.assert_allclose(state.params.weight, jnp.asarray(expected_master, dtype=jnp.bfloat16))
+
+
+def test_fp32_host_master_preserves_float32_initialization(monkeypatch):
+    config = _latent_config()
+    key = jax.random.key(17)
+    mesh = _explicit_mesh(1, 1, 1, 1)
+    monkeypatch.setattr(train, "_tree_to_memory_kind", lambda tree, memory_kind: tree)
+
+    with set_mesh(mesh):
+        expected = model.Transformer.init(config, key=key)
+        state = train.initial_state(
+            config,
+            optimizer=optax.sgd(0.1),
+            mp=jmp.get_policy("params=bfloat16,compute=bfloat16,output=bfloat16"),
+            key=key,
+            ema_beta=None,
+            master_param_mode=train.MasterParamMode.FP32_PINNED_HOST,
+        )
+
+    assert state.master_params is not None
+    expected_leaves = jax.tree.leaves(expected)
+    master_leaves = jax.tree.leaves(state.master_params)
+    param_leaves = jax.tree.leaves(state.params)
+    for expected_leaf, master_leaf, param_leaf in zip(expected_leaves, master_leaves, param_leaves, strict=True):
+        np.testing.assert_array_equal(master_leaf, expected_leaf)
+        np.testing.assert_array_equal(param_leaf, expected_leaf.astype(jnp.bfloat16))
+    assert any(
+        not np.array_equal(master_leaf, param_leaf.astype(jnp.float32))
+        for master_leaf, param_leaf in zip(master_leaves, param_leaves, strict=True)
+    )
+
+
+def test_drop_metrics_reports_sender_and_receiver_fractions():
+    metrics = train._drop_metrics(
+        jnp.array(5, dtype=jnp.int32),
+        jnp.array(2, dtype=jnp.int32),
+        jnp.array(3, dtype=jnp.int32),
+        batch_size=2,
+        sequence_length=4,
+        top_k=2,
+        num_layers=1,
+    )
+
+    assert metrics == {
+        "moe/dropped_assignments": 5,
+        "moe/drop_fraction": 5 / 16,
+        "moe/sender_dropped_assignments": 2,
+        "moe/sender_drop_fraction": 2 / 16,
+        "moe/receiver_dropped_assignments": 3,
+        "moe/receiver_drop_fraction": 3 / 16,
+        "moe/receiver_drop_fraction_of_received": 3 / 14,
+    }
+
+
+def test_drop_metrics_sums_per_layer_counts_in_int64_without_overflow():
+    # Per-layer int32 counts whose 48-layer sum exceeds int32 (jax_enable_x64 is off, so an in-device
+    # jnp.sum would wrap and break the total==sender+receiver check). The host sum must stay exact.
+    num_layers = 48
+    per_layer_sender = jnp.full((num_layers,), 40_000_000, dtype=jnp.int32)  # 48 * 40M = 1.92e9
+    per_layer_receiver = jnp.full((num_layers,), 60_000_000, dtype=jnp.int32)  # 48 * 60M = 2.88e9 > int32
+    per_layer_total = per_layer_sender + per_layer_receiver
+    sender_total = 48 * 40_000_000
+    receiver_total = 48 * 60_000_000
+
+    metrics = train._drop_metrics(
+        per_layer_total,
+        per_layer_sender,
+        per_layer_receiver,
+        batch_size=4096,
+        sequence_length=4096,
+        top_k=8,
+        num_layers=num_layers,
+    )
+
+    assert metrics["moe/dropped_assignments"] == sender_total + receiver_total  # no int32 wrap
+    assert metrics["moe/sender_dropped_assignments"] == sender_total
+    assert metrics["moe/receiver_dropped_assignments"] == receiver_total
+
+
+def test_baseline_eval_hook_runs_once_after_the_first_step():
+    # The baseline eval must fire on the first completed step and never again: it reshards the
+    # params onto the expert-collapsed mesh, and that copy competes with the train step's temporary
+    # buffer. A resumed run starts above step 1 and must skip it.
+    fired = []
+    runner = StateCallbackRunner[SimpleNamespace](
+        step_getter=lambda s: s.step,
+        model_getter=lambda s: s.params,
+        eval_model_getter=lambda s: s.params,
+        opt_state_getter=lambda s: s.opt_state,
+    )
+    runner.add_hook(train._first_step_only(lambda info: fired.append(info.step)), every=1)
+
+    def run_steps(next_steps):
+        for next_step in next_steps:
+            runner.run(
+                SimpleNamespace(step=jnp.int32(next_step), params=None, opt_state=None),
+                loss=0.0,
+                step_duration=0.0,
+            )
+
+    run_steps([1, 2, 3, 3000])
+    assert fired == [0]  # StepInfo.step is next_step - 1, so the point lands at 0 on the curve
+
+    fired.clear()
+    run_steps([5001, 5002])  # a resumed run
+    assert fired == []
+
+
+def test_the_drop_oracle_keeps_everything_when_capacity_cannot_clip():
+    # The 4-GPU guard judges the transport against this mask, so a wrong mask either hides a
+    # transport bug or fails a correct one. At the structural no-drop capacity nothing may drop.
+    rng = np.random.default_rng(0)
+    tokens_per_shard = 8
+    tokens = tokens_per_shard * ragged_ep.EP_SIZE
+    selected = rng.integers(0, ragged_ep.NUM_EXPERTS, size=(tokens, ragged_ep.TOPK))
+
+    keep = ragged_ep._keep_mask(selected, tokens_per_shard, ragged_ep.NO_DROP_CAPACITY)
+
+    assert keep.shape == selected.shape
+    assert keep.all()
+
+
+def test_the_drop_oracle_keeps_a_prefix_of_each_expert_group():
+    # Accepted rows are the prefix of each expert group in the shard's stable expert-sorted order,
+    # which is what lets the transport read them in place. The mask has to agree.
+    rng = np.random.default_rng(1)
+    tokens_per_shard = 16
+    tokens = tokens_per_shard * ragged_ep.EP_SIZE
+    topk, num_experts = ragged_ep.TOPK, ragged_ep.NUM_EXPERTS
+    # Skew hard toward the low experts so the gate actually bites.
+    selected = rng.choice(num_experts, size=(tokens, topk), p=[0.5, 0.3, 0.05, 0.05, 0.025, 0.025, 0.025, 0.025])
+
+    keep = ragged_ep._keep_mask(selected, tokens_per_shard, 1.0)
+
+    dropped = int((1.0 - keep).sum())
+    assert 0 < dropped < selected.size, f"expected partial clipping, dropped {dropped}"
+    for shard in range(ragged_ep.EP_SIZE):
+        lo, hi = shard * tokens_per_shard, (shard + 1) * tokens_per_shard
+        flat_selected = selected[lo:hi].reshape(-1)
+        flat_keep = keep[lo:hi].reshape(-1)
+        for expert in range(num_experts):
+            group = np.flatnonzero(flat_selected == expert)
+            kept = flat_keep[group]
+            # A prefix: every kept entry precedes every dropped one within the group.
+            assert list(kept) == sorted(kept, reverse=True), f"shard {shard} expert {expert} not a prefix"

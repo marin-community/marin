@@ -13,10 +13,23 @@ import fsspec
 import jax
 from fsspec import AbstractFileSystem
 from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
+from levanter.utils.jax_utils import barrier_sync_named
 
 logger = logging.getLogger(__name__)
 
 StateT = TypeVar("StateT")
+RESTORE_COMPLETE_BARRIER = "grug_checkpoint_restore_complete"
+# Older grug runs saved {"train_state": state}, so their leaves carry this prefix.
+LEGACY_STATE_KEY = "train_state"
+# Field name of the optional fp32 pinned-host master in a grug train state's checkpoint layout.
+MASTER_PARAMS_KEY = "master_params"
+# The barrier runs one clock, started by the first rank to arrive, so this bounds the spread
+# between arrivals rather than the length of a restore. A gang whose object-store caches are only
+# partly warm spreads widest, since re-reading a checkpoint is an order of magnitude faster than
+# reading it cold, and killing a stalled gang is what leaves a fleet in that state. Expiring
+# aborts the attempt for the scheduler to retry, rather than holding every rank behind one that
+# never arrives.
+RESTORE_BARRIER_TIMEOUT = 40 * 60
 
 
 class _GrugState(Protocol):
@@ -100,8 +113,18 @@ def restore_grug_state_from_checkpoint(
     load_checkpoint_setting: bool | None,
     mesh: jax.sharding.Mesh | None,
     allow_partial: bool,
+    template_for_candidate: Callable[[str], StateT] | None = None,
     _load_fn: Callable[..., StateT] = load_checkpoint,
 ) -> StateT:
+    """Restore the newest loadable checkpoint under the search paths, else return ``state``.
+
+    ``template_for_candidate`` maps a candidate path to the exemplar it is read with. An exemplar
+    is the pytree whose leaves name what restore loads. Pass the hook when the state layout
+    differs between checkpoint generations, so each candidate is read with an exemplar matching
+    its layout; ``None`` reads every candidate with ``state``. Raising ``FileNotFoundError`` from
+    the hook skips to the next-older candidate; any other exception aborts the restore, so a hook
+    can refuse a checkpoint outright rather than quietly fall past it.
+    """
     if not checkpoint_search_paths:
         if load_checkpoint_setting:
             raise FileNotFoundError("load_checkpoint=True but no checkpoint search paths are configured.")
@@ -111,17 +134,21 @@ def restore_grug_state_from_checkpoint(
         return state
 
     candidates = _checkpoint_candidates(checkpoint_search_paths)
+    # A bare search root is always a candidate, so this is what separates "nothing has been
+    # written yet" from "checkpoints exist here".
+    written = [candidate for candidate in candidates if candidate not in checkpoint_search_paths]
     last_error: FileNotFoundError | None = None
 
     for candidate in candidates:
         try:
             loaded = _load_candidate_state(
-                state=state,
+                state=state if template_for_candidate is None else template_for_candidate(candidate),
                 candidate=candidate,
                 mesh=mesh,
                 allow_partial=allow_partial,
                 load_fn=_load_fn,
             )
+            barrier_sync_named(RESTORE_COMPLETE_BARRIER, timeout=RESTORE_BARRIER_TIMEOUT)
             if candidate not in checkpoint_search_paths:
                 logger.info("Loaded checkpoint from %s while searching %s", candidate, checkpoint_search_paths)
             return loaded
@@ -131,8 +158,8 @@ def restore_grug_state_from_checkpoint(
                 "Checkpoint candidate %s could not be loaded (%s). Trying an older checkpoint.", candidate, exc
             )
 
+    search_path_summary = ", ".join(checkpoint_search_paths)
     if load_checkpoint_setting is True:
-        search_path_summary = ", ".join(checkpoint_search_paths)
         attempted = ", ".join(candidates)
         if last_error is None:
             raise FileNotFoundError(f"Could not find checkpoint under any of: {search_path_summary}")
@@ -140,7 +167,15 @@ def restore_grug_state_from_checkpoint(
             f"Could not load a checkpoint from search paths {search_path_summary}. Attempted: {attempted}"
         ) from last_error
 
-    logger.info("Checkpoint not found under %s. Starting from scratch.", checkpoint_search_paths)
+    if written:
+        # An optional resume that finds checkpoints and reads none of them is a failed resume, not
+        # a first launch. Restarting at step 0 would overwrite them and still report a plausible MFU.
+        raise FileNotFoundError(
+            f"{len(written)} checkpoint(s) exist under {search_path_summary} but none could be loaded: "
+            f"{', '.join(written)}"
+        ) from last_error
+
+    logger.info("No checkpoint under %s. Starting from scratch.", checkpoint_search_paths)
     return state
 
 
@@ -193,13 +228,12 @@ def _load_candidate_state(
             allow_partial=allow_partial,
         )
     except FileNotFoundError:
-        # Backward compatibility: older grug runs saved {"train_state": state}.
         wrapped = load_fn(
-            {"train_state": state},
+            {LEGACY_STATE_KEY: state},
             candidate,
             axis_mapping=None,
             mesh=mesh,
             allow_partial=allow_partial,
         )
         logger.info("Loaded legacy wrapped grug checkpoint format from %s", candidate)
-        return wrapped["train_state"]  # type: ignore[index]
+        return wrapped[LEGACY_STATE_KEY]  # type: ignore[index]

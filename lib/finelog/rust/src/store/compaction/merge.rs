@@ -1,4 +1,4 @@
-//! Native arrow k-way merge of N already-sorted segments by `(key_column, seq)`.
+//! Native arrow k-way merge of N segments by configured sort columns plus `seq`.
 //!
 //! Each input batch is already internally sorted on the sort keys (every segment
 //! is written sorted by L0->L1 compaction, and L0 inputs to a force-compact are
@@ -25,7 +25,8 @@ use arrow::row::{OwnedRow, RowConverter, Rows, SortField};
 
 /// Rows per output batch from the k-way merge. This is a batching decision only:
 /// the writer accumulates across batches and cuts row groups at its own
-/// byte-derived stride (see [`crate::store::segment::segment_writer_properties`]).
+/// byte-derived stride (see
+/// [`crate::store::segment::segment_writer_properties_with_max_rows`]).
 const MERGE_CHUNK_ROWS: usize = 16_384;
 
 /// Project `batch` onto `target_schema`, additive-null-filling any target column
@@ -91,9 +92,9 @@ const MERGE_SORT_OPTIONS: SortOptions = SortOptions {
 /// L0 segments are written UNSORTED (seq-monotonic only), so an L0->L1 merge's
 /// inputs are not key-sorted; `kway_merge` requires each input to be internally
 /// sorted on the merge keys. The executor runs each projected input through this
-/// before merging, so the merge sees pre-sorted inputs and the global output is
-/// `(key, seq)`-ordered. A segment already sorted (L>=1 inputs) is unchanged by a
-/// stable sort.
+/// before merging, so the merge sees pre-sorted inputs and the global output has
+/// the configured order. A segment already sorted (L>=1 inputs) is unchanged by
+/// a stable sort.
 pub fn sort_batch_by(batch: &RecordBatch, sort_cols: &[usize]) -> Result<RecordBatch, ArrowError> {
     if batch.num_rows() <= 1 {
         return Ok(batch.clone());
@@ -114,7 +115,7 @@ pub fn sort_batch_by(batch: &RecordBatch, sort_cols: &[usize]) -> Result<RecordB
 /// `Ord` is reversed (min-heap via `BinaryHeap`, which is a max-heap): the
 /// "greatest" entry is the row that should be popped LAST, so we compare so the
 /// globally-smallest row is the heap's max. The `(Reverse-style)` comparison is
-/// implemented directly to keep the smallest `(key, seq)` at the top.
+/// implemented directly to keep the smallest sort-key row at the top.
 struct HeapEntry {
     row: OwnedRow,
     batch_idx: usize,
@@ -226,19 +227,24 @@ pub fn kway_merge(
     Ok(out)
 }
 
-/// Resolve sort-key column indices `[key_column?, seq]` for `arrow_schema`.
-///
-/// Returns the `seq` index alone when `key_column` is `None` or absent — the
-/// `compaction_sort_keys` contract. `seq` is required (every stored segment
-/// carries it); its absence is a programming error.
-pub fn sort_col_indices(arrow_schema: &ArrowSchema, key_column: Option<&str>) -> Vec<usize> {
+/// Resolve configured sort columns followed by the implicit `seq` tie-breaker.
+pub fn sort_col_indices(arrow_schema: &ArrowSchema, sort_columns: &[String]) -> Vec<usize> {
     let seq_idx = arrow_schema
         .index_of(crate::store::schema::IMPLICIT_SEQ_COLUMN)
         .expect("stored segment schema always carries the implicit seq column");
-    match key_column.and_then(|k| arrow_schema.index_of(k).ok()) {
-        Some(key_idx) if key_idx != seq_idx => vec![key_idx, seq_idx],
-        _ => vec![seq_idx],
+    let mut indices: Vec<usize> = sort_columns
+        .iter()
+        .map(|column| {
+            arrow_schema.index_of(column).unwrap_or_else(|_| {
+                panic!("validated sort column {column:?} is missing from the stored schema")
+            })
+        })
+        .filter(|&index| index != seq_idx)
+        .collect();
+    if !indices.contains(&seq_idx) {
+        indices.push(seq_idx);
     }
+    indices
 }
 
 #[cfg(test)]
@@ -484,9 +490,13 @@ mod tests {
     #[test]
     fn sort_col_indices_with_and_without_key() {
         let s = schema();
-        assert_eq!(sort_col_indices(&s, Some("key")), vec![1, 0]);
-        assert_eq!(sort_col_indices(&s, None), vec![0]);
-        // a key column that doesn't exist falls back to seq alone.
-        assert_eq!(sort_col_indices(&s, Some("nope")), vec![0]);
+        assert_eq!(sort_col_indices(&s, &["key".to_string()]), vec![1, 0]);
+        assert_eq!(sort_col_indices(&s, &[]), vec![0]);
+    }
+
+    #[test]
+    #[should_panic(expected = "validated sort column \"nope\" is missing")]
+    fn missing_configured_sort_column_is_a_programming_error() {
+        sort_col_indices(&schema(), &["nope".to_string()]);
     }
 }

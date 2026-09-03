@@ -8,16 +8,18 @@ import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.cluster.bundle import BundleStore
+from iris.cluster.controller import service as service_module
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.budget import (
     UserTask,
+    budget_user_id,
     compute_effective_band,
     interleave_by_user,
     resource_value,
 )
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.types import UserBudgetDefaults
+from iris.cluster.types import LOCAL_ADMIN_SUBMITTER, JobName, UserBudgetDefaults
 from iris.rpc import controller_pb2, job_pb2
 from iris.testing.controller import (
     MockController,
@@ -26,9 +28,11 @@ from iris.testing.controller import (
 )
 from rigging.server_auth import VerifiedIdentity, identity_scope
 
+SYSTEM = job_pb2.PRIORITY_BAND_SYSTEM
 PRODUCTION = job_pb2.PRIORITY_BAND_PRODUCTION
 INTERACTIVE = job_pb2.PRIORITY_BAND_INTERACTIVE
 BATCH = job_pb2.PRIORITY_BAND_BATCH
+OPENATHENA_USER = "russell.power@openathena.ai"
 
 GiB = 1024**3
 
@@ -56,6 +60,18 @@ def state():
 )
 def test_resource_value(cpu_millicores, memory_bytes, accelerator_count, expected):
     assert resource_value(cpu_millicores, memory_bytes, accelerator_count) == expected
+
+
+@pytest.mark.parametrize(
+    "submitting_user,expected",
+    [
+        (OPENATHENA_USER, OPENATHENA_USER),
+        (LOCAL_ADMIN_SUBMITTER, "power"),
+        ("", "power"),
+    ],
+)
+def test_budget_user_id_uses_authenticated_principal_with_nickname_fallback(submitting_user, expected):
+    assert budget_user_id(JobName.root("power", "job"), submitting_user) == expected
 
 
 # ---------------------------------------------------------------------------
@@ -121,6 +137,7 @@ _UNLIMITED_DEFAULTS = UserBudgetDefaults(budget_limit=0, max_band=INTERACTIVE)
     [
         (INTERACTIVE, 10000, 5000, BATCH),  # over budget → demoted
         (INTERACTIVE, 3000, 5000, INTERACTIVE),  # within budget → kept
+        (SYSTEM, 10000, 5000, SYSTEM),  # system never demoted
         (PRODUCTION, 10000, 5000, PRODUCTION),  # production never demoted
         (INTERACTIVE, 999999, 0, INTERACTIVE),  # limit=0 means unlimited
         (BATCH, 10000, 5000, BATCH),  # batch stays batch
@@ -234,7 +251,8 @@ def test_list_user_budgets(service):
     for user_id, limit, band in [
         ("alice", 5000, INTERACTIVE),
         ("bob", 3000, BATCH),
-        ("charlie", 0, PRODUCTION),
+        ("charlie", 0, SYSTEM),
+        ("dana", 0, PRODUCTION),
     ]:
         _as_admin(service.set_user_budget, _set_budget(user_id, limit, band), None)
 
@@ -244,25 +262,28 @@ def test_list_user_budgets(service):
         None,
     )
     by_user = {u.user_id: u for u in resp.users}
-    assert set(by_user) == {"alice", "bob", "charlie"}
+    assert set(by_user) == {"alice", "bob", "charlie", "dana"}
     assert by_user["alice"].budget_limit == 5000
     assert by_user["bob"].max_band == BATCH
-    assert by_user["charlie"].max_band == PRODUCTION
+    assert by_user["charlie"].max_band == SYSTEM
+    assert by_user["dana"].max_band == PRODUCTION
 
 
-def test_non_admin_cannot_submit_production(service):
+@pytest.mark.parametrize("band", [SYSTEM, PRODUCTION])
+def test_non_admin_cannot_submit_admin_band(service, band):
     with pytest.raises(ConnectError) as exc:
-        _as_user(service.launch_job, "alice", _launch("/alice/prod-job", band=PRODUCTION), None)
+        _as_user(service.launch_job, "alice", _launch("/alice/admin-job", band=band), None)
     assert exc.value.code == Code.PERMISSION_DENIED
 
 
-def test_admin_can_submit_production(service):
-    resp = _as_admin(service.launch_job, _launch("/admin/prod-job", band=PRODUCTION), None)
-    assert resp.job_id == "/admin/prod-job"
+@pytest.mark.parametrize("band", [SYSTEM, PRODUCTION])
+def test_admin_can_submit_admin_band(service, band):
+    resp = _as_admin(service.launch_job, _launch("/admin/admin-job", band=band), None)
+    assert resp.job_id == "/admin/admin-job"
 
 
 def test_launch_job_rejects_band_above_user_max(service):
-    """User with max_band=BATCH cannot submit INTERACTIVE (numerically lower) jobs."""
+    """User with max_band=BATCH cannot submit higher-priority jobs."""
     _as_admin(service.set_user_budget, _set_budget("alice", 0, BATCH), None)
     with pytest.raises(ConnectError) as exc:
         _as_user(
@@ -273,6 +294,46 @@ def test_launch_job_rejects_band_above_user_max(service):
         )
     assert exc.value.code == Code.PERMISSION_DENIED
     assert "cannot submit" in str(exc.value.message).lower()
+
+
+def test_admin_nickname_job_uses_email_budget(service):
+    _as_admin(service.set_user_budget, _set_budget("power", 0, INTERACTIVE), None)
+    _as_admin(service.set_user_budget, _set_budget(OPENATHENA_USER, 0, BATCH), None)
+
+    with identity_scope(VerifiedIdentity(user_id=OPENATHENA_USER, role="admin")):
+        with pytest.raises(ConnectError) as exc:
+            service.launch_job(_launch("/power/email-budget", band=INTERACTIVE), None)
+
+    assert exc.value.code == Code.PERMISSION_DENIED
+
+
+def test_child_job_inherits_root_email_budget(service):
+    _as_admin(service.set_user_budget, _set_budget(OPENATHENA_USER, 0, INTERACTIVE), None)
+    with identity_scope(VerifiedIdentity(user_id=OPENATHENA_USER, role="admin")):
+        service.launch_job(_launch("/power/parent", band=INTERACTIVE), None)
+
+    _as_admin(service.set_user_budget, _set_budget(OPENATHENA_USER, 0, BATCH), None)
+    with identity_scope(VerifiedIdentity(user_id=OPENATHENA_USER, role="admin")):
+        with pytest.raises(ConnectError) as exc:
+            service.launch_job(_launch("/power/parent/child", band=job_pb2.PRIORITY_BAND_INHERIT), None)
+
+    assert exc.value.code == Code.PERMISSION_DENIED
+
+
+def test_active_task_cap_uses_email_across_nicknames(service, monkeypatch):
+    monkeypatch.setattr(service_module, "MAX_ACTIVE_TASKS_PER_USER", 5)
+
+    with identity_scope(VerifiedIdentity(user_id=OPENATHENA_USER, role="admin")):
+        first = _launch("/power/first")
+        first.replicas = 3
+        service.launch_job(first, None)
+
+        second = _launch("/held/second")
+        second.replicas = 3
+        with pytest.raises(ConnectError) as exc:
+            service.launch_job(second, None)
+
+    assert exc.value.code == Code.RESOURCE_EXHAUSTED
 
 
 def test_launch_job_unspecified_band_accepted(service):

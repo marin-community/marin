@@ -10,7 +10,8 @@ from collections.abc import Callable
 from typing import Generic, ParamSpec, TypeVar
 
 import cloudpickle
-from rigging.filesystem import StoragePath, marin_temp_bucket
+from rigging.filesystem.cluster_config import marin_temp_bucket
+from rigging.filesystem.storage_path import StoragePath
 
 from marin.execution.step_status import (
     STATUS_FAILED,

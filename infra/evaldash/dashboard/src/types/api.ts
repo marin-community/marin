@@ -197,13 +197,19 @@ export interface StoreInfo {
   backend: string
   instance: string | null
   database: string | null
+  record_count: number
+  catalog_generation: number | null
+  snapshot_updated_at: string | null
+  catalog_error: string | null
 }
 
 export interface Status {
   store: StoreInfo
   ingest: {
     interval_seconds: number
+    revalidate_after_seconds: number | null
     last_pass_time: string | null
+    cycle_error: string | null
     prefixes: PrefixProbe[]
   }
 }
@@ -314,7 +320,7 @@ export interface LogsResponse {
   entries: LogEntry[]
 }
 
-// --- Per-sample browser (samples.py, mirroring finestore.eval.EvalSample) ---
+// --- Per-sample browser (samples.py, mirroring marin.evaluation.archive.EvalSample) ---
 
 export interface SampleTasksResponse {
   available: boolean
@@ -336,7 +342,7 @@ export interface SampleChoice {
   is_greedy: boolean | null
 }
 
-// How one prediction was scored (finestore.eval.Grading). `method` names the grader
+// How one prediction was scored (marin.evaluation.archive.Grading). `method` names the grader
 // (`lm-eval:<metric>`, `harbor:<verifier>`, `judge:<model>`); `detail` is the grader's raw output
 // as a JSON string, the escape hatch for anything the typed fields do not carry.
 export interface SampleGrading {

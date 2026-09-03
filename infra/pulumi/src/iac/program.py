@@ -9,8 +9,8 @@ typed `provisioning:` section, and declares that cluster's resources. One stack 
 which resources: CoreWeave declares the controller RBAC, reserved NodePools, Kueue objects,
 the Traefik/cert-manager/federation-ingress stack, and configured Cloudflare CNAMEs; GCP declares
 the reserved federation-egress static IPs, Artifact Registry pull-through mirrors, the shared
-GCLB/IAP ingress, and every IAM grant on the project (`iac.gcp.iam.GcpIam`, replacing
-`infra/permissions`). Components not yet implemented are tracked in README.md's "Future work".
+GCLB/IAP ingress, and every IAM grant on the project (`iac.gcp.iam.GcpIam`). Components not yet
+implemented are tracked in README.md's "Future work".
 """
 
 import os
@@ -38,13 +38,14 @@ from iac.config import (
 )
 from iac.coreweave.cluster import CoreweaveCluster, CoreweaveClusterArgs
 from iac.coreweave.dns import FederationDns, FederationDnsArgs
-from iac.coreweave.kueue import KueueAddon, KueueAddonArgs
+from iac.coreweave.kueue import KueueAddon, KueueAddonArgs, accelerator_nominal_quotas
 from iac.coreweave.rbac import GrafanaObserverRbac, GrafanaObserverRbacArgs, IrisRbac, IrisRbacArgs
 from iac.coreweave.traefik import TraefikAddon, TraefikAddonArgs
 from iac.gcp.addresses import GcpStaticAddresses, GcpStaticAddressesArgs
 from iac.gcp.gclb import ControllerIngress, FinelogIngress, GcpGclbIap, GcpGclbIapArgs
-from iac.gcp.iam import GcpIam, GcpIamArgs
+from iac.gcp.iam import GcpIam
 from iac.gcp.iam_config import load_iam_config
+from iac.gcp.iam_targets import global_iam_args
 from iac.gcp.registries import GcpArtifactRegistries, GcpArtifactRegistriesArgs
 from iac.imports import NO_IMPORTS, ImportRegistrar
 from iac.nodepools import derive_nodepools
@@ -165,6 +166,7 @@ def _build_coreweave(cluster: str, *, imports: ImportRegistrar) -> None:
             namespace=namespace,
             cluster_queue=kueue_config.cluster_queue,
             spec=coreweave_provisioning.kueue,
+            nominal_quotas=accelerator_nominal_quotas(iris_config),
         ),
         k8s_provider=k8s_provider,
         imports=imports,
@@ -321,7 +323,6 @@ def _build_gcp(cluster: str, *, imports: ImportRegistrar) -> None:
     assert provisioning.gcp is not None  # guaranteed by load_provisioning
     gcp_provisioning = provisioning.gcp
     iam_config = load_iam_config()
-
     gcp_provider = gcp.Provider("gcp", project=gcp_provisioning.project)
     GcpStaticAddresses(
         "addresses",
@@ -350,20 +351,7 @@ def _build_gcp(cluster: str, *, imports: ImportRegistrar) -> None:
         )
     GcpIam(
         "iam",
-        GcpIamArgs(
-            project=gcp_provisioning.project,
-            kms_location=iam_config.kms_location,
-            kms_key_ring=iam_config.kms_key_ring,
-            kms_key=iam_config.kms_key,
-            custom_roles=iam_config.custom_roles,
-            owned_service_accounts=iam_config.owned_service_accounts,
-            project_grants=iam_config.project_grants,
-            kms_grants=iam_config.kms_grants,
-            secrets=iam_config.secrets,
-            buckets=iam_config.buckets,
-            artifact_repositories=iam_config.artifact_repositories,
-            service_accounts=iam_config.service_accounts,
-        ),
+        global_iam_args(gcp_provisioning.project, iam_config),
         gcp_provider=gcp_provider,
         imports=imports,
     )

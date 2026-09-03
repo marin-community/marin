@@ -8,6 +8,7 @@ import math
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 from levanter.kernels.pallas.mamba3 import (
     HybridModeConfig,
@@ -41,6 +42,15 @@ from levanter.kernels.pallas.mamba3.reference import (
 from levanter.kernels.pallas.mamba3.xla import mamba3_mimo_chunked_forward_ranked_xla_batched
 from levanter.kernels.pallas.ssd import intra_chunk_log_alpha_cumsum, local_log_alpha
 from levanter.testing.helpers import skip_if_no_torch
+
+
+# The parity tolerances below assume float32 matmuls. TPU defaults to lower-precision
+# passes for float32 inputs, which pushes the XLA-vs-reference gap past `1e-5`.
+@pytest.fixture(scope="module", autouse=True)
+def _use_float32_matmul_precision():
+    with jax.default_matmul_precision("float32"):
+        yield
+
 
 MAMBA3_MIMO_RANKED_PARITY_ATOL = 1e-4
 MAMBA3_MIMO_RANKED_PARITY_RTOL = 1e-4

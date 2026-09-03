@@ -63,7 +63,11 @@ def reset_telemetry() -> Iterator[None]:
 def _transport(monkeypatch: pytest.MonkeyPatch) -> RecordingTelemetryTransport:
     transport = RecordingTelemetryTransport()
     monkeypatch.setattr(telemetry, "_RequestsTransport", lambda: transport)
-    telemetry.configure(endpoint="http://finelog/v1/telemetry", service="vllm", attributes={"job_id": "/serve"})
+    telemetry.configure(
+        endpoint="http://finelog/v1/telemetry",
+        service="vllm",
+        attributes={"job_id": "/serve"},
+    )
     return transport
 
 

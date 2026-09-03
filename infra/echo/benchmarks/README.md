@@ -17,13 +17,21 @@ Each record contains:
   result should be promoted.
 - `intent`: broad query class (`how_to`, `concept`, `identifier`, `navigation`,
   `issue_recall`, `pr_recall`, `incident`, `cross_domain`, or `no_answer`).
-- `source`: the repository path or GitHub URL used to write the judgment.
-- `relevant`: independently useful artifacts. `target` is a repository-relative
-  path for files, a canonical GitHub URL for issues and pull requests, or a
-  `wiki:<id>` identifier. `grade` is 3 for the answer a user should see first,
+- `source`: the artifact used to write the judgment. Repository sources record
+  `repository`, `branch`, and `path` explicitly.
+- `relevant`: independently useful artifacts. `target` is a repository-qualified ID
+  shaped as `file:<owner>/<repository>@<branch>:<path>` for files, a canonical
+  GitHub URL for issues and pull requests, or a `wiki:<id>` identifier. `grade` is 3 for
+  the answer a user should see first,
   2 for a useful supporting result, and 1 for related background. File entries
   include approximate inclusive `lines` where a reviewer can inspect the gold
   passage quickly.
+
+All original path-only file judgments are explicitly assigned to
+`marin-community/marin@main`. The community-repository block adds source-grounded cases
+for each of the five new repositories and separately judges the colliding
+`marin-community/marin@main:README.md` and `marin-community/vllm@main:README.md`
+identities. The loader rejects ambiguous path-only file targets.
 
 Construction uses repository files and narrow GitHub metadata/body inspection,
 not Echo result rankings. It is a regression corpus, not a statistically random
@@ -34,7 +42,9 @@ them as ranking failures. A result is credited when its domain and stable target
 match a judged artifact; line hints guide human review and sub-file evaluation.
 
 Tune only on the `dev` split. Freeze the model, candidate budget, fusion weights,
-and quality threshold before collecting the `test` split:
+and quality threshold before collecting the `test` split. The collector explicitly
+requests all six repositories, so its results measure cross-repository search rather
+than the API's Marin default:
 
 ```bash
 uv run infra/echo/search_benchmark.py collect \

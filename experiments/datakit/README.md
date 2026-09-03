@@ -145,10 +145,71 @@ flowchart TD
 
 ## Testbed samples
 
-Pre-built testbed samples live under `s3://marin-us-east-02a/marin/datakit/`
-(CoreWeave `us-east-02a`). Each is a tree of already-normalized sources named
-`sample_<tokens>_<hash>`. Pass the full S3 root as `--sample-prefix` (it is used
-verbatim — the bucket prefix is not prepended):
+Each testbed sample is a tree of already-normalized sources named
+`sample_<tokens>_<hash>`. Pass its full root as `--sample-prefix`; the bucket
+prefix is not prepended.
+
+`zephyr_benchmark.py` defaults to the Europe sample. The us-central1 copy is
+also available for benchmarks that run in us-central1:
+
+| `--sample-prefix` | Approx. size | Region |
+| --- | --- | --- |
+| `gs://marin-eu-west4/datakit/sample_100b_8ae7a94f` | ~100B tokens | GCP `europe-west4` (default) |
+| `gs://marin-us-central1/datakit/sample_100b_8ae7a94f` | ~100B tokens | GCP `us-central1` |
+
+### Create a regional sample
+
+`experiments.datakit.materialize_zephyr_benchmark_sample` creates a benchmark
+sample in the region where it will run. It either copies an existing normalized
+sample or rebuilds it from the source Hugging Face datasets. Neither mode is
+part of the A/B benchmark workflow.
+
+Copying preserves the normalized Parquet payloads and writes destination-local
+`NormalizedData` artifacts. Run the job in the destination region, keep
+concurrency bounded, and confirm transfer charges before a cross-region copy.
+Use a 24 GiB memory request with `--enable-extra-resources`. For a GCS-to-GCS
+copy, use GCP credentials that can read the source bucket. Do not use Storage
+Transfer Service.
+
+```bash
+uv run iris --cluster=marin job run --no-wait \
+  --region europe-west4 --memory=24G --disk=5G --cpu=4 --extra=cpu --enable-extra-resources \
+  --priority batch \
+  -- python -m experiments.datakit.materialize_zephyr_benchmark_sample \
+    --mode copy \
+    --source-prefix gs://marin-us-central1/datakit/sample_100b_8ae7a94f \
+    --destination-prefix gs://marin-eu-west4/datakit/sample_100b_8ae7a94f \
+    --max-concurrent 4
+```
+
+To copy from the legacy CoreWeave S3 sample instead, replace `--source-prefix`
+with `s3://marin-us-east-02a/marin/datakit/sample_100b_8ae7a94f` and add
+`-e CW_KEY_ID "$CW_KEY_ID" -e CW_KEY_SECRET "$CW_KEY_SECRET"` before `--`.
+
+Regeneration reads the source names from `--source-prefix`, then runs the source
+registry's Hugging Face download and normalization steps before sampling 100B
+tokens into the destination. It reads no source Parquet payloads. `--data-prefix`
+is the region-local root for raw and normalized intermediate artifacts. The
+source prefix must be readable for its artifact metadata; pass CoreWeave
+credentials when it is the legacy S3 sample. Regeneration can produce different
+bytes as source revisions or normalization code change.
+
+```bash
+uv run iris --cluster=marin job run --no-wait \
+  --region europe-west4 --memory=24G --disk=5G --cpu=4 --extra=cpu --enable-extra-resources \
+  --priority batch \
+  -e CW_KEY_ID "$CW_KEY_ID" -e CW_KEY_SECRET "$CW_KEY_SECRET" \
+  -- python -m experiments.datakit.materialize_zephyr_benchmark_sample \
+    --mode regenerate \
+    --source-prefix s3://marin-us-east-02a/marin/datakit/sample_100b_8ae7a94f \
+    --data-prefix gs://marin-eu-west4 \
+    --destination-prefix gs://marin-eu-west4/datakit/sample_100b_8ae7a94f \
+    --target-total-tokens-b 100 \
+    --max-concurrent 4
+```
+
+The original samples remain available under
+`s3://marin-us-east-02a/marin/datakit/` in CoreWeave `us-east-02a`:
 
 | `--sample-prefix` | Approx. size |
 | --- | --- |
@@ -161,7 +222,7 @@ verbatim — the bucket prefix is not prepended):
 List them with:
 
 ```bash
-aws s3 ls s3://marin-us-east-02a/marin/datakit/ | grep sample
+uv run fsutil ls s3://marin-us-east-02a/marin/datakit/
 ```
 
 ## Layout
@@ -169,6 +230,8 @@ aws s3 ls s3://marin-us-east-02a/marin/datakit/ | grep sample
 | Path | What it is |
 | --- | --- |
 | `reference_pipeline.py` | The DAG builder + CLI (`--mode full\|sample`, `--pool-*`, `--sources`, `--quality-model`) |
+| `zephyr_benchmark.py` | GCP-default A/B benchmark over a pre-normalized sample |
+| `materialize_zephyr_benchmark_sample.py` | One-time benchmark sample copy or regeneration tool |
 | `global_exact_dedup.py` | Sparse co-partitioned exact-duplicate attributes by normalized record ID |
 | `cluster/quality/fast_transformer/` | Quality classifier: per-source scoring step + training/calibration |
 | `cluster/domain/v0/` | Domain clustering: centroid sampling/training + per-source assignment |

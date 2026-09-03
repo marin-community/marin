@@ -18,7 +18,7 @@ from typing import Any
 import pyarrow.parquet as pq
 from marin.datakit.source_key import DatakitArtifactPath
 from pydantic import BaseModel
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 
 TEMPLATES = Path(__file__).parent / "templates"
 REPORT_FILE = "report.html"

@@ -27,7 +27,7 @@ uv run iris --cluster=marin cluster stop
 ### Submit a Job
 
 ```python
-from iris.client.client import IrisClient
+from iris.client import IrisClient, JobState
 from iris.cluster.types import Entrypoint, ResourceSpec
 
 def my_task():
@@ -39,8 +39,16 @@ job = client.submit(
     entrypoint=Entrypoint.from_callable(my_task),
     resources=ResourceSpec(cpu=1, memory="2GB"),
 )
-job.wait()
+status = job.wait()
+assert status.state is JobState.SUCCEEDED
 ```
+
+`Job.status()`, `Job.wait()`, `Task.status()`, `Task.describe()`,
+`Attempt.status()`, and the IrisClient list methods return immutable Iris values
+rather than generated protobuf messages. `Job.cancel()` and Task actions address
+the logical workload on the deployed ControllerService. A numbered Attempt
+action is rejected after a newer Attempt becomes current; full incarnation
+fencing requires the resource operation protocol.
 
 For accelerator jobs, request the accelerator on the task itself with `--tpu ...` or `--gpu ...`.
 `--reserve <accel>` is a hard constraint that confines the job to a zone where `<accel>` has actually
@@ -335,13 +343,35 @@ iris --config cluster.yaml job logs /my-job
 iris --config cluster.yaml job logs /my-job --follow
 iris --config cluster.yaml job logs /my-job --since-seconds 300
 
+# Narrow the same log view to one Task or numbered Attempt
+iris --config cluster.yaml task logs /my-job/0 --follow
+iris --config cluster.yaml attempt logs /my-job/0:2 --follow
+
 # Wait for an existing job; prints its terminal state and exits nonzero unless it succeeded
 iris --config cluster.yaml job wait /my-job
 
-# Stop one or more jobs
-iris --config cluster.yaml job stop /my-job
-iris --config cluster.yaml job stop --prefix /my-job-prefix
+# Cancel one or more Jobs
+iris --config cluster.yaml job cancel /my-job
+iris --config cluster.yaml job cancel --prefix /my-job-prefix
+
+# Explicitly record an active Job and its unfinished descendants as successful
+iris --config cluster.yaml job complete /my-job
 ```
+
+The standard task image includes jemalloc as an opt-in allocator. Set
+`LD_PRELOAD=libjemalloc.so.2` for the default jemalloc policy, and optionally
+set `MALLOC_CONF` to tune it for the workload:
+
+```bash
+iris --config cluster.yaml job run \
+  -e LD_PRELOAD libjemalloc.so.2 \
+  -e MALLOC_CONF background_thread:true,dirty_decay_ms:0,muzzy_decay_ms:0,narenas:2 \
+  -- python train.py
+```
+
+`iris process logs` is the low-level diagnostic view for a controller, worker,
+or task-runtime process. Workload output is always under `job logs`, `task logs`,
+or `attempt logs`.
 
 ## Smoke Test
 
@@ -351,10 +381,6 @@ dashboard rendering, log levels, profiling, and constraint routing.
 ```bash
 # Local mode (in-process cluster, default)
 uv run pytest lib/iris/tests/e2e/test_smoke.py -m requires_cluster -o "addopts=" -v
-
-# Cloud mode: start cluster via CLI, then run tests against it
-# iris --cluster=ci-gcp-smoke cluster start-smoke --label-prefix my-test --url-file /tmp/url --wait-for-workers 1
-uv run pytest lib/iris/tests/e2e/test_smoke.py -m requires_cluster --iris-controller-url "$(cat /tmp/url)" -o "addopts="
 
 # Cloud mode: connect to existing cluster
 uv run pytest lib/iris/tests/e2e/test_smoke.py -m requires_cluster --iris-controller-url http://localhost:8080 -o "addopts="
@@ -438,6 +464,7 @@ scale_groups:
 
 - [Architecture](docs/architecture.md) - source layout, import layers, and the `TaskBackend` contract
 - [Task States](docs/task-states.md) - Task state machine and retry semantics
+- [Temporary Task Outputs](docs/task-outputs.md) - per-attempt diagnostic archives
 - [Priority Bands](docs/priority-bands.md) - production, interactive, and batch scheduling priority
 - [CoreWeave](docs/coreweave.md) - CoreWeave GPU cluster quickstart and operator guide
 - [Federation](docs/federation.md) - how a job is routed to a peer cluster, and what travels with it

@@ -41,7 +41,6 @@ class Gpt2HyenaConfig(LmConfig):
     layer_norm_epsilon: float = 1e-5
 
     gradient_checkpointing: bool = True  # better to just always use this
-    gradient_checkpointing_block_size: int = 5
 
     # NOTE: a bunch of things from here are used for the outer Gpt2 part of the architecture
     # as well (e.g. use_bias, layer_norm_epsilon, etc.). Some of these could in theory be

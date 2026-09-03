@@ -158,12 +158,13 @@ Set by the controller in three scenarios:
    transitions each to `KILLED`. Tasks with workers assigned are queued for
    kill RPCs.
 
-2. **Job failure cascade**: When a job exceeds `max_task_failures`,
-   `_finalize_job_state` calls `_mark_remaining_tasks_killed` to terminate all
-   surviving tasks.
+2. **Job finalization**: `_finalize_terminal_job` terminates a job's remaining
+   non-terminal tasks with the job's recorded terminal cause.
 
-3. **Parent job termination**: `_cancel_child_jobs` recursively cancels child
-   jobs when a parent reaches a terminal state (except `SUCCEEDED`).
+3. **Parent job termination**: Parent finalization or explicit cancellation
+   recursively kills live descendant jobs. Descendant jobs and tasks use the
+   error `Parent job terminated`; task events use the stable reason code
+   `ParentJobTerminated`. The originating terminal cause remains on the parent.
 
 `KILLED` is always terminal and never retried.
 

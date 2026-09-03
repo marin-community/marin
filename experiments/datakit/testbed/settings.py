@@ -16,11 +16,15 @@ TESTBED_TOKENIZER: str = llama3_tokenizer
 TESTBED_SEQ_LEN: int = 4096
 """Grug MoE default; reused across ranking + IsoFLOP confirmation runs."""
 
+TESTBED_STAGING_PREFIX: str = "gs://marin-us-central1"
+"""Storage root for the fixed Datakit testbed inputs."""
+
 TESTBED_STAGING_REGION: str = "us-central1"
 """All raw dumps must be reachable without cross-region reads.
 
-Iris supplies a region-local ``MARIN_PREFIX`` when the testbed is launched in
-this region; every source must either be pre-staged there or downloadable into it.
+Testbed entry points default ``MARIN_PREFIX`` to :data:`TESTBED_STAGING_PREFIX`
+and reject prefixes outside this region. Every source must either be pre-staged
+there or downloadable into it.
 """
 
 RAW_TARGET_TOTAL_TOKENS_B: float = 1000.0

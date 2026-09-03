@@ -8,11 +8,13 @@
         </router-link>
         <nav class="flex items-center gap-1 overflow-x-auto text-sm" aria-label="Echo areas">
           <router-link class="quick-tab" to="/">Search</router-link>
-          <a class="quick-tab" href="/?domain=file">Files</a>
+          <a class="quick-tab hidden sm:block" href="/?domain=file">Files</a>
           <router-link class="quick-tab" to="/wiki">Wiki</router-link>
-          <a class="quick-tab" href="/?domain=pr&domain=issue">GitHub</a>
-          <a class="quick-tab" href="/?domain=discord">Discord</a>
-          <a class="quick-tab" href="/docs">API</a>
+          <router-link class="quick-tab" to="/conversation">Conversation</router-link>
+          <router-link class="quick-tab" to="/feedback">Feedback</router-link>
+          <a class="quick-tab hidden sm:block" href="/?domain=pr&domain=issue">GitHub</a>
+          <a class="quick-tab hidden sm:block" href="/?domain=discord">Discord</a>
+          <a class="quick-tab hidden sm:block" href="/docs">API</a>
         </nav>
       </div>
     </header>

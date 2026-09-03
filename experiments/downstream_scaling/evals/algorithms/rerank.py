@@ -21,8 +21,8 @@ from fray.current_client import current_client
 from thalas.execution.executor import ExecutorStep, InputName, MirroredValue
 from thalas.execution.remote import remote
 from thalas.execution.types import this_output_path, versioned
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
 
 from experiments.downstream_scaling.evals.algorithms.iid import VLLM_TPU_ENV_VARS
 from experiments.downstream_scaling.evals.framework.schema import (

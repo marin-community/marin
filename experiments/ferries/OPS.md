@@ -31,13 +31,13 @@ uv run iris --cluster=marin job run --no-wait \
 - Use `--cluster=marin` (prod), not `--config=lib/iris/config/marin-dev.yaml`
   — the dev config needs OS Login impersonation that dev SAs typically lack.
 
-## Stop
+## Cancel
 
 ```bash
-uv run iris --cluster=marin job stop $JOB_ID
+uv run iris --cluster=marin job cancel $JOB_ID
 ```
 
-Terminates the entrypoint job and its Zephyr children.
+Cancels the entrypoint job and its Zephyr children.
 
 ## Validate output
 

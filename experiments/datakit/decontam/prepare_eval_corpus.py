@@ -54,7 +54,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from datasets import Image as DatasetsImage
 from datasets import load_dataset
-from rigging.filesystem import StoragePath, marin_prefix
+from rigging.filesystem.cluster_config import marin_prefix
+from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.decontam.lmh_loader import (

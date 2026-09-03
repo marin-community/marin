@@ -1,7 +1,22 @@
-@import '@fontsource-variable/noto-sans';
-@import '@fontsource-variable/noto-sans-mono';
 @import 'tailwindcss';
 @config '../tailwind.config.ts';
+
+@font-face {
+  font-family: 'Noto Sans Variable';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url('@fontsource-variable/noto-sans/files/noto-sans-latin-wght-normal.woff2') format('woff2-variations');
+}
+
+@font-face {
+  font-family: 'Noto Sans Mono Variable';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url('@fontsource-variable/noto-sans-mono/files/noto-sans-mono-latin-wght-normal.woff2')
+    format('woff2-variations');
+}
 
 :root {
   --color-cream: #f8f6ef;

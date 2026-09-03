@@ -69,8 +69,8 @@ from levanter.compat.hf_checkpoints import load_tokenizer
 from thalas.execution.executor import ExecutorStep, InputName, MirroredValue
 from thalas.execution.remote import remote
 from thalas.execution.types import this_output_path, versioned
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, ShardInfo
-from zephyr.execution import ZephyrContext
 
 from experiments.downstream_scaling.evals.algorithms import xtok_selection
 from experiments.downstream_scaling.evals.framework.schema import (

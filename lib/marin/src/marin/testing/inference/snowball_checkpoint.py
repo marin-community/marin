@@ -11,7 +11,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 from levanter.checkpoint import load_checkpoint as load_levanter_checkpoint
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 
 # The vendored experiment path is the immutable training source for Snowball.
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig as VendoredGrugModelConfig

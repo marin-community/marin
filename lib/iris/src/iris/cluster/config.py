@@ -27,7 +27,6 @@ from typing import Annotated, Any, ClassVar, Literal
 
 import yaml
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PlainSerializer, field_validator, model_validator
-from rigging.filesystem import StoragePath
 from rigging.secrets import as_secret_spec, is_secret_reference, resolve_secret_spec
 from rigging.timing import Duration
 
@@ -35,7 +34,8 @@ from iris.cluster.platforms.k8s.coreweave_topology import TopologyMode
 from iris.cluster.tpu_topology import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topology, tpu_variant_name
 from iris.cluster.types import (
     AUTO_DEVICE_VARIANT,
-    DEFAULT_BACKEND_ID,
+    DEFAULT_USER_BUDGET_LIMIT,
+    DEFAULT_USER_BUDGET_MAX_BAND,
     LOCAL_CLUSTER,
     AcceleratorType,
     CapacityType,
@@ -48,8 +48,6 @@ from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_SSH_PORT = 22
-DEFAULT_SSH_CONNECT_TIMEOUT = Duration.from_seconds(30)
 DEFAULT_PRIORITY = 100
 DOCKER_WORKER_RUNTIME = "docker"
 KUBERNETES_WORKER_RUNTIME = "kubernetes"
@@ -371,6 +369,32 @@ class WorkerSettings(_Config):
     cache_dir: str = ""
 
 
+class TaskOutputPolicy(_Config):
+    """Cluster-owned policy for per-attempt temporary output archives.
+
+    ``destination`` is an fsspec URL prefix. When omitted, the execution
+    cluster resolves its region-local lifecycle-managed temporary prefix.
+    """
+
+    destination: str | None = None
+    ttl_days: int = 7
+    max_bytes: int = 2 * 1024**3
+    max_entries: int = 10_000
+    finalization_timeout: DurationField = Field(default_factory=lambda: Duration.from_seconds(300))
+
+    @model_validator(mode="after")
+    def _validate_limits(self) -> TaskOutputPolicy:
+        if self.destination != "file://" and self.ttl_days <= 0:
+            raise ValueError("task_outputs.ttl_days must be positive for object storage")
+        if self.max_bytes <= 0:
+            raise ValueError("task_outputs.max_bytes must be positive")
+        if self.max_entries <= 0:
+            raise ValueError("task_outputs.max_entries must be positive")
+        if self.finalization_timeout.to_ms() <= 0:
+            raise ValueError("task_outputs.finalization_timeout must be positive")
+        return self
+
+
 class ScaleGroupConfig(_Config):
     name: str = ""
     # Extra slices to keep warm beyond demand: target = min(demand + buffer, max).
@@ -444,6 +468,7 @@ class WorkerConfig(_Config):
     heartbeat_timeout: DurationField | None = None
     platform: PlatformConfig | None = None
     storage_prefix: str = ""  # task-artifact prefix; empty disables profile upload
+    task_outputs: TaskOutputPolicy | None = None
     auth_token: str = ""  # worker→controller bearer token; empty when auth disabled
 
 
@@ -629,10 +654,18 @@ class KubernetesProviderConfig(_Config):
     service_account: str = ""
     host_network: bool = False
     cache_dir: str = ""  # hostPath base for cache mounts (default: "/cache")
+    cache_max_age: DurationField | None = None  # enables cache reclamation
     controller_address: str = ""  # injected into task pods
     kueue: KueueConfig = Field(default_factory=KueueConfig)
     preempt_namespaces: list[str] = Field(default_factory=list)
     priority_classes: dict[str, str] = Field(default_factory=dict)  # band -> PriorityClass
+
+    @field_validator("cache_max_age")
+    @classmethod
+    def _positive_cache_max_age(cls, value: Duration | None) -> Duration | None:
+        if value is not None and value.to_ms() <= 0:
+            raise ValueError("cache_max_age must be positive")
+        return value
 
 
 # ---------------------------------------------------------------------------
@@ -644,6 +677,11 @@ class UserBudgetTier(_Config):
     user_ids: list[str] = Field(default_factory=list)
     budget_limit: int = 0  # resource-value spend before downgrade to BATCH (0 = unlimited)
     max_band: PriorityBandField = 0  # highest band these users may submit to
+
+
+class UserBudgetDefaultsConfig(_Config):
+    budget_limit: int = DEFAULT_USER_BUDGET_LIMIT
+    max_band: PriorityBandField = DEFAULT_USER_BUDGET_MAX_BAND
 
 
 class EndpointSpec(_Config):
@@ -669,34 +707,6 @@ def user_admitted(allowed_users: Collection[str], user: str) -> bool:
         return False
     domain = user.rsplit("@", 1)[1].lower()
     return f"*@{domain}" in {entry.lower() for entry in allowed_users}
-
-
-# ---------------------------------------------------------------------------
-# Backends
-# ---------------------------------------------------------------------------
-
-
-class BackendConfig(_Config):
-    """One task backend in a multi-backend cluster.
-
-    ``kind`` selects the provider arm: ``worker_daemon`` drives the worker-daemon
-    provider (``worker_provider``), ``k8s`` drives the Kubernetes provider
-    (``kubernetes_provider``). ``transport`` must be ``in_process``; ``remote`` is
-    rejected by :func:`validate_config`.
-
-    ``attributes`` holds any extra routing attributes as comma-split value sets
-    (for example ``device-variant: "v5e-4,v5p-8"``). Device attributes need not be
-    listed here: ``backend_attribute_sets`` derives ``device-type``/``device-variant``
-    from ``scale_groups`` and unions them in.
-    """
-
-    kind: Literal["worker_daemon", "k8s"]
-    transport: Literal["in_process", "remote"] = "in_process"
-    attributes: dict[str, str] = Field(default_factory=dict)
-    worker_provider: WorkerProviderConfig | None = None
-    kubernetes_provider: KubernetesProviderConfig | None = None
-    scale_groups: dict[str, ScaleGroupConfig] = Field(default_factory=dict)
-    platform: PlatformConfig | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -755,15 +765,13 @@ class IrisClusterConfig(_OneofConfig):
     platform: PlatformConfig = Field(default_factory=PlatformConfig)
     defaults: DefaultsConfig = Field(default_factory=DefaultsConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
+    task_outputs: TaskOutputPolicy | None = Field(default_factory=TaskOutputPolicy)
     controller: ControllerVmConfig = Field(default_factory=ControllerVmConfig)
     scale_groups: dict[str, ScaleGroupConfig] = Field(default_factory=dict)
     auth: AuthConfig | None = None
     kubernetes_provider: KubernetesProviderConfig | None = None
     worker_provider: WorkerProviderConfig | None = None
-    # Explicit multi-backend map. Absent (None) = the implicit single-backend form,
-    # synthesized from the top-level platform/scale_groups/provider fields by
-    # resolve_backends. Mixing the two is rejected by validate_config.
-    backends: dict[str, BackendConfig] | None = None
+    user_budget_defaults: UserBudgetDefaultsConfig = Field(default_factory=UserBudgetDefaultsConfig)
     user_budgets: list[UserBudgetTier] = Field(default_factory=list)
     endpoints: dict[str, EndpointSpec] = Field(default_factory=dict)
     # Federation peers (peer id -> declaration): remote Iris controllers this
@@ -995,49 +1003,6 @@ def validate_autoscaler_config(config: AutoscalerConfig, context: str = "autosca
         )
 
 
-def _validate_backends(config: IrisClusterConfig) -> None:
-    """Validate an explicit ``backends:`` map.
-
-    The implicit single-backend form (no ``backends:``) is covered by the
-    top-level validators and synthesized by :func:`resolve_backends`.
-    """
-    if config.backends is None:
-        return
-
-    conflicting = []
-    if config.scale_groups:
-        conflicting.append("scale_groups")
-    if config.worker_provider is not None:
-        conflicting.append("worker_provider")
-    if config.kubernetes_provider is not None:
-        conflicting.append("kubernetes_provider")
-    if config.platform.platform_kind() is not None:
-        conflicting.append("platform")
-    if conflicting:
-        raise ValueError(
-            f"backends: cannot be combined with top-level {', '.join(conflicting)}. "
-            "The top-level platform/scale_groups/provider fields are the implicit single-backend "
-            "form; move them under a backends: entry instead."
-        )
-
-    for backend_id, backend in config.backends.items():
-        if backend.transport == "remote":
-            raise ValueError(
-                f"backend '{backend_id}': transport 'remote' is not supported yet — "
-                "remote transport lands in a later PR."
-            )
-        if backend.kind == "worker_daemon":
-            if backend.worker_provider is None:
-                raise ValueError(f"backend '{backend_id}': kind 'worker_daemon' requires worker_provider.")
-            if backend.kubernetes_provider is not None:
-                raise ValueError(f"backend '{backend_id}': kind 'worker_daemon' must not set kubernetes_provider.")
-        elif backend.kind == "k8s":
-            if backend.kubernetes_provider is None:
-                raise ValueError(f"backend '{backend_id}': kind 'k8s' requires kubernetes_provider.")
-            if backend.worker_provider is not None:
-                raise ValueError(f"backend '{backend_id}': kind 'k8s' must not set worker_provider.")
-
-
 def _validate_cluster_name(config: IrisClusterConfig) -> None:
     """Require a cluster ``name``, distinct from the federation sentinel.
 
@@ -1083,7 +1048,6 @@ def _validate_peers(config: IrisClusterConfig) -> None:
 def validate_config(config: IrisClusterConfig) -> None:
     """Validate cluster config; raises ValueError on the first violation."""
     _validate_cluster_name(config)
-    _validate_backends(config)
     _validate_peers(config)
     _validate_provider_platform_compat(config)
     _validate_accelerator_types(config)
@@ -1258,49 +1222,16 @@ def _scale_group_device_attributes(scale_groups: Mapping[str, ScaleGroupConfig])
     return derived
 
 
-def backend_attribute_sets(backend: BackendConfig) -> dict[str, set[str]]:
-    """The routing attributes a backend advertises to the meta-scheduler and peers.
-
-    Explicit ``attributes`` values are comma-split into sets (``device-variant:
-    "v5e-4, v5p-8"`` becomes ``{"device-variant": {"v5e-4", "v5p-8"}}``); empty and
-    whitespace-only entries are dropped. ``device-type`` and ``device-variant`` are
-    additionally derived from ``scale_groups[*].resources`` and unioned in, so a
-    backend advertises the devices its scale groups offer without the operator
-    restating them in ``attributes``. ``region`` is derived the same way from each
-    scale group's slice template so the backend exports its location through the
-    federation protocol (#7286).
-    """
-    attributes = {
-        key: {part.strip() for part in raw.split(",") if part.strip()} for key, raw in backend.attributes.items()
-    }
+def backend_attribute_sets(config: IrisClusterConfig) -> dict[str, set[str]]:
+    """Derive the device and region attributes this cluster advertises to peers."""
+    attributes: dict[str, set[str]] = {}
     for derived in (
-        _scale_group_device_attributes(backend.scale_groups),
-        _scale_group_region_attributes(backend.scale_groups),
+        _scale_group_device_attributes(config.scale_groups),
+        _scale_group_region_attributes(config.scale_groups),
     ):
         for key, values in derived.items():
             attributes.setdefault(key, set()).update(values)
     return attributes
-
-
-def resolve_backends(config: IrisClusterConfig) -> dict[str, BackendConfig]:
-    """Resolve the cluster's backends as a ``{backend_id: BackendConfig}`` map.
-
-    An explicit ``backends:`` map is returned as-is. A single-cluster config (no
-    ``backends:``) synthesizes exactly one entry keyed :data:`DEFAULT_BACKEND_ID`
-    from the top-level platform/scale_groups/provider fields.
-    """
-    if config.backends is not None:
-        return dict(config.backends)
-
-    kind = "k8s" if config.provider_kind() == "kubernetes_provider" else "worker_daemon"
-    backend = BackendConfig(
-        kind=kind,
-        worker_provider=config.worker_provider,
-        kubernetes_provider=config.kubernetes_provider,
-        scale_groups=dict(config.scale_groups),
-        platform=config.platform,
-    )
-    return {DEFAULT_BACKEND_ID: backend}
 
 
 # ===========================================================================
@@ -1494,21 +1425,6 @@ def _inject_scale_group_names_into(scale_groups: object) -> None:
             sg["name"] = name
 
 
-def _inject_scale_group_names(data: dict) -> None:
-    """Stamp each scale group's map key onto its ``name`` field.
-
-    Applies to the top-level ``scale_groups`` and to every backend's
-    ``scale_groups`` so a backend's workers register under the same scale-group
-    name the backend's routing is keyed by.
-    """
-    _inject_scale_group_names_into(data.get("scale_groups"))
-    backends = data.get("backends")
-    if isinstance(backends, dict):
-        for backend in backends.values():
-            if isinstance(backend, dict):
-                _inject_scale_group_names_into(backend.get("scale_groups"))
-
-
 def parse_config(data: dict) -> IrisClusterConfig:
     """Parse and validate a raw config dict (post-expansion) into the model."""
     config = IrisClusterConfig.model_validate(data)
@@ -1534,7 +1450,7 @@ def load_config(config_path: Path | str) -> IrisClusterConfig:
 
     _expand_tpu_pools(data)
     _expand_multi_zone_groups(data)
-    _inject_scale_group_names(data)
+    _inject_scale_group_names_into(data.get("scale_groups"))
 
     config = parse_config(data)
 
@@ -1567,6 +1483,9 @@ def make_local_config(base_config: IrisClusterConfig) -> IrisClusterConfig:
     config.platform.local = LocalPlatformConfig()
     config.controller = ControllerVmConfig(image=config.controller.image, local=LocalControllerConfig(port=0))
     config.storage.remote_state_dir = ""  # LocalCluster sets a temp path
+    if config.task_outputs is not None:
+        config.task_outputs = config.task_outputs.model_copy(update={"destination": "file://", "ttl_days": 0})
+        config.defaults.worker.task_outputs = config.task_outputs.model_copy(deep=True)
     # Fast timings for local dev (override any production timings).
     config.defaults.autoscaler = AutoscalerConfig(
         evaluation_interval=Duration.from_seconds(0.5),
@@ -1574,37 +1493,3 @@ def make_local_config(base_config: IrisClusterConfig) -> IrisClusterConfig:
         scale_down_delay=Duration.from_seconds(1),
     )
     return config
-
-
-def build_ssh_command_config(config: IrisClusterConfig, group_name: str | None = None) -> SshConfig:
-    """Resolve SSH config: cluster defaults merged with per-group manual overrides."""
-    ssh = config.defaults.ssh
-    user = ssh.user or "root"
-    key_file = ssh.key_file or ""
-    port = ssh.port if ssh.port and ssh.port > 0 else DEFAULT_SSH_PORT
-    impersonate = ssh.impersonate_service_account or ""
-    connect_timeout = ssh.connect_timeout if ssh.connect_timeout is not None else DEFAULT_SSH_CONNECT_TIMEOUT
-
-    if group_name and group_name in config.scale_groups:
-        group = config.scale_groups[group_name]
-        if group.slice_template is not None and group.slice_template.manual is not None:
-            manual = group.slice_template.manual
-            if manual.ssh_user:
-                user = manual.ssh_user
-            if manual.ssh_key_file:
-                key_file = manual.ssh_key_file
-
-    return SshConfig(
-        user=user,
-        key_file=key_file,
-        port=port,
-        impersonate_service_account=impersonate,
-        connect_timeout=connect_timeout,
-    )
-
-
-def clear_remote_state(remote_state_dir: str) -> None:
-    """Remove all files under the remote state dir so the controller starts fresh."""
-    path = StoragePath(remote_state_dir)
-    if path.exists():
-        path.rmtree()

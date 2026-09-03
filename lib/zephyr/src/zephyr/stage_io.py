@@ -19,7 +19,8 @@ from typing import Protocol
 import cloudpickle
 import humanfriendly
 from fray.types import ResourceConfig
-from rigging.filesystem import open_url, unique_temp_path
+from rigging.filesystem.atomic import unique_temp_path
+from rigging.filesystem.factory import open_url
 
 from zephyr.plan import PhysicalOp, Scatter
 from zephyr.shuffle import ListShard, _write_scatter
@@ -102,7 +103,7 @@ class TaskResult:
 
     Always contains a ListShard. For non-scatter stages, refs are
     PickleDiskChunks. For scatter stages, refs contain file paths
-    (the actual metadata lives in ``.scatter_meta`` sidecar files
+    (the actual metadata lives in ``metadata.msgpack`` sidecar files
     read lazily by reducers).
     """
 
@@ -222,7 +223,7 @@ def _write_stage_output(
     """Write stage output to disk.
 
     For scatter stages (``scatter_op`` is set), writes Parquet with envelope
-    wrapping and ``.scatter_meta`` sidecars. Returns TaskResult with compact
+    wrapping and ``metadata.msgpack`` sidecars. Returns TaskResult with compact
     scatter metadata.
 
     For non-scatter stages, batches items into pickle chunk files. Returns

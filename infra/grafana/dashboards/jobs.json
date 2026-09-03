@@ -140,14 +140,7 @@
       "url": "/d/marin-home"
     },
     {
-      "asDropdown": false,
-      "icon": "dashboard",
-      "includeVars": true,
-      "keepTime": true,
-      "targetBlank": false,
-      "title": "Accelerators",
-      "type": "link",
-      "url": "/d/marin-accel"
+      "linkRef": "fleet_accelerators"
     },
     {
       "asDropdown": false,
@@ -180,14 +173,10 @@
       "url": "/d/marin-runs"
     },
     {
-      "asDropdown": false,
-      "icon": "dashboard",
-      "includeVars": true,
-      "keepTime": true,
-      "targetBlank": false,
-      "title": "Clusters",
-      "type": "link",
-      "url": "/d/marin-clusters"
+      "linkRef": "fleet_health"
+    },
+    {
+      "linkRef": "cluster_capacity"
     },
     {
       "asDropdown": false,
@@ -195,9 +184,9 @@
       "includeVars": true,
       "keepTime": true,
       "targetBlank": false,
-      "title": "Pipelines",
+      "title": "Training run",
       "type": "link",
-      "url": "/d/marin-pipelines"
+      "url": "/d/marin-training"
     },
     {
       "asDropdown": false,
@@ -1417,7 +1406,7 @@
           "source": "url",
           "format": "table",
           "parser": "backend",
-          "url": "/jobs",
+          "url": "/job_counts",
           "url_options": {
             "method": "GET",
             "params": []
@@ -1477,7 +1466,7 @@
           "source": "url",
           "format": "table",
           "parser": "backend",
-          "url": "/jobs",
+          "url": "/job_counts",
           "url_options": {
             "method": "GET",
             "params": []

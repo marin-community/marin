@@ -1,15 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""In-memory worker liveness, owned by the controller and folded from backend-observed events.
+"""In-memory worker liveness derived from backend-observed events.
 
-The backend never decides a worker is dead. Each reconcile tick it *observes*
-its own I/O outcomes and emits :class:`WorkerHealthEvent`s; the controller folds
-them through the single :meth:`WorkerHealthTracker.apply` site, which accumulates
-the per-worker counters and applies the termination thresholds. ``apply`` is the
-sole liveness-accounting mutation site. The only other writes are lifecycle:
-startup seeding + worker registration (``heartbeat``/``register``) and removal
-(``forget``/``forget_many``).
+The controller owns one tracker for its registered worker-daemon backend. A
+reconcile tick classifies I/O outcomes as :class:`WorkerHealthEvent`s and the
+controller applies them through :meth:`WorkerHealthTracker.apply`, which
+accumulates counters and enforces termination thresholds. ``apply`` is the sole
+reconcile-time mutation site; the other writes are startup recovery, worker
+registration, and removal.
 
 Per-worker signals:
 
@@ -30,8 +29,8 @@ autoscale), so it costs far more than ``poll_interval`` — a count of
 a controller stall — which ages every heartbeat at once without running any
 reconciles — from mass-reaping the fleet on resume.
 
-Thread-safe: ``apply`` runs on the reconcile thread; reads come from the
-scheduler and RPC handler threads.
+Thread-safe: ``apply`` runs on the control thread; reads also come from RPC
+handler and housekeeping threads.
 """
 
 import dataclasses
@@ -81,7 +80,7 @@ class WorkerHealthEventKind(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class WorkerHealthEvent:
-    """One backend-observed health signal the controller folds via :meth:`apply`."""
+    """One backend-observed health signal the controller applies via :meth:`apply`."""
 
     worker_id: WorkerId
     kind: WorkerHealthEventKind
@@ -122,7 +121,7 @@ def _mark_reached(state: WorkerLiveness, now_ms: int) -> None:
 
     Refreshes the heartbeat, asserts healthy/active, and clears the
     consecutive-failure counter. Shared by the lifecycle seed
-    (:meth:`WorkerHealthTracker.heartbeat`) and the steady-state REACHED fold
+    (:meth:`WorkerHealthTracker.heartbeat`) and steady-state REACHED handling
     (:meth:`WorkerHealthTracker.apply`) so the two cannot drift.
     """
     state.last_heartbeat_ms = now_ms
@@ -187,7 +186,7 @@ class WorkerHealthTracker:
                 state = self._states.get(event.worker_id)
                 if state is None:
                     # apply() only updates known workers; creation is reserved for
-                    # register/heartbeat. A stray observation — e.g. a REACHED folded
+                    # register/heartbeat. A stray observation — e.g. a REACHED applied
                     # from an impostor at a dead worker's recycled address — must not
                     # conjure a fresh, schedulable liveness entry and re-animate a
                     # forgotten worker.

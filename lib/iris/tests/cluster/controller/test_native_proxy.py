@@ -171,6 +171,24 @@ def test_native_listener_preserves_public_routes_and_streams_to_endpoint(
         threads.stop()
 
 
+def test_controller_begin_shutdown_rejects_endpoint_discovery(make_controller) -> None:
+    controller = make_controller(host="127.0.0.1", port=0)
+    controller.start()
+
+    with httpx.Client(base_url=controller.url, trust_env=False) as client:
+        assert client.post("/iris.cluster.EndpointService/ListEndpoints", json={}).status_code == 200
+
+        controller.begin_shutdown()
+
+        endpoint_response = client.post("/iris.cluster.EndpointService/ListEndpoints", json={})
+        health_response = client.get("/health")
+
+    assert endpoint_response.status_code == 503
+    assert endpoint_response.json()["code"] == "unavailable"
+    assert health_response.status_code == 503
+    assert health_response.json()["status"] == "unavailable"
+
+
 def test_native_rpc_metrics_aggregate_controllers_in_one_process(make_controller, tmp_path, telemetry_transport) -> None:
     controllers = [
         make_controller(

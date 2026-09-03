@@ -1,8 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Aggregate-scoped commands for jobs: submit, cancel, remove_finished."""
+"""Aggregate-scoped commands for jobs: submit, cancel, complete, remove_finished."""
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from rigging.timing import Timestamp
@@ -20,6 +21,7 @@ from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
 from iris.cluster.controller.reconcile import ReconcileState
 from iris.cluster.controller.reconcile.commit import commit_effects
+from iris.cluster.controller.reconcile.effects import ControllerEffects
 from iris.cluster.controller.reconcile.loader import load_closed_snapshot
 from iris.cluster.controller.reconcile.policy import (
     MAX_REPLICAS_PER_JOB,
@@ -331,12 +333,24 @@ def insert_job_and_config(
     )
 
 
-def cancel(
+def _apply_job_transition(
     cur: Tx,
     *,
     job_id: JobName,
-    reason: str,
+    transition: Callable[[ReconcileState, Timestamp], ControllerEffects],
 ) -> None:
+    """Apply one reconcile transition and remove endpoints for its subtree."""
+    now = Timestamp.now()
+    snapshot = load_closed_snapshot(cur, now=now, seed_job_ids=[job_id])
+    if job_id not in snapshot.job_configs:
+        return
+    effects = transition(ReconcileState.open(snapshot), now)
+    commit_effects(cur, effects)
+    subtree = [job_id, *snapshot.job_descendants[job_id].descendants]
+    cur.caches[EndpointsProjection].remove_by_job_ids(cur, subtree)
+
+
+def cancel(cur: Tx, *, job_id: JobName, reason: str) -> None:
     """Cancel ``job_id`` and its descendant subtree through the kernel.
 
     Loads a snapshot covering every job in the subtree and all their active
@@ -347,23 +361,20 @@ def cancel(
     when one half of an atomic coscheduled group is cancelled, the kernel
     cascades termination to the surviving peers instead of stranding them.
     """
-    now = Timestamp.now()
-    # The slice closes the full descendant subtree (and every job's tasks /
-    # active rows) so the kernel can cascade-kill children and fire
-    # coscheduled-peer cascades on killed tasks.
-    snapshot = load_closed_snapshot(cur, now=now, seed_job_ids=[job_id])
-    if job_id not in snapshot.job_configs:
-        return
-    # No per-job state preload: the cascade-kill merge guard skips already-
-    # terminal rows (excluding WORKER_FAILED, which cancel overwrites).
-    effects = ReconcileState.open(snapshot).cancel_job(job_id, reason, now)
-    commit_effects(cur, effects)
-    # Fast-path clear of the cancelled subtree's endpoints (the FK CASCADE
-    # backstop): cancellation stops routing to these endpoints at once rather
-    # than waiting out their lease. Derive the subtree from the snapshot's
-    # transitive descendants.
-    subtree = [job_id, *snapshot.job_descendants[job_id].descendants]
-    cur.caches[EndpointsProjection].remove_by_job_ids(cur, subtree)
+    _apply_job_transition(
+        cur,
+        job_id=job_id,
+        transition=lambda state, now: state.cancel_job(job_id, reason, now),
+    )
+
+
+def complete(cur: Tx, *, job_id: JobName) -> None:
+    """Complete ``job_id`` successfully and stop its unfinished task attempts."""
+    _apply_job_transition(
+        cur,
+        job_id=job_id,
+        transition=lambda state, now: state.complete_job(job_id, now),
+    )
 
 
 def remove_finished(

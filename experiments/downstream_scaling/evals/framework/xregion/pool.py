@@ -13,8 +13,8 @@ from dataclasses import dataclass
 from math import prod
 
 from fray.cluster import ResourceConfig
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, ShardInfo
-from zephyr.execution import ZephyrContext
 from zephyr.runners import InlineRunner
 
 from experiments.downstream_scaling.evals.framework.xregion import ledger

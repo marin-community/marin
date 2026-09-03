@@ -1,9 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """
 Save per-token log probabilities for a language model on a dataset.
 
@@ -37,12 +34,13 @@ from levanter.models.loss import next_token_loss
 from levanter.tracker import NoopConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.tree_utils import inference_mode
-from rigging.filesystem import open_url
+from rigging.filesystem.factory import open_url
 from thalas.execution.types import ExecutorStep, InputName, this_output_path
 
 from marin.evaluation.model_loading import load_eval_model
 from marin.processing.tokenize.data_configs import with_pack
 from marin.training.run_environment import extras_for_resources
+
 logger = logging.getLogger(__name__)
 
 

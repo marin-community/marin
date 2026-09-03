@@ -19,7 +19,6 @@ from iris.cluster.constraints import (
     Constraint,
     peer_availability_gate,
     routing_constraints,
-    strip_backend_constraints,
     strip_cluster_constraints,
 )
 from iris.cluster.controller import ops, reads, writes
@@ -36,6 +35,7 @@ from iris.cluster.federation.store import (
     HandoffState,
 )
 from iris.cluster.types import TERMINAL_JOB_STATES, JobName
+from iris.rpc.proto_display import priority_band_rank
 from iris.time_proto import duration_from_proto, timestamp_from_proto
 
 logger = logging.getLogger(__name__)
@@ -52,8 +52,8 @@ def build_queued_candidates(tx: Tx) -> list[QueuedCandidate]:
 
     Each candidate carries its shape (routing constraints) and its
     ``ge(available:<token>, amount)`` availability gate, derived from the job's stored
-    request. Ordered by priority band ascending (lower band = higher priority), then
-    oldest submission first — the order the assignment pass consumes them in.
+    request. Ordered by priority band, then oldest submission first — the order the
+    assignment pass consumes them in.
     """
     candidates: list[QueuedCandidate] = []
     for handle in reads.queued_handoff_handles(tx):
@@ -66,7 +66,7 @@ def build_queued_candidates(tx: Tx) -> list[QueuedCandidate]:
         # Shape only — this pass reads constraints and resources, never the payload.
         request = reconstruct_launch_job_request(job, workdir_files={})
         constraints = [Constraint.from_proto(c) for c in request.constraints]
-        shape = routing_constraints(strip_cluster_constraints(strip_backend_constraints(constraints)))
+        shape = routing_constraints(strip_cluster_constraints(constraints))
         candidates.append(
             QueuedCandidate(
                 job_id=handle.job_id,
@@ -77,7 +77,7 @@ def build_queued_candidates(tx: Tx) -> list[QueuedCandidate]:
                 availability_gate=peer_availability_gate(request.resources.device, request.replicas),
             )
         )
-    candidates.sort(key=lambda c: (c.priority_band, c.submitted_at_ms))
+    candidates.sort(key=lambda c: (priority_band_rank(c.priority_band), c.submitted_at_ms))
     return candidates
 
 

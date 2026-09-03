@@ -520,6 +520,11 @@ class InMemoryGcpService:
                 default_task_image="process-runtime-unused",
                 poll_interval=Duration.from_seconds(0.1),
                 storage_prefix=self._storage_prefix,
+                task_outputs=(
+                    worker_config.task_outputs.model_copy(deep=True)
+                    if worker_config is not None and worker_config.task_outputs is not None
+                    else None
+                ),
                 auth_token=worker_config.auth_token if worker_config is not None else "",
             )
             worker_threads = self._threads.create_child(f"worker-{worker_id}")

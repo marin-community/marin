@@ -24,7 +24,7 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 import pyarrow.parquet as pq
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.cluster.quality.fast_transformer.data import PackedData, build_remap, encode_texts, pack

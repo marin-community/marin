@@ -18,7 +18,7 @@ use crate::store::segment::{segment_id, segment_id_and_row_group_rows};
 use crate::store::trigram::{self, TrigramIndex, SIDECAR_SPAN_ROWS};
 
 const TRIGRAM_METHOD_VERSION: u8 = 1;
-const EXACT_POSTINGS_METHOD_VERSION: u8 = 1;
+pub(crate) const EXACT_POSTINGS_METHOD_VERSION: u8 = 2;
 const VALUE_COUNTS_METHOD_VERSION: u8 = 1;
 const PROJECTION_METHOD_VERSION: u8 = 1;
 const GROUP_EXTREMA_METHOD_VERSION: u8 = 1;
@@ -205,6 +205,17 @@ pub enum SegmentIndexWrite {
     NotApplicable,
 }
 
+/// Header-resident exact-posting coverage. Queries can reject values outside
+/// this set without reading or decompressing the section payload.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExactPostingsCoverage {
+    pub columns: BTreeMap<String, Vec<String>>,
+}
+
+pub fn parse_exact_postings_coverage(bytes: &[u8]) -> Option<ExactPostingsCoverage> {
+    serde_json::from_slice(bytes).ok()
+}
+
 /// Header-resident coverage for one trigram section.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TrigramCoverage {
@@ -315,9 +326,14 @@ pub fn needs_rebuild(parquet_path: &Path, expected_rows: i64, config: &SegmentIn
             IndexSpec::TrigramBloom { column } => {
                 header.section(&trigram_section_id(column)).is_some()
             }
-            IndexSpec::ExactPostings { column, .. } => {
-                section_covers_column(&header, EXACT_POSTINGS_SECTION_ID, column)
-            }
+            IndexSpec::ExactPostings { column, .. } => header
+                .section(EXACT_POSTINGS_SECTION_ID)
+                .filter(|section| {
+                    section.kind == SectionKind::ExactPostings
+                        && section.method_version == EXACT_POSTINGS_METHOD_VERSION
+                })
+                .and_then(|section| parse_exact_postings_coverage(&section.coverage))
+                .is_some_and(|coverage| coverage.columns.contains_key(column)),
             IndexSpec::ValueCounts { column } => {
                 section_covers_column(&header, VALUE_COUNTS_SECTION_ID, column)
             }
@@ -590,13 +606,16 @@ fn append_exact_sections(sections: &mut Vec<SectionInput>, sidecar: &ExactSectio
             kind: SectionKind::ExactPostings,
             method_version: EXACT_POSTINGS_METHOD_VERSION,
             exactness: Exactness::ExactRows,
-            coverage: postings
-                .columns
-                .keys()
-                .cloned()
-                .collect::<Vec<_>>()
-                .join("\0")
-                .into_bytes(),
+            coverage: serde_json::to_vec(&ExactPostingsCoverage {
+                columns: postings
+                    .columns
+                    .iter()
+                    .map(|(column, postings)| {
+                        (column.clone(), postings.rows.keys().cloned().collect())
+                    })
+                    .collect(),
+            })
+            .expect("exact-postings coverage serialization never fails"),
             payload: exact::serialize(&postings),
         });
     }
@@ -814,7 +833,13 @@ mod tests {
             config.policy_fingerprint()
         );
         assert!(header.section("trigram:name").is_some());
-        assert!(header.section("exact-postings").is_some());
+        let exact = header.section("exact-postings").unwrap();
+        assert_eq!(
+            parse_exact_postings_coverage(&exact.coverage)
+                .unwrap()
+                .columns["name"],
+            ["phase", "step"]
+        );
         assert!(header.section("value-counts").is_some());
         let projection = header.section("projection:training-status").unwrap();
         let reference = parse_projection_reference(&projection.coverage).unwrap();

@@ -143,7 +143,7 @@ def test_sweep_expired_deletes_only_expired(state):
 
     result = prune_old_data(
         state._db,
-        [],
+        state._health,
         job_retention=Duration.from_hours(1),
         worker_retention=Duration.from_hours(1),
         slice_retention=Duration.from_hours(1),

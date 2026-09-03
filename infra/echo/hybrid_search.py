@@ -13,6 +13,7 @@ from search_config import (
     RRF_K,
     TEXT_SEARCH_CONFIG,
     TS_RANK_NORMALIZATION,
+    RepositoryTarget,
 )
 
 HNSW_ITERATIVE_SCAN = sqlalchemy.text("SET hnsw.iterative_scan = relaxed_order")
@@ -138,8 +139,17 @@ def wiki_search_statement(filter_clauses: Sequence[str] = ()) -> sqlalchemy.Text
     )
 
 
-def repository_file_search_statement() -> sqlalchemy.TextClause:
-    filters = ["r.repository = :repository", "r.branch = :branch"]
+def repository_file_search_statement(targets: Sequence[RepositoryTarget]) -> sqlalchemy.TextClause:
+    if not targets:
+        raise ValueError("at least one repository target is required")
+    target_filter = (
+        "("
+        + " OR ".join(
+            f"(r.repository = :repository_{index} AND r.branch = :branch_{index})" for index, _ in enumerate(targets)
+        )
+        + ")"
+    )
+    filters = [target_filter]
     filename = "regexp_replace(r.path, '^.*/', '')"
     filename_exact = f"{filename} ILIKE :exact ESCAPE '\\'"
     filename_match = f"{filename} ILIKE :substring ESCAPE '\\'"
@@ -161,8 +171,8 @@ def repository_file_search_statement() -> sqlalchemy.TextClause:
             f"(r.search_document @@ input.query OR {path_match} OR {text_match})",
         ),
         lexical_score=lexical_score,
-        result_key="path",
-        final_order="path",
+        result_key="repository, branch, path",
+        final_order="repository, branch, path",
         additional_hit_weight=FILE_ADDITIONAL_HIT_WEIGHT,
         additional_hit_max_fraction=FILE_ADDITIONAL_HIT_MAX_FRACTION,
     )

@@ -10,6 +10,7 @@ from rigging.timing import Duration, Timestamp
 
 from iris.cluster.backends.rpc.backend import RpcTaskBackend
 from iris.cluster.constraints import WellKnownAttribute
+from iris.cluster.controller.backend import BackendDescriptor, BackendKind
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.log_stack import build_log_stack
@@ -147,18 +148,22 @@ class WorkerJourney:
         monkeypatch.setattr(Timestamp, "now", classmethod(lambda cls: self.clock.now()))
         self.fleet = WorkerFleet()
         self.backend = RpcTaskBackend(
+            descriptor=BackendDescriptor(
+                backend_id=DEFAULT_BACKEND_ID,
+                display_name="worker",
+                kind=BackendKind.WORKER,
+            ),
             stub_factory=self.fleet,
-            unreachable_grace=Duration.from_ms(100),
         )
         state_dir = root / "controller"
         config = ControllerConfig(
             cluster_id="worker-journey",
             remote_state_dir=f"file://{root / 'remote'}",
             local_state_dir=state_dir,
+            worker_unreachable_grace=Duration.from_ms(100),
         )
         self.controller = Controller(
             config=config,
-            backends={DEFAULT_BACKEND_ID: self.backend},
             log_stack=build_log_stack(
                 log_service_address="",
                 local_log_dir=state_dir / "log-server",
@@ -168,6 +173,7 @@ class WorkerJourney:
             threads=ThreadContainer(name="worker-journey"),
             db=ControllerDB(db_dir=root / "db"),
         )
+        self.controller.register_backend(self.backend)
 
     def close(self) -> None:
         self.controller.stop()

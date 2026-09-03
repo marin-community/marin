@@ -1,0 +1,61 @@
+// Copyright The Marin Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+edition = "2023";
+
+package iris.resource;
+
+import "google/protobuf/any.proto";
+
+option features.field_presence = EXPLICIT;
+
+message ResourceRequest {
+  string resource_type = 1;
+  google.protobuf.Any input = 2;
+}
+
+message Resource {
+  // The registered detail or summary view for this noun. A detail view may be
+  // composite (for example, Task status plus its resource limits); callers use
+  // the registered type URL rather than assuming every noun has one flat row.
+  google.protobuf.Any body = 1;
+}
+
+message PageInfo {
+  // Number of resources matching the query before paging. For an unpaged
+  // binding, this equals the number returned and has_more is false.
+  int64 total_count = 1;
+  bool has_more = 2;
+}
+
+message GetResponse {
+  Resource resource = 1;
+}
+
+message ListResponse {
+  repeated Resource resources = 1;
+  PageInfo page = 2;
+  // Optional noun-owned aggregate data that is not a resource row.
+  google.protobuf.Any metadata = 3;
+}
+
+message BatchGetResponse {
+  repeated Resource resources = 1;
+}
+
+service ResourceService {
+  rpc Get(ResourceRequest) returns (GetResponse);
+  rpc List(ResourceRequest) returns (ListResponse);
+  rpc BatchGet(ResourceRequest) returns (BatchGetResponse);
+}

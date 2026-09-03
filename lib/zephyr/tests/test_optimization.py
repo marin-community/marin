@@ -7,8 +7,8 @@ import itertools
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, FilterOp, MapOp, ReshardOp, TakePerShardOp
-from zephyr.execution import ZephyrContext
 from zephyr.expr import col
 from zephyr.plan import Map, PhysicalStage, Reshard, StageType, compute_plan
 

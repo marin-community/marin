@@ -18,6 +18,7 @@ with. A server's own key pair is its identity: the hub records rows under the
 
 import json
 from dataclasses import dataclass
+from enum import StrEnum
 from importlib.resources import files
 from pathlib import Path
 
@@ -26,6 +27,22 @@ from rigging.secrets import SecretSpec, as_secret_spec
 from rigging.tunnel import GcpSshForwardTarget, K8sPortForwardTarget, TunnelTarget
 
 USER_CONFIG_DIR = Path.home() / ".config" / "marin" / "finelog"
+K8S_APP_LABEL = "app"
+K8S_CONTAINER_NAME = "finelog"
+K8S_ENV_SECRET_SUFFIX = "-env"
+SOURCE_REVISION_ANNOTATION = "finelog.marin/source-revision"
+
+
+class TelemetryMigrationMode(StrEnum):
+    NORMAL = "normal"
+    DUAL_WRITE = "dual-write"
+
+
+class K8sCacheStorage(StrEnum):
+    """Kubernetes cache storage backends."""
+
+    PERSISTENT_VOLUME = "persistent-volume"
+    NODE_LOCAL = "node-local"
 
 
 def _bundled_config_dir() -> Path:
@@ -67,31 +84,34 @@ class K8sDeployment:
     # of the file's current-context.
     kubeconfig: str | None = None
     kube_context: str | None = None
+    cache_storage: K8sCacheStorage = K8sCacheStorage.PERSISTENT_VOLUME
     storage_class: str | None = None
     storage_gb: int = 200
+    # Existing claim to adopt and mount instead of `<name>-cache` when using
+    # persistent-volume storage.
+    cache_pvc_name: str | None = None
     cpu_request: str = "2"
     cpu_limit: str = "8"
     memory_request: str = "16Gi"
     memory_limit: str = "32Gi"
     # S3-compatible endpoint (e.g. Cloudflare R2) for an `s3://` remote_log_dir.
-    # Required there: `finelog deploy up` mints a Secret holding this endpoint
+    # Required there: `finelog deploy sync-secret` mints a Secret holding this endpoint
     # plus the operator's R2 creds, projected into the pod via envFrom so the
     # server can authenticate. Unused for `gs://` (GCS uses workload identity).
     object_storage_endpoint: str | None = None
-    # PriorityClass stamped on the finelog pod. When finelog is the log backend
+    # PriorityClass stamped on the Finelog pod. When Finelog is the log backend
     # for an Iris control plane, set this to `iris-system` so a user job cannot
-    # preempt it off the shared control node. `deploy up` creates the class
-    # (idempotently) from name+value before applying the Deployment, so finelog
-    # can still be brought up first on a fresh cluster. Iris is the canonical
-    # owner of the iris-* bands (see IRIS_PRIORITY_CLASSES); keep priority_class_value
-    # in sync with it — value/preemptionPolicy are immutable, so a mismatch makes
-    # one side's apply fail loudly rather than silently disagree.
+    # preempt it off the shared control node. The cluster substrate owns that
+    # PriorityClass; the Finelog stack only references it.
     priority_class_name: str | None = None
-    priority_class_value: int | None = None
 
     def __post_init__(self) -> None:
-        if (self.priority_class_name is None) != (self.priority_class_value is None):
-            raise ValueError("priority_class_name and priority_class_value must be set together")
+        if self.storage_gb <= 0:
+            raise ValueError("deployment.k8s.storage_gb must be > 0")
+        if self.cache_storage is K8sCacheStorage.NODE_LOCAL and self.storage_class is not None:
+            raise ValueError("deployment.k8s.storage_class cannot be set with node-local cache storage")
+        if self.cache_storage is K8sCacheStorage.NODE_LOCAL and self.cache_pvc_name is not None:
+            raise ValueError("deployment.k8s.cache_pvc_name cannot be set with node-local cache storage")
 
 
 @dataclass(frozen=True)
@@ -237,12 +257,26 @@ class FinelogConfig:
     query_metadata_cache_mb: int | None = None
     # Decoded `.fidx` section cache limit. Unset keeps the server default.
     query_index_cache_mb: int | None = None
+    telemetry_migration_mode: TelemetryMigrationMode = TelemetryMigrationMode.NORMAL
 
     def __post_init__(self) -> None:
         if self.query_metadata_cache_mb is not None and self.query_metadata_cache_mb <= 0:
             raise ValueError("query_metadata_cache_mb must be > 0")
         if self.query_index_cache_mb is not None and self.query_index_cache_mb <= 0:
             raise ValueError("query_index_cache_mb must be > 0")
+
+
+def k8s_env_secret_name(config: FinelogConfig) -> str | None:
+    """Return the required Kubernetes Secret name, or ``None`` when no secrets are needed."""
+    if not config.remote_log_dir.startswith("s3://") and config.forwarding is None:
+        return None
+    return f"{config.name}{K8S_ENV_SECRET_SUFFIX}"
+
+
+def k8s_cache_pvc_name(config: FinelogConfig) -> str:
+    """Return the PersistentVolumeClaim name for a Kubernetes deployment."""
+    assert config.deployment.k8s is not None
+    return config.deployment.k8s.cache_pvc_name or f"{config.name}-cache"
 
 
 def _config_search_paths(name_or_path: str) -> list[Path]:
@@ -306,20 +340,20 @@ def _build_forwarding(raw: dict, path: Path) -> ForwardingConfig:
 
 def _build_k8s(raw: dict) -> K8sDeployment:
     defaults = K8sDeployment(namespace=raw["namespace"])
-    priority_class_value = raw.get("priority_class_value")
     return K8sDeployment(
         namespace=raw["namespace"],
         kubeconfig=raw.get("kubeconfig"),
         kube_context=raw.get("kube_context"),
+        cache_storage=K8sCacheStorage(raw.get("cache_storage", defaults.cache_storage)),
         storage_class=raw.get("storage_class"),
         storage_gb=int(raw.get("storage_gb", defaults.storage_gb)),
+        cache_pvc_name=raw.get("cache_pvc_name"),
         cpu_request=str(raw.get("cpu_request", defaults.cpu_request)),
         cpu_limit=str(raw.get("cpu_limit", defaults.cpu_limit)),
         memory_request=str(raw.get("memory_request", defaults.memory_request)),
         memory_limit=str(raw.get("memory_limit", defaults.memory_limit)),
         object_storage_endpoint=raw.get("object_storage_endpoint"),
         priority_class_name=raw.get("priority_class_name"),
-        priority_class_value=None if priority_class_value is None else int(priority_class_value),
     )
 
 
@@ -375,6 +409,7 @@ def _load_from_path(path: Path) -> FinelogConfig:
         query_metadata_cache_mb=(
             None if raw.get("query_metadata_cache_mb") is None else int(raw["query_metadata_cache_mb"])
         ),
+        telemetry_migration_mode=TelemetryMigrationMode(raw.get("telemetry_migration_mode", "normal")),
     )
 
 

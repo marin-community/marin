@@ -49,7 +49,8 @@ reproduction step, observation, expected behavior, or completion criterion.
 
 Treat experiment issues as part of Marin's scientific record. Use them as a summary layer, a coordination surface, and a long-lived artifact.
 
-They are frequently created using the [run-research](../run-research/SKILL.md) skill.
+For experiment issues attached to a research program, follow the
+[run-research](../run-research/SKILL.md) workflow.
 
 ### Assume This Reader
 

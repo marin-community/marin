@@ -579,6 +579,6 @@ class WorkerPool:
         # Terminate worker job
         if self._job:
             try:
-                self._job.terminate()
+                self._job.cancel()
             except Exception as e:
                 logger.debug("Failed to terminate worker job %s: %s", self._job.job_id, e)

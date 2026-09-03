@@ -1033,40 +1033,13 @@ def is_any_region_marker(c: Constraint) -> bool:
     return c.key == WellKnownAttribute.REGION and c.op == ConstraintOp.EXISTS
 
 
-BACKEND_CONSTRAINT_KEY = "backend"
-"""Reserved constraint key carrying a ``--backend`` routing directive.
-
-A ``backend EQ <id>`` constraint pins a job to a named task backend. The
-meta-scheduler reads it via :func:`backend_directive` and strips it (no worker
-advertises a ``backend`` attribute, so a leftover hard ``backend=X`` constraint
-would match no worker and starve the task) before per-backend scheduling sees
-the constraints."""
-
-
-def strip_backend_constraints(constraints: Sequence[Constraint]) -> list[Constraint]:
-    """Drop the reserved ``backend`` routing directive from ``constraints``."""
-    return [c for c in constraints if c.key != BACKEND_CONSTRAINT_KEY]
-
-
-def backend_directive(constraints: Sequence[Constraint]) -> str | None:
-    """Return the ``--backend`` target from a ``backend EQ <id>`` constraint, if any."""
-    for c in constraints:
-        if c.key == BACKEND_CONSTRAINT_KEY and c.op == ConstraintOp.EQ:
-            return str(c.values[0].value)
-    return None
-
-
 CLUSTER_CONSTRAINT_KEY = "cluster"
 """Reserved constraint key carrying a ``--cluster`` federation routing directive.
 
 A ``cluster EQ <peer>`` constraint pins a whole job to a named federation peer:
 the submit-time router hands it off to that peer instead of running it locally.
 Federation strips it before the handed-off request reaches the peer's worker
-matching (no worker advertises a ``cluster`` attribute, so a leftover hard
-``cluster=X`` constraint would match no worker and starve the task), exactly as
-the ``backend`` directive is stripped for local scheduling. A job may not pin
-both a local ``backend`` and a ``cluster`` — the two directives are mutually
-exclusive (one runs the job here, the other hands it off)."""
+matching because no worker advertises a ``cluster`` attribute."""
 
 
 def strip_cluster_constraints(constraints: Sequence[Constraint]) -> list[Constraint]:

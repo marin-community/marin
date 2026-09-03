@@ -13,10 +13,11 @@ import pytest
 from finelog.client import LogClient
 from finelog.embedded import EmbeddedServer
 from fray.types import ResourceConfig
-from zephyr import counters, runners
+from zephyr import counters, runners, worker
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext, ZephyrWorkerError
 from zephyr.runners import InlineRunner, SubprocessRunner
+from zephyr.stage_io import ZephyrWorkerError
 from zephyr.stats import (
     ZEPHYR_STAGE_STATS_NAMESPACE,
     ZEPHYR_WORKER_STATS_NAMESPACE,
@@ -207,7 +208,8 @@ def test_finelog_stats_emitted(local_client, tmp_path, finelog_server, monkeypat
         return w
 
     monkeypatch.setattr(StatsWriter, "connect", staticmethod(make_writer))
-    monkeypatch.setattr(runners, "SUBPROCESS_STATS_INTERVAL", 0.01)
+    monkeypatch.setattr(runners, "WORKER_STATS_INTERVAL", 0.01)
+    monkeypatch.setattr(worker, "WORKER_STATS_INTERVAL", 0.01)
 
     def slow_identity(x: int) -> int:
         # Keep the shard alive long enough for the background sampler to emit.
@@ -221,7 +223,7 @@ def test_finelog_stats_emitted(local_client, tmp_path, finelog_server, monkeypat
     finally:
         ctx.shutdown()
 
-    # ctx.shutdown() closes the coordinator's writer; close any runner writers too.
+    # Close is idempotent; this also covers writers retained by the test factory.
     for w in writers:
         with suppress(Exception):
             w.close()

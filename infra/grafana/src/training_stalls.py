@@ -3,160 +3,198 @@
 
 """Bounded finelog queries and alert projection for stalled Levanter jobs."""
 
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import pyarrow as pa
+from hero_runs import (
+    FINISHED_PHASE,
+    INITIALIZING_PHASE,
+    LEVANTER_METRICS_TABLE,
+    PHASE_METRIC,
+    TASK_STATE_LOOKBACK,
+    TELEMETRY_GONE_AGE,
+    TRAINING_PHASE,
+    HeroRun,
+    as_utc,
+    run_id_predicate,
+    sql_epoch_ms,
+    sql_timestamp,
+)
 
-_TASK_STATE_FRESHNESS = timedelta(seconds=90)
 _TRAINING_STALL_AGE = timedelta(minutes=15)
 _INITIALIZING_STALL_AGE = timedelta(minutes=45)
-_TASK_STATE_LOOKBACK = timedelta(hours=1)
+# Typed training metrics publish from process zero. Keep that constraint in the
+# query so migrated legacy rows and direct typed rows select the same replica.
 _PROGRESS_LOOKBACK = 2 * _TRAINING_STALL_AGE
-# Levanter republishes `phase` every 60s, so enrollment is always recent and this
-# scan can be bounded. Unbounded, it read every telemetry_v1 row once a minute and
-# saturated the finelog hub. Keep this many multiples above that heartbeat:
-# telemetry is best-effort, and a few dropped batches must not un-enroll a live job.
-_ENROLLMENT_LOOKBACK = timedelta(minutes=15)
+_EXECUTION_LOOKBACK = TASK_STATE_LOOKBACK
+# The phase heartbeat reaches back a day so a run that went silent hours ago is
+# still recognisable as one that stopped publishing, which is TrainingTelemetryGone's
+# case. Without the reach this rule calls a silent training run `initializing_stale`
+# and pages beside it. Phase is one row a minute for one process.
+_PHASE_LOOKBACK = timedelta(hours=24)
 
 _STEP_METRIC = "step"
 _PROGRESS_TIME_METRIC = "progress_time_seconds"
-_PHASE_METRIC = "phase"
-
-_INITIALIZING_PHASE = 0
-_TRAINING_PHASE = 1
-_FINISHED_PHASE = 2
 
 
-def _sql_timestamp(at: datetime) -> str:
-    return at.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S")
-
-
-def task_state_query(now: datetime) -> str:
-    """Return the bounded query for recently running root jobs."""
-    start = _sql_timestamp(now - _TASK_STATE_LOOKBACK)
-    fresh = _sql_timestamp(now - _TASK_STATE_FRESHNESS)
+def telemetry_query(now: datetime, runs: tuple[HeroRun, ...]) -> str:
+    """Return current execution metrics for exact active hero run IDs."""
+    run_predicate = run_id_predicate(runs)
+    phase_since = sql_epoch_ms(now - _PHASE_LOOKBACK)
+    progress_since = sql_epoch_ms(now - _PROGRESS_LOOKBACK)
+    enrolled_since = sql_timestamp(now - _PHASE_LOOKBACK)
+    end = sql_epoch_ms(now)
+    metric_names = f"'{PHASE_METRIC}', '{_PROGRESS_TIME_METRIC}'"
     return (
-        "WITH history AS ("
-        "SELECT COALESCE(NULLIF(cluster,''),'unknown') AS cluster, root_job_id, ts, running, "
-        "MIN(CASE WHEN running > 0 THEN ts END) OVER ("
-        "PARTITION BY COALESCE(NULLIF(cluster,''),'unknown'), root_job_id"
-        ") AS running_since, "
-        "ROW_NUMBER() OVER ("
-        "PARTITION BY COALESCE(NULLIF(cluster,''),'unknown'), root_job_id ORDER BY ts DESC"
-        ") AS rn "
-        'FROM "iris.task_state" '
-        f"WHERE root_job_id <> '' AND ts >= TIMESTAMP '{start}'"
-        ") "
-        "SELECT cluster, root_job_id AS job, ts AS state_at, running_since "
-        "FROM history "
-        f"WHERE rn = 1 AND running > 0 AND ts >= TIMESTAMP '{fresh}'"
-    )
-
-
-def telemetry_query(now: datetime) -> str:
-    """Return latest retained enrollment and bounded progress per root job."""
-    progress_since = _sql_timestamp(now - _PROGRESS_LOOKBACK)
-    enrolled_since = _sql_timestamp(now - _ENROLLMENT_LOOKBACK)
-    end = _sql_timestamp(now)
-    metric_names = f"'{_PHASE_METRIC}', '{_STEP_METRIC}', '{_PROGRESS_TIME_METRIC}'"
-    return (
-        "WITH filtered AS ("
+        f"WITH telemetry AS (SELECT * FROM {LEVANTER_METRICS_TABLE}), raw AS ("
         "SELECT COALESCE(NULLIF(cluster,''),'unknown') AS origin_cluster, "
-        "json_get(resource_attributes_json, 'job_id') AS job, name, value, "
+        "run_id, job_id AS telemetry_job, execution_uid, name, value, step, "
         "timestamp_ms, seq, to_timestamp_millis(timestamp_ms) AS ts "
-        'FROM "telemetry_v1" '
-        f"WHERE service = 'levanter' AND name IN ({metric_names}) "
-        f"AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM TIMESTAMP '{progress_since}') * 1000 AS BIGINT) "
-        f"AND timestamp_ms < CAST(EXTRACT(EPOCH FROM TIMESTAMP '{end}') * 1000 AS BIGINT) "
-        f"AND (name <> '{_PHASE_METRIC}' OR timestamp_ms >= "
-        f"CAST(EXTRACT(EPOCH FROM TIMESTAMP '{enrolled_since}') * 1000 AS BIGINT))"
-        "), recent AS ("
-        "SELECT origin_cluster, job, name, value, ts, "
+        "FROM telemetry "
+        f"WHERE name IN ({metric_names}) "
+        f"AND {run_predicate} AND process_index = 0 "
+        "AND job_id IS NOT NULL AND execution_uid IS NOT NULL "
+        f"AND timestamp_ms >= {phase_since} AND timestamp_ms < {end} "
+        f"AND (name = '{PHASE_METRIC}' OR timestamp_ms >= {progress_since})"
+        "), filtered AS ("
+        "SELECT origin_cluster, run_id, telemetry_job, execution_uid, name, value, "
+        "timestamp_ms, seq, ts FROM raw UNION ALL "
+        "SELECT origin_cluster, run_id, telemetry_job, execution_uid, 'step' AS name, "
+        "CAST(step AS DOUBLE) AS value, timestamp_ms, seq, ts FROM raw "
+        f"WHERE name = '{_PROGRESS_TIME_METRIC}' AND step IS NOT NULL"
+        "), phase_history AS ("
+        "SELECT origin_cluster, run_id, telemetry_job, execution_uid, ts, "
         "ROW_NUMBER() OVER ("
-        "PARTITION BY origin_cluster, job, name ORDER BY timestamp_ms DESC, seq DESC"
+        "PARTITION BY origin_cluster, run_id, telemetry_job ORDER BY timestamp_ms DESC, seq DESC"
+        ") AS rn FROM filtered "
+        f"WHERE name = '{PHASE_METRIC}' AND ts >= TIMESTAMP '{enrolled_since}'"
+        "), enrolled AS ("
+        "SELECT origin_cluster, run_id, telemetry_job, execution_uid FROM phase_history WHERE rn = 1"
+        "), execution AS ("
+        "SELECT enrolled.origin_cluster, enrolled.run_id, enrolled.telemetry_job, enrolled.execution_uid, "
+        "MIN(filtered.ts) AS execution_started_at FROM enrolled JOIN filtered "
+        "ON filtered.origin_cluster = enrolled.origin_cluster AND filtered.run_id = enrolled.run_id "
+        "AND filtered.telemetry_job = enrolled.telemetry_job "
+        "AND filtered.execution_uid = enrolled.execution_uid "
+        f"WHERE filtered.name = '{PHASE_METRIC}' "
+        "GROUP BY enrolled.origin_cluster, enrolled.run_id, enrolled.telemetry_job, enrolled.execution_uid"
+        "), recent AS ("
+        "SELECT filtered.origin_cluster, filtered.run_id, filtered.telemetry_job, "
+        "filtered.name, filtered.value, filtered.ts, execution.execution_started_at, "
+        "ROW_NUMBER() OVER ("
+        "PARTITION BY filtered.origin_cluster, filtered.run_id, filtered.telemetry_job, filtered.name "
+        "ORDER BY filtered.timestamp_ms DESC, filtered.seq DESC"
         ") AS rn "
-        "FROM filtered WHERE job IS NOT NULL AND job <> ''"
+        "FROM filtered JOIN execution ON filtered.origin_cluster = execution.origin_cluster "
+        "AND filtered.run_id = execution.run_id AND filtered.telemetry_job = execution.telemetry_job "
+        "AND filtered.execution_uid = execution.execution_uid"
         ") "
-        "SELECT origin_cluster AS cluster, job, name, value, ts FROM recent WHERE rn = 1"
+        "SELECT origin_cluster AS cluster, run_id, telemetry_job, name, value, ts, execution_started_at "
+        "FROM recent WHERE rn = 1"
     )
-
-
-def _as_utc(value: object) -> datetime:
-    if not isinstance(value, datetime):
-        raise ValueError(f"expected timestamp, got {value!r}")
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
 
 
 def _phase_name(phase: int | None) -> str:
     return {
-        _INITIALIZING_PHASE: "initializing",
-        _TRAINING_PHASE: "training",
-        _FINISHED_PHASE: "finished",
+        INITIALIZING_PHASE: "initializing",
+        TRAINING_PHASE: "training",
+        FINISHED_PHASE: "finished",
     }.get(phase, "unknown")
 
 
-def _row(cluster: str, job: str, phase: str, reason: str, value: int) -> dict:
-    return {"cluster": cluster, "job": job, "phase": phase, "reason": reason, "value": value}
+def _row(cluster: str, job: str, run: str, phase: str, reason: str, value: int) -> dict:
+    return {"cluster": cluster, "job": job, "run": run, "phase": phase, "reason": reason, "value": value}
 
 
-def training_stall_alert_rows(task_states: pa.Table, telemetry_metrics: pa.Table, now: datetime) -> list[dict]:
-    """Project active jobs and progress metrics into Grafana warning rows.
+@dataclass(frozen=True)
+class ExecutionMetrics:
+    """One root job's newest value per metric, and when its execution started."""
 
-    Each row has string labels and exactly one numeric value. A job enrolls on
-    `phase`; without it the row reports `producer_missing` at zero
-    rather than a stall. Absent progress is itself evidence once a job is
-    enrolled.
-    """
-    metrics_by_job: dict[tuple[str, str], dict[str, float]] = {}
+    metrics: dict[str, float]
+    execution_started: datetime | None
+    observed_at: datetime
+
+
+def _metrics_by_job(runs: tuple[HeroRun, ...], telemetry_metrics: pa.Table) -> dict[tuple[str, str], ExecutionMetrics]:
+    """Fold telemetry rows onto the root job that owns them, keeping the newest of each metric."""
+    newest: dict[tuple[str, str], dict[str, tuple[datetime, float]]] = {}
+    started: dict[tuple[str, str], datetime] = {}
     for row in telemetry_metrics.to_pylist():
-        key = (str(row["cluster"]), str(row["job"]))
-        metrics_by_job.setdefault(key, {})[str(row["name"])] = float(row["value"])
+        cluster = str(row["cluster"])
+        run_id = str(row["run_id"])
+        telemetry_job = str(row["telemetry_job"])
+        for run in runs:
+            if cluster != run.cluster or run_id != run.run_id:
+                continue
+            if telemetry_job != run.root_job and not telemetry_job.startswith(run.root_job + "/"):
+                continue
+            key = (run.cluster, run.root_job)
+            execution_started = as_utc(row["execution_started_at"])
+            if key not in started or execution_started > started[key]:
+                started[key] = execution_started
+            metric = str(row["name"])
+            observed = as_utc(row["ts"])
+            current = newest.setdefault(key, {}).get(metric)
+            if current is None or observed > current[0]:
+                newest[key][metric] = (observed, float(row["value"]))
 
-    now = _as_utc(now)
-    rows: list[dict] = []
-    for state in task_states.to_pylist():
-        cluster = str(state["cluster"])
-        job = str(state["job"])
-        running_age = now - _as_utc(state["running_since"])
-        metrics = metrics_by_job.get((cluster, job), {})
-        if not metrics:
-            continue
+    return {
+        key: ExecutionMetrics(
+            metrics={name: value for name, (_, value) in metrics.items()},
+            execution_started=started.get(key),
+            observed_at=max(observed for observed, _ in metrics.values()),
+        )
+        for key, metrics in newest.items()
+    }
 
-        raw_phase = metrics.get(_PHASE_METRIC)
-        if raw_phase is None:
-            # A producer old enough to predate the phase and progress metrics
-            # still emits step. Judging it against progress it cannot
-            # report would call every healthy job stalled, so report the gap.
-            rows.append(_row(cluster, job, _phase_name(None), "producer_missing", 0))
-            continue
 
-        phase = int(raw_phase)
-        step = metrics.get(_STEP_METRIC, 0.0)
-        progress_time = metrics.get(_PROGRESS_TIME_METRIC, 0.0)
+def _classify(run: HeroRun, observed: ExecutionMetrics | None, now: datetime) -> tuple[str, str, int]:
+    """Return the phase name, alert reason, and firing value for one enrolled root."""
+    metrics = observed.metrics if observed is not None else {}
+    raw_phase = metrics.get(PHASE_METRIC)
+    phase = int(raw_phase) if raw_phase is not None else None
+    step = metrics.get(_STEP_METRIC, 0.0)
+    progress_time = metrics.get(_PROGRESS_TIME_METRIC, 0.0)
+    execution_started = observed.execution_started if observed is not None else None
+    attempt_age = now - max(run.running_since, execution_started or run.running_since)
 
-        reason = "healthy"
-        value = 0
-        is_training = phase == _TRAINING_PHASE or step > 0
-        if phase == _FINISHED_PHASE:
-            reason = "finished"
-        elif is_training and progress_time > 0:
-            progress_age = now - datetime.fromtimestamp(progress_time, tz=UTC)
-            if progress_age >= _TRAINING_STALL_AGE:
-                reason = "optimizer_progress_stale"
-                value = 1
-        elif is_training and running_age >= _TRAINING_STALL_AGE:
-            reason = "optimizer_progress_missing"
+    reason = "healthy"
+    value = 0
+    is_training = phase == TRAINING_PHASE or step > 0
+    if observed is not None and now - observed.observed_at > TELEMETRY_GONE_AGE:
+        # A run that stopped publishing is TrainingTelemetryGone's, which names the
+        # failure precisely. Reporting a stall as well would page twice for it.
+        reason = "telemetry_gone"
+    elif phase == FINISHED_PHASE:
+        reason = "finished"
+    elif is_training and progress_time > 0:
+        progress_age = now - datetime.fromtimestamp(progress_time, tz=UTC)
+        if progress_age >= _TRAINING_STALL_AGE:
+            reason = "training_stalled"
             value = 1
-        elif running_age >= _INITIALIZING_STALL_AGE:
-            reason = "initializing_stale"
-            value = 1
-        else:
-            reason = "training" if is_training else "initializing"
+    elif is_training and attempt_age >= _TRAINING_STALL_AGE:
+        reason = "training_stalled"
+        value = 1
+    elif attempt_age >= _INITIALIZING_STALL_AGE:
+        reason = "initializing_stale"
+        value = 1
+    else:
+        reason = "training" if is_training else "initializing"
 
-        rows.append(_row(cluster, job, _phase_name(phase), reason, value))
+    if phase is None:
+        return ("training" if is_training else "initializing"), reason, value
+    return _phase_name(phase), reason, value
 
+
+def training_stall_alert_rows(runs: tuple[HeroRun, ...], telemetry_metrics: pa.Table, now: datetime) -> list[dict]:
+    """Project enrolled hero roots and their latest execution metrics into alert rows."""
+    observed = _metrics_by_job(runs, telemetry_metrics)
+    now = as_utc(now)
+    rows = [
+        _row(run.cluster, run.root_job, run.run_id, *_classify(run, observed.get((run.cluster, run.root_job)), now))
+        for run in runs
+    ]
     if rows:
         return rows
-    return [_row("fleet", "", "idle", "healthy", 0)]
+    return [_row("fleet", "", "", "idle", "healthy", 0)]

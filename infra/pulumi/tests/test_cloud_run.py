@@ -3,7 +3,8 @@
 
 import pulumi
 import pulumi_gcp as gcp
-from iac.gcp.cloud_run import dockerfile_image
+from iac.gcp.cloud_run import CloudRunService, CloudRunServiceArgs, SecretEnv, dockerfile_image
+from iac.gcp.cloud_run_job import ScheduledCloudRunJob, ScheduledCloudRunJobArgs
 from pulumi.runtime import MockCallArgs, MockResourceArgs, Mocks
 
 
@@ -20,7 +21,10 @@ class RecordingMocks(Mocks):
         return f"{args.name}_id", outputs
 
     def call(self, args: MockCallArgs) -> tuple[dict, list[tuple[str, str]] | None]:
-        return dict(args.args), []
+        outputs = dict(args.args)
+        if args.token == "gcp:organizations/getProject:getProject":
+            outputs["number"] = "123456789"
+        return outputs, []
 
 
 @pulumi.runtime.test
@@ -54,3 +58,73 @@ def test_dockerfile_image_uses_dedicated_registry_cache() -> pulumi.Output[None]
         assert registry["imageManifest"] is True
 
     return image.ref.apply(check)
+
+
+@pulumi.runtime.test
+def test_cloud_run_components_leave_iam_to_the_infrastructure_stack() -> pulumi.Output[None]:
+    mocks = RecordingMocks()
+    pulumi.runtime.set_mocks(mocks, project="marin-iac", stack="test", preview=False)
+    provider = gcp.Provider("gcp", project="example")
+    service = CloudRunService(
+        "service",
+        CloudRunServiceArgs(
+            project="example",
+            region="us-central1",
+            service_name="service",
+            build_context="/tmp/service",
+            secrets=(SecretEnv(name="TOKEN", secret="service-token"),),
+            cloudsql_instances=("example:us-central1:database",),
+        ),
+        gcp_provider=provider,
+    )
+    job = ScheduledCloudRunJob(
+        "job",
+        ScheduledCloudRunJobArgs(
+            project="example",
+            region="us-central1",
+            job_name="job",
+            build_context="/tmp/job",
+            secrets=(SecretEnv(name="TOKEN", secret="job-token"),),
+            cloudsql_instances=("example:us-central1:database",),
+        ),
+        gcp_provider=provider,
+    )
+
+    def check(_: list[str]) -> None:
+        iam_resource_types = {
+            "gcp:cloudrunv2/jobIamMember:JobIamMember",
+            "gcp:cloudrunv2/serviceIamMember:ServiceIamMember",
+            "gcp:iap/webCloudRunServiceIamMember:WebCloudRunServiceIamMember",
+            "gcp:projects/iAMMember:IAMMember",
+            "gcp:secretmanager/secretIamMember:SecretIamMember",
+        }
+        assert iam_resource_types.isdisjoint(resource.typ for resource in mocks.resources)
+
+    return pulumi.Output.all(service.uri, job.job_name).apply(check)
+
+
+@pulumi.runtime.test
+def test_cloud_run_service_can_boost_startup_with_request_based_cpu() -> pulumi.Output[None]:
+    mocks = RecordingMocks()
+    pulumi.runtime.set_mocks(mocks, project="marin-iac", stack="test", preview=False)
+    provider = gcp.Provider("gcp", project="example")
+    service = CloudRunService(
+        "service",
+        CloudRunServiceArgs(
+            project="example",
+            region="us-central1",
+            service_name="service",
+            build_context="/tmp/service",
+            cpu_always_allocated=False,
+            startup_cpu_boost=True,
+        ),
+        gcp_provider=provider,
+    )
+
+    def check(_: str) -> None:
+        resource = next(resource for resource in mocks.resources if resource.typ == "gcp:cloudrunv2/service:Service")
+        resources = resource.inputs["template"]["containers"][0]["resources"]
+        assert resources["cpuIdle"] is True
+        assert resources["startupCpuBoost"] is True
+
+    return service.uri.apply(check)
