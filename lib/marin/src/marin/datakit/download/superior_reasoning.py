@@ -14,8 +14,8 @@ from zephyr.dataset import Dataset
 from zephyr.readers import load_jsonl
 
 from marin.datakit.download.huggingface import download_hf_step
-from marin.datakit.download.rollout_transforms import strip_think_tags, text_document
-from marin.datakit.normalize import normalize_step
+from marin.datakit.download.rollout_transforms import chat_document, strip_think_tags, text_document
+from marin.datakit.normalize import normalize_chat_step, normalize_step
 from marin.execution.step_spec import StepSpec
 
 HF_DATASET_ID = "Alibaba-Apsara/Superior-Reasoning-SFT-gpt-oss-120b"
@@ -45,6 +45,15 @@ def row_to_doc(row: dict) -> list[dict]:
     return [text_document(text, "Alibaba-Apsara/Superior-Reasoning-SFT-gpt-oss-120b")]
 
 
+def row_to_chat_doc(row: dict) -> list[dict]:
+    prompt = row.get("input") or ""
+    response = strip_think_tags(row.get("output") or "")
+    if not prompt or not response:
+        return []
+    messages = [{"role": "user", "content": prompt}, {"role": "assistant", "content": response}]
+    return [chat_document(messages, HF_DATASET_ID)]
+
+
 def transform(input_path: str, output_path: str) -> None:
     input_files = [f"{input_path}/{stage}" for stage in STAGES]
     pipeline = (
@@ -55,6 +64,17 @@ def transform(input_path: str, output_path: str) -> None:
     )
     ctx = ZephyrContext(name="superior-reasoning-transform", resources=ResourceConfig(cpu=1, ram="8g"))
     ctx.execute(pipeline)
+
+
+def transform_chat(input_path: str, output_path: str) -> None:
+    input_files = [f"{input_path}/{stage}" for stage in STAGES]
+    pipeline = (
+        Dataset.from_list(input_files)
+        .flat_map(load_jsonl)
+        .flat_map(row_to_chat_doc)
+        .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
+    )
+    ZephyrContext(name="superior-reasoning-chat-transform", resources=ResourceConfig(cpu=1, ram="8g")).execute(pipeline)
 
 
 def download_superior_reasoning_step() -> StepSpec:
@@ -84,3 +104,16 @@ def superior_reasoning_normalize_steps() -> tuple[StepSpec, ...]:
         processed,
         normalize_step(name="normalized/superior-reasoning", download=processed),
     )
+
+
+def superior_reasoning_chat_normalize_steps() -> tuple[StepSpec, ...]:
+    download = download_hf_step(
+        "raw/superior-reasoning-sft", hf_dataset_id=HF_DATASET_ID, revision=HF_REVISION, hf_urls_glob=STAGES
+    )
+    processed = StepSpec(
+        name="processed-chat/superior-reasoning-sft",
+        deps=[download],
+        fn=lambda output_path: transform_chat(download.output_path, output_path),
+        hash_attrs={"version": "v1"},
+    )
+    return processed, normalize_chat_step(name="normalized-chat/superior-reasoning", download=processed)

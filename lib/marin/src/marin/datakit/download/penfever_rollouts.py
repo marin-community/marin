@@ -22,11 +22,12 @@ from marin.datakit.download.rollout_transforms import (
     TRAJECTORY_FAILED_TAG,
     TRAJECTORY_SOLVED_TAG,
     TRAJECTORY_UNVERIFIED_TAG,
+    chat_document,
     load_parquet_batched,
     render_role_message,
     text_document,
 )
-from marin.datakit.normalize import normalize_step
+from marin.datakit.normalize import normalize_chat_step, normalize_step
 from marin.execution.step_spec import StepSpec
 
 
@@ -1090,6 +1091,29 @@ def row_to_doc(dataset: PenfeverRollout) -> Callable[[dict], list[dict]]:
     return transform_row
 
 
+def row_to_chat_doc(dataset: PenfeverRollout) -> Callable[[dict], list[dict]]:
+    """Build a row-to-structured-chat transform for one repository."""
+
+    def transform_row(row: dict) -> list[dict]:
+        conversations = row.get("conversations")
+        if not conversations:
+            return []
+        messages = [dict(message) for message in conversations]
+        tag = outcome_tag(row.get("verifier_output"), row.get("result"))
+        if tag:
+            messages.insert(0, {"role": "system", "content": tag})
+        return [
+            chat_document(
+                messages,
+                dataset.hf_dataset_id,
+                teacher=dataset.teacher,
+                task_source=dataset.task_source,
+            )
+        ]
+
+    return transform_row
+
+
 def transform(dataset: PenfeverRollout, input_path: str, output_path: str) -> None:
     pipeline = (
         Dataset.from_files(f"{input_path}/**/*.parquet")
@@ -1102,6 +1126,19 @@ def transform(dataset: PenfeverRollout, input_path: str, output_path: str) -> No
         resources=ResourceConfig(cpu=1, ram="32g"),
     )
     ctx.execute(pipeline)
+
+
+def transform_chat(dataset: PenfeverRollout, input_path: str, output_path: str) -> None:
+    pipeline = (
+        Dataset.from_files(f"{input_path}/**/*.parquet")
+        .flat_map(load_parquet_batched)
+        .flat_map(row_to_chat_doc(dataset))
+        .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
+    )
+    ZephyrContext(
+        name=f"penfever-{dataset.cohort_name}-{dataset.task_source}-chat-transform",
+        resources=ResourceConfig(cpu=1, ram="32g"),
+    ).execute(pipeline)
 
 
 def _rollout_steps(dataset: PenfeverRollout) -> tuple[StepSpec, StepSpec]:
@@ -1130,3 +1167,20 @@ def _rollout_steps(dataset: PenfeverRollout) -> tuple[StepSpec, StepSpec]:
 
 def penfever_rollouts_normalize_steps() -> dict[str, tuple[StepSpec, ...]]:
     return {dataset.marin_name: _rollout_steps(dataset) for dataset in PENFEVER_ROLLOUTS}
+
+
+def _rollout_chat_steps(dataset: PenfeverRollout) -> tuple[StepSpec, StepSpec]:
+    download = download_hf_step(
+        f"raw/{dataset.marin_name}", hf_dataset_id=dataset.hf_dataset_id, revision=dataset.revision
+    )
+    processed = StepSpec(
+        name=f"processed-chat/{dataset.marin_name}",
+        deps=[download],
+        fn=lambda output_path: transform_chat(dataset, download.output_path, output_path),
+        hash_attrs={"version": "2026.08.01", "teacher": dataset.teacher, "task_source": dataset.task_source},
+    )
+    return processed, normalize_chat_step(name=f"normalized-chat/{dataset.marin_name}", download=processed)
+
+
+def penfever_rollouts_chat_normalize_steps() -> dict[str, tuple[StepSpec, ...]]:
+    return {dataset.marin_name: _rollout_chat_steps(dataset) for dataset in PENFEVER_ROLLOUTS}

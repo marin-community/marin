@@ -37,8 +37,8 @@ from zephyr.dataset import Dataset
 from zephyr.readers import load_jsonl
 
 from marin.datakit.download.huggingface import download_hf_step
-from marin.datakit.download.rollout_transforms import render_role_message, text_document
-from marin.datakit.normalize import normalize_step
+from marin.datakit.download.rollout_transforms import chat_document, render_role_message, text_document
+from marin.datakit.normalize import normalize_chat_step, normalize_step
 from marin.execution.step_spec import StepSpec
 
 HF_DATASET_ID = "marin-community/glm-5.2-kernelgym-rollouts"
@@ -85,7 +85,7 @@ def render_message(message: dict) -> str:
     return render_role_message({**message, "content": join_reasoning_and_answer(message["content"])})
 
 
-def render_conversation(messages: list[dict], turns: list[dict]) -> str:
+def conversation_messages(messages: list[dict], turns: list[dict]) -> list[dict]:
     """Render a trajectory as a tagged transcript of its recorded generation turns.
 
     An assistant message absent from ``turns`` is sampler bookkeeping rather than a recorded
@@ -104,7 +104,18 @@ def render_conversation(messages: list[dict], turns: list[dict]) -> str:
             continue
         kept.append(message)
 
-    return "\n\n".join(render_message(m) for m in kept)
+    return [
+        (
+            {**message, "content": join_reasoning_and_answer(message["content"])}
+            if message["role"] == "assistant"
+            else message
+        )
+        for message in kept
+    ]
+
+
+def render_conversation(messages: list[dict], turns: list[dict]) -> str:
+    return "\n\n".join(render_message(message) for message in conversation_messages(messages, turns))
 
 
 def row_to_doc(row: dict, truncation_filter: TruncationFilter) -> list[dict]:
@@ -128,6 +139,18 @@ def row_to_doc(row: dict, truncation_filter: TruncationFilter) -> list[dict]:
     return [text_document(text, HF_DATASET_ID)]
 
 
+def row_to_chat_doc(row: dict, truncation_filter: TruncationFilter) -> list[dict]:
+    messages = row["messages"]
+    turns = row["turns"]
+    if not messages or not turns:
+        return []
+    truncated = [turn["usage"]["completion_tokens"] >= row["max_tokens"] for turn in turns]
+    if truncated[-1] or (truncation_filter is TruncationFilter.ANY_TURN and any(truncated)):
+        return []
+    kept = conversation_messages(messages, turns)
+    return [chat_document(kept, HF_DATASET_ID)] if kept else []
+
+
 def transform(input_path: str, output_path: str, truncation_filter: TruncationFilter) -> None:
     pipeline = (
         Dataset.from_files(prefix_join(input_path, "**/*.jsonl.gz"))
@@ -137,6 +160,18 @@ def transform(input_path: str, output_path: str, truncation_filter: TruncationFi
     )
     ctx = ZephyrContext(name="glm-kernelgym-rollouts-transform", resources=ResourceConfig(cpu=1, ram="8g"))
     ctx.execute(pipeline)
+
+
+def transform_chat(input_path: str, output_path: str, truncation_filter: TruncationFilter) -> None:
+    pipeline = (
+        Dataset.from_files(prefix_join(input_path, "**/*.jsonl.gz"))
+        .flat_map(load_jsonl)
+        .flat_map(lambda row: row_to_chat_doc(row, truncation_filter))
+        .write_parquet(prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"), skip_existing=True)
+    )
+    ZephyrContext(name="glm-kernelgym-rollouts-chat-transform", resources=ResourceConfig(cpu=1, ram="8g")).execute(
+        pipeline
+    )
 
 
 def download_glm_kernelgym_rollouts_step(truncation_filter: TruncationFilter) -> StepSpec:
@@ -172,3 +207,20 @@ def glm_kernelgym_rollouts_normalize_steps() -> tuple[StepSpec, ...]:
         processed,
         normalize_step(name="normalized/glm-5.2-kernelgym-rollouts", download=processed),
     )
+
+
+def glm_kernelgym_rollouts_chat_normalize_steps() -> tuple[StepSpec, ...]:
+    download = download_hf_step(
+        "raw/glm-5.2-kernelgym-rollouts",
+        hf_dataset_id=HF_DATASET_ID,
+        revision=HF_REVISION,
+        hf_urls_glob=[DATA_GLOB],
+    )
+    truncation_filter = TruncationFilter.FINAL_TURN
+    processed = StepSpec(
+        name="processed-chat/glm-5.2-kernelgym-rollouts",
+        deps=[download],
+        fn=lambda output_path: transform_chat(download.output_path, output_path, truncation_filter),
+        hash_attrs={"version": "v1", "truncation_filter": truncation_filter.value},
+    )
+    return processed, normalize_chat_step(name="normalized-chat/glm-5.2-kernelgym-rollouts", download=processed)

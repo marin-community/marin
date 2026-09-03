@@ -704,6 +704,9 @@ def test_slicing_strategies():
         ):
             GreedyPrepackedDataset(dataset, max_length, slice_strategy="raise")
 
+        tester_drop = GreedyPrepackedDataset(dataset, max_length, slice_strategy="drop")
+        assert len(tester_drop._pack_indices) == 0
+
         # Test invalid strategy
         with pytest.raises(ValueError, match="slice_strategy must be one of 'left', 'right', 'raise', or 'drop'"):
             GreedyPrepackedDataset(dataset, max_length, slice_strategy="invalid")

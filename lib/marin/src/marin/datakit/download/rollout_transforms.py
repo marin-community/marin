@@ -14,6 +14,15 @@ from zephyr import counters
 
 logger = logging.getLogger(__name__)
 
+CANONICAL_CHAT_ROLES = frozenset({"assistant", "system", "tool", "user"})
+CHAT_ROLE_ALIASES = {
+    "bot": "assistant",
+    "function": "tool",
+    "gpt": "assistant",
+    "human": "user",
+    "model": "assistant",
+}
+
 
 def load_parquet_batched(path: str) -> Iterator[dict]:
     """Read parquet via iter_batches to avoid OOM on large nested-struct columns."""
@@ -45,6 +54,44 @@ def text_document(text: str, source: str) -> dict:
         "id": hashlib.sha256(text.encode("utf-8")).hexdigest(),
         "text": text,
         "source": source,
+    }
+
+
+def canonical_chat_messages(messages: list[dict]) -> list[dict]:
+    """Normalize common role aliases and validate the canonical message contract."""
+    canonical: list[dict] = []
+    for message in messages:
+        role_value = message.get("role", message.get("from"))
+        if not isinstance(role_value, str):
+            raise ValueError("Chat messages require a string 'role' or 'from' field")
+        role = CHAT_ROLE_ALIASES.get(role_value.lower(), role_value.lower())
+        if role not in CANONICAL_CHAT_ROLES:
+            raise ValueError(f"Unsupported chat role {role_value!r}")
+
+        content = message.get("content", message.get("value"))
+        if content is not None and not isinstance(content, str):
+            raise ValueError(f"Chat message content must be a string or null, got {type(content).__name__}")
+        if content is None and not message.get("tool_calls"):
+            raise ValueError("Only assistant tool-call messages may have null content")
+
+        normalized = {key: value for key, value in message.items() if key not in {"from", "value"}}
+        normalized["role"] = role
+        normalized["content"] = content
+        canonical.append(normalized)
+    if not canonical:
+        raise ValueError("A conversation must contain at least one message")
+    return canonical
+
+
+def chat_document(messages: list[dict], source: str, **metadata: object) -> dict:
+    """Build a canonical structured-chat document with a content-derived ID."""
+    messages = canonical_chat_messages(messages)
+    encoded = json.dumps(messages, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return {
+        "id": hashlib.sha256(encoded).hexdigest(),
+        "messages": messages,
+        "source": source,
+        **metadata,
     }
 
 

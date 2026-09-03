@@ -32,7 +32,8 @@ from zephyr.dataset import Dataset
 from zephyr.readers import load_jsonl
 
 from marin.datakit.download.http_session import build_retrying_session
-from marin.datakit.normalize import normalize_step
+from marin.datakit.download.rollout_transforms import chat_document
+from marin.datakit.normalize import normalize_chat_step, normalize_step
 from marin.execution.step_spec import StepSpec
 
 logger = logging.getLogger(__name__)
@@ -656,6 +657,45 @@ def row_to_doc(row: dict) -> list[dict]:
     ]
 
 
+def row_to_chat_doc(row: dict) -> list[dict]:
+    """Represent one MASSIVE row as a canonical tool-calling conversation."""
+    intent = row["intent"]
+    if intent not in _TOOLS_BY_NAME:
+        raise ValueError(f"Unknown intent {intent!r}")
+    arguments: dict[str, list[str]] = {}
+    for slot, value in parse_annot_utt(row["annot_utt"]):
+        arguments.setdefault(slot, []).append(value)
+
+    split = _PARTITION_TO_SPLIT[row["partition"]]
+    doc_id = f"{row['locale']}/{row['id']}/{split}"
+    call_id = f"call_{row['locale']}_{row['id']}"
+    messages = [
+        {"role": "user", "content": row["utt"]},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": call_id,
+                    "type": "function",
+                    "function": {"name": intent, "arguments": arguments},
+                }
+            ],
+        },
+    ]
+    return [
+        chat_document(
+            messages,
+            HF_DATASET_ID,
+            chat_template_kwargs={"tools": select_tools(intent, doc_id)},
+            locale=row["locale"],
+            split=split,
+            intent=intent,
+            source_id=row["id"],
+        )
+    ]
+
+
 def _download_tarball(url: str, dest_path: str) -> None:
     """Stream a URL to a local file with retry on transient HTTP errors."""
     session = build_retrying_session(status_forcelist=(500, 502, 503, 504))
@@ -747,6 +787,19 @@ def transform_staged_massive(input_path: str, output_path: str) -> None:
     ctx.execute(pipeline)
 
 
+def transform_staged_massive_chat(input_path: str, output_path: str) -> None:
+    files = _list_staged_files(input_path)
+    if not files:
+        raise FileNotFoundError(f"No staged JSONL files under {input_path}")
+    pipeline = (
+        Dataset.from_list(files)
+        .flat_map(load_jsonl)
+        .flat_map(row_to_chat_doc)
+        .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
+    )
+    ZephyrContext(name="massive-chat-transform", resources=ResourceConfig(cpu=1, ram="2g")).execute(pipeline)
+
+
 def stage_massive_step() -> StepSpec:
     """Sequential staging step: download tarball → per-locale JSONL files."""
     return StepSpec(
@@ -783,4 +836,19 @@ def massive_normalize_steps() -> tuple[StepSpec, ...]:
             id_field="id",
             file_extensions=(".parquet",),
         ),
+    )
+
+
+def massive_chat_normalize_steps() -> tuple[StepSpec, ...]:
+    staged = stage_massive_step()
+    transformed = StepSpec(
+        name="processed-chat/massive_function_calling",
+        deps=[staged],
+        fn=lambda output_path: transform_staged_massive_chat(staged.output_path, output_path),
+        hash_attrs={"schema_version": "v1"},
+    )
+    return (
+        staged,
+        transformed,
+        normalize_chat_step(name="normalized-chat/massive_function_calling", download=transformed),
     )

@@ -19,8 +19,8 @@ from zephyr.dataset import Dataset
 from zephyr.readers import load_parquet
 
 from marin.datakit.download.huggingface import download_hf_step
-from marin.datakit.download.rollout_transforms import text_document
-from marin.datakit.normalize import normalize_step
+from marin.datakit.download.rollout_transforms import chat_document, text_document
+from marin.datakit.normalize import normalize_chat_step, normalize_step
 from marin.execution.step_spec import StepSpec
 
 HF_DATASET_ID = "AI-MO/NuminaMath-TIR"
@@ -73,6 +73,13 @@ def row_to_doc(row: dict) -> list[dict]:
     return [text_document(text, HF_DATASET_ID)]
 
 
+def row_to_chat_doc(row: dict) -> list[dict]:
+    messages = row.get("messages")
+    if not isinstance(messages, list) or any(_message_text(message) is None for message in messages):
+        return []
+    return [chat_document([dict(message) for message in messages], HF_DATASET_ID)]
+
+
 def transform(input_path: str, output_path: str) -> None:
     pipeline = (
         Dataset.from_files(f"{input_path}/**/*.parquet")
@@ -82,6 +89,16 @@ def transform(input_path: str, output_path: str) -> None:
     )
     ctx = ZephyrContext(name="numinamath-tir-transform", resources=ResourceConfig(cpu=1, ram="4g"))
     ctx.execute(pipeline)
+
+
+def transform_chat(input_path: str, output_path: str) -> None:
+    pipeline = (
+        Dataset.from_files(f"{input_path}/**/*.parquet")
+        .flat_map(load_parquet)
+        .flat_map(row_to_chat_doc)
+        .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
+    )
+    ZephyrContext(name="numinamath-tir-chat-transform", resources=ResourceConfig(cpu=1, ram="4g")).execute(pipeline)
 
 
 def download_numinamath_tir_step() -> StepSpec:
@@ -111,3 +128,19 @@ def numinamath_tir_normalize_steps() -> tuple[StepSpec, ...]:
         processed,
         normalize_step(name="normalized/numinamath-tir", download=processed),
     )
+
+
+def numinamath_tir_chat_normalize_steps() -> tuple[StepSpec, ...]:
+    download = download_hf_step(
+        "raw/numinamath-tir",
+        hf_dataset_id=HF_DATASET_ID,
+        revision=HF_REVISION,
+        hf_urls_glob=[TRAIN_PARQUET_GLOB],
+    )
+    processed = StepSpec(
+        name="processed-chat/numinamath-tir",
+        deps=[download],
+        fn=lambda output_path: transform_chat(download.output_path, output_path),
+        hash_attrs={"version": "v1"},
+    )
+    return processed, normalize_chat_step(name="normalized-chat/numinamath-tir", download=processed)

@@ -16,6 +16,7 @@ All discovered files are merged into a single output: main records land in
 ``<output_path>/outputs/dups/``. Input directory structure is not preserved.
 """
 
+import json
 import logging
 import os
 import re
@@ -66,6 +67,7 @@ NORMALIZED_DATA_VERSION = "v2"
 NORMALIZE_IDENTITY_ATTRS = frozenset(
     {"text_field", "id_field", "target_partition_bytes", "max_whitespace_run_chars", "dedup_mode"}
 )
+CHAT_NORMALIZE_IDENTITY_ATTRS = frozenset({"messages_field", "id_field", "target_partition_bytes", "dedup_mode"})
 
 
 class DedupMode(StrEnum):
@@ -182,6 +184,35 @@ def _make_normalize_fn(
         if source_id is not None:
             out["source_id"] = source_id
 
+        return out
+
+    return normalize_record
+
+
+def _canonical_messages_bytes(messages: list[dict[str, Any]]) -> bytes:
+    return json.dumps(messages, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def _make_chat_normalize_fn(
+    messages_field: str,
+    id_field: str,
+) -> Callable[[dict[str, Any]], dict[str, Any]]:
+    """Return a transform that canonicalizes the message field and hashes its contents."""
+
+    def normalize_record(record: dict[str, Any]) -> dict[str, Any]:
+        messages = record[messages_field]
+        if not isinstance(messages, list) or not messages:
+            raise ValueError(f"{messages_field!r} must be a non-empty list")
+        for message in messages:
+            if not isinstance(message, dict) or message.get("role") not in {"assistant", "system", "tool", "user"}:
+                raise ValueError("Each message must use a canonical assistant/system/tool/user role")
+
+        source_id = record.get(id_field)
+        out = {key: value for key, value in record.items() if key not in {id_field, messages_field}}
+        out["id"] = format(dupekit.hash_xxh3_128(_canonical_messages_bytes(messages)), "032x")
+        out["messages"] = messages
+        if source_id is not None:
+            out["source_id"] = source_id
         return out
 
     return normalize_record
@@ -399,6 +430,52 @@ def _build_pipeline(
     )
 
 
+def _build_chat_pipeline(
+    files: list[str],
+    output_dir: str,
+    num_shards: int,
+    messages_field: str,
+    id_field: str,
+    dedup_mode: DedupMode,
+) -> Dataset:
+    """Build the normalization pipeline for canonical message records."""
+    normalize_record = _make_chat_normalize_fn(messages_field, id_field)
+
+    def dedup(_key: str, items: Iterator[dict[str, Any]]) -> Iterator[MainOutput | ExactDupSideOutput]:
+        prev_id: str | None = None
+        for record in items:
+            if record["id"] != prev_id:
+                prev_id = record["id"]
+                yield MainOutput(data=record)
+            else:
+                yield ExactDupSideOutput(data=record)
+
+    def passthrough(_key: str, items: Iterator[dict[str, Any]]) -> Iterator[MainOutput]:
+        yield from (MainOutput(data=item) for item in items)
+
+    def has_messages(record: dict[str, Any]) -> bool:
+        messages = record.get(messages_field)
+        if not isinstance(messages, list) or not messages:
+            counters.pipeline.update_counter("normalize/empty_messages_filtered", 1)
+            return False
+        return True
+
+    reducers: dict[DedupMode, Callable] = {DedupMode.EXACT: dedup, DedupMode.NONE: passthrough}
+    return (
+        Dataset.from_list(files)
+        .flat_map(load_file)
+        .filter(has_messages)
+        .map(normalize_record)
+        .group_by(
+            key=lambda record: record["id"],
+            reducer=reducers[dedup_mode],
+            sort_by=lambda record: record["id"],
+            num_output_shards=num_shards,
+        )
+        .map_shard(_make_split_writer(output_dir))
+    )
+
+
 def normalize_to_parquet(
     *,
     input_path: str,
@@ -602,4 +679,76 @@ def normalize_step(
         hash_attrs=hash_attrs,
         output_path_prefix=output_path_prefix,
         override_output_path=override_output_path,
+    )
+
+
+def normalize_chat_to_parquet(
+    *,
+    input_path: str,
+    output_path: str,
+    messages_field: str = "messages",
+    id_field: str = "id",
+    target_partition_bytes: int = 256 * 1024 * 1024,
+    worker_resources: ResourceConfig | None = None,
+    max_workers: int = DEFAULT_MAX_WORKERS,
+    file_extensions: tuple[str, ...] | None = None,
+    dedup_mode: DedupMode = DedupMode.EXACT,
+) -> NormalizedData:
+    """Normalize structured conversations without rendering them to text."""
+    resources = worker_resources or ResourceConfig(cpu=2, ram="32g", disk="10g")
+    files = _discover_files(input_path, file_extensions=file_extensions)
+    if not files:
+        raise FileNotFoundError(f"No data files found under {input_path}")
+
+    total_bytes = _compute_total_bytes(files)
+    num_shards = max(1, total_bytes // target_partition_bytes)
+    pipeline = _build_chat_pipeline(files, output_path, num_shards, messages_field, id_field, dedup_mode)
+    outcome = ZephyrContext(name="normalize-chat", resources=resources, max_workers=max_workers).execute(pipeline)
+    counters_dict = dict(outcome.counters)
+    total_in = counters_dict.get("zephyr/records_in", 0)
+    if total_in > 0 and counters_dict.get("normalize/empty_messages_filtered", 0) == total_in:
+        raise ValueError(f"All {total_in} records were filtered because {messages_field!r} was empty or missing")
+    return NormalizedData(
+        main_output_dir=prefix_join(output_path, "outputs/main"),
+        dup_output_dir=prefix_join(output_path, "outputs/dups"),
+        counters=counters_dict,
+    )
+
+
+def normalize_chat_step(
+    *,
+    name: str,
+    download: StepSpec,
+    messages_field: str = "messages",
+    id_field: str = "id",
+    target_partition_bytes: int = 256 * 1024 * 1024,
+    worker_resources: ResourceConfig | None = None,
+    max_workers: int = DEFAULT_MAX_WORKERS,
+    file_extensions: tuple[str, ...] | None = None,
+    dedup_mode: DedupMode = DedupMode.EXACT,
+) -> StepSpec:
+    """Create a step whose normalized records retain canonical ``messages``."""
+    hash_attrs = {
+        "messages_field": messages_field,
+        "id_field": id_field,
+        "target_partition_bytes": target_partition_bytes,
+        "file_extensions": file_extensions,
+        "dedup_mode": dedup_mode,
+    }
+    assert CHAT_NORMALIZE_IDENTITY_ATTRS <= hash_attrs.keys()
+    return StepSpec(
+        name=name,
+        fn=lambda output_path: normalize_chat_to_parquet(
+            input_path=download.output_path,
+            output_path=output_path,
+            messages_field=messages_field,
+            id_field=id_field,
+            target_partition_bytes=target_partition_bytes,
+            worker_resources=worker_resources,
+            max_workers=max_workers,
+            file_extensions=file_extensions,
+            dedup_mode=dedup_mode,
+        ),
+        deps=[download],
+        hash_attrs=hash_attrs,
     )

@@ -17,8 +17,8 @@ from zephyr.dataset import Dataset
 from zephyr.readers import load_jsonl
 
 from marin.datakit.download.huggingface import download_hf_step
-from marin.datakit.download.rollout_transforms import text_document
-from marin.datakit.normalize import normalize_step
+from marin.datakit.download.rollout_transforms import chat_document, text_document
+from marin.datakit.normalize import normalize_chat_step, normalize_step
 from marin.execution.step_spec import StepSpec
 
 HF_DATASET_ID = "andyrdt/gpt-oss-20b-rollouts"
@@ -50,6 +50,17 @@ def row_to_doc(row: dict) -> list[dict]:
     return [text_document(text, "andyrdt/gpt-oss-20b-rollouts")]
 
 
+def row_to_chat_doc(row: dict) -> list[dict]:
+    user = row.get("user_content") or ""
+    response = row.get("assistant_content") or ""
+    if not user or not response:
+        return []
+    thinking = row.get("assistant_thinking") or ""
+    assistant = f"<think>\n{thinking}\n</think>\n\n{response}" if thinking else response
+    messages = [{"role": "user", "content": user}, {"role": "assistant", "content": assistant}]
+    return [chat_document(messages, HF_DATASET_ID)]
+
+
 def transform(input_path: str, output_path: str) -> None:
     input_files = [f"{input_path}/{subset}/{split}.jsonl" for subset, split in SUBSETS.items()]
     pipeline = (
@@ -60,6 +71,17 @@ def transform(input_path: str, output_path: str) -> None:
     )
     ctx = ZephyrContext(name="gpt-oss-rollouts-transform", resources=ResourceConfig(cpu=1, ram="8g"))
     ctx.execute(pipeline)
+
+
+def transform_chat(input_path: str, output_path: str) -> None:
+    input_files = [f"{input_path}/{subset}/{split}.jsonl" for subset, split in SUBSETS.items()]
+    pipeline = (
+        Dataset.from_list(input_files)
+        .flat_map(load_jsonl)
+        .flat_map(row_to_chat_doc)
+        .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
+    )
+    ZephyrContext(name="gpt-oss-rollouts-chat-transform", resources=ResourceConfig(cpu=1, ram="8g")).execute(pipeline)
 
 
 def download_gpt_oss_rollouts_step() -> StepSpec:
@@ -93,3 +115,17 @@ def gpt_oss_rollouts_normalize_steps() -> tuple[StepSpec, ...]:
         processed,
         normalize_step(name="normalized/gpt-oss-rollouts", download=processed),
     )
+
+
+def gpt_oss_rollouts_chat_normalize_steps() -> tuple[StepSpec, ...]:
+    paths = [f"{subset}/{split}.jsonl" for subset, split in SUBSETS.items()]
+    download = download_hf_step(
+        "raw/gpt-oss-20b-rollouts", hf_dataset_id=HF_DATASET_ID, revision=HF_REVISION, hf_urls_glob=paths
+    )
+    processed = StepSpec(
+        name="processed-chat/gpt-oss-20b-rollouts",
+        deps=[download],
+        fn=lambda output_path: transform_chat(download.output_path, output_path),
+        hash_attrs={"version": "v1"},
+    )
+    return processed, normalize_chat_step(name="normalized-chat/gpt-oss-rollouts", download=processed)

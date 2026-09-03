@@ -8,9 +8,11 @@ import json
 import tarfile
 
 import pyarrow.parquet as pq
+from levanter.tokenizers import load_tokenizer
 from marin.datakit.download import massive
 from marin.datakit.download.massive import (
     parse_annot_utt,
+    row_to_chat_doc,
     row_to_doc,
     transform_staged_massive,
 )
@@ -59,6 +61,23 @@ def test_row_to_doc_renders_full_training_document():
     assert call["name"] == "alarm_set"
     # Responses API encodes ``arguments`` as a JSON string, not a nested object.
     assert json.loads(call["arguments"]) == {"date": ["friday"], "time": ["nine am"]}
+
+
+def test_row_to_chat_doc_renders_with_marin_tool_template():
+    [doc] = row_to_chat_doc(_row("alarm_set"))
+    assert [message["role"] for message in doc["messages"]] == ["user", "assistant"]
+    tool_call = doc["messages"][1]["tool_calls"][0]
+    assert tool_call["function"] == {
+        "name": "alarm_set",
+        "arguments": {"date": ["friday"], "time": ["nine am"]},
+    }
+    tools = doc["chat_template_kwargs"]["tools"]
+    assert "alarm_set" in {tool["name"] for tool in tools}
+
+    rendered = load_tokenizer("marin-community/marin-tokenizer").apply_chat_template(
+        doc["messages"], tokenize=False, add_generation_prompt=False, tools=tools
+    )
+    assert '<|start_header_id|>assistant<|end_header_id|>\n{"name": "alarm_set"' in rendered
 
 
 def test_transform_staged_massive_end_to_end(tmp_path):

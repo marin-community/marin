@@ -15,8 +15,13 @@ from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
 from marin.datakit.download.huggingface import download_hf_step
-from marin.datakit.download.rollout_transforms import load_parquet_batched, render_role_message, text_document
-from marin.datakit.normalize import normalize_step
+from marin.datakit.download.rollout_transforms import (
+    chat_document,
+    load_parquet_batched,
+    render_role_message,
+    text_document,
+)
+from marin.datakit.normalize import normalize_chat_step, normalize_step
 from marin.execution.step_spec import StepSpec
 
 HF_DATASET_ID = "AlienKevin/SWE-ZERO-12M-trajectories"
@@ -35,6 +40,11 @@ def row_to_doc(row: dict) -> list[dict]:
     return [text_document(text, HF_DATASET_ID)]
 
 
+def row_to_chat_doc(row: dict) -> list[dict]:
+    messages = row.get("messages")
+    return [chat_document(messages, HF_DATASET_ID)] if messages else []
+
+
 def transform(input_path: str, output_path: str) -> None:
     pipeline = (
         Dataset.from_files(f"{input_path}/**/*.parquet")
@@ -44,6 +54,16 @@ def transform(input_path: str, output_path: str) -> None:
     )
     ctx = ZephyrContext(name="swe-zero-12m-transform", resources=ResourceConfig(cpu=1, ram="32g"))
     ctx.execute(pipeline)
+
+
+def transform_chat(input_path: str, output_path: str) -> None:
+    pipeline = (
+        Dataset.from_files(f"{input_path}/**/*.parquet")
+        .flat_map(load_parquet_batched)
+        .flat_map(row_to_chat_doc)
+        .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
+    )
+    ZephyrContext(name="swe-zero-12m-chat-transform", resources=ResourceConfig(cpu=1, ram="32g")).execute(pipeline)
 
 
 def download_swe_zero_12m_step() -> StepSpec:
@@ -72,3 +92,14 @@ def swe_zero_12m_normalize_steps() -> tuple[StepSpec, ...]:
         processed,
         normalize_step(name="normalized/swe-zero-12m", download=processed),
     )
+
+
+def swe_zero_12m_chat_normalize_steps() -> tuple[StepSpec, ...]:
+    dl = download_hf_step("raw/swe-zero-12m-trajectories", hf_dataset_id=HF_DATASET_ID, revision=HF_REVISION)
+    processed = StepSpec(
+        name="processed-chat/swe-zero-12m-trajectories",
+        deps=[dl],
+        fn=lambda output_path: transform_chat(dl.output_path, output_path),
+        hash_attrs={"version": "v1"},
+    )
+    return processed, normalize_chat_step(name="normalized-chat/swe-zero-12m", download=processed)

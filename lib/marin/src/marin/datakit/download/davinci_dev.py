@@ -22,6 +22,8 @@ The HF dataset is gated (auto-approve); ``HF_TOKEN`` must be set locally
 for ``download_hf_step`` to authenticate.
 """
 
+import json
+
 from fray.types import ResourceConfig
 from zephyr import counters
 from zephyr.context import ZephyrContext
@@ -32,11 +34,12 @@ from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import (
     TRAJECTORY_FAILED_TAG,
     TRAJECTORY_SOLVED_TAG,
+    chat_document,
     load_parquet_batched,
     render_tool_message,
     text_document,
 )
-from marin.datakit.normalize import normalize_step
+from marin.datakit.normalize import normalize_chat_step, normalize_step
 from marin.execution.step_spec import StepSpec
 
 HF_DATASET_ID = "GAIR/daVinci-Dev"
@@ -181,6 +184,18 @@ def env_row_to_doc(row: dict) -> list[dict]:
     return [text_document(text, "GAIR/daVinci-Dev/env-native")]
 
 
+def env_row_to_chat_doc(row: dict) -> list[dict]:
+    messages = row.get("messages")
+    if not messages:
+        return []
+    if isinstance(messages, str):
+        messages = json.loads(messages)
+    tag = _success_to_tag(row.get("success") if "success" in row else None)
+    if tag:
+        messages = [{"role": "system", "content": tag}, *messages]
+    return [chat_document(messages, "GAIR/daVinci-Dev/env-native")]
+
+
 def transform_env_native(input_path: str, output_path: str) -> None:
     pipeline = (
         Dataset.from_files(f"{input_path}/env-native.jsonl")
@@ -190,6 +205,16 @@ def transform_env_native(input_path: str, output_path: str) -> None:
     )
     ctx = ZephyrContext(name="davinci-dev-env-transform", resources=ResourceConfig(cpu=1, ram="16g"))
     ctx.execute(pipeline)
+
+
+def transform_env_native_chat(input_path: str, output_path: str) -> None:
+    pipeline = (
+        Dataset.from_files(f"{input_path}/env-native.jsonl")
+        .flat_map(load_jsonl)
+        .flat_map(env_row_to_chat_doc)
+        .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
+    )
+    ZephyrContext(name="davinci-dev-env-chat-transform", resources=ResourceConfig(cpu=1, ram="16g")).execute(pipeline)
 
 
 def download_davinci_dev_env_native_step() -> StepSpec:
@@ -223,4 +248,21 @@ def davinci_dev_env_native_normalize_steps() -> tuple[StepSpec, ...]:
             # the default 16 GiB worker on load. Bump to 64 GiB.
             worker_resources=ResourceConfig(cpu=2, ram="64g", disk="10g"),
         ),
+    )
+
+
+def davinci_dev_env_native_chat_normalize_steps() -> tuple[StepSpec, ...]:
+    dl = download_hf_step(
+        "raw/davinci-dev-env-native", hf_dataset_id=HF_DATASET_ID, revision=HF_REVISION, hf_urls_glob=ENV_GLOBS
+    )
+    processed = StepSpec(
+        name="processed-chat/davinci-dev-env-native",
+        deps=[dl],
+        fn=lambda output_path: transform_env_native_chat(dl.output_path, output_path),
+        hash_attrs={"version": "v1"},
+    )
+    return processed, normalize_chat_step(
+        name="normalized-chat/davinci-dev-env-native",
+        download=processed,
+        worker_resources=ResourceConfig(cpu=2, ram="64g", disk="10g"),
     )

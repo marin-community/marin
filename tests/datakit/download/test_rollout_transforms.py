@@ -1,7 +1,30 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from marin.datakit.download.rollout_transforms import render_tool_call, render_tool_message
+import pytest
+from marin.datakit.download.rollout_transforms import canonical_chat_messages, render_tool_call, render_tool_message
+
+
+def test_canonical_chat_messages_normalizes_role_aliases_and_preserves_tools():
+    tool_calls = [{"id": "call_1", "function": {"name": "bash", "arguments": {"cmd": "pwd"}}}]
+    messages = canonical_chat_messages(
+        [
+            {"from": "human", "value": "Inspect the repository."},
+            {"from": "gpt", "value": None, "tool_calls": tool_calls},
+            {"role": "function", "content": "/workspace", "tool_call_id": "call_1"},
+        ]
+    )
+
+    assert messages == [
+        {"role": "user", "content": "Inspect the repository."},
+        {"tool_calls": tool_calls, "role": "assistant", "content": None},
+        {"role": "tool", "content": "/workspace", "tool_call_id": "call_1"},
+    ]
+
+
+def test_canonical_chat_messages_rejects_unknown_roles():
+    with pytest.raises(ValueError, match="Unsupported chat role"):
+        canonical_chat_messages([{"role": "critic", "content": "No."}])
 
 
 def test_render_tool_call_dict_arguments():
