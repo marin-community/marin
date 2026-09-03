@@ -407,7 +407,13 @@ def build_workflow(
     ckpt_interval: int | None = None,
     bf16_update_mode: str = "stochastic",
     policy_train_spans: bool = True,
-    spans_synchronize: bool = True,
+    # OFF by default since 2026-09-03. The spans themselves are ~free (the spans-OFF control was the
+    # SLOWEST arm at both steps), but synchronising serialises the CUDA pipeline the run is trying to
+    # overlap and cost +2.13% at step 2 -- a systematic penalty on every headline total this recipe
+    # produces. It buys attribution: unattributable residual 2.56% -> 0.11%. Turn it on to ATTRIBUTE,
+    # leave it off to MEASURE, and never compare the two -- the rows carry `_launch` vs `_wall` in
+    # clock_domain precisely so a consumer cannot mix them by accident.
+    spans_synchronize: bool = False,
     smoke: bool = False,
     debug_distributed: bool = False,
     collective_diagnostics: bool = False,
@@ -643,7 +649,7 @@ def build_workflow(
     help="Route Grug MoE blocks through torch._grouped_mm instead of the eager 256-expert Python "
     "loop. This is the workstream's headline arm: the baseline inherits use_grouped_mm=false, and "
     "F2 measures that path at ~0.6% MFU against Megatron's 10%. Needs no expert parallelism -- the "
-    "EP constraint runs the other way. Encodes itself into the artifact name as -groupedmm, so its "
+    "EP constraint runs the other way. Encodes itself into the artifact name as -eagermoe when OFF, so its "
     "rows are separable from the baseline's by run_id.",
 )
 @click.option(
@@ -731,7 +737,7 @@ def build_workflow(
 )
 @click.option(
     "--spans-synchronize/--no-spans-synchronize",
-    default=True,
+    default=False,
     show_default=True,
     help="Synchronise CUDA at span boundaries. On attributes time to the right span; off measures "
     "end-to-end without serialising the pipeline. A spans-on run is for ATTRIBUTION -- do not use it "
