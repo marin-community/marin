@@ -360,6 +360,39 @@ def test_verified_copy_hash_mismatch_removes_object_and_withholds_completion(tmp
     assert not (destination / COMPLETION_MANIFEST).exists()
 
 
+class _EtagDestination:
+    protocol = "s3"
+
+    def __init__(self, filesystem, etag, *, fixed_upload_size, allow_reads):
+        self.filesystem = filesystem
+        self.etag = etag
+        self.fixed_upload_size = fixed_upload_size
+        self.allow_reads = allow_reads
+
+    def __getattr__(self, name):
+        return getattr(self.filesystem, name)
+
+    def open(self, path, mode, **kwargs):
+        if mode == "rb" and path.endswith("weights.bin") and not self.allow_reads:
+            raise AssertionError("S3 verification must not download the destination object")
+        kwargs.pop("block_size", None)
+        return self.filesystem.open(path, mode, **kwargs)
+
+    def info(self, path):
+        info = self.filesystem.info(path)
+        if path.endswith("weights.bin"):
+            info["ETag"] = f'"{self.etag}"'
+        return info
+
+    def find(self, path, *, detail):
+        found = self.filesystem.find(path, detail=detail)
+        if detail:
+            for name, info in found.items():
+                if name.endswith("weights.bin"):
+                    info["ETag"] = f'"{self.etag}"'
+        return found
+
+
 @pytest.mark.parametrize(
     ("contents", "etag"),
     [
@@ -375,36 +408,16 @@ def test_verified_copy_uses_s3_etag_without_destination_reads(tmp_path, monkeypa
 
     destination_filesystem, destination_path = verified_copy_module.filesystem_for(str(destination))
     original_filesystem_for = verified_copy_module.filesystem_for
-
-    class EtagDestination:
-        protocol = "s3"
-
-        def __getattr__(self, name):
-            return getattr(destination_filesystem, name)
-
-        def open(self, path, mode, **kwargs):
-            if mode == "rb" and path.endswith("weights.bin"):
-                raise AssertionError("S3 verification must not download the destination object")
-            kwargs.pop("block_size", None)
-            return destination_filesystem.open(path, mode, **kwargs)
-
-        def info(self, path):
-            info = destination_filesystem.info(path)
-            if path.endswith("weights.bin"):
-                info["ETag"] = f'"{etag}"'
-            return info
-
-        def find(self, path, *, detail):
-            found = destination_filesystem.find(path, detail=detail)
-            if detail:
-                for name, info in found.items():
-                    if name.endswith("weights.bin"):
-                        info["ETag"] = f'"{etag}"'
-            return found
+    etag_destination = _EtagDestination(
+        destination_filesystem,
+        etag,
+        fixed_upload_size=True,
+        allow_reads=False,
+    )
 
     def routed_filesystem(url, *, fixed_upload_size=False):
         if url == str(destination):
-            return EtagDestination(), destination_path
+            return etag_destination, destination_path
         return original_filesystem_for(url, fixed_upload_size=fixed_upload_size)
 
     monkeypatch.setattr(verified_copy_module, "S3_UPLOAD_PART_BYTES", 4)
@@ -427,25 +440,16 @@ def test_verified_copy_rejects_s3_etag_mismatch(tmp_path, monkeypatch):
     destination_filesystem, destination_path = verified_copy_module.filesystem_for(str(destination))
     original_filesystem_for = verified_copy_module.filesystem_for
 
-    class WrongEtagDestination:
-        protocol = "s3"
-
-        def __getattr__(self, name):
-            return getattr(destination_filesystem, name)
-
-        def open(self, path, mode, **kwargs):
-            kwargs.pop("block_size", None)
-            return destination_filesystem.open(path, mode, **kwargs)
-
-        def info(self, path):
-            info = destination_filesystem.info(path)
-            if path.endswith("weights.bin"):
-                info["ETag"] = '"00000000000000000000000000000000-3"'
-            return info
+    etag_destination = _EtagDestination(
+        destination_filesystem,
+        "00000000000000000000000000000000-3",
+        fixed_upload_size=True,
+        allow_reads=True,
+    )
 
     def routed_filesystem(url, *, fixed_upload_size=False):
         if url == str(destination):
-            return WrongEtagDestination(), destination_path
+            return etag_destination, destination_path
         return original_filesystem_for(url, fixed_upload_size=fixed_upload_size)
 
     monkeypatch.setattr(verified_copy_module, "S3_UPLOAD_PART_BYTES", 4)
@@ -456,6 +460,35 @@ def test_verified_copy_rejects_s3_etag_mismatch(tmp_path, monkeypatch):
 
     assert not (destination / "weights.bin").exists()
     assert not (destination / COMPLETION_MANIFEST).exists()
+
+
+def test_verified_copy_reads_destination_when_s3_part_sizes_are_not_fixed(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    (source / "weights.bin").write_bytes(b"abcdefghij")
+
+    destination_filesystem, destination_path = verified_copy_module.filesystem_for(str(destination))
+    original_filesystem_for = verified_copy_module.filesystem_for
+    etag_destination = _EtagDestination(
+        destination_filesystem,
+        "00000000000000000000000000000000-3",
+        fixed_upload_size=False,
+        allow_reads=True,
+    )
+
+    def routed_filesystem(url, *, fixed_upload_size=False):
+        if url == str(destination):
+            return etag_destination, destination_path
+        return original_filesystem_for(url, fixed_upload_size=fixed_upload_size)
+
+    monkeypatch.setattr(verified_copy_module, "S3_UPLOAD_PART_BYTES", 4)
+    monkeypatch.setattr(verified_copy_module, "filesystem_for", routed_filesystem)
+
+    result = verified_copy_prefix(str(source), str(destination), workers=1)
+
+    assert result.copied_files == 1
+    assert (destination / COMPLETION_MANIFEST).exists()
 
 
 @pytest.mark.parametrize(("command", "destination"), [(["cp", "-r"], "copy"), (["rsync"], "sync")])
