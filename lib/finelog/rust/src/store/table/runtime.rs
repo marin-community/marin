@@ -665,16 +665,26 @@ impl TableRuntime {
     ///
     /// Stops and JOINs any dispatched maintenance work (bounded by `timeout`),
     /// then does a final flush (no RAM-only rows survive; durability is already
-    /// preserved — an acked write was on a sealed segment) and, for a table with
-    /// a legacy archive, a final bounded sync so the bucket matches the catalog
-    /// at shutdown.
+    /// preserved — an acked write was on a sealed segment), publishes any owed
+    /// object-backed revision, and gives a legacy archive one final bounded sync.
     pub async fn shutdown(self: &Arc<Self>, timeout: Duration) {
         self.stop_and_join(timeout).await;
         if let Err(error) = self.flush().await {
             tracing::warn!(namespace = %self.name, %error, "shutdown: final flush failed");
         }
-        // Legacy tables get one final bounded archive sync. Object-backed tables
-        // already publish through their write path, so this is a no-op for them.
+        if self.controller.publication_owed() {
+            match tokio::time::timeout(timeout, self.controller.publish_state()).await {
+                Ok(Ok(_)) => {}
+                Ok(Err(error)) => {
+                    tracing::warn!(namespace = %self.name, %error, "shutdown: final publication failed");
+                }
+                Err(_elapsed) => {
+                    tracing::warn!(namespace = %self.name, "shutdown: final publication timed out");
+                }
+            }
+        }
+        // Legacy tables get one final bounded archive sync. This is a no-op for
+        // object-backed tables.
         if self.controller.object_persistence_configured() {
             match tokio::time::timeout(timeout, super::maintenance::sync_archive(self)).await {
                 Ok(Ok(())) => {}

@@ -95,6 +95,14 @@ enum ControllerCommand {
 
 const COMMAND_QUEUE_DEPTH: usize = 32;
 
+/// Floor between owed publications of one table. Every flush and compaction
+/// commit marks HEAD owed, and each publication PUTs a full catalog snapshot
+/// and rewrites the same `HEAD.json` object — which object stores rate-limit
+/// per object. Acknowledgement is local, so deferring publication batches the
+/// staged-object uploads and snapshot churn without touching write latency;
+/// the revision stays owed and the next maintenance cycle publishes it.
+const MIN_PUBLISH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+
 pub struct TableController {
     table: String,
     catalog: Arc<Catalog>,
@@ -124,6 +132,9 @@ pub struct TableController {
     writes_ready: AtomicBool,
     /// Set while a locally committed revision is not known to be published.
     publication_owed: AtomicBool,
+    /// When the last successful publication finished, for the owed-publication
+    /// throttle. Explicit `Publish` commands bypass it.
+    last_published: Mutex<Option<tokio::time::Instant>>,
     /// Objects staged locally whose upload has not completed, by object id.
     /// Publication uploads them before it swaps HEAD; a crash repopulates the
     /// missing entries through the once-per-boot reconcile below.
@@ -168,6 +179,7 @@ impl TableController {
             claimed: AtomicBool::new(false),
             writes_ready: AtomicBool::new(true),
             publication_owed: AtomicBool::new(false),
+            last_published: Mutex::new(None),
             staged: Mutex::new(std::collections::HashMap::new()),
             boot_reconciled: AtomicBool::new(false),
             degraded: Mutex::new(None),
@@ -819,10 +831,19 @@ impl TableController {
         // its specification later moves.
         self.head_published.store(true, Ordering::SeqCst);
         self.publication_owed.store(false, Ordering::SeqCst);
+        *self.last_published.lock().unwrap() = Some(tokio::time::Instant::now());
         *self.degraded.lock().unwrap() = None;
         let published = Arc::new(published);
         self.snapshot.send_replace(Some(Arc::clone(&published)));
         Ok(published)
+    }
+
+    /// Whether an owed publication is past the per-table throttle.
+    fn owed_publication_due(&self) -> bool {
+        self.last_published
+            .lock()
+            .unwrap()
+            .is_none_or(|at| at.elapsed() >= MIN_PUBLISH_INTERVAL)
     }
 
     /// Make every data object the state references remotely durable before
@@ -1013,7 +1034,10 @@ async fn run_controller(
                 let _ = reply.send(controller.run_publish().await);
             }
             ControllerCommand::PublishOwed(reply) => {
-                let result = if controller.publication_owed() {
+                // Within the throttle the revision simply stays owed; a later
+                // cycle publishes it. Explicit Publish commands are not
+                // throttled — activation and shutdown want HEAD current.
+                let result = if controller.publication_owed() && controller.owed_publication_due() {
                     controller
                         .run_publish()
                         .await
@@ -1409,5 +1433,43 @@ mod tests {
         let second = watcher.borrow_and_update().clone().unwrap();
         assert!(second.revision() > published.revision());
         assert_eq!(second.state().catalog().forward_cursors[0].cursor, Some(9));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn owed_publications_coalesce_until_the_interval_elapses() {
+        let remote_dir = crate::test_support::unique_dir("controller_publish_throttle");
+        let remote = Arc::new(
+            build_remote_object_store(remote_dir.to_str().unwrap())
+                .unwrap()
+                .unwrap(),
+        );
+        let states = Arc::new(ObjectTableStateStore::new(remote.clone()));
+        let catalog = registered_catalog();
+        let controller =
+            object_controller(remote_dir, Arc::clone(&catalog), remote, states.clone(), 11);
+        controller.publish_state().await.unwrap();
+
+        controller
+            .commit_owing_publication(|| {
+                let revision = catalog.set_forward_cursor("hub", TABLE, 9)?;
+                Ok((revision, ()))
+            })
+            .unwrap();
+        controller.publish_owed().await.unwrap();
+
+        assert_eq!(
+            states.load(TABLE).await.unwrap().unwrap().revision().get(),
+            1
+        );
+        assert!(controller.publication_owed());
+
+        tokio::time::advance(MIN_PUBLISH_INTERVAL).await;
+        controller.publish_owed().await.unwrap();
+
+        assert_eq!(
+            states.load(TABLE).await.unwrap().unwrap().revision().get(),
+            2
+        );
+        assert!(!controller.publication_owed());
     }
 }

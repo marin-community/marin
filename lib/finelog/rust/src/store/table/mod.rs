@@ -377,9 +377,16 @@ impl TableManager {
 
     /// Run one full maintenance cycle for `name`.
     pub async fn maintain(&self, name: &str, force_compact_l0: bool) -> Result<(), StatsError> {
-        self.run_work(&self.require(name)?, TableWork::Cycle { force_compact_l0 })
-            .await
-            .map(|_| ())
+        let runtime = self.require(name)?;
+        self.run_work(&runtime, TableWork::Cycle { force_compact_l0 })
+            .await?;
+        // Direct maintenance is an explicit durability boundary used by the
+        // admin surface and migration tooling. Scheduled cycles use the
+        // throttled owed-publication path inside `maintenance::cycle`.
+        if runtime.controller.publication_owed() {
+            runtime.controller.publish_state().await?;
+        }
+        Ok(())
     }
 
     /// Dispatch one unit of maintenance against a live table.
