@@ -51,7 +51,10 @@ from experiments.grug.moe.model import GatedNorm as GatedNorm
 from experiments.grug.moe.model import GrugMoeHfConfig as GrugMoeHfConfig
 from experiments.grug.moe.model import MoEMLP as MoEMLP
 from experiments.grug.moe.model import RMSNorm as RMSNorm
+from experiments.grug.moe.model import _hf_config_attr as _hf_config_attr
+from experiments.grug.moe.model import _init_weight as _init_weight
 from experiments.grug.moe.model import _summarize_router_metrics as _summarize_router_metrics
+from experiments.grug.moe.model import debug_mesh_and_token_pspec as debug_mesh_and_token_pspec
 from experiments.grug.moe.model import grugmoe_inference_state_dict as grugmoe_inference_state_dict
 
 RematMode = Literal["recompute_all", "save_moe"]
@@ -63,13 +66,6 @@ def _batch_spec() -> P:
 
 def _layer_attention_masks(mask: AttentionMask, *, sliding_window: int) -> tuple[AttentionMask, AttentionMask]:
     return mask.with_sliding_window(sliding_window // 2), mask.with_sliding_window(sliding_window)
-
-
-def _hf_config_attr(config: HfConfig, names: tuple[str, ...], default: Any = None) -> Any:
-    for name in names:
-        if hasattr(config, name):
-            return getattr(config, name)
-    return default
 
 
 @dataclass(frozen=True)
@@ -374,29 +370,6 @@ class Transformer(eqx.Module):
             summarized_metrics["train/router/aux_loss_weighted"] = aux_loss
             return loss, summarized_metrics
         return loss
-
-
-def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], std: float) -> Float[Array, "..."]:
-    return std * random.truncated_normal(key, -3, 3, shape)
-
-
-def debug_mesh_and_token_pspec(num_devices: int) -> tuple[jax.sharding.AbstractMesh, P]:
-    """Return a small abstract mesh and token sharding for lowering contract tests."""
-    if num_devices <= 0:
-        raise ValueError(f"num_devices must be positive, got {num_devices}")
-    expert = 2 if num_devices % 2 == 0 else 1
-    data = max(1, num_devices // expert)
-    mesh = jax.sharding.AbstractMesh(
-        axis_sizes=(1, data, expert, 1),
-        axis_names=("replica_dcn", "data", "expert", "model"),
-        axis_types=(
-            jax.sharding.AxisType.Explicit,
-            jax.sharding.AxisType.Explicit,
-            jax.sharding.AxisType.Explicit,
-            jax.sharding.AxisType.Explicit,
-        ),
-    )
-    return mesh, P(BATCH_AXES, None)
 
 
 __all__ = [

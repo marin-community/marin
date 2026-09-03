@@ -278,8 +278,8 @@ def split_automatic_stages(
     """Partition automatic-schedule stages into trainable and static pytrees.
 
     Returns:
-        The trainable and static stage tuples. Router biases remain static
-        because the pending QB update supplies them separately.
+        The trainable and static stage tuples. Router biases are removed from
+        both because the pending QB update supplies them separately.
     """
     stages = split_transformer(model, num_stages, layer_counts=layer_counts)
     trainable_stages = []
@@ -577,7 +577,7 @@ def prepare_automatic_mpmd_step(
     *,
     memory_threshold: int | None = None,
 ) -> PreparedAutomaticMpmdStep:
-    """Compile with stage-local state and place only the still-SPMD batch inputs."""
+    """Compile with stage-local state and place the remaining SPMD inputs."""
     pp, _ = _jaxpp_modules()
     compiled = step.compile(state, batches, loss_denominator)
     args_shardings, kwargs_shardings = compiled.in_shardings
