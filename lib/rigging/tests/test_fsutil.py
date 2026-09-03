@@ -360,11 +360,18 @@ def test_verified_copy_hash_mismatch_removes_object_and_withholds_completion(tmp
     assert not (destination / COMPLETION_MANIFEST).exists()
 
 
-def test_verified_copy_uses_s3_etag_without_destination_reads(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("contents", "etag"),
+    [
+        (b"abc", "900150983cd24fb0d6963f7d28e17f72"),
+        (b"abcdefghij", "446feba4c1b5cc7ad93bf4d44a0e36ac-3"),
+    ],
+)
+def test_verified_copy_uses_s3_etag_without_destination_reads(tmp_path, monkeypatch, contents, etag):
     source = tmp_path / "source"
     destination = tmp_path / "destination"
     source.mkdir()
-    (source / "weights.bin").write_bytes(b"abcdefghij")
+    (source / "weights.bin").write_bytes(contents)
 
     destination_filesystem, destination_path = verified_copy_module.filesystem_for(str(destination))
     original_filesystem_for = verified_copy_module.filesystem_for
@@ -384,7 +391,7 @@ def test_verified_copy_uses_s3_etag_without_destination_reads(tmp_path, monkeypa
         def info(self, path):
             info = destination_filesystem.info(path)
             if path.endswith("weights.bin"):
-                info["ETag"] = '"446feba4c1b5cc7ad93bf4d44a0e36ac-3"'
+                info["ETag"] = f'"{etag}"'
             return info
 
         def find(self, path, *, detail):
@@ -392,7 +399,7 @@ def test_verified_copy_uses_s3_etag_without_destination_reads(tmp_path, monkeypa
             if detail:
                 for name, info in found.items():
                     if name.endswith("weights.bin"):
-                        info["ETag"] = '"446feba4c1b5cc7ad93bf4d44a0e36ac-3"'
+                        info["ETag"] = f'"{etag}"'
             return found
 
     def routed_filesystem(url, *, fixed_upload_size=False):
