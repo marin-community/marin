@@ -23,6 +23,7 @@ from sqlalchemy.engine import Engine
 logger = logging.getLogger(__name__)
 
 POOL_SIZE = 5
+GRANT_LOCK_TIMEOUT = "5s"
 DATABASE_URL_ENV = "MARINA_DATABASE_URL"
 CLOUDSQL_CONNECTION_ENV = "CLOUDSQL_CONNECTION"
 PGDATABASE_ENV = "PGDATABASE"
@@ -87,6 +88,22 @@ def _bare_engine(spec: DatabaseSpec) -> Engine:
 def schema_name(app: str) -> str:
     """The Postgres schema for an app: hyphens become underscores."""
     return app.replace("-", "_")
+
+
+def grant_read(engine: Engine, schema: str, role: str) -> None:
+    """Let ``role`` read ``schema``, including tables an app adds later.
+
+    People hold a Cloud SQL group login for queries the apps do not expose; every write
+    still goes through an app as the service account.
+
+    ``GRANT`` takes each table's exclusive lock, which would otherwise queue behind a long
+    write and hold every reader behind it, so the grant gives up rather than wait.
+    """
+    with engine.begin() as conn:
+        conn.execute(text(f"SET LOCAL lock_timeout = '{GRANT_LOCK_TIMEOUT}'"))
+        conn.execute(text(f'GRANT USAGE ON SCHEMA "{schema}" TO "{role}"'))
+        conn.execute(text(f'GRANT SELECT ON ALL TABLES IN SCHEMA "{schema}" TO "{role}"'))
+        conn.execute(text(f'ALTER DEFAULT PRIVILEGES IN SCHEMA "{schema}" GRANT SELECT ON TABLES TO "{role}"'))
 
 
 def engine_for(spec: DatabaseSpec, app: str) -> Engine:

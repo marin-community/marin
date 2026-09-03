@@ -12,7 +12,7 @@ import pytest
 import uvicorn
 
 from marina.apps import is_python_app, migration, services_for
-from marina.db import database_from_env
+from marina.db import database_from_env, grant_read, schema_name
 from marina.journey_plugin import DEFAULT_SHOTS_DIR, JOURNEYS_DIR
 from marina.manifest import discover_apps
 from marina.server import APPS_DIR_ENV, MarinaConfig, create_app
@@ -55,7 +55,8 @@ def build(apps_dir: Path, only: tuple[str, ...]) -> None:
 @cli.command()
 @click.option("--apps-dir", type=click.Path(path_type=Path), default=DEFAULT_APPS_DIR, show_default=True)
 @click.option("--only", multiple=True, help="Migrate only these apps.")
-def migrate(apps_dir: Path, only: tuple[str, ...]) -> None:
+@click.option("--reader", help="Postgres role to grant read access on every schema migrated.")
+def migrate(apps_dir: Path, only: tuple[str, ...], reader: str | None) -> None:
     """Run each Python app's migrate() against its schema on the database the environment names."""
     database = database_from_env(os.environ)
     if database is None:
@@ -69,7 +70,10 @@ def migrate(apps_dir: Path, only: tuple[str, ...]) -> None:
         if run is None:
             continue
         click.echo(f"== {app.name}: migrate")
-        run(services_for(app, "", database).engine())
+        engine = services_for(app, "", database).engine()
+        run(engine)
+        if reader:
+            grant_read(engine, schema_name(app.name), reader)
 
 
 @cli.command()

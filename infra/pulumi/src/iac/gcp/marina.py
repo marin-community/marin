@@ -4,9 +4,10 @@
 """GCP IAM declarations required by the Marina deploy target.
 
 One runtime service account serves every app, runs the migrate and Echo sync jobs, and is
-the only Cloud SQL IAM user of the ``marina`` database. The grants below are the union of
-what the hosted apps need: Cloud SQL login, the record buckets evaldash indexes, compute
-listing for Iris discovery, the CoreWeave storage keys, and the marinmirror token for sync.
+the only account that writes the ``marina`` database; people read it through a Cloud SQL
+group login that ``marina migrate`` grants. The grants below are the union of what the
+hosted apps need: Cloud SQL login, the record buckets evaldash indexes, compute listing for
+Iris discovery, the CoreWeave storage keys, and the marinmirror token for sync.
 """
 
 from collections.abc import Mapping
@@ -27,6 +28,8 @@ _SERVICE = "marina"
 _DATA_BUCKET = "marin-marina"
 _MIRROR_TOKEN_SECRET = "marinmirror-token"
 _COREWEAVE_SECRETS = ("cw-object-storage-key-id", "cw-object-storage-key-secret")
+# The Cloud SQL group login `marina migrate` grants read on every app schema.
+_READER_GROUP = "group:eng-all@openathena.ai"
 
 
 def iam_grants(project: str, principals: Mapping[str, GcpEncryptedMember]) -> GcpIamGrantSet:
@@ -37,8 +40,8 @@ def iam_grants(project: str, principals: Mapping[str, GcpEncryptedMember]) -> Gc
     iap_agent = f"serviceAccount:service-{_PROJECT_NUMBER}@gcp-sa-iap.iam.gserviceaccount.com"
     return GcpIamGrantSet(
         project_grants=(
-            GcpRoleGrant(role="roles/cloudsql.client", members=(runtime_account,)),
-            GcpRoleGrant(role="roles/cloudsql.instanceUser", members=(runtime_account,)),
+            GcpRoleGrant(role="roles/cloudsql.client", members=(runtime_account, _READER_GROUP)),
+            GcpRoleGrant(role="roles/cloudsql.instanceUser", members=(runtime_account, _READER_GROUP)),
             GcpRoleGrant(role="roles/compute.viewer", members=(runtime_account,)),
             GcpRoleGrant(role="roles/storage.objectViewer", members=(runtime_account,)),
             # Cloud Scheduler runs the sync job as the runtime account.

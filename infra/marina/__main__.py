@@ -4,8 +4,8 @@
 """Pulumi entry point for Marina: one Cloud Run service serving every app under infra/marina/apps.
 
 The stack also carries the ``context`` database and the Loom VM's Cloud SQL login, which the
-codehealth review workbench (infra/codehealth) uses directly; they predate Marina and are
-adopted from the retired echo stack with ``pulumi import``.
+codehealth review workbench (infra/codehealth) uses directly, and the group login people
+read the apps' schemas with.
 
 The stack owns what the apps share: the ``marina`` database on the ``marin-metadata`` Cloud
 SQL instance (one schema per Python app, all owned by the service account), the
@@ -42,6 +42,9 @@ DATABASE_USER = SERVICE_ACCOUNT.removesuffix(".gserviceaccount.com")
 # The codehealth workbench's database and its writer (infra/codehealth/review_store.py).
 CODEHEALTH_DATABASE = "context"
 LOOM_DATABASE_USER = "loom-vm@hai-gcp-models.iam"
+# Cloud SQL group login for people: members read any app's schema under their own Google
+# identity, without a database user each. ``marina migrate`` grants it.
+READER_GROUP = "eng-all@openathena.ai"
 MIGRATE_JOB = "marina-migrate"
 ECHO_SYNC_JOB = "marina-echo-sync"
 # marinmirror bearer token: a GitHub PAT (read:org) of an Open-Athena member.
@@ -110,17 +113,8 @@ def job_template(
 
 def main() -> None:
     config = pulumi.Config()
-    # First bring-up: `pulumi config set marin-marina:import true` adopts the secret, the
-    # context database, and the Loom SQL user that the retired echo stack created.
-    adopt = config.get_bool("import") or False
-    # Set once the old echo-api and marin-evaldash services are gone: the old vanity hosts
-    # then map here and the kernel redirects them into their apps.
-    alias_hosts = config.get_bool("alias_hosts") or False
     gcp_provider = gcp.Provider("gcp", project=PROJECT)
     child = pulumi.ResourceOptions(provider=gcp_provider)
-
-    def adopted(resource_id: str) -> pulumi.ResourceOptions:
-        return pulumi.ResourceOptions.merge(child, pulumi.ResourceOptions(import_=resource_id if adopt else None))
 
     project_number = gcp.organizations.get_project(
         project_id=PROJECT, opts=pulumi.InvokeOptions(provider=gcp_provider)
@@ -132,7 +126,7 @@ def main() -> None:
         name=CODEHEALTH_DATABASE,
         instance=INSTANCE,
         project=PROJECT,
-        opts=adopted(f"projects/{PROJECT}/instances/{INSTANCE}/databases/{CODEHEALTH_DATABASE}"),
+        opts=child,
     )
     loom_user = gcp.sql.User(
         "loom-db-user",
@@ -140,7 +134,15 @@ def main() -> None:
         instance=INSTANCE,
         project=PROJECT,
         type="CLOUD_IAM_SERVICE_ACCOUNT",
-        opts=adopted(f"{PROJECT}/{INSTANCE}//{LOOM_DATABASE_USER}"),
+        opts=child,
+    )
+    reader_group = gcp.sql.User(
+        "reader-group",
+        name=READER_GROUP,
+        instance=INSTANCE,
+        project=PROJECT,
+        type="CLOUD_IAM_GROUP",
+        opts=child,
     )
     bucket = gcp.storage.Bucket(
         "data",
@@ -155,7 +157,7 @@ def main() -> None:
         secret_id=MARINMIRROR_TOKEN_SECRET,
         project=PROJECT,
         replication=gcp.secretmanager.SecretReplicationArgs(auto=gcp.secretmanager.SecretReplicationAutoArgs()),
-        opts=adopted(f"projects/{PROJECT}/secrets/{MARINMIRROR_TOKEN_SECRET}"),
+        opts=child,
     )
     # CoreWeave object-storage keys for evaldash's s3:// record prefixes. Values stay in Secret Manager.
     coreweave_keys = (
@@ -180,7 +182,7 @@ def main() -> None:
         create=f"uv run {GRANTS_SCRIPT}",
         triggers=[GRANTS_SCRIPT.read_text()],
         environment={"GOOGLE_CLOUD_QUOTA_PROJECT": PROJECT},
-        opts=pulumi.ResourceOptions(depends_on=[database_user, loom_user, database, codehealth_database]),
+        opts=pulumi.ResourceOptions(depends_on=[database_user, loom_user, reader_group, database, codehealth_database]),
     )
 
     # Every app's migrate() is idempotent, so the job runs after each image change and the
@@ -193,7 +195,14 @@ def main() -> None:
             location=REGION,
             deletion_protection=False,
             template=gcp.cloudrunv2.JobTemplateArgs(
-                template=job_template(image_ref, ["marina", "migrate"], DATABASE_ENV, (), cpu="1", memory="1Gi")
+                template=job_template(
+                    image_ref,
+                    ["marina", "migrate", "--reader", READER_GROUP],
+                    DATABASE_ENV,
+                    (),
+                    cpu="1",
+                    memory="1Gi",
+                )
             ),
             opts=pulumi.ResourceOptions.merge(child, pulumi.ResourceOptions(depends_on=[database_user, grants])),
         )
@@ -276,7 +285,7 @@ def main() -> None:
     # server-set metadata, so those fields are ignored. Set marin-marina:dns_zone_id to enable.
     dns_zone_id = config.get("dns_zone_id")
     if dns_zone_id:
-        for host in (MARINA_HOST, *(HOST_APPS if alias_hosts else ())):
+        for host in (MARINA_HOST, *HOST_APPS):
             slug = host.split(".")[0]
             gcp.cloudrun.DomainMapping(
                 f"{slug}-domain",
