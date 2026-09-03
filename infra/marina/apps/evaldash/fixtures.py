@@ -49,8 +49,7 @@ from marin.evaluation.records import (
     write_record,
 )
 
-# The dashboard's EvalProfileChart highlights this reference model; keep it in the fixtures so that
-# view renders its emphasis. See dashboard/src/components/charts/EvalProfileChart.vue.
+# The one model with a run in every suite, so a view that compares models has a complete series.
 REFERENCE_MODEL = "snowball"
 
 USER = "dev@marin"

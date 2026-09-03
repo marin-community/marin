@@ -86,11 +86,6 @@ class EchoConfig:
     service_revision: str | None = None
 
 
-DEFAULT_CONFIG = EchoConfig(
-    public_path=search_config.PUBLIC_PATH,
-)
-
-
 def environment_config() -> EchoConfig:
     # The kernel mounts the app at its directory name, so the path the API hands out is
     # fixed by the deployment rather than configurable.
@@ -103,9 +98,7 @@ def environment_config() -> EchoConfig:
 def create_api(services: Services) -> FastAPI:
     """The ASGI app the kernel mounts at ``/echo/api/``.
 
-    The engine is the kernel's, on Echo's own schema. The ONNX models are not loaded here:
-    the kernel process serves every Marina app, so the first search loads them instead of
-    every deploy paying for them (see :mod:`echo.models`).
+    The engine is the kernel's, on Echo's own schema.
     """
     api = FastAPI(
         title="echo",

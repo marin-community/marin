@@ -1,4 +1,4 @@
-// Shapes returned by the evaldash server (src/server.py). Kept in sync with the
+// Shapes returned by the evaldash API (app.py). Kept in sync with the
 // dict shapes that RecordStore, cluster.py, and samples.py produce.
 
 export const RUN_STATUS = {

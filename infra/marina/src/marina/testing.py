@@ -35,10 +35,11 @@ def _wait_ready(url: str) -> None:
                 with engine.connect() as conn:
                     conn.execute(sqlalchemy.text("SELECT 1"))
                 return
-            except sqlalchemy.exc.SQLAlchemyError as error:
-                # A container that is still starting refuses the connection; anything else
-                # (bad credentials, bad URL) refuses it just as often, so keep the last one
-                # to report instead of a bare timeout.
+            except (sqlalchemy.exc.SQLAlchemyError, OSError) as error:
+                # A container that is still starting refuses the connection, or resets it
+                # mid-handshake, which reaches here as a bare OSError from the driver. A bad
+                # credential or URL refuses it just as often, so keep the last one to report
+                # instead of a bare timeout.
                 refused = error
                 time.sleep(0.3)
         raise RuntimeError(f"postgres at {url} did not become ready within {START_TIMEOUT}s") from refused

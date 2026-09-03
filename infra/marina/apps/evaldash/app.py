@@ -766,7 +766,7 @@ async def _reload_catalog_loop(store: PgRecordStore) -> None:
     )
 
 
-class BackgroundLoops:
+class ApiWithBackgroundLoops:
     """The API, with its background loops started on the first request it serves.
 
     Starlette delivers lifespan events only to the top-level application, and the kernel mounts this
@@ -947,7 +947,7 @@ class NullClusterGateway:
         return {"reachable": False, "error": "local mode: cluster unavailable", "source": "", "entries": []}
 
 
-def build_api(store: RecordStore, gateway: ClusterGatewayLike, config: EvaldashConfig) -> BackgroundLoops:
+def build_api(store: RecordStore, gateway: ClusterGatewayLike, config: EvaldashConfig) -> ApiWithBackgroundLoops:
     """Build the JSON API over a store, the cluster gateway, and the resolved configuration.
 
     ``config.prefixes`` are the record roots the background ingest scans; an empty tuple disables
@@ -1174,7 +1174,7 @@ def build_api(store: RecordStore, gateway: ClusterGatewayLike, config: EvaldashC
     loops: tuple[Callable[[], Awaitable[None]], ...] = (ingestor.run_loop,)
     if isinstance(store, PgRecordStore):
         loops += (functools.partial(_reload_catalog_loop, store),)
-    return BackgroundLoops(Starlette(routes=routes), loops)
+    return ApiWithBackgroundLoops(Starlette(routes=routes), loops)
 
 
 def create_api(services: Services) -> ASGIApp:

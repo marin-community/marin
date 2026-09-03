@@ -25,6 +25,7 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import prefix_join
 from rigging.server_auth import (
     RequestAuthPolicy,
     RouteAuthMiddleware,
@@ -194,7 +195,7 @@ async def serve_data_file(app: AppManifest, data_root: str, path: str) -> Respon
     if relative is None:
         return JSONResponse({"error": "not found"}, status_code=404)
     fs, root = url_to_fs(data_url_for(data_root, app.name))
-    target = f"{root}/{relative}"
+    target = prefix_join(root, relative)
     headers = {"Content-Security-Policy": content_security_policy(app), "Cache-Control": DATA_CACHE_CONTROL}
     media_type = mimetypes.guess_type(relative)[0] or "application/octet-stream"
     if await run_in_threadpool(fs.isfile, target):
@@ -304,8 +305,3 @@ def create_app(config: MarinaConfig) -> RouteAuthMiddleware:
         install_app_routes(api, app, config.data_root)
 
     return RouteAuthMiddleware(api, policy)
-
-
-def asgi() -> RouteAuthMiddleware:
-    """Uvicorn factory entry point: ``uvicorn --factory marina.server:asgi``."""
-    return create_app(MarinaConfig.from_env(Path.cwd() / "apps"))
