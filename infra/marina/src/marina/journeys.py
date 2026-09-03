@@ -1,18 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Journeys: a person walks through an app in a real browser, and the walk is a test.
+"""Browser tests against an in-process kernel.
 
-A journey drives the kernel the way production is driven: the apps are served by an
-in-process kernel on a loopback port, a Chromium page loads them, and the spec speaks
-in what a person sees and presses (``sees``, ``click``, ``fill``) rather than in
-selectors. Screenshots are kept for every passing screen, because the passing screen is
-the one a design pass wants to look at. Every uncaught page error and every failed
-same-origin API call is collected while the journey runs and asserted at the end, so a
-screen that refuses quietly still fails.
-
-Specs live in ``apps/<name>/journeys/test_*.py`` and receive a :class:`Journey` from
-the ``journey`` fixture in :mod:`marina.journey_plugin`.
+``Kernel`` runs the apps on a loopback port; ``Journey`` wraps a Playwright page with
+text-based helpers (``sees``, ``click``, ``fill``), screenshots, and a record of page
+errors and failed API calls that ``finish`` asserts on. Specs live in
+``apps/<name>/journeys/test_*.py`` and take the ``journey`` fixture from
+:mod:`marina.journey_plugin`.
 """
 
 import contextlib

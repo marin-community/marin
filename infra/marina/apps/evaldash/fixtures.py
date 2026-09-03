@@ -23,8 +23,7 @@ import sys
 from datetime import datetime, timedelta
 
 from fsspec.core import url_to_fs
-
-from evaldash.marin_evaluation.archive import (
+from marin.evaluation.archive import (
     SAMPLES_PREFIX,
     SAMPLES_SUFFIX,
     Choice,
@@ -34,7 +33,7 @@ from evaldash.marin_evaluation.archive import (
     SampleKind,
     write_sample_parquet,
 )
-from evaldash.marin_evaluation.records import (
+from marin.evaluation.records import (
     RECORD_FILE,
     EvalRef,
     EvalRunRecord,

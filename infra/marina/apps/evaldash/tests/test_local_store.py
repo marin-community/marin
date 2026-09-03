@@ -13,7 +13,7 @@ from collections.abc import Iterator
 import pytest
 from evaldash import app as evaldash_app
 from evaldash import fixtures, metrics, samples
-from evaldash.marin_evaluation.records import list_records, write_record
+from marin.evaluation.records import list_records, write_record
 from starlette.testclient import TestClient
 
 

@@ -20,6 +20,8 @@ const total = ref(0)
 const problem = ref('')
 const searching = ref(false)
 const asked = ref('')
+// Only the newest request may write results; an older, slower answer is dropped.
+let latest = 0
 
 const rows = computed(() =>
   found.value.map((row) => ({
@@ -36,28 +38,34 @@ async function run(): Promise<void> {
   searching.value = true
   problem.value = ''
   asked.value = needle
+  const request = ++latest
   try {
     const answer = await search(needle, 0)
+    if (request !== latest) return
     found.value = answer.rows
     total.value = answer.total
   } catch (error) {
+    if (request !== latest) return
     problem.value = String(error)
     found.value = []
     total.value = 0
   } finally {
-    searching.value = false
+    if (request === latest) searching.value = false
   }
 }
 
 async function more(): Promise<void> {
   searching.value = true
+  const request = ++latest
   try {
     const answer = await search(asked.value, found.value.length)
+    if (request !== latest) return
     found.value = [...found.value, ...answer.rows]
   } catch (error) {
+    if (request !== latest) return
     problem.value = String(error)
   } finally {
-    searching.value = false
+    if (request === latest) searching.value = false
   }
 }
 

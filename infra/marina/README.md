@@ -120,12 +120,15 @@ cd infra/marina && uv run pulumi up
 ```
 
 The image builds from the repository root (`Dockerfile.dockerignore` allowlists
-what it copies). IAM for the service account, the deploy account, and IAP
-viewers is declared in the `marin` stack by `infra/pulumi/src/iac/gcp/marina.py`;
-apply that stack first when the grants change. `pulumi up` then builds the
-image, updates the service and the two jobs, and executes `marina-migrate`
-against the new image. `marina-echo-sync` runs the same image every ten
-minutes.
+what it copies). `pulumi up` builds the image, updates the service and the two
+jobs, and executes `marina-migrate` against the new image. `marina-echo-sync`
+runs the same image every ten minutes.
+
+IAM for the service account, the deploy account, and IAP viewers is declared in
+the `marin` stack by `infra/pulumi/src/iac/gcp/marina.py`. Its bindings attach
+to the repository, service, and bucket this stack creates, so a first deployment
+runs this stack as a privileged operator and then applies the `marin` stack;
+after that, apply `marin` whenever the grants change.
 
 Data under the bucket is uploaded by hand when an app's files change:
 

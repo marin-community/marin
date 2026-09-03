@@ -20,9 +20,8 @@ import json
 import logging
 import os
 
+from marin.evaluation.archive import EvalSample, SampleKind
 from pydantic import BaseModel, ConfigDict
-
-from evaldash.marin_evaluation.archive import EvalSample, SampleKind
 
 from . import samples
 

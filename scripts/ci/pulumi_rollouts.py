@@ -57,7 +57,6 @@ ROLLOUTS = (
             "lib/finelog",
             "lib/finestore",
             "lib/iris",
-            # Vendored into apps/evaldash; the change runs the drift guard, not a deploy.
             "lib/marin/src/marin/evaluation",
             "lib/rigging",
         ),

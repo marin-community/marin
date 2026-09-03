@@ -15,9 +15,10 @@ from marina.apps import is_python_app, migration, services_for
 from marina.db import database_from_env
 from marina.journey_plugin import DEFAULT_SHOTS_DIR, JOURNEYS_DIR
 from marina.manifest import discover_apps
-from marina.server import MarinaConfig, create_app
+from marina.server import APPS_DIR_ENV, MarinaConfig, create_app
 
-DEFAULT_APPS_DIR = Path(__file__).resolve().parents[2] / "apps"
+# The environment wins so the deployed image (MARINA_APPS_DIR=/app/apps) runs `marina migrate` unchanged.
+DEFAULT_APPS_DIR = Path(os.environ.get(APPS_DIR_ENV) or Path(__file__).resolve().parents[2] / "apps")
 # Where `marina dev` reads app data: one directory per app, mirroring the production bucket.
 DEFAULT_DATA_ROOT = Path(__file__).resolve().parents[2] / ".data"
 DEFAULT_PORT = 8080

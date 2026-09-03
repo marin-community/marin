@@ -20,6 +20,7 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 
 import sqlalchemy
+from marin.evaluation.records import EvalRunRecord
 from sqlalchemy import (
     JSON,
     BigInteger,
@@ -40,8 +41,6 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection, Engine
-
-from evaldash.marin_evaluation.records import EvalRunRecord
 
 from .db_migrations import apply_migrations
 

@@ -28,10 +28,7 @@ from finestore.layout import FormatVersionError
 from finestore.migrations import LEGACY_READ_FORMAT_VERSION, LegacyReadView
 from finestore.reader import ReadView
 from fsspec.core import url_to_fs
-from pydantic import BaseModel, ConfigDict
-from rigging.filesystem.storage_path import StoragePath
-
-from evaldash.marin_evaluation.archive import (
+from marin.evaluation.archive import (
     ARCHIVE_SAMPLES_TABLE,
     FILTER_COLUMN,
     SAMPLES_PREFIX,
@@ -41,6 +38,8 @@ from evaldash.marin_evaluation.archive import (
     primary_metric,
     sample_from_archive_row,
 )
+from pydantic import BaseModel, ConfigDict
+from rigging.filesystem.storage_path import StoragePath
 
 logger = logging.getLogger(__name__)
 
