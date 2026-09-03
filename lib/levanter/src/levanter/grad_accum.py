@@ -17,6 +17,7 @@ from jax.sharding import PartitionSpec
 
 from levanter.metrics import Metric
 from levanter.metrics import fold as fold_metric
+from levanter.pipeline import reshape_array_into_microbatches
 from levanter.utils.jax_utils import zeros_like_tree
 
 Args = ParamSpec("Args")
@@ -174,7 +175,7 @@ def _reshape_for_microbatch(Batch: Axis, Microbatch: Axis, AccumStep: Axis, inpu
             x = x.unflatten_axis(Batch, (AccumStep, Microbatch))
             return hax.shard(x, axis_mapping)
         elif isinstance(x, jnp.ndarray) and x.ndim > 0 and x.shape[0] == Batch.size:
-            x = x.reshape((AccumStep.size, Microbatch.size) + x.shape[1:])
+            x = reshape_array_into_microbatches(x, AccumStep.size)
             return with_sharding_constraint(x, PartitionSpec(None, ResourceAxis.DATA, *(None,) * (len(x.shape) - 2)))
         else:
             # assert jnp.isscalar(x)

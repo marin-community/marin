@@ -47,6 +47,26 @@ dependencies = [
     "marin-dupekit",
 ]
 
+[project.optional-dependencies]
+# Keep this CUDA stack separate from marin-levanter[gpu] while JaxPP requires
+# JAX <=0.11.0 and Levanter GPU pins 0.11.1. Once those versions align, make
+# this extra depend on marin-levanter[gpu] instead of listing its GPU packages.
+pipeline = [
+    "jaxpp",
+    "marin-levanter",
+    "jax[cuda13]==0.11.0",
+    "nvidia-cublas>=13.2.0.9; sys_platform == 'linux'",
+    "nvidia-nccl-cu13>=2.31.2; sys_platform == 'linux'",
+    "nvidia-cutlass-dsl[cu13]==4.6.0; sys_platform == 'linux'",
+    "flash-attn-4[cu13]>=4.0.0b16,<4.1; sys_platform == 'linux'",
+    "quack-kernels[cu13]==0.6.1; sys_platform == 'linux'",
+    "jax-triton==0.3.1; sys_platform == 'linux'",
+    "triton>=3.6.0,<3.7; sys_platform == 'linux'",
+    # Flash Attention's Python helpers import Torch, but the Grug kernels execute
+    # through JAX/CuTe. Keep the pipeline environment on one CUDA runtime.
+    "torch==2.11.0+cpu; sys_platform == 'linux'",
+]
+
 [tool.uv]
 fork-strategy = "fewest"
 # "explicit": allow pre-releases only for packages whose declared specifier
@@ -114,6 +134,38 @@ conflicts = [
         { package = "marin-core", extra = "tpu" },
     ],
     [
+        { package = "marin-root", extra = "pipeline" },
+        { package = "marin-core", extra = "gpu" },
+    ],
+    [
+        { package = "marin-root", extra = "pipeline" },
+        { package = "marin-core", extra = "cpu" },
+    ],
+    [
+        { package = "marin-root", extra = "pipeline" },
+        { package = "marin-core", extra = "tpu" },
+    ],
+    [
+        { package = "marin-root", extra = "pipeline" },
+        { package = "marin-levanter", extra = "gpu" },
+    ],
+    [
+        { package = "marin-root", extra = "pipeline" },
+        { package = "marin-levanter", extra = "tpu" },
+    ],
+    [
+        { package = "marin-root", extra = "pipeline" },
+        { package = "marin-fray", group = "fray_tpu_test" },
+    ],
+    [
+        { package = "marin-root", extra = "pipeline" },
+        { package = "marin-iris", group = "dev" },
+    ],
+    [
+        { package = "marin-root", extra = "pipeline" },
+        { package = "marin-iris", group = "test" },
+    ],
+    [
         { package = "marin-core", extra = "gpu" },
         { package = "marin-levanter", extra = "tpu" },
     ],
@@ -167,6 +219,8 @@ marin-rigging = { workspace = true }
 marin-zephyr = { workspace = true }
 marin-finestore = { workspace = true }
 marin-iac = { workspace = true }
+jaxpp = { git = "https://github.com/NVIDIA/jaxpp.git", rev = "46b8443eed01f54688dd24ae451203a504b1cff8" }
+torch = [{ index = "pytorch-cpu", extra = "pipeline", marker = "sys_platform == 'linux'" }]
 nvidia-cutlass-dsl = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-base = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-cu13 = { index = "nvidia" }
@@ -178,6 +232,10 @@ name = "nvidia"
 url = "https://pypi.nvidia.com"
 explicit = true
 
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [tool.black]
 line-length = 121
