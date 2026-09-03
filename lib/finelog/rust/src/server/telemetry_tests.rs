@@ -1369,14 +1369,15 @@ async fn an_explicit_local_cache_conflicting_with_the_managed_policy_is_rejected
         ..RegisterTableRequest::default()
     };
     let service = StatsServiceImpl::new(Arc::clone(&store));
-    let error = service
+    let Err(error) = service
         .register_table(
             local_ctx(),
             OwnedRegisterTableRequestView::from_owned(&request).unwrap(),
         )
         .await
-        .err()
-        .expect("a conflicting explicit local_cache must be refused");
+    else {
+        panic!("a conflicting explicit local_cache must be refused");
+    };
     assert!(
         error.to_string().contains("local_cache"),
         "unexpected error: {error}",

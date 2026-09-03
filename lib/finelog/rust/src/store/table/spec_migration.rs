@@ -465,29 +465,46 @@ async fn rewrite_batch(
         })
         .collect();
     let staging_dir = staging.path().to_path_buf();
-    let swap = tokio::task::spawn_blocking(move || {
-        run_job_with_partition_policy(
-            &job,
-            &staging_dir,
-            &arrow_schema,
-            CompactionExecution {
-                layout: CompactionLayout {
-                    sort_columns: &sort_columns,
-                    key_column: &key_column,
-                    max_row_group_rows,
+    // The rewrite runs on one dedicated thread at the lowest scheduling
+    // priority, NOT on the shared blocking pool: a backfill is minutes of
+    // saturated CPU per batch, and at pool priority it starves the query path
+    // of the very table being migrated. At nice(19) the OS grants it only
+    // cycles the serving threads leave idle, which is all the pacing a
+    // migration needs.
+    let (send_swap, receive_swap) = tokio::sync::oneshot::channel();
+    std::thread::Builder::new()
+        .name("finelog-migration".to_string())
+        .spawn(move || {
+            #[cfg(unix)]
+            unsafe {
+                libc::nice(19);
+            }
+            let _ = send_swap.send(run_job_with_partition_policy(
+                &job,
+                &staging_dir,
+                &arrow_schema,
+                CompactionExecution {
+                    layout: CompactionLayout {
+                        sort_columns: &sort_columns,
+                        key_column: &key_column,
+                        max_row_group_rows,
+                    },
+                    index_config: &index_config,
+                    partition_policy: partitions
+                        .as_ref()
+                        .map(|policy| policy as &dyn PhysicalPartitionPolicy),
+                    max_merge_arrow_bytes,
+                    output: OutputPolicy::AlwaysRewrite,
                 },
-                index_config: &index_config,
-                partition_policy: partitions
-                    .as_ref()
-                    .map(|policy| policy as &dyn PhysicalPartitionPolicy),
-                max_merge_arrow_bytes,
-                output: OutputPolicy::AlwaysRewrite,
-            },
-            move |path| bounds_by_path.get(path).copied().unwrap_or((None, None)),
-        )
-    })
-    .await
-    .map_err(|error| StatsError::Internal(format!("migration rewrite task panicked: {error}")))??;
+                move |path| bounds_by_path.get(path).copied().unwrap_or((None, None)),
+            ));
+        })
+        .map_err(|error| {
+            StatsError::Internal(format!("spawn migration rewrite thread: {error}"))
+        })?;
+    let swap = receive_swap
+        .await
+        .map_err(|_| StatsError::Internal("migration rewrite thread died".to_string()))??;
 
     let consumed: Vec<&BatchSource> = swap
         .removed

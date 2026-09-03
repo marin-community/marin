@@ -7,6 +7,8 @@
 //! maintenance lease, and `local_driver` compacts the local files of a legacy
 //! table. Both run the same executor.
 
+#[cfg(test)]
+mod backfill_bench;
 pub mod config;
 pub mod executor;
 pub mod local_driver;

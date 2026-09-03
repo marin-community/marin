@@ -35,7 +35,8 @@ use crate::indices::{local_sidecar_artifacts, write_segment_index, SegmentIndexC
 use crate::partition_policy::{segment_path, PhysicalPartitionPolicy, SegmentPartition};
 use crate::store::compaction::config::CompactionJob;
 use crate::store::compaction::merge::{
-    kway_merge, project_to_schema, sort_batch_by, sort_col_indices,
+    merge_row_converter, merge_runs, project_to_schema, sort_batch_to_run, sort_col_indices,
+    SortedRun,
 };
 use crate::store::segment::{read_segment_footer, segment_writer_properties_with_partition};
 use crate::store::table_state::LocalArtifacts;
@@ -295,7 +296,9 @@ fn apply_merge(
     // An input that does not fit is therefore read, measured, and dropped again —
     // one input of transient RAM over the ceiling, the price of measuring instead
     // of guessing.
-    let mut projected: Vec<RecordBatch> = Vec::new();
+    let converter = merge_row_converter(arrow_schema, &sort_cols)
+        .map_err(|e| StatsError::Internal(format!("merge row converter: {e}")))?;
+    let mut projected: Vec<SortedRun> = Vec::new();
     let mut consumed: Vec<&SegmentRow> = Vec::new();
     let mut input_arrow_bytes: i64 = 0;
     for inp in &job.inputs {
@@ -335,15 +338,15 @@ fn apply_merge(
                 break;
             }
         };
-        let mut batches: Vec<RecordBatch> = Vec::new();
+        let mut batches: Vec<SortedRun> = Vec::new();
         let mut batch_bytes: i64 = 0;
         for b in raw {
             let projected_batch = project_to_schema(&b, arrow_schema)
                 .map_err(|e| StatsError::Internal(format!("project merge input: {e}")))?;
-            let sorted = sort_batch_by(&projected_batch, &sort_cols)
+            let run = sort_batch_to_run(&projected_batch, &converter, &sort_cols)
                 .map_err(|e| StatsError::Internal(format!("sort merge input: {e}")))?;
-            batch_bytes = batch_bytes.saturating_add(sorted.get_array_memory_size() as i64);
-            batches.push(sorted);
+            batch_bytes = batch_bytes.saturating_add(run.batch().get_array_memory_size() as i64);
+            batches.push(run);
         }
         if !consumed.is_empty()
             && input_arrow_bytes.saturating_add(batch_bytes) > execution.max_merge_arrow_bytes
@@ -372,12 +375,12 @@ fn apply_merge(
         );
     }
 
-    let merged = kway_merge(&projected, &sort_cols)
-        .map_err(|e| StatsError::Internal(format!("k-way merge: {e}")))?;
-    // `kway_merge` copied the rows it needs into `merged`; free the sorted inputs
-    // now so the segment isn't held in RAM twice through the Parquet + index
-    // writes below (each input plus the output is a fully materialized,
-    // uncompressed copy of the segment).
+    let merged =
+        merge_runs(&projected).map_err(|e| StatsError::Internal(format!("k-way merge: {e}")))?;
+    // `merge_runs` copied the rows it needs into `merged`; free the inputs now
+    // so the segment isn't held in RAM twice through the Parquet + index writes
+    // below (each input plus the output is a fully materialized, uncompressed
+    // copy of the segment).
     drop(projected);
     let output_batches: Vec<(Option<SegmentPartition>, Vec<RecordBatch>)> = if needs_repartition {
         execution
@@ -483,10 +486,16 @@ pub fn read_segment_projected(
     path: &Path,
     columns: Option<&[&str]>,
 ) -> Result<Vec<RecordBatch>, StatsError> {
+    // Far above the 1,024-row arrow default, which shredded a 46k-row segment
+    // into ~45 batches and multiplied the k-way merge's fan-in and per-chunk
+    // interleave setup by the same factor. Bounded so one batch's decoded Utf8
+    // stays well under the 2^31 offset ceiling even for high-ratio log text.
+    const READ_BATCH_ROWS: usize = 65_536;
     let file = std::fs::File::open(path)
         .map_err(|e| StatsError::Internal(format!("open merge input {}: {e}", path.display())))?;
     let builder = ParquetRecordBatchReaderBuilder::try_new(file)
-        .map_err(|e| StatsError::Internal(format!("parquet reader {}: {e}", path.display())))?;
+        .map_err(|e| StatsError::Internal(format!("parquet reader {}: {e}", path.display())))?
+        .with_batch_size(READ_BATCH_ROWS);
     let builder = match columns {
         None => builder,
         Some(wanted) => {
@@ -1197,9 +1206,10 @@ mod tests {
     fn merge_multi_row_group_input_no_concat() {
         let dir = tempdir("multirg");
 
-        // One large L0 segment: >2 row groups, written UNSORTED (descending key)
-        // so the per-batch sort is load-bearing. seq is unique and monotonic.
-        let n = 16_384_i64 * 2 + 500;
+        // One large L0 segment spanning multiple reader batches, written
+        // UNSORTED (descending key) so the per-batch sort is load-bearing. seq
+        // is unique and monotonic.
+        let n = 65_536_i64 * 2 + 500;
         let big: Vec<(i64, i64, &str)> = (1..=n).map(|s| (s, n - s + 1, "big")).collect();
         let (p_big, _) = write_segment_to_dir(&dir, 0, 1, &batch(&big)).unwrap();
         let (p_small, _) =
