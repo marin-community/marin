@@ -9,12 +9,11 @@ read the apps' schemas with.
 
 The stack owns what the apps share: the ``marina`` database on the ``marin-metadata`` Cloud
 SQL instance (one schema per Python app, all owned by the service account), the
-``marin-marina`` bucket the data root points at, the service, and two Cloud Run jobs that
-run the same image as the service under the same account: ``marina-migrate`` (executed at
-the end of every ``pulumi up`` that changes the image) and ``marina-echo-sync`` (scheduled,
-keeps Echo's corpus mirror current). IAP is the front door; the container verifies IAP's
-signed assertion against the service's audience so each request carries the caller's
-email. IAM grants live in the ``marin`` stack (iac.gcp.marina).
+``marin-marina`` bucket the data root points at, the request-based service, and the Cloud
+Run runners declared by app manifests. A runner uses the service image and account, runs
+migrations first, and then executes its app commands. IAP is the front door; the container
+verifies IAP's signed assertion against the service's audience so each request carries the
+caller's email. IAM grants live in the ``marin`` stack (iac.gcp.marina).
 
 Vanity hosts: the apps are served from ``marina.oa.dev``. ``echo.oa.dev`` and
 ``evaldash.oa.dev`` map to the same service. Legacy API paths route to the corresponding
@@ -30,6 +29,7 @@ import pulumi_cloudflare as cloudflare
 import pulumi_command as command
 import pulumi_gcp as gcp
 from iac.gcp.cloud_run import CloudRunService, CloudRunServiceArgs, SecretEnv
+from marina.manifest import JobRunner, discover_apps, job_runners
 
 PROJECT = "hai-gcp-models"
 REGION = "us-central1"
@@ -48,8 +48,8 @@ LOOM_DATABASE_USER = "loom-vm@hai-gcp-models.iam"
 # Cloud SQL group login for people: members read any app's schema under their own Google
 # identity, without a database user each. ``marina migrate`` grants it.
 READER_GROUP = "eng-all@openathena.ai"
-MIGRATE_JOB = "marina-migrate"
-ECHO_SYNC_JOB = "marina-echo-sync"
+DEPLOY_RUNNER = "hourly"
+EVALDASH_RUNNER = "evaldash"
 # marinmirror bearer token: a GitHub PAT (read:org) of an Open-Athena member.
 MARINMIRROR_TOKEN_SECRET = "marinmirror-token"
 # Google's shared frontend for Cloud Run domain mappings; vanity CNAMEs point here.
@@ -57,6 +57,7 @@ CLOUD_RUN_FRONTEND = "ghs.googlehosted.com"
 HOST_APPS = {"echo.oa.dev": "echo", "evaldash.oa.dev": "evaldash"}
 MARINA_HOST = "marina.oa.dev"
 GRANTS_SCRIPT = Path(__file__).parent / "database_grants.py"
+APPS_DIR = Path(__file__).parent / "apps"
 
 DATABASE_ENV = {"CLOUDSQL_CONNECTION": CONNECTION_NAME, "PGDATABASE": DATABASE, "PGUSER": DATABASE_USER}
 
@@ -73,12 +74,13 @@ def job_template(
     secrets: tuple[SecretEnv, ...],
     cpu: str,
     memory: str,
+    timeout: int,
 ) -> gcp.cloudrunv2.JobTemplateTemplateArgs:
     """The service image run as a job under the service account, with the Cloud SQL socket attached."""
     return gcp.cloudrunv2.JobTemplateTemplateArgs(
         service_account=SERVICE_ACCOUNT,
         max_retries=0,
-        timeout="7200s",
+        timeout=f"{timeout}s",
         volumes=[
             gcp.cloudrunv2.JobTemplateTemplateVolumeArgs(
                 name="cloudsql",
@@ -188,34 +190,47 @@ def main() -> None:
         opts=pulumi.ResourceOptions(depends_on=[database_user, loom_user, reader_group, database, codehealth_database]),
     )
 
-    # Every app's migrate() is idempotent, so the job runs after each image change and the
-    # new revision only starts once its schema is in place.
-    def migrate_before_deploy(image_ref: pulumi.Output[str]) -> tuple[pulumi.Resource, ...]:
-        migrate = gcp.cloudrunv2.Job(
-            "migrate",
-            name=MIGRATE_JOB,
-            project=PROJECT,
-            location=REGION,
-            deletion_protection=False,
-            template=gcp.cloudrunv2.JobTemplateArgs(
-                template=job_template(
-                    image_ref,
-                    ["marina", "migrate", "--reader", READER_GROUP],
-                    DATABASE_ENV,
-                    (),
-                    cpu="1",
-                    memory="1Gi",
-                )
-            ),
-            opts=pulumi.ResourceOptions.merge(child, pulumi.ResourceOptions(depends_on=[database_user, grants])),
+    runners = job_runners(discover_apps(APPS_DIR))
+    runner_names = {runner.name for runner in runners}
+    for required_runner in (DEPLOY_RUNNER, EVALDASH_RUNNER):
+        if required_runner not in runner_names:
+            raise ValueError(f"Marina requires the {required_runner!r} runner")
+    registered_secrets = {
+        secret.name: secret
+        for secret in (
+            *coreweave_keys,
+            SecretEnv(name="MARINMIRROR_TOKEN", secret=MARINMIRROR_TOKEN_SECRET, wait_for=(mirror_token,)),
         )
+    }
+
+    # Every scheduled execution migrates before running app code. The deploy executes the
+    # same runner in migration-only mode, so a scheduler tick against the new image is also
+    # safe while the service revision waits for its schema.
+    def runners_before_deploy(image_ref: pulumi.Output[str]) -> tuple[pulumi.Resource, ...]:
+        resources: dict[str, gcp.cloudrunv2.Job] = {}
+        for runner in runners:
+            resources[runner.name] = scheduled_runner(
+                runner,
+                image_ref,
+                registered_secrets,
+                child,
+                database_user,
+                grants,
+            )
+
+        if DEPLOY_RUNNER not in resources:
+            raise ValueError(f"Marina requires the {DEPLOY_RUNNER!r} runner for deploy migrations")
+        deploy_job_name = f"{SERVICE}-{DEPLOY_RUNNER}"
         run = command.local.Command(
             "run-migrate",
-            create=f"gcloud run jobs execute {MIGRATE_JOB} --project {PROJECT} --region {REGION} --wait",
+            create=(
+                f"gcloud run jobs execute {deploy_job_name} --project {PROJECT} --region {REGION} --wait "
+                f"--args=marina,run,{DEPLOY_RUNNER},--reader,{READER_GROUP},--migrate-only"
+            ),
             triggers=[image_ref],
-            opts=pulumi.ResourceOptions(depends_on=[migrate]),
+            opts=pulumi.ResourceOptions(depends_on=[resources[DEPLOY_RUNNER]]),
         )
-        return (run,)
+        return (*resources.values(), run)
 
     service = CloudRunService(
         "service",
@@ -230,12 +245,13 @@ def main() -> None:
                 "MARINA_DATA_ROOT": f"gs://{DATA_BUCKET}",
                 "MARINA_HOST_APPS": ",".join(f"{host}={app}" for host, app in HOST_APPS.items()),
                 "MARINA_CANONICAL_ORIGIN": f"https://{MARINA_HOST}",
+                "EVALDASH_INGEST_JOB": f"projects/{PROJECT}/locations/{REGION}/jobs/{SERVICE}-{EVALDASH_RUNNER}",
                 **DATABASE_ENV,
             },
             secrets=coreweave_keys,
-            # Echo's search is CPU-bound inference and evaldash keeps an ingest loop running
-            # between requests, so CPU stays allocated and a warm instance is always up.
-            cpu_always_allocated=True,
+            # Keep one warm instance for Echo's model-loading latency. All non-request work
+            # runs in app-declared jobs, so the service can use request-based billing.
+            cpu_always_allocated=False,
             startup_cpu_boost=True,
             min_instances=1,
             max_instances=4,
@@ -243,44 +259,9 @@ def main() -> None:
             cpu="4",
             memory="4Gi",
             cloudsql_instances=(CONNECTION_NAME,),
-            before_deploy=migrate_before_deploy,
+            before_deploy=runners_before_deploy,
         ),
         gcp_provider=gcp_provider,
-    )
-
-    sync = gcp.cloudrunv2.Job(
-        "echo-sync",
-        name=ECHO_SYNC_JOB,
-        project=PROJECT,
-        location=REGION,
-        deletion_protection=False,
-        template=gcp.cloudrunv2.JobTemplateArgs(
-            template=job_template(
-                service.image_ref,
-                ["python", "-m", "echo.sync.main"],
-                DATABASE_ENV,
-                (SecretEnv(name="MARINMIRROR_TOKEN", secret=MARINMIRROR_TOKEN_SECRET, wait_for=(mirror_token,)),),
-                # Four CPUs keep a first repository embedding build within one attempt.
-                cpu="4",
-                memory="4Gi",
-            )
-        ),
-        opts=pulumi.ResourceOptions.merge(child, pulumi.ResourceOptions(depends_on=[database_user, mirror_token])),
-    )
-    gcp.cloudscheduler.Job(
-        "echo-sync-trigger",
-        name=f"{ECHO_SYNC_JOB}-trigger",
-        project=PROJECT,
-        region=REGION,
-        # Activity checks keep a ten-minute cadence; the repository phase advances one turn per run.
-        schedule="*/10 * * * *",
-        time_zone="Etc/UTC",
-        http_target=gcp.cloudscheduler.JobHttpTargetArgs(
-            http_method="POST",
-            uri=f"https://run.googleapis.com/v2/projects/{PROJECT}/locations/{REGION}/jobs/{ECHO_SYNC_JOB}:run",
-            oauth_token=gcp.cloudscheduler.JobHttpTargetOauthTokenArgs(service_account_email=SERVICE_ACCOUNT),
-        ),
-        opts=pulumi.ResourceOptions.merge(child, pulumi.ResourceOptions(depends_on=[sync])),
     )
 
     # Vanity hosts: a Cloud Run domain mapping per host routes it to the service and provisions
@@ -316,6 +297,62 @@ def main() -> None:
     pulumi.export("image", service.image_ref)
     pulumi.export("database", database.name)
     pulumi.export("data_root", bucket.name.apply(lambda name: f"gs://{name}"))
+
+
+def scheduled_runner(
+    runner: JobRunner,
+    image_ref: pulumi.Output[str],
+    registered_secrets: dict[str, SecretEnv],
+    child: pulumi.ResourceOptions,
+    database_user: pulumi.Resource,
+    grants: pulumi.Resource,
+) -> gcp.cloudrunv2.Job:
+    """Create one app-declared Cloud Run runner and its scheduler trigger."""
+    secret_names = sorted({secret for bound in runner.jobs for secret in bound.job.secrets})
+    unknown = set(secret_names) - registered_secrets.keys()
+    if unknown:
+        raise ValueError(f"runner {runner.name!r} declares unknown secrets {sorted(unknown)}")
+    secrets = tuple(registered_secrets[name] for name in secret_names)
+    job_name = f"{SERVICE}-{runner.name}"
+    job = gcp.cloudrunv2.Job(
+        f"{runner.name}-runner",
+        name=job_name,
+        project=PROJECT,
+        location=REGION,
+        deletion_protection=False,
+        template=gcp.cloudrunv2.JobTemplateArgs(
+            template=job_template(
+                image_ref,
+                ["marina", "run", runner.name, "--reader", READER_GROUP],
+                DATABASE_ENV,
+                secrets,
+                cpu=str(runner.cpu),
+                memory=f"{runner.memory_gib}Gi",
+                timeout=runner.timeout,
+            )
+        ),
+        opts=pulumi.ResourceOptions.merge(
+            child,
+            pulumi.ResourceOptions(
+                depends_on=[database_user, grants, *(resource for secret in secrets for resource in secret.wait_for)]
+            ),
+        ),
+    )
+    gcp.cloudscheduler.Job(
+        f"{runner.name}-trigger",
+        name=f"{job_name}-trigger",
+        project=PROJECT,
+        region=REGION,
+        schedule=runner.schedule,
+        time_zone="Etc/UTC",
+        http_target=gcp.cloudscheduler.JobHttpTargetArgs(
+            http_method="POST",
+            uri=f"https://run.googleapis.com/v2/projects/{PROJECT}/locations/{REGION}/jobs/{job_name}:run",
+            oauth_token=gcp.cloudscheduler.JobHttpTargetOauthTokenArgs(service_account_email=SERVICE_ACCOUNT),
+        ),
+        opts=pulumi.ResourceOptions.merge(child, pulumi.ResourceOptions(depends_on=[job])),
+    )
+    return job
 
 
 main()

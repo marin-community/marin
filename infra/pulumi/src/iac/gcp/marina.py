@@ -3,7 +3,7 @@
 
 """GCP IAM declarations required by the Marina deploy target.
 
-One runtime service account serves every app, runs the migrate and Echo sync jobs, and is
+One runtime service account serves every app and runs its manifest-declared Cloud Run jobs. It is
 the only account that writes the ``marina`` database; people read it through a Cloud SQL
 group login that ``marina migrate`` grants. The grants below are the union of what the
 hosted apps need: Cloud SQL login, the record buckets evaldash indexes, compute listing for
@@ -44,7 +44,7 @@ def iam_grants(project: str, principals: Mapping[str, GcpEncryptedMember]) -> Gc
             GcpRoleGrant(role="roles/cloudsql.instanceUser", members=(runtime_account, _READER_GROUP)),
             GcpRoleGrant(role="roles/compute.viewer", members=(runtime_account,)),
             GcpRoleGrant(role="roles/storage.objectViewer", members=(runtime_account,)),
-            # Cloud Scheduler runs the sync job as the runtime account.
+            # Cloud Scheduler invokes manifest-declared runners as the runtime account.
             GcpRoleGrant(role="roles/run.invoker", members=(runtime_account,)),
         ),
         secrets=(

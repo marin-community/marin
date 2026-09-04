@@ -34,7 +34,7 @@ from marina.db import database_from_env, engine_for
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from echo import repository_identity, schema
+from echo import repository_identity, schema, search_config
 from echo.sync import github_repository
 
 MARINMIRROR_URL = os.environ.get("MARINMIRROR_URL", "https://marinmirror.exe.xyz")
@@ -242,12 +242,35 @@ def run(
     return 0
 
 
+def run_all(engine: sqlalchemy.Engine, token: str, now: datetime | None = None) -> int:
+    """Sync activity once, then attempt one repository turn for every configured target."""
+    sync_corpus(engine, token)
+    failures: list[Exception] = []
+    with github_repository.repository_sync_lock(engine) as locked:
+        if not locked:
+            print("another repository sync is running; repository turns not consumed")
+            return 0
+        for _ in search_config.REPOSITORY_TARGETS:
+            target = github_repository.claim_repository_turn(engine)
+            print(f"repository turn: {target.repository}@{target.branch}", flush=True)
+            try:
+                github_repository.sync_repository_locked(engine, target, token, now or datetime.now(UTC))
+            except Exception as exc:
+                failures.append(exc)
+                print(f"repository turn failed: {target.repository}@{target.branch}: {exc}", file=sys.stderr)
+    if failures:
+        raise ExceptionGroup("repository sync failures", failures)
+    return 0
+
+
 def main() -> int:
     override = os.environ.get("ECHO_REPOSITORY_TARGET")
     target = repository_identity.configured_repository_target(override) if override else None
     engine = make_engine()
     try:
-        return run(engine, os.environ["MARINMIRROR_TOKEN"], target)
+        if target is not None:
+            return run(engine, os.environ["MARINMIRROR_TOKEN"], target)
+        return run_all(engine, os.environ["MARINMIRROR_TOKEN"])
     finally:
         engine.dispose()
 

@@ -6,7 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from marina.manifest import discover_apps, load_manifest
+from marina.manifest import discover_apps, job_runners, load_manifest
 from marina.server import CANONICAL_ORIGIN_ENV, MarinaConfig, create_app, serve_app_file
 from starlette.testclient import TestClient
 
@@ -77,6 +77,94 @@ def test_manifest_rejects_unknown_keys(tmp_path: Path) -> None:
     root = write_app(tmp_path, "bad", manifest=TASKTROVE_MANIFEST + 'hostname = "x"\n')
     with pytest.raises(ValueError, match="unknown keys"):
         load_manifest(root)
+
+
+def test_manifest_groups_jobs_by_runner_in_stable_order(tmp_path: Path) -> None:
+    job = """
+[[jobs]]
+name = "refresh"
+runner = "hourly"
+schedule = "0 * * * *"
+command = ["python", "-m", "worker"]
+timeout = 60
+cpu = 2
+memory_gib = 3
+secrets = ["TOKEN"]
+"""
+    write_app(tmp_path, "zeta", manifest=TASKTROVE_MANIFEST + job)
+    alpha_job = (
+        job.replace('name = "refresh"', 'name = "sync"')
+        .replace("cpu = 2", "cpu = 1")
+        .replace("memory_gib = 3", "memory_gib = 1")
+    )
+    write_app(tmp_path, "alpha", manifest=TASKTROVE_MANIFEST + alpha_job)
+
+    (runner,) = job_runners(discover_apps(tmp_path))
+
+    assert runner.name == "hourly"
+    assert runner.schedule == "0 * * * *"
+    assert runner.timeout == 420
+    assert runner.cpu == 2
+    assert runner.memory_gib == 3
+    assert [bound.qualified_name for bound in runner.jobs] == ["alpha.sync", "zeta.refresh"]
+
+
+@pytest.mark.parametrize(
+    "job, error",
+    [
+        (
+            'name = "bad_name"\nrunner = "hourly"\nschedule = "0 * * * *"\ncommand = ["x"]\n'
+            "timeout = 1\ncpu = 1\nmemory_gib = 1",
+            "must match",
+        ),
+        (
+            'name = "ok"\nrunner = "hourly"\nschedule = "hourly"\ncommand = ["x"]\n'
+            "timeout = 1\ncpu = 1\nmemory_gib = 1",
+            "five cron",
+        ),
+        (
+            'name = "ok"\nrunner = "hourly"\nschedule = "0 * * * *"\ncommand = []\n'
+            "timeout = 1\ncpu = 1\nmemory_gib = 1",
+            "command",
+        ),
+        (
+            'name = "ok"\nrunner = "hourly"\nschedule = "0 * * * *"\ncommand = ["x"]\n'
+            "timeout = 0\ncpu = 1\nmemory_gib = 1",
+            "timeout",
+        ),
+        (
+            'name = "ok"\nrunner = "hourly"\nschedule = "0 * * * *"\ncommand = ["x"]\n'
+            "timeout = 1\ncpu = 0\nmemory_gib = 1",
+            "cpu",
+        ),
+    ],
+)
+def test_manifest_rejects_invalid_jobs(tmp_path: Path, job: str, error: str) -> None:
+    root = write_app(tmp_path, "bad", manifest=TASKTROVE_MANIFEST + f"\n[[jobs]]\n{job}\n")
+    with pytest.raises(ValueError, match=error):
+        load_manifest(root)
+
+
+def test_runner_rejects_conflicting_schedules(tmp_path: Path) -> None:
+    first = (
+        TASKTROVE_MANIFEST
+        + """
+[[jobs]]
+name = "first"
+runner = "shared"
+schedule = "0 * * * *"
+command = ["x"]
+timeout = 1
+cpu = 1
+memory_gib = 1
+"""
+    )
+    second = first.replace('name = "first"', 'name = "second"').replace("0 * * * *", "30 * * * *")
+    write_app(tmp_path, "alpha", manifest=first)
+    write_app(tmp_path, "beta", manifest=second)
+
+    with pytest.raises(ValueError, match="conflicting schedules"):
+        job_runners(discover_apps(tmp_path))
 
 
 def test_discovery_skips_underscore_dirs(tmp_path: Path) -> None:

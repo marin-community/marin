@@ -5,16 +5,17 @@
 
 A Marina Python app. The kernel mounts :func:`create_api` at ``/evaldash/api/`` behind its own
 authentication and serves ``web/``'s build from ``dist/`` under ``/evaldash/``; this module is
-therefore only the JSON API and the background record ingest behind it.
+therefore the JSON API and its serving stores.
 
 Eval runs write one canonical ``record.json`` per run to object storage. That remains the producer
-and recovery format; the app's own Postgres schema is the serving catalog, and a background
-reconciler scans the record roots after the API is serving and commits changes as new catalog
-generations. The ``local`` store keeps the direct object scan used for development and journeys,
-with no database at all.
+and recovery format; the app's own Postgres schema is the serving catalog. A scheduled job scans
+the record roots and commits new catalog generations. Serving processes check the generation at a
+bounded cadence and atomically install a newer snapshot. The ``local`` store keeps the direct object
+scan used for development and journeys, with no database at all.
 
-``/status`` reports each prefix's last-probe health, the active store, and the ingest cadence;
-``POST /refresh`` runs one ingest pass immediately, serialised with the loop.
+``/status`` reports each prefix's durable last-probe health, the active store, and the ingest
+cadence. In PostgreSQL mode, ``POST /refresh`` reloads an already committed catalog generation and
+queues the ingest job; in local mode it runs one ingest pass immediately, serialised with the loop.
 
 Per-run drill-in endpoints read beyond the record: ``/runs/{id}/jobs`` and ``.../logs`` fetch live
 iris job/attempt status and finelog log lines over Direct VPC egress, ``.../samples`` pages the
@@ -30,13 +31,17 @@ import asyncio
 import functools
 import logging
 import os
+import re
 import threading
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Protocol
 
+import google.auth
+from google.auth.transport.requests import AuthorizedSession
 from marin.evaluation.eval_stats import DEFAULT_MIN_COVERAGE, Completeness, MissingPolicy, SelectionRequest
 from marin.evaluation.records import (
     DEFAULT_SCAN_PREFIXES,
@@ -86,7 +91,7 @@ from .results_db import (
 
 logger = logging.getLogger(__name__)
 
-CATALOG_POLL_SECONDS = 10
+CATALOG_CHECK_INTERVAL = 10.0
 DEFAULT_RUNS_LIMIT = 200
 MAX_RUNS_LIMIT = 1000
 DEFAULT_LOG_TAIL = 200
@@ -109,6 +114,9 @@ STORE_ENV = "EVALDASH_STORE"
 INGEST_INTERVAL_ENV = "EVALDASH_INGEST_INTERVAL"
 REVALIDATE_AFTER_ENV = "EVALDASH_REVALIDATE_AFTER"
 REVIEW_MODEL_ENV = "EVALDASH_REVIEW_MODEL"
+INGEST_JOB_ENV = "EVALDASH_INGEST_JOB"
+CLOUD_PLATFORM_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
+CLOUD_RUN_JOB_PATTERN = re.compile(r"^projects/[a-z][a-z0-9-]+/locations/[a-z0-9-]+/jobs/[a-z][a-z0-9-]+$")
 
 
 class StoreMode(StrEnum):
@@ -129,6 +137,7 @@ class EvaldashConfig:
     ingest_interval: float
     revalidate_after: float
     review_model: str
+    ingest_job: str | None
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str]) -> EvaldashConfig:
@@ -137,13 +146,30 @@ class EvaldashConfig:
         store = environ.get(STORE_ENV, StoreMode.POSTGRES).strip().lower()
         if store not in tuple(StoreMode):
             raise ValueError(f"unknown {STORE_ENV}={store!r}; expected one of {[mode.value for mode in StoreMode]}")
+        ingest_job = environ.get(INGEST_JOB_ENV)
+        if ingest_job is not None and not CLOUD_RUN_JOB_PATTERN.fullmatch(ingest_job):
+            raise ValueError(f"invalid {INGEST_JOB_ENV}={ingest_job!r}")
         return cls(
             prefixes=tuple(part.strip() for part in raw_prefixes.split(",") if part.strip()),
             store=StoreMode(store),
             ingest_interval=float(environ.get(INGEST_INTERVAL_ENV, DEFAULT_INGEST_INTERVAL)),
             revalidate_after=float(environ.get(REVALIDATE_AFTER_ENV, DEFAULT_REVALIDATE_AFTER)),
             review_model=environ.get(REVIEW_MODEL_ENV, DEFAULT_REVIEW_MODEL),
+            ingest_job=ingest_job,
         )
+
+
+def trigger_cloud_run_job(job: str) -> str:
+    """Start one Cloud Run job execution and return the long-running operation name."""
+    credentials, _project = google.auth.default(scopes=(CLOUD_PLATFORM_SCOPE,))
+    with AuthorizedSession(credentials) as session:
+        response = session.post(f"https://run.googleapis.com/v2/{job}:run", timeout=30)
+        response.raise_for_status()
+        operation = response.json()
+    name = operation.get("name")
+    if not isinstance(name, str) or not name:
+        raise ValueError("Cloud Run returned an operation without a name")
+    return name
 
 
 # --------------------------------------------------------------------------------------
@@ -408,9 +434,12 @@ class PgRecordStore(RecordStore):
 
     backend = "postgres"
 
-    def __init__(self, engine: Engine) -> None:
+    def __init__(self, engine: Engine, now: Callable[[], float] = time.monotonic) -> None:
         super().__init__()
         self._engine = engine
+        self._now = now
+        self._refresh_lock = threading.Lock()
+        self._next_catalog_check = 0.0
         # The kernel owns the connection, so all this store can name is where the engine points:
         # a host and database for a URL engine, nothing for one built on the Cloud SQL connector.
         self._instance = engine.url.host
@@ -422,6 +451,7 @@ class PgRecordStore(RecordStore):
         self._set_snapshot(snapshot.records)
 
     def store_info(self) -> StoreInfo:
+        self.refresh_if_due()
         with self._lock:
             return StoreInfo(
                 backend=self.backend,
@@ -433,21 +463,53 @@ class PgRecordStore(RecordStore):
                 catalog_error=self._catalog_error,
             )
 
-    def reload_if_changed(self) -> bool:
-        """Load a newer committed generation, returning whether the snapshot advanced."""
+    def _load_newer_catalog(self) -> bool:
         generation = catalog_generation(self._engine)
         with self._lock:
             current_generation = self._catalog_generation
-        if generation == current_generation:
+        if generation <= current_generation:
             return False
         snapshot = fetch_snapshot(self._engine)
         with self._lock:
+            if snapshot.generation <= self._catalog_generation:
+                return False
             self._records = snapshot.records
             self._by_id = {record.run_id: record for record in snapshot.records}
             self._catalog_generation = snapshot.generation
             self._snapshot_updated_at = snapshot.updated_at
         logger.info("postgres store loaded generation %d with %d records", snapshot.generation, len(snapshot.records))
         return True
+
+    def reload_if_changed(self) -> bool:
+        """Check immediately for a newer committed catalog and install it once."""
+        with self._refresh_lock:
+            try:
+                changed = self._load_newer_catalog()
+            except Exception as exc:
+                self.set_catalog_error(f"{type(exc).__name__}: {exc}")
+                raise
+            self.set_catalog_error(None)
+            return changed
+
+    def refresh_if_due(self) -> bool:
+        """Refresh the cached catalog at most once per check interval, serving stale data on failure."""
+        with self._refresh_lock:
+            now = self._now()
+            if now < self._next_catalog_check:
+                return False
+            self._next_catalog_check = now + CATALOG_CHECK_INTERVAL
+            try:
+                changed = self._load_newer_catalog()
+            except Exception as exc:
+                self.set_catalog_error(f"{type(exc).__name__}: {exc}")
+                logger.exception("catalog generation check failed; serving the previous snapshot")
+                return False
+            self.set_catalog_error(None)
+            return changed
+
+    def _snapshot(self) -> tuple[list[EvalRunRecord], dict[str, EvalRunRecord]]:
+        self.refresh_if_due()
+        return super()._snapshot()
 
     def set_catalog_error(self, error: str | None) -> None:
         with self._lock:
@@ -516,7 +578,7 @@ def create_store(services: Services, config: EvaldashConfig) -> RecordStore:
 
 
 # --------------------------------------------------------------------------------------
-# Background ingest
+# Record ingest
 # --------------------------------------------------------------------------------------
 
 
@@ -525,7 +587,7 @@ def _utcnow_iso() -> str:
 
 
 async def _run_periodically(
-    operation: Callable[[], Awaitable[None]],
+    operation: Callable[[], Awaitable[object]],
     interval: float,
     label: str,
     set_error: Callable[[str | None], None],
@@ -586,14 +648,15 @@ class Ingestor:
         self.last_pass_time: str | None = None
         self.cycle_error: str | None = None
 
-    async def run_once(self) -> None:
+    async def run_once(self) -> tuple[str, ...]:
         """Run one full ingest pass, serialised against any other pass via ``_lock``."""
         if not self._prefixes:
             # No roots to scan: leave the (externally populated) store untouched rather than
             # refreshing it to empty.
-            return
+            return ()
         async with self._lock:
             records: list[EvalRunRecord] = []
+            failed_prefixes: list[str] = []
             for prefix in self._prefixes:
                 probe = self._probes[prefix]
                 probe.last_probe_time = _utcnow_iso()
@@ -606,6 +669,7 @@ class Ingestor:
                     # rest, and must not drop this prefix's previously-ingested runs from the
                     # snapshot -- carry its last-good listing forward instead.
                     probe.error = f"{type(exc).__name__}: {exc}"
+                    failed_prefixes.append(prefix)
                     logger.exception("ingest: listing %s failed; keeping last-good records this pass", prefix)
                     records.extend(self._last_good[prefix])
                     continue
@@ -619,6 +683,7 @@ class Ingestor:
                 records.extend(found)
             await asyncio.to_thread(self._store.refresh, records)
             self.last_pass_time = _utcnow_iso()
+            return tuple(failed_prefixes)
 
     async def run_loop(self) -> None:
         if not self._prefixes:
@@ -640,7 +705,7 @@ class Ingestor:
 
 
 class PostgresIngestor:
-    """Reconcile object membership and versions into PostgreSQL after serving has started."""
+    """Reconcile object membership and versions into PostgreSQL in one job or manual pass."""
 
     def __init__(
         self,
@@ -675,10 +740,11 @@ class PostgresIngestor:
         self.last_pass_time: str | None = None
         self.cycle_error: str | None = None
 
-    async def run_once(self) -> None:
+    async def run_once(self) -> tuple[str, ...]:
         if not self._prefixes:
-            return
+            return ()
         async with self._lock:
+            failed_prefixes: list[str] = []
             for prefix in self._prefixes:
                 probe = self._probes[prefix]
                 probe_at = self._now()
@@ -717,6 +783,7 @@ class PostgresIngestor:
                     probe.error = error
                     logger.exception("reconcile: %s failed; keeping its committed catalog rows", prefix)
                     await asyncio.to_thread(self._store.mark_prefix_failed, prefix, probe_at, error)
+                    failed_prefixes.append(prefix)
                     continue
                 probe.last_success_time = probe.last_probe_time
                 probe.record_count = len(paths)
@@ -733,6 +800,7 @@ class PostgresIngestor:
                 )
             await asyncio.to_thread(self._store.finish_reconciliation, self._prefixes)
             self.last_pass_time = self._now().isoformat()
+            return tuple(failed_prefixes)
 
     async def run_loop(self) -> None:
         if not self._prefixes:
@@ -743,44 +811,40 @@ class PostgresIngestor:
         self.cycle_error = error
 
     def status(self) -> dict:
+        probes = []
+        rows = {row.prefix: row for row in self._store.prefix_statuses()}
+        for prefix in self._prefixes:
+            row = rows.get(prefix)
+            probe = PrefixProbe(prefix=prefix)
+            if row is not None:
+                probe.last_probe_time = row.last_probe_at.isoformat() if row.last_probe_at else None
+                probe.last_success_time = row.last_success_at.isoformat() if row.last_success_at else None
+                probe.record_count = row.record_count
+                probe.error = row.error
+            probe.parse_failures = [
+                RecordParseFailure(path=path, error=state.error)
+                for path, state in sorted(self._store.source_states(prefix).items())
+                if state.error is not None
+            ]
+            probes.append(probe)
+        last_pass_time = max((probe.last_probe_time for probe in probes if probe.last_probe_time), default=None)
         return {
             "interval_seconds": self.interval,
             "revalidate_after_seconds": self.revalidate_after,
-            "last_pass_time": self.last_pass_time,
-            "cycle_error": self.cycle_error,
-            "prefixes": [asdict(self._probes[prefix]) for prefix in self._prefixes],
+            "last_pass_time": last_pass_time,
+            "cycle_error": None,
+            "prefixes": [asdict(probe) for probe in probes],
         }
 
 
-async def _reload_catalog_loop(store: PgRecordStore) -> None:
-    """Poll for committed generations and expose any refresh failure through store status."""
-
-    async def reload_once() -> None:
-        await asyncio.to_thread(store.reload_if_changed)
-
-    await _run_periodically(
-        reload_once,
-        CATALOG_POLL_SECONDS,
-        "catalog generation poll",
-        store.set_catalog_error,
-    )
-
-
 class ApiWithBackgroundLoops:
-    """The API, with its background loops started on the first request it serves.
+    """The local-store API, with its ingest loop started on the first request.
 
     Starlette delivers lifespan events only to the top-level application, and the kernel mounts this
     API under ``/evaldash/api/``; the first request is therefore the earliest moment inside the
-    running event loop at which the ingest and catalog-reload loops can be started. They start once
-    and then run for the life of the process, which ends with it -- there is no mounted-app shutdown
-    event to cancel them on either.
-
-    More than one instance may run these loops at once. Each reconciliation commits a prefix's
-    source changes and their serving projection in one transaction that advances the catalog
-    generation, so concurrent passes repeat work rather than corrupt state, and every instance picks
-    up whichever generation committed last. What is not shared is per-process and therefore
-    per-instance: the probe health ``/status`` reports, and the memory store's snapshot. Two
-    instances can report different last-probe times for the same prefix.
+    running event loop at which local ingest can start. It starts once and runs for the life of the
+    process, which ends with it -- there is no mounted-app shutdown event to cancel it. PostgreSQL
+    deployments return the raw API and perform reconciliation only in the scheduled runner.
     """
 
     def __init__(self, app: ASGIApp, loops: tuple[Callable[[], Awaitable[None]], ...]) -> None:
@@ -886,7 +950,7 @@ def _collect_job_status(gateway: ClusterGatewayLike, jobs: dict[str, str]) -> li
 class IngestorLike(Protocol):
     interval: float
 
-    async def run_once(self) -> None: ...
+    async def run_once(self) -> tuple[str, ...]: ...
 
     async def run_loop(self) -> None: ...
 
@@ -947,12 +1011,16 @@ class NullClusterGateway:
         return {"reachable": False, "error": "local mode: cluster unavailable", "source": "", "entries": []}
 
 
-def build_api(store: RecordStore, gateway: ClusterGatewayLike, config: EvaldashConfig) -> ApiWithBackgroundLoops:
+def build_api(
+    store: RecordStore,
+    gateway: ClusterGatewayLike,
+    config: EvaldashConfig,
+    trigger_ingest: Callable[[], str] | None = None,
+) -> ASGIApp:
     """Build the JSON API over a store, the cluster gateway, and the resolved configuration.
 
-    ``config.prefixes`` are the record roots the background ingest scans; an empty tuple disables
-    ingestion entirely (for a store populated out of band, as the tests do), which keeps the app from
-    ever reaching the remote defaults.
+    ``config.prefixes`` are the record roots local ingest or the PostgreSQL job scans. An empty tuple
+    disables ingestion entirely for a store populated out of band, as some tests do.
     """
     ingestor: IngestorLike
     if isinstance(store, PgRecordStore):
@@ -1148,6 +1216,12 @@ def build_api(store: RecordStore, gateway: ClusterGatewayLike, config: EvaldashC
         return JSONResponse(_status_payload(store, ingestor))
 
     async def api_refresh(_request: Request) -> JSONResponse:
+        if isinstance(store, PgRecordStore):
+            await asyncio.to_thread(store.reload_if_changed)
+            if trigger_ingest is None:
+                return JSONResponse({"detail": "scheduled ingest job is not configured"}, status_code=503)
+            operation = await asyncio.to_thread(trigger_ingest)
+            return JSONResponse({"operation": operation, **_status_payload(store, ingestor)}, status_code=202)
         await ingestor.run_once()
         return JSONResponse(_status_payload(store, ingestor))
 
@@ -1171,10 +1245,10 @@ def build_api(store: RecordStore, gateway: ClusterGatewayLike, config: EvaldashC
         Route("/status", api_status),
         Route("/refresh", api_refresh, methods=["POST"]),
     ]
-    loops: tuple[Callable[[], Awaitable[None]], ...] = (ingestor.run_loop,)
+    api = Starlette(routes=routes)
     if isinstance(store, PgRecordStore):
-        loops += (functools.partial(_reload_catalog_loop, store),)
-    return ApiWithBackgroundLoops(Starlette(routes=routes), loops)
+        return api
+    return ApiWithBackgroundLoops(api, (ingestor.run_loop,))
 
 
 def create_api(services: Services) -> ASGIApp:
@@ -1196,7 +1270,8 @@ def create_api(services: Services) -> ASGIApp:
 
         configure_coreweave_s3()
         gateway = ClusterGateway()
-    return build_api(create_store(services, config), gateway, config)
+    trigger_ingest = functools.partial(trigger_cloud_run_job, config.ingest_job) if config.ingest_job else None
+    return build_api(create_store(services, config), gateway, config, trigger_ingest)
 
 
 def migrate(engine: Engine) -> None:
