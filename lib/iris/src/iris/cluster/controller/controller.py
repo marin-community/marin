@@ -29,6 +29,7 @@ from sqlalchemy import Row
 from iris.cluster.bundle import BundleStore
 from iris.cluster.config import PeerConfig
 from iris.cluster.controller import ops, reads, writes
+from iris.cluster.controller.attempts import CapabilityUrlConfig
 from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.auth import (
     CONTROL_PLANE_AUDIENCE,
@@ -73,7 +74,8 @@ from iris.cluster.controller.checkpoint import (
 )
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.db import ControllerDB, Tx
-from iris.cluster.controller.endpoint_service import EndpointServiceImpl, ProxyMappingDelta, ProxyRegistryReset
+from iris.cluster.controller.endpoint_service import EndpointServiceImpl
+from iris.cluster.controller.endpoints import ProxyMappingDelta, ProxyRegistryReset
 from iris.cluster.controller.federation_proxy import FederatedEndpointHandoff
 from iris.cluster.controller.federation_store import ControllerFederationStore, build_queued_candidates
 from iris.cluster.controller.log_stack import LogStack
@@ -103,9 +105,10 @@ from iris.cluster.controller.scheduling.scheduler import (
     SchedulingContext,
     worker_snapshot_from_row,
 )
-from iris.cluster.controller.service import CapabilityUrlConfig, ControllerServiceImpl, PendingKick
+from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.task_state import RuntimeReleaseTarget
 from iris.cluster.controller.task_state_stats import TaskStateCollector
+from iris.cluster.controller.tasks import PendingKick
 from iris.cluster.controller.transition_reader import DbTransitionReader
 from iris.cluster.controller.worker_health import WorkerHealthTracker, WorkerLiveness
 from iris.cluster.endpoints import TELEMETRY_ENDPOINT_PATH
@@ -1679,14 +1682,14 @@ class Controller:
         request: controller_pb2.Controller.RegisterEndpointRequest,
     ) -> controller_pb2.Controller.RegisterEndpointResponse:
         """Register or renew a Task endpoint."""
-        return self._service.endpoint_service.register_endpoint(request, None)
+        return self._endpoint_service.register_endpoint(request, None)
 
     def list_endpoints(
         self,
         request: controller_pb2.Controller.ListEndpointsRequest | None = None,
     ) -> controller_pb2.Controller.ListEndpointsResponse:
         """Return Task endpoints matching the optional query."""
-        return self._service.endpoint_service.list_endpoints(
+        return self._endpoint_service.list_endpoints(
             request or controller_pb2.Controller.ListEndpointsRequest(),
             None,
         )
@@ -1694,7 +1697,7 @@ class Controller:
     def unregister_endpoint(self, endpoint_id: str) -> job_pb2.Empty:
         """Remove a Task endpoint by ID."""
         request = controller_pb2.Controller.UnregisterEndpointRequest(endpoint_id=endpoint_id)
-        return self._service.endpoint_service.unregister_endpoint(request, None)
+        return self._endpoint_service.unregister_endpoint(request, None)
 
     def set_user_budget(
         self,
