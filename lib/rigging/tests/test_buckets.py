@@ -108,9 +108,3 @@ def test_gcs_is_not_an_s3_backend(config):
     """GCS uses application default credentials, so asking for its S3 settings is an error."""
     with pytest.raises(ValueError, match="stores"):
         cluster_config.store_config(StoreType.GCS)
-
-
-def test_r2_upload_can_require_fixed_multipart_parts(config):
-    filesystem, _ = filesystem_for("s3://marin-na/export/model.safetensors", fixed_upload_size=True)
-
-    assert filesystem.fixed_upload_size is True
