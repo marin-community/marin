@@ -24,6 +24,8 @@ use crate::store::table_spec::canonical_json_bytes;
 use crate::store::table_state::{ArtifactReferences, SegmentDescriptor, TableRevision};
 use crate::store::types::SegmentRow;
 
+pub(crate) const MIGRATION_SOURCE_ID_SEPARATOR: char = '\n';
+
 #[derive(Debug, Clone)]
 pub struct ObjectSegmentRecord {
     pub path: String,
@@ -68,11 +70,10 @@ pub(super) fn parse_artifacts(json: Option<&str>) -> Result<ArtifactReferences, 
 
 /// How a descriptor insert treats an existing `(namespace, path)` row.
 enum SegmentInsert {
-    /// A flush retry may re-commit the same content-addressed path: take the
-    /// newer descriptor and clear any migration provenance.
+    /// A descriptor replay may re-commit an existing path: take the newer
+    /// descriptor and clear any migration provenance.
     Upsert,
-    /// A replacement or checkpoint must never collide: content-addressed
-    /// outputs conflict exactly when the same source is committed twice.
+    /// A replacement or checkpoint must never collide with a live object.
     CreateOnly {
         source_id: Option<String>,
         source_rows: Option<i64>,
@@ -515,6 +516,38 @@ impl Catalog {
                 namespace, phase
             )));
         }
+        let incoming_sources: HashSet<_> = migration_source_id
+            .split(MIGRATION_SOURCE_ID_SEPARATOR)
+            .collect();
+        let source_already_committed = {
+            let mut statement = transaction
+                .prepare(
+                    "SELECT migration_source_id FROM object_segments
+                     WHERE namespace = ?1 AND migration_backfill = 1
+                       AND migration_source_id IS NOT NULL",
+                )
+                .map_err(sqlite_err)?;
+            let existing = statement
+                .query_map([namespace], |row| row.get::<_, String>(0))
+                .map_err(sqlite_err)?;
+            let mut found = false;
+            for ids in existing {
+                let ids = ids.map_err(sqlite_err)?;
+                if ids
+                    .split(MIGRATION_SOURCE_ID_SEPARATOR)
+                    .any(|id| incoming_sources.contains(id))
+                {
+                    found = true;
+                    break;
+                }
+            }
+            found
+        };
+        if source_already_committed {
+            return Err(StatsError::SchemaConflict(format!(
+                "migration source was already checkpointed for {namespace:?}"
+            )));
+        }
         insert_object_segments_in(
             &transaction,
             namespace,
@@ -529,8 +562,9 @@ impl Catalog {
         // The total is the universe as it was last measured, so progress can
         // pass it: a source rewritten before an eviction removed it from that
         // universe is done, and the total rises to say so rather than rejecting
-        // the checkpoint. Committing one source twice is prevented by its
-        // content-addressed outputs, whose insert above conflicts.
+        // the checkpoint. The source-identity check above prevents
+        // checkpointing one source twice even though immutable output names
+        // are opaque UUIDs.
         let changed = transaction
             .execute(
                 "UPDATE table_migrations
