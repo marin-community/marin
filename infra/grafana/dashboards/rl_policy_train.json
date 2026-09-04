@@ -1797,6 +1797,603 @@
         }
       ],
       "interval": "1m"
+    },
+    {
+      "id": 203,
+      "type": "table",
+      "title": "What this run published",
+      "description": "One row per sink and clock domain, with the ranks, the steps, and the steps that ended in a failure. Read it before anything else, for three reasons. A run with no worker row has no policy_train decomposition at all, and every panel in the training row below is empty for that reason rather than because the producer broke. The clock domain decides what those numbers mean: `_wall` spans are device-synchronised and measure execution, `_launch` spans measure kernel launch and charge a backward's real cost to whatever later call happens to block, and the two must never be compared — a run publishes one, and this says which. And a nonzero truncated count means a step died mid-flight, so a step that looks fast on any panel below is a step that stopped early. This table is never empty for a run in the picker: the picker only offers runs that reported a policy_step, so a blank here is a true alarm.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 84
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "No spans at all. The run reported a policy_step, so the timing sink itself is not reaching finelog."
+        },
+        "overrides": []
+      },
+      "options": {},
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT json_get(attributes_json, 'role') AS role, json_get(attributes_json, 'clock_domain') AS clock, COUNT(DISTINCT json_get(attributes_json, 'rank')) AS ranks, COUNT(DISTINCT json_get(attributes_json, 'step')) AS steps, COUNT(DISTINCT CASE WHEN json_get(attributes_json, 'outcome') = 'failure' THEN json_get(attributes_json, 'step') END) AS truncated_steps FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name = 'phase_duration_seconds' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1, 2"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "role",
+              "text": "sink role",
+              "type": "string"
+            },
+            {
+              "selector": "clock",
+              "text": "clock domain",
+              "type": "string"
+            },
+            {
+              "selector": "ranks",
+              "text": "ranks",
+              "type": "number"
+            },
+            {
+              "selector": "steps",
+              "text": "steps",
+              "type": "number"
+            },
+            {
+              "selector": "truncated_steps",
+              "text": "steps that failed",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 204,
+      "type": "timeseries",
+      "title": "Signed span residuals — both trees",
+      "description": "What each tree's parent measured that none of its children accounts for: generate_span_residual on the driver, policy_span_residual on r*. It is signed on purpose and is the only automatic detector this dashboard has for a child being counted inside its parent. Positive means the children miss where some of the time went, which is ordinary and small. Negative means they double-count, and it is not hypothetical: the first instrumented run published policy_training_step_other beside the four spans inside it and the residual read -1703 s against a 1706 s parent. Nothing here is clamped, because a clamp would turn the one number that can report a broken instrument into a number that always looks fine. Read it against the exclusive bands above — those recompute the same quantity from the rows that arrived, so a residual and a band that disagree mean a row was lost in transport rather than that a span is mis-parented.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 84
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisLabel": "seconds the children do not account for"
+          },
+          "unit": "s",
+          "noValue": "No residual rows. The residual ships with the spans, so a run with spans and no residual is a build from before the tree became auditable."
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, AVG(value) AS generate_residual FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name = 'phase_duration_seconds' AND json_get(attributes_json, 'role') = 'trainer' AND json_get(attributes_json, 'phase') = 'generate_span_residual' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "generate_residual",
+              "text": "generate_residual",
+              "type": "number"
+            }
+          ]
+        },
+        {
+          "refId": "B",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "WITH spans AS ( SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS bucket, json_get(attributes_json, 'step') AS s, json_get(attributes_json, 'rank') AS worker_rank, json_get(attributes_json, 'phase') AS phase, json_get(attributes_json, 'clock_domain') AS domain, value FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name = 'phase_duration_seconds' AND json_get(attributes_json, 'role') = 'worker' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) ), tagged AS ( SELECT bucket, s, worker_rank, phase, value, FIRST_VALUE(worker_rank) OVER ( PARTITION BY s ORDER BY CASE WHEN phase = 'policy_ppo_train' AND domain IN ('inclusive_wall', 'inclusive_launch') THEN value ELSE -1 END DESC, worker_rank ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING ) AS critical_rank FROM spans ) SELECT bucket AS t, AVG(value) AS policy_residual FROM tagged WHERE worker_rank = critical_rank AND phase = 'policy_span_residual' GROUP BY 1 ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "policy_residual",
+              "text": "policy_residual",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 205,
+      "type": "timeseries",
+      "title": "Inside generate — where the fan-out goes",
+      "description": "generate's direct children as fractions of generate, which they partition, plus whatever they do not cover. Generation is around 60% of an E6 step and until this tree landed it was one wall with nothing inside it. The reading it exists to deliver is that rollout_collect — the fan-out that awaits every trajectory — is essentially the whole phase, about 97% on the pr488 run, so tokenise, assemble and finalise are not where to look and the question is what the fan-out is waiting on. The panels to the right answer that. Shares rather than seconds on purpose: the seconds are on the step composition above, and the question here has a different denominator. `unaccounted` is generate's own orchestration and should stay near zero; the same quantity is published as generate_span_residual, so the two disagreeing means a child row was lost.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 84
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 60,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisLabel": "share of the generate wall",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "noValue": "No generate subtree. This build measures generate as a single wall — 11 of the 167 runs in finelog decompose it. The step composition above still shows generate's total."
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "WITH gen AS ( SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS bucket, json_get(attributes_json, 'step') AS s, json_get(attributes_json, 'phase') AS phase, json_get(attributes_json, 'parent') AS parent, value FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name = 'phase_duration_seconds' AND json_get(attributes_json, 'role') = 'trainer' AND json_get(attributes_json, 'clock_domain') = 'inclusive_wall' AND json_get(attributes_json, 'root') = 'step' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) ), per_step AS ( SELECT bucket, s, MAX(CASE WHEN phase = 'generate' THEN value END) AS generate_seconds, SUM(CASE WHEN parent = 'generate' THEN value END) AS child_seconds FROM gen GROUP BY 1, 2 ), banded AS ( SELECT gen.bucket AS bucket, gen.phase AS band, gen.value / NULLIF(per_step.generate_seconds, 0) AS share FROM gen JOIN per_step ON per_step.bucket = gen.bucket AND per_step.s = gen.s WHERE gen.parent = 'generate' UNION ALL SELECT bucket, 'unaccounted', (generate_seconds - child_seconds) / NULLIF(generate_seconds, 0) FROM per_step WHERE child_seconds IS NOT NULL ) SELECT bucket AS t, band AS series, AVG(share) AS value FROM banded GROUP BY 1, 2 ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 206,
+      "type": "timeseries",
+      "title": "A trajectory's wait: the engine against the environment",
+      "description": "Where one rollout trajectory's wall goes, and how far the slowest one runs past the mean. The two await totals are CONCURRENT SUMS over up to 4,096 coroutines and exceed their own parent by design — on the pr488 run rollout_engine_await_seconds_sum is 23,656 s against a 115 s generate, a factor of 205 — so they are divided by rollout_trajectory_count here and are never banded, never stacked, and never put on an axis beside a phase duration. A panel that plots one of those sums raw is the single easiest way for this dashboard to publish a number nobody should believe. What the three lines say together: the environment is close to free, the engine is the whole wait, and the slowest single trajectory runs about 2.7x the mean and is what the step actually waits for, because generate cannot end until the last one lands.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 92
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisLabel": "seconds per trajectory"
+          },
+          "unit": "s",
+          "noValue": "No rollout counters. This build does not instrument the generation coroutines; the engine row below reports the same wait from the serving side."
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "WITH counters AS ( SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS bucket, json_get(attributes_json, 'step') AS s, json_get(attributes_json, 'counter') AS counter, MAX(value) AS value FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name IN ('rollout_wait_seconds', 'rollout_count') AND json_get(attributes_json, 'role') = 'trainer' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3 ), per_step AS ( SELECT bucket, s, MAX(CASE WHEN counter = 'rollout_trajectory_count' THEN value END) AS trajectories, MAX(CASE WHEN counter = 'rollout_engine_await_seconds_sum' THEN value END) AS engine_seconds, MAX(CASE WHEN counter = 'rollout_env_await_seconds_sum' THEN value END) AS env_seconds, MAX(CASE WHEN counter = 'rollout_engine_await_seconds_max' THEN value END) AS slowest FROM counters GROUP BY 1, 2 ) SELECT bucket AS t, AVG(engine_seconds / NULLIF(trajectories, 0)) AS engine_wait_per_trajectory, AVG(env_seconds / NULLIF(trajectories, 0)) AS env_wait_per_trajectory, AVG(slowest) AS slowest_single_trajectory FROM per_step GROUP BY 1 ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "engine_wait_per_trajectory",
+              "text": "engine_wait_per_trajectory",
+              "type": "number"
+            },
+            {
+              "selector": "env_wait_per_trajectory",
+              "text": "env_wait_per_trajectory",
+              "type": "number"
+            },
+            {
+              "selector": "slowest_single_trajectory",
+              "text": "slowest_single_trajectory",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 207,
+      "type": "timeseries",
+      "title": "Is the environment slow, or the loop around it?",
+      "description": "The environment wait split into the three terms that partition it: time queued for the executor, time the environment itself ran, and time waiting to be resumed on the driver's event loop after it finished. The split is the whole point, because the three have different fixes and the answer on real runs is not the obvious one — on the pr488 run the environment ran for 0.05 s while resume took 88 s of a 92 s wait. That is the EVENT LOOP being behind, not a slow environment, and no amount of environment optimisation touches it. Queue dominating instead would mean the executor is undersized. Shares rather than seconds because these are concurrent sums, comparable to each other and to nothing else on this dashboard. `unaccounted` is an audit: the producer states that the three terms partition the wait exactly, so anything but zero means they no longer do.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 92
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 60,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisLabel": "share of the environment wait",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "noValue": "No environment-wait counters. This build does not split the environment wait; the panel to the left still shows its total against the engine's."
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "WITH counters AS ( SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS bucket, json_get(attributes_json, 'step') AS s, json_get(attributes_json, 'counter') AS counter, MAX(value) AS value FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name IN ('rollout_wait_seconds', 'rollout_count') AND json_get(attributes_json, 'role') = 'trainer' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3 ), per_step AS ( SELECT bucket, s, MAX(CASE WHEN counter = 'rollout_env_await_seconds_sum' THEN value END) AS awaited, MAX(CASE WHEN counter = 'rollout_env_queue_seconds_sum' THEN value END) AS queued, MAX(CASE WHEN counter = 'rollout_env_exec_seconds_sum' THEN value END) AS executed, MAX(CASE WHEN counter = 'rollout_env_resume_seconds_sum' THEN value END) AS resumed FROM counters GROUP BY 1, 2 ), banded AS ( SELECT bucket, 'queued for the executor' AS band, queued / NULLIF(awaited, 0) AS share FROM per_step UNION ALL SELECT bucket, 'running the environment', executed / NULLIF(awaited, 0) FROM per_step UNION ALL SELECT bucket, 'resuming on the event loop', resumed / NULLIF(awaited, 0) FROM per_step UNION ALL SELECT bucket, 'unaccounted', (awaited - queued - executed - resumed) / NULLIF(awaited, 0) FROM per_step ) SELECT bucket AS t, band AS series, AVG(share) AS value FROM banded GROUP BY 1, 2 ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 217,
+      "type": "timeseries",
+      "title": "Allocator pressure and peak memory on the worst rank",
+      "description": "Torch's own peak bytes on the rank that used most, and the allocator's retries and OOMs summed across ranks. This is the number that decides whether a larger micro_train_batch_size_per_gpu fits, and it is not the framebuffer gauge in the accelerator row: that one is per device and includes everything else on the card, while reserved bytes is what this process's caching allocator holds and allocated bytes is what it is actually using. The gap between them is fragmentation. Retries are the leading indicator and are invisible in a peak-bytes series: a retry means the allocator had the bytes but not a contiguous block, so a run can be nowhere near the ceiling and still be paying for the eager attention score tensor. Peaks are taken across ranks rather than averaged because the binding constraint is the worst rank; retries and OOMs are summed because they are per-step deltas and the question is how much churn the step cost in total.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 92
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisLabel": "peak bytes on the worst rank"
+          },
+          "unit": "bytes",
+          "noValue": "No memory counters. They ship with the worker spans, so a run with spans and no memory series predates them."
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "alloc_.*"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "allocator events in the step"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "WITH counters AS ( SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS bucket, json_get(attributes_json, 'step') AS s, json_get(attributes_json, 'rank') AS worker_rank, json_get(attributes_json, 'counter') AS counter, MAX(value) AS value FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name IN ('policy_train_bytes', 'policy_train_count') AND json_get(attributes_json, 'role') = 'worker' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3, 4 ) SELECT bucket AS t, MAX(CASE WHEN counter = 'peak_reserved_bytes' THEN value END) AS peak_reserved_bytes, MAX(CASE WHEN counter = 'peak_allocated_bytes' THEN value END) AS peak_allocated_bytes, SUM(CASE WHEN counter = 'alloc_retries' THEN value END) AS alloc_retries, SUM(CASE WHEN counter = 'alloc_ooms' THEN value END) AS alloc_ooms FROM counters GROUP BY 1 ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "peak_reserved_bytes",
+              "text": "peak_reserved_bytes",
+              "type": "number"
+            },
+            {
+              "selector": "peak_allocated_bytes",
+              "text": "peak_allocated_bytes",
+              "type": "number"
+            },
+            {
+              "selector": "alloc_retries",
+              "text": "alloc_retries",
+              "type": "number"
+            },
+            {
+              "selector": "alloc_ooms",
+              "text": "alloc_ooms",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
     }
   ]
 }

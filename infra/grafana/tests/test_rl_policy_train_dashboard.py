@@ -122,6 +122,40 @@ WORKER_COUNTERS = {
     },
 }
 
+# The critical-path twins the driver publishes beside the tree, carrying an outcome and no place in
+# it: train_step == train_critic_and_policy and rollout_or_inference_wait == generate. One step ends
+# in a failure, because a truncated step renders exactly like a fast one.
+CRITICAL_PATH = {"train_step": CONTAINER_SECONDS, "rollout_or_inference_wait": DRIVER_PHASES["generate"]}
+FAILED_BUCKET = 4
+
+# The driver's rollout counters, at the magnitudes the pr488 run measured. The engine-await total is
+# a CONCURRENT SUM over 512 coroutines and is five times the whole step; a panel that plots it raw is
+# the failure the per-trajectory division exists to prevent.
+TRAJECTORIES = 512.0
+ENGINE_AWAIT_SUM = 23655.9
+ENGINE_AWAIT_MAX = 126.6
+ENV_SPLIT = {"queue": 3.3, "exec": 0.1, "resume": 88.2}
+ROLLOUT_COUNTERS = {
+    "rollout_trajectory_count": TRAJECTORIES,
+    "rollout_engine_await_count": TRAJECTORIES,
+    "rollout_engine_await_seconds_sum": ENGINE_AWAIT_SUM,
+    "rollout_engine_await_seconds_max": ENGINE_AWAIT_MAX,
+    "rollout_env_await_count": 3 * TRAJECTORIES,
+    "rollout_env_await_seconds_max": 1.04,
+    "rollout_env_await_seconds_sum": sum(ENV_SPLIT.values()),
+    "rollout_env_queue_seconds_sum": ENV_SPLIT["queue"],
+    "rollout_env_exec_seconds_sum": ENV_SPLIT["exec"],
+    "rollout_env_resume_seconds_sum": ENV_SPLIT["resume"],
+}
+
+# Torch's own memory, per rank. Rank 1 holds most and is the one that binds the micro-batch, and it
+# is the only rank whose allocator had to retry.
+WORKER_MEMORY = {
+    "0": {"peak_allocated_bytes": 61.0 * 1024**3, "peak_reserved_bytes": 71.0 * 1024**3},
+    "1": {"peak_allocated_bytes": 63.0 * 1024**3, "peak_reserved_bytes": 74.0 * 1024**3},
+}
+WORKER_ALLOCATOR = {"0": {"alloc_retries": 0.0, "alloc_ooms": 0.0}, "1": {"alloc_retries": 5.0, "alloc_ooms": 0.0}}
+
 # A cumulative Prometheus histogram: counts are cumulative in `le`, so +Inf carries the total.
 GENERATION_TOKEN_BUCKETS = {"64": 10.0, "256": 50.0, "1024": 90.0, "4096": 99.0, "+Inf": 100.0}
 LATENCY_BUCKETS = {"0.5": 20.0, "2": 60.0, "8": 95.0, "32": 99.0, "+Inf": 100.0}
@@ -263,6 +297,40 @@ def _driver_rows(moment: datetime, seq: int) -> list[tuple]:
                 "step": str(seq),
             },
         )
+    ] + [
+        _row(
+            service="marinskyrl",
+            name="phase_duration_seconds",
+            value=seconds,
+            moment=moment,
+            seq=seq,
+            run_id=RUN_ID,
+            node_name=NODES[0],
+            role="trainer",
+            attributes={
+                "phase": phase,
+                "clock_domain": "critical_path",
+                "role": "trainer",
+                "outcome": "failure" if seq == FAILED_BUCKET else "success",
+                "step": str(seq),
+            },
+        )
+        for phase, seconds in CRITICAL_PATH.items()
+    ] + [
+        _row(
+            service="marinskyrl",
+            # The counts and the seconds go to different instruments, as publish_rollout_counters
+            # sends them.
+            name="rollout_count" if counter.endswith("_count") else "rollout_wait_seconds",
+            value=value,
+            moment=moment,
+            seq=seq,
+            run_id=RUN_ID,
+            node_name=NODES[0],
+            role="trainer",
+            attributes={"counter": counter, "role": "trainer", "step": str(seq)},
+        )
+        for counter, value in ROLLOUT_COUNTERS.items()
     ]
 
 
@@ -351,20 +419,28 @@ def _worker_rows(moment: datetime, seq: int, clock: str) -> list[tuple]:
                 },
             )
         )
-        for counter, value in WORKER_COUNTERS[rank].items():
-            rows.append(
-                _row(
-                    service="marinskyrl",
-                    name="policy_train_count",
-                    value=value,
-                    moment=moment,
-                    seq=seq,
-                    run_id=RUN_ID,
-                    node_name=rank_node,
-                    role="worker",
-                    attributes={"counter": counter, "role": "worker", "rank": rank, "step": str(seq)},
+        # policy_train_bytes was split off the unit-1 counter instrument on 2026-09-03; the byte
+        # gauges moved to it and the allocator deltas stayed behind.
+        published = [
+            ("policy_train_count", WORKER_COUNTERS[rank]),
+            ("policy_train_count", WORKER_ALLOCATOR[rank]),
+            ("policy_train_bytes", WORKER_MEMORY[rank]),
+        ]
+        for instrument, counters in published:
+            for counter, value in counters.items():
+                rows.append(
+                    _row(
+                        service="marinskyrl",
+                        name=instrument,
+                        value=value,
+                        moment=moment,
+                        seq=seq,
+                        run_id=RUN_ID,
+                        node_name=rank_node,
+                        role="worker",
+                        attributes={"counter": counter, "role": "worker", "rank": rank, "step": str(seq)},
+                    )
                 )
-            )
     return rows
 
 
@@ -880,11 +956,12 @@ def test_every_panel_has_a_distinct_title_id_and_slot() -> None:
     assert len(slots) == len(set(slots)), slots
 
 
-def test_the_worker_panels_never_read_a_driver_row_or_the_reverse() -> None:
+def test_a_span_query_names_one_sink_or_keeps_the_two_apart() -> None:
     """The two sinks publish different clock domains, and summing across them double-counts.
 
     A worker span is exclusive of its siblings and a driver span is inclusive of everything it
-    contains, so one query may select one domain and never both.
+    contains, so a query pins one sink. The audit table is the one query that has to read both, and
+    it may only do so by returning the role as a column, so the two never merge into one number.
     """
     for panel in _dashboard()["panels"]:
         for target in panel.get("targets", []):
@@ -892,4 +969,149 @@ def test_the_worker_panels_never_read_a_driver_row_or_the_reverse() -> None:
             sql = parameter["value"]
             if "phase_duration_seconds" not in sql:
                 continue
-            assert ("'trainer'" in sql) != ("'worker'" in sql), panel["title"]
+            if "'trainer'" in sql or "'worker'" in sql:
+                assert ("'trainer'" in sql) != ("'worker'" in sql), panel["title"]
+            else:
+                assert "AS role" in sql, panel["title"]
+
+
+def test_the_vitals_table_names_the_clock_domain_the_ranks_and_the_truncated_steps(store) -> None:
+    """Three things decide whether anything below can be read, and all three are invisible in a
+    duration: which clock the worker sink stamped, whether any worker reported at all, and whether a
+    step ended in a failure -- a truncated step renders exactly like a fast one."""
+    rows = store.execute(_panel_sql("What this run published")).fetchall()
+
+    by_sink = {(role, clock): (ranks, steps, failed) for role, clock, ranks, steps, failed in rows}
+    assert by_sink[("worker", "exclusive_wall")][0] == len(WORKER_SPANS)
+    assert by_sink[("trainer", "inclusive_wall")][0] == 0, "driver rows carry no rank"
+    assert by_sink[("trainer", "critical_path")] == (0, BUCKETS, 1)
+    # Nothing but the critical-path rows carries an outcome, so nothing else may report a failure.
+    assert {failed for (_, clock), (_, _, failed) in by_sink.items() if clock != "critical_path"} == {0}
+
+
+def test_the_vitals_table_shows_a_run_that_stamped_two_clock_domains_as_two_rows(store) -> None:
+    """No run publishes both today, because the synchronise flag is fixed for its lifetime. If one
+    ever does, the panels below would average execution time against launch time into one series,
+    and this table is where that becomes visible rather than a number that quietly moved."""
+    store.execute(
+        """UPDATE "telemetry_v1.marinskyrl"
+           SET attributes_json = replace(attributes_json, 'exclusive_wall', 'exclusive_launch')
+           WHERE seq >= 3 AND json_extract_string(attributes_json, '$.role') = 'worker'"""
+    )
+    rows = store.execute(_panel_sql("What this run published")).fetchall()
+
+    worker_clocks = {clock for role, clock, *_ in rows if role == "worker"}
+    assert worker_clocks == {"exclusive_wall", "exclusive_launch", "inclusive_wall"}
+
+
+def test_the_residual_panel_reports_both_trees_signed(store) -> None:
+    panels = {panel["title"]: panel for panel in _dashboard()["panels"]}
+    targets = panels["Signed span residuals — both trees"]["targets"]
+    queries = [_resolve([p for p in t["url_options"]["params"] if p["key"] == "sql"][0]["value"]) for t in targets]
+
+    driver = store.execute(queries[0]).fetchall()
+    assert {round(value, 6) for _, value in driver} == {round(GENERATE_RESIDUAL, 6)}
+
+    worker = store.execute(queries[1]).fetchall()
+    published = (
+        PPO_TRAIN[CRITICAL_RANK]
+        - sum(WORKER_SPANS[CRITICAL_RANK].values())
+        - sum(WORKER_SPANS[CRITICAL_RANK][phase] for phase in CONTAINED_SPANS)
+    )
+    assert published < 0, "the fixture no longer reproduces the double-count"
+    # Signed, and read from r*. Clamping it at zero would retire the one series that can report a
+    # child being counted inside its parent.
+    assert {round(value, 6) for _, value in worker} == {round(published, 6)}
+
+
+def test_the_generate_shares_partition_the_phase(store) -> None:
+    rows = store.execute(_panel_sql("Inside generate — where the fan-out goes")).fetchall()
+
+    shares = {series: value for _, series, value in rows}
+    assert shares["rollout_collect"] == pytest.approx(
+        GENERATE_CHILDREN["rollout_collect"] / DRIVER_PHASES["generate"]
+    )
+    # The grandchildren belong to their own parents' walls, not to generate's.
+    assert set(shares) == {*GENERATE_CHILDREN, "unaccounted"}
+    assert sum(shares.values()) == pytest.approx(1.0)
+    assert shares["unaccounted"] == pytest.approx(GENERATE_RESIDUAL / DRIVER_PHASES["generate"])
+
+
+def test_the_generate_shares_are_blank_rather_than_a_single_full_band_without_the_subtree(store) -> None:
+    """156 of the 167 runs in finelog measure generate as one wall. Reporting 100% unaccounted for
+    those would read as a defect in generate rather than as an absent instrument."""
+    store.execute(
+        """DELETE FROM "telemetry_v1.marinskyrl"
+           WHERE json_extract_string(attributes_json, '$.parent') = 'generate'"""
+    )
+
+    assert store.execute(_panel_sql("Inside generate — where the fan-out goes")).fetchall() == []
+
+
+def test_the_rollout_waits_are_divided_by_the_trajectory_count(store) -> None:
+    rows = store.execute(_panel_sql("A trajectory's wait: the engine against the environment")).fetchall()
+
+    for _, engine, environment, slowest in rows:
+        assert engine == pytest.approx(ENGINE_AWAIT_SUM / TRAJECTORIES)
+        assert environment == pytest.approx(sum(ENV_SPLIT.values()) / TRAJECTORIES)
+        assert slowest == pytest.approx(ENGINE_AWAIT_MAX)
+
+
+def test_no_panel_plots_a_concurrent_await_sum_undivided(store) -> None:
+    """rollout_*_seconds_sum is a sum over up to 4,096 coroutines. It exceeds its own parent by
+    design -- 23,656 s against a 4,210 s step in this fixture -- so any panel reading these counters
+    has to divide before plotting. Banding one is the single easiest way for this dashboard to
+    publish a number nobody should believe."""
+    readers = [
+        panel
+        for panel in _dashboard()["panels"]
+        for target in panel.get("targets", [])
+        for param in target["url_options"]["params"]
+        if param["key"] == "sql" and "rollout_wait_seconds" in param["value"]
+    ]
+    assert len(readers) == 2, [panel["title"] for panel in readers]
+    assert ENGINE_AWAIT_SUM > STEP_SECONDS, "the fixture no longer makes the raw sum implausible"
+
+    for panel in readers:
+        for row in store.execute(_panel_sql(panel["title"])).fetchall():
+            plotted = [cell for cell in row[1:] if isinstance(cell, float)]
+            assert plotted, panel["title"]
+            assert max(plotted) < STEP_SECONDS, f"{panel['title']} plots {max(plotted)}"
+
+
+def test_the_environment_split_is_a_partition_with_an_audit_band(store) -> None:
+    rows = store.execute(_panel_sql("Is the environment slow, or the loop around it?")).fetchall()
+
+    shares = {series: value for _, series, value in rows}
+    awaited = sum(ENV_SPLIT.values())
+    assert shares["resuming on the event loop"] == pytest.approx(ENV_SPLIT["resume"] / awaited)
+    assert shares["running the environment"] == pytest.approx(ENV_SPLIT["exec"] / awaited)
+    # The producer states the three terms partition the wait exactly, so the audit band is zero
+    # until they stop doing so.
+    assert shares["unaccounted"] == pytest.approx(0.0)
+    assert sum(shares.values()) == pytest.approx(1.0)
+
+
+def test_memory_is_the_worst_rank_and_allocator_events_are_the_run_total(store) -> None:
+    rows = store.execute(_panel_sql("Allocator pressure and peak memory on the worst rank")).fetchall()
+
+    for _, reserved, allocated, retries, ooms in rows:
+        # The binding constraint on the micro-batch is the rank that used most, never the mean.
+        assert reserved == pytest.approx(max(m["peak_reserved_bytes"] for m in WORKER_MEMORY.values()))
+        assert allocated == pytest.approx(max(m["peak_allocated_bytes"] for m in WORKER_MEMORY.values()))
+        assert retries == pytest.approx(sum(a["alloc_retries"] for a in WORKER_ALLOCATOR.values()))
+        assert ooms == pytest.approx(0.0)
+
+
+def test_the_memory_panel_reads_the_instrument_the_byte_gauges_moved_to(store) -> None:
+    """peak_allocated_bytes and peak_reserved_bytes were split off policy_train_count onto
+    policy_train_bytes on 2026-09-03. Naming either instrument alone empties the series on half the
+    runs, and an empty memory series reads as headroom."""
+    store.execute(
+        """UPDATE "telemetry_v1.marinskyrl" SET name = 'policy_train_count'
+           WHERE name = 'policy_train_bytes'"""
+    )
+    rows = store.execute(_panel_sql("Allocator pressure and peak memory on the worst rank")).fetchall()
+
+    assert all(row[1] is not None for row in rows)
+    assert rows[0][1] == pytest.approx(max(m["peak_reserved_bytes"] for m in WORKER_MEMORY.values()))
