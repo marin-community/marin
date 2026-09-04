@@ -127,6 +127,23 @@ class TrainingDataMode(StrEnum):
     SYNTHETIC = "synthetic"
 
 
+def place_step_on_mesh(state: "GrugTrainState", mesh: Mesh) -> "GrugTrainState":
+    """Place the step counter under the mesh sharding the train step returns it with.
+
+    `_init_state` is jitted without `out_shardings`, so the scalar step comes back under a
+    `GSPMDSharding`, while `train_step` runs under the explicit mesh and returns it under a
+    `NamedSharding`. JAX keys its compilation cache on input shardings, so the second step misses
+    and compiles a second `train_step` executable that lives for the whole run. Each `GpuExecutable`
+    owns a `CollectiveMemoryCache`, so two executables register two NCCL symmetric windows over the
+    same collective-memory arena at the same base address, which is the aliasing #8861 fails on.
+    Every other leaf already carries an explicit sharding and matches across the step.
+    """
+    # `jax.device_put` asserts inside `_different_device_order_reshard` when the source is a
+    # GSPMDSharding whose device order differs from the mesh's, so reshard through a jit instead.
+    place = jax.jit(lambda leaf: leaf, out_shardings=NamedSharding(mesh, P()))
+    return dataclasses.replace(state, step=place(state.step))
+
+
 def restore_template_from(state):
     """ShapeDtypeStructs carrying each leaf's concrete sharding, releasing the leaves.
 
@@ -975,6 +992,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             state = take_master_as_params(state)
         if released_initial_state and any(isinstance(leaf, jax.ShapeDtypeStruct) for leaf in jax.tree.leaves(state)):
             state = _init_state(model_key)
+        state = place_step_on_mesh(state, mesh)
         dump_grug_state_sharding_run_artifact(
             state,
             log_dir=trainer.log_dir,

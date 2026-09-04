@@ -434,6 +434,57 @@ def test_a_master_bearing_checkpoint_migrates_in_process_into_a_master_less_rest
         np.testing.assert_array_equal(np.asarray(want), np.asarray(have))
 
 
+def test_the_step_counter_is_placed_on_the_sharding_the_train_step_returns():
+    """A step under a GSPMD sharding makes the next train step miss jit's compilation cache, which
+    keys on input shardings, and the second executable registers a second NCCL symmetric window over
+    the shared collective-memory arena (#8861)."""
+    env = os.environ.copy()
+    env["JAX_PLATFORMS"] = "cpu"
+    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=2"
+    script = """
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from jax._src.lib import xla_client as xc
+        from jax._src.sharding_impls import GSPMDSharding
+        from jax.sharding import AxisType, Mesh, set_mesh
+
+        from experiments.grug.moe_hero_ep import train
+
+        mesh = Mesh(
+            np.asarray(jax.devices()).reshape(1, 1, 2, 1),
+            ("replica_dcn", "data", "expert", "model"),
+            axis_types=(AxisType.Explicit,) * 4,
+        )
+        replicated = GSPMDSharding(tuple(jax.devices()), xc.HloSharding.replicate())
+        state = train.GrugTrainState(
+            step=jax.device_put(jnp.array(3, dtype=jnp.int32), replicated),
+            params=jnp.zeros(4),
+            master_params=None,
+            opt_state=(),
+            ema_params=None,
+            pending_qb_betas=jnp.zeros((1, 2)),
+        )
+        with set_mesh(mesh):
+            advance = jax.jit(lambda step: step + jnp.asarray(1, dtype=step.dtype))
+            assert advance(state.step).sharding != state.step.sharding
+            placed = train.place_step_on_mesh(state, mesh)
+            advanced = advance(placed.step)
+        assert advanced.sharding == placed.step.sharding, (advanced.sharding, placed.step.sharding)
+        assert int(placed.step) == 3
+    """
+
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(script)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_the_carry_offload_overrides_an_inherited_collective_overlap_limit(monkeypatch):
     inherited = f"{train.XLA_COLLECTIVE_OVERLAP_FLAG}={train.DEFAULT_COLLECTIVE_OVERLAP_LIMIT}"
     monkeypatch.setenv("XLA_FLAGS", inherited)
