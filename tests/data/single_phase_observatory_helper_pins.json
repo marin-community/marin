@@ -21,7 +21,9 @@
    "QUALITY_SCRAMBLE_SEED": "20260904",
    "QUALITY_SUFFIXES": "('_high', '_low')",
    "REFINE_EVALUATIONS": "80",
-   "RPL_COLUMN_SCALE_FLOOR": "1e-12"
+   "RPL_COLUMN_SCALE_FLOOR": "1e-12",
+   "UNIQUE_TOKEN_SCALE": "10.0",
+   "ONSET_COVARIATES": "('none', 'log_inventory', 'quality')"
   }
  },
  "note": "Source pins for the models-module helpers whose behaviour the cache-key description does not capture. A helper may change only together with a DESIGN_REVISIONS bump above the pinned revision (or a pin refresh in the same change). Refreshed 2026-09-02 22:2x after the Codex round-2 fixes; the pin now also records the resolved module constants that helper bodies read (constants block), since a changed default escapes both the description hash and the body hash.",
@@ -92,7 +94,8 @@
   },
   "family_design": {
    "design_revision": 1,
-   "source_sha256": "79cd2c8c58fa5654cc42ab8401313e85d8a85098f280468332ed1b6c90c775d9"
+   "source_sha256": "4f107121f8eac8ff639f1f43e6ad160f5c78869140a6f48eb064275e72601c3e",
+   "note": "refreshed 2026-09-04 round 4: defaulted options only, cc_hub raises without bucket names; 57 sampled shards reproduce bit-for-bit"
   },
   "features_from_panel": {
    "design_revision": 1,
@@ -145,6 +148,16 @@
   "weibull_response": {
    "design_revision": 1,
    "source_sha256": "c6706d3280029b554856ec134695f61d609a3c3489fafe095dcf0123905bd61b"
+  },
+  "onset_covariate": {
+   "design_revision": 1,
+   "source_sha256": "6797592fcef0de767ba8b1daff8e3da2bcca26537e8f7fd9f8292fef26ee7dcd",
+   "note": "round-4 design helper called by family_design"
+  },
+  "unique_token_input": {
+   "design_revision": 1,
+   "source_sha256": "ef36271d3f96723773cbc915f153fac90b45d014dba4ab9812b46fb249d52099",
+   "note": "round-4 design helper called by family_design"
   }
  }
 }

@@ -1491,7 +1491,9 @@ def pooled_anchor_contrasts(component_fold_metrics: pd.DataFrame, fits: pd.DataF
 
 def ablation_promotions(pooled: pd.DataFrame) -> pd.DataFrame:
     rows = []
-    for entry in registry.ABLATIONS + registry.ROW_SCRAMBLED_CONTROLS + registry.SUCCESSOR_ABLATIONS:
+    for entry in (
+        registry.ABLATIONS + registry.ROW_SCRAMBLED_CONTROLS + registry.SUCCESSOR_ABLATIONS + registry.ROUND4_ENTRIES
+    ):
         subset = pooled[pooled["model"].eq(entry.model_id) & pooled["comparator"].eq(entry.parent)]
         frozen_hits = []
         posthoc_hits = []

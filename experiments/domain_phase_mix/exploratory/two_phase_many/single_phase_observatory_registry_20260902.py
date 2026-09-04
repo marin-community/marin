@@ -27,6 +27,9 @@ import pandas as pd
 from experiments.domain_phase_mix.exploratory.two_phase_many import (
     single_phase_observatory_models_20260902 as models,
 )
+from experiments.domain_phase_mix.exploratory.two_phase_many import (
+    single_phase_round4_pooled_law_20260903 as pooled_law,
+)
 
 Builder = Callable[[models.Features], Any]
 
@@ -1413,6 +1416,21 @@ SUCCESSOR_EXP_MATCHED_SHAPES = tuple(
     {"rate": rate, "threshold": threshold} for rate in SUCCESSOR_EXP_MATCHED_RATES for threshold in SUCCESSOR_THRESHOLDS
 )
 SUCCESSOR_OPTIONS = models.FamilyOptions(family_signal="none", harm="softplus_bucket", benefit="weibull")
+# Round-4 grids: the successor grid nested in one extra shape axis each.
+ONSET_SLOPES_INVENTORY = (-0.75, 0.0, 0.75, 1.5)
+ONSET_SLOPES_QUALITY = (-1.0, 0.0, 1.0, 2.0)
+HARM_SHRINKS = (3.0, 10.0, 30.0)
+INTERACTION_SHRINKS = (1.0, 10.0)
+SUCCESSOR_ONSET_INVENTORY_SHAPES = tuple(
+    {**s, "onset_slope": slope} for s in SUCCESSOR_SHAPES for slope in ONSET_SLOPES_INVENTORY
+)
+SUCCESSOR_ONSET_QUALITY_SHAPES = tuple(
+    {**s, "onset_slope": slope} for s in SUCCESSOR_SHAPES for slope in ONSET_SLOPES_QUALITY
+)
+SUCCESSOR_HIERARCHICAL_SHAPES = tuple({**s, "harm_shrink": shrink} for s in SUCCESSOR_SHAPES for shrink in HARM_SHRINKS)
+SUCCESSOR_HUB_SHAPES = tuple(
+    {**s, "interaction_shrink": shrink} for s in SUCCESSOR_SHAPES for shrink in INTERACTION_SHRINKS
+)
 SUCCESSOR_HEAD = models.HeadSpec(kind=models.HeadKind.NNLS, scale_columns=True)
 
 
@@ -1422,11 +1440,12 @@ def _successor(
     shapes: tuple[models.Shape, ...] = SUCCESSOR_SHAPES,
     head: models.HeadSpec = SUCCESSOR_HEAD,
     ridge_grid: tuple[float, ...] = SUCCESSOR_RIDGE_GRID,
+    extra_dof: int = 0,
 ) -> Builder:
     dof = 3 if options.benefit == "weibull" else 2
     if options.harm == "none":
         dof -= 1
-    return _family_grid_model(model_id, options, shapes, ridge_grid, head, dof)
+    return _family_grid_model(model_id, options, shapes, ridge_grid, head, dof + extra_dof)
 
 
 # Significance prior from the 2026-06-23 domain-ablation p-value matrix (300M, one bucket deleted at a time,
@@ -1901,8 +1920,128 @@ SUCCESSOR_ABLATIONS: tuple[ModelEntry, ...] = (
         role="control",
     ),
 )
+# Round 4 (2026-09-03): mechanisms taken from the repetition-aware mixing literature, each nested on the successor.
+ROUND4_ENTRIES: tuple[ModelEntry, ...] = (
+    _ablation(
+        "weibull_softplus_unscaled@share_penalty",
+        "weibull_softplus_unscaled",
+        "harm=softplus_bucket+linear_share_penalty",
+        _successor(
+            "weibull_softplus_unscaled@share_penalty", _options(SUCCESSOR_OPTIONS, share_penalty=True), head=NNLS
+        ),
+        note="Nonnegative linear penalty per bucket share (Sedova et al. gamma h), identified from weight variation.",
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@onset_inventory",
+        "weibull_softplus_unscaled",
+        "harm=softplus_bucket_onset_by_log_inventory",
+        _successor(
+            "weibull_softplus_unscaled@onset_inventory",
+            _options(SUCCESSOR_OPTIONS, harm_onset_covariate="log_inventory"),
+            SUCCESSOR_ONSET_INVENTORY_SHAPES,
+            head=NNLS,
+            extra_dof=1,
+        ),
+        note="Per-bucket harm onset threshold + onset_slope * centred log inventory (unique-token tolerance).",
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@onset_quality",
+        "weibull_softplus_unscaled",
+        "harm=softplus_bucket_onset_by_quality",
+        _successor(
+            "weibull_softplus_unscaled@onset_quality",
+            _options(SUCCESSOR_OPTIONS, harm_onset_covariate="quality"),
+            SUCCESSOR_ONSET_QUALITY_SHAPES,
+            head=NNLS,
+            extra_dof=1,
+        ),
+        note="Per-bucket harm onset threshold + onset_slope * centred quality rank (declared CC and manifest bins).",
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@harm_hierarchical",
+        "weibull_softplus_unscaled",
+        "harm=softplus_bucket_hierarchical",
+        _successor(
+            "weibull_softplus_unscaled@harm_hierarchical",
+            _options(SUCCESSOR_OPTIONS, harm="softplus_bucket_hierarchical"),
+            SUCCESSOR_HIERARCHICAL_SHAPES,
+            head=NNLS,
+            extra_dof=1,
+        ),
+        note="Shared harm amplitude plus ridge-shrunk signed per-bucket deviations (harm_shrink on the grid).",
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@interaction_total_hub",
+        "weibull_softplus_unscaled",
+        "interaction=total_hub_products",
+        _successor(
+            "weibull_softplus_unscaled@interaction_total_hub",
+            _options(SUCCESSOR_OPTIONS, interaction="total_hub"),
+            SUCCESSOR_HUB_SHAPES,
+            head=NNLS,
+            extra_dof=1,
+        ),
+        note="Signed products of the total benefit signal with each bucket signal (Scheffe hub interactions).",
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@interaction_cc_hub",
+        "weibull_softplus_unscaled",
+        "interaction=cc_hub_products",
+        _successor(
+            "weibull_softplus_unscaled@interaction_cc_hub",
+            _options(SUCCESSOR_OPTIONS, interaction="cc_hub"),
+            SUCCESSOR_HUB_SHAPES,
+            head=NNLS,
+            extra_dof=1,
+        ),
+        note="Signed products of the Common Crawl benefit signal with each bucket signal; total hub without CC buckets.",
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@unique_benefit",
+        "weibull_softplus_unscaled",
+        "benefit=weibull_in_unique_tokens",
+        _successor(
+            "weibull_softplus_unscaled@unique_benefit",
+            _options(SUCCESSOR_OPTIONS, benefit_input="unique_tokens"),
+            head=NNLS,
+        ),
+        note="Benefit in unique tokens seen (min(weight, 1/inventory), scaled); harm stays in epochs.",
+    ),
+)
+POOLED_EFFECTIVE_DATA: tuple[ModelEntry, ...] = (
+    ModelEntry(
+        "pooled_effective_data",
+        "successor",
+        (),
+        "pooled_effective_data",
+        "Round-4 candidate: pooled effective-data power law with linear share penalties",
+        _mechanisms(
+            coordinate="unique_share_and_epochs",
+            benefit="pooled_power_law_effective_data",
+            harm="repetition_credit_saturation+linear_share_penalty",
+            sharing="shared_alpha_r1",
+            head="nonnegative_bounded_least_squares",
+        ),
+        "n/a (new model)",
+        "none",
+        "inner_cv_grid + bounded least squares",
+        f"alpha x{len(pooled_law.POOLED_ALPHAS)}, repetition scale x{len(pooled_law.POOLED_REPETITION_SCALES)}, "
+        f"ridge x{len(pooled_law.POOLED_RIDGE_GRID)}",
+        lambda features: pooled_law.PooledEffectiveDataModel(
+            "pooled_effective_data", revision=pooled_law.POOLED_REVISION
+        ),
+        note=(
+            "After Sedova et al. (2026): y = c + (sum_b tau_b U_b (1 + rho(E_b)))^(-alpha) + sum_b gamma_b w_b with "
+            "U_b the unique share of the budget, rho a saturating repetition credit, tau and gamma nonnegative; "
+            "concave pooling of the effective-data total instead of additive per-bucket benefits."
+        ),
+    ),
+)
+ROUND4_ENTRIES = ROUND4_ENTRIES + POOLED_EFFECTIVE_DATA
+ROUND4_IDS: tuple[str, ...] = tuple(entry.model_id for entry in ROUND4_ENTRIES)
+
 ALL_ENTRIES: tuple[ModelEntry, ...] = (
-    PARENTS + REFERENCES + ABLATIONS + ROW_SCRAMBLED_CONTROLS + SUCCESSORS + SUCCESSOR_ABLATIONS
+    PARENTS + REFERENCES + ABLATIONS + ROW_SCRAMBLED_CONTROLS + SUCCESSORS + SUCCESSOR_ABLATIONS + ROUND4_ENTRIES
 )
 SUCCESSOR_BY_ID = {entry.model_id: entry for entry in SUCCESSORS}
 ENTRY_BY_ID = {entry.model_id: entry for entry in ALL_ENTRIES}

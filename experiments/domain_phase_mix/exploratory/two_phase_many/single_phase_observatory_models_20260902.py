@@ -90,6 +90,10 @@ QUALITY_SCRAMBLE_SEED = 20_260_904
 # Bounded log-deficit link: the linear predictor is capped at the largest training log-deficit plus this margin.
 LINK_CAP_MARGIN = 0.5
 CC_PREFIX = "dolma3_cc/"
+# Round-4 mechanisms: unique-token benefit input (share of the budget, times this scale so a 10 % bucket is 1),
+# and per-bucket harm-onset covariates.
+UNIQUE_TOKEN_SCALE = 10.0
+ONSET_COVARIATES = ("none", "log_inventory", "quality")
 
 
 def softplus(value: np.ndarray) -> np.ndarray:
@@ -560,10 +564,16 @@ class FamilyOptions:
     row_scrambled_harm: bool = False
     # Round-2 mechanisms: additive interaction columns, quality-axis pooling across families, and a
     # per-(component, bucket) ridge multiplier table keyed by bucket name.
-    interaction: str = "none"
+    interaction: str = "none"  # none | total_square | family_products | total_hub | cc_hub
     quality_axis: str = "none"
     shuffled_quality: bool = False
     component_ridge: tuple[tuple[str, tuple[tuple[str, float], ...]], ...] = ()
+    # Round-4 mechanisms: a nonnegative linear share penalty per bucket, a per-bucket harm onset driven by a
+    # covariate (threshold + onset_slope * z_b), a hierarchical harm block (harm="softplus_bucket_hierarchical"),
+    # and a unique-token benefit input (benefit_input="unique_tokens").
+    share_penalty: bool = False
+    harm_onset_covariate: str = "none"
+    benefit_input: str = "exposure"  # exposure | unique_tokens
 
 
 def _benefit(values: np.ndarray, shape: Shape, options: FamilyOptions) -> np.ndarray:
@@ -580,15 +590,44 @@ def _benefit(values: np.ndarray, shape: Shape, options: FamilyOptions) -> np.nda
     raise ValueError(f"unknown benefit {options.benefit}")
 
 
+def onset_covariate(features: Features, kind: str) -> np.ndarray:
+    """Per-bucket centred covariate for the harm onset: log inventory (epochs at full share) or quality rank."""
+    if kind == "log_inventory":
+        logged = np.log(np.maximum(features.inventory, EPSILON))
+        return logged - float(np.median(logged))
+    if kind == "quality":
+        quality = np.asarray(features.families.quality, dtype=float)
+        known = quality >= 0
+        if not known.any():
+            return np.zeros(features.buckets)
+        centred = np.zeros(features.buckets)
+        centred[known] = quality[known] - float(np.mean(quality[known]))
+        return centred
+    raise ValueError(f"unknown onset covariate {kind}")
+
+
+def unique_token_input(features: Features) -> np.ndarray:
+    """Unique tokens each bucket contributes, as a share of the budget: min(weight, 1 / inventory), scaled."""
+    return np.minimum(features.weights, 1.0 / np.maximum(features.inventory, EPSILON)[None, :]) * UNIQUE_TOKEN_SCALE
+
+
 def family_design(features: Features, shape: Shape, options: FamilyOptions) -> Design:
     """GRP-style single-phase design: bucket benefit, family benefit, and repetition harm."""
     families = features.families
     exposure = features.exposures
-    signal_input = (
-        retained_state(features, float(shape.get("late_multiplier", 1.0)), float(shape.get("forgetting_rate", 0.0)))
-        if options.retention_gate
-        else exposure
-    )
+    if options.retention_gate:
+        signal_input = retained_state(
+            features, float(shape.get("late_multiplier", 1.0)), float(shape.get("forgetting_rate", 0.0))
+        )
+    elif options.benefit_input == "unique_tokens":
+        signal_input = unique_token_input(features)
+    elif options.benefit_input == "exposure":
+        signal_input = exposure
+    else:
+        raise ValueError(f"unknown benefit input {options.benefit_input}")
+    threshold: np.ndarray | float = float(shape["threshold"]) if "threshold" in shape else float("nan")
+    if options.harm_onset_covariate != "none":
+        threshold = threshold + float(shape["onset_slope"]) * onset_covariate(features, options.harm_onset_covariate)
     pieces: list[np.ndarray] = []
     ridge: list[float] = []
     names: list[str] = []
@@ -655,9 +694,17 @@ def family_design(features: Features, shape: Shape, options: FamilyOptions) -> D
         ridge.extend([1.0] * len(families.members))
         names.extend(f"family_overexposure:{name}" for name in families.names)
     elif options.harm == "softplus_bucket":
-        pieces.append(softplus_harm(exposure, float(shape["threshold"])))
+        pieces.append(softplus_harm(exposure, threshold))
         ridge.extend([1.0] * features.buckets)
         names.extend(f"bucket_overexposure:{index}" for index in range(features.buckets))
+    elif options.harm == "softplus_bucket_hierarchical":
+        bucket_harm = softplus_harm(exposure, threshold)
+        shrink = float(shape["harm_shrink"])
+        pieces.extend([bucket_harm.sum(axis=1, keepdims=True), bucket_harm, -bucket_harm])
+        ridge.extend([1.0] + [shrink] * (2 * features.buckets))
+        names.append("shared_overexposure")
+        names.extend(f"bucket_overexposure_plus:{index}" for index in range(features.buckets))
+        names.extend(f"bucket_overexposure_minus:{index}" for index in range(features.buckets))
     elif options.harm == "softplus_group_sum":
         groups = families.pairs
         paired = {index for pair in groups for index in pair}
@@ -687,8 +734,13 @@ def family_design(features: Features, shape: Shape, options: FamilyOptions) -> D
     elif options.harm != "none":
         raise ValueError(f"unknown harm {options.harm}")
 
+    if options.share_penalty:
+        pieces.append(features.weights)
+        ridge.extend([1.0] * features.buckets)
+        names.extend(f"bucket_share_penalty:{index}" for index in range(features.buckets))
+
     if options.member_replay:
-        bucket_harm = softplus_harm(exposure, float(shape["threshold"]))
+        bucket_harm = softplus_harm(exposure, threshold)
         pieces.append(families.means(bucket_harm))
         ridge.extend([1.0] * len(families.members))
         names.extend(f"family_member_replay:{name}" for name in families.names)
@@ -704,6 +756,24 @@ def family_design(features: Features, shape: Shape, options: FamilyOptions) -> D
             pieces.extend([product, -product])
             ridge.extend([1.0, 1.0])
             names.extend([f"interaction:pair_plus:{high}+{low}", f"interaction:pair_minus:{high}+{low}"])
+    elif options.interaction in ("total_hub", "cc_hub"):
+        if options.interaction == "cc_hub":
+            if not features.buckets_names:
+                raise ValueError("cc_hub interaction needs bucket names")
+            hub_members = [index for index, name in enumerate(features.buckets_names) if name.startswith(CC_PREFIX)]
+        else:
+            hub_members = []
+        hub = (
+            bucket_signal[:, hub_members].sum(axis=1, keepdims=True)
+            if hub_members
+            else bucket_signal.sum(axis=1, keepdims=True)
+        )
+        product = hub * bucket_signal
+        shrink = float(shape.get("interaction_shrink", 1.0))
+        pieces.extend([product, -product])
+        ridge.extend([shrink] * (2 * features.buckets))
+        names.extend(f"interaction:hub_plus:{index}" for index in range(features.buckets))
+        names.extend(f"interaction:hub_minus:{index}" for index in range(features.buckets))
     elif options.interaction != "none":
         raise ValueError(f"unknown interaction {options.interaction}")
 
@@ -721,7 +791,7 @@ def family_design(features: Features, shape: Shape, options: FamilyOptions) -> D
                 ridge.append(1.0)
                 names.append(f"quality_benefit:{level}")
         if options.quality_axis in ("harm", "both"):
-            quality_harm = softplus_harm(exposure, float(shape["threshold"]))
+            quality_harm = softplus_harm(exposure, threshold)
             for level in levels:
                 pieces.append(quality_harm[:, quality == level].sum(axis=1, keepdims=True))
                 ridge.append(1.0)
