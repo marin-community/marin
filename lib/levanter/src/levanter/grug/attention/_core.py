@@ -68,45 +68,6 @@ def _segment_ids_pspec(token_pspec: PartitionSpec, segment_ids_ndim: int) -> Par
     raise ValueError(f"Splash segment IDs must have rank 1 or 2, got rank {segment_ids_ndim}")
 
 
-def _replicated_sequence_segment_ids_pspec(token_pspec: PartitionSpec, segment_ids_ndim: int) -> PartitionSpec:
-    """Keep segment sequence IDs replicated while preserving batch sharding."""
-    if segment_ids_ndim == 1:
-        return PartitionSpec()
-    if segment_ids_ndim == 2:
-        return PartitionSpec(token_pspec[0], None)
-    raise ValueError(f"Splash segment IDs must have rank 1 or 2, got rank {segment_ids_ndim}")
-
-
-def _slice_query_segment_ids(
-    segment_ids: jax.Array,
-    *,
-    local_sequence_length: int,
-    sequence_axes: object,
-    mesh: jax.sharding.Mesh,
-) -> jax.Array:
-    """Select this shard's query segment IDs from a replicated global array."""
-    if segment_ids.shape[-1] == local_sequence_length:
-        return segment_ids
-
-    axes = (sequence_axes,) if isinstance(sequence_axes, str) else tuple(sequence_axes)
-    shard_count = math.prod(int(mesh.shape[axis]) for axis in axes)
-    if segment_ids.shape[-1] != local_sequence_length * shard_count:
-        raise ValueError(
-            "Query segment IDs do not match the local or global query sequence length: "
-            f"segment_ids={segment_ids.shape[-1]}, local_query={local_sequence_length}, shards={shard_count}"
-        )
-
-    shard_index = jnp.asarray(0, dtype=jnp.int32)
-    for axis in axes:
-        shard_index = shard_index * int(mesh.shape[axis]) + jax.lax.axis_index(axis)
-    return jax.lax.dynamic_slice_in_dim(
-        segment_ids,
-        shard_index * local_sequence_length,
-        local_sequence_length,
-        axis=-1,
-    )
-
-
 def thd_segment_metadata_from_segment_ids(
     segment_ids: Int[Array, "... S"],
     *,
@@ -462,15 +423,7 @@ def _tpu_splash_attention(
 
         if mask.segment_ids is not None:
             q_segment_ids, kv_segment_ids = mask.segment_ids
-            # Splash sees a context-local Q sequence and a gathered KV sequence. Keep
-            # query IDs replicated at the boundary and select the local range inside
-            # shard_map; nested SegmentIds inputs do not reliably inherit a resharded
-            # tracer's sequence layout while the enclosing training jit is staged.
-            q_segment_ids_axes = _replicated_sequence_segment_ids_pspec(q_pspec, q_segment_ids.ndim)
-            q_segment_ids = jax.sharding.reshard(
-                q_segment_ids,
-                NamedSharding(mesh, q_segment_ids_axes),
-            )
+            q_segment_ids_axes = _segment_ids_pspec(q_pspec, q_segment_ids.ndim)
             kv_segment_ids_axes = _segment_ids_pspec(k_pspec, kv_segment_ids.ndim)
             segment_id_lowering = lower_splash_segment_ids(
                 q_segment_ids=q_segment_ids,
@@ -499,24 +452,21 @@ def _tpu_splash_attention(
         head_shards=head_shards,
         q_seq_shards=q_seq_shards,
     )
+    kernel_sharding = NamedSharding(mesh, PartitionSpec(q_pspec[1], q_pspec[2]))
+    kernel_specs = splash_kernel.manual_sharding_spec(kernel_sharding)
 
     @functools.partial(
         shard_map,
         mesh=mesh,
-        in_specs=(q_pspec, k_pspec, v_pspec, segment_id_lowering.segment_ids_axes, None),
+        in_specs=(q_pspec, k_pspec, v_pspec, segment_id_lowering.segment_ids_axes, kernel_specs),
         out_specs=q_pspec,
         **_SHARD_MAP_CHECK_KWARGS,
     )
     def wrap(q_bhsd, k_bhsd, v_bhsd, seg_ids, kernel):
-        if seg_ids is not None:
-            local_q_segment_ids = _slice_query_segment_ids(
-                seg_ids.q,
-                local_sequence_length=Sq // q_seq_shards,
-                sequence_axes=q_pspec[2],
-                mesh=mesh,
-            )
-            seg_ids = splash_attention_kernel.SegmentIds(local_q_segment_ids, seg_ids.kv)
-        return jax.vmap(kernel, in_axes=(0, 0, 0, segment_id_lowering.segment_batch_axis))(
+        def call_kernel(q_b, k_b, v_b, segment_ids):
+            return kernel(q_b, k_b, v_b, segment_ids=segment_ids)
+
+        return jax.vmap(call_kernel, in_axes=(0, 0, 0, segment_id_lowering.segment_batch_axis))(
             q_bhsd,
             k_bhsd,
             v_bhsd,
