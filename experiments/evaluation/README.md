@@ -257,13 +257,13 @@ subprocess receives that key without inheriting the orchestrator's other credent
 
 Every Harbor catalog policy is YAML under `experiments/evaluation/configs/harbor/`, named after its
 `EVALS` key. Python retains the catalog and suite membership, Evalchemy definitions, model and hardware
-selection, runtime task caps, and secret source declarations. The Grug OpenCode profile runs its YAML
+selection, runtime task caps, and secret source declarations. The OT-TBLite profile runs its YAML
 policy through the same path:
 
 ```bash
-# One OpenCode trial with the step-1903 Grug SFT on H100x8.
+# One OT-TBLite trial with the step-1903 Grug SFT and OpenCode on H100x8.
 uv run python -m experiments.evaluation.cli launch \
-  --model grug-agentic-s3-step1903 --evals grug-opencode-id --limit 1
+  --model grug-agentic-s3-step1903 --evals ot-tblite --limit 1
 ```
 
 The profile materializes `DCAgent/dev_set_v2` from a pinned Hugging Face commit before passing its
