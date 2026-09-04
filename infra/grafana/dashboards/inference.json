@@ -1149,6 +1149,16 @@
       "url": "/d/marin-runs"
     },
     {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "RL runs",
+      "type": "link",
+      "url": "/d/marin-rl-runs"
+    },
+    {
       "linkRef": "fleet_health_without_vars"
     },
     {
