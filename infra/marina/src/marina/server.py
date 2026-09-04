@@ -53,9 +53,8 @@ CLOUD_RUN_SERVICE_ENV = "K_SERVICE"
 APPS_DIR_ENV = "MARINA_APPS_DIR"
 DATA_ROOT_ENV = "MARINA_DATA_ROOT"
 IAP_AUDIENCE_ENV = "MARINA_IAP_AUDIENCE"
-# `host=app,host=app`: a vanity host that used to be one app's own origin (echo.oa.dev)
-# redirects into that app's prefix on the canonical origin, so links from before the move
-# keep resolving.
+# `host=app,host=app`: a vanity host that used to be one app's own origin (echo.oa.dev).
+# Legacy API paths keep serving that app; pages redirect into its canonical prefix.
 HOST_APPS_ENV = "MARINA_HOST_APPS"
 # The origin the apps are served from. Aliased hosts send every request here, so one URL
 # space holds the apps and a link from one app to another resolves against this origin.
@@ -74,7 +73,7 @@ class MarinaConfig:
     iap_audience: str | None
     # None serves static apps only; a Python app that asks for its engine then fails.
     database: DatabaseSpec | None = None
-    # Hosts that redirect into one app's prefix, by host name.
+    # Legacy hosts assigned to one app, by host name.
     host_apps: dict[str, str] = field(default_factory=dict)
     # Scheme and host the aliased hosts redirect to, e.g. https://marina.oa.dev.
     canonical_origin: str | None = None
@@ -130,10 +129,12 @@ def host_redirect(host: str, path: str, host_apps: dict[str, str], canonical_ori
     return f"{canonical_origin}/{app}{'' if path == '/' else path}"
 
 
-def is_api_target(target: str, canonical_origin: str) -> bool:
-    """Whether a redirect target addresses an app's API rather than one of its pages."""
-    segments = target[len(canonical_origin) :].split("/")
-    return len(segments) > 2 and f"/{segments[2]}" == API_PREFIX
+def legacy_api_app(host: str, path: str, host_apps: dict[str, str]) -> str | None:
+    """The app serving a root-relative API path on its legacy host, if any."""
+    app = host_apps.get(host.split(":")[0].lower())
+    if app is None or not (path == API_PREFIX or path.startswith(f"{API_PREFIX}/")):
+        return None
+    return app
 
 
 def content_security_policy(app: AppManifest) -> str:
@@ -296,14 +297,17 @@ def create_app(config: MarinaConfig) -> RouteAuthMiddleware:
 
         @api.middleware("http")
         async def redirect_aliased_hosts(request: Request, call_next):
-            target = host_redirect(request.headers.get("host", ""), request.url.path, config.host_apps, origin)
+            host = request.headers.get("host", "")
+            path = request.url.path
+            app_name = legacy_api_app(host, path, config.host_apps)
+            if app_name is not None:
+                prefix = f"/{app_name}"
+                request.scope["path"] = prefix + path
+                request.scope["raw_path"] = prefix.encode() + request.scope["raw_path"]
+                return await call_next(request)
+            target = host_redirect(host, path, config.host_apps, origin)
             if target is None:
                 return await call_next(request)
-            if is_api_target(target, origin):
-                # A client follows a cross-origin redirect without its Authorization header --
-                # requests and curl both drop it -- so the retry would reach IAP anonymous and
-                # come back as a sign-in page with status 200. Name the move instead.
-                return JSONResponse({"error": "moved", "url": target}, status_code=421)
             query = f"?{request.url.query}" if request.url.query else ""
             # 307, not 308: a permanent redirect is cached hard, and a browser that kept an
             # earlier target would keep following it after this mapping changes.

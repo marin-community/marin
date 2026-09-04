@@ -17,9 +17,10 @@ signed assertion against the service's audience so each request carries the call
 email. IAM grants live in the ``marin`` stack (iac.gcp.marina).
 
 Vanity hosts: the apps are served from ``marina.oa.dev``. ``echo.oa.dev`` and
-``evaldash.oa.dev`` map to the same service, where every request redirects to
-``marina.oa.dev/echo/`` or ``marina.oa.dev/evaldash/`` with its path, so the old links keep
-resolving and one origin holds the apps.
+``evaldash.oa.dev`` map to the same service. Legacy API paths route to the corresponding
+app without a redirect; pages redirect to ``marina.oa.dev/echo/`` or
+``marina.oa.dev/evaldash/`` with their path, so old links keep resolving and one origin
+holds the apps.
 """
 
 from pathlib import Path

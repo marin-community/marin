@@ -31,6 +31,31 @@ def write_app(apps_dir: Path, name: str, manifest: str = TASKTROVE_MANIFEST, bui
     return root
 
 
+def write_api_app(apps_dir: Path, name: str) -> Path:
+    root = write_app(apps_dir, name)
+    (root / "__init__.py").write_text("")
+    (root / "app.py").write_text(
+        """from fastapi import FastAPI, Request
+from marina.apps import Services
+
+
+def create_api(_services: Services) -> FastAPI:
+    api = FastAPI()
+
+    @api.post("/feedback")
+    async def feedback(request: Request) -> dict[str, object]:
+        return {
+            "body": await request.json(),
+            "query": request.query_params.get("execution"),
+            "request_id": request.headers.get("x-request-id"),
+        }
+
+    return api
+"""
+    )
+    return root
+
+
 def config_for(tmp_path: Path) -> MarinaConfig:
     data_root = tmp_path / "data"
     (data_root / "tasktrove").mkdir(parents=True, exist_ok=True)
@@ -113,7 +138,7 @@ def test_non_loopback_without_iap_is_denied(tmp_path: Path) -> None:
 
 
 def aliased_client(tmp_path: Path) -> TestClient:
-    write_app(tmp_path / "apps", "tasktrove")
+    write_api_app(tmp_path / "apps", "tasktrove")
     config = replace(
         config_for(tmp_path),
         host_apps={"old.example": "tasktrove"},
@@ -147,13 +172,16 @@ def test_aliased_host_keeps_another_apps_name_inside_its_own_app(tmp_path: Path)
     assert response.headers["location"] == "https://marina.example/tasktrove/notes/"
 
 
-def test_an_api_call_to_an_aliased_host_is_told_where_the_api_moved(tmp_path: Path) -> None:
-    # A redirect would be followed without the Authorization header, and the retry would come
-    # back from IAP as a sign-in page with status 200 -- a success the caller cannot parse.
+def test_aliased_host_serves_legacy_api_path_without_a_redirect(tmp_path: Path) -> None:
     client = aliased_client(tmp_path)
-    response = client.post("/api/feedback", headers={"host": "old.example"}, follow_redirects=False)
-    assert response.status_code == 421
-    assert response.json() == {"error": "moved", "url": "https://marina.example/tasktrove/api/feedback"}
+    response = client.post(
+        "/api/feedback?execution=17",
+        headers={"host": "old.example", "x-request-id": "request-42"},
+        json={"grade": 10},
+        follow_redirects=False,
+    )
+    assert response.status_code == 200
+    assert response.json() == {"body": {"grade": 10}, "query": "17", "request_id": "request-42"}
 
 
 def test_a_page_whose_path_merely_starts_with_an_app_still_redirects(tmp_path: Path) -> None:

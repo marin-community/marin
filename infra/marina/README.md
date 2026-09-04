@@ -108,10 +108,12 @@ serves the real apps directory, the local data root, and the database in
 
 `marina serve` reads `MARINA_APPS_DIR`, `MARINA_DATA_ROOT`,
 `MARINA_IAP_AUDIENCE`, the database variables above, and `MARINA_HOST_APPS`
-(`echo.oa.dev=echo,...`: a host that used to be one app's own origin redirects
-into that app's prefix). The auth chain is IAP's signed assertion header when
-an audience is configured, then loopback; on Cloud Run a missing audience is a
-startup error rather than an open service.
+(`echo.oa.dev=echo,...`: a host that used to be one app's own origin). A request
+to `/api` on a legacy host is routed directly to that app's API so existing
+clients keep their authorization header; page requests redirect into the app's
+prefix on the canonical origin. The auth chain is IAP's signed assertion header
+when an audience is configured, then loopback; on Cloud Run a missing audience
+is a startup error rather than an open service.
 
 ## Deploying
 
