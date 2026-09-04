@@ -157,7 +157,7 @@
       "id": 3,
       "type": "timeseries",
       "title": "Optimizer step and policy lag",
-      "description": "The trainer's optimizer step, and the newest policy version whose generated work was consumed in the same bucket. The vertical gap between them is the policy lag in optimizer steps: superimposed is on-policy, a widening gap is generation falling behind, and a gap pinned flat at max_staleness_steps is admission clamping and buying throughput with staleness. The upper line is a counter and only ever rises, so flat is the failure signal and down is impossible. This gap is MAX(policy_step) − MAX(weights_step) per bucket, a best-case estimate read by eye; the measured per-group distribution is the off-policy staleness panel two rows down.",
+      "description": "The trainer's optimizer step, and the newest policy version whose generated work was consumed in the same bucket.\n\nThe gap between the lines is the policy lag in optimizer steps. A widening gap means generation is falling behind; a flat gap means admission is clamping it.\n\nBoth lines are counters and only rise, so a flat line is the failure signal. The gap is a per-bucket maximum and reads as a best case. The measured distribution is on the off-policy staleness panel. Data from telemetry_v1.marinskyrl.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -246,7 +246,7 @@
       "id": 4,
       "type": "timeseries",
       "title": "Rollouts, samples and tokens completed",
-      "description": "Work the trainer finished in each time bucket. A rollout is one completed trajectory; a sample is one generated response segment, so a multi-turn or step-wise rollout counts as several samples and only its terminal segment as a rollout. These arrive as native counter deltas and sum directly, so no line here is a running total, and generated tokens ÷ rollouts is mean trajectory length. Harbor counts trials under this same metric name and a trial is not a rollout; the trainer also emits a policy_step work kind here, separate from the policy_step gauge the panel to the left reads.",
+      "description": "Rollouts, samples and generated tokens the trainer finished in each time bucket.\n\nGenerated tokens divided by rollouts is the mean trajectory length. Blank means the trainer finished nothing in this window.\n\nA rollout is one completed trajectory. A sample is one generated response segment, so a multi-turn rollout counts as several samples and one rollout. These are counter deltas, so no line is a running total. Data from telemetry_v1.marinskyrl.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -339,7 +339,7 @@
       "id": 1,
       "type": "table",
       "title": "Producers reporting this run",
-      "description": "One row per service × role × metric source that stamped this run_id, and when each last reported. A healthy async run shows marinskyrl several times (driver, trainer, controller, plus a ray metric source), one vllm row covering every inference engine, and one harbor row as orchestrator; the Iris node agent never appears, because it is a fleet process that stamps no run_id. A producer that never called configure() fails silently — no exception, no log, lost_records stays 0 — so a missing row here is the only evidence you get.",
+      "description": "One row per service, role and metric source that stamped this run id, with the time each last reported.\n\nA healthy async run shows several marinskyrl rows, one vllm row, and one harbor row. A missing row is the only evidence that a producer failed to start telemetry.\n\nThe Iris node agent never appears here, because it stamps no run id. Rows come from the marinskyrl, vllm and harbor tables in telemetry_v1.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -458,111 +458,18 @@
       "panels": []
     },
     {
-      "id": 12,
-      "type": "timeseries",
-      "title": "Optimizer step decomposition (exclusive time)",
-      "description": "Mean seconds each phase spent on its own work inside one optimizer step: the span's duration minus the spans it contains. Exclusive time is the only kind that may be stacked, because the bands then sum to the step. Checkpointing, eval and export are recorded alongside a step and contained by none, so the panel reads one root subtree rather than every exclusive span. Blank until the producer stamps root; until then the panel to the right is the two-way split.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 10,
-        "w": 12,
-        "h": 8
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 60,
-            "showPoints": "never",
-            "spanNulls": false,
-            "stacking": {
-              "mode": "normal",
-              "group": "A"
-            },
-            "axisLabel": "mean seconds per optimizer step"
-          },
-          "min": 0,
-          "noValue": "No exclusive-clock rows carrying root='step'. This build does not stamp them yet -- read the critical-path panel to the right.",
-          "unit": "s"
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "showLegend": true,
-          "displayMode": "list",
-          "placement": "bottom",
-          "calcs": []
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "timeseries",
-          "parser": "backend",
-          "url": "/query",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, json_get(attributes_json, 'phase') AS series, AVG(value) AS value FROM \"telemetry_v1.marinskyrl\" WHERE name = 'phase_duration_seconds' AND json_get(attributes_json, 'clock_domain') = 'exclusive' AND json_get(attributes_json, 'root') = 'step' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              }
-            ]
-          },
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "interval": "1m"
-    },
-    {
       "id": 2,
       "type": "timeseries",
       "title": "Rollout wait vs train step (critical path)",
-      "description": "Mean seconds per optimizer step that the trainer blocked, split two ways: waiting for generated rollouts, and inside the optimizer step itself. Rollout wait dominating means the trainer is starved for generation rather than slow at training — read it against the rollout buffer below to see which side is holding the work. These spans are inclusive of everything they contain, so they say which half of the step is expensive and never what inside it; they must not be stacked. Each phase is split by outcome because a phase that raised recorded how long it ran before failing, which is not how long that phase takes.",
+      "description": "Mean seconds per optimizer step the trainer spent waiting for rollouts, and inside the step itself.\n\nRollout wait above train step means generation is the bottleneck. The rollout buffer occupancy panel says whether the buffer is full.\n\nBoth spans contain everything inside them, so they never stack. Each series is split by outcome, because a phase that failed recorded only how long it ran before failing. Blank means no critical-path spans arrived. Data from telemetry_v1.marinskyrl.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
-        "x": 12,
+        "w": 8,
+        "x": 0,
         "y": 10
       },
       "fieldConfig": {
@@ -642,16 +549,16 @@
       "id": 5,
       "type": "timeseries",
       "title": "Rollout buffer occupancy (groups)",
-      "description": "Completed rollout groups sitting in the fully-async buffer, against the buffer's capacity. One group is one prompt's n samples, so this counts groups and not individual rollouts. Pinned at capacity means generation is ahead and the trainer is the bottleneck; near zero while the trainer waits is the reverse — the pair is the evidence for choosing an inference-to-training ratio, which our configs span from 0.5:1 to 6:1 with no recorded rationale. Async trainer only: one call site in fully_async_trainer.py, so a sync run is blank, and blank reads identically to starved.",
+      "description": "Completed rollout groups waiting in the async buffer, against the buffer's capacity.\n\nPinned at capacity means generation is ahead and the trainer is the bottleneck. Near zero while the trainer waits means the opposite.\n\nOne group is one prompt's n samples, so this counts groups. Only the async trainer fills this buffer, so a sync run is blank. Data from telemetry_v1.marinskyrl.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 18
+        "w": 8,
+        "x": 8,
+        "y": 10
       },
       "fieldConfig": {
         "defaults": {
@@ -731,16 +638,16 @@
       "id": 8,
       "type": "timeseries",
       "title": "GPU utilization on this run's nodes",
-      "description": "Mean GPU busy percentage on the nodes this run occupied, from the Iris node agent. The node agent stamps no run_id and never will, so this is joined through node_name: each node is credited to whichever run reported most from it in that time bucket, and a node two runs share goes entirely to one of them. Read it against the critical-path panel — a long step with low GPU busy is stranded accelerator time.",
+      "description": "Mean GPU busy percentage on the nodes this run occupied.\n\nA long step with low GPU busy is stranded accelerator time. Read it beside the critical-path panel.\n\nThe node agent stamps no run id, so nodes are matched by name. Each node is credited to whichever run reported most from it in that bucket. A node shared by two runs goes entirely to one of them. Data from telemetry_v1.node_agent, joined to node names in telemetry_v1.marinskyrl.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 18
+        "w": 8,
+        "x": 16,
+        "y": 10
       },
       "fieldConfig": {
         "defaults": {
@@ -826,7 +733,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 26
+        "y": 18
       },
       "panels": []
     },
@@ -834,7 +741,7 @@
       "id": 9,
       "type": "timeseries",
       "title": "Engine token throughput",
-      "description": "Prompt and generated tokens per second, summed across the run's inference engines and differenced per engine from cumulative counters. Read the ratio rather than either line: under GRPO all n samples of a group share one prompt, so a prompt-heavy ratio is the signal that prefix-cache routing would pay, and the prefix-cache panel below says whether the cache is already catching it. The generated line against generated tokens on the work-completed panel is the discard rate — generation the trainer never consumed.",
+      "description": "Prompt and generated tokens per second, summed across the run's inference engines.\n\nA prompt-heavy ratio means prefill is being paid repeatedly. The prefix-cache panel says whether the cache is catching it.\n\nRates are differenced per engine from cumulative counters. Under GRPO all n samples of a group share one prompt, so a high prompt share is expected. Data from telemetry_v1.vllm.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -843,7 +750,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 27
+        "y": 19
       },
       "fieldConfig": {
         "defaults": {
@@ -856,7 +763,7 @@
             "axisLabel": "tokens / s"
           },
           "min": 0,
-          "unit": "short",
+          "unit": "tps",
           "noValue": "No vLLM rows for this run. If the whole rank is blank, the engine exporter is down rather than six separate faults."
         },
         "overrides": []
@@ -923,7 +830,7 @@
       "id": 10,
       "type": "timeseries",
       "title": "Engine queue and KV-cache",
-      "description": "Requests running and requests queued at the inference engines, and how full their KV-cache is, each averaged across engines. Queued high with KV-cache low is a scheduling limit — add engines, or raise the concurrency cap. Both high is a genuine KV-cache limit, and the preemptions panel below says whether it cost anything. Neither number separates the two cases alone.",
+      "description": "Requests running and queued at the inference engines, with KV-cache occupancy on the right axis.\n\nQueued high with KV-cache low is a scheduling limit, so add engines or raise the concurrency cap. Both high is a real KV-cache limit.\n\nThe preemptions panel says whether that limit cost anything. Values are averaged across engines. Data from telemetry_v1.vllm.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -932,7 +839,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 27
+        "y": 19
       },
       "fieldConfig": {
         "defaults": {
@@ -1042,7 +949,7 @@
       "id": 11,
       "type": "timeseries",
       "title": "Engine request latency (mean by stage)",
-      "description": "Mean seconds per finished request at each stage: queue, prefill, decode, time to first token, and end to end. The forwarder ships Prometheus histograms as _sum and _count, so this is Σ(Δ_sum) ÷ Σ(Δ_count) over each time bucket — a mean, which cannot show a tail. The straggler panel below carries that reading. End to end and time to first token contain the other stages, so these series neither stack nor sum.",
+      "description": "Mean seconds per finished request at each stage: queue, prefill, decode, time to first token, and end to end.\n\nA rising decode stage means generation itself slowed. A rising queue stage means requests waited to start.\n\nThis is a mean and cannot show a tail; the straggler panel carries that. End to end and time to first token contain the other stages, so these series neither stack nor sum. Data from telemetry_v1.vllm.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -1051,7 +958,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 27
+        "y": 19
       },
       "fieldConfig": {
         "defaults": {
@@ -1131,7 +1038,7 @@
       "id": 16,
       "type": "timeseries",
       "title": "Prefix-cache hit rate",
-      "description": "Cached prompt tokens ÷ queried prompt tokens across the run's inference engines, from two counters. Both counters are in tokens, so this is not the share of requests that hit. It is the evidence base for cache-aware routing: under GRPO all n samples of a group share one prompt, so the reachable ceiling is high and the gap to it is the opportunity. Read it under engine throughput — a prompt-heavy throughput ratio with a low hit rate is prefill being paid for repeatedly.",
+      "description": "Cached prompt tokens divided by queried prompt tokens, across the run's inference engines.\n\nA low rate with a prompt-heavy throughput ratio means prefill is being recomputed for prompts the engines already hold.\n\nBoth counters are in tokens, so this is not the share of requests that hit. Under GRPO all n samples of a group share one prompt. Data from telemetry_v1.vllm.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -1140,7 +1047,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 35
+        "y": 27
       },
       "fieldConfig": {
         "defaults": {
@@ -1219,7 +1126,7 @@
       "id": 17,
       "type": "timeseries",
       "title": "Engine KV-cache preemptions",
-      "description": "Requests the inference engine evicted from its KV-cache and had to recompute, per time bucket, differenced from a cumulative counter. This is vLLM's own scheduler preemption and is unrelated to Kubernetes pod preemption or Iris job preemption. A counter cannot miss an event between scrapes the way a KV-cache high-water gauge can, so this is the only panel showing KV-cache pressure that actually cost something: high KV-cache use above with zero here cost nothing.",
+      "description": "Requests the engine evicted from its KV-cache and had to recompute, per time bucket.\n\nAny value above zero means KV-cache pressure cost real work. High KV-cache occupancy with zero here cost nothing.\n\nThis is vLLM's own scheduler preemption. It is unrelated to Kubernetes pod preemption or Iris job preemption. Data from telemetry_v1.vllm.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -1228,7 +1135,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 35
+        "y": 27
       },
       "fieldConfig": {
         "defaults": {
@@ -1308,7 +1215,7 @@
       "id": 13,
       "type": "timeseries",
       "title": "Straggler proxy: rollout wait p99 ÷ p50",
-      "description": "The 99th percentile of the trainer's critical-path rollout wait divided by its median, over the rows in each time bucket. One row is one optimizer step, so this measures step-to-step spread and stands in for the straggler tax rather than measuring it; the per-rollout distribution needs a per-rollout record, which no producer emits. Above about 2 the tail is multiplying every synchronous step — pair it with effective batch size after filtering, because taking the first n completions fills early batches with short, easy tasks. The ratio only means anything when a bucket holds many steps: at the default window the bucket is under a minute while a step is minutes, so raise the panel's minimum interval to 30m before reading it.",
+      "description": "The 99th percentile of the trainer's rollout wait divided by its median, over the steps in each bucket.\n\nAbove about 2 the slowest rollouts are stretching every synchronous step.\n\nOne row is one optimizer step, so this measures step-to-step spread. The per-rollout distribution needs a per-rollout record, which no producer emits. This panel forces a 30-minute minimum bucket and ignores shorter dashboard ranges, because the ratio needs many steps per bucket. Data from telemetry_v1.marinskyrl.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -1317,7 +1224,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 35
+        "y": 27
       },
       "fieldConfig": {
         "defaults": {
@@ -1390,7 +1297,7 @@
           ]
         }
       ],
-      "interval": "1m"
+      "interval": "30m"
     },
     {
       "type": "row",
@@ -1401,7 +1308,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 43
+        "y": 35
       },
       "panels": []
     },
@@ -1409,7 +1316,7 @@
       "id": 14,
       "type": "timeseries",
       "title": "Off-policy staleness (optimizer steps behind)",
-      "description": "How many optimizer steps old each admitted group's policy was when the trainer consumed it, measured at admission, one observation per group. The producer cannot compute this, because a group can wait in the buffer across step boundaries and so cannot know which step will consume it. Staleness as a logged number, at the k≈4–8 the async trainer targets; it is also the input any off-policy correction needs. Watch p99: the trainer asserts max staleness ≤ max_staleness_steps immediately after recording, so a p99 climbing toward the configured max is the last thing you see before the run aborts. Async trainer only — a sync run is on-policy by construction.",
+      "description": "How many optimizer steps old each admitted group's policy was when the trainer consumed it.\n\nWatch p99. The trainer asserts staleness stays under the configured maximum, so a p99 climbing toward it is the last thing visible before the run aborts.\n\nMeasured at admission, one observation per group. The producer cannot compute it, because a group can wait in the buffer across step boundaries. Only the async trainer records it, so a sync run is blank. Data from telemetry_v1.marinskyrl.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -1418,7 +1325,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 44
+        "y": 36
       },
       "fieldConfig": {
         "defaults": {
@@ -1498,7 +1405,7 @@
       "id": 18,
       "type": "timeseries",
       "title": "Why engine requests finished",
-      "description": "Finished inference-engine requests per time bucket, split by vLLM's finished_reason. The set is open — stop, length, abort, error and repetition on the pinned build — so read whatever appears rather than expecting three. A rising length share is truncation quietly corrupting the reward signal: the model was cut off rather than choosing to stop, and the verifier scores the truncation anyway. These count engine requests, so one rollout is several of them when the group is sampled n ways or the task is multi-turn.",
+      "description": "Finished engine requests per time bucket, split by the reason vLLM recorded.\n\nA rising length share means responses are being truncated, and the verifier scores the truncation anyway.\n\nThe reason set is open; the pinned build emits stop, length, abort, error and repetition. One rollout is several requests when a group is sampled n ways. Blank means the engines finished nothing in this window. Data from telemetry_v1.vllm.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -1507,7 +1414,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 44
+        "y": 36
       },
       "fieldConfig": {
         "defaults": {
@@ -1595,7 +1502,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 52
+        "y": 44
       },
       "panels": []
     },
@@ -1603,7 +1510,7 @@
       "id": 6,
       "type": "timeseries",
       "title": "Ray object store occupancy",
-      "description": "Share of the Ray object store in use across the run's nodes: used ÷ (used + free), so it does not move when the node count does. Climbing toward 1 is the store about to spill, and spill surfaces as rollout latency long before it surfaces as a failure. This is Ray plumbing and is unrelated to the engines' KV-cache.",
+      "description": "Share of the Ray object store in use across the run's nodes.\n\nClimbing toward 1 means the store is about to spill. Spill shows up as rollout latency before it shows up as a failure.\n\nThe ratio is used divided by used plus free, so it does not move when the node count does. This is Ray plumbing and is unrelated to the engines' KV-cache. Ray produces these counters; MarinSkyRL scrapes them into telemetry_v1.marinskyrl.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -1612,7 +1519,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 53
+        "y": 45
       },
       "fieldConfig": {
         "defaults": {
@@ -1687,7 +1594,7 @@
       "id": 7,
       "type": "timeseries",
       "title": "Ray spill manager bytes by state",
-      "description": "Bytes the Ray spill manager is tracking, split by its own state label, averaged per node. Read the states separately and never together: pinned, pending spill and pending restore are current occupancy, while spilled and restored are lifetime running totals that only ever climb. A pending-spill line that stops draining is the plumbing failing; a spilled line whose slope steepens is trajectories bigger than budgeted.",
+      "description": "Bytes the Ray spill manager holds, averaged across the run's nodes and split by state.\n\nA pending-spill line that stops draining means the spill path has stalled. A spilled line that steepens means trajectories are bigger than budgeted.\n\nThe states are separate quantities. Pinned, pending spill and pending restore are current occupancy. Spilled and restored are lifetime totals and only climb. Ray produces these counters; MarinSkyRL scrapes them into telemetry_v1.marinskyrl.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -1696,7 +1603,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 53
+        "y": 45
       },
       "fieldConfig": {
         "defaults": {
