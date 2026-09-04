@@ -1,7 +1,7 @@
 {
   "type": "timeseries",
   "title": "A trajectory's wait: the engine against the environment",
-  "description": "Per-trajectory wait, from concurrent sums divided by rollout_trajectory_count. The raw sums run about 200x their own parent and must never be banded. `slowest` is what generate actually waits for: the step ends with the last trajectory.",
+  "description": "Per-trajectory wait, from concurrent sums divided by rollout_trajectory_count. The raw sums run about 200x their own parent and must never be banded. `slowest` is what generate waits for. The engine wait also contains any driver-thread tokenization on the call path, so it is not purely engine time.",
   "datasource": {
     "type": "yesoreyeram-infinity-datasource",
     "uid": "finelog-marin"

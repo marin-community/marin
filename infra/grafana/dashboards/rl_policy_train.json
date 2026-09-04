@@ -1387,7 +1387,7 @@
       "id": 233,
       "type": "timeseries",
       "title": "Request latency by stage",
-      "description": "Where a request's wall goes inside the engine: queue, prefill, decode, end to end. Queue large against decode is an admission problem, not a slow model — that is what raising concurrency 8→16 fixed.",
+      "description": "Where a request's wall goes inside the engine, as percentiles: queue, prefill, decode, end to end. Queue large against decode is an admission problem, not a slow model. Means and gauges for the same stages are on RL runs.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"

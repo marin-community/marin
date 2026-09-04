@@ -1009,7 +1009,7 @@
       "id": 11,
       "type": "timeseries",
       "title": "Engine request latency (mean by stage)",
-      "description": "Mean seconds per finished request at each stage: queue, prefill, decode, time to first token, and end to end. The forwarder ships Prometheus histograms as _sum and _count, so this is Σ(Δ_sum) ÷ Σ(Δ_count) over each time bucket — a mean, which cannot show a tail. The straggler panel below carries that reading. End to end and time to first token contain the other stages, so these series neither stack nor sum.",
+      "description": "Mean seconds per finished request at each stage: queue, prefill, decode, time to first token, and end to end. The forwarder ships Prometheus histograms as _sum and _count, so this is Σ(Δ_sum) ÷ Σ(Δ_count) over each time bucket — a mean, which cannot show a tail. The straggler panel below carries that reading. End to end and time to first token contain the other stages, so these series neither stack nor sum. Means and gauges here; the tail is on RL training step.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
