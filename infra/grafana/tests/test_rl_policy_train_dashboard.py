@@ -4,10 +4,15 @@
 """The policy_train dashboard's SQL, run against the rows MarinSkyRL actually publishes.
 
 The fixture is built from the emitting code rather than from the panels: driver spans carry
-``clock_domain='inclusive_wall'`` and no rank, worker spans carry ``exclusive_wall`` and a rank,
-and the two ranks are constructed so that a per-phase maximum across them would exceed the parent
-it is supposed to decompose. That is the mistake these panels exist to avoid, so it is the one the
-fixture makes available.
+``clock_domain='inclusive_wall'`` and no rank, worker spans carry a rank and one of two clock
+domains, and the two ranks are constructed so that a per-phase maximum across them would exceed
+the parent it is supposed to decompose. That is the mistake these panels exist to avoid, so it is
+the one the fixture makes available.
+
+``WorkerTimingSink._clock_domain`` composes the worker domain from the containment and the
+synchronise mode: ``exclusive_wall`` with ``trainer.policy_train_spans_synchronize``, and
+``exclusive_launch`` without it. Both are fixtured, because a panel that names only one renders
+empty on every run made the other way and reads exactly like a producer that stopped publishing.
 """
 
 import json
@@ -205,7 +210,7 @@ def _driver_rows(moment: datetime, seq: int) -> list[tuple]:
     ]
 
 
-def _worker_rows(moment: datetime, seq: int) -> list[tuple]:
+def _worker_rows(moment: datetime, seq: int, clock: str) -> list[tuple]:
     """What WorkerTimingSink publishes: exclusive spans per rank, plus one inclusive parent.
 
     The ranks sit on different nodes, which is what lets the DCGM join credit both of the run's
@@ -235,7 +240,7 @@ def _worker_rows(moment: datetime, seq: int) -> list[tuple]:
                         "phase": phase,
                         "root": "step",
                         "parent": "policy_ppo_train",
-                        "clock_domain": "exclusive_wall",
+                        "clock_domain": f"exclusive_{clock}",
                         "role": "worker",
                         "rank": rank,
                         "step": str(seq),
@@ -256,7 +261,7 @@ def _worker_rows(moment: datetime, seq: int) -> list[tuple]:
                     "phase": "policy_ppo_train",
                     "root": "step",
                     "parent": "policy_train",
-                    "clock_domain": "inclusive_wall",
+                    "clock_domain": f"inclusive_{clock}",
                     "role": "worker",
                     "rank": rank,
                     "step": str(seq),
@@ -383,12 +388,12 @@ def _vllm_rows(moment: datetime, seq: int) -> list[tuple]:
     return rows
 
 
-def _run_rows() -> list[tuple]:
+def _run_rows(clock: str) -> list[tuple]:
     rows = []
     for bucket in range(BUCKETS):
         moment = WINDOW_START + timedelta(minutes=5 * bucket)
         rows += _driver_rows(moment, bucket)
-        rows += _worker_rows(moment, bucket)
+        rows += _worker_rows(moment, bucket, clock)
         rows += _node_agent_rows(moment, bucket)
         rows += _vllm_rows(moment, bucket)
         # The run variable reads policy_step, so the run has to report one.
@@ -407,8 +412,7 @@ def _run_rows() -> list[tuple]:
     return rows
 
 
-@pytest.fixture
-def store() -> duckdb.DuckDBPyConnection:
+def _store(clock: str) -> duckdb.DuckDBPyConnection:
     database = duckdb.connect()
     for stream in sorted(set(_SEMANTIC_STREAM.values())):
         database.execute(f'CREATE TABLE "{stream}"{_SCHEMA}')
@@ -420,12 +424,24 @@ def store() -> duckdb.DuckDBPyConnection:
     placeholders = ", ".join("?" for _ in _COLUMNS)
     service_index = _COLUMNS.index("service")
     routed: dict[str, list] = {}
-    for row in _run_rows():
+    for row in _run_rows(clock):
         stream = _SEMANTIC_STREAM[row[service_index]]
         routed.setdefault(stream, []).append(row)
     for stream, stream_rows in routed.items():
         database.executemany(f'INSERT INTO "{stream}" VALUES ({placeholders})', stream_rows)
     return database
+
+
+@pytest.fixture
+def store() -> duckdb.DuckDBPyConnection:
+    """A synchronised run: worker spans measure execution and ship as ``*_wall``."""
+    return _store("wall")
+
+
+@pytest.fixture
+def launch_store() -> duckdb.DuckDBPyConnection:
+    """An unsynchronised run: the same spans measure launch and ship as ``*_launch``."""
+    return _store("launch")
 
 
 def _dashboard() -> dict:
@@ -538,6 +554,33 @@ def test_the_derived_ratios_divide_the_quantities_they_name(store) -> None:
         )
     )
     assert [round(value, 6) for _, value in waiting] == [round(barriers / PPO_TRAIN[CRITICAL_RANK], 6)] * len(waiting)
+
+
+def test_the_worker_panels_read_whichever_clock_the_sink_stamped(launch_store) -> None:
+    """A run made without ``policy_train_spans_synchronize`` ships ``*_launch`` and nothing else.
+
+    Naming ``exclusive_wall`` alone renders all four worker panels empty on every such run, which
+    is indistinguishable from a producer that stopped publishing — and every arm of this campaign
+    ran unsynchronised.
+    """
+    bands = {
+        series: seconds
+        for _, series, seconds in launch_store.execute(
+            _panel_sql("policy_ppo_train decomposition at the critical rank")
+        ).fetchall()
+    }
+    assert bands["policy_backward"] == pytest.approx(WORKER_SPANS[CRITICAL_RANK]["policy_backward"])
+    assert sum(bands.values()) == pytest.approx(PPO_TRAIN[CRITICAL_RANK])
+
+    skew = launch_store.execute(_panel_sql("Rank skew: policy_ppo_train across ranks")).fetchall()
+    assert {round(slowest, 6) for _, slowest, _, _, _ in skew} == {round(PPO_TRAIN[CRITICAL_RANK], 6)}
+
+    ratio = launch_store.execute(_panel_sql("backward ÷ forward at the critical rank")).fetchall()
+    expected = WORKER_SPANS[CRITICAL_RANK]["policy_backward"] / WORKER_SPANS[CRITICAL_RANK]["policy_forward"]
+    assert {round(value, 6) for _, value in ratio} == {round(expected, 6)}
+
+    waiting = launch_store.execute(_panel_sql("Waiting and collective share at the critical rank")).fetchall()
+    assert {value for _, value in waiting} != {None}
 
 
 def test_padding_is_a_per_rank_ratio_rather_than_a_ratio_of_summed_tokens(store) -> None:
