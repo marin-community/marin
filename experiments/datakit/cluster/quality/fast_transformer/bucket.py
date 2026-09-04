@@ -62,10 +62,14 @@ from experiments.datakit.cluster.quality.fast_transformer.score_fusion import (
 logger = logging.getLogger(__name__)
 
 QUALITY_BUCKETS_VERSION = 1
-# Per-shard reads are three narrow columns; the largest shard's 2.68M ids and
-# scores fit in a few hundred MB.
-WORKER_RESOURCES = ResourceConfig(cpu=1, ram="8g", disk="8g")
-MAX_WORKERS = 512
+# A shard is three narrow columns and about four seconds of work, so the pool
+# is bounded by pod scheduling rather than compute. Each worker runs four shards
+# at once (the cpu and ram ratios below), and 128 workers keep 512 shards in
+# flight with a quarter of the pods a one-shard-per-worker pool needed; the
+# task ram covers the largest shard's 2.68M ids across the three sides.
+WORKER_RESOURCES = ResourceConfig(cpu=4, ram="24g", disk="8g")
+TASK_RESOURCES = ResourceConfig(cpu=1, ram="6g", disk="8g")
+MAX_WORKERS = 128
 
 QUALITY_SCHEMA = pa.schema(
     [
@@ -150,10 +154,11 @@ def bucket_quality_scores(
     content_type_dir: str,
     quality_model: QualityPin,
     worker_resources: ResourceConfig = WORKER_RESOURCES,
+    task_resources: ResourceConfig = TASK_RESOURCES,
     max_workers: int = MAX_WORKERS,
     zephyr_context: ZephyrContext | None = None,
 ) -> QualityScores:
-    """Bucket one source's fusion scores; one Zephyr task per shard.
+    """Bucket one source's fusion scores; one Zephyr task per shard, several per worker.
 
     Output shards that already exist are skipped, so a rerun after a partial
     failure buckets only the remainder.
@@ -188,7 +193,7 @@ def bucket_quality_scores(
         max_workers=min(max_workers, len(basenames)),
         chunk_storage_prefix=marin_temp_bucket(ttl_days=1, prefix="zephyr", source_prefix=output_path),
     )
-    outcome = ctx.execute(pipeline, verbose=True, map_task_resources=worker_resources)
+    outcome = ctx.execute(pipeline, verbose=True, map_task_resources=task_resources)
     return QualityScores(
         main_output_dir=output_path,
         samples_output_dir=None,
@@ -208,6 +213,7 @@ def quality_step(
     content_type: StepSpec,
     quality_model: QualityPin,
     worker_resources: ResourceConfig = WORKER_RESOURCES,
+    task_resources: ResourceConfig = TASK_RESOURCES,
     max_workers: int = MAX_WORKERS,
     zephyr_context: ZephyrContext | None = None,
 ) -> StepSpec:
@@ -230,6 +236,7 @@ def quality_step(
             content_type_dir=content_type.output_path,
             quality_model=quality_model,
             worker_resources=worker_resources,
+            task_resources=task_resources,
             max_workers=max_workers,
             zephyr_context=zephyr_context,
         ),
