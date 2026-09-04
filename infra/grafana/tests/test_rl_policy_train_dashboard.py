@@ -43,9 +43,23 @@ DRIVER_PHASES = {
     "policy_train": 3805.6,
     "sync_weights": 12.6,
 }
-# train_critic_and_policy contains policy_train, so it is not a leaf and must not be banded.
+# train_critic_and_policy contains policy_train, so its own band is the Ray dispatch around it and
+# never the 3806 s it wraps.
 CONTAINER_SECONDS = 3806.0
-UNATTRIBUTED = STEP_SECONDS - sum(DRIVER_PHASES.values())
+
+# The generate subtree, in the proportions the pr488 run measured: the fan-out is essentially the
+# whole phase and generate's own exclusive time is the published residual. Two levels deep, because
+# one level would not catch a query that bands a child beside the parent that contains it.
+GENERATE_CHILDREN = {"rollout_collect": 156.4, "rollout_assemble": 0.1, "rollout_finalize": 4.6}
+GENERATE_GRANDCHILDREN = {"rollout_tokenize": ("rollout_collect", 0.2), "rollout_retain": ("rollout_finalize", 4.5)}
+GENERATE_RESIDUAL = DRIVER_PHASES["generate"] - sum(GENERATE_CHILDREN.values())
+
+# step's own exclusive time. The old panel lumped this together with train_critic_and_policy's, and
+# the two are different costs: one is the driver's step loop, the other is the Ray round trip.
+UNATTRIBUTED = STEP_SECONDS - DRIVER_PHASES["generate"] - CONTAINER_SECONDS - sum(
+    DRIVER_PHASES[phase] for phase in ("convert_to_training_input", "fwd_logprobs_values_reward", "sync_weights")
+)
+DISPATCH_SECONDS = CONTAINER_SECONDS - DRIVER_PHASES["policy_train"]
 
 # Two ranks whose barrier and compute time are anti-correlated. Rank 1 is r*: it arrives last, so
 # it waits ~0 at the entry barrier and then does the full compute. Taking a per-phase maximum over
@@ -186,7 +200,11 @@ def _driver_rows(moment: datetime, seq: int) -> list[tuple]:
         ("train_critic_and_policy", CONTAINER_SECONDS, "step"),
         ("policy_train", DRIVER_PHASES["policy_train"], "train_critic_and_policy"),
         ("sync_weights", DRIVER_PHASES["sync_weights"], "step"),
+        *((phase, seconds, "generate") for phase, seconds in GENERATE_CHILDREN.items()),
+        *((phase, seconds, parent) for phase, (parent, seconds) in GENERATE_GRANDCHILDREN.items()),
     ]
+    # EXCLUSIVE_DRIVER_SPANS: a residual is what its parent's wall does not contain, so it ships
+    # exclusive while every other driver span ships inclusive.
     return [
         _row(
             service="marinskyrl",
@@ -207,6 +225,25 @@ def _driver_rows(moment: datetime, seq: int) -> list[tuple]:
             },
         )
         for phase, seconds, parent in tree
+    ] + [
+        _row(
+            service="marinskyrl",
+            name="phase_duration_seconds",
+            value=GENERATE_RESIDUAL,
+            moment=moment,
+            seq=seq,
+            run_id=RUN_ID,
+            node_name=NODES[0],
+            role="trainer",
+            attributes={
+                "phase": "generate_span_residual",
+                "root": "step",
+                "parent": "generate",
+                "clock_domain": "exclusive_wall",
+                "role": "trainer",
+                "step": str(seq),
+            },
+        )
     ]
 
 
@@ -475,23 +512,64 @@ def test_the_run_variable_offers_the_run_the_trainer_reported(store) -> None:
     assert store.execute(_resolve(parameter["value"])).fetchall() == [(RUN_ID,)]
 
 
-def test_the_step_bands_are_the_leaves_and_they_close_on_the_step(store) -> None:
-    rows = store.execute(_panel_sql("Step composition (driver leaf phases)")).fetchall()
+def test_the_step_bands_are_exclusive_and_they_close_on_the_step(store) -> None:
+    rows = store.execute(_panel_sql("Step composition — exclusive seconds per phase")).fetchall()
 
     bands = {series: seconds for _, series, seconds in rows}
-    # train_critic_and_policy contains policy_train, so banding it too would double-count 3806 s
-    # inside a 4210 s step.
-    assert "train_critic_and_policy" not in bands
+    # Every phase gets a band, and it is the wall it did not spend inside a child. A parent banded
+    # at its own wall would double-count: train_critic_and_policy would put 3806 s beside the
+    # 3805.6 s of policy_train it contains, in a 4210 s step.
+    assert bands["train_critic_and_policy"] == pytest.approx(DISPATCH_SECONDS)
     assert bands["policy_train"] == pytest.approx(DRIVER_PHASES["policy_train"])
-    assert bands["generate"] == pytest.approx(DRIVER_PHASES["generate"])
     assert bands["unattributed"] == pytest.approx(UNATTRIBUTED)
     assert sum(bands.values()) == pytest.approx(STEP_SECONDS)
+
+
+def test_the_generate_subtree_is_subtracted_from_generate_and_not_stacked_beside_it(store) -> None:
+    """The tree grew a level under generate after this panel shipped, and a hardcoded exclusion
+    list could not see it: rollout_collect alone is 97% of generate, so banding both put 162% of
+    the phase on the stack with nothing to say so."""
+    bands = {
+        series: seconds
+        for _, series, seconds in store.execute(
+            _panel_sql("Step composition — exclusive seconds per phase")
+        ).fetchall()
+    }
+
+    # generate's own band is the orchestration it does outside its children, which is what the
+    # producer publishes as generate_span_residual.
+    assert bands["generate"] == pytest.approx(GENERATE_RESIDUAL)
+    assert bands["rollout_collect"] == pytest.approx(
+        GENERATE_CHILDREN["rollout_collect"] - GENERATE_GRANDCHILDREN["rollout_tokenize"][1]
+    )
+    assert bands["rollout_tokenize"] == pytest.approx(GENERATE_GRANDCHILDREN["rollout_tokenize"][1])
+    # The whole subtree still sums to generate, two levels deep.
+    subtree = ["generate", *GENERATE_CHILDREN, *GENERATE_GRANDCHILDREN]
+    assert sum(bands[phase] for phase in subtree) == pytest.approx(DRIVER_PHASES["generate"])
 
 
 def test_policy_train_share_reproduces_the_measured_ninety_percent(store) -> None:
     rows = store.execute(_panel_sql("policy_train share of the step")).fetchall()
 
     assert {round(share, 4) for _, share in rows} == {round(DRIVER_PHASES["policy_train"] / STEP_SECONDS, 4)}
+
+
+def test_the_share_still_has_a_denominator_when_the_run_publishes_no_step_span(store) -> None:
+    """No run has published a `step` span since the generate tree landed, so a panel that needs one
+    is permanently blank. The step's direct children partition it, so their sum stands in."""
+    store.execute(
+        """DELETE FROM "telemetry_v1.marinskyrl"
+           WHERE json_extract_string(attributes_json, '$.phase') = 'step'"""
+    )
+    rows = store.execute(_panel_sql("policy_train share of the step")).fetchall()
+
+    direct_children = DRIVER_PHASES["generate"] + CONTAINER_SECONDS + sum(
+        DRIVER_PHASES[phase] for phase in ("convert_to_training_input", "fwd_logprobs_values_reward", "sync_weights")
+    )
+    assert direct_children != pytest.approx(STEP_SECONDS), "the fixture no longer distinguishes the two denominators"
+    assert {round(share, 6) for _, share in rows} == {
+        round(DRIVER_PHASES["policy_train"] / direct_children, 6)
+    }
 
 
 def test_the_decomposition_reads_the_critical_rank_and_never_a_per_phase_maximum(store) -> None:
