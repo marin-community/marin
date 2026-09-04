@@ -1,0 +1,87 @@
+{
+  "type": "timeseries",
+  "title": "Inside generate — where the fan-out goes",
+  "description": "generate's direct children as shares of generate. rollout_collect — the fan-out that awaits every trajectory — is about 97%, so the question is what it waits on. `unaccounted` should stay near zero.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "custom": {
+        "drawStyle": "line",
+        "lineWidth": 1,
+        "fillOpacity": 60,
+        "showPoints": "never",
+        "spanNulls": false,
+        "axisLabel": "share of the generate wall",
+        "stacking": {
+          "mode": "normal",
+          "group": "A"
+        }
+      },
+      "unit": "percentunit",
+      "min": 0,
+      "max": 1,
+      "noValue": "This build measures generate as one wall — 11 of 167 runs decompose it. Its total is on the step composition."
+    },
+    "overrides": []
+  },
+  "options": {
+    "legend": {
+      "showLegend": true,
+      "displayMode": "list",
+      "placement": "bottom",
+      "calcs": []
+    },
+    "tooltip": {
+      "mode": "multi",
+      "sort": "desc"
+    }
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "type": "json",
+      "source": "url",
+      "format": "timeseries",
+      "parser": "backend",
+      "url": "/query",
+      "url_options": {
+        "method": "GET",
+        "params": [
+          {
+            "key": "sql",
+            "value": "WITH gen AS ( SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS bucket, json_get(attributes_json, 'step') AS s, json_get(attributes_json, 'phase') AS phase, json_get(attributes_json, 'parent') AS parent, value FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name = 'phase_duration_seconds' AND json_get(attributes_json, 'role') = 'trainer' AND json_get(attributes_json, 'clock_domain') = 'inclusive_wall' AND json_get(attributes_json, 'root') = 'step' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) ), per_step AS ( SELECT bucket, s, MAX(CASE WHEN phase = 'generate' THEN value END) AS generate_seconds, SUM(CASE WHEN parent = 'generate' THEN value END) AS child_seconds FROM gen GROUP BY 1, 2 ), banded AS ( SELECT gen.bucket AS bucket, gen.phase AS band, gen.value / NULLIF(per_step.generate_seconds, 0) AS share FROM gen JOIN per_step ON per_step.bucket = gen.bucket AND per_step.s = gen.s WHERE gen.parent = 'generate' UNION ALL SELECT bucket, 'unaccounted', (generate_seconds - child_seconds) / NULLIF(generate_seconds, 0) FROM per_step WHERE child_seconds IS NOT NULL ) SELECT bucket AS t, band AS series, AVG(share) AS value FROM banded GROUP BY 1, 2 ORDER BY 1"
+          },
+          {
+            "key": "from",
+            "value": "${__from}"
+          },
+          {
+            "key": "to",
+            "value": "${__to}"
+          }
+        ]
+      },
+      "columns": [
+        {
+          "selector": "t",
+          "text": "time",
+          "type": "timestamp_epoch"
+        },
+        {
+          "selector": "series",
+          "text": "series",
+          "type": "string"
+        },
+        {
+          "selector": "value",
+          "text": "value",
+          "type": "number"
+        }
+      ]
+    }
+  ],
+  "interval": "1m"
+}

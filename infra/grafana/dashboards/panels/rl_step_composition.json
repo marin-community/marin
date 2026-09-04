@@ -1,0 +1,86 @@
+{
+  "type": "timeseries",
+  "title": "Step composition — exclusive seconds per phase",
+  "description": "Seconds each phase spent outside its own children, so the bands sum to the step at any depth. `generate` near zero is correct — it is pure orchestration. A negative band means a child is being counted inside its parent.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "custom": {
+        "drawStyle": "line",
+        "lineWidth": 1,
+        "fillOpacity": 60,
+        "showPoints": "never",
+        "spanNulls": false,
+        "axisLabel": "mean seconds per step",
+        "stacking": {
+          "mode": "normal",
+          "group": "A"
+        }
+      },
+      "unit": "s",
+      "min": 0,
+      "noValue": "No inclusive-wall driver rows under root='step'. This build publishes no step timings."
+    },
+    "overrides": []
+  },
+  "options": {
+    "legend": {
+      "showLegend": true,
+      "displayMode": "list",
+      "placement": "bottom",
+      "calcs": []
+    },
+    "tooltip": {
+      "mode": "multi",
+      "sort": "desc"
+    }
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "type": "json",
+      "source": "url",
+      "format": "timeseries",
+      "parser": "backend",
+      "url": "/query",
+      "url_options": {
+        "method": "GET",
+        "params": [
+          {
+            "key": "sql",
+            "value": "WITH driver AS ( SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS bucket, json_get(attributes_json, 'step') AS s, json_get(attributes_json, 'phase') AS phase, json_get(attributes_json, 'parent') AS parent, value FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name = 'phase_duration_seconds' AND json_get(attributes_json, 'role') = 'trainer' AND json_get(attributes_json, 'clock_domain') = 'inclusive_wall' AND json_get(attributes_json, 'root') = 'step' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) ), contained AS ( SELECT bucket, s, parent AS phase, SUM(value) AS child_seconds FROM driver WHERE parent IS NOT NULL AND parent <> '' GROUP BY 1, 2, 3 ), banded AS ( SELECT driver.bucket AS bucket, CASE WHEN driver.phase = 'step' THEN 'unattributed' ELSE driver.phase END AS band, driver.value - COALESCE(contained.child_seconds, 0) AS seconds FROM driver LEFT JOIN contained ON contained.bucket = driver.bucket AND contained.s = driver.s AND contained.phase = driver.phase ) SELECT bucket AS t, band AS series, AVG(seconds) AS value FROM banded GROUP BY 1, 2 ORDER BY 1"
+          },
+          {
+            "key": "from",
+            "value": "${__from}"
+          },
+          {
+            "key": "to",
+            "value": "${__to}"
+          }
+        ]
+      },
+      "columns": [
+        {
+          "selector": "t",
+          "text": "time",
+          "type": "timestamp_epoch"
+        },
+        {
+          "selector": "series",
+          "text": "series",
+          "type": "string"
+        },
+        {
+          "selector": "value",
+          "text": "value",
+          "type": "number"
+        }
+      ]
+    }
+  ],
+  "interval": "1m"
+}

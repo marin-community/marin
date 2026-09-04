@@ -1,0 +1,87 @@
+{
+  "type": "timeseries",
+  "title": "A trajectory's wait: the engine against the environment",
+  "description": "Per-trajectory wait, from concurrent sums divided by rollout_trajectory_count. The raw sums run about 200x their own parent and must never be banded. `slowest` is what generate actually waits for: the step ends with the last trajectory.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "custom": {
+        "drawStyle": "line",
+        "lineWidth": 1,
+        "fillOpacity": 8,
+        "showPoints": "never",
+        "spanNulls": false,
+        "axisLabel": "seconds per trajectory"
+      },
+      "unit": "s",
+      "noValue": "No rollout counters. This build does not instrument the generation coroutines.",
+      "min": 0
+    },
+    "overrides": []
+  },
+  "options": {
+    "legend": {
+      "showLegend": true,
+      "displayMode": "list",
+      "placement": "bottom",
+      "calcs": []
+    },
+    "tooltip": {
+      "mode": "multi",
+      "sort": "desc"
+    }
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "type": "json",
+      "source": "url",
+      "format": "timeseries",
+      "parser": "backend",
+      "url": "/query",
+      "url_options": {
+        "method": "GET",
+        "params": [
+          {
+            "key": "sql",
+            "value": "WITH counters AS ( SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS bucket, json_get(attributes_json, 'step') AS s, json_get(attributes_json, 'counter') AS counter, MAX(value) AS value FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name IN ('rollout_wait_seconds', 'rollout_count') AND json_get(attributes_json, 'role') = 'trainer' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3 ), per_step AS ( SELECT bucket, s, MAX(CASE WHEN counter = 'rollout_trajectory_count' THEN value END) AS trajectories, MAX(CASE WHEN counter = 'rollout_engine_await_seconds_sum' THEN value END) AS engine_seconds, MAX(CASE WHEN counter = 'rollout_env_await_seconds_sum' THEN value END) AS env_seconds, MAX(CASE WHEN counter = 'rollout_engine_await_seconds_max' THEN value END) AS slowest FROM counters GROUP BY 1, 2 ) SELECT bucket AS t, AVG(engine_seconds / NULLIF(trajectories, 0)) AS engine_wait_per_trajectory, AVG(env_seconds / NULLIF(trajectories, 0)) AS env_wait_per_trajectory, AVG(slowest) AS slowest_single_trajectory FROM per_step GROUP BY 1 ORDER BY 1"
+          },
+          {
+            "key": "from",
+            "value": "${__from}"
+          },
+          {
+            "key": "to",
+            "value": "${__to}"
+          }
+        ]
+      },
+      "columns": [
+        {
+          "selector": "t",
+          "text": "time",
+          "type": "timestamp_epoch"
+        },
+        {
+          "selector": "engine_wait_per_trajectory",
+          "text": "engine_wait_per_trajectory",
+          "type": "number"
+        },
+        {
+          "selector": "env_wait_per_trajectory",
+          "text": "env_wait_per_trajectory",
+          "type": "number"
+        },
+        {
+          "selector": "slowest_single_trajectory",
+          "text": "slowest_single_trajectory",
+          "type": "number"
+        }
+      ]
+    }
+  ],
+  "interval": "1m"
+}

@@ -1,0 +1,70 @@
+{
+  "type": "table",
+  "title": "Span coverage: clock, ranks, truncated steps",
+  "description": "Which clock the worker sink stamped, how many ranks reported, and whether a step died mid-flight. `_launch` spans measure kernel launch rather than execution and must never be compared with `_wall`. A truncated step looks fast.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "noValue": "No spans at all. The run reported a policy_step, so the timing sink itself is not reaching finelog."
+    },
+    "overrides": []
+  },
+  "options": {},
+  "targets": [
+    {
+      "refId": "A",
+      "type": "json",
+      "source": "url",
+      "format": "table",
+      "parser": "backend",
+      "url": "/query",
+      "url_options": {
+        "method": "GET",
+        "params": [
+          {
+            "key": "sql",
+            "value": "SELECT json_get(attributes_json, 'role') AS role, json_get(attributes_json, 'clock_domain') AS clock, COUNT(DISTINCT json_get(attributes_json, 'rank')) AS ranks, COUNT(DISTINCT json_get(attributes_json, 'step')) AS steps, COUNT(DISTINCT CASE WHEN json_get(attributes_json, 'outcome') = 'failure' THEN json_get(attributes_json, 'step') END) AS truncated_steps FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name = 'phase_duration_seconds' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1, 2"
+          },
+          {
+            "key": "from",
+            "value": "${__from}"
+          },
+          {
+            "key": "to",
+            "value": "${__to}"
+          }
+        ]
+      },
+      "columns": [
+        {
+          "selector": "role",
+          "text": "sink role",
+          "type": "string"
+        },
+        {
+          "selector": "clock",
+          "text": "clock domain",
+          "type": "string"
+        },
+        {
+          "selector": "ranks",
+          "text": "ranks",
+          "type": "number"
+        },
+        {
+          "selector": "steps",
+          "text": "steps",
+          "type": "number"
+        },
+        {
+          "selector": "truncated_steps",
+          "text": "steps that failed",
+          "type": "number"
+        }
+      ]
+    }
+  ]
+}

@@ -611,8 +611,40 @@ def launch_store() -> duckdb.DuckDBPyConnection:
     return _store("launch")
 
 
-def _dashboard() -> dict:
-    return stitch_all(DASHBOARDS, DASHBOARDS / "panels")["rl_policy_train.json"]
+# The panels this branch adds live in dashboards/panels/rl_*.json and are mounted by panelRef, so
+# they can move between dashboards without their body moving. These tests follow the panel, not the
+# dashboard: a fragment is the single source of truth for everything except id and gridPos.
+def _stitched() -> dict:
+    return stitch_all(DASHBOARDS, DASHBOARDS / "panels")
+
+
+def _dashboard(name: str = "rl_policy_train.json") -> dict:
+    return _stitched()[name]
+
+
+def _rl_dashboards() -> dict:
+    return {name: _stitched()[name] for name in ("rl_policy_train.json", "rl_runs.json")}
+
+
+def _our_panels() -> list[dict]:
+    """Every panel this branch owns: the shared fragments, plus rl_policy_train's own panels.
+
+    rl_runs.json's other panels came from marin#8562 and are deliberately left alone -- holding
+    them to a rule written after they shipped would only make that PR harder to rebase onto.
+    """
+    ours = {path.stem for path in (DASHBOARDS / "panels").glob("rl_*.json")}
+    mounted = [
+        panel
+        for name, board in _rl_dashboards().items()
+        for panel, source in zip(board["panels"], json.loads((DASHBOARDS / name).read_text())["panels"], strict=True)
+        if source.get("panelRef") in ours or (name == "rl_policy_train.json" and panel["type"] != "row")
+    ]
+    assert len(mounted) >= len(ours), (len(mounted), len(ours))
+    return mounted
+
+
+def _all_panels(title: str) -> list[dict]:
+    return [panel for board in _rl_dashboards().values() for panel in board["panels"] if panel["title"] == title]
 
 
 def _resolve(sql: str) -> str:
@@ -627,10 +659,16 @@ def _resolve(sql: str) -> str:
 
 
 def _panel_sql(title: str) -> str:
-    """One panel's shipped SQL, with Grafana's macros resolved to this window."""
-    panels = {panel["title"]: panel for panel in _dashboard()["panels"]}
-    (parameter,) = [param for param in panels[title]["targets"][0]["url_options"]["params"] if param["key"] == "sql"]
-    return _resolve(parameter["value"])
+    """One panel's shipped SQL, with Grafana's macros resolved to this window.
+
+    Searched across both RL dashboards, because a shared fragment has one body wherever it is
+    mounted -- and asserted unique, so a copy-pasted second body cannot pass as the same panel.
+    """
+    matches = _all_panels(title)
+    assert matches, f"no panel titled {title!r} on either RL dashboard"
+    sql = {next(p["value"] for p in m["targets"][0]["url_options"]["params"] if p["key"] == "sql") for m in matches}
+    assert len(sql) == 1, f"{title} is mounted twice with different SQL"
+    return _resolve(sql.pop())
 
 
 def test_the_run_variable_offers_the_run_the_trainer_reported(store) -> None:
@@ -936,7 +974,7 @@ def test_the_engine_gauges_are_averaged_and_never_differenced(store) -> None:
 
 def test_every_timeseries_panel_declares_the_columns_its_sql_returns() -> None:
     """A panel is read through its declared columns, so executing its SQL cannot see a mistake there."""
-    for panel in _dashboard()["panels"]:
+    for panel in (p for board in _rl_dashboards().values() for p in board["panels"]):
         if panel.get("type") != "timeseries":
             continue
         for target in panel["targets"]:
@@ -954,9 +992,7 @@ def test_every_timeseries_panel_declares_the_columns_its_sql_returns() -> None:
 def test_the_hover_text_stays_short_enough_to_be_read() -> None:
     """A description nobody reads is a description that is not there. Fifty words is about four
     lines in the tooltip; past that the trap at the end is the part that gets skipped."""
-    for panel in _dashboard()["panels"]:
-        if panel["type"] == "row":
-            continue
+    for panel in _our_panels():
         for field, cap in (("description", 50), ("noValue", 40)):
             text = panel.get(field) or panel["fieldConfig"]["defaults"].get(field, "")
             assert len(text.split()) <= cap, f"{panel['title']}: {field} is {len(text.split())} words"
@@ -966,44 +1002,62 @@ def test_every_panel_says_on_its_face_why_it_would_be_blank() -> None:
     """An empty panel and a broken producer render identically, and half of these panels are empty
     on a run made by a build that predates their series. That distinction belongs on the panel face,
     not behind a description hover."""
-    for panel in _dashboard()["panels"]:
-        if panel["type"] == "row":
-            continue
+    for panel in _our_panels():
         assert panel["fieldConfig"]["defaults"].get("noValue"), panel["title"]
 
 
-def test_the_rows_are_questions_and_every_rank_fills_the_grid() -> None:
-    """The order is the diagnostic sequence, so each row states the question it answers and a rank
-    with a gap in it floats the next panel up into a section that does not ask its question."""
-    panels = _dashboard()["panels"]
-    rows = [panel for panel in panels if panel["type"] == "row"]
-    assert len(rows) >= 5
-    assert all(row["title"].endswith("?") for row in rows), [row["title"] for row in rows]
-    assert [row["gridPos"]["y"] for row in rows] == sorted(row["gridPos"]["y"] for row in rows)
+def test_every_rank_fills_the_grid_on_both_rl_dashboards() -> None:
+    """A rank with a gap floats the next panel up into a section that does not ask its question."""
+    for name, board in _rl_dashboards().items():
+        widths: dict[int, int] = {}
+        for panel in board["panels"]:
+            if panel["type"] == "row":
+                continue
+            widths[panel["gridPos"]["y"]] = widths.get(panel["gridPos"]["y"], 0) + panel["gridPos"]["w"]
+        assert set(widths.values()) == {24}, (name, widths)
+        rows = [panel["gridPos"]["y"] for panel in board["panels"] if panel["type"] == "row"]
+        assert rows == sorted(rows), name
 
-    widths: dict[int, int] = {}
-    for panel in panels:
+
+def test_the_training_rows_are_questions() -> None:
+    """Each row states the question it answers, in the order an engineer needs them."""
+    rows = [panel["title"] for panel in _dashboard()["panels"] if panel["type"] == "row"]
+    assert rows == [
+        "Why is the training step slow?",
+        "Were the accelerators doing arithmetic, or waiting?",
+        "Is the engine slow, or is nothing reaching it?",
+    ]
+
+
+def test_the_new_panels_answer_the_question_of_the_row_they_sit_in() -> None:
+    """Panels answering "can I believe this" sit above panels answering "what exactly is wrong".
+
+    The fragments mount into marin#8562's five questions rather than into a taxonomy of their own,
+    which is both the right reading order and the smallest possible diff to that dashboard.
+    """
+    board = _dashboard("rl_runs.json")
+    rows = [panel for panel in board["panels"] if panel["type"] == "row"]
+    section = {}
+    for panel in board["panels"]:
         if panel["type"] == "row":
             continue
-        widths[panel["gridPos"]["y"]] = widths.get(panel["gridPos"]["y"], 0) + panel["gridPos"]["w"]
-    assert set(widths.values()) == {24}, widths
+        owner = max(
+            (row for row in rows if row["gridPos"]["y"] < panel["gridPos"]["y"]), key=lambda row: row["gridPos"]["y"]
+        )
+        section[panel["title"]] = owner["title"]
 
+    assert section["Span coverage: clock, ranks, truncated steps"] == "Alive and moving?"
+    assert section["How the run ended, and whether telemetry kept up"] == "Alive and moving?"
+    assert section["Step composition — exclusive seconds per phase"] == "Where did the wall clock go?"
+    assert section["policy_train share of the step"] == "Where did the wall clock go?"
+    assert section["Signed span residuals — both trees"] == "Where did the wall clock go?"
+    assert section["Inside generate — where the fan-out goes"] == "Why is generation slow?"
+    assert section["A trajectory's wait: the engine against the environment"] == "Why is generation slow?"
+    assert section["Is the environment slow, or the loop around it?"] == "Why is generation slow?"
 
-def test_the_triage_row_leads_and_the_deep_panels_follow() -> None:
-    """Panels answering "should I keep reading" sit above panels answering "what exactly is wrong"."""
-    order = [panel["title"] for panel in _dashboard()["panels"]]
-    lead = order.index("What this run published")
-    assert lead == 1, order[:3]
-    for later in (
-        "Step composition — exclusive seconds per phase",
-        "Inside generate — where the fan-out goes",
-        "policy_ppo_train decomposition at the critical rank",
-        "SM and tensor-pipe activity on this run's nodes",
-    ):
-        assert order.index(later) > lead, later
-    # The run picker only offers runs that reported a policy_step, so the lead panel going blank is
+    # The run picker only offers runs that reported a policy_step, so a lead panel going blank is
     # always a true alarm rather than a filter that did not match.
-    (variable,) = [v for v in _dashboard()["templating"]["list"] if v["name"] == "run"]
+    (variable,) = [v for v in board["templating"]["list"] if v["name"] == "run"]
     (parameter,) = [
         param for param in variable["query"]["infinityQuery"]["url_options"]["params"] if param["key"] == "sql"
     ]
@@ -1011,14 +1065,15 @@ def test_the_triage_row_leads_and_the_deep_panels_follow() -> None:
 
 
 def test_every_panel_has_a_distinct_title_id_and_slot() -> None:
-    panels = _dashboard()["panels"]
-
-    titles = [panel["title"] for panel in panels]
-    assert len(titles) == len(set(titles)), titles
-    ids = [panel["id"] for panel in panels]
-    assert len(ids) == len(set(ids)), ids
-    slots = [(panel["gridPos"]["x"], panel["gridPos"]["y"]) for panel in panels]
-    assert len(slots) == len(set(slots)), slots
+    """id and gridPos are dashboard-local -- the two things a panelRef legitimately varies."""
+    for name, board in _rl_dashboards().items():
+        panels = board["panels"]
+        titles = [panel["title"] for panel in panels]
+        assert len(titles) == len(set(titles)), (name, titles)
+        ids = [panel["id"] for panel in panels]
+        assert len(ids) == len(set(ids)), (name, ids)
+        slots = [(panel["gridPos"]["x"], panel["gridPos"]["y"]) for panel in panels]
+        assert len(slots) == len(set(slots)), (name, slots)
 
 
 def test_a_span_query_names_one_sink_or_keeps_the_two_apart() -> None:
@@ -1028,7 +1083,7 @@ def test_a_span_query_names_one_sink_or_keeps_the_two_apart() -> None:
     contains, so a query pins one sink. The audit table is the one query that has to read both, and
     it may only do so by returning the role as a column, so the two never merge into one number.
     """
-    for panel in _dashboard()["panels"]:
+    for panel in (p for board in _rl_dashboards().values() for p in board["panels"]):
         for target in panel.get("targets", []):
             (parameter,) = [param for param in target["url_options"]["params"] if param["key"] == "sql"]
             sql = parameter["value"]
@@ -1036,6 +1091,10 @@ def test_a_span_query_names_one_sink_or_keeps_the_two_apart() -> None:
                 continue
             if "'trainer'" in sql or "'worker'" in sql:
                 assert ("'trainer'" in sql) != ("'worker'" in sql), panel["title"]
+            elif "'critical_path'" in sql:
+                # WorkerTimingSink._clock_domain can only produce {inclusive,exclusive}_{wall,launch},
+                # so a query pinned to the critical-path domain is driver-only by construction.
+                continue
             else:
                 assert "AS role" in sql, panel["title"]
 
@@ -1044,7 +1103,7 @@ def test_the_vitals_table_names_the_clock_domain_the_ranks_and_the_truncated_ste
     """Three things decide whether anything below can be read, and all three are invisible in a
     duration: which clock the worker sink stamped, whether any worker reported at all, and whether a
     step ended in a failure -- a truncated step renders exactly like a fast one."""
-    rows = store.execute(_panel_sql("What this run published")).fetchall()
+    rows = store.execute(_panel_sql("Span coverage: clock, ranks, truncated steps")).fetchall()
 
     by_sink = {(role, clock): (ranks, steps, failed) for role, clock, ranks, steps, failed in rows}
     assert by_sink[("worker", "exclusive_wall")][0] == len(WORKER_SPANS)
@@ -1063,15 +1122,15 @@ def test_the_vitals_table_shows_a_run_that_stamped_two_clock_domains_as_two_rows
            SET attributes_json = replace(attributes_json, 'exclusive_wall', 'exclusive_launch')
            WHERE seq >= 3 AND json_extract_string(attributes_json, '$.role') = 'worker'"""
     )
-    rows = store.execute(_panel_sql("What this run published")).fetchall()
+    rows = store.execute(_panel_sql("Span coverage: clock, ranks, truncated steps")).fetchall()
 
     worker_clocks = {clock for role, clock, *_ in rows if role == "worker"}
     assert worker_clocks == {"exclusive_wall", "exclusive_launch", "inclusive_wall"}
 
 
 def test_the_residual_panel_reports_both_trees_signed(store) -> None:
-    panels = {panel["title"]: panel for panel in _dashboard()["panels"]}
-    targets = panels["Signed span residuals — both trees"]["targets"]
+    (panel,) = _all_panels("Signed span residuals — both trees")
+    targets = panel["targets"]
     queries = [
         _resolve(next(p["value"] for p in target["url_options"]["params"] if p["key"] == "sql")) for target in targets
     ]
@@ -1129,7 +1188,8 @@ def test_no_panel_plots_a_concurrent_await_sum_undivided(store) -> None:
     publish a number nobody should believe."""
     readers = [
         panel
-        for panel in _dashboard()["panels"]
+        for board in _rl_dashboards().values()
+        for panel in board["panels"]
         for target in panel.get("targets", [])
         for param in target["url_options"]["params"]
         if param["key"] == "sql" and "rollout_wait_seconds" in param["value"]

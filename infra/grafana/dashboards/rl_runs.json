@@ -31,7 +31,7 @@
       "includeVars": true,
       "keepTime": true,
       "targetBlank": false,
-      "title": "policy_train",
+      "title": "RL training step",
       "type": "link",
       "url": "/d/marin-rl-policy-train"
     },
@@ -455,6 +455,26 @@
       ]
     },
     {
+      "id": 20,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 9
+      },
+      "panelRef": "rl_span_coverage"
+    },
+    {
+      "id": 21,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 9
+      },
+      "panelRef": "rl_run_outcome"
+    },
+    {
       "type": "row",
       "title": "Where did the wall clock go?",
       "collapsed": false,
@@ -463,102 +483,19 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 9
+        "y": 17
       },
       "panels": []
     },
     {
       "id": 12,
-      "type": "timeseries",
-      "title": "Optimizer step decomposition (exclusive time)",
-      "description": "Mean seconds each phase spent on its own work inside one optimizer step: the span's duration minus the spans it contains. Exclusive time is the only kind that may be stacked, because the bands then sum to the step. Checkpointing, eval and export are recorded alongside a step and contained by none, so the panel reads one root subtree rather than every exclusive span. Blank until the producer stamps root; until then the panel to the right is the two-way split.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
       "gridPos": {
-        "x": 0,
-        "y": 10,
+        "h": 8,
         "w": 12,
-        "h": 8
+        "x": 0,
+        "y": 18
       },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 60,
-            "showPoints": "never",
-            "spanNulls": false,
-            "stacking": {
-              "mode": "normal",
-              "group": "A"
-            },
-            "axisLabel": "mean seconds per optimizer step"
-          },
-          "min": 0,
-          "noValue": "No exclusive-clock rows carrying root='step'. This build does not stamp them yet -- read the critical-path panel to the right.",
-          "unit": "s"
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "showLegend": true,
-          "displayMode": "list",
-          "placement": "bottom",
-          "calcs": []
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "timeseries",
-          "parser": "backend",
-          "url": "/query",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, json_get(attributes_json, 'phase') AS series, AVG(value) AS value FROM \"telemetry_v1.marinskyrl\" WHERE name = 'phase_duration_seconds' AND json_get(attributes_json, 'clock_domain') = 'exclusive' AND json_get(attributes_json, 'root') = 'step' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              }
-            ]
-          },
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "interval": "1m"
+      "panelRef": "rl_step_composition"
     },
     {
       "id": 2,
@@ -573,7 +510,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 10
+        "y": 18
       },
       "fieldConfig": {
         "defaults": {
@@ -661,7 +598,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 18
+        "y": 26
       },
       "fieldConfig": {
         "defaults": {
@@ -750,7 +687,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 18
+        "y": 26
       },
       "fieldConfig": {
         "defaults": {
@@ -828,6 +765,26 @@
       "interval": "1m"
     },
     {
+      "id": 22,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 34
+      },
+      "panelRef": "rl_policy_train_share"
+    },
+    {
+      "id": 23,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 34
+      },
+      "panelRef": "rl_span_residuals"
+    },
+    {
       "type": "row",
       "title": "Why is generation slow?",
       "collapsed": false,
@@ -836,7 +793,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 26
+        "y": 42
       },
       "panels": []
     },
@@ -853,7 +810,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 27
+        "y": 43
       },
       "fieldConfig": {
         "defaults": {
@@ -942,7 +899,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 27
+        "y": 43
       },
       "fieldConfig": {
         "defaults": {
@@ -1061,7 +1018,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 27
+        "y": 43
       },
       "fieldConfig": {
         "defaults": {
@@ -1150,7 +1107,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 35
+        "y": 51
       },
       "fieldConfig": {
         "defaults": {
@@ -1238,7 +1195,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 35
+        "y": 51
       },
       "fieldConfig": {
         "defaults": {
@@ -1327,7 +1284,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 35
+        "y": 51
       },
       "fieldConfig": {
         "defaults": {
@@ -1403,6 +1360,36 @@
       "interval": "1m"
     },
     {
+      "id": 24,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 59
+      },
+      "panelRef": "rl_generate_breakdown"
+    },
+    {
+      "id": 25,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 59
+      },
+      "panelRef": "rl_trajectory_wait"
+    },
+    {
+      "id": 26,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 59
+      },
+      "panelRef": "rl_environment_wait_split"
+    },
+    {
       "type": "row",
       "title": "Is it learning, and can the reward be trusted?",
       "collapsed": false,
@@ -1411,7 +1398,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 43
+        "y": 67
       },
       "panels": []
     },
@@ -1428,7 +1415,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 44
+        "y": 68
       },
       "fieldConfig": {
         "defaults": {
@@ -1517,7 +1504,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 44
+        "y": 68
       },
       "fieldConfig": {
         "defaults": {
@@ -1605,7 +1592,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 52
+        "y": 76
       },
       "panels": []
     },
@@ -1622,7 +1609,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 53
+        "y": 77
       },
       "fieldConfig": {
         "defaults": {
@@ -1706,7 +1693,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 53
+        "y": 77
       },
       "fieldConfig": {
         "defaults": {

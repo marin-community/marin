@@ -1,0 +1,78 @@
+{
+  "type": "timeseries",
+  "title": "policy_train share of the step",
+  "description": "policy_train ÷ the step. The triage number: 0.90 on E6, 0.24 on pr488 where generation owns the step instead. The denominator is the step's direct children, because no run publishes a `step` span any more.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "custom": {
+        "drawStyle": "line",
+        "lineWidth": 1,
+        "fillOpacity": 8,
+        "showPoints": "never",
+        "spanNulls": false,
+        "axisLabel": "fraction of the step"
+      },
+      "unit": "percentunit",
+      "min": 0,
+      "max": 1,
+      "noValue": "No policy_train row, and no phases naming step as their parent. The driver sink is not reaching finelog."
+    },
+    "overrides": []
+  },
+  "options": {
+    "legend": {
+      "showLegend": true,
+      "displayMode": "list",
+      "placement": "bottom",
+      "calcs": []
+    },
+    "tooltip": {
+      "mode": "multi",
+      "sort": "desc"
+    }
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "type": "json",
+      "source": "url",
+      "format": "timeseries",
+      "parser": "backend",
+      "url": "/query",
+      "url_options": {
+        "method": "GET",
+        "params": [
+          {
+            "key": "sql",
+            "value": "WITH driver AS ( SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS bucket, json_get(attributes_json, 'step') AS s, json_get(attributes_json, 'phase') AS phase, json_get(attributes_json, 'parent') AS parent, value FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name = 'phase_duration_seconds' AND json_get(attributes_json, 'role') = 'trainer' AND json_get(attributes_json, 'clock_domain') = 'inclusive_wall' AND json_get(attributes_json, 'root') = 'step' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) ), per_step AS ( SELECT bucket, s, MAX(CASE WHEN phase = 'policy_train' THEN value END) AS policy_train, COALESCE(MAX(CASE WHEN phase = 'step' THEN value END), SUM(CASE WHEN parent = 'step' THEN value END)) AS step_seconds FROM driver GROUP BY 1, 2 ) SELECT bucket AS t, AVG(policy_train / NULLIF(step_seconds, 0)) AS policy_train_share FROM per_step GROUP BY 1 ORDER BY 1"
+          },
+          {
+            "key": "from",
+            "value": "${__from}"
+          },
+          {
+            "key": "to",
+            "value": "${__to}"
+          }
+        ]
+      },
+      "columns": [
+        {
+          "selector": "t",
+          "text": "time",
+          "type": "timestamp_epoch"
+        },
+        {
+          "selector": "policy_train_share",
+          "text": "policy_train ÷ step",
+          "type": "number"
+        }
+      ]
+    }
+  ],
+  "interval": "1m"
+}
