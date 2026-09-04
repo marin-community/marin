@@ -47,6 +47,12 @@ provisioning:
     cluster: { name: marin-gpu, zone: US-EAST-02A }
     kueue:
       flavor_topology: infiniband  # H100 IB cluster: bind the flavor to the infiniband topology
+      # At 6,893 Workloads, the 2Gi fleet default OOM-killed Kueue during startup
+      # resync. Raise the API client limits with memory so lease renewal stays responsive.
+      manager_memory_limit: 8Gi
+      client_connection:
+        qps: 1000
+        burst: 2000
     ingress:
       ingress_class: traefik
       acme_email: ops@openathena.ai
