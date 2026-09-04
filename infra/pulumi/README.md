@@ -118,8 +118,10 @@ Cluster infrastructure comes from the per-cluster Iris config
   `provisioning.coreweave.grafana_observer_rbac`. The stack binds those identities to `get`,
   `list`, and `watch` on Nodes and NodePools; the standard CoreWeave `read` group omits these
   cluster-inventory resources. Retain both identities during a token rotation.
-- Kueue's controller-manager memory request and limit default to `2Gi`.
-  `manager_memory_limit` accepts larger per-cluster values and rejects values below `2Gi`.
+- For IaC-managed CoreWeave clusters, Kueue's controller-manager memory request and limit
+  default to `8Gi`; its Kubernetes API client defaults to `1000` QPS and `2000` burst.
+  `manager_memory_limit` accepts per-cluster values at or above `2Gi`, and
+  `client_connection` accepts positive `qps` and `burst` overrides.
 - The GCP GCLB route set from `provisioning.gcp.gclb`. Controller runtime details come from
   each referenced Iris config, finelog VM details come from `lib/finelog/config`, and current
   internal VM addresses are read from GCE during preview. See
