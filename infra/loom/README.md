@@ -16,7 +16,8 @@ the production stack explicitly.
 The `loom-oa-dev` GitHub App must be installed on the repositories Loom serves.
 Its private key, webhook secret, and client secret belong only in the
 `LOOM_DOTENV` Secret Manager secret. The App callback and webhook URL use
-`https://loom.oa.dev`.
+`https://loom.oa.dev`. Its organization permissions must grant **Members:
+Read-only** so Loom can verify private `Open-Athena` membership during sign-in.
 
 Authenticate Pulumi's providers and the local Docker client:
 
@@ -86,7 +87,14 @@ so uploading another secret version does not change the running service.
 
 Runtime profiles and workload federation mappings live in
 `Pulumi.marin-loom.yaml` and are applied through Loom's deployment API during
-activation. The `grafana-alerts` federation mapping authorizes the Google
+activation. The deployment setting
+`auth.github_auto_approve_organizations: Open-Athena` lets an active member add
+themself to Loom's approved people with the `user` role on first GitHub sign-in.
+This is approval bootstrap rather than group synchronization: removing someone
+from the GitHub organization does not remove an existing Loom approval, which
+an administrator must revoke separately.
+
+The `grafana-alerts` federation mapping authorizes the Google
 identity of the existing `marin-grafana` Cloud Run service account to select
 only the `ops` profile. The profile names `marin-community/marin` in
 `githubRepositories` because Grafana launches the operator session in that
