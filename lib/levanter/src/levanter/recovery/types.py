@@ -15,9 +15,8 @@ from enum import StrEnum
 
 
 # Exit-code contract between the trainer subprocess and the supervisor.
-#
-# 124 matches ``levanter.callbacks.progress_watchdog.STALLED_TRAINING_EXIT_CODE`` so
-# the existing watchdog and the new sentinel agree on one number for "stalled".
+# A stall exit has two producers: the recovery sentinel and
+# ``levanter.callbacks.progress_watchdog``, which imports EXIT_STALL from here.
 EXIT_OK = 0
 EXIT_STALL = 124
 EXIT_STICKY_FAULT = 125
