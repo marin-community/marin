@@ -112,7 +112,9 @@ def grant_read(engine: Engine, schema: str, role: str) -> None:
         conn.execute(text(f"SET LOCAL lock_timeout = '{GRANT_LOCK_TIMEOUT}'"))
         conn.execute(text(f'GRANT USAGE ON SCHEMA "{schema}" TO "{role}"'))
         conn.execute(text(f'GRANT SELECT ON ALL TABLES IN SCHEMA "{schema}" TO "{role}"'))
+        conn.execute(text(f'GRANT SELECT ON ALL SEQUENCES IN SCHEMA "{schema}" TO "{role}"'))
         conn.execute(text(f'ALTER DEFAULT PRIVILEGES IN SCHEMA "{schema}" GRANT SELECT ON TABLES TO "{role}"'))
+        conn.execute(text(f'ALTER DEFAULT PRIVILEGES IN SCHEMA "{schema}" GRANT SELECT ON SEQUENCES TO "{role}"'))
 
 
 def engine_for(spec: DatabaseSpec, app: str) -> Engine:
@@ -135,6 +137,21 @@ def engine_for(spec: DatabaseSpec, app: str) -> Engine:
 
     with engine.begin() as conn:
         conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{schema}"'))
+    return engine
+
+
+def engine_for_role(spec: DatabaseSpec, schema: str, role: str) -> Engine:
+    """An engine whose connections assume a pre-provisioned role and schema."""
+    engine = _bare_engine(spec)
+
+    @event.listens_for(engine, "connect")
+    def _set_role_and_search_path(dbapi_connection, _record) -> None:
+        cursor = dbapi_connection.cursor()
+        cursor.execute(f'SET ROLE "{role}"')
+        cursor.execute(f'SET search_path TO "{schema}", public')
+        cursor.close()
+        dbapi_connection.commit()
+
     return engine
 
 

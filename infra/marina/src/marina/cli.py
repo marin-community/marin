@@ -3,15 +3,20 @@
 
 """The ``marina`` command: check manifests, build frontends, run the kernel."""
 
+import json
 import os
 import subprocess
 from pathlib import Path
+from urllib.parse import urlparse
 
 import click
 import pytest
 import uvicorn
 
+from marina.applets import APPLET_MANIFEST, AppletStore, package_applet, parse_applet_manifest, read_applet_package
 from marina.apps import is_python_app, migration, services_for
+from marina.client import DEFAULT_MARINA_URL, marina_request, publish_applet
+from marina.database_setup import APPLET_READER_ROLE, ensure_applet_provisioning
 from marina.db import (
     DatabaseSpec,
     database_from_env,
@@ -24,6 +29,7 @@ from marina.db import (
 from marina.journey_plugin import DEFAULT_SHOTS_DIR, JOURNEYS_DIR
 from marina.manifest import AppManifest, JobRunner, discover_apps, job_runners
 from marina.server import APPS_DIR_ENV, MarinaConfig, create_app
+from marina.table_load import read_table, table_statements
 
 # The environment wins so the deployed image (MARINA_APPS_DIR=/app/apps) runs `marina migrate` unchanged.
 DEFAULT_APPS_DIR = Path(os.environ.get(APPS_DIR_ENV) or Path(__file__).resolve().parents[2] / "apps")
@@ -74,6 +80,12 @@ def migrate(apps_dir: Path, only: tuple[str, ...], reader: str | None) -> None:
 
 def _migrate_apps(apps: list[AppManifest], database: DatabaseSpec, only: tuple[str, ...], reader: str | None) -> None:
     with migration_lock(database):
+        applet_store = AppletStore(database)
+        try:
+            ensure_applet_provisioning(applet_store.engine)
+            applet_store.migrate()
+        finally:
+            applet_store.engine.dispose()
         for app in apps:
             if only and app.name not in only:
                 continue
@@ -86,6 +98,7 @@ def _migrate_apps(apps: list[AppManifest], database: DatabaseSpec, only: tuple[s
             engine = services_for(app, "", database).engine()
             try:
                 run(engine)
+                grant_read(engine, schema_name(app.name), APPLET_READER_ROLE)
                 if reader:
                     grant_read(engine, schema_name(app.name), reader)
             finally:
@@ -144,6 +157,216 @@ def run_jobs(runner_name: str, apps_dir: Path, reader: str | None, migrate_only:
                 failures.append(bound.qualified_name)
         if failures:
             raise click.ClickException(f"job failures: {', '.join(failures)}")
+
+
+@cli.command()
+@click.argument("app_dir", type=click.Path(path_type=Path, file_okay=False, exists=True))
+@click.option("--url", "service_url", default=DEFAULT_MARINA_URL, show_default=True)
+@click.option("--update", "applet_id", default=None, help="Applet UUID to update.")
+@click.option("--base-version", type=int, default=None, help="Current version required by an update.")
+@click.option("--build/--no-build", default=True, help="Run build_command when dist/index.html is absent.")
+@click.option("--dry-run", is_flag=True, help="Validate and print package contents without publishing.")
+@click.option("--json", "json_output", is_flag=True, help="Print the publish result as JSON.")
+def publish(
+    app_dir: Path,
+    service_url: str,
+    applet_id: str | None,
+    base_version: int | None,
+    build: bool,
+    dry_run: bool,
+    json_output: bool,
+) -> None:
+    """Publish a built applet directory and print its URL."""
+    manifest_path = app_dir / APPLET_MANIFEST
+    if not manifest_path.is_file():
+        raise click.UsageError(f"{app_dir} has no {APPLET_MANIFEST}")
+    manifest = parse_applet_manifest(manifest_path.read_bytes())
+    if not (app_dir / "dist" / "index.html").is_file() and build:
+        if manifest.build_command is None:
+            raise click.UsageError("dist/index.html is absent and applet.toml has no build_command")
+        subprocess.run(manifest.build_command, shell=True, cwd=app_dir, check=True)
+    try:
+        payload = package_applet(app_dir)
+    except ValueError as error:
+        raise click.UsageError(str(error)) from error
+    package = read_applet_package(payload)
+    if dry_run:
+        files = sorted(package.files)
+        report = {
+            "files": files,
+            "file_count": len(files),
+            "byte_size": package.byte_size,
+            "digest": package.digest.hex(),
+        }
+        if json_output:
+            click.echo(json.dumps(report, sort_keys=True))
+        else:
+            click.echo(f"{report['file_count']} files, {report['byte_size']} bytes, sha256 {report['digest']}")
+            for path in files:
+                click.echo(path)
+        return
+    if (applet_id is None) != (base_version is None):
+        raise click.UsageError("--update and --base-version must be supplied together")
+    try:
+        result = publish_applet(service_url, payload, applet_id=applet_id, base_version=base_version)
+    except RuntimeError as error:
+        raise click.ClickException(str(error)) from error
+    if not isinstance(result.get("url"), str) or not urlparse(str(result["url"])).netloc:
+        result["url"] = service_url.rstrip("/") + str(result["path"])
+    if json_output:
+        click.echo(json.dumps(result, sort_keys=True))
+    else:
+        click.echo(result["url"])
+
+
+@cli.group()
+def applets() -> None:
+    """Inspect and manage published applets."""
+
+
+def _applet_origin(service_url: str, applet_id: str) -> str:
+    details = marina_request(service_url, "GET", f"/api/marina/applets/{applet_id}")
+    if not isinstance(details, dict) or not isinstance(details.get("url"), str):
+        raise RuntimeError("Marina returned invalid applet details")
+    parsed = urlparse(details["url"])
+    return f"{parsed.scheme}://{parsed.netloc}" if parsed.netloc else service_url.rstrip("/")
+
+
+@applets.command("list")
+@click.option("--url", "service_url", default=DEFAULT_MARINA_URL, show_default=True)
+@click.option("--json", "json_output", is_flag=True)
+def list_applets(service_url: str, json_output: bool) -> None:
+    """List active applets."""
+    try:
+        result = marina_request(service_url, "GET", "/api/marina/applets")
+    except RuntimeError as error:
+        raise click.ClickException(str(error)) from error
+    if not isinstance(result, dict) or not isinstance(result.get("applets"), list):
+        raise click.ClickException("Marina returned an invalid applet list")
+    if json_output:
+        click.echo(json.dumps(result, sort_keys=True))
+        return
+    for applet in result["applets"]:
+        click.echo(f"{applet['name']}  v{applet['version']}  {applet['title']}  {applet['path']}")
+
+
+@applets.command("versions")
+@click.argument("applet_id")
+@click.option("--url", "service_url", default=DEFAULT_MARINA_URL, show_default=True)
+@click.option("--json", "json_output", is_flag=True)
+def list_applet_versions(applet_id: str, service_url: str, json_output: bool) -> None:
+    """List the retained revisions of one applet."""
+    try:
+        result = marina_request(service_url, "GET", f"/api/marina/applets/{applet_id}")
+    except RuntimeError as error:
+        raise click.ClickException(str(error)) from error
+    if (
+        not isinstance(result, dict)
+        or not isinstance(result.get("current_version"), int)
+        or not isinstance(result.get("versions"), list)
+    ):
+        raise click.ClickException("Marina returned invalid applet details")
+    if json_output:
+        click.echo(json.dumps(result, sort_keys=True))
+        return
+    for revision in result["versions"]:
+        current = " current" if revision["version"] == result["current_version"] else ""
+        click.echo(
+            f"v{revision['version']}{current}  {revision['published_at']}  "
+            f"{revision['published_by']}  {revision['byte_size']} bytes"
+        )
+
+
+@applets.command("rollback")
+@click.argument("applet_id")
+@click.argument("version", type=int)
+@click.option("--url", "service_url", default=DEFAULT_MARINA_URL, show_default=True)
+def rollback_applet(applet_id: str, version: int, service_url: str) -> None:
+    """Move an applet's current URL to a retained revision."""
+    try:
+        details = marina_request(service_url, "GET", f"/api/marina/applets/{applet_id}")
+        if not isinstance(details, dict) or not isinstance(details.get("current_version"), int):
+            raise RuntimeError("Marina returned invalid applet details")
+        marina_request(
+            service_url,
+            "PUT",
+            f"/api/marina/applets/{applet_id}/current",
+            json_body={"version": version, "base_version": details["current_version"]},
+        )
+    except RuntimeError as error:
+        raise click.ClickException(str(error)) from error
+    click.echo(f"{applet_id} now points to revision {version}")
+
+
+@applets.command("archive")
+@click.argument("applet_id")
+@click.option("--url", "service_url", default=DEFAULT_MARINA_URL, show_default=True)
+def archive_applet(applet_id: str, service_url: str) -> None:
+    """Hide an applet while preserving its schema and retained revisions."""
+    try:
+        marina_request(service_url, "DELETE", f"/api/marina/applets/{applet_id}")
+    except RuntimeError as error:
+        raise click.ClickException(str(error)) from error
+    click.echo(f"archived {applet_id}")
+
+
+@applets.command("sql")
+@click.argument("applet_id")
+@click.argument("sql")
+@click.option("--parameters", default="{}", help="JSON object bound to SQL parameters.")
+@click.option("--url", "service_url", default=DEFAULT_MARINA_URL, show_default=True)
+def applet_sql(applet_id: str, sql: str, parameters: str, service_url: str) -> None:
+    """Execute one parameterized statement as an applet's database role."""
+    try:
+        values = json.loads(parameters)
+        if not isinstance(values, dict):
+            raise ValueError("--parameters must be a JSON object")
+        origin = _applet_origin(service_url, applet_id)
+        result = marina_request(
+            origin,
+            "POST",
+            f"/a/{applet_id}/query",
+            json_body={"sql": sql, "parameters": values},
+        )
+    except (RuntimeError, ValueError) as error:
+        raise click.ClickException(str(error)) from error
+    click.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
+@applets.group("table")
+def applet_tables() -> None:
+    """Load local tabular files into an applet schema."""
+
+
+@applet_tables.command("load")
+@click.argument("applet_id")
+@click.argument("table_name")
+@click.argument("source", type=click.Path(path_type=Path, dir_okay=False, exists=True))
+@click.option("--replace", is_flag=True, help="Drop and recreate the table before loading.")
+@click.option("--url", "service_url", default=DEFAULT_MARINA_URL, show_default=True)
+def load_applet_table(applet_id: str, table_name: str, source: Path, replace: bool, service_url: str) -> None:
+    """Load JSON, JSONL, CSV, or Parquet rows into an applet table."""
+    try:
+        table = read_table(source)
+        schema_sql, inserts = table_statements(table_name, table, replace)
+        origin = _applet_origin(service_url, applet_id)
+        for statement in schema_sql:
+            marina_request(
+                origin,
+                "POST",
+                f"/a/{applet_id}/query",
+                json_body={"sql": statement, "parameters": {}},
+            )
+        for statement, parameters in inserts:
+            marina_request(
+                origin,
+                "POST",
+                f"/a/{applet_id}/query",
+                json_body={"sql": statement, "parameters": parameters},
+            )
+    except (RuntimeError, ValueError) as error:
+        raise click.ClickException(str(error)) from error
+    click.echo(f"loaded {table.num_rows} rows into {table_name}")
 
 
 @cli.command()

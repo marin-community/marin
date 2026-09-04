@@ -19,7 +19,8 @@ Vanity hosts: the apps are served from ``marina.oa.dev``. ``echo.oa.dev`` and
 ``evaldash.oa.dev`` map to the same service. Legacy API paths route to the corresponding
 app without a redirect; pages redirect to ``marina.oa.dev/echo/`` or
 ``marina.oa.dev/evaldash/`` with their path, so old links keep resolving and one origin
-holds the apps.
+holds the checked-in apps. ``applets.marina.oa.dev`` maps to the service but the kernel
+exposes only dynamic applet routes on that host.
 """
 
 from pathlib import Path
@@ -54,8 +55,10 @@ MARINMIRROR_TOKEN_SECRET = "marinmirror-token"
 CLOUD_RUN_FRONTEND = "ghs.googlehosted.com"
 HOST_APPS = {"echo.oa.dev": "echo", "evaldash.oa.dev": "evaldash"}
 MARINA_HOST = "marina.oa.dev"
+APPLET_HOST = "applets.marina.oa.dev"
 GRANTS_SCRIPT = Path(__file__).parent / "database_grants.py"
 APPS_DIR = Path(__file__).parent / "apps"
+DATABASE_SETUP_SCRIPT = Path(__file__).parent / "src" / "marina" / "database_setup.py"
 
 DATABASE_ENV = {"CLOUDSQL_CONNECTION": CONNECTION_NAME, "PGDATABASE": DATABASE, "PGUSER": DATABASE_USER}
 
@@ -116,6 +119,9 @@ def job_template(
 
 def main() -> None:
     config = pulumi.Config()
+    applet_operators = config.get_object("applet_operators") or []
+    if not isinstance(applet_operators, list) or not all(isinstance(item, str) for item in applet_operators):
+        raise ValueError("marin-marina:applet_operators must be a list of user IDs")
     gcp_provider = gcp.Provider("gcp", project=PROJECT)
     child = pulumi.ResourceOptions(provider=gcp_provider)
 
@@ -183,7 +189,7 @@ def main() -> None:
     grants = command.local.Command(
         "database-grants",
         create=f"uv run {GRANTS_SCRIPT}",
-        triggers=[GRANTS_SCRIPT.read_text()],
+        triggers=[GRANTS_SCRIPT.read_text(), DATABASE_SETUP_SCRIPT.read_text()],
         environment={"GOOGLE_CLOUD_QUOTA_PROJECT": PROJECT},
         opts=pulumi.ResourceOptions(depends_on=[database_user, loom_user, reader_group, database, codehealth_database]),
     )
@@ -247,6 +253,8 @@ def main() -> None:
                 "MARINA_DATA_ROOT": f"gs://{DATA_BUCKET}",
                 "MARINA_HOST_APPS": ",".join(f"{host}={app}" for host, app in HOST_APPS.items()),
                 "MARINA_CANONICAL_ORIGIN": f"https://{MARINA_HOST}",
+                "MARINA_APPLET_ORIGIN": f"https://{APPLET_HOST}",
+                "MARINA_APPLET_OPERATORS": ",".join(applet_operators),
                 **DATABASE_ENV,
                 **runner_env,
             },
@@ -272,7 +280,7 @@ def main() -> None:
     # server-set metadata, so those fields are ignored. Set marin-marina:dns_zone_id to enable.
     dns_zone_id = config.get("dns_zone_id")
     if dns_zone_id:
-        for host in (MARINA_HOST, *HOST_APPS):
+        for host in (MARINA_HOST, APPLET_HOST, *HOST_APPS):
             slug = host.split(".")[0]
             gcp.cloudrun.DomainMapping(
                 f"{slug}-domain",
