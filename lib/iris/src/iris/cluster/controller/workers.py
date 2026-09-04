@@ -6,15 +6,15 @@
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Protocol
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 from rigging.timing import Timestamp
-from sqlalchemy import bindparam, case, select
+from sqlalchemy import Row, bindparam, case, select
 
-from iris.cluster.controller import ops, reads
+from iris.cluster.controller import ops, reads, tasks
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.backend import BackendCapability, TaskBackend
 from iris.cluster.controller.codec import decode_attribute_value, resource_spec_from_scalars, worker_metadata_to_proto
@@ -26,7 +26,7 @@ from iris.cluster.controller.schema import (
     worker_attributes_table,
     workers_table,
 )
-from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
+from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, AttemptDetailRow
 from iris.cluster.controller.worker_health import WorkerHealthTracker, WorkerLiveness
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
@@ -60,9 +60,75 @@ class WorkerDependencies:
     auth: ControllerAuth
 
 
+@dataclass(frozen=True, slots=True)
+class WorkerRecord:
+    worker_id: WorkerId
+    address: str
+    total_cpu_millicores: int
+    total_memory_bytes: int
+    total_gpu_count: int
+    total_tpu_count: int
+    device_type: str
+    device_variant: str
+    md_hostname: str
+    md_ip_address: str
+    md_cpu_count: int
+    md_memory_bytes: int
+    md_disk_bytes: int
+    md_tpu_name: str
+    md_tpu_worker_hostnames: str
+    md_tpu_worker_id: str
+    md_tpu_chips_per_host_bounds: str
+    md_gpu_count: int
+    md_gpu_name: str
+    md_gpu_memory_mb: int
+    md_gce_instance_name: str
+    md_gce_zone: str
+    md_device_json: str
+    md_provenance_json: str
+    scale_group: str
+
+    @classmethod
+    def from_row(cls, row: Row) -> "WorkerRecord":
+        return cls(
+            worker_id=row.worker_id,
+            address=row.address,
+            total_cpu_millicores=row.total_cpu_millicores,
+            total_memory_bytes=row.total_memory_bytes,
+            total_gpu_count=row.total_gpu_count,
+            total_tpu_count=row.total_tpu_count,
+            device_type=row.device_type,
+            device_variant=row.device_variant,
+            md_hostname=row.md_hostname,
+            md_ip_address=row.md_ip_address,
+            md_cpu_count=row.md_cpu_count,
+            md_memory_bytes=row.md_memory_bytes,
+            md_disk_bytes=row.md_disk_bytes,
+            md_tpu_name=row.md_tpu_name,
+            md_tpu_worker_hostnames=row.md_tpu_worker_hostnames,
+            md_tpu_worker_id=row.md_tpu_worker_id,
+            md_tpu_chips_per_host_bounds=row.md_tpu_chips_per_host_bounds,
+            md_gpu_count=row.md_gpu_count,
+            md_gpu_name=row.md_gpu_name,
+            md_gpu_memory_mb=row.md_gpu_memory_mb,
+            md_gce_instance_name=row.md_gce_instance_name,
+            md_gce_zone=row.md_gce_zone,
+            md_device_json=row.md_device_json,
+            md_provenance_json=row.md_provenance_json,
+            scale_group=row.scale_group,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerRuntimeRecord:
+    worker_id: WorkerId
+    address: str
+    scale_group: str
+
+
 @dataclass(frozen=True)
 class WorkerDetail:
-    worker: Any
+    worker: WorkerRecord
     attributes: dict[str, str | int | float]
     running_tasks: frozenset[JobName]
 
@@ -198,20 +264,24 @@ def get_worker_status(
     return response
 
 
-def read_worker(db: ControllerDB, worker_id: WorkerId):
+def read_worker(db: ControllerDB, worker_id: WorkerId) -> WorkerRuntimeRecord | None:
     with db.read_snapshot() as tx:
-        return tx.execute(
+        row = tx.execute(
             select(workers_table.c.worker_id, workers_table.c.address, workers_table.c.scale_group).where(
                 workers_table.c.worker_id == worker_id
             )
         ).first()
+    if row is None:
+        return None
+    return WorkerRuntimeRecord(worker_id=row.worker_id, address=row.address, scale_group=row.scale_group)
 
 
 def read_worker_detail(db: ControllerDB, worker_id: WorkerId) -> WorkerDetail | None:
     with db.read_snapshot() as tx:
-        worker = reads.get_worker_detail(tx, worker_id)
-        if worker is None:
+        worker_row = reads.get_worker_detail(tx, worker_id)
+        if worker_row is None:
             return None
+        worker = WorkerRecord.from_row(worker_row)
         attribute_rows = tx.execute(
             select(
                 worker_attributes_table.c.key,
@@ -277,9 +347,9 @@ def _request_recycled_address_eviction(
     dependencies.runtime.request_worker_eviction(stale)
 
 
-def worker_roster(db: ControllerDB) -> list[tuple[Any, dict]]:
+def worker_roster(db: ControllerDB) -> list[tuple[WorkerRecord, dict[str, str | int | float]]]:
     with db.read_snapshot() as tx:
-        decoded = tx.execute(select(*reads.WORKER_DETAIL_COLS)).all()
+        decoded = [WorkerRecord.from_row(row) for row in tx.execute(select(*reads.WORKER_DETAIL_COLS)).all()]
         if not decoded:
             return []
         worker_ids = [worker.worker_id for worker in decoded]
@@ -302,10 +372,10 @@ def worker_roster(db: ControllerDB) -> list[tuple[Any, dict]]:
 
 
 def _filter_and_sort_workers(
-    workers: list[tuple[Any, dict]],
+    workers: list[tuple[WorkerRecord, dict[str, str | int | float]]],
     liveness_by_id: dict[WorkerId, WorkerLiveness],
     query: controller_pb2.Controller.WorkerQuery,
-) -> list[tuple[Any, dict]]:
+) -> list[tuple[WorkerRecord, dict[str, str | int | float]]]:
     needle = query.contains.lower() if query.contains else ""
     if needle:
         workers = [
@@ -374,27 +444,10 @@ def _attempts_for_worker(
 
     attempts = []
     for row in raw_rows:
-        attempt = job_pb2.TaskAttempt(
-            attempt_id=row.attempt_id,
-            worker_id=str(row.worker_id) if row.worker_id else "",
-            state=row.state,
-            exit_code=row.exit_code or 0,
-            error=row.error or "",
-            is_worker_failure=row.state in (job_pb2.TASK_STATE_WORKER_FAILED, job_pb2.TASK_STATE_PREEMPTED),
-            attempt_uid=row.attempt_uid,
-            pod_name=row.pod_name or "",
-            pod_uid=row.pod_uid or "",
-            node_name=row.node_name or "",
-            terminal_reason=row.terminal_reason or "",
-        )
-        if row.started_at_ms is not None:
-            attempt.started_at.CopyFrom(timestamp_to_proto(row.started_at_ms))
-        if row.finished_at_ms is not None:
-            attempt.finished_at.CopyFrom(timestamp_to_proto(row.finished_at_ms))
         attempts.append(
             controller_pb2.Controller.WorkerTaskAttempt(
                 task_id=row.task_id.to_wire(),
-                attempt=attempt,
+                attempt=tasks.attempt_to_proto(AttemptDetailRow.from_row(row)),
                 resources=resources_by_job.get(row.task_id.parent),
             )
         )

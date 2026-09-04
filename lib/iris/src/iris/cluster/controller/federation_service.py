@@ -60,8 +60,8 @@ def _job_summary(q: Tx, job) -> job_pb2.JobStatus:
         backend_id=job.backend_id or "",
         cluster=job.cluster,
         resources=resource_spec_from_job_row(job),
-        **jobs.job_status_counts(summaries.get(job.job_id), job.job_id),
     )
+    jobs.apply_job_status_counts(status, summaries.get(job.job_id), job.job_id)
     if job.started_at_ms:
         status.started_at.CopyFrom(timestamp_to_proto(job.started_at_ms))
     if job.finished_at_ms:
