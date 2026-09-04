@@ -58,7 +58,7 @@ class RunStatus(StrEnum):
 class ModelResourceConfig(BaseModel):
     """Normalized placement and inference-worker resources for an evaluated model."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True)
 
     hbm_gb: int | None
     gpu: dict[str, int]
@@ -70,7 +70,7 @@ class ModelResourceConfig(BaseModel):
 class ModelServeConfig(BaseModel):
     """Normalized model-server configuration preserved in an evaluation record."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True)
 
     backend: str
     tensor_parallel_size: int | None
@@ -92,7 +92,7 @@ class ModelServeConfig(BaseModel):
 class ModelGenerationConfig(BaseModel):
     """Normalized generation overrides preserved in an evaluation record."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True)
 
     max_gen_toks: int | None
     extra_gen_kwargs: dict[str, str]
@@ -101,15 +101,23 @@ class ModelGenerationConfig(BaseModel):
 class ModelAgentConfig(BaseModel):
     """Normalized agent request arguments preserved in an evaluation record."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True)
 
     agent_kwargs: dict[str, str]
 
 
 class ModelConfigRef(BaseModel):
-    """The complete normalized model catalog schema used by one launch."""
+    """The complete normalized model catalog schema used by one launch.
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    These four blocks mirror the launcher's ``ModelConfig`` dataclasses, which gain fields the
+    record schema has not learned yet. An unknown key is dropped rather than rejected: a run's
+    metrics are worth more than a faithful copy of a serve option, and rejecting cost the whole
+    record on both sides -- the launcher could not write it, and a reader older than the writer
+    discarded it. ``tests/evals/test_records.py`` fails when a mirror falls behind, which is
+    where that drift is meant to surface.
+    """
+
+    model_config = ConfigDict(frozen=True)
 
     name: str
     location: str
