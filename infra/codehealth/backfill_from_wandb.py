@@ -13,8 +13,8 @@ Defaults to a dry run that reports what it would write. Run it once against
 each target; a second run appends the same rows again, because Finelog
 namespaces are append-only and this script does no deduplication.
 
-    uv run infra/codehealth/backfill_from_wandb.py --dry-run
-    uv run infra/codehealth/backfill_from_wandb.py --no-dry-run --deployment marin
+    uv run python -m infra.codehealth.backfill_from_wandb --dry-run
+    uv run python -m infra.codehealth.backfill_from_wandb --no-dry-run --deployment marin
 """
 
 import datetime as dt
@@ -24,7 +24,8 @@ from collections.abc import Callable
 from typing import Any
 
 import click
-from review_tables import (
+
+from .review_tables import (
     DEFAULT_DEPLOYMENT,
     FINDINGS_NAMESPACE,
     HUMAN_COMMENTS_NAMESPACE,
@@ -159,6 +160,9 @@ def to_human_comment(row: dict) -> HumanComment:
         file=_text(row.get("file")),
         line=_integer(row.get("line")),
         body=_text(row.get("body")),
+        source_url=None,
+        context_hash=None,
+        context=None,
         comment_class=_text(row.get("class")),
         catchable_strict=_flag(row.get("catchable_strict")),
         catchable_generous=_flag(row.get("catchable_generous")),

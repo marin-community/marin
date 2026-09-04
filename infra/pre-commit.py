@@ -862,8 +862,8 @@ PRECOMMIT_CONFIGS = [
             "lib/iris/src/**/*.py",
             "lib/rigging/src/**/*.py",
             "lib/zephyr/src/**/*.py",
-            "infra/evaldash/src/*.py",
-            "infra/evaldash/src/**/*.py",
+            "infra/marina/src/**/*.py",
+            "infra/marina/apps/**/*.py",
         ],
         checks=[
             check_pyrefly,

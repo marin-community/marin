@@ -19,8 +19,11 @@ from haliax.nn.ragged_dot import ragged_dot
 
 import levanter.grug.grug_moe as grug_moe
 from levanter.grug._moe.common import (
+    _interleave_gate_up,
+    _interleave_halves,
     _prepare_moe_dispatch,
     _prepare_moe_dispatch_indices_with_assignment_ids,
+    _swiglu_gate_up_backward,
     CapacityOverflow,
 )
 from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
@@ -30,6 +33,7 @@ from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import (
     _interleaved_receiver_ranks,
     _receiver_ranks,
 )
+from levanter.grug._moe.ep_ragged_all_to_all import _loop_local_zeros, _LoopLocalZeroSite
 from levanter.grug._moe.sonic import sonic_gather_sum
 from levanter.grug.grug_moe import (
     MoEExpertMlp,
@@ -403,6 +407,63 @@ def test_prepare_moe_dispatch_indices_match_materialized_dispatch():
     np.testing.assert_array_equal(
         flat_dispatch_positions[np.asarray(sorted_assignment_ids)], expected_sorted_positions
     )
+
+
+def _arange_w13(dtype, *, experts: int = 2, hidden: int = 3, moe_dim: int = 4) -> jax.Array:
+    values = jnp.arange(experts * hidden * 2 * moe_dim, dtype=jnp.float32)
+    return values.reshape(experts, hidden, 2 * moe_dim).astype(dtype)
+
+
+@pytest.mark.parametrize("dtype", [jnp.bfloat16, jnp.float16, jnp.float32])
+def test_interleave_places_gate_and_up_in_alternating_columns(dtype):
+    moe_dim = 4
+    w13 = _arange_w13(dtype, moe_dim=moe_dim)
+
+    interleaved = _interleave_gate_up(w13, moe_dim)
+
+    assert interleaved.shape == w13.shape
+    assert interleaved.dtype == w13.dtype
+    np.testing.assert_array_equal(np.asarray(interleaved[..., 0::2]), np.asarray(w13[..., :moe_dim]))
+    np.testing.assert_array_equal(np.asarray(interleaved[..., 1::2]), np.asarray(w13[..., moe_dim:]))
+
+
+@pytest.mark.parametrize("dtype", [jnp.bfloat16, jnp.float16])
+def test_the_interleave_transpose_de_interleaves_the_cotangent(dtype):
+    # `bitcast_convert_type` has no AD rule, so the pack carries a hand-written VJP. Its
+    # correctness is what keeps `dw13` pointing at the right half of the fused weight.
+    gate = _arange_w13(dtype, moe_dim=4)[..., :4]
+    up = -gate
+    # The cotangent carries the interleaved layout, one value per output element.
+    cotangent = _arange_w13(dtype, moe_dim=4)
+
+    _, vjp = jax.vjp(_interleave_halves, gate, up)
+    gate_ct, up_ct = vjp(cotangent)
+
+    np.testing.assert_array_equal(np.asarray(gate_ct), np.asarray(cotangent[..., 0::2]))
+    np.testing.assert_array_equal(np.asarray(up_ct), np.asarray(cotangent[..., 1::2]))
+
+
+@pytest.mark.parametrize(
+    ("dtype", "max_abs_error", "mean_abs_error"),
+    [(jnp.bfloat16, 8e-3, 5e-4), (jnp.float32, 2e-7, 2e-8)],
+)
+def test_swiglu_backward_matches_autodiff_of_the_forward(dtype, max_abs_error, mean_abs_error):
+    tokens, moe_dim = 5, 4
+    gu = jnp.linspace(-2.0, 2.0, tokens * 2 * moe_dim, dtype=jnp.float32).reshape(tokens, 2 * moe_dim).astype(dtype)
+    dh = jnp.linspace(1.0, -1.0, tokens * moe_dim, dtype=jnp.float32).reshape(tokens, moe_dim).astype(dtype)
+
+    def swiglu(x):
+        gate, up = x[:, 0::2], x[:, 1::2]
+        return jax.nn.silu(gate.astype(jnp.float32)) * up.astype(jnp.float32)
+
+    expected = jax.vjp(swiglu, gu)[1](dh.astype(jnp.float32))[0]
+
+    actual = _swiglu_gate_up_backward(gu, dh)
+
+    assert actual.dtype == gu.dtype
+    error = np.abs(np.asarray(actual, dtype=np.float32) - np.asarray(expected, dtype=np.float32))
+    assert np.max(error) <= max_abs_error
+    assert np.mean(error) <= mean_abs_error
 
 
 def test_moe_expert_mlp_init_matches_across_backends():
@@ -1383,3 +1444,68 @@ def test_ragged_a2a_receiver_clipping_respects_capacity():
         ),
     )
     assert int(jnp.sum(clipped)) < int(jnp.sum(group_sizes))
+
+
+@pytest.mark.parametrize("site", list(_LoopLocalZeroSite))
+@pytest.mark.parametrize(
+    "tie",
+    [
+        np.array([0, 0, 0, 0], dtype=np.int32),
+        np.array([1, 7, 0, 3], dtype=np.int32),
+        np.array([2**20, 5, 5, 5], dtype=np.int32),
+    ],
+    ids=["all-empty-groups", "mixed", "large-first-group"],
+)
+def test_loop_local_zeros_fills_exact_zeros(site: _LoopLocalZeroSite, tie: np.ndarray):
+    filled = _loop_local_zeros(4, 3, jnp.float32, jnp.asarray(tie), site=site)
+
+    assert filled.shape == (4, 3)
+    np.testing.assert_array_equal(np.asarray(filled), np.zeros((4, 3), dtype=np.float32))
+
+
+# The zero fill's traced minimum, as XLA names the opcode in optimized HLO.
+MINIMUM_OPCODE = "kMinimum"
+
+
+def _optimized_hlo_opcode_count(fill_fn, opcode_name: str) -> int:
+    tie = jnp.asarray([1, 7, 0, 3], dtype=jnp.int32)
+    executable = jax.jit(fill_fn).lower(tie).compile().runtime_executable()
+    return sum(
+        instruction.opcode.name == opcode_name
+        for module in executable.hlo_modules()
+        for computation in module.computations()
+        for instruction in computation.instructions()
+    )
+
+
+def test_loop_local_zeros_is_not_a_foldable_constant():
+    assert (
+        _optimized_hlo_opcode_count(
+            lambda tie: _loop_local_zeros(4, 3, jnp.float32, tie, site=_LoopLocalZeroSite.DISPATCH_OUTPUT),
+            MINIMUM_OPCODE,
+        )
+        == 1
+    )
+    assert (
+        _optimized_hlo_opcode_count(
+            lambda tie: jnp.broadcast_to((jnp.minimum(tie[0], 5) * 0).astype(jnp.float32), (4, 3)), MINIMUM_OPCODE
+        )
+        == 0
+    ), "the folding probe no longer folds, so this test can no longer detect a foldable fill"
+
+
+def test_loop_local_zeros_sites_prevent_cse():
+    def distinct_sites(tie):
+        return (
+            _loop_local_zeros(4, 3, jnp.float32, tie, site=_LoopLocalZeroSite.DISPATCH_OUTPUT),
+            _loop_local_zeros(4, 3, jnp.float32, tie, site=_LoopLocalZeroSite.OPERAND_COTANGENT),
+        )
+
+    def repeated_site(tie):
+        fill = _loop_local_zeros(4, 3, jnp.float32, tie, site=_LoopLocalZeroSite.DISPATCH_OUTPUT)
+        return fill, fill
+
+    assert _optimized_hlo_opcode_count(distinct_sites, MINIMUM_OPCODE) == 2
+    assert (
+        _optimized_hlo_opcode_count(repeated_site, MINIMUM_OPCODE) == 1
+    ), "the CSE probe no longer merges repeated sites, so this test can no longer detect a site collision"

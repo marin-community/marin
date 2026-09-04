@@ -1,0 +1,7 @@
+# Marin's shared agent-context store: GitHub and Discord activity, the indexed heads of
+# the Marin-community repositories, and the durable wiki agents write to. The page talks
+# only to its own API under /echo/api/, which searches Postgres and reranks on the CPU.
+title = "Echo"
+description = "Search Marin's context: wiki notes, repository files, pull requests, issues, and Discord."
+connect_src = []
+build_command = "cd web && npm ci && npm run build"

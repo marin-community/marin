@@ -16,19 +16,25 @@ data-parallel rack uses one 64-device expert mesh.
   diagnostic uses 1024 sequences.
 - Router: top-8 quantile balancing uses a global histogram with 10,000 bins. It has next-step,
   stop-gradient expert biases and no auxiliary balancing loss.
-- MoE backend: `ragged_all_to_all`. One update carries each (peer, local expert) pair, so rows
-  arrive grouped by expert, and local experts run in two chunks that share the 1.15 receiver
-  capacity. The transport reaches XLA's device-initiated (NCCL LSA) kernel, which needs Marin's patched
-  PJRT build, installed on GB200 through the `gpu` extra (`lib/marin/pyproject.toml`); a run that
-  reaches the stock plugin fails at startup.
+- MoE backend: `fixed_pooled_wave_all_to_all`, as a temporary fallback. Each sender uses one fixed
+  pool per destination and stripes it over three static waves. The receiver runs all six local
+  experts in each wave and drops rows above the fixed expert capacity. Expert IDs travel in the
+  activation payload, so the method does not use a metadata collective. The receiver and sender
+  capacity factors are 1.15. `ragged_all_to_all` is the intended default and takes the hero back
+  once it stops hanging an 11-rack run after a watch step
+  ([#8870](https://github.com/marin-community/marin/issues/8870)): one update carries each (peer,
+  local expert) pair, so rows arrive grouped by expert, and it reaches XLA's device-initiated
+  (NCCL LSA) kernel, which needs Marin's patched PJRT build, installed on GB200 through the `gpu`
+  extra (`lib/marin/pyproject.toml`).
 - Optimizer: MuonH, with its state offloaded to pinned host memory.
-- Weights: fp32 on device with bf16 compute. A checkpoint written with a pinned-host fp32 master
-  migrates in process on restore: its stored fp32 master is read directly into the run's params
-  (the bf16 compute copy goes unread), and the next save writes the new layout. The reverse
-  (synthesizing a master) is refused.
+- Weights: bf16 on device with a pinned-host fp32 master, which the pooled-wave device peak needs.
+  A checkpoint written with a master restores natively here. A master-less checkpoint, which the
+  hero writes when it keeps fp32 weights on device under the ragged transport, cannot restore into
+  this mode: synthesizing a master is refused. The reverse direction migrates in process, so a
+  master-bearing checkpoint reaches either mode.
 - Runtime: Each GPU has one JAX process. The recipe uses `cuda_async`, no PGLE, and no GPU
-  command buffers. The ragged transport fixes collective overlap at 1 and turns the latency-hiding
-  scheduler off, for memory rather than scheduling.
+  command buffers. The layer carry stays in HBM, which only the ragged transport offloads. Inline
+  watch uses collective overlap limit 1. A disabled watch uses limit 4.
 - Resources: Each four-GPU worker requests 120 CPU, 890 GB of RAM, and 1 TB of disk.
 
 The attention, shared-expert, language-model-head, and optimizer states use the combined `data` and
@@ -140,6 +146,10 @@ The selected E384 model runs at expert width 3072 and receiver capacity factor 1
 
 ## Launch
 
+Use `--version dev` for diagnostics, ablations, profiles, and scaling runs in this guide. These
+runs write under `users/<username>/grug/...`. Reserve calendar versions for coordinated major
+production runs that need a shared checkpoint path under `grug/...`.
+
 ### Bounded diagnostics
 
 `launch_diagnostics.py` uses the d6144 model, Harrier 2026.08.18 data, process layout, watch config,
@@ -155,7 +165,7 @@ Print the plan without a GPU run:
 python -m experiments.grug.moe_hero_ep.launch_diagnostics \
   --run-id mhep-ragged \
   --num-steps 200 \
-  --version 2026.08.14
+  --version dev
 ```
 
 Submit the one-rack gate through the Marin Iris controller:
@@ -169,7 +179,7 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra
   -e WANDB_API_KEY "$WANDB_API_KEY" -e WANDB_PROJECT "$WANDB_PROJECT" \
   -e IRIS_PORT_JAX 32575 \
   -- python -m experiments.grug.moe_hero_ep.launch_diagnostics \
-    --run-id "$run_id" --num-steps 200 --version 2026.08.14 --run
+    --run-id "$run_id" --num-steps 200 --version dev --run
 ```
 
 W&B uses the `WANDB_PROJECT` environment variable, or project `marin_moe` when it is unset, with
@@ -214,7 +224,7 @@ python -m experiments.grug.moe_hero_ep.small_scale_abl_launch \
   --run-id mhep-abl-d1024-ep \
   --size d1024 \
   --flavor ep \
-  --version 2026.08.10
+  --version dev
 ```
 
 Submit one rung through the Marin Iris controller:
@@ -228,7 +238,7 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra
   -e WANDB_API_KEY "$WANDB_API_KEY" -e WANDB_PROJECT "$WANDB_PROJECT" \
   -e IRIS_PORT_JAX 32576 \
   -- python -m experiments.grug.moe_hero_ep.small_scale_abl_launch \
-    --run-id "$run_id" --size d1024 --flavor ep --version 2026.08.10 --run
+    --run-id "$run_id" --size d1024 --flavor ep --version dev --run
 ```
 
 The wider rungs need more than one rack to hold their batch: `--dp-racks N` replicates the run
@@ -261,6 +271,17 @@ durable output root, and a rolling temporary checkpoint every hour goes to regio
 storage with the shared 14-day lifecycle TTL. One temporary checkpoint is kept. A hardware fault, a
 host out-of-memory, or a preemption thus costs at most one hour of training. The training job
 retries 1000 times on failure and 100 times on preemption.
+
+Launch or resume the production d6144 hero with `trigger_hero.sh`. The trigger first comments on
+[issue #8506](https://github.com/marin-community/marin/issues/8506) with the full `HEAD` commit,
+whether the tree has staged, unstaged, or untracked changes, and the coordinator job name. A
+missing GitHub CLI login or failed comment aborts the trigger before Iris submission. Iris also
+captures its standard launch provenance in `MARIN_PROVENANCE`. The run ID continues to identify
+the checkpoint and output lineage across resumptions.
+
+```bash
+WANDB_API_KEY=... ./experiments/grug/moe_hero_ep/trigger_hero.sh
+```
 
 ```bash
 python -m experiments.grug.moe_hero_ep.launch_scaling_ladder \

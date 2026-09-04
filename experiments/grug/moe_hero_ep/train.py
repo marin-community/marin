@@ -58,7 +58,7 @@ from experiments.grug.checkpointing import (
     restore_grug_state_from_checkpoint,
 )
 from experiments.grug.dispatch import dispatch_grug_training_run
-from experiments.grug.moe_hero_ep.model import GrugModelConfig, Transformer
+from experiments.grug.moe_hero_ep.model import OFFLOAD_CARRY_REMAT_MODE, GrugModelConfig, RematMode, Transformer
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
@@ -89,12 +89,10 @@ DEFAULT_DROPLESS_MOE_IMPLEMENTATION: MoeImplementation = "sonic_cute"
 INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT = 1
 # The ragged transport wants the opposite scheduling posture from the fixed and pooled ones. Its
 # dispatch and combine form one long dependent chain, so admitting several concurrent collectives
-# only contends for the SMs the transport itself needs. The latency-hiding scheduler stays off for
-# a memory reason, not a scheduling one: its longer buffer live ranges push the step past the HBM
-# budget and NCCL's first-step allocations fail. With the layer activations offloaded to pinned
-# host the freed ~36 GiB fits those live ranges and the scheduler measures ~0.9 MFU faster
-# (#8317); a follow-up lands that offload and turns the scheduler on.
+# only contends for the SMs the transport itself needs.
 RAGGED_COLLECTIVE_OVERLAP_LIMIT = 1
+# Offload and latency hiding race the reloaded residual with its consumer when overlap exceeds 1.
+OFFLOAD_CARRY_COLLECTIVE_OVERLAP_LIMIT = 1
 RAGGED_MOE_IMPLEMENTATION = "ragged_all_to_all"
 # TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU
 # command buffers after the CUDA graph failure is fixed.
@@ -193,7 +191,11 @@ def take_master_as_params(state: "GrugTrainState") -> "GrugTrainState":
 
 
 def _apply_hero_ep_runtime_defaults(
-    *, inline_watch_enabled: bool, moe_implementation: MoeImplementation | None, processes_per_task: int = 1
+    *,
+    inline_watch_enabled: bool,
+    moe_implementation: MoeImplementation | None,
+    remat_mode: RematMode,
+    processes_per_task: int = 1,
 ) -> None:
     env_defaults = dict(HERO_EP_RUNTIME_ENV)
     if processes_per_task > 1:
@@ -211,9 +213,12 @@ def _apply_hero_ep_runtime_defaults(
         overlap_limit = INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT
     else:
         overlap_limit = DEFAULT_COLLECTIVE_OVERLAP_LIMIT
+    # The scheduler's longer buffer live ranges fit on the ragged transport only once the layer
+    # carry leaves HBM. Without that offload its first-step NCCL allocations fail.
+    latency_hiding = not ragged or remat_mode == OFFLOAD_CARRY_REMAT_MODE
     flag_defaults = (
         f"{XLA_COLLECTIVE_OVERLAP_FLAG}={overlap_limit}",
-        f"--xla_gpu_enable_latency_hiding_scheduler={'false' if ragged else 'true'}",
+        f"--xla_gpu_enable_latency_hiding_scheduler={'true' if latency_hiding else 'false'}",
         # The scheduler sizes the single `jit_train_step` temp arena against this percentage of
         # its memory budget, roughly `133.6 GiB x percentage`. The pool holds 138.2 GiB and
         # persistent state occupies 18.1 GiB of it, so an arena above 120.2 GiB cannot be served
@@ -227,6 +232,11 @@ def _apply_hero_ep_runtime_defaults(
     )
     explicit_names = {flag.partition("=")[0] for flag in xla_flags}
     xla_flags.extend(flag for flag in flag_defaults if flag.partition("=")[0] not in explicit_names)
+    if remat_mode == OFFLOAD_CARRY_REMAT_MODE:
+        # A wrong overlap limit corrupts training silently, so the offload takes the flag
+        # away from the caller instead of defaulting it.
+        xla_flags = [f for f in xla_flags if f.partition("=")[0] != XLA_COLLECTIVE_OVERLAP_FLAG]
+        xla_flags.append(f"{XLA_COLLECTIVE_OVERLAP_FLAG}={OFFLOAD_CARRY_COLLECTIVE_OVERLAP_LIMIT}")
     if ragged:
         # Unlike the defaults above, these are not overridable. Selecting the host-launched
         # one-shot kernel needs both flags cleared together plus a splits-per-peer count this
@@ -298,12 +308,14 @@ class GrugEvalConfig:
     steps_per_eval: int | None = 1000
     max_eval_batches: int | None = None
     prefix: str = "eval"
+    # Evaluate with the training MoE backend (capacity-limited, with drops): `eval_current` scores
+    # the live parameters and `eval_ema` the EMA parameters; either one schedules the
+    # training-mesh evaluator.
     eval_current: bool = True
     eval_ema: bool = True
     compute_bpb: bool = True
-    # For expert-parallel runs, also evaluate under the dropless local backend on an
-    # expert-collapsed mesh, logging a separate `eval_dropless` macro loss alongside the
-    # as-trained (with-drop) eval. No-op when the mesh has no expert parallelism.
+    # For expert-parallel runs, evaluate under the dropless local backend on an expert-collapsed
+    # mesh, logging an `eval_dropless` macro loss. No-op when the mesh has no expert parallelism.
     dropless_eval: bool = False
     # Local MoE kernel used after collapsing the expert axis. ``sonic`` is the Hopper Triton path;
     # ``sonic_cute`` is the Blackwell QuACK/CUTLASS path.
@@ -994,18 +1006,23 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         evaluator = None
         dropless_evaluator = None
         dropless_eval_mesh = None
+        eval_ema = False
         if eval_cfg is not None:
-            evaluator = build_tagged_evaluator(
-                data_config=config.data,
-                max_seq_len=config.model.max_seq_len,
-                mesh=mesh,
-                eval_cfg=eval_cfg,
-                mp=trainer.mp,
-            )
+            eval_ema = eval_cfg.eval_ema and config.trainer.ema_beta is not None
+            train_mesh_eval = eval_cfg.eval_current or eval_ema
+            dropless = eval_cfg.dropless_eval and mesh.shape["expert"] > 1
+            if train_mesh_eval:
+                evaluator = build_tagged_evaluator(
+                    data_config=config.data,
+                    max_seq_len=config.model.max_seq_len,
+                    mesh=mesh,
+                    eval_cfg=eval_cfg,
+                    mp=trainer.mp,
+                )
             # Expert-parallel runs drop tokens over capacity; a second evaluator scores the same
             # weights dropless under the local backend on an expert-collapsed mesh (expert folded
             # into `data`), which the local backend requires. FSDP runs already have expert=1.
-            if eval_cfg.dropless_eval and mesh.shape["expert"] > 1:
+            if dropless:
                 dropless_eval_mesh = compact_grug_mesh(
                     expert_axis_size=1,
                     replica_axis_size=mesh.shape["replica_dcn"],
@@ -1078,58 +1095,64 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         if train_dataset is not None:
             state_callbacks.add_hook(_make_mixture_stage_callback(train_dataset, batch_schedule), every=1)
         state_callbacks.add_hook(log_device_memory, every=1)
-        if evaluator is not None and eval_cfg is not None:
+        if eval_cfg is not None:
             interval = eval_cfg.steps_per_eval
-            eval_ema = eval_cfg.eval_ema and config.trainer.ema_beta is not None
-            if eval_cfg.eval_current or eval_ema:
-                tagged_eval_hook = cb_tagged_evaluate(
-                    evaluator,
-                    prefix=eval_cfg.prefix,
-                    eval_current=eval_cfg.eval_current,
-                    eval_ema=eval_ema,
+            eval_hooks: list[Callable[..., None]] = []
+            if evaluator is not None:
+                eval_hooks.append(
+                    cb_tagged_evaluate(
+                        evaluator,
+                        prefix=eval_cfg.prefix,
+                        eval_current=eval_cfg.eval_current,
+                        eval_ema=eval_ema,
+                    )
                 )
-                eval_hooks: list[Callable[..., None]] = [tagged_eval_hook]
-                if dropless_evaluator is not None and dropless_eval_mesh is not None:
-                    # The training loop runs under `set_mesh(mesh)` (expert-parallel). The dropless
-                    # evaluator runs under the expert-collapsed mesh, so the model params -- sharded on
-                    # the train mesh -- must be resharded onto the eval mesh before its eval jit (JAX
-                    # does not auto-reshard across explicit meshes), then the local backend sees
-                    # expert=1. PGLE is disabled for the eval module as in `cb_tagged_evaluate`.
-                    dropless_prefix = f"{eval_cfg.prefix}_dropless"
+            if dropless_evaluator is not None and dropless_eval_mesh is not None:
+                # The training loop runs under `set_mesh(mesh)` (expert-parallel). The dropless
+                # evaluator runs under the expert-collapsed mesh, so the model params -- sharded on
+                # the train mesh -- must be resharded onto the eval mesh before its eval jit (JAX
+                # does not auto-reshard across explicit meshes), then the local backend sees
+                # expert=1. PGLE is disabled for the eval module as in `cb_tagged_evaluate`.
+                dropless_prefix = f"{eval_cfg.prefix}_dropless"
+                # The forced end-of-run callback pass revisits the last step; skip it when the
+                # periodic cadence already scored that step, as `cb_tagged_evaluate` does.
+                last_dropless_eval_step: int | None = None
 
-                    def dropless_eval_hook(
-                        step, *args, _mesh=dropless_eval_mesh, _ev=dropless_evaluator, _prefix=dropless_prefix, **kwargs
-                    ):
-                        step_count = int(step.step)
-                        if step_count < 0:
-                            return
-                        # `model` must stay a local. The eval mesh has expert=1, so a leaf sharded on
-                        # the expert axis lands replicated, and the copy is much larger than the
-                        # train-mesh params. The train step needs almost the whole device budget for
-                        # its temporary buffer, thus this copy must die before the next step.
-                        with set_mesh(_mesh):
-                            model = _reshard_tree_to_mesh(step.model, _mesh)
-                            with jax_config.enable_pgle(False):
-                                log_dict = eval_model(_ev, model, prefix=_prefix)
-                            levanter.tracker.log(log_dict, step=step_count)
+                def dropless_eval_hook(
+                    step, *args, _mesh=dropless_eval_mesh, _ev=dropless_evaluator, _prefix=dropless_prefix, **kwargs
+                ):
+                    nonlocal last_dropless_eval_step
+                    step_count = int(step.step)
+                    if step_count < 0 or step_count == last_dropless_eval_step:
+                        return
+                    last_dropless_eval_step = step_count
+                    # `model` must stay a local. The eval mesh has expert=1, so a leaf sharded on
+                    # the expert axis lands replicated, and the copy is much larger than the
+                    # train-mesh params. The train step needs almost the whole device budget for
+                    # its temporary buffer, thus this copy must die before the next step.
+                    with set_mesh(_mesh):
+                        model = _reshard_tree_to_mesh(step.model, _mesh)
+                        with jax_config.enable_pgle(False):
+                            log_dict = eval_model(_ev, model, prefix=_prefix)
+                        levanter.tracker.log(log_dict, step=step_count)
 
-                    eval_hooks.append(dropless_eval_hook)
+                eval_hooks.append(dropless_eval_hook)
 
-                if interval is not None and interval > 0:
-                    for hook in eval_hooks:
-                        state_callbacks.add_hook(hook, every=interval)
+            if interval is not None and interval > 0:
+                for hook in eval_hooks:
+                    state_callbacks.add_hook(hook, every=interval)
 
-                # Baseline point at the start of the loss curve. The periodic cadence first fires at
-                # `steps_per_eval` (step 3000 on the hero), thus a fresh run gets no early point.
-                # These run after the first optimization step, not before it: the first train step
-                # then allocates against a clean pool, and the eval-to-train handoff gets a gate at
-                # step 2 instead of first at step 3000. `every=1` is the only interval that covers
-                # the first step, and `_first_step_only` makes the hook fire once. A resumed run
-                # starts above step 1, thus it never fires. The hooks log at `StepInfo.step`, which
-                # is 0 there, so the point lands at step 0 on the curve.
-                if eval_cfg.eval_at_first_step:
-                    for hook in eval_hooks:
-                        state_callbacks.add_hook(_first_step_only(hook), every=1)
+            # Baseline point at the start of the loss curve. The periodic cadence first fires at
+            # `steps_per_eval` (step 3000 on the hero), thus a fresh run gets no early point.
+            # These run after the first optimization step, not before it: the first train step
+            # then allocates against a clean pool, and the eval-to-train handoff gets a gate at
+            # step 2 instead of first at step 3000. `every=1` is the only interval that covers
+            # the first step, and `_first_step_only` makes the hook fire once. A resumed run
+            # starts above step 1, thus it never fires. The hooks log at `StepInfo.step`, which
+            # is 0 there, so the point lands at step 0 on the curve.
+            if eval_cfg.eval_at_first_step:
+                for hook in eval_hooks:
+                    state_callbacks.add_hook(_first_step_only(hook), every=1)
 
         last_loss: float | jax.Array = 0.0
         last_step_duration = 0.0
@@ -1238,6 +1261,7 @@ def run_grug(config: GrugRunConfig) -> None:
         inline_watch_enabled=inline_watch_enabled,
         processes_per_task=config.processes_per_task,
         moe_implementation=config.model.moe_implementation,
+        remat_mode=config.model.remat_mode,
     )
     dispatch_grug_training_run(
         run_id=trainer.id,
