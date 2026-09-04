@@ -338,6 +338,31 @@ def test_the_patched_pjrt_wheel_pairs_with_the_pinned_jax():
     assert filename.endswith("aarch64.whl")
 
 
+def test_the_stock_pjrt_extra_tracks_the_gpu_extra():
+    """gpu-stock-pjrt serves aarch64 hosts whose GPU the Blackwell-only patched wheel aborts on
+    (GH200, #8852). It must stay the gpu extra minus the explicit patched-wheel pin, keep the
+    cu128 torch index, and never key the patched-wheel source."""
+    project = tomllib.loads(GPU_EXTRA_PYPROJECT.read_text())
+    extras = project["project"]["optional-dependencies"]
+    without_patched_pin = [requirement for requirement in extras["gpu"] if not requirement.startswith("jax-cuda13-pjrt")]
+    assert extras["gpu-stock-pjrt"] == without_patched_pin
+
+    sources = project["tool"]["uv"]["sources"]
+    assert sources["jax-cuda13-pjrt"]["extra"] == "gpu"
+    for package in ("torch", "torchvision"):
+        cu128_extras = {entry.get("extra") for entry in sources[package] if entry.get("index") == "pytorch-cu128"}
+        assert {"gpu", "gpu-stock-pjrt"} <= cu128_extras
+
+    # The two extras resolve jax-cuda13-pjrt from different sources on aarch64, so uv must fork.
+    conflict_pairs = [{entry.get("extra") for entry in group} for group in project["tool"]["uv"]["conflicts"]]
+    assert {"gpu", "gpu-stock-pjrt"} in conflict_pairs
+
+    # Levanter never pins the patched wheel, so its companion extra is the gpu extra verbatim.
+    levanter = tomllib.loads((GPU_EXTRA_PYPROJECT.parents[1] / "levanter/pyproject.toml").read_text())
+    levanter_extras = levanter["project"]["optional-dependencies"]
+    assert levanter_extras["gpu-stock-pjrt"] == levanter_extras["gpu"]
+
+
 def _tiny_state(params, master_params):
     return train.GrugTrainState(
         step=jnp.array(0, dtype=jnp.int32),

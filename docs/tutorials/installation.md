@@ -110,6 +110,18 @@ Marin runs on multiple types of hardware (CPU, GPU, TPU).
          uv sync --all-packages --extra=gpu
          ```
 
+         On aarch64 hosts the `gpu` extra pins Marin's patched PJRT wheel, whose GPU kernels
+         are built for Blackwell (GB200). On a non-Blackwell aarch64 host such as GH200, use
+         the stock-PJRT variant instead, or XLA aborts with
+         `cudaErrorNoKernelImageForDevice` at the first training step:
+
+         ```bash
+         uv sync --all-packages --extra=gpu-stock-pjrt
+         ```
+
+         The stock plugin lacks the ragged all-to-all patch, which only expert-parallel MoE
+         training uses; dense training is unaffected.
+
     === "TPU"
 
         ```bash
