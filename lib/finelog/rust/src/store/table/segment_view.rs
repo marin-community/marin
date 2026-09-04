@@ -225,7 +225,7 @@ impl SegmentView {
 /// Debug-only invariant: no two entries share a path.
 ///
 /// A same-path duplicate is a phantom reference — two entries for one seq range,
-/// one of whose file a prior compaction already unlinked (#7361). It surfaces
+/// one of whose file a prior compaction already unlinked. It surfaces
 /// duplicate rows in a query and wedges compaction when the planner picks the
 /// dead entry. Compiled out of release builds; a cheap guard that trips tests
 /// the instant any mutation reintroduces a duplicate.

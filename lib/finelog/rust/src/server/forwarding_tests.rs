@@ -341,9 +341,13 @@ async fn read_all(client: &LogServiceClient<TestTransport>) -> Vec<(String, Stri
 
 /// Poll `condition` until it holds, or fail after five seconds with `describe()`, so a
 /// wedged forwarder fails the test rather than hanging it.
-async fn poll_until(mut condition: impl FnMut() -> bool, describe: impl Fn() -> String) {
+async fn poll_until<F, Fut>(mut condition: F, describe: impl Fn() -> String)
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
     for _ in 0..200 {
-        if condition() {
+        if condition().await {
             return;
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
@@ -351,12 +355,20 @@ async fn poll_until(mut condition: impl FnMut() -> bool, describe: impl Fn() -> 
     panic!("{}", describe());
 }
 
+async fn wait_for_scalar(store: &Store, sql: &str, expected: i64) {
+    poll_until(
+        || async { scalar_i64(store, sql).await == expected },
+        || format!("query {sql:?} never returned {expected}"),
+    )
+    .await;
+}
+
 /// Wait for `store`'s watermark for `(target, namespace)` to reach `expected`. Reads
 /// local state only, so a test can tell "the forwarder is done" without an RPC that
 /// would perturb the target's request count.
 async fn wait_for_cursor(store: &Store, target: &str, namespace: &str, expected: i64) {
     poll_until(
-        || store.forward_cursor(target, namespace).unwrap() == Some(expected),
+        || std::future::ready(store.forward_cursor(target, namespace).unwrap() == Some(expected)),
         || {
             format!(
                 "watermark for {namespace:?} never reached {expected} (stuck at {:?})",
@@ -372,7 +384,7 @@ async fn wait_for_cursor(store: &Store, target: &str, namespace: &str, expected:
 /// produced it.
 async fn wait_for_requests(counter: &RequestStats, expected: usize) {
     poll_until(
-        || counter.total() >= expected,
+        || std::future::ready(counter.total() >= expected),
         || {
             format!(
                 "hub never served {expected} requests (saw {})",
@@ -392,16 +404,14 @@ async fn wait_for_hub_log_rows(fx: &Fixture, expected: &[(&str, &str)]) {
         .iter()
         .map(|(key, data)| (key.to_string(), data.to_string()))
         .collect();
-    for _ in 0..200 {
-        if fx.hub_log_rows().await == want {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-    panic!(
-        "hub never held {want:?} (last saw {:?})",
-        fx.hub_log_rows().await
-    );
+    poll_until(
+        || {
+            let want = &want;
+            async move { fx.hub_log_rows().await == *want }
+        },
+        || format!("hub never held {want:?}"),
+    )
+    .await;
 }
 
 /// A forwarder running on its own task, stopped and joined by [`Self::finish`].
@@ -476,7 +486,7 @@ async fn fresh_remote_store_forwarder_registers_progress_without_panicking() {
 
     let running = RunningForwarder::start(forwarder);
     poll_until(
-        || source.get_table_schema(FINELOG_NAMESPACE).is_ok(),
+        || std::future::ready(source.get_table_schema(FINELOG_NAMESPACE).is_ok()),
         || "forwarder did not register its progress namespace".to_string(),
     )
     .await;
@@ -1475,13 +1485,7 @@ async fn a_restart_mid_migration_resumes_forwarding_from_the_durable_cursor() {
 
     // The hub ACKs before its async flush seals the rows, so poll the count.
     let count_sql = format!("SELECT count(*) FROM \"{EVENTS}\"");
-    for _ in 0..200 {
-        if scalar_i64(&target, &count_sql).await == 60 {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-    assert_eq!(scalar_i64(&target, &count_sql).await, 60);
+    wait_for_scalar(&target, &count_sql, 60).await;
     assert_eq!(
         scalar_i64(
             &target,
@@ -1547,7 +1551,6 @@ async fn a_hub_migration_under_live_forwarding_loses_nothing() {
             break;
         }
         hub.maintain_namespace(EVENTS, false).await.unwrap();
-        tokio::time::sleep(Duration::from_millis(25)).await;
     }
     assert_eq!(
         hub.spec_lifecycle(EVENTS).unwrap().active_version(),
@@ -1563,13 +1566,7 @@ async fn a_hub_migration_under_live_forwarding_loses_nothing() {
     // Exactly once, before and after the flip. The hub ACKs before its async
     // flush seals rows for queries, so poll the count.
     let count_sql = format!("SELECT count(*) FROM \"{EVENTS}\"");
-    for _ in 0..200 {
-        if scalar_i64(&hub, &count_sql).await == 250 {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-    assert_eq!(scalar_i64(&hub, &count_sql).await, 250);
+    wait_for_scalar(&hub, &count_sql, 250).await;
     assert_eq!(
         scalar_i64(
             &hub,

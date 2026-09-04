@@ -30,7 +30,9 @@ use crate::policies::{
     physical_partition_policy_for, schema_for_namespace, segment_indexes_enabled_for,
     storage_policy_for, PolicyRegistry,
 };
-use crate::proto::finelog::stats::{ColumnType, L0Mode, SchemaView, TableSpecView};
+use crate::proto::finelog::stats::{
+    ColumnType, L0Mode, NamespaceCatalog, SchemaView, TableSpecView,
+};
 use crate::query::provider::NamespaceProvider;
 use crate::query::RegisteredProvider;
 use crate::store::catalog::{Catalog, PublishedObjectSegment, RegisteredNamespace, SpecLifecycle};
@@ -99,6 +101,12 @@ enum SchemaRegistration {
 enum BatchAlignment {
     Strict,
     ForwardCompatible,
+}
+
+struct RecoveredProjection {
+    schema: Schema,
+    policy: StoragePolicy,
+    segments: Vec<PublishedObjectSegment>,
 }
 
 impl BatchAlignment {
@@ -566,7 +574,43 @@ impl Store {
             );
             return Ok(false);
         }
-        let schema_spec = state
+        let recovered = self.recovered_projection(namespace, &state)?;
+        // The claimed state stays authoritative whatever the projection does:
+        // it is rebuildable, so a failure leaves the table unready rather than
+        // undoing or blocking the durable revision.
+        if let Err(error) = self.catalog.replace_with_published_snapshot(
+            namespace,
+            recovered.schema.clone(),
+            recovered.policy.clone(),
+            &state,
+            &recovered.segments,
+        ) {
+            tracing::error!(
+                namespace,
+                %error,
+                remote_revision,
+                "rebuilding the local projection from the claimed state failed"
+            );
+            self.mark_table_unready(namespace, &error.to_string());
+            return Ok(false);
+        }
+        let (prior, _controller) = self.tables.take(namespace);
+        if let Some(prior) = prior {
+            prior.shutdown(TABLE_LIFECYCLE_SHUTDOWN_TIMEOUT).await;
+        }
+        // The rebuilt runtime seeds its sequence high-water mark from the
+        // projection of the claimed state.
+        self.tables
+            .register(namespace, recovered.schema, recovered.policy)?;
+        Ok(true)
+    }
+
+    fn recovered_projection(
+        &self,
+        namespace: &str,
+        state: &NamespaceCatalog,
+    ) -> Result<RecoveredProjection, StatsError> {
+        let spec = state
             .retained_table_specs
             .iter()
             .find(|spec| spec.version == state.active_table_spec_version)
@@ -582,7 +626,7 @@ impl Store {
                     "table state for {namespace:?} has no retained TableSpec"
                 ))
             })?;
-        let schema_proto = schema_spec.logical_schema.as_option().ok_or_else(|| {
+        let schema_proto = spec.logical_schema.as_option().ok_or_else(|| {
             StatsError::Internal(format!(
                 "table state TableSpec for {namespace:?} has no logical schema"
             ))
@@ -594,16 +638,28 @@ impl Store {
             ))
         })?;
         let schema = stored_form(schema_from_proto_view(&schema_view)?);
-        let policy = schema_spec
+        let policy = spec
             .operating_policy
             .as_option()
             .and_then(|operating| operating.local_cache.as_option())
             .map(StoragePolicy::from_proto_owned)
             .unwrap_or_default();
+        Ok(RecoveredProjection {
+            schema,
+            policy,
+            segments: self.recovered_segments(namespace, state)?,
+        })
+    }
+
+    fn recovered_segments(
+        &self,
+        namespace: &str,
+        state: &NamespaceCatalog,
+    ) -> Result<Vec<PublishedObjectSegment>, StatsError> {
         let object_store = self.object_store.as_ref().ok_or_else(|| {
             StatsError::Internal("table state store configured without an object store".to_string())
         })?;
-        let mut published_segments = HashMap::<String, PublishedObjectSegment>::new();
+        let mut published = HashMap::<String, PublishedObjectSegment>::new();
         for version in &state.version_segments {
             for segment in version
                 .live_segments
@@ -622,11 +678,6 @@ impl Store {
                 {
                     Ok(reference) => reference,
                     Err(error) if table_spec_version == 0 => {
-                        // A version-0 entry can point into the legacy archive
-                        // rather than the object layout (an archive-only row
-                        // retained until retirement). Its bytes are not
-                        // recoverable from the object store; the entry is
-                        // rollback bookkeeping, not a projection row.
                         tracing::debug!(
                             namespace,
                             %error,
@@ -641,9 +692,10 @@ impl Store {
                         "table state segment for {namespace:?} references another table"
                     ))
                 })?;
-                // Recovery names the file a later query would localize; it
-                // never downloads or opens it.
-                let local_path = object_store.planned_local_path(&reference.id)?;
+                let path = object_store
+                    .planned_local_path(&reference.id)?
+                    .to_string_lossy()
+                    .into_owned();
                 let partition = segment
                     .partition_json
                     .as_deref()
@@ -654,8 +706,7 @@ impl Store {
                             "table state segment for {namespace:?} has invalid partition metadata: {error}"
                         ))
                     })?;
-                let path = local_path.to_string_lossy().into_owned();
-                published_segments
+                published
                     .entry(path.clone())
                     .or_insert_with(|| PublishedObjectSegment {
                         row: crate::store::types::SegmentRow {
@@ -682,34 +733,7 @@ impl Store {
                     });
             }
         }
-        let published_segments: Vec<_> = published_segments.into_values().collect();
-        // The claimed state stays authoritative whatever the projection does:
-        // it is rebuildable, so a failure leaves the table unready rather than
-        // undoing or blocking the durable revision.
-        if let Err(error) = self.catalog.replace_with_published_snapshot(
-            namespace,
-            schema.clone(),
-            policy.clone(),
-            &state,
-            &published_segments,
-        ) {
-            tracing::error!(
-                namespace,
-                %error,
-                remote_revision,
-                "rebuilding the local projection from the claimed state failed"
-            );
-            self.mark_table_unready(namespace, &error.to_string());
-            return Ok(false);
-        }
-        let (prior, _controller) = self.tables.take(namespace);
-        if let Some(prior) = prior {
-            prior.shutdown(TABLE_LIFECYCLE_SHUTDOWN_TIMEOUT).await;
-        }
-        // The rebuilt runtime seeds its sequence high-water mark from the
-        // projection of the claimed state.
-        self.tables.register(namespace, schema, policy)?;
-        Ok(true)
+        Ok(published.into_values().collect())
     }
 
     fn rehydrate_from_catalog(&self) -> Result<(), StatsError> {
@@ -947,6 +971,37 @@ impl Store {
             None => self.spec_for_legacy_schema_evolution(name, &stored, registration)?,
         };
         let table_spec = table_spec.or(evolved_spec.as_ref());
+        self.validate_registration_spec(name, &stored, &policy, registration, table_spec)?;
+        let stored_for_merge = stored.clone();
+        let had_engine = self.tables.contains(name);
+        let (effective_schema, effective_policy) =
+            self.catalog
+                .register_or_evolve(
+                    name,
+                    stored,
+                    policy,
+                    move |existing_schema| match registration {
+                        SchemaRegistration::Additive => {
+                            merge_schemas(existing_schema, &stored_for_merge)
+                        }
+                        SchemaRegistration::Managed => {
+                            merge_managed_schema(existing_schema, &stored_for_merge)
+                        }
+                    },
+                )?;
+        self.sync_registered_runtime(name, &effective_schema, effective_policy, had_engine)?;
+        let spec_lifecycle = self.commit_registered_spec(name, table_spec)?;
+        Ok((effective_schema, spec_lifecycle))
+    }
+
+    fn validate_registration_spec(
+        &self,
+        name: &str,
+        stored: &Schema,
+        policy: &StoragePolicy,
+        registration: SchemaRegistration,
+        table_spec: Option<&ValidatedTableSpec>,
+    ) -> Result<(), StatsError> {
         if let Some(table_spec) = table_spec {
             self.catalog.validate_table_spec_registration(
                 name,
@@ -957,8 +1012,8 @@ impl Store {
             let declared_schema = stored_form(table_spec.schema.clone());
             let prospective_schema = match self.catalog.get_live(name) {
                 Some(existing) => match registration {
-                    SchemaRegistration::Additive => merge_schemas(&existing.schema, &stored),
-                    SchemaRegistration::Managed => merge_managed_schema(&existing.schema, &stored),
+                    SchemaRegistration::Additive => merge_schemas(&existing.schema, stored),
+                    SchemaRegistration::Managed => merge_managed_schema(&existing.schema, stored),
                 }?,
                 None => stored.clone(),
             };
@@ -978,51 +1033,39 @@ impl Store {
                 )));
             }
         }
+        Ok(())
+    }
 
-        // `merge_schemas` (pure) raises SchemaConflict on a column-type change.
-        // The catalog applies the empty-policy-keeps-existing rule and persists
-        // under a single lock; we only supply the schema-merge decision.
-        let stored_for_merge = stored.clone();
-        let had_engine = self.tables.contains(name);
-        let (effective_schema, effective_policy) =
-            self.catalog
-                .register_or_evolve(
-                    name,
-                    stored,
-                    policy,
-                    move |existing_schema| match registration {
-                        SchemaRegistration::Additive => {
-                            merge_schemas(existing_schema, &stored_for_merge)
-                        }
-                        SchemaRegistration::Managed => {
-                            merge_managed_schema(existing_schema, &stored_for_merge)
-                        }
-                    },
-                )?;
-        // (Re)build the engine on fresh registration or when the effective schema
-        // evolved. The engine re-opens on the same dir, adopting existing
-        // segments and recovering next_seq, so an additive evolution keeps the
-        // already-flushed data visible. A runtime registration starts maintenance
-        // immediately after construction.
+    fn sync_registered_runtime(
+        &self,
+        name: &str,
+        effective_schema: &Schema,
+        effective_policy: StoragePolicy,
+        had_engine: bool,
+    ) -> Result<(), StatsError> {
         let needs_engine = !had_engine
             || self
                 .tables
                 .get(name)
-                .map(|table| table.schema() != &effective_schema)
+                .map(|table| table.schema() != effective_schema)
                 .unwrap_or(true);
         if needs_engine {
             self.tables
-                .register(name, effective_schema.clone(), effective_policy)?;
+                .register(name, effective_schema.clone(), effective_policy)
+                .map(|_| ())
         } else {
-            // Runtime kept; push the (possibly updated) policy onto it so a
-            // policy-only re-register takes effect on the next eviction tick.
             if let Some(table) = self.tables.get(name) {
                 table.update_policy(effective_policy);
             }
+            Ok(())
         }
-        // Registration is a synchronous RPC path, so its committed revision is
-        // owed to the table's maintenance loop, which publishes it or a later
-        // revision containing it.
+    }
+
+    fn commit_registered_spec(
+        &self,
+        name: &str,
+        table_spec: Option<&ValidatedTableSpec>,
+    ) -> Result<Option<SpecLifecycle>, StatsError> {
         let controller = self.tables.controller(name);
         let spec_lifecycle = table_spec
             .map(|table_spec| {
@@ -1046,7 +1089,7 @@ impl Store {
                 table.update_table_spec(status);
             }
         }
-        Ok((effective_schema, spec_lifecycle))
+        Ok(spec_lifecycle)
     }
 
     /// Append a pre-routed batch and return its row count and durability
@@ -1794,6 +1837,39 @@ mod tests {
         current_catalog: TableSnapshot,
     }
 
+    fn worker_ipc(rows: &[(&str, i64, i64)]) -> (SchemaRef, Vec<u8>) {
+        let batch_schema = schema_to_arrow(&worker_schema());
+        let batch = RecordBatch::try_new(
+            batch_schema.clone(),
+            vec![
+                Arc::new(StringArray::from(
+                    rows.iter()
+                        .map(|(worker, _, _)| *worker)
+                        .collect::<Vec<_>>(),
+                )),
+                Arc::new(Int64Array::from(
+                    rows.iter().map(|(_, value, _)| *value).collect::<Vec<_>>(),
+                )),
+                Arc::new(Int64Array::from(
+                    rows.iter().map(|(_, _, value)| *value).collect::<Vec<_>>(),
+                )),
+            ],
+        )
+        .unwrap();
+        let ipc = crate::store::ipc::encode_ipc(&batch_schema, &[batch]).unwrap();
+        (batch_schema, ipc)
+    }
+
+    async fn write_worker_rows(store: &Store, rows: &[(&str, i64, i64)]) -> (SchemaRef, i64) {
+        let (batch_schema, ipc) = worker_ipc(rows);
+        let (_, last_seq) = store.write_rows("iris.worker", &ipc, None).unwrap();
+        store
+            .await_persisted("iris.worker", last_seq, Duration::from_secs(10))
+            .await
+            .unwrap();
+        (batch_schema, last_seq)
+    }
+
     async fn published_object_table(tag: &str) -> PublishedObjectTableFixture {
         let data_dir = crate::test_support::unique_dir(&format!("{tag}_data"));
         let remote_dir = crate::test_support::unique_dir(&format!("{tag}_remote"));
@@ -1810,22 +1886,8 @@ mod tests {
             .unwrap();
         let initial_catalog = store.publish_object_catalog("iris.worker").await.unwrap();
 
-        let batch_schema = schema_to_arrow(&worker_schema());
-        let batch = RecordBatch::try_new(
-            batch_schema.clone(),
-            vec![
-                Arc::new(StringArray::from(vec!["w-1", "w-2"])),
-                Arc::new(Int64Array::from(vec![128, 256])),
-                Arc::new(Int64Array::from(vec![1, 2])),
-            ],
-        )
-        .unwrap();
-        let ipc = crate::store::ipc::encode_ipc(&batch_schema, &[batch]).unwrap();
-        let (_, last_seq) = store.write_rows("iris.worker", &ipc, None).unwrap();
-        store
-            .await_persisted("iris.worker", last_seq, Duration::from_secs(10))
-            .await
-            .unwrap();
+        let (batch_schema, last_seq) =
+            write_worker_rows(&store, &[("w-1", 128, 1), ("w-2", 256, 2)]).await;
         let paths = store.query_snapshot("iris.worker").unwrap().paths;
         let current_catalog = store.publish_object_catalog("iris.worker").await.unwrap();
         PublishedObjectTableFixture {
@@ -2662,22 +2724,7 @@ mod tests {
             .register_table("iris.worker", worker_schema(), StoragePolicy::default())
             .unwrap();
 
-        let batch_schema = schema_to_arrow(&worker_schema());
-        let legacy_batch = RecordBatch::try_new(
-            batch_schema.clone(),
-            vec![
-                Arc::new(StringArray::from(vec!["legacy"])),
-                Arc::new(Int64Array::from(vec![128])),
-                Arc::new(Int64Array::from(vec![1])),
-            ],
-        )
-        .unwrap();
-        let legacy_ipc = crate::store::ipc::encode_ipc(&batch_schema, &[legacy_batch]).unwrap();
-        let (_, legacy_seq) = store.write_rows("iris.worker", &legacy_ipc, None).unwrap();
-        store
-            .await_persisted("iris.worker", legacy_seq, Duration::from_secs(10))
-            .await
-            .unwrap();
+        let _ = write_worker_rows(&store, &[("legacy", 128, 1)]).await;
         let legacy_paths = store.query_snapshot("iris.worker").unwrap().paths;
         assert_eq!(legacy_paths.len(), 1);
         assert!(!legacy_paths[0].contains("/_finelog/"));
@@ -2707,21 +2754,7 @@ mod tests {
         assert_eq!(active_paths.len(), 1);
         assert_local_content_object(&data_dir, &active_paths[0]);
 
-        let current_batch = RecordBatch::try_new(
-            batch_schema.clone(),
-            vec![
-                Arc::new(StringArray::from(vec!["current"])),
-                Arc::new(Int64Array::from(vec![256])),
-                Arc::new(Int64Array::from(vec![2])),
-            ],
-        )
-        .unwrap();
-        let current_ipc = crate::store::ipc::encode_ipc(&batch_schema, &[current_batch]).unwrap();
-        let (_, current_seq) = store.write_rows("iris.worker", &current_ipc, None).unwrap();
-        store
-            .await_persisted("iris.worker", current_seq, Duration::from_secs(10))
-            .await
-            .unwrap();
+        let _ = write_worker_rows(&store, &[("current", 256, 2)]).await;
 
         let aborted = store.abort_table_migration("iris.worker").await.unwrap();
         assert_eq!(aborted.active_version(), 0);
@@ -2780,22 +2813,7 @@ mod tests {
             .unwrap();
         store.publish_object_catalog("iris.worker").await.unwrap();
 
-        let batch_schema = schema_to_arrow(&worker_schema());
-        let batch = RecordBatch::try_new(
-            batch_schema.clone(),
-            vec![
-                Arc::new(StringArray::from(vec!["existing"])),
-                Arc::new(Int64Array::from(vec![128])),
-                Arc::new(Int64Array::from(vec![1])),
-            ],
-        )
-        .unwrap();
-        let ipc = crate::store::ipc::encode_ipc(&batch_schema, &[batch]).unwrap();
-        let (_, last_seq) = store.write_rows("iris.worker", &ipc, None).unwrap();
-        store
-            .await_persisted("iris.worker", last_seq, Duration::from_secs(10))
-            .await
-            .unwrap();
+        let _ = write_worker_rows(&store, &[("existing", 128, 1)]).await;
         let before = store.query_snapshot("iris.worker").unwrap().paths;
         assert_eq!(before.len(), 1);
         let generation_before = store
@@ -2852,22 +2870,7 @@ mod tests {
             .register_versioned_table("iris.worker", object_backed_spec(1))
             .unwrap();
 
-        let batch_schema = schema_to_arrow(&worker_schema());
-        let batch = RecordBatch::try_new(
-            batch_schema.clone(),
-            vec![
-                Arc::new(StringArray::from(vec!["existing"])),
-                Arc::new(Int64Array::from(vec![128])),
-                Arc::new(Int64Array::from(vec![1])),
-            ],
-        )
-        .unwrap();
-        let ipc = crate::store::ipc::encode_ipc(&batch_schema, &[batch]).unwrap();
-        let (_, last_seq) = store.write_rows("iris.worker", &ipc, None).unwrap();
-        store
-            .await_persisted("iris.worker", last_seq, Duration::from_secs(10))
-            .await
-            .unwrap();
+        let _ = write_worker_rows(&store, &[("existing", 128, 1)]).await;
 
         let rekeyed = ObjectSpec::new(2)
             .schema(worker_schema_keyed_on("mem_bytes"))
@@ -3027,22 +3030,7 @@ mod tests {
             .unwrap();
         store.publish_object_catalog("iris.worker").await.unwrap();
 
-        let batch_schema = schema_to_arrow(&worker_schema());
-        let batch = RecordBatch::try_new(
-            batch_schema.clone(),
-            vec![
-                Arc::new(StringArray::from(vec!["existing"])),
-                Arc::new(Int64Array::from(vec![128])),
-                Arc::new(Int64Array::from(vec![1])),
-            ],
-        )
-        .unwrap();
-        let ipc = crate::store::ipc::encode_ipc(&batch_schema, &[batch]).unwrap();
-        let (_, last_seq) = store.write_rows("iris.worker", &ipc, None).unwrap();
-        store
-            .await_persisted("iris.worker", last_seq, Duration::from_secs(10))
-            .await
-            .unwrap();
+        let _ = write_worker_rows(&store, &[("existing", 128, 1)]).await;
         let source_paths = store.query_snapshot("iris.worker").unwrap().paths;
 
         store
@@ -3079,11 +3067,20 @@ mod tests {
             .as_millis() as i64;
         assert!(deadline > now_ms + 60_000, "deadline {deadline}");
 
-        // Every query the 50 ms bound admits has expired, and the source version
-        // is still there.
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        // Run collection at a logical time after every 50 ms query pin has
+        // expired. The one-hour rollback retention still keeps the source.
         store
-            .maintain_namespace("iris.worker", false)
+            .tables
+            .controller("iris.worker")
+            .gc_published(
+                now_ms + 1_000,
+                crate::store::state_store::object::StateGcPolicy {
+                    pin_retention_ms: 50,
+                    state_retention_ms: 3_600_000,
+                    orphan_grace_ms: 0,
+                    sweep_orphans: true,
+                },
+            )
             .await
             .unwrap();
         let observing = store.spec_lifecycle("iris.worker").unwrap();
@@ -3137,22 +3134,7 @@ mod tests {
             .register_table("iris.worker", worker_schema(), StoragePolicy::default())
             .unwrap();
 
-        let batch_schema = schema_to_arrow(&worker_schema());
-        let batch = RecordBatch::try_new(
-            batch_schema.clone(),
-            vec![
-                Arc::new(StringArray::from(vec!["legacy"])),
-                Arc::new(Int64Array::from(vec![128])),
-                Arc::new(Int64Array::from(vec![1])),
-            ],
-        )
-        .unwrap();
-        let ipc = crate::store::ipc::encode_ipc(&batch_schema, &[batch]).unwrap();
-        let (_, last_seq) = store.write_rows("iris.worker", &ipc, None).unwrap();
-        store
-            .await_persisted("iris.worker", last_seq, Duration::from_secs(10))
-            .await
-            .unwrap();
+        let _ = write_worker_rows(&store, &[("legacy", 128, 1)]).await;
         let legacy_paths = store.query_snapshot("iris.worker").unwrap().paths;
         assert_eq!(legacy_paths.len(), 1);
 
@@ -3530,22 +3512,7 @@ mod tests {
         store
             .register_table("iris.worker", worker_schema(), StoragePolicy::default())
             .unwrap();
-        let batch_schema = schema_to_arrow(&worker_schema());
-        let batch = RecordBatch::try_new(
-            batch_schema.clone(),
-            vec![
-                Arc::new(StringArray::from(vec!["legacy"])),
-                Arc::new(Int64Array::from(vec![128])),
-                Arc::new(Int64Array::from(vec![1])),
-            ],
-        )
-        .unwrap();
-        let ipc = crate::store::ipc::encode_ipc(&batch_schema, &[batch]).unwrap();
-        let (_, seq) = store.write_rows("iris.worker", &ipc, None).unwrap();
-        store
-            .await_persisted("iris.worker", seq, Duration::from_secs(10))
-            .await
-            .unwrap();
+        let _ = write_worker_rows(&store, &[("legacy", 128, 1)]).await;
         let phantom_path = format!(
             "{}/iris.worker/run_id/31/seg_L2_0000000000000000900.parquet",
             data_dir.display()
@@ -3671,22 +3638,7 @@ mod tests {
         store
             .register_table("iris.worker", worker_schema(), StoragePolicy::default())
             .unwrap();
-        let batch_schema = schema_to_arrow(&worker_schema());
-        let batch = RecordBatch::try_new(
-            batch_schema.clone(),
-            vec![
-                Arc::new(StringArray::from(vec!["legacy"])),
-                Arc::new(Int64Array::from(vec![128])),
-                Arc::new(Int64Array::from(vec![1])),
-            ],
-        )
-        .unwrap();
-        let ipc = crate::store::ipc::encode_ipc(&batch_schema, &[batch]).unwrap();
-        let (_, seq) = store.write_rows("iris.worker", &ipc, None).unwrap();
-        store
-            .await_persisted("iris.worker", seq, Duration::from_secs(10))
-            .await
-            .unwrap();
+        let _ = write_worker_rows(&store, &[("legacy", 128, 1)]).await;
 
         let pending = store
             .register_versioned_table("iris.worker", object_backed_spec(1))
@@ -3730,22 +3682,7 @@ mod tests {
         store
             .register_table("iris.worker", worker_schema(), StoragePolicy::default())
             .unwrap();
-        let batch_schema = schema_to_arrow(&worker_schema());
-        let batch = RecordBatch::try_new(
-            batch_schema.clone(),
-            vec![
-                Arc::new(StringArray::from(vec!["legacy"])),
-                Arc::new(Int64Array::from(vec![128])),
-                Arc::new(Int64Array::from(vec![1])),
-            ],
-        )
-        .unwrap();
-        let ipc = crate::store::ipc::encode_ipc(&batch_schema, &[batch]).unwrap();
-        let (_, seq) = store.write_rows("iris.worker", &ipc, None).unwrap();
-        store
-            .await_persisted("iris.worker", seq, Duration::from_secs(10))
-            .await
-            .unwrap();
+        let _ = write_worker_rows(&store, &[("legacy", 128, 1)]).await;
         store
             .register_versioned_table("iris.worker", object_backed_spec(1))
             .unwrap();
@@ -3779,7 +3716,15 @@ mod tests {
             "the retained HEAD must keep the aborted table on the maintenance GC path"
         );
         let removed = controller
-            .gc_published(crate::store::table::now_ms(), 0, 0, 0, true)
+            .gc_published(
+                crate::store::table::now_ms(),
+                crate::store::state_store::object::StateGcPolicy {
+                    pin_retention_ms: 0,
+                    state_retention_ms: 0,
+                    orphan_grace_ms: 0,
+                    sweep_orphans: true,
+                },
+            )
             .await
             .unwrap();
         assert!(removed > 0, "GC removed nothing after the abort");
@@ -3825,22 +3770,8 @@ mod tests {
         store
             .register_table("iris.worker", worker_schema(), StoragePolicy::default())
             .unwrap();
-        let batch_schema = schema_to_arrow(&worker_schema());
-        let batch = RecordBatch::try_new(
-            batch_schema.clone(),
-            vec![
-                Arc::new(StringArray::from(vec!["legacy"])),
-                Arc::new(Int64Array::from(vec![128])),
-                Arc::new(Int64Array::from(vec![1])),
-            ],
-        )
-        .unwrap();
-        let ipc = crate::store::ipc::encode_ipc(&batch_schema, &[batch]).unwrap();
-        let (_, seq) = store.write_rows("iris.worker", &ipc, None).unwrap();
-        store
-            .await_persisted("iris.worker", seq, Duration::from_secs(10))
-            .await
-            .unwrap();
+        let (_, ipc) = worker_ipc(&[("legacy", 128, 1)]);
+        let _ = write_worker_rows(&store, &[("legacy", 128, 1)]).await;
         store
             .register_versioned_table("iris.worker", object_backed_spec(1))
             .unwrap();
@@ -3930,22 +3861,7 @@ mod tests {
         store
             .register_table("iris.worker", worker_schema(), StoragePolicy::default())
             .unwrap();
-        let batch_schema = schema_to_arrow(&worker_schema());
-        let batch = RecordBatch::try_new(
-            batch_schema.clone(),
-            vec![
-                Arc::new(StringArray::from(vec!["legacy"])),
-                Arc::new(Int64Array::from(vec![128])),
-                Arc::new(Int64Array::from(vec![1])),
-            ],
-        )
-        .unwrap();
-        let ipc = crate::store::ipc::encode_ipc(&batch_schema, &[batch]).unwrap();
-        let (_, seq) = store.write_rows("iris.worker", &ipc, None).unwrap();
-        store
-            .await_persisted("iris.worker", seq, Duration::from_secs(10))
-            .await
-            .unwrap();
+        let _ = write_worker_rows(&store, &[("legacy", 128, 1)]).await;
         store
             .register_versioned_table("iris.worker", object_backed_spec(1))
             .unwrap();
@@ -3974,6 +3890,7 @@ mod tests {
         recovered
             .register_table("iris.worker", worker_schema(), StoragePolicy::default())
             .unwrap();
+        let (_, ipc) = worker_ipc(&[("legacy", 128, 1)]);
         recovered.write_rows("iris.worker", &ipc, None).unwrap();
 
         recovered.shutdown(Duration::from_secs(1)).await;

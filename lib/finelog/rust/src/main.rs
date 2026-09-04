@@ -18,7 +18,7 @@ use finelog::server::diagnostics::spawn_pool_diagnostics;
 use finelog::server::{
     build_app_with_config, spawn_forwarder, AuthPolicy, Forwarder, ForwardingConfig, ServerConfig,
 };
-use finelog::store::object_store::is_object_store;
+use finelog::store::object_store::is_remote_object_store;
 use finelog::store::{ServeMode, Store, TelemetryRootWriteMode};
 use tokio::sync::Notify;
 
@@ -295,7 +295,7 @@ fn resolve_serve_mode(args: &Args) -> Result<ServeMode, String> {
             "shadow mode needs --log-dir: an in-memory store has no boot to rehearse".into(),
         );
     }
-    if is_object_store(&args.remote_log_dir) {
+    if is_remote_object_store(&args.remote_log_dir) {
         return Err(format!(
             "shadow mode refuses the archive {:?}: point --remote-log-dir at a local directory, \
              or leave it empty",
