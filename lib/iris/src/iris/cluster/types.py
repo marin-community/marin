@@ -844,6 +844,17 @@ TERMINAL_JOB_STATES: frozenset[int] = frozenset(
     job_pb2.JobState.Value(f"JOB_STATE_{state.name}") for state in NATIVE_TERMINAL_JOB_STATES
 )
 
+USER_JOB_STATES = (
+    job_pb2.JOB_STATE_PENDING,
+    job_pb2.JOB_STATE_BUILDING,
+    job_pb2.JOB_STATE_RUNNING,
+    job_pb2.JOB_STATE_SUCCEEDED,
+    job_pb2.JOB_STATE_FAILED,
+    job_pb2.JOB_STATE_KILLED,
+    job_pb2.JOB_STATE_WORKER_FAILED,
+    job_pb2.JOB_STATE_UNSCHEDULABLE,
+)
+
 TERMINAL_TASK_STATES: frozenset[int] = frozenset(
     job_pb2.TaskState.Value(f"TASK_STATE_{state.name}") for state in NATIVE_TERMINAL_TASK_STATES
 )
