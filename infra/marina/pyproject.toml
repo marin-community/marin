@@ -18,7 +18,7 @@ dependencies = [
     "pgvector>=0.3",
     # evaldash: the per-sample parquet reader and the finestore archive behind it, the LLM
     # sample review, and the Connect clients plus GCE lookup its live job/log panels use.
-    "marin-core[cpu]",
+    "marin-core",
     "marin-finestore",
     "marin-iris",
     "marin-finelog",
