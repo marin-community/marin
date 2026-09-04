@@ -61,6 +61,10 @@ HOST_APPS_ENV = "MARINA_HOST_APPS"
 CANONICAL_ORIGIN_ENV = "MARINA_CANONICAL_ORIGIN"
 DATA_PREFIX = "data/"
 API_PREFIX = "/api"
+# The first path segment the kernel answers itself. An app named for one of these would
+# register the same route and lose it: FastAPI keeps the first match, and the kernel's
+# routes are installed before any app's.
+KERNEL_PREFIXES = frozenset({"api", "healthz"})
 DATA_CACHE_CONTROL = "private, max-age=300"
 
 
@@ -261,6 +265,9 @@ def install_app_routes(api: FastAPI, app: AppManifest, data_root: str) -> None:
 
 def create_app(config: MarinaConfig) -> RouteAuthMiddleware:
     apps = discover_apps(config.apps_dir)
+    shadowed = sorted(app.name for app in apps if app.name in KERNEL_PREFIXES)
+    if shadowed:
+        raise ValueError(f"app {shadowed[0]!r} is named for a kernel route; rename it")
     policy = build_policy(config.iap_audience)
     api = FastAPI(title="Marina", docs_url=None, redoc_url=None)
 

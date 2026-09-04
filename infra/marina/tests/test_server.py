@@ -137,6 +137,14 @@ def test_non_loopback_without_iap_is_denied(tmp_path: Path) -> None:
     assert remote.get("/healthz").status_code == 200
 
 
+def test_an_app_named_for_a_kernel_route_is_rejected(tmp_path: Path) -> None:
+    # The kernel's routes are installed first and FastAPI keeps the first match, so such an
+    # app would silently lose those paths rather than fail.
+    write_app(tmp_path / "apps", "healthz")
+    with pytest.raises(ValueError, match="healthz"):
+        create_app(config_for(tmp_path))
+
+
 def aliased_client(tmp_path: Path) -> TestClient:
     write_api_app(tmp_path / "apps", "tasktrove")
     config = replace(
