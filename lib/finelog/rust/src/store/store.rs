@@ -1012,8 +1012,8 @@ impl Store {
             let declared_schema = stored_form(table_spec.schema.clone());
             let prospective_schema = match self.catalog.get_live(name) {
                 Some(existing) => match registration {
-                    SchemaRegistration::Additive => merge_schemas(&existing.schema, &stored),
-                    SchemaRegistration::Managed => merge_managed_schema(&existing.schema, &stored),
+                    SchemaRegistration::Additive => merge_schemas(&existing.schema, stored),
+                    SchemaRegistration::Managed => merge_managed_schema(&existing.schema, stored),
                 }?,
                 None => stored.clone(),
             };
