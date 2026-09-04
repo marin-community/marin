@@ -25,6 +25,7 @@ use crate::store::compaction::local_driver::{self, LocalCompaction};
 use crate::store::compaction::object_driver::{self, ObjectCompaction};
 use crate::store::legacy::archive::{self, LegacyArchive};
 use crate::store::legacy::layout::{self, LocalLayout};
+use crate::store::state_store::object::StateGcPolicy;
 use crate::store::table::index_artifacts::{self, IndexBackfill, INDEX_BUNDLES_PER_TICK};
 use crate::store::table::key_bounds;
 use crate::store::table::runtime::TableRuntime;
@@ -61,22 +62,25 @@ pub enum TableWork {
     Cycle { force_compact_l0: bool },
 }
 
-/// Whether more of the dispatched work is due.
-///
-/// A cycle uses this to decide whether to keep draining, whether a migration
-/// still owns the table, and what cadence the scheduler should poll at next.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct WorkOutcome {
-    pub pending: bool,
+/// Whether the scheduler should run another cycle on its prompt cadence.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum WorkOutcome {
+    #[default]
+    Complete,
+    MoreWork,
 }
 
 impl WorkOutcome {
-    fn done() -> Self {
-        Self { pending: false }
+    pub fn has_more_work(self) -> bool {
+        self == Self::MoreWork
     }
 
-    fn pending(pending: bool) -> Self {
-        Self { pending }
+    fn from_pending(pending: bool) -> Self {
+        if pending {
+            Self::MoreWork
+        } else {
+            Self::Complete
+        }
     }
 }
 
@@ -86,7 +90,7 @@ impl WorkOutcome {
 /// and nothing to make durable.
 pub async fn run(runtime: &Arc<TableRuntime>, work: TableWork) -> Result<WorkOutcome, StatsError> {
     if !runtime.is_disk_backed() {
-        return Ok(WorkOutcome::done());
+        return Ok(WorkOutcome::Complete);
     }
     match work {
         TableWork::Cycle { force_compact_l0 } => cycle(runtime, force_compact_l0).await,
@@ -100,7 +104,7 @@ async fn run_one(runtime: &Arc<TableRuntime>, work: TableWork) -> Result<WorkOut
     match work {
         TableWork::Flush => {
             runtime.flush().await?;
-            Ok(WorkOutcome::done())
+            Ok(WorkOutcome::Complete)
         }
         TableWork::SpecMigration => {
             let activated = |status: &SpecLifecycle| -> Result<(), StatsError> {
@@ -125,10 +129,12 @@ async fn run_one(runtime: &Arc<TableRuntime>, work: TableWork) -> Result<WorkOut
                 on_activated: &activated,
             })
             .await?;
-            Ok(WorkOutcome::pending(owns_cycle))
+            Ok(WorkOutcome::from_pending(owns_cycle))
         }
         TableWork::Compaction { force_compact_l0 } => compact(runtime, force_compact_l0).await,
-        TableWork::KeyBounds => Ok(WorkOutcome::pending(key_bounds::maintain(runtime).await?)),
+        TableWork::KeyBounds => Ok(WorkOutcome::from_pending(
+            key_bounds::maintain(runtime).await?,
+        )),
         TableWork::IndexArtifacts => {
             let tracker = &runtime.layout_tracker;
             let layout_is_current = |path: &str| tracker.is_current(path);
@@ -137,15 +143,15 @@ async fn run_one(runtime: &Arc<TableRuntime>, work: TableWork) -> Result<WorkOut
                 INDEX_BUNDLES_PER_TICK,
             )
             .await;
-            Ok(WorkOutcome::done())
+            Ok(WorkOutcome::Complete)
         }
         TableWork::ObjectCollection => {
             collect_objects(runtime).await?;
-            Ok(WorkOutcome::done())
+            Ok(WorkOutcome::Complete)
         }
         TableWork::LegacyArchive => {
             sync_archive(runtime).await?;
-            Ok(WorkOutcome::done())
+            Ok(WorkOutcome::Complete)
         }
         TableWork::Eviction => {
             let runtime = Arc::clone(runtime);
@@ -163,7 +169,7 @@ async fn run_one(runtime: &Arc<TableRuntime>, work: TableWork) -> Result<WorkOut
             .map_err(|error| {
                 StatsError::Internal(format!("maintenance evict task panicked: {error}"))
             })??;
-            Ok(WorkOutcome::done())
+            Ok(WorkOutcome::Complete)
         }
         TableWork::Placement => {
             let runtime = Arc::clone(runtime);
@@ -174,11 +180,11 @@ async fn run_one(runtime: &Arc<TableRuntime>, work: TableWork) -> Result<WorkOut
             .map_err(|error| {
                 StatsError::Internal(format!("maintenance placement task panicked: {error}"))
             })??;
-            Ok(WorkOutcome::pending(pending))
+            Ok(WorkOutcome::from_pending(pending))
         }
         TableWork::ArchivePlacement => {
             layout::advance_archive_placement(&local_layout(runtime)).await?;
-            Ok(WorkOutcome::done())
+            Ok(WorkOutcome::Complete)
         }
         TableWork::EncodingRewrite => {
             let runtime = Arc::clone(runtime);
@@ -189,7 +195,7 @@ async fn run_one(runtime: &Arc<TableRuntime>, work: TableWork) -> Result<WorkOut
             .map_err(|error| {
                 StatsError::Internal(format!("maintenance rewrite task panicked: {error}"))
             })?;
-            Ok(WorkOutcome::done())
+            Ok(WorkOutcome::Complete)
         }
         TableWork::Cycle { .. } => unreachable!("a cycle is composed, not dispatched"),
     }
@@ -207,7 +213,10 @@ async fn cycle(
 ) -> Result<WorkOutcome, StatsError> {
     let _cycle_guard = runtime.maint_lock.lock().await;
     run_one(runtime, TableWork::Flush).await?;
-    if run_one(runtime, TableWork::SpecMigration).await?.pending {
+    if run_one(runtime, TableWork::SpecMigration)
+        .await?
+        .has_more_work()
+    {
         // The migration owns the table's maintenance while it runs: placement
         // and legacy compaction would destroy the sources it rewrites. Object
         // compaction stays on: it folds only ordinary-stream objects at the
@@ -226,7 +235,7 @@ async fn cycle(
             runtime.controller.gc_objects().await?;
             run_one(runtime, TableWork::ObjectCollection).await?;
         }
-        return Ok(WorkOutcome::pending(true));
+        return Ok(WorkOutcome::MoreWork);
     }
     if runtime.policy().object_backed() {
         runtime.controller.publish_owed().await?;
@@ -234,17 +243,21 @@ async fn cycle(
         // then drains at the fast re-poll cadence through the dedicated slot
         // instead of one run per shared-queue visit, mirroring how a legacy
         // table drains its whole backlog in one cycle.
-        let bounds_pending = run_one(runtime, TableWork::KeyBounds).await?.pending;
+        let bounds_pending = run_one(runtime, TableWork::KeyBounds)
+            .await?
+            .has_more_work();
         let compacted = run_one(runtime, TableWork::Compaction { force_compact_l0 })
             .await?
-            .pending;
+            .has_more_work();
         runtime.controller.gc_objects().await?;
         run_one(runtime, TableWork::ObjectCollection).await?;
         run_one(runtime, TableWork::IndexArtifacts).await?;
-        return Ok(WorkOutcome::pending(bounds_pending || compacted));
+        return Ok(WorkOutcome::from_pending(bounds_pending || compacted));
     }
 
-    let placement_pending = run_one(runtime, TableWork::Placement).await?.pending;
+    let placement_pending = run_one(runtime, TableWork::Placement)
+        .await?
+        .has_more_work();
     run_one(runtime, TableWork::Compaction { force_compact_l0 }).await?;
     run_one(runtime, TableWork::LegacyArchive).await?;
     run_one(runtime, TableWork::ObjectCollection).await?;
@@ -257,7 +270,7 @@ async fn cycle(
     // re-compacted, so without it a table carries whatever layout it was written
     // with until eviction ages it out.
     run_one(runtime, TableWork::EncodingRewrite).await?;
-    Ok(WorkOutcome::pending(placement_pending))
+    Ok(WorkOutcome::from_pending(placement_pending))
 }
 
 /// Compact one run, or — for a legacy table — drain the planner's backlog.
@@ -282,7 +295,7 @@ async fn compact(
             force_compact_l0,
         )
         .await?;
-        return Ok(WorkOutcome::pending(compacted.has_pending_work()));
+        return Ok(WorkOutcome::from_pending(compacted.has_pending_work()));
     }
     // The legacy path decodes Parquet and takes the query-visibility write lock,
     // so the whole drain runs on the blocking pool. It checks the stop latch
@@ -291,7 +304,7 @@ async fn compact(
     // inside its timeout. Otherwise a long drain outlives the timeout, the task
     // is aborted, and its detached blocking compaction keeps unlinking inputs
     // while the replacement runtime adopts the same directory — the race that
-    // plants a phantom segment (#7361).
+    // plants a phantom segment.
     let runtime = Arc::clone(runtime);
     let single_job = layout::partitioning_is_pending(&local_layout(&runtime));
     tokio::task::spawn_blocking(move || -> Result<WorkOutcome, StatsError> {
@@ -313,7 +326,7 @@ async fn compact(
                 break;
             }
         }
-        Ok(WorkOutcome::pending(compacted))
+        Ok(WorkOutcome::from_pending(compacted))
     })
     .await
     .map_err(|error| StatsError::Internal(format!("maintenance compact task panicked: {error}")))?
@@ -372,10 +385,12 @@ async fn collect_objects(runtime: &Arc<TableRuntime>) -> Result<(), StatsError> 
         .controller
         .gc_published(
             crate::store::table::now_ms(),
-            policy.max_query_time_ms,
-            state_retention_ms,
-            orphan_grace_ms,
-            sweep_orphans,
+            StateGcPolicy {
+                pin_retention_ms: policy.max_query_time_ms,
+                state_retention_ms,
+                orphan_grace_ms,
+                sweep_orphans,
+            },
         )
         .await?;
     if removed > 0 {

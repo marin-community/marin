@@ -35,6 +35,7 @@ def _args(cache_storage: K8sCacheStorage = K8sCacheStorage.PERSISTENT_VOLUME) ->
             signing_key=("gcp-secret://projects/1/secrets/finelog-cw-signing-key/versions/1",),
         ),
         query_index_cache_mb=512,
+        object_cache_gb=200,
     )
     return FinelogServerArgs(
         config=config,
@@ -68,6 +69,7 @@ def test_finelog_resource_args_reference_secret_without_secret_values() -> None:
         "FINELOG_AUTH_POLICY",
         "FINELOG_FORWARDING",
         "FINELOG_INDEX_CACHE_MB",
+        "FINELOG_OBJECT_CACHE_GB",
         "FINELOG_PORT",
         "FINELOG_REMOTE_DIR",
     }

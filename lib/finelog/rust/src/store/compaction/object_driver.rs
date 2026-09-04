@@ -53,6 +53,14 @@ pub struct ObjectCompaction<'a> {
     pub target_object_bytes: i64,
 }
 
+/// One planned compaction with the lifecycle state its commit is fenced to.
+struct LeasedCompaction<'context, 'resources> {
+    resources: &'context ObjectCompaction<'resources>,
+    lease: MaintenanceLease,
+    table_spec_version: u64,
+    migration_backfill: bool,
+}
+
 /// Result of one object-compaction attempt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CompactionOutcome {
@@ -164,28 +172,24 @@ pub async fn compact_once(
     }
 
     let staging = StagingDir::create(compaction.table_dir)?;
-    let outcome = run(
-        &compaction,
-        &staging,
-        &job,
-        &lease,
+    let leased = LeasedCompaction {
+        resources: &compaction,
+        lease,
         table_spec_version,
         migration_backfill,
-    )
-    .await;
+    };
+    let outcome = run(&leased, &staging, &job).await;
     drop(staging);
     outcome
 }
 
 /// Execute one object compaction inside `staging` and commit its result.
 async fn run(
-    compaction: &ObjectCompaction<'_>,
+    leased: &LeasedCompaction<'_, '_>,
     staging: &StagingDir,
     job: &CompactionJob,
-    lease: &MaintenanceLease,
-    table_spec_version: u64,
-    migration_backfill: bool,
 ) -> Result<CompactionOutcome, StatsError> {
+    let compaction = leased.resources;
     let index_config = compaction.index_config.clone();
     let arrow_schema = Arc::clone(compaction.format.arrow_schema());
     let sort_columns = compaction.format.sort_columns().to_vec();
@@ -231,15 +235,7 @@ async fn run(
     // renamed, so the promotion re-advertises the same source and artifacts at
     // the higher level instead of rewriting anything.
     if swap.bump_rename.is_some() {
-        return commit_level_bump(
-            compaction,
-            &swap.removed,
-            swap.added,
-            lease,
-            table_spec_version,
-            migration_backfill,
-        )
-        .await;
+        return commit_level_bump(leased, &swap.removed, swap.added).await;
     }
     if swap.added.is_empty() {
         tracing::warn!(
@@ -287,27 +283,16 @@ async fn run(
         upload_ms = upload_started.elapsed().as_millis() as u64,
         "object compaction rewrite finished"
     );
-    commit_replacement(
-        compaction,
-        &swap.removed,
-        outputs,
-        published,
-        lease,
-        table_spec_version,
-        migration_backfill,
-    )
-    .await
+    commit_replacement(leased, &swap.removed, outputs, published).await
 }
 
 /// Promote a single input to the next level without rewriting its object.
 async fn commit_level_bump(
-    compaction: &ObjectCompaction<'_>,
+    leased: &LeasedCompaction<'_, '_>,
     removed: &[String],
     added: Vec<LocalSegment>,
-    lease: &MaintenanceLease,
-    table_spec_version: u64,
-    migration_backfill: bool,
 ) -> Result<CompactionOutcome, StatsError> {
+    let compaction = leased.resources;
     let records: HashMap<_, _> = compaction
         .catalog
         .object_segments(compaction.table)?
@@ -332,32 +317,21 @@ async fn commit_level_bump(
         });
         published.push(segment);
     }
-    commit_replacement(
-        compaction,
-        removed,
-        outputs,
-        published,
-        lease,
-        table_spec_version,
-        migration_backfill,
-    )
-    .await
+    commit_replacement(leased, removed, outputs, published).await
 }
 
 /// Commit one leased replacement and swap the local query view.
 async fn commit_replacement(
-    compaction: &ObjectCompaction<'_>,
+    leased: &LeasedCompaction<'_, '_>,
     removed: &[String],
     outputs: Vec<SegmentDescriptor>,
     published: Vec<LocalSegment>,
-    lease: &MaintenanceLease,
-    table_spec_version: u64,
-    migration_backfill: bool,
 ) -> Result<CompactionOutcome, StatsError> {
+    let compaction = leased.resources;
     let removed_paths = removed.to_vec();
     let committed = match compaction
         .controller
-        .commit_maintenance(lease, || {
+        .commit_maintenance(&leased.lease, || {
             let live: HashSet<String> = compaction
                 .catalog
                 .object_segments(compaction.table)?
@@ -373,8 +347,8 @@ async fn commit_replacement(
                 compaction.table,
                 &removed_paths,
                 &outputs,
-                table_spec_version,
-                migration_backfill,
+                leased.table_spec_version,
+                leased.migration_backfill,
             )?;
             Ok((revision, ()))
         })

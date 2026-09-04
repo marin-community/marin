@@ -59,8 +59,14 @@ pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), StatsError> 
     if let Err(error) = published {
         // A failed write (e.g. a full disk) must not leave the staging file
         // behind: staging files are exempt from cache eviction.
-        let _ = std::fs::remove_file(&staging);
-        return Err(error);
+        return match std::fs::remove_file(&staging) {
+            Ok(()) => Err(error),
+            Err(cleanup) if cleanup.kind() == std::io::ErrorKind::NotFound => Err(error),
+            Err(cleanup) => Err(StatsError::Internal(format!(
+                "{error}; failed to remove local object staging {}: {cleanup}",
+                staging.display()
+            ))),
+        };
     }
     std::fs::File::open(parent)
         .and_then(|directory| directory.sync_all())

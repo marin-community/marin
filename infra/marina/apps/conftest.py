@@ -1,14 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Journeys under apps/*/journeys use the kernel and browser fixtures; unit tests under
-# apps/*/tests share the throwaway database.
-pytest_plugins = ["marina.journey_plugin"]
+# Unit tests under apps/*/tests share the throwaway database.
+from collections.abc import Iterator
 
-from collections.abc import Iterator  # noqa: E402
-
-import pytest  # noqa: E402
-from marina.testing import test_database  # noqa: E402
+import pytest
+from marina.testing import test_database
 
 
 @pytest.fixture(scope="session")

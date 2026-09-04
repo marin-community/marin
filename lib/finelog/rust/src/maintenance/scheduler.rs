@@ -25,7 +25,7 @@ use crate::maintenance::{
     MIN_POLL_INTERVAL,
 };
 use crate::store::store::ServeMode;
-use crate::store::table::{TableManager, TableRuntime, TableWork};
+use crate::store::table::{TableManager, TableRuntime, TableWork, WorkOutcome};
 
 /// Report a maintenance cycle that sat in the slot queue at least this long.
 const SLOW_CYCLE_WAIT: Duration = Duration::from_secs(5);
@@ -39,7 +39,7 @@ struct TableCadence {
     /// Set from the previous cycle's outcome. A table rebuilding its physical
     /// layout is polled at [`LAYOUT_MIGRATION_RETRY_INTERVAL`] instead of its
     /// ordinary compaction check interval.
-    migration_pending: bool,
+    prompt_maintenance: bool,
     /// Cleared at the end of each round; an entry that stays false belongs to a
     /// table that has left the registry.
     live: bool,
@@ -55,8 +55,32 @@ impl TableCadence {
             last_maintenance: now,
             flush_running: false,
             maintenance_running: false,
-            migration_pending: false,
+            prompt_maintenance: false,
             live: true,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ScheduledWork {
+    Flush,
+    Maintenance(MaintenanceQueue),
+}
+
+#[derive(Clone, Copy)]
+enum MaintenanceQueue {
+    Shared,
+    Migration,
+}
+
+impl ScheduledWork {
+    fn clear_running(self, entry: &mut TableCadence, outcome: WorkOutcome) {
+        match self {
+            Self::Flush => entry.flush_running = false,
+            Self::Maintenance(_) => {
+                entry.maintenance_running = false;
+                entry.prompt_maintenance = outcome.has_more_work();
+            }
         }
     }
 }
@@ -109,7 +133,13 @@ impl MaintenanceScheduler {
         self.stop.notify_waiters();
         let handle = self.task.lock().unwrap().take();
         if let Some(handle) = handle {
-            let _ = handle.await;
+            if let Err(error) = handle.await {
+                if error.is_cancelled() {
+                    tracing::debug!(%error, "maintenance scheduler task was cancelled");
+                } else {
+                    tracing::error!(%error, "maintenance scheduler task failed");
+                }
+            }
         }
     }
 
@@ -187,26 +217,8 @@ impl MaintenanceScheduler {
         // Clear before the flush runs so an append that lands during it re-arms
         // the demand rather than being swallowed by this cycle.
         runtime.clear_flush_demand();
-        let table = runtime.name().to_string();
-        let limits = Arc::clone(&self.limits);
-        let wake = Arc::clone(&self.wake);
-        let cadence = Arc::clone(&self.cadence);
-        let tables = Arc::clone(&self.tables);
-        let dispatched = runtime.clone().spawn_tracked({
-            let runtime = Arc::clone(runtime);
-            async move {
-                let _permit = limits.flushes().acquire().await;
-                if let Err(error) = tables.run_work(&runtime, TableWork::Flush).await {
-                    tracing::warn!(namespace = %runtime.name(), %error, "scheduled flush failed");
-                }
-                if let Some(entry) = cadence.lock().unwrap().get_mut(&table) {
-                    entry.flush_running = false;
-                }
-                wake.notify_one();
-            }
-        });
-        if !dispatched {
-            entry.flush_running = false;
+        if !self.dispatch(runtime, ScheduledWork::Flush) {
+            ScheduledWork::Flush.clear_running(entry, WorkOutcome::Complete);
         }
         MIN_FLUSH_INTERVAL
     }
@@ -222,7 +234,7 @@ impl MaintenanceScheduler {
         if self.mode == ServeMode::Shadow || entry.maintenance_running {
             return MAX_POLL_INTERVAL;
         }
-        let interval = if entry.migration_pending {
+        let interval = if entry.prompt_maintenance {
             LAYOUT_MIGRATION_RETRY_INTERVAL
         } else {
             runtime.maintenance_interval()
@@ -234,60 +246,84 @@ impl MaintenanceScheduler {
         }
         entry.last_maintenance = now;
         entry.maintenance_running = true;
+        let queue = if entry.prompt_maintenance {
+            MaintenanceQueue::Migration
+        } else {
+            MaintenanceQueue::Shared
+        };
+        let work = ScheduledWork::Maintenance(queue);
+        if !self.dispatch(runtime, work) {
+            work.clear_running(entry, WorkOutcome::Complete);
+        }
+        interval
+    }
+
+    /// Spawn one tracked unit and settle its cadence state on every outcome.
+    fn dispatch(&self, runtime: &Arc<TableRuntime>, work: ScheduledWork) -> bool {
         let table = runtime.name().to_string();
-        let migration_owned = entry.migration_pending;
         let limits = Arc::clone(&self.limits);
         let wake = Arc::clone(&self.wake);
         let cadence = Arc::clone(&self.cadence);
         let tables = Arc::clone(&self.tables);
-        let dispatched = runtime.clone().spawn_tracked({
+        runtime.clone().spawn_tracked({
             let runtime = Arc::clone(runtime);
             async move {
-                let queued = Instant::now();
-                // A migrating table cycles in its own slot (see
-                // `MaintenanceLimits::spec_migration`); everything else shares
-                // the maintenance slots.
-                let mut _migration_slot = None;
-                let mut _cycle_slot = None;
-                if migration_owned {
-                    _migration_slot = Some(limits.spec_migration().lock().await);
-                } else {
-                    _cycle_slot = Some(limits.maintenance_cycles().acquire().await);
-                }
-                let waited = queued.elapsed();
-                if waited >= SLOW_CYCLE_WAIT {
-                    // A long wait means another table's cycle is hogging the
-                    // process's few maintenance slots (e.g. a legacy backlog
-                    // drain); it shows up here rather than as a mystery stall.
-                    tracing::info!(
-                        namespace = %runtime.name(),
-                        waited_ms = waited.as_millis() as u64,
-                        "maintenance cycle waited for a slot"
-                    );
-                }
-                let cycle = TableWork::Cycle {
-                    force_compact_l0: false,
-                };
-                let migration_pending = match tables.run_work(&runtime, cycle).await {
-                    Ok(outcome) => outcome.pending,
-                    Err(error) => {
-                        // Fall back to the ordinary interval after an error. A
-                        // bad input must not turn this into a hot loop.
-                        tracing::warn!(namespace = %runtime.name(), %error, "scheduled maintenance failed");
-                        false
+                let outcome = match work {
+                    ScheduledWork::Flush => {
+                        let _permit = limits.flushes().acquire().await;
+                        if let Err(error) = tables.run_work(&runtime, TableWork::Flush).await {
+                            tracing::warn!(namespace = %runtime.name(), %error, "scheduled flush failed");
+                        }
+                        WorkOutcome::Complete
+                    }
+                    ScheduledWork::Maintenance(queue) => {
+                        run_maintenance_cycle(&tables, &limits, &runtime, queue).await
                     }
                 };
                 if let Some(entry) = cadence.lock().unwrap().get_mut(&table) {
-                    entry.maintenance_running = false;
-                    entry.migration_pending = migration_pending;
+                    work.clear_running(entry, outcome);
                 }
                 wake.notify_one();
             }
-        });
-        if !dispatched {
-            entry.maintenance_running = false;
+        })
+    }
+}
+
+async fn run_maintenance_cycle(
+    tables: &TableManager,
+    limits: &MaintenanceLimits,
+    runtime: &Arc<TableRuntime>,
+    queue: MaintenanceQueue,
+) -> WorkOutcome {
+    let queued = Instant::now();
+    let mut _migration_slot = None;
+    let mut _cycle_slot = None;
+    match queue {
+        MaintenanceQueue::Migration => {
+            _migration_slot = Some(limits.spec_migration().lock().await);
         }
-        interval
+        MaintenanceQueue::Shared => {
+            _cycle_slot = Some(limits.maintenance_cycles().acquire().await);
+        }
+    }
+    let waited = queued.elapsed();
+    if waited >= SLOW_CYCLE_WAIT {
+        tracing::info!(
+            namespace = %runtime.name(),
+            waited_ms = waited.as_millis() as u64,
+            "maintenance cycle waited for a slot"
+        );
+    }
+    let cycle = TableWork::Cycle {
+        force_compact_l0: false,
+    };
+    match tables.run_work(runtime, cycle).await {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            // A bad input must not turn this into a hot loop.
+            tracing::warn!(namespace = %runtime.name(), %error, "scheduled maintenance failed");
+            WorkOutcome::Complete
+        }
     }
 }
 
@@ -370,29 +406,34 @@ mod tests {
         let manager = manager_with_one_table(dir.clone(), ServeMode::Live);
         let scheduler = MaintenanceScheduler::new(Arc::clone(&manager));
         let table = manager.require(TABLE).unwrap();
+        let now = Instant::now();
+        let mut cadence = TableCadence::new(now);
 
         table.request_flush(false);
-        scheduler.poll_round();
+        scheduler.schedule_flush(&table, &mut cadence, now);
         assert!(
             !table.flush_demand().requested,
             "a table's first nudge flushes without waiting"
         );
-        // Let the dispatched flush finish, still well inside the window.
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        // Model the dispatch completion. This unit test covers the cadence
+        // decision; task completion is exercised by the scheduler shutdown
+        // tests.
+        cadence.flush_running = false;
 
         table.request_flush(false);
-        scheduler.poll_round();
+        scheduler.schedule_flush(&table, &mut cadence, now);
         assert!(
             table.flush_demand().requested,
             "a nudge inside the coalescing window is deferred, not dropped"
         );
 
         table.request_flush(true);
-        scheduler.poll_round();
+        scheduler.schedule_flush(&table, &mut cadence, now);
         assert!(
             !table.flush_demand().requested,
             "a full buffer flushes without waiting out the window"
         );
+        table.stop_and_join(Duration::from_secs(1)).await;
         std::fs::remove_dir_all(&dir).ok();
     }
 }

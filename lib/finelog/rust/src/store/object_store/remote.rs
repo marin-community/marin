@@ -71,28 +71,6 @@ impl RemoteObjectStore {
             .map(|base| (base.to_string(), Arc::clone(self.provider.backend())))
     }
 
-    /// The URL a registered scan reads `id` from.
-    pub(super) fn scan_url(&self, id: &ObjectId) -> String {
-        let key: Vec<&str> = self
-            .prefix_parts()
-            .chain(id.as_str().split('/').filter(|part| !part.is_empty()))
-            .collect();
-        match self.provider.base_url() {
-            Some(base) => format!("{base}/{}", key.join("/")),
-            None => {
-                let mut path = self
-                    .provider
-                    .local_root()
-                    .expect("a provider without a base URL has a local root")
-                    .to_path_buf();
-                for part in key {
-                    path.push(part);
-                }
-                path.to_string_lossy().into_owned()
-            }
-        }
-    }
-
     /// Split the configured prefix on `/` into individual path components.
     /// `OsPath::from_iter` escapes `/` *within* a single part, so a multi-segment
     /// prefix like `logs/sub` must be pushed component-by-component.
@@ -136,13 +114,13 @@ impl RemoteObjectStore {
 impl ObjectStore for RemoteObjectStore {
     async fn read(&self, id: &ObjectId) -> Result<Option<StoredObject>, StatsError> {
         self.provider
-            .get_path(self.canonical(id.as_str()), "object")
+            .get_path(self.provider.object_path(id), "object")
             .await
     }
 
     /// Create an immutable object, accepting an identical retry.
     async fn write(&self, id: &ObjectId, bytes: bytes::Bytes) -> Result<ObjectVersion, StatsError> {
-        let path = self.canonical(id.as_str());
+        let path = self.provider.object_path(id);
         let content_sha256 = Sha256::digest(&bytes).into();
         let byte_size = bytes.len() as u64;
         let result = self
@@ -194,7 +172,7 @@ impl ObjectStore for RemoteObjectStore {
             .map(|root| local_object_path(root, id));
         self.provider
             .compare_and_swap_path(
-                self.canonical(id.as_str()),
+                self.provider.object_path(id),
                 local_path,
                 expected,
                 bytes,
@@ -204,7 +182,7 @@ impl ObjectStore for RemoteObjectStore {
     }
 
     fn remote_scan_url(&self, id: &ObjectId) -> Option<String> {
-        Some(self.scan_url(id))
+        Some(self.provider.scan_url(id))
     }
 
     async fn list(&self, prefix: &ObjectPrefix) -> Result<Vec<ObjectMetadata>, StatsError> {
@@ -231,7 +209,7 @@ impl ObjectStore for RemoteObjectStore {
     }
 
     async fn delete(&self, id: &ObjectId) -> Result<(), StatsError> {
-        let path = self.canonical(id.as_str());
+        let path = self.provider.object_path(id);
         match self.provider.backend().delete(&path).await {
             Ok(()) | Err(object_store::Error::NotFound { .. }) => Ok(()),
             Err(error) => Err(StatsError::Internal(format!(

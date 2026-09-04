@@ -12,7 +12,7 @@ use object_store::{
 use sha2::{Digest, Sha256};
 
 use crate::errors::StatsError;
-use crate::store::object_store::{ObjectVersion, StoredObject};
+use crate::store::object_store::{ObjectId, ObjectVersion, StoredObject};
 
 use super::local_file::compare_and_swap as local_compare_and_swap;
 
@@ -94,6 +94,28 @@ impl Provider {
 
     pub(super) fn local_root(&self) -> Option<&Path> {
         self.local_root.as_deref()
+    }
+
+    /// Provider-relative physical path for one validated logical object ID.
+    pub(super) fn object_path(&self, id: &ObjectId) -> OsPath {
+        OsPath::from_iter(
+            self.prefix_parts()
+                .chain(id.as_str().split('/').filter(|part| !part.is_empty())),
+        )
+    }
+
+    /// URL or filesystem path used to scan the same physical object.
+    pub(super) fn scan_url(&self, id: &ObjectId) -> String {
+        let path = self.object_path(id);
+        match self.base_url() {
+            Some(base) => format!("{base}/{path}"),
+            None => self
+                .local_root()
+                .expect("a provider without a base URL has a local root")
+                .join(path.as_ref())
+                .to_string_lossy()
+                .into_owned(),
+        }
     }
 
     /// Read the object at `path`, or `None` when it does not exist.
@@ -192,8 +214,8 @@ impl Provider {
     }
 }
 
-/// Whether `value` names an object store rather than a local directory.
-pub fn is_object_store(value: &str) -> bool {
+/// Whether `value` names a remote bucket URL rather than a local directory.
+pub fn is_remote_object_store(value: &str) -> bool {
     let value = value.trim();
     value.starts_with(GCS_SCHEME) || value.starts_with(S3_SCHEME)
 }

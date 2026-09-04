@@ -23,6 +23,7 @@ def _write_catalog(
     active_version: int = 1,
     l0_mode: str = "L0_MODE_OBJECT_STORE",
     object_id_override: str | None = None,
+    include_logical_schema: bool = True,
 ) -> Path:
     namespace = "iris.worker"
     table_root = root / "_finelog" / "tables" / namespace
@@ -41,6 +42,17 @@ def _write_catalog(
         ),
         object_path,
     )
+    retained_spec: dict[str, object] = {
+        "version": "1",
+        "operatingPolicy": {"l0Mode": l0_mode},
+    }
+    if include_logical_schema:
+        retained_spec["logicalSchema"] = {
+            "columns": [
+                {"name": "worker_id", "type": "COLUMN_TYPE_STRING"},
+                {"name": "mem_bytes", "type": "COLUMN_TYPE_INT64"},
+            ]
+        }
     catalog = {
         "formatVersion": "1",
         "namespace": namespace,
@@ -49,18 +61,7 @@ def _write_catalog(
         "desiredTableSpecVersion": "0",
         "maxQueryTimeMs": "600000",
         "directQueryHighWater": "2",
-        "retainedTableSpecs": [
-            {
-                "version": "1",
-                "logicalSchema": {
-                    "columns": [
-                        {"name": "worker_id", "type": "COLUMN_TYPE_STRING"},
-                        {"name": "mem_bytes", "type": "COLUMN_TYPE_INT64"},
-                    ]
-                },
-                "operatingPolicy": {"l0Mode": l0_mode},
-            }
-        ],
+        "retainedTableSpecs": [retained_spec],
         "versionSegments": [
             {
                 "tableSpecVersion": str(active_version),
@@ -213,3 +214,10 @@ def test_object_query_rejects_catalog_without_an_active_object_version(
             'SELECT * FROM "iris.worker"',
             namespaces=["iris.worker"],
         )
+
+
+def test_object_query_rejects_active_spec_without_logical_schema(tmp_path: Path) -> None:
+    _write_catalog(tmp_path, include_logical_schema=False)
+
+    with pytest.raises(StatsError, match="has no logical schema"):
+        ObjectQueryClient(str(tmp_path)).pin_catalog("iris.worker")

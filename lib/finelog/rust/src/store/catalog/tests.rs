@@ -162,7 +162,7 @@ fn upsert_schema_round_trips_through_json() {
 }
 
 #[test]
-fn upsert_preserves_registered_at_and_bumps_last_modified() {
+fn upsert_preserves_registered_at_and_does_not_regress_last_modified() {
     let cat = Catalog::open(None).unwrap();
     cat.upsert("a", &worker_stored()).unwrap();
     let inner = cat.inner.lock().unwrap();
@@ -175,7 +175,6 @@ fn upsert_preserves_registered_at_and_bumps_last_modified() {
         )
         .unwrap();
     drop(inner);
-    std::thread::sleep(std::time::Duration::from_millis(2));
     cat.upsert("a", &worker_stored()).unwrap();
     let inner = cat.inner.lock().unwrap();
     let (reg2, mod2): (i64, i64) = inner
@@ -187,7 +186,27 @@ fn upsert_preserves_registered_at_and_bumps_last_modified() {
         )
         .unwrap();
     assert_eq!(reg1, reg2, "registered_at preserved");
-    assert!(mod2 >= mod1, "last_modified bumped");
+    assert!(mod2 >= mod1, "last_modified did not regress");
+}
+
+#[test]
+fn upsert_reports_invalid_persisted_registration_timestamp() {
+    let cat = Catalog::open(None).unwrap();
+    cat.upsert("a", &worker_stored()).unwrap();
+    cat.inner
+        .lock()
+        .unwrap()
+        .conn
+        .execute(
+            "UPDATE namespaces SET registered_at_ms = 'invalid' WHERE namespace = 'a'",
+            [],
+        )
+        .unwrap();
+
+    assert!(matches!(
+        cat.upsert("a", &worker_stored()),
+        Err(StatsError::Internal(_))
+    ));
 }
 
 #[test]

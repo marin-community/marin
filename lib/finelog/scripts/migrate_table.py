@@ -33,6 +33,7 @@ digest mismatch. ``abort`` calls AbortTableMigration.
 
 import json
 import time
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -59,6 +60,29 @@ NESTED_TYPES = {
     stats_pb2.COLUMN_TYPE_INT64_LIST,
     stats_pb2.COLUMN_TYPE_MAP,
 }
+
+
+@dataclass(frozen=True)
+class MigrationBaseline:
+    captured_at: str
+    frozen_max_seq: int
+    min_seq_at_baseline: int
+    window_start: int
+    bytes_window_start: int
+    row_count_reported: int
+    full_count_at_frozen: int
+    column_digests: dict[str, dict[str, object]]
+    latency_probes: dict[str, str]
+    latency_ms: dict[str, list[float]]
+    active_version_at_baseline: int
+
+    @classmethod
+    def read(cls, path: Path) -> "MigrationBaseline":
+        return cls(**json.loads(path.read_text()))
+
+    def write(self, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(asdict(self), indent=2, sort_keys=True))
 
 
 def _state_path(name: str, namespace: str) -> Path:
@@ -239,22 +263,21 @@ def baseline_cmd(name: str, namespace: str, window: int, request_timeout: float)
                 raise
             active_version = 0
 
-    state = {
-        "captured_at": datetime.now(UTC).isoformat(),
-        "frozen_max_seq": frozen,
-        "min_seq_at_baseline": info.min_seq,
-        "window_start": window_start,
-        "bytes_window_start": bytes_window_start,
-        "row_count_reported": info.row_count,
-        "full_count_at_frozen": full_count,
-        "column_digests": digests,
-        "latency_probes": probes,
-        "latency_ms": latencies,
-        "active_version_at_baseline": active_version,
-    }
+    state = MigrationBaseline(
+        captured_at=datetime.now(UTC).isoformat(),
+        frozen_max_seq=frozen,
+        min_seq_at_baseline=info.min_seq,
+        window_start=window_start,
+        bytes_window_start=bytes_window_start,
+        row_count_reported=info.row_count,
+        full_count_at_frozen=full_count,
+        column_digests=digests,
+        latency_probes=probes,
+        latency_ms=latencies,
+        active_version_at_baseline=active_version,
+    )
     path = _state_path(name, namespace)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(state, indent=2, sort_keys=True))
+    state.write(path)
     click.echo(f"baseline written to {path}")
     click.echo(f"full_count_at_frozen={full_count}")
     for label, runs in latencies.items():
@@ -315,10 +338,10 @@ def validate_cmd(name: str, namespace: str, request_timeout: float) -> None:
     path = _state_path(name, namespace)
     if not path.is_file():
         raise click.ClickException(f"no baseline recorded at {path}")
-    state = json.loads(path.read_text())
-    frozen = state["frozen_max_seq"]
-    window_start = state["window_start"]
-    bytes_window_start = state["bytes_window_start"]
+    state = MigrationBaseline.read(path)
+    frozen = state.frozen_max_seq
+    window_start = state.window_start
+    bytes_window_start = state.bytes_window_start
 
     with _open_cli_client(name, DEFAULT_TUNNEL_TIMEOUT, request_timeout) as client:
         _print_status(client, namespace)
@@ -328,16 +351,16 @@ def validate_cmd(name: str, namespace: str, request_timeout: float) -> None:
                 f"WARNING: min_seq advanced past the digest window start ({info.min_seq} > {window_start}); "
                 "window digests are no longer comparable"
             )
-        count_floor = min(info.min_seq, state["min_seq_at_baseline"])
+        count_floor = min(info.min_seq, state.min_seq_at_baseline)
         full_count = _full_count(client, namespace, count_floor, frozen)
         digests = _column_digests(client, namespace, window_start, bytes_window_start, frozen)
-        latencies = _measure_latencies(client, state["latency_probes"])
+        latencies = _measure_latencies(client, state.latency_probes)
 
-    drift = full_count - state["full_count_at_frozen"]
-    click.echo(f"full_count_at_frozen: baseline={state['full_count_at_frozen']} now={full_count} drift={drift}")
+    drift = full_count - state.full_count_at_frozen
+    click.echo(f"full_count_at_frozen: baseline={state.full_count_at_frozen} now={full_count} drift={drift}")
 
     mismatches = []
-    for column, expected in state["column_digests"].items():
+    for column, expected in state.column_digests.items():
         actual = digests.get(column)
         if not _digests_equal(expected, actual):
             mismatches.append(column)
@@ -346,7 +369,7 @@ def validate_cmd(name: str, namespace: str, request_timeout: float) -> None:
         click.echo(f"window digests match on all {len(digests)} columns")
 
     for label, runs in latencies.items():
-        click.echo(f"latency {label}: baseline={state['latency_ms'][label]} now={runs} ms")
+        click.echo(f"latency {label}: baseline={state.latency_ms[label]} now={runs} ms")
 
     if mismatches:
         raise click.ClickException(f"digest mismatch on: {', '.join(mismatches)}")
