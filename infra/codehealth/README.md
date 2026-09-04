@@ -19,8 +19,9 @@ the refinement agent's source of truth.
 
 The weekly refinement workflow stores raw GitHub review data and a bounded copy
 of lint telemetry in the existing `context` PostgreSQL database on the shared
-`marin-metadata` Cloud SQL service. Migration
-`infra/echo/migrations/m0014_codehealth_review_store.py` owns the schema.
+`marin-metadata` Cloud SQL service. `review_store.create_schema` owns the tables
+(`refinement_tools.py init-schema` runs it); the `marin-marina` stack owns the database
+and the Loom account's login.
 
 The store keeps current pull requests, comments, threads, files, commits, and
 diffs, plus immutable versions of edited pull requests and review events. It
