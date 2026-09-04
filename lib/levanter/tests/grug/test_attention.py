@@ -10,7 +10,7 @@ from jax.sharding import AbstractMesh, AxisType, NamedSharding, use_abstract_mes
 from jax.sharding import PartitionSpec as P
 
 import levanter.grug.attention._fa4_thd as fa4_thd
-from levanter.grug.attention._core import _segment_ids_pspec
+from levanter.grug.attention._core import _replicated_sequence_segment_ids_pspec, _segment_ids_pspec
 from levanter.data.text.examples import GrugLmExample
 from levanter.grug.attention import (
     AttentionMask,
@@ -37,10 +37,15 @@ def test_splash_segment_ids_follow_context_parallel_query_sharding():
     assert _segment_ids_pspec(kv_pspec, 2) == P(("replica", "data"), None)
     assert _segment_ids_pspec(q_pspec, 1) == P("context")
 
+    assert _replicated_sequence_segment_ids_pspec(q_pspec, 2) == P(("replica", "data"), None)
+    assert _replicated_sequence_segment_ids_pspec(q_pspec, 1) == P()
+
 
 def test_splash_segment_ids_reject_unsupported_rank():
     with pytest.raises(ValueError, match="rank 3"):
         _segment_ids_pspec(P(None, None, "context", None), 3)
+    with pytest.raises(ValueError, match="rank 3"):
+        _replicated_sequence_segment_ids_pspec(P(None, None, "context", None), 3)
 
 
 def test_reference_attention_matches_manual_segment_mask():
