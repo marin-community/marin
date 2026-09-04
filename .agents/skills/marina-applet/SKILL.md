@@ -27,6 +27,24 @@ so both `/a/<uuid>/` and `/a/<uuid>/v/<revision>/` work.
 The source directory may omit `dist/index.html` only when `applet.toml` has a
 `build_command` that creates it before packaging.
 
+Use plain HTML and JavaScript for a small single-view applet. Use Vue with Vite
+when the applet needs multiple views, reusable components, or substantial
+client state. For Vue applets:
+
+- Set Vite's `base` to `"./"` so built asset URLs remain relative.
+- Use `createWebHashHistory()` when the app has client-side routes. This avoids
+  hard-coding an applet UUID or revision into the router base.
+- Use relative backend calls such as `fetch("api/results")` and
+  `fetch("query", ...)`; do not start applet-owned URLs with `/`.
+- Bundle dependencies into `dist/`. Marina's content security policy does not
+  allow scripts loaded from a third-party CDN.
+
+Keep the source `index.html`, `package.json`, the Vite configuration, and `src/`
+beside `applet.toml`. They are local build inputs and are not uploaded. A
+typical manifest uses `build_command = "npm ci && npm run build"`. Marina runs
+that command only when `dist/index.html` is absent; run the build explicitly
+before publishing when a previous `dist/` exists.
+
 Use the applet's implicit Postgres schema for mutable or queryable data. Do not
 create or attach a separate database. Load simple scalar tables with the CLI,
 or add `server/` when the applet needs parameterized business logic, custom
