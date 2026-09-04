@@ -1,0 +1,133 @@
+{
+  "type": "timeseries",
+  "title": "In-flight, running, and waiting requests",
+  "description": "Fleet request counts: in flight = running + waiting. Running means admitted to vLLM scheduling, not all executing in one GPU batch. One iteration can contain prefill chunks and decode tokens from many requests. A draining curve does not distinguish an intentional rollout barrier from missing upstream work; use RL phase timing for context.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "unit": "none",
+      "min": 0,
+      "noValue": "No samples",
+      "displayName": "${__field.labels.series}",
+      "custom": {
+        "drawStyle": "line",
+        "showPoints": "auto",
+        "spanNulls": false
+      }
+    },
+    "overrides": [
+      {
+        "matcher": {
+          "id": "byName",
+          "options": "num_requests_in_flight"
+        },
+        "properties": [
+          {
+            "id": "displayName",
+            "value": "In flight"
+          }
+        ]
+      },
+      {
+        "matcher": {
+          "id": "byName",
+          "options": "num_requests_running"
+        },
+        "properties": [
+          {
+            "id": "displayName",
+            "value": "Running"
+          }
+        ]
+      },
+      {
+        "matcher": {
+          "id": "byName",
+          "options": "num_requests_waiting"
+        },
+        "properties": [
+          {
+            "id": "displayName",
+            "value": "Waiting"
+          }
+        ]
+      }
+    ]
+  },
+  "options": {
+    "legend": {
+      "displayMode": "list",
+      "placement": "bottom",
+      "calcs": []
+    },
+    "tooltip": {
+      "mode": "multi",
+      "sort": "desc"
+    }
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "type": "json",
+      "source": "url",
+      "format": "timeseries",
+      "parser": "backend",
+      "url": "/v1/vllm/overview",
+      "url_options": {
+        "method": "GET",
+        "params": [
+          {
+            "key": "identity_kind",
+            "value": "${identity_kind}"
+          },
+          {
+            "key": "identity",
+            "value": "${identity}"
+          },
+          {
+            "key": "from",
+            "value": "${__from}"
+          },
+          {
+            "key": "to",
+            "value": "${__to}"
+          },
+          {
+            "key": "bucket_ms",
+            "value": "${__interval_ms}"
+          },
+          {
+            "key": "view",
+            "value": "saturation"
+          }
+        ]
+      },
+      "columns": [
+        {
+          "selector": "t",
+          "text": "time",
+          "type": "timestamp_epoch"
+        },
+        {
+          "selector": "series",
+          "text": "series",
+          "type": "string"
+        },
+        {
+          "selector": "value",
+          "text": "value",
+          "type": "number"
+        },
+        {
+          "selector": "metric",
+          "text": "metric",
+          "type": "string"
+        }
+      ],
+      "filterExpression": "metric == 'num_requests_running' || metric == 'num_requests_waiting' || metric == 'num_requests_in_flight'"
+    }
+  ]
+}

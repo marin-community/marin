@@ -1,0 +1,79 @@
+{
+  "type": "table",
+  "title": "Telemetry publication health",
+  "description": "Reports known collection or publication loss in the selected window. Fresh zero-valued evidence is healthy, any positive loss is incomplete, and absent or stale evidence is unknown. Embedded evidence is selected only from service=marinskyrl rows with metric_source=vllm; Ray health never stands in for vLLM health. The best-effort health signal cannot prove its own delivery. Unknown is not healthy. Older runs may have no publication-health records.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {},
+    "overrides": []
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "type": "json",
+      "source": "url",
+      "format": "table",
+      "parser": "backend",
+      "url": "/v1/vllm/overview",
+      "url_options": {
+        "method": "GET",
+        "params": [
+          {
+            "key": "identity_kind",
+            "value": "${identity_kind}"
+          },
+          {
+            "key": "identity",
+            "value": "${identity}"
+          },
+          {
+            "key": "from",
+            "value": "${__from}"
+          },
+          {
+            "key": "to",
+            "value": "${__to}"
+          },
+          {
+            "key": "bucket_ms",
+            "value": "${__interval_ms}"
+          },
+          {
+            "key": "view",
+            "value": "telemetry_health"
+          }
+        ]
+      },
+      "columns": [
+        {
+          "selector": "status",
+          "text": "status",
+          "type": "string"
+        },
+        {
+          "selector": "metric",
+          "text": "signal",
+          "type": "string"
+        },
+        {
+          "selector": "series",
+          "text": "stage / reason",
+          "type": "string"
+        },
+        {
+          "selector": "value",
+          "text": "window value",
+          "type": "number"
+        },
+        {
+          "selector": "unit",
+          "text": "unit",
+          "type": "string"
+        }
+      ]
+    }
+  ]
+}

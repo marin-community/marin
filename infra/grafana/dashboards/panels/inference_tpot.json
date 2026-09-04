@@ -1,0 +1,101 @@
+{
+  "type": "timeseries",
+  "title": "Time per output token (mean)",
+  "description": "Mean request TPOT from histogram sum/count deltas. Lower is faster per request; this is not aggregate tokens/s or GPU utilization. Observations arrive when requests finish, so unfinished long requests are absent. A gap can mean no observations or missing telemetry. Window tails and observation counts are in diagnostics.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "unit": "s",
+      "min": 0,
+      "noValue": "No samples",
+      "displayName": "${__field.labels.series}",
+      "custom": {
+        "drawStyle": "line",
+        "showPoints": "auto",
+        "spanNulls": false
+      }
+    },
+    "overrides": []
+  },
+  "options": {
+    "legend": {
+      "displayMode": "list",
+      "placement": "bottom",
+      "calcs": []
+    },
+    "tooltip": {
+      "mode": "multi",
+      "sort": "desc"
+    }
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "type": "json",
+      "source": "url",
+      "format": "timeseries",
+      "parser": "backend",
+      "url": "/v1/vllm/overview",
+      "url_options": {
+        "method": "GET",
+        "params": [
+          {
+            "key": "identity_kind",
+            "value": "${identity_kind}"
+          },
+          {
+            "key": "identity",
+            "value": "${identity}"
+          },
+          {
+            "key": "from",
+            "value": "${__from}"
+          },
+          {
+            "key": "to",
+            "value": "${__to}"
+          },
+          {
+            "key": "bucket_ms",
+            "value": "${__interval_ms}"
+          },
+          {
+            "key": "view",
+            "value": "latency"
+          }
+        ]
+      },
+      "columns": [
+        {
+          "selector": "t",
+          "text": "time",
+          "type": "timestamp_epoch"
+        },
+        {
+          "selector": "series",
+          "text": "series",
+          "type": "string"
+        },
+        {
+          "selector": "value",
+          "text": "value",
+          "type": "number"
+        },
+        {
+          "selector": "metric",
+          "text": "metric",
+          "type": "string"
+        },
+        {
+          "selector": "stat",
+          "text": "stat",
+          "type": "string"
+        }
+      ],
+      "filterExpression": "metric == 'tpot' && stat == 'mean_over_time'"
+    }
+  ]
+}

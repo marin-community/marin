@@ -1,7 +1,7 @@
 {
   "uid": "marin-inference",
-  "title": "Inference telemetry",
-  "description": "Bounded, reset-aware views over standalone and MarinSkyRL-embedded vLLM telemetry on the marin hub. Pick an identity kind and then a serve from the dropdown; the bridge enforces the identity, seven-day range, bucket, and result caps server-side. Summary panels are window aggregates; token rate, request pressure, iteration occupancy, KV-cache use, and TPOT have a time axis.",
+  "title": "Inference diagnostics",
+  "description": "Why is inference slow? Request scheduling, token throughput, engine differences, latency stages and tails, workload length, and telemetry trust. The original inference UID and panel IDs are retained.",
   "tags": [
     "marin",
     "inference",
@@ -107,23 +107,341 @@
   },
   "panels": [
     {
-      "id": 1,
-      "type": "table",
-      "title": "Worst replica freshness",
-      "description": "Reports the stalest producer/resource identity, so a stopped replica cannot be hidden by a healthy peer. Explicitly distinguishes no matching records, a range ending after the last sample, an in-range scrape/export gap, and continuous samples.",
+      "type": "text",
+      "title": "",
+      "options": {
+        "mode": "markdown",
+        "content": "Requests are not GPU batch size. Compare **running/waiting**, **iteration tokens**, and **time per output token** over the same rollout phase. These metrics do not split in-flight requests into prefill vs decode, expose ready upstream work, or measure CUDA-graph/kernel efficiency. Use **RL runs** for phase timing and **Fleet accelerators** for GPU context."
+      },
+      "id": 12,
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 3
+      }
+    },
+    {
+      "panelRef": "inference_requests",
+      "id": 3,
+      "gridPos": {
+        "x": 0,
+        "y": 3,
+        "w": 12,
+        "h": 7
+      }
+    },
+    {
+      "panelRef": "inference_tokens",
+      "id": 2,
+      "gridPos": {
+        "x": 12,
+        "y": 3,
+        "w": 12,
+        "h": 7
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Tokens per engine iteration (mean)",
+      "description": "Histogram-weighted mean tokens scheduled per engine iteration, mixing prefill chunks and decode tokens. This is neither request batch size nor GPU utilization. It does not separate prefill and decode occupancy.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
       },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "noValue": "No samples",
+          "displayName": "${__field.labels.series}",
+          "custom": {
+            "drawStyle": "line",
+            "showPoints": "auto",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/vllm/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "identity_kind",
+                "value": "${identity_kind}"
+              },
+              {
+                "key": "identity",
+                "value": "${identity}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "saturation"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            },
+            {
+              "selector": "metric",
+              "text": "metric",
+              "type": "string"
+            }
+          ],
+          "filterExpression": "metric == 'iteration_tokens'"
+        }
+      ],
+      "id": 13,
       "gridPos": {
-        "h": 5,
-        "w": 8,
         "x": 0,
-        "y": 0
+        "y": 10,
+        "w": 8,
+        "h": 7
+      }
+    },
+    {
+      "panelRef": "inference_tpot",
+      "id": 11,
+      "gridPos": {
+        "x": 8,
+        "y": 10,
+        "w": 8,
+        "h": 7
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Latency stages (mean)",
+      "description": "Histogram-weighted means. Queue, prefill and decode describe request stages; end-to-end and TTFT overlap with them and must not be summed. Completed-request measurements exclude unfinished requests; missing observations remain gaps.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
       },
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "noValue": "No samples",
+          "displayName": "${__field.labels.series}",
+          "custom": {
+            "drawStyle": "line",
+            "showPoints": "auto",
+            "spanNulls": false
+          }
+        },
         "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/vllm/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "identity_kind",
+                "value": "${identity_kind}"
+              },
+              {
+                "key": "identity",
+                "value": "${identity}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "latency"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            },
+            {
+              "selector": "metric",
+              "text": "metric",
+              "type": "string"
+            },
+            {
+              "selector": "stat",
+              "text": "stat",
+              "type": "string"
+            }
+          ],
+          "filterExpression": "stat == 'mean_over_time' && metric != 'tpot' && metric != 'inter_token_latency'"
+        }
+      ],
+      "id": 14,
+      "gridPos": {
+        "x": 16,
+        "y": 10,
+        "w": 8,
+        "h": 7
+      }
+    },
+    {
+      "type": "table",
+      "title": "Engine comparison (observed samples)",
+      "description": "Up to 128 observed identities per signal, keyed by cluster, service, resource and engine. Legacy identities may cover more than one physical DP engine. Running/waiting are sample means; KV is raw peak; tokens/s is the mean over bins with valid deltas, not the whole wall-clock window. Missing cells are unknown, not idle. Narrow to one rollout phase before comparing; check freshness below for unequal coverage.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "No samples",
+          "custom": {
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "running_mean"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Running (mean)"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "waiting_mean"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Waiting (mean)"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "kv_cache_peak"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "KV-cache (peak)"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "generated_tokens_per_second"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Generated tokens/s"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "kv_cache_peak"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true
       },
       "targets": [
         {
@@ -158,105 +476,14 @@
               },
               {
                 "key": "view",
-                "value": "freshness"
+                "value": "engine_summary"
               }
             ]
           },
           "columns": [
             {
               "selector": "series",
-              "text": "producer/resource",
-              "type": "string"
-            },
-            {
-              "selector": "status",
-              "text": "status",
-              "type": "string"
-            },
-            {
-              "selector": "t",
-              "text": "last sample",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "value",
-              "text": "age at range end (s)",
-              "type": "number"
-            },
-            {
-              "selector": "gap_seconds",
-              "text": "largest sample gap (s)",
-              "type": "number"
-            },
-            {
-              "selector": "samples",
-              "text": "replica samples",
-              "type": "number"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "id": 10,
-      "type": "table",
-      "title": "Telemetry publication health",
-      "description": "Reports known collection or publication loss in the selected window. Fresh zero-valued evidence is healthy, any positive loss is incomplete, and absent or stale evidence is unknown. Embedded evidence is selected only from service=marinskyrl rows with metric_source=vllm; Ray health never stands in for vLLM health. The best-effort health signal cannot prove its own delivery.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 8,
-        "x": 8,
-        "y": 0
-      },
-      "fieldConfig": {
-        "defaults": {},
-        "overrides": []
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "parser": "backend",
-          "url": "/v1/vllm/overview",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "identity_kind",
-                "value": "${identity_kind}"
-              },
-              {
-                "key": "identity",
-                "value": "${identity}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
-                "key": "view",
-                "value": "telemetry_health"
-              }
-            ]
-          },
-          "columns": [
-            {
-              "selector": "status",
-              "text": "status",
+              "text": "engine",
               "type": "string"
             },
             {
@@ -265,13 +492,112 @@
               "type": "string"
             },
             {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "transformations": [
+        {
+          "id": "groupingToMatrix",
+          "options": {
+            "columnField": "signal",
+            "rowField": "engine",
+            "valueField": "value",
+            "emptyValue": "null"
+          }
+        }
+      ],
+      "id": 15,
+      "gridPos": {
+        "x": 0,
+        "y": 17,
+        "w": 24,
+        "h": 8
+      }
+    },
+    {
+      "panelRef": "inference_kv",
+      "id": 5,
+      "gridPos": {
+        "x": 0,
+        "y": 25,
+        "w": 12,
+        "h": 7
+      }
+    },
+    {
+      "id": 6,
+      "type": "table",
+      "title": "Saturation average and peak",
+      "description": "Averages retain the binned serve-wide request-count and unweighted replica KV-cache semantics. KV-cache peak is the maximum raw replica sample, before adaptive time-bin averaging.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 25,
+        "w": 8,
+        "h": 7
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/v1/vllm/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "identity_kind",
+                "value": "${identity_kind}"
+              },
+              {
+                "key": "identity",
+                "value": "${identity}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "saturation_summary"
+              }
+            ]
+          },
+          "columns": [
+            {
               "selector": "series",
-              "text": "stage / reason",
+              "text": "metric",
+              "type": "string"
+            },
+            {
+              "selector": "stat",
+              "text": "stat",
               "type": "string"
             },
             {
               "selector": "value",
-              "text": "window value",
+              "text": "value",
               "type": "number"
             },
             {
@@ -284,6 +610,233 @@
       ]
     },
     {
+      "panelRef": "inference_preemptions",
+      "id": 4,
+      "gridPos": {
+        "x": 20,
+        "y": 25,
+        "w": 4,
+        "h": 7
+      }
+    },
+    {
+      "type": "table",
+      "title": "Latency distribution in selected window",
+      "description": "Mean and p50/p90/p99 bucket upper bounds, merged from per-producer histogram deltas, never averaged percentiles. Counts are observations for that family, not unique requests across rows. A reset or incomplete stored component invalidates that producer/family sample; an unbounded quantile is null. Completed-request histograms omit unfinished requests. Queue, prefill, decode, TTFT and end-to-end timings overlap: do not add them.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "No samples",
+          "custom": {
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "seconds"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/v1/vllm/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "identity_kind",
+                "value": "${identity_kind}"
+              },
+              {
+                "key": "identity",
+                "value": "${identity}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "latency"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "metric",
+              "text": "latency",
+              "type": "string"
+            },
+            {
+              "selector": "stat",
+              "text": "stat",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "seconds",
+              "type": "number"
+            },
+            {
+              "selector": "samples",
+              "text": "observations",
+              "type": "number"
+            }
+          ],
+          "filterExpression": "stat != 'mean_over_time'"
+        }
+      ],
+      "id": 7,
+      "gridPos": {
+        "x": 0,
+        "y": 32,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "table",
+      "title": "Output length of finished requests",
+      "description": "Mean and p50/p90/p99 bucket upper bounds of generated tokens per finished request, with observation counts. Long unfinished requests are absent. A heavier output-length tail can prolong a synchronous rollout; this is not proof of dispatch starvation. Old runs may lack coherent histograms.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "No samples",
+          "custom": {
+            "filterable": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/v1/vllm/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "identity_kind",
+                "value": "${identity_kind}"
+              },
+              {
+                "key": "identity",
+                "value": "${identity}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "workload"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "stat",
+              "text": "stat",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "tokens/request",
+              "type": "number"
+            },
+            {
+              "selector": "samples",
+              "text": "observations",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "id": 16,
+      "gridPos": {
+        "x": 12,
+        "y": 32,
+        "w": 6,
+        "h": 8
+      }
+    },
+    {
+      "panelRef": "inference_outcomes",
+      "id": 8,
+      "gridPos": {
+        "x": 18,
+        "y": 32,
+        "w": 6,
+        "h": 8
+      }
+    },
+    {
+      "panelRef": "inference_freshness",
+      "id": 1,
+      "gridPos": {
+        "x": 0,
+        "y": 40,
+        "w": 8,
+        "h": 6
+      }
+    },
+    {
+      "panelRef": "inference_health",
+      "id": 10,
+      "gridPos": {
+        "x": 8,
+        "y": 40,
+        "w": 8,
+        "h": 6
+      }
+    },
+    {
       "id": 9,
       "type": "table",
       "title": "Replica freshness detail",
@@ -293,10 +846,10 @@
         "uid": "finelog-marin"
       },
       "gridPos": {
-        "h": 5,
-        "w": 8,
         "x": 16,
-        "y": 0
+        "y": 40,
+        "w": 8,
+        "h": 6
       },
       "fieldConfig": {
         "defaults": {},
@@ -373,728 +926,19 @@
           ]
         }
       ]
-    },
-    {
-      "id": 2,
-      "type": "timeseries",
-      "title": "Prompt and generated token rate",
-      "description": "Per-bucket rates from reset-aware cumulative snapshot deltas, summed only after replica-local deltas are computed.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 5
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "tps",
-          "min": 0,
-          "custom": {
-            "drawStyle": "line",
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "timeseries",
-          "parser": "backend",
-          "url": "/v1/vllm/overview",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "identity_kind",
-                "value": "${identity_kind}"
-              },
-              {
-                "key": "identity",
-                "value": "${identity}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
-                "key": "view",
-                "value": "token_rate"
-              }
-            ]
-          },
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "tokens/s",
-              "type": "number"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "id": 3,
-      "type": "timeseries",
-      "title": "In-flight, running, waiting, and iteration tokens",
-      "description": "Per-bin request gauges, including in-flight requests as running plus waiting, and mean tokens processed per vLLM engine iteration. KV-cache uses a separate unweighted replica view because no capacity weight is stored.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 5
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "min": 0,
-          "custom": {
-            "drawStyle": "line",
-            "showPoints": "never"
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "iteration_tokens"
-            },
-            "properties": [
-              {
-                "id": "custom.axisPlacement",
-                "value": "right"
-              },
-              {
-                "id": "custom.axisLabel",
-                "value": "tokens / iteration"
-              }
-            ]
-          }
-        ]
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "timeseries",
-          "parser": "backend",
-          "url": "/v1/vllm/overview",
-          "filterExpression": "metric != 'kv_cache_usage'",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "identity_kind",
-                "value": "${identity_kind}"
-              },
-              {
-                "key": "identity",
-                "value": "${identity}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
-                "key": "view",
-                "value": "saturation"
-              }
-            ]
-          },
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "metric",
-              "text": "metric",
-              "type": "string"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "id": 4,
-      "type": "barchart",
-      "title": "Window totals",
-      "description": "Prompt/generated tokens and preemptions over the selected range, as magnitudes rather than a three-row table. Native Rigging counter rows are summed directly; imported Prometheus counters use reset-aware deltas.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
-      "gridPos": {
-        "h": 7,
-        "w": 8,
-        "x": 0,
-        "y": 13
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "lineWidth": 1,
-            "fillOpacity": 80,
-            "gradientMode": "none",
-            "axisPlacement": "auto"
-          }
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "parser": "backend",
-          "url": "/v1/vllm/overview",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "identity_kind",
-                "value": "${identity_kind}"
-              },
-              {
-                "key": "identity",
-                "value": "${identity}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
-                "key": "view",
-                "value": "counter_total"
-              }
-            ]
-          },
-          "columns": [
-            {
-              "selector": "series",
-              "text": "metric",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "total",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "options": {
-        "orientation": "horizontal",
-        "xTickLabelRotation": 0,
-        "showValue": "auto",
-        "stacking": "none",
-        "legend": {
-          "showLegend": false,
-          "displayMode": "list",
-          "placement": "bottom",
-          "calcs": []
-        },
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
-        }
-      }
-    },
-    {
-      "id": 5,
-      "type": "timeseries",
-      "title": "KV-cache usage",
-      "description": "Unweighted average of per-replica KV-cache usage for each time bin. A capacity-weighted serve-wide percentage is not available in the stored family.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
-      "gridPos": {
-        "h": 7,
-        "w": 8,
-        "x": 8,
-        "y": 13
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit",
-          "min": 0,
-          "max": 1,
-          "custom": {
-            "drawStyle": "line",
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "timeseries",
-          "parser": "backend",
-          "url": "/v1/vllm/overview",
-          "filterExpression": "metric == 'kv_cache_usage'",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "identity_kind",
-                "value": "${identity_kind}"
-              },
-              {
-                "key": "identity",
-                "value": "${identity}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
-                "key": "view",
-                "value": "saturation"
-              }
-            ]
-          },
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "metric",
-              "text": "metric",
-              "type": "string"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "usage",
-              "type": "number"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "id": 6,
-      "type": "table",
-      "title": "Saturation average and peak",
-      "description": "Averages retain the binned serve-wide request-count and unweighted replica KV-cache semantics. KV-cache peak is the maximum raw replica sample, before adaptive time-bin averaging.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
-      "gridPos": {
-        "h": 7,
-        "w": 8,
-        "x": 16,
-        "y": 13
-      },
-      "fieldConfig": {
-        "defaults": {},
-        "overrides": []
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "parser": "backend",
-          "url": "/v1/vllm/overview",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "identity_kind",
-                "value": "${identity_kind}"
-              },
-              {
-                "key": "identity",
-                "value": "${identity}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
-                "key": "view",
-                "value": "saturation_summary"
-              }
-            ]
-          },
-          "columns": [
-            {
-              "selector": "series",
-              "text": "metric",
-              "type": "string"
-            },
-            {
-              "selector": "stat",
-              "text": "stat",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            },
-            {
-              "selector": "unit",
-              "text": "unit",
-              "type": "string"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "id": 7,
-      "type": "table",
-      "title": "Reset-aware latency evidence",
-      "description": "TTFT, request TPOT, inter-token latency, queue, and end-to-end means from _sum/_count deltas plus p50/p90/p99 upper-bound estimates from bucket deltas. A reset or missing predecessor in any stored component invalidates the complete replica/family sample; a null quantile means the stored finite buckets do not bound it.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 0,
-        "y": 20
-      },
-      "fieldConfig": {
-        "defaults": {},
-        "overrides": []
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "parser": "backend",
-          "url": "/v1/vllm/overview",
-          "filterExpression": "stat != 'mean_over_time'",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "identity_kind",
-                "value": "${identity_kind}"
-              },
-              {
-                "key": "identity",
-                "value": "${identity}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
-                "key": "view",
-                "value": "latency"
-              }
-            ]
-          },
-          "columns": [
-            {
-              "selector": "series",
-              "text": "latency",
-              "type": "string"
-            },
-            {
-              "selector": "stat",
-              "text": "stat",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "seconds",
-              "type": "number"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "id": 11,
-      "type": "timeseries",
-      "title": "Time per output token",
-      "description": "Reset-aware mean request time per output token in bins where requests finished. Empty bins mean no completed request supplied a TPOT observation.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 20
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "min": 0,
-          "custom": {
-            "drawStyle": "line",
-            "showPoints": "always"
-          }
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "timeseries",
-          "parser": "backend",
-          "url": "/v1/vllm/overview",
-          "filterExpression": "metric == 'tpot' && stat == 'mean_over_time'",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "identity_kind",
-                "value": "${identity_kind}"
-              },
-              {
-                "key": "identity",
-                "value": "${identity}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
-                "key": "view",
-                "value": "latency"
-              }
-            ]
-          },
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "seconds/token",
-              "type": "number"
-            },
-            {
-              "selector": "metric",
-              "text": "metric",
-              "type": "string"
-            },
-            {
-              "selector": "stat",
-              "text": "stat",
-              "type": "string"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "id": 8,
-      "type": "barchart",
-      "title": "Request outcomes",
-      "description": "Reset-aware request_success_total grouped by the stored finish/outcome label, plus compatible failure and timeout counter families when a vLLM version exposes them. Preemptions are in Window totals.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 16,
-        "y": 20
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "lineWidth": 1,
-            "fillOpacity": 80,
-            "gradientMode": "none",
-            "axisPlacement": "auto"
-          }
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "parser": "backend",
-          "url": "/v1/vllm/overview",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "identity_kind",
-                "value": "${identity_kind}"
-              },
-              {
-                "key": "identity",
-                "value": "${identity}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
-                "key": "view",
-                "value": "request_outcome"
-              }
-            ]
-          },
-          "columns": [
-            {
-              "selector": "series",
-              "text": "outcome",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "requests",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "options": {
-        "orientation": "horizontal",
-        "xTickLabelRotation": 0,
-        "showValue": "auto",
-        "stacking": "none",
-        "legend": {
-          "showLegend": false,
-          "displayMode": "list",
-          "placement": "bottom",
-          "calcs": []
-        },
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
-        }
-      }
     }
   ],
   "links": [
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Inference overview",
+      "type": "link",
+      "url": "/d/marin-inference-overview"
+    },
     {
       "asDropdown": false,
       "icon": "dashboard",

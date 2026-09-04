@@ -1,0 +1,508 @@
+{
+  "uid": "marin-inference-overview",
+  "title": "Inference overview",
+  "description": "Is inference progressing, and is there evidence of pressure or slow responses? One serve/run, existing telemetry only. Open diagnostics for engine comparisons and latency tails.",
+  "tags": [
+    "marin",
+    "inference",
+    "vllm"
+  ],
+  "timezone": "utc",
+  "editable": false,
+  "schemaVersion": 39,
+  "refresh": "1m",
+  "time": {
+    "from": "now-3h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "identity_kind",
+        "label": "Identity kind",
+        "type": "custom",
+        "query": "job_id,run_id,execution_uid",
+        "current": {
+          "text": "job_id",
+          "value": "job_id"
+        },
+        "options": [
+          {
+            "selected": true,
+            "text": "job_id",
+            "value": "job_id"
+          },
+          {
+            "selected": false,
+            "text": "run_id",
+            "value": "run_id"
+          },
+          {
+            "selected": false,
+            "text": "execution_uid",
+            "value": "execution_uid"
+          }
+        ]
+      },
+      {
+        "name": "identity",
+        "label": "Serve",
+        "type": "query",
+        "description": "Standalone vLLM serves and MarinSkyRL processes carrying metric_source=vllm under the selected identity kind. One identity at a time: every panel is entity-scoped.",
+        "datasource": {
+          "type": "yesoreyeram-infinity-datasource",
+          "uid": "finelog-marin"
+        },
+        "definition": "distinct ${identity_kind} from standalone or embedded vLLM telemetry",
+        "query": {
+          "queryType": "infinity",
+          "refId": "variable-identity",
+          "infinityQuery": {
+            "refId": "variable-identity",
+            "type": "json",
+            "source": "url",
+            "format": "table",
+            "parser": "backend",
+            "url": "/query",
+            "url_options": {
+              "method": "GET",
+              "params": [
+                {
+                  "key": "sql",
+                  "value": "WITH telemetry AS (SELECT job_id, run_id, execution_uid, timestamp_ms FROM \"telemetry_v1.vllm\" WHERE service = 'vllm' UNION ALL SELECT job_id, run_id, execution_uid, timestamp_ms FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND json_get(attributes_json, 'metric_source') = 'vllm') SELECT DISTINCT CASE '${identity_kind}' WHEN 'job_id' THEN job_id WHEN 'run_id' THEN run_id WHEN 'execution_uid' THEN execution_uid END AS value FROM telemetry WHERE timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND CASE '${identity_kind}' WHEN 'job_id' THEN job_id WHEN 'run_id' THEN run_id WHEN 'execution_uid' THEN execution_uid END IS NOT NULL ORDER BY 1"
+                },
+                {
+                  "key": "from",
+                  "value": "${__from}"
+                },
+                {
+                  "key": "to",
+                  "value": "${__to}"
+                }
+              ]
+            },
+            "columns": [
+              {
+                "selector": "value",
+                "text": "value",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "current": {
+          "selected": false,
+          "text": "",
+          "value": ""
+        },
+        "options": [],
+        "includeAll": false,
+        "multi": false,
+        "refresh": 2,
+        "sort": 1,
+        "regex": "",
+        "hide": 0
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "text",
+      "title": "",
+      "options": {
+        "mode": "markdown",
+        "content": "Read progress, response speed, and pressure together. **No data is not zero.** In RL, low throughput may be an intentional phase boundary; these charts do not prove upstream starvation. Open **Inference diagnostics** with the same serve and time range for engine differences, latency tails, and telemetry detail."
+      },
+      "id": 12,
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 3
+      }
+    },
+    {
+      "panelRef": "inference_tokens",
+      "id": 2,
+      "gridPos": {
+        "x": 0,
+        "y": 3,
+        "w": 12,
+        "h": 7
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Finished requests/s by outcome",
+      "description": "Rate of engine finishes, not incoming demand. Includes every stored finish reason; stop and length are not failures by definition. Counter resets and missing predecessors do not become negative rates.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "min": 0,
+          "noValue": "No samples",
+          "displayName": "${__field.labels.series}",
+          "custom": {
+            "drawStyle": "line",
+            "showPoints": "auto",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/vllm/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "identity_kind",
+                "value": "${identity_kind}"
+              },
+              {
+                "key": "identity",
+                "value": "${identity}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "request_rate"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "id": 13,
+      "gridPos": {
+        "x": 12,
+        "y": 3,
+        "w": 12,
+        "h": 7
+      }
+    },
+    {
+      "panelRef": "inference_requests",
+      "id": 3,
+      "gridPos": {
+        "x": 0,
+        "y": 10,
+        "w": 12,
+        "h": 7
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Time to first token (mean)",
+      "description": "Histogram-weighted mean TTFT. Lower is better. Includes time before the first token; it is not pure GPU prefill time. In-flight requests without a first token are not represented yet. Compare with queue and prefill timing in diagnostics.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "noValue": "No samples",
+          "displayName": "${__field.labels.series}",
+          "custom": {
+            "drawStyle": "line",
+            "showPoints": "auto",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/vllm/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "identity_kind",
+                "value": "${identity_kind}"
+              },
+              {
+                "key": "identity",
+                "value": "${identity}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "latency"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            },
+            {
+              "selector": "metric",
+              "text": "metric",
+              "type": "string"
+            },
+            {
+              "selector": "stat",
+              "text": "stat",
+              "type": "string"
+            }
+          ],
+          "filterExpression": "metric == 'ttft' && stat == 'mean_over_time'"
+        }
+      ],
+      "id": 14,
+      "gridPos": {
+        "x": 12,
+        "y": 10,
+        "w": 6,
+        "h": 7
+      }
+    },
+    {
+      "panelRef": "inference_tpot",
+      "id": 11,
+      "gridPos": {
+        "x": 18,
+        "y": 10,
+        "w": 6,
+        "h": 7
+      }
+    },
+    {
+      "panelRef": "inference_kv",
+      "id": 5,
+      "gridPos": {
+        "x": 0,
+        "y": 17,
+        "w": 12,
+        "h": 7
+      }
+    },
+    {
+      "panelRef": "inference_outcomes",
+      "id": 8,
+      "gridPos": {
+        "x": 12,
+        "y": 17,
+        "w": 8,
+        "h": 7
+      }
+    },
+    {
+      "panelRef": "inference_preemptions",
+      "id": 4,
+      "gridPos": {
+        "x": 20,
+        "y": 17,
+        "w": 4,
+        "h": 7
+      }
+    },
+    {
+      "panelRef": "inference_freshness",
+      "id": 1,
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 12,
+        "h": 5
+      }
+    },
+    {
+      "panelRef": "inference_health",
+      "id": 10,
+      "gridPos": {
+        "x": 12,
+        "y": 24,
+        "w": 12,
+        "h": 5
+      }
+    }
+  ],
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Inference diagnostics",
+      "type": "link",
+      "url": "/d/marin-inference"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Home",
+      "type": "link",
+      "url": "/d/marin-home"
+    },
+    {
+      "linkRef": "fleet_accelerators_without_vars"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Node details",
+      "type": "link",
+      "url": "/d/marin-nodes"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Node pools",
+      "type": "link",
+      "url": "/d/marin-node-pools"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Jobs",
+      "type": "link",
+      "url": "/d/marin-jobs"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Runs",
+      "type": "link",
+      "url": "/d/marin-runs"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "RL runs",
+      "type": "link",
+      "url": "/d/marin-rl-runs"
+    },
+    {
+      "linkRef": "fleet_health_without_vars"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Training run",
+      "type": "link",
+      "url": "/d/marin-training"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Infra",
+      "type": "link",
+      "url": "/d/infra"
+    }
+  ]
+}

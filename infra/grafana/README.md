@@ -223,8 +223,24 @@ of repeating the Kubernetes object name.
 | Workload | Runs | `runs.json` | How is each Levanter training run doing? | cluster, run |
 | Workload | RL runs | `rl_runs.json` | How is one reinforcement-learning run doing? | cluster, run |
 | Workload | Training run | `training.json` | Is one training run on track? | run |
-| Workload | Inference telemetry | `inference.json` | How did one vLLM serve behave? | identity kind, serve |
+| Workload | Inference overview | `inference_overview.json` | Is inference progressing, and are responses slow or queues growing? | identity kind, serve |
+| Workload | Inference diagnostics | `inference.json` | Which engines, request stages, or workload changes explain the slowdown? | identity kind, serve |
 | Services | Infra | `infra.json` | Are nightly runs, main CI, workers, and hero training healthy? | none |
+
+The two inference dashboards keep the selected identity and time range when
+linked. The existing `marin-inference` UID now opens diagnostics, preserving old
+links and panel IDs; `marin-inference-overview` is the entry point from Home.
+Shared charts use the existing panel-fragment stitcher. Both dashboards read
+the cached `/v1/vllm/overview` result; no new collector or metric is required.
+
+Inference rates describe the observed engines, not upstream demand. Running
+requests are admitted to scheduling, not a GPU batch size; iteration tokens mix
+prefill and decode work. Histogram counts show the available observations, and
+request-completion histograms exclude unfinished requests. Quantiles are bucket
+upper bounds, not interpolated percentiles. Missing observations stay missing,
+and freshness covers only producers that emitted records. Use RL phase timing
+and the accelerator dashboards for context before diagnosing starvation or GPU
+inefficiency. Older runs may lack engine-resolved histograms or publication health.
 
 `home.json` is provisioned as the default home dashboard
 (`GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/etc/grafana/dashboards/home.json`,

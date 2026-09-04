@@ -8,7 +8,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 VLLM_MAX_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
-VLLM_MAX_POINTS = 720
+# Leave room for latency/outcome series and bounded producer tables in the shared result.
+VLLM_MAX_POINTS = 360
 VLLM_MAX_RESULT_ROWS = 10_000
 VLLM_MIN_BUCKET_MS = 15_000
 VLLM_SCRAPE_INTERVAL_MS = 60_000
@@ -20,14 +21,17 @@ VLLM_MAX_IDENTITY_LENGTH = 512
 VLLM_OVERVIEW_SECTIONS = frozenset(
     {
         "counter_total",
+        "engine_summary",
         "freshness",
         "freshness_detail",
         "latency",
         "request_outcome",
+        "request_rate",
         "saturation",
         "saturation_summary",
         "telemetry_health",
         "token_rate",
+        "workload",
     }
 )
 
@@ -72,7 +76,10 @@ _HISTOGRAM_FAMILIES = (
     ("request_time_per_output_token_seconds", "tpot"),
     ("inter_token_latency_seconds", "inter_token_latency"),
     ("request_queue_time_seconds", "queue"),
+    ("request_prefill_time_seconds", "prefill"),
+    ("request_decode_time_seconds", "decode"),
     ("e2e_request_latency_seconds", "e2e"),
+    ("request_generation_tokens", "output_tokens"),
     ("iteration_tokens_total", "iteration_tokens"),
 )
 _HISTOGRAM_COMPONENTS = ("bucket", "count", "sum")
@@ -215,6 +222,12 @@ WITH base AS (
            ) AS previous_value
     FROM base
     WHERE json_get(attributes_json, 'source_temporality') = 'cumulative_snapshot'
+      -- Reject legacy mixed-engine histograms before computing their unused deltas.
+      AND (
+          name NOT IN ({histogram_names})
+          OR service = 'vllm'
+          OR json_get(attributes_json, 'engine_index') IS NOT NULL
+      )
 ), increments AS (
     SELECT origin_cluster,
            service,
@@ -249,15 +262,22 @@ WITH base AS (
                    ELSE {bucket_ms}
                END AS t,
            name,
+           origin_cluster,
            service,
+           resource_attributes_json,
+           COALESCE(json_get(attributes_json, 'engine'), resource_attributes_json) AS producer_identity,
            SUM(delta) AS delta
     FROM increments
     WHERE name IN ({token_counters})
       AND delta IS NOT NULL
-    GROUP BY 1, 2, 3
+    GROUP BY 1, 2, 3, 4, 5, 6
 ), token_source_rates AS (
     SELECT t,
            name,
+           origin_cluster,
+           service,
+           resource_attributes_json,
+           producer_identity,
            delta / (CASE WHEN service = 'vllm' THEN {standalone_bucket_ms} ELSE {bucket_ms} END / 1000.0) AS value
     FROM token_bins
 ), token_rates AS (
@@ -280,6 +300,7 @@ WITH base AS (
            service,
            resource_attributes_json,
            COALESCE(json_get(attributes_json, 'engine'), attributes_json) AS producer_identity,
+           COALESCE(json_get(attributes_json, 'engine'), resource_attributes_json) AS engine_identity,
            value
     FROM base
     WHERE timestamp_ms >= {start_ms}
@@ -318,6 +339,42 @@ WITH base AS (
     SELECT name, MAX(value) AS peak
     FROM canonical_gauge_samples
     GROUP BY 1
+), kv_peak_bins AS (
+    SELECT {start_ms} + (timestamp_ms - {start_ms})
+               - (timestamp_ms - {start_ms}) % CASE
+                   WHEN service = 'vllm' THEN {standalone_bucket_ms}
+                   ELSE {bucket_ms}
+               END AS t,
+           MAX(value) AS value
+    FROM canonical_gauge_samples
+    WHERE name = 'kv_cache_usage'
+    GROUP BY 1
+), engine_stats AS (
+    SELECT engine_identity || ' @ ' || origin_cluster || ':' || service || ':' || resource_attributes_json AS series,
+           CASE name
+               WHEN 'num_requests_running' THEN 'running_mean'
+               WHEN 'num_requests_waiting' THEN 'waiting_mean'
+               ELSE 'kv_cache_peak'
+           END AS metric,
+           CASE WHEN name = 'kv_cache_usage' THEN MAX(value) ELSE AVG(value) END AS value,
+           CASE WHEN name = 'kv_cache_usage' THEN 'ratio' ELSE 'requests' END AS unit,
+           COUNT(*) AS samples
+    FROM canonical_gauge_samples
+    GROUP BY 1, 2, 4, name
+
+    UNION ALL
+
+    SELECT producer_identity || ' @ ' || origin_cluster || ':' || service || ':' || resource_attributes_json AS series,
+           'generated_tokens_per_second' AS metric,
+           AVG(value) AS value,
+           'tokens/s' AS unit,
+           COUNT(*) AS samples
+    FROM token_source_rates
+    WHERE name = 'generation_tokens_total'
+    GROUP BY 1
+), ranked_engine_stats AS (
+    SELECT *, ROW_NUMBER() OVER (PARTITION BY metric ORDER BY series) AS producer_rank
+    FROM engine_stats
 ), gauge_stats AS (
     SELECT bins.name,
            AVG(bins.value) AS average,
@@ -406,16 +463,19 @@ WITH base AS (
     SELECT {start_ms} + (sample_t - {start_ms}) - (sample_t - {start_ms}) % {bucket_ms} AS t,
            family,
            SUM(CASE WHEN component = 'sum' THEN delta ELSE 0 END)
-               / NULLIF(SUM(CASE WHEN component = 'count' THEN delta ELSE 0 END), 0) AS mean
+               / NULLIF(SUM(CASE WHEN component = 'count' THEN delta ELSE 0 END), 0) AS mean,
+           SUM(CASE WHEN component = 'count' THEN delta ELSE 0 END) AS samples
     FROM coherent_histogram_increments
     GROUP BY 1, 2
     HAVING SUM(CASE WHEN component = 'count' THEN delta ELSE 0 END) > 0
 ), histogram_means AS (
     SELECT family,
            SUM(CASE WHEN component = 'sum' THEN delta ELSE 0 END)
-               / NULLIF(SUM(CASE WHEN component = 'count' THEN delta ELSE 0 END), 0) AS mean
+               / NULLIF(SUM(CASE WHEN component = 'count' THEN delta ELSE 0 END), 0) AS mean,
+           SUM(CASE WHEN component = 'count' THEN delta ELSE 0 END) AS samples
     FROM coherent_histogram_increments
     GROUP BY 1
+    HAVING SUM(CASE WHEN component = 'count' THEN delta ELSE 0 END) > 0
 ), histogram_buckets AS (
     SELECT family, upper_bound, SUM(delta) AS bucket_count
     FROM coherent_histogram_increments
@@ -444,30 +504,55 @@ WITH base AS (
     FROM histogram_ranked_buckets
     GROUP BY 1
 ), histogram_stats AS (
-    SELECT means.family, means.mean, quantiles.p50, quantiles.p90, quantiles.p99
+    SELECT means.family, means.mean, means.samples, quantiles.p50, quantiles.p90, quantiles.p99
     FROM histogram_means AS means
     LEFT JOIN histogram_quantiles AS quantiles USING (family)
 ), histogram_evidence AS (
-    SELECT family, 'mean' AS stat, mean AS value FROM histogram_stats
-    UNION ALL
-    SELECT family, 'p50', p50 FROM histogram_stats
-    UNION ALL
-    SELECT family, 'p90', p90 FROM histogram_stats
-    UNION ALL
-    SELECT family, 'p99', p99 FROM histogram_stats
-), outcome_totals AS (
-    SELECT COALESCE(
+    SELECT family,
+           quantile.stat,
+           CASE quantile.stat
+               WHEN 'mean' THEN mean
+               WHEN 'p50' THEN p50
+               WHEN 'p90' THEN p90
+               ELSE p99
+           END AS value,
+           samples
+    FROM histogram_stats
+    -- A UNION per statistic would repeat the histogram pipeline in Finelog's plan.
+    CROSS JOIN (VALUES ('mean'), ('p50'), ('p90'), ('p99')) AS quantile(stat)
+), outcome_increments AS (
+    SELECT timestamp_ms,
+           service,
+           COALESCE(
                json_get(attributes_json, 'finished_reason'),
                json_get(attributes_json, 'finish_reason'),
                json_get(attributes_json, 'outcome'),
                json_get(attributes_json, 'status'),
                name
            ) AS outcome,
-           SUM(delta) AS value
+           delta
     FROM increments
     WHERE name IN ({outcome_counters})
       AND delta IS NOT NULL
+), outcome_totals AS (
+    SELECT outcome, SUM(delta) AS value
+    FROM outcome_increments
     GROUP BY 1
+), outcome_source_rates AS (
+    SELECT {start_ms} + (timestamp_ms - {start_ms})
+               - (timestamp_ms - {start_ms}) % CASE
+                   WHEN service = 'vllm' THEN {standalone_bucket_ms}
+                   ELSE {bucket_ms}
+               END AS t,
+           outcome,
+           service,
+           SUM(delta) / (CASE WHEN service = 'vllm' THEN {standalone_bucket_ms} ELSE {bucket_ms} END / 1000.0) AS value
+    FROM outcome_increments
+    GROUP BY 1, 2, 3
+), outcome_rates AS (
+    SELECT t, outcome, SUM(value) AS value
+    FROM outcome_source_rates
+    GROUP BY 1, 2
 ), collector_polls AS (
     SELECT COUNT(*) AS polls,
            SUM(CASE WHEN value <= 0 THEN 1 ELSE 0 END) AS unavailable_polls,
@@ -700,6 +785,35 @@ WITH base AS (
 
     SELECT t AS t,
            'saturation' AS section,
+           'kv_cache_usage_peak' AS metric,
+           'value' AS stat,
+           'kv_cache_usage_peak' AS series,
+           value AS value,
+           'ratio' AS unit,
+           CAST(NULL AS VARCHAR) AS status,
+           CAST(NULL AS BIGINT) AS samples,
+           CAST(NULL AS DOUBLE) AS gap_seconds
+    FROM kv_peak_bins
+
+    UNION ALL
+
+    SELECT CAST(NULL AS BIGINT) AS t,
+           'engine_summary' AS section,
+           metric AS metric,
+           'observed' AS stat,
+           series AS series,
+           value AS value,
+           unit AS unit,
+           CAST(NULL AS VARCHAR) AS status,
+           CAST(samples AS BIGINT) AS samples,
+           CAST(NULL AS DOUBLE) AS gap_seconds
+    FROM ranked_engine_stats
+    WHERE producer_rank <= {VLLM_MAX_FRESHNESS_DETAILS}
+
+    UNION ALL
+
+    SELECT t AS t,
+           'saturation' AS section,
            'iteration_tokens' AS metric,
            'mean' AS stat,
            'iteration tokens per engine step' AS series,
@@ -742,14 +856,14 @@ WITH base AS (
     UNION ALL
 
     SELECT CAST(NULL AS BIGINT) AS t,
-           'latency' AS section,
+           CASE WHEN family = 'output_tokens' THEN 'workload' ELSE 'latency' END AS section,
            family AS metric,
            stat AS stat,
            family AS series,
            value AS value,
-           's' AS unit,
+           CASE WHEN family = 'output_tokens' THEN 'tokens' ELSE 's' END AS unit,
            CAST(NULL AS VARCHAR) AS status,
-           CAST(NULL AS BIGINT) AS samples,
+           CAST(samples AS BIGINT) AS samples,
            CAST(NULL AS DOUBLE) AS gap_seconds
     FROM histogram_evidence
     WHERE family <> 'iteration_tokens'
@@ -758,16 +872,30 @@ WITH base AS (
 
     SELECT t AS t,
            'latency' AS section,
-           'tpot' AS metric,
+           family AS metric,
            'mean_over_time' AS stat,
-           'time per output token' AS series,
+           CASE WHEN family = 'tpot' THEN 'time per output token' ELSE family END AS series,
            mean AS value,
            's' AS unit,
            CAST(NULL AS VARCHAR) AS status,
-           CAST(NULL AS BIGINT) AS samples,
+           CAST(samples AS BIGINT) AS samples,
            CAST(NULL AS DOUBLE) AS gap_seconds
     FROM histogram_time_means
-    WHERE family = 'tpot'
+    WHERE family NOT IN ('iteration_tokens', 'output_tokens')
+
+    UNION ALL
+
+    SELECT t AS t,
+           'request_rate' AS section,
+           'requests' AS metric,
+           'rate' AS stat,
+           outcome AS series,
+           value AS value,
+           'requests/s' AS unit,
+           CAST(NULL AS VARCHAR) AS status,
+           CAST(NULL AS BIGINT) AS samples,
+           CAST(NULL AS DOUBLE) AS gap_seconds
+    FROM outcome_rates
 
     UNION ALL
 
@@ -891,7 +1019,7 @@ ORDER BY section,
          metric,
          stat,
          series
-LIMIT {VLLM_MAX_RESULT_ROWS}
+LIMIT {VLLM_MAX_RESULT_ROWS + 1}
 """.strip()
     return VllmOverviewQuery(
         sql=sql,

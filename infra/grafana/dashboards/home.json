@@ -141,9 +141,9 @@
       "includeVars": true,
       "keepTime": true,
       "targetBlank": false,
-      "title": "Inference",
+      "title": "Inference overview",
       "type": "link",
-      "url": "/d/marin-inference"
+      "url": "/d/marin-inference-overview"
     },
     {
       "asDropdown": false,
