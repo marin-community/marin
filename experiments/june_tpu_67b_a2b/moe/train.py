@@ -550,7 +550,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         state_shape = eqx.filter_eval_shape(_init_state, model_key)
         state_shardings = jax.tree.map(lambda leaf: leaf.sharding, state_shape)
-        state = jax.jit(_init_state, out_shardings=state_shardings)(model_key)
 
         checkpointer = trainer.checkpointer.create(run_id)
         if config.trainer.sft_weights_only_init:
@@ -559,20 +558,43 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             # optimizer/step (marin #650). initialize_from is deliberately withheld here so
             # the restore never does a full-state load; the weights-only init runs below.
             state = restore_grug_state_from_checkpoint(
-                state,
+                state_shape,
                 checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
                 load_checkpoint_setting=trainer.load_checkpoint,
                 mesh=mesh,
                 allow_partial=trainer.allow_partial_checkpoint,
             )
-            if int(state.step) == 0 and trainer.initialize_from is not None:
-                state = init_weights_only_from_checkpoint(
-                    state,
-                    trainer.initialize_from,
-                    mesh=mesh,
-                    load_ema=config.trainer.ema_beta is not None,
+            if isinstance(state.step, jax.ShapeDtypeStruct):
+                if trainer.initialize_from is None:
+                    raise ValueError("sft_weights_only_init requires TrainerConfig.initialize_from")
+
+                logger.info("Initializing fresh SFT state from weights in %s", trainer.initialize_from)
+                loaded = cast(
+                    "dict[str, object]",
+                    load_checkpoint(
+                        {"params": state_shape.params, "pending_qb_betas": state_shape.pending_qb_betas},
+                        trainer.initialize_from,
+                        axis_mapping=None,
+                        mesh=mesh,
+                        allow_partial=True,
+                    ),
+                )
+
+                def _fresh_state_from_weights(params: Transformer, pending_qb_betas: jax.Array) -> GrugTrainState:
+                    return GrugTrainState(
+                        step=jnp.array(0, dtype=jnp.int32),
+                        params=params,
+                        opt_state=optimizer.init(params),
+                        ema_params=params if config.trainer.ema_beta is not None else None,
+                        pending_qb_betas=pending_qb_betas,
+                    )
+
+                state = jax.jit(_fresh_state_from_weights, out_shardings=state_shardings)(
+                    cast("Transformer", loaded["params"]),
+                    cast("jax.Array", loaded["pending_qb_betas"]),
                 )
         else:
+            state = jax.jit(_init_state, out_shardings=state_shardings)(model_key)
             state = restore_grug_state_from_checkpoint(
                 state,
                 checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
