@@ -97,6 +97,8 @@ def solve(
             target[better] = candidate[better]
             selected[count:][better] = count
         best, choices[bucket] = updated, selected
+    if not np.isfinite(best[BLOCKS]):
+        raise RuntimeError("no feasible allocation")
     result = np.zeros(len(inventory), dtype=int)
     remaining = BLOCKS
     for bucket in range(len(inventory) - 1, -1, -1):

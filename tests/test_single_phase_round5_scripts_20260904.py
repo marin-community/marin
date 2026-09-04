@@ -10,6 +10,9 @@ from experiments.domain_phase_mix.exploratory.two_phase_many import (
     single_phase_observatory_models_20260902 as models,
 )
 from experiments.domain_phase_mix.exploratory.two_phase_many import (
+    single_phase_round3_heldout_selection_20260903 as selection,
+)
+from experiments.domain_phase_mix.exploratory.two_phase_many import (
     single_phase_round3_proposals_20260903 as proposals,
 )
 from experiments.domain_phase_mix.exploratory.two_phase_many import (
@@ -28,7 +31,7 @@ TABLE9_SHORT_NAMES = (
 ).split()
 
 
-def test_family_map_covers_every_table9_name_and_rejects_unknown_ones():
+def test_family_map_assigns_representative_table9_names_and_rejects_unknown_ones():
     families = {name: gap.family(f"olmo_base_eval/easy_bpb/{name}/bpb") for name in TABLE9_SHORT_NAMES}
     assert families["minerva_math_algebra"] == "math"
     assert families["mt_mbpp_bash"] == "code" and families["codex_humaneval"] == "code"
@@ -98,6 +101,29 @@ def test_dp_solution_respects_bounds_and_sums_to_the_block_count():
     assert counts[0] >= 100 and counts[1] <= 900
     clamped = candidates.solve(curves, inventory, lower, upper, "clamp_panel_max", np.array([0.5, 0.5]))
     assert np.isclose(clamped.sum(), 1.0)
+    with pytest.raises(ValueError, match="infeasible"):
+        candidates.solve(curves, inventory, np.array([1500, 1500]), upper, "plain", np.array([10.0, 10.0]))
+
+
+def test_drop_coordinates_keeps_order_and_trims_every_array():
+    ids = np.array(["a", "b", "c"])
+    bank = selection.Bank(
+        "table9", ids, np.array([1.0, 2.0, 3.0]), np.array(["s", "s", "t"]), np.array([1, 1, 2]), np.zeros(3), 0.1
+    )
+    weights = np.array([[1.0, 0.0], [0.5, 0.5], [0.0, 1.0]])
+    features = models.Features(
+        exposures=weights * 2.0,
+        weights=weights,
+        inventory=np.array([2.0, 2.0]),
+        early_fraction=np.zeros(3),
+        families=models.no_families(2),
+        label="bank",
+    )
+    trimmed, trimmed_features, keep = remedies.drop_coordinates(bank, features, {"b"})
+    assert list(trimmed.coordinate_id) == ["a", "c"] and keep.tolist() == [True, False, True]
+    np.testing.assert_allclose(trimmed.measured, [1.0, 3.0])
+    np.testing.assert_allclose(trimmed_features.weights, weights[[0, 2]])
+    assert trimmed.tolerance == bank.tolerance
 
 
 def test_held_out_mask_covers_secondary_memberships_and_pools_small_sources():

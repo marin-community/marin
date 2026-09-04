@@ -56,6 +56,7 @@ leave-one-source-out on the bank, and the matched-seed runs are used only as the
 
 Scripts (all in `two_phase_many/`): `single_phase_round5_olmix_gap_20260904.py` (51-row tables, bucket decomposition,
 extrapolation flags), `single_phase_round5_dose_curves_20260904.py` (fitted single-bucket dose curves),
+`single_phase_round5_bank_audit_20260904.py` (bank residual correlations, aggregation and name audit),
 `single_phase_round5_remedies_20260904.py` (offline remedies scored on the bank),
 `single_phase_round5_candidates_20260904.py` (candidate set). Outputs in
 `reference_outputs/single_phase_observatory_benchmark_20260902/olmix_gap_round5/`. Tests in
@@ -95,16 +96,16 @@ bucket (hybrid mixtures, additivity gap 7e-15). Cap 7, macro and regressor contr
 
 | bucket group | OLMix share → WSPU share | predicted macro contribution | on the 15 regressors | on code |
 |---|---|---|---|---|
-| synthetic QA + OLMOCR (cut) | 0.463 → 0.162 | +0.027 | +0.046 | +0.003 |
+| synthetic QA + OLMOCR (cut) | 0.463 → 0.162 | +0.027 | +0.046 | +0.015 |
 | stack_edu + stack_edu_fim (raised to cap) | 0.169 → 0.296 | −0.035 | +0.002 | −0.082 |
 | 18 CC buckets at 0.5–4% each | 0.196 → 0.310 | −0.043 | −0.046 | −0.050 |
-| curated, math, other synthetic | | −0.027 | −0.019 | −0.012 |
+| curated, math, other synthetic (17 buckets) | | −0.027 | −0.020 | −0.024 |
 | total | | −0.078 | −0.017 | −0.141 |
 
 - The fitted single-bucket dose curves (`dose_curves_weibull_softplus_unscaled.csv`) show the mechanism. For the
   regressors, synthetic QA is worth −0.104 at 1 epoch and −0.153 at 4 epochs with no harm upturn (panel maximum 2.34
-  epochs; the OLMix value of 4 epochs is extrapolated, and the heads extrapolate a continued benefit). Each CC-low bucket
-  is worth −0.006 to −0.013 at 1–2 epochs for the regressors; eighteen of them add up. Stack_edu is worth −0.204 at 3
+  epochs; the OLMix value of 4 epochs is extrapolated, and the heads extrapolate a continued benefit). The three CC-low
+  buckets in the dose-curve set are worth −0.005 to −0.020 at 1–2 epochs for the regressors; eighteen such buckets add up. Stack_edu is worth −0.204 at 3
   epochs and −0.261 at 6 for code, essentially zero for the regressors, with no harm inside 10 epochs.
 - Extrapolation in epochs is limited: cap 7 places only stack_edu beyond the panel's maximum exposure (6.98 vs 6.85);
   cap 8 both stack buckets (7.8 and 7.6 vs 6.9 and 7.1); OLMix places synthetic QA (4.0 vs 2.34) and OLMOCR (4.0 vs
@@ -119,12 +120,14 @@ bucket (hybrid mixtures, additivity gap 7e-15). Cap 7, macro and regressor contr
 
 Per-component residuals at the matched seed (cap 7 unless stated):
 
-- Allocation change: the residual is a function of what the head predicted, not of noise: correlation of residual with
+- Allocation change (bank numbers from `single_phase_round5_bank_audit_20260904.py`): the residual is a function of what the head predicted, not of noise: correlation of residual with
   predicted delta −0.86 / −0.82 / −0.78 (caps 6/7/8); every family is over-predicted in proportion to its predicted
   gain. The bank residuals (247 coordinates, observed − predicted, positive = optimistic) put the same structure in
   share space: macro residual correlates +0.68 with the stack share and −0.66 with the CC-high share; the code residual
-  +0.89 with stack; the regressor residual +0.50 with the CC-low share and −0.34 with OLMOCR. Joint OLS on shares:
-  macro residual = −0.03 + 0.21·stack + 0.17·cc_low − 0.02·synth_qa − 0.08·olmocr.
+  +0.89 with stack; the regressor residual +0.50 with the CC-low share and −0.34 with OLMOCR. Joint OLS on shares
+  (stack, CC-low, CC-high, synthetic QA, OLMOCR): macro residual = −0.004 + 0.18·stack + 0.15·cc_low − 0.05·cc_high
+  − 0.04·synth_qa − 0.09·olmocr; code residual = 0.04 + 0.31·stack + 0.05·cc_low − 0.12·cc_high; regressor residual =
+  −0.02 + 0.07·stack + 0.26·cc_low − 0.29·olmocr (`bank_residual_correlations.csv`).
 - Epoch-cap activity: cap 6 has four active caps, cap 7 three, cap 8 none; the residual grows with the cap (RMS 0.090,
   0.096, 0.104). The cap does not bind the successor's optimum (7.8 epochs), so activity is not the driver.
 - Distance from the panel: OLMix is the furthest of the four mixtures (TV 0.51 to the nearest panel row, vs 0.385 /
@@ -137,6 +140,8 @@ Per-component residuals at the matched seed (cap 7 unless stated):
 - Task family explains 35% of the cap-7 residual variance; the predicted delta alone explains 67%.
 
 ## 5. Aggregation and component-name audit
+
+Computed by `single_phase_round5_bank_audit_20260904.py` (`--evals`) from the W&B evaluation table and the sweep artifacts.
 
 - Harness Table-9 aggregation is the unweighted mean of 51 components (weights all 1/51); it equals the W&B macro
   `table9_51_component_macro_bpb` on all seven runs to 1e-6.
@@ -183,7 +188,8 @@ bandwidths are pre-specified grids reported side by side; none is selected on th
   code family is worse (regret 0.0168, frontier 50th).
 - Exposure clamping is a no-op (panel max) or harmful (95th percentile). Treating buckets under a 2% share as absent
   is the one rule with a best-of-5 gain (0.0132 → 0.0086, P(better) 0.66) but a worse frontier rank (20th) and
-  Spearman (0.81); combining it with calibration loses the gain. Its own optimum (`rule_share_floor0.02_cap7`) is not
+  Spearman (0.81); combining it with calibration loses the gain. An absent bucket keeps its zero-exposure harm
+  constant, so the rule removes benefit and harm alike. Its own optimum (`rule_share_floor0.02_cap7`) is not
   a sensible candidate (synthetic QA 0.10).
 - Pure kernel regression on the bank (no model) at bandwidth 0.1 selects as well as the successor (regret 0.0140) and
   fails at larger bandwidths; the bank is too sparse to replace the model.
@@ -195,8 +201,10 @@ Weights in `candidates_weights.csv`; per-component predicted effects (plain succ
 "kernel-corrected macro" adds the TV-0.2 kernel mean of bank residuals; both are fitted on the 246-coordinate bank without
 the matched-seed OLMix coordinate. Both are bias corrections that did not improve selection, reported for scale only.
 Cap 7 is a per-bucket upper bound of 7 epochs on the 1/2048 block grid; "at the bound" means the returned block count
-equals the cap's block count (sweep candidates report their stored activity). Box candidates round the ±0.05 box
-inward on the grid.
+equals the cap's block count (sweep candidates report their stored activity; for the measured bank references, which
+were not solved under a cap, the column lists buckets at or above 7 epochs). Box candidates round the ±0.05 box inward
+on the grid. For the rule-based optima (`rule_*`) the optimizer minimizes the rule-modified objective; the predicted
+columns evaluate the returned weights under the plain successor.
 
 | candidate | synth QA | OLMOCR | stack | eff. buckets | max epochs | buckets at the 7-epoch bound | TV to OLMix | TV to nearest panel row | TV to nearest bank coord (its measured BPB) | predicted macro (Δ vs OLMix) | descriptor-calibrated Δ | kernel-corrected macro |
 |---|---:|---:|---:|---:|---:|---|---:|---:|---|---|---:|---:|
