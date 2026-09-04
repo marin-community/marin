@@ -85,6 +85,27 @@ def test_canonical_chat_messages_serializes_parallel_tool_calls():
     ]
 
 
+def test_canonical_chat_messages_converts_legacy_function_call_and_drops_unknown_fields():
+    messages = canonical_chat_messages(
+        [
+            {
+                "role": "assistant",
+                "content": None,
+                "function_call": '{"name":"search","arguments":{"query":"marin"}}',
+                "provider_metadata": {"shape": "varies"},
+            }
+        ]
+    )
+
+    assert messages == [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"function": {"name": "search", "arguments": '{"query":"marin"}'}}],
+        }
+    ]
+
+
 def test_canonical_chat_messages_rejects_unknown_roles():
     with pytest.raises(ValueError, match="Unsupported chat role"):
         canonical_chat_messages([{"role": "critic", "content": "No."}])

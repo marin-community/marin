@@ -64,7 +64,7 @@ def _canonical_tool_calls(tool_calls: object) -> list[dict]:
     if not isinstance(tool_calls, list):
         raise ValueError("Chat message tool_calls must be a list")
 
-    canonical = []
+    canonical: list[dict[str, object]] = []
     for tool_call in tool_calls:
         if not isinstance(tool_call, dict):
             raise ValueError("Each chat tool call must be an object")
@@ -76,7 +76,13 @@ def _canonical_tool_calls(tool_calls: object) -> list[dict]:
         if not isinstance(arguments, str):
             arguments = json.dumps(arguments, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
-        normalized = {key: tool_call[key] for key in ("id", "type") if key in tool_call}
+        normalized: dict[str, object] = {}
+        for key in ("id", "type"):
+            value = tool_call.get(key)
+            if value is not None:
+                if not isinstance(value, str):
+                    raise ValueError(f"Chat tool call {key} must be a string or null")
+                normalized[key] = value
         normalized["function"] = {"name": function["name"], "arguments": arguments}
         canonical.append(normalized)
     return canonical
@@ -84,7 +90,7 @@ def _canonical_tool_calls(tool_calls: object) -> list[dict]:
 
 def canonical_chat_messages(messages: list[dict]) -> list[dict]:
     """Normalize roles, tool calls, and parallel calls into the canonical message contract."""
-    canonical: list[dict] = []
+    canonical: list[dict[str, object]] = []
     for message in messages:
         role_value = message.get("role", message.get("from"))
         if not isinstance(role_value, str):
@@ -96,21 +102,33 @@ def canonical_chat_messages(messages: list[dict]) -> list[dict]:
         content = message.get("content", message.get("value"))
         if content is not None and not isinstance(content, str):
             raise ValueError(f"Chat message content must be a string or null, got {type(content).__name__}")
-        if content is None and not message.get("tool_calls"):
+        has_tool_call = bool(message.get("tool_calls") or message.get("function_call"))
+        if content is None and (role != "assistant" or not has_tool_call):
             raise ValueError("Only assistant tool-call messages may have null content")
 
-        normalized = {key: value for key, value in message.items() if key not in {"from", "value"}}
-        normalized["role"] = role
-        normalized["content"] = content
-        if message.get("tool_calls") is not None:
-            normalized["tool_calls"] = _canonical_tool_calls(message["tool_calls"])
+        normalized: dict[str, object] = {"role": role, "content": content}
+        for key in ("name", "tool_call_id"):
+            value = message.get(key)
+            if value is not None:
+                if not isinstance(value, str):
+                    raise ValueError(f"Chat message {key} must be a string or null")
+                normalized[key] = value
+
+        tool_calls_value = message.get("tool_calls")
+        legacy_function_call = message.get("function_call")
+        if not tool_calls_value and legacy_function_call:
+            if isinstance(legacy_function_call, str):
+                legacy_function_call = json.loads(legacy_function_call)
+            tool_calls_value = [{"function": legacy_function_call}]
+        if tool_calls_value:
+            normalized["tool_calls"] = _canonical_tool_calls(tool_calls_value)
         tool_calls = normalized.get("tool_calls") or []
         if len(tool_calls) <= 1:
             canonical.append(normalized)
             continue
 
         for index, tool_call in enumerate(tool_calls):
-            serialized = dict(normalized)
+            serialized: dict[str, object] = dict(normalized)
             serialized["content"] = content if index == 0 else None
             serialized["tool_calls"] = [tool_call]
             canonical.append(serialized)
