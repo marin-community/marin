@@ -279,20 +279,6 @@ def test_verified_copy_identityless_source_rereads_content_on_completion(tmp_pat
 
     source_filesystem, source_path = verified_copy_module.filesystem_for(str(source))
     original_filesystem_for = verified_copy_module.filesystem_for
-    identity_keys = {
-        "generation",
-        "version_id",
-        "VersionId",
-        "md5Hash",
-        "crc32c",
-        "checksum",
-        "ChecksumSHA256",
-        "etag",
-        "ETag",
-        "updated",
-        "mtime",
-        "LastModified",
-    }
 
     class IdentitylessSource:
         def __getattr__(self, name):
@@ -301,12 +287,13 @@ def test_verified_copy_identityless_source_rereads_content_on_completion(tmp_pat
         def find(self, path, *, detail):
             found = source_filesystem.find(path, detail=detail)
             return {
-                name: {key: value for key, value in info.items() if key not in identity_keys}
+                name: {"name": name, "size": info["size"], "type": info.get("type", "file")}
                 for name, info in found.items()
             }
 
         def info(self, path):
-            return {key: value for key, value in source_filesystem.info(path).items() if key not in identity_keys}
+            info = source_filesystem.info(path)
+            return {"name": path, "size": info["size"], "type": info.get("type", "file")}
 
     def identityless_route(url, *, fixed_upload_size=False):
         if url == str(source):

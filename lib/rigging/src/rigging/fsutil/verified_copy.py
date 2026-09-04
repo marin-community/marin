@@ -13,6 +13,7 @@ from fsspec import AbstractFileSystem
 
 from rigging.filesystem.atomic import atomic_rename
 from rigging.filesystem.buckets import filesystem_for
+from rigging.fsutil.transfer import _join_path, _join_url, _relative_path
 
 COPY_CHUNK_BYTES = 8 * 1024 * 1024
 COMPLETION_MANIFEST = ".verified-copy-manifest.json"
@@ -64,12 +65,10 @@ def verified_copy_prefix(
     status_url: str | None = None,
     workers: int = 4,
 ) -> VerifiedCopyResult:
-    """Copy a prefix, verify every destination object, then publish a manifest.
+    """Copy and verify a prefix before publishing its completion manifest.
 
-    Verified per-object records live in a sibling status prefix. A retry hashes
-    the destination object and skips its GCS read when the recorded path, size,
-    and SHA-256 still match. The completion manifest is written into the
-    destination only after every object has verified.
+    Verified per-object records allow retries to reuse destination objects when
+    their source identity and content hash still match.
     """
     if workers < 1:
         raise VerifiedCopyError("workers must be at least 1")
@@ -89,8 +88,8 @@ def verified_copy_prefix(
     if any(source.path == COMPLETION_MANIFEST for source in sources):
         raise VerifiedCopyError(f"source prefix reserves {COMPLETION_MANIFEST!r}")
 
-    manifest_path = _join(destination_root, COMPLETION_MANIFEST)
-    manifest_url = _join(destination_url, COMPLETION_MANIFEST)
+    manifest_path = _join_path(destination_root, COMPLETION_MANIFEST)
+    manifest_url = _join_url(destination_url, COMPLETION_MANIFEST)
     if destination_fs.exists(manifest_path):
         manifest = _read_json(destination_fs, manifest_path)
         verified = _verified_files_from_manifest(manifest, source_url, destination_url)
@@ -180,8 +179,8 @@ def _copy_or_resume(
     status_root: str,
     destination_size: int | None,
 ) -> tuple[VerifiedFile, bool]:
-    destination_path = _join(destination_root, source.path)
-    marker_path = _join(status_root, f"{hashlib.sha256(source.path.encode()).hexdigest()}.json")
+    destination_path = _join_path(destination_root, source.path)
+    marker_path = _join_path(status_root, f"{hashlib.sha256(source.path.encode()).hexdigest()}.json")
     marker = _resume_marker(status_fs, marker_path)
     if destination_size == source.size and source.identity is not None and marker is not None:
         expected = VerifiedFile(source.path, source.size, marker.sha256, source.identity)
@@ -353,15 +352,3 @@ def _result(
         total_files=len(files),
         total_bytes=sum(file.size for file in files),
     )
-
-
-def _relative_path(path: str, root: str) -> str:
-    root = root.rstrip("/")
-    prefix = f"{root}/"
-    if not path.startswith(prefix):
-        raise VerifiedCopyError(f"unexpected object {path!r} outside {root!r}")
-    return path[len(prefix) :]
-
-
-def _join(parent: str, child: str) -> str:
-    return f"{parent.rstrip('/')}/{child}"
