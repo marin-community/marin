@@ -177,6 +177,48 @@ def test_verified_copy_retry_uses_verified_objects_without_source_reads(tmp_path
     assert (destination / COMPLETION_MANIFEST).exists()
 
 
+def test_verified_copy_rejects_alias_for_source_as_destination(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    source_file = source / "weights.bin"
+    source_file.write_bytes(b"weights")
+
+    with pytest.raises(VerifiedCopyError, match="source and destination prefixes overlap"):
+        verified_copy_prefix(f"file://{source}", str(source), workers=1)
+
+    assert source_file.read_bytes() == b"weights"
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_verified_copy_rejects_contained_prefixes(tmp_path, reverse):
+    parent = tmp_path / "parent"
+    child = parent / "child"
+    child.mkdir(parents=True)
+    (child / "weights.bin").write_bytes(b"weights")
+    source, destination = (child, parent) if reverse else (parent, child)
+
+    with pytest.raises(VerifiedCopyError, match="source and destination prefixes overlap"):
+        verified_copy_prefix(str(source), str(destination), workers=1)
+
+
+@pytest.mark.parametrize("marker_payload", ["{", "[]"])
+def test_verified_copy_ignores_malformed_resume_marker(tmp_path, marker_payload):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    (source / "weights.bin").write_bytes(b"weights")
+    verified_copy_prefix(str(source), str(destination), workers=1)
+    (destination / COMPLETION_MANIFEST).unlink()
+    marker = next(tmp_path.glob("destination.verified-copy-status/*.json"))
+    marker.write_text(marker_payload)
+
+    result = verified_copy_prefix(str(source), str(destination), workers=1)
+
+    assert result.copied_files == 1
+    assert result.resumed_files == 0
+    assert (destination / "weights.bin").read_bytes() == b"weights"
+
+
 def test_verified_copy_interruption_leaves_no_completion_and_retry_resumes(tmp_path, monkeypatch):
     source = tmp_path / "source"
     destination = tmp_path / "destination"

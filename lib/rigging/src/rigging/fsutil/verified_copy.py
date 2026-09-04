@@ -5,6 +5,7 @@
 
 import hashlib
 import json
+import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from typing import Any, cast
@@ -13,7 +14,15 @@ from fsspec import AbstractFileSystem
 
 from rigging.filesystem.atomic import atomic_rename
 from rigging.filesystem.buckets import filesystem_for
-from rigging.fsutil.transfer import _join_path, _join_url, _relative_path
+from rigging.fsutil.transfer import (
+    TransferLocation,
+    _backend,
+    _join_path,
+    _join_url,
+    _relative_path,
+    _same_location,
+    _strictly_contains,
+)
 
 COPY_CHUNK_BYTES = 8 * 1024 * 1024
 S3_UPLOAD_PART_BYTES = 50 * 1024 * 1024
@@ -119,15 +128,17 @@ def verified_copy_prefix(
     if workers < 1:
         raise VerifiedCopyError("workers must be at least 1")
 
-    source_url = source_url.rstrip("/")
-    destination_url = destination_url.rstrip("/")
-    if source_url == destination_url:
-        raise VerifiedCopyError("source and destination must differ")
-    status_url = (status_url or f"{destination_url}.verified-copy-status").rstrip("/")
+    source = _resolved_location(source_url, fixed_upload_size=False)
+    destination = _resolved_location(destination_url, fixed_upload_size=True)
+    status = _resolved_location(
+        status_url or f"{destination.url}.verified-copy-status",
+        fixed_upload_size=True,
+    )
+    _validate_disjoint_locations(source, destination, status)
 
-    source_fs, source_root = filesystem_for(source_url)
-    destination_fs, destination_root = filesystem_for(destination_url, fixed_upload_size=True)
-    status_fs, status_root = filesystem_for(status_url, fixed_upload_size=True)
+    source_url, source_fs, source_root = source.url, source.filesystem, source.path
+    destination_url, destination_fs, destination_root = destination.url, destination.filesystem, destination.path
+    status_fs, status_root = status.filesystem, status.path
     sources = _source_files(source_fs, source_root)
     if not sources:
         raise VerifiedCopyError(f"source prefix contains no files: {source_url}")
@@ -368,8 +379,29 @@ def _resume_marker(filesystem: AbstractFileSystem, path: str) -> _ResumeMarker |
             sha256=str(data["sha256"]),
             destination_identity=str(data["destination_identity"]),
         )
-    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+    except (KeyError, TypeError, ValueError, VerifiedCopyError):
         return None
+
+
+def _resolved_location(url: str, *, fixed_upload_size: bool) -> TransferLocation:
+    filesystem, path = filesystem_for(url, fixed_upload_size=fixed_upload_size)
+    location = TransferLocation.from_path(url, filesystem, path)
+    if _backend(location) == "file":
+        path = os.path.realpath(os.path.abspath(path))
+        location = TransferLocation.from_path(path, filesystem, path)
+    return location
+
+
+def _validate_disjoint_locations(
+    source: TransferLocation,
+    destination: TransferLocation,
+    status: TransferLocation,
+) -> None:
+    locations = (("source", source), ("destination", destination), ("status", status))
+    for index, (left_name, left) in enumerate(locations):
+        for right_name, right in locations[index + 1 :]:
+            if _same_location(left, right) or _strictly_contains(left, right) or _strictly_contains(right, left):
+                raise VerifiedCopyError(f"{left_name} and {right_name} prefixes overlap")
 
 
 def _write_json_atomic(filesystem: AbstractFileSystem, path: str, value: dict[str, Any]) -> None:
