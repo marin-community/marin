@@ -137,7 +137,7 @@ pub fn run_job(compaction: &LocalCompaction<'_>, job: &CompactionJob) -> Result<
                 compaction.segments,
                 compaction.query_visibility,
                 path,
-            );
+            )?;
         }
         tracing::warn!(
             namespace = %compaction.table,

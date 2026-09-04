@@ -71,6 +71,9 @@ pub struct MaintenanceLimits {
     index_backfill: tokio::sync::Mutex<()>,
     /// At most one two-worker physical-layout migration wave runs at a time.
     layout_migration: Mutex<()>,
+    /// At most one legacy encoding rewrite runs at a time. A table skips this
+    /// opportunistic work when the permit is busy instead of queueing.
+    encoding_rewrite: Mutex<()>,
     /// How many tables may run a maintenance cycle concurrently.
     maintenance_cycles: tokio::sync::Semaphore,
     /// A table whose spec migration is mid-flight cycles in this dedicated
@@ -95,6 +98,7 @@ impl MaintenanceLimits {
         Arc::new(Self {
             index_backfill: tokio::sync::Mutex::new(()),
             layout_migration: Mutex::new(()),
+            encoding_rewrite: Mutex::new(()),
             maintenance_cycles: tokio::sync::Semaphore::new(MAX_CONCURRENT_MAINTENANCE_CYCLES),
             spec_migration: tokio::sync::Mutex::new(()),
             flushes: tokio::sync::Semaphore::new(MAX_CONCURRENT_FLUSHES),
@@ -107,6 +111,10 @@ impl MaintenanceLimits {
 
     pub fn layout_migration(&self) -> &Mutex<()> {
         &self.layout_migration
+    }
+
+    pub fn encoding_rewrite(&self) -> &Mutex<()> {
+        &self.encoding_rewrite
     }
 
     pub fn maintenance_cycles(&self) -> &tokio::sync::Semaphore {

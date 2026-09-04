@@ -84,6 +84,12 @@ struct LeaseLifecycle {
     phase: MigrationPhase,
 }
 
+struct AppliedMutation<T> {
+    previous: TableRevision,
+    revision: TableRevision,
+    output: T,
+}
+
 impl LeaseLifecycle {
     fn from_status(status: &SpecLifecycle) -> Self {
         Self {
@@ -393,7 +399,11 @@ impl TableController {
     where
         F: FnOnce() -> Result<(TableRevision, T), StatsError>,
     {
-        let (previous, revision, output) = self.apply(mutation)?;
+        let AppliedMutation {
+            previous,
+            revision,
+            output,
+        } = self.apply(mutation)?;
         if !self.is_object_backed() {
             return Ok(Committed {
                 token: CommitToken::local(revision, WriterFence::UNCLAIMED),
@@ -423,7 +433,11 @@ impl TableController {
     where
         F: FnOnce() -> Result<(TableRevision, T), StatsError>,
     {
-        let (previous, revision, output) = self.apply(mutation)?;
+        let AppliedMutation {
+            previous,
+            revision,
+            output,
+        } = self.apply(mutation)?;
         let fence = if self.is_object_backed() {
             if revision > previous {
                 self.publish_local_snapshot(revision);
@@ -443,7 +457,7 @@ impl TableController {
     /// A revision that advances is owed to HEAD from the moment it is durable
     /// locally, so a failure between here and publication republishes the same
     /// revision instead of undoing it.
-    fn apply<T, F>(&self, mutation: F) -> Result<(TableRevision, TableRevision, T), CommitError>
+    fn apply<T, F>(&self, mutation: F) -> Result<AppliedMutation<T>, CommitError>
     where
         F: FnOnce() -> Result<(TableRevision, T), StatsError>,
     {
@@ -463,7 +477,11 @@ impl TableController {
                 .map_err(CommitError::NotCommitted)?;
             self.mark_publication_owed();
         }
-        Ok((previous, revision, output))
+        Ok(AppliedMutation {
+            previous,
+            revision,
+            output,
+        })
     }
 
     fn local_revision(&self) -> Result<TableRevision, StatsError> {
@@ -532,22 +550,14 @@ impl TableController {
     }
 
     /// Remove superseded state documents and unreferenced objects.
-    pub async fn gc_published(
+    pub(crate) async fn gc_published(
         &self,
         now_ms: i64,
-        pin_retention_ms: u64,
-        state_retention_ms: u64,
-        orphan_grace_ms: u64,
-        sweep_orphans: bool,
+        policy: StateGcPolicy,
     ) -> Result<usize, StatsError> {
         self.dispatch(|reply| ControllerCommand::GcStates {
             now_ms,
-            policy: StateGcPolicy {
-                pin_retention_ms,
-                state_retention_ms,
-                orphan_grace_ms,
-                sweep_orphans,
-            },
+            policy,
             reply,
         })
         .await?
@@ -905,6 +915,7 @@ impl TableController {
         let mut live = Vec::new();
         let mut retired = Vec::new();
         for version in &catalog.version_segments {
+            let version_number = version.table_spec_version.unwrap_or(0);
             let segments = version
                 .live_segments
                 .iter()
@@ -916,21 +927,38 @@ impl TableController {
                         .map(|segment| (segment, false)),
                 );
             for (segment, is_live) in segments {
-                let Some(source) = segment.source.as_option() else {
-                    continue;
-                };
-                let in_object_layout = source
-                    .object_id
-                    .as_deref()
-                    .and_then(|id| ObjectId::parse(id).ok())
-                    .and_then(|id| id.table_relative(&self.table).map(str::to_string))
-                    .is_some_and(|key| key.starts_with(&data_object_prefix));
-                if !in_object_layout {
+                let table_spec_version = segment.table_spec_version.unwrap_or(version_number);
+                if table_spec_version == 0 {
                     continue;
                 }
-                let Ok(reference) = ObjectReference::try_from(source) else {
-                    continue;
+                let Some(source) = segment.source.as_option() else {
+                    return Err(StatsError::Internal(format!(
+                        "table {:?} version {table_spec_version} segment {:?} has no source object",
+                        self.table, segment.segment_id
+                    )));
                 };
+                let reference = ObjectReference::try_from(source).map_err(|error| {
+                    StatsError::Internal(format!(
+                        "table {:?} version {table_spec_version} segment {:?} has an invalid source object: {error}",
+                        self.table, segment.segment_id
+                    ))
+                })?;
+                let relative = reference.id.table_relative(&self.table).ok_or_else(|| {
+                    StatsError::Internal(format!(
+                        "table {:?} version {table_spec_version} segment {:?} references object {:?} from another table",
+                        self.table,
+                        segment.segment_id,
+                        reference.id.as_str()
+                    ))
+                })?;
+                if !relative.starts_with(&data_object_prefix) {
+                    return Err(StatsError::Internal(format!(
+                        "table {:?} version {table_spec_version} segment {:?} source {:?} is outside the data-object prefix",
+                        self.table,
+                        segment.segment_id,
+                        reference.id.as_str()
+                    )));
+                }
                 if is_live {
                     live.push(reference);
                 } else {
@@ -1112,7 +1140,8 @@ mod tests {
     use buffa::MessageField;
 
     use crate::proto::finelog::stats::{
-        ColumnType, L0Mode, OperatingPolicy, SourceLayout, TableSpec as ProtoTableSpec,
+        CatalogSegment, ColumnType, L0Mode, OperatingPolicy, SourceLayout,
+        TableSpec as ProtoTableSpec, TableVersionSegments,
     };
     use crate::store::object_store::build_remote_object_store;
     use crate::store::schema::{schema_to_proto_owned, with_implicit_seq, Column, Schema};
@@ -1234,6 +1263,33 @@ mod tests {
         assert_eq!(published.fence(), WriterFence::new(11));
         assert!(!controller.publication_owed());
         assert!(controller.writes_ready());
+    }
+
+    #[tokio::test]
+    async fn publication_rejects_a_malformed_live_object_reference() {
+        let (controller, _states, _faults) = faulted_controller("controller_malformed_ref", 11);
+        let state = NamespaceCatalog {
+            version_segments: vec![TableVersionSegments {
+                table_spec_version: Some(1),
+                live_segments: vec![CatalogSegment {
+                    table_spec_version: Some(1),
+                    source: MessageField::some(ObjectRef {
+                        object_id: Some("not/a/canonical/object".to_string()),
+                        byte_size: Some(1),
+                        sha256: Some(vec![0; 32]),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        assert!(matches!(
+            controller.sync_referenced_objects(&state).await,
+            Err(StatsError::Internal(_))
+        ));
     }
 
     #[tokio::test]

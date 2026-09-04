@@ -181,7 +181,7 @@ pub fn evict_to_policy(
             // Over cap but nothing eligible (still L0, or not yet uploaded).
             break;
         };
-        evict_segment(table, catalog, segments, query_visibility, &row.path);
+        evict_segment(table, catalog, segments, query_visibility, &row.path)?;
     }
 
     // Age trim: independent of size; ordered by created_at_ms.
@@ -190,7 +190,7 @@ pub fn evict_to_policy(
     };
     let cutoff_ms = crate::store::table::now_ms() - max_age_ms;
     while let Some(row) = catalog.select_aged_eviction_candidate(table, cutoff_ms)? {
-        evict_segment(table, catalog, segments, query_visibility, &row.path);
+        evict_segment(table, catalog, segments, query_visibility, &row.path)?;
     }
     Ok(())
 }
@@ -214,14 +214,17 @@ pub fn evict_segment(
     segments: &SegmentView,
     query_visibility: &Arc<RwLock<()>>,
     path: &str,
-) -> i64 {
+) -> Result<i64, StatsError> {
     let _write_guard = query_visibility.blocking_write();
-    let removed = segments.remove(path);
-    if removed.as_ref().map(|segment| segment.location) == Some(SegmentLocation::Both) {
-        let _ = catalog.set_location(table, path, SegmentLocation::Remote);
+    let Some(candidate) = segments.find(|segment| segment.path == path) else {
+        return Ok(0);
+    };
+    if candidate.location == SegmentLocation::Both {
+        catalog.set_location(table, path, SegmentLocation::Remote)?;
     } else {
-        let _ = catalog.remove_segment(table, path);
+        catalog.remove_segment(table, path)?;
     }
+    let removed = segments.remove(path);
     if let Err(error) = std::fs::remove_file(path) {
         if error.kind() != std::io::ErrorKind::NotFound {
             tracing::warn!(namespace = %table, path = %path, %error, "failed to delete evicted segment");
@@ -230,7 +233,7 @@ pub fn evict_segment(
     // Derived indexes are local-only, so they are unlinked with the local
     // Parquet on eviction.
     remove_index_artifacts(path);
-    removed.map(|segment| segment.size_bytes).unwrap_or(0)
+    Ok(removed.map(|segment| segment.size_bytes).unwrap_or(0))
 }
 
 #[cfg(test)]

@@ -351,6 +351,20 @@ async fn poll_until(mut condition: impl FnMut() -> bool, describe: impl Fn() -> 
     panic!("{}", describe());
 }
 
+async fn wait_for_scalar(store: &Store, sql: &str, expected: i64) {
+    for _ in 0..200 {
+        let actual = scalar_i64(store, sql).await;
+        if actual == expected {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!(
+        "query {sql:?} never returned {expected} (last saw {})",
+        scalar_i64(store, sql).await
+    );
+}
+
 /// Wait for `store`'s watermark for `(target, namespace)` to reach `expected`. Reads
 /// local state only, so a test can tell "the forwarder is done" without an RPC that
 /// would perturb the target's request count.
@@ -1475,13 +1489,7 @@ async fn a_restart_mid_migration_resumes_forwarding_from_the_durable_cursor() {
 
     // The hub ACKs before its async flush seals the rows, so poll the count.
     let count_sql = format!("SELECT count(*) FROM \"{EVENTS}\"");
-    for _ in 0..200 {
-        if scalar_i64(&target, &count_sql).await == 60 {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-    assert_eq!(scalar_i64(&target, &count_sql).await, 60);
+    wait_for_scalar(&target, &count_sql, 60).await;
     assert_eq!(
         scalar_i64(
             &target,
@@ -1547,7 +1555,6 @@ async fn a_hub_migration_under_live_forwarding_loses_nothing() {
             break;
         }
         hub.maintain_namespace(EVENTS, false).await.unwrap();
-        tokio::time::sleep(Duration::from_millis(25)).await;
     }
     assert_eq!(
         hub.spec_lifecycle(EVENTS).unwrap().active_version(),
@@ -1563,13 +1570,7 @@ async fn a_hub_migration_under_live_forwarding_loses_nothing() {
     // Exactly once, before and after the flip. The hub ACKs before its async
     // flush seals rows for queries, so poll the count.
     let count_sql = format!("SELECT count(*) FROM \"{EVENTS}\"");
-    for _ in 0..200 {
-        if scalar_i64(&hub, &count_sql).await == 250 {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-    assert_eq!(scalar_i64(&hub, &count_sql).await, 250);
+    wait_for_scalar(&hub, &count_sql, 250).await;
     assert_eq!(
         scalar_i64(
             &hub,

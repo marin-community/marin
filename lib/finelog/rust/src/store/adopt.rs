@@ -516,7 +516,7 @@ fn discard_staging_files(dir: &Path, namespace: &str) {
 ///   compaction input the catalog has already superseded — its row replaced by
 ///   the merge output — but whose unlink has not yet run. Adopting the latter
 ///   resurrects a phantom segment whose file is about to vanish: a dangling
-///   reference that wedges compaction (#7361). Monotonic seq allocation
+///   reference that wedges compaction. Monotonic seq allocation
 ///   separates the two — a genuine flush orphan always sits strictly ABOVE the
 ///   cataloged high-water seq, a superseded input at or below it — so pass 2
 ///   skips any file whose `min_seq` is not past every catalog row's `max_seq`.
@@ -640,7 +640,7 @@ pub fn adopt_local_segments(
         // is a compaction input whose row the merge output replaced but whose
         // unlink has not yet run (a concurrent adopt caught the post-splice /
         // pre-unlink window). Adopting it would resurrect a phantom segment whose
-        // file is about to vanish, wedging compaction (#7361). A genuine
+        // file is about to vanish, wedging compaction. A genuine
         // uncataloged flush always sits strictly above the cataloged high-water
         // seq, so this only skips the superseded case.
         if let Some(max_seq) = max_catalog_seq {
@@ -1126,7 +1126,7 @@ mod tests {
 
     #[test]
     fn adopt_skips_superseded_compaction_input_still_on_disk() {
-        // Regression for #7361. A compaction had committed its catalog splice —
+        // A compaction had committed its catalog splice —
         // `replace_segments` swapped the L0 input rows for the merged L1 output —
         // but had not yet unlinked the input files when adoption ran (a
         // re-register replacing the engine, or a crash, caught the post-splice /
