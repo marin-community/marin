@@ -26,6 +26,7 @@ def test_dashboard_vllm_overview_end_to_end():
         return name, value, json.dumps(attributes), timestamp
 
     cumulative = {"source_temporality": "cumulative_snapshot"}
+    snapshot = {"source_temporality": "current_snapshot"}
     samples = [
         sample("generation_tokens_total", value, timestamp, **cumulative) for timestamp, value in ((0, 0), (15_000, 150))
     ]
@@ -39,7 +40,11 @@ def test_dashboard_vllm_overview_end_to_end():
             sample(f"request_time_per_output_token_seconds_{component}", value, timestamp, **labels)
             for timestamp, value in ((0, 0), (15_000, final))
         ]
-    samples.append(sample("num_requests_running", 2, 15_000, source_temporality="current_snapshot", step="1"))
+    samples.append(sample("num_requests_running", 2, 15_000, **snapshot))
+    samples += [
+        sample("num_requests_running", 1, timestamp, engine="physical-b", engine_index="1", **snapshot)
+        for timestamp in range(0, 240_000, 15_000)
+    ]
     database.executemany(
         """INSERT INTO "telemetry_v1.marinskyrl"
            VALUES ('cw-a', 'marinskyrl', '/train', ?, 'gauge', ?, '{"worker":"driver"}', ?, ?, ?)""",
@@ -54,7 +59,7 @@ def test_dashboard_vllm_overview_end_to_end():
     dashboard = json.loads((Path(__file__).parents[1] / "dashboards" / "inference.json").read_text())
     targets = (target for panel in dashboard["panels"] for target in panel.get("targets", []))
     path = next(target["url"] for target in targets if target.get("url") == "/v1/vllm/overview")
-    params = {"identity_kind": "job_id", "identity": "/train", "from": 0, "to": 30_000, "bucket_ms": 15_000}
+    params = {"identity_kind": "job_id", "identity": "/train", "from": 0, "to": 240_000, "bucket_ms": 15_000}
 
     with TestClient(app) as client:
         response = client.get(f"/finelog/marin{path}", params={**params, "view": "token_rate"})
@@ -62,4 +67,11 @@ def test_dashboard_vllm_overview_end_to_end():
 
     assert response.status_code == 200
     assert [(row["metric"], row["value"]) for row in response.json()] == [("generated_tokens", 10)]
-    assert {row["section"] for row in all_rows.json()} == VLLM_OVERVIEW_SECTIONS
+    rows = all_rows.json()
+    assert {row["section"] for row in rows} == VLLM_OVERVIEW_SECTIONS
+    values = {(row["section"], row["metric"], row["stat"], row["series"], row["t"]): row["value"] for row in rows}
+    assert values[("request_outcome", "requests", "total", "stop", None)] == 1
+    assert values[("latency", "tpot", "mean_over_time", "time per output token", 15_000)] == 0.1
+    assert values[("saturation", "num_requests_running", "value", "num_requests_running", 15_000)] == 3
+    freshness = {row["series"].rsplit(":", 1)[-1]: row["status"] for row in rows if row["section"] == "freshness_detail"}
+    assert freshness == {"physical-a": "stale_or_stopped", "physical-b": "fresh"}

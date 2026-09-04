@@ -566,13 +566,20 @@ WITH base AS (
     CROSS JOIN (SELECT COUNT(*) AS uncertain_failures FROM collection_failure_increments WHERE uncertain > 0)
     CROSS JOIN (SELECT COUNT(*) AS drop_reasons FROM dropped_sample_totals)
 ), producer_samples AS (
-    SELECT DISTINCT origin_cluster, service, resource_attributes_json, timestamp_ms
+    SELECT DISTINCT origin_cluster,
+           service,
+           resource_attributes_json,
+           CASE
+               WHEN service = 'marinskyrl' THEN COALESCE(json_get(attributes_json, 'engine'), resource_attributes_json)
+               ELSE resource_attributes_json
+           END AS producer_identity,
+           timestamp_ms
     FROM base
     WHERE name IN ({serving_metric_names})
 ), producer_ordered AS (
     SELECT *,
            LAG(timestamp_ms) OVER (
-               PARTITION BY origin_cluster, service, resource_attributes_json
+               PARTITION BY origin_cluster, service, resource_attributes_json, producer_identity
                ORDER BY timestamp_ms
            ) AS previous_timestamp_ms
     FROM producer_samples
@@ -580,13 +587,14 @@ WITH base AS (
     SELECT origin_cluster,
            service,
            resource_attributes_json,
+           producer_identity,
            MAX(timestamp_ms) AS latest_timestamp_ms,
            SUM(CASE WHEN timestamp_ms >= {start_ms} THEN 1 ELSE 0 END) AS samples,
            MAX(CASE
                WHEN timestamp_ms >= {start_ms} THEN timestamp_ms - previous_timestamp_ms
            END) / 1000.0 AS gap_seconds
     FROM producer_ordered
-    GROUP BY 1, 2, 3
+    GROUP BY 1, 2, 3, 4
 ), producer_freshness AS (
     SELECT *,
            CASE
@@ -607,7 +615,8 @@ WITH base AS (
                         gap_seconds DESC,
                         origin_cluster,
                         service,
-                        resource_attributes_json
+                        resource_attributes_json,
+                        producer_identity
            ) AS freshness_rank
     FROM producer_freshness
 ), freshness_summary AS (
@@ -817,7 +826,7 @@ WITH base AS (
            'freshness' AS section,
            'telemetry' AS metric,
            'latest_sample_age' AS stat,
-           origin_cluster || ':' || service || ':' || resource_attributes_json AS series,
+           origin_cluster || ':' || service || ':' || producer_identity AS series,
            ({end_ms} - latest_timestamp_ms) / 1000.0 AS value,
            's' AS unit,
            freshness_status AS status,
@@ -831,7 +840,7 @@ WITH base AS (
            'freshness_detail' AS section,
            'telemetry' AS metric,
            'latest_sample_age' AS stat,
-           origin_cluster || ':' || service || ':' || resource_attributes_json AS series,
+           origin_cluster || ':' || service || ':' || producer_identity AS series,
            ({end_ms} - latest_timestamp_ms) / 1000.0 AS value,
            's' AS unit,
            freshness_status AS status,
