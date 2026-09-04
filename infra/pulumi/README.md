@@ -263,12 +263,10 @@ A Grafana token rotation creates a new Managed Auth username (`cwtoken-…`). Ap
 preview/up for each stack before switching Grafana to the new token. Remove the old username
 and update the stacks again only after the new Grafana revision passes its bridge checks.
 
-Loom uses a separate CoreWeave API token and kubeconfig. [CoreWeave API
-tokens](https://docs.coreweave.com/security/authn-authz/managed-auth/api-access) are user-scoped,
-so an organization administrator must first select a token-owning user reserved for this
-application and assign it only the [CKS Viewer
-role](https://docs.coreweave.com/security/iam/access-policies). The token owner then creates a
-token named `loom-token` in the CoreWeave Cloud Console and assembles a kubeconfig containing
+Loom uses a separate user-scoped [CoreWeave API
+token](https://docs.coreweave.com/security/authn-authz/managed-auth/api-access). Its token-owning
+user has the [CKS Viewer role](https://docs.coreweave.com/security/iam/access-policies). During
+rotation, the token owner creates a replacement token and assembles a kubeconfig containing
 these four contexts:
 
 - `marin-gpu_US-EAST-02A` for `cw-us-east-02a`
@@ -284,8 +282,9 @@ CoreWeave IAM policy, add `pods/exec` and `pods/portforward`. Keep the current a
 Managed Auth usernames in every cluster config during rotation, and preview/apply all four
 Pulumi stacks before exposing the replacement kubeconfig to Loom.
 
-Inspect the downloaded file without printing its token, verify the expected username and
-contexts, and upload the complete kubeconfig to a dedicated Secret Manager secret:
+Inspect the replacement file without printing its token, verify the expected username and
+contexts, and add the complete kubeconfig as a new version of the existing
+`loom-coreweave-iris-kubeconfig` Secret Manager secret:
 
 ```bash
 export KUBECONFIG=/path/to/reviewed/coreweave-iris
@@ -293,15 +292,11 @@ chmod 600 "$KUBECONFIG"
 kubectl auth whoami --kubeconfig "$KUBECONFIG" --context marin-us-east-08a_US-EAST-08A
 kubectl config get-contexts --kubeconfig "$KUBECONFIG" -o name
 
-gcloud secrets create loom-coreweave-iris-kubeconfig \
-  --project=hai-gcp-models \
-  --replication-policy=automatic
 gcloud secrets versions add loom-coreweave-iris-kubeconfig \
   --project=hai-gcp-models \
   --data-file="$KUBECONFIG"
 ```
 
-Create the secret only for its first version; later rotations use `gcloud secrets versions add`.
 Do not put the kubeconfig in Git, Pulumi configuration, shell output, or a PR. Pin the new
 numeric secret version through the Loom stack's `homeFiles` entry at `.kube/coreweave-iris`
 with mode `0600`. That deployment grants the Loom VM access only to the referenced secret and
