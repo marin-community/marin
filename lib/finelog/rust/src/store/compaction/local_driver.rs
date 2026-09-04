@@ -26,7 +26,7 @@ use crate::store::compaction::config::{CompactionConfig, CompactionJob};
 use crate::store::compaction::executor::{
     run_job_with_partition_policy, CompactionExecution, OutputPolicy, PlannedSwap,
 };
-use crate::store::compaction::planner::plan;
+use crate::store::compaction::planner::{plan, UnpartitionedRunPolicy};
 use crate::store::legacy::archive::evict_segment;
 use crate::store::table::segment_format::SegmentFormat;
 use crate::store::table::segment_view::SegmentView;
@@ -50,7 +50,11 @@ pub struct LocalCompaction<'a> {
 /// The caller drains by looping while this returns `true`.
 pub fn compact_once(compaction: &LocalCompaction<'_>) -> Result<bool, StatsError> {
     let rows = compaction.segments.rows();
-    let Some(job) = plan(compaction.config, &rows) else {
+    let Some(job) = plan(
+        compaction.config,
+        &rows,
+        UnpartitionedRunPolicy::StrictAdjacency,
+    ) else {
         return Ok(false);
     };
     run_job(compaction, &job)?;

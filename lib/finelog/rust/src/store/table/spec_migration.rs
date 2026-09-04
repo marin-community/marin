@@ -57,6 +57,16 @@ const SOURCE_ID_SEPARATOR: char = '\n';
 /// from colliding.
 const PARTITION_DIRECTORIES: u32 = 64;
 
+/// A single source can contain unbounded partition cardinality. Refuse a
+/// rewrite before uploading anything when one atomic checkpoint would create
+/// an impractically large output fanout.
+const MAX_MIGRATION_OUTPUT_PARTITIONS: usize = 4_096;
+
+/// Migration rewrites enter the first indexed level. They must not inherit a
+/// source's depth: a batch can span old levels, and publishing it directly at
+/// L2 or terminal L3 bypasses the normal leveling policy.
+const MIGRATION_OUTPUT_LEVEL: i32 = 1;
+
 /// Consecutive identical failures after which a transition is reported blocked.
 ///
 /// A few repeats are ordinary — a contended commit, a transient object read —
@@ -312,7 +322,7 @@ async fn backfill(
             .filter_map(|record| record.migration_source_id.as_deref())
             .flat_map(|ids| ids.split(SOURCE_ID_SEPARATOR).map(str::to_string))
             .collect();
-        let mut sources: Vec<_> = rows
+        let sources: Vec<_> = rows
             .iter()
             .filter(|row| row.max_seq <= fence_seq)
             .filter(|row| match object_records.get(&row.path) {
@@ -321,55 +331,66 @@ async fn backfill(
             })
             .cloned()
             .collect();
-        // Newest first: checkpointing is order-independent (each source is
-        // identified by content), and dashboards read the most recent window,
-        // so rewriting the newest sources first collapses the hottest part of
-        // the query view from thousands of small files into a few objects
-        // within the first batches instead of the last.
-        sources.sort_by_key(|row| std::cmp::Reverse(row.min_seq));
         (object_records, sources, covered)
     };
+    let partitioned_target = target_layout
+        .as_ref()
+        .and_then(|layout| layout.partition.as_option())
+        .is_some_and(|partition| !partition.fields.is_empty());
+    let source_groups = migration_source_groups(sources, partitioned_target);
     let snapshot_ms = snapshot_started.elapsed().as_millis() as u64;
     let select_started = Instant::now();
     let mut batch: Vec<BatchSource> = Vec::new();
     let mut batch_bytes: i64 = 0;
     let mut unexamined = false;
-    for row in &sources {
-        if batch.len() >= migration.migration_batch_sources || batch_bytes >= batch_byte_cap {
-            unexamined = true;
+    'groups: for (group_index, group) in source_groups.iter().enumerate() {
+        for row in group {
+            if !batch.is_empty()
+                && (batch.len() >= migration.migration_batch_sources
+                    || batch_bytes >= batch_byte_cap)
+            {
+                unexamined = true;
+                break 'groups;
+            }
+            let record = object_records.get(&row.path);
+            let Some(localized) = migration.controller.localize_source(row, record).await? else {
+                // The row's bytes exist neither locally nor in the archive: no
+                // reader can serve them and no source can supply them. Drop the
+                // row so the restated universe stops owing rows nothing holds.
+                tracing::warn!(
+                    namespace = %table,
+                    path = %row.path,
+                    rows = row.row_count,
+                    "dropping a legacy migration source whose bytes are unrecoverable"
+                );
+                migration.catalog.remove_segment(table, &row.path)?;
+                continue;
+            };
+            let source_id = cached_source_identity(migration, row, record, &localized).await?;
+            if covered.contains(&source_id) {
+                continue;
+            }
+            batch_bytes += row.byte_size;
+            batch.push(BatchSource {
+                row: row.clone(),
+                localized,
+                source_id,
+            });
+        }
+        if !batch.is_empty() {
+            // An unpartitioned rewrite never crosses a real sequence gap. If
+            // this component is only partially consumed or older components
+            // remain, the next tick still owns backfill work.
+            unexamined |= group_index + 1 < source_groups.len();
             break;
         }
-        let record = object_records.get(&row.path);
-        let Some(localized) = migration.controller.localize_source(row, record).await? else {
-            // The row's bytes exist neither locally nor in the archive: no
-            // reader can serve them and no source can supply them. Drop the
-            // row so the restated universe stops owing rows nothing holds.
-            tracing::warn!(
-                namespace = %table,
-                path = %row.path,
-                rows = row.row_count,
-                "dropping a legacy migration source whose bytes are unrecoverable"
-            );
-            migration.catalog.remove_segment(table, &row.path)?;
-            continue;
-        };
-        let source_id = cached_source_identity(migration, row, record, &localized).await?;
-        if covered.contains(&source_id) {
-            continue;
-        }
-        batch_bytes += row.byte_size;
-        batch.push(BatchSource {
-            row: row.clone(),
-            localized,
-            source_id,
-        });
     }
     if !batch.is_empty() {
         tracing::info!(
             namespace = %table,
             batch_sources = batch.len(),
             batch_bytes,
-            universe = sources.len(),
+            universe = source_groups.iter().map(Vec::len).sum::<usize>(),
             snapshot_ms,
             select_ms = select_started.elapsed().as_millis() as u64,
             "migration backfill batch selected"
@@ -421,6 +442,56 @@ struct BatchSource {
     source_id: String,
 }
 
+/// Deterministic source groups for one migration target.
+///
+/// A partitioned target defines sparse stream membership from row values, so
+/// global sequence gaps do not constrain a batch. An unpartitioned target has
+/// no such identity: keep each overlap-or-adjacency component separate so one
+/// output footer never invents coverage across a real gap. Components are
+/// processed newest first, while rows inside one component remain in canonical
+/// sequence/path order.
+fn migration_source_groups(
+    mut sources: Vec<SegmentRow>,
+    partitioned_target: bool,
+) -> Vec<Vec<SegmentRow>> {
+    if partitioned_target {
+        sources.sort_by(|left, right| {
+            (right.min_seq, right.max_seq, &right.path).cmp(&(
+                left.min_seq,
+                left.max_seq,
+                &left.path,
+            ))
+        });
+        return (!sources.is_empty())
+            .then_some(sources)
+            .into_iter()
+            .collect();
+    }
+
+    sources.sort_by(|left, right| {
+        (left.min_seq, left.max_seq, &left.path).cmp(&(right.min_seq, right.max_seq, &right.path))
+    });
+    let mut groups: Vec<Vec<SegmentRow>> = Vec::new();
+    let mut component_max = i64::MIN;
+    for source in sources {
+        let starts_new_component = groups
+            .last()
+            .is_some_and(|_| source.min_seq > component_max.saturating_add(1));
+        if starts_new_component || groups.is_empty() {
+            groups.push(Vec::new());
+            component_max = source.max_seq;
+        } else {
+            component_max = component_max.max(source.max_seq);
+        }
+        groups
+            .last_mut()
+            .expect("migration source group was just created")
+            .push(source);
+    }
+    groups.reverse();
+    groups
+}
+
 /// Rewrite `batch` into `target_layout` at version `to_version` as one
 /// multi-input job, and checkpoint every consumed source in one commit.
 ///
@@ -448,13 +519,7 @@ async fn rewrite_batch(
                 ..source.row.clone()
             })
             .collect(),
-        // Outputs take the batch's deepest level: the merge folds shallow
-        // levels into it, which is the direction compaction moves anyway.
-        output_level: batch
-            .iter()
-            .map(|source| source.row.level)
-            .max()
-            .unwrap_or(0),
+        output_level: MIGRATION_OUTPUT_LEVEL,
         output_min_seq: batch
             .iter()
             .map(|source| source.row.min_seq)
@@ -530,6 +595,7 @@ async fn rewrite_batch(
             consumed.len()
         )));
     }
+    validate_output_partition_count(&swap.added)?;
     let created_at_ms = consumed
         .iter()
         .map(|source| source.row.created_at_ms)
@@ -591,6 +657,20 @@ async fn rewrite_batch(
         "migration backfill batch committed"
     );
     Ok(consumed.len())
+}
+
+fn validate_output_partition_count(outputs: &[LocalSegment]) -> Result<(), StatsError> {
+    let partitions = outputs
+        .iter()
+        .map(|segment| segment.partition.as_ref())
+        .collect::<BTreeSet<_>>()
+        .len();
+    if partitions > MAX_MIGRATION_OUTPUT_PARTITIONS {
+        return Err(StatsError::ResourceExhausted(format!(
+            "migration batch would emit {partitions} partitions; limit is {MAX_MIGRATION_OUTPUT_PARTITIONS}"
+        )));
+    }
+    Ok(())
 }
 
 /// Stable identity of one migration source, so a rewrite interrupted after its
@@ -723,24 +803,43 @@ impl PhysicalPartitionPolicy for TargetPartitions {
 
     fn segment_directory(&self, partition: &SegmentPartition) -> PathBuf {
         let mut digest = Sha256::new();
+        digest.update(partition.spec_id.to_be_bytes());
         for (field, value) in &partition.values {
+            digest.update((field.len() as u64).to_be_bytes());
             digest.update(field.as_bytes());
-            digest.update([0]);
+            digest.update((value.len() as u64).to_be_bytes());
             digest.update(value.as_bytes());
-            digest.update([0]);
         }
-        let bucket = u32::from_be_bytes(
-            digest.finalize()[..4]
-                .try_into()
-                .expect("sha256 prefix is four bytes"),
-        ) % PARTITION_DIRECTORIES;
-        Path::new("partition").join(format!("{bucket:02}"))
+        let digest = digest.finalize();
+        let bucket =
+            u32::from_be_bytes(digest[..4].try_into().expect("sha256 prefix is four bytes"))
+                % PARTITION_DIRECTORIES;
+        Path::new("partition")
+            .join(format!("{bucket:02}"))
+            .join(crate::hex::encode(&digest))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn source(path: &str, min_seq: i64, max_seq: i64) -> SegmentRow {
+        SegmentRow {
+            namespace: "events".to_string(),
+            path: path.to_string(),
+            level: 2,
+            min_seq,
+            max_seq,
+            row_count: 1,
+            byte_size: 1,
+            created_at_ms: 0,
+            min_key_value: None,
+            max_key_value: None,
+            partition: None,
+            location: SegmentLocation::Both,
+        }
+    }
 
     /// The point of the counter is to separate a transition that retries from
     /// one that cannot proceed, so only an unchanging error escalates and any
@@ -769,5 +868,117 @@ mod tests {
 
         block.clear();
         assert_eq!(block.blocked_error(), None);
+    }
+
+    #[test]
+    fn unpartitioned_migration_never_batches_across_a_real_sequence_gap() {
+        let groups = migration_source_groups(
+            vec![
+                source("nested", 4, 6),
+                source("new", 20, 25),
+                source("bridge", 1, 10),
+                source("adjacent", 11, 12),
+                source("new-overlap", 24, 30),
+            ],
+            false,
+        );
+
+        assert_eq!(groups.len(), 2);
+        assert_eq!(
+            groups[0]
+                .iter()
+                .map(|row| row.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["new", "new-overlap"]
+        );
+        assert_eq!(
+            groups[1]
+                .iter()
+                .map(|row| row.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["bridge", "nested", "adjacent"]
+        );
+    }
+
+    #[test]
+    fn unpartitioned_migration_handles_the_maximum_sequence_without_overflow() {
+        let groups = migration_source_groups(
+            vec![
+                source("last", i64::MAX, i64::MAX),
+                source("penultimate", i64::MAX - 1, i64::MAX - 1),
+            ],
+            false,
+        );
+        assert_eq!(groups.len(), 1);
+    }
+
+    #[test]
+    fn partitioned_migration_keeps_sparse_sources_in_one_newest_first_group() {
+        let groups = migration_source_groups(
+            vec![source("old", -1_000, -900), source("new", 1_000, 1_100)],
+            true,
+        );
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0][0].path, "new");
+        assert_eq!(groups[0][1].path, "old");
+    }
+
+    #[test]
+    fn partitioned_staging_names_distinguish_equal_minimum_sequences() {
+        let policy = TargetPartitions {
+            spec_id: 1,
+            layout: SourceLayout::default(),
+        };
+        let mut by_bucket: BTreeMap<PathBuf, (SegmentPartition, PathBuf)> = BTreeMap::new();
+        for index in 0..=PARTITION_DIRECTORIES {
+            let partition = SegmentPartition {
+                spec_id: 1,
+                values: BTreeMap::from([("run_id".to_string(), format!("run-{index}"))]),
+            };
+            let directory = policy.segment_directory(&partition);
+            let bucket = directory
+                .parent()
+                .expect("partition path has a placement bucket")
+                .to_path_buf();
+            if let Some((other_partition, other_directory)) = by_bucket.get(&bucket) {
+                assert_ne!(partition, *other_partition);
+                assert_ne!(directory, *other_directory);
+                assert_eq!(directory.parent(), other_directory.parent());
+                return;
+            }
+            by_bucket.insert(bucket, (partition, directory));
+        }
+        panic!("65 partitions must contain a collision across 64 placement buckets");
+    }
+
+    #[test]
+    fn migration_rejects_excessive_partition_fanout() {
+        let outputs = (0..=MAX_MIGRATION_OUTPUT_PARTITIONS)
+            .map(|index| LocalSegment {
+                path: format!("/{index}.parquet"),
+                size_bytes: 1,
+                level: MIGRATION_OUTPUT_LEVEL,
+                min_seq: index as i64,
+                max_seq: index as i64,
+                row_count: 1,
+                created_at_ms: 0,
+                min_key_value: None,
+                max_key_value: None,
+                partition: Some(SegmentPartition {
+                    spec_id: 1,
+                    values: BTreeMap::from([("run_id".to_string(), index.to_string())]),
+                }),
+                location: SegmentLocation::Local,
+                artifacts: Default::default(),
+            })
+            .collect::<Vec<_>>();
+
+        assert!(matches!(
+            validate_output_partition_count(&outputs),
+            Err(StatsError::ResourceExhausted(_))
+        ));
+        assert!(
+            validate_output_partition_count(&outputs[..MAX_MIGRATION_OUTPUT_PARTITIONS]).is_ok()
+        );
     }
 }

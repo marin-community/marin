@@ -28,7 +28,7 @@ use sha2::{Digest, Sha256};
 use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::errors::StatsError;
-use crate::proto::finelog::stats::{NamespaceCatalog, ObjectRef};
+use crate::proto::finelog::stats::{MigrationPhase, NamespaceCatalog, ObjectRef};
 use crate::store::catalog::projection::namespace_catalog;
 use crate::store::catalog::{Catalog, ObjectSegmentRecord, SpecLifecycle};
 use crate::store::object_store::OBJECTS_PREFIX;
@@ -74,7 +74,24 @@ pub struct ObjectPersistence {
 #[derive(Clone, Debug)]
 pub struct MaintenanceLease {
     fence: WriterFence,
-    definition_version: u64,
+    lifecycle: LeaseLifecycle,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct LeaseLifecycle {
+    active_version: u64,
+    desired_version: u64,
+    phase: MigrationPhase,
+}
+
+impl LeaseLifecycle {
+    fn from_status(status: &SpecLifecycle) -> Self {
+        Self {
+            active_version: status.active_version(),
+            desired_version: status.desired_version(),
+            phase: status.phase,
+        }
+    }
 }
 
 /// Work only the controller task performs.
@@ -548,10 +565,28 @@ impl TableController {
                 self.table
             )));
         }
+        let lifecycle = self.catalog.spec_lifecycle(&self.table)?;
         Ok(MaintenanceLease {
             fence: self.fence,
-            definition_version: self.catalog.spec_lifecycle(&self.table)?.active_version(),
+            lifecycle: LeaseLifecycle::from_status(&lifecycle),
         })
+    }
+
+    /// Take a lease only if the lifecycle used to select the compaction inputs
+    /// is still current. This closes the window between planning and leasing.
+    pub fn begin_compaction_for(
+        &self,
+        expected: &SpecLifecycle,
+    ) -> Result<MaintenanceLease, StatsError> {
+        let lease = self.begin_compaction()?;
+        let expected = LeaseLifecycle::from_status(expected);
+        if lease.lifecycle != expected {
+            return Err(StatsError::SchemaConflict(format!(
+                "table {:?} changed lifecycle while compaction was planned",
+                self.table
+            )));
+        }
+        Ok(lease)
     }
 
     /// Commit a compaction result, rebasing it onto the current state.
@@ -574,16 +609,16 @@ impl TableController {
                 self.table, lease.fence
             ))));
         }
-        let active = self
+        let current = self
             .catalog
             .spec_lifecycle(&self.table)
-            .map_err(CommitError::NotCommitted)?
-            .active_version();
-        if active != lease.definition_version {
+            .map_err(CommitError::NotCommitted)?;
+        let current = LeaseLifecycle::from_status(&current);
+        if current != lease.lifecycle {
             return Err(CommitError::NotCommitted(StatsError::SchemaConflict(
                 format!(
-                    "table {:?} moved from definition version {} to {active} while compaction ran",
-                    self.table, lease.definition_version
+                    "table {:?} changed lifecycle from {:?} to {:?} while compaction ran",
+                    self.table, lease.lifecycle, current
                 ),
             )));
         }
@@ -1360,6 +1395,67 @@ mod tests {
             .map(|committed| committed.token.revision());
         assert!(matches!(rejected, Err(CommitError::Fenced(_))));
         assert!(stale.begin_compaction().is_err());
+    }
+
+    #[tokio::test]
+    async fn maintenance_lease_rejects_migration_lifecycle_changes() {
+        let catalog = registered_catalog();
+        let active = catalog.spec_lifecycle(TABLE).unwrap().active.unwrap();
+        let mut next = active;
+        next.version = Some(2);
+        next.source_layout
+            .get_or_insert_default()
+            .target_object_bytes = Some(8 * 1024 * 1024);
+        let hash: [u8; 32] = Sha256::digest(canonical_json_bytes(&next).unwrap()).into();
+        let dual_write = catalog
+            .register_table_spec(TABLE, &next, &hash, true)
+            .unwrap();
+        assert_eq!(dual_write.phase, MigrationPhase::MIGRATION_PHASE_DUAL_WRITE);
+
+        let remote_dir = crate::test_support::unique_dir("controller_lifecycle_lease");
+        let remote = Arc::new(
+            build_remote_object_store(remote_dir.to_str().unwrap())
+                .unwrap()
+                .unwrap(),
+        );
+        let controller = object_controller(
+            remote_dir,
+            Arc::clone(&catalog),
+            remote.clone(),
+            Arc::new(ObjectTableStateStore::new(remote)),
+            11,
+        );
+
+        catalog
+            .update_migration_phase(
+                TABLE,
+                MigrationPhase::MIGRATION_PHASE_DUAL_WRITE,
+                MigrationPhase::MIGRATION_PHASE_BACKFILL,
+            )
+            .unwrap();
+        assert!(controller.begin_compaction_for(&dual_write).is_err());
+
+        let backfill = catalog.spec_lifecycle(TABLE).unwrap();
+        let lease = controller.begin_compaction_for(&backfill).unwrap();
+        catalog
+            .update_migration_phase(
+                TABLE,
+                MigrationPhase::MIGRATION_PHASE_BACKFILL,
+                MigrationPhase::MIGRATION_PHASE_VERIFY,
+            )
+            .unwrap();
+        let mut invoked = false;
+        let rejected = controller
+            .commit_maintenance(&lease, || {
+                invoked = true;
+                Ok((TableRevision::new(99), ()))
+            })
+            .await;
+        assert!(matches!(
+            rejected,
+            Err(CommitError::NotCommitted(StatsError::SchemaConflict(_)))
+        ));
+        assert!(!invoked);
     }
 
     /// The local projection is rebuildable; losing it never disturbs the state

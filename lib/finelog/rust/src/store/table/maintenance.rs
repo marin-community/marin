@@ -277,7 +277,7 @@ async fn compact(
             force_compact_l0,
         )
         .await?;
-        return Ok(WorkOutcome::pending(compacted));
+        return Ok(WorkOutcome::pending(compacted.has_pending_work()));
     }
     // The legacy path decodes Parquet and takes the query-visibility write lock,
     // so the whole drain runs on the blocking pool. It checks the stop latch

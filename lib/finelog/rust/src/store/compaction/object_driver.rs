@@ -26,7 +26,7 @@ use crate::store::compaction::config::{CompactionConfig, CompactionJob};
 use crate::store::compaction::executor::{
     run_job_with_partition_policy, run_merge_thread, CompactionExecution, OutputPolicy,
 };
-use crate::store::compaction::planner::plan;
+use crate::store::compaction::planner::{plan, plan_forced_l0, UnpartitionedRunPolicy};
 use crate::store::compaction::staging::StagingDir;
 use crate::store::object_store::OBJECTS_PREFIX;
 use crate::store::table::controller::{MaintenanceLease, TableController};
@@ -53,18 +53,36 @@ pub struct ObjectCompaction<'a> {
     pub target_object_bytes: i64,
 }
 
+/// Result of one object-compaction attempt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CompactionOutcome {
+    /// No stream was eligible, or no readable input was available.
+    Idle,
+    /// The replacement committed and more debt may remain.
+    Committed,
+    /// Planning succeeded but a concurrent lifecycle or input change won.
+    Conflicted,
+}
+
+impl CompactionOutcome {
+    /// Whether the scheduler should retry on its fast maintenance cadence.
+    pub fn has_pending_work(self) -> bool {
+        self != Self::Idle
+    }
+}
+
 /// Compact one planner-issued run of immutable objects and commit the
 /// replacement under a maintenance lease.
 ///
 /// `force_compact_l0` makes an L0 run eligible regardless of the size threshold
 /// the planner would otherwise apply.
 ///
-/// Returns `true` when a run was replaced and `false` when nothing is eligible
-/// or the commit lost a conflict.
+/// Returns the attempt outcome so the scheduler can distinguish a quiet table
+/// from a conflict that should be replanned promptly.
 pub async fn compact_once(
     compaction: ObjectCompaction<'_>,
     force_compact_l0: bool,
-) -> Result<bool, StatsError> {
+) -> Result<CompactionOutcome, StatsError> {
     let lifecycle = compaction.catalog.spec_lifecycle(compaction.table)?;
     // While a spec migration is pending, dual-write flushes commit ordinary L0
     // objects at the target version; compact those so a many-hour backfill does
@@ -76,7 +94,7 @@ pub async fn compact_once(
         lifecycle.active_version()
     };
     if table_spec_version == 0 {
-        return Ok(false);
+        return Ok(CompactionOutcome::Idle);
     }
     let object_records: HashMap<_, _> = compaction
         .catalog
@@ -108,17 +126,17 @@ pub async fn compact_once(
         ..compaction.config.clone()
     };
     let Some((migration_backfill, job)) = rows_by_class.into_iter().find_map(|(backfill, rows)| {
-        plan(&config, &rows)
-            .or_else(|| force_compact_l0.then(|| l0_promotion_job(&rows)).flatten())
+        plan(&config, &rows, UnpartitionedRunPolicy::SparseStream)
+            .or_else(|| force_compact_l0.then(|| plan_forced_l0(&rows)).flatten())
             .map(|job| (backfill, job))
     }) else {
-        return Ok(false);
+        return Ok(CompactionOutcome::Idle);
     };
 
     // The lease pins the writer fence and definition version. Merging,
     // encoding, and uploading then run outside the controller; only the
     // replacement commit is serialized against concurrent flushes.
-    let lease = compaction.controller.begin_compaction()?;
+    let lease = compaction.controller.begin_compaction_for(&lifecycle)?;
     let localize_started = Instant::now();
     for input in &job.inputs {
         let record = object_records.get(&input.path).ok_or_else(|| {
@@ -167,7 +185,7 @@ async fn run(
     lease: &MaintenanceLease,
     table_spec_version: u64,
     migration_backfill: bool,
-) -> Result<bool, StatsError> {
+) -> Result<CompactionOutcome, StatsError> {
     let index_config = compaction.index_config.clone();
     let arrow_schema = Arc::clone(compaction.format.arrow_schema());
     let sort_columns = compaction.format.sort_columns().to_vec();
@@ -229,7 +247,7 @@ async fn run(
             dropped = ?swap.removed,
             "object compaction found no readable input; leaving the run for the next tick"
         );
-        return Ok(false);
+        return Ok(CompactionOutcome::Idle);
     }
 
     let upload_started = Instant::now();
@@ -289,7 +307,7 @@ async fn commit_level_bump(
     lease: &MaintenanceLease,
     table_spec_version: u64,
     migration_backfill: bool,
-) -> Result<bool, StatsError> {
+) -> Result<CompactionOutcome, StatsError> {
     let records: HashMap<_, _> = compaction
         .catalog
         .object_segments(compaction.table)?
@@ -335,7 +353,7 @@ async fn commit_replacement(
     lease: &MaintenanceLease,
     table_spec_version: u64,
     migration_backfill: bool,
-) -> Result<bool, StatsError> {
+) -> Result<CompactionOutcome, StatsError> {
     let removed_paths = removed.to_vec();
     let committed = match compaction
         .controller
@@ -371,7 +389,7 @@ async fn commit_replacement(
                 %error,
                 "compaction lease lost a real conflict; abandoning the uploaded outputs"
             );
-            return Ok(false);
+            return Ok(CompactionOutcome::Conflicted);
         }
         Err(error) if !error.is_committed() => return Err(error.into()),
         // Durable locally but not published; the maintenance loop owes HEAD that
@@ -396,30 +414,7 @@ async fn commit_replacement(
         catalog_generation = committed.map(|revision| revision.get()),
         "object-backed compaction committed"
     );
-    Ok(true)
-}
-
-/// One job promoting every L0 segment in `rows` to L1.
-///
-/// The leveled policy only promotes a run that meets its byte or fanout target.
-/// A caller that needs L0 stabilized now — a forced maintenance cycle — asks for
-/// this instead.
-fn l0_promotion_job(rows: &[SegmentRow]) -> Option<CompactionJob> {
-    let mut inputs: Vec<SegmentRow> = rows.iter().filter(|row| row.level == 0).cloned().collect();
-    if inputs.is_empty() {
-        return None;
-    }
-    inputs.sort_by_key(|row| row.min_seq);
-    let output_min_seq = inputs
-        .iter()
-        .map(|row| row.min_seq)
-        .min()
-        .expect("a non-empty run has a minimum seq");
-    Some(CompactionJob {
-        inputs,
-        output_level: 1,
-        output_min_seq,
-    })
+    Ok(CompactionOutcome::Committed)
 }
 
 /// Whether a leased commit lost a real conflict rather than hitting a transient
