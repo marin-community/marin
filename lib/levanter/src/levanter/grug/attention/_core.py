@@ -424,22 +424,16 @@ def _tpu_splash_attention(
         if mask.segment_ids is not None:
             q_segment_ids, kv_segment_ids = mask.segment_ids
             # Context parallelism shards Q's sequence while KV remains gathered. Segment
-            # IDs must follow those respective sequence layouts inside shard_map too.
-            q_segment_ids = jax.sharding.reshard(
-                q_segment_ids,
-                NamedSharding(mesh, _segment_ids_pspec(q_pspec, q_segment_ids.ndim)),
-            )
-            kv_segment_ids = jax.sharding.reshard(
-                kv_segment_ids,
-                NamedSharding(mesh, _segment_ids_pspec(k_pspec, kv_segment_ids.ndim)),
-            )
-            q_seg_sharding = _named_sharding_of(q_segment_ids, label="segment_ids.q")
-            kv_seg_sharding = _named_sharding_of(kv_segment_ids, label="segment_ids.kv")
+            # IDs must use those respective layouts at the shard_map boundary. Do not
+            # recover these specs from a resharded tracer: while staging an enclosing
+            # jit its abstract sharding can still describe the input layout.
+            q_segment_ids_axes = _segment_ids_pspec(q_pspec, q_segment_ids.ndim)
+            kv_segment_ids_axes = _segment_ids_pspec(k_pspec, kv_segment_ids.ndim)
             segment_id_lowering = lower_splash_segment_ids(
                 q_segment_ids=q_segment_ids,
                 kv_segment_ids=kv_segment_ids,
-                q_segment_ids_axes=q_seg_sharding.spec,
-                kv_segment_ids_axes=kv_seg_sharding.spec,
+                q_segment_ids_axes=q_segment_ids_axes,
+                kv_segment_ids_axes=kv_segment_ids_axes,
                 q_segment_batch_axis=0 if q_segment_ids.ndim == 2 else None,
                 kv_segment_batch_axis=0 if kv_segment_ids.ndim == 2 else None,
             )
