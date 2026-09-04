@@ -46,7 +46,7 @@ provisioning:
     cluster: { name: marin-rn02a, zone: RNO2A }
     kueue:
       flavor_topology: infiniband  # H100 IB cluster: bind the flavor to the infiniband topology
-      # Standardize Kueue headroom across production Iris clusters. Raise the API
+      # Standardize Kueue headroom across managed CoreWeave Iris clusters. Raise the API
       # client limits with memory so lease renewal stays responsive during large resyncs.
       manager_memory_limit: 8Gi
       client_connection:
