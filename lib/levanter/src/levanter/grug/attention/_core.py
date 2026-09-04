@@ -14,7 +14,7 @@ from haliax.partitioning import _get_mesh
 from jax import numpy as jnp
 from jax import shard_map
 from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_kernel
-from jax.sharding import NamedSharding, auto_axes
+from jax.sharding import NamedSharding, PartitionSpec, auto_axes
 from jaxtyping import Array, Bool, Float, Int
 
 from levanter.kernels.pallas.autotune_utils import named_sharding_of
@@ -57,6 +57,15 @@ class ThdSegmentMetadata(eqx.Module):
 
     segment_lengths: Int[Array, "... M"]
     num_segments: Int[Array, "..."]
+
+
+def _segment_ids_pspec(token_pspec: PartitionSpec, segment_ids_ndim: int) -> PartitionSpec:
+    """Project a BHSD token sharding onto batch/sequence segment IDs."""
+    if segment_ids_ndim == 1:
+        return PartitionSpec(token_pspec[2])
+    if segment_ids_ndim == 2:
+        return PartitionSpec(token_pspec[0], token_pspec[2])
+    raise ValueError(f"Splash segment IDs must have rank 1 or 2, got rank {segment_ids_ndim}")
 
 
 def thd_segment_metadata_from_segment_ids(
@@ -414,6 +423,16 @@ def _tpu_splash_attention(
 
         if mask.segment_ids is not None:
             q_segment_ids, kv_segment_ids = mask.segment_ids
+            # Context parallelism shards Q's sequence while KV remains gathered. Segment
+            # IDs must follow those respective sequence layouts inside shard_map too.
+            q_segment_ids = jax.sharding.reshard(
+                q_segment_ids,
+                NamedSharding(mesh, _segment_ids_pspec(q_pspec, q_segment_ids.ndim)),
+            )
+            kv_segment_ids = jax.sharding.reshard(
+                kv_segment_ids,
+                NamedSharding(mesh, _segment_ids_pspec(k_pspec, kv_segment_ids.ndim)),
+            )
             q_seg_sharding = _named_sharding_of(q_segment_ids, label="segment_ids.q")
             kv_seg_sharding = _named_sharding_of(kv_segment_ids, label="segment_ids.kv")
             segment_id_lowering = lower_splash_segment_ids(
