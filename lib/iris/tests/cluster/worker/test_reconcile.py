@@ -188,6 +188,9 @@ def test_stop_intent_kills_running_attempt(worker, mock_runtime):
     task.thread.join(timeout=5.0)
     assert task.status == job_pb2.TASK_STATE_KILLED
 
+    released = _observations_by_uid(_reconcile(worker, [_stop_desired(uid)]))[uid]
+    assert released.runtime_released
+
 
 def test_stop_intent_unknown_attempt_reports_missing(worker):
     """intent=stop for an attempt the worker has forgotten → TASK_STATE_MISSING.
@@ -204,6 +207,7 @@ def test_stop_intent_unknown_attempt_reports_missing(worker):
     obs = _observations_by_uid(response)
     assert uid in obs
     assert obs[uid].state == job_pb2.TASK_STATE_MISSING
+    assert obs[uid].runtime_released
 
 
 def test_zombie_attempt_is_killed(worker, mock_runtime):

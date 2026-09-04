@@ -24,7 +24,7 @@ from dataclasses import dataclass, field, replace
 from typing import Protocol
 
 from rigging.timing import Timestamp
-from sqlalchemy import Integer, Row, bindparam, case, exists, func, literal_column, select, tuple_
+from sqlalchemy import Integer, Row, bindparam, case, exists, func, literal_column, or_, select, tuple_
 from sqlalchemy.sql.selectable import FromClause
 
 from iris.cluster.constraints import AttributeValue
@@ -63,6 +63,7 @@ from iris.cluster.controller.task_state import (
     DISPATCHED_TASK_STATES,
     ActiveTaskRow,
     RunningTaskEntry,
+    RuntimeReleaseTarget,
     TaskDetailRow,
     task_row_can_be_scheduled,
 )
@@ -73,6 +74,7 @@ from iris.cluster.types import (
     LOCAL_ADMIN_SUBMITTER,
     LOCAL_CLUSTER,
     TERMINAL_JOB_STATES,
+    TERMINAL_TASK_STATES,
     AttemptUid,
     EndpointAccess,
     JobName,
@@ -1884,6 +1886,60 @@ class ControlSnapshot:
     job_specs: dict[JobName, job_pb2.RunTaskRequest] = field(default_factory=dict)
     tasks_to_run: list[job_pb2.RunTaskRequest] = field(default_factory=list)
     running_tasks: list[RunningTaskEntry] = field(default_factory=list)
+
+
+_RUNTIME_RELEASE_TARGETS_STMT = (
+    select(
+        task_attempts_table.c.task_id,
+        task_attempts_table.c.attempt_id,
+        task_attempts_table.c.attempt_uid,
+        task_attempts_table.c.worker_id,
+        workers_table.c.address.label("worker_address"),
+    )
+    .select_from(
+        task_attempts_table.join(local_tasks, local_tasks.c.task_id == task_attempts_table.c.task_id).outerjoin(
+            workers_table, workers_table.c.worker_id == task_attempts_table.c.worker_id
+        )
+    )
+    .where(
+        task_attempts_table.c.runtime_released_at_ms.is_(None),
+        or_(
+            task_attempts_table.c.state.in_(list(TERMINAL_TASK_STATES)),
+            local_tasks.c.state.in_(list(TERMINAL_TASK_STATES)),
+        ),
+    )
+    .order_by(task_attempts_table.c.attempt_uid)
+)
+
+
+def _runtime_release_targets(tx: Tx, stmt) -> list[RuntimeReleaseTarget]:
+    return [
+        RuntimeReleaseTarget(
+            task_id=row.task_id,
+            attempt_id=int(row.attempt_id),
+            attempt_uid=AttemptUid(str(row.attempt_uid)),
+            worker_id=row.worker_id,
+            worker_address=str(row.worker_address) if row.worker_address is not None else None,
+        )
+        for row in tx.execute(stmt).all()
+    ]
+
+
+def direct_runtime_release_targets(tx: Tx) -> list[RuntimeReleaseTarget]:
+    """Return every terminal runtime awaiting direct-provider confirmation."""
+    return _runtime_release_targets(tx, _RUNTIME_RELEASE_TARGETS_STMT)
+
+
+def worker_runtime_release_targets(tx: Tx) -> list[RuntimeReleaseTarget]:
+    """Return terminal runtimes still addressable through an Iris worker.
+
+    An orphaned worker runtime remains unconfirmed after its worker row is
+    removed because no endpoint remains from which Iris can prove absence.
+    """
+    return _runtime_release_targets(
+        tx,
+        _RUNTIME_RELEASE_TARGETS_STMT.where(task_attempts_table.c.worker_id.is_not(None)),
+    )
 
 
 def load_control_snapshot(

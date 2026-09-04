@@ -81,6 +81,7 @@ class WorkerDaemon:
                     worker_pb2.Worker.AttemptObservation(
                         attempt_uid=desired.attempt_uid,
                         state=job_pb2.TASK_STATE_KILLED,
+                        runtime_released=True,
                     )
                 )
 

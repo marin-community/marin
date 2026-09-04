@@ -42,6 +42,7 @@ from iris.cluster.controller.backend import (
     ScheduleResult,
     TaskTarget,
     WorkerFleetReconcileRequest,
+    WorkerReconcileTarget,
     run_scheduling_decision,
 )
 from iris.cluster.controller.reconcile.worker import (
@@ -54,7 +55,7 @@ from iris.cluster.controller.worker_health import (
     WorkerHealthEvent,
     WorkerHealthEventKind,
 )
-from iris.cluster.types import WellKnownAttribute, WorkerId
+from iris.cluster.types import TERMINAL_TASK_STATES, AttemptUid, WellKnownAttribute, WorkerId
 from iris.rpc import controller_pb2, job_pb2, vm_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.worker_connect import WorkerServiceClient
@@ -81,6 +82,80 @@ EXEC_IN_CONTAINER_MAX_TIMEOUT = Duration.from_seconds(900.0)
 
 _T = TypeVar("_T")
 _R = TypeVar("_R")
+
+
+def _state_observations(
+    result: WorkerReconcileResult,
+    release_only_uids: frozenset[AttemptUid],
+) -> WorkerReconcileResult:
+    """Remove release-only observations before translating task state."""
+    return WorkerReconcileResult(
+        worker_id=result.worker_id,
+        observations=[obs for obs in result.observations if obs.attempt_uid not in release_only_uids],
+        error=result.error,
+        self_healthy=result.self_healthy,
+        responder_worker_id=result.responder_worker_id,
+    )
+
+
+def _confirmed_runtime_releases(
+    result: WorkerReconcileResult,
+    requested: frozenset[AttemptUid],
+) -> set[AttemptUid]:
+    """Return requested exact runtimes that a trusted response proves absent."""
+    return {
+        AttemptUid(obs.attempt_uid)
+        for obs in result.observations
+        if obs.attempt_uid in requested
+        and (obs.state in TERMINAL_TASK_STATES or obs.state == job_pb2.TASK_STATE_MISSING)
+        and (obs.runtime_released or obs.state == job_pb2.TASK_STATE_MISSING)
+    }
+
+
+def _targets_with_runtime_releases(
+    request: WorkerFleetReconcileRequest,
+) -> tuple[list[WorkerReconcileTarget], dict[WorkerId, frozenset[AttemptUid]]]:
+    """Merge exact stop intents into immutable per-worker reconcile plans."""
+    targets_by_worker: dict[WorkerId, WorkerReconcileTarget] = {}
+    for target in request.targets:
+        wire_request = worker_pb2.Worker.ReconcileRequest()
+        wire_request.CopyFrom(target.plan.request)
+        targets_by_worker[target.plan.worker_id] = WorkerReconcileTarget(
+            plan=WorkerReconcilePlan(
+                worker_id=target.plan.worker_id,
+                request=wire_request,
+                attempts=target.plan.attempts,
+            ),
+            address=target.address,
+        )
+
+    releases_by_worker: dict[WorkerId, set[AttemptUid]] = {}
+    for release in request.release_targets:
+        if release.worker_id is None or release.worker_address is None:
+            continue
+        releases_by_worker.setdefault(release.worker_id, set()).add(release.attempt_uid)
+        target = targets_by_worker.get(release.worker_id)
+        if target is None:
+            target = WorkerReconcileTarget(
+                plan=WorkerReconcilePlan(
+                    worker_id=release.worker_id,
+                    request=worker_pb2.Worker.ReconcileRequest(worker_id=release.worker_id),
+                    attempts=(),
+                ),
+                address=release.worker_address,
+            )
+            targets_by_worker[release.worker_id] = target
+        desired_uids = {desired.attempt_uid for desired in target.plan.request.desired}
+        if release.attempt_uid not in desired_uids:
+            target.plan.request.desired.append(
+                worker_pb2.Worker.DesiredAttempt(
+                    attempt_uid=release.attempt_uid,
+                    stop=worker_pb2.Worker.STOP_REASON_JOB_TERMINATED,
+                )
+            )
+
+    ordered = [targets_by_worker[worker_id] for worker_id in sorted(targets_by_worker)]
+    return ordered, {worker_id: frozenset(uids) for worker_id, uids in releases_by_worker.items()}
 
 
 def _fan_out(
@@ -250,8 +325,9 @@ class RpcTaskBackend:
         reachability facts. It never decides a worker dead or applies Iris task
         policy; the controller handles both after this I/O returns.
         """
-        plans = [target.plan for target in request.targets]
-        addresses = {target.plan.worker_id: target.address for target in request.targets}
+        targets, releases_by_worker = _targets_with_runtime_releases(request)
+        plans = [target.plan for target in targets]
+        addresses = {target.plan.worker_id: target.address for target in targets}
 
         async def _one(sem: asyncio.Semaphore, plan: WorkerReconcilePlan) -> WorkerReconcileResult:
             return await self._reconcile_one(sem, plan, addresses[plan.worker_id])
@@ -260,15 +336,23 @@ class RpcTaskBackend:
         observed_at = Timestamp.now()
 
         task_updates = []
+        released_attempt_uids: set[AttemptUid] = set()
         worker_health_events: list[WorkerHealthEvent] = []
         for plan, result in zip(plans, results, strict=True):
             address = addresses[plan.worker_id]
+            releases = releases_by_worker.get(plan.worker_id, frozenset())
+            regular_attempt_uids = {row.attempt_uid for row in plan.attempts}
+            release_only_uids = releases - regular_attempt_uids
+            state_result = _state_observations(result, frozenset(release_only_uids))
+            response_is_trusted = result.error is None and (
+                result.responder_worker_id is None or result.responder_worker_id == str(plan.worker_id)
+            )
             if result.error is not None:
                 logger.warning("Reconcile RPC failed for worker %s at %s: %s", plan.worker_id, address, result.error)
                 worker_health_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.UNREACHABLE))
                 self.stub_factory.evict(address)
-                task_updates.extend(task_updates_from_result(plan, result, observed_at=observed_at))
-            elif result.responder_worker_id is not None and result.responder_worker_id != str(plan.worker_id):
+                task_updates.extend(task_updates_from_result(plan, state_result, observed_at=observed_at))
+            elif not response_is_trusted:
                 # Misrouted reconcile: a *different* live worker answered at this
                 # address. GCP recycles a deleted worker's internal IP onto a new
                 # VM, so the controller's stale address for the dead worker now
@@ -287,11 +371,17 @@ class RpcTaskBackend:
                 self.stub_factory.evict(address)
             elif not result.self_healthy:
                 worker_health_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.UNREACHABLE))
-                task_updates.extend(task_updates_from_result(plan, result, observed_at=observed_at))
+                task_updates.extend(task_updates_from_result(plan, state_result, observed_at=observed_at))
             else:
                 worker_health_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.REACHED))
-                task_updates.extend(task_updates_from_result(plan, result, observed_at=observed_at))
-        return ReconcileObservation(task_updates=task_updates, worker_health_events=worker_health_events)
+                task_updates.extend(task_updates_from_result(plan, state_result, observed_at=observed_at))
+            if response_is_trusted:
+                released_attempt_uids.update(_confirmed_runtime_releases(result, releases))
+        return ReconcileObservation(
+            task_updates=task_updates,
+            worker_health_events=worker_health_events,
+            released_attempt_uids=frozenset(released_attempt_uids),
+        )
 
     def reconcile(self, request: ReconcileRequest) -> ReconcileObservation:
         """Return exact task state and worker reachability observations.

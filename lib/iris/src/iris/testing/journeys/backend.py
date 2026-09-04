@@ -78,6 +78,7 @@ class ScriptedTaskBackend:
         self.events: list[BackendEvent] = []
         self.calls: list[str] = []
         self._reconcile_failures = 0
+        self.acknowledge_releases = True
         self.closed = False
 
     @property
@@ -122,6 +123,25 @@ class ScriptedTaskBackend:
         for task_id, attempt_id in sorted(self._desired.keys() - desired.keys()):
             self.events.append(BackendEvent("stopped", task_id, attempt_id, backend_id=self.descriptor.backend_id))
 
+        for target in request.release_targets:
+            self.events.append(
+                BackendEvent(
+                    "release-requested",
+                    target.task_id.to_wire(),
+                    target.attempt_id,
+                    backend_id=self.descriptor.backend_id,
+                )
+            )
+        released = (
+            frozenset(
+                target.attempt_uid
+                for target in request.release_targets
+                if (target.task_id.to_wire(), target.attempt_id) not in desired
+            )
+            if self.acknowledge_releases
+            else frozenset()
+        )
+
         updates: list[TaskUpdate] = []
         newly_launched = {(run.task_id, run.attempt_id) for run in request.tasks_to_run}
         for task_id, attempt_id in sorted(newly_launched - self._desired.keys()):
@@ -139,7 +159,7 @@ class ScriptedTaskBackend:
                 updates.append(self._task_update(task_id, observed_attempt_id, desired[(task_id, attempt_id)], queued))
 
         self._desired = desired
-        return ReconcileObservation(task_updates=updates)
+        return ReconcileObservation(task_updates=updates, released_attempt_uids=released)
 
     def _pop_observation(self, task_id: str) -> ScriptedObservation | None:
         queue = self._queued.get(task_id)

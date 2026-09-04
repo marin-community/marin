@@ -38,7 +38,7 @@ from iris.cluster.stats.tables import (
     WorkerStatus,
     build_worker_stat,
 )
-from iris.cluster.types import AcceleratorType, AttemptUid, CapacityType, JobName
+from iris.cluster.types import AcceleratorType, AttemptUid, CapacityType, JobName, is_task_finished
 from iris.cluster.types import TaskAttempt as TaskAttemptId
 from iris.cluster.worker.dashboard import WorkerDashboard
 from iris.cluster.worker.env_probe import (
@@ -929,6 +929,7 @@ class Worker:
                         worker_pb2.Worker.AttemptObservation(
                             attempt_uid=desired.attempt_uid,
                             state=job_pb2.TASK_STATE_MISSING,
+                            runtime_released=True,
                         )
                     )
 
@@ -1014,6 +1015,7 @@ class Worker:
             error=task.error or "",
             container_id=task.platform_container_id or "",
             status_message=task.status_message or "",
+            runtime_released=is_task_finished(state) and task.runtime_released,
         )
         if task.output_archive is not None:
             obs.output_archive.CopyFrom(task.output_archive)
@@ -1036,11 +1038,12 @@ class Worker:
         ).start()
 
     def kill_task(self, task_id: str, term_timeout_ms: int = 5000) -> bool:
-        """Kill the current (most recent) attempt of a task."""
+        """Request a stop for the current attempt and report whether it exists."""
         current = self.current_attempt(task_id)
         if not current:
             return False
-        return current.kill(term_timeout_ms)
+        current.kill(term_timeout_ms)
+        return True
 
     def _run_profile_loop(self, stop_event: threading.Event) -> None:
         """Tick at ``profile_interval`` and capture a CPU profile per running attempt.

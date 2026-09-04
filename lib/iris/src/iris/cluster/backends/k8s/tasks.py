@@ -1945,6 +1945,11 @@ class ClusterState:
             self._workloads = new_workloads
             self._node_pools = list(node_pools)
 
+    def active_pod_names(self) -> frozenset[str]:
+        """Return names from the latest completed active-Pod scan."""
+        with self._lock:
+            return frozenset(pod.get("metadata", {}).get("name", "") for pod in self._pods)
+
     def gpu_capacity(self, priority_class_names: dict[int, str]) -> DeviceCapacity:
         """Approximate free vs. total GPUs across the cluster, split by holder priority.
 
@@ -2409,6 +2414,7 @@ class K8sTaskProvider:
     _task_event_log: TaskEventLog | None = field(default=None, init=False, repr=False)
     _cluster_state: ClusterState = field(default_factory=ClusterState, init=False, repr=False)
     _last_cluster_scan: float = field(default=0.0, init=False, repr=False)
+    _scan_generation: int = field(default=0, init=False, repr=False)
     _last_preempt_time: float = field(default=0.0, init=False, repr=False)
     # Terminal-resource GC runs on its own thread. _gc_lock guards the deferred-cleanup
     # hash set, the one piece of state it shares with the control loop.
@@ -2477,7 +2483,24 @@ class K8sTaskProvider:
         """Converge Pods and return exact task-attempt observations."""
         if not isinstance(request, DirectReconcileRequest):
             raise ValueError("Kubernetes backend requires DirectReconcileRequest")
-        return ReconcileObservation(task_updates=self.sync(request))
+        scan_generation = self._scan_generation
+        updates = self.sync(request)
+        released = self._released_attempt_uids(request) if self._scan_generation != scan_generation else frozenset()
+        return ReconcileObservation(task_updates=updates, released_attempt_uids=released)
+
+    def _released_attempt_uids(self, request: DirectReconcileRequest) -> frozenset[AttemptUid]:
+        active_pod_names = self._cluster_state.active_pod_names()
+        released: set[AttemptUid] = set()
+        for target in request.release_targets:
+            candidates = _pod_name_candidates(
+                target.task_id,
+                target.attempt_id,
+                target.attempt_uid,
+                allow_legacy=(target.task_id.to_wire(), target.attempt_id) not in self._dispatched_attempts,
+            )
+            if active_pod_names.isdisjoint(candidates):
+                released.add(target.attempt_uid)
+        return frozenset(released)
 
     def collect_garbage(self) -> None:
         """Run one garbage-collection pass for eligible Kubernetes resources."""
@@ -2594,6 +2617,7 @@ class K8sTaskProvider:
 
         node_pools = _fetch_node_pools(self.kubectl, self.pods.managed_label)
         self._cluster_state.update(managed_pods, nodes, workloads, node_pools)
+        self._scan_generation += 1
 
         self._start_terminal_gc()
 
