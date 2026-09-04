@@ -14,11 +14,11 @@ The `levanter.metrics` table is in `MIGRATION_PHASE_RETIRED` at table-spec versi
 
 A read-only production catalog inspection found 150 L2 objects containing 943,134,742 rows and 14,287,345,828 compressed bytes. The current exact-adjacency planner sees 142 runs. The largest is nine objects and 212,650,253 bytes, so no run reaches the 32-object or 268,435,456-byte trigger. Of the 149 neighboring pairs ordered by `min_seq`, 129 overlap and only eight are exactly adjacent. An overlap-connected sweep produces one component of 141 objects and 14,074,695,575 bytes plus a nine-object, 212,650,253-byte component.
 
-The same production audit found no comparable nonterminal overlap backlog in other retired tables. `levanter.metrics` also has 81 L1 objects and about 2.8 GB; `iris.task_status` has two overlapping L0 neighbors totaling less than 200 KB. The active Levanter v1 `TableSpec` has no partition declaration, although the legacy policy and [PR #8707](https://github.com/marin-community/marin/pull/8707) require exact `run_id` partitioning. Object flush and migration use `TableSpec.source_layout`; the legacy-only policy is not consulted by object compaction.
+The same production audit found no comparable nonterminal overlap backlog in other retired tables. `levanter.metrics` also has 81 L1 objects and about 2.8 GB; `iris.task_status` has two overlapping L0 neighbors totaling less than 200 KB. The active Levanter v1 `TableSpec` retains the canonical `(run_id, name, step, timestamp_ms)` sort but has no partition declaration. The legacy-only exact `run_id` partition policy is not consulted by object flush or compaction.
 
 ## Internal Prior Work
 
-[Issue #8737](https://github.com/marin-community/marin/issues/8737) requires object-native storage, maintained object layouts, and reusable online table migration. [PR #8707](https://github.com/marin-community/marin/pull/8707) established exact `run_id` partition metadata for Levanter metrics after a seven-day selector scanned 1.068 billion rows across 17,411 segments and exceeded the query deadline. The object-native v1 registration omitted that partition declaration and the migration rewrote the table as unpartitioned objects.
+[Issue #8737](https://github.com/marin-community/marin/issues/8737) requires object-native storage, maintained object layouts, and reusable online table migration. [PR #8707](https://github.com/marin-community/marin/pull/8707) combined a `run_id`-first sort with exact `run_id` partition metadata after a seven-day selector scanned 1.068 billion rows across 17,411 segments and exceeded the query deadline. Object-native v1 kept the sort and omitted the partition. Artifact review concluded that the sort supplied most of the observed gain and partitioning did not justify another full-table rewrite without separate evidence.
 
 The current migration selects all pre-fence sources newest-first and batches them by source count and compressed bytes. It does not preserve level, partition, or sequence-run boundaries. Each rewrite is advertised at the deepest input level. An unpartitioned batch can therefore combine sparse or disjoint sequence sets into an object whose footer interval overlaps other batches. See [`spec_migration.rs`](https://github.com/marin-community/marin/blob/c93e91f01190f2c6fd01d0dac841fb977724aeda/lib/finelog/rust/src/store/table/spec_migration.rs#L300-L365) and [`spec_migration.rs`](https://github.com/marin-community/marin/blob/c93e91f01190f2c6fd01d0dac841fb977724aeda/lib/finelog/rust/src/store/table/spec_migration.rs#L443-L463).
 
@@ -51,13 +51,13 @@ The migration provenance bit cannot identify already-retired repair candidates. 
 - Confidence: high for object-backed tables; the legacy path should retain its existing policy.
 - Action: make unpartitioned-run policy explicit. Treat one object-backed, unpartitioned level as a sparse stream, while retaining exact adjacency for the legacy filesystem path. Sparse membership survives bounded jobs even when a consumed interval was the bridge between other ranges.
 
-### Claim: Levanter v1 lost its intended physical partition
+### Claim: Levanter does not need a v2 rewrite in this rollout
 
-- Support: the active production v1 `SourceLayout` has no partition; every live segment has `partition_json = NULL`; PR #8707 and `LEVANTER_RUN_PARTITION_POLICY` require exact `run_id` partitioning.
-- Contradictions: none found. The static policy still exists, but object flush and compaction do not use it.
+- Support: active production v1 retains the canonical run-first sort; every live segment is unpartitioned; sparse-stream planning can clean its stranded L1/L2 objects in place. Partitioning would rewrite roughly 36 GiB without demonstrated incremental benefit.
+- Contradictions: the static legacy policy and PR #8707 encode exact `run_id` partitioning, but they do not isolate how much improvement came from partition pruning versus the sort order.
 - Directness to Marin: production RPC/catalog plus merged policy code.
 - Confidence: high.
-- Action: ship a server-owned v2 table spec declaring exact `run_id` partitioning in the same binary as the general migration fix, and register it before maintenance starts.
+- Action: keep active Levanter v1 sorted and unpartitioned, remove automatic v2 registration, and defer object-native partitioning to a separately measured proposal.
 
 ## Recommended Next Experiments
 
@@ -73,18 +73,18 @@ The migration provenance bit cannot identify already-retired repair candidates. 
 - Expected signal: inputs are replaced atomically, every row is preserved, and the next cycle makes progress.
 - Cost or risk: bounded local object reads; do not infer uniqueness from footer overlap.
 
-### 3. Rehearse Levanter v2 on marin-dev
+### 3. Rehearse all-table cleanup from smallest to largest
 
-- Minimum experiment: register an exact `run_id` partition spec, stop in `OBSERVING`, and run the Grafana Levanter selectors used in PR #8707. Compare v1 pre-fence rows with v2 backfill rows through retained source references and verify known post-fence canary writes before retirement.
-- Expected signal: all active outputs carry the current partition spec, exact run filters prune unrelated objects, lifecycle-aware commits cannot race activation, abort, or retirement, and maintenance does not reread version-0 archive paths.
-- Cost or risk: rewrites the active marin-dev table once.
+- Minimum experiment: rank copied production stores by live bytes and recent query/write frequency, run repeated maintenance on the smallest and coldest tables first, then advance through active cohorts with Levanter last.
+- Expected signal: every table preserves complete rows and sequence values, each nonterminal sparse stream converges below the configured byte and count limits, query candidate bytes stay bounded, and Levanter remains sorted v1 without archive reads.
+- Cost or risk: bounded local copies only; no production mutation during the rehearsal.
 
 ## Source Ledger
 
 | Source | Type | Location | Claim used for | Confidence | Notes |
 |---|---|---|---|---|---|
 | Object-native issue | GitHub issue | [#8737](https://github.com/marin-community/marin/issues/8737) | Maintained object layout and online migration goals | High | Primary project issue |
-| Levanter partitioning | PR | [#8707](https://github.com/marin-community/marin/pull/8707) | Exact `run_id` partition intent and query motivation | High | Merged production change |
+| Levanter layout | PR | [#8707](https://github.com/marin-community/marin/pull/8707) | Run-first sort, exact partitioning, and query motivation | High | Does not isolate partition benefit from sort benefit |
 | Migration batching | Marin code | [`spec_migration.rs`](https://github.com/marin-community/marin/blob/c93e91f01190f2c6fd01d0dac841fb977724aeda/lib/finelog/rust/src/store/table/spec_migration.rs#L300-L463) | Cause of mixed-level, overlapping outputs | High | Current deployed branch |
 | Compaction planning | Marin code | [`planner.rs`](https://github.com/marin-community/marin/blob/c93e91f01190f2c6fd01d0dac841fb977724aeda/lib/finelog/rust/src/store/compaction/planner.rs#L38-L102) | Per-run threshold and adjacency rule | High | Current deployed branch |
 | Migration retirement | Marin code | [`table_specs.rs`](https://github.com/marin-community/marin/blob/c93e91f01190f2c6fd01d0dac841fb977724aeda/lib/finelog/rust/src/store/catalog/table_specs.rs#L633-L706) | Quiescent state and provenance clearing | High | Current deployed branch |
@@ -92,7 +92,7 @@ The migration provenance bit cannot identify already-retired repair candidates. 
 
 ## Handoff
 
-- Issue prior-work block: #8737 established maintained object layout; #8707 established the Levanter partition contract. Object-native v1 violated both by omitting the partition from `TableSpec` and emitting deep-level sparse batches that the exact-adjacency planner cannot consume.
-- Settled design choices: include a server-owned Levanter v2 repair in this rollout; publish future migration rewrites at L1 so indexed objects neither inherit deep source levels nor use the flat L0 staging path; encode the complete partition fingerprint in staging names; reject a batch above 4,096 partitions or a projected 32 MiB catalog; block rollout above the stated query-candidate and latency regressions.
-- Deferred follow-up: service-level compaction-debt metrics and partial-source migration checkpoints.
+- Issue prior-work block: #8737 established maintained object layout; #8707 established the Levanter run-first sort and partition experiment. Object-native migration emitted deep-level sparse batches that the exact-adjacency planner cannot consume; active v1 still retains the useful sort.
+- Settled design choices: clean every object-backed table through sparse planning; test copied stores from smallest/coldest to largest/most active; keep Levanter sorted and unpartitioned at v1; publish future migration rewrites at L1; retain generic partition collision and fanout guards for future specs; block rollout above the stated query-candidate and latency regressions.
+- Deferred follow-up: service-level compaction-debt metrics, partial-source migration checkpoints, object-native Levanter partitioning, and a universal acknowledged-write receipt ledger.
 - Stop reason: code, tests, Git history, and live catalog geometry agree on the cause and repair boundary.

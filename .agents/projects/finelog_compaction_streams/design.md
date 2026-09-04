@@ -1,8 +1,8 @@
 # Finelog Compaction Streams After Table Migration
 
-Finelog will treat each unpartitioned object level as one sparse logical stream, so overlaps and legitimate sequence gaps cannot strand aggregate debt at a nonterminal level. Future migrations will publish rewritten data at L1 under the target layout and will not manufacture intervals across disconnected unpartitioned ranges. A server-owned Levanter v2 physical definition will restore the exact `run_id` partitioning lost during the object-native v1 migration.
+Finelog will treat each unpartitioned object level as one sparse logical stream, so overlaps and legitimate sequence gaps cannot strand aggregate debt at a nonterminal level. Future migrations will publish rewritten data at L1 under the target layout and will not manufacture intervals across disconnected unpartitioned ranges. The rollout applies sparse-stream cleanup to every object-backed table after a copied-store rehearsal on the smallest cold table and the smallest known affected table.
 
-The repair reads objects referenced by the active table state. It does not list, import, rewrite, or delete version-0 legacy archives.
+Levanter remains sorted by `(run_id, name, step, timestamp_ms)` and unpartitioned. This rollout does not register a v2 definition or rewrite its roughly 36 GiB active object set merely to add `run_id` partition metadata. The repair reads objects referenced by the active table state and does not list, import, rewrite, or delete version-0 legacy archives.
 
 ## Challenges
 
@@ -12,17 +12,16 @@ Strict adjacency cannot be a universal data invariant without renumbering valid 
 
 `MIGRATION_PHASE_RETIRED` is migration-quiescent: migration performs no more work, while ordinary maintenance continues. Retirement removes the source version and clears migration provenance from active objects. Existing tables must therefore be repaired from their current layout and segment geometry.
 
-The Levanter table also lost a required physical layout. PR #8707 partitioned it by exact `run_id`; object-native v1 has no partition declaration and every live object reports `partition_json = NULL`. Restoring that layout requires a v2 migration over about 36 GiB of active object-native data.
+PR #8707 introduced both the Levanter `run_id`-first sort and exact `run_id` partitioning. The object-native v1 table retained the useful sort but not partition metadata. We do not have evidence that partition pruning materially improved the relevant queries beyond the sort order, so partitioning is not worth a full-table rewrite in this rollout.
 
 See [research.md](research.md) for code references, production measurements, and prior work.
 
 ## Costs / Risks
 
 - Sparse-stream leveling can produce broad L3 sequence bounds. L3 is the configured maximum level and is not selected for further leveling. Before enablement, a simulated post-compaction catalog must keep p95 candidate bytes for the production query corpus within 1.25 times baseline and every query within 2 times baseline.
-- Levanter v2 rewrites about 36 GiB once. L1 outputs at or above the 256 MiB target can advance by metadata-only promotion; smaller same-partition outputs require later merges. Version-0 archives remain untouched.
-- A partition-changing batch may produce many objects because one output is written per distinct partition. Source count and input bytes do not hard-bound partition cardinality. A batch is rejected before upload if it would emit more than 4,096 partitions or make the serialized namespace catalog exceed 32 MiB. Exceeding either limit defers Levanter v2 until partial-source checkpoints have a separate design.
+- Enabling cleanup for every object-backed table creates maintenance work beyond the known Levanter backlog. The copied-store rehearsal therefore starts with the smallest cold table, then exercises real overlap and sparsity in the smallest known affected table. Production enablement is global: the current binary has no per-table kill switch, and rolling back the binary cannot undo objects already promoted to terminal L3.
 - The decoded-Arrow limit is a soft admission bound. The executor learns an input's decoded size only after reading it and permits one oversized input for forward progress, so peak transient memory can exceed the configured limit by that input.
-- The current `log` namespace v0-to-v1 migration and Levanter v2 both consume the single migration slot. Starting v2 before `log` reaches `MIGRATION_PHASE_RETIRED` would extend both operations.
+- Sparse cleanup should not compete with the current `log` v0-to-v1 migration for disk and maintenance capacity. Production deployment waits for `log` to reach `MIGRATION_PHASE_RETIRED`.
 
 ## Design
 
@@ -36,9 +35,7 @@ An eligible stream contributes the shortest prefix reaching either configured li
 
 The executor performs a sorted union and preserves every input row. The catalog atomically replaces exact paths under a maintenance lease. A single-input level promotion atomically removes and reinserts the same source object reference with the next level; it does not rewrite bytes. These contracts make overlap safe without changing query-visible row semantics.
 
-Legacy local compaction keeps exact adjacency. This proposal does not change its filesystem recovery or local mutation behavior.
-
-The production Levanter L2 backlog is therefore eligible as one 150-object sparse stream. This demonstrates the general repair, but the rollout registers Levanter v2 before the first maintenance tick, so production Levanter is repartitioned from live v1 objects instead of first consolidating the faulty v1 layout.
+Legacy local compaction keeps exact adjacency. This proposal does not change its filesystem recovery or local mutation behavior. The production Levanter L2 backlog becomes one eligible sparse stream and drains through ordinary maintenance without changing table-spec version or physical partitioning.
 
 ### Publish migration rewrites at L1
 
@@ -48,23 +45,31 @@ For an unpartitioned target, source batching follows overlap-connected component
 
 Before activation, backfill objects carry source identities that prove which source rows were rewritten; ordinary post-fence writes form a separate class. Compaction leaves the backfill class frozen through `DUAL_WRITE`, `BACKFILL`, and `VERIFY`. During `OBSERVING`, the new version is active and complete, so each class may compact separately while retaining its `migration_backfill` bit. An abort during `OBSERVING` removes the backfill class and reassigns post-fence writes to the prior version. At `MIGRATION_PHASE_RETIRED`, retirement clears the class marker and ordinary maintenance may mix all active-version objects. A compaction lease also pins the observed migration phase and transition versions; commit rejects an in-flight job if abort, activation, or retirement changed that lifecycle state.
 
-### Restore Levanter with a server-owned physical policy
+### Keep Levanter sorted and unpartitioned
 
-The server policy registry owns the physical overlay for `levanter.metrics`: sort order `(run_id, name, step, timestamp_ms)`, 256 MiB target objects, and identity partitioning from `run_id` to `run_id` with partition spec ID 1. The logical schema comes from the stored active definition for an existing table or the registration request for a new table. This restores the PR #8707 layout without asking each Levanter process to reconstruct a physical policy.
+The active Levanter v1 definition already carries the canonical sort order `(run_id, name, step, timestamp_ms)`, the 256 MiB object target, and the established row-group size. Its lack of partition metadata is intentional for this rollout. Startup does not register a managed v2, mutate its table-spec lifecycle, or schedule a migration rewrite.
 
-For an existing unpartitioned v1 table, bootstrap copies its logical schema and operating/artifact policies, applies the managed physical overlay, and registers v2. For an absent table, first registration stores v1 with the managed layout. A later logical-schema change still requires the normal next-version registration; the server overlay supplies physical fields and rejects a client-supplied conflicting layout.
-
-Boot order is: open or adopt the local catalog, recover and claim remote HEADs, register managed definitions only on successfully claimed writable tables, update runtime policy, start maintenance, then serve traffic. Shadow, fenced, and unready tables do not mutate their catalogs during bootstrap. The desired v2 is therefore durable before the first scheduler tick can select Levanter v1 compaction.
-
-The v2 source universe is the active v1 object set. Version-0 local files and their archived copies represent the retired prior storage generation and are not scanned.
+This contract is limited to the recovered production v1 definition. The legacy local driver may continue using its static `run_id` partition policy while legacy-local tables exist; object compaction follows the active `TableSpec` and therefore leaves production v1 unpartitioned. A future proposal for newly created object-native Levanter tables must identify the authoritative synchronous registration path. A future partitioning proposal must also demonstrate an incremental benefit over sorting and justify its rewrite cost separately.
 
 ### Schedule and roll out through existing maintenance
 
 An object-backed cycle performs one job and reports pending on progress. The scheduler retries that table after 100 ms; it returns to 30-second checks when no run is eligible. Existing process-wide limits, low-priority compaction thread, writer fencing, and GC remain unchanged. Stream choice keeps the existing priority: lower levels first, then canonical partition order. Continuous input above compaction capacity can starve a later partition; debt metrics or introspection should make that overload visible.
 
-Before deployment, run both planners over a copy of every active production catalog, simulate repeated jobs, and report newly eligible objects, bytes, terminal bounds, and candidate bytes for the production query corpus. The rollout waits for the `log` v0-to-v1 migration to reach `MIGRATION_PHASE_RETIRED`, then deploys the new binary. Startup registers Levanter v2 in the boot sequence above.
+Before deployment, run both planners over every active production catalog. Then copy the smallest cold table and the smallest table with observed overlap into a disposable local object root. The harness retains the baseline catalog, has no endpoint for production storage, opens in shadow mode so no scheduler runs, and explicitly invokes the same `maintain_namespace` entry point production maintenance uses. It drives the affected table until every nonterminal level is below the configured limits and compares row counts, sequence aggregates, per-column aggregates, resulting geometry, and cold-restart recovery with the baseline.
 
-Set the v2 observation window long enough to run acceptance checks. During `OBSERVING`, require v1 pre-fence source rows to equal v2 backfill rows. Compare complete decoded samples against retained v1 object references, bounded by the migration fence. Capture acknowledged post-fence writes independently at the writer boundary and compare their count and complete rows with the ordinary v2 class; canary rows supplement this check but do not replace it. Require every v2 object to carry partition spec ID 1 and run representative queries shaped as `WHERE run_id = ? AND name IN (...)`. Abort before the deadline on a row mismatch, missing acknowledged write, missing partition, failed pruning, write regression, disk pressure, any query deadline failure, or p95 latency above 1.25 times the pinned v1 baseline. After `MIGRATION_PHASE_RETIRED`, rollback requires a new table-spec migration; subsequent checks are monitoring.
+After the rehearsal passes, make one global production go/no-go decision and deploy a binary that enables sparse-stream planning for every object-backed table. This is deliberate cleanup, not a namespace allowlist: the storage contract is uniform, and unit plus scenario tests cover the larger shapes. Production waits for the `log` migration to report `MIGRATION_PHASE_RETIRED`. Once deployed, all eligible tables may begin immediately; monitoring detects regressions but is not an execution-order control. A binary rollback can stop new jobs, but already committed level changes remain valid and are not reversed.
+
+### Future migration write authority
+
+No table-spec migration is introduced by this rollout, so an independent post-fence write ledger is not a deployment gate. A later physical migration has five plausible authorities:
+
+1. The target catalog and its persisted high-water mark prove that Finelog made rows durable before acknowledging them, but they are not independent of the target being verified and do not preserve RPC batch identity after compaction.
+2. A client or forwarder receipt recorded after `WriteRows` succeeds is independent but only at-least-once evidence: the client can crash after the acknowledgement and before recording it, while a lost response can cause a retry that duplicates rows because `WriteRows` has no idempotency token. Levanter would also need client-side capture because its metrics do not pass through the regional log forwarders.
+3. A durable producer-side pre-send journal with a stable batch identity could close the acknowledgement gap, but exact reconciliation also requires `WriteRows` to accept and deduplicate that identity. This is a protocol change.
+4. A server-side receipt journal atomically committed with the append could cover every writer uniformly, but it adds another durable schema and recovery contract to the ingest path solely for verification.
+5. Canary writes are cheap and easy to inspect but sample behavior rather than proving completeness.
+
+For a future partition migration, use retained source references for pre-fence parity. For exact post-fence proof, either reconcile against an independent durable producer source or add option 3; use option 4 only when universal proof is required and producer-side identity is unavailable. Post-ack receipts and canaries remain useful operational signals, not completeness proofs.
 
 ## Testing
 
@@ -74,13 +79,16 @@ Small copied Parquet files verify complete decoded rows before and after overlap
 
 Migration scenarios mix source levels, negative sequence bands, overlaps, gaps, and partitions across several batches. They assert L1 output, no cross-gap unpartitioned batch, collision-free staging for two partitions with the same placement bucket and minimum sequence, checkpoint protection before activation, separate-class compaction during `OBSERVING`, successful abort after that compaction, and ordinary compaction after retirement. Race tests reject a compaction commit after concurrent activation, abort, or retirement. Fanout tests enforce the 4,096-output and 32 MiB catalog limits before upload.
 
-The marin-dev Levanter rehearsal compares pre-fence v1 rows with v2 backfill rows for fixed run IDs, verifies exact partition pruning, and records query latency. The production dry run and `OBSERVING` checks are required rollout artifacts.
+The copied-store rollout test uses `infra.canary.probes` as the smallest cold table and `iris.task_status` as the smallest table with observed overlap. The latter contains real overlapping L0 intervals, sparse boundaries, and a 32-object L2. The shadow store has no production storage endpoint or maintenance scheduler; the harness explicitly drives the real maintenance entry point. The larger Levanter geometry remains covered by the copied production-catalog planner fixture and adversarial executor scenarios.
+
+### Rehearsal result
+
+The September 4 rehearsal copied 25.5 MiB: 78 canary rows and 3,108,480 `iris.task_status` rows. Ordinary maintenance reduced `iris.task_status` from 39 L0, 46 L1, 32 L2, and one L3 object to 7 L0, 15 L1, one L2, and two L3 objects. The L2-to-L3 job completed in 1.45 seconds with the optimized binary. Row count, minimum and maximum sequence, sequence sum, and count/length or numeric sums for every logical column matched before maintenance, after maintenance, and after recovery into an empty cache. The remaining overlap is between the two terminal L3 objects; no nonterminal overlap remains.
 
 ## Deferred Follow-up
 
-This PR uses the offline catalog report for rollout evidence. Service-level compaction-debt metrics and partial-source migration checkpoints remain follow-up work. The fixed fanout, catalog-size, and query-regression gates block deployment instead of changing architecture during rollout.
+This PR uses the offline catalog report for rollout evidence. Service-level compaction-debt metrics, partial-source migration checkpoints, Levanter `run_id` partitioning, and a general acknowledged-write receipt ledger remain follow-up work. The fixed fanout, catalog-size, and query-regression gates block deployment instead of changing architecture during rollout.
 
 ## Open Questions
 
-- Should the first rollout enable sparse-stream planning for every object-backed table after the catalog dry run, or gate it to the known affected namespaces for one release? The implementation keeps the policy explicit so either rollout choice uses the same storage contract.
-- Which durable writer-boundary record should be the authority for acknowledged post-fence writes during Levanter v2 observation? The acceptance rule requires an independent record; the exact operational source should be selected before deployment.
+- After global production enablement, when should cleanup be declared complete? The proposal is to wait until every nonterminal stream is below both thresholds, then observe two additional maintenance intervals with representative query replay and no regression gate firing.

@@ -244,7 +244,7 @@ section. That index makes `contains(col, …)`, `col LIKE '%…%'`, and regexes 
 required literal runs prune instead of full-scan. Today it is on `log.key`,
 `log.data`, and telemetry `name` columns. `levanter.metrics` intentionally has no
 secondary indexes: its queries use exact `run_id` and `name` predicates, which
-are served by the hidden exact run partition and Parquet sort/statistics. Its
+are served by the run-first Parquet sort and row-group statistics. Its
 managed policy also disables adaptive string value counts and removes stale
 bundles written under the old telemetry-derived schema in bounded maintenance
 batches.
@@ -285,7 +285,7 @@ only when both the predicate values and every referenced query column are
 covered. Covered segments use the projection while uncovered segments retain
 source Parquet. The legacy root `telemetry_v1` table retains its training
 projections during migration. Typed training queries use `levanter.metrics`,
-whose exact hidden `run_id` partitions provide their primary pruning boundary.
+whose run-first Parquet sort and row-group statistics provide its pruning.
 
 Redefining a projection is not a conflict. `merge_schemas` supersedes the
 registered definition with the requested one, unless the registered one already

@@ -1,6 +1,6 @@
 # Finelog Compaction Stream Contract
 
-This specification defines the planner boundary, migration output contract, and server-owned Levanter physical policy proposed in [design.md](design.md). It changes no RPC, catalog table, or state-document schema. It changes partitioned migration staging names to include the full partition fingerprint.
+This specification defines the planner boundary, migration output contract, and staged all-table cleanup proposed in [design.md](design.md). It changes no RPC, catalog table, state-document schema, or active Levanter table specification. It changes partitioned migration staging names to include the full partition fingerprint.
 
 ## Terms
 
@@ -91,55 +91,23 @@ Lifecycle behavior is:
 - `OBSERVING`: the target version is active and the rewrite is complete. Backfill and ordinary objects may compact as separate classes. Replacement preserves `migration_backfill`; source identities may be cleared because no further coverage scan occurs. Abort removes every backfill-class object and reassigns ordinary target-version objects to the source version. A compaction commit whose lease observed an earlier phase is rejected.
 - `MIGRATION_PHASE_RETIRED`: the source version is removed, migration checkpoint fields are cleared from the active objects, and future compaction may mix the former classes. This phase is migration-quiescent—ordinary maintenance continues—and irreversible through `AbortTableMigration`.
 
-## Server-Owned Levanter Physical Policy
+## Levanter Contract
 
-Files:
+This rollout leaves the recovered production `levanter.metrics` table at version 1. Its `SourceLayout` remains unpartitioned and retains sort columns `(run_id, name, step, timestamp_ms)`, maximum row-group size 131,072, and target object bytes 268,435,456. Recovery does not register a desired v2 definition or otherwise mutate the table-spec lifecycle. This contract does not define how a new object-native Levanter table is first registered.
 
-- `lib/finelog/rust/src/levanter_metrics_policy.rs`
-- `lib/finelog/rust/src/policies.rs`
-- `lib/finelog/rust/src/store/store.rs`
+The object compaction driver applies `SparseStream` to Levanter v1 like every other object-backed table. It merges or promotes only active v1 objects selected from the catalog and never reads version-0 archive objects. Rewritten outputs preserve the active v1 sort and remain unpartitioned.
 
-The policy registry exposes the managed physical overlay:
-
-```rust
-pub(crate) fn managed_table_spec_for(
-    namespace: &str,
-    schema: &Schema,
-    cache_policy: &StoragePolicy,
-    version: u64,
-) -> Result<Option<ValidatedTableSpec>, StatsError>;
-```
-
-For namespaces outside the exact logical namespace `levanter.metrics`, it returns `None`. For `levanter.metrics`, it combines the supplied logical schema and cache policy with the supplied version and these managed physical fields:
-
-- sort columns `(run_id, name, step, timestamp_ms)`;
-- the existing maximum row-group size of 131,072;
-- target object bytes of 268,435,456;
-- object-store L0 mode and the existing cache/retention policy;
-- partition spec ID 1;
-- one identity field with source column `run_id` and partition name `run_id`.
-
-For a successfully recovered and claimed existing table, bootstrap reads the stored active logical schema and operating/artifact policies. If active v1 lacks the managed partition, it registers v2 by copying those fields and applying the overlay. A matching stored v2 is a no-op; a conflicting stored v2 fails startup with the existing table-spec conflict. For an absent table, first registration uses the request's logical schema and cache policy to store v1 with the managed physical layout.
-
-Startup order is: open or adopt local catalogs; recover remote HEADs; claim writable tables; register managed definitions on successfully claimed tables; update runtime policies; start `MaintenanceScheduler`; begin serving. Shadow, fenced, and unready tables skip managed-definition mutation. The first scheduler tick can therefore observe desired Levanter v2 but cannot select v1 sparse-stream compaction.
-
-Legacy and mixed-version clients may omit `RegisterTableRequest.table_spec`. A matching logical registration neither replaces nor downgrades the server-owned physical definition. A client-supplied conflicting Levanter physical layout is rejected. Additive logical-schema evolution continues to require the next normal table-spec version; the overlay is applied to that new logical schema. No Python API or Levanter writer change is required for this rollout.
-
-The v2 migration source universe consists only of active v1 object records. Version-0 local files and archive objects are storage representations of the retired pre-object-native generation and are not selected.
+The existing static Levanter `run_id` partition policy remains available to the legacy local driver. It is not projected into the object-backed `TableSpec`. Adding object-native `run_id` partitioning requires a later table-spec proposal and migration with measured benefit beyond the existing run-first sort.
 
 ## Persisted Shapes
 
-No catalog schema or protobuf change is added.
-
-The existing `table_specs` row stores Levanter v2. `TableSpec.source_layout.partition` carries partition spec ID 1 and its identity field. The existing `segments.partition_json` column and `CatalogSegment.partition_json` field carry each output's catalog partition identity.
+No catalog schema or protobuf change is added. The existing Levanter v1 `table_specs` row and unpartitioned segment records remain unchanged.
 
 Migration and compaction use the existing immutable object layout and content-addressed source references. No remote object prefix changes.
 
 ## Errors
 
 No new public error type is added.
-
-Existing `StatsError::SchemaValidation` rejects an invalid managed v2 definition, including a missing `run_id`, invalid partition spec ID, empty partition fields, or unsupported transform.
 
 Existing lease conflicts remain nonfatal maintenance outcomes. Object read, decode, sort, partition, upload, and catalog errors fail the cycle while preserving every live input.
 
@@ -159,9 +127,10 @@ Existing lease conflicts remain nonfatal maintenance outcomes. Object read, deco
 - Migration tests assert L1 output across mixed source levels, no cross-gap unpartitioned batch, target partition stamping, and collision-free staging for two distinct partitions deliberately assigned to the same placement bucket with equal `seq` minima.
 - Lifecycle tests cover frozen backfill before activation, separate-class compaction during `OBSERVING`, abort after that compaction, merged-class compaction after retirement, and rejection of commits racing activation (`VERIFY` to `OBSERVING`), abort, or retirement.
 - High-cardinality tests reject 4,097 output partitions and a projected catalog above 32 MiB before upload, including the one-source case.
-- A Levanter v1-to-v2 bootstrap scenario proves registration follows remote recovery and claim but precedes scheduler start, only active v1 objects are read, canonical sort is retained, and every v2 output carries partition spec ID 1. Shadow, fenced, and unready variants prove bootstrap performs no mutation.
+- A recovered Levanter v1 fixture proves recovery creates no desired v2 definition, canonical sort remains active, outputs remain unpartitioned, and compaction reads only active v1 objects.
 - Scheduler tests prove a successful object job requests the 100 ms retry cadence and returns to 30-second checks when no run is eligible.
 - An offline old/new planner comparison over every active production catalog reports newly eligible objects, bytes, jobs, and terminal-range amplification before deployment.
+- The copied-store rehearsal uses `infra.canary.probes` as the smallest cold table and `iris.task_status` as the smallest known affected table. The harness copies their catalog and referenced live objects into a disposable local root, retains the baseline catalog, opens without a production object endpoint in `ServeMode::Shadow`, and explicitly invokes `Store::maintain_namespace` until every nonterminal level is below both limits. It compares row and sequence aggregates, per-column aggregates, level geometry, and cold recovery.
 
 ## Rollout Gates
 
@@ -169,24 +138,19 @@ Deployment waits until the production `log` v0-to-v1 migration reports `MIGRATIO
 
 The production planner dry run must explain every newly eligible stream before the new planner is enabled. It simulates repeated jobs and the resulting terminal bounds. Replaying the production query corpus against the simulated catalog must keep p95 candidate bytes at or below 1.25 times baseline and every query at or below 2 times baseline. The current read-only audit found material overlap only in Levanter L1/L2 and two sub-200 KB `iris.task_status` L0 neighbors.
 
-Levanter v2 uses an observation window long enough to evaluate the complete pre-fence migration and representative active behavior. During `OBSERVING`, operators must verify:
+Copied-store testing starts with `infra.canary.probes`, then runs `iris.task_status`, whose production snapshot contains overlapping L0 intervals, sparse boundaries, and a 32-object L2. The disposable root contains no production storage endpoint, and the retained baseline supplies the before side of the comparison. The rehearsal must preserve row and sequence aggregates plus per-column count/length or numeric sums, converge each nonterminal stream below both configured thresholds, and recover the same result from an empty cache.
 
-- v1 pre-fence source row count equals v2 backfill row count;
-- selected fixed run IDs return equal complete pre-fence rows from retained v1 object references and v2 backfill objects;
-- known post-fence canary writes return their complete contents and sequence values from active v2;
-- the independently captured set of acknowledged post-fence writes has the same count and complete rows as the ordinary v2 class;
-- every v2 segment carries partition spec ID 1;
-- exact `run_id` filters prune unrelated partitions;
-- writes and disk free space remain healthy;
-- representative query p95 latency is at most 1.25 times the pinned v1 baseline and no query reaches its deadline.
-
-Any failed gate triggers `AbortTableMigration` before the observation deadline. After `MIGRATION_PHASE_RETIRED`, these checks continue as monitoring and rollback requires a new table-spec migration.
+After the copied-store rehearsal passes, operators make one global go/no-go decision. The production binary enables sparse planning for every object-backed table, and every eligible table may start immediately. There is no namespace-specific storage contract, permanent allowlist, per-table execution order, or kill switch. A binary rollback prevents new jobs but does not reverse already committed level changes. Operators rollback on any row mismatch, disk pressure, memory regression, query deadline failure, p95 latency above 1.25 times baseline, or candidate bytes above the dry-run bound. No Levanter table-spec migration or `OBSERVING` phase is part of this rollout.
 
 ## Out of Scope
 
 - Rewriting or deleting version-0 legacy archives.
 - Deduplicating rows or sequence values.
 - Recompacting terminal L3 objects solely to narrow their sequence bounds.
+- Adding object-native Levanter `run_id` partitioning or registering Levanter v2.
+- Defining first registration for new object-native Levanter tables.
+- Adding idempotent batch identities or a durable acknowledged-write receipt ledger. Post-ack client receipts and canaries are at-least-once operational evidence, not exact completeness proof.
+- Adding a per-table sparse-compaction allowlist or kill switch.
 - Changing maintenance cadence, global concurrency, merge thread priority, object GC, or publication throttling.
 - Removing the legacy static Levanter partition policy while legacy-local tables may still use it.
 - Adding a public maintenance RPC or operator-triggered compaction command.

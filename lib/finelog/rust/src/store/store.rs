@@ -25,10 +25,6 @@ use clap::ValueEnum;
 use crate::errors::StatsError;
 use crate::indices::IndexRegistry;
 use crate::ingestion_policy::IngestionBatchSource;
-use crate::levanter_metrics_policy::{
-    has_managed_levanter_layout, initial_managed_table_spec, managed_table_spec_for,
-    LEVANTER_METRICS_NAMESPACE,
-};
 use crate::maintenance::scheduler::MaintenanceScheduler;
 use crate::policies::{
     physical_partition_policy_for, schema_for_namespace, segment_indexes_enabled_for,
@@ -185,7 +181,6 @@ pub enum ServeMode {
 pub struct Store {
     data_dir: Option<PathBuf>,
     remote_log_dir: String,
-    mode: ServeMode,
     catalog: Arc<Catalog>,
     object_store: Option<Arc<dyn ObjectStore>>,
     /// Durable state authority for object-backed tables. Absent when no remote
@@ -356,7 +351,6 @@ impl Store {
         let store = Store {
             data_dir,
             remote_log_dir,
-            mode,
             catalog,
             object_store,
             object_state_store,
@@ -432,55 +426,7 @@ impl Store {
     /// Returns the number of object-backed tables whose local projection was
     /// rebuilt from their durable state.
     pub async fn recover_tables(&self) -> Result<usize, StatsError> {
-        let loaded = self.recover_object_tables().await?;
-        self.register_managed_table_specs().await?;
-        Ok(loaded)
-    }
-
-    /// Register server-owned physical layouts after remote recovery and writer
-    /// claim, but before the maintenance scheduler can select work under the
-    /// superseded definition.
-    async fn register_managed_table_specs(&self) -> Result<(), StatsError> {
-        if self.mode != ServeMode::Live || !self.catalog.contains(LEVANTER_METRICS_NAMESPACE) {
-            return Ok(());
-        }
-        let controller = self.tables.controller(LEVANTER_METRICS_NAMESPACE);
-        if !controller.writes_ready() {
-            return Ok(());
-        }
-        let lifecycle = self.catalog.spec_lifecycle(LEVANTER_METRICS_NAMESPACE)?;
-        if let Some(desired) = lifecycle.desired.as_ref() {
-            if has_managed_levanter_layout(desired) {
-                controller.publish_owed().await?;
-                return Ok(());
-            }
-            return Err(StatsError::SchemaConflict(
-                "levanter.metrics has a table-spec migration in progress; finish or abort it before applying the managed physical layout"
-                    .to_string(),
-            ));
-        }
-        let Some(active) = lifecycle.active.as_ref() else {
-            return Ok(());
-        };
-        let cache_policy = self.catalog.get_policy(LEVANTER_METRICS_NAMESPACE)?;
-        let Some(managed) =
-            managed_table_spec_for(LEVANTER_METRICS_NAMESPACE, active, &cache_policy)?
-        else {
-            return Ok(());
-        };
-        if managed.l0_mode != L0Mode::L0_MODE_OBJECT_STORE {
-            return Ok(());
-        }
-        let registration = self.register_versioned_table(LEVANTER_METRICS_NAMESPACE, managed)?;
-        self.publish_object_catalog(LEVANTER_METRICS_NAMESPACE)
-            .await?;
-        tracing::info!(
-            namespace = LEVANTER_METRICS_NAMESPACE,
-            active_version = registration.spec_lifecycle.active_version(),
-            desired_version = registration.spec_lifecycle.desired_version(),
-            "registered managed table layout"
-        );
-        Ok(())
+        self.recover_object_tables().await
     }
 
     /// Recover object-backed tables from their durable state before the server
@@ -863,12 +809,6 @@ impl Store {
         name: &str,
         validated: ValidatedTableSpec,
     ) -> Result<VersionedRegistration, StatsError> {
-        if name == LEVANTER_METRICS_NAMESPACE && !has_managed_levanter_layout(&validated.spec) {
-            return Err(StatsError::SchemaValidation(
-                "levanter.metrics uses a server-owned run_id-partitioned physical layout"
-                    .to_string(),
-            ));
-        }
         if validated.l0_mode == L0Mode::L0_MODE_OBJECT_STORE
             && self.remote_log_dir.trim().is_empty()
         {
@@ -999,25 +939,14 @@ impl Store {
         self.namespace_dir(name)?;
         validate_index_policies(&schema)?;
         resolve_key_column(&schema)?;
-        let initial_managed_spec = if table_spec.is_none()
-            && self.mode == ServeMode::Live
-            && !self.remote_log_dir.trim().is_empty()
-            && !self.catalog.contains(name)
-        {
-            initial_managed_table_spec(name, &schema, &policy)?
-        } else {
-            None
-        };
         let stored = stored_form(schema);
         let registration_lock = self.tables.registration_lock(name);
         let _registration_guard = registration_lock.lock().unwrap();
-        let evolved_spec = match (table_spec, initial_managed_spec.as_ref()) {
-            (Some(_), _) | (_, Some(_)) => None,
-            (None, None) => self.spec_for_legacy_schema_evolution(name, &stored, registration)?,
+        let evolved_spec = match table_spec {
+            Some(_) => None,
+            None => self.spec_for_legacy_schema_evolution(name, &stored, registration)?,
         };
-        let table_spec = table_spec
-            .or(initial_managed_spec.as_ref())
-            .or(evolved_spec.as_ref());
+        let table_spec = table_spec.or(evolved_spec.as_ref());
         if let Some(table_spec) = table_spec {
             self.catalog.validate_table_spec_registration(
                 name,
@@ -1686,9 +1615,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn first_levanter_registration_uses_the_managed_object_layout() {
-        let data_dir = crate::test_support::unique_dir("managed_levanter_data");
-        let remote_dir = crate::test_support::unique_dir("managed_levanter_remote");
+    async fn recovery_keeps_sorted_unpartitioned_levanter_v1() {
+        let data_dir = crate::test_support::unique_dir("sorted_levanter_data");
+        let remote_dir = crate::test_support::unique_dir("sorted_levanter_remote");
         let store = Store::new(
             Some(data_dir.clone()),
             remote_dir.to_string_lossy().into_owned(),
@@ -1696,62 +1625,40 @@ mod tests {
             ServeMode::Live,
         )
         .unwrap();
-
-        store
-            .register_table(
-                LEVANTER_METRICS_NAMESPACE,
-                levanter_metrics_schema(),
-                StoragePolicy::default(),
-            )
-            .unwrap();
-
-        let lifecycle = store.spec_lifecycle(LEVANTER_METRICS_NAMESPACE).unwrap();
-        assert_eq!(lifecycle.active_version(), 1);
-        assert!(lifecycle.desired.is_none());
-        assert!(has_managed_levanter_layout(
-            lifecycle.active.as_ref().unwrap()
-        ));
-        store.shutdown(Duration::from_secs(1)).await;
-        std::fs::remove_dir_all(data_dir).ok();
-        std::fs::remove_dir_all(remote_dir).ok();
-    }
-
-    #[tokio::test]
-    async fn bootstrap_registers_managed_vnext_for_unpartitioned_levanter() {
-        let data_dir = crate::test_support::unique_dir("upgrade_levanter_data");
-        let remote_dir = crate::test_support::unique_dir("upgrade_levanter_remote");
-        let store = Store::new(
-            Some(data_dir.clone()),
-            remote_dir.to_string_lossy().into_owned(),
-            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
-            ServeMode::Live,
-        )
-        .unwrap();
-        let unpartitioned = ObjectSpec::new(1)
+        let spec = ObjectSpec::new(1)
             .schema(levanter_metrics_schema())
             .validated();
         store
             .register_table_with(
-                LEVANTER_METRICS_NAMESPACE,
-                unpartitioned.schema.clone(),
-                unpartitioned.cache_policy.clone(),
+                "levanter.metrics",
+                spec.schema.clone(),
+                spec.cache_policy.clone(),
                 SchemaRegistration::Additive,
-                Some(&unpartitioned),
+                Some(&spec),
             )
             .unwrap();
         store
-            .publish_object_catalog(LEVANTER_METRICS_NAMESPACE)
+            .publish_object_catalog("levanter.metrics")
             .await
             .unwrap();
 
         store.recover_tables().await.unwrap();
 
-        let lifecycle = store.spec_lifecycle(LEVANTER_METRICS_NAMESPACE).unwrap();
-        assert_eq!(lifecycle.active_version(), 2);
+        let lifecycle = store.spec_lifecycle("levanter.metrics").unwrap();
+        assert_eq!(lifecycle.active_version(), 1);
         assert!(lifecycle.desired.is_none());
-        assert!(has_managed_levanter_layout(
-            lifecycle.active.as_ref().unwrap()
-        ));
+        let layout = lifecycle
+            .active
+            .as_ref()
+            .unwrap()
+            .source_layout
+            .as_option()
+            .unwrap();
+        assert_eq!(
+            layout.sort_columns,
+            ["run_id", "name", "step", "timestamp_ms"]
+        );
+        assert!(layout.partition.as_option().is_none());
         store.shutdown(Duration::from_secs(1)).await;
         std::fs::remove_dir_all(data_dir).ok();
         std::fs::remove_dir_all(remote_dir).ok();
