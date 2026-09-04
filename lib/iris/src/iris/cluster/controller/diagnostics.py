@@ -1,19 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Controller operations for health probes, bundles, checkpoints, and raw queries."""
+"""Controller database diagnostics and administrative queries."""
 
 import json
 from dataclasses import dataclass
-from typing import Any, Protocol
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
+from connectrpc.request import RequestContext
 from rigging.server_auth import require_identity
 from sqlalchemy import select, text
 
-from iris.cluster.bundle import BundleStore
-from iris.cluster.controller.checkpoint import CHECKPOINT_EPOCH_META_KEY, CheckpointResult
+from iris.cluster.controller.checkpoint import CHECKPOINT_EPOCH_META_KEY
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.schema import (
     federation_changelog_table,
@@ -21,30 +20,15 @@ from iris.cluster.controller.schema import (
     meta_table,
     task_attempts_table,
 )
-from iris.rpc import controller_pb2, query_pb2
-from iris.time_proto import timestamp_to_proto
-
-
-class CheckpointRuntime(Protocol):
-    def begin_checkpoint(self) -> tuple[str, CheckpointResult]: ...
+from iris.rpc import query_pb2
 
 
 @dataclass(frozen=True, slots=True)
-class AdminDependencies:
+class DiagnosticDependencies:
     db: ControllerDB
-    bundles: BundleStore
-    runtime: CheckpointRuntime
 
 
-def bundle_zip(dependencies: AdminDependencies, bundle_id: str) -> bytes:
-    return dependencies.bundles.get(bundle_id)
-
-
-def blob_data(dependencies: AdminDependencies, blob_id: str) -> bytes:
-    return dependencies.bundles.get(blob_id)
-
-
-def probe_database(dependencies: AdminDependencies) -> int | None:
+def probe_database(dependencies: DiagnosticDependencies) -> int | None:
     """Return checkpoint ancestry after verifying controller state is readable."""
     with dependencies.db.read_snapshot() as tx:
         checkpoint_epoch_ms = tx.execute(
@@ -56,27 +40,10 @@ def probe_database(dependencies: AdminDependencies) -> int | None:
     return int(checkpoint_epoch_ms) if checkpoint_epoch_ms is not None else None
 
 
-def begin_checkpoint(
-    dependencies: AdminDependencies,
-    request: controller_pb2.Controller.BeginCheckpointRequest,
-    context: Any,
-) -> controller_pb2.Controller.BeginCheckpointResponse:
-    del request, context
-    path, result = dependencies.runtime.begin_checkpoint()
-    response = controller_pb2.Controller.BeginCheckpointResponse(
-        checkpoint_path=path,
-        job_count=result.job_count,
-        task_count=result.task_count,
-        worker_count=result.worker_count,
-    )
-    response.created_at.CopyFrom(timestamp_to_proto(result.created_at))
-    return response
-
-
 def execute_raw_query(
-    dependencies: AdminDependencies,
+    dependencies: DiagnosticDependencies,
     request: query_pb2.RawQueryRequest,
-    context: Any,
+    context: RequestContext,
 ) -> query_pb2.RawQueryResponse:
     del context
     identity = require_identity()

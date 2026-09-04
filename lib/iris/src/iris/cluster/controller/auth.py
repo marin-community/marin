@@ -501,7 +501,6 @@ class ControllerAuth:
 
 
 def authorize_owner_if_configured(auth: ControllerAuth, owner: str) -> None:
-    """Require ownership when this controller has an auth provider."""
     if auth.provider:
         authorize_resource_owner(owner)
 

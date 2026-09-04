@@ -6,7 +6,7 @@
 import secrets
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Protocol, TypeVar
+from typing import Protocol, TypeVar
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
@@ -153,7 +153,7 @@ def profile_task(
 def get_process_status(
     dependencies: AttemptDependencies,
     request: job_pb2.GetProcessStatusRequest,
-    context: Any,
+    context: RequestContext,
 ) -> job_pb2.GetProcessStatusResponse:
     """Return controller, worker, or task-container process information."""
     del context
@@ -181,7 +181,7 @@ def get_process_status(
 def mint_endpoint_token(
     dependencies: AttemptDependencies,
     request: controller_pb2.Controller.MintEndpointTokenRequest,
-    context: Any,
+    context: RequestContext,
 ) -> controller_pb2.Controller.MintEndpointTokenResponse:
     """Mint a scoped, expiring bearer token for one task endpoint."""
     del context
@@ -210,7 +210,7 @@ def mint_endpoint_token(
 def exec_in_container(
     dependencies: AttemptDependencies,
     request: controller_pb2.Controller.ExecInContainerRequest,
-    context: Any,
+    context: RequestContext,
 ) -> controller_pb2.Controller.ExecInContainerResponse:
     """Execute a command in the current Attempt for one task."""
     del context

@@ -4,10 +4,11 @@
 """Controller operations that serve federation peers."""
 
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Protocol
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
+from connectrpc.request import RequestContext
 from rigging.server_auth import require_identity
 from rigging.timing import Duration, Timestamp
 
@@ -37,7 +38,7 @@ class FederationDependencies:
 def list_peers(
     dependencies: FederationDependencies,
     _request: controller_pb2.Controller.ListPeersRequest,
-    _ctx: Any,
+    _ctx: RequestContext,
 ) -> controller_pb2.Controller.ListPeersResponse:
     """List peers this controller may delegate whole jobs to."""
     require_identity()
@@ -135,7 +136,7 @@ def _authorize_sync(requester_id: str) -> None:
 def federation_sync(
     dependencies: FederationDependencies,
     request: controller_pb2.Controller.FederationSyncRequest,
-    _ctx: Any,
+    _ctx: RequestContext,
 ) -> controller_pb2.Controller.FederationSyncResponse:
     """Return the peer-visible job changes since the requester's cursor."""
     requester_id = request.requester_id

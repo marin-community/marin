@@ -10,6 +10,7 @@ from typing import Any, Protocol
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
+from connectrpc.request import RequestContext
 from finelog.client import LogClient
 from finelog.rpc import logging_pb2
 from rigging.timing import Timestamp
@@ -117,7 +118,7 @@ class TaskWithAttempts:
 def get_task_status(
     dependencies: TaskDependencies,
     request: controller_pb2.Controller.GetTaskStatusRequest,
-    context: Any,
+    context: RequestContext,
 ) -> controller_pb2.Controller.GetTaskStatusResponse:
     """Return one task, its Attempt history, and static resource limits."""
     del context
@@ -170,7 +171,7 @@ def get_task_status(
 def list_tasks(
     dependencies: TaskDependencies,
     request: controller_pb2.Controller.ListTasksRequest,
-    context: Any,
+    context: RequestContext,
 ) -> controller_pb2.Controller.ListTasksResponse:
     """Return all tasks belonging to one job."""
     del context
@@ -191,7 +192,7 @@ def list_tasks(
 def kick_tasks(
     dependencies: TaskDependencies,
     request: controller_pb2.Controller.KickTasksRequest,
-    context: Any,
+    context: RequestContext,
 ) -> controller_pb2.Controller.KickTasksResponse:
     """Queue administrative terminal transitions for active tasks."""
     del context
@@ -350,10 +351,6 @@ def worker_address(db: ControllerDB, worker_id: WorkerId) -> str:
     return str(row.address) if row else ""
 
 
-def _authorize_job_owner(dependencies: TaskDependencies, job_id: JobName) -> None:
-    authorize_owner_if_configured(dependencies.auth, job_id.user)
-
-
 def _task_root_cause_highlights(logs: LogClient, task_id: JobName, state: int) -> list[str]:
     if state not in _LISTING_FAILURE_STATES:
         return []
@@ -399,7 +396,7 @@ def _resolve_kick_target(
         return
 
     name = task_attempt.task_id
-    _authorize_job_owner(dependencies, name)
+    authorize_owner_if_configured(dependencies.auth, name.user)
     if name.is_task:
         detail = reads.get_task_detail(tx, name)
         if detail is None:

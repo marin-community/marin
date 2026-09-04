@@ -5,11 +5,11 @@
 
 from typing import Protocol
 
-from iris.cluster.controller import admin, attempts, backend_status, federation_service, jobs, tasks, workers
+from iris.cluster.controller import attempts, backend_status, checkpoint, federation_service, jobs, tasks, workers
 
 
 class ControllerRuntime(
-    admin.CheckpointRuntime,
+    checkpoint.CheckpointRuntime,
     attempts.AttemptRuntime,
     backend_status.BackendStatusRuntime,
     federation_service.FederationRuntime,
