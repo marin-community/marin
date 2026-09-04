@@ -201,6 +201,26 @@ def test_codehealth_refinement_workflow_launches_one_database_backed_agent() -> 
     assert launch["with"]["channel"] == "codehealth-refinement"
 
 
+def test_agent_moe_report_workflow_launches_one_weekly_refresh_agent() -> None:
+    workflow_path = ROOT.parent.parent / ".github/workflows/ops-agent-moe-report.yaml"
+    workflow = yaml.safe_load(workflow_path.read_text())
+    steps = {step["name"]: step for step in workflow["jobs"]["refresh"]["steps"]}
+    trigger = workflow.get("on", workflow.get(True))
+
+    assert trigger["schedule"] == [{"cron": "17 9 * * 1"}]
+    assert "workflow_dispatch" in trigger
+    assert workflow["permissions"] == {"contents": "read", "id-token": "write"}
+
+    checkout = steps["Checkout workflow action"]
+    assert checkout["with"]["persist-credentials"] is False
+    assert checkout["with"]["sparse-checkout"] == ".github/actions/launch-loom-run"
+    assert set(steps) == {"Checkout workflow action", "Launch report refresh agent"}
+    launch = steps["Launch report refresh agent"]
+    assert launch["uses"] == "./.github/actions/launch-loom-run"
+    assert launch["with"]["profile"] == "${{ vars.LOOM_AGENT_MOE_REPORT_PROFILE }}"
+    assert launch["with"]["channel"] == "agent-moe-report"
+
+
 def test_release_reference_must_be_the_expected_registry_digest() -> None:
     canonical = "us-central1-docker.pkg.dev/example/loom/loom@sha256:" + "a" * 64
     tagged = "us-central1-docker.pkg.dev/example/loom/loom:latest@sha256:" + "a" * 64
