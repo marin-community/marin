@@ -454,6 +454,8 @@ def _tpu_splash_attention(
     )
     kernel_sharding = NamedSharding(mesh, PartitionSpec(q_pspec[1], q_pspec[2]))
     kernel_specs = splash_kernel.manual_sharding_spec(kernel_sharding)
+    kernel_shardings = jax.tree.map(lambda spec: NamedSharding(mesh, spec), kernel_specs)
+    splash_kernel = jax.sharding.reshard(splash_kernel, kernel_shardings)
 
     @functools.partial(
         shard_map,
