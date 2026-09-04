@@ -25,11 +25,13 @@ class PortAllocator:
 
     def allocate(self, count: int = 1) -> list[int]:
         with self._lock:
+            unavailable = set(self._allocated)
             ports = []
             for _ in range(count):
-                port = self._find_free_port()
-                self._allocated.add(port)
+                port = self._find_free_port(unavailable)
+                unavailable.add(port)
                 ports.append(port)
+            self._allocated.update(ports)
             return ports
 
     def reserve(self, ports: list[int]) -> None:
@@ -46,9 +48,9 @@ class PortAllocator:
             for port in ports:
                 self._allocated.discard(port)
 
-    def _find_free_port(self) -> int:
+    def _find_free_port(self, unavailable: set[int]) -> int:
         for port in range(self._range[0], self._range[1]):
-            if port in self._allocated:
+            if port in unavailable:
                 continue
             if self._is_port_free(port):
                 return port

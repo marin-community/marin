@@ -76,6 +76,13 @@ def test_no_port_reuse_before_release(allocator):
     assert len(set(ports1) & set(ports2)) == 0
 
 
+def test_failed_multi_port_allocation_preserves_capacity(allocator):
+    with pytest.raises(RuntimeError):
+        allocator.allocate(count=101)
+
+    assert len(allocator.allocate()) == 1
+
+
 def test_concurrent_allocations(allocator):
     results = []
 
