@@ -69,6 +69,7 @@ def _tokenize_rendered_source(name: str, rendered: StepSpec) -> StepSpec:
                 cache_path=output_path,
                 tokenizer=_TOKENIZER,
                 max_workers=_TOKENIZE_MAX_WORKERS,
+                allow_test_in_train=True,
                 tags=["sft", name],
             )
         )
