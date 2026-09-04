@@ -921,7 +921,7 @@
       "id": 232,
       "type": "timeseries",
       "title": "Time to first token and inter-token latency",
-      "description": "Prefill responsiveness and steady-state decode speed, as percentiles over the vLLM histograms. Inter-token latency times the p99 generation length is the floor on how long the generate phase can take, whatever the concurrency; a p99 inter-token latency far above p50 means decode is contending rather than long.",
+      "description": "Prefill responsiveness and steady-state decode speed, as percentiles over the vLLM histograms. Inter-token latency times the p99 generation length is the floor on how long the generate phase can take, whatever the concurrency; a p99 inter-token latency far above p50 means decode is contending rather than long. On a run whose engine rows arrive forwarded under the trainer's service rather than published directly under service='vllm', only the time-to-first-token histogram makes the trip: the inter-token series is simply absent and its lines do not draw, which is a narrower forwarder and not a decode that never happened.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -944,7 +944,7 @@
           },
           "unit": "s",
           "min": 0,
-          "noValue": "No time-to-first-token or inter-token histograms from this run's engines. Blank is an absent forwarder, never an instant prefill."
+          "noValue": "Neither the time-to-first-token nor the inter-token histogram reached finelog from this run's engines. Blank is an absent forwarder, never an instant prefill."
         },
         "overrides": []
       },
@@ -1301,7 +1301,7 @@
           },
           "unit": "none",
           "min": 0,
-          "noValue": "No iteration_tokens_total rows. Not every vLLM build registers this histogram; the queue and KV-cache panels answer the same under-subscription question without it."
+          "noValue": "No iteration_tokens_total histogram for this run. An RL run's engine rows usually arrive forwarded under the trainer's own service, and that forwarder carries a narrower set than the engine's own registry — on the pr488 run it publishes eight engine series and this is not one of them, while runs whose engines publish directly under service='vllm' do have it. The queue and KV-cache panels answer the same under-subscription question without it."
         },
         "overrides": []
       },
