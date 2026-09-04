@@ -10,7 +10,6 @@ from rigging.timing import Timer
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller import (
     accounts,
-    artifacts,
     attempts,
     backend_status,
     checkpoint,
@@ -69,7 +68,6 @@ class ControllerServiceImpl:
         self._timer = Timer()
         self._auth = auth or ControllerAuth()
         self._accounts = accounts.AccountDependencies(db=self._db, auth=self._auth)
-        self._artifacts = artifacts.ArtifactDependencies(bundles=self._bundle_store)
         self._diagnostics = diagnostics.DiagnosticDependencies(db=self._db)
         self._checkpoint = checkpoint.CheckpointDependencies(runtime=controller)
         self._workers = workers.WorkerDependencies(db=self._db, runtime=controller, auth=self._auth)
@@ -108,10 +106,10 @@ class ControllerServiceImpl:
         )
 
     def bundle_zip(self, bundle_id: str) -> bytes:
-        return artifacts.bundle_zip(self._artifacts, bundle_id)
+        return self._bundle_store.get(bundle_id)
 
     def blob_data(self, blob_id: str) -> bytes:
-        return artifacts.blob_data(self._artifacts, blob_id)
+        return self._bundle_store.get(blob_id)
 
     def probe_database(self) -> int | None:
         return diagnostics.probe_database(self._diagnostics)

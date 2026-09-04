@@ -99,7 +99,7 @@ sub-layered:
 | State predicates | `task_state` · `worker_health` · `audit` | What the rows *mean*. |
 | Decision kernels | `reconcile/` (lifecycle) · `scheduling/scheduler.py` (matching) · `scheduling/policy.py` (preemption/gating) · `autoscaler/` (capacity) | Compute what *should* change. `reconcile/` and `scheduling/` are parameterized with no live I/O; `autoscaler/` also actuates its plan through `WorkerInfraProvider` (live cloud create/describe calls and worker health probes). |
 | Imperative shell | `ops/{job,task,worker}` · `reconcile/dispatch` · `pruner` | Load a snapshot, call a kernel, apply effects. |
-| Request operations | `jobs` · `tasks` · `attempts` · `workers` · `endpoints` · `accounts` · `backend_status` · `federation_service` · `artifacts` · `diagnostics` · `checkpoint` | Authorize one request, call the data and runtime boundaries, and build its response. |
+| Request operations | `jobs` · `tasks` · `attempts` · `workers` · `endpoints` · `accounts` · `backend_status` · `federation_service` · `diagnostics` · `checkpoint` | Authorize one request, call the data and runtime boundaries, and build its response. |
 | Transport / loops | `controller.py` (loops) · `service.py` (thin Connect adapter) · `dashboard.py` · `main.py` | Drive the controller and expose its APIs. |
 
 The `reconcile/` package is the lifecycle kernel: leaves

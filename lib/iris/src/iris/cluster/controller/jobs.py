@@ -4,9 +4,10 @@
 """Controller operations for job admission, observation, and lifecycle."""
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Any, Protocol
+from typing import Protocol
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
@@ -103,6 +104,20 @@ class JobDependencies:
     user_budget_defaults: UserBudgetDefaults
 
 
+class JobStatusRow(Protocol):
+    job_id: JobName
+    state: int
+    submitted_at_ms: Timestamp | None
+    started_at_ms: Timestamp | None
+    finished_at_ms: Timestamp | None
+    error: str | None
+    exit_code: int | None
+    num_tasks: int
+    name: str
+    backend_id: str | None
+    cluster: str
+
+
 def submitting_user_for_root(
     identity: VerifiedIdentity | None, request: controller_pb2.Controller.LaunchJobRequest
 ) -> str:
@@ -173,22 +188,25 @@ def _clamp_int32(value: int, *, job_id: JobName, field: str) -> int:
     return value
 
 
-def job_status_counts(
-    summary: TaskJobSummary | None, job_id: JobName, *, pre_sync_task_count: int = 0
-) -> dict[str, Any]:
-    """Return clamped JobStatus counters, including pre-sync federated tasks."""
+def apply_job_status_counts(
+    status: job_pb2.JobStatus,
+    summary: TaskJobSummary | None,
+    job_id: JobName,
+    *,
+    pre_sync_task_count: int = 0,
+) -> None:
     s = summary or _EMPTY_TASK_SUMMARY
     task_count = s.task_count if summary is not None else pre_sync_task_count
-    return {
-        "failure_count": _clamp_int32(s.failure_count, job_id=job_id, field="failure_count"),
-        "preemption_count": _clamp_int32(s.preemption_count, job_id=job_id, field="preemption_count"),
-        "task_count": _clamp_int32(task_count, job_id=job_id, field="task_count"),
-        "completed_count": _clamp_int32(s.completed_count, job_id=job_id, field="completed_count"),
-        "task_state_counts": {
+    status.failure_count = _clamp_int32(s.failure_count, job_id=job_id, field="failure_count")
+    status.preemption_count = _clamp_int32(s.preemption_count, job_id=job_id, field="preemption_count")
+    status.task_count = _clamp_int32(task_count, job_id=job_id, field="task_count")
+    status.completed_count = _clamp_int32(s.completed_count, job_id=job_id, field="completed_count")
+    status.task_state_counts.update(
+        {
             task_state_friendly(state): _clamp_int32(count, job_id=job_id, field=f"task_state_counts[{state}]")
             for state, count in s.task_state_counts.items()
-        },
-    }
+        }
+    )
 
 
 def peer_status(cluster: str, handoff_state: int | None, has_reported_tasks: bool) -> int:
@@ -857,48 +875,17 @@ def get_job_status(
         # its handoff posture in the pending reason.
         handle = reads.federated_handle(q, job.job_id) if is_federated(job.cluster) else None
     summary = summaries.get(job.job_id)
-
-    # Get scheduling diagnostics for pending jobs from cache
-    # (populated each scheduling cycle by the controller). The autoscaler
-    # hint dict is cached once per evaluate cycle, so the lookup here
-    # is a single dict get — we only attach this job's hint, never the
-    # full routing decision.
     handoff_state = handle.handoff_state if handle else None
-    current_peer_status = peer_status(job.cluster, handoff_state, summary is not None)
-    pending_reason = ""
-    if job.state == job_pb2.JOB_STATE_PENDING and is_federated(job.cluster):
-        pending_reason = _federated_pending_reason(job.cluster, handoff_state, current_peer_status)
-    elif job.state == job_pb2.JOB_STATE_PENDING:
-        sched_reason = dependencies.runtime.get_job_scheduling_diagnostics(job.job_id.to_wire())
-        pending_reason = sched_reason or "Pending scheduler feedback"
-        hint = _get_autoscaler_pending_hints(dependencies).get(job.job_id.to_wire())
-        if hint is not None:
-            scaling_prefix = "(scaling up) " if hint.is_scaling_up else ""
-            pending_reason = f"Scheduler: {pending_reason}\n\nAutoscaler: {scaling_prefix}{hint.message}"
-
-    resources = resource_spec_from_job_row(job)
-
-    proto_job_status = job_pb2.JobStatus(
-        job_id=job.job_id.to_wire(),
-        state=job.state,
-        error=job.error or "",
-        exit_code=job.exit_code or 0,
-        name=job.name,
-        pending_reason=pending_reason,
-        resources=resources,
+    proto_job_status = _job_to_proto(
+        dependencies,
+        job,
+        summary,
+        _get_autoscaler_pending_hints(dependencies) if job.state == job_pb2.JOB_STATE_PENDING else {},
         has_children=has_children,
         parent_job_id=job.parent_job_id.to_wire() if job.parent_job_id else "",
-        backend_id=job.backend_id or "",
-        cluster=job.cluster,
-        peer_status=current_peer_status,
-        **job_status_counts(summary, job.job_id, pre_sync_task_count=job.num_tasks if is_federated(job.cluster) else 0),
+        resources=resource_spec_from_job_row(job),
+        handoff_state=handoff_state,
     )
-    if job.started_at_ms:
-        proto_job_status.started_at.CopyFrom(timestamp_to_proto(job.started_at_ms))
-    if job.finished_at_ms:
-        proto_job_status.finished_at.CopyFrom(timestamp_to_proto(job.finished_at_ms))
-    if job.submitted_at_ms:
-        proto_job_status.submitted_at.CopyFrom(timestamp_to_proto(job.submitted_at_ms))
 
     # Status describes the job's shape; the workdir file bytes are payload no
     # client of this RPC reads, so they stay out of the response.
@@ -1008,51 +995,61 @@ def complete_job(
 
 def _job_to_proto(
     dependencies: JobDependencies,
-    j: Any,
+    job: JobStatusRow,
     task_summary: TaskJobSummary | None,
     autoscaler_pending_hints: dict[str, PendingHint],
     *,
     has_children: bool = False,
     handoff_state: int | None = None,
+    parent_job_id: str = "",
+    resources: job_pb2.ResourceSpecProto | None = None,
 ) -> job_pb2.JobStatus:
     """Convert a job row and its task summary into a JobStatus proto."""
-    current_peer_status = peer_status(j.cluster, handoff_state, task_summary is not None)
-    pending_reason = j.error or ""
-    if j.state == job_pb2.JOB_STATE_PENDING and is_federated(j.cluster):
-        pending_reason = _federated_pending_reason(j.cluster, handoff_state, current_peer_status)
-    elif j.state == job_pb2.JOB_STATE_PENDING:
-        sched_reason = dependencies.runtime.get_job_scheduling_diagnostics(j.job_id.to_wire())
+    current_peer_status = peer_status(job.cluster, handoff_state, task_summary is not None)
+    pending_reason = job.error or ""
+    if job.state == job_pb2.JOB_STATE_PENDING and is_federated(job.cluster):
+        pending_reason = _federated_pending_reason(job.cluster, handoff_state, current_peer_status)
+    elif job.state == job_pb2.JOB_STATE_PENDING:
+        sched_reason = dependencies.runtime.get_job_scheduling_diagnostics(job.job_id.to_wire())
         pending_reason = sched_reason or "Pending scheduler feedback"
-        hint = autoscaler_pending_hints.get(j.job_id.to_wire())
+        hint = autoscaler_pending_hints.get(job.job_id.to_wire())
         if hint is not None:
             scaling_prefix = "(scaling up) " if hint.is_scaling_up else ""
             pending_reason = f"Scheduler: {pending_reason}\n\nAutoscaler: {scaling_prefix}{hint.message}"
 
     proto_job = job_pb2.JobStatus(
-        job_id=j.job_id.to_wire(),
-        state=j.state,
-        error=j.error or "",
-        exit_code=j.exit_code or 0,
-        name=j.name,
+        job_id=job.job_id.to_wire(),
+        state=job.state,
+        error=job.error or "",
+        exit_code=job.exit_code or 0,
+        name=job.name,
         pending_reason=pending_reason,
         has_children=has_children,
-        backend_id=j.backend_id or "",
-        cluster=j.cluster,
+        parent_job_id=parent_job_id,
+        backend_id=job.backend_id or "",
+        cluster=job.cluster,
         peer_status=current_peer_status,
-        **job_status_counts(task_summary, j.job_id, pre_sync_task_count=j.num_tasks if is_federated(j.cluster) else 0),
     )
-    if j.started_at_ms:
-        proto_job.started_at.CopyFrom(timestamp_to_proto(j.started_at_ms))
-    if j.finished_at_ms:
-        proto_job.finished_at.CopyFrom(timestamp_to_proto(j.finished_at_ms))
-    if j.submitted_at_ms:
-        proto_job.submitted_at.CopyFrom(timestamp_to_proto(j.submitted_at_ms))
+    if resources is not None:
+        proto_job.resources.CopyFrom(resources)
+    apply_job_status_counts(
+        proto_job,
+        task_summary,
+        job.job_id,
+        pre_sync_task_count=job.num_tasks if is_federated(job.cluster) else 0,
+    )
+    if job.started_at_ms:
+        proto_job.started_at.CopyFrom(timestamp_to_proto(job.started_at_ms))
+    if job.finished_at_ms:
+        proto_job.finished_at.CopyFrom(timestamp_to_proto(job.finished_at_ms))
+    if job.submitted_at_ms:
+        proto_job.submitted_at.CopyFrom(timestamp_to_proto(job.submitted_at_ms))
     return proto_job
 
 
 def _jobs_to_protos(
     dependencies: JobDependencies,
-    jobs: list,
+    jobs: Sequence[JobStatusRow],
     task_summaries: dict[JobName, TaskJobSummary],
     autoscaler_pending_hints: dict[str, PendingHint],
     has_children: set[JobName] | None = None,
