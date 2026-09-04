@@ -87,9 +87,11 @@ WORKER_SPANS = {
 PPO_TRAIN = {"0": 1900.0, "1": 2000.0}
 CRITICAL_RANK = "1"
 
-# policy_training_step wraps these four. The first instrumented run published it as
-# policy_training_step_other under clock_domain=exclusive_wall, so it arrives looking exactly like
-# a leaf; both spellings have to be excluded from the bands.
+# policy_training_step wraps these four, and the fixture carries both of the ways it has arrived --
+# which no single run does, so one store exercises both exclusions at once. The current spelling
+# ships under an inclusive clock domain and is excluded by that. The first instrumented run
+# published it as policy_training_step_other, which is absent from TIMING_PARENTS, so the sink
+# stamped an empty parent on it and it arrives looking exactly like a leaf.
 CONTAINER_SPAN = "policy_training_step_other"
 CONTAINED_SPANS = (
     "policy_forward",
@@ -97,6 +99,11 @@ CONTAINED_SPANS = (
     "policy_optimizer_step",
     "policy_entropy_allreduce",
 )
+
+# policy_span_publish is the cost of shipping the PREVIOUS step's rows. It is measured after
+# policy_ppo_train's wall is taken and declares a parent outside it, so it is a worker span that
+# does not belong in this decomposition however exclusive its clock domain looks.
+SPAN_PUBLISH_SECONDS = 3.0
 
 WORKER_COUNTERS = {
     "0": {"micro_step_count": 64.0, "tokens_real": 6000.0, "tokens_padded": 8000.0, "attention_work_ratio": 1.9},
@@ -257,11 +264,16 @@ def _worker_rows(moment: datetime, seq: int, clock: str) -> list[tuple]:
     for rank, spans in WORKER_SPANS.items():
         rank_node = NODES[int(rank) % len(NODES)]
         emitted = dict(spans)
-        # The container span, as the first instrumented run actually published it: exclusive_wall,
-        # and wrapping four of the spans beside it. Banding it counts that time twice, and the
-        # producer's own residual goes sharply negative as a result.
-        emitted[CONTAINER_SPAN] = sum(spans[phase] for phase in CONTAINED_SPANS)
+        # The container span, as the first instrumented run actually published it: an exclusive
+        # clock domain, an empty parent, and four of the spans beside it inside its own wall.
+        # Banding it counts that time twice, and the producer's own residual goes sharply negative.
+        contained_seconds = sum(spans[phase] for phase in CONTAINED_SPANS)
+        emitted[CONTAINER_SPAN] = contained_seconds
         emitted["policy_span_residual"] = PPO_TRAIN[rank] - sum(emitted.values())
+        parents = dict.fromkeys(emitted, "policy_ppo_train")
+        parents[CONTAINER_SPAN] = ""
+        parents["policy_span_publish"] = "policy_train"
+        emitted["policy_span_publish"] = SPAN_PUBLISH_SECONDS
         for phase, seconds in emitted.items():
             rows.append(
                 _row(
@@ -276,7 +288,7 @@ def _worker_rows(moment: datetime, seq: int, clock: str) -> list[tuple]:
                     attributes={
                         "phase": phase,
                         "root": "step",
-                        "parent": "policy_ppo_train",
+                        "parent": parents[phase],
                         "clock_domain": f"exclusive_{clock}",
                         "role": "worker",
                         "rank": rank,
@@ -284,6 +296,28 @@ def _worker_rows(moment: datetime, seq: int, clock: str) -> list[tuple]:
                     },
                 )
             )
+        # The current spelling of the container, under the inclusive domain the sink gives it.
+        rows.append(
+            _row(
+                service="marinskyrl",
+                name="phase_duration_seconds",
+                value=contained_seconds,
+                moment=moment,
+                seq=seq,
+                run_id=RUN_ID,
+                node_name=rank_node,
+                role="worker",
+                attributes={
+                    "phase": "policy_training_step",
+                    "root": "step",
+                    "parent": "policy_ppo_train",
+                    "clock_domain": f"inclusive_{clock}",
+                    "role": "worker",
+                    "rank": rank,
+                    "step": str(seq),
+                },
+            )
+        )
         rows.append(
             _row(
                 service="marinskyrl",
@@ -580,9 +614,19 @@ def test_the_decomposition_reads_the_critical_rank_and_never_a_per_phase_maximum
     expected["unattributed"] = PPO_TRAIN[CRITICAL_RANK] - sum(WORKER_SPANS[CRITICAL_RANK].values())
     assert bands == pytest.approx(expected)
 
-    # The container span and the producer's own residual are both excluded, and the residual is
-    # recomputed. Reading the published one would put a -1949 s band in a 2000 s stack.
+    # Only spans that name policy_ppo_train as their parent are banded, so the two container
+    # spellings and the publish cost drop out by construction rather than by a list of names.
+    # policy_span_publish is exclusive, it is a worker row, and it belongs to another parent; a
+    # rule that read the clock domain alone would band it and quietly shrink the residual by its
+    # three seconds.
     assert CONTAINER_SPAN not in bands
+    assert "policy_training_step" not in bands
+    assert "policy_span_publish" not in bands
+    assert bands["unattributed"] == pytest.approx(
+        PPO_TRAIN[CRITICAL_RANK] - sum(WORKER_SPANS[CRITICAL_RANK].values())
+    )
+    # The producer's own residual is excluded and recomputed. Reading the published one would put
+    # a -1949 s band in a 2000 s stack.
     assert "policy_span_residual" not in bands
     published = (
         PPO_TRAIN[CRITICAL_RANK]
