@@ -91,8 +91,9 @@ def run_jobs(runner: str, apps_dir: Path, reader: str | None, migrate_only: bool
     """Run every app job assigned to `runner` in stable order.
 
     Acquire a PostgreSQL advisory lease scoped to `runner`; return successfully if another
-    execution owns it. Apply every app migration and reader grant while holding the lease.
-    Stop after migration when `migrate_only` is true. Otherwise run each command as a child
+    execution owns it. Apply every app migration under a shared migration advisory lock.
+    Apply reader grants only when `--reader` is explicitly passed. Stop after migration when
+    `migrate_only` is true. Otherwise run each command as a child
     process in its app directory with its declared timeout and only its declared registered
     secrets. Attempt later jobs after a timeout, spawn error, or nonzero exit. Raise
     ClickException after completion with each failed `<app>.<job>` name. Raise UsageError if
@@ -135,11 +136,11 @@ Every PostgreSQL read method reaches `refresh_if_due()` through the store's snap
 The `marin-marina` stack declares:
 
 - Cloud Run service `marina`: `cpu_idle=true`, startup CPU boost enabled, minimum instances `1`, maximum instances `4`, concurrency `8`, CPU `4`, memory `4Gi`.
-- Cloud Run job `marina-hourly`: args `marina run hourly --reader <reader-group>`, timeout equal to the child timeout sum plus fixed overhead, retries `0`, CPU `4`, memory `4Gi`, Marina service account, Cloud SQL volume, database environment, and `MARINMIRROR_TOKEN`.
+- Cloud Run job `marina-hourly`: args `marina run hourly`, timeout equal to the child timeout sum plus fixed overhead, retries `0`, CPU `4`, memory `4Gi`, Marina service account, Cloud SQL volume, database environment, and `MARINMIRROR_TOKEN`.
 - Cloud Scheduler job `marina-hourly-trigger`: schedule `0 * * * *`, UTC, OAuth as the Marina service account, invoking `marina-hourly:run`.
-- Cloud Run job `marina-evaldash`: args `marina run evaldash --reader <reader-group>`, CPU `1`, memory `1Gi`, and the two CoreWeave secrets.
+- Cloud Run job `marina-evaldash`: args `marina run evaldash`, CPU `1`, memory `1Gi`, and the two CoreWeave secrets.
 - Cloud Scheduler job `marina-evaldash-trigger`: schedule `*/10 * * * *`, UTC, invoking `marina-evaldash:run`.
-- Deploy command: execute `marina-hourly` with args `marina,run,hourly,--reader,<reader-group>,--migrate-only` and wait when the image reference changes. The service revision depends on this execution. Scheduled and deploy executions use the same runner lease and both migrate before app code.
+- Deploy command: execute `marina-hourly` with args `marina,run,hourly,--reader,<reader-group>,--migrate-only` and wait when the image reference changes. The service revision depends on this execution. Every scheduled and deploy execution takes the shared migration lock; only the deploy execution applies reader grants.
 
 The stack no longer declares `marina-migrate`, `marina-echo-sync`, or `marina-echo-sync-trigger`. Pulumi deletes those resources during apply.
 

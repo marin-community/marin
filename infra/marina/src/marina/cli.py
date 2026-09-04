@@ -12,7 +12,7 @@ import pytest
 import uvicorn
 
 from marina.apps import is_python_app, migration, services_for
-from marina.db import DatabaseSpec, database_from_env, grant_read, runner_lock, schema_name
+from marina.db import DatabaseSpec, database_from_env, grant_read, migration_lock, runner_lock, schema_name
 from marina.journey_plugin import DEFAULT_SHOTS_DIR, JOURNEYS_DIR
 from marina.manifest import AppManifest, JobRunner, discover_apps, job_runners
 from marina.server import APPS_DIR_ENV, MarinaConfig, create_app
@@ -65,22 +65,23 @@ def migrate(apps_dir: Path, only: tuple[str, ...], reader: str | None) -> None:
 
 
 def _migrate_apps(apps: list[AppManifest], database: DatabaseSpec, only: tuple[str, ...], reader: str | None) -> None:
-    for app in apps:
-        if only and app.name not in only:
-            continue
-        if not is_python_app(app):
-            continue
-        run = migration(app)
-        if run is None:
-            continue
-        click.echo(f"== {app.name}: migrate")
-        engine = services_for(app, "", database).engine()
-        try:
-            run(engine)
-            if reader:
-                grant_read(engine, schema_name(app.name), reader)
-        finally:
-            engine.dispose()
+    with migration_lock(database):
+        for app in apps:
+            if only and app.name not in only:
+                continue
+            if not is_python_app(app):
+                continue
+            run = migration(app)
+            if run is None:
+                continue
+            click.echo(f"== {app.name}: migrate")
+            engine = services_for(app, "", database).engine()
+            try:
+                run(engine)
+                if reader:
+                    grant_read(engine, schema_name(app.name), reader)
+            finally:
+                engine.dispose()
 
 
 def _runner(runner_name: str, apps: list[AppManifest]) -> JobRunner:

@@ -323,7 +323,7 @@ def scheduled_runner(
         template=gcp.cloudrunv2.JobTemplateArgs(
             template=job_template(
                 image_ref,
-                ["marina", "run", runner.name, "--reader", READER_GROUP],
+                ["marina", "run", runner.name],
                 DATABASE_ENV,
                 secrets,
                 cpu=str(runner.cpu),

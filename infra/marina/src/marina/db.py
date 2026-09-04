@@ -30,6 +30,7 @@ CLOUDSQL_CONNECTION_ENV = "CLOUDSQL_CONNECTION"
 PGDATABASE_ENV = "PGDATABASE"
 PGUSER_ENV = "PGUSER"
 RUNNER_LOCK_PREFIX = "marina-runner:"
+MIGRATION_LOCK_NAME = "marina-migrations"
 
 
 @dataclass(frozen=True)
@@ -132,13 +133,7 @@ def engine_for(spec: DatabaseSpec, app: str) -> Engine:
 
 
 @contextmanager
-def runner_lock(spec: DatabaseSpec, runner: str, *, wait: bool) -> Iterator[bool]:
-    """Hold a database-wide advisory lock for one Marina runner execution.
-
-    Scheduled executions use a non-blocking lock and skip overlap. A migration-only deploy
-    execution waits so the new service revision cannot start before its migrations finish.
-    Non-Postgres test databases have no cross-process advisory-lock primitive and always enter.
-    """
+def _advisory_lock(spec: DatabaseSpec, name: str, *, wait: bool) -> Iterator[bool]:
     engine = _bare_engine(spec)
     try:
         with engine.connect() as conn:
@@ -148,7 +143,7 @@ def runner_lock(spec: DatabaseSpec, runner: str, *, wait: bool) -> Iterator[bool
             operation = "pg_advisory_lock" if wait else "pg_try_advisory_lock"
             result = conn.execute(
                 text(f"SELECT {operation}(hashtext(:name))"),
-                {"name": f"{RUNNER_LOCK_PREFIX}{runner}"},
+                {"name": name},
             ).scalar()
             acquired = True if wait else bool(result)
             conn.commit()
@@ -158,8 +153,28 @@ def runner_lock(spec: DatabaseSpec, runner: str, *, wait: bool) -> Iterator[bool
                 if acquired:
                     conn.execute(
                         text("SELECT pg_advisory_unlock(hashtext(:name))"),
-                        {"name": f"{RUNNER_LOCK_PREFIX}{runner}"},
+                        {"name": name},
                     )
                     conn.commit()
     finally:
         engine.dispose()
+
+
+@contextmanager
+def runner_lock(spec: DatabaseSpec, runner: str, *, wait: bool) -> Iterator[bool]:
+    """Hold a database-wide advisory lock for one Marina runner execution.
+
+    Scheduled executions use a non-blocking lock and skip overlap. A migration-only deploy
+    execution waits so the new service revision cannot start before its migrations finish.
+    Non-Postgres test databases have no cross-process advisory-lock primitive and always enter.
+    """
+    with _advisory_lock(spec, f"{RUNNER_LOCK_PREFIX}{runner}", wait=wait) as acquired:
+        yield acquired
+
+
+@contextmanager
+def migration_lock(spec: DatabaseSpec) -> Iterator[None]:
+    """Serialize schema migrations across every runner and deployment."""
+    with _advisory_lock(spec, MIGRATION_LOCK_NAME, wait=True) as acquired:
+        assert acquired
+        yield
