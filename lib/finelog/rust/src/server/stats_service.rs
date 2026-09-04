@@ -26,7 +26,7 @@ use crate::query::{
     make_ctx, query_timeout, run_query_over, run_within_query_timeout, truncate_sql_for_log,
 };
 use crate::server::auth::{request_identity, AuthIdentity};
-use crate::server::MAX_MESSAGE_BYTES;
+use crate::server::MAX_QUERY_RESULT_BYTES;
 use crate::store::catalog::SpecLifecycle;
 use crate::store::ipc::encode_ipc;
 use crate::store::policy::StoragePolicy;
@@ -372,11 +372,10 @@ impl StatsService for StatsServiceImpl {
         // still emits the correct typed schema (the typed-empty contract).
         let buf = encode_ipc(&result.schema, &result.batches)
             .map_err(|e| ConnectError::internal(format!("encode query result: {e}")))?;
-        // No server-side row cap; the only result bound is the 64MB transport
-        // message limit -> resource_exhausted.
-        if buf.len() > MAX_MESSAGE_BYTES {
+        // No server-side row cap; the result-size limit maps to resource_exhausted.
+        if buf.len() > MAX_QUERY_RESULT_BYTES {
             return Err(ConnectError::resource_exhausted(format!(
-                "query result {} bytes exceeds {MAX_MESSAGE_BYTES} message limit",
+                "query result {} bytes exceeds {MAX_QUERY_RESULT_BYTES} message limit",
                 buf.len()
             )));
         }

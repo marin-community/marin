@@ -38,7 +38,7 @@ pub const IMPLICIT_SEQ_COLUMN: &str = "seq";
 pub const IMPLICIT_CLUSTER_COLUMN: &str = "cluster";
 
 /// Max bytes per WriteRows request body.
-pub const MAX_WRITE_ROWS_BYTES: usize = 16 * 1024 * 1024;
+pub const MAX_WRITE_ROWS_BYTES: usize = 160 * 1024 * 1024;
 
 /// Max rows per RecordBatch. Exactly `1_000_000` (NOT `1 << 20`).
 pub const MAX_WRITE_ROWS_ROWS: usize = 1_000_000;

@@ -94,10 +94,10 @@ const FORWARD_INTERVAL: Duration = Duration::from_secs(5);
 /// million-row write limit.
 const FORWARD_BATCH_ROWS: i64 = 200_000;
 
-/// Encoded bytes per outbound request. Keep one MiB below the receiving store's hard
+/// Encoded bytes per outbound request. Keep ten MiB below the receiving store's hard
 /// Arrow IPC limit. [`chunk_by_bytes`] verifies the resulting size and adjusts each
 /// chunk toward this budget.
-const FORWARD_BATCH_BYTES: usize = MAX_WRITE_ROWS_BYTES - (1 << 20);
+const FORWARD_BATCH_BYTES: usize = MAX_WRITE_ROWS_BYTES - (10 << 20);
 
 const FORWARD_REQUEST_COMPRESSION: &str = "zstd";
 const FINELOG_ZSTD_LEVEL: i32 = 1;

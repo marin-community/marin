@@ -621,7 +621,7 @@ fn chunk_by_bytes_shrinks_an_estimate_that_encodes_over_budget() {
 }
 
 #[test]
-fn one_telemetry_sized_read_turn_fits_one_parallel_wave() {
+fn one_telemetry_sized_read_turn_fits_one_request() {
     let rows = FORWARD_BATCH_ROWS as usize;
     let row = "x".repeat(TELEMETRY_ROW_BYTES);
     let batch = RecordBatch::try_new(
@@ -637,15 +637,7 @@ fn one_telemetry_sized_read_turn_fits_one_parallel_wave() {
 
     let chunks = chunk_by_bytes(&batch, &seqs, FORWARD_BATCH_BYTES).unwrap();
 
-    assert!(
-        chunks.len() <= FORWARD_CHUNK_CONCURRENCY,
-        "chunks: {:?}",
-        chunks
-            .iter()
-            .map(|(ipc, seq)| (ipc.len(), seq))
-            .collect::<Vec<_>>()
-    );
-    assert!(chunks.len() > 1, "the fixture must exercise byte chunking");
+    assert_eq!(chunks.len(), 1);
     assert!(chunks
         .iter()
         .all(|(ipc, _)| ipc.len() <= FORWARD_BATCH_BYTES));
@@ -1144,10 +1136,11 @@ async fn a_dense_backlog_is_forwarded_in_one_read_batch() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn telemetry_sized_chunks_are_delivered_concurrently_without_loss() {
     let fx = Fixture::new("concurrent-chunks").await;
+    let row_bytes = FORWARD_BATCH_BYTES / FORWARD_BATCH_ROWS as usize + 64;
     write_string_rows(
         &fx.source,
         "telemetry",
-        vec!["x".repeat(TELEMETRY_ROW_BYTES); FORWARD_BATCH_ROWS as usize],
+        vec!["x".repeat(row_bytes); FORWARD_BATCH_ROWS as usize],
     )
     .await;
     fx.forward_from_start("telemetry").await;
