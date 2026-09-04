@@ -62,6 +62,7 @@ from iris.cluster.controller.task_state import (
     ACTIVE_TASK_STATES,
     DISPATCHED_TASK_STATES,
     ActiveTaskRow,
+    AttemptDetailRow,
     RunningTaskEntry,
     RuntimeReleaseTarget,
     TaskDetailRow,
@@ -1108,7 +1109,7 @@ def attempt_counts_for_jobs(tx: Tx, job_ids: Sequence[JobName]) -> dict[JobName,
     }
 
 
-def all_attempts_for_tasks(tx: Tx, task_ids: Sequence[JobName]) -> dict[JobName, tuple[object, ...]]:
+def all_attempts_for_tasks(tx: Tx, task_ids: Sequence[JobName]) -> dict[JobName, tuple[AttemptDetailRow, ...]]:
     """Return ``{task_id: (attempt_row, ...)}`` with every attempt per task, ascending by attempt id.
 
     Returns the complete attempt history per task, with no per-task cap.
@@ -1121,9 +1122,10 @@ def all_attempts_for_tasks(tx: Tx, task_ids: Sequence[JobName]) -> dict[JobName,
         .order_by(task_attempts_table.c.task_id.asc(), task_attempts_table.c.attempt_id.asc()),
         {"task_ids": list(task_ids)},
     ).all()
-    grouped: dict[JobName, list[object]] = {}
+    grouped: dict[JobName, list[AttemptDetailRow]] = {}
     for row in rows:
-        grouped.setdefault(row.task_id, []).append(row)
+        attempt = AttemptDetailRow.from_row(row)
+        grouped.setdefault(attempt.task_id, []).append(attempt)
     return {task_id: tuple(attempts) for task_id, attempts in grouped.items()}
 
 

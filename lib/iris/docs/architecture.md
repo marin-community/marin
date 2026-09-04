@@ -17,6 +17,7 @@ it.** Reading top to bottom answers a chain of questions:
 └──────────────────────────────┬───────────────────────────────────────┘
 ┌─ CONTROLLER  (cluster/controller/) — the brain ──▼────────────────────┐
 │  transport/loops  controller.py · service.py · dashboard.py · main.py │
+│  request operations  jobs · tasks · attempts · workers · endpoints    │
 │  imperative shell  ops/{job,task,worker} · reconcile/dispatch · pruner│
 │  decision kernels  reconcile/ · scheduling/ · autoscaler/             │
 │  state predicates  task_state.py · worker_health.py · audit.py        │
@@ -94,18 +95,28 @@ sub-layered:
 
 | Sub-layer | Modules | Role |
 |---|---|---|
-| Persistence spine | `schema` → `codec` → `db` → `reads`/`writes` · `projections/` | State at rest. `reads`/`writes` are the **only** sanctioned query/mutation surface; `projections/` are write-through caches. |
+| Persistence spine | `schema` → `codec` → `db` → `reads`/`writes` · `projections/` | State at rest. `reads`/`writes` hold shared queries and mutations; `projections/` are write-through caches. |
 | State predicates | `task_state` · `worker_health` · `audit` | What the rows *mean*. |
 | Decision kernels | `reconcile/` (lifecycle) · `scheduling/scheduler.py` (matching) · `scheduling/policy.py` (preemption/gating) · `autoscaler/` (capacity) | Compute what *should* change. `reconcile/` and `scheduling/` are parameterized with no live I/O; `autoscaler/` also actuates its plan through `WorkerInfraProvider` (live cloud create/describe calls and worker health probes). |
 | Imperative shell | `ops/{job,task,worker}` · `reconcile/dispatch` · `pruner` | Load a snapshot, call a kernel, apply effects. |
-| Transport / loops | `controller.py` (loops) · `service.py` (RPC) · `dashboard.py` · `main.py` | Drive it / expose it. |
+| Request operations | `jobs` · `tasks` · `attempts` · `workers` · `endpoints` · `accounts` · `backend_status` · `federation_service` · `diagnostics` · `checkpoint` | Authorize one request, call the data and runtime boundaries, and build its response. |
+| Transport / loops | `controller.py` (loops) · `service.py` (thin Connect adapter) · `dashboard.py` · `main.py` | Drive the controller and expose its APIs. |
 
 The `reconcile/` package is the lifecycle kernel: leaves
 (`snapshot`/`policy`/`effects`) → `working_state` → aggregate primitives
 (`task`/`job`/`worker`, no cross-imports) → `peers` (the lone cross-aggregate
 edge) → `batches` (orchestrator) → `loader` (I/O) → `ops/` shell. `reads`/`writes`
-are the canonical data layer; **one-off queries may stay in `service.py`** —
-`reads.py` is reserved for load-bearing, multiply-used queries.
+are the canonical data layer. A query used by one request may stay in its
+operation module. `reads.py` is reserved for load-bearing, multiply-used
+queries.
+
+`service.py` and `endpoint_service.py` wire each generated Connect method to one
+operation function. Operation modules use frozen dependency records and small
+runtime Protocols where live collaborators are needed. This keeps
+authorization, exact target resolution, database work, and response
+construction together under the owning controller concern. The operation
+modules use the existing protobuf request and response messages; Iris does not
+maintain parallel native copies solely to isolate the wire type.
 
 ### The TaskBackend contract
 
@@ -183,7 +194,4 @@ Honest exceptions to the layering, as of this writing:
   `constraints.py` (type/variant). Consolidation is blocked because the type
   reader returns `constraints.DeviceType`, which is pinned to `constraints.py`
   by `PlacementRequirements`; moving it would only invert the coupling.
-- **`service.py` is large** (~2.5k lines) but deliberately wide-and-flat
-  (RPC dispatch + one-off queries). Only proto *encoding* belongs in `codec.py`.
-
 Layering is a convention maintained by review, not a machine-checked invariant.

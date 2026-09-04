@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import NamedTuple, Protocol
 
 from rigging.timing import Deadline, Duration, Timestamp
+from sqlalchemy import Row
 
 from iris.cluster.types import AttemptUid, JobName, WorkerId
 from iris.rpc import job_pb2
@@ -84,6 +85,10 @@ def task_is_finished(
     return False
 
 
+def attempt_is_worker_failure(state: int) -> bool:
+    return state in (job_pb2.TASK_STATE_WORKER_FAILED, job_pb2.TASK_STATE_PREEMPTED)
+
+
 class TaskStateRow(Protocol):
     """Minimal row shape for state-only predicates."""
 
@@ -158,6 +163,45 @@ class TaskDetailRow:
     # Federated task's peer-side worker label ("" for a local task); NULL from the
     # outer join when absent.
     peer_worker_label: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class AttemptDetailRow:
+    """Attempt projection shared by task, worker, and federation views."""
+
+    task_id: JobName
+    attempt_id: int
+    worker_id: WorkerId | None
+    state: int
+    started_at_ms: Timestamp | None
+    finished_at_ms: Timestamp | None
+    exit_code: int | None
+    error: str | None
+    attempt_uid: str
+    pod_name: str | None
+    pod_uid: str | None
+    node_name: str | None
+    terminal_reason: str | None
+    output_archive_json: str | None
+
+    @classmethod
+    def from_row(cls, row: Row) -> "AttemptDetailRow":
+        return cls(
+            task_id=row.task_id,
+            attempt_id=row.attempt_id,
+            worker_id=row.worker_id,
+            state=row.state,
+            started_at_ms=row.started_at_ms,
+            finished_at_ms=row.finished_at_ms,
+            exit_code=row.exit_code,
+            error=row.error,
+            attempt_uid=row.attempt_uid,
+            pod_name=row.pod_name,
+            pod_uid=row.pod_uid,
+            node_name=row.node_name,
+            terminal_reason=row.terminal_reason,
+            output_archive_json=row.output_archive_json,
+        )
 
 
 def task_is_finished_row(task: TaskDetailRow) -> bool:
