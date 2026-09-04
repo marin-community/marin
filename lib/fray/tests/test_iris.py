@@ -213,11 +213,12 @@ def test_actor_startup_after_task_termination_stops_server_without_error(monkeyp
     registry = SimpleNamespace(register=reject_registration)
     ctx = SimpleNamespace(job_id=JobName.from_wire("/user/job"), registry=registry, get_port=lambda _name: 1234)
     job_info = SimpleNamespace(task_index=0, advertise_host="worker")
+
     monkeypatch.setattr(iris_backend, "ActorServer", lambda **_kwargs: server)
     monkeypatch.setattr(iris_backend, "iris_ctx", lambda: ctx)
     monkeypatch.setattr(iris_backend, "get_job_info", lambda: job_info)
 
-    iris_backend._host_actor(object, (), {}, "actor")
+    iris_backend._host_actor(object, (), {}, "actor", 17)
 
     assert stopped
     assert any(record.levelno == logging.ERROR for record in caplog.records)
