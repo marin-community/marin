@@ -3,7 +3,6 @@
 
 """Client-directed SQL over immutable per-table Finelog catalog snapshots."""
 
-import hashlib
 import threading
 import time
 from collections.abc import Iterable
@@ -143,8 +142,6 @@ class ObjectQueryClient:
         catalog_id = _table_object_id(head.catalog.object_id, namespace, "HEAD.catalog.objectId")
         catalog_path = self._root / catalog_id
         catalog_bytes = self._read_bytes(catalog_path)
-        if hashlib.sha256(catalog_bytes).digest() != head.catalog.sha256:
-            raise StatsError(f"catalog checksum mismatch for namespace {namespace!r}")
         catalog = _parse_message(
             catalog_bytes,
             stats_pb2.NamespaceCatalog(),
@@ -181,7 +178,7 @@ class ObjectQueryClient:
 
 def _parse_message(data: bytes, message: _MessageT, description: str) -> _MessageT:
     try:
-        return json_format.Parse(data.decode(), message)
+        return json_format.Parse(data.decode(), message, ignore_unknown_fields=True)
     except (UnicodeDecodeError, json_format.ParseError) as error:
         raise StatsError(f"invalid {description} JSON: {error}") from error
 
@@ -222,8 +219,8 @@ def _validated_active_spec(
     return active_version, spec
 
 
-def _table_object_id(value: object, namespace: str, field: str) -> str:
-    if not isinstance(value, str) or not value:
+def _table_object_id(value: str, namespace: str, field: str) -> str:
+    if not value:
         raise StatsError(f"{field} must be a non-empty object ID")
     path = PurePosixPath(value)
     if path.is_absolute() or str(path) != value or ".." in path.parts or "\\" in value or "://" in value:

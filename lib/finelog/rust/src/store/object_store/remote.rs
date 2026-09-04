@@ -20,7 +20,6 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use object_store::path::Path as OsPath;
 use object_store::{ObjectStoreExt, PutMode, PutOptions};
-use sha2::{Digest, Sha256};
 
 use crate::errors::StatsError;
 use crate::store::object_store::{
@@ -121,7 +120,6 @@ impl ObjectStore for RemoteObjectStore {
     /// Create an immutable object, accepting an identical retry.
     async fn write(&self, id: &ObjectId, bytes: bytes::Bytes) -> Result<ObjectVersion, StatsError> {
         let path = self.provider.object_path(id);
-        let content_sha256 = Sha256::digest(&bytes).into();
         let byte_size = bytes.len() as u64;
         let result = self
             .provider
@@ -139,8 +137,8 @@ impl ObjectStore for RemoteObjectStore {
             Ok(result) => Ok(ObjectVersion {
                 e_tag: result.e_tag,
                 provider_version: result.version,
-                content_sha256,
                 byte_size,
+                local_value: None,
             }),
             Err(object_store::Error::AlreadyExists { .. }) => {
                 let existing = self.read(id).await?.ok_or_else(|| {

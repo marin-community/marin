@@ -159,6 +159,7 @@ pub struct NamespaceSnapshot {
     pub paths: Vec<String>,
     pub key_bounds: BTreeMap<String, (String, String)>,
     pub seq_bounds: BTreeMap<String, (i64, i64)>,
+    pub row_counts: BTreeMap<String, u64>,
     pub partitions: BTreeMap<String, crate::partition_policy::SegmentPartition>,
     pub min_seq: Option<i64>,
     pub indices: Arc<IndexRegistry>,
@@ -1332,6 +1333,7 @@ impl Store {
             .with_exact_postings_policy(snapshot.exact_postings_policy)
             .with_segment_key_bounds(snapshot.key_column, snapshot.key_bounds)
             .with_segment_seq_bounds(snapshot.seq_bounds)
+            .with_segment_row_counts(snapshot.row_counts)
             .with_segment_partitions(physical_partition_policy_for(name), snapshot.partitions);
         Ok(match snapshot.sources {
             Some((store, segments)) => provider.with_object_sources(store, segments),
@@ -1366,6 +1368,7 @@ impl Store {
             paths: segments.paths,
             key_bounds: segments.key_bounds,
             seq_bounds: segments.seq_bounds,
+            row_counts: segments.row_counts,
             partitions: segments.partitions,
             min_seq: segments.min_seq,
             indices: Arc::clone(self.tables.indices()),
@@ -2015,13 +2018,12 @@ mod tests {
         result.batches.iter().map(|b| b.num_rows() as i64).sum()
     }
 
-    fn assert_local_content_object(data_dir: &Path, path: &str) {
+    fn assert_local_immutable_object(data_dir: &Path, path: &str) {
         let path = Path::new(path);
         assert!(path.starts_with(data_dir.join("_finelog/tables/iris.worker/objects")));
         let filename = path.file_name().and_then(|name| name.to_str()).unwrap();
-        let hash = filename.strip_suffix(".parquet").unwrap();
-        assert_eq!(hash.len(), 64);
-        assert!(hash.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        let object_id = filename.strip_suffix(".parquet").unwrap();
+        uuid::Uuid::parse_str(object_id).unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2047,7 +2049,7 @@ mod tests {
         assert_eq!(first.state().catalog().active_table_spec_version, Some(1));
         assert_eq!(first.state().catalog().retained_table_specs.len(), 1);
         assert_eq!(paths.len(), 1);
-        assert_local_content_object(&data_dir, &paths[0]);
+        assert_local_immutable_object(&data_dir, &paths[0]);
         assert_eq!(after_flush.state().catalog().catalog_generation, Some(2));
         let version = after_flush
             .state()
@@ -2752,7 +2754,7 @@ mod tests {
         );
         let active_paths = store.query_snapshot("iris.worker").unwrap().paths;
         assert_eq!(active_paths.len(), 1);
-        assert_local_content_object(&data_dir, &active_paths[0]);
+        assert_local_immutable_object(&data_dir, &active_paths[0]);
 
         let _ = write_worker_rows(&store, &[("current", 256, 2)]).await;
 
@@ -3172,7 +3174,7 @@ mod tests {
         // directory the legacy parquet still sits in adds nothing back.
         let imported = store.query_snapshot("iris.worker").unwrap().paths;
         assert_eq!(imported.len(), 1);
-        assert_local_content_object(&data_dir, &imported[0]);
+        assert_local_immutable_object(&data_dir, &imported[0]);
         assert!(Path::new(&legacy_paths[0]).exists());
         crate::store::adopt::adopt_store_from_disk(&data_dir, &store.catalog).unwrap();
         let after_rescan: Vec<String> = store
@@ -3422,7 +3424,7 @@ mod tests {
         assert_eq!(scan_table(store, "iris.worker").await, 1);
         let imported = store.query_snapshot("iris.worker").unwrap().paths;
         assert_eq!(imported.len(), 1);
-        assert_local_content_object(&table.data_dir, &imported[0]);
+        assert_local_immutable_object(&table.data_dir, &imported[0]);
 
         store.shutdown(Duration::from_secs(1)).await;
         table.cleanup();
@@ -4060,9 +4062,9 @@ mod tests {
         let snapshot = store.query_snapshot("iris.worker").unwrap();
         let paths = snapshot.paths.clone();
         assert_eq!(paths.len(), 1);
-        assert_local_content_object(&data_dir, &paths[0]);
+        assert_local_immutable_object(&data_dir, &paths[0]);
 
-        // The compacted segment advertises its derived artifacts as content-addressed
+        // The compacted segment advertises its derived artifacts as immutable
         // objects of their own, not as files named after the output Parquet.
         let artifacts = snapshot
             .artifacts
@@ -4079,8 +4081,8 @@ mod tests {
         );
         assert!(bundle.starts_with(data_dir.join("_finelog/tables/iris.worker/indices")));
         let bundle_name = bundle.file_name().and_then(|name| name.to_str()).unwrap();
-        let bundle_hash = bundle_name.strip_suffix(".fidx").unwrap();
-        assert_eq!(bundle_hash.len(), 64);
+        let bundle_id = bundle_name.strip_suffix(".fidx").unwrap();
+        uuid::Uuid::parse_str(bundle_id).unwrap();
         let after = store.publish_object_catalog("iris.worker").await.unwrap();
         assert_eq!(
             after.state().catalog().catalog_generation,
