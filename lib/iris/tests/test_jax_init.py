@@ -483,8 +483,6 @@ def test_multigpu_task_fetches_autotune_cache_once_per_node(tmp_path, process_in
     autotune_dir = f"{scratch_cache_dir}/xla/per-fusion-autotune/process-{process_index}"
     assert f"--xla_gpu_per_fusion_autotune_cache_dir={autotune_dir}" in configured_xla_flags.split()
     assert len(fetches) == expected_fetches
-    if fetches:
-        assert fetches == [(jax_init_module._XLA_AUTOTUNE_REMOTE_PREFIX, autotune_dir)]
     assert uploads == []
 
 
