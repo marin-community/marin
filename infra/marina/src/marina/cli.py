@@ -13,7 +13,14 @@ import click
 import pytest
 import uvicorn
 
-from marina.applets import APPLET_MANIFEST, AppletStore, package_applet, parse_applet_manifest, read_applet_package
+from marina.applets import (
+    APPLET_MANIFEST,
+    AppletPackage,
+    AppletStore,
+    package_applet,
+    parse_applet_manifest,
+    read_applet_package,
+)
 from marina.apps import is_python_app, migration, services_for
 from marina.client import DEFAULT_MARINA_URL, marina_request, publish_applet
 from marina.database_setup import APPLET_READER_ROLE, ensure_applet_provisioning
@@ -159,6 +166,47 @@ def run_jobs(runner_name: str, apps_dir: Path, reader: str | None, migrate_only:
             raise click.ClickException(f"job failures: {', '.join(failures)}")
 
 
+def _publish_package(app_dir: Path, *, build: bool) -> tuple[bytes, AppletPackage]:
+    manifest_path = app_dir / APPLET_MANIFEST
+    if not manifest_path.is_file():
+        raise click.UsageError(f"{app_dir} has no {APPLET_MANIFEST}")
+    manifest = parse_applet_manifest(manifest_path.read_bytes())
+    if not (app_dir / "dist" / "index.html").is_file() and build:
+        if manifest.build_command is None:
+            raise click.UsageError("dist/index.html is absent and applet.toml has no build_command")
+        subprocess.run(manifest.build_command, shell=True, cwd=app_dir, check=True)
+    try:
+        payload = package_applet(app_dir)
+    except ValueError as error:
+        raise click.UsageError(str(error)) from error
+    return payload, read_applet_package(payload)
+
+
+def _print_dry_run(package: AppletPackage, *, json_output: bool) -> None:
+    files = sorted(package.files)
+    report = {
+        "files": files,
+        "file_count": len(files),
+        "byte_size": package.byte_size,
+        "digest": package.digest.hex(),
+    }
+    if json_output:
+        click.echo(json.dumps(report, sort_keys=True))
+        return
+    click.echo(f"{report['file_count']} files, {report['byte_size']} bytes, sha256 {report['digest']}")
+    for path in files:
+        click.echo(path)
+
+
+def _print_publish_result(result: dict[str, object], service_url: str, *, json_output: bool) -> None:
+    if not isinstance(result.get("url"), str) or not urlparse(str(result["url"])).netloc:
+        result["url"] = service_url.rstrip("/") + str(result["path"])
+    if json_output:
+        click.echo(json.dumps(result, sort_keys=True))
+        return
+    click.echo(result["url"])
+
+
 @cli.command()
 @click.argument("app_dir", type=click.Path(path_type=Path, file_okay=False, exists=True))
 @click.option("--url", "service_url", default=DEFAULT_MARINA_URL, show_default=True)
@@ -177,33 +225,9 @@ def publish(
     json_output: bool,
 ) -> None:
     """Publish a built applet directory and print its URL."""
-    manifest_path = app_dir / APPLET_MANIFEST
-    if not manifest_path.is_file():
-        raise click.UsageError(f"{app_dir} has no {APPLET_MANIFEST}")
-    manifest = parse_applet_manifest(manifest_path.read_bytes())
-    if not (app_dir / "dist" / "index.html").is_file() and build:
-        if manifest.build_command is None:
-            raise click.UsageError("dist/index.html is absent and applet.toml has no build_command")
-        subprocess.run(manifest.build_command, shell=True, cwd=app_dir, check=True)
-    try:
-        payload = package_applet(app_dir)
-    except ValueError as error:
-        raise click.UsageError(str(error)) from error
-    package = read_applet_package(payload)
+    payload, package = _publish_package(app_dir, build=build)
     if dry_run:
-        files = sorted(package.files)
-        report = {
-            "files": files,
-            "file_count": len(files),
-            "byte_size": package.byte_size,
-            "digest": package.digest.hex(),
-        }
-        if json_output:
-            click.echo(json.dumps(report, sort_keys=True))
-        else:
-            click.echo(f"{report['file_count']} files, {report['byte_size']} bytes, sha256 {report['digest']}")
-            for path in files:
-                click.echo(path)
+        _print_dry_run(package, json_output=json_output)
         return
     if (applet_id is None) != (base_version is None):
         raise click.UsageError("--update and --base-version must be supplied together")
@@ -211,12 +235,7 @@ def publish(
         result = publish_applet(service_url, payload, applet_id=applet_id, base_version=base_version)
     except RuntimeError as error:
         raise click.ClickException(str(error)) from error
-    if not isinstance(result.get("url"), str) or not urlparse(str(result["url"])).netloc:
-        result["url"] = service_url.rstrip("/") + str(result["path"])
-    if json_output:
-        click.echo(json.dumps(result, sort_keys=True))
-    else:
-        click.echo(result["url"])
+    _print_publish_result(result, service_url, json_output=json_output)
 
 
 @cli.group()
@@ -348,7 +367,7 @@ def load_applet_table(applet_id: str, table_name: str, source: Path, replace: bo
     """Load JSON, JSONL, CSV, or Parquet rows into an applet table."""
     try:
         table = read_table(source)
-        schema_sql, inserts = table_statements(table_name, table, replace)
+        schema_sql, inserts = table_statements(table_name, table, replace=replace)
         origin = _applet_origin(service_url, applet_id)
         for statement in schema_sql:
             marina_request(

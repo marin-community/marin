@@ -28,7 +28,7 @@ from sqlalchemy.engine import Connection, Engine
 from starlette.types import ASGIApp
 
 from marina.database_setup import APPLET_READER_ROLE, PROVISION_APPLET_FUNCTION
-from marina.db import DatabaseSpec, engine_for, engine_for_role
+from marina.db import DatabaseSpec, engine_for, engine_for_role, grant_read_on_connection
 
 APPLET_MANIFEST = "applet.toml"
 DIST_PREFIX = "dist/"
@@ -46,6 +46,7 @@ BACKEND_VALIDATION_TIMEOUT = 15
 KNOWN_MANIFEST_KEYS = frozenset({"title", "description", "connect_src", "build_command", "python_entrypoint"})
 ENTRYPOINT_PATTERN = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*:[A-Za-z_]\w*$")
 BACKEND_CACHE_ROOT = Path(tempfile.gettempdir()) / "marina-applet-backends"
+APPLET_LOCK_SQL = "SELECT pg_advisory_xact_lock(hashtextextended(:id, 0))"
 
 
 class AppletNotFound(Exception):
@@ -356,149 +357,197 @@ class AppletStore:
     ) -> PublishResult:
         applet_id = applet_id or uuid.uuid4()
         with self.engine.begin() as connection:
-            connection.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:id, 0))"), {"id": str(applet_id)})
-            existing = (
-                connection.execute(
-                    text("SELECT owner, current_version, archived_at FROM applets WHERE id = :id FOR UPDATE"),
-                    {"id": applet_id},
-                )
-                .mappings()
-                .first()
+            self._lock_applet(connection, applet_id)
+            version = self._allocate_version(
+                connection,
+                applet_id,
+                package.manifest,
+                owner,
+                base_version,
+                operators,
             )
-            if existing is None:
-                if base_version is not None:
-                    raise AppletNotFound(str(applet_id))
-                version = 1
-                connection.execute(text(f"SELECT {PROVISION_APPLET_FUNCTION}(:id)"), {"id": applet_id})
-                connection.execute(
-                    text(
-                        "INSERT INTO applets (id, title, description, owner) "
-                        "VALUES (:id, :title, :description, :owner)"
-                    ),
-                    {
-                        "id": applet_id,
-                        "title": package.manifest.title,
-                        "description": package.manifest.description,
-                        "owner": owner,
-                    },
-                )
-            else:
-                if existing["archived_at"] is not None:
-                    raise AppletNotFound(str(applet_id))
-                if existing["owner"] != owner and owner not in operators:
-                    raise AppletForbidden(str(applet_id))
-                if base_version is None or existing["current_version"] != base_version:
-                    raise AppletConflict(str(applet_id))
-                version = int(
-                    connection.execute(
-                        text("SELECT COALESCE(MAX(version), 0) + 1 FROM applet_versions WHERE applet_id = :id"),
-                        {"id": applet_id},
-                    ).scalar_one()
-                )
-            connection.execute(
-                text(
-                    "INSERT INTO applet_versions "
-                    "(applet_id, version, manifest, package_digest, byte_size, published_by) "
-                    "VALUES (:id, :version, CAST(:manifest AS jsonb), :digest, :byte_size, :owner)"
-                ),
-                {
-                    "id": applet_id,
-                    "version": version,
-                    "manifest": _manifest_json(package.manifest),
-                    "digest": package.digest,
-                    "byte_size": package.byte_size,
-                    "owner": owner,
-                },
-            )
-            for path, body in package.files.items():
-                digest = hashlib.sha256(body).digest()
-                media_path = path.removesuffix(".gz")
-                media_type = mimetypes.guess_type(media_path)[0] or "application/octet-stream"
-                blob_id = connection.execute(
-                    text("SELECT id FROM blobs WHERE digest = :digest AND media_type = :media_type"),
-                    {"digest": digest, "media_type": media_type},
-                ).scalar()
-                if blob_id is None:
-                    blob_id = uuid.uuid4()
-                    inserted = connection.execute(
-                        text(
-                            "INSERT INTO blobs (id, digest, byte_size, media_type, inline_bytes) "
-                            "VALUES (:id, :digest, :byte_size, :media_type, :body) "
-                            "ON CONFLICT (digest, media_type) DO NOTHING RETURNING id"
-                        ),
-                        {
-                            "id": blob_id,
-                            "digest": digest,
-                            "byte_size": len(body),
-                            "media_type": media_type,
-                            "body": body,
-                        },
-                    ).scalar()
-                    if inserted is None:
-                        blob_id = connection.execute(
-                            text("SELECT id FROM blobs WHERE digest = :digest AND media_type = :media_type"),
-                            {"digest": digest, "media_type": media_type},
-                        ).scalar_one()
-                connection.execute(
-                    text(
-                        "INSERT INTO applet_files (applet_id, version, path, blob_id) "
-                        "VALUES (:id, :version, :path, :blob_id)"
-                    ),
-                    {"id": applet_id, "version": version, "path": path, "blob_id": blob_id},
-                )
+            self._insert_version(connection, applet_id, version, package, owner)
+            self._store_files(connection, applet_id, version, package.files)
             connection.execute(text(f'SET LOCAL ROLE "{applet_role(applet_id)}"'))
             connection.execute(text(f'SET LOCAL search_path TO "{applet_schema(applet_id)}", public'))
-            if package.manifest.python_entrypoint is not None:
-                try:
-                    module, _factory = load_package_module(applet_id, version, package)
-                    migration = getattr(module, "migrate", None)
-                    if migration is not None:
-                        migration(connection)
-                finally:
-                    remove_package_module(applet_id, version, package.digest)
-            connection.execute(text(f'GRANT USAGE ON SCHEMA "{applet_schema(applet_id)}" TO {APPLET_READER_ROLE}'))
-            connection.execute(
-                text(f'GRANT SELECT ON ALL TABLES IN SCHEMA "{applet_schema(applet_id)}" ' f"TO {APPLET_READER_ROLE}")
-            )
-            connection.execute(
-                text(f'GRANT SELECT ON ALL SEQUENCES IN SCHEMA "{applet_schema(applet_id)}" ' f"TO {APPLET_READER_ROLE}")
-            )
-            connection.execute(
-                text(
-                    f'ALTER DEFAULT PRIVILEGES IN SCHEMA "{applet_schema(applet_id)}" '
-                    f"GRANT SELECT ON TABLES TO {APPLET_READER_ROLE}"
-                )
-            )
-            connection.execute(
-                text(
-                    f'ALTER DEFAULT PRIVILEGES IN SCHEMA "{applet_schema(applet_id)}" '
-                    f"GRANT SELECT ON SEQUENCES TO {APPLET_READER_ROLE}"
-                )
-            )
+            self._run_migration(connection, applet_id, version, package)
+            grant_read_on_connection(connection, applet_schema(applet_id), APPLET_READER_ROLE)
             connection.execute(text("RESET ROLE"))
             connection.execute(text("SET LOCAL search_path TO marina, public"))
+            self._activate_version(connection, applet_id, version, package.manifest)
+            self._delete_unreferenced_blobs(connection)
+        return PublishResult(applet_id=applet_id, version=version)
+
+    @staticmethod
+    def _lock_applet(connection: Connection, applet_id: uuid.UUID) -> None:
+        connection.execute(text(APPLET_LOCK_SQL), {"id": str(applet_id)})
+
+    @staticmethod
+    def _allocate_version(
+        connection: Connection,
+        applet_id: uuid.UUID,
+        manifest: AppletManifest,
+        owner: str,
+        base_version: int | None,
+        operators: frozenset[str],
+    ) -> int:
+        existing = (
+            connection.execute(
+                text("SELECT owner, current_version, archived_at FROM applets WHERE id = :id FOR UPDATE"),
+                {"id": applet_id},
+            )
+            .mappings()
+            .first()
+        )
+        if existing is not None:
+            if existing["archived_at"] is not None:
+                raise AppletNotFound(str(applet_id))
+            if existing["owner"] != owner and owner not in operators:
+                raise AppletForbidden(str(applet_id))
+            if base_version is None or existing["current_version"] != base_version:
+                raise AppletConflict(str(applet_id))
+            return int(
+                connection.execute(
+                    text("SELECT COALESCE(MAX(version), 0) + 1 FROM applet_versions WHERE applet_id = :id"),
+                    {"id": applet_id},
+                ).scalar_one()
+            )
+        if base_version is not None:
+            raise AppletNotFound(str(applet_id))
+        connection.execute(text(f"SELECT {PROVISION_APPLET_FUNCTION}(:id)"), {"id": applet_id})
+        connection.execute(
+            text("INSERT INTO applets (id, title, description, owner) VALUES (:id, :title, :description, :owner)"),
+            {
+                "id": applet_id,
+                "title": manifest.title,
+                "description": manifest.description,
+                "owner": owner,
+            },
+        )
+        return 1
+
+    @staticmethod
+    def _insert_version(
+        connection: Connection,
+        applet_id: uuid.UUID,
+        version: int,
+        package: AppletPackage,
+        owner: str,
+    ) -> None:
+        connection.execute(
+            text(
+                "INSERT INTO applet_versions "
+                "(applet_id, version, manifest, package_digest, byte_size, published_by) "
+                "VALUES (:id, :version, CAST(:manifest AS jsonb), :digest, :byte_size, :owner)"
+            ),
+            {
+                "id": applet_id,
+                "version": version,
+                "manifest": _manifest_json(package.manifest),
+                "digest": package.digest,
+                "byte_size": package.byte_size,
+                "owner": owner,
+            },
+        )
+
+    @staticmethod
+    def _blob_id(connection: Connection, path: str, body: bytes) -> uuid.UUID:
+        digest = hashlib.sha256(body).digest()
+        media_type = mimetypes.guess_type(path.removesuffix(".gz"))[0] or "application/octet-stream"
+        existing = connection.execute(
+            text("SELECT id FROM blobs WHERE digest = :digest AND media_type = :media_type"),
+            {"digest": digest, "media_type": media_type},
+        ).scalar()
+        if existing is not None:
+            return existing
+        blob_id = uuid.uuid4()
+        inserted = connection.execute(
+            text(
+                "INSERT INTO blobs (id, digest, byte_size, media_type, inline_bytes) "
+                "VALUES (:id, :digest, :byte_size, :media_type, :body) "
+                "ON CONFLICT (digest, media_type) DO NOTHING RETURNING id"
+            ),
+            {
+                "id": blob_id,
+                "digest": digest,
+                "byte_size": len(body),
+                "media_type": media_type,
+                "body": body,
+            },
+        ).scalar()
+        if inserted is not None:
+            return inserted
+        return connection.execute(
+            text("SELECT id FROM blobs WHERE digest = :digest AND media_type = :media_type"),
+            {"digest": digest, "media_type": media_type},
+        ).scalar_one()
+
+    @classmethod
+    def _store_files(
+        cls,
+        connection: Connection,
+        applet_id: uuid.UUID,
+        version: int,
+        files: dict[str, bytes],
+    ) -> None:
+        for path, body in files.items():
             connection.execute(
                 text(
-                    "UPDATE applets SET title = :title, description = :description, current_version = :version, "
-                    "updated_at = now() WHERE id = :id"
+                    "INSERT INTO applet_files (applet_id, version, path, blob_id) "
+                    "VALUES (:id, :version, :path, :blob_id)"
                 ),
                 {
                     "id": applet_id,
-                    "title": package.manifest.title,
-                    "description": package.manifest.description,
                     "version": version,
+                    "path": path,
+                    "blob_id": cls._blob_id(connection, path, body),
                 },
             )
-            connection.execute(
-                text(
-                    "DELETE FROM applet_versions WHERE applet_id = :id AND version <> :current "
-                    "AND version NOT IN (SELECT version FROM applet_versions WHERE applet_id = :id "
-                    "AND version <> :current ORDER BY version DESC LIMIT :retained)"
-                ),
-                {"id": applet_id, "current": version, "retained": MAX_REVISIONS - 1},
-            )
-            self._delete_unreferenced_blobs(connection)
-        return PublishResult(applet_id=applet_id, version=version)
+
+    @staticmethod
+    def _run_migration(
+        connection: Connection,
+        applet_id: uuid.UUID,
+        version: int,
+        package: AppletPackage,
+    ) -> None:
+        if package.manifest.python_entrypoint is None:
+            return
+        try:
+            module, _factory = load_backend_entrypoint(applet_id, version, package)
+            migration = getattr(module, "migrate", None)
+            if migration is not None:
+                migration(connection)
+        finally:
+            remove_backend_revision(applet_id, version, package.digest)
+
+    @staticmethod
+    def _activate_version(
+        connection: Connection,
+        applet_id: uuid.UUID,
+        version: int,
+        manifest: AppletManifest,
+    ) -> None:
+        connection.execute(
+            text(
+                "UPDATE applets SET title = :title, description = :description, current_version = :version, "
+                "updated_at = now() WHERE id = :id"
+            ),
+            {
+                "id": applet_id,
+                "title": manifest.title,
+                "description": manifest.description,
+                "version": version,
+            },
+        )
+        connection.execute(
+            text(
+                "DELETE FROM applet_versions WHERE applet_id = :id AND version <> :current "
+                "AND version NOT IN (SELECT version FROM applet_versions WHERE applet_id = :id "
+                "AND version <> :current ORDER BY version DESC LIMIT :retained)"
+            ),
+            {"id": applet_id, "current": version, "retained": MAX_REVISIONS - 1},
+        )
 
     @staticmethod
     def _delete_unreferenced_blobs(connection: Connection) -> None:
@@ -587,7 +636,7 @@ class AppletStore:
         operators: frozenset[str] = frozenset(),
     ) -> None:
         with self.engine.begin() as connection:
-            connection.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:id, 0))"), {"id": str(applet_id)})
+            self._lock_applet(connection, applet_id)
             applet = (
                 connection.execute(
                     text("SELECT owner, current_version FROM applets WHERE id = :id AND archived_at IS NULL FOR UPDATE"),
@@ -819,8 +868,8 @@ def validate_backend_import(package: AppletPackage) -> None:
         raise ValueError(f"Python backend validation failed: {detail[:500]}")
 
 
-def load_package_module(applet_id: uuid.UUID, version: int, package: AppletPackage) -> tuple[object, str]:
-    """Materialize and import one revision under a content-specific module name."""
+def load_backend_entrypoint(applet_id: uuid.UUID, version: int, package: AppletPackage) -> tuple[object, str]:
+    """Return the imported backend module and factory name for one applet revision."""
     assert package.manifest.python_entrypoint is not None
     module_path, factory_name = package.manifest.python_entrypoint.split(":", 1)
     root_name = _module_name(applet_id, version, package.digest)
@@ -833,8 +882,8 @@ def load_package_module(applet_id: uuid.UUID, version: int, package: AppletPacka
     return module, factory_name
 
 
-def remove_package_module(applet_id: uuid.UUID, version: int, digest: bytes) -> None:
-    """Remove one failed backend revision from Python and the materialized-file cache."""
+def remove_backend_revision(applet_id: uuid.UUID, version: int, digest: bytes) -> None:
+    """Remove imported modules and source files for one applet revision."""
     root_name = _module_name(applet_id, version, digest)
     for name in [name for name in sys.modules if name == root_name or name.startswith(root_name + ".")]:
         del sys.modules[name]
@@ -875,14 +924,14 @@ class AppletRuntime:
             if package.manifest.python_entrypoint is None:
                 raise AppletNotFound(f"{applet_id}/v/{version}/api")
             try:
-                module, factory_name = load_package_module(applet_id, version, package)
+                module, factory_name = load_backend_entrypoint(applet_id, version, package)
                 factory = getattr(module, factory_name)
                 candidate = factory(AppletServices(applet_id=applet_id, version=version, database=self.store.database))
                 if not callable(candidate):
                     raise TypeError("create_api did not return an ASGI application")
                 api = cast(ASGIApp, candidate)
             except Exception as error:
-                remove_package_module(applet_id, version, package.digest)
+                remove_backend_revision(applet_id, version, package.digest)
                 message = f"{type(error).__name__}: {error}"
                 with self._lock:
                     self._failures[key] = message
@@ -918,4 +967,4 @@ class AppletRuntime:
             for key in stale_initializers:
                 self._initializers.pop(key)
         for version, digest in removed:
-            remove_package_module(applet_id, version, digest)
+            remove_backend_revision(applet_id, version, digest)

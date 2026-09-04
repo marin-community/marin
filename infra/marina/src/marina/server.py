@@ -49,9 +49,11 @@ from marina.applets import (
     AppletConflict,
     AppletForbidden,
     AppletNotFound,
+    AppletPackage,
     AppletRuntime,
     AppletStore,
     InvalidQuery,
+    PublishResult,
     QueryLimitExceeded,
     read_applet_package,
     validate_backend_import,
@@ -167,8 +169,8 @@ def legacy_api_app(host: str, path: str, host_apps: dict[str, str]) -> str | Non
     return app
 
 
-def content_security_policy(app: AppManifest) -> str:
-    connect = " ".join(("'self'", *app.connect_src))
+def content_security_policy(connect_src: tuple[str, ...]) -> str:
+    connect = " ".join(("'self'", *connect_src))
     return (
         "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
         f"img-src 'self' data:; font-src 'self' data:; connect-src {connect}; frame-ancestors 'none'"
@@ -194,14 +196,6 @@ def applet_directory(store: AppletStore | None, applet_origin: str | None) -> li
         }
         for applet in store.apps()
     ]
-
-
-def applet_content_security_policy(connect_src: tuple[str, ...]) -> str:
-    connect = " ".join(("'self'", *connect_src))
-    return (
-        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
-        f"img-src 'self' data:; font-src 'self' data:; connect-src {connect}; frame-ancestors 'none'"
-    )
 
 
 def accepts_encoding(header: str, encoding: str) -> bool:
@@ -270,7 +264,7 @@ def serve_app_file(app: AppManifest, path: str) -> Response:
             f"<h1>{html.escape(app.title)}</h1><p>Frontend not built. Run <code>marina build</code>.</p>",
             status_code=503,
         )
-    headers = {"Content-Security-Policy": content_security_policy(app)}
+    headers = {"Content-Security-Policy": content_security_policy(app.connect_src)}
     candidate = (dist / path).resolve() if path else dist / INDEX_FILE
     inside = candidate == dist or dist in candidate.parents
     if not inside:
@@ -299,7 +293,7 @@ async def serve_data_file(app: AppManifest, data_root: str, path: str) -> Respon
         return JSONResponse({"error": "not found"}, status_code=404)
     fs, root = url_to_fs(data_url_for(data_root, app.name))
     target = prefix_join(root, relative)
-    headers = {"Content-Security-Policy": content_security_policy(app), "Cache-Control": DATA_CACHE_CONTROL}
+    headers = {"Content-Security-Policy": content_security_policy(app.connect_src), "Cache-Control": DATA_CACHE_CONTROL}
     media_type = mimetypes.guess_type(relative)[0] or "application/octet-stream"
     if await run_in_threadpool(fs.isfile, target):
         body = await run_in_threadpool(fs.cat_file, target)
@@ -378,6 +372,54 @@ async def call_applet_api(app: ASGIApp, request: Request, path: str) -> Response
     return Response(response.content, status_code=response.status_code, headers=forwarded)
 
 
+async def uploaded_applet_package(request: Request) -> AppletPackage:
+    payload = await request.body()
+    if len(payload) > MAX_ARCHIVE_BYTES:
+        raise HTTPException(status_code=400, detail=f"archive exceeds {MAX_ARCHIVE_BYTES} bytes")
+    try:
+        package = await run_in_threadpool(read_applet_package, payload)
+        await run_in_threadpool(validate_backend_import, package)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return package
+
+
+def publish_result_response(published: PublishResult, applet_origin: str | None) -> JSONResponse:
+    return JSONResponse(
+        {
+            "id": str(published.applet_id),
+            "version": published.version,
+            "path": published.path,
+            "url": (applet_origin or "") + published.path,
+        },
+        status_code=201,
+    )
+
+
+async def dispatch_applet_api(
+    store: AppletStore | None,
+    runtime: AppletRuntime | None,
+    policy: RequestAuthPolicy,
+    applet_id: uuid.UUID,
+    version: int | None,
+    path: str,
+    request: Request,
+) -> Response:
+    if store is None or runtime is None:
+        raise HTTPException(status_code=404, detail="applet API not found")
+    try:
+        selected_version = version
+        if selected_version is None:
+            selected_version = await run_in_threadpool(store.current_version, applet_id)
+        applet_api = await run_in_threadpool(runtime.api, applet_id, selected_version)
+        with identity_scope(identity_for(request, policy)):
+            return await call_applet_api(applet_api, request, path)
+    except AppletNotFound as error:
+        raise HTTPException(status_code=404, detail="applet API not found") from error
+    except AppletBackendUnavailable as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+
+
 def create_app(config: MarinaConfig) -> RouteAuthMiddleware:
     apps = discover_apps(config.apps_dir)
     shadowed = sorted(app.name for app in apps if app.name in KERNEL_PREFIXES)
@@ -419,37 +461,21 @@ def create_app(config: MarinaConfig) -> RouteAuthMiddleware:
     async def publish_applet(request: Request) -> JSONResponse:
         if applet_store is None:
             raise HTTPException(status_code=503, detail="Marina has no database configured")
-        payload = await request.body()
-        if len(payload) > MAX_ARCHIVE_BYTES:
-            raise HTTPException(status_code=400, detail=f"archive exceeds {MAX_ARCHIVE_BYTES} bytes")
+        package = await uploaded_applet_package(request)
         try:
-            package = await run_in_threadpool(read_applet_package, payload)
-            await run_in_threadpool(validate_backend_import, package)
             owner = identity_for(request, policy).user_id
             published = await run_in_threadpool(applet_store.publish, package, owner)
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
-        return JSONResponse(
-            {
-                "id": str(published.applet_id),
-                "version": published.version,
-                "path": published.path,
-                "url": (config.applet_origin or "") + published.path,
-            },
-            status_code=201,
-        )
+        return publish_result_response(published, config.applet_origin)
 
     @api.post("/api/marina/applets/{applet_id}")
     @requires_auth
     async def update_applet(applet_id: uuid.UUID, base_version: int, request: Request) -> JSONResponse:
         if applet_store is None:
             raise HTTPException(status_code=503, detail="Marina has no database configured")
-        payload = await request.body()
-        if len(payload) > MAX_ARCHIVE_BYTES:
-            raise HTTPException(status_code=400, detail=f"archive exceeds {MAX_ARCHIVE_BYTES} bytes")
+        package = await uploaded_applet_package(request)
         try:
-            package = await run_in_threadpool(read_applet_package, payload)
-            await run_in_threadpool(validate_backend_import, package)
             owner = identity_for(request, policy).user_id
             published = await run_in_threadpool(
                 applet_store.publish,
@@ -474,15 +500,7 @@ def create_app(config: MarinaConfig) -> RouteAuthMiddleware:
             raise HTTPException(status_code=403, detail="only the publisher may update this applet") from error
         except AppletConflict as error:
             raise HTTPException(status_code=409, detail="applet has a newer current version") from error
-        return JSONResponse(
-            {
-                "id": str(published.applet_id),
-                "version": published.version,
-                "path": published.path,
-                "url": (config.applet_origin or "") + published.path,
-            },
-            status_code=201,
-        )
+        return publish_result_response(published, config.applet_origin)
 
     @api.get("/api/marina/applets/{applet_id}")
     @requires_auth
@@ -627,17 +645,7 @@ def create_app(config: MarinaConfig) -> RouteAuthMiddleware:
     )
     @requires_auth
     async def current_applet_api(applet_id: uuid.UUID, path: str, request: Request) -> Response:
-        if applet_store is None or applet_runtime is None:
-            raise HTTPException(status_code=404, detail="applet API not found")
-        try:
-            version = await run_in_threadpool(applet_store.current_version, applet_id)
-            applet_api = await run_in_threadpool(applet_runtime.api, applet_id, version)
-            with identity_scope(identity_for(request, policy)):
-                return await call_applet_api(applet_api, request, path)
-        except AppletNotFound as error:
-            raise HTTPException(status_code=404, detail="applet API not found") from error
-        except AppletBackendUnavailable as error:
-            raise HTTPException(status_code=503, detail=str(error)) from error
+        return await dispatch_applet_api(applet_store, applet_runtime, policy, applet_id, None, path, request)
 
     @api.api_route(
         "/a/{applet_id}/v/{version}/api/{path:path}",
@@ -646,16 +654,7 @@ def create_app(config: MarinaConfig) -> RouteAuthMiddleware:
     )
     @requires_auth
     async def versioned_applet_api(applet_id: uuid.UUID, version: int, path: str, request: Request) -> Response:
-        if applet_runtime is None:
-            raise HTTPException(status_code=404, detail="applet API not found")
-        try:
-            applet_api = await run_in_threadpool(applet_runtime.api, applet_id, version)
-            with identity_scope(identity_for(request, policy)):
-                return await call_applet_api(applet_api, request, path)
-        except AppletNotFound as error:
-            raise HTTPException(status_code=404, detail="applet API not found") from error
-        except AppletBackendUnavailable as error:
-            raise HTTPException(status_code=503, detail=str(error)) from error
+        return await dispatch_applet_api(applet_store, applet_runtime, policy, applet_id, version, path, request)
 
     def applet_file_response(applet_id: uuid.UUID, version: int, path: str, request: Request) -> Response:
         if applet_store is None:
@@ -674,7 +673,7 @@ def create_app(config: MarinaConfig) -> RouteAuthMiddleware:
         etag = f'"{stored.digest.hex()}"'
         headers = {
             "Cache-Control": "private, max-age=31536000, immutable",
-            "Content-Security-Policy": applet_content_security_policy(record.manifest.connect_src),
+            "Content-Security-Policy": content_security_policy(record.manifest.connect_src),
             "ETag": etag,
             "Vary": "Accept-Encoding",
         }

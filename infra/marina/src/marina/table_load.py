@@ -58,7 +58,7 @@ def postgres_type(data_type: pa.DataType) -> str:
 
 
 def table_statements(
-    table_name: str, table: pa.Table, replace: bool
+    table_name: str, table: pa.Table, *, replace: bool
 ) -> tuple[list[str], list[tuple[str, dict[str, object]]]]:
     """Return schema and parameterized inserts for one Arrow table."""
     target = checked_identifier(table_name)

@@ -20,7 +20,7 @@ from enum import StrEnum
 import sqlalchemy
 from google.cloud.sql.connector import Connector
 from sqlalchemy import event, text
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Connection, Engine
 
 logger = logging.getLogger(__name__)
 
@@ -109,12 +109,17 @@ def grant_read(engine: Engine, schema: str, role: str) -> None:
     write and hold every reader behind it, so the grant gives up rather than wait.
     """
     with engine.begin() as conn:
-        conn.execute(text(f"SET LOCAL lock_timeout = '{GRANT_LOCK_TIMEOUT}'"))
-        conn.execute(text(f'GRANT USAGE ON SCHEMA "{schema}" TO "{role}"'))
-        conn.execute(text(f'GRANT SELECT ON ALL TABLES IN SCHEMA "{schema}" TO "{role}"'))
-        conn.execute(text(f'GRANT SELECT ON ALL SEQUENCES IN SCHEMA "{schema}" TO "{role}"'))
-        conn.execute(text(f'ALTER DEFAULT PRIVILEGES IN SCHEMA "{schema}" GRANT SELECT ON TABLES TO "{role}"'))
-        conn.execute(text(f'ALTER DEFAULT PRIVILEGES IN SCHEMA "{schema}" GRANT SELECT ON SEQUENCES TO "{role}"'))
+        grant_read_on_connection(conn, schema, role)
+
+
+def grant_read_on_connection(connection: Connection, schema: str, role: str) -> None:
+    """Let ``role`` read existing and future relations in ``schema`` within a caller transaction."""
+    connection.execute(text(f"SET LOCAL lock_timeout = '{GRANT_LOCK_TIMEOUT}'"))
+    connection.execute(text(f'GRANT USAGE ON SCHEMA "{schema}" TO "{role}"'))
+    connection.execute(text(f'GRANT SELECT ON ALL TABLES IN SCHEMA "{schema}" TO "{role}"'))
+    connection.execute(text(f'GRANT SELECT ON ALL SEQUENCES IN SCHEMA "{schema}" TO "{role}"'))
+    connection.execute(text(f'ALTER DEFAULT PRIVILEGES IN SCHEMA "{schema}" GRANT SELECT ON TABLES TO "{role}"'))
+    connection.execute(text(f'ALTER DEFAULT PRIVILEGES IN SCHEMA "{schema}" GRANT SELECT ON SEQUENCES TO "{role}"'))
 
 
 def engine_for(spec: DatabaseSpec, app: str) -> Engine:
