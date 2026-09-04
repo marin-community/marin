@@ -155,9 +155,10 @@ def test_fork_ferry_workflow_stays_within_loom_profile_capacity() -> None:
     assert len(units) <= max_concurrent
 
 
-def test_loom_pr_review_launcher_never_executes_pull_request_code() -> None:
+def test_loom_pr_review_launcher_starts_one_bounded_review_session() -> None:
     workflow_path = ROOT.parent.parent / ".github/workflows/ops-loom-review.yaml"
     workflow = yaml.safe_load(workflow_path.read_text())
+    stack = yaml.safe_load((ROOT / "Pulumi.marin-loom.yaml").read_text())
     trigger = workflow.get("on", workflow.get(True))
     job = workflow["jobs"]["review"]
 
@@ -169,6 +170,15 @@ def test_loom_pr_review_launcher_never_executes_pull_request_code() -> None:
     assert checkout["with"]["sparse-checkout"] == ".github/actions/launch-loom-run"
     assert launch["uses"] == "./.github/actions/launch-loom-run"
     assert "head.repo.full_name == github.repository" in job["if"]
+    assert "strategy" not in job
+    assert launch["with"]["idempotency-key"] == (
+        "pr-review:${{ github.event.pull_request.number }}:${{ github.event.pull_request.head.sha }}"
+    )
+    assert "review-pr with --comment" in launch["with"]["goal"]
+    assert "lint-review" not in launch["with"]["goal"]
+
+    review_profile = stack["config"]["marin-loom:profiles"]["pr-review"]
+    assert 0 < review_profile["idleArchiveSeconds"] <= 900
 
 
 def test_loom_launch_action_uses_registered_automation_endpoint() -> None:
