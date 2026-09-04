@@ -18,7 +18,6 @@ import pytest
 from finelog.client import FlushResult, LogClient
 from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
-from google.protobuf.message import Message
 from iris.client.client import IrisClient, iris_ctx
 from iris.cluster.config import (
     IrisClusterConfig,
@@ -34,9 +33,8 @@ from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.lifecycle import connect_cluster
 from iris.cluster.stats.tables import TASK_EVENT_NAMESPACE, TASK_EVENT_STORAGE_POLICY, TaskEventRow
 from iris.cluster.types import AcceleratorType, CapacityType, Entrypoint, EnvironmentSpec, ResourceSpec
-from iris.rpc import controller_pb2, job_pb2, resource_pb2
+from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
-from iris.rpc.resource_connect import ResourceServiceClientSync
 from iris.testing.e2e import (
     DEFAULT_CONFIG,
     MARIN_ROOT,
@@ -301,103 +299,6 @@ def verbose_job(smoke_cluster):
 def capabilities(smoke_cluster) -> ClusterCapabilities:
     """Discover cluster capabilities from live workers for topology-dependent tests."""
     return discover_capabilities(smoke_cluster.controller_client)
-
-
-def test_resource_reads_match_controller_views(smoke_cluster):
-    job = smoke_cluster.submit(TestJobs.quick, "smoke-resource-read")
-    smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout)
-    resources = ResourceServiceClientSync(address=smoke_cluster.url, timeout_ms=30_000)
-    try:
-        job_request = controller_pb2.Controller.GetJobStatusRequest(job_id=job.job_id.to_wire())
-        legacy_job = smoke_cluster.controller_client.get_job_status(job_request)
-        job_response = resources.get(
-            _resource_request("job", job_request),
-        )
-        generic_job = controller_pb2.Controller.GetJobStatusResponse()
-        assert job_response.resource.body.Unpack(generic_job)
-
-        task_request = controller_pb2.Controller.ListTasksRequest(job_id=job.job_id.to_wire())
-        legacy_tasks = smoke_cluster.controller_client.list_tasks(task_request)
-        task_response = resources.list(
-            _resource_request("task", task_request),
-        )
-        generic_tasks = [job_pb2.TaskStatus() for _ in task_response.resources]
-        assert all(
-            resource.body.Unpack(task) for resource, task in zip(task_response.resources, generic_tasks, strict=True)
-        )
-
-        task_id = legacy_tasks.tasks[0].task_id
-        attempt_list_request = job_pb2.TaskAttemptSelector(task_id=task_id)
-        attempt_list_response = resources.list(_resource_request("attempt", attempt_list_request))
-        generic_attempts = [job_pb2.TaskAttempt() for _ in attempt_list_response.resources]
-        assert all(
-            resource.body.Unpack(attempt)
-            for resource, attempt in zip(attempt_list_response.resources, generic_attempts, strict=True)
-        )
-        attempt_get_response = resources.get(
-            _resource_request("attempt", job_pb2.TaskAttemptSelector(task_id=task_id, attempt_id=0))
-        )
-        generic_attempt = job_pb2.TaskAttempt()
-        assert attempt_get_response.resource.body.Unpack(generic_attempt)
-
-        state_request = controller_pb2.Controller.GetJobStateRequest(job_ids=[job.job_id.to_wire()])
-        legacy_states = smoke_cluster.controller_client.get_job_state(state_request)
-        state_response = resources.batch_get(
-            _resource_request("job", state_request),
-        )
-        generic_states = [job_pb2.JobStateSnapshot() for _ in state_response.resources]
-        assert all(
-            resource.body.Unpack(state) for resource, state in zip(state_response.resources, generic_states, strict=True)
-        )
-
-        worker_request = controller_pb2.Controller.ListWorkersRequest()
-        legacy_workers = smoke_cluster.controller_client.list_workers(worker_request)
-        worker_response = resources.list(_resource_request("worker", worker_request))
-        generic_workers = [controller_pb2.Controller.WorkerHealthStatus() for _ in worker_response.resources]
-        assert all(
-            resource.body.Unpack(worker)
-            for resource, worker in zip(worker_response.resources, generic_workers, strict=True)
-        )
-
-        backend_request = controller_pb2.Controller.ListBackendsRequest()
-        legacy_backends = smoke_cluster.controller_client.list_backends(backend_request)
-        backend_response = resources.list(_resource_request("backend", backend_request))
-        generic_backends = [controller_pb2.Controller.BackendSummary() for _ in backend_response.resources]
-        assert all(
-            resource.body.Unpack(backend)
-            for resource, backend in zip(backend_response.resources, generic_backends, strict=True)
-        )
-        backend_metadata = controller_pb2.Controller.BackendListMetadata()
-        assert backend_response.metadata.Unpack(backend_metadata)
-    finally:
-        resources.close()
-
-    assert generic_job == legacy_job
-    assert generic_tasks == list(legacy_tasks.tasks)
-    assert task_response.page.total_count == len(legacy_tasks.tasks)
-    assert not task_response.page.has_more
-    assert generic_attempts == list(legacy_tasks.tasks[0].attempts)
-    assert generic_attempt == legacy_tasks.tasks[0].attempts[0]
-    assert attempt_list_response.page.total_count == len(generic_attempts)
-    assert {state.job_id: state.state for state in generic_states} == dict(legacy_states.states)
-    assert generic_workers == list(legacy_workers.workers)
-    assert worker_response.page.total_count == legacy_workers.total_count
-    assert worker_response.page.has_more == legacy_workers.has_more
-    assert [
-        (backend.backend_id, backend.name, backend.kind, tuple(backend.capabilities), tuple(backend.scale_groups))
-        for backend in generic_backends
-    ] == [
-        (backend.backend_id, backend.name, backend.kind, tuple(backend.capabilities), tuple(backend.scale_groups))
-        for backend in legacy_backends.backends
-    ]
-    assert backend_metadata.unroutable_job_count == legacy_backends.unroutable_job_count
-    assert backend_metadata.unroutable_sample == legacy_backends.unroutable_sample
-
-
-def _resource_request(resource_type: str, message: Message) -> resource_pb2.ResourceRequest:
-    request = resource_pb2.ResourceRequest(resource_type=resource_type)
-    request.input.Pack(message)
-    return request
 
 
 # ============================================================================

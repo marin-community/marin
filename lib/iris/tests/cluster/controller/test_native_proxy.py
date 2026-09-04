@@ -17,7 +17,7 @@ from iris.cluster.controller.auth import (
     NativeProxyAuthMode,
     create_controller_auth,
 )
-from iris.cluster.controller.endpoint_service import ProxyEndpointMapping, ProxyRegistrySnapshot
+from iris.cluster.controller.endpoints import ProxyEndpointMapping, ProxyRegistrySnapshot
 from iris.cluster.controller.native_proxy import PROXY_DECISION_PATH, NativeProxy
 from iris.cluster.controller.native_proxy_metrics import NativeProxyTelemetry, flush_native_proxy_metrics
 from iris.managed_thread import ThreadContainer

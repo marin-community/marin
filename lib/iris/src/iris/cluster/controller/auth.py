@@ -57,7 +57,7 @@ from rigging.token_authority import (
 )
 
 from iris.cluster.config import AuthConfig, PeerConfig
-from iris.rpc.auth import FEDERATION_PEER_ROLE, SESSION_COOKIE
+from iris.rpc.auth import FEDERATION_PEER_ROLE, SESSION_COOKIE, authorize_resource_owner
 
 logger = logging.getLogger(__name__)
 
@@ -498,6 +498,12 @@ class ControllerAuth:
     allowed_submitters: tuple[str, ...] = ()
     iap_audience: str | None = None
     federation_keys: dict[str, str] = dataclasses.field(default_factory=dict)
+
+
+def authorize_owner_if_configured(auth: ControllerAuth, owner: str) -> None:
+    """Require ownership when this controller has an auth provider."""
+    if auth.provider:
+        authorize_resource_owner(owner)
 
 
 def request_auth_policy(auth: ControllerAuth | None) -> RequestAuthPolicy:
