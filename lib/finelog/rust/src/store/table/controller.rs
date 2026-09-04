@@ -35,7 +35,7 @@ use crate::store::object_store::OBJECTS_PREFIX;
 use crate::store::object_store::{
     ObjectId, ObjectPrefix, ObjectReference, ObjectStore, ObjectVersion,
 };
-use crate::store::state_store::object::ObjectTableStateStore;
+use crate::store::state_store::object::{ObjectTableStateStore, StateGcPolicy};
 use crate::store::state_store::StoredTableState;
 use crate::store::table_spec::TablePolicy;
 use crate::store::table_state::{
@@ -102,10 +102,7 @@ enum ControllerCommand {
     Tombstone(oneshot::Sender<Result<(), StatsError>>),
     GcStates {
         now_ms: i64,
-        pin_retention_ms: u64,
-        state_retention_ms: u64,
-        orphan_grace_ms: u64,
-        sweep_orphans: bool,
+        policy: StateGcPolicy,
         reply: oneshot::Sender<Result<usize, StatsError>>,
     },
 }
@@ -545,10 +542,12 @@ impl TableController {
     ) -> Result<usize, StatsError> {
         self.dispatch(|reply| ControllerCommand::GcStates {
             now_ms,
-            pin_retention_ms,
-            state_retention_ms,
-            orphan_grace_ms,
-            sweep_orphans,
+            policy: StateGcPolicy {
+                pin_retention_ms,
+                state_retention_ms,
+                orphan_grace_ms,
+                sweep_orphans,
+            },
             reply,
         })
         .await?
@@ -1028,26 +1027,11 @@ impl TableController {
         Ok(())
     }
 
-    async fn run_gc_states(
-        &self,
-        now_ms: i64,
-        pin_retention_ms: u64,
-        state_retention_ms: u64,
-        orphan_grace_ms: u64,
-        sweep_orphans: bool,
-    ) -> Result<usize, StatsError> {
+    async fn run_gc_states(&self, now_ms: i64, policy: StateGcPolicy) -> Result<usize, StatsError> {
         let objects = self.require_objects()?;
         objects
             .state_store
-            .gc_obsolete_states(
-                &self.table,
-                now_ms,
-                pin_retention_ms,
-                state_retention_ms,
-                orphan_grace_ms,
-                sweep_orphans,
-                self.fence,
-            )
+            .gc_obsolete_states(&self.table, now_ms, policy, self.fence)
             .await
     }
 }
@@ -1091,23 +1075,10 @@ async fn run_controller(
             }
             ControllerCommand::GcStates {
                 now_ms,
-                pin_retention_ms,
-                state_retention_ms,
-                orphan_grace_ms,
-                sweep_orphans,
+                policy,
                 reply,
             } => {
-                let _ = reply.send(
-                    controller
-                        .run_gc_states(
-                            now_ms,
-                            pin_retention_ms,
-                            state_retention_ms,
-                            orphan_grace_ms,
-                            sweep_orphans,
-                        )
-                        .await,
-                );
+                let _ = reply.send(controller.run_gc_states(now_ms, policy).await);
             }
         }
     }

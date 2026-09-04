@@ -29,6 +29,14 @@ pub struct ObjectTableStateStore {
     storage: Arc<dyn ObjectStore>,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct StateGcPolicy {
+    pub pin_retention_ms: u64,
+    pub state_retention_ms: u64,
+    pub orphan_grace_ms: u64,
+    pub sweep_orphans: bool,
+}
+
 impl ObjectTableStateStore {
     pub fn new(storage: Arc<dyn ObjectStore>) -> Self {
         Self { storage }
@@ -337,14 +345,11 @@ impl ObjectTableStateStore {
     /// objects no retained state references are also removed after
     /// `orphan_grace_ms`; that pass re-reads every retained state document, so
     /// callers run it on a slower cadence than the state trim.
-    pub async fn gc_obsolete_states(
+    pub(crate) async fn gc_obsolete_states(
         &self,
         table: &str,
         now_ms: i64,
-        pin_retention_ms: u64,
-        state_retention_ms: u64,
-        orphan_grace_ms: u64,
-        sweep_orphans: bool,
+        policy: StateGcPolicy,
         fence: WriterFence,
     ) -> Result<usize, StatsError> {
         let Some(selected) = self.load(table).await? else {
@@ -372,12 +377,15 @@ impl ObjectTableStateStore {
         let current = current_id.table_relative(table).ok_or_else(|| {
             StatsError::Internal(format!("table HEAD for {table:?} points outside its table"))
         })?;
-        let pin_cutoff = now_ms.saturating_sub(i64::try_from(pin_retention_ms).unwrap_or(i64::MAX));
+        let pin_cutoff =
+            now_ms.saturating_sub(i64::try_from(policy.pin_retention_ms).unwrap_or(i64::MAX));
         let state_cutoff =
-            now_ms.saturating_sub(i64::try_from(state_retention_ms).unwrap_or(i64::MAX));
+            now_ms.saturating_sub(i64::try_from(policy.state_retention_ms).unwrap_or(i64::MAX));
         let orphan_cutoff =
-            now_ms.saturating_sub(i64::try_from(orphan_grace_ms).unwrap_or(i64::MAX));
-        let bucket_ms = i64::try_from(pin_retention_ms).unwrap_or(i64::MAX).max(1);
+            now_ms.saturating_sub(i64::try_from(policy.orphan_grace_ms).unwrap_or(i64::MAX));
+        let bucket_ms = i64::try_from(policy.pin_retention_ms)
+            .unwrap_or(i64::MAX)
+            .max(1);
         let current_revision = selected.revision().get();
         let state_objects = self.table_objects(table, STATES_PREFIX).await?;
         let mut candidates = Vec::new();
@@ -436,7 +444,7 @@ impl ObjectTableStateStore {
             self.storage.delete(&ObjectId::table(table, key)?).await?;
             removed += 1;
         }
-        if !sweep_orphans {
+        if !policy.sweep_orphans {
             return Ok(removed);
         }
         let mut referenced = referenced_object_keys(&selected.catalog);
@@ -773,7 +781,17 @@ mod tests {
             .modified_at_ms;
         assert_eq!(
             states
-                .gc_obsolete_states(TABLE, current_modified_ms + 5, 10, 10, 10, true, fence)
+                .gc_obsolete_states(
+                    TABLE,
+                    current_modified_ms + 5,
+                    StateGcPolicy {
+                        pin_retention_ms: 10,
+                        state_retention_ms: 10,
+                        orphan_grace_ms: 10,
+                        sweep_orphans: true,
+                    },
+                    fence,
+                )
                 .await
                 .unwrap(),
             0
@@ -782,7 +800,17 @@ mod tests {
         // A fenced writer collects nothing.
         assert_eq!(
             states
-                .gc_obsolete_states(TABLE, future, 0, 0, 0, true, WriterFence::new(12))
+                .gc_obsolete_states(
+                    TABLE,
+                    future,
+                    StateGcPolicy {
+                        pin_retention_ms: 0,
+                        state_retention_ms: 0,
+                        orphan_grace_ms: 0,
+                        sweep_orphans: true,
+                    },
+                    WriterFence::new(12),
+                )
                 .await
                 .unwrap(),
             0
@@ -790,7 +818,17 @@ mod tests {
         assert_eq!(states.state_keys(TABLE).await.unwrap().len(), 2);
         assert_eq!(
             states
-                .gc_obsolete_states(TABLE, future, 600_000, 600_000, 600_000, true, fence)
+                .gc_obsolete_states(
+                    TABLE,
+                    future,
+                    StateGcPolicy {
+                        pin_retention_ms: 600_000,
+                        state_retention_ms: 600_000,
+                        orphan_grace_ms: 600_000,
+                        sweep_orphans: true,
+                    },
+                    fence,
+                )
                 .await
                 .unwrap(),
             1
@@ -822,11 +860,13 @@ mod tests {
                 .gc_obsolete_states(
                     TABLE,
                     i64::MAX,
-                    600_000,
-                    600_000,
-                    600_000,
-                    false,
-                    WriterFence::new(1)
+                    StateGcPolicy {
+                        pin_retention_ms: 600_000,
+                        state_retention_ms: 600_000,
+                        orphan_grace_ms: 600_000,
+                        sweep_orphans: false,
+                    },
+                    WriterFence::new(1),
                 )
                 .await
                 .unwrap(),
@@ -838,11 +878,13 @@ mod tests {
                 .gc_obsolete_states(
                     TABLE,
                     i64::MAX,
-                    600_000,
-                    600_000,
-                    600_000,
-                    true,
-                    WriterFence::new(1)
+                    StateGcPolicy {
+                        pin_retention_ms: 600_000,
+                        state_retention_ms: 600_000,
+                        orphan_grace_ms: 600_000,
+                        sweep_orphans: true,
+                    },
+                    WriterFence::new(1),
                 )
                 .await
                 .unwrap(),
@@ -895,11 +937,13 @@ mod tests {
                 .gc_obsolete_states(
                     TABLE,
                     base_ms + 100_000,
-                    10_000,
-                    99_000,
-                    99_000,
-                    false,
-                    fence
+                    StateGcPolicy {
+                        pin_retention_ms: 10_000,
+                        state_retention_ms: 99_000,
+                        orphan_grace_ms: 99_000,
+                        sweep_orphans: false,
+                    },
+                    fence,
                 )
                 .await
                 .unwrap(),
@@ -919,11 +963,13 @@ mod tests {
                 .gc_obsolete_states(
                     TABLE,
                     base_ms + 100_000,
-                    10_000,
-                    99_000,
-                    99_000,
-                    false,
-                    fence
+                    StateGcPolicy {
+                        pin_retention_ms: 10_000,
+                        state_retention_ms: 99_000,
+                        orphan_grace_ms: 99_000,
+                        sweep_orphans: false,
+                    },
+                    fence,
                 )
                 .await
                 .unwrap(),
