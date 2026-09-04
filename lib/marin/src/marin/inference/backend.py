@@ -3,7 +3,6 @@
 
 """Interfaces shared by local inference backends."""
 
-from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -35,12 +34,3 @@ class ServedModel(Protocol):
     def model_id(self) -> str: ...
 
     def check_alive(self) -> None: ...
-
-
-class InferenceBackend(Protocol):
-    """Starts one OpenAI-compatible server on the current host."""
-
-    @property
-    def name(self) -> str: ...
-
-    def serve(self, spec: ModelSpec) -> AbstractContextManager[ServedModel]: ...
