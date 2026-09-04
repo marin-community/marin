@@ -423,8 +423,8 @@ def create_app(config: MarinaConfig) -> RouteAuthMiddleware:
         if len(payload) > MAX_ARCHIVE_BYTES:
             raise HTTPException(status_code=400, detail=f"archive exceeds {MAX_ARCHIVE_BYTES} bytes")
         try:
-            package = read_applet_package(payload)
-            validate_backend_import(package)
+            package = await run_in_threadpool(read_applet_package, payload)
+            await run_in_threadpool(validate_backend_import, package)
             owner = identity_for(request, policy).user_id
             published = await run_in_threadpool(applet_store.publish, package, owner)
         except ValueError as error:
@@ -448,8 +448,8 @@ def create_app(config: MarinaConfig) -> RouteAuthMiddleware:
         if len(payload) > MAX_ARCHIVE_BYTES:
             raise HTTPException(status_code=400, detail=f"archive exceeds {MAX_ARCHIVE_BYTES} bytes")
         try:
-            package = read_applet_package(payload)
-            validate_backend_import(package)
+            package = await run_in_threadpool(read_applet_package, payload)
+            await run_in_threadpool(validate_backend_import, package)
             owner = identity_for(request, policy).user_id
             published = await run_in_threadpool(
                 applet_store.publish,
@@ -458,6 +458,13 @@ def create_app(config: MarinaConfig) -> RouteAuthMiddleware:
                 applet_id,
                 base_version,
                 config.applet_operators,
+            )
+            retained = await run_in_threadpool(applet_store.versions, applet_id)
+            assert applet_runtime is not None
+            await run_in_threadpool(
+                applet_runtime.retain_versions,
+                applet_id,
+                {item.version for item in retained},
             )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
@@ -544,6 +551,8 @@ def create_app(config: MarinaConfig) -> RouteAuthMiddleware:
         actor = identity_for(request, policy).user_id
         try:
             await run_in_threadpool(applet_store.archive, applet_id, actor, config.applet_operators)
+            assert applet_runtime is not None
+            await run_in_threadpool(applet_runtime.retain_versions, applet_id, set())
         except AppletNotFound as error:
             raise HTTPException(status_code=404, detail="applet not found") from error
         except AppletForbidden as error:

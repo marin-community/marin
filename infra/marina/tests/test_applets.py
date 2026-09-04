@@ -202,6 +202,14 @@ def test_update_keeps_old_files_and_routes_each_python_revision(tmp_path: Path, 
     assert client.get(f"/a/{applet_id}/api/revision").json() == {"version": 1}
     assert client.delete(f"/api/marina/applets/{applet_id}").status_code == 204
     assert client.get(f"/a/{applet_id}/v/1/").status_code == 404
+    assert (
+        client.post(
+            f"/api/marina/applets/{applet_id}",
+            params={"base_version": 1},
+            content=package_applet(changed),
+        ).status_code
+        == 404
+    )
     listed_ids = {applet["name"] for applet in client.get("/api/marina/applets").json()["applets"]}
     assert applet_id not in listed_ids
 

@@ -360,7 +360,8 @@ class AppletStore:
             connection.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:id, 0))"), {"id": str(applet_id)})
             existing = (
                 connection.execute(
-                    text("SELECT owner, current_version FROM applets WHERE id = :id FOR UPDATE"), {"id": applet_id}
+                    text("SELECT owner, current_version, archived_at FROM applets WHERE id = :id FOR UPDATE"),
+                    {"id": applet_id},
                 )
                 .mappings()
                 .first()
@@ -383,6 +384,8 @@ class AppletStore:
                     },
                 )
             else:
+                if existing["archived_at"] is not None:
+                    raise AppletNotFound(str(applet_id))
                 if existing["owner"] != owner and owner not in operators:
                     raise AppletForbidden(str(applet_id))
                 if base_version is None or existing["current_version"] != base_version:
@@ -446,15 +449,14 @@ class AppletStore:
                 )
             connection.execute(text(f'SET LOCAL ROLE "{applet_role(applet_id)}"'))
             connection.execute(text(f'SET LOCAL search_path TO "{applet_schema(applet_id)}", public'))
-            try:
-                if package.manifest.python_entrypoint is not None:
+            if package.manifest.python_entrypoint is not None:
+                try:
                     module, _factory = load_package_module(applet_id, version, package)
                     migration = getattr(module, "migrate", None)
                     if migration is not None:
                         migration(connection)
-            except Exception:
-                remove_package_module(applet_id, version, package.digest)
-                raise
+                finally:
+                    remove_package_module(applet_id, version, package.digest)
             connection.execute(text(f'GRANT USAGE ON SCHEMA "{applet_schema(applet_id)}" TO {APPLET_READER_ROLE}'))
             connection.execute(
                 text(f'GRANT SELECT ON ALL TABLES IN SCHEMA "{applet_schema(applet_id)}" ' f"TO {APPLET_READER_ROLE}")
@@ -824,16 +826,29 @@ class AppletRuntime:
         self.store = store
         self._apis: dict[tuple[uuid.UUID, int], ASGIApp] = {}
         self._failures: dict[tuple[uuid.UUID, int], str] = {}
+        self._digests: dict[tuple[uuid.UUID, int], bytes] = {}
+        self._initializers: dict[tuple[uuid.UUID, int], threading.Lock] = {}
         self._lock = threading.Lock()
 
     def api(self, applet_id: uuid.UUID, version: int) -> ASGIApp:
         key = (applet_id, version)
-        with self._lock:
+        try:
             self.store.version(applet_id, version)
+        except AppletNotFound:
+            self.retain_versions(applet_id, self._retained_versions(applet_id))
+            raise
+        with self._lock:
             if key in self._failures:
                 raise AppletBackendUnavailable(self._failures[key])
             if key in self._apis:
                 return self._apis[key]
+            initializer = self._initializers.setdefault(key, threading.Lock())
+        with initializer:
+            with self._lock:
+                if key in self._failures:
+                    raise AppletBackendUnavailable(self._failures[key])
+                if key in self._apis:
+                    return self._apis[key]
             package = self.store.package(applet_id, version)
             if package.manifest.python_entrypoint is None:
                 raise AppletNotFound(f"{applet_id}/v/{version}/api")
@@ -847,7 +862,38 @@ class AppletRuntime:
             except Exception as error:
                 remove_package_module(applet_id, version, package.digest)
                 message = f"{type(error).__name__}: {error}"
-                self._failures[key] = message
+                with self._lock:
+                    self._failures[key] = message
                 raise AppletBackendUnavailable(message) from error
-            self._apis[key] = api
+            with self._lock:
+                self._apis[key] = api
+                self._digests[key] = package.digest
+            try:
+                self.store.version(applet_id, version)
+            except AppletNotFound:
+                self.retain_versions(applet_id, self._retained_versions(applet_id))
+                raise
             return api
+
+    def _retained_versions(self, applet_id: uuid.UUID) -> set[int]:
+        try:
+            return {item.version for item in self.store.versions(applet_id)}
+        except AppletNotFound:
+            return set()
+
+    def retain_versions(self, applet_id: uuid.UUID, versions: set[int]) -> None:
+        """Discard cached runtime state for revisions outside the retained set."""
+        removed: list[tuple[int, bytes]] = []
+        with self._lock:
+            stale_apis = [key for key in self._apis if key[0] == applet_id and key[1] not in versions]
+            for key in stale_apis:
+                self._apis.pop(key)
+                removed.append((key[1], self._digests.pop(key)))
+            stale_failures = [key for key in self._failures if key[0] == applet_id and key[1] not in versions]
+            for key in stale_failures:
+                self._failures.pop(key)
+            stale_initializers = [key for key in self._initializers if key[0] == applet_id and key[1] not in versions]
+            for key in stale_initializers:
+                self._initializers.pop(key)
+        for version, digest in removed:
+            remove_package_module(applet_id, version, digest)
