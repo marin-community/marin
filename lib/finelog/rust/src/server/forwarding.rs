@@ -65,8 +65,10 @@ use tokio::task::JoinHandle;
 use crate::errors::StatsError;
 use crate::policies::storage_policy_for;
 use crate::proto::finelog::stats::{RegisterTableRequest, StatsServiceClient, WriteRowsRequest};
-use crate::query::provider::NamespaceProvider;
-use crate::query::{make_ctx, run_query_over, QueryResult, RegisteredProvider};
+use crate::query::{
+    make_ctx, query_timeout, run_query_over, run_within_query_timeout, QueryResult,
+    RegisteredProvider,
+};
 use crate::server::auth::FINELOG_AUDIENCE;
 use crate::server::telemetry::{counter_batch, telemetry_schema, CounterSample};
 use crate::server::MAX_MESSAGE_BYTES;
@@ -92,10 +94,10 @@ const FORWARD_INTERVAL: Duration = Duration::from_secs(5);
 /// million-row write limit.
 const FORWARD_BATCH_ROWS: i64 = 200_000;
 
-/// Encoded bytes per outbound request. Keep one MiB below the receiving store's hard
+/// Encoded bytes per outbound request. Keep ten MiB below the receiving store's hard
 /// Arrow IPC limit. [`chunk_by_bytes`] verifies the resulting size and adjusts each
 /// chunk toward this budget.
-const FORWARD_BATCH_BYTES: usize = MAX_WRITE_ROWS_BYTES - (1 << 20);
+const FORWARD_BATCH_BYTES: usize = MAX_WRITE_ROWS_BYTES - (10 << 20);
 
 const FORWARD_REQUEST_COMPRESSION: &str = "zstd";
 const FINELOG_ZSTD_LEVEL: i32 = 1;
@@ -419,7 +421,7 @@ where
                 return ForwardTurn::Wait;
             }
         };
-        let mut cursor = match self.seed(name, persisted) {
+        let mut cursor = match self.seed(name, persisted).await {
             Ok(cursor) => cursor,
             Err(e) => {
                 tracing::warn!(namespace = name, error = %e, "finelog forwarder: cannot seed; skipping");
@@ -460,7 +462,7 @@ where
                 "finelog forwarder: rows evicted before they were forwarded; skipping ahead"
             );
             cursor = resume_at;
-            if !self.persist_cursor(name, cursor) {
+            if !self.persist_cursor(name, cursor).await {
                 return ForwardTurn::Wait;
             }
         }
@@ -470,7 +472,7 @@ where
             // or the loop rereads them forever. Safe against a concurrent writer:
             // `persisted` is a captured bound, and later rows arrive with a later
             // watermark.
-            self.persist_cursor(name, persisted);
+            self.persist_cursor(name, persisted).await;
             return ForwardTurn::Wait;
         };
         // The hub must hold the namespace before it can take rows for it.
@@ -548,7 +550,7 @@ where
                 }
             }
             cursor = last_seq;
-            if !self.persist_cursor(name, cursor) {
+            if !self.persist_cursor(name, cursor).await {
                 return ForwardTurn::Wait;
             }
         }
@@ -562,7 +564,7 @@ where
     /// The cursor to start `name` from: its stored watermark, or the current tip when
     /// there is none, or when the watermark sits beyond `persisted` and so names a seq
     /// space this store no longer has (a recreated volume).
-    fn seed(&self, name: &str, persisted: i64) -> Result<i64, StatsError> {
+    async fn seed(&self, name: &str, persisted: i64) -> Result<i64, StatsError> {
         match self.store.forward_cursor(&self.config.target, name)? {
             Some(cursor) if cursor <= persisted => Ok(cursor),
             Some(cursor) => {
@@ -572,7 +574,7 @@ where
                     persisted,
                     "finelog forwarder: watermark is ahead of the store; reseeding at the tip"
                 );
-                self.persist(name, persisted)?;
+                self.persist(name, persisted).await?;
                 Ok(persisted)
             }
             None => {
@@ -581,7 +583,7 @@ where
                     persisted,
                     "finelog forwarder: no watermark for this target; seeding at the tip (new rows only)"
                 );
-                self.persist(name, persisted)?;
+                self.persist(name, persisted).await?;
                 Ok(persisted)
             }
         }
@@ -626,16 +628,17 @@ where
         .map_err(|error| StatsError::Internal(format!("progress namespace task failed: {error}")))?
     }
 
-    fn persist(&self, name: &str, cursor: i64) -> Result<(), StatsError> {
+    async fn persist(&self, name: &str, cursor: i64) -> Result<(), StatsError> {
         self.store
             .set_forward_cursor(&self.config.target, name, cursor)
+            .await
     }
 
     /// Record `cursor` as the durable watermark for `name`, reporting whether the write
     /// stuck. `false` is not data loss: every row stays queryable in this store, and the
     /// catalog still names an older cursor for the next round to resume from.
-    fn persist_cursor(&self, name: &str, cursor: i64) -> bool {
-        if let Err(e) = self.persist(name, cursor) {
+    async fn persist_cursor(&self, name: &str, cursor: i64) -> bool {
+        if let Err(e) = self.persist(name, cursor).await {
             tracing::warn!(namespace = name, cursor, error = %e, "finelog forwarder: persisting the watermark failed");
             return false;
         }
@@ -686,11 +689,7 @@ where
         let resume_at = resume_after_eviction(cursor, snapshot.min_seq);
         let read_from = resume_at.unwrap_or(cursor);
 
-        let provider =
-            NamespaceProvider::build(snapshot.schema, &snapshot.paths, snapshot.index_cache)
-                .map_err(|e| StatsError::Internal(format!("build provider {name:?}: {e}")))?
-                .with_exact_postings_policy(snapshot.exact_postings_policy)
-                .with_segment_key_bounds(snapshot.key_column, snapshot.key_bounds);
+        let provider = self.store.namespace_provider(name, snapshot)?;
 
         let table = quote_ident(name);
         let mut sql =
@@ -707,9 +706,22 @@ where
             name: name.to_string(),
             provider,
         }];
-        let result = run_query_over(&make_ctx(), providers, &sql)
-            .await
-            .map_err(|e| StatsError::Internal(format!("read {name:?} failed: {e}")))?;
+        // The forwarder is a server read like any other: an object-backed source
+        // bounds it by the same non-disableable effective deadline.
+        let query_ctx = make_ctx();
+        let read = run_query_over(&query_ctx, providers, &sql);
+        let result = run_within_query_timeout(
+            query_timeout(None, self.store.object_query_bound()),
+            read,
+            |timeout| {
+                StatsError::DeadlineExceeded(format!(
+                    "forward read of {name:?} exceeded deadline of {} ms",
+                    timeout.as_millis()
+                ))
+            },
+            |e| StatsError::Internal(format!("read {name:?} failed: {e}")),
+        )
+        .await?;
 
         Ok(Batch {
             rows: self.ship_batch(result)?,

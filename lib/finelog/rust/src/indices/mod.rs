@@ -1,21 +1,50 @@
-//! Build and read the typed index bundle for one immutable Parquet segment.
+//! Derived index artifacts: the FIDX container, the per-kind builders, the
+//! parsed-section cache, and the [`IndexRegistry`] that owns them.
+//!
+//! [`IndexRegistry`] is the only way in and out of the format. It builds the
+//! artifacts for one immutable Parquet segment from the Arrow batches that
+//! segment holds, and it opens the artifacts a segment advertises by exact
+//! reference. Callers never derive an artifact filename from a Parquet
+//! filename: an artifact belongs to a segment because the segment's
+//! [`ArtifactReferences`](crate::store::table_state::ArtifactReferences) names
+//! it.
+//!
+//! Every index is optional derived state. A missing, unreadable, or stale
+//! artifact makes [`IndexRegistry::open`] return `None`, and the query scans the
+//! source Parquet instead.
+
+pub mod cache;
+pub mod exact;
+pub mod format;
+pub mod group_extrema;
+pub mod projection;
+pub mod registry;
+pub mod trigram;
+
+#[cfg(test)]
+pub use registry::{sidecar_artifacts, test_index_registry};
+pub use registry::{
+    BuiltArtifacts, IndexBuildRequest, IndexRegistry, OpenedIndexes, SegmentArtifacts,
+};
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt::Write;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use arrow::record_batch::RecordBatch;
 use serde::{Deserialize, Serialize};
 
-use crate::store::exact::{
-    self, ExactColumn, ExactIndexConfig, ExactSection, ProjectionDescriptor,
+use crate::indices::exact::{ExactColumn, ExactIndexConfig, ExactSection};
+use crate::indices::format::{Exactness, SectionInput, SectionKind, SegmentBinding};
+use crate::indices::group_extrema::{GroupExtremaConfig, GroupExtremaSection};
+use crate::indices::projection::{
+    covering_projection_paths, parse_projection_reference, projection_path, projection_section_id,
+    projection_spec_id, ProjectionReference, SOURCE_ROW_OFFSET_IDENTITY,
 };
-use crate::store::group_extrema::{self, GroupExtremaConfig, GroupExtremaSection};
-use crate::store::index_bundle::{self, Exactness, SectionInput, SectionKind, SegmentBinding};
+use crate::indices::trigram::{TrigramIndex, SIDECAR_SPAN_ROWS};
 use crate::store::schema::CoveringProjection;
 use crate::store::segment::{segment_id, segment_id_and_row_group_rows};
-use crate::store::trigram::{self, TrigramIndex, SIDECAR_SPAN_ROWS};
+use crate::store::table_state::{LocalArtifacts, SourceBinding};
 
 const TRIGRAM_METHOD_VERSION: u8 = 1;
 pub(crate) const EXACT_POSTINGS_METHOD_VERSION: u8 = 2;
@@ -24,7 +53,6 @@ const PROJECTION_METHOD_VERSION: u8 = 1;
 const GROUP_EXTREMA_METHOD_VERSION: u8 = 1;
 const EXACT_POSTINGS_SECTION_ID: &str = "exact-postings";
 const VALUE_COUNTS_SECTION_ID: &str = "value-counts";
-pub const SOURCE_ROW_OFFSET_IDENTITY: &str = "source_segment_row_offset";
 
 /// Complete secondary-index policy for a namespace segment.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -151,7 +179,7 @@ impl SegmentIndexConfig {
     }
 
     pub fn policy_fingerprint(&self) -> [u8; 32] {
-        index_bundle::fingerprint(
+        format::fingerprint(
             &serde_json::to_vec(self).expect("segment index policy serialization never fails"),
         )
     }
@@ -199,12 +227,6 @@ impl SegmentIndexConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SegmentIndexWrite {
-    Written,
-    NotApplicable,
-}
-
 /// Header-resident exact-posting coverage. Queries can reject values outside
 /// this set without reading or decompressing the section payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -237,73 +259,44 @@ impl TrigramCoverage {
     }
 }
 
-/// Header-resident descriptor for an external covering-projection Parquet file.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ProjectionReference {
-    pub spec_id: String,
-    pub descriptor: ProjectionDescriptor,
-    pub file_segment_id: String,
-    pub file_bytes: u64,
-    /// Postings use zero-based row offsets in the bound source segment.
-    pub row_identity: String,
-}
-
 pub fn trigram_section_id(column: &str) -> String {
     format!("trigram:{column}")
-}
-
-pub fn projection_section_id(name: &str) -> String {
-    format!("projection:{name}")
 }
 
 pub fn parse_trigram_coverage(bytes: &[u8]) -> Option<TrigramCoverage> {
     serde_json::from_slice(bytes).ok()
 }
 
-pub fn parse_projection_reference(bytes: &[u8]) -> Option<ProjectionReference> {
-    serde_json::from_slice(bytes).ok()
-}
-
-fn projection_spec_id(projection: &CoveringProjection) -> String {
-    let digest = index_bundle::fingerprint(
-        &serde_json::to_vec(projection).expect("projection serialization never fails"),
-    );
-    let mut out = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        write!(&mut out, "{byte:02x}").expect("writing to a string never fails");
-    }
-    out
-}
-
 pub fn read_exact_section(
     bundle_path: &Path,
-    header: &index_bundle::BundleHeader,
+    header: &format::BundleHeader,
     kind: SectionKind,
 ) -> Option<ExactSection> {
     let section = header
         .sections
         .iter()
         .find(|section| section.kind == kind)?;
-    exact::parse(&index_bundle::read_section(
-        bundle_path,
-        header,
-        &section.id,
-    )?)
+    exact::parse(&format::read_section(bundle_path, header, &section.id)?)
 }
 
-fn section_covers_column(
-    header: &index_bundle::BundleHeader,
-    section_id: &str,
-    column: &str,
-) -> bool {
+fn section_covers_column(header: &format::BundleHeader, section_id: &str, column: &str) -> bool {
     header
         .section(section_id)
         .and_then(|section| std::str::from_utf8(&section.coverage).ok())
         .is_some_and(|columns| columns.split('\0').any(|covered| covered == column))
 }
 
-/// Whether a segment lacks a complete bundle for the current policy.
-pub fn needs_rebuild(parquet_path: &Path, expected_rows: i64, config: &SegmentIndexConfig) -> bool {
+/// Whether the artifacts a segment advertises fall short of the current policy.
+///
+/// The candidate set comes from table state, so the bundle and projection files
+/// are the ones `artifacts` names; a file that merely sits beside the Parquet is
+/// not membership.
+pub fn needs_rebuild(
+    parquet_path: &Path,
+    expected_rows: i64,
+    artifacts: &LocalArtifacts,
+    config: &SegmentIndexConfig,
+) -> bool {
     if config.is_empty() {
         return false;
     }
@@ -311,8 +304,10 @@ pub fn needs_rebuild(parquet_path: &Path, expected_rows: i64, config: &SegmentIn
         return true;
     };
     let source_rows = row_groups.iter().sum::<usize>() as u64;
-    let path = index_bundle::bundle_path(parquet_path);
-    let Some(header) = index_bundle::read_header(&path) else {
+    let Some(path) = artifacts.bundle.clone() else {
+        return true;
+    };
+    let Some(header) = format::read_header(&path) else {
         return true;
     };
     if i64::try_from(source_rows).ok() != Some(expected_rows)
@@ -354,10 +349,11 @@ pub fn needs_rebuild(parquet_path: &Path, expected_rows: i64, config: &SegmentIn
         if reference.spec_id != projection_spec_id(projection) {
             return true;
         }
-        let path = projection_path(parquet_path, &reference);
-        if std::fs::metadata(&path).ok().map(|metadata| metadata.len())
-            != Some(reference.file_bytes)
-            || segment_id(&path).map(|id| id.to_string()) != Some(reference.file_segment_id)
+        let Some(path) = artifacts.projections.get(&projection.name) else {
+            return true;
+        };
+        if std::fs::metadata(path).ok().map(|metadata| metadata.len()) != Some(reference.file_bytes)
+            || segment_id(path).map(|id| id.to_string()) != Some(reference.file_segment_id)
         {
             return true;
         }
@@ -365,18 +361,50 @@ pub fn needs_rebuild(parquet_path: &Path, expected_rows: i64, config: &SegmentIn
     false
 }
 
+/// The artifacts a legacy local segment carries beside its Parquet.
+///
+/// Version-0 tables have no durable artifact references: their sidecars are
+/// discovered from the local layout once, when the segment enters the query
+/// view, and are recorded on the segment from then on. Object-backed tables
+/// never take this path — their artifacts are named by the table state.
+pub fn local_sidecar_artifacts(parquet_path: &Path) -> LocalArtifacts {
+    let bundle = format::bundle_path(parquet_path);
+    let Some(header) = format::read_header(&bundle) else {
+        return LocalArtifacts::default();
+    };
+    let projections = header
+        .sections
+        .iter()
+        .filter(|section| section.kind == SectionKind::CoveringProjection)
+        .filter_map(|section| parse_projection_reference(&section.coverage))
+        .map(|reference| {
+            let path = projection_path(parquet_path, &reference);
+            (reference.descriptor.name, path)
+        })
+        .filter(|(_, path)| path.exists())
+        .collect();
+    LocalArtifacts {
+        binding: SourceBinding {
+            segment_uuid: Some(header.binding.segment_id.to_string()),
+            row_count: i64::try_from(header.binding.row_count).unwrap_or(i64::MAX),
+        },
+        bundle: Some(bundle),
+        projections,
+    }
+}
+
 /// Build every configured index from `batches` and publish the bundle last.
-pub fn write_segment_index(
+pub(crate) fn write_segment_index(
     parquet_path: &Path,
     batches: &[RecordBatch],
     config: &SegmentIndexConfig,
-) -> std::io::Result<SegmentIndexWrite> {
+) -> std::io::Result<BuiltArtifacts> {
     if config.is_empty() {
-        return Ok(SegmentIndexWrite::NotApplicable);
+        return Ok(BuiltArtifacts::default());
     }
     let started = Instant::now();
     let Some(first) = batches.first() else {
-        return Ok(SegmentIndexWrite::NotApplicable);
+        return Ok(BuiltArtifacts::default());
     };
     let total_rows = batches.iter().try_fold(0_u64, |total, batch| {
         total.checked_add(batch.num_rows() as u64)
@@ -445,8 +473,8 @@ pub fn write_segment_index(
         }
     }
     if sections.is_empty() {
-        remove_if_exists(&index_bundle::bundle_path(parquet_path))?;
-        remove_if_exists(&index_bundle::staging_path(parquet_path))?;
+        remove_if_exists(&format::bundle_path(parquet_path))?;
+        remove_if_exists(&format::staging_path(parquet_path))?;
         remove_unreferenced_projections(parquet_path, &referenced_projection_paths);
         remove_legacy_artifacts(parquet_path);
         tracing::info!(
@@ -455,18 +483,18 @@ pub fn write_segment_index(
             elapsed_ms = started.elapsed().as_millis() as u64,
             "segment index produced no applicable sections"
         );
-        return Ok(SegmentIndexWrite::NotApplicable);
+        return Ok(BuiltArtifacts::default());
     }
     sections.sort_by(|left, right| left.id.cmp(&right.id));
-    let schema_fingerprint = index_bundle::fingerprint(format!("{:?}", first.schema()).as_bytes());
+    let schema_fingerprint = format::fingerprint(format!("{:?}", first.schema()).as_bytes());
     let binding = SegmentBinding {
         segment_id: source_segment_id,
         row_count: total_rows,
         schema_fingerprint,
         policy_fingerprint: config.policy_fingerprint(),
     };
-    index_bundle::write_bundle(parquet_path, &binding, &sections)?;
-    let bundle_bytes = std::fs::metadata(index_bundle::bundle_path(parquet_path))?.len();
+    format::write_bundle(parquet_path, &binding, &sections)?;
+    let bundle_bytes = std::fs::metadata(format::bundle_path(parquet_path))?.len();
     let external_bytes = referenced_projection_paths.iter().try_fold(
         0_u64,
         |total, path| -> std::io::Result<u64> {
@@ -484,7 +512,10 @@ pub fn write_segment_index(
         elapsed_ms = started.elapsed().as_millis() as u64,
         "segment index built"
     );
-    Ok(SegmentIndexWrite::Written)
+    Ok(BuiltArtifacts {
+        bundle: Some(format::bundle_path(parquet_path)),
+        projections: referenced_projection_paths.into_iter().collect(),
+    })
 }
 
 fn build_trigram_sections(
@@ -569,7 +600,7 @@ pub fn parse_group_extrema_config(bytes: &[u8]) -> Option<GroupExtremaConfig> {
 
 pub fn read_group_extrema_section(
     bundle_path: &Path,
-    header: &index_bundle::BundleHeader,
+    header: &format::BundleHeader,
     config: &GroupExtremaConfig,
 ) -> Option<GroupExtremaSection> {
     let id = group_extrema_section_id(config);
@@ -579,7 +610,7 @@ pub fn read_group_extrema_section(
     {
         return None;
     }
-    group_extrema::parse(&index_bundle::read_section(bundle_path, header, &id)?)
+    group_extrema::parse(&format::read_section(bundle_path, header, &id)?)
 }
 
 fn append_exact_sections(sections: &mut Vec<SectionInput>, sidecar: &ExactSection) {
@@ -664,45 +695,60 @@ pub fn legacy_artifact_paths(parquet_path: &Path) -> [PathBuf; 3] {
     ]
 }
 
-fn covering_projection_paths_with_suffix(
-    parquet_path: &Path,
-    suffix: &str,
-) -> std::io::Result<Vec<PathBuf>> {
-    let (Some(directory), Some(file_name)) = (parquet_path.parent(), parquet_path.file_name())
-    else {
-        return Ok(Vec::new());
-    };
-    let prefix = format!(
-        "{}{}",
-        file_name.to_string_lossy(),
-        exact::NAMED_PROJECTION_MARKER
-    );
-    let mut paths = Vec::new();
-    for entry in std::fs::read_dir(directory)? {
-        let path = entry?.path();
-        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        if name.starts_with(&prefix) && name.ends_with(suffix) {
-            paths.push(path);
-        }
-    }
-    Ok(paths)
-}
-
-pub fn covering_projection_paths(parquet_path: &Path) -> std::io::Result<Vec<PathBuf>> {
-    covering_projection_paths_with_suffix(parquet_path, ".parquet")
-}
-
-pub fn covering_projection_staging_paths(parquet_path: &Path) -> std::io::Result<Vec<PathBuf>> {
-    covering_projection_paths_with_suffix(parquet_path, ".parquet.tmp")
-}
-
 pub fn remove_if_exists(path: &Path) -> std::io::Result<()> {
     match std::fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error),
+    }
+}
+
+/// Whether any fixed-name artifact still sits beside `parquet_path`.
+///
+/// Covering projections carry the projection name, so they are enumerated
+/// separately; these are the containers whose filename is derived from the
+/// segment's alone.
+pub fn fixed_index_artifacts_exist(parquet_path: &Path) -> bool {
+    format::bundle_path(parquet_path).exists()
+        || format::staging_path(parquet_path).exists()
+        || legacy_artifact_paths(parquet_path)
+            .into_iter()
+            .any(|path| path.exists())
+}
+
+/// Best-effort removal of a segment's derived index files, co-located with every
+/// Parquet unlink. Missing artifacts are not errors.
+pub fn remove_index_artifacts(parquet_path: &str) {
+    let parquet = Path::new(parquet_path);
+    let mut artifacts = vec![
+        (format::bundle_path(parquet), "index bundle"),
+        (format::staging_path(parquet), "staged index bundle"),
+    ];
+    artifacts.extend(
+        legacy_artifact_paths(parquet)
+            .into_iter()
+            .map(|path| (path, "legacy index")),
+    );
+    match covering_projection_paths(parquet) {
+        Ok(paths) => artifacts.extend(paths.into_iter().map(|path| (path, "covering projection"))),
+        Err(error) => {
+            tracing::warn!(path = %parquet.display(), %error, "failed to enumerate segment index artifacts");
+        }
+    }
+    match projection::covering_projection_staging_paths(parquet) {
+        Ok(paths) => artifacts.extend(
+            paths
+                .into_iter()
+                .map(|path| (path, "staged covering projection")),
+        ),
+        Err(error) => {
+            tracing::warn!(path = %parquet.display(), %error, "failed to enumerate staged segment index artifacts");
+        }
+    }
+    for (path, kind) in artifacts {
+        if let Err(error) = remove_if_exists(&path) {
+            tracing::warn!(path = %path.display(), %error, index_artifact = kind, "failed to remove segment index artifact");
+        }
     }
 }
 
@@ -735,10 +781,6 @@ fn remove_unreferenced_projections(parquet_path: &Path, referenced: &BTreeSet<Pa
             }
         }
     }
-}
-
-pub fn projection_path(parquet_path: &Path, reference: &ProjectionReference) -> PathBuf {
-    exact::named_projection_path(parquet_path, &reference.descriptor.name)
 }
 
 #[cfg(test)]
@@ -822,12 +864,10 @@ mod tests {
             batch,
             config,
         } = fixture();
-        assert_eq!(
-            write_segment_index(&parquet, &[batch], &config).unwrap(),
-            SegmentIndexWrite::Written
-        );
-        let bundle = index_bundle::bundle_path(&parquet);
-        let header = index_bundle::read_header(&bundle).unwrap();
+        let built = write_segment_index(&parquet, &[batch], &config).unwrap();
+        let bundle = built.bundle.clone().unwrap();
+        assert_eq!(built.projections.len(), 1);
+        let header = format::read_header(&bundle).unwrap();
         assert_eq!(
             header.binding.policy_fingerprint,
             config.policy_fingerprint()
@@ -871,13 +911,23 @@ mod tests {
             config,
         } = fixture();
         write_segment_index(&parquet, &[batch], &config).unwrap();
-        assert!(!needs_rebuild(&parquet, 4, &config));
+        let artifacts = local_sidecar_artifacts(&parquet);
+        assert!(!needs_rebuild(&parquet, 4, &artifacts, &config));
 
         let mut changed = config.clone();
         changed.indexes.push(IndexSpec::TrigramBloom {
             column: "service".to_string(),
         });
-        assert!(needs_rebuild(&parquet, 4, &changed));
+        assert!(needs_rebuild(&parquet, 4, &artifacts, &changed));
+
+        // An unadvertised bundle is not membership, however complete the file
+        // beside the segment is.
+        assert!(needs_rebuild(
+            &parquet,
+            4,
+            &LocalArtifacts::default(),
+            &config
+        ));
         std::fs::remove_dir_all(parquet.parent().unwrap()).ok();
     }
 
@@ -899,7 +949,7 @@ mod tests {
         write_segment_index(&parquet, &[batch], &changed).unwrap();
 
         assert!(!projection.exists());
-        let header = index_bundle::read_header(&index_bundle::bundle_path(&parquet)).unwrap();
+        let header = format::read_header(&format::bundle_path(&parquet)).unwrap();
         assert!(header.section("projection:training-status").is_none());
         std::fs::remove_dir_all(parquet.parent().unwrap()).ok();
     }

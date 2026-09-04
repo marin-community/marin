@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use crate::store::trigram::ByteReader;
+use crate::indices::trigram::ByteReader;
 
 const MAGIC: &[u8; 4] = b"FIDX";
 const VERSION: u8 = 1;

@@ -310,20 +310,9 @@ mod tests {
         assert_eq!(content_type_for("noext"), "application/octet-stream");
     }
 
-    fn tempdir() -> PathBuf {
-        let mut p = std::env::temp_dir();
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        p.push(format!("finelog_spa_test_{nanos}"));
-        std::fs::create_dir_all(&p).unwrap();
-        p
-    }
-
     #[tokio::test]
     async fn read_dist_file_serves_asset_and_rejects_traversal() {
-        let dist = tempdir();
+        let dist = crate::test_support::unique_dir("spa_test");
         let dist = dist.as_path();
         let asset = dist.join("static/js/index.abc.js");
         std::fs::create_dir_all(asset.parent().unwrap()).unwrap();

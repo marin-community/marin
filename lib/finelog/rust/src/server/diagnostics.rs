@@ -131,7 +131,7 @@ Threads:\t8\n";
             Store::new(
                 None,
                 String::new(),
-                crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+                crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
                 crate::store::ServeMode::Live,
             )
             .unwrap(),

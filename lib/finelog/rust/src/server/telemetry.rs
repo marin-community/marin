@@ -24,12 +24,12 @@ use tower_http::set_header::SetResponseHeaderLayer;
 use uuid::Uuid;
 
 use crate::errors::StatsError;
+use crate::indices::group_extrema::GroupExtremaConfig;
 use crate::ingestion_policy::IngestionBatchSource;
 use crate::policies::{eager_storage_namespaces_for, schema_for_namespace, storage_policy_for};
 use crate::proto::finelog::stats::ColumnType;
 use crate::server::auth::{auth_gate, AuthIdentity, AuthPolicy};
 use crate::server::ingest_health::IngestHealth;
-use crate::store::group_extrema::GroupExtremaConfig;
 use crate::store::schema::{schema_to_arrow, Column, CoveringProjection, Schema};
 use crate::store::Store;
 use crate::telemetry_policy::TELEMETRY_NAMESPACE;
