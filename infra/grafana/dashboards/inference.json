@@ -1,7 +1,7 @@
 {
   "uid": "marin-inference",
   "title": "Inference telemetry",
-  "description": "Bounded, reset-aware views over Marin's centralized service=vllm telemetry on the marin hub. Pick an identity kind and then a serve from the dropdown; the bridge enforces the identity, seven-day range, bucket, and result caps server-side. The summary panels are window aggregates, not time series -- only token rate, request pressure and KV-cache use have a time axis.",
+  "description": "Bounded, reset-aware views over standalone and MarinSkyRL-embedded vLLM telemetry on the marin hub. Pick an identity kind and then a serve from the dropdown; the bridge enforces the identity, seven-day range, bucket, and result caps server-side. Summary panels are window aggregates; token rate, request pressure, iteration occupancy, KV-cache use, and TPOT have a time axis.",
   "tags": [
     "marin",
     "inference",
@@ -48,12 +48,12 @@
         "name": "identity",
         "label": "Serve",
         "type": "query",
-        "description": "vLLM serves that reported under the selected identity kind inside the dashboard window. One serve at a time: every panel is entity-scoped.",
+        "description": "Standalone vLLM serves and MarinSkyRL processes carrying metric_source=vllm under the selected identity kind. One identity at a time: every panel is entity-scoped.",
         "datasource": {
           "type": "yesoreyeram-infinity-datasource",
           "uid": "finelog-marin"
         },
-        "definition": "distinct ${identity_kind} from service=vllm telemetry",
+        "definition": "distinct ${identity_kind} from standalone or embedded vLLM telemetry",
         "query": {
           "queryType": "infinity",
           "refId": "variable-identity",
@@ -69,7 +69,7 @@
               "params": [
                 {
                   "key": "sql",
-                  "value": "WITH telemetry AS (SELECT * FROM \"telemetry_v1.vllm\") SELECT DISTINCT CASE '${identity_kind}' WHEN 'job_id' THEN job_id WHEN 'run_id' THEN run_id WHEN 'execution_uid' THEN execution_uid END AS value FROM telemetry WHERE service = 'vllm' AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND CASE '${identity_kind}' WHEN 'job_id' THEN job_id WHEN 'run_id' THEN run_id WHEN 'execution_uid' THEN execution_uid END IS NOT NULL ORDER BY 1"
+                  "value": "WITH telemetry AS (SELECT job_id, run_id, execution_uid, timestamp_ms FROM \"telemetry_v1.vllm\" WHERE service = 'vllm' UNION ALL SELECT job_id, run_id, execution_uid, timestamp_ms FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND json_get(attributes_json, 'metric_source') = 'vllm') SELECT DISTINCT CASE '${identity_kind}' WHEN 'job_id' THEN job_id WHEN 'run_id' THEN run_id WHEN 'execution_uid' THEN execution_uid END AS value FROM telemetry WHERE timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND CASE '${identity_kind}' WHEN 'job_id' THEN job_id WHEN 'run_id' THEN run_id WHEN 'execution_uid' THEN execution_uid END IS NOT NULL ORDER BY 1"
                 },
                 {
                   "key": "from",
@@ -200,8 +200,8 @@
     {
       "id": 10,
       "type": "table",
-      "title": "Collector telemetry health",
-      "description": "Reports known collection loss in the selected window. Incomplete means any observed resource reported an unavailable source, a positive collection-stage failure delta, or dropped samples. Healthy means only that collector polls reported none of those signals; unknown means no collector-poll evidence. Serving freshness and metric-family completeness are separate.",
+      "title": "Telemetry publication health",
+      "description": "Reports known collection or publication loss in the selected window. Fresh zero-valued evidence is healthy, any positive loss is incomplete, and absent or stale evidence is unknown. Embedded evidence is selected only from service=marinskyrl rows with metric_source=vllm; Ray health never stands in for vLLM health. The best-effort health signal cannot prove its own delivery.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -460,8 +460,8 @@
     {
       "id": 3,
       "type": "timeseries",
-      "title": "Running and waiting requests",
-      "description": "Per-bin replica averages summed across the selected serve. KV-cache uses a separate unweighted replica view because no capacity weight is stored.",
+      "title": "Running, waiting, and iteration tokens",
+      "description": "Per-bin request gauges and mean tokens processed per vLLM engine iteration. KV-cache uses a separate unweighted replica view because no capacity weight is stored.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -481,7 +481,24 @@
             "showPoints": "never"
           }
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "iteration_tokens"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "tokens / iteration"
+              }
+            ]
+          }
+        ]
       },
       "targets": [
         {
@@ -539,7 +556,7 @@
             },
             {
               "selector": "value",
-              "text": "requests",
+              "text": "value",
               "type": "number"
             }
           ]
@@ -822,7 +839,7 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
+        "w": 8,
         "x": 0,
         "y": 20
       },
@@ -838,6 +855,7 @@
           "format": "table",
           "parser": "backend",
           "url": "/v1/vllm/overview",
+          "filterExpression": "stat != 'mean_over_time'",
           "url_options": {
             "method": "GET",
             "params": [
@@ -888,6 +906,100 @@
       ]
     },
     {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Time per output token",
+      "description": "Reset-aware mean request time per output token in bins where requests finished. Empty bins mean no completed request supplied a TPOT observation.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 20
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "showPoints": "always"
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/vllm/overview",
+          "filterExpression": "metric == 'tpot' && stat == 'mean_over_time'",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "identity_kind",
+                "value": "${identity_kind}"
+              },
+              {
+                "key": "identity",
+                "value": "${identity}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "latency"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "seconds/token",
+              "type": "number"
+            },
+            {
+              "selector": "metric",
+              "text": "metric",
+              "type": "string"
+            },
+            {
+              "selector": "stat",
+              "text": "stat",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": 8,
       "type": "barchart",
       "title": "Request outcomes",
@@ -898,8 +1010,8 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
-        "x": 12,
+        "w": 8,
+        "x": 16,
         "y": 20
       },
       "fieldConfig": {

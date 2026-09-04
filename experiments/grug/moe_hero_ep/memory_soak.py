@@ -9,7 +9,7 @@ This run puts the same hooks on a one-step cadence on up to two GB200 trays, so 
 100 checkpoints, tagged evaluations, and dropless evaluations.
 
 The shape is downsized but the memory-relevant machinery is the hero's: MuonH optimizer state
-offloaded to pinned host memory, and the ragged all-to-all transport. Those decide what the
+offloaded to pinned host memory, and the hero's all-to-all transport. Those decide what the
 checkpoint path has to move through host memory, which is what the soak measures.
 
 Checkpoints go to a one-day temporary prefix, never to the hero's own checkpoint root.
@@ -52,6 +52,7 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     HERO_NODE_RAM,
     HERO_QB_HIST_BINS,
     HeroThroughputResult,
+    with_transport_remat_mode,
 )
 from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic
 from experiments.grug.moe_hero_ep.small_scale_abl_launch import (
@@ -148,10 +149,12 @@ def build_memory_soak_run(
     model = _small_model(
         shape=SOAK_SHAPES[size],
         capacity_factor=_EP_CAPACITY_FACTOR,
-        # FA4's packed-segment helper gives equivalent size-one mesh axes distinct explicit
-        # shardings. Reference attention avoids that single-device-only mismatch; attention
-        # implementation does not participate in checkpoint host staging.
-        attention_implementation="reference" if devices == 1 else HERO_MODEL_CONFIG.attention_implementation,
+        # A single-device soak uses reference attention. FA4's packed-segment helper gives
+        # equivalent size-one mesh axes distinct explicit shardings, and reference attention
+        # avoids that mismatch. The attention implementation does not participate in
+        # checkpoint host staging. Multi-device soaks use the plain FA4 name, because the
+        # soak shapes are all small and the wide forward tile is measured only at the hero.
+        attention_implementation="reference" if devices == 1 else "gpu_fa4_cute",
         moe_implementation=HERO_MODEL_CONFIG.moe_implementation,
         expert_chunks=HERO_MODEL_CONFIG.expert_chunks,
         seq_len=seq_len,
@@ -164,6 +167,7 @@ def build_memory_soak_run(
         qb_use_histogram=True,
         qb_hist_bins=HERO_QB_HIST_BINS,
     )
+    model = with_transport_remat_mode(model)
     local_experts = num_experts // expert_axis
     if local_experts % model.num_expert_waves != 0:
         raise ValueError(f"local expert count={local_experts} must divide num_expert_waves={model.num_expert_waves}")

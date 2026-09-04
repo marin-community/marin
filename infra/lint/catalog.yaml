@@ -1,0 +1,302 @@
+schema_version: 1
+shared_prompt: |-
+  # Marin lint rules
+
+  Catalog of patterns reviewers in this repo recurrently flag. Each rule has a
+  short code (`ml-...`), the condition, why it's bad, when it's nevertheless
+  acceptable, and a bad-pattern example. Rules are *advisory* — surface findings
+  to the author, never block.
+
+  This policy is the shared harness for the structured rule catalog in
+  `infra/lint/rules/`. It holds the detector usage, suppression, confidence,
+  overlap precedence, output format, and self-evaluation that govern every lane.
+  Each rule states the convention it enforces in its own "Why it's bad" section.
+  See "Detector usage" below for how the catalog is run against a diff.
+
+  ## Audience
+
+  - **Reviewer / agent**: scan a diff and emit findings in the format described
+    under "Output format". See "Detector usage" for input selection.
+  - **Author**: search `infra/lint/rules/` for the code from a finding (`ml-...`)
+    to see the rule, why it matters, and when it is acceptable.
+
+  This is not a security review (see `/security-review`), a correctness checker,
+  or a formatter (ruff / Black already exist; stay out of whitespace, import
+  order, line length).
+
+  ---
+
+  ## Detector usage
+
+  For agents running this catalog against a diff:
+
+  ### Lanes & composition
+
+  `./infra/pre-commit.py --review` runs the catalog as a fan-out, not a single
+  pass. One headless agent runs per lane; each receives this harness, its lane's
+  structured rules, and the changed-file inventory (`git diff --stat`), and emits findings in
+  the "Output format" below. Lanes are given read-only git, not a pasted diff: they
+  inspect each changed file themselves (see "Inputs"). The complexity lane
+  additionally receives a `COMPLEXITY LEADS` block of advisory static metrics. One lane is holistic: the **meta** lane reasons over
+  the whole change rather than scanning hunks, may read beyond the diff to confirm a
+  finding, and runs only on larger diffs (>100 changed lines). A final **composer**
+  agent then merges the lanes' outputs into one list.
+
+  Consequences for a lane agent: apply only your lane's rules, and resolve
+  overlap precedence *within* your lane. Cross-lane duplicates (the same line
+  flagged by two lanes) and cross-lane precedence are the composer's job — do not
+  second-guess other lanes. The composer never culls a finding on disagreement; it
+  only collapses true duplicates and drops precedence losers.
+
+  "Stay in scope" has two axes. *Rule scope* — the `ml-` codes you own — is narrow
+  for **every** lane, meta included: never emit another lane's code. *Diff scope* —
+  how much of the change you may read — is narrow for the five local lanes (the
+  changed hunks plus enough context to judge intent) and wide for the meta lane (the
+  whole diff, the call graph, sibling files). The meta lane fires only where a
+  hunk-scoped pass structurally cannot see the problem; if a single hunk would let a
+  local lane catch it, the meta lane defers.
+
+  `--lint-lane <name>` runs a single lane; `--no-lint-compose` skips the composer
+  and concatenates lanes (deduped) instead of reasoning over them.
+
+  ### Inputs
+
+  Review every changed file on the branch versus the merge base with `main`, regardless of language — Python, proto, Rust, TOML, YAML, shell, config. You are handed the changed-file inventory (`git diff --stat`) and the merge-base SHA, and you inspect each file yourself: `git diff <merge-base> -- <path>` for its hunks (add `-U30` for more context), or open it with `Read`, and follow the change into other files with git/grep when you need context. Running standalone, get the inventory with `git diff main...HEAD --name-only` (or `--cached`, or `gh pr diff <number> --name-only`); read a named file or two in full.
+
+  Skip files you can't usefully review — emit nothing for them: binary, lock files (`uv.lock`, `*.lock`), generated stubs (`*_pb2.py`, `*_pb2_grpc.py`, `*_connect.py`), and oversized vendored/generated files. If nothing reviewable changed, emit nothing and stop.
+
+  Scan added/modified hunks plus enough surrounding context to judge intent (usually the enclosing function/class). Do not flag pre-existing code in unchanged regions. Migrations, `__init__.py` exports, proto definitions, and test fixtures all count.
+
+  Security findings (auth, injection, secrets) are out of scope — they belong in `/security-review`.
+
+  ### Suppression markers
+
+  A finding is suppressed when the line it cites carries a trailing
+  `# noqa: <code>` comment that names the rule — ruff's suppression convention.
+  `<code>` is the rule's `ml-...` code, or for `ml-local-import` the equivalent
+  ruff code `PLC0415`. A suppressed line is an author-approved exception: do not
+  emit a finding for it.
+
+  ### Confidence
+
+  Every finding has a confidence in `[0.0, 1.0]`:
+
+  - `≥0.9` — example is near-verbatim; the reviewer comment writes itself.
+  - `0.7–0.9` — pattern fits the rule's intent; some context uncertainty.
+  - `<0.7` — do not emit.
+
+  Do not pad. Empty output is correct. False positives are the failure mode that erodes trust.
+
+  ### Overlap precedence
+
+  Several rules touch adjacent surface.
+
+  If a single line legitimately violates two unrelated rules (e.g. `Any` return and a `_v2` suffix), emit two findings.
+
+  When rules overlap on one line, pick the more specific one and emit it alone:
+
+  - A comment that is both wrong *and* paraphrases the code → `ml-stale-inline-comment` (the staleness is the bigger problem). Plain restatement of correct code → `ml-restating-comment`.
+  - A flag-gated duplicate path → `ml-flag-gated-parallel-path` over `ml-parallel-source-impl` (the flag is the more specific shape) if that rule applies; otherwise `ml-parallel-source-impl`.
+  - A `_v2` / `_legacy` suffix on a function whose contrast no longer exists → `ml-vestigial-qualifier`, not `ml-misleading-name`.
+  - A function that does too much: boolean *knobs* in the signature drive the split → `ml-monolithic-function`; an ordinary signature wrapping a body that does too many distinct things → `ml-overloaded-function`. A class/module mixing unrelated responsibility clusters → `ml-god-class`.
+  - A whole-diff meta finding (e.g. `ml-shotgun-surgery`, `ml-echo-across-files`) and a local finding naming one instance of the same issue cite different lines → keep both: the meta finding names the aggregate, the local names the instance. The meta lane should already have deferred anything a single hunk exposes.
+
+  ### Output format
+
+  One finding per line:
+
+  ```
+  <path>:<line>: <code> (<confidence>) <message>
+  ```
+
+  - `<path>` — repo-relative, forward slashes.
+  - `<line>` — 1-indexed in the file as it exists post-change.
+  - `<code>` — the `ml-...` code from the catalog.
+  - `<confidence>` — two decimals, e.g. `0.82`.
+  - `<message>` — ≤200 chars. State the concern; do not propose a fix.
+
+  Worked examples:
+
+  ```
+  lib/iris/src/iris/cluster/worker/reconcile.py:284: ml-try-except-fallback (0.90) silent fallback contradicts docstring's MISSING contract; will mask cache bugs
+  lib/iris/src/iris/cluster/controller/transitions.py:1673: ml-bool-return-status (0.85) error: str | None encodes two unrelated transactions in one method
+  lib/marin/src/marin/processing/tokenize/tokenize_utils.py:1: ml-utils-module (0.75) module name uses generic _utils suffix
+  lib/iris/src/iris/cluster/worker/task_attempt.py:107: ml-speculative-abstraction (0.80) sentinel exists only to satisfy one import
+  ```
+
+  If the diff is empty or has nothing reviewable, emit nothing — no "no findings" message, no preamble, no summary, no JSON, no Markdown, no fenced code blocks. One finding per line, no blank lines between them. Do not echo the input.
+
+  ### Self-evaluation
+
+  - **Precision over recall.** A reviewer who sees a false positive once trusts the tool less. When uncertain, suppress.
+  - **Calibration.** If you wouldn't bet $1 on a finding being valid, score it below 0.7.
+  - **Stay in scope.** Only the rules in your lane. Don't moonlight as a security / perf / style reviewer for things outside the catalog, or as another lane. The meta lane is the one exception on *diff* scope — it may read the whole change and beyond — but it still emits only meta codes.
+  - **Anchor in real shapes.** A reader at the cited line should immediately see why you flagged it. If you're reaching, suppress.
+lanes:
+- name: complexity
+  prompt: |-
+    # Marin lint rules — Complexity lane
+
+    Functions, classes, and modules that do too much. This lane is fed advisory static-complexity *leads* (cyclomatic complexity, nesting, size); the leads only point the eye — a finding still requires the rule's intent test, never a raw threshold.
+
+    The shared detector harness is rendered from `infra/lint/catalog.yaml` and governs every lane.
+
+    ## Using the complexity leads
+
+    This lane's prompt is prefixed with a `COMPLEXITY LEADS` block: per-function and
+    per-class metrics (cyclomatic complexity, max nesting depth, line count, method
+    count) for the changed files. Treat them as a *map of where to look*, exactly as a
+    profiler points at hot functions — they are not findings and carry no threshold. A
+    function at cyclomatic 30 that does one thing is clean; a function at cyclomatic 10
+    that does four unrelated things is `ml-overloaded-function`. Read the body, apply
+    the rule's intent, and ignore the number when it disagrees with the code. You may
+    also flag a unit the leads did not surface, and you must stay silent on a
+    high-metric unit that is genuinely cohesive.
+
+    ## Doing too much
+  include_complexity_leads: true
+  min_diff_lines: 0
+  rules:
+  - ml-overloaded-function
+  - ml-monolithic-function
+  - ml-god-class
+- name: interfaces
+  prompt: |-
+    # Marin lint rules — Interfaces lane
+
+    Imports, layering, public API shape, and type/data-structure choices — how modules depend on each other and how functions and types present themselves.
+
+    The shared detector harness is rendered from `infra/lint/catalog.yaml` and governs every lane.
+
+    ## Imports
+  include_complexity_leads: false
+  min_diff_lines: 0
+  rules:
+  - ml-local-import
+  - ml-type-checking-guard
+  - ml-reverse-layer-import
+  - ml-cross-sibling-import
+  - ml-bool-flag-arg
+  - ml-bool-return-status
+  - ml-tuple-return-shape
+  - ml-input-type-union
+  - ml-bare-any
+  - ml-non-auto-enum
+  - ml-missing-protocol
+  - ml-missing-isinstance-narrow
+  - ml-raw-dict-vs-dataclass
+- name: robustness
+  prompt: |-
+    # Marin lint rules — Robustness lane
+
+    Configuration explicitness and defensive error handling — where code reaches for ambient state or swallows failures instead of failing fast.
+
+    The shared detector harness is rendered from `infra/lint/catalog.yaml` and governs every lane.
+
+    ## Configuration explicitness
+  include_complexity_leads: false
+  min_diff_lines: 0
+  rules:
+  - ml-env-var-vs-param
+  - ml-module-globals
+  - ml-magic-constant
+  - ml-config-not-threaded
+  - ml-try-except-fallback
+  - ml-exception-swallow
+  - ml-guard-after-error
+  - ml-naive-path-join
+  - ml-raw-fsspec-io
+- name: cruft
+  prompt: |-
+    # Marin lint rules — Cruft lane
+
+    Dead code, duplication, and low-signal tests — code that has stopped earning its place or never did.
+
+    The shared detector harness is rendered from `infra/lint/catalog.yaml` and governs every lane.
+
+    ## Dead code
+  include_complexity_leads: false
+  min_diff_lines: 0
+  rules:
+  - ml-unused-param
+  - ml-rollout-scaffolding
+  - ml-obsolete-after-refactor
+  - ml-add-then-remove
+  - ml-speculative-abstraction
+  - ml-duplicate-logic-block
+  - ml-parallel-source-impl
+  - ml-test-double-mirrors-prod
+  - ml-duplicate-test-body
+  - ml-duplicate-constant
+  - ml-slop-test
+  - ml-time-sleep-in-test
+  - ml-unittest-class-wrapper
+- name: prose
+  prompt: |-
+    # Marin lint rules — Prose lane
+
+    Naming, comments, and documentation — how the code names and describes itself.
+
+    The shared detector harness is rendered from `infra/lint/catalog.yaml` and governs every lane.
+
+    ## Naming
+  include_complexity_leads: false
+  min_diff_lines: 0
+  rules:
+  - ml-utils-module
+  - ml-misleading-name
+  - ml-vestigial-qualifier
+  - ml-abbreviated-name
+  - ml-seconds-suffix
+  - ml-restating-comment
+  - ml-trivial-docstring
+  - ml-multi-paragraph-docstring
+  - ml-impl-narration-docstring
+  - ml-pr-reference-comment
+  - ml-bare-todo
+  - ml-init-all-export
+  - ml-stale-docstring
+  - ml-undocumented-return
+  - ml-stale-inline-comment
+  - ml-docstring-contradicts-impl
+  - ml-rotting-historical-ref
+- name: meta
+  prompt: |-
+    # Marin lint rules — Meta lane
+
+    Holistic, whole-diff rules: smells you can only see by holding the entire change
+    at once — a concept smeared across many edits, a helper reinvented, a path left
+    stranded, a payload that wants a shape. Unlike the other lanes, which scan
+    added/modified hunks for a known *local* shape, this lane reasons over the change
+    **as a unit**: model what the PR is trying to do, then judge whether the means are
+    the cleanest path to that end.
+
+    The shared detector harness is rendered from `infra/lint/catalog.yaml` and governs every lane. Two things are
+    specific to this lane:
+
+    - **Diff scope is wide; rule scope is narrow.** You may read beyond the diff — the
+      whole file, the call graph, a sibling module, an existing helper, a tree-wide
+      grep — to confirm a finding (several rules below require it). But you own only
+      the `ml-` codes in this file. If you notice a *local* smell (a bad name, one
+      overloaded function, a swallowed exception), stay silent — its lane will catch
+      it. Fire only where a hunk-scoped pass structurally cannot see the problem: it
+      spans files, lives in an unchanged file, or is a property of the whole change.
+    - **This lane runs only on larger diffs** (>100 changed lines). On small PRs it
+      does not run at all, so do not worry about tiny changes here.
+
+    These rules are higher-judgment than the local lanes; lean hard on each rule's
+    confidence floor and its suppressors, and where a rule says so, phrase the finding
+    as a question to confirm rather than an assertion.
+
+    ## Aspirational redesign
+  include_complexity_leads: false
+  min_diff_lines: 100
+  rules:
+  - ml-there-must-be-a-better-way
+  - ml-data-clump-threaded
+  - ml-shotgun-surgery
+  - ml-echo-across-files
+  - ml-compat-shim-not-migration
+  - ml-reinvents-existing-helper
+  - ml-asymmetric-pair
+  - ml-orphaned-by-change

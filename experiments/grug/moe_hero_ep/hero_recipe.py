@@ -18,8 +18,9 @@ from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.datasets.paloma import paloma_datasets
 from experiments.grug.moe_hero_ep.heuristic import HERO_MODEL
-from experiments.grug.moe_hero_ep.model import QbEstimator
+from experiments.grug.moe_hero_ep.model import OFFLOAD_CARRY_REMAT_MODE, GrugModelConfig, QbEstimator
 from experiments.grug.moe_hero_ep.train import (
+    RAGGED_MOE_IMPLEMENTATION,
     GrugTrainerConfig,
     MasterParamMode,
     TrainingDataMode,
@@ -37,8 +38,12 @@ HERO_NODE_CPU = 120
 HERO_NODE_RAM = "890g"
 HERO_NODE_DISK = "1t"
 HERO_MIXED_PRECISION = "params=bfloat16,compute=bfloat16,output=bfloat16"
-# The hero keeps fp32 weights on device; the diagnostics, soak, and benchmarks follow it.
-HERO_MASTER_PARAM_MODE = MasterParamMode.DEVICE
+# The pooled-wave transport peaks at 149.9 GiB of device memory with fp32 weights on device
+# (#8549), above the 138.2 GiB `cuda_async` release threshold, so this fallback keeps the fp32
+# master on pinned host and leaves the device copy in bf16. The mode is part of the checkpoint
+# layout: a master-less checkpoint cannot restore into it, because synthesizing a master is
+# refused. The diagnostics, soak, and benchmarks follow the hero.
+HERO_MASTER_PARAM_MODE = MasterParamMode.FP32_PINNED_HOST
 # An fp32 master keeps the device copy in bf16; without one the device weights are the fp32 copy.
 HERO_MIXED_PRECISION_BY_MASTER_PARAM_MODE = {
     MasterParamMode.FP32_PINNED_HOST: HERO_MIXED_PRECISION,
@@ -54,6 +59,12 @@ HERO_MODEL_CONFIG = dataclasses.replace(
     qb_estimator=QbEstimator.HIST,
     qb_hist_bins=HERO_QB_HIST_BINS,
 )
+
+
+def with_transport_remat_mode(model: GrugModelConfig) -> GrugModelConfig:
+    if model.moe_implementation != RAGGED_MOE_IMPLEMENTATION:
+        return model
+    return dataclasses.replace(model, remat_mode=OFFLOAD_CARRY_REMAT_MODE)
 
 
 class HeroThroughputResult(Artifact):
@@ -98,6 +109,7 @@ def hero_trainer_config(
     checkpointer: CheckpointerConfig,
     progress_watchdog: ProgressWatchdogConfig = ProgressWatchdogConfig(),
     load_checkpoint_path: str | list[str] | None = None,
+    load_checkpoint: bool | None = None,
     master_param_mode: MasterParamMode = HERO_MASTER_PARAM_MODE,
 ) -> TrainerConfig:
     """Set the Levanter options that affect the compiled hero step."""
@@ -115,6 +127,7 @@ def hero_trainer_config(
         require_accelerator=True,
         allow_nondivisible_batch_size=False,
         load_checkpoint_path=load_checkpoint_path,
+        load_checkpoint=load_checkpoint,
         checkpointer=checkpointer,
     )
 

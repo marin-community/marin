@@ -1,0 +1,7 @@
+# The eval-results dashboard: one row per model, one column per benchmark, and the run
+# log behind every cell. Records are read from object storage into this app's own
+# Postgres schema; the page fetches everything from /evaldash/api/.
+title = "EvalDash"
+description = "Every Marin eval run: the benchmark panel, the runs behind it, and the graded samples behind those."
+connect_src = []
+build_command = "cd web && npm ci && npm run build"

@@ -60,6 +60,11 @@ leaf that configures a shared `iac` component. For example, `infra/grafana`
 constructs `iac.gcp.cloud_run.CloudRunService` with Grafana's image, runtime
 configuration, and dependencies.
 
+A small internal web app (a browser UI over a database or an API, used by the
+team) does not need its own project at all: add it as an app under
+`infra/marina/apps/` and the `marin-marina` stack deploys it with the others
+on one Cloud Run service (see `infra/marina/README.md`).
+
 Use a bespoke program only when a shared component cannot express the
 deployment. `infra/loom` is one example: it builds an image, writes the image
 digest and runtime configuration to a durable VM, and runs its own readiness

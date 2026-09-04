@@ -1,0 +1,10 @@
+# A browser for open-thoughts/TaskTrove, the Harbor task collection on Hugging
+# Face. The page reads task rows from Hugging Face's datasets-server as it needs
+# them, so it holds no copy of the data: the list of sources, the audit that
+# reviewed each one, and the labels for the tasks the audit sampled are the
+# whole of what this app carries.
+title = "TaskTrove"
+description = "Browse the TaskTrove task collection: every source, every task's files, and what the shellsim audit made of them."
+# The kernel appends this to `connect-src`; without it the browser refuses the fetch.
+connect_src = ["https://datasets-server.huggingface.co"]
+build_command = "cd web && npm ci && npm run build"

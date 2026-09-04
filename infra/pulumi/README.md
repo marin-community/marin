@@ -26,7 +26,7 @@ Storage, and Cloudflare R2 buckets.
 
 Beyond cluster prerequisites, the `iac` package also carries the reusable *service* components
 other `infra/<service>/` Pulumi projects build on: `iac.gcp.cloud_run` (IAP-gated Cloud Run,
-used by `infra/echo`, `infra/evaldash`, and `infra/grafana`), `iac.iris` (always-on Iris
+used by `infra/marina` and `infra/grafana`), `iac.iris` (always-on Iris
 service jobs via a `local.Command` around the `iac.iris.deploy` CLI, used by `infra/ducky` and
 `infra/xprof`), and `iac.kubernetes.finelog` (a custom image plus stateful Kubernetes resources,
 used by [`infra/finelog`](../finelog/README.md)). The service components create runtime
@@ -37,19 +37,19 @@ client remains a component-owned IAP setting.
 ### Cloud Run IAP access
 
 For an access report, compare the live IAP policy and settings with the service declaration in
-`src/iac/gcp/{echo,evaldash,grafana}.py`:
+`src/iac/gcp/{marina,grafana}.py`:
 
 ```bash
 gcloud iap web get-iam-policy \
   --project=hai-gcp-models \
   --resource-type=cloud-run \
   --region=us-central1 \
-  --service=marin-evaldash
+  --service=marina
 gcloud iap settings get \
   --project=hai-gcp-models \
   --resource-type=cloud-run \
   --region=us-central1 \
-  --service=marin-evaldash
+  --service=marina
 ```
 
 `domain:openathena.ai` and
