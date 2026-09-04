@@ -100,6 +100,16 @@ class _ResumeMarker:
     destination_identity: str
 
 
+@dataclass(frozen=True)
+class _CompletionManifest:
+    schema_version: int
+    source: str
+    destination: str
+    total_files: int
+    total_bytes: int
+    files: list[VerifiedFile]
+
+
 class _MultipartEtag:
     """Hash a byte stream using the content-derived S3/R2 multipart ETag rules."""
 
@@ -166,8 +176,8 @@ def verified_copy_prefix(
     manifest_path = _join_path(destination_root, COMPLETION_MANIFEST)
     manifest_url = _join_url(destination_url, COMPLETION_MANIFEST)
     if destination_fs.exists(manifest_path):
-        manifest = _read_json(destination_fs, manifest_path)
-        verified = _verified_files_from_manifest(manifest, source_url, destination_url)
+        manifest = _completion_manifest(_read_json(destination_fs, manifest_path), source_url, destination_url)
+        verified = manifest.files
         _validate_completed_source(source_fs, sources, verified)
         return _result(manifest_url, verified, copied_files=0, resumed_files=len(verified))
 
@@ -202,15 +212,15 @@ def verified_copy_prefix(
             resumed_files += int(outcome.disposition is _CopyDisposition.RESUMED)
 
     verified_files.sort()
-    manifest = {
-        "schema_version": MANIFEST_SCHEMA_VERSION,
-        "source": source_url,
-        "destination": destination_url,
-        "total_files": len(verified_files),
-        "total_bytes": sum(file.size for file in verified_files),
-        "files": [asdict(file) for file in verified_files],
-    }
-    _write_json_atomic(destination_fs, manifest_path, manifest)
+    manifest = _CompletionManifest(
+        schema_version=MANIFEST_SCHEMA_VERSION,
+        source=source_url,
+        destination=destination_url,
+        total_files=len(verified_files),
+        total_bytes=sum(file.size for file in verified_files),
+        files=verified_files,
+    )
+    _write_json_atomic(destination_fs, manifest_path, asdict(manifest))
     return _result(manifest_url, verified_files, copied_files=copied_files, resumed_files=resumed_files)
 
 
@@ -444,11 +454,7 @@ def _read_json(filesystem: AbstractFileSystem, path: str) -> dict[str, Any]:
     return value
 
 
-def _verified_files_from_manifest(manifest: dict[str, Any], source_url: str, destination_url: str) -> list[VerifiedFile]:
-    if manifest.get("schema_version") != MANIFEST_SCHEMA_VERSION:
-        raise VerifiedCopyError("completion manifest has an unsupported schema")
-    if manifest.get("source") != source_url or manifest.get("destination") != destination_url:
-        raise VerifiedCopyError("completion manifest belongs to a different transfer")
+def _completion_manifest(data: dict[str, Any], source_url: str, destination_url: str) -> _CompletionManifest:
     try:
         files = [
             VerifiedFile(
@@ -457,12 +463,26 @@ def _verified_files_from_manifest(manifest: dict[str, Any], source_url: str, des
                 sha256=str(item["sha256"]),
                 source_identity=str(item["source_identity"]) if item.get("source_identity") is not None else None,
             )
-            for item in manifest["files"]
+            for item in data["files"]
         ]
+        manifest = _CompletionManifest(
+            schema_version=int(data["schema_version"]),
+            source=str(data["source"]),
+            destination=str(data["destination"]),
+            total_files=int(data["total_files"]),
+            total_bytes=int(data["total_bytes"]),
+            files=files,
+        )
     except (KeyError, TypeError, ValueError) as error:
         raise VerifiedCopyError("completion manifest has invalid file records") from error
     files.sort()
-    return files
+    if manifest.schema_version != MANIFEST_SCHEMA_VERSION:
+        raise VerifiedCopyError("completion manifest has an unsupported schema")
+    if manifest.source != source_url or manifest.destination != destination_url:
+        raise VerifiedCopyError("completion manifest belongs to a different transfer")
+    if manifest.total_files != len(files) or manifest.total_bytes != sum(file.size for file in files):
+        raise VerifiedCopyError("completion manifest totals do not match its file records")
+    return manifest
 
 
 def _validate_completed_source(
