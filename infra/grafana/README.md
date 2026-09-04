@@ -221,6 +221,7 @@ of repeating the Kubernetes object name.
 | Node | Node details | `nodes.json` | What is happening on one physical GPU node? | cluster, node |
 | Workload | Jobs | `jobs.json` | What is running, queued, and stuck? | cluster, job |
 | Workload | Runs | `runs.json` | How is each Levanter training run doing? | cluster, run |
+| Workload | RL runs | `rl_runs.json` | How is one reinforcement-learning run doing? | cluster, run |
 | Workload | Training run | `training.json` | Is one training run on track? | run |
 | Workload | Inference telemetry | `inference.json` | How did one vLLM serve behave? | identity kind, serve |
 | Services | Infra | `infra.json` | Are nightly runs, main CI, workers, and hero training healthy? | none |

@@ -1,4 +1,9 @@
 //! Memory-bounded cache for parsed `.fidx` bundle sections.
+//!
+//! The cache is addressed by the bundle file a caller already resolved from an
+//! artifact reference. It never derives a bundle filename from a source
+//! filename; [`IndexRegistry`](crate::indices::IndexRegistry) owns that
+//! resolution.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -7,15 +12,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
-use crate::store::exact::ExactSection;
-use crate::store::group_extrema::{GroupExtremaConfig, GroupExtremaSection};
-use crate::store::index_bundle::{self, BundleHeader, SectionKind};
-use crate::store::segment::segment_id_and_row_group_rows;
-use crate::store::segment_index::{
-    parse_trigram_coverage, read_exact_section, read_group_extrema_section, trigram_section_id,
-    TrigramCoverage,
+use crate::indices::exact::ExactSection;
+use crate::indices::format::{self, BundleHeader, SectionKind};
+use crate::indices::group_extrema::{GroupExtremaConfig, GroupExtremaSection};
+use crate::indices::trigram::{self, ColumnIndex};
+use crate::indices::{
+    parse_group_extrema_config, parse_trigram_coverage, read_exact_section,
+    read_group_extrema_section, trigram_section_id, TrigramCoverage,
 };
-use crate::store::trigram::{self, ColumnIndex};
 
 pub const DEFAULT_INDEX_CACHE_MB: usize = 256;
 
@@ -60,11 +64,6 @@ pub(crate) struct AggregateStats {
     pub fallbacks: u64,
 }
 
-pub struct IndexedSegment {
-    pub header: Arc<BundleHeader>,
-    pub row_group_rows: Arc<[usize]>,
-}
-
 impl IndexCache {
     pub fn new(budget_mb: usize) -> Self {
         Self::with_budget_bytes(budget_mb.saturating_mul(1024 * 1024))
@@ -82,30 +81,18 @@ impl IndexCache {
         }
     }
 
-    /// Resolve the source footer and its matching bundle header as one lookup.
-    pub fn indexed_segment(&self, parquet_path: &Path) -> Option<IndexedSegment> {
-        let (source_id, row_group_rows) = segment_id_and_row_group_rows(parquet_path)?;
-        let source_rows = row_group_rows.iter().sum::<usize>() as u64;
-        let header = self.get_header(parquet_path, source_id, source_rows)?;
-        Some(IndexedSegment {
-            header,
-            row_group_rows,
-        })
-    }
-
-    /// Load a bundle only when it is bound to the current source segment.
+    /// Load `bundle_path` only when it is bound to the current source segment.
     pub fn get_header(
         &self,
-        parquet_path: &Path,
+        bundle_path: &Path,
         source_id: Uuid,
         row_count: u64,
     ) -> Option<Arc<BundleHeader>> {
-        let bundle_path = index_bundle::bundle_path(parquet_path);
-        let key = Key::Header(bundle_path.clone(), source_id);
+        let key = Key::Header(bundle_path.to_path_buf(), source_id);
         if let Some(Cached::Header(header)) = self.lookup(&key) {
             return header.matches(source_id, row_count).then_some(header);
         }
-        let Some(header) = index_bundle::read_header(&bundle_path) else {
+        let Some(header) = format::read_header(bundle_path) else {
             if bundle_path.exists() {
                 self.corrupt_bundles.fetch_add(1, Ordering::Relaxed);
             }
@@ -134,22 +121,25 @@ impl IndexCache {
 
     pub fn get_trigram(
         &self,
-        parquet_path: &Path,
+        bundle_path: &Path,
         header: &BundleHeader,
         column: &str,
     ) -> Option<(TrigramCoverage, Arc<ColumnIndex>)> {
-        let bundle_path = index_bundle::bundle_path(parquet_path);
         let id = trigram_section_id(column);
         let section = header.section(&id)?;
         if section.kind != SectionKind::TrigramBloom {
             return None;
         }
         let coverage = parse_trigram_coverage(&section.coverage)?;
-        let key = Key::Section(bundle_path.clone(), header.binding.segment_id, id.clone());
+        let key = Key::Section(
+            bundle_path.to_path_buf(),
+            header.binding.segment_id,
+            id.clone(),
+        );
         if let Some(Cached::Trigram(index)) = self.lookup(&key) {
             return Some((coverage, index));
         }
-        let Some(payload) = index_bundle::read_section(&bundle_path, header, &id) else {
+        let Some(payload) = format::read_section(bundle_path, header, &id) else {
             self.corrupt_sections.fetch_add(1, Ordering::Relaxed);
             return None;
         };
@@ -165,24 +155,23 @@ impl IndexCache {
 
     pub fn get_exact(
         &self,
-        parquet_path: &Path,
+        bundle_path: &Path,
         header: &BundleHeader,
         kind: SectionKind,
     ) -> Option<Arc<ExactSection>> {
-        let bundle_path = index_bundle::bundle_path(parquet_path);
         let section = header
             .sections
             .iter()
             .find(|section| section.kind == kind)?;
         let key = Key::Section(
-            bundle_path.clone(),
+            bundle_path.to_path_buf(),
             header.binding.segment_id,
             section.id.clone(),
         );
         if let Some(Cached::Exact(index)) = self.lookup(&key) {
             return Some(index);
         }
-        let Some(index) = read_exact_section(&bundle_path, header, kind) else {
+        let Some(index) = read_exact_section(bundle_path, header, kind) else {
             self.corrupt_sections.fetch_add(1, Ordering::Relaxed);
             return None;
         };
@@ -193,26 +182,23 @@ impl IndexCache {
 
     pub fn get_group_extrema(
         &self,
-        parquet_path: &Path,
+        bundle_path: &Path,
         header: &BundleHeader,
         config: &GroupExtremaConfig,
     ) -> Option<Arc<GroupExtremaSection>> {
-        let bundle_path = index_bundle::bundle_path(parquet_path);
         let section = header.sections.iter().find(|section| {
             section.kind == SectionKind::GroupExtrema
-                && crate::store::segment_index::parse_group_extrema_config(&section.coverage)
-                    .as_ref()
-                    == Some(config)
+                && parse_group_extrema_config(&section.coverage).as_ref() == Some(config)
         })?;
         let key = Key::Section(
-            bundle_path.clone(),
+            bundle_path.to_path_buf(),
             header.binding.segment_id,
             section.id.clone(),
         );
         if let Some(Cached::GroupExtrema(index)) = self.lookup(&key) {
             return Some(index);
         }
-        let Some(index) = read_group_extrema_section(&bundle_path, header, config) else {
+        let Some(index) = read_group_extrema_section(bundle_path, header, config) else {
             self.corrupt_sections.fetch_add(1, Ordering::Relaxed);
             return None;
         };
@@ -277,11 +263,6 @@ impl IndexCache {
         cache.insert(key, cached, bytes);
         value
     }
-}
-
-#[cfg(test)]
-pub fn test_index_cache() -> Arc<IndexCache> {
-    Arc::new(IndexCache::new(16))
 }
 
 trait CachedValue<T> {
@@ -425,7 +406,7 @@ mod tests {
     use std::fs::File;
     use std::os::unix::fs::FileExt;
 
-    use crate::store::index_bundle::{Exactness, SectionInput, SegmentBinding};
+    use crate::indices::format::{Exactness, SectionInput, SegmentBinding};
 
     use super::*;
 
@@ -443,8 +424,8 @@ mod tests {
         SegmentBinding {
             segment_id,
             row_count: 7,
-            schema_fingerprint: index_bundle::fingerprint(b"schema"),
-            policy_fingerprint: index_bundle::fingerprint(b"policy"),
+            schema_fingerprint: format::fingerprint(b"schema"),
+            policy_fingerprint: format::fingerprint(b"policy"),
         }
     }
 
@@ -455,7 +436,7 @@ mod tests {
             method_version: 1,
             exactness: Exactness::ExactRows,
             coverage: b"name".to_vec(),
-            payload: crate::store::exact::serialize(&ExactSection {
+            payload: crate::indices::exact::serialize(&ExactSection {
                 total_rows: 7,
                 columns: BTreeMap::new(),
             }),
@@ -467,12 +448,13 @@ mod tests {
         let parquet = temp_path("identity.parquet");
         let first_id = Uuid::from_u128(1);
         let second_id = Uuid::from_u128(2);
-        index_bundle::write_bundle(&parquet, &binding(first_id), &[exact_section()]).unwrap();
+        let bundle =
+            format::write_bundle(&parquet, &binding(first_id), &[exact_section()]).unwrap();
         let cache = IndexCache::with_budget_bytes(1024 * 1024);
-        assert!(cache.get_header(&parquet, first_id, 7).is_some());
+        assert!(cache.get_header(&bundle, first_id, 7).is_some());
 
-        index_bundle::write_bundle(&parquet, &binding(second_id), &[exact_section()]).unwrap();
-        assert!(cache.get_header(&parquet, second_id, 7).is_some());
+        format::write_bundle(&parquet, &binding(second_id), &[exact_section()]).unwrap();
+        assert!(cache.get_header(&bundle, second_id, 7).is_some());
         assert_eq!(
             cache.corruption_counts(),
             CorruptionCounts {
@@ -480,7 +462,7 @@ mod tests {
                 sections: 0,
             }
         );
-        std::fs::remove_file(index_bundle::bundle_path(&parquet)).ok();
+        std::fs::remove_file(bundle).ok();
     }
 
     #[test]
@@ -488,9 +470,9 @@ mod tests {
         let parquet = temp_path("section_corruption.parquet");
         let segment_id = Uuid::from_u128(3);
         let path =
-            index_bundle::write_bundle(&parquet, &binding(segment_id), &[exact_section()]).unwrap();
+            format::write_bundle(&parquet, &binding(segment_id), &[exact_section()]).unwrap();
         let cache = IndexCache::with_budget_bytes(1024 * 1024);
-        let header = cache.get_header(&parquet, segment_id, 7).unwrap();
+        let header = cache.get_header(&path, segment_id, 7).unwrap();
         let section = header.section("exact-postings").unwrap();
         File::options()
             .write(true)
@@ -499,7 +481,7 @@ mod tests {
             .write_all_at(&[0xff], section.offset)
             .unwrap();
         assert!(cache
-            .get_exact(&parquet, &header, SectionKind::ExactPostings)
+            .get_exact(&path, &header, SectionKind::ExactPostings)
             .is_none());
         assert_eq!(
             cache.corruption_counts(),
@@ -512,14 +494,14 @@ mod tests {
 
         let parquet = temp_path("bundle_corruption.parquet");
         let path =
-            index_bundle::write_bundle(&parquet, &binding(segment_id), &[exact_section()]).unwrap();
+            format::write_bundle(&parquet, &binding(segment_id), &[exact_section()]).unwrap();
         File::options()
             .write(true)
             .open(&path)
             .unwrap()
             .write_all_at(&[0xff], 0)
             .unwrap();
-        assert!(cache.get_header(&parquet, segment_id, 7).is_none());
+        assert!(cache.get_header(&path, segment_id, 7).is_none());
         assert_eq!(
             cache.corruption_counts(),
             CorruptionCounts {

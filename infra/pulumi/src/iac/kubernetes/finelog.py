@@ -94,6 +94,13 @@ def _container_env(config: FinelogConfig) -> list[k8s.core.v1.EnvVarArgs]:
                 value=str(config.query_index_cache_mb),
             )
         )
+    if config.object_cache_gb is not None:
+        env.append(
+            k8s.core.v1.EnvVarArgs(
+                name="FINELOG_OBJECT_CACHE_GB",
+                value=str(config.object_cache_gb),
+            )
+        )
     if config.auth:
         env.append(k8s.core.v1.EnvVarArgs(name="FINELOG_AUTH_POLICY", value=auth_policy_json(config.auth)))
     if config.forwarding:

@@ -12,9 +12,17 @@ import pytest
 import uvicorn
 
 from marina.apps import is_python_app, migration, services_for
-from marina.db import database_from_env, grant_read, schema_name
+from marina.db import (
+    DatabaseSpec,
+    database_from_env,
+    deployment_runner_lock,
+    grant_read,
+    migration_lock,
+    runner_lock,
+    schema_name,
+)
 from marina.journey_plugin import DEFAULT_SHOTS_DIR, JOURNEYS_DIR
-from marina.manifest import discover_apps
+from marina.manifest import AppManifest, JobRunner, discover_apps, job_runners
 from marina.server import APPS_DIR_ENV, MarinaConfig, create_app
 
 # The environment wins so the deployed image (MARINA_APPS_DIR=/app/apps) runs `marina migrate` unchanged.
@@ -61,19 +69,81 @@ def migrate(apps_dir: Path, only: tuple[str, ...], reader: str | None) -> None:
     database = database_from_env(os.environ)
     if database is None:
         raise click.UsageError("no database configured: set MARINA_DATABASE_URL or CLOUDSQL_CONNECTION")
-    for app in discover_apps(apps_dir):
-        if only and app.name not in only:
-            continue
-        if not is_python_app(app):
-            continue
-        run = migration(app)
-        if run is None:
-            continue
-        click.echo(f"== {app.name}: migrate")
-        engine = services_for(app, "", database).engine()
-        run(engine)
-        if reader:
-            grant_read(engine, schema_name(app.name), reader)
+    _migrate_apps(discover_apps(apps_dir), database, only, reader)
+
+
+def _migrate_apps(apps: list[AppManifest], database: DatabaseSpec, only: tuple[str, ...], reader: str | None) -> None:
+    with migration_lock(database):
+        for app in apps:
+            if only and app.name not in only:
+                continue
+            if not is_python_app(app):
+                continue
+            run = migration(app)
+            if run is None:
+                continue
+            click.echo(f"== {app.name}: migrate")
+            engine = services_for(app, "", database).engine()
+            try:
+                run(engine)
+                if reader:
+                    grant_read(engine, schema_name(app.name), reader)
+            finally:
+                engine.dispose()
+
+
+def _runner(runner_name: str, apps: list[AppManifest]) -> JobRunner:
+    for runner in job_runners(apps):
+        if runner.name == runner_name:
+            return runner
+    raise click.UsageError(f"unknown job runner {runner_name!r}")
+
+
+@cli.command("run")
+@click.argument("runner_name")
+@click.option("--apps-dir", type=click.Path(path_type=Path), default=DEFAULT_APPS_DIR, show_default=True)
+@click.option("--reader", help="Postgres role to grant read access on every schema migrated.")
+@click.option("--migrate-only", is_flag=True, help="Apply migrations without running app jobs.")
+def run_jobs(runner_name: str, apps_dir: Path, reader: str | None, migrate_only: bool) -> None:
+    """Migrate, then execute every app job assigned to RUNNER_NAME."""
+    apps = discover_apps(apps_dir)
+    selected = _runner(runner_name, apps)
+    database = database_from_env(os.environ)
+    if database is None:
+        raise click.UsageError("no database configured: set MARINA_DATABASE_URL or CLOUDSQL_CONNECTION")
+
+    lock = deployment_runner_lock(database, runner_name) if migrate_only else runner_lock(database, runner_name)
+    with lock as acquired:
+        if not acquired:
+            click.echo(f"runner {runner_name}: another execution holds the lease; skipping")
+            return
+        _migrate_apps(apps, database, (), reader)
+        if migrate_only:
+            return
+
+        runner_secrets = {secret for bound in selected.jobs for secret in bound.job.secrets}
+        failures: list[str] = []
+        for bound in selected.jobs:
+            click.echo(f"== {bound.qualified_name}: {' '.join(bound.job.command)}")
+            child_env = dict(os.environ)
+            for secret in runner_secrets - set(bound.job.secrets):
+                child_env.pop(secret, None)
+            try:
+                completed = subprocess.run(
+                    bound.job.command,
+                    cwd=bound.app.root,
+                    env=child_env,
+                    timeout=bound.job.timeout,
+                    check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                click.echo(f"{bound.qualified_name}: {exc}", err=True)
+                failures.append(bound.qualified_name)
+                continue
+            if completed.returncode != 0:
+                failures.append(bound.qualified_name)
+        if failures:
+            raise click.ClickException(f"job failures: {', '.join(failures)}")
 
 
 @cli.command()

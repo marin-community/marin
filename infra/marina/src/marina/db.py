@@ -12,8 +12,10 @@ account; locally and in tests it is a plain SQLAlchemy URL.
 """
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
+from enum import StrEnum
 
 import sqlalchemy
 from google.cloud.sql.connector import Connector
@@ -28,6 +30,13 @@ DATABASE_URL_ENV = "MARINA_DATABASE_URL"
 CLOUDSQL_CONNECTION_ENV = "CLOUDSQL_CONNECTION"
 PGDATABASE_ENV = "PGDATABASE"
 PGUSER_ENV = "PGUSER"
+RUNNER_LOCK_PREFIX = "marina-runner:"
+MIGRATION_LOCK_NAME = "marina-migrations"
+
+
+class LockAcquisition(StrEnum):
+    BLOCKING = "pg_advisory_lock"
+    NONBLOCKING = "pg_try_advisory_lock"
 
 
 @dataclass(frozen=True)
@@ -127,3 +136,52 @@ def engine_for(spec: DatabaseSpec, app: str) -> Engine:
     with engine.begin() as conn:
         conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{schema}"'))
     return engine
+
+
+@contextmanager
+def _advisory_lock(spec: DatabaseSpec, name: str, acquisition: LockAcquisition) -> Iterator[bool]:
+    engine = _bare_engine(spec)
+    try:
+        with engine.connect() as conn:
+            if conn.dialect.name != "postgresql":
+                yield True
+                return
+            result = conn.execute(
+                text(f"SELECT {acquisition.value}(hashtext(:name))"),
+                {"name": name},
+            ).scalar()
+            acquired = acquisition is LockAcquisition.BLOCKING or bool(result)
+            conn.commit()
+            try:
+                yield acquired
+            finally:
+                if acquired:
+                    conn.execute(
+                        text("SELECT pg_advisory_unlock(hashtext(:name))"),
+                        {"name": name},
+                    )
+                    conn.commit()
+    finally:
+        engine.dispose()
+
+
+@contextmanager
+def runner_lock(spec: DatabaseSpec, runner: str) -> Iterator[bool]:
+    """Try to lease a scheduled runner, returning false when another execution owns it."""
+    with _advisory_lock(spec, f"{RUNNER_LOCK_PREFIX}{runner}", LockAcquisition.NONBLOCKING) as acquired:
+        yield acquired
+
+
+@contextmanager
+def deployment_runner_lock(spec: DatabaseSpec, runner: str) -> Iterator[bool]:
+    """Wait to lease the runner used for deployment migrations."""
+    with _advisory_lock(spec, f"{RUNNER_LOCK_PREFIX}{runner}", LockAcquisition.BLOCKING) as acquired:
+        yield acquired
+
+
+@contextmanager
+def migration_lock(spec: DatabaseSpec) -> Iterator[None]:
+    """Serialize schema migrations across every runner and deployment."""
+    with _advisory_lock(spec, MIGRATION_LOCK_NAME, LockAcquisition.BLOCKING) as acquired:
+        assert acquired
+        yield

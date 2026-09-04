@@ -332,3 +332,19 @@ def test_activity_failure_prevents_repository_lock_and_turn(monkeypatch):
         activity_sync.run(engine, "token")
     assert engine.repository_lock_attempts == 0
     assert state == {}
+
+
+def test_hourly_sync_attempts_every_repository_turn(monkeypatch):
+    state = {}
+    attempted = []
+    monkeypatch.setattr(activity_sync, "fetch_manifest", _current_activity_manifest)
+    monkeypatch.setattr(
+        activity_sync.github_repository,
+        "sync_repository_locked",
+        lambda _engine, target, _token, _now: attempted.append(target.repository),
+    )
+
+    assert activity_sync.run_all(_TurnEngine(state), "token") == 0
+
+    assert attempted == [target.repository for target in activity_sync.search_config.REPOSITORY_TARGETS]
+    assert state == {"next_target": 0}

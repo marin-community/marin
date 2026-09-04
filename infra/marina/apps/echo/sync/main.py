@@ -4,8 +4,8 @@
 """Sync MarinMirror activity and GitHub repository files into Echo.
 
 The MarinMirror phase refreshes GitHub and Discord activity first. One globally
-serialized repository phase then advances a durable fair turn and indexes that
-repository's configured branch head.
+serialized repository phase then indexes every configured repository. Setting
+``ECHO_REPOSITORY_TARGET`` limits an execution to the named repository.
 
 This mirror duplicates what marinmirror itself could push; it is the interim answer
 until marinmirror runs as a service in this project (see README.md).
@@ -26,7 +26,9 @@ import sys
 import tempfile
 import time
 import urllib.request
+from collections.abc import Callable
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 
 import sqlalchemy
@@ -34,14 +36,14 @@ from marina.db import database_from_env, engine_for
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from echo import repository_identity, schema
+from echo import repository_identity, schema, search_config
 from echo.sync import github_repository
 
 MARINMIRROR_URL = os.environ.get("MARINMIRROR_URL", "https://marinmirror.exe.xyz")
+MARINMIRROR_TOKEN_ENV = "MARINMIRROR_TOKEN"
 SOURCES = ("github", "discord")
 BATCH = 400
-# Session advisory lock so overlapping executions don't convoy on row locks: a full sync
-# outlasts the 10-minute schedule, and Cloud Run jobs have no concurrency limit of their own.
+# Session advisory lock so overlapping executions don't duplicate repository work.
 SYNC_LOCK_KEY = 0x6563686F  # "echo"
 # The app's name, and so the name of its Postgres schema.
 APP_NAME = "echo"
@@ -225,21 +227,55 @@ def sync_corpus(engine: sqlalchemy.Engine, token: str) -> int:
     return 0
 
 
+RepositoryPhase = Callable[[sqlalchemy.Engine, str, datetime], None]
+
+
+def _sync_one_repository(
+    engine: sqlalchemy.Engine,
+    token: str,
+    now: datetime,
+    repository_override: github_repository.RepositoryTarget | None,
+) -> None:
+    target = repository_override or github_repository.claim_repository_turn(engine)
+    print(f"repository turn: {target.repository}@{target.branch}", flush=True)
+    github_repository.sync_repository_locked(engine, target, token, now)
+
+
+def _sync_all_repositories(engine: sqlalchemy.Engine, token: str, now: datetime) -> None:
+    failures: list[Exception] = []
+    for _ in search_config.REPOSITORY_TARGETS:
+        try:
+            _sync_one_repository(engine, token, now, None)
+        except Exception as exc:
+            failures.append(exc)
+            print(f"repository turn failed: {exc}", file=sys.stderr)
+    if failures:
+        raise ExceptionGroup("repository sync failures", failures)
+
+
+def _run_sync(engine: sqlalchemy.Engine, token: str, phase: RepositoryPhase, now: datetime | None) -> int:
+    sync_corpus(engine, token)
+    with github_repository.repository_sync_lock(engine) as locked:
+        if not locked:
+            print("another repository sync is running; repository turns not consumed")
+            return 0
+        phase(engine, token, now or datetime.now(UTC))
+    return 0
+
+
 def run(
     engine: sqlalchemy.Engine,
     token: str,
     repository_override: github_repository.RepositoryTarget | None = None,
     now: datetime | None = None,
 ) -> int:
-    sync_corpus(engine, token)
-    with github_repository.repository_sync_lock(engine) as locked:
-        if not locked:
-            print("another repository sync is running; repository turn not consumed")
-            return 0
-        target = repository_override or github_repository.claim_repository_turn(engine)
-        print(f"repository turn: {target.repository}@{target.branch}", flush=True)
-        github_repository.sync_repository_locked(engine, target, token, now or datetime.now(UTC))
-    return 0
+    phase = partial(_sync_one_repository, repository_override=repository_override)
+    return _run_sync(engine, token, phase, now)
+
+
+def run_all(engine: sqlalchemy.Engine, token: str, now: datetime | None = None) -> int:
+    """Sync activity once, then attempt one repository turn for every configured target."""
+    return _run_sync(engine, token, _sync_all_repositories, now)
 
 
 def main() -> int:
@@ -247,7 +283,9 @@ def main() -> int:
     target = repository_identity.configured_repository_target(override) if override else None
     engine = make_engine()
     try:
-        return run(engine, os.environ["MARINMIRROR_TOKEN"], target)
+        if target is not None:
+            return run(engine, os.environ[MARINMIRROR_TOKEN_ENV], target)
+        return run_all(engine, os.environ[MARINMIRROR_TOKEN_ENV])
     finally:
         engine.dispose()
 

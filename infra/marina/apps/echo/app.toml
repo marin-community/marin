@@ -5,3 +5,13 @@ title = "Echo"
 description = "Search Marin's context: wiki notes, repository files, pull requests, issues, and Discord."
 connect_src = []
 build_command = "cd web && npm ci && npm run build"
+
+[[jobs]]
+name = "sync"
+runner = "hourly"
+schedule = "0 * * * *"
+command = ["python", "-m", "echo.sync.main"]
+timeout = 7200
+cpu = 4
+memory_gib = 4
+secrets = ["MARINMIRROR_TOKEN"]

@@ -118,6 +118,11 @@ Cluster infrastructure comes from the per-cluster Iris config
   `provisioning.coreweave.grafana_observer_rbac`. The stack binds those identities to `get`,
   `list`, and `watch` on Nodes and NodePools; the standard CoreWeave `read` group omits these
   cluster-inventory resources. Retain both identities during a token rotation.
+- Loom's CoreWeave Managed Auth usernames from
+  `provisioning.coreweave.loom_session_rbac`. CoreWeave's CKS Viewer role supplies namespaced
+  read access, including `get` on `pods/log`. The stack adds only `create` on `pods/exec` and
+  `pods/portforward` in that cluster's Iris namespace. `pods/portforward` is required because
+  the Iris CLI reaches the controller through `kubectl port-forward`.
 - For IaC-managed CoreWeave clusters, Kueue's controller-manager memory request and limit
   default to `8Gi`; its Kubernetes API client defaults to `1000` QPS and `2000` burst.
   `manager_memory_limit` accepts per-cluster values at or above `2Gi`, and
@@ -253,10 +258,58 @@ pulumi stack init <cluster> \
   --secrets-provider="gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key"
 ```
 
-A CoreWeave token rotation creates a new Managed Auth username (`cwtoken-…`). Append it to
-`grafana_observer_rbac.usernames` in all three monitored cluster configs and run a normal preview/up for
-each stack before switching Grafana to the new token. Remove the old username and update the
-stacks again only after the new Grafana revision passes its bridge checks.
+### CoreWeave token rotation
+
+A Grafana token rotation creates a new Managed Auth username (`cwtoken-…`). Append it to
+`grafana_observer_rbac.usernames` in all three monitored cluster configs and run a normal
+preview/up for each stack before switching Grafana to the new token. Remove the old username
+and update the stacks again only after the new Grafana revision passes its bridge checks.
+
+Loom uses a separate user-scoped [CoreWeave API
+token](https://docs.coreweave.com/security/authn-authz/managed-auth/api-access). Its token-owning
+user has the [CKS Viewer role](https://docs.coreweave.com/security/iam/access-policies). During
+rotation, the token owner creates a replacement token and assembles a kubeconfig containing
+these four contexts:
+
+- `marin-gpu_US-EAST-02A` for `cw-us-east-02a`
+- `marin-us-east-08a_US-EAST-08A` for `cw-us-east-08a`
+- `marin-rn02a_RNO2A` for `cw-rno2a`
+- `marin_US-WEST-04A` for `cw-us-west-04a`
+
+These names must match each Iris config's `platform.coreweave.kube_context`; the short cluster
+names are not kubeconfig aliases.
+
+CKS Viewer maps the identity into Kubernetes' `read` group. Kubernetes RoleBindings, not the
+CoreWeave IAM policy, add `pods/exec` and `pods/portforward`. Keep the current and replacement
+Managed Auth usernames in every cluster config during rotation, and preview/apply all four
+Pulumi stacks before exposing the replacement kubeconfig to Loom.
+
+Inspect the replacement file without printing its token, verify the expected username and
+contexts, and add the complete kubeconfig as a new version of the existing
+`loom-coreweave-iris-kubeconfig` Secret Manager secret:
+
+```bash
+export KUBECONFIG=/path/to/reviewed/coreweave-iris
+chmod 600 "$KUBECONFIG"
+kubectl auth whoami --kubeconfig "$KUBECONFIG" --context marin-us-east-08a_US-EAST-08A
+kubectl config get-contexts --kubeconfig "$KUBECONFIG" -o name
+
+gcloud secrets versions add loom-coreweave-iris-kubeconfig \
+  --project=hai-gcp-models \
+  --data-file="$KUBECONFIG"
+```
+
+Do not put the kubeconfig in Git, Pulumi configuration, shell output, or a PR. Pin the new
+numeric secret version through the Loom stack's `homeFiles` entry at `.kube/coreweave-iris`
+with mode `0600`. That deployment grants the Loom VM access only to the referenced secret and
+installs the file atomically.
+
+Exercise the replacement from a new Loom session before removing the old username from the
+four cluster configs, applying that removal, and revoking the old CoreWeave token. `pods/exec`
+permits arbitrary commands in any pod in the namespace, and `pods/portforward` permits direct
+connections to any pod port there; Kubernetes RBAC cannot constrain either subresource by
+command, container, label, or port. Any narrower policy requires separate namespaces or an
+authorization layer outside these Role rules.
 
 ### Backend
 

@@ -460,8 +460,8 @@
     {
       "id": 3,
       "type": "timeseries",
-      "title": "Running, waiting, and iteration tokens",
-      "description": "Per-bin request gauges and mean tokens processed per vLLM engine iteration. KV-cache uses a separate unweighted replica view because no capacity weight is stored.",
+      "title": "In-flight, running, waiting, and iteration tokens",
+      "description": "Per-bin request gauges, including in-flight requests as running plus waiting, and mean tokens processed per vLLM engine iteration. KV-cache uses a separate unweighted replica view because no capacity weight is stored.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -1147,6 +1147,16 @@
       "title": "Runs",
       "type": "link",
       "url": "/d/marin-runs"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "RL runs",
+      "type": "link",
+      "url": "/d/marin-rl-runs"
     },
     {
       "linkRef": "fleet_health_without_vars"

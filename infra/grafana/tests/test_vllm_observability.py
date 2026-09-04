@@ -28,7 +28,12 @@ def test_dashboard_vllm_overview_end_to_end():
     cumulative = {"source_temporality": "cumulative_snapshot"}
     snapshot = {"source_temporality": "current_snapshot"}
     samples = [
-        sample("generation_tokens_total", value, timestamp, **cumulative) for timestamp, value in ((0, 0), (15_000, 150))
+        sample("generation_tokens_total", value, timestamp, **cumulative)
+        for timestamp, value in ((0, 0), (15_000, 150), (30_000, 300))
+    ]
+    samples += [
+        sample("prompt_tokens_total", value, timestamp, **cumulative)
+        for timestamp, value in ((0, 0), (15_000, 30), (30_000, 60))
     ]
     samples += [
         sample("request_success_total", value, timestamp, finished_reason="stop", **cumulative)
@@ -40,9 +45,16 @@ def test_dashboard_vllm_overview_end_to_end():
             sample(f"request_time_per_output_token_seconds_{component}", value, timestamp, **labels)
             for timestamp, value in ((0, 0), (15_000, final))
         ]
-    samples.append(sample("num_requests_running", 2, 15_000, **snapshot))
+    samples += [
+        sample("num_requests_running", 2, 15_000, **snapshot),
+        sample("num_requests_waiting", 1, 15_000, **snapshot),
+    ]
     samples += [
         sample("num_requests_running", 1, timestamp, engine="physical-b", engine_index="1", **snapshot)
+        for timestamp in range(0, 240_000, 15_000)
+    ]
+    samples += [
+        sample("num_requests_waiting", 0, timestamp, engine="physical-b", engine_index="1", **snapshot)
         for timestamp in range(0, 240_000, 15_000)
     ]
     database.executemany(
@@ -63,15 +75,28 @@ def test_dashboard_vllm_overview_end_to_end():
 
     with TestClient(app) as client:
         response = client.get(f"/finelog/marin{path}", params={**params, "view": "token_rate"})
+        saturation = client.get(f"/finelog/marin{path}", params={**params, "view": "saturation"})
         all_rows = client.get(f"/finelog/marin{path}", params=params)
 
     assert response.status_code == 200
-    assert [(row["metric"], row["value"]) for row in response.json()] == [("generated_tokens", 10)]
+    assert saturation.status_code == 200
+    assert all_rows.status_code == 200
+    token_rows = response.json()
+    saturation_rows = saturation.json()
+    assert [row["t"] for row in token_rows] == sorted(row["t"] for row in token_rows)
+    assert [row["t"] for row in saturation_rows] == sorted(row["t"] for row in saturation_rows)
+    assert {(row["metric"], row["t"]): row["value"] for row in token_rows} == {
+        ("generated_tokens", 15_000): 10,
+        ("generated_tokens", 30_000): 10,
+        ("prompt_tokens", 15_000): 2,
+        ("prompt_tokens", 30_000): 2,
+    }
     rows = all_rows.json()
     assert {row["section"] for row in rows} == VLLM_OVERVIEW_SECTIONS
     values = {(row["section"], row["metric"], row["stat"], row["series"], row["t"]): row["value"] for row in rows}
     assert values[("request_outcome", "requests", "total", "stop", None)] == 1
     assert values[("latency", "tpot", "mean_over_time", "time per output token", 15_000)] == 0.1
     assert values[("saturation", "num_requests_running", "value", "num_requests_running", 15_000)] == 3
+    assert values[("saturation", "num_requests_in_flight", "value", "num_requests_in_flight", 15_000)] == 4
     freshness = {row["series"].rsplit(":", 1)[-1]: row["status"] for row in rows if row["section"] == "freshness_detail"}
     assert freshness == {"physical-a": "stale_or_stopped", "physical-b": "fresh"}

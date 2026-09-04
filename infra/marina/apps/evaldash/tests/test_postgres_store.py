@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Behavior of EvalDash's durable serving catalog and background reconciliation."""
+"""Behavior of EvalDash's durable serving catalog and scheduled reconciliation."""
 
 import asyncio
 from datetime import UTC, datetime, timedelta
@@ -192,7 +192,7 @@ def test_first_inventory_failure_does_not_downgrade_migrated_row(tmp_path, monke
 
     monkeypatch.setattr(evaldash_app, "list_record_paths", list_unless_canonical)
     ingestor = evaldash_app.PostgresIngestor(store, (str(canonical), str(legacy)), 600, 86400, now=Clock())
-    asyncio.run(ingestor.run_once())
+    assert asyncio.run(ingestor.run_once()) == (str(canonical),)
 
     assert _stored(store, record.run_id)["description"] == "migrated canonical"
 
@@ -235,7 +235,7 @@ def test_reconciler_keeps_last_valid_row_when_a_prefix_or_rewritten_record_fails
 
     monkeypatch.setattr(evaldash_app, "list_record_paths", fail_listing)
     clock.now += timedelta(seconds=600)
-    asyncio.run(ingestor.run_once())
+    assert asyncio.run(ingestor.run_once()) == (str(prefix),)
 
     assert _stored(store, record.run_id)["run_id"] == record.run_id
     failed_probe = ingestor.status()["prefixes"][0]

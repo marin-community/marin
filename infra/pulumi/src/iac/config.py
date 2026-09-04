@@ -140,6 +140,12 @@ class GrafanaObserverRbacSpec(BaseModel):
     usernames: tuple[str, ...] = Field(min_length=1)
 
 
+class LoomSessionRbacSpec(BaseModel):
+    """CoreWeave Managed Auth usernames accepted from Loom sessions."""
+
+    usernames: tuple[str, ...] = Field(min_length=1)
+
+
 class CoreweaveProvisioning(BaseModel):
     cluster: CksClusterSpec
     kueue: KueueProvisioningSpec
@@ -147,6 +153,7 @@ class CoreweaveProvisioning(BaseModel):
     federation_dns: FederationDnsSpec | None = None
     rbac: RbacSpec = RbacSpec()
     grafana_observer_rbac: GrafanaObserverRbacSpec | None = None
+    loom_session_rbac: LoomSessionRbacSpec | None = None
 
 
 class GcpAddressSpec(BaseModel):
