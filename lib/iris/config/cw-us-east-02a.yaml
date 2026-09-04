@@ -222,7 +222,6 @@ user_budgets:
       - eczech
       - larry
       - marin
-      - wmoss
       - zack
     budget_limit: 42752
     max_band: PRIORITY_BAND_INTERACTIVE
