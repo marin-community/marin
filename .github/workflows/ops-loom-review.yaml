@@ -23,14 +23,6 @@ jobs:
       )
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - review: correctness
-            skill: review-pr
-          - review: lint-catalog
-            skill: lint-review
     permissions:
       contents: read
       id-token: write
@@ -47,12 +39,12 @@ jobs:
         uses: ./.github/actions/launch-loom-run
         with:
           profile: ${{ vars.LOOM_PR_REVIEW_PROFILE }}
-          idempotency-key: pr-review:${{ matrix.review }}:${{ github.event.pull_request.number }}:${{ github.event.pull_request.head.sha }}
-          title: "${{ matrix.review }} review for PR #${{ github.event.pull_request.number }}"
+          idempotency-key: pr-review:${{ github.event.pull_request.number }}:${{ github.event.pull_request.head.sha }}
+          title: "PR review for #${{ github.event.pull_request.number }}"
           goal: >-
             Review pull request #${{ github.event.pull_request.number }} at head
             ${{ github.event.pull_request.head.sha }}. Remain read-only except for
-            GitHub review comments. Run only the ${{ matrix.skill }} skill with
-            --comment and report its result in the session result.
+            GitHub review comments. Run review-pr with --comment and publish a
+            typed result.
           base: ${{ github.event.pull_request.head.sha }}
           github-issue: ${{ github.event.pull_request.number }}
