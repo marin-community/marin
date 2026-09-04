@@ -74,8 +74,7 @@ def _create_levanter_stream_view(database: duckdb.DuckDBPyConnection) -> None:
 
 def _storage_usage_database() -> duckdb.DuckDBPyConnection:
     database = duckdb.connect()
-    database.execute(
-        """
+    database.execute("""
         CREATE TABLE "storage.usage"(
             provider VARCHAR,
             metric VARCHAR,
@@ -87,8 +86,7 @@ def _storage_usage_database() -> duckdb.DuckDBPyConnection:
             collected_at TIMESTAMPTZ,
             seq BIGINT
         )
-        """
-    )
+        """)
     return database
 
 
@@ -834,8 +832,7 @@ def test_training_loss_by_attempt_separates_process_incarnations():
     database = duckdb.connect()
     database.execute("CREATE MACRO to_timestamp_millis(value) AS epoch_ms(value)")
     database.execute("CREATE MACRO date_bin(bucket, value) AS time_bucket(bucket, value)")
-    database.execute(
-        """
+    database.execute("""
         CREATE TABLE telemetry_v1(
             service VARCHAR,
             run_id VARCHAR,
@@ -844,8 +841,7 @@ def test_training_loss_by_attempt_separates_process_incarnations():
             value DOUBLE,
             timestamp_ms BIGINT
         )
-        """
-    )
+        """)
     _create_levanter_stream_view(database)
     at = int(datetime(2026, 8, 20, 12, tzinfo=UTC).timestamp() * 1000)
     database.executemany(
@@ -922,8 +918,7 @@ def test_training_execution_health_uses_the_current_attempt_and_iris_state():
     }
 
     database = duckdb.connect()
-    database.execute(
-        """
+    database.execute("""
         CREATE TABLE telemetry_v1(
             service VARCHAR,
             run_id VARCHAR,
@@ -936,8 +931,7 @@ def test_training_execution_health_uses_the_current_attempt_and_iris_state():
             timestamp_ms BIGINT,
             seq BIGINT
         )
-        """
-    )
+        """)
     _create_levanter_stream_view(database)
     fixed_now_ms = int(datetime(2026, 8, 21, 12, tzinfo=UTC).timestamp() * 1000)
     database.executemany(
@@ -959,8 +953,7 @@ def test_training_execution_health_uses_the_current_attempt_and_iris_state():
             ("other-run", "/u/other-run-coord/train", "other-attempt", "0", 1, fixed_now_ms - 20_000, 5),
         ],
     )
-    database.execute(
-        """
+    database.execute("""
         CREATE TABLE "iris.task_state"(
             cluster VARCHAR,
             root_job_id VARCHAR,
@@ -970,8 +963,7 @@ def test_training_execution_health_uses_the_current_attempt_and_iris_state():
             building BIGINT,
             running BIGINT
         )
-        """
-    )
+        """)
     database.executemany(
         'INSERT INTO "iris.task_state" VALUES (?, ?, ?, ?, ?, ?, ?)',
         [
@@ -981,8 +973,7 @@ def test_training_execution_health_uses_the_current_attempt_and_iris_state():
             ("cw-a", "/u/other-run-coord", datetime(2026, 8, 21, 11, 59, 45, tzinfo=UTC), 0, 0, 0, 176),
         ],
     )
-    database.execute(
-        """
+    database.execute("""
         CREATE TABLE "iris.task_event"(
             cluster VARCHAR,
             task_id VARCHAR,
@@ -990,8 +981,7 @@ def test_training_execution_health_uses_the_current_attempt_and_iris_state():
             reason VARCHAR,
             ts TIMESTAMPTZ
         )
-        """
-    )
+        """)
     database.executemany(
         'INSERT INTO "iris.task_event" VALUES (?, ?, ?, ?, ?)',
         [
@@ -1095,8 +1085,7 @@ def test_training_attempts_table_links_the_newest_attempt_to_iris():
     assert "iris_cluster" in {column["text"] for column in target["columns"]}
 
     database = duckdb.connect()
-    database.execute(
-        """
+    database.execute("""
         CREATE TABLE "levanter.metrics"(
             service VARCHAR,
             run_id VARCHAR,
@@ -1108,8 +1097,7 @@ def test_training_attempts_table_links_the_newest_attempt_to_iris():
             value DOUBLE,
             timestamp_ms BIGINT
         )
-        """
-    )
+        """)
     hour = 3_600_000
     at = int(datetime(2026, 8, 21, 12, tzinfo=UTC).timestamp() * 1000)
     database.executemany(
@@ -1144,8 +1132,7 @@ def test_training_moe_health_queries_show_routing_signals():
     database = duckdb.connect()
     database.execute("CREATE MACRO to_timestamp_millis(value) AS epoch_ms(value)")
     database.execute("CREATE MACRO date_bin(bucket, value) AS time_bucket(bucket, value)")
-    database.execute(
-        """
+    database.execute("""
         CREATE TABLE telemetry_v1(
             service VARCHAR,
             run_id VARCHAR,
@@ -1153,8 +1140,7 @@ def test_training_moe_health_queries_show_routing_signals():
             value DOUBLE,
             timestamp_ms BIGINT
         )
-        """
-    )
+        """)
     _create_levanter_stream_view(database)
     at = int(datetime(2026, 8, 21, 12, tzinfo=UTC).timestamp() * 1000)
     database.executemany(

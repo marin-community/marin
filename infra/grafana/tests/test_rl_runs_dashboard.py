@@ -475,6 +475,26 @@ def test_the_producer_census_separates_the_engine_series_from_the_trainer(store)
     assert {(row[0], row[1]) for row in rows} >= {("marinskyrl", "trainer"), ("vllm", "inference")}
 
 
+def _projected_columns(sql: str) -> set[str]:
+    # Grafana reads the columns the outermost SELECT returns. The last SELECT in the text can sit
+    # inside a subquery, and a derived table's alias is not a column, so scan at parenthesis depth
+    # zero and keep only the projection list. CAST target types are spelled in caps.
+    depth = 0
+    start = end = None
+    for match in re.finditer(r"[()]|\bSELECT\b|\bFROM\b", sql):
+        token = match.group().upper()
+        if token == "(":
+            depth += 1
+        elif token == ")":
+            depth -= 1
+        elif depth == 0 and token == "SELECT":
+            start, end = match.end(), None
+        elif depth == 0 and token == "FROM" and start is not None and end is None:
+            end = match.start()
+    projection = sql[start:end]
+    return {alias for alias in re.findall(r"\bAS (\w+)", projection) if not alias.isupper()}
+
+
 def test_every_timeseries_panel_declares_the_columns_its_sql_returns() -> None:
     """A panel is read through its declared columns, so executing its SQL cannot see a mistake there."""
     dashboard = stitch_all(DASHBOARDS, DASHBOARDS / "panels")["rl_runs.json"]
@@ -484,9 +504,7 @@ def test_every_timeseries_panel_declares_the_columns_its_sql_returns() -> None:
             continue
         for target in panel["targets"]:
             (parameter,) = [param for param in target["url_options"]["params"] if param["key"] == "sql"]
-            final_select = re.split(r"\bSELECT\b", parameter["value"])[-1]
-            # `AS` also introduces the target type of a CAST, and those are spelled in caps.
-            selected = {alias for alias in re.findall(r"\bAS (\w+)", final_select) if not alias.isupper()}
+            selected = _projected_columns(parameter["value"])
             declared = {column["selector"]: column["type"] for column in target["columns"]}
 
             assert (
@@ -544,6 +562,34 @@ def test_engine_rates_keep_two_actors_that_both_report_engine_zero_apart(store) 
 
     throughput = store.execute(_panel_sql("Engine token throughput")).fetchall()
     rates = [round(row[1], 4) for row in throughput]
+
+    assert rates == [round(3 * 1024.0 / 300.0, 4)] * len(rates)
+    assert len(rates) == 5
+
+
+def test_engine_panels_read_the_embedded_stream_as_well_as_the_standalone_one(store) -> None:
+    # An engine embedded in the trainer publishes through the trainer's exporter, so its rows land
+    # under service='marinskyrl' with metric_source='vllm'. Reading only telemetry_v1.vllm would
+    # leave every engine panel blank on such a run.
+    for bucket in range(6):
+        store.execute(
+            f'INSERT INTO "telemetry_v1.marinskyrl" VALUES ({", ".join("?" for _ in _COLUMNS)})',
+            list(
+                _row(
+                    service="marinskyrl",
+                    name="generation_tokens_total",
+                    value=1024.0 * (bucket + 1),
+                    moment=WINDOW_START + timedelta(minutes=5 * bucket),
+                    seq=bucket,
+                    run_id=RUN_ID,
+                    node_name=NODES[0],
+                    role="trainer",
+                    attributes={"engine": "GPU-abc", "metric_source": "vllm"},
+                )
+            ),
+        )
+
+    rates = [round(row[1], 4) for row in store.execute(_panel_sql("Engine token throughput")).fetchall()]
 
     assert rates == [round(3 * 1024.0 / 300.0, 4)] * len(rates)
     assert len(rates) == 5
