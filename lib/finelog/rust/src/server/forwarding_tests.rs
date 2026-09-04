@@ -341,9 +341,13 @@ async fn read_all(client: &LogServiceClient<TestTransport>) -> Vec<(String, Stri
 
 /// Poll `condition` until it holds, or fail after five seconds with `describe()`, so a
 /// wedged forwarder fails the test rather than hanging it.
-async fn poll_until(mut condition: impl FnMut() -> bool, describe: impl Fn() -> String) {
+async fn poll_until<F, Fut>(mut condition: F, describe: impl Fn() -> String)
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
     for _ in 0..200 {
-        if condition() {
+        if condition().await {
             return;
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
@@ -352,17 +356,11 @@ async fn poll_until(mut condition: impl FnMut() -> bool, describe: impl Fn() -> 
 }
 
 async fn wait_for_scalar(store: &Store, sql: &str, expected: i64) {
-    for _ in 0..200 {
-        let actual = scalar_i64(store, sql).await;
-        if actual == expected {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-    panic!(
-        "query {sql:?} never returned {expected} (last saw {})",
-        scalar_i64(store, sql).await
-    );
+    poll_until(
+        || async { scalar_i64(store, sql).await == expected },
+        || format!("query {sql:?} never returned {expected}"),
+    )
+    .await;
 }
 
 /// Wait for `store`'s watermark for `(target, namespace)` to reach `expected`. Reads
@@ -370,7 +368,7 @@ async fn wait_for_scalar(store: &Store, sql: &str, expected: i64) {
 /// would perturb the target's request count.
 async fn wait_for_cursor(store: &Store, target: &str, namespace: &str, expected: i64) {
     poll_until(
-        || store.forward_cursor(target, namespace).unwrap() == Some(expected),
+        || std::future::ready(store.forward_cursor(target, namespace).unwrap() == Some(expected)),
         || {
             format!(
                 "watermark for {namespace:?} never reached {expected} (stuck at {:?})",
@@ -386,7 +384,7 @@ async fn wait_for_cursor(store: &Store, target: &str, namespace: &str, expected:
 /// produced it.
 async fn wait_for_requests(counter: &RequestStats, expected: usize) {
     poll_until(
-        || counter.total() >= expected,
+        || std::future::ready(counter.total() >= expected),
         || {
             format!(
                 "hub never served {expected} requests (saw {})",
@@ -406,16 +404,14 @@ async fn wait_for_hub_log_rows(fx: &Fixture, expected: &[(&str, &str)]) {
         .iter()
         .map(|(key, data)| (key.to_string(), data.to_string()))
         .collect();
-    for _ in 0..200 {
-        if fx.hub_log_rows().await == want {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-    panic!(
-        "hub never held {want:?} (last saw {:?})",
-        fx.hub_log_rows().await
-    );
+    poll_until(
+        || {
+            let want = &want;
+            async move { fx.hub_log_rows().await == *want }
+        },
+        || format!("hub never held {want:?}"),
+    )
+    .await;
 }
 
 /// A forwarder running on its own task, stopped and joined by [`Self::finish`].
@@ -490,7 +486,7 @@ async fn fresh_remote_store_forwarder_registers_progress_without_panicking() {
 
     let running = RunningForwarder::start(forwarder);
     poll_until(
-        || source.get_table_schema(FINELOG_NAMESPACE).is_ok(),
+        || std::future::ready(source.get_table_schema(FINELOG_NAMESPACE).is_ok()),
         || "forwarder did not register its progress namespace".to_string(),
     )
     .await;

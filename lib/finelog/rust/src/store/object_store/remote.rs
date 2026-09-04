@@ -71,11 +71,6 @@ impl RemoteObjectStore {
             .map(|base| (base.to_string(), Arc::clone(self.provider.backend())))
     }
 
-    /// The URL a registered scan reads `id` from.
-    pub(super) fn scan_url(&self, id: &ObjectId) -> String {
-        self.provider.scan_url(id)
-    }
-
     /// Split the configured prefix on `/` into individual path components.
     /// `OsPath::from_iter` escapes `/` *within* a single part, so a multi-segment
     /// prefix like `logs/sub` must be pushed component-by-component.
@@ -187,7 +182,7 @@ impl ObjectStore for RemoteObjectStore {
     }
 
     fn remote_scan_url(&self, id: &ObjectId) -> Option<String> {
-        Some(self.scan_url(id))
+        Some(self.provider.scan_url(id))
     }
 
     async fn list(&self, prefix: &ObjectPrefix) -> Result<Vec<ObjectMetadata>, StatsError> {

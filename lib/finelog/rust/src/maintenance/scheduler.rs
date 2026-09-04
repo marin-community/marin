@@ -25,7 +25,7 @@ use crate::maintenance::{
     MIN_POLL_INTERVAL,
 };
 use crate::store::store::ServeMode;
-use crate::store::table::{TableManager, TableRuntime, TableWork};
+use crate::store::table::{TableManager, TableRuntime, TableWork, WorkOutcome};
 
 /// Report a maintenance cycle that sat in the slot queue at least this long.
 const SLOW_CYCLE_WAIT: Duration = Duration::from_secs(5);
@@ -64,16 +64,22 @@ impl TableCadence {
 #[derive(Clone, Copy)]
 enum ScheduledWork {
     Flush,
-    Maintenance { prompt: bool },
+    Maintenance(MaintenanceQueue),
+}
+
+#[derive(Clone, Copy)]
+enum MaintenanceQueue {
+    Shared,
+    Migration,
 }
 
 impl ScheduledWork {
-    fn clear_running(self, entry: &mut TableCadence, prompt: bool) {
+    fn clear_running(self, entry: &mut TableCadence, outcome: WorkOutcome) {
         match self {
             Self::Flush => entry.flush_running = false,
-            Self::Maintenance { .. } => {
+            Self::Maintenance(_) => {
                 entry.maintenance_running = false;
-                entry.prompt_maintenance = prompt;
+                entry.prompt_maintenance = outcome.has_more_work();
             }
         }
     }
@@ -212,7 +218,7 @@ impl MaintenanceScheduler {
         // the demand rather than being swallowed by this cycle.
         runtime.clear_flush_demand();
         if !self.dispatch(runtime, ScheduledWork::Flush) {
-            ScheduledWork::Flush.clear_running(entry, false);
+            ScheduledWork::Flush.clear_running(entry, WorkOutcome::Complete);
         }
         MIN_FLUSH_INTERVAL
     }
@@ -240,11 +246,14 @@ impl MaintenanceScheduler {
         }
         entry.last_maintenance = now;
         entry.maintenance_running = true;
-        let work = ScheduledWork::Maintenance {
-            prompt: entry.prompt_maintenance,
+        let queue = if entry.prompt_maintenance {
+            MaintenanceQueue::Migration
+        } else {
+            MaintenanceQueue::Shared
         };
+        let work = ScheduledWork::Maintenance(queue);
         if !self.dispatch(runtime, work) {
-            work.clear_running(entry, false);
+            work.clear_running(entry, WorkOutcome::Complete);
         }
         interval
     }
@@ -259,20 +268,20 @@ impl MaintenanceScheduler {
         runtime.clone().spawn_tracked({
             let runtime = Arc::clone(runtime);
             async move {
-                let prompt = match work {
+                let outcome = match work {
                     ScheduledWork::Flush => {
                         let _permit = limits.flushes().acquire().await;
                         if let Err(error) = tables.run_work(&runtime, TableWork::Flush).await {
                             tracing::warn!(namespace = %runtime.name(), %error, "scheduled flush failed");
                         }
-                        false
+                        WorkOutcome::Complete
                     }
-                    ScheduledWork::Maintenance { prompt } => {
-                        run_maintenance_cycle(&tables, &limits, &runtime, prompt).await
+                    ScheduledWork::Maintenance(queue) => {
+                        run_maintenance_cycle(&tables, &limits, &runtime, queue).await
                     }
                 };
                 if let Some(entry) = cadence.lock().unwrap().get_mut(&table) {
-                    work.clear_running(entry, prompt);
+                    work.clear_running(entry, outcome);
                 }
                 wake.notify_one();
             }
@@ -284,15 +293,18 @@ async fn run_maintenance_cycle(
     tables: &TableManager,
     limits: &MaintenanceLimits,
     runtime: &Arc<TableRuntime>,
-    prompt: bool,
-) -> bool {
+    queue: MaintenanceQueue,
+) -> WorkOutcome {
     let queued = Instant::now();
     let mut _migration_slot = None;
     let mut _cycle_slot = None;
-    if prompt {
-        _migration_slot = Some(limits.spec_migration().lock().await);
-    } else {
-        _cycle_slot = Some(limits.maintenance_cycles().acquire().await);
+    match queue {
+        MaintenanceQueue::Migration => {
+            _migration_slot = Some(limits.spec_migration().lock().await);
+        }
+        MaintenanceQueue::Shared => {
+            _cycle_slot = Some(limits.maintenance_cycles().acquire().await);
+        }
     }
     let waited = queued.elapsed();
     if waited >= SLOW_CYCLE_WAIT {
@@ -306,11 +318,11 @@ async fn run_maintenance_cycle(
         force_compact_l0: false,
     };
     match tables.run_work(runtime, cycle).await {
-        Ok(outcome) => outcome.has_more_work(),
+        Ok(outcome) => outcome,
         Err(error) => {
             // A bad input must not turn this into a hot loop.
             tracing::warn!(namespace = %runtime.name(), %error, "scheduled maintenance failed");
-            false
+            WorkOutcome::Complete
         }
     }
 }
