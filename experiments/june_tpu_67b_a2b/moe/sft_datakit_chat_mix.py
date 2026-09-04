@@ -25,7 +25,7 @@ from rigging.log_setup import configure_logging
 
 from experiments.june_tpu_67b_a2b.moe.heuristic_muonh import MoeMuonHHeuristic
 from experiments.june_tpu_67b_a2b.moe.launch_datakit_moe_mix import _TAIL_BUCKETS, _phase_weights
-from experiments.june_tpu_67b_a2b.moe.sft_67b_a2b_2stage import _optimizer
+from experiments.june_tpu_67b_a2b.moe.optimizer import GrugMoeMuonHConfig
 from experiments.june_tpu_67b_a2b.moe.sft_launch import GrugMoeSFTConfig, run_grug_moe_sft_trial
 from experiments.june_tpu_67b_a2b.moe.train import GrugTrainerConfig
 from experiments.marin_tokenizer import marin_tokenizer
@@ -49,6 +49,25 @@ _PRETRAIN_FRACTION = 0.2
 _LONG_CONTEXT_SKEW = 4
 _TOKENIZE_MAX_WORKERS = 64
 _TAIL_BUCKETS_WITHOUT_LONG = frozenset({"c07q3", "c38q1", "c38q3", "c38q4", "c39q0", "c39q1", "c39q2", "c39q3", "c39q4"})
+_SFT_LR = 5e-5
+
+# AdamH is used by the H100 SFT recipe because MuonH's Newton-Schulz workspace is
+# expensive on 80 GB GPUs. On this v4-2048 geometry, however, AdamH's two expert
+# moments make jit__init_state require 253 GiB per 32 GiB chip. The known-good
+# 262K TPU context-extension run uses MuonH, whose single expert momentum fits.
+_OPTIMIZER = GrugMoeMuonHConfig(
+    learning_rate=_SFT_LR,
+    adam_lr=_SFT_LR,
+    beta1=0.9,
+    beta2=0.95,
+    epsilon=1e-8,
+    max_grad_norm=1.0,
+    weight_decay=0.0,
+    min_lr_ratio=0.1,
+    warmup=0.03,
+    lr_schedule="cosine",
+    rmsnorm_to_adam=True,
+)
 
 
 @dataclass(frozen=True)
@@ -185,7 +204,7 @@ def build() -> StepSpec:
                     name=_RUN_NAME.removeprefix("grug/"),
                     tags=["sft", "datakit", "v4-2048", "ctx262k", "sft80-pretrain20"],
                 ),
-                optimizer=_optimizer,
+                optimizer=_OPTIMIZER,
                 init_from_path=_BASE_CHECKPOINT,
                 expert_parallel=1,
                 context_parallel=4,
