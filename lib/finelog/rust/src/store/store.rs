@@ -2050,13 +2050,11 @@ mod tests {
             Some(last_seq)
         );
 
-        // A scan localizes the objects it selected. Deleting the cached file
-        // does not change what the pinned state says is live, and the next scan
-        // fetches it back.
+        // Deleting a cache copy does not change the pinned live set. The scan
+        // reads the remote object while its asynchronous cache fill proceeds.
         std::fs::remove_file(&paths[0]).unwrap();
         assert_eq!(store.query_snapshot("iris.worker").unwrap().paths, paths);
         assert_eq!(scan_table(&store, "iris.worker").await, 2);
-        assert!(Path::new(&paths[0]).exists());
 
         store.shutdown(Duration::from_secs(1)).await;
         std::fs::remove_dir_all(data_dir).ok();
