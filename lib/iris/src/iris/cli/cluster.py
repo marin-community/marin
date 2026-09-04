@@ -38,7 +38,7 @@ from iris.cli.build import (
     get_git_provenance,
 )
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS, require_controller_url, rpc_client_for_ctx
-from iris.cluster.composer import provider_bundle
+from iris.cluster.composer import build_base_worker_config, provider_bundle
 from iris.cluster.config import (
     KUBERNETES_WORKER_RUNTIME,
     make_local_config,
@@ -890,14 +890,16 @@ def cluster_create_slice(ctx, scale_group_name: str):
     slice_config = prepare_slice_config(sg_config.slice_template, sg_config, label_prefix)
     slice_config.labels[labels.iris_manual] = "true"
 
-    # Fold operator-injected env (defaults.inject_env) into task_env so manually
-    # created slices match autoscaler-provisioned workers.
-    base_worker_config = with_injected_task_env(config).defaults.worker.model_copy(deep=True)
-    if not base_worker_config.controller_address:
-        base_worker_config.controller_address = worker_controller_address
-    base_worker_config.platform = config.platform.model_copy(deep=True)
-    if config.storage.remote_state_dir:
-        base_worker_config.storage_prefix = config.storage.remote_state_dir
+    # Build the worker config through the same helper the controller uses, so a
+    # manually created slice matches its autoscaler-provisioned peers.
+    # ``with_injected_task_env`` folds operator-injected env (defaults.inject_env)
+    # into task_env; the worker token is minted controller-side, hence the empty one.
+    base_worker_config = build_base_worker_config(
+        with_injected_task_env(config),
+        controller_address=worker_controller_address,
+        storage_prefix=config.storage.remote_state_dir,
+        auth_token="",
+    )
 
     worker_config = build_worker_config_for_group(base_worker_config, sg_config)
 
@@ -1620,14 +1622,14 @@ def worker_restart(
     if not worker_controller_address:
         worker_controller_address = bundle.controller.discover_controller(config.controller)
 
-    # Fold operator-injected env (defaults.inject_env) into task_env so restarted
-    # workers match autoscaler-provisioned ones.
-    base_worker_config = with_injected_task_env(config).defaults.worker.model_copy(deep=True)
-    if not base_worker_config.controller_address:
-        base_worker_config.controller_address = worker_controller_address
-    base_worker_config.platform = config.platform.model_copy(deep=True)
-    if config.storage.remote_state_dir:
-        base_worker_config.storage_prefix = config.storage.remote_state_dir
+    # Same helper and empty-token rationale as cluster_create_slice, so a
+    # restarted worker matches its autoscaler-provisioned peers.
+    base_worker_config = build_base_worker_config(
+        with_injected_task_env(config),
+        controller_address=worker_controller_address,
+        storage_prefix=config.storage.remote_state_dir,
+        auth_token="",
+    )
 
     scale_groups = dict(config.scale_groups)
 

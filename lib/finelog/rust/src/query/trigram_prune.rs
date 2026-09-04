@@ -34,8 +34,8 @@ use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
 use regex_syntax::hir::{Hir, HirKind};
 use regex_syntax::Parser;
 
-use crate::query::index_cache::IndexCache;
-use crate::store::trigram::{needle_trigrams, MIN_TRIGRAM_LEN};
+use crate::indices::trigram::{needle_trigrams, MIN_TRIGRAM_LEN};
+use crate::indices::{IndexRegistry, SegmentArtifacts};
 
 /// An inclusive key range constraining a single column, distilled from a query's
 /// top-level conjuncts. Used to scope which segments' index sections are read: a
@@ -54,7 +54,7 @@ pub struct StringRange {
 
 /// Inject access plans for already-extracted per-column `needles` (from
 /// [`substring_needles_by_column`]). Does the blocking bundle + footer reads
-/// (routed through the [`IndexCache`] cache), so the provider runs it under
+/// (routed through the registry's parsed-section cache), so the provider runs it under
 /// `spawn_blocking`. `key_ranges` (from [`string_column_ranges`]) scopes which
 /// segments are consulted by key band. Returns `plan` unchanged when `needles`
 /// is empty or nothing prunes.
@@ -63,16 +63,97 @@ pub fn apply_with_needles(
     segment_paths: &[String],
     needles: &HashMap<String, Vec<String>>,
     key_ranges: &HashMap<String, StringRange>,
-    index_cache: &IndexCache,
+    indices: &IndexRegistry,
+    artifacts: &SegmentArtifacts,
 ) -> Arc<dyn ExecutionPlan> {
     if needles.is_empty() {
         return plan;
     }
-    let access_plans = build_access_plans(segment_paths, needles, key_ranges, index_cache);
+    let access_plans = build_access_plans(segment_paths, needles, key_ranges, indices, artifacts);
     if access_plans.is_empty() {
         return plan;
     }
     rewrite_file_groups(plan, &access_plans)
+}
+
+/// Eliminate whole segments whose advertised trigram bundle proves that no row
+/// can satisfy the required string predicates. Missing or uncached artifacts
+/// keep the segment, so this remains a fail-open optimization.
+pub fn prune_segment_paths(
+    segment_paths: &[String],
+    needles: &HashMap<String, Vec<String>>,
+    key_ranges: &HashMap<String, StringRange>,
+    indices: &IndexRegistry,
+    artifacts: &SegmentArtifacts,
+) -> Vec<String> {
+    let trigrams_by_column: HashMap<&str, Vec<Vec<[u8; 3]>>> = needles
+        .iter()
+        .filter_map(|(column, values)| {
+            let trigrams: Vec<_> = values
+                .iter()
+                .filter_map(|value| needle_trigrams(value))
+                .collect();
+            (!trigrams.is_empty()).then_some((column.as_str(), trigrams))
+        })
+        .collect();
+    if trigrams_by_column.is_empty() {
+        return segment_paths.to_vec();
+    }
+
+    let mut pruned = 0usize;
+    let retained = segment_paths
+        .iter()
+        .filter(|path| {
+            let Some(segment_artifacts) = artifacts.get(path.as_str()) else {
+                return true;
+            };
+            let Some(segment) = indices.open_summary(segment_artifacts) else {
+                return true;
+            };
+            let mut combined: Option<Vec<bool>> = None;
+            let mut span_rows = None;
+            for (&column, needle_sets) in &trigrams_by_column {
+                let Some((coverage, index)) = indices.summary_trigram(&segment, column) else {
+                    continue;
+                };
+                if !coverage.key_column.is_empty()
+                    && key_ranges.get(&coverage.key_column).is_some_and(|range| {
+                        !coverage.key_band_overlaps(range.lo.as_deref(), range.hi.as_deref())
+                    })
+                {
+                    pruned += 1;
+                    return false;
+                }
+                if span_rows.is_some_and(|rows| rows != coverage.span_rows)
+                    || combined
+                        .as_ref()
+                        .is_some_and(|mask| mask.len() != coverage.span_count as usize)
+                {
+                    return true;
+                }
+                span_rows = Some(coverage.span_rows);
+                let mask = combined.get_or_insert_with(|| vec![true; coverage.span_count as usize]);
+                for trigrams in needle_sets {
+                    for (keep, matches) in mask.iter_mut().zip(index.keep_mask_for(trigrams)) {
+                        *keep &= matches;
+                    }
+                }
+            }
+            if combined
+                .as_ref()
+                .is_some_and(|mask| mask.iter().all(|keep| !keep))
+            {
+                pruned += 1;
+                return false;
+            }
+            true
+        })
+        .cloned()
+        .collect();
+    if pruned > 0 {
+        tracing::debug!(segments_pruned = pruned, "trigram segment prune");
+    }
+    retained
 }
 
 /// Inclusive per-column key ranges implied by a query's top-level conjuncts.
@@ -225,7 +306,7 @@ fn scalar_function_needles(
     };
     let value = utf8_literal(&sf.args[1])?;
     match sf.func.name() {
-        "contains" => Some((col.name.clone(), vec![value])),
+        "contains" | "prefix" => Some((col.name.clone(), vec![value])),
         "regexp_matches" => Some((col.name.clone(), regex_required_literals(&value))),
         _ => None,
     }
@@ -335,14 +416,15 @@ fn utf8_literal(expr: &Expr) -> Option<String> {
 /// out of scope, nothing pruned) is skipped — the file then scans unpruned,
 /// which is correct.
 ///
-/// Bundle reads go through the store's shared [`IndexCache`], so a repeated
+/// Bundle reads go through the registry's shared parsed-section cache, so a repeated
 /// query reuses parsed blooms and resident bytes stay within the configured
 /// budget.
 fn build_access_plans(
     segment_paths: &[String],
     needles: &HashMap<String, Vec<String>>,
     key_ranges: &HashMap<String, StringRange>,
-    manager: &IndexCache,
+    indices: &IndexRegistry,
+    artifacts: &SegmentArtifacts,
 ) -> HashMap<String, ParquetAccessPlan> {
     // Decompose each constrained column's needles into trigram sets ONCE, not
     // once per segment — a single query commonly spans dozens of segments.
@@ -370,7 +452,7 @@ fn build_access_plans(
         let Some(basename) = p.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
-        let Some(segment) = manager.indexed_segment(p) else {
+        let Some(segment) = indices.open_segment(p, artifacts) else {
             // No valid bundle: expected for L0 or an unindexed namespace.
             // segments. The file just scans unpruned — correct, never a false
             // negative.
@@ -389,7 +471,7 @@ fn build_access_plans(
         let mut span_rows = None;
         let mut applied_any = false;
         for (&col, needle_trigrams) in &trigrams_by_column {
-            let Some((coverage, index)) = manager.get_trigram(p, &segment.header, col) else {
+            let Some((coverage, index)) = indices.trigram(&segment, col) else {
                 continue;
             };
             if !coverage.key_column.is_empty() {
@@ -747,8 +829,8 @@ mod tests {
     /// Write a log segment spanning two index spans (all rows under `key`, the
     /// needle in span 1 only) plus its trigram section; return the segment path.
     fn write_scoping_segment(dir: &std::path::Path, key: &str, needle: &str) -> String {
+        use crate::indices::trigram::SIDECAR_SPAN_ROWS;
         use crate::store::segment::write_segment_to_dir;
-        use crate::store::trigram::SIDECAR_SPAN_ROWS;
         use arrow::array::{Int64Array, StringArray};
         use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
         use arrow::record_batch::RecordBatch;
@@ -773,10 +855,10 @@ mod tests {
         )
         .unwrap();
         let (path, _) = write_segment_to_dir(dir, 1, 1, &batch).unwrap();
-        crate::store::segment_index::write_segment_index(
+        crate::indices::write_segment_index(
             &path,
             std::slice::from_ref(&batch),
-            &crate::store::segment_index::SegmentIndexConfig::from_policies(
+            &crate::indices::SegmentIndexConfig::from_policies(
                 ["data"],
                 &[],
                 &[],
@@ -807,10 +889,11 @@ mod tests {
             "data".to_string(),
             vec!["Bootstrap completed for TPU".to_string()],
         )]);
-        let index_cache = IndexCache::new(16);
+        let indices = crate::indices::test_index_registry();
+        let artifacts = crate::indices::sidecar_artifacts(&paths);
 
         // No key constraint: the needle prunes row group 0, so a plan is produced.
-        let unscoped = build_access_plans(&paths, &needles, &HashMap::new(), &index_cache);
+        let unscoped = build_access_plans(&paths, &needles, &HashMap::new(), &indices, &artifacts);
         assert_eq!(
             unscoped.len(),
             1,
@@ -826,7 +909,7 @@ mod tests {
             },
         )]);
         assert_eq!(
-            build_access_plans(&paths, &needles, &inband, &index_cache).len(),
+            build_access_plans(&paths, &needles, &inband, &indices, &artifacts).len(),
             1
         );
 
@@ -839,7 +922,51 @@ mod tests {
                 hi: Some(b"/zzz9".to_vec()),
             },
         )]);
-        assert!(build_access_plans(&paths, &needles, &out_of_band, &index_cache).is_empty());
+        assert!(
+            build_access_plans(&paths, &needles, &out_of_band, &indices, &artifacts).is_empty()
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_bundle_the_segment_does_not_advertise_is_not_used() {
+        // Sitting beside the Parquet is not membership: pruning uses the bundle
+        // the snapshotted table state names, so a segment with no artifact
+        // reference scans unpruned even though a complete bundle is on disk.
+        let dir = std::env::temp_dir().join(format!(
+            "finelog_prune_unadvertised_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = write_scoping_segment(
+            &dir,
+            "/system/controller",
+            "Bootstrap completed for TPU here",
+        );
+        let paths = vec![path];
+        let needles = HashMap::from([(
+            "data".to_string(),
+            vec!["Bootstrap completed for TPU".to_string()],
+        )]);
+        let indices = crate::indices::test_index_registry();
+
+        let advertised = crate::indices::sidecar_artifacts(&paths);
+        assert_eq!(
+            build_access_plans(&paths, &needles, &HashMap::new(), &indices, &advertised).len(),
+            1
+        );
+        assert!(build_access_plans(
+            &paths,
+            &needles,
+            &HashMap::new(),
+            &indices,
+            &crate::indices::SegmentArtifacts::new(),
+        )
+        .is_empty());
 
         std::fs::remove_dir_all(&dir).ok();
     }

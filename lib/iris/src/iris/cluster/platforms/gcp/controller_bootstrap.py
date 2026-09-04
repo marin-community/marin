@@ -17,6 +17,8 @@ from iris.cluster.config import IrisClusterConfig, assert_no_inlined_secrets, co
 from iris.cluster.platforms.gcp.worker_bootstrap import render_template
 from iris.cluster.runtime.docker import EPHEMERAL_PORT_RANGE
 
+# Docker name the bootstrap script gives the controller container. The lifecycle
+# helpers in platforms/vm_lifecycle.py address the container by this name.
 CONTROLLER_CONTAINER_NAME = "iris-controller"
 
 CONTROLLER_BOOTSTRAP_SCRIPT = """

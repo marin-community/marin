@@ -49,7 +49,7 @@ a training run with no signal that it happened. That is what `iris_state_stale` 
 | `router_bias` | Newest bound over 400 from zero | `train_router_bias_max`, `train_router_bias_min` |
 | `throughput_low` | Most of 15 minutes below 2.0M tokens per second | `throughput_tokens_per_second` |
 | `mfu_low` | Most of 15 minutes below 15% | `throughput_mfu` |
-| `eval_regressed` | Newest evaluation, within 30 minutes, worse than two evaluations ago or over 2% worse than the preceding evaluation | `eval_paloma_macro_loss` |
+| `eval_regressed` | Newest evaluation, within 30 minutes, worse than two evaluations ago or over 2% worse than the preceding evaluation | `eval_dropless_paloma_macro_loss` |
 | `iris_state_stale` | Newest `iris.task_state` row for the root over 5 minutes old | `iris.task_state` |
 | `task_retried` | A controller retry or gang requeue in the last 15 minutes | `iris.task_event` |
 

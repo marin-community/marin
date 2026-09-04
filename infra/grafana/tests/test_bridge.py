@@ -878,7 +878,7 @@ def test_health_alert_reads_routing_throughput_and_evaluation():
             "train_router_bias_max": {"latest": 120.0},
             "throughput_tokens_per_second": {"latest": 1.4e6, "recent_samples": 100, "recent_below_floor": 62},
             "throughput_mfu": {"latest": 31.0, "recent_samples": 100, "recent_below_floor": 4},
-            "eval_paloma_macro_loss": {"latest": 2.31, "previous": 2.17},
+            "eval_dropless_paloma_macro_loss": {"latest": 2.31, "previous": 2.17},
         },
     )
 
@@ -909,7 +909,7 @@ def test_eval_regression_uses_two_eval_history_and_two_percent_jump(
         "previous": previous,
         "two_samples_ago": two_samples_ago,
     }
-    signals = _signals(now, {"eval_paloma_macro_loss": evaluation})
+    signals = _signals(now, {"eval_dropless_paloma_macro_loss": evaluation})
 
     reasons = _reasons(health_alert_rows((_watched(),), signals, pa.table({}), now))
     assert ("eval_regressed" in reasons) is should_alert
@@ -1014,9 +1014,9 @@ def test_signal_query_reduces_the_newest_sample_and_the_health_window():
             ("attempt-1", "optim_skipped_step", 1.0, now - timedelta(minutes=9), 4),
             ("attempt-1", "optim_skipped_step", 1.0, now - timedelta(minutes=2), 5),
             # Hours apart, so only the eval lookback keeps the comparison history.
-            ("attempt-1", "eval_paloma_macro_loss", 2.19, now - timedelta(hours=12), 9),
-            ("attempt-1", "eval_paloma_macro_loss", 2.17, now - timedelta(hours=6), 6),
-            ("attempt-1", "eval_paloma_macro_loss", 2.31, now - timedelta(minutes=12), 7),
+            ("attempt-1", "eval_dropless_paloma_macro_loss", 2.19, now - timedelta(hours=12), 9),
+            ("attempt-1", "eval_dropless_paloma_macro_loss", 2.17, now - timedelta(hours=6), 6),
+            ("attempt-1", "eval_dropless_paloma_macro_loss", 2.31, now - timedelta(minutes=12), 7),
         ]
     )
 
@@ -1027,7 +1027,7 @@ def test_signal_query_reduces_the_newest_sample_and_the_health_window():
     throughput = signals["throughput_tokens_per_second"]
     assert (throughput.latest, throughput.recent_samples, throughput.recent_below_floor) == (2.6e6, 3, 2)
     assert signals["optim_skipped_step"].recent_total == 2.0
-    evaluation = signals["eval_paloma_macro_loss"]
+    evaluation = signals["eval_dropless_paloma_macro_loss"]
     assert (evaluation.latest, evaluation.previous, evaluation.two_samples_ago) == (2.31, 2.17, 2.19)
 
 

@@ -1,0 +1,87 @@
+/* The layout this app adds over the shared tokens and parts. */
+
+.page { max-width: 84rem; margin: 0 auto; padding: 1rem 1.25rem 3rem; }
+
+/* Where the rows on every screen come from, said once under the bar. */
+.where { color: var(--muted); font-size: 0.85rem; margin: 0 0 1.25rem; }
+
+h2 { font-size: 1.25rem; margin: 0 0 0.35rem; overflow-wrap: anywhere; }
+h3 { font-size: 0.78rem; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); margin: 1.4rem 0 0.5rem; }
+
+.controls { display: flex; gap: 0.6rem; flex-wrap: wrap; align-items: center; margin: 0 0 0.9rem; }
+.controls input[type='search'], .controls select {
+  font: inherit;
+  color: var(--ink);
+  background: var(--panel);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius);
+  padding: 0.35rem 0.55rem;
+}
+.controls input[type='search'] { min-width: 16rem; flex: 1; max-width: 28rem; }
+.controls label { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.88rem; color: var(--muted); }
+.controls .tally { color: var(--muted); font-size: 0.85rem; margin-left: auto; font-variant-numeric: tabular-nums; }
+
+.panel { background: var(--panel); border: 1px solid var(--edge); border-radius: var(--radius); padding: 0.9rem 1rem; }
+
+.facts { display: grid; grid-template-columns: max-content 1fr; gap: 0.3rem 1rem; margin: 0; font-size: 0.9rem; }
+.facts dt { color: var(--muted); }
+.facts dd { margin: 0; overflow-wrap: anywhere; }
+
+.review { display: grid; gap: 0.9rem; grid-template-columns: 1fr 1fr; }
+.review p { margin: 0.25rem 0 0; font-size: 0.9rem; }
+@media (max-width: 60rem) { .review { grid-template-columns: 1fr; } }
+
+.tally-row { display: flex; gap: 1.2rem; flex-wrap: wrap; margin: 0 0 1rem; }
+.tally-row .stat { display: flex; flex-direction: column; }
+.tally-row .stat b { font-size: 1.3rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.tally-row .stat span { font-size: 0.78rem; color: var(--muted); }
+
+.more { margin: 0.9rem 0; display: flex; gap: 0.8rem; align-items: center; }
+button.button { font: inherit; background: var(--panel); cursor: pointer; }
+button.button:disabled { color: var(--muted); cursor: default; }
+
+.score { display: inline-flex; gap: 1px; vertical-align: middle; }
+.score i { width: 0.5rem; height: 0.7rem; border-radius: 2px; background: var(--edge); }
+.score i[data-on='true'] { background: var(--mark); }
+.score[data-warn='true'] i[data-on='true'] { background: var(--warn); }
+
+/* A task: the file list beside the file. */
+.task { display: grid; grid-template-columns: 18rem minmax(0, 1fr); gap: 1.25rem; align-items: start; }
+@media (max-width: 60rem) { .task { grid-template-columns: 1fr; } }
+.files { list-style: none; margin: 0; padding: 0; font: 0.84rem var(--mono); }
+.files li a {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.22rem 0.45rem;
+  border-radius: 3px;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.files li a[aria-current='true'] { background: color-mix(in srgb, var(--mark) 12%, transparent); }
+.files li a:hover { text-decoration: none; background: color-mix(in srgb, var(--mark) 7%, transparent); }
+.files li a .num { flex: none; }
+.files li[data-dir='true'] a { color: var(--muted); }
+.viewer { min-width: 0; }
+.viewer .heading { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; margin-bottom: 0.5rem; font: 0.84rem var(--mono); color: var(--muted); }
+.viewer pre {
+  margin: 0;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius);
+  background: var(--panel);
+  font: 0.8rem/1.5 var(--mono);
+  overflow: auto;
+  max-height: 70vh;
+  white-space: pre;
+}
+.viewer pre[data-wrap='true'] { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.label { border-left: 3px solid var(--mark); padding-left: 0.9rem; }
+.label[data-verdict='no'] { border-left-color: var(--warn); }
+.label[data-verdict='partial'] { border-left-color: var(--muted); }
+.label .summary { margin: 0 0 0.5rem; font-size: 0.95rem; }
+.label .tags { display: flex; gap: 0.3rem; flex-wrap: wrap; margin: 0.4rem 0; }
+
+.empty { color: var(--muted); font-size: 0.9rem; padding: 1rem 0; }
+.working { color: var(--muted); font-size: 0.88rem; }

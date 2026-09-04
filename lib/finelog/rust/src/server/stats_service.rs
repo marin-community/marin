@@ -15,27 +15,46 @@ use datafusion::error::DataFusionError;
 use crate::errors::StatsError;
 use crate::policies::{managed_storage_policy_for, registration_namespace_for};
 use crate::proto::finelog::stats::{
-    DropTableResponse, GetTableSchemaResponse, ListNamespacesResponse, NamespaceInfo,
-    OwnedDropTableRequestView, OwnedGetTableSchemaRequestView, OwnedListNamespacesRequestView,
-    OwnedQueryRequestView, OwnedRegisterTableRequestView, OwnedWriteRowsRequestView, QueryResponse,
-    RegisterTableResponse, StatsService, WriteRowsResponse,
+    AbortTableMigrationResponse, DropTableResponse, GetTableSchemaResponse, GetTableStatusResponse,
+    ListNamespacesResponse, NamespaceInfo, OwnedAbortTableMigrationRequestView,
+    OwnedDropTableRequestView, OwnedGetTableSchemaRequestView, OwnedGetTableStatusRequestView,
+    OwnedListNamespacesRequestView, OwnedQueryRequestView, OwnedRegisterTableRequestView,
+    OwnedWriteRowsRequestView, QueryResponse, RegisterTableResponse, StatsService,
+    WriteRowsResponse,
 };
-use crate::query::{make_ctx, query_timeout, run_query_over, truncate_sql_for_log};
+use crate::query::{
+    make_ctx, query_timeout, run_query_over, run_within_query_timeout, truncate_sql_for_log,
+};
 use crate::server::auth::{request_identity, AuthIdentity};
-use crate::server::MAX_MESSAGE_BYTES;
+use crate::server::MAX_QUERY_RESULT_BYTES;
+use crate::store::catalog::SpecLifecycle;
 use crate::store::ipc::encode_ipc;
-use crate::store::namespace::DEFAULT_PERSIST_TIMEOUT;
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{
     ignored_forwarded_schema_columns, schema_from_proto_view, schema_to_proto_owned, Schema,
 };
 use crate::store::store::ForwardedWrite;
+use crate::store::table::ingest::DEFAULT_PERSIST_TIMEOUT;
+use crate::store::table_spec::ValidatedTableSpec;
 use crate::store::Store;
 use crate::telemetry_policy::{is_forwarded_telemetry_namespace, TELEMETRY_NAMESPACE};
+
+/// A per-destination durability wait above this is worth naming in the log:
+/// it points at the table whose flush cadence is holding acks up.
+const SLOW_PERSIST_WARN_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(5);
 
 pub struct StatsServiceImpl {
     store: Arc<Store>,
     ignored_forwarded_telemetry_columns: Mutex<HashSet<String>>,
+}
+
+struct RegistrationOutcome {
+    namespace: String,
+    schema: Schema,
+    policy: StoragePolicy,
+    ignored_columns: Vec<String>,
+    spec_lifecycle: SpecLifecycle,
+    object_backed: bool,
 }
 
 impl StatsServiceImpl {
@@ -141,34 +160,88 @@ impl StatsService for StatsServiceImpl {
             .ok_or_else(|| ConnectError::invalid_argument("schema required"))?;
         let schema: Schema = schema_from_proto_view(schema_view)?;
         let requested_policy = StoragePolicy::from_proto_view(request.storage_policy.as_option());
+        // Managed namespaces own their storage policy; validate the table spec
+        // against the managed policy, not the client's copy, which may lag the
+        // current policy rules (e.g. a legacy table registered under an older
+        // cap). An explicit conflicting local_cache in the spec still fails.
+        let ns = registration_namespace_for(&namespace)?;
+        let policy = managed_storage_policy_for(&ns)?.unwrap_or(requested_policy);
+        let validated_table_spec = request
+            .table_spec
+            .as_option()
+            .map(|view| ValidatedTableSpec::from_view(view, &schema, &policy))
+            .transpose()?;
         let forwarded_telemetry = is_forwarded_telemetry(&ctx, &namespace);
 
         let store = Arc::clone(&self.store);
-        let requested_namespace = namespace.clone();
-        let (effective, effective_policy, ignored_columns) = run_blocking(move || {
-            let ns = registration_namespace_for(&requested_namespace)?;
-            let policy = managed_storage_policy_for(&ns)?.unwrap_or(requested_policy);
+        let outcome = run_blocking(move || {
             if forwarded_telemetry {
+                if validated_table_spec.is_some() {
+                    return Err(StatsError::SchemaValidation(
+                        "forwarded telemetry registration cannot change table_spec".to_string(),
+                    ));
+                }
                 match store.get_table_schema(&ns) {
                     Ok(effective) => {
                         let ignored = ignored_forwarded_schema_columns(&schema, &effective)?;
                         let effective_policy = store.get_policy(&ns)?;
-                        return Ok((effective, effective_policy, ignored));
+                        let spec_lifecycle = store.spec_lifecycle(&ns)?;
+                        return Ok(RegistrationOutcome {
+                            namespace: ns,
+                            schema: effective,
+                            policy: effective_policy,
+                            ignored_columns: ignored,
+                            spec_lifecycle,
+                            object_backed: false,
+                        });
                     }
                     Err(StatsError::NamespaceNotFound(_)) => {}
                     Err(error) => return Err(error),
                 }
             }
+            if let Some(validated) = validated_table_spec {
+                if validated.cache_policy != policy {
+                    return Err(StatsError::SchemaValidation(
+                        "table_spec local_cache does not match the server-managed storage policy"
+                            .to_string(),
+                    ));
+                }
+                let registration = store.register_versioned_table(&ns, validated)?;
+                return Ok(RegistrationOutcome {
+                    namespace: ns,
+                    schema: registration.schema,
+                    policy: registration.policy,
+                    ignored_columns: Vec::new(),
+                    spec_lifecycle: registration.spec_lifecycle,
+                    object_backed: registration.object_backed,
+                });
+            }
             let effective = store.register_table(&ns, schema, policy)?;
             let effective_policy = store.get_policy(&ns)?;
-            Ok((effective, effective_policy, Vec::new()))
+            let spec_lifecycle = store.spec_lifecycle(&ns)?;
+            Ok(RegistrationOutcome {
+                namespace: ns,
+                schema: effective,
+                policy: effective_policy,
+                ignored_columns: Vec::new(),
+                spec_lifecycle,
+                object_backed: false,
+            })
         })
         .await?;
-        self.report_ignored_forwarded_telemetry_columns(ignored_columns);
+        self.report_ignored_forwarded_telemetry_columns(outcome.ignored_columns);
+        if outcome.object_backed {
+            self.store
+                .publish_object_catalog(&outcome.namespace)
+                .await?;
+        }
 
         connectrpc::Response::ok(RegisterTableResponse {
-            effective_schema: MessageField::some(schema_to_proto_owned(&effective)),
-            effective_policy: MessageField::some(effective_policy.to_proto_owned()),
+            effective_schema: MessageField::some(schema_to_proto_owned(&outcome.schema)),
+            effective_policy: MessageField::some(outcome.policy.to_proto_owned()),
+            active_table_spec_version: Some(outcome.spec_lifecycle.active_version()),
+            desired_table_spec_version: Some(outcome.spec_lifecycle.desired_version()),
+            transition_phase: Some(outcome.spec_lifecycle.phase.into()),
             ..Default::default()
         })
     }
@@ -215,12 +288,31 @@ impl StatsService for StatsServiceImpl {
 
         // The server does not auto-cancel on the client deadline; enforce the
         // durability await ourselves, bounded by the remaining budget (falling
-        // back to DEFAULT_PERSIST_TIMEOUT).
-        for (destination, last_seq) in persisted_targets {
-            let budget = ctx.time_remaining().unwrap_or(DEFAULT_PERSIST_TIMEOUT);
-            self.store
-                .await_persisted(&destination, last_seq, budget)
-                .await?;
+        // back to DEFAULT_PERSIST_TIMEOUT). A forwarded telemetry batch fans
+        // out to many namespaces whose flushes run independently, so the waits
+        // run concurrently: the ack costs the slowest destination, not the sum.
+        let budget = ctx.time_remaining().unwrap_or(DEFAULT_PERSIST_TIMEOUT);
+        let waits = persisted_targets
+            .into_iter()
+            .map(|(destination, last_seq)| {
+                let store = Arc::clone(&self.store);
+                async move {
+                    let started = std::time::Instant::now();
+                    store
+                        .await_persisted(&destination, last_seq, budget)
+                        .await?;
+                    Ok::<_, StatsError>((destination, started.elapsed()))
+                }
+            });
+        let waited = futures::future::try_join_all(waits).await?;
+        if let Some((destination, wait)) = waited.iter().max_by_key(|(_, wait)| *wait) {
+            if *wait > SLOW_PERSIST_WARN_THRESHOLD {
+                tracing::warn!(
+                    namespace = %destination,
+                    waited_ms = wait.as_millis() as u64,
+                    "write ack waited on this destination's flush"
+                );
+            }
         }
 
         connectrpc::Response::ok(WriteRowsResponse::default().with_rows_written(rows_written))
@@ -239,10 +331,14 @@ impl StatsService for StatsServiceImpl {
         // concurrent drop_table / compaction from unlinking a file mid-scan.
         let _read_guard = self.store.query_visibility().read().await;
 
-        // Snapshot every live namespace (schema + sealed-segment paths) under
-        // the engine locks on the blocking pool.
+        // Plan every live namespace from its pinned state (schema, bounds,
+        // partitions, exact object references) on the blocking pool. Objects are
+        // localized later, and only for the segments the scan selects.
         let store = Arc::clone(&self.store);
         let providers = run_blocking(move || store.query_providers()).await?;
+        // Object-backed tables bound the read themselves; that bound cannot be
+        // configured away.
+        let table_bound = self.store.object_query_bound();
 
         // DataFusion schedules its own CPU tasks; await sql()/collect() directly
         // (no spawn_blocking). Errors map by variant: parse/plan/schema/catalog
@@ -253,34 +349,33 @@ impl StatsService for StatsServiceImpl {
         // scan), so a timed-out caller cannot leave CPU work behind.
         let query_ctx = make_ctx();
         let query = run_query_over(&query_ctx, providers, &sql);
-        let result = match query_timeout(ctx.time_remaining()) {
-            Some(deadline) => match tokio::time::timeout(deadline, query).await {
-                Ok(r) => r.map_err(map_query_error)?,
-                Err(_elapsed) => {
-                    tracing::warn!(
-                        deadline_ms = deadline.as_millis() as u64,
-                        sql = %truncate_sql_for_log(&sql),
-                        "query aborted: exceeded deadline",
-                    );
-                    return Err(ConnectError::deadline_exceeded(format!(
-                        "query exceeded deadline of {} ms",
-                        deadline.as_millis()
-                    )));
-                }
+        let result = run_within_query_timeout(
+            query_timeout(ctx.time_remaining(), table_bound),
+            query,
+            |timeout| {
+                tracing::warn!(
+                    deadline_ms = timeout.as_millis() as u64,
+                    sql = %truncate_sql_for_log(&sql),
+                    "query aborted: exceeded deadline",
+                );
+                ConnectError::deadline_exceeded(format!(
+                    "query exceeded deadline of {} ms",
+                    timeout.as_millis()
+                ))
             },
-            None => query.await.map_err(map_query_error)?,
-        };
+            map_query_error,
+        )
+        .await?;
 
         let row_count: i64 = result.batches.iter().map(|b| b.num_rows() as i64).sum();
         // The schema is captured from the planned DataFrame, so an empty result
         // still emits the correct typed schema (the typed-empty contract).
         let buf = encode_ipc(&result.schema, &result.batches)
             .map_err(|e| ConnectError::internal(format!("encode query result: {e}")))?;
-        // No server-side row cap; the only result bound is the 64MB transport
-        // message limit -> resource_exhausted.
-        if buf.len() > MAX_MESSAGE_BYTES {
+        // No server-side row cap; the result-size limit maps to resource_exhausted.
+        if buf.len() > MAX_QUERY_RESULT_BYTES {
             return Err(ConnectError::resource_exhausted(format!(
-                "query result {} bytes exceeds {MAX_MESSAGE_BYTES} message limit",
+                "query result {} bytes exceeds {MAX_QUERY_RESULT_BYTES} message limit",
                 buf.len()
             )));
         }
@@ -352,6 +447,55 @@ impl StatsService for StatsServiceImpl {
         let schema = run_blocking(move || store.get_table_schema(&namespace)).await?;
         connectrpc::Response::ok(GetTableSchemaResponse {
             schema: MessageField::some(schema_to_proto_owned(&schema)),
+            ..Default::default()
+        })
+    }
+
+    async fn get_table_status(
+        &self,
+        _ctx: RequestContext,
+        request: OwnedGetTableStatusRequestView,
+    ) -> ServiceResult<GetTableStatusResponse> {
+        let namespace = request
+            .namespace
+            .ok_or_else(|| ConnectError::invalid_argument("namespace required"))?
+            .to_string();
+        let store = Arc::clone(&self.store);
+        let blocked_error = store.blocked_migration_error(&namespace);
+        let status = run_blocking(move || store.spec_lifecycle(&namespace)).await?;
+        connectrpc::Response::ok(GetTableStatusResponse {
+            migration_blocked: Some(blocked_error.is_some()),
+            migration_error: Some(blocked_error.unwrap_or_default()),
+            active_table_spec: status
+                .active
+                .map(MessageField::some)
+                .unwrap_or_else(MessageField::none),
+            desired_table_spec: status
+                .desired
+                .map(MessageField::some)
+                .unwrap_or_else(MessageField::none),
+            migration: status
+                .migration
+                .map(MessageField::some)
+                .unwrap_or_else(MessageField::none),
+            catalog_generation: Some(status.catalog_generation),
+            ..Default::default()
+        })
+    }
+
+    async fn abort_table_migration(
+        &self,
+        _ctx: RequestContext,
+        request: OwnedAbortTableMigrationRequestView,
+    ) -> ServiceResult<AbortTableMigrationResponse> {
+        let namespace = request
+            .namespace
+            .ok_or_else(|| ConnectError::invalid_argument("namespace required"))?
+            .to_string();
+        let status = self.store.abort_table_migration(&namespace).await?;
+        connectrpc::Response::ok(AbortTableMigrationResponse {
+            catalog_generation: Some(status.catalog_generation),
+            active_table_spec_version: Some(status.active_version()),
             ..Default::default()
         })
     }

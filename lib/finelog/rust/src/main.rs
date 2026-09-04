@@ -11,14 +11,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use clap::{Parser, ValueEnum};
+use finelog::indices::cache::DEFAULT_INDEX_CACHE_MB;
 use finelog::migrations::telemetry_v1::ensure_dual_write_fence;
 use finelog::query::configure_query_runtime;
-use finelog::query::index_cache::DEFAULT_INDEX_CACHE_MB;
 use finelog::server::diagnostics::spawn_pool_diagnostics;
 use finelog::server::{
     build_app_with_config, spawn_forwarder, AuthPolicy, Forwarder, ForwardingConfig, ServerConfig,
 };
-use finelog::store::remote::is_object_store;
+use finelog::store::object_store::is_object_store;
 use finelog::store::{ServeMode, Store, TelemetryRootWriteMode};
 use tokio::sync::Notify;
 
@@ -79,6 +79,13 @@ struct Args {
         default_value_t = NonZeroUsize::new(DEFAULT_INDEX_CACHE_MB).unwrap()
     )]
     index_cache_mb: NonZeroUsize,
+
+    /// Local object-cache capacity in GiB. When set, maintenance evicts
+    /// least-recently-used cached objects beyond this size; unset retains
+    /// everything (an evicted object re-materializes from the remote on the
+    /// next read that selects it).
+    #[arg(long, env = "FINELOG_OBJECT_CACHE_GB")]
+    object_cache_gb: Option<NonZeroUsize>,
 
     /// Mount the NON-proto test-only `/debug/*` admin routes (maintain/segments).
     /// Off the frozen contract; used only by the parity harness. Never set in
@@ -154,15 +161,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         TelemetryMigrationMode::DualWrite => TelemetryRootWriteMode::MirrorRoot,
     };
     let store = Arc::new(
-        Store::new_with_telemetry_root_write_mode(
+        Store::open(
             store_dir.clone(),
             args.remote_log_dir.clone(),
             args.index_cache_mb.get(),
             mode,
             telemetry_root_write_mode,
+            args.object_cache_gb
+                .map(|gib| gib.get() as u64 * 1024 * 1024 * 1024),
+            None,
         )
         .map_err(|e| format!("failed to open store: {e}"))?,
     );
+    let loaded_object_tables = store
+        .recover_tables()
+        .await
+        .map_err(|e| format!("failed to recover table state: {e}"))?;
+    if loaded_object_tables > 0 {
+        tracing::info!(
+            namespaces = loaded_object_tables,
+            "recovered table state before serving"
+        );
+    }
     if args.telemetry_migration_mode == TelemetryMigrationMode::DualWrite {
         let store_dir = store_dir
             .as_deref()

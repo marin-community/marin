@@ -5,7 +5,8 @@
 //! - `SchemaConflict` / `BatchSchemaConflict` -> `failed_precondition`
 //! - `SchemaValidation` / `InvalidNamespace` -> `invalid_argument`
 //! - `NamespaceNotFound` -> `not_found`
-//! - `ResourceExhausted` -> `resource_exhausted`
+//! - `QueryResultTooLarge` / `ResourceExhausted` -> `resource_exhausted`
+//! - `AmbiguousCommit` -> `unavailable`
 //! - `Internal` -> `internal`
 
 use connectrpc::ConnectError;
@@ -31,6 +32,10 @@ pub enum StatsError {
     ResourceExhausted(String),
     /// A durability await exceeded its budget (write not durable in time).
     DeadlineExceeded(String),
+    /// A conditional write reported neither success nor a precondition
+    /// failure, so the backend may or may not have applied it. Callers resolve
+    /// the outcome by re-reading the pointer they tried to swap.
+    AmbiguousCommit(String),
     /// Unexpected internal failure.
     Internal(String),
 }
@@ -45,6 +50,7 @@ impl std::fmt::Display for StatsError {
             StatsError::NamespaceNotFound(m) => write!(f, "{m}"),
             StatsError::ResourceExhausted(m) => write!(f, "{m}"),
             StatsError::DeadlineExceeded(m) => write!(f, "{m}"),
+            StatsError::AmbiguousCommit(m) => write!(f, "{m}"),
             StatsError::Internal(m) => write!(f, "{m}"),
         }
     }
@@ -62,6 +68,7 @@ impl From<StatsError> for ConnectError {
             StatsError::NamespaceNotFound(m) => ConnectError::not_found(m),
             StatsError::ResourceExhausted(m) => ConnectError::resource_exhausted(m),
             StatsError::DeadlineExceeded(m) => ConnectError::deadline_exceeded(m),
+            StatsError::AmbiguousCommit(m) => ConnectError::unavailable(m),
             StatsError::Internal(m) => ConnectError::internal(m),
         }
     }
@@ -113,6 +120,14 @@ mod tests {
         assert_eq!(
             code_of(StatsError::ResourceExhausted("x".into())),
             ErrorCode::ResourceExhausted
+        );
+    }
+
+    #[test]
+    fn ambiguous_commit_maps_to_unavailable() {
+        assert_eq!(
+            code_of(StatsError::AmbiguousCommit("x".into())),
+            ErrorCode::Unavailable
         );
     }
 

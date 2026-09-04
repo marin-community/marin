@@ -15,7 +15,7 @@ use crate::server::auth::{AuthIdentity, AuthPolicy};
 use crate::server::telemetry::telemetry_schema;
 use crate::server::test_support::{
     client, disk_store, serve, serve_rejecting, serve_schema_conflict, serve_unavailable,
-    stats_client, RequestStats, TestTransport, PRIV_A, PRIV_UNTRUSTED, PUB_A,
+    serve_with_outage, stats_client, RequestStats, TestTransport, PRIV_A, PRIV_UNTRUSTED, PUB_A,
 };
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{Column, Schema};
@@ -120,9 +120,10 @@ impl Fixture {
     }
 
     /// Point `namespace`'s watermark below every row, so a forward drains it whole.
-    fn forward_from_start(&self, namespace: &str) {
+    async fn forward_from_start(&self, namespace: &str) {
         self.source
             .set_forward_cursor(&self.target_url, namespace, 0)
+            .await
             .unwrap();
     }
 
@@ -451,7 +452,7 @@ async fn fresh_remote_store_forwarder_registers_progress_without_panicking() {
         Store::new(
             Some(local_dir),
             remote_dir.to_string_lossy().into_owned(),
-            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
             crate::store::ServeMode::Live,
         )
         .unwrap(),
@@ -620,7 +621,7 @@ fn chunk_by_bytes_shrinks_an_estimate_that_encodes_over_budget() {
 }
 
 #[test]
-fn one_telemetry_sized_read_turn_fits_one_parallel_wave() {
+fn one_telemetry_sized_read_turn_fits_one_request() {
     let rows = FORWARD_BATCH_ROWS as usize;
     let row = "x".repeat(TELEMETRY_ROW_BYTES);
     let batch = RecordBatch::try_new(
@@ -636,15 +637,7 @@ fn one_telemetry_sized_read_turn_fits_one_parallel_wave() {
 
     let chunks = chunk_by_bytes(&batch, &seqs, FORWARD_BATCH_BYTES).unwrap();
 
-    assert!(
-        chunks.len() <= FORWARD_CHUNK_CONCURRENCY,
-        "chunks: {:?}",
-        chunks
-            .iter()
-            .map(|(ipc, seq)| (ipc.len(), seq))
-            .collect::<Vec<_>>()
-    );
-    assert!(chunks.len() > 1, "the fixture must exercise byte chunking");
+    assert_eq!(chunks.len(), 1);
     assert!(chunks
         .iter()
         .all(|(ipc, _)| ipc.len() <= FORWARD_BATCH_BYTES));
@@ -664,7 +657,7 @@ async fn drains_a_startup_backlog_of_many_keys_in_one_request() {
     for key in ["/user/job/task-a", "/user/job/task-b", "/system/worker/1"] {
         push(&fx.source_client, key, &["first", "second"]).await;
     }
-    fx.forward_from_start(LOG_NAMESPACE_NAME);
+    fx.forward_from_start(LOG_NAMESPACE_NAME).await;
     let requests_before = fx.requests();
 
     fx.drain(PRIV_A, LOG_NAMESPACE_NAME).await;
@@ -697,7 +690,7 @@ async fn forwarded_rows_carry_the_origin_cluster_of_the_store_that_sent_them() {
     // `cluster` column on the way out.
     let fx = Fixture::new("stamp").await;
     push(&fx.source_client, "/user/job/t", &["hello"]).await;
-    fx.forward_from_start(LOG_NAMESPACE_NAME);
+    fx.forward_from_start(LOG_NAMESPACE_NAME).await;
     fx.drain(PRIV_A, LOG_NAMESPACE_NAME).await;
 
     let entries = client(fx.target_addr)
@@ -765,7 +758,7 @@ async fn forwarded_telemetry_ignores_candidate_only_nullable_columns() {
         .await_persisted(namespace, last_seq, Duration::from_secs(5))
         .await
         .unwrap();
-    fx.forward_from_start(namespace);
+    fx.forward_from_start(namespace).await;
 
     fx.drain(PRIV_A, namespace).await;
 
@@ -782,7 +775,7 @@ async fn forwarded_telemetry_ignores_candidate_only_nullable_columns() {
 async fn forwarded_root_telemetry_registers_an_unseen_semantic_namespace() {
     let fx = Fixture::new("telemetry-unseen-service").await;
     write_root_telemetry(&fx.source, "batch", "queue_depth").await;
-    fx.forward_from_start(TELEMETRY_NAMESPACE);
+    fx.forward_from_start(TELEMETRY_NAMESPACE).await;
 
     fx.drain(PRIV_A, TELEMETRY_NAMESPACE).await;
 
@@ -817,8 +810,8 @@ async fn concurrent_forwarders_share_one_unseen_semantic_namespace_engine() {
     .await;
     write_root_telemetry(&fx_a.source, "batch-a", "queue_a").await;
     write_root_telemetry(&fx_b.source, "batch-b", "queue_b").await;
-    fx_a.forward_from_start(TELEMETRY_NAMESPACE);
-    fx_b.forward_from_start(TELEMETRY_NAMESPACE);
+    fx_a.forward_from_start(TELEMETRY_NAMESPACE).await;
+    fx_b.forward_from_start(TELEMETRY_NAMESPACE).await;
 
     tokio::join!(
         fx_a.drain(PRIV_A, TELEMETRY_NAMESPACE),
@@ -839,7 +832,7 @@ async fn a_bearer_the_hub_does_not_trust_forwards_nothing_and_loses_nothing() {
     // owed, and the local store still serves them.
     let fx = Fixture::new("reject").await;
     push(&fx.source_client, "/user/job/t", &["hello"]).await;
-    fx.forward_from_start(LOG_NAMESPACE_NAME);
+    fx.forward_from_start(LOG_NAMESPACE_NAME).await;
 
     let running = RunningForwarder::start(fx.forwarder(PRIV_UNTRUSTED));
     // Wait for the push to REACH the hub. Stopping on a timer instead would let a
@@ -859,7 +852,7 @@ async fn a_bearer_the_hub_does_not_trust_forwards_nothing_and_loses_nothing() {
 async fn a_batch_the_hub_calls_malformed_is_dropped() {
     let fx = Fixture::with_rejecting_hub("poison").await;
     push(&fx.source_client, "/user/job/t", &["hello"]).await;
-    fx.forward_from_start(LOG_NAMESPACE_NAME);
+    fx.forward_from_start(LOG_NAMESPACE_NAME).await;
 
     let forwarder = fx.forwarder(PRIV_A);
     let mut progress = Progress::new();
@@ -907,7 +900,7 @@ async fn a_batch_the_hub_calls_malformed_is_dropped() {
 async fn a_batch_that_conflicts_with_the_hub_schema_stays_owed() {
     let fx = Fixture::with_schema_conflict_hub("schema-conflict").await;
     push(&fx.source_client, "/user/job/t", &["hello"]).await;
-    fx.forward_from_start(LOG_NAMESPACE_NAME);
+    fx.forward_from_start(LOG_NAMESPACE_NAME).await;
 
     let forwarder = fx.forwarder(PRIV_A);
     let mut progress = Progress::new();
@@ -927,10 +920,10 @@ async fn forwarding_progress_telemetry_reaches_the_hub() {
     let fx = Fixture::new("forwarding-progress").await;
     let forwarder = fx.forwarder(PRIV_A);
     forwarder.ensure_progress_namespace().await.unwrap();
-    fx.forward_from_start(FINELOG_NAMESPACE);
+    fx.forward_from_start(FINELOG_NAMESPACE).await;
 
     push(&fx.source_client, "/user/job/t", &["hello"]).await;
-    fx.forward_from_start(LOG_NAMESPACE_NAME);
+    fx.forward_from_start(LOG_NAMESPACE_NAME).await;
     let mut progress = Progress::new();
     progress.last_report = Instant::now() - PROGRESS_INTERVAL;
     let (_stop_tx, mut stop) = watch::channel(false);
@@ -959,8 +952,8 @@ async fn three_retryable_push_failures_yield_to_the_next_namespace() {
     let fx = Fixture::with_unavailable_hub("unavailable").await;
     push(&fx.source_client, "/user/job/t", &["hello"]).await;
     write_id_rows(&fx.source, "events", 1).await;
-    fx.forward_from_start(LOG_NAMESPACE_NAME);
-    fx.forward_from_start("events");
+    fx.forward_from_start(LOG_NAMESPACE_NAME).await;
+    fx.forward_from_start("events").await;
 
     let forwarder = fx.forwarder(PRIV_A);
     let mut progress = Progress::new();
@@ -1033,7 +1026,7 @@ async fn rows_that_already_carry_an_origin_cluster_are_never_re_forwarded() {
         .await
         .unwrap();
     push(&fx.source_client, "/user/job/t", &["local"]).await;
-    fx.forward_from_start(LOG_NAMESPACE_NAME);
+    fx.forward_from_start(LOG_NAMESPACE_NAME).await;
     fx.drain(PRIV_A, LOG_NAMESPACE_NAME).await;
 
     assert_eq!(
@@ -1050,6 +1043,7 @@ async fn a_watermark_ahead_of_the_store_reseeds_at_the_tip() {
     push(&fx.source_client, "/user/job/t", &["one"]).await;
     fx.source
         .set_forward_cursor(&fx.target_url, LOG_NAMESPACE_NAME, 10_000)
+        .await
         .unwrap();
 
     fx.drain(PRIV_A, LOG_NAMESPACE_NAME).await;
@@ -1066,7 +1060,7 @@ async fn a_backlog_beyond_the_warning_threshold_is_drained_without_loss() {
         &["one", "two", "three", "four"],
     )
     .await;
-    fx.forward_from_start(LOG_NAMESPACE_NAME);
+    fx.forward_from_start(LOG_NAMESPACE_NAME).await;
 
     let mut forwarder = fx.forwarder(PRIV_A);
     forwarder.lag_warning_seqs = 2;
@@ -1095,8 +1089,8 @@ async fn a_busy_namespace_yields_before_the_next_namespace_is_forwarded() {
     let fx = Fixture::new("fairness").await;
     write_id_rows(&fx.source, "busy", FORWARD_BATCH_ROWS as usize + 1).await;
     write_id_rows(&fx.source, "urgent", 1).await;
-    fx.forward_from_start("busy");
-    fx.forward_from_start("urgent");
+    fx.forward_from_start("busy").await;
+    fx.forward_from_start("urgent").await;
 
     let forwarder = fx.forwarder(PRIV_A);
     let mut progress = Progress::new();
@@ -1121,7 +1115,7 @@ async fn a_busy_namespace_yields_before_the_next_namespace_is_forwarded() {
 async fn a_dense_backlog_is_forwarded_in_one_read_batch() {
     let fx = Fixture::new("large-batch").await;
     write_id_rows(&fx.source, "events", FORWARD_BATCH_ROWS as usize).await;
-    fx.forward_from_start("events");
+    fx.forward_from_start("events").await;
     let requests_before = fx.requests();
     let zstd_before = fx.zstd_requests();
 
@@ -1142,13 +1136,14 @@ async fn a_dense_backlog_is_forwarded_in_one_read_batch() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn telemetry_sized_chunks_are_delivered_concurrently_without_loss() {
     let fx = Fixture::new("concurrent-chunks").await;
+    let row_bytes = FORWARD_BATCH_BYTES / FORWARD_BATCH_ROWS as usize + 64;
     write_string_rows(
         &fx.source,
         "telemetry",
-        vec!["x".repeat(TELEMETRY_ROW_BYTES); FORWARD_BATCH_ROWS as usize],
+        vec!["x".repeat(row_bytes); FORWARD_BATCH_ROWS as usize],
     )
     .await;
-    fx.forward_from_start("telemetry");
+    fx.forward_from_start("telemetry").await;
 
     fx.drain(PRIV_A, "telemetry").await;
 
@@ -1179,7 +1174,7 @@ async fn a_non_log_table_is_registered_on_the_hub_and_stamped_with_its_origin() 
     // The producer declares `id` only; `cluster` is added implicitly at registration.
     write_id_rows(&fx.source, "events", 2).await;
 
-    fx.forward_from_start("events");
+    fx.forward_from_start("events").await;
     fx.drain(PRIV_A, "events").await;
 
     let stats = fx.target_store().list_namespaces_with_stats().unwrap();
@@ -1203,7 +1198,7 @@ async fn a_non_log_table_is_registered_on_the_hub_and_stamped_with_its_origin() 
 async fn schema_evolution_is_registered_before_forwarding_new_rows() {
     let fx = Fixture::new("schema-evolution").await;
     write_id_rows(&fx.source, "events", 1).await;
-    fx.forward_from_start("events");
+    fx.forward_from_start("events").await;
 
     let forwarder = fx.forwarder(PRIV_A);
     let mut progress = Progress::new();
@@ -1257,4 +1252,331 @@ async fn schema_evolution_is_registered_before_forwarding_new_rows() {
         .2
         .row_count;
     assert_eq!(target_rows, 2);
+}
+
+// -------------------------------------------------------------------------------------
+// Journeys: the forwarding failure points rollouts keep hitting, in a box.
+
+/// A hub outage mid-stream: rounds against the dead hub leave the watermark
+/// untouched, and once the hub returns at the same address the next drain
+/// delivers everything written before and during the outage exactly once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_hub_outage_holds_the_cursor_and_recovery_delivers_every_row_once() {
+    use std::sync::atomic::Ordering;
+
+    let target = disk_store("hub_outage_target");
+    let (target_addr, target_requests, outage) =
+        serve_with_outage(Arc::clone(&target), hub_policy(SOURCE_CLUSTER)).await;
+    let fx = Fixture::with_hub("hub_outage", Some(target), target_addr, target_requests).await;
+    push(&fx.source_client, "/user/job/t", &["before-outage"]).await;
+    fx.forward_from_start(LOG_NAMESPACE_NAME).await;
+
+    outage.store(true, Ordering::SeqCst);
+    let forwarder = fx.forwarder(PRIV_A);
+    let mut progress = Progress::new();
+    let (_stop_tx, mut stop) = watch::channel(false);
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        forwarder.forward_round(&mut progress, &mut stop),
+    )
+    .await
+    .expect("an unreachable hub must yield the round, not wedge it");
+    assert_eq!(
+        fx.cursor(LOG_NAMESPACE_NAME),
+        Some(0),
+        "a failed push must not advance the watermark"
+    );
+
+    // Rows written during the outage queue behind the watermark.
+    push(&fx.source_client, "/user/job/t", &["during-outage"]).await;
+    outage.store(false, Ordering::SeqCst);
+    fx.drain(PRIV_A, LOG_NAMESPACE_NAME).await;
+
+    wait_for_hub_log_rows(
+        &fx,
+        &[
+            ("/user/job/t", "before-outage"),
+            ("/user/job/t", "during-outage"),
+        ],
+    )
+    .await;
+    assert_eq!(
+        fx.cursor(LOG_NAMESPACE_NAME),
+        Some(fx.tip(LOG_NAMESPACE_NAME))
+    );
+}
+
+/// The [`write_id_rows`] schema as a version-1 object-backed spec, for a source
+/// that migrates a forwarded table mid-stream.
+fn id_object_spec() -> crate::store::table_spec::ValidatedTableSpec {
+    use crate::proto::finelog::stats::{
+        L0Mode, OperatingPolicy, RemoteRetentionPolicy, SourceLayout, TableSpec, TableSpecView,
+    };
+    use buffa::{Message, MessageField, MessageView};
+
+    let schema = Schema::new(
+        vec![Column::new("id", ColumnType::COLUMN_TYPE_STRING, false)],
+        "id",
+    );
+    let spec = TableSpec {
+        version: Some(1),
+        logical_schema: MessageField::some(crate::store::schema::schema_to_proto_owned(&schema)),
+        source_layout: MessageField::some(SourceLayout::default()),
+        operating_policy: MessageField::some(OperatingPolicy {
+            l0_mode: Some(L0Mode::L0_MODE_OBJECT_STORE.into()),
+            remote_retention: MessageField::some(RemoteRetentionPolicy {
+                retain_forever: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let encoded = spec.encode_to_vec();
+    let view = TableSpecView::decode_view(&encoded).unwrap();
+    crate::store::table_spec::ValidatedTableSpec::from_view(
+        &view,
+        &schema,
+        &StoragePolicy::default(),
+    )
+    .unwrap()
+}
+
+/// As [`write_id_rows`], but for a store with no background maintenance: one
+/// explicit round makes the rows durable. Returns the last written seq.
+async fn durable_id_rows(store: &Store, namespace: &str, ids: std::ops::Range<usize>) -> i64 {
+    let arrow_schema = Arc::new(ArrowSchema::new(vec![Field::new(
+        "id",
+        DataType::Utf8,
+        false,
+    )]));
+    let batch = RecordBatch::try_new(
+        arrow_schema,
+        vec![Arc::new(StringArray::from(
+            ids.map(|row| row.to_string()).collect::<Vec<_>>(),
+        ))],
+    )
+    .unwrap();
+    let ipc = encode_ipc(&batch.schema(), &[batch]).unwrap();
+    let (_, last_seq) = store.write_rows(namespace, &ipc, None).unwrap();
+    store.maintain_namespace(namespace, false).await.unwrap();
+    store
+        .await_persisted(namespace, last_seq, Duration::from_secs(5))
+        .await
+        .unwrap();
+    last_seq
+}
+
+/// Restarting the forwarding node mid-migration loses nothing: the forward
+/// watermark and the migration checkpoint are both durable, so the reopened
+/// store finishes the migration and resumes shipping from where it stopped,
+/// and the hub converges to every source row exactly once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_restart_mid_migration_resumes_forwarding_from_the_durable_cursor() {
+    const EVENTS: &str = "events";
+    let target = disk_store("restart_migration_target");
+    let (target_addr, _target_requests) =
+        serve(Arc::clone(&target), hub_policy(SOURCE_CLUSTER)).await;
+    let target_url = format!("http://{target_addr}");
+
+    // A source over durable directories, reopened across the restart. Shadow
+    // mode runs no background maintenance, so the migration advances only when
+    // this test says so.
+    let data_dir = crate::test_support::unique_dir("restart_migration_data");
+    let remote_dir = crate::test_support::unique_dir("restart_migration_remote");
+    let open_source = || {
+        Arc::new(
+            Store::new(
+                Some(data_dir.clone()),
+                remote_dir.to_string_lossy().into_owned(),
+                crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+                crate::store::ServeMode::Shadow,
+            )
+            .unwrap(),
+        )
+    };
+    let forwarder_for = |source: &Arc<Store>| {
+        let config = ForwardingConfig {
+            target: target_url.clone(),
+            cluster: SOURCE_CLUSTER.to_string(),
+        };
+        let minter = TokenMinter::new(PRIV_A, config.cluster.clone()).unwrap();
+        Forwarder::with_client(
+            Arc::clone(source),
+            config,
+            minter,
+            stats_client(target_addr),
+        )
+    };
+
+    // First life: ship forty rows, land twenty more, then start the object
+    // migration and stop the node before it can activate.
+    let source = open_source();
+    source
+        .register_table(
+            EVENTS,
+            Schema::new(
+                vec![Column::new("id", ColumnType::COLUMN_TYPE_STRING, false)],
+                "id",
+            ),
+            StoragePolicy::default(),
+        )
+        .unwrap();
+    let shipped_tip = durable_id_rows(&source, EVENTS, 0..40).await;
+    source
+        .set_forward_cursor(&target_url, EVENTS, 0)
+        .await
+        .unwrap();
+    forward_until(
+        forwarder_for(&source),
+        &source,
+        &target_url,
+        EVENTS,
+        shipped_tip,
+    )
+    .await;
+    let unshipped_tip = durable_id_rows(&source, EVENTS, 40..60).await;
+
+    source
+        .register_versioned_table(EVENTS, id_object_spec())
+        .unwrap();
+    source.publish_object_catalog(EVENTS).await.unwrap();
+    assert_eq!(
+        source.spec_lifecycle(EVENTS).unwrap().active_version(),
+        0,
+        "the restart must land mid-migration, before activation"
+    );
+    source.shutdown(Duration::from_secs(1)).await;
+    drop(source);
+
+    // Second life: the watermark survived, the migration runs to activation,
+    // and forwarding resumes from it — no gap, no replay.
+    let source = open_source();
+    source.recover_tables().await.unwrap();
+    assert_eq!(
+        source.forward_cursor(&target_url, EVENTS).unwrap(),
+        Some(shipped_tip)
+    );
+    for _ in 0..8 {
+        if source.spec_lifecycle(EVENTS).unwrap().active_version() == 1 {
+            break;
+        }
+        source.maintain_namespace(EVENTS, false).await.unwrap();
+    }
+    assert_eq!(source.spec_lifecycle(EVENTS).unwrap().active_version(), 1);
+    forward_until(
+        forwarder_for(&source),
+        &source,
+        &target_url,
+        EVENTS,
+        unshipped_tip,
+    )
+    .await;
+
+    // The hub ACKs before its async flush seals the rows, so poll the count.
+    let count_sql = format!("SELECT count(*) FROM \"{EVENTS}\"");
+    for _ in 0..200 {
+        if scalar_i64(&target, &count_sql).await == 60 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert_eq!(scalar_i64(&target, &count_sql).await, 60);
+    assert_eq!(
+        scalar_i64(
+            &target,
+            &format!("SELECT count(DISTINCT id) FROM \"{EVENTS}\"")
+        )
+        .await,
+        60,
+        "a resumed cursor must not replay shipped rows"
+    );
+    source.shutdown(Duration::from_secs(1)).await;
+}
+
+/// The hub-side flip: a forwarded table migrates to object-backed storage on
+/// the hub while its source cluster keeps pushing. Forwarded writes land
+/// through the same write path organic ones do, so the migration activates
+/// under live traffic and the hub converges to every source row exactly once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_hub_migration_under_live_forwarding_loses_nothing() {
+    const EVENTS: &str = "events";
+    // An object-capable hub in live mode: its own maintenance drives the
+    // migration while forwarded writes keep landing.
+    let hub_data = crate::test_support::unique_dir("hub_migration_data");
+    let hub_remote = crate::test_support::unique_dir("hub_migration_remote");
+    let hub = Arc::new(
+        Store::new(
+            Some(hub_data),
+            hub_remote.to_string_lossy().into_owned(),
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            crate::store::ServeMode::Live,
+        )
+        .unwrap(),
+    );
+    hub.bootstrap_maintenance();
+    let (hub_addr, hub_requests) = serve(Arc::clone(&hub), hub_policy(SOURCE_CLUSTER)).await;
+    let fx = Fixture::with_hub(
+        "hub_migration",
+        Some(Arc::clone(&hub)),
+        hub_addr,
+        hub_requests,
+    )
+    .await;
+
+    let ids = |range: std::ops::Range<usize>| range.map(|id| id.to_string()).collect::<Vec<_>>();
+    write_string_rows(&fx.source, EVENTS, ids(0..100)).await;
+    fx.forward_from_start(EVENTS).await;
+    fx.drain(PRIV_A, EVENTS).await;
+
+    // The operator registers the object spec on the hub; rows keep arriving
+    // while the version-0 import backfills.
+    let spec_hub = Arc::clone(&hub);
+    tokio::task::spawn_blocking(move || {
+        spec_hub.register_versioned_table(EVENTS, id_object_spec())
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    write_string_rows(&fx.source, EVENTS, ids(100..200)).await;
+    fx.drain(PRIV_A, EVENTS).await;
+    // Drive maintenance rather than waiting out the scheduler cadence; the
+    // forwarded traffic above keeps landing between rounds either way.
+    for _ in 0..40 {
+        if hub.spec_lifecycle(EVENTS).unwrap().active_version() == 1 {
+            break;
+        }
+        hub.maintain_namespace(EVENTS, false).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert_eq!(
+        hub.spec_lifecycle(EVENTS).unwrap().active_version(),
+        1,
+        "the hub migration never activated (phase: {:?})",
+        hub.spec_lifecycle(EVENTS).unwrap().phase
+    );
+
+    // Post-activation traffic lands in the object-backed table.
+    write_string_rows(&fx.source, EVENTS, ids(200..250)).await;
+    fx.drain(PRIV_A, EVENTS).await;
+
+    // Exactly once, before and after the flip. The hub ACKs before its async
+    // flush seals rows for queries, so poll the count.
+    let count_sql = format!("SELECT count(*) FROM \"{EVENTS}\"");
+    for _ in 0..200 {
+        if scalar_i64(&hub, &count_sql).await == 250 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert_eq!(scalar_i64(&hub, &count_sql).await, 250);
+    assert_eq!(
+        scalar_i64(
+            &hub,
+            &format!("SELECT count(DISTINCT id) FROM \"{EVENTS}\"")
+        )
+        .await,
+        250,
+        "a hub migration under live forwarding must not duplicate or drop rows"
+    );
 }

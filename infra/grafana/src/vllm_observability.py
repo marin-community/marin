@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Bounded Finelog query for one centralized Marin vLLM serve."""
+"""Bounded Finelog query for one standalone or MarinSkyRL-embedded vLLM serve."""
 
 import math
 from dataclasses import dataclass
@@ -10,7 +10,7 @@ from enum import StrEnum
 VLLM_MAX_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
 VLLM_MAX_POINTS = 720
 VLLM_MAX_RESULT_ROWS = 10_000
-VLLM_MIN_BUCKET_MS = 60_000
+VLLM_MIN_BUCKET_MS = 15_000
 VLLM_SCRAPE_INTERVAL_MS = 60_000
 VLLM_HISTOGRAM_COHERENCE_MS = 15_000
 VLLM_SNAPSHOT_LOOKBACK_MS = 3 * VLLM_SCRAPE_INTERVAL_MS
@@ -73,6 +73,7 @@ _HISTOGRAM_FAMILIES = (
     ("inter_token_latency_seconds", "inter_token_latency"),
     ("request_queue_time_seconds", "queue"),
     ("e2e_request_latency_seconds", "e2e"),
+    ("iteration_tokens_total", "iteration_tokens"),
 )
 _HISTOGRAM_COMPONENTS = ("bucket", "count", "sum")
 _HISTOGRAM_NAMES = tuple(
@@ -83,6 +84,7 @@ _HEALTH_METRIC_NAMES = (
     "prometheus_source_available",
     "prometheus_stage_failures",
     "prometheus_dropped_samples",
+    "metric_publication_dropped_records",
 )
 _METRIC_NAMES = (*_SERVING_METRIC_NAMES, *_HEALTH_METRIC_NAMES)
 
@@ -151,6 +153,7 @@ def vllm_overview_query(
         raise ValueError("vLLM overview range must not exceed 7 days")
 
     bucket_ms = _bounded_bucket_ms(start_ms, end_ms, requested_bucket_ms)
+    standalone_bucket_ms = max(bucket_ms, VLLM_SCRAPE_INTERVAL_MS)
     scan_start_ms = max(0, start_ms - VLLM_SNAPSHOT_LOOKBACK_MS)
     identity_literal = sql_string(identity)
     metric_names = _sql_values(_METRIC_NAMES)
@@ -177,6 +180,25 @@ WITH base AS (
            seq
     FROM "telemetry_v1.vllm"
     WHERE service = 'vllm'
+      AND {identity_field.value} = {identity_literal}
+      AND name IN ({metric_names})
+      AND timestamp_ms >= {scan_start_ms}
+      AND timestamp_ms < {end_ms}
+
+    UNION ALL
+
+    SELECT COALESCE(NULLIF(cluster, ''), 'local') AS origin_cluster,
+           service,
+           name,
+           kind,
+           value,
+           resource_attributes_json,
+           attributes_json,
+           timestamp_ms,
+           seq
+    FROM "telemetry_v1.marinskyrl"
+    WHERE service = 'marinskyrl'
+      AND json_get(attributes_json, 'metric_source') = 'vllm'
       AND {identity_field.value} = {identity_literal}
       AND name IN ({metric_names})
       AND timestamp_ms >= {scan_start_ms}
@@ -221,21 +243,27 @@ WITH base AS (
       AND kind = 'counter'
       AND COALESCE(json_get(attributes_json, 'source_temporality'), '') <> 'cumulative_snapshot'
 ), token_bins AS (
-    SELECT {start_ms} + (timestamp_ms - {start_ms}) - (timestamp_ms - {start_ms}) % {bucket_ms} AS t,
+    SELECT {start_ms} + (timestamp_ms - {start_ms})
+               - (timestamp_ms - {start_ms}) % CASE
+                   WHEN service = 'vllm' THEN {standalone_bucket_ms}
+                   ELSE {bucket_ms}
+               END AS t,
            name,
+           service,
            SUM(delta) AS delta
     FROM increments
     WHERE name IN ({token_counters})
       AND delta IS NOT NULL
-    GROUP BY 1, 2
-), token_rates AS (
+    GROUP BY 1, 2, 3
+), token_source_rates AS (
     SELECT t,
            name,
-           delta / (CASE
-               WHEN t + {bucket_ms} <= {end_ms} THEN {bucket_ms}
-               ELSE {end_ms} - t
-           END / 1000.0) AS value
+           delta / (CASE WHEN service = 'vllm' THEN {standalone_bucket_ms} ELSE {bucket_ms} END / 1000.0) AS value
     FROM token_bins
+), token_rates AS (
+    SELECT t, name, SUM(value) AS value
+    FROM token_source_rates
+    GROUP BY 1, 2
 ), counter_totals AS (
     SELECT name, SUM(delta) AS value
     FROM increments
@@ -251,19 +279,23 @@ WITH base AS (
            origin_cluster,
            service,
            resource_attributes_json,
-           attributes_json,
+           COALESCE(json_get(attributes_json, 'engine'), attributes_json) AS producer_identity,
            value
     FROM base
     WHERE timestamp_ms >= {start_ms}
       AND name IN ({gauges})
       AND json_get(attributes_json, 'source_temporality') = 'current_snapshot'
 ), gauge_replica_bins AS (
-    SELECT {start_ms} + (timestamp_ms - {start_ms}) - (timestamp_ms - {start_ms}) % {bucket_ms} AS t,
+    SELECT {start_ms} + (timestamp_ms - {start_ms})
+               - (timestamp_ms - {start_ms}) % CASE
+                   WHEN service = 'vllm' THEN {standalone_bucket_ms}
+                   ELSE {bucket_ms}
+               END AS t,
            name,
            origin_cluster,
            service,
            resource_attributes_json,
-           attributes_json,
+           producer_identity,
            AVG(value) AS value
     FROM canonical_gauge_samples
     GROUP BY 1, 2, 3, 4, 5, 6
@@ -292,6 +324,7 @@ WITH base AS (
            service,
            resource_attributes_json,
            attributes_json,
+           COALESCE(json_get(attributes_json, 'engine'), resource_attributes_json) AS producer_identity,
            timestamp_ms,
            timestamp_ms - timestamp_ms % {VLLM_HISTOGRAM_COHERENCE_MS} AS sample_t,
            name,
@@ -306,10 +339,15 @@ WITH base AS (
            CASE WHEN previous_value IS NULL OR value < previous_value THEN 1 ELSE 0 END AS invalid_component
     FROM cumulative_samples
     WHERE name IN ({histogram_names})
+      AND (
+          service = 'vllm'
+          OR json_get(attributes_json, 'engine_index') IS NOT NULL
+      )
 ), histogram_series AS (
     SELECT DISTINCT origin_cluster,
            service,
            resource_attributes_json,
+           producer_identity,
            source_family,
            name,
            attributes_json
@@ -318,14 +356,16 @@ WITH base AS (
     SELECT origin_cluster,
            service,
            resource_attributes_json,
+           producer_identity,
            source_family,
            COUNT(*) AS expected_series
     FROM histogram_series
-    GROUP BY 1, 2, 3, 4
+    GROUP BY 1, 2, 3, 4, 5
 ), histogram_sample_validity AS (
     SELECT samples.origin_cluster,
            samples.service,
            samples.resource_attributes_json,
+           samples.producer_identity,
            samples.source_family,
            samples.sample_t,
            CASE
@@ -337,11 +377,13 @@ WITH base AS (
       ON samples.origin_cluster = expected.origin_cluster
      AND samples.service = expected.service
      AND samples.resource_attributes_json = expected.resource_attributes_json
+     AND samples.producer_identity = expected.producer_identity
      AND samples.source_family = expected.source_family
     WHERE samples.timestamp_ms >= {start_ms}
-    GROUP BY 1, 2, 3, 4, 5
+    GROUP BY 1, 2, 3, 4, 5, 6
 ), coherent_histogram_increments AS (
-    SELECT samples.family,
+    SELECT samples.sample_t,
+           samples.family,
            samples.component,
            samples.upper_bound,
            samples.delta
@@ -350,9 +392,18 @@ WITH base AS (
       ON samples.origin_cluster = validity.origin_cluster
      AND samples.service = validity.service
      AND samples.resource_attributes_json = validity.resource_attributes_json
+     AND samples.producer_identity = validity.producer_identity
      AND samples.source_family = validity.source_family
      AND samples.sample_t = validity.sample_t
     WHERE validity.valid_sample = 1
+), histogram_time_means AS (
+    SELECT {start_ms} + (sample_t - {start_ms}) - (sample_t - {start_ms}) % {bucket_ms} AS t,
+           family,
+           SUM(CASE WHEN component = 'sum' THEN delta ELSE 0 END)
+               / NULLIF(SUM(CASE WHEN component = 'count' THEN delta ELSE 0 END), 0) AS mean
+    FROM coherent_histogram_increments
+    GROUP BY 1, 2
+    HAVING SUM(CASE WHEN component = 'count' THEN delta ELSE 0 END) > 0
 ), histogram_means AS (
     SELECT family,
            SUM(CASE WHEN component = 'sum' THEN delta ELSE 0 END)
@@ -413,11 +464,46 @@ WITH base AS (
     GROUP BY 1
 ), collector_polls AS (
     SELECT COUNT(*) AS polls,
-           SUM(CASE WHEN value <= 0 THEN 1 ELSE 0 END) AS unavailable_polls
+           SUM(CASE WHEN value <= 0 THEN 1 ELSE 0 END) AS unavailable_polls,
+           MAX(timestamp_ms) AS latest_timestamp_ms
     FROM base
     WHERE timestamp_ms >= {start_ms}
       AND name = 'prometheus_source_available'
       AND json_get(attributes_json, 'metric_source') = 'vllm'
+), publication_health_ranked AS (
+    SELECT json_get(attributes_json, 'drop_reason') AS drop_reason,
+           value,
+           timestamp_ms,
+           COUNT(*) OVER (PARTITION BY json_get(attributes_json, 'drop_reason')) AS samples,
+           ROW_NUMBER() OVER (
+               PARTITION BY json_get(attributes_json, 'drop_reason')
+               ORDER BY timestamp_ms DESC, seq DESC
+           ) AS recency
+    FROM base
+    WHERE timestamp_ms >= {start_ms}
+      AND service = 'marinskyrl'
+      AND name = 'metric_publication_dropped_records'
+      AND json_get(attributes_json, 'metric_source') = 'vllm'
+      AND json_get(attributes_json, 'drop_reason') IN ('sample_limit', 'telemetry_loss')
+), publication_health_reasons AS (
+    SELECT drop_reason,
+           samples,
+           timestamp_ms AS latest_timestamp_ms,
+           value AS current_value,
+           CASE WHEN value > 0 THEN 1 ELSE 0 END AS positive
+    FROM publication_health_ranked
+    WHERE recency = 1
+), publication_health AS (
+    SELECT COUNT(*) AS reasons,
+           COALESCE(MIN(samples), 0) AS polls,
+           MIN(latest_timestamp_ms) AS oldest_latest_timestamp_ms,
+           COALESCE(MAX(positive), 0) AS has_positive,
+           COALESCE(MAX(CASE
+               WHEN positive > 0
+                AND {end_ms} - latest_timestamp_ms <= {VLLM_FRESHNESS_THRESHOLD_MS}
+               THEN 1 ELSE 0
+           END), 0) AS has_fresh_positive
+    FROM publication_health_reasons
 ), collection_failure_increments AS (
     SELECT COALESCE(json_get(attributes_json, 'stage'), 'unknown') AS stage,
            CASE
@@ -444,30 +530,56 @@ WITH base AS (
       AND json_get(attributes_json, 'metric_source') = 'vllm'
       AND value > 0
     GROUP BY 1
+
+    UNION ALL
+
+    SELECT drop_reason, current_value
+    FROM publication_health_reasons
+    WHERE current_value > 0
 ), telemetry_health AS (
-    SELECT polls,
+    SELECT CASE WHEN collector.polls > 0 THEN collector.polls ELSE publication.polls END AS polls,
            COALESCE(unavailable_polls, 0) AS unavailable_polls,
            CASE
+               WHEN collector.polls > 0
+                AND {end_ms} - collector.latest_timestamp_ms > {VLLM_FRESHNESS_THRESHOLD_MS}
+               THEN 'unknown'
+               WHEN collector.polls = 0 AND publication.has_fresh_positive > 0
+               THEN 'incomplete'
+               WHEN collector.polls = 0
+                AND (
+                    publication.reasons < 2
+                    OR {end_ms} - publication.oldest_latest_timestamp_ms > {VLLM_FRESHNESS_THRESHOLD_MS}
+                )
+               THEN 'unknown'
                WHEN COALESCE(unavailable_polls, 0) > 0
                  OR failure_stages > 0
                  OR uncertain_failures > 0
                  OR drop_reasons > 0
+                 OR publication.has_positive > 0
                THEN 'incomplete'
-               WHEN polls > 0 THEN 'healthy'
+               WHEN collector.polls > 0 OR publication.reasons = 2 THEN 'healthy'
                ELSE 'unknown'
            END AS status
-    FROM collector_polls
+    FROM collector_polls AS collector
+    CROSS JOIN publication_health AS publication
     CROSS JOIN (SELECT COUNT(*) AS failure_stages FROM collection_failure_totals)
     CROSS JOIN (SELECT COUNT(*) AS uncertain_failures FROM collection_failure_increments WHERE uncertain > 0)
     CROSS JOIN (SELECT COUNT(*) AS drop_reasons FROM dropped_sample_totals)
 ), producer_samples AS (
-    SELECT DISTINCT origin_cluster, service, resource_attributes_json, timestamp_ms
+    SELECT DISTINCT origin_cluster,
+           service,
+           resource_attributes_json,
+           CASE
+               WHEN service = 'marinskyrl' THEN COALESCE(json_get(attributes_json, 'engine'), resource_attributes_json)
+               ELSE resource_attributes_json
+           END AS producer_identity,
+           timestamp_ms
     FROM base
     WHERE name IN ({serving_metric_names})
 ), producer_ordered AS (
     SELECT *,
            LAG(timestamp_ms) OVER (
-               PARTITION BY origin_cluster, service, resource_attributes_json
+               PARTITION BY origin_cluster, service, resource_attributes_json, producer_identity
                ORDER BY timestamp_ms
            ) AS previous_timestamp_ms
     FROM producer_samples
@@ -475,13 +587,14 @@ WITH base AS (
     SELECT origin_cluster,
            service,
            resource_attributes_json,
+           producer_identity,
            MAX(timestamp_ms) AS latest_timestamp_ms,
            SUM(CASE WHEN timestamp_ms >= {start_ms} THEN 1 ELSE 0 END) AS samples,
            MAX(CASE
                WHEN timestamp_ms >= {start_ms} THEN timestamp_ms - previous_timestamp_ms
            END) / 1000.0 AS gap_seconds
     FROM producer_ordered
-    GROUP BY 1, 2, 3
+    GROUP BY 1, 2, 3, 4
 ), producer_freshness AS (
     SELECT *,
            CASE
@@ -502,7 +615,8 @@ WITH base AS (
                         gap_seconds DESC,
                         origin_cluster,
                         service,
-                        resource_attributes_json
+                        resource_attributes_json,
+                        producer_identity
            ) AS freshness_rank
     FROM producer_freshness
 ), freshness_summary AS (
@@ -564,6 +678,21 @@ WITH base AS (
 
     UNION ALL
 
+    SELECT t AS t,
+           'saturation' AS section,
+           'iteration_tokens' AS metric,
+           'mean' AS stat,
+           'iteration tokens per engine step' AS series,
+           mean AS value,
+           'tokens' AS unit,
+           CAST(NULL AS VARCHAR) AS status,
+           CAST(NULL AS BIGINT) AS samples,
+           CAST(NULL AS DOUBLE) AS gap_seconds
+    FROM histogram_time_means
+    WHERE family = 'iteration_tokens'
+
+    UNION ALL
+
     SELECT CAST(NULL AS BIGINT) AS t,
            'saturation_summary' AS section,
            name AS metric,
@@ -603,6 +732,22 @@ WITH base AS (
            CAST(NULL AS BIGINT) AS samples,
            CAST(NULL AS DOUBLE) AS gap_seconds
     FROM histogram_evidence
+    WHERE family <> 'iteration_tokens'
+
+    UNION ALL
+
+    SELECT t AS t,
+           'latency' AS section,
+           'tpot' AS metric,
+           'mean_over_time' AS stat,
+           'time per output token' AS series,
+           mean AS value,
+           's' AS unit,
+           CAST(NULL AS VARCHAR) AS status,
+           CAST(NULL AS BIGINT) AS samples,
+           CAST(NULL AS DOUBLE) AS gap_seconds
+    FROM histogram_time_means
+    WHERE family = 'tpot'
 
     UNION ALL
 
@@ -681,7 +826,7 @@ WITH base AS (
            'freshness' AS section,
            'telemetry' AS metric,
            'latest_sample_age' AS stat,
-           origin_cluster || ':' || service || ':' || resource_attributes_json AS series,
+           origin_cluster || ':' || service || ':' || producer_identity AS series,
            ({end_ms} - latest_timestamp_ms) / 1000.0 AS value,
            's' AS unit,
            freshness_status AS status,
@@ -695,7 +840,7 @@ WITH base AS (
            'freshness_detail' AS section,
            'telemetry' AS metric,
            'latest_sample_age' AS stat,
-           origin_cluster || ':' || service || ':' || resource_attributes_json AS series,
+           origin_cluster || ':' || service || ':' || producer_identity AS series,
            ({end_ms} - latest_timestamp_ms) / 1000.0 AS value,
            's' AS unit,
            freshness_status AS status,
