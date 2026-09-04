@@ -62,40 +62,24 @@ def manifest_path() -> pathlib.Path:
     return pathlib.Path(__file__).with_name("hero_data_paths.json")
 
 
-@cache
-def harrier_paths_path() -> pathlib.Path:
-    """Return the path to the complete Harrier path map."""
-    return pathlib.Path(__file__).with_name("hero_data_emb_paths.json")
+# Stages pinned by a source-to-path map: the leaves were written from branches, so
+# their hashes do not recompute from current code. Paths are relative to the prefix.
+_PINNED_MAP_FILES = {
+    "harrier": "hero_data_emb_paths.json",
+    "fusion_scores": "hero_data_fusion_score_paths.json",
+    "content_type": "hero_data_content_type_paths.json",
+}
+
+
+def pinned_map_path(stage: str) -> pathlib.Path:
+    """Return the path to ``stage``'s source-to-path map."""
+    return pathlib.Path(__file__).with_name(_PINNED_MAP_FILES[stage])
 
 
 @cache
-def harrier_paths() -> dict[str, str]:
-    """Load the complete Harrier path map."""
-    return json.loads(harrier_paths_path().read_text())
-
-
-@cache
-def fusion_score_paths_path() -> pathlib.Path:
-    """Return the path to the fusion score path map."""
-    return pathlib.Path(__file__).with_name("hero_data_fusion_score_paths.json")
-
-
-@cache
-def fusion_score_paths() -> dict[str, str]:
-    """Load the fusion score path map."""
-    return json.loads(fusion_score_paths_path().read_text())
-
-
-@cache
-def content_type_paths_path() -> pathlib.Path:
-    """Return the path to the content-type path map."""
-    return pathlib.Path(__file__).with_name("hero_data_content_type_paths.json")
-
-
-@cache
-def content_type_paths() -> dict[str, str]:
-    """Load the content-type path map."""
-    return json.loads(content_type_paths_path().read_text())
+def pinned_map(stage: str) -> dict[str, str]:
+    """Load ``stage``'s source-to-path map."""
+    return json.loads(pinned_map_path(stage).read_text())
 
 
 # The manifest records paths relative to the sole CoreWeave Datakit root.
@@ -233,7 +217,7 @@ def fusion_scores(source: str, quality_model: QualityPin = NEMOTRON_88K) -> Step
             f"the pinned fusion scores were written by {NEMOTRON_88K.name}; score the corpus under "
             f"{quality_model.name} with run.py --stage score before bucketing it"
         )
-    return _frozen_step(f"hero/fusion_scores/{source}", fusion_score_paths()[source])
+    return _frozen_step(f"hero/fusion_scores/{source}", pinned_map("fusion_scores")[source])
 
 
 def content_type(source: str) -> StepSpec:
@@ -244,7 +228,22 @@ def content_type(source: str) -> StepSpec:
     in :data:`NEMOTRON_88K` carries one curve per predicted type, which is what
     :func:`quality` applies.
     """
-    return _frozen_step(f"hero/content_type/{source}", content_type_paths()[source])
+    return _frozen_step(f"hero/content_type/{source}", pinned_map("content_type")[source])
+
+
+def quality_step_for(source: str, quality_model: QualityPin = NEMOTRON_88K) -> StepSpec:
+    """Return the runnable bucket step whose identity :func:`quality` registers.
+
+    The fleet driver runs this one; everything else reads :func:`quality`.
+    """
+    return quality_step(
+        name=f"datakit/quality/{source}",
+        source=source,
+        normalized=_normalize_step(source),
+        scores=fusion_scores(source, quality_model),
+        content_type=content_type(source),
+        quality_model=quality_model,
+    )
 
 
 def quality(source: str, quality_model: QualityPin = NEMOTRON_88K) -> StepSpec:
@@ -255,16 +254,7 @@ def quality(source: str, quality_model: QualityPin = NEMOTRON_88K) -> StepSpec:
     calibrated ``score`` and ``quality_bucket``. Its identity is the step's own, so
     a refit calibration or a repointed input moves the path.
     """
-    return _read_only(
-        quality_step(
-            name=f"datakit/quality/{source}",
-            source=source,
-            normalized=_normalize_step(source),
-            scores=fusion_scores(source, quality_model),
-            content_type=content_type(source),
-            quality_model=quality_model,
-        )
-    )
+    return _read_only(quality_step_for(source, quality_model))
 
 
 def exact_dups() -> StepSpec:
@@ -311,7 +301,7 @@ def assigned_clusters(source: str) -> StepSpec:
 
 def harrier(source: str) -> StepSpec:
     """Return the pinned complete Harrier embeddings for ``source``."""
-    return _frozen_step(f"hero/harrier/{source}", harrier_paths()[source])
+    return _frozen_step(f"hero/harrier/{source}", pinned_map("harrier")[source])
 
 
 def all_paths() -> dict[str, str]:

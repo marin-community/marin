@@ -39,7 +39,10 @@ def test_pad_ids_truncates_remaps_and_marks_unknown_ids():
 
 
 def test_rebatch_yields_full_batches_and_one_tail():
-    batches = [pa.RecordBatch.from_pydict({"id": [str(i) for i in range(start, start + n)]}) for start, n in ((0, 3), (3, 5), (8, 1))]
+    batches = [
+        pa.RecordBatch.from_pydict({"id": [str(i) for i in range(start, start + n)]})
+        for start, n in ((0, 3), (3, 5), (8, 1))
+    ]
 
     out = list(rebatch(iter(batches), 4))
 
@@ -95,7 +98,9 @@ def test_model_digest_covers_the_scorer_artifacts_and_not_the_calibration(tmp_pa
     (root / "m_meta.json").write_bytes(b'{"k": 2}')
     assert model_sha256(str(root)) != model, "changed bytes are a different model"
 
-    assert calibration == hashlib.sha256(CALIBRATION_FILE.encode() + b"\0" + hashlib.sha256(b"knots").digest()).hexdigest()
+    assert (
+        calibration == hashlib.sha256(CALIBRATION_FILE.encode() + b"\0" + hashlib.sha256(b"knots").digest()).hexdigest()
+    )
 
 
 def test_digests_survive_copying_the_directory(tmp_path):
@@ -125,5 +130,5 @@ def test_scoring_refuses_bytes_that_are_not_the_pinned_ones(tmp_path):
 
 
 def test_a_model_dir_without_an_artifact_does_not_digest(tmp_path):
-    with pytest.raises(ValueError, match="no .eqx artifact"):
+    with pytest.raises(ValueError, match=r"no \.eqx artifact"):
         model_sha256(str(tmp_path))

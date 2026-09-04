@@ -31,7 +31,6 @@ from marin.execution.step_spec import StepSpec
 from rigging.log_setup import configure_logging
 
 from experiments.datakit import hero_data
-from experiments.datakit.cluster.quality.fast_transformer.bucket import quality_step
 from experiments.datakit.cluster.quality.fast_transformer.score_fusion import fusion_score_step
 
 logger = logging.getLogger(__name__)
@@ -67,16 +66,7 @@ def build_bucket_steps(sources: list[str]) -> list[StepSpec]:
     """One bucket step per source, at the identity :func:`hero_data.quality` resolves."""
     steps = []
     for source in sources:
-        step = quality_step(
-            name=f"datakit/quality/{source}",
-            source=source,
-            normalized=hero_data.normalized(source),
-            scores=hero_data.fusion_scores(source),
-            content_type=hero_data.content_type(source),
-            quality_model=hero_data.NEMOTRON_88K,
-        )
-        if step.output_path != hero_data.quality(source).output_path:
-            raise AssertionError(f"{source}: the bucket step does not resolve to the registered quality path")
+        step = hero_data.quality_step_for(source)
         steps.append(replace(step, fn=remote(step.fn, resources=DRIVER_RESOURCES)))
     return steps
 
@@ -84,7 +74,9 @@ def build_bucket_steps(sources: list[str]) -> list[StepSpec]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--stage", choices=("score", "bucket"), required=True)
-    parser.add_argument("--sources", default=None, help="comma-separated source names (default: every registered source)")
+    parser.add_argument(
+        "--sources", default=None, help="comma-separated source names (default: every registered source)"
+    )
     parser.add_argument("--partition-index", type=int, default=0)
     parser.add_argument("--partition-count", type=int, default=1)
     parser.add_argument("--max-concurrent", type=int, default=MAX_CONCURRENT)

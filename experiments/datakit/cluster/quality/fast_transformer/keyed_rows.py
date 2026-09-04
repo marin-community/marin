@@ -80,14 +80,11 @@ class KeyedRows:
 
 
 def read_keyed_rows(path: str, column: str) -> KeyedRows:
-    """Read ``id`` and ``column`` from one parquet shard.
-
-    Read through polars, which types a fixed-width list column as an ``Array``
-    with no offsets buffer, so the int32 offset ceiling that made a whole-column
-    pyarrow read of the largest Harrier shards fail (2,682,446 documents times
-    1,024 values against 2^31-1) does not apply, and ``to_numpy`` hands back a
-    contiguous ``[n, width]`` block.
-    """
+    """Read ``id`` and ``column`` from one parquet shard, whole."""
+    # polars types a fixed-width list column as an Array with no offsets buffer,
+    # so the int32 offset ceiling that fails a whole-column pyarrow read of the
+    # largest Harrier shards (2,682,446 documents x 1,024 values > 2^31-1) does
+    # not apply, and to_numpy hands back one contiguous [n, width] block.
     with StoragePath(path).open("rb") as fh:
         frame = pl.read_parquet(fh, columns=["id", column])
     return KeyedRows.from_arrays(frame.get_column("id").to_numpy(), frame.get_column(column).to_numpy())

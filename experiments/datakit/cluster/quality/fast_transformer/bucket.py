@@ -53,7 +53,11 @@ from experiments.datakit.cluster.quality.fast_transformer.quality_model import (
     quality_model_dir,
     require_pinned_calibration,
 )
-from experiments.datakit.cluster.quality.fast_transformer.score_fusion import paired_basenames
+from experiments.datakit.cluster.quality.fast_transformer.score_fusion import (
+    COORDINATOR_RESOURCES,
+    paired_basenames,
+    shard_output_pattern,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +65,6 @@ QUALITY_BUCKETS_VERSION = 1
 # Per-shard reads are three narrow columns; the largest shard's 2.68M ids and
 # scores fit in a few hundred MB.
 WORKER_RESOURCES = ResourceConfig(cpu=1, ram="8g", disk="8g")
-COORDINATOR_RESOURCES = ResourceConfig(cpu=1, ram="8g", preemptible=False)
 MAX_WORKERS = 512
 
 QUALITY_SCHEMA = pa.schema(
@@ -160,11 +163,9 @@ def bucket_quality_scores(
     basenames = tuple(paired_basenames(text_dir, scores_dir, content_type_dir))
     score_paths = tuple(prefix_join(scores_dir, name) for name in basenames)
     type_paths = tuple(prefix_join(content_type_dir, name) for name in basenames)
-
-    def _output_path(shard_idx: int, _total: int, names: tuple[str, ...] = basenames) -> str:
-        return prefix_join(output_path, names[shard_idx])
-
-    logger.info("%s: bucketing %d shards from %s and %s -> %s", source, len(basenames), scores_dir, content_type_dir, output_path)
+    logger.info(
+        "%s: bucketing %d shards from %s and %s -> %s", source, len(basenames), scores_dir, content_type_dir, output_path
+    )
     pipeline = (
         Dataset.from_list([prefix_join(text_dir, name) for name in basenames])
         .load_parquet(columns=["id"], batch_mode=True)
@@ -178,7 +179,7 @@ def bucket_quality_scores(
                 pin=quality_model,
             )
         )
-        .write_parquet(_output_path, schema=QUALITY_SCHEMA, skip_existing=True)
+        .write_parquet(shard_output_pattern(output_path, basenames), schema=QUALITY_SCHEMA, skip_existing=True)
     )
     ctx = zephyr_context or ZephyrContext(
         name=f"quality-{os.path.basename(text_dir.rstrip('/'))[:8]}",

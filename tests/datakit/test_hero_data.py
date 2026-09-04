@@ -22,11 +22,7 @@ from experiments.datakit.cluster.quality.fast_transformer import run as quality_
 
 PREFIX = hero_data.MANIFEST_PREFIX
 MANIFEST = hero_data.manifest_path()
-PINNED_MAPS = {
-    "harrier": hero_data.harrier_paths_path(),
-    "fusion_scores": hero_data.fusion_score_paths_path(),
-    "content_type": hero_data.content_type_paths_path(),
-}
+PINNED_STAGES = ("harrier", "fusion_scores", "content_type")
 
 
 @pytest.fixture(autouse=True)
@@ -53,9 +49,9 @@ def test_paths_match_the_checked_in_manifest():
     assert _relative_paths() == json.loads(MANIFEST.read_text())
 
 
-@pytest.mark.parametrize("stage", sorted(PINNED_MAPS))
+@pytest.mark.parametrize("stage", PINNED_STAGES)
 def test_pinned_maps_are_complete_and_relative(stage):
-    paths = json.loads(PINNED_MAPS[stage].read_text())
+    paths = json.loads(hero_data.pinned_map_path(stage).read_text())
 
     assert set(paths) == set(hero_data.source_names())
     assert all("://" not in path and not path.startswith("/") for path in paths.values())
@@ -144,7 +140,7 @@ def test_quality_path_moves_with_its_pinned_inputs(monkeypatch):
     # Repointing the fusion scores or the content types is a different dataset even
     # under the same calibration: the frozen inputs carry their paths in hash_attrs.
     before = hero_data.quality("stack-v3").output_path
-    monkeypatch.setitem(hero_data.content_type_paths(), "stack-v3", "datakit/content-type/stack-v3_ffffffff")
+    monkeypatch.setitem(hero_data.pinned_map("content_type"), "stack-v3", "datakit/content-type/stack-v3_ffffffff")
     assert hero_data.quality("stack-v3").output_path != before
 
 
@@ -158,4 +154,3 @@ def test_fusion_scores_refuse_a_pin_that_is_another_model():
 def test_the_bucket_driver_resolves_to_the_registered_quality_path():
     (step,) = quality_run.build_bucket_steps(["stack-v3"])
     assert step.output_path == hero_data.quality("stack-v3").output_path
-    assert step.fn is not None

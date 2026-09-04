@@ -101,9 +101,6 @@ class FusionScores(BaseModel):
     tokenizer: str
     counters: dict[str, int | float]
 
-    def shard_paths(self) -> list[str]:
-        return sorted(str(path) for path in (StoragePath(self.output_dir) / "*.parquet").glob())
-
 
 def fusion_hash_attrs(pin: QualityPin) -> dict[str, str | int]:
     """The identity of a fusion score step, shared by its producer and its consumers."""
@@ -169,11 +166,9 @@ def _load_pinned_scorer(model_dir: str, pin: QualityPin) -> PooledScorer:
 
 
 def pinned_scorer(model_dir: str, pin: QualityPin) -> PooledScorer:
-    """The process's one scorer, digest-checked and loaded on first use.
-
-    Concurrent tasks in a worker all miss the cache at start; the lock makes them
-    load the 158 MB checkpoint once instead of once each.
-    """
+    """The process's one scorer, digest-checked and loaded on first use."""
+    # functools.cache is not atomic: the concurrent tasks of a fresh worker all
+    # miss at once and would each load the 158 MB checkpoint without the lock.
     with _SCORER_LOCK:
         return _load_pinned_scorer(model_dir, pin)
 
@@ -197,13 +192,20 @@ def pad_ids(rows: list[list[int]], max_tokens: int, vocab_size: int) -> np.ndarr
 
 
 def normalize_embeddings(rows: np.ndarray) -> np.ndarray:
-    """int8[1024] rows -> float32, L2-normalized, exactly as training fed them.
-
-    A uniform quantization scale cancels under L2 normalization, so the int8 values
-    are normalized directly rather than dequantized first.
-    """
+    """int8[1024] rows -> float32, L2-normalized, exactly as training fed them."""
+    # No dequantization step: a uniform scale cancels under L2 normalization, and
+    # training normalized the raw int8 values the same way.
     x = rows.astype(np.float32)
     return x / np.maximum(np.linalg.norm(x, axis=1, keepdims=True), 1e-6)
+
+
+def shard_output_pattern(output_path: str, basenames: tuple[str, ...]):
+    """The ``write_parquet`` pattern that names shard ``i`` after input basename ``i``."""
+
+    def _output_path(shard_idx: int, _total: int) -> str:
+        return prefix_join(output_path, basenames[shard_idx])
+
+    return _output_path
 
 
 def first_chunk_ids(ids: np.ndarray, texts: list[str]) -> list[list[int]]:
@@ -289,10 +291,6 @@ def score_fusion(
     text_dir = normalized.main_output_dir
     basenames = tuple(paired_basenames(text_dir, embedding_dir))
     embedding_paths = tuple(prefix_join(embedding_dir, name) for name in basenames)
-
-    def _output_path(shard_idx: int, _total: int, names: tuple[str, ...] = basenames) -> str:
-        return prefix_join(output_path, names[shard_idx])
-
     logger.info("scoring %d shards of %s against %s -> %s", len(basenames), text_dir, embedding_dir, output_path)
     pipeline = (
         Dataset.from_list([prefix_join(text_dir, name) for name in basenames])
@@ -306,7 +304,7 @@ def score_fusion(
                 batch_docs=batch_docs,
             )
         )
-        .write_parquet(_output_path, schema=SCORE_SCHEMA, skip_existing=True)
+        .write_parquet(shard_output_pattern(output_path, basenames), schema=SCORE_SCHEMA, skip_existing=True)
     )
     ctx = zephyr_context or ZephyrContext(
         name=f"fusion-{os.path.basename(text_dir.rstrip('/'))[:8]}",
