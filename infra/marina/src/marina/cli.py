@@ -12,7 +12,15 @@ import pytest
 import uvicorn
 
 from marina.apps import is_python_app, migration, services_for
-from marina.db import DatabaseSpec, database_from_env, grant_read, migration_lock, runner_lock, schema_name
+from marina.db import (
+    DatabaseSpec,
+    database_from_env,
+    deployment_runner_lock,
+    grant_read,
+    migration_lock,
+    runner_lock,
+    schema_name,
+)
 from marina.journey_plugin import DEFAULT_SHOTS_DIR, JOURNEYS_DIR
 from marina.manifest import AppManifest, JobRunner, discover_apps, job_runners
 from marina.server import APPS_DIR_ENV, MarinaConfig, create_app
@@ -104,7 +112,8 @@ def run_jobs(runner_name: str, apps_dir: Path, reader: str | None, migrate_only:
     if database is None:
         raise click.UsageError("no database configured: set MARINA_DATABASE_URL or CLOUDSQL_CONNECTION")
 
-    with runner_lock(database, runner_name, wait=migrate_only) as acquired:
+    lock = deployment_runner_lock(database, runner_name) if migrate_only else runner_lock(database, runner_name)
+    with lock as acquired:
         if not acquired:
             click.echo(f"runner {runner_name}: another execution holds the lease; skipping")
             return

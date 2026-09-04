@@ -136,11 +136,13 @@ cd infra/marina && uv run pulumi up
 
 The image builds from the repository root (`Dockerfile.dockerignore` allowlists
 what it copies). `pulumi up` builds the image, creates one Cloud Run job and
-Scheduler trigger per manifest runner, executes the `hourly` runner in
-migration-only mode, and then updates the service. Scheduled runners also apply
-migrations before app work, so a scheduler tick cannot run new code against an
-old schema. One PostgreSQL advisory lock serializes migrations across every
-runner. Reader grants run only in the deployment migration.
+Scheduler trigger per manifest runner, executes the longest-timeout runner in
+migration-only mode, and then updates the service. The service receives each
+runner's resource name as `<APP>_<JOB>_JOB`, with hyphens converted to
+underscores, so an app can trigger its own declared job. Scheduled runners also
+apply migrations before app work, so a scheduler tick cannot run new code
+against an old schema. One PostgreSQL advisory lock serializes migrations
+across every runner. Reader grants run only in the deployment migration.
 
 The service keeps one warm instance for Echo search latency but uses
 request-based billing: CPU is throttled outside requests because periodic work

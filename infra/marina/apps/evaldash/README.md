@@ -174,7 +174,7 @@ Resolved once when the kernel mounts the app, from the environment:
 | `RECORDS_PREFIXES` | the four roots above | Comma-separated record roots, highest precedence first. |
 | `EVALDASH_STORE` | `postgres` | `local` serves from the record snapshot with no database. |
 | `EVALDASH_INGEST_INTERVAL` | `600` | Local-store polling cadence. Production uses the manifest's ten-minute schedule. |
-| `EVALDASH_INGEST_JOB` | unset | Full Cloud Run job resource queued by `POST /refresh`; set in production. |
+| `EVALDASH_INGEST_JOB` | unset | Full Cloud Run job resource queued by `POST /refresh`; Marina derives it from the manifest in production. |
 | `EVALDASH_REVALIDATE_AFTER` | `86400` | Seconds before a known object is rechecked. |
 | `EVALDASH_REVIEW_MODEL` | `claude-haiku-4-5-20251001` | The model behind `samples/review`. |
 | `ANTHROPIC_API_KEY` | unset | Without it the review endpoint degrades rather than failing. |

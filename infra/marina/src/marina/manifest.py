@@ -70,6 +70,11 @@ class BoundJob:
     def qualified_name(self) -> str:
         return f"{self.app.name}.{self.job.name}"
 
+    @property
+    def resource_env(self) -> str:
+        """Environment variable naming the Cloud Run resource for this job's runner."""
+        return f"{self.app.name}_{self.job.name}_JOB".replace("-", "_").upper()
+
 
 @dataclass(frozen=True)
 class JobRunner:

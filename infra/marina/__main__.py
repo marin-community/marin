@@ -48,8 +48,6 @@ LOOM_DATABASE_USER = "loom-vm@hai-gcp-models.iam"
 # Cloud SQL group login for people: members read any app's schema under their own Google
 # identity, without a database user each. ``marina migrate`` grants it.
 READER_GROUP = "eng-all@openathena.ai"
-DEPLOY_RUNNER = "hourly"
-EVALDASH_RUNNER = "evaldash"
 # marinmirror bearer token: a GitHub PAT (read:org) of an Open-Athena member.
 MARINMIRROR_TOKEN_SECRET = "marinmirror-token"
 # Google's shared frontend for Cloud Run domain mappings; vanity CNAMEs point here.
@@ -191,10 +189,16 @@ def main() -> None:
     )
 
     runners = job_runners(discover_apps(APPS_DIR))
-    runner_names = {runner.name for runner in runners}
-    for required_runner in (DEPLOY_RUNNER, EVALDASH_RUNNER):
-        if required_runner not in runner_names:
-            raise ValueError(f"Marina requires the {required_runner!r} runner")
+    if not runners:
+        raise ValueError("Marina requires at least one app-declared runner")
+    deploy_runner = max(runners, key=lambda runner: runner.timeout)
+    runner_env: dict[str, str] = {}
+    for runner in runners:
+        resource_name = f"projects/{PROJECT}/locations/{REGION}/jobs/{SERVICE}-{runner.name}"
+        for bound in runner.jobs:
+            previous = runner_env.setdefault(bound.resource_env, resource_name)
+            if previous != resource_name:
+                raise ValueError(f"job resource environment name {bound.resource_env!r} is ambiguous")
     registered_secrets = {
         secret.name: secret
         for secret in (
@@ -218,17 +222,15 @@ def main() -> None:
                 grants,
             )
 
-        if DEPLOY_RUNNER not in resources:
-            raise ValueError(f"Marina requires the {DEPLOY_RUNNER!r} runner for deploy migrations")
-        deploy_job_name = f"{SERVICE}-{DEPLOY_RUNNER}"
+        deploy_job_name = f"{SERVICE}-{deploy_runner.name}"
         run = command.local.Command(
             "run-migrate",
             create=(
                 f"gcloud run jobs execute {deploy_job_name} --project {PROJECT} --region {REGION} --wait "
-                f"--args=marina,run,{DEPLOY_RUNNER},--reader,{READER_GROUP},--migrate-only"
+                f"--args=marina,run,{deploy_runner.name},--reader,{READER_GROUP},--migrate-only"
             ),
             triggers=[image_ref],
-            opts=pulumi.ResourceOptions(depends_on=[resources[DEPLOY_RUNNER]]),
+            opts=pulumi.ResourceOptions(depends_on=[resources[deploy_runner.name]]),
         )
         return (*resources.values(), run)
 
@@ -245,8 +247,8 @@ def main() -> None:
                 "MARINA_DATA_ROOT": f"gs://{DATA_BUCKET}",
                 "MARINA_HOST_APPS": ",".join(f"{host}={app}" for host, app in HOST_APPS.items()),
                 "MARINA_CANONICAL_ORIGIN": f"https://{MARINA_HOST}",
-                "EVALDASH_INGEST_JOB": f"projects/{PROJECT}/locations/{REGION}/jobs/{SERVICE}-{EVALDASH_RUNNER}",
                 **DATABASE_ENV,
+                **runner_env,
             },
             secrets=coreweave_keys,
             # Keep one warm instance for Echo's model-loading latency. All non-request work

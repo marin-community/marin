@@ -15,6 +15,7 @@ import logging
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
+from enum import StrEnum
 
 import sqlalchemy
 from google.cloud.sql.connector import Connector
@@ -31,6 +32,11 @@ PGDATABASE_ENV = "PGDATABASE"
 PGUSER_ENV = "PGUSER"
 RUNNER_LOCK_PREFIX = "marina-runner:"
 MIGRATION_LOCK_NAME = "marina-migrations"
+
+
+class LockAcquisition(StrEnum):
+    BLOCKING = "pg_advisory_lock"
+    NONBLOCKING = "pg_try_advisory_lock"
 
 
 @dataclass(frozen=True)
@@ -133,19 +139,18 @@ def engine_for(spec: DatabaseSpec, app: str) -> Engine:
 
 
 @contextmanager
-def _advisory_lock(spec: DatabaseSpec, name: str, *, wait: bool) -> Iterator[bool]:
+def _advisory_lock(spec: DatabaseSpec, name: str, acquisition: LockAcquisition) -> Iterator[bool]:
     engine = _bare_engine(spec)
     try:
         with engine.connect() as conn:
             if conn.dialect.name != "postgresql":
                 yield True
                 return
-            operation = "pg_advisory_lock" if wait else "pg_try_advisory_lock"
             result = conn.execute(
-                text(f"SELECT {operation}(hashtext(:name))"),
+                text(f"SELECT {acquisition.value}(hashtext(:name))"),
                 {"name": name},
             ).scalar()
-            acquired = True if wait else bool(result)
+            acquired = acquisition is LockAcquisition.BLOCKING or bool(result)
             conn.commit()
             try:
                 yield acquired
@@ -161,20 +166,22 @@ def _advisory_lock(spec: DatabaseSpec, name: str, *, wait: bool) -> Iterator[boo
 
 
 @contextmanager
-def runner_lock(spec: DatabaseSpec, runner: str, *, wait: bool) -> Iterator[bool]:
-    """Hold a database-wide advisory lock for one Marina runner execution.
+def runner_lock(spec: DatabaseSpec, runner: str) -> Iterator[bool]:
+    """Try to lease a scheduled runner, returning false when another execution owns it."""
+    with _advisory_lock(spec, f"{RUNNER_LOCK_PREFIX}{runner}", LockAcquisition.NONBLOCKING) as acquired:
+        yield acquired
 
-    Scheduled executions use a non-blocking lock and skip overlap. A migration-only deploy
-    execution waits so the new service revision cannot start before its migrations finish.
-    Non-Postgres test databases have no cross-process advisory-lock primitive and always enter.
-    """
-    with _advisory_lock(spec, f"{RUNNER_LOCK_PREFIX}{runner}", wait=wait) as acquired:
+
+@contextmanager
+def deployment_runner_lock(spec: DatabaseSpec, runner: str) -> Iterator[bool]:
+    """Wait to lease the runner used for deployment migrations."""
+    with _advisory_lock(spec, f"{RUNNER_LOCK_PREFIX}{runner}", LockAcquisition.BLOCKING) as acquired:
         yield acquired
 
 
 @contextmanager
 def migration_lock(spec: DatabaseSpec) -> Iterator[None]:
     """Serialize schema migrations across every runner and deployment."""
-    with _advisory_lock(spec, MIGRATION_LOCK_NAME, wait=True) as acquired:
+    with _advisory_lock(spec, MIGRATION_LOCK_NAME, LockAcquisition.BLOCKING) as acquired:
         assert acquired
         yield

@@ -128,15 +128,6 @@ class StoreMode(StrEnum):
     LOCAL = "local"
 
 
-class CatalogRefresh(StrEnum):
-    """Outcome of checking PostgreSQL for a newer committed catalog."""
-
-    DEFERRED = "deferred"
-    UNCHANGED = "unchanged"
-    UPDATED = "updated"
-    FAILED = "failed"
-
-
 @dataclass(frozen=True)
 class EvaldashConfig:
     """Everything the environment decides, resolved once when the kernel mounts the app."""
@@ -475,49 +466,46 @@ class PgRecordStore(RecordStore):
                 catalog_error=self._catalog_error,
             )
 
-    def _load_newer_catalog(self) -> CatalogRefresh:
+    def _load_newer_catalog(self) -> None:
         generation = catalog_generation(self._engine)
         with self._lock:
             current_generation = self._catalog_generation
         if generation <= current_generation:
-            return CatalogRefresh.UNCHANGED
+            return
         snapshot = fetch_snapshot(self._engine)
         with self._lock:
             if snapshot.generation <= self._catalog_generation:
-                return CatalogRefresh.UNCHANGED
+                return
             self._records = snapshot.records
             self._by_id = {record.run_id: record for record in snapshot.records}
             self._catalog_generation = snapshot.generation
             self._snapshot_updated_at = snapshot.updated_at
         logger.info("postgres store loaded generation %d with %d records", snapshot.generation, len(snapshot.records))
-        return CatalogRefresh.UPDATED
 
-    def reload_if_changed(self) -> CatalogRefresh:
+    def reload_if_changed(self) -> None:
         """Check immediately for a newer committed catalog and install it once."""
         with self._refresh_lock:
             try:
-                result = self._load_newer_catalog()
+                self._load_newer_catalog()
             except Exception as exc:
                 self.set_catalog_error(f"{type(exc).__name__}: {exc}")
                 raise
             self.set_catalog_error(None)
-            return result
 
-    def refresh_if_due(self) -> CatalogRefresh:
+    def refresh_if_due(self) -> None:
         """Refresh the cached catalog at most once per check interval, serving stale data on failure."""
         with self._refresh_lock:
             now = self._now()
             if now < self._next_catalog_check:
-                return CatalogRefresh.DEFERRED
+                return
             self._next_catalog_check = now + CATALOG_CHECK_INTERVAL
             try:
-                result = self._load_newer_catalog()
+                self._load_newer_catalog()
             except Exception as exc:
                 self.set_catalog_error(f"{type(exc).__name__}: {exc}")
                 logger.exception("catalog generation check failed; serving the previous snapshot")
-                return CatalogRefresh.FAILED
+                return
             self.set_catalog_error(None)
-            return result
 
     def _snapshot(self) -> tuple[list[EvalRunRecord], dict[str, EvalRunRecord]]:
         self.refresh_if_due()
@@ -732,61 +720,59 @@ class PostgresIngestor:
         self.interval = interval
         self.revalidate_after = revalidate_after
         self._now = now
-        self._lock = asyncio.Lock()
         store.configure_prefixes(prefixes)
 
     async def run_once(self) -> tuple[str, ...]:
         """Run one reconciliation pass and return the prefixes whose listings failed."""
         if not self._prefixes:
             return ()
-        async with self._lock:
-            failed_prefixes: list[str] = []
-            for prefix in self._prefixes:
-                probe_at = self._now()
-                try:
-                    paths = await asyncio.to_thread(list_record_paths, prefix)
-                    states = await asyncio.to_thread(self._store.source_states, prefix)
-                    observations = await asyncio.to_thread(
-                        inspect_record_paths,
-                        paths,
-                        states,
-                        VerificationSchedule(
-                            checked_at=probe_at,
-                            retry_after=self.interval,
-                            revalidate_after=self.revalidate_after,
-                        ),
-                    )
-                    failures = {
-                        path: state.error for path, state in states.items() if path in paths and state.error is not None
-                    }
-                    for observation in observations:
-                        if observation.error is None:
-                            failures.pop(observation.path, None)
-                        else:
-                            failures[observation.path] = observation.error
-                    await asyncio.to_thread(
-                        self._store.reconcile_prefix,
-                        prefix,
-                        paths,
-                        observations,
-                        probe_at,
-                        self.interval,
-                    )
-                except Exception as exc:
-                    error = f"{type(exc).__name__}: {exc}"
-                    logger.exception("reconcile: %s failed; keeping its committed catalog rows", prefix)
-                    await asyncio.to_thread(self._store.mark_prefix_failed, prefix, probe_at, error)
-                    failed_prefixes.append(prefix)
-                    continue
-                logger.info(
-                    "reconcile: %d candidates, %d checked, %d invalid from %s",
-                    len(paths),
-                    len(observations),
-                    len(failures),
-                    prefix,
+        failed_prefixes: list[str] = []
+        for prefix in self._prefixes:
+            probe_at = self._now()
+            try:
+                paths = await asyncio.to_thread(list_record_paths, prefix)
+                states = await asyncio.to_thread(self._store.source_states, prefix)
+                observations = await asyncio.to_thread(
+                    inspect_record_paths,
+                    paths,
+                    states,
+                    VerificationSchedule(
+                        checked_at=probe_at,
+                        retry_after=self.interval,
+                        revalidate_after=self.revalidate_after,
+                    ),
                 )
-            await asyncio.to_thread(self._store.finish_reconciliation, self._prefixes)
-            return tuple(failed_prefixes)
+                failures = {
+                    path: state.error for path, state in states.items() if path in paths and state.error is not None
+                }
+                for observation in observations:
+                    if observation.error is None:
+                        failures.pop(observation.path, None)
+                    else:
+                        failures[observation.path] = observation.error
+                await asyncio.to_thread(
+                    self._store.reconcile_prefix,
+                    prefix,
+                    paths,
+                    observations,
+                    probe_at,
+                    self.interval,
+                )
+            except Exception as exc:
+                error = f"{type(exc).__name__}: {exc}"
+                logger.exception("reconcile: %s failed; keeping its committed catalog rows", prefix)
+                await asyncio.to_thread(self._store.mark_prefix_failed, prefix, probe_at, error)
+                failed_prefixes.append(prefix)
+                continue
+            logger.info(
+                "reconcile: %d candidates, %d checked, %d invalid from %s",
+                len(paths),
+                len(observations),
+                len(failures),
+                prefix,
+            )
+        await asyncio.to_thread(self._store.finish_reconciliation, self._prefixes)
+        return tuple(failed_prefixes)
 
     def status(self) -> dict:
         probes = []

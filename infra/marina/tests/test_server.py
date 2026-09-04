@@ -107,6 +107,7 @@ secrets = ["TOKEN"]
     assert runner.cpu == 2
     assert runner.memory_gib == 3
     assert [bound.qualified_name for bound in runner.jobs] == ["alpha.sync", "zeta.refresh"]
+    assert [bound.resource_env for bound in runner.jobs] == ["ALPHA_SYNC_JOB", "ZETA_REFRESH_JOB"]
 
 
 @pytest.mark.parametrize(
