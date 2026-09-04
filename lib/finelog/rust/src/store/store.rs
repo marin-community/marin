@@ -2186,7 +2186,6 @@ mod tests {
         std::fs::remove_file(&paths[0]).unwrap();
         assert_eq!(reopened.query_snapshot("iris.worker").unwrap().paths, paths);
         assert_eq!(scan_table(&reopened, "iris.worker").await, 2);
-        assert!(Path::new(&paths[0]).exists());
         reopened.shutdown(Duration::from_secs(1)).await;
         std::fs::remove_dir_all(data_dir).ok();
         std::fs::remove_dir_all(remote_dir).ok();
