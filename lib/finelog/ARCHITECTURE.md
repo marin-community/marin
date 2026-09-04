@@ -104,11 +104,11 @@ The ownership rule: `ObjectStore` owns bytes and localization; `TableController`
 Each object-backed table has one authority: an immutable, complete state document per revision plus a mutable HEAD replaced by compare-and-swap.
 
 ```text
-<remote>/_finelog/tables/<table>/HEAD.json                    mutable pointer: revision, writer fence, state ref + checksum
-<remote>/_finelog/tables/<table>/catalogs/<rev>-<sha8>.json   immutable complete TableState per revision
-<remote>/_finelog/tables/<table>/objects/<sha256>.parquet     immutable data segments
-<remote>/_finelog/tables/<table>/indices/<sha256>.fidx        immutable index bundles
-<remote>/_finelog/tables/<table>/projections/<sha256>.parquet immutable covering-projection artifacts
+<remote>/_finelog/tables/<table>/HEAD.json                    mutable pointer: revision, writer fence, state ref
+<remote>/_finelog/tables/<table>/catalogs/<rev>-<uuid>.json   immutable complete TableState per revision
+<remote>/_finelog/tables/<table>/objects/<uuid>.parquet       immutable data segments
+<remote>/_finelog/tables/<table>/indices/<uuid>.fidx          immutable index bundles
+<remote>/_finelog/tables/<table>/projections/<uuid>.parquet   immutable covering-projection artifacts
 ```
 
 Every durable mutation — flush, compaction, index backfill, registration, activation, abort, retire, forward cursor, tombstone — is a controller commit that allocates the next monotonic `TableRevision` and carries the process's `WriterFence`. SQLite is a rebuildable projection for object-backed tables; for legacy tables it is the single authority, guarded by the data-dir flock rather than a durable state store. Dropping a table publishes a durable tombstone revision; HEAD is never deleted, so a missing HEAD with no catalog documents unambiguously means "never published", while a missing HEAD *over surviving catalogs* is external damage (a bucket lifecycle rule, human error). Recovery flags such a table **degraded**: it keeps serving reads and accumulating locally durable writes, but every publication is refused rather than starting a second history over the surviving catalogs. The repair is to restore `HEAD.json` (pointing at the newest catalog document) and restart; the revisions committed while degraded then roll forward and publish.
@@ -174,9 +174,9 @@ sequenceDiagram
     DF-->>C: rows
 ```
 
-Reads plan from immutable pinned snapshots and touch only what pruning selected. Each selected segment scans from its verified cache file when one exists; otherwise the scan reads the object's remote URL directly (the provider's backend is registered with DataFusion's runtime at store open) while a background fetch warms the cache for the next query — a cold cache never blocks a read. Index artifacts are opened by the content-addressed references the state advertises — never by deriving a sidecar path — and an uncached artifact is warmed in the background while this scan reads the source Parquet. Direct clients (Python/DuckDB) read HEAD and the published projection from object storage without the server.
+Reads plan from immutable pinned snapshots and touch only what pruning selected. Each selected segment scans from its cached file when one exists; otherwise the scan reads the object's remote URL directly (the provider's backend is registered with DataFusion's runtime at store open) while a background fetch warms the cache for the next query — a cold cache never blocks a read. Index artifacts are opened by the immutable references the state advertises — never by deriving a sidecar path — and an uncached artifact is warmed in the background while this scan reads the source Parquet. Direct clients (Python/DuckDB) read HEAD and the published projection from object storage without the server.
 
-The cache itself (`cached.rs`): a verified hit (size + SHA-256, corrupt files self-heal) returns the local file and refreshes its recency; a fill downloads under a store-wide concurrency bound and lands the file by atomic rename. Writes are dual-ported — an upload's bytes also seed the cache, streamed uploads spool to the cache file while they transfer — so the flush → query path never re-downloads its own output. With `FINELOG_OBJECT_CACHE_GB` set, maintenance evicts least-recently-used cache files beyond the capacity, unlinking only behind the query-visibility write lock; unset retains everything. Staged files — written locally but not yet uploaded — are pinned and never evicted, because until publication they are the only copy.
+The cache itself (`cached.rs`): a hit checks file size, returns the local file, and refreshes its recency without reading its contents. A truncated file is removed and fetched again; same-size changes are not detected. A fill downloads under a store-wide concurrency bound, checks the byte length, and lands the file by atomic rename. Writes are dual-ported — an upload's bytes also seed the cache, streamed uploads spool to the cache file while they transfer — so the flush → query path never re-downloads its own output. With `FINELOG_OBJECT_CACHE_GB` set, maintenance evicts least-recently-used cache files beyond the capacity, unlinking only behind the query-visibility write lock; unset retains everything. Staged files — written locally but not yet uploaded — are pinned and never evicted, because until publication they are the only copy.
 
 ### Maintenance dispatch
 

@@ -206,8 +206,8 @@ impl ObjectSources {
     }
 }
 
-/// The file sets one scan reads: verified local cache files, and remote URLs
-/// for the objects the cache does not hold yet.
+/// The file sets one scan reads: local cache files, and remote URLs for the
+/// objects the cache does not hold yet.
 #[derive(Default)]
 struct ResolvedScan {
     local: Vec<String>,

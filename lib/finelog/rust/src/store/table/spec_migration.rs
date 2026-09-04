@@ -326,9 +326,10 @@ async fn backfill(
             .collect();
         (object_records, sources, covered)
     };
-    // Remove this guard after every deployed table is RETIRED and no older
-    // server can publish the pre-metadata checkpoint format. Without it, a
-    // mixed-version migration could rewrite an already checkpointed source.
+    // TODO(#8909): Remove after 2026-09-18 once every deployed table is
+    // RETIRED and no older server can publish the pre-metadata checkpoint
+    // format. Without it, a mixed-version migration could rewrite an already
+    // checkpointed source.
     if covered.iter().any(|identity| {
         identity.len() == 64 && identity.bytes().all(|byte| byte.is_ascii_hexdigit())
     }) {
