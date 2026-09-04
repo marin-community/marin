@@ -271,10 +271,13 @@ role](https://docs.coreweave.com/security/iam/access-policies). The token owner 
 token named `loom-token` in the CoreWeave Cloud Console and assembles a kubeconfig containing
 these four contexts:
 
-- `cw-us-east-02a`
-- `cw-us-east-08a`
-- `cw-rno2a`
-- `cw-us-west-04a`
+- `marin-gpu_US-EAST-02A` for `cw-us-east-02a`
+- `marin-us-east-08a_US-EAST-08A` for `cw-us-east-08a`
+- `marin-rn02a_RNO2A` for `cw-rno2a`
+- `marin_US-WEST-04A` for `cw-us-west-04a`
+
+These names must match each Iris config's `platform.coreweave.kube_context`; the short cluster
+names are not kubeconfig aliases.
 
 CKS Viewer maps the identity into Kubernetes' `read` group. Kubernetes RoleBindings, not the
 CoreWeave IAM policy, add `pods/exec` and `pods/portforward`. Keep the current and replacement
@@ -287,7 +290,7 @@ contexts, and upload the complete kubeconfig to a dedicated Secret Manager secre
 ```bash
 export KUBECONFIG=/path/to/reviewed/coreweave-iris
 chmod 600 "$KUBECONFIG"
-kubectl auth whoami --kubeconfig "$KUBECONFIG" --context cw-us-east-08a
+kubectl auth whoami --kubeconfig "$KUBECONFIG" --context marin-us-east-08a_US-EAST-08A
 kubectl config get-contexts --kubeconfig "$KUBECONFIG" -o name
 
 gcloud secrets create loom-coreweave-iris-kubeconfig \
