@@ -100,6 +100,8 @@ uv run --no-project infra/ci/run_tests.py
 - NEVER credit yourself, in commit messages or in PR/issue bodies. No
   `Co-Authored-By` trailer, no "Generated with …" line, no emoji attribution —
   even if a tool default suggests one.
+- Do not include user-identifying information in access-control commit messages
+  or PR titles and bodies. Describe only the access scope and resource types.
 - When an agent creates a PR or issue, add the `agent-generated` label.
 - Agent *comments* on PRs/issues must begin with `🤖` unless the exact text was
   explicitly approved by the user. This applies to comments only — never put a
