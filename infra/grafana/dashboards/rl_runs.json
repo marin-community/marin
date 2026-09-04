@@ -31,6 +31,16 @@
       "includeVars": true,
       "keepTime": true,
       "targetBlank": false,
+      "title": "RL generation",
+      "type": "link",
+      "url": "/d/marin-rl-generation"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
       "title": "RL training step",
       "type": "link",
       "url": "/d/marin-rl-policy-train"
@@ -1360,36 +1370,6 @@
       "interval": "1m"
     },
     {
-      "id": 24,
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 0,
-        "y": 59
-      },
-      "panelRef": "rl_generate_breakdown"
-    },
-    {
-      "id": 25,
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 59
-      },
-      "panelRef": "rl_trajectory_wait"
-    },
-    {
-      "id": 26,
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 16,
-        "y": 59
-      },
-      "panelRef": "rl_environment_wait_split"
-    },
-    {
       "type": "row",
       "title": "Is it learning, and can the reward be trusted?",
       "collapsed": false,
@@ -1398,7 +1378,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 67
+        "y": 59
       },
       "panels": []
     },
@@ -1415,7 +1395,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 68
+        "y": 60
       },
       "fieldConfig": {
         "defaults": {
@@ -1504,7 +1484,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 68
+        "y": 60
       },
       "fieldConfig": {
         "defaults": {
@@ -1592,7 +1572,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 76
+        "y": 68
       },
       "panels": []
     },
@@ -1609,7 +1589,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 77
+        "y": 69
       },
       "fieldConfig": {
         "defaults": {
@@ -1693,7 +1673,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 77
+        "y": 69
       },
       "fieldConfig": {
         "defaults": {

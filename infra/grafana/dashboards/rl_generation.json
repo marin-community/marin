@@ -1,0 +1,901 @@
+{
+  "uid": "marin-rl-generation",
+  "title": "RL generation",
+  "description": "Why generation takes as long as it does. It is 57-66% of an E6 step and the half that moves: after the grouped-mm fix made training about 13x faster, generation did not move and the bottleneck relocated here. The driver's own view of the fan-out sits above what the serving engines report.",
+  "tags": [
+    "marin",
+    "generated"
+  ],
+  "timezone": "utc",
+  "editable": false,
+  "schemaVersion": 39,
+  "refresh": "1m",
+  "time": {
+    "from": "now-3h",
+    "to": "now"
+  },
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "RL runs",
+      "type": "link",
+      "url": "/d/marin-rl-runs"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "RL training step",
+      "type": "link",
+      "url": "/d/marin-rl-policy-train"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Inference",
+      "type": "link",
+      "url": "/d/marin-inference"
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "cluster",
+        "label": "Cluster",
+        "type": "custom",
+        "query": "cw-rno2a,cw-us-east-02a,cw-us-east-08a,marin,marin-dev",
+        "multi": true,
+        "includeAll": true,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": []
+      },
+      {
+        "name": "run",
+        "label": "Run",
+        "type": "query",
+        "datasource": {
+          "type": "yesoreyeram-infinity-datasource",
+          "uid": "finelog-marin"
+        },
+        "multi": false,
+        "includeAll": false,
+        "refresh": 2,
+        "sort": 1,
+        "current": {},
+        "options": [],
+        "query": {
+          "queryType": "infinity",
+          "refId": "variable-run",
+          "infinityQuery": {
+            "refId": "variable-run",
+            "type": "json",
+            "source": "url",
+            "format": "table",
+            "parser": "backend",
+            "url": "/query",
+            "url_options": {
+              "method": "GET",
+              "params": [
+                {
+                  "key": "sql",
+                  "value": "SELECT DISTINCT run_id AS value FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name = 'policy_step' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND run_id IS NOT NULL ORDER BY 1"
+                },
+                {
+                  "key": "from",
+                  "value": "${__from}"
+                },
+                {
+                  "key": "to",
+                  "value": "${__to}"
+                }
+              ]
+            },
+            "columns": [
+              {
+                "selector": "value",
+                "text": "value",
+                "type": "string"
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "row",
+      "title": "Does generation own this step?",
+      "collapsed": false,
+      "id": 300,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "panels": []
+    },
+    {
+      "id": 305,
+      "type": "timeseries",
+      "title": "Generation against training, per step",
+      "description": "The two halves of the step side by side. Generation is 57-66% of it and moves 95-139 s between steps; training is 21-27% and barely moves. The step range is generation's variance, not training's — which is why this board exists.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisLabel": "mean seconds per step"
+          },
+          "unit": "s",
+          "min": 0,
+          "noValue": "No inclusive-wall driver rows under root='step'. This build publishes no step timings."
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, json_get(attributes_json, 'phase') AS series, AVG(value) AS value FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name = 'phase_duration_seconds' AND json_get(attributes_json, 'role') = 'trainer' AND json_get(attributes_json, 'clock_domain') = 'inclusive_wall' AND json_get(attributes_json, 'root') = 'step' AND json_get(attributes_json, 'phase') IN ('generate', 'policy_train') AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 302,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 1
+      },
+      "panelRef": "rl_generate_breakdown"
+    },
+    {
+      "id": 303,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 1
+      },
+      "panelRef": "rl_trajectory_wait"
+    },
+    {
+      "type": "row",
+      "title": "Is it the tail, or the whole batch?",
+      "collapsed": false,
+      "id": 310,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 9
+      },
+      "panels": []
+    },
+    {
+      "id": 306,
+      "type": "timeseries",
+      "title": "How far the slowest trajectory runs past the mean",
+      "description": "The longest single engine wait divided by the per-trajectory mean — about 7.6x on this run, a 93.6 s tail against a 12.3 s mean. Generation is tail-latency-bound: the step ends with the last trajectory, so the mean alone actively misleads.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 10
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisLabel": "slowest ÷ mean"
+          },
+          "unit": "none",
+          "min": 0,
+          "noValue": "No rollout counters. This build does not instrument the generation coroutines."
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "WITH counters AS ( SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS bucket, json_get(attributes_json, 'step') AS s, json_get(attributes_json, 'counter') AS counter, MAX(value) AS value FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name IN ('rollout_wait_seconds', 'rollout_count') AND json_get(attributes_json, 'role') = 'trainer' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3 ), per_step AS ( SELECT bucket, s, MAX(CASE WHEN counter = 'rollout_trajectory_count' THEN value END) AS trajectories, MAX(CASE WHEN counter = 'rollout_engine_await_seconds_sum' THEN value END) AS engine_seconds, MAX(CASE WHEN counter = 'rollout_engine_await_seconds_max' THEN value END) AS slowest FROM counters GROUP BY 1, 2 ) SELECT bucket AS t, AVG(slowest / NULLIF(engine_seconds / NULLIF(trajectories, 0), 0)) AS tail_over_mean FROM per_step GROUP BY 1 ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "tail_over_mean",
+              "text": "tail_over_mean",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 304,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 10
+      },
+      "panelRef": "rl_environment_wait_split"
+    },
+    {
+      "id": 231,
+      "type": "timeseries",
+      "title": "Generated tokens per request",
+      "description": "Generated tokens per rollout request, as percentiles over the vLLM histogram. The step ends with the slowest sample, so the p99-over-p50 gap is what generation costs it, not the mean.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 10
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisLabel": "tokens per request"
+          },
+          "unit": "none",
+          "min": 0,
+          "noValue": "No request_generation_tokens histogram, in either the vllm namespace or the trainer's forwarded one."
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "WITH engine AS ( SELECT service, run_id, execution_uid, node_name, process_index, name, resource_attributes_json, attributes_json, timestamp_ms, seq, value FROM \"telemetry_v1.vllm\" WHERE name IN ('request_generation_tokens_bucket') AND service = 'vllm' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) UNION ALL SELECT service, run_id, execution_uid, node_name, process_index, name, resource_attributes_json, attributes_json, timestamp_ms, seq, value FROM \"telemetry_v1.marinskyrl\" WHERE name IN ('request_generation_tokens_bucket') AND json_get(attributes_json, 'metric_source') = 'vllm' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) ), raw AS ( SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS bucket, json_get(attributes_json, 'le') AS upper_bound, CASE name WHEN 'request_queue_time_seconds_bucket' THEN 'queue' WHEN 'request_prefill_time_seconds_bucket' THEN 'prefill' WHEN 'request_decode_time_seconds_bucket' THEN 'decode' WHEN 'e2e_request_latency_seconds_bucket' THEN 'end to end' WHEN 'time_to_first_token_seconds_bucket' THEN 'time to first token' WHEN 'inter_token_latency_seconds_bucket' THEN 'inter-token latency' WHEN 'request_generation_tokens_bucket' THEN 'generated tokens' ELSE 'iteration tokens' END AS family, value, LAG(value) OVER ( PARTITION BY service, run_id, execution_uid, node_name, process_index, name, resource_attributes_json, attributes_json ORDER BY timestamp_ms, seq ) AS previous_value FROM engine ), deltas AS ( SELECT bucket, upper_bound, family, CASE WHEN previous_value IS NULL OR value < previous_value THEN NULL ELSE value - previous_value END AS delta FROM raw ), buckets AS ( SELECT bucket, family, upper_bound, SUM(delta) AS bucket_count FROM deltas WHERE delta IS NOT NULL GROUP BY 1, 2, 3 ), ranked AS ( SELECT bucket, family, upper_bound, bucket_count, MAX(bucket_count) OVER (PARTITION BY bucket, family) AS total_count FROM buckets ), quantiles AS ( SELECT bucket, family, MIN(CASE WHEN upper_bound NOT IN ('+Inf', 'Inf') AND bucket_count >= total_count * 0.50 THEN CAST(upper_bound AS DOUBLE) END) AS p50, MIN(CASE WHEN upper_bound NOT IN ('+Inf', 'Inf') AND bucket_count >= total_count * 0.90 THEN CAST(upper_bound AS DOUBLE) END) AS p90, MIN(CASE WHEN upper_bound NOT IN ('+Inf', 'Inf') AND bucket_count >= total_count * 0.99 THEN CAST(upper_bound AS DOUBLE) END) AS p99 FROM ranked WHERE total_count > 0 GROUP BY 1, 2 ), evidence AS ( SELECT bucket, family || ' · p50' AS label, p50 AS observed FROM quantiles UNION ALL SELECT bucket, family || ' · p90' AS label, p90 AS observed FROM quantiles UNION ALL SELECT bucket, family || ' · p99' AS label, p99 AS observed FROM quantiles ) SELECT bucket AS t, label AS series, observed AS value FROM evidence ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "type": "row",
+      "title": "Is the engine slow, or is nothing reaching it?",
+      "collapsed": false,
+      "id": 320,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 18
+      },
+      "panels": []
+    },
+    {
+      "id": 232,
+      "type": "timeseries",
+      "title": "Time to first token and inter-token latency",
+      "description": "Prefill responsiveness and decode speed. Inter-token latency times the p99 length is the floor on the generate phase at any concurrency. Only TTFT survives the trainer's forwarder, so the ITL lines are often absent.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 19
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisLabel": "seconds"
+          },
+          "unit": "s",
+          "min": 0,
+          "noValue": "Neither histogram reached finelog from this run's engines. Never an instant prefill."
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "WITH engine AS ( SELECT service, run_id, execution_uid, node_name, process_index, name, resource_attributes_json, attributes_json, timestamp_ms, seq, value FROM \"telemetry_v1.vllm\" WHERE name IN ('time_to_first_token_seconds_bucket', 'inter_token_latency_seconds_bucket') AND service = 'vllm' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) UNION ALL SELECT service, run_id, execution_uid, node_name, process_index, name, resource_attributes_json, attributes_json, timestamp_ms, seq, value FROM \"telemetry_v1.marinskyrl\" WHERE name IN ('time_to_first_token_seconds_bucket', 'inter_token_latency_seconds_bucket') AND json_get(attributes_json, 'metric_source') = 'vllm' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) ), raw AS ( SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS bucket, json_get(attributes_json, 'le') AS upper_bound, CASE name WHEN 'request_queue_time_seconds_bucket' THEN 'queue' WHEN 'request_prefill_time_seconds_bucket' THEN 'prefill' WHEN 'request_decode_time_seconds_bucket' THEN 'decode' WHEN 'e2e_request_latency_seconds_bucket' THEN 'end to end' WHEN 'time_to_first_token_seconds_bucket' THEN 'time to first token' WHEN 'inter_token_latency_seconds_bucket' THEN 'inter-token latency' WHEN 'request_generation_tokens_bucket' THEN 'generated tokens' ELSE 'iteration tokens' END AS family, value, LAG(value) OVER ( PARTITION BY service, run_id, execution_uid, node_name, process_index, name, resource_attributes_json, attributes_json ORDER BY timestamp_ms, seq ) AS previous_value FROM engine ), deltas AS ( SELECT bucket, upper_bound, family, CASE WHEN previous_value IS NULL OR value < previous_value THEN NULL ELSE value - previous_value END AS delta FROM raw ), buckets AS ( SELECT bucket, family, upper_bound, SUM(delta) AS bucket_count FROM deltas WHERE delta IS NOT NULL GROUP BY 1, 2, 3 ), ranked AS ( SELECT bucket, family, upper_bound, bucket_count, MAX(bucket_count) OVER (PARTITION BY bucket, family) AS total_count FROM buckets ), quantiles AS ( SELECT bucket, family, MIN(CASE WHEN upper_bound NOT IN ('+Inf', 'Inf') AND bucket_count >= total_count * 0.50 THEN CAST(upper_bound AS DOUBLE) END) AS p50, MIN(CASE WHEN upper_bound NOT IN ('+Inf', 'Inf') AND bucket_count >= total_count * 0.90 THEN CAST(upper_bound AS DOUBLE) END) AS p90, MIN(CASE WHEN upper_bound NOT IN ('+Inf', 'Inf') AND bucket_count >= total_count * 0.99 THEN CAST(upper_bound AS DOUBLE) END) AS p99 FROM ranked WHERE total_count > 0 GROUP BY 1, 2 ), evidence AS ( SELECT bucket, family || ' · p50' AS label, p50 AS observed FROM quantiles UNION ALL SELECT bucket, family || ' · p90' AS label, p90 AS observed FROM quantiles UNION ALL SELECT bucket, family || ' · p99' AS label, p99 AS observed FROM quantiles ) SELECT bucket AS t, label AS series, observed AS value FROM evidence ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 233,
+      "type": "timeseries",
+      "title": "Request latency by stage",
+      "description": "Where a request's wall goes inside the engine, as percentiles: queue, prefill, decode, end to end. Queue large against decode is an admission problem, not a slow model. Means and gauges for the same stages are on RL runs.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 19
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisLabel": "seconds"
+          },
+          "unit": "s",
+          "min": 0,
+          "noValue": "No per-stage latency histograms. The generate row above reports the same wait from the driver's side."
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "WITH engine AS ( SELECT service, run_id, execution_uid, node_name, process_index, name, resource_attributes_json, attributes_json, timestamp_ms, seq, value FROM \"telemetry_v1.vllm\" WHERE name IN ('request_queue_time_seconds_bucket', 'request_decode_time_seconds_bucket', 'e2e_request_latency_seconds_bucket') AND service = 'vllm' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) UNION ALL SELECT service, run_id, execution_uid, node_name, process_index, name, resource_attributes_json, attributes_json, timestamp_ms, seq, value FROM \"telemetry_v1.marinskyrl\" WHERE name IN ('request_queue_time_seconds_bucket', 'request_decode_time_seconds_bucket', 'e2e_request_latency_seconds_bucket') AND json_get(attributes_json, 'metric_source') = 'vllm' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) ), raw AS ( SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS bucket, json_get(attributes_json, 'le') AS upper_bound, CASE name WHEN 'request_queue_time_seconds_bucket' THEN 'queue' WHEN 'request_prefill_time_seconds_bucket' THEN 'prefill' WHEN 'request_decode_time_seconds_bucket' THEN 'decode' WHEN 'e2e_request_latency_seconds_bucket' THEN 'end to end' WHEN 'time_to_first_token_seconds_bucket' THEN 'time to first token' WHEN 'inter_token_latency_seconds_bucket' THEN 'inter-token latency' WHEN 'request_generation_tokens_bucket' THEN 'generated tokens' ELSE 'iteration tokens' END AS family, value, LAG(value) OVER ( PARTITION BY service, run_id, execution_uid, node_name, process_index, name, resource_attributes_json, attributes_json ORDER BY timestamp_ms, seq ) AS previous_value FROM engine ), deltas AS ( SELECT bucket, upper_bound, family, CASE WHEN previous_value IS NULL OR value < previous_value THEN NULL ELSE value - previous_value END AS delta FROM raw ), buckets AS ( SELECT bucket, family, upper_bound, SUM(delta) AS bucket_count FROM deltas WHERE delta IS NOT NULL GROUP BY 1, 2, 3 ), ranked AS ( SELECT bucket, family, upper_bound, bucket_count, MAX(bucket_count) OVER (PARTITION BY bucket, family) AS total_count FROM buckets ), quantiles AS ( SELECT bucket, family, MIN(CASE WHEN upper_bound NOT IN ('+Inf', 'Inf') AND bucket_count >= total_count * 0.50 THEN CAST(upper_bound AS DOUBLE) END) AS p50, MIN(CASE WHEN upper_bound NOT IN ('+Inf', 'Inf') AND bucket_count >= total_count * 0.99 THEN CAST(upper_bound AS DOUBLE) END) AS p99 FROM ranked WHERE total_count > 0 GROUP BY 1, 2 ), evidence AS ( SELECT bucket, family || ' · p50' AS label, p50 AS observed FROM quantiles UNION ALL SELECT bucket, family || ' · p99' AS label, p99 AS observed FROM quantiles ) SELECT bucket AS t, label AS series, observed AS value FROM evidence ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 234,
+      "type": "timeseries",
+      "title": "Engine queue depth and why requests are waiting",
+      "description": "Mean queue depth per engine and the requests held back by each reason, averaged across engines rather than summed. A queue that never fills while the step waits is under-subscription; waiting on KV-cache is the opposite.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 19
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisLabel": "requests"
+          },
+          "unit": "none",
+          "min": 0,
+          "noValue": "No queue gauges. These are gauges, so blank is an absent producer and never an empty queue."
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "WITH engine AS ( SELECT service, run_id, execution_uid, node_name, process_index, name, resource_attributes_json, attributes_json, timestamp_ms, seq, value FROM \"telemetry_v1.vllm\" WHERE name IN ('queue_depth', 'num_requests_waiting_by_reason') AND service = 'vllm' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) UNION ALL SELECT service, run_id, execution_uid, node_name, process_index, name, resource_attributes_json, attributes_json, timestamp_ms, seq, value FROM \"telemetry_v1.marinskyrl\" WHERE name IN ('queue_depth', 'num_requests_waiting_by_reason') AND json_get(attributes_json, 'metric_source') = 'vllm' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) ), gauges AS ( SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS bucket, CASE WHEN name = 'queue_depth' THEN 'queue depth' ELSE 'waiting · ' || COALESCE(json_get(attributes_json, 'reason'), 'unknown') END AS label, value FROM engine ) SELECT bucket AS t, label AS series, AVG(value) AS value FROM gauges GROUP BY 1, 2 ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 235,
+      "type": "timeseries",
+      "title": "Tokens per engine iteration",
+      "description": "How full each engine step was, as percentiles over the iteration-token histogram. A p99 well below the batch size means the engine ran a mostly empty step, and the fix is concurrency or routing.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 27
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisLabel": "tokens per iteration"
+          },
+          "unit": "none",
+          "min": 0,
+          "noValue": "No iteration_tokens_total histogram. An RL run's engine rows usually arrive forwarded under the trainer's service, and that forwarder carries a narrower set than the engine's own registry."
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "WITH engine AS ( SELECT service, run_id, execution_uid, node_name, process_index, name, resource_attributes_json, attributes_json, timestamp_ms, seq, value FROM \"telemetry_v1.vllm\" WHERE name IN ('iteration_tokens_total_bucket') AND service = 'vllm' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) UNION ALL SELECT service, run_id, execution_uid, node_name, process_index, name, resource_attributes_json, attributes_json, timestamp_ms, seq, value FROM \"telemetry_v1.marinskyrl\" WHERE name IN ('iteration_tokens_total_bucket') AND json_get(attributes_json, 'metric_source') = 'vllm' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) ), raw AS ( SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS bucket, json_get(attributes_json, 'le') AS upper_bound, CASE name WHEN 'request_queue_time_seconds_bucket' THEN 'queue' WHEN 'request_prefill_time_seconds_bucket' THEN 'prefill' WHEN 'request_decode_time_seconds_bucket' THEN 'decode' WHEN 'e2e_request_latency_seconds_bucket' THEN 'end to end' WHEN 'time_to_first_token_seconds_bucket' THEN 'time to first token' WHEN 'inter_token_latency_seconds_bucket' THEN 'inter-token latency' WHEN 'request_generation_tokens_bucket' THEN 'generated tokens' ELSE 'iteration tokens' END AS family, value, LAG(value) OVER ( PARTITION BY service, run_id, execution_uid, node_name, process_index, name, resource_attributes_json, attributes_json ORDER BY timestamp_ms, seq ) AS previous_value FROM engine ), deltas AS ( SELECT bucket, upper_bound, family, CASE WHEN previous_value IS NULL OR value < previous_value THEN NULL ELSE value - previous_value END AS delta FROM raw ), buckets AS ( SELECT bucket, family, upper_bound, SUM(delta) AS bucket_count FROM deltas WHERE delta IS NOT NULL GROUP BY 1, 2, 3 ), ranked AS ( SELECT bucket, family, upper_bound, bucket_count, MAX(bucket_count) OVER (PARTITION BY bucket, family) AS total_count FROM buckets ), quantiles AS ( SELECT bucket, family, MIN(CASE WHEN upper_bound NOT IN ('+Inf', 'Inf') AND bucket_count >= total_count * 0.50 THEN CAST(upper_bound AS DOUBLE) END) AS p50, MIN(CASE WHEN upper_bound NOT IN ('+Inf', 'Inf') AND bucket_count >= total_count * 0.90 THEN CAST(upper_bound AS DOUBLE) END) AS p90, MIN(CASE WHEN upper_bound NOT IN ('+Inf', 'Inf') AND bucket_count >= total_count * 0.99 THEN CAST(upper_bound AS DOUBLE) END) AS p99 FROM ranked WHERE total_count > 0 GROUP BY 1, 2 ), evidence AS ( SELECT bucket, family || ' · p50' AS label, p50 AS observed FROM quantiles UNION ALL SELECT bucket, family || ' · p90' AS label, p90 AS observed FROM quantiles UNION ALL SELECT bucket, family || ' · p99' AS label, p99 AS observed FROM quantiles ) SELECT bucket AS t, label AS series, observed AS value FROM evidence ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 236,
+      "type": "timeseries",
+      "title": "KV-cache utilisation",
+      "description": "Mean and peak KV-cache occupancy across the run's engines, a gauge. Read it with the waiting-reason lines: a cache pinned near full while requests wait explains queueing that no amount of extra concurrency will clear, and a cache that stays empty says the engines had room the trainer never used.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 27
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisLabel": "KV-cache in use"
+          },
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "noValue": "No KV-cache gauge from this run's engines. Never an empty cache."
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "WITH engine AS ( SELECT service, run_id, execution_uid, node_name, process_index, name, resource_attributes_json, attributes_json, timestamp_ms, seq, value FROM \"telemetry_v1.vllm\" WHERE name IN ('kv_cache_usage_perc') AND service = 'vllm' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) UNION ALL SELECT service, run_id, execution_uid, node_name, process_index, name, resource_attributes_json, attributes_json, timestamp_ms, seq, value FROM \"telemetry_v1.marinskyrl\" WHERE name IN ('kv_cache_usage_perc') AND json_get(attributes_json, 'metric_source') = 'vllm' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) ), gauge AS ( SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS bucket, value FROM engine ) SELECT bucket AS t, AVG(value) AS mean_usage, MAX(value) AS peak_usage FROM gauge GROUP BY 1 ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "mean_usage",
+              "text": "mean_usage",
+              "type": "number"
+            },
+            {
+              "selector": "peak_usage",
+              "text": "peak_usage",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    }
+  ]
+}

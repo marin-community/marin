@@ -623,7 +623,7 @@ def _dashboard(name: str = "rl_policy_train.json") -> dict:
 
 
 def _rl_dashboards() -> dict:
-    return {name: _stitched()[name] for name in ("rl_policy_train.json", "rl_runs.json")}
+    return {name: _stitched()[name] for name in ("rl_policy_train.json", "rl_generation.json", "rl_runs.json")}
 
 
 def _our_panels() -> list[dict]:
@@ -637,10 +637,25 @@ def _our_panels() -> list[dict]:
         panel
         for name, board in _rl_dashboards().items()
         for panel, source in zip(board["panels"], json.loads((DASHBOARDS / name).read_text())["panels"], strict=True)
-        if source.get("panelRef") in ours or (name == "rl_policy_train.json" and panel["type"] != "row")
+        if source.get("panelRef") in ours
+        or (name in ("rl_policy_train.json", "rl_generation.json") and panel["type"] != "row")
     ]
     assert len(mounted) >= len(ours), (len(mounted), len(ours))
     return mounted
+
+
+def _section_of(name: str) -> dict[str, str]:
+    """Panel title -> the row it sits under, by grid position rather than by list order."""
+    board = _dashboard(name)
+    rows = [panel for panel in board["panels"] if panel["type"] == "row"]
+    return {
+        panel["title"]: max(
+            (row for row in rows if row["gridPos"]["y"] < panel["gridPos"]["y"]),
+            key=lambda row: row["gridPos"]["y"],
+        )["title"]
+        for panel in board["panels"]
+        if panel["type"] != "row"
+    }
 
 
 def _all_panels(title: str) -> list[dict]:
@@ -1019,14 +1034,43 @@ def test_every_rank_fills_the_grid_on_both_rl_dashboards() -> None:
         assert rows == sorted(rows), name
 
 
-def test_the_training_rows_are_questions() -> None:
-    """Each row states the question it answers, in the order an engineer needs them."""
-    rows = [panel["title"] for panel in _dashboard()["panels"] if panel["type"] == "row"]
-    assert rows == [
+def test_each_board_owns_one_question_and_its_rows_are_questions() -> None:
+    """Three boards, one question each. The rule marin#8562 applied to rows applies to boards too:
+    a person debugging generation must not have to open something with "training" in the name."""
+    assert [panel["title"] for panel in _dashboard()["panels"] if panel["type"] == "row"] == [
         "Why is the training step slow?",
         "Were the accelerators doing arithmetic, or waiting?",
+    ]
+    assert [panel["title"] for panel in _dashboard("rl_generation.json")["panels"] if panel["type"] == "row"] == [
+        "Does generation own this step?",
+        "Is it the tail, or the whole batch?",
         "Is the engine slow, or is nothing reaching it?",
     ]
+    # The engine detail belongs to the board that asks about generation, not to the training board.
+    training = {panel["title"] for panel in _dashboard()["panels"]}
+    assert "Request latency by stage" not in training
+    assert "KV-cache utilisation" not in training
+
+
+def test_generation_is_shown_against_training_rather_than_alone(store) -> None:
+    """The premise the old layout encoded -- policy_train owns 90.4% of the step -- was true before
+    the grouped-mm fix and is false now. Two series on one axis is what makes that legible."""
+    rows = store.execute(_panel_sql("Generation against training, per step")).fetchall()
+
+    by_series = {series: seconds for _, series, seconds in rows}
+    assert set(by_series) == {"generate", "policy_train"}
+    assert by_series["generate"] == pytest.approx(DRIVER_PHASES["generate"])
+    assert by_series["policy_train"] == pytest.approx(DRIVER_PHASES["policy_train"])
+
+
+def test_the_tail_is_reported_against_the_per_trajectory_mean(store) -> None:
+    """Generation is tail-latency-bound: the step ends with the last trajectory, so the mean alone
+    misleads. The ratio has to divide the max by the per-trajectory mean, not by the raw sum."""
+    rows = store.execute(_panel_sql("How far the slowest trajectory runs past the mean")).fetchall()
+
+    expected = ENGINE_AWAIT_MAX / (ENGINE_AWAIT_SUM / TRAJECTORIES)
+    assert expected > 1.0, "the fixture no longer has a tail"
+    assert {round(value, 6) for _, value in rows} == {round(expected, 6)}
 
 
 def test_the_new_panels_answer_the_question_of_the_row_they_sit_in() -> None:
@@ -1036,24 +1080,20 @@ def test_the_new_panels_answer_the_question_of_the_row_they_sit_in() -> None:
     which is both the right reading order and the smallest possible diff to that dashboard.
     """
     board = _dashboard("rl_runs.json")
-    rows = [panel for panel in board["panels"] if panel["type"] == "row"]
-    section = {}
-    for panel in board["panels"]:
-        if panel["type"] == "row":
-            continue
-        owner = max(
-            (row for row in rows if row["gridPos"]["y"] < panel["gridPos"]["y"]), key=lambda row: row["gridPos"]["y"]
-        )
-        section[panel["title"]] = owner["title"]
+    section = _section_of("rl_runs.json")
 
     assert section["Span coverage: clock, ranks, truncated steps"] == "Alive and moving?"
     assert section["How the run ended, and whether telemetry kept up"] == "Alive and moving?"
     assert section["Step composition — exclusive seconds per phase"] == "Where did the wall clock go?"
     assert section["policy_train share of the step"] == "Where did the wall clock go?"
     assert section["Signed span residuals — both trees"] == "Where did the wall clock go?"
-    assert section["Inside generate — where the fan-out goes"] == "Why is generation slow?"
-    assert section["A trajectory's wait: the engine against the environment"] == "Why is generation slow?"
-    assert section["Is the environment slow, or the loop around it?"] == "Why is generation slow?"
+    # The generate-side depth moved to the board whose whole subject is generation, where it no
+    # longer competes for attention with the triage panels.
+    assert "Inside generate — where the fan-out goes" not in section
+    generation = _section_of("rl_generation.json")
+    assert generation["Inside generate — where the fan-out goes"] == "Does generation own this step?"
+    assert generation["A trajectory's wait: the engine against the environment"] == "Does generation own this step?"
+    assert generation["Is the environment slow, or the loop around it?"] == "Is it the tail, or the whole batch?"
 
     # The run picker only offers runs that reported a policy_step, so a lead panel going blank is
     # always a true alarm rather than a filter that did not match.
@@ -1194,7 +1234,8 @@ def test_no_panel_plots_a_concurrent_await_sum_undivided(store) -> None:
         for param in target["url_options"]["params"]
         if param["key"] == "sql" and "rollout_wait_seconds" in param["value"]
     ]
-    assert len(readers) == 2, [panel["title"] for panel in readers]
+    # The per-trajectory wait, the environment split, and the tail ratio.
+    assert len(readers) == 3, [panel["title"] for panel in readers]
     assert ENGINE_AWAIT_SUM > STEP_SECONDS, "the fixture no longer makes the raw sum implausible"
 
     for panel in readers:
