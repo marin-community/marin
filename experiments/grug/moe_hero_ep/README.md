@@ -146,6 +146,10 @@ The selected E384 model runs at expert width 3072 and receiver capacity factor 1
 
 ## Launch
 
+Use `--version dev` for diagnostics, ablations, profiles, and scaling runs in this guide. These
+runs write under `users/<username>/grug/...`. Reserve calendar versions for coordinated major
+production runs that need a shared checkpoint path under `grug/...`.
+
 ### Bounded diagnostics
 
 `launch_diagnostics.py` uses the d6144 model, Harrier 2026.08.18 data, process layout, watch config,
@@ -161,7 +165,7 @@ Print the plan without a GPU run:
 python -m experiments.grug.moe_hero_ep.launch_diagnostics \
   --run-id mhep-ragged \
   --num-steps 200 \
-  --version 2026.08.14
+  --version dev
 ```
 
 Submit the one-rack gate through the Marin Iris controller:
@@ -175,7 +179,7 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra
   -e WANDB_API_KEY "$WANDB_API_KEY" -e WANDB_PROJECT "$WANDB_PROJECT" \
   -e IRIS_PORT_JAX 32575 \
   -- python -m experiments.grug.moe_hero_ep.launch_diagnostics \
-    --run-id "$run_id" --num-steps 200 --version 2026.08.14 --run
+    --run-id "$run_id" --num-steps 200 --version dev --run
 ```
 
 W&B uses the `WANDB_PROJECT` environment variable, or project `marin_moe` when it is unset, with
@@ -220,7 +224,7 @@ python -m experiments.grug.moe_hero_ep.small_scale_abl_launch \
   --run-id mhep-abl-d1024-ep \
   --size d1024 \
   --flavor ep \
-  --version 2026.08.10
+  --version dev
 ```
 
 Submit one rung through the Marin Iris controller:
@@ -234,7 +238,7 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra
   -e WANDB_API_KEY "$WANDB_API_KEY" -e WANDB_PROJECT "$WANDB_PROJECT" \
   -e IRIS_PORT_JAX 32576 \
   -- python -m experiments.grug.moe_hero_ep.small_scale_abl_launch \
-    --run-id "$run_id" --size d1024 --flavor ep --version 2026.08.10 --run
+    --run-id "$run_id" --size d1024 --flavor ep --version dev --run
 ```
 
 The wider rungs need more than one rack to hold their batch: `--dp-racks N` replicates the run
