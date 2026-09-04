@@ -951,6 +951,17 @@ def test_every_timeseries_panel_declares_the_columns_its_sql_returns() -> None:
             assert "number" in declared.values(), f"{panel['title']}: no numeric column to plot"
 
 
+def test_the_hover_text_stays_short_enough_to_be_read() -> None:
+    """A description nobody reads is a description that is not there. Fifty words is about four
+    lines in the tooltip; past that the trap at the end is the part that gets skipped."""
+    for panel in _dashboard()["panels"]:
+        if panel["type"] == "row":
+            continue
+        for field, cap in (("description", 50), ("noValue", 40)):
+            text = panel.get(field) or panel["fieldConfig"]["defaults"].get(field, "")
+            assert len(text.split()) <= cap, f"{panel['title']}: {field} is {len(text.split())} words"
+
+
 def test_every_panel_says_on_its_face_why_it_would_be_blank() -> None:
     """An empty panel and a broken producer render identically, and half of these panels are empty
     on a run made by a build that predates their series. That distinction belongs on the panel face,

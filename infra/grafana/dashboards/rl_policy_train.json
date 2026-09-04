@@ -137,7 +137,7 @@
       "id": 203,
       "type": "table",
       "title": "What this run published",
-      "description": "One row per sink and clock domain, with the ranks, the steps, and the steps that ended in a failure. Read it before anything else, for three reasons. A run with no worker row has no policy_train decomposition at all, and every panel in the training row below is empty for that reason rather than because the producer broke. The clock domain decides what those numbers mean: `_wall` spans are device-synchronised and measure execution, `_launch` spans measure kernel launch and charge a backward's real cost to whatever later call happens to block, and the two must never be compared — a run publishes one, and this says which. And a nonzero truncated count means a step died mid-flight, so a step that looks fast on any panel below is a step that stopped early. This table is never empty for a run in the picker: the picker only offers runs that reported a policy_step, so a blank here is a true alarm.",
+      "description": "Which clock the worker sink stamped, how many ranks reported, and whether a step died mid-flight. `_launch` spans measure kernel launch rather than execution and must never be compared with `_wall`. A truncated step looks fast.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -214,7 +214,7 @@
       "id": 204,
       "type": "timeseries",
       "title": "Signed span residuals — both trees",
-      "description": "What each tree's parent measured that none of its children accounts for: generate_span_residual on the driver, policy_span_residual on r*. It is signed on purpose and is the only automatic detector this dashboard has for a child being counted inside its parent. Positive means the children miss where some of the time went, which is ordinary and small. Negative means they double-count, and it is not hypothetical: the first instrumented run published policy_training_step_other beside the four spans inside it and the residual read -1703 s against a 1706 s parent. Nothing here is clamped, because a clamp would turn the one number that can report a broken instrument into a number that always looks fine. Read it against the exclusive bands above — those recompute the same quantity from the rows that arrived, so a residual and a band that disagree mean a row was lost in transport rather than that a span is mis-parented.",
+      "description": "What each parent measured that its children do not account for. Positive is ordinary. Negative means a child is double-counted — the first instrumented run read -1703 s inside a 1706 s parent. Never clamped.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -236,7 +236,7 @@
             "axisLabel": "seconds the children do not account for"
           },
           "unit": "s",
-          "noValue": "No residual rows. The residual ships with the spans, so a run with spans and no residual is a build from before the tree became auditable."
+          "noValue": "No residual rows. The residual ships with the spans, so this build predates an auditable tree."
         },
         "overrides": []
       },
@@ -334,7 +334,7 @@
       "id": 202,
       "type": "timeseries",
       "title": "policy_train share of the step",
-      "description": "policy_train as a fraction of the enclosing step, from the same driver rows as the panel to the left. This is the triage number: on E6 Snowball it reads about 0.90, which is the reason this dashboard exists — the phase that owned nine tenths of the wall clock was a single leaf timer with nothing inside it. Read low, generation owns the step instead and the generate row below is the one to open. The denominator is the published `step` span when there is one and the sum of the step's direct children otherwise, because they partition it by construction and no run has published a `step` span since the generate tree landed; a panel that insisted on the span would be permanently blank. Compare against the accelerator row — a phase this large with low SM activity is stranded GPU time, not slow arithmetic.",
+      "description": "policy_train ÷ the step. The triage number: 0.90 on E6, 0.24 on pr488 where generation owns the step instead. The denominator is the step's direct children, because no run publishes a `step` span any more.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -358,7 +358,7 @@
           "unit": "percentunit",
           "min": 0,
           "max": 1,
-          "noValue": "No policy_train row, or no phases naming step as their parent. Both come from the same driver sink, so this is the sink not reaching finelog rather than a step with no training in it. The table to the left says what the run did publish."
+          "noValue": "No policy_train row, and no phases naming step as their parent. The driver sink is not reaching finelog."
         },
         "overrides": []
       },
@@ -432,7 +432,7 @@
       "id": 201,
       "type": "timeseries",
       "title": "Step composition — exclusive seconds per phase",
-      "description": "Mean seconds each driver phase spent on its own work inside one optimizer step: the phase's wall minus the walls of the phases that name it as their parent. Exclusive time is the only kind that may be stacked, and it telescopes, so these bands sum to the step no matter how deep the tree gets. Which phases exist depends on the trainer and on the build: the synchronous trainer records no run_training, so fwd_logprobs_values_reward and train_critic_and_policy attach straight to step, and the generate subtree (rollout_collect, rollout_assemble, rollout_finalize and their children) exists only on builds that publish it. Nothing here is enumerated, so a new span appears as its own band and is subtracted from its parent's on the same day it ships. Two bands read oddly on purpose. `generate` near zero is the correct statement that generate is pure orchestration and all of its wall is in its children — it equals the published generate_span_residual, and a disagreement between them means a child row was lost in transport. `train_critic_and_policy` is the Ray dispatch and collection around policy_train, a second or two that used to be invisible. A negative band is not noise: it means a child was counted inside its parent, and it is left signed rather than clamped. Only the root='step' subtree is read — save_checkpoints, queue_hf_export and eval sit beside a step and can neither be added to nor subtracted from it.",
+      "description": "Seconds each phase spent outside its own children, so the bands sum to the step at any depth. `generate` near zero is correct — it is pure orchestration. A negative band means a child is being counted inside its parent.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -459,7 +459,7 @@
           },
           "unit": "s",
           "min": 0,
-          "noValue": "No inclusive-wall driver rows under root='step'. This build does not publish step timings to telemetry, or the selected run predates them."
+          "noValue": "No inclusive-wall driver rows under root='step'. This build publishes no step timings."
         },
         "overrides": []
       },
@@ -538,7 +538,7 @@
       "id": 205,
       "type": "timeseries",
       "title": "Inside generate — where the fan-out goes",
-      "description": "generate's direct children as fractions of generate, which they partition, plus whatever they do not cover. Generation is around 60% of an E6 step and until this tree landed it was one wall with nothing inside it. The reading it exists to deliver is that rollout_collect — the fan-out that awaits every trajectory — is essentially the whole phase, about 97% on the pr488 run, so tokenise, assemble and finalise are not where to look and the question is what the fan-out is waiting on. The panels to the right answer that. Shares rather than seconds on purpose: the seconds are on the step composition above, and the question here has a different denominator. `unaccounted` is generate's own orchestration and should stay near zero; the same quantity is published as generate_span_residual, so the two disagreeing means a child row was lost.",
+      "description": "generate's direct children as shares of generate. rollout_collect — the fan-out that awaits every trajectory — is about 97%, so the question is what it waits on. `unaccounted` should stay near zero.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -566,7 +566,7 @@
           "unit": "percentunit",
           "min": 0,
           "max": 1,
-          "noValue": "No generate subtree. This build measures generate as a single wall — 11 of the 167 runs in finelog decompose it. The step composition above still shows generate's total."
+          "noValue": "This build measures generate as one wall — 11 of 167 runs decompose it. Its total is on the step composition."
         },
         "overrides": []
       },
@@ -632,7 +632,7 @@
       "id": 206,
       "type": "timeseries",
       "title": "A trajectory's wait: the engine against the environment",
-      "description": "Where one rollout trajectory's wall goes, and how far the slowest one runs past the mean. The two await totals are CONCURRENT SUMS over up to 4,096 coroutines and exceed their own parent by design — on the pr488 run rollout_engine_await_seconds_sum is 23,656 s against a 115 s generate, a factor of 205 — so they are divided by rollout_trajectory_count here and are never banded, never stacked, and never put on an axis beside a phase duration. A panel that plots one of those sums raw is the single easiest way for this dashboard to publish a number nobody should believe. What the three lines say together: the environment is close to free, the engine is the whole wait, and the slowest single trajectory runs about 2.7x the mean and is what the step actually waits for, because generate cannot end until the last one lands.",
+      "description": "Per-trajectory wait, from concurrent sums divided by rollout_trajectory_count. The raw sums run about 200x their own parent and must never be banded. `slowest` is what generate actually waits for: the step ends with the last trajectory.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -654,7 +654,8 @@
             "axisLabel": "seconds per trajectory"
           },
           "unit": "s",
-          "noValue": "No rollout counters. This build does not instrument the generation coroutines; the engine row below reports the same wait from the serving side."
+          "noValue": "No rollout counters. This build does not instrument the generation coroutines.",
+          "min": 0
         },
         "overrides": []
       },
@@ -725,7 +726,7 @@
       "id": 207,
       "type": "timeseries",
       "title": "Is the environment slow, or the loop around it?",
-      "description": "The environment wait split into the three terms that partition it: time queued for the executor, time the environment itself ran, and time waiting to be resumed on the driver's event loop after it finished. The split is the whole point, because the three have different fixes and the answer on real runs is not the obvious one — on the pr488 run the environment ran for 0.05 s while resume took 88 s of a 92 s wait. That is the EVENT LOOP being behind, not a slow environment, and no amount of environment optimisation touches it. Queue dominating instead would mean the executor is undersized. Shares rather than seconds because these are concurrent sums, comparable to each other and to nothing else on this dashboard. `unaccounted` is an audit: the producer states that the three terms partition the wait exactly, so anything but zero means they no longer do.",
+      "description": "The environment wait split three ways. Resume dominates on real runs — 88 s of 92 s while the environment itself ran for 0.05 s — which is the event loop being behind, not a slow environment. `unaccounted` audits the split.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -753,7 +754,7 @@
           "unit": "percentunit",
           "min": 0,
           "max": 1,
-          "noValue": "No environment-wait counters. This build does not split the environment wait; the panel to the left still shows its total against the engine's."
+          "noValue": "No environment-wait counters. This build does not split the environment wait."
         },
         "overrides": []
       },
@@ -832,7 +833,7 @@
       "id": 231,
       "type": "timeseries",
       "title": "Generated tokens per request",
-      "description": "The distribution of generated tokens per rollout request, from the vLLM histogram. The step cannot end until the slowest sample finishes, so the p99 over p50 gap — not the mean — is what generation costs the step. This series has been flowing for the whole life of the fleet and has never been analysed; it needs no new instrumentation. These are Prometheus-imported cumulative counters, differenced per full series identity with resets discarded, and must never be plotted beside a native Rigging counter, which is already a delta.",
+      "description": "Generated tokens per rollout request, as percentiles over the vLLM histogram. The step ends with the slowest sample, so the p99-over-p50 gap is what generation costs it, not the mean.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -855,7 +856,7 @@
           },
           "unit": "none",
           "min": 0,
-          "noValue": "No request_generation_tokens histogram. An RL run's engine rows land either under service='vllm' or forwarded under the trainer's own service and this panel reads both, so blank means neither arrived rather than that nothing was generated."
+          "noValue": "No request_generation_tokens histogram, in either the vllm namespace or the trainer's forwarded one."
         },
         "overrides": []
       },
@@ -921,7 +922,7 @@
       "id": 232,
       "type": "timeseries",
       "title": "Time to first token and inter-token latency",
-      "description": "Prefill responsiveness and steady-state decode speed, as percentiles over the vLLM histograms. Inter-token latency times the p99 generation length is the floor on how long the generate phase can take, whatever the concurrency; a p99 inter-token latency far above p50 means decode is contending rather than long. On a run whose engine rows arrive forwarded under the trainer's service rather than published directly under service='vllm', only the time-to-first-token histogram makes the trip: the inter-token series is simply absent and its lines do not draw, which is a narrower forwarder and not a decode that never happened.",
+      "description": "Prefill responsiveness and decode speed. Inter-token latency times the p99 length is the floor on the generate phase at any concurrency. Only TTFT survives the trainer's forwarder, so the ITL lines are often absent.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -944,7 +945,7 @@
           },
           "unit": "s",
           "min": 0,
-          "noValue": "Neither the time-to-first-token nor the inter-token histogram reached finelog from this run's engines. Blank is an absent forwarder, never an instant prefill."
+          "noValue": "Neither histogram reached finelog from this run's engines. Never an instant prefill."
         },
         "overrides": []
       },
@@ -1010,7 +1011,7 @@
       "id": 233,
       "type": "timeseries",
       "title": "Request latency by stage",
-      "description": "Where a rollout request's wall clock goes inside the engine: waiting in the queue, prefill, decode, and end to end. Queue time large against decode is an admission problem, not a model-speed problem, and it is the shape the earlier concurrency change was treating when raising 8 to 16 took the generate phase from 1260 s to 673 s.",
+      "description": "Where a request's wall goes inside the engine: queue, prefill, decode, end to end. Queue large against decode is an admission problem, not a slow model — that is what raising concurrency 8→16 fixed.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -1033,7 +1034,7 @@
           },
           "unit": "s",
           "min": 0,
-          "noValue": "No per-stage latency histograms from this run's engines. The generate row above still reports the same wait from the driver's side."
+          "noValue": "No per-stage latency histograms. The generate row above reports the same wait from the driver's side."
         },
         "overrides": []
       },
@@ -1099,7 +1100,7 @@
       "id": 234,
       "type": "timeseries",
       "title": "Engine queue depth and why requests are waiting",
-      "description": "Mean queue depth per engine, and the mean number of requests held back by each reason. Both are gauges and are averaged across engines rather than summed, so the lines answer “is one engine under-subscribed” rather than “how much work is in flight”. A queue that never fills while the step waits on generation is the under-subscription signature; requests waiting on KV-cache capacity instead is the opposite problem and takes a different fix.",
+      "description": "Mean queue depth per engine and the requests held back by each reason, averaged across engines rather than summed. A queue that never fills while the step waits is under-subscription; waiting on KV-cache is the opposite.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -1122,7 +1123,7 @@
           },
           "unit": "none",
           "min": 0,
-          "noValue": "No queue gauges from this run's engines. These are gauges, so blank is an absent producer and never an empty queue."
+          "noValue": "No queue gauges. These are gauges, so blank is an absent producer and never an empty queue."
         },
         "overrides": []
       },
@@ -1212,7 +1213,7 @@
           "unit": "percentunit",
           "min": 0,
           "max": 1,
-          "noValue": "No KV-cache gauge from this run's engines. Blank is an absent producer, never an empty cache."
+          "noValue": "No KV-cache gauge from this run's engines. Never an empty cache."
         },
         "overrides": []
       },
@@ -1278,7 +1279,7 @@
       "id": 235,
       "type": "timeseries",
       "title": "Tokens per engine iteration",
-      "description": "How full each engine step actually was, as percentiles over the iteration-token histogram. This is the under-subscription measurement that needs no experiment: a p99 well below what the batch size allows means the engine ran a mostly empty step, and the fix is concurrency or routing rather than a faster kernel.",
+      "description": "How full each engine step was, as percentiles over the iteration-token histogram. A p99 well below the batch size means the engine ran a mostly empty step, and the fix is concurrency or routing.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -1301,7 +1302,7 @@
           },
           "unit": "none",
           "min": 0,
-          "noValue": "No iteration_tokens_total histogram for this run. An RL run's engine rows usually arrive forwarded under the trainer's own service, and that forwarder carries a narrower set than the engine's own registry — on the pr488 run it publishes eight engine series and this is not one of them, while runs whose engines publish directly under service='vllm' do have it. The queue and KV-cache panels answer the same under-subscription question without it."
+          "noValue": "No iteration_tokens_total histogram. An RL run's engine rows usually arrive forwarded under the trainer's service, and that forwarder carries a narrower set than the engine's own registry."
         },
         "overrides": []
       },
@@ -1380,7 +1381,7 @@
       "id": 211,
       "type": "timeseries",
       "title": "policy_ppo_train decomposition at the critical rank",
-      "description": "The exclusive worker spans inside policy_train, for r* = argmax_rank(policy_ppo_train) at each step — the rank the driver actually blocked on. Aggregating per phase across ranks would be wrong and would not merely be noisy: barrier time and compute time are ANTI-correlated across ranks, because the last rank to arrive waits about nothing in the entry barrier and then does a full compute while early ranks do the reverse. Per-phase maxima therefore come from different ranks and can sum to more than the parent. Use the skew panel to the right for spread, never this one. `unattributed` is computed here as the parent minus the bands, not read from the published policy_span_residual, and it is signed: positive means the spans miss where the time goes, negative means they double-count. That is not a hypothetical. policy_training_step wraps forward, backward, optimizer and entropy, so banding it beside them counts that time twice — on the first instrumented run it published as policy_training_step_other with clock_domain=exclusive_wall at 1705.8 s inside a 1706.2 s parent, and the producer's own residual read -1703.5 s. Both spellings are excluded by name, and once the parent is recomputed the same rows close to about -0.2 s. policy_span_publish is measured at step N and published under step N-1, so its sub-second band lands one bucket late. Step 1 is warm-up dominated -- compilation, the first unshard and the allocator caches all land in it -- so read steady state from step 2 onward and narrow the time range rather than averaging the two together. One trap to know about: on the first instrumented run, step 2 published a 37 s train_step carrying outcome=failure, because the run died mid-step. A short step is a truncated step, not a fast one -- check the outcome attribute before believing a step got faster. Measured steady state runs the other way: across three arms step 2 takes about 15% LONGER than step 1 (about 1715 s -> 1972 s), and that gap does not track token count. The worker sink stamps one of two clock domains and the choice changes what every number here means: `_wall` when trainer.policy_train_spans_synchronize is set, `_launch` when it is not, because without a device synchronise a span measures kernel launch rather than execution and charges a backward's real cost to whatever later call happens to block. The panel reads either, and a run stamps only one — but the two must never be compared or averaged together, so check which one the run published before quoting a number from here.",
+      "description": "Exclusive spans on r* = argmax_rank(policy_ppo_train), the rank the driver blocked on. Never take a per-phase maximum across ranks: barrier and compute are anti-correlated, so the maxima come from different ranks and can sum past the parent. `unattributed` is recomputed here, and signed.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -1406,7 +1407,8 @@
             }
           },
           "unit": "s",
-          "noValue": "No worker spans. Set trainer.policy_train_spans=true and check that the telemetry endpoint, run id and execution uid reached the Ray actors — an unconfigured runtime discards every record and still reports a healthy flush."
+          "noValue": "No worker spans. Set trainer.policy_train_spans=true, and check the telemetry endpoint, run id and execution uid reached the Ray actors — an unconfigured runtime discards every record and still reports a healthy flush.",
+          "min": 0
         },
         "overrides": []
       },
@@ -1472,7 +1474,7 @@
       "id": 212,
       "type": "timeseries",
       "title": "Rank skew: policy_ppo_train across ranks",
-      "description": "The spread of policy_ppo_train over the ranks of one step. The gap between max and p50 is the arrival and straggler skew the driver pays for; it is the only thing the cross-rank spread may be read for. The max line is r*, whose row set the panel to the left decomposes. Do not subtract these from the driver's policy_train and call the difference driver overhead: the driver waits for the last-returning rank while this reports the longest-running one, and they need not be the same rank.",
+      "description": "Spread of policy_ppo_train across one step's ranks. The max-to-p50 gap is the straggler skew the driver pays for. Do not subtract it from the driver's policy_train — that waits for the last rank to return, not the longest-running one.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -1495,7 +1497,7 @@
           },
           "unit": "s",
           "min": 0,
-          "noValue": "No worker spans, so there is no cross-rank spread. The table at the top says whether any rank published; this is never a run whose ranks all finished together."
+          "noValue": "No worker spans, so there is no spread. Never a run whose ranks all finished together."
         },
         "overrides": []
       },
@@ -1571,7 +1573,7 @@
       "id": 213,
       "type": "timeseries",
       "title": "policy_train ÷ micro-step count",
-      "description": "Driver policy_train divided by the number of micro-steps the workers actually ran, with the micro-step count itself on the right axis. Per-layer FSDP parameter all-gathers are paid once per micro-step, so at micro_train_batch_size_per_gpu=1 the gather count is linear in this denominator and the ratio is what says whether raising the micro-batch bought anything: a flat ratio with a halved count is a real win, an inversely proportional ratio is not. Counted from the batch rather than derived from config, so a mismatch between the two is visible.",
+      "description": "Driver policy_train per micro-step, with the count itself on the right axis. FSDP pays a parameter all-gather per micro-step, so a flat ratio against a halved count is a real win and an inversely proportional one is not.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -1594,7 +1596,7 @@
           },
           "unit": "s",
           "min": 0,
-          "noValue": "No policy_train_count rows. The spans and these counters are published from the same block, so spans without counters means the run predates them or the batch carried no attention_mask -- it does not mean the batch was unpadded."
+          "noValue": "No policy_train_count rows. The spans and these counters ship together, so this run predates them."
         },
         "overrides": [
           {
@@ -1681,7 +1683,7 @@
       "id": 214,
       "type": "timeseries",
       "title": "backward ÷ forward at the critical rank",
-      "description": "The ratio of policy_backward to policy_forward on r*. With FSDP2 the backward pays a second parameter all-gather when reshard_after_forward is on, and gradient checkpointing adds a third for the recompute forward, so the ratio rises well above the arithmetic 2:1 when the gathers are the cost rather than the maths. Both spans are device-synchronised at their boundaries when trainer.policy_train_spans_synchronize is set, and the sink says which by stamping clock_domain=exclusive_wall; with it off they measure launch time, ship as exclusive_launch, and this ratio means something else. The panel reads either domain because a run publishes only one, but never compare a synchronised series against an unsynchronised one.",
+      "description": "The ratio on r*. FSDP2 pays a second all-gather in backward when reshard_after_forward is on and a third for gradient checkpointing, so it climbs above 2:1 when the gathers cost more than the maths. Meaningless across clock domains.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -1704,7 +1706,7 @@
           },
           "unit": "none",
           "min": 0,
-          "noValue": "No worker spans on r*. The table at the top says whether any rank published; this is never a forward that took no time."
+          "noValue": "No worker spans on r*. Never a forward that took no time."
         },
         "overrides": []
       },
@@ -1765,7 +1767,7 @@
       "id": 215,
       "type": "timeseries",
       "title": "Waiting and collective share at the critical rank",
-      "description": "The share of policy_ppo_train that r* spent in a barrier or a collective rather than in forward, backward or the optimizer: policy_entry_barrier, policy_final_barrier, policy_metric_allreduce and policy_entropy_allreduce over the whole span. On r* the entry barrier is close to zero by construction — it is the last rank to arrive — so a large share here is not arrival skew but real synchronisation cost, and arrival skew belongs to the rank-skew panel instead.",
+      "description": "The share of policy_ppo_train that r* spent in barriers and collectives. r*'s entry barrier is near zero by construction, so a large share here is real synchronisation cost rather than arrival skew — that belongs to the skew panel.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -1788,8 +1790,7 @@
           },
           "unit": "percentunit",
           "min": 0,
-          "max": 1,
-          "noValue": "No worker spans on r*, so there is no barrier or collective share to compute. This is never a step that spent nothing waiting."
+          "noValue": "No worker spans on r*. Never a step that spent nothing waiting."
         },
         "overrides": []
       },
@@ -1850,7 +1851,7 @@
       "id": 216,
       "type": "timeseries",
       "title": "Padding waste and attention work",
-      "description": "Left axis: the fraction of the trained batch that is padding, one minus real tokens over padded tokens. Right axis: the attention-work proxy B·S² ÷ ΣLᵢ², the factor by which eager attention's quadratic cost exceeds what the real sequence lengths would need. Packing is rejected for Grug, so batches are BSHD-padded, and eager attention is quadratic on the padded shape — which is why the linear padded fraction understates the cost and both lines have to be read together. The ratio is computed per rank and then averaged, so it is unaffected by how the batch is sharded. The token counters were renamed rank_tokens_real and rank_tokens_padded on 2026-09-03 to state that population -- they are one rank's shard, never the run total -- and both spellings are read, because naming only the new one empties the panel across the whole back catalogue and naming only the old one empties it on every run since.",
+      "description": "Left: the padding fraction of the trained batch. Right: B·S² ÷ ΣLᵢ², how far eager attention's quadratic cost runs past what the real lengths need. Packing is off for Grug, so the linear padded fraction understates the cost.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -1874,7 +1875,7 @@
           "unit": "percentunit",
           "min": 0,
           "max": 1,
-          "noValue": "No token counters. The spans and these counters are published from the same block, so spans without counters means the run predates them or the batch carried no attention_mask -- it does not mean the batch was unpadded."
+          "noValue": "No token counters. They ship with the spans, so this is an older run — never an unpadded batch."
         },
         "overrides": [
           {
@@ -1961,7 +1962,7 @@
       "id": 217,
       "type": "timeseries",
       "title": "Allocator pressure and peak memory on the worst rank",
-      "description": "Torch's own peak bytes on the rank that used most, and the allocator's retries and OOMs summed across ranks. This is the number that decides whether a larger micro_train_batch_size_per_gpu fits, and it is not the framebuffer gauge in the accelerator row: that one is per device and includes everything else on the card, while reserved bytes is what this process's caching allocator holds and allocated bytes is what it is actually using. The gap between them is fragmentation. Retries are the leading indicator and are invisible in a peak-bytes series: a retry means the allocator had the bytes but not a contiguous block, so a run can be nowhere near the ceiling and still be paying for the eager attention score tensor. Peaks are taken across ranks rather than averaged because the binding constraint is the worst rank; retries and OOMs are summed because they are per-step deltas and the question is how much churn the step cost in total.",
+      "description": "Torch's own peak bytes on the rank that used most, with allocator retries on the right axis. A retry means the bytes were there but not contiguous: the leading indicator of an OOM, and invisible in a peak-bytes series alone.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -1983,7 +1984,8 @@
             "axisLabel": "peak bytes on the worst rank"
           },
           "unit": "bytes",
-          "noValue": "No memory counters. They ship with the worker spans, so a run with spans and no memory series predates them."
+          "noValue": "No memory counters. They ship with the worker spans, so this run predates them.",
+          "min": 0
         },
         "overrides": [
           {
@@ -2093,7 +2095,7 @@
       "id": 221,
       "type": "timeseries",
       "title": "SM and tensor-pipe activity on this run's nodes",
-      "description": "DCGM SM-active and tensor-pipe-active on the GPUs of the nodes this run occupied. This is the direct test of the leading hypothesis for policy_train: that the eager 256-expert MoE loop is launch- and occupancy-bound rather than FLOP-bound. SM-active counts time with at least one warp resident, so it stays high while the device is busy doing very little; tensor-active near zero underneath a high SM-active is the signature. Read it beside the decomposition panel above. The node agent stamps no run_id and never will, so each node is credited to whichever run reported most from it in that bucket, and a node two runs share goes entirely to one of them — this is never a per-rank attribution.",
+      "description": "DCGM SM-active against tensor-active on this run's nodes. The direct test of whether the eager MoE loop is launch-bound: SM-active stays high while the device does very little, so tensor-active near zero underneath it is the signature. Joined by node, never per rank.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -2117,7 +2119,7 @@
           "unit": "percent",
           "min": 0,
           "max": 100,
-          "noValue": "No node join. Trainer rows carry no node_name, or the node agent is not reporting this cluster. This is never “the GPUs were idle”."
+          "noValue": "No node join: trainer rows carry no node_name, or the node agent is not reporting this cluster. Never idle GPUs."
         },
         "overrides": []
       },
@@ -2183,7 +2185,7 @@
       "id": 222,
       "type": "timeseries",
       "title": "GPU memory in use on this run's nodes",
-      "description": "DCGM framebuffer bytes in use, mean and peak across the run's GPUs. Eager attention materialises a full FP32 score tensor over the padded shape, and the headroom it leaves is what pins micro_train_batch_size_per_gpu to 1. The peak line is the number that decides whether a larger micro-batch fits with production margin; the mean is not.",
+      "description": "DCGM framebuffer bytes, mean and peak across the run's GPUs. Per device, so it counts everything else on the card — the per-rank torch peaks are the number that decides whether a larger micro-batch fits.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -2206,7 +2208,7 @@
           },
           "unit": "bytes",
           "min": 0,
-          "noValue": "No node join. Trainer rows carry no node_name, or the node agent is not reporting this cluster. This is never “the GPUs used no memory”."
+          "noValue": "No node join. Never “the GPUs used no memory”."
         },
         "overrides": []
       },
@@ -2272,7 +2274,7 @@
       "id": 223,
       "type": "timeseries",
       "title": "NVLink against PCIe receive traffic",
-      "description": "DCGM NVLink and PCIe throughput per direction, summed over the run's GPUs. This is the observable proxy for where the FSDP parameter all-gather goes: NVLink carries traffic that stayed inside a tray, PCIe carries what left it for the host and the network. With fsdp_size=-1 the shard group spans every rank, so a gather that crosses the tray boundary shows here as PCIe volume rising with NVLink rather than instead of it. It does not identify the fabric beyond the host — that needs NCCL_DEBUG transport lines, which nothing in the launcher currently pins or records.",
+      "description": "DCGM NVLink and PCIe throughput per direction. The proxy for where the FSDP all-gather goes: NVLink is traffic that stayed in the tray, PCIe is what left it. It cannot identify the fabric beyond the host.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -2295,7 +2297,7 @@
           },
           "unit": "Bps",
           "min": 0,
-          "noValue": "No node join, or this cluster's node agent does not export the NVLink and PCIe counters. This is never “nothing crossed the fabric”."
+          "noValue": "No node join, or no NVLink/PCIe counters from this cluster's node agent. Never “nothing crossed the fabric”."
         },
         "overrides": []
       },
@@ -2361,7 +2363,7 @@
       "id": 224,
       "type": "table",
       "title": "Link faults and power on this run's GPUs",
-      "description": "Per GPU over the selected window: peak board power, and the increase in the NVLink and PCIe error counters. Power is a gauge and is reported as a peak; the two error columns are cumulative snapshots and are reported as differences with resets discarded, which is why they are separate columns rather than separate series in one plot. A degraded link shows up as a nonzero increase here while NVLink throughput on the panel to the left stays flat. An empty table is the healthy result.",
+      "description": "Per GPU: peak board power, and the increase in the NVLink and PCIe error counters with resets discarded. A degraded link shows here as a nonzero increase while throughput on the left stays flat.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -2374,7 +2376,7 @@
       },
       "fieldConfig": {
         "defaults": {
-          "noValue": "No GPU on this run's nodes increased an NVLink or PCIe error counter in this window. Empty is the healthy result here, which is the opposite of every other panel on this dashboard."
+          "noValue": "No GPU increased an NVLink or PCIe error counter here. Empty is the healthy result, unlike every other panel."
         },
         "overrides": []
       },
