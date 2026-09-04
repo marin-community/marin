@@ -17,6 +17,7 @@ still apply where they already did.
 """
 
 import logging
+from enum import StrEnum
 from typing import Any
 
 import s3fs
@@ -41,7 +42,16 @@ class MissingCredentials(Exception):
     """A bucket's backend has no usable credentials in the environment."""
 
 
-def filesystem_for(url: str, *, fixed_upload_size: bool = False) -> tuple[Any, str]:
+class S3UploadPolicy(StrEnum):
+    STANDARD = "standard"
+    FIXED_PARTS = "fixed_parts"
+
+
+def filesystem_for(
+    url: str,
+    *,
+    s3_upload_policy: S3UploadPolicy = S3UploadPolicy.STANDARD,
+) -> tuple[Any, str]:
     """Return ``(fs, path)`` for *url*, routed by the bucket's declared backend.
 
     An ``s3://`` URL naming a bucket declared as R2 or CoreWeave gets a dedicated
@@ -66,7 +76,7 @@ def filesystem_for(url: str, *, fixed_upload_size: bool = False) -> tuple[Any, s
         fs, path = url_to_fs(url)
         return _with_object_store_operations(fs), path
 
-    return _with_object_store_operations(_s3_filesystem(spec, fixed_upload_size=fixed_upload_size)), _s3_path(parsed)
+    return _with_object_store_operations(_s3_filesystem(spec, s3_upload_policy)), _s3_path(parsed)
 
 
 def _with_object_store_operations(fs: Any) -> Any:
@@ -78,7 +88,7 @@ def _s3_path(parsed: StoragePath) -> str:
     return f"{parsed.bucket}/{parsed.key}" if parsed.key else parsed.bucket
 
 
-def _s3_filesystem(spec: BucketSpec, *, fixed_upload_size: bool) -> s3fs.S3FileSystem:
+def _s3_filesystem(spec: BucketSpec, upload_policy: S3UploadPolicy) -> s3fs.S3FileSystem:
     """Build (or reuse) the S3 filesystem serving *spec*'s backend.
 
     The signing region is the bucket's own for CoreWeave, whose endpoint routes on it, and
@@ -99,5 +109,5 @@ def _s3_filesystem(spec: BucketSpec, *, fixed_upload_size: bool) -> s3fs.S3FileS
         # ``fsspec_s3_conf`` is the JSON-safe env shape, so it carries the
         # endpoint's addressing style but not the whole-request deadline.
         config_kwargs={**conf["config_kwargs"], **s3_python_config_kwargs()},
-        fixed_upload_size=fixed_upload_size,
+        fixed_upload_size=upload_policy is S3UploadPolicy.FIXED_PARTS,
     )

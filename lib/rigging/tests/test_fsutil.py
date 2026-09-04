@@ -22,6 +22,7 @@ import rigging.fsutil.verified_copy as verified_copy_module
 import rigging.timing as timing
 from botocore.exceptions import EndpointConnectionError
 from click.testing import CliRunner
+from rigging.filesystem.buckets import S3UploadPolicy
 from rigging.filesystem.cross_region import CrossRegionGuardedFS
 from rigging.filesystem.paged_listing import with_listing
 from rigging.fsutil import deletion, listing
@@ -159,8 +160,8 @@ def test_verified_copy_retry_uses_verified_objects_without_source_reads(tmp_path
         def open(self, _path, _mode):
             raise AssertionError("a verified resumed object must not reread its source")
 
-    def routed_filesystem(url, *, fixed_upload_size=False):
-        del fixed_upload_size
+    def routed_filesystem(url, *, s3_upload_policy=S3UploadPolicy.STANDARD):
+        del s3_upload_policy
         if url == str(source):
             return UnreadableSource(), source_path
         if url == str(destination):
@@ -239,10 +240,10 @@ def test_verified_copy_interruption_leaves_no_completion_and_retry_resumes(tmp_p
                 raise OSError("injected source failure")
             return source_filesystem.open(path, mode)
 
-    def failing_route(url, *, fixed_upload_size=False):
+    def failing_route(url, *, s3_upload_policy=S3UploadPolicy.STANDARD):
         if url == str(source):
             return FailingSource(), source_path
-        return original_filesystem_for(url, fixed_upload_size=fixed_upload_size)
+        return original_filesystem_for(url, s3_upload_policy=s3_upload_policy)
 
     monkeypatch.setattr(verified_copy_module, "filesystem_for", failing_route)
     with pytest.raises(OSError, match="injected source failure"):
@@ -338,10 +339,10 @@ def test_verified_copy_identityless_source_rereads_content_on_completion(tmp_pat
             info = source_filesystem.info(path)
             return {"name": path, "size": info["size"], "type": info.get("type", "file")}
 
-    def identityless_route(url, *, fixed_upload_size=False):
+    def identityless_route(url, *, s3_upload_policy=S3UploadPolicy.STANDARD):
         if url == str(source):
             return IdentitylessSource(), source_path
-        return original_filesystem_for(url, fixed_upload_size=fixed_upload_size)
+        return original_filesystem_for(url, s3_upload_policy=s3_upload_policy)
 
     monkeypatch.setattr(verified_copy_module, "filesystem_for", identityless_route)
     verified_copy_prefix(str(source), str(destination), workers=1)
@@ -389,10 +390,10 @@ def test_verified_copy_hash_mismatch_removes_object_and_withholds_completion(tmp
                 return CorruptingWriter(file, path)
             return file
 
-    def corrupting_route(url, *, fixed_upload_size=False):
+    def corrupting_route(url, *, s3_upload_policy=S3UploadPolicy.STANDARD):
         if url == str(destination):
             return CorruptingDestination(), destination_path
-        return original_filesystem_for(url, fixed_upload_size=fixed_upload_size)
+        return original_filesystem_for(url, s3_upload_policy=s3_upload_policy)
 
     monkeypatch.setattr(verified_copy_module, "filesystem_for", corrupting_route)
 
@@ -411,13 +412,16 @@ class _EtagDestination:
         self.etag = etag
         self.fixed_upload_size = fixed_upload_size
         self.allow_reads = allow_reads
+        self.reads = 0
 
     def __getattr__(self, name):
         return getattr(self.filesystem, name)
 
     def open(self, path, mode, **kwargs):
-        if mode == "rb" and path.endswith("weights.bin") and not self.allow_reads:
-            raise AssertionError("S3 verification must not download the destination object")
+        if mode == "rb" and path.endswith("weights.bin"):
+            self.reads += 1
+            if not self.allow_reads:
+                raise AssertionError("S3 verification must not download the destination object")
         kwargs.pop("block_size", None)
         return self.filesystem.open(path, mode, **kwargs)
 
@@ -458,10 +462,10 @@ def test_verified_copy_uses_s3_etag_without_destination_reads(tmp_path, monkeypa
         allow_reads=False,
     )
 
-    def routed_filesystem(url, *, fixed_upload_size=False):
+    def routed_filesystem(url, *, s3_upload_policy=S3UploadPolicy.STANDARD):
         if url == str(destination):
             return etag_destination, destination_path
-        return original_filesystem_for(url, fixed_upload_size=fixed_upload_size)
+        return original_filesystem_for(url, s3_upload_policy=s3_upload_policy)
 
     monkeypatch.setattr(verified_copy_module, "S3_UPLOAD_PART_BYTES", 4)
     monkeypatch.setattr(verified_copy_module, "filesystem_for", routed_filesystem)
@@ -490,10 +494,10 @@ def test_verified_copy_rejects_s3_etag_mismatch(tmp_path, monkeypatch):
         allow_reads=True,
     )
 
-    def routed_filesystem(url, *, fixed_upload_size=False):
+    def routed_filesystem(url, *, s3_upload_policy=S3UploadPolicy.STANDARD):
         if url == str(destination):
             return etag_destination, destination_path
-        return original_filesystem_for(url, fixed_upload_size=fixed_upload_size)
+        return original_filesystem_for(url, s3_upload_policy=s3_upload_policy)
 
     monkeypatch.setattr(verified_copy_module, "S3_UPLOAD_PART_BYTES", 4)
     monkeypatch.setattr(verified_copy_module, "filesystem_for", routed_filesystem)
@@ -520,10 +524,10 @@ def test_verified_copy_reads_destination_when_s3_part_sizes_are_not_fixed(tmp_pa
         allow_reads=True,
     )
 
-    def routed_filesystem(url, *, fixed_upload_size=False):
+    def routed_filesystem(url, *, s3_upload_policy=S3UploadPolicy.STANDARD):
         if url == str(destination):
             return etag_destination, destination_path
-        return original_filesystem_for(url, fixed_upload_size=fixed_upload_size)
+        return original_filesystem_for(url, s3_upload_policy=s3_upload_policy)
 
     monkeypatch.setattr(verified_copy_module, "S3_UPLOAD_PART_BYTES", 4)
     monkeypatch.setattr(verified_copy_module, "filesystem_for", routed_filesystem)
@@ -531,6 +535,7 @@ def test_verified_copy_reads_destination_when_s3_part_sizes_are_not_fixed(tmp_pa
     result = verified_copy_prefix(str(source), str(destination), workers=1)
 
     assert result.copied_files == 1
+    assert etag_destination.reads == 1
     assert (destination / COMPLETION_MANIFEST).exists()
 
 

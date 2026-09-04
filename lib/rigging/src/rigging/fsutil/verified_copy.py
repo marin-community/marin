@@ -15,7 +15,7 @@ from typing import Any, cast
 from fsspec import AbstractFileSystem
 
 from rigging.filesystem.atomic import atomic_rename
-from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.buckets import S3UploadPolicy, filesystem_for
 from rigging.fsutil.transfer import (
     COPY_CHUNK_BYTES,
     TransferLocation,
@@ -156,11 +156,11 @@ def verified_copy_prefix(
     if workers < 1:
         raise VerifiedCopyError("workers must be at least 1")
 
-    source = _resolved_location(source_url, fixed_upload_size=False)
-    destination = _resolved_location(destination_url, fixed_upload_size=True)
+    source = _resolved_location(source_url, S3UploadPolicy.STANDARD)
+    destination = _resolved_location(destination_url, S3UploadPolicy.FIXED_PARTS)
     status = _resolved_location(
         status_url or f"{destination.url}.verified-copy-status",
-        fixed_upload_size=True,
+        S3UploadPolicy.FIXED_PARTS,
     )
     _validate_disjoint_locations(source, destination, status)
 
@@ -412,8 +412,8 @@ def _resume_marker(filesystem: AbstractFileSystem, path: str) -> _ResumeMarker |
         return None
 
 
-def _resolved_location(url: str, *, fixed_upload_size: bool) -> TransferLocation:
-    filesystem, path = filesystem_for(url, fixed_upload_size=fixed_upload_size)
+def _resolved_location(url: str, upload_policy: S3UploadPolicy) -> TransferLocation:
+    filesystem, path = filesystem_for(url, s3_upload_policy=upload_policy)
     location = TransferLocation.from_path(url, filesystem, path)
     if _backend(location) == "file":
         path = os.path.realpath(os.path.abspath(path))
