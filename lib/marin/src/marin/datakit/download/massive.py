@@ -850,5 +850,9 @@ def massive_chat_normalize_steps() -> tuple[StepSpec, ...]:
     return (
         staged,
         transformed,
-        normalize_chat_step(name="normalized-chat/massive_function_calling", download=transformed),
+        normalize_chat_step(
+            name="normalized-chat/massive_function_calling",
+            download=transformed,
+            worker_resources=ResourceConfig(cpu=2, ram="64g", disk="10g"),
+        ),
     )

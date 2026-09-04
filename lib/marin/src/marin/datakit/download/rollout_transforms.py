@@ -83,7 +83,7 @@ def _canonical_tool_calls(tool_calls: object) -> list[dict]:
 
 
 def canonical_chat_messages(messages: list[dict]) -> list[dict]:
-    """Normalize common role aliases and validate the canonical message contract."""
+    """Normalize roles, tool calls, and parallel calls into the canonical message contract."""
     canonical: list[dict] = []
     for message in messages:
         role_value = message.get("role", message.get("from"))
@@ -104,7 +104,16 @@ def canonical_chat_messages(messages: list[dict]) -> list[dict]:
         normalized["content"] = content
         if message.get("tool_calls") is not None:
             normalized["tool_calls"] = _canonical_tool_calls(message["tool_calls"])
-        canonical.append(normalized)
+        tool_calls = normalized.get("tool_calls") or []
+        if len(tool_calls) <= 1:
+            canonical.append(normalized)
+            continue
+
+        for index, tool_call in enumerate(tool_calls):
+            serialized = dict(normalized)
+            serialized["content"] = content if index == 0 else None
+            serialized["tool_calls"] = [tool_call]
+            canonical.append(serialized)
     if not canonical:
         raise ValueError("A conversation must contain at least one message")
     return canonical

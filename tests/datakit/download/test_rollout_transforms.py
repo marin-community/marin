@@ -53,6 +53,38 @@ def test_chat_document_tool_arguments_have_stable_arrow_schema():
     assert documents[0]["messages"][0]["tool_calls"][0]["function"]["arguments"] == ('{"lines":[1,2],"path":"a.py"}')
 
 
+def test_canonical_chat_messages_serializes_parallel_tool_calls():
+    messages = canonical_chat_messages(
+        [
+            {
+                "role": "assistant",
+                "content": "I will inspect both files.",
+                "tool_calls": [
+                    {"id": "call_1", "function": {"name": "read", "arguments": {"path": "a.py"}}},
+                    {"id": "call_2", "function": {"name": "read", "arguments": {"path": "b.py"}}},
+                ],
+            },
+            {"role": "tool", "content": "a", "tool_call_id": "call_1"},
+            {"role": "tool", "content": "b", "tool_call_id": "call_2"},
+        ]
+    )
+
+    assert messages == [
+        {
+            "role": "assistant",
+            "content": "I will inspect both files.",
+            "tool_calls": [{"id": "call_1", "function": {"name": "read", "arguments": '{"path":"a.py"}'}}],
+        },
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "call_2", "function": {"name": "read", "arguments": '{"path":"b.py"}'}}],
+        },
+        {"role": "tool", "content": "a", "tool_call_id": "call_1"},
+        {"role": "tool", "content": "b", "tool_call_id": "call_2"},
+    ]
+
+
 def test_canonical_chat_messages_rejects_unknown_roles():
     with pytest.raises(ValueError, match="Unsupported chat role"):
         canonical_chat_messages([{"role": "critic", "content": "No."}])

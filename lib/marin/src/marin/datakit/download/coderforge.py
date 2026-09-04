@@ -134,6 +134,6 @@ def coderforge_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/coderforge-preview",
         deps=[dl],
         fn=lambda output_path: transform_chat(dl.output_path, output_path),
-        hash_attrs={"version": "v1"},
+        hash_attrs={"version": "v2"},
     )
     return processed, normalize_chat_step(name="normalized-chat/coderforge", download=processed)
