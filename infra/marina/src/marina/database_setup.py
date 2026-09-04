@@ -9,7 +9,9 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 APPLET_READER_ROLE = "marina_reader"
-PROVISION_APPLET_FUNCTION = "marina.provision_applet"
+APPLET_ROLE_PREFIX = "applet_"
+MARINA_SCHEMA = "marina"
+PROVISION_APPLET_FUNCTION = f"{MARINA_SCHEMA}.provision_applet"
 POSTGRES_ROLE_PATTERN = re.compile(r"^[A-Za-z0-9_@.\-]+$")
 
 
@@ -23,8 +25,8 @@ def applet_provisioning_statements(service_role: str) -> tuple[str, ...]:
     """SQL an administrator runs once to let Marina provision constrained applet roles."""
     service = _quoted_role(service_role)
     return (
-        f"CREATE SCHEMA IF NOT EXISTS marina AUTHORIZATION {service}",
-        f"GRANT ALL ON SCHEMA marina TO {service}",
+        f"CREATE SCHEMA IF NOT EXISTS {MARINA_SCHEMA} AUTHORIZATION {service}",
+        f"GRANT ALL ON SCHEMA {MARINA_SCHEMA} TO {service}",
         f"""DO $$
         BEGIN
             CREATE ROLE {APPLET_READER_ROLE} NOLOGIN;
@@ -41,7 +43,7 @@ def applet_provisioning_statements(service_role: str) -> tuple[str, ...]:
         SET search_path = pg_catalog
         AS $$
         DECLARE
-            applet_role TEXT := 'applet_' || replace(applet_id::TEXT, '-', '');
+            applet_role TEXT := '{APPLET_ROLE_PREFIX}' || replace(applet_id::TEXT, '-', '');
         BEGIN
             IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = applet_role) THEN
                 EXECUTE format('CREATE ROLE %I NOLOGIN', applet_role);
@@ -66,7 +68,7 @@ def ensure_applet_provisioning(engine: Engine) -> None:
             text("SELECT current_user, rolcreaterole OR rolsuper FROM pg_roles " "WHERE rolname = current_user")
         ).one()
         installed = connection.execute(
-            text("SELECT to_regprocedure('marina.provision_applet(uuid)') IS NOT NULL")
+            text(f"SELECT to_regprocedure('{PROVISION_APPLET_FUNCTION}(uuid)') IS NOT NULL")
         ).scalar_one()
         if installed:
             return

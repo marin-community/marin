@@ -27,7 +27,12 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
 from starlette.types import ASGIApp
 
-from marina.database_setup import APPLET_READER_ROLE, PROVISION_APPLET_FUNCTION
+from marina.database_setup import (
+    APPLET_READER_ROLE,
+    APPLET_ROLE_PREFIX,
+    MARINA_SCHEMA,
+    PROVISION_APPLET_FUNCTION,
+)
 from marina.db import DatabaseSpec, engine_for, engine_for_role, grant_read_on_connection
 
 APPLET_MANIFEST = "applet.toml"
@@ -256,7 +261,7 @@ def package_applet(app_dir: Path) -> bytes:
 
 
 def applet_schema(applet_id: uuid.UUID) -> str:
-    return f"applet_{applet_id.hex}"
+    return f"{APPLET_ROLE_PREFIX}{applet_id.hex}"
 
 
 def applet_role(applet_id: uuid.UUID) -> str:
@@ -292,7 +297,7 @@ class AppletStore:
 
     def __init__(self, database: DatabaseSpec):
         self.database = database
-        self.engine = engine_for(database, "marina")
+        self.engine = engine_for(database, MARINA_SCHEMA)
 
     def migrate(self) -> None:
         statements = (
@@ -332,15 +337,15 @@ class AppletStore:
                 PRIMARY KEY (applet_id, version, path),
                 FOREIGN KEY (applet_id, version) REFERENCES applet_versions(applet_id, version) ON DELETE CASCADE
             )""",
-            """CREATE OR REPLACE VIEW applet_catalog AS
+            f"""CREATE OR REPLACE VIEW applet_catalog AS
                 SELECT a.id AS applet_id, a.title, a.owner,
-                       'applet_' || replace(a.id::TEXT, '-', '') AS schema_name,
+                       '{APPLET_ROLE_PREFIX}' || replace(a.id::TEXT, '-', '') AS schema_name,
                        c.table_name, c.column_name, c.data_type, c.ordinal_position
                 FROM applets a
                 LEFT JOIN information_schema.columns c
-                  ON c.table_schema = 'applet_' || replace(a.id::TEXT, '-', '')
+                  ON c.table_schema = '{APPLET_ROLE_PREFIX}' || replace(a.id::TEXT, '-', '')
                 WHERE a.archived_at IS NULL""",
-            f"GRANT USAGE ON SCHEMA marina TO {APPLET_READER_ROLE}",
+            f"GRANT USAGE ON SCHEMA {MARINA_SCHEMA} TO {APPLET_READER_ROLE}",
             f"GRANT SELECT ON applet_catalog TO {APPLET_READER_ROLE}",
         )
         with self.engine.begin() as connection:
@@ -555,7 +560,7 @@ class AppletStore:
             text("DELETE FROM blobs WHERE NOT EXISTS (SELECT 1 FROM applet_files WHERE blob_id = blobs.id)")
         )
 
-    def apps(self) -> list[AppletSummary]:
+    def active_applets(self) -> list[AppletSummary]:
         with self.engine.connect() as connection:
             rows = connection.execute(
                 text(

@@ -194,7 +194,7 @@ def applet_directory(store: AppletStore | None, applet_origin: str | None) -> li
             "published_by": applet.owner,
             "version": applet.current_version,
         }
-        for applet in store.apps()
+        for applet in store.active_applets()
     ]
 
 
