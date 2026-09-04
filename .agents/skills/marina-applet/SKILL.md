@@ -42,8 +42,8 @@ client state. For Vue applets:
 Keep the source `index.html`, `package.json`, the Vite configuration, and `src/`
 beside `applet.toml`. They are local build inputs and are not uploaded. A
 typical manifest uses `build_command = "npm ci && npm run build"`. Marina runs
-that command only when `dist/index.html` is absent; run the build explicitly
-before publishing when a previous `dist/` exists.
+that command before every publish by default. Use `--no-build` only when the
+existing `dist/` has already been built and validated.
 
 Use the applet's implicit Postgres schema for mutable or queryable data. Do not
 create or attach a separate database. Load simple scalar tables with the CLI,
@@ -85,8 +85,9 @@ local filesystem persistence.
 
 Inspect existing Marina and repository helpers before introducing a framework
 or dependency. Build frontend output locally; Marina does not install applet
-dependencies. A manifest `build_command` may create `dist/index.html` when
-`marina publish` runs with its default `--build` behavior.
+dependencies. `marina publish` runs a declared `build_command` before packaging
+by default, and the command may create `dist/index.html`. Pass `--no-build` to
+reuse an existing validated `dist/`.
 
 Validate the exact package without changing server state:
 

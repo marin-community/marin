@@ -176,10 +176,10 @@ def _publish_package(app_dir: Path, *, build: bool) -> tuple[bytes, AppletPackag
     if not manifest_path.is_file():
         raise click.UsageError(f"{app_dir} has no {APPLET_MANIFEST}")
     manifest = parse_applet_manifest(manifest_path.read_bytes())
-    if not (app_dir / "dist" / "index.html").is_file() and build:
-        if manifest.build_command is None:
-            raise click.UsageError("dist/index.html is absent and applet.toml has no build_command")
+    if build and manifest.build_command is not None:
         subprocess.run(manifest.build_command, shell=True, cwd=app_dir, check=True)
+    elif build and not (app_dir / "dist" / "index.html").is_file():
+        raise click.UsageError("dist/index.html is absent and applet.toml has no build_command")
     try:
         payload = package_applet(app_dir)
     except ValueError as error:
@@ -249,7 +249,7 @@ def _serve_local_applet(payload: bytes, *, json_output: bool) -> None:
 @click.option("--url", "service_url", default=DEFAULT_MARINA_URL, show_default=True)
 @click.option("--update", "applet_id", default=None, help="Applet UUID to update.")
 @click.option("--base-version", type=int, default=None, help="Current version required by an update.")
-@click.option("--build/--no-build", default=True, help="Run build_command when dist/index.html is absent.")
+@click.option("--build/--no-build", default=True, help="Run a declared build_command before packaging.")
 @click.option("--local", is_flag=True, help="Run this applet against disposable Postgres and Marina.")
 @click.option("--dry-run", is_flag=True, help="Validate and print package contents without publishing.")
 @click.option("--json", "json_output", is_flag=True, help="Print the publish result as JSON.")

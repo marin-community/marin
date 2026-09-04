@@ -228,20 +228,19 @@ as `fetch("api/results")` and `fetch("query", ...)`; a leading `/` escapes the
 applet prefix. Bundle dependencies into `dist/` because the applet content
 security policy permits scripts from the applet origin only.
 
-The manifest may build a missing `dist/index.html` locally:
+The manifest may define its local build:
 
 ```toml
 build_command = "npm ci && npm run build"
 ```
 
-`marina publish` runs `build_command` only when `dist/index.html` is absent. If
-`dist/` already exists, build it explicitly before publishing so an old bundle
-is not reused:
+`marina publish` runs a declared `build_command` before every publish by
+default, including when `dist/index.html` already exists. Pass `--no-build`
+only to reuse an existing bundle that has already been built and validated:
 
 ```bash
-npm ci
-npm run build
 uv run marina publish .
+uv run marina publish . --no-build
 ```
 
 Publish a built directory:
