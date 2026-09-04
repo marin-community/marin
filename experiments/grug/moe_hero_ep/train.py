@@ -265,6 +265,30 @@ def _apply_hero_ep_runtime_defaults(
         # other and with CoreWeave's DCGM, so PGLE cannot profile and its recompile
         # machinery only adds failure modes. Default it off; an explicit env wins.
         env_defaults["JAX_ENABLE_PGLE"] = "false"
+    if moe_implementation == RAGGED_MOE_IMPLEMENTATION:
+        # #8870 hangs inside the ragged transport's LSA device-kernel barrier, which cannot report
+        # itself: `sync` is called in the no-timeout form and NCCL leaves `abortFlag` null for user
+        # devComms, so the spin has no exit but the peer arriving. Both hero attempts therefore
+        # produced fifteen minutes of silence on 704 ranks and no usable evidence.
+        #
+        # These arm the only two observables that would have discriminated, and they must be set
+        # before the process starts: the driver reads the coredump variables once at init, and the
+        # NVLS subsystem carries the only NCCL log line that prints a window's `bigOffset`, which is
+        # what a rank-divergent placement would show up in. Neither costs anything at run time -- the
+        # dump is taken by hand, and the NVLS lines are emitted during registration only.
+        #
+        # `skip_abort` is what makes a dump survivable: without it the dumping process SIGABRTs and
+        # takes the whole gang with it, and the dump is 62 GB rather than 283 MB.
+        env_defaults.update(
+            {
+                "CUDA_ENABLE_USER_TRIGGERED_COREDUMP": "1",
+                "CUDA_COREDUMP_GENERATION_FLAGS": "skip_abort,skip_global_memory,skip_constbank_memory",
+                "CUDA_COREDUMP_FILE": "/tmp/gpucore.%h.%p.%t.nvcudmp",
+                "CUDA_COREDUMP_PIPE": "/tmp/corepipe.cuda.%h.%p",
+                "NCCL_DEBUG": "INFO",
+                "NCCL_DEBUG_SUBSYS": "REG,INIT,NVLS",
+            }
+        )
     for name, value in env_defaults.items():
         os.environ.setdefault(name, value)
     xla_flags = os.environ.get("XLA_FLAGS", "").split()
