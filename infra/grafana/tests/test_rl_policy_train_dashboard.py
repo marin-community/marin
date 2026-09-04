@@ -56,8 +56,11 @@ GENERATE_RESIDUAL = DRIVER_PHASES["generate"] - sum(GENERATE_CHILDREN.values())
 
 # step's own exclusive time. The old panel lumped this together with train_critic_and_policy's, and
 # the two are different costs: one is the driver's step loop, the other is the Ray round trip.
-UNATTRIBUTED = STEP_SECONDS - DRIVER_PHASES["generate"] - CONTAINER_SECONDS - sum(
-    DRIVER_PHASES[phase] for phase in ("convert_to_training_input", "fwd_logprobs_values_reward", "sync_weights")
+UNATTRIBUTED = (
+    STEP_SECONDS
+    - DRIVER_PHASES["generate"]
+    - CONTAINER_SECONDS
+    - sum(DRIVER_PHASES[phase] for phase in ("convert_to_training_input", "fwd_logprobs_values_reward", "sync_weights"))
 )
 DISPATCH_SECONDS = CONTAINER_SECONDS - DRIVER_PHASES["policy_train"]
 
@@ -258,80 +261,85 @@ def _driver_rows(moment: datetime, seq: int) -> list[tuple]:
     ]
     # EXCLUSIVE_DRIVER_SPANS: a residual is what its parent's wall does not contain, so it ships
     # exclusive while every other driver span ships inclusive.
-    return [
-        _row(
-            service="marinskyrl",
-            name="phase_duration_seconds",
-            value=seconds,
-            moment=moment,
-            seq=seq,
-            run_id=RUN_ID,
-            node_name=NODES[0],
-            role="trainer",
-            attributes={
-                "phase": phase,
-                "root": "step",
-                "parent": parent,
-                "clock_domain": "inclusive_wall",
-                "role": "trainer",
-                "step": str(seq),
-            },
-        )
-        for phase, seconds, parent in tree
-    ] + [
-        _row(
-            service="marinskyrl",
-            name="phase_duration_seconds",
-            value=GENERATE_RESIDUAL,
-            moment=moment,
-            seq=seq,
-            run_id=RUN_ID,
-            node_name=NODES[0],
-            role="trainer",
-            attributes={
-                "phase": "generate_span_residual",
-                "root": "step",
-                "parent": "generate",
-                "clock_domain": "exclusive_wall",
-                "role": "trainer",
-                "step": str(seq),
-            },
-        )
-    ] + [
-        _row(
-            service="marinskyrl",
-            name="phase_duration_seconds",
-            value=seconds,
-            moment=moment,
-            seq=seq,
-            run_id=RUN_ID,
-            node_name=NODES[0],
-            role="trainer",
-            attributes={
-                "phase": phase,
-                "clock_domain": "critical_path",
-                "role": "trainer",
-                "outcome": "failure" if seq == FAILED_BUCKET else "success",
-                "step": str(seq),
-            },
-        )
-        for phase, seconds in CRITICAL_PATH.items()
-    ] + [
-        _row(
-            service="marinskyrl",
-            # The counts and the seconds go to different instruments, as publish_rollout_counters
-            # sends them.
-            name="rollout_count" if counter.endswith("_count") else "rollout_wait_seconds",
-            value=value,
-            moment=moment,
-            seq=seq,
-            run_id=RUN_ID,
-            node_name=NODES[0],
-            role="trainer",
-            attributes={"counter": counter, "role": "trainer", "step": str(seq)},
-        )
-        for counter, value in ROLLOUT_COUNTERS.items()
-    ]
+    return (
+        [
+            _row(
+                service="marinskyrl",
+                name="phase_duration_seconds",
+                value=seconds,
+                moment=moment,
+                seq=seq,
+                run_id=RUN_ID,
+                node_name=NODES[0],
+                role="trainer",
+                attributes={
+                    "phase": phase,
+                    "root": "step",
+                    "parent": parent,
+                    "clock_domain": "inclusive_wall",
+                    "role": "trainer",
+                    "step": str(seq),
+                },
+            )
+            for phase, seconds, parent in tree
+        ]
+        + [
+            _row(
+                service="marinskyrl",
+                name="phase_duration_seconds",
+                value=GENERATE_RESIDUAL,
+                moment=moment,
+                seq=seq,
+                run_id=RUN_ID,
+                node_name=NODES[0],
+                role="trainer",
+                attributes={
+                    "phase": "generate_span_residual",
+                    "root": "step",
+                    "parent": "generate",
+                    "clock_domain": "exclusive_wall",
+                    "role": "trainer",
+                    "step": str(seq),
+                },
+            )
+        ]
+        + [
+            _row(
+                service="marinskyrl",
+                name="phase_duration_seconds",
+                value=seconds,
+                moment=moment,
+                seq=seq,
+                run_id=RUN_ID,
+                node_name=NODES[0],
+                role="trainer",
+                attributes={
+                    "phase": phase,
+                    "clock_domain": "critical_path",
+                    "role": "trainer",
+                    "outcome": "failure" if seq == FAILED_BUCKET else "success",
+                    "step": str(seq),
+                },
+            )
+            for phase, seconds in CRITICAL_PATH.items()
+        ]
+        + [
+            _row(
+                service="marinskyrl",
+                # The counts and the seconds go to different instruments, as publish_rollout_counters
+                # sends them.
+                name="rollout_count" if counter.endswith("_count") else "rollout_wait_seconds",
+                value=value,
+                moment=moment,
+                seq=seq,
+                run_id=RUN_ID,
+                node_name=NODES[0],
+                role="trainer",
+                attributes={"counter": counter, "role": "trainer", "step": str(seq)},
+            )
+            for counter, value in ROLLOUT_COUNTERS.items()
+        ]
+    )
 
 
 def _worker_rows(moment: datetime, seq: int, clock: str) -> list[tuple]:
@@ -653,9 +661,7 @@ def test_the_generate_subtree_is_subtracted_from_generate_and_not_stacked_beside
     the phase on the stack with nothing to say so."""
     bands = {
         series: seconds
-        for _, series, seconds in store.execute(
-            _panel_sql("Step composition — exclusive seconds per phase")
-        ).fetchall()
+        for _, series, seconds in store.execute(_panel_sql("Step composition — exclusive seconds per phase")).fetchall()
     }
 
     # generate's own band is the orchestration it does outside its children, which is what the
@@ -685,13 +691,15 @@ def test_the_share_still_has_a_denominator_when_the_run_publishes_no_step_span(s
     )
     rows = store.execute(_panel_sql("policy_train share of the step")).fetchall()
 
-    direct_children = DRIVER_PHASES["generate"] + CONTAINER_SECONDS + sum(
-        DRIVER_PHASES[phase] for phase in ("convert_to_training_input", "fwd_logprobs_values_reward", "sync_weights")
+    direct_children = (
+        DRIVER_PHASES["generate"]
+        + CONTAINER_SECONDS
+        + sum(
+            DRIVER_PHASES[phase] for phase in ("convert_to_training_input", "fwd_logprobs_values_reward", "sync_weights")
+        )
     )
     assert direct_children != pytest.approx(STEP_SECONDS), "the fixture no longer distinguishes the two denominators"
-    assert {round(share, 6) for _, share in rows} == {
-        round(DRIVER_PHASES["policy_train"] / direct_children, 6)
-    }
+    assert {round(share, 6) for _, share in rows} == {round(DRIVER_PHASES["policy_train"] / direct_children, 6)}
 
 
 def test_the_decomposition_reads_the_critical_rank_and_never_a_per_phase_maximum(store) -> None:
@@ -710,9 +718,7 @@ def test_the_decomposition_reads_the_critical_rank_and_never_a_per_phase_maximum
     assert CONTAINER_SPAN not in bands
     assert "policy_training_step" not in bands
     assert "policy_span_publish" not in bands
-    assert bands["unattributed"] == pytest.approx(
-        PPO_TRAIN[CRITICAL_RANK] - sum(WORKER_SPANS[CRITICAL_RANK].values())
-    )
+    assert bands["unattributed"] == pytest.approx(PPO_TRAIN[CRITICAL_RANK] - sum(WORKER_SPANS[CRITICAL_RANK].values()))
     # The producer's own residual is excluded and recomputed. Reading the published one would put
     # a -1949 s band in a 2000 s stack.
     assert "policy_span_residual" not in bands
@@ -945,6 +951,54 @@ def test_every_timeseries_panel_declares_the_columns_its_sql_returns() -> None:
             assert "number" in declared.values(), f"{panel['title']}: no numeric column to plot"
 
 
+def test_every_panel_says_on_its_face_why_it_would_be_blank() -> None:
+    """An empty panel and a broken producer render identically, and half of these panels are empty
+    on a run made by a build that predates their series. That distinction belongs on the panel face,
+    not behind a description hover."""
+    for panel in _dashboard()["panels"]:
+        if panel["type"] == "row":
+            continue
+        assert panel["fieldConfig"]["defaults"].get("noValue"), panel["title"]
+
+
+def test_the_rows_are_questions_and_every_rank_fills_the_grid() -> None:
+    """The order is the diagnostic sequence, so each row states the question it answers and a rank
+    with a gap in it floats the next panel up into a section that does not ask its question."""
+    panels = _dashboard()["panels"]
+    rows = [panel for panel in panels if panel["type"] == "row"]
+    assert len(rows) >= 5
+    assert all(row["title"].endswith("?") for row in rows), [row["title"] for row in rows]
+    assert [row["gridPos"]["y"] for row in rows] == sorted(row["gridPos"]["y"] for row in rows)
+
+    widths: dict[int, int] = {}
+    for panel in panels:
+        if panel["type"] == "row":
+            continue
+        widths[panel["gridPos"]["y"]] = widths.get(panel["gridPos"]["y"], 0) + panel["gridPos"]["w"]
+    assert set(widths.values()) == {24}, widths
+
+
+def test_the_triage_row_leads_and_the_deep_panels_follow() -> None:
+    """Panels answering "should I keep reading" sit above panels answering "what exactly is wrong"."""
+    order = [panel["title"] for panel in _dashboard()["panels"]]
+    lead = order.index("What this run published")
+    assert lead == 1, order[:3]
+    for later in (
+        "Step composition — exclusive seconds per phase",
+        "Inside generate — where the fan-out goes",
+        "policy_ppo_train decomposition at the critical rank",
+        "SM and tensor-pipe activity on this run's nodes",
+    ):
+        assert order.index(later) > lead, later
+    # The run picker only offers runs that reported a policy_step, so the lead panel going blank is
+    # always a true alarm rather than a filter that did not match.
+    (variable,) = [v for v in _dashboard()["templating"]["list"] if v["name"] == "run"]
+    (parameter,) = [
+        param for param in variable["query"]["infinityQuery"]["url_options"]["params"] if param["key"] == "sql"
+    ]
+    assert "'policy_step'" in parameter["value"]
+
+
 def test_every_panel_has_a_distinct_title_id_and_slot() -> None:
     panels = _dashboard()["panels"]
 
@@ -1007,7 +1061,9 @@ def test_the_vitals_table_shows_a_run_that_stamped_two_clock_domains_as_two_rows
 def test_the_residual_panel_reports_both_trees_signed(store) -> None:
     panels = {panel["title"]: panel for panel in _dashboard()["panels"]}
     targets = panels["Signed span residuals — both trees"]["targets"]
-    queries = [_resolve([p for p in t["url_options"]["params"] if p["key"] == "sql"][0]["value"]) for t in targets]
+    queries = [
+        _resolve(next(p["value"] for p in target["url_options"]["params"] if p["key"] == "sql")) for target in targets
+    ]
 
     driver = store.execute(queries[0]).fetchall()
     assert {round(value, 6) for _, value in driver} == {round(GENERATE_RESIDUAL, 6)}
@@ -1028,9 +1084,7 @@ def test_the_generate_shares_partition_the_phase(store) -> None:
     rows = store.execute(_panel_sql("Inside generate — where the fan-out goes")).fetchall()
 
     shares = {series: value for _, series, value in rows}
-    assert shares["rollout_collect"] == pytest.approx(
-        GENERATE_CHILDREN["rollout_collect"] / DRIVER_PHASES["generate"]
-    )
+    assert shares["rollout_collect"] == pytest.approx(GENERATE_CHILDREN["rollout_collect"] / DRIVER_PHASES["generate"])
     # The grandchildren belong to their own parents' walls, not to generate's.
     assert set(shares) == {*GENERATE_CHILDREN, "unaccounted"}
     assert sum(shares.values()) == pytest.approx(1.0)
