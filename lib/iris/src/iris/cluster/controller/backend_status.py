@@ -4,10 +4,11 @@
 """Controller read operations for backend, scheduler, and capacity status."""
 
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Protocol
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
+from connectrpc.request import RequestContext
 from rigging.server_auth import require_identity
 from sqlalchemy import func, select
 
@@ -45,7 +46,7 @@ class BackendStatusDependencies:
 def get_autoscaler_status(
     dependencies: BackendStatusDependencies,
     request: controller_pb2.Controller.GetAutoscalerStatusRequest,
-    context: Any,
+    context: RequestContext,
 ) -> controller_pb2.Controller.GetAutoscalerStatusResponse:
     del context
     backend = dependencies.runtime.backend
@@ -61,7 +62,7 @@ def get_autoscaler_status(
 def get_kubernetes_cluster_status(
     dependencies: BackendStatusDependencies,
     request: controller_pb2.Controller.GetKubernetesClusterStatusRequest,
-    context: Any,
+    context: RequestContext,
 ) -> controller_pb2.Controller.GetKubernetesClusterStatusResponse:
     del context
     backend = dependencies.runtime.backend
@@ -75,7 +76,7 @@ def get_kubernetes_cluster_status(
 def get_scheduler_state(
     dependencies: BackendStatusDependencies,
     request: controller_pb2.Controller.GetSchedulerStateRequest,
-    context: Any,
+    context: RequestContext,
 ) -> controller_pb2.Controller.GetSchedulerStateResponse:
     """Return aggregate pending/running scheduling state."""
     del request, context
@@ -179,7 +180,7 @@ def get_scheduler_state(
 def list_backends(
     dependencies: BackendStatusDependencies,
     request: controller_pb2.Controller.ListBackendsRequest,
-    context: Any,
+    context: RequestContext,
 ) -> controller_pb2.Controller.ListBackendsResponse:
     """Describe the controller's execution backend and aggregate workload."""
     del request, context

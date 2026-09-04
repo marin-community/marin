@@ -4,10 +4,10 @@
 """Controller operations for users, roles, and budgets."""
 
 from dataclasses import dataclass, field
-from typing import Any
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
+from connectrpc.request import RequestContext
 from rigging.server_auth import get_verified_identity, require_identity
 from rigging.timing import Timestamp
 from sqlalchemy import bindparam, func, select
@@ -60,7 +60,7 @@ _USER_TASK_STATES = (
 def list_users(
     dependencies: AccountDependencies,
     request: controller_pb2.Controller.ListUsersRequest,
-    context: Any,
+    context: RequestContext,
 ) -> controller_pb2.Controller.ListUsersResponse:
     """Return current per-user workload counts and configured roles."""
     del request, context
@@ -88,7 +88,7 @@ def list_users(
 
 def get_current_user(
     request: job_pb2.GetCurrentUserRequest,
-    context: Any,
+    context: RequestContext,
 ) -> job_pb2.GetCurrentUserResponse:
     del request, context
     identity = get_verified_identity()
@@ -100,7 +100,7 @@ def get_current_user(
 def set_user_budget(
     dependencies: AccountDependencies,
     request: controller_pb2.Controller.SetUserBudgetRequest,
-    context: Any,
+    context: RequestContext,
 ) -> controller_pb2.Controller.SetUserBudgetResponse:
     """Set one user's budget limit and maximum priority band."""
     del context
@@ -123,7 +123,7 @@ def set_user_budget(
 def get_user_budget(
     dependencies: AccountDependencies,
     request: controller_pb2.Controller.GetUserBudgetRequest,
-    context: Any,
+    context: RequestContext,
 ) -> controller_pb2.Controller.GetUserBudgetResponse:
     """Return one user's budget configuration and current spend."""
     del context
@@ -146,7 +146,7 @@ def get_user_budget(
 def list_user_budgets(
     dependencies: AccountDependencies,
     request: controller_pb2.Controller.ListUserBudgetsRequest,
-    context: Any,
+    context: RequestContext,
 ) -> controller_pb2.Controller.ListUserBudgetsResponse:
     """Return every configured user budget with current spend."""
     del request, context

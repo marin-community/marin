@@ -4,8 +4,8 @@
 """Thin protobuf adapter for endpoint request operations."""
 
 from collections.abc import Callable
-from typing import Any
 
+from connectrpc.request import RequestContext
 from rigging.timing import Duration
 
 from iris.cluster.controller import endpoints
@@ -36,21 +36,21 @@ class EndpointServiceImpl:
     def register_endpoint(
         self,
         request: controller_pb2.Controller.RegisterEndpointRequest,
-        context: Any,
+        context: RequestContext,
     ) -> controller_pb2.Controller.RegisterEndpointResponse:
         return endpoints.register_endpoint(self._dependencies, request, context)
 
     def unregister_endpoint(
         self,
         request: controller_pb2.Controller.UnregisterEndpointRequest,
-        context: Any,
+        context: RequestContext,
     ) -> job_pb2.Empty:
         return endpoints.unregister_endpoint(self._dependencies, request, context)
 
     def list_endpoints(
         self,
         request: controller_pb2.Controller.ListEndpointsRequest,
-        context: Any,
+        context: RequestContext,
     ) -> controller_pb2.Controller.ListEndpointsResponse:
         return endpoints.list_endpoints(self._dependencies, request, context)
 

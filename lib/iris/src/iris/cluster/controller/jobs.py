@@ -132,21 +132,7 @@ def _child_federation_refusal(job_id: JobName, peer_id: str) -> str:
 
 
 def _check_client_freshness(client_date_str: str, controller_date_str: str, today: date) -> None:
-    """Reject root LaunchJob submissions built long before the controller's own marin-iris.
-
-    Both dates come from `iris.version.client_revision_date`: the stamp baked into
-    an image or wheel, the last commit touching the iris tree in a source checkout.
-    Comparing the two anchors staleness to the code the cluster actually runs, so a
-    quiet week in the iris tree cannot strand a client that is current with it.
-
-    A controller that cannot identify its own build measures from today instead,
-    which is the rule that predates the stamp. Every image built before the stamp
-    existed lands here, so holding the old behavior for them keeps the gate
-    enforced across the rollout rather than silently opening it.
-
-    An empty client date means that build cannot identify itself, which leaves no
-    basis for a verdict, so the gate does not apply to it.
-    """
+    """Reject an identifiable root client older than the freshness window."""
     if not client_date_str:
         return
     try:
@@ -190,19 +176,7 @@ def _clamp_int32(value: int, *, job_id: JobName, field: str) -> int:
 def job_status_counts(
     summary: TaskJobSummary | None, job_id: JobName, *, pre_sync_task_count: int = 0
 ) -> dict[str, Any]:
-    """Return the clamped int32 counter fields for a ``JobStatus``.
-
-    Spread into ``JobStatus(...)`` as ``**job_status_counts(summary, job_id)``.
-    A ``None`` summary collapses to all-zero counters (no log noise); a real
-    summary runs each field through ``_clamp_int32`` so 64-bit aggregates
-    never trip the proto encoder.
-
-    ``pre_sync_task_count`` is the requested replica count of a federated job
-    (``jobs.num_tasks``). A handed-off job has no local task rows until the first
-    FederationSync mirrors the peer's set, so with a ``None`` summary it is
-    surfaced as ``task_count`` — the job reads "N tasks, awaiting the peer"
-    instead of an unexplained empty table.
-    """
+    """Return clamped JobStatus counters, including pre-sync federated tasks."""
     s = summary or _EMPTY_TASK_SUMMARY
     task_count = s.task_count if summary is not None else pre_sync_task_count
     return {
@@ -218,24 +192,7 @@ def job_status_counts(
 
 
 def peer_status(cluster: str, handoff_state: int | None, has_reported_tasks: bool) -> int:
-    """The ``PeerStatus`` for a job, derived from its cluster coordinate, its
-    ``federated_jobs.handoff_state``, and whether the peer has mirrored any task
-    rows back yet.
-
-    Branch order matters: a peer that has reported tasks is ``SYNCED`` even if
-    the local handle still reads ``PENDING_HANDOFF``. The sync loop can mirror a
-    job's state before a transient RPC failure lets ``mark_handed_off`` run, so
-    the presence of mirrored task rows is the more current signal — checking it
-    before the handle avoids labelling a running, populated job "awaiting the
-    peer's acceptance". A rejected handoff never reports tasks, so ``REJECTED``
-    is checked first.
-
-    For a terminal job this is the last posture observed (e.g. a handoff
-    cancelled before delivery stays ``PENDING_SCHEDULING``). ``handoff_state`` is
-    ``None`` only if the SENT handle is gone; the handle and jobs row are created
-    and CASCADE-deleted together, so for a live federated job that is a
-    can't-happen fallback, treated as handed off.
-    """
+    """Return the peer handoff posture for a local or federated job."""
     if not is_federated(cluster):
         return job_pb2.PEER_STATUS_NONE
     if handoff_state == int(HandoffState.HANDOFF_REJECTED):
@@ -291,14 +248,7 @@ def _query_jobs(
     query: controller_pb2.Controller.JobQuery,
     state_ids: tuple[int, ...],
 ) -> tuple[list, int]:
-    """Execute a ``JobQuery`` and return ``(rows, total_count)``.
-
-    ``state_ids`` is the pre-resolved state filter (always non-empty); the
-    caller owns "unknown state -> empty page" handling so that a bad filter
-    never reaches SQL. The caller also owns the read snapshot — list_jobs
-    chains the SELECT, COUNT, and downstream summary/parent queries on a
-    single snapshot to keep the per-connection page cache hot.
-    """
+    """Return jobs matching a normalized query and state filter."""
     if query.scope == controller_pb2.Controller.JOB_QUERY_SCOPE_CHILDREN and not query.parent_job_id:
         raise ConnectError(
             Code.INVALID_ARGUMENT,
@@ -359,7 +309,6 @@ def _inject_resource_constraints(
 
 
 def _get_autoscaler_pending_hints(dependencies: JobDependencies) -> dict[str, PendingHint]:
-    """Build the backend autoscaler's cached pending hints keyed by job id."""
     return dependencies.runtime.backend_observation.pending_hints
 
 
@@ -374,14 +323,6 @@ def _profile_is_elevated(profile: int) -> bool:
         job_pb2.CONTAINER_PROFILE_DOCKER_ACCESS,
         job_pb2.CONTAINER_PROFILE_PRIVILEGED,
     )
-
-
-def _authorize_job_owner(dependencies: JobDependencies, job_id: JobName) -> None:
-    """Raise PERMISSION_DENIED if the authenticated user doesn't own this job.
-
-    Skipped when no auth provider is configured (null-auth mode).
-    """
-    authorize_owner_if_configured(dependencies.auth, job_id.user)
 
 
 def _authorize_federation_handoff(
@@ -425,13 +366,7 @@ def _authorize_federation_handoff(
 
 
 def _authorize_job_actor(dependencies: JobDependencies, job_id: JobName) -> None:
-    """Authorize the caller to act on ``job_id`` (e.g. route a cancel).
-
-    The job owner or an admin passes, as with :meth:`_authorize_job_owner`. A
-    federation peer additionally passes for a job it federated here — its verified
-    requester matches the job's received handle — so the parent can route a cancel
-    for a handed-off job whose local owner it is not.
-    """
+    """Authorize an owner, admin, or originating federation peer for a job."""
     if not dependencies.auth.provider:
         return
     identity = get_verified_identity()
@@ -445,14 +380,7 @@ def _authorize_job_actor(dependencies: JobDependencies, job_id: JobName) -> None
 
 
 def _wait_until_job_drained(dependencies: JobDependencies, job_id: JobName, wait: Duration) -> bool:
-    """Wait up to ``wait`` for ``job_id`` to have no unfinished worker-bound
-    attempts. Returns ``True`` if drained, ``False`` if the wait elapsed.
-
-    Polls the snapshot DB; the reconcile-observation path landing terminal
-    updates is what flips the predicate. Caller decides whether to reap the
-    predecessor when the wait elapses — a stuck worker must not block
-    the new submission forever.
-    """
+    """Wait until a job has no unfinished worker-bound attempts."""
 
     def drained() -> bool:
         with dependencies.db.read_snapshot() as tx:
@@ -467,16 +395,7 @@ def _replace_finished_job(
     *,
     record_tombstone: bool = True,
 ) -> bool:
-    """Attempt to replace a terminal job; signal whether a drain is needed.
-
-    CASCADE-deleting a job's tasks while its attempts are still worker-
-    bound destroys the rows the reconcile-observation path needs to find when it
-    stamps ``finished_at_ms``. Returns ``True`` when the caller must wait
-    for worker-bound attempts to finalize before retrying (the job rows
-    are left in place), ``False`` when removal completed in this
-    transaction. Every replacement path in ``launch_job`` funnels through
-    here so the contract is uniform.
-    """
+    """Remove a terminal job, returning whether unfinished attempts require a drain."""
     if reads.has_unfinished_worker_attempts(cur, job_id):
         return True
     ops.job.remove_finished(cur, job_id, record_tombstone=record_tombstone)
@@ -518,15 +437,7 @@ def _queue_federated_job(
     pinned_peer_id: str,
     submitting_user: str,
 ) -> controller_pb2.Controller.LaunchJobResponse:
-    """Admit a root job to the federation queue and return the parent's job id.
-
-    The caller has established that ``job_id`` is a root: the peer runs it under the
-    same, cluster-invariant job id, so queueing a non-root job would clash with the
-    job's own tree on the peer. The manager persists the handle in ``QUEUED_HANDOFF``
-    (no peer chosen unless ``pinned_peer_id`` is set); the control tick later assigns
-    it to a peer with room and delivers it. Peer allowlist rejection surfaces later as
-    a failed job rather than synchronously here.
-    """
+    """Queue a root job for federation and return its stable job ID."""
     assert job_id.is_root, f"only whole root jobs may be federated to a peer; got {job_id}"
     dependencies.runtime.federation.queue_federated(
         local_job_id=job_id,
@@ -560,7 +471,7 @@ def _validate_launch_request(request: controller_pb2.Controller.LaunchJobRequest
 def _launch_identity(
     dependencies: JobDependencies,
     request: controller_pb2.Controller.LaunchJobRequest,
-    context: Any,
+    context: RequestContext | None,
     requested_job_id: JobName,
 ) -> LaunchIdentity:
     """Authorize the caller and resolve the owner and budget identities."""
@@ -582,7 +493,7 @@ def _launch_identity(
     ):
         job_id = JobName.root(identity.user_id, job_id.name)
     if dependencies.auth.provider and identity is not None and not job_id.is_root:
-        _authorize_job_owner(dependencies, job_id)
+        authorize_owner_if_configured(dependencies.auth, job_id.user)
 
     submitting_user = submitting_user_for_root(identity, request)
     if job_id.parent is not None:
@@ -900,7 +811,7 @@ def _insert_local_job(
 def launch_job(
     dependencies: JobDependencies,
     request: controller_pb2.Controller.LaunchJobRequest,
-    ctx: Any,
+    ctx: RequestContext | None,
 ) -> controller_pb2.Controller.LaunchJobResponse:
     """Submit a new job to the controller.
 
@@ -928,15 +839,10 @@ def launch_job(
 def get_job_status(
     dependencies: JobDependencies,
     request: controller_pb2.Controller.GetJobStatusRequest,
-    ctx: Any,
+    ctx: RequestContext,
 ) -> controller_pb2.Controller.GetJobStatusResponse:
-    """Get job-level status with aggregated task counts.
-
-    Per-task detail (attempts, worker addresses) is NOT included — callers
-    that need it should use ListTasks instead.  This keeps GetJobStatus
-    cheap: one job row read + one GROUP BY query vs loading every task,
-    attempt, and worker address.
-    """
+    """Return job status and aggregate task counts."""
+    del ctx
     with dependencies.db.read_snapshot() as q:
         job = reads.get_job_detail(q, JobName.from_wire(request.job_id))
         if not job:
@@ -1006,13 +912,14 @@ def get_job_status(
 def get_job_state(
     dependencies: JobDependencies,
     request: controller_pb2.Controller.GetJobStateRequest,
-    ctx: Any,
+    ctx: RequestContext,
 ) -> controller_pb2.Controller.GetJobStateResponse:
     """Lightweight batch job state query.
 
     Returns only the state enum for each requested job, avoiding the cost
     of loading tasks, attempts, and worker addresses.
     """
+    del ctx
     wire_ids = list(request.job_ids)
     if not wire_ids:
         return controller_pb2.Controller.GetJobStateResponse()
@@ -1032,13 +939,10 @@ def get_job_state(
 def terminate_job(
     dependencies: JobDependencies,
     request: controller_pb2.Controller.TerminateJobRequest,
-    ctx: Any,
+    ctx: RequestContext,
 ) -> job_pb2.Empty:
-    """Terminate a running job and all its children.
-
-    Cascade termination is performed depth-first: all children are
-    terminated before the parent. All tasks within each job are killed.
-    """
+    """Cancel a job tree or route cancellation to its execution peer."""
+    del ctx
     job_id = JobName.from_wire(request.job_id)
     state = _job_state(dependencies.db, job_id)
     if state is None:
@@ -1172,15 +1076,10 @@ def _jobs_to_protos(
 def list_jobs(
     dependencies: JobDependencies,
     request: controller_pb2.Controller.ListJobsRequest,
-    ctx: Any,
+    ctx: RequestContext,
 ) -> controller_pb2.Controller.ListJobsResponse:
-    """List jobs with filtering, sorting, and pagination.
-
-    Served directly from indexed SQL via ``_query_jobs``. Per-page task
-    summaries and parent->child flags are looked up against the same read
-    snapshot so the whole RPC observes a single transactionally-consistent
-    view.
-    """
+    """Return jobs matching the requested scope, filters, and page."""
+    del ctx
     query = _query_from_list_jobs_request(request)
 
     state_ids = _resolve_state_filter(query.state_filter)
