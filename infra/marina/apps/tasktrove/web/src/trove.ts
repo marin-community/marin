@@ -5,7 +5,7 @@
 // The manifest in `corpus.ts` says which rows are which source, so a page of
 // one source is a page of the dataset at that source's offset.
 
-import { base64, entries, gunzip, text, type Entry } from './tar'
+import { decodeBase64, entries, gunzip, text, type Entry } from './tar'
 
 const SERVER = 'https://datasets-server.huggingface.co'
 const DATASET = 'open-thoughts/TaskTrove'
@@ -86,7 +86,7 @@ export async function task(row: number): Promise<Task> {
   if (cell.truncated_cells.includes('task_binary')) {
     throw new Error(`row ${row} is too large for the dataset server to answer whole`)
   }
-  const packed = base64(cell.row.task_binary)
+  const packed = decodeBase64(cell.row.task_binary)
   const archive = await gunzip(packed)
   return {
     row,

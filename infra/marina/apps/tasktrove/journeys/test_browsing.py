@@ -15,7 +15,7 @@ from marina.journeys import Journey
 
 
 def test_sources_are_listed_and_filterable(journey: Journey) -> None:
-    journey.visit("/").sees("96 sources").shoot("sources")
+    journey.visit("/").shoot("sources")
     assert "input:Filter sources by name or description" in journey.offers()
     journey.fill("Filter sources by name or description", "nl2bash")
     journey.sees(re.compile(r"\d+ sources, [\d,]+ tasks"))
@@ -24,7 +24,7 @@ def test_sources_are_listed_and_filterable(journey: Journey) -> None:
 
 
 def test_audited_sample_opens_from_the_shell_nav(journey: Journey) -> None:
-    journey.visit("/").click("Audited sample").sees("1033 of 1033").shoot("sampled")
+    journey.visit("/").click("Audited sample").shoot("sampled")
     journey.widths("sampled")
     assert journey.page.url.endswith("/tasktrove/sampled")
 

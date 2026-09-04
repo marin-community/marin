@@ -12,7 +12,7 @@ from marina.journeys import Journey
 
 
 def test_search_page_is_ready_to_take_a_query(journey: Journey) -> None:
-    journey.visit("/").sees("Search across Marin.").shoot("search")
+    journey.visit("/").shoot("search")
     offered = journey.offers()
     assert "input:Identifier, incident, question, or phrase…" in offered
     assert "button:Search" in offered

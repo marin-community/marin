@@ -56,9 +56,9 @@ function gist(text: string | undefined): string {
 <template>
   <p class="problem" v-if="problem">{{ problem }}</p>
   <p class="note">
-    Ninety-six sources, one parquet file each. A source is a task template and a
-    generator; the audit read about eleven tasks from each and reviewed the
-    source as a whole. Open a source to page through its tasks.
+    Each source has one parquet file and represents a task template and generator.
+    The audit sampled tasks from every source and reviewed each source as a whole.
+    Open a source to page through its tasks.
   </p>
   <div class="tally-row" v-if="loaded">
     <div class="stat"><b>{{ count(loaded.total) }}</b><span>tasks</span></div>

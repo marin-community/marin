@@ -316,7 +316,7 @@ class SearchExecutionEntry(BaseModel):
     normalized_query: str
     mode: search_history.SearchMode
     domains: list[str]
-    filters: dict[str, Any]
+    filters: dict[str, object]
     requested_limit: int
     returned_count: int
     duration_ms: float

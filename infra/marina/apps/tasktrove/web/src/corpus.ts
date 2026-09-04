@@ -88,7 +88,6 @@ export function corpus(): Promise<Corpus> {
   return loading
 }
 
-/** The source a dataset row belongs to. */
 export function sourceOf(sources: Source[], row: number): Source | undefined {
   return sources.find((source) => row >= source.offset && row < source.offset + source.rows)
 }

@@ -20,12 +20,17 @@ what `shellsim/eval/tasktrove_audit` is.
 
 import gzip
 import json
+import posixpath
 import sys
 from pathlib import Path
 
 import pyarrow.parquet as pq
 from huggingface_hub import HfFileSystem
-from manifest import DATA_DIR, DATASET  # pyrefly: ignore[missing-import]  # a sibling script, run from its directory
+from manifest import (  # pyrefly: ignore[missing-import]  # a sibling script, run from its directory
+    DATA_DIR,
+    DATASET,
+    TASKS_FILENAME,
+)
 
 OUT = DATA_DIR
 
@@ -50,7 +55,7 @@ def row_indices(sources: list[str]) -> dict[str, dict[str, int]]:
     fs = HfFileSystem()
     found = {}
     for source in sources:
-        with fs.open(f"{DATASET}/{source}/tasks.parquet", "rb") as f:
+        with fs.open(posixpath.join(DATASET, source, TASKS_FILENAME), "rb") as f:
             paths = pq.ParquetFile(f).read(columns=["path"]).column(0).to_pylist()
         found[source] = {path: i for i, path in enumerate(paths)}
         print(source, len(paths), flush=True)

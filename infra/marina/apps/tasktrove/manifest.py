@@ -13,6 +13,7 @@ Usage:
 """
 
 import json
+import posixpath
 import statistics
 from pathlib import Path
 
@@ -20,6 +21,7 @@ import pyarrow.parquet as pq
 from huggingface_hub import HfFileSystem
 
 DATASET = "datasets/open-thoughts/TaskTrove"
+TASKS_FILENAME = "tasks.parquet"
 # The app's data directory: uploaded to the Marina bucket, served at /tasktrove/data/.
 DATA_DIR = Path(__file__).parents[2] / ".data" / "tasktrove"
 OUT = DATA_DIR / "files.json"
@@ -33,7 +35,7 @@ def main() -> None:
     )
     sources = []
     for directory in files:
-        path = f"{directory}/tasks.parquet"
+        path = posixpath.join(directory, TASKS_FILENAME)
         info = fs.info(path)
         with fs.open(path, "rb") as f:
             metadata = pq.ParquetFile(f).metadata
@@ -42,11 +44,11 @@ def main() -> None:
             next(g.column(c) for c in range(g.num_columns) if g.column(c).path_in_schema == "task_binary")
             for g in groups
         ]
-        name = directory.rsplit("/", 1)[1]
+        name = posixpath.basename(directory)
         sources.append(
             {
                 "source": name,
-                "file": path.removeprefix(DATASET + "/"),
+                "file": posixpath.relpath(path, DATASET),
                 "size": info["size"],
                 "rows": metadata.num_rows,
                 "groups": len(groups),
