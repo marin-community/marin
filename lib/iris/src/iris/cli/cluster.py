@@ -890,10 +890,10 @@ def cluster_create_slice(ctx, scale_group_name: str):
     slice_config = prepare_slice_config(sg_config.slice_template, sg_config, label_prefix)
     slice_config.labels[labels.iris_manual] = "true"
 
-    # Assemble the same base worker config the controller ships to autoscaled
-    # workers, with operator-injected env (defaults.inject_env) folded into
-    # task_env, so manually created slices match autoscaler-provisioned workers.
-    # The worker token is minted controller-side and is not available here.
+    # Build the worker config through the same helper the controller uses, so a
+    # manually created slice matches its autoscaler-provisioned peers.
+    # ``with_injected_task_env`` folds operator-injected env (defaults.inject_env)
+    # into task_env; the worker token is minted controller-side, hence the empty one.
     base_worker_config = build_base_worker_config(
         with_injected_task_env(config),
         controller_address=worker_controller_address,
@@ -1622,8 +1622,8 @@ def worker_restart(
     if not worker_controller_address:
         worker_controller_address = bundle.controller.discover_controller(config.controller)
 
-    # Same base worker config the controller ships to autoscaled workers (see
-    # cluster_create_slice), so a restarted worker matches its autoscaled peers.
+    # Same helper and empty-token rationale as cluster_create_slice, so a
+    # restarted worker matches its autoscaler-provisioned peers.
     base_worker_config = build_base_worker_config(
         with_injected_task_env(config),
         controller_address=worker_controller_address,
