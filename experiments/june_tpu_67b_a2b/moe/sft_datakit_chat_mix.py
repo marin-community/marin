@@ -12,7 +12,6 @@ from levanter.data.text.datasets import (
     ConcatDatasetComponent,
     DatasetComponent,
     LmDataConfig,
-    UrlDatasetSourceConfig,
 )
 from levanter.data.text.formats import TextLmDatasetFormat
 from levanter.tracker.wandb import WandbConfig
@@ -20,6 +19,7 @@ from marin.datakit.chat import render_chat_source
 from marin.datakit.sft_sources import all_sft_sources
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
+from marin.processing.tokenize import TokenizeConfig, tokenize
 from rigging.filesystem.storage_path import prefix_join
 from rigging.log_setup import configure_logging
 
@@ -47,6 +47,7 @@ _MIXTURE_BLOCK_SIZE = 49_152
 _SFT_FRACTION = 0.8
 _PRETRAIN_FRACTION = 0.2
 _LONG_CONTEXT_SKEW = 4
+_TOKENIZE_MAX_WORKERS = 64
 _TAIL_BUCKETS_WITHOUT_LONG = frozenset({"c07q3", "c38q1", "c38q3", "c38q4", "c39q0", "c39q1", "c39q2", "c39q3", "c39q4"})
 
 
@@ -55,6 +56,30 @@ class _SftMixture:
     components: dict[str, DatasetComponent]
     weights: dict[str, float]
     deps: list[StepSpec]
+
+
+def _tokenize_rendered_source(name: str, rendered: StepSpec) -> StepSpec:
+    cache_path = prefix_join(rendered.output_path, "levanter-cache")
+
+    def build_cache(output_path: str) -> None:
+        tokenize(
+            TokenizeConfig(
+                train_paths=[prefix_join(rendered.output_path, "outputs/main/*.parquet")],
+                validation_paths=[],
+                cache_path=output_path,
+                tokenizer=_TOKENIZER,
+                max_workers=_TOKENIZE_MAX_WORKERS,
+                tags=["sft", name],
+            )
+        )
+
+    return StepSpec(
+        name=f"tokenized-rendered-chat/{name}",
+        deps=[rendered],
+        fn=build_cache,
+        hash_attrs={"tokenizer": _TOKENIZER},
+        override_output_path=cache_path,
+    )
 
 
 def _sft_mixture() -> _SftMixture:
@@ -66,21 +91,17 @@ def _sft_mixture() -> _SftMixture:
     for name, source in sources.items():
         rendered = render_chat_source(source, tokenizer=_TOKENIZER)
         terminal = rendered.normalized
-        source_config = UrlDatasetSourceConfig(
-            train_urls=[prefix_join(terminal.output_path, "outputs/main/*.parquet")],
-            cache_dir=prefix_join(terminal.output_path, "levanter-cache"),
-            format=TextLmDatasetFormat(),
-        )
+        tokenized = _tokenize_rendered_source(name, terminal)
         components[f"sft/{name}"] = DatasetComponent(
-            source=source_config,
-            cache_dir=source_config.cache_dir,
-            format=source_config.format,
+            source=None,
+            cache_dir=tokenized.output_path,
+            format=TextLmDatasetFormat(),
             tags=["sft", name],
             pack=True,
             packing_slice_strategy="drop",
         )
         weights[f"sft/{name}"] = _SFT_FRACTION * source.rough_token_count_b / total_tokens
-        deps.append(terminal)
+        deps.append(tokenized)
     return _SftMixture(components=components, weights=weights, deps=deps)
 
 
@@ -142,7 +163,7 @@ def build() -> StepSpec:
         cache_dir=None,
         components={**sft.components, **pretrain_components},
         train_weights=weights,
-        auto_build_caches=True,
+        auto_build_caches=False,
         mixture_block_size=_MIXTURE_BLOCK_SIZE,
     )
 
