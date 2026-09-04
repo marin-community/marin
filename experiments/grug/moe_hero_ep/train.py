@@ -128,15 +128,12 @@ class TrainingDataMode(StrEnum):
 
 
 def place_step_on_mesh(state: "GrugTrainState", mesh: Mesh) -> "GrugTrainState":
-    """Place the step counter under the mesh sharding the train step returns it with.
+    """Place the step counter under the sharding `train_step` returns it with.
 
-    `_init_state` is jitted without `out_shardings`, so the scalar step comes back under a
-    `GSPMDSharding`, while `train_step` runs under the explicit mesh and returns it under a
-    `NamedSharding`. JAX keys its compilation cache on input shardings, so the second step misses
-    and compiles a second `train_step` executable that lives for the whole run. Each `GpuExecutable`
-    owns a `CollectiveMemoryCache`, so two executables register two NCCL symmetric windows over the
-    same collective-memory arena at the same base address, which is the aliasing #8861 fails on.
-    Every other leaf already carries an explicit sharding and matches across the step.
+    `_init_state` and the checkpoint restore hand the scalar back under a GSPMD sharding, and jit
+    keys its compilation cache on input shardings. Without this the second train step compiles a
+    second executable, and each executable registers its own NCCL symmetric window over the shared
+    collective-memory arena. Every other leaf already carries an explicit sharding.
     """
     # `jax.device_put` asserts inside `_different_device_order_reshard` when the source is a
     # GSPMDSharding whose device order differs from the mesh's, so reshard through a jit instead.
