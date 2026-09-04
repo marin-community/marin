@@ -23,7 +23,6 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import cast
 
-from fastapi.encoders import jsonable_encoder
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
 from starlette.types import ASGIApp
@@ -699,22 +698,39 @@ class AppletStore:
 
     def query(self, applet_id: uuid.UUID, sql: str, parameters: dict[str, object]) -> dict[str, object]:
         self.current_version(applet_id)
-        validate_query(sql)
+        command = validate_query(sql)
         engine = engine_for_role(self.database, applet_schema(applet_id), applet_role(applet_id))
         try:
             with engine.begin() as connection:
                 connection.execute(text(f"SET LOCAL statement_timeout = '{QUERY_TIMEOUT_MS}ms'"))
+                if command in {"SELECT", "WITH"}:
+                    statement = sql.strip().removesuffix(";").rstrip()
+                    bounded = text(
+                        "SELECT CASE WHEN pg_column_size(payload) <= "
+                        f"{MAX_QUERY_RESPONSE_BYTES} THEN payload END AS payload, "
+                        "row_count, pg_column_size(payload) AS byte_size FROM ("
+                        "SELECT COALESCE(json_agg(row_to_json(applet_query)), '[]'::json) AS payload, "
+                        "count(*) AS row_count FROM (SELECT * FROM ("
+                        f"{statement}"
+                        f") AS applet_result LIMIT {MAX_QUERY_ROWS + 1}) AS applet_query"
+                        ") AS applet_payload"
+                    )
+                    result = connection.execute(bounded, parameters).mappings().one()
+                    row_count = int(result["row_count"])
+                    if row_count > MAX_QUERY_ROWS:
+                        raise QueryLimitExceeded(f"query returned more than {MAX_QUERY_ROWS} rows")
+                    if int(result["byte_size"]) > MAX_QUERY_RESPONSE_BYTES:
+                        raise QueryLimitExceeded(f"query response exceeds {MAX_QUERY_RESPONSE_BYTES} bytes")
+                    rows = cast(list[dict[str, object]], result["payload"])
+                    columns = list(rows[0]) if rows else []
+                    response: dict[str, object] = {"columns": columns, "rows": rows, "row_count": row_count}
+                    if len(json.dumps(response).encode()) > MAX_QUERY_RESPONSE_BYTES:
+                        raise QueryLimitExceeded(f"query response exceeds {MAX_QUERY_RESPONSE_BYTES} bytes")
+                    return response
                 result = connection.execute(text(sql), parameters)
-                if not result.returns_rows:
-                    return {"columns": [], "rows": [], "row_count": result.rowcount}
-                columns = list(result.keys())
-                rows = [dict(row) for row in result.mappings().fetchmany(MAX_QUERY_ROWS + 1)]
-                if len(rows) > MAX_QUERY_ROWS:
-                    raise QueryLimitExceeded(f"query returned more than {MAX_QUERY_ROWS} rows")
-                encoded = jsonable_encoder(rows)
-                if len(json.dumps(encoded).encode()) > MAX_QUERY_RESPONSE_BYTES:
-                    raise QueryLimitExceeded(f"query response exceeds {MAX_QUERY_RESPONSE_BYTES} bytes")
-                return {"columns": columns, "rows": encoded, "row_count": len(rows)}
+                if result.returns_rows:
+                    raise InvalidQuery(f"{command} statements may not return rows")
+                return {"columns": [], "rows": [], "row_count": result.rowcount}
         finally:
             engine.dispose()
 
@@ -731,7 +747,7 @@ class AppletServices:
         return engine_for_role(self.database, applet_schema(self.applet_id), applet_role(self.applet_id))
 
 
-def validate_query(sql: str) -> None:
+def validate_query(sql: str) -> str:
     """Accept one data or schema statement while blocking transaction and role control."""
     statement = sql.strip()
     if not statement or ";" in statement.rstrip(";"):
@@ -750,6 +766,12 @@ def validate_query(sql: str) -> None:
         "WITH",
     }:
         raise InvalidQuery("query command is not allowed")
+    normalized = command.group(0).upper()
+    if normalized == "WITH" and re.search(r"\b(INSERT|UPDATE|DELETE)\b", statement, re.IGNORECASE):
+        raise InvalidQuery("data-modifying WITH statements are not allowed")
+    if normalized not in {"SELECT", "WITH"} and re.search(r"\bRETURNING\b", statement, re.IGNORECASE):
+        raise InvalidQuery(f"{normalized} statements may not return rows")
+    return normalized
 
 
 def _module_name(applet_id: uuid.UUID, version: int, digest: bytes) -> str:

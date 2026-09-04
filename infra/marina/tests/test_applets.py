@@ -71,6 +71,8 @@ def test_publish_demo_serves_files_schema_query_and_python_api(tmp_path: Path, d
         {"id": 3, "prompt": "19 + 28"},
     ]
     assert client.get(f"/a/{applet_id}/api/revision").json() == {"version": 1}
+    assert client.get(f"/a/{applet_id}/api/identity").json() == {"user": "anonymous"}
+    assert client.get(f"/a/{applet_id}/v/1/api/identity").json() == {"user": "anonymous"}
 
     created = client.post(
         f"/a/{applet_id}/query",
@@ -376,18 +378,25 @@ def test_query_limits_roll_back_and_timeout(tmp_path: Path, database_url: str, m
     too_many = client.post(
         endpoint,
         json={
-            "sql": (
-                "WITH inserted AS ("
-                "INSERT INTO problems (id, prompt, answer) "
-                "SELECT value + 100, 'bulk', value FROM generate_series(1, 10001) AS value RETURNING id"
-                ") SELECT id FROM inserted"
-            ),
+            "sql": "SELECT value FROM generate_series(1, 10001) AS value",
             "parameters": {},
         },
     )
     assert too_many.status_code == 413
+    returning = client.post(
+        endpoint,
+        json={
+            "sql": "INSERT INTO problems (id, prompt, answer) VALUES (100, 'new', 1) RETURNING id",
+            "parameters": {},
+        },
+    )
+    assert returning.status_code == 400
     count = client.post(endpoint, json={"sql": "SELECT count(*) AS count FROM problems", "parameters": {}})
     assert count.json()["rows"] == [{"count": 3}]
+
+    monkeypatch.setattr("marina.applets.MAX_QUERY_RESPONSE_BYTES", 200)
+    oversized = client.post(endpoint, json={"sql": "SELECT repeat('x', 10000) AS value", "parameters": {}})
+    assert oversized.status_code == 413
 
     monkeypatch.setattr("marina.applets.QUERY_TIMEOUT_MS", 20)
     timed_out = client.post(endpoint, json={"sql": "SELECT pg_sleep(0.2)", "parameters": {}})

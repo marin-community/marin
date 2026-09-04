@@ -5,6 +5,7 @@
 
 from fastapi import FastAPI
 from marina.applets import AppletServices
+from rigging.server_auth import get_verified_identity
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
@@ -39,5 +40,10 @@ def create_api(services: AppletServices) -> FastAPI:
     @api.get("/revision")
     def revision() -> dict[str, int]:
         return {"version": services.version}
+
+    @api.get("/identity")
+    def identity() -> dict[str, str | None]:
+        caller = get_verified_identity()
+        return {"user": caller.user_id if caller is not None else None}
 
     return api

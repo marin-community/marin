@@ -230,8 +230,10 @@ statement and an optional parameter object. Statements run as the applet's
 generated Postgres role with its schema first on `search_path`. The role owns
 that schema and inherits `marina_reader`, which can select from checked-in and
 other applet schemas. It cannot write outside its own schema. Transaction and
-role-control commands are rejected. Responses are limited to 10,000 rows and
-5 MiB, with a 10-second statement timeout.
+role-control commands, data-modifying `WITH`, and mutation statements with
+`RETURNING` are rejected. Postgres bounds query results before sending them to
+the Marina process. Responses are limited to 10,000 rows and 5 MiB, with a
+10-second statement timeout.
 
 Agents can inspect applets, query them, and load small tables without writing an
 API backend:

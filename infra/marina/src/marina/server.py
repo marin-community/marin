@@ -632,7 +632,8 @@ def create_app(config: MarinaConfig) -> RouteAuthMiddleware:
         try:
             version = await run_in_threadpool(applet_store.current_version, applet_id)
             applet_api = await run_in_threadpool(applet_runtime.api, applet_id, version)
-            return await call_applet_api(applet_api, request, path)
+            with identity_scope(identity_for(request, policy)):
+                return await call_applet_api(applet_api, request, path)
         except AppletNotFound as error:
             raise HTTPException(status_code=404, detail="applet API not found") from error
         except AppletBackendUnavailable as error:
@@ -649,7 +650,8 @@ def create_app(config: MarinaConfig) -> RouteAuthMiddleware:
             raise HTTPException(status_code=404, detail="applet API not found")
         try:
             applet_api = await run_in_threadpool(applet_runtime.api, applet_id, version)
-            return await call_applet_api(applet_api, request, path)
+            with identity_scope(identity_for(request, policy)):
+                return await call_applet_api(applet_api, request, path)
         except AppletNotFound as error:
             raise HTTPException(status_code=404, detail="applet API not found") from error
         except AppletBackendUnavailable as error:
