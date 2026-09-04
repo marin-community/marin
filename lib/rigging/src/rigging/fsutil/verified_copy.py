@@ -5,9 +5,11 @@
 
 import hashlib
 import json
+import logging
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
+from enum import StrEnum
 from typing import Any, cast
 
 from fsspec import AbstractFileSystem
@@ -15,6 +17,7 @@ from fsspec import AbstractFileSystem
 from rigging.filesystem.atomic import atomic_rename
 from rigging.filesystem.buckets import filesystem_for
 from rigging.fsutil.transfer import (
+    COPY_CHUNK_BYTES,
     TransferLocation,
     _backend,
     _join_path,
@@ -24,10 +27,14 @@ from rigging.fsutil.transfer import (
     _strictly_contains,
 )
 
-COPY_CHUNK_BYTES = 8 * 1024 * 1024
+DEFAULT_VERIFIED_COPY_WORKERS = 4
 S3_UPLOAD_PART_BYTES = 50 * 1024 * 1024
 COMPLETION_MANIFEST = ".verified-copy-manifest.json"
 MANIFEST_SCHEMA_VERSION = 1
+SHA256_IDENTITY_PREFIX = "sha256="
+ETAG_IDENTITY_PREFIX = "etag="
+
+logger = logging.getLogger(__name__)
 
 
 class VerifiedCopyError(ValueError):
@@ -70,6 +77,17 @@ class _CopiedFile:
     sha256: str
     size: int
     expected_etag: str | None
+
+
+class _CopyDisposition(StrEnum):
+    COPIED = "copied"
+    RESUMED = "resumed"
+
+
+@dataclass(frozen=True)
+class _CopyOutcome:
+    file: VerifiedFile
+    disposition: _CopyDisposition
 
 
 @dataclass(frozen=True)
@@ -118,7 +136,7 @@ def verified_copy_prefix(
     destination_url: str,
     *,
     status_url: str | None = None,
-    workers: int = 4,
+    workers: int = DEFAULT_VERIFIED_COPY_WORKERS,
 ) -> VerifiedCopyResult:
     """Copy and verify a prefix before publishing its completion manifest.
 
@@ -178,10 +196,10 @@ def verified_copy_prefix(
             for source in sources
         }
         for future in as_completed(futures):
-            verified, copied = future.result()
-            verified_files.append(verified)
-            copied_files += int(copied)
-            resumed_files += int(not copied)
+            outcome = future.result()
+            verified_files.append(outcome.file)
+            copied_files += int(outcome.disposition is _CopyDisposition.COPIED)
+            resumed_files += int(outcome.disposition is _CopyDisposition.RESUMED)
 
     verified_files.sort()
     manifest = {
@@ -238,7 +256,7 @@ def _copy_or_resume(
     status_fs: AbstractFileSystem,
     status_root: str,
     destination: _DestinationFile | None,
-) -> tuple[VerifiedFile, bool]:
+) -> _CopyOutcome:
     destination_path = _join_path(destination_root, source.path)
     marker_path = _join_path(status_root, f"{hashlib.sha256(source.path.encode()).hexdigest()}.json")
     marker = _resume_marker(status_fs, marker_path)
@@ -256,7 +274,7 @@ def _copy_or_resume(
             and marker.size == source.size
             and _destination_matches_marker(destination_fs, destination_path, destination, marker)
         ):
-            return expected, False
+            return _CopyOutcome(expected, _CopyDisposition.RESUMED)
 
     copied = _copy_with_hash(source_fs, source.source_path, destination_fs, destination_path)
     if copied.size != source.size:
@@ -294,7 +312,7 @@ def _copy_or_resume(
             )
         ),
     )
-    return verified, True
+    return _CopyOutcome(verified, _CopyDisposition.COPIED)
 
 
 def _copy_with_hash(
@@ -339,12 +357,12 @@ def _verify_destination(
     if expected_etag is None:
         if _sha256(filesystem, path) != expected_sha256:
             raise VerifiedCopyError(f"destination hash mismatch for {path}")
-        return _destination_identity(info) or f"sha256={expected_sha256}"
+        return _destination_identity(info) or f"{SHA256_IDENTITY_PREFIX}{expected_sha256}"
 
     actual_etag = _etag(info)
     if actual_etag != expected_etag:
         raise VerifiedCopyError(f"destination ETag mismatch for {path}")
-    return f"etag={actual_etag}"
+    return f"{ETAG_IDENTITY_PREFIX}{actual_etag}"
 
 
 def _destination_matches_marker(
@@ -353,8 +371,8 @@ def _destination_matches_marker(
     destination: _DestinationFile,
     marker: _ResumeMarker,
 ) -> bool:
-    if marker.destination_identity.startswith("sha256="):
-        return _sha256(filesystem, path) == marker.destination_identity.removeprefix("sha256=")
+    if marker.destination_identity.startswith(SHA256_IDENTITY_PREFIX):
+        return _sha256(filesystem, path) == marker.destination_identity.removeprefix(SHA256_IDENTITY_PREFIX)
     return destination.identity == marker.destination_identity
 
 
@@ -379,7 +397,8 @@ def _resume_marker(filesystem: AbstractFileSystem, path: str) -> _ResumeMarker |
             sha256=str(data["sha256"]),
             destination_identity=str(data["destination_identity"]),
         )
-    except (KeyError, TypeError, ValueError, VerifiedCopyError):
+    except (KeyError, TypeError, ValueError, VerifiedCopyError) as error:
+        logger.warning("Ignoring invalid verified-copy resume marker %s: %s", path, error)
         return None
 
 
@@ -486,7 +505,7 @@ def _source_identity(info: dict[str, Any]) -> str | None:
 def _destination_identity(info: dict[str, Any]) -> str | None:
     etag = _etag(info)
     if etag is not None:
-        return f"etag={etag}"
+        return f"{ETAG_IDENTITY_PREFIX}{etag}"
     for key in ("ChecksumSHA256", "checksum", "md5Hash", "crc32c", "version_id", "VersionId"):
         value = info.get(key)
         if value is not None:

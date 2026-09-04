@@ -58,7 +58,7 @@ from rigging.fsutil.usage import (
     render_usage_report,
     scan_usage,
 )
-from rigging.fsutil.verified_copy import VerifiedCopyError, verified_copy_prefix
+from rigging.fsutil.verified_copy import DEFAULT_VERIFIED_COPY_WORKERS, VerifiedCopyError, verified_copy_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -376,7 +376,12 @@ def rsync(source: str, destination: str, delete: bool, dry_run: bool, checksum: 
 @click.argument("source")
 @click.argument("destination")
 @click.option("--status-prefix", default=None, help="Sibling prefix for verified per-object resume records.")
-@click.option("--workers", default=4, show_default=True, type=click.IntRange(min=1, max=64))
+@click.option(
+    "--workers",
+    default=DEFAULT_VERIFIED_COPY_WORKERS,
+    show_default=True,
+    type=click.IntRange(min=1, max=64),
+)
 def verified_copy(source: str, destination: str, status_prefix: str | None, workers: int) -> None:
     """Copy and verify a prefix, publishing its completion manifest last."""
     try:

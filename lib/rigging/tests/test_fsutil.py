@@ -202,7 +202,7 @@ def test_verified_copy_rejects_contained_prefixes(tmp_path, reverse):
 
 
 @pytest.mark.parametrize("marker_payload", ["{", "[]"])
-def test_verified_copy_ignores_malformed_resume_marker(tmp_path, marker_payload):
+def test_verified_copy_ignores_malformed_resume_marker(tmp_path, marker_payload, caplog):
     source = tmp_path / "source"
     destination = tmp_path / "destination"
     source.mkdir()
@@ -217,6 +217,7 @@ def test_verified_copy_ignores_malformed_resume_marker(tmp_path, marker_payload)
     assert result.copied_files == 1
     assert result.resumed_files == 0
     assert (destination / "weights.bin").read_bytes() == b"weights"
+    assert "Ignoring invalid verified-copy resume marker" in caplog.text
 
 
 def test_verified_copy_interruption_leaves_no_completion_and_retry_resumes(tmp_path, monkeypatch):
