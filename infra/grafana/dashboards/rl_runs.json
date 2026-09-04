@@ -741,7 +741,7 @@
       "id": 9,
       "type": "timeseries",
       "title": "Engine token throughput",
-      "description": "Prompt and generated tokens per second, summed across the run's inference engines.\n\nA prompt-heavy ratio means prefill is being paid repeatedly. The prefix-cache panel says whether the cache is catching it.\n\nRates are differenced per engine from cumulative counters. Under GRPO all n samples of a group share one prompt, so a high prompt share is expected. Data from telemetry_v1.vllm.",
+      "description": "Prompt and generated tokens per second, summed across the run's inference engines.\n\nA prompt-heavy ratio means prefill is being paid repeatedly. The prefix-cache panel says whether the cache is catching it.\n\nRates are differenced per engine from cumulative counters. Under GRPO all n samples of a group share one prompt, so a high prompt share is expected. Data from telemetry_v1.vllm, and from engines embedded in the trainer in telemetry_v1.marinskyrl.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -830,7 +830,7 @@
       "id": 10,
       "type": "timeseries",
       "title": "Engine queue and KV-cache",
-      "description": "Requests running and queued at the inference engines, with KV-cache occupancy on the right axis.\n\nQueued high with KV-cache low is a scheduling limit, so add engines or raise the concurrency cap. Both high is a real KV-cache limit.\n\nThe preemptions panel says whether that limit cost anything. Values are averaged across engines. Data from telemetry_v1.vllm.",
+      "description": "Requests running and queued at the inference engines, with KV-cache occupancy on the right axis.\n\nQueued high with KV-cache low is a scheduling limit, so add engines or raise the concurrency cap. Both high is a real KV-cache limit.\n\nThe preemptions panel says whether that limit cost anything. Values are averaged across engines. Data from telemetry_v1.vllm, and from engines embedded in the trainer in telemetry_v1.marinskyrl.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -949,7 +949,7 @@
       "id": 11,
       "type": "timeseries",
       "title": "Engine request latency (mean by stage)",
-      "description": "Mean seconds per finished request at each stage: queue, prefill, decode, time to first token, and end to end.\n\nA rising decode stage means generation itself slowed. A rising queue stage means requests waited to start.\n\nThis is a mean and cannot show a tail; the straggler panel carries that. End to end and time to first token contain the other stages, so these series neither stack nor sum. Data from telemetry_v1.vllm.",
+      "description": "Mean seconds per finished request at each stage: queue, prefill, decode, time to first token, and end to end.\n\nA rising decode stage means generation itself slowed. A rising queue stage means requests waited to start.\n\nThis is a mean and cannot show a tail; the straggler panel carries that. End to end and time to first token contain the other stages, so these series neither stack nor sum. Data from telemetry_v1.vllm, and from engines embedded in the trainer in telemetry_v1.marinskyrl.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -1038,7 +1038,7 @@
       "id": 16,
       "type": "timeseries",
       "title": "Prefix-cache hit rate",
-      "description": "Cached prompt tokens divided by queried prompt tokens, across the run's inference engines.\n\nA low rate with a prompt-heavy throughput ratio means prefill is being recomputed for prompts the engines already hold.\n\nBoth counters are in tokens, so this is not the share of requests that hit. Under GRPO all n samples of a group share one prompt. Data from telemetry_v1.vllm.",
+      "description": "Cached prompt tokens divided by queried prompt tokens, across the run's inference engines.\n\nA low rate with a prompt-heavy throughput ratio means prefill is being recomputed for prompts the engines already hold.\n\nBoth counters are in tokens, so this is not the share of requests that hit. Under GRPO all n samples of a group share one prompt. Data from telemetry_v1.vllm, and from engines embedded in the trainer in telemetry_v1.marinskyrl.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -1126,7 +1126,7 @@
       "id": 17,
       "type": "timeseries",
       "title": "Engine KV-cache preemptions",
-      "description": "Requests the engine evicted from its KV-cache and had to recompute, per time bucket.\n\nAny value above zero means KV-cache pressure cost real work. High KV-cache occupancy with zero here cost nothing.\n\nThis is vLLM's own scheduler preemption. It is unrelated to Kubernetes pod preemption or Iris job preemption. Data from telemetry_v1.vllm.",
+      "description": "Requests the engine evicted from its KV-cache and had to recompute, per time bucket.\n\nAny value above zero means KV-cache pressure cost real work. High KV-cache occupancy with zero here cost nothing.\n\nThis is vLLM's own scheduler preemption. It is unrelated to Kubernetes pod preemption or Iris job preemption. Data from telemetry_v1.vllm, and from engines embedded in the trainer in telemetry_v1.marinskyrl.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -1405,7 +1405,7 @@
       "id": 18,
       "type": "timeseries",
       "title": "Why engine requests finished",
-      "description": "Finished engine requests per time bucket, split by the reason vLLM recorded.\n\nA rising length share means responses are being truncated, and the verifier scores the truncation anyway.\n\nThe reason set is open; the pinned build emits stop, length, abort, error and repetition. One rollout is several requests when a group is sampled n ways. Blank means the engines finished nothing in this window. Data from telemetry_v1.vllm.",
+      "description": "Finished engine requests per time bucket, split by the reason vLLM recorded.\n\nA rising length share means responses are being truncated, and the verifier scores the truncation anyway.\n\nThe reason set is open; the pinned build emits stop, length, abort, error and repetition. One rollout is several requests when a group is sampled n ways. Blank means the engines finished nothing in this window. Data from telemetry_v1.vllm, and from engines embedded in the trainer in telemetry_v1.marinskyrl.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"

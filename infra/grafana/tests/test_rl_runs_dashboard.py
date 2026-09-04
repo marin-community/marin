@@ -301,26 +301,6 @@ def _run_rows() -> list[tuple]:
                     attributes={"step": str(bucket)},
                 )
             )
-        # Exclusive phase time: the only decomposition that sums to the step.
-        for phase, value in (("generate", 7.0), ("run_training", 3.0), ("sync_weights", 0.9), ("step", 0.6)):
-            rows.append(
-                _row(
-                    service="marinskyrl",
-                    name="phase_duration_seconds",
-                    value=value,
-                    moment=moment,
-                    seq=bucket,
-                    run_id=RUN_ID,
-                    job_id=JOB_ID,
-                    node_name=NODES[0],
-                    role="trainer",
-                    attributes={
-                        "phase": phase,
-                        "clock_domain": "exclusive",
-                        "step": str(bucket),
-                    },
-                )
-            )
     return rows
 
 
