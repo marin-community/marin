@@ -18,7 +18,7 @@ config:
   marin-loom:dotenvSecretVersion: "4"
   marin-loom:pruneDeployment: "true"
   marin-loom:settings:
-    auth.github_auto_approve_organizations: Open-Athena
+    auth.github_organizations: "Open-Athena:188075292"
     github.profile: github
     slack.effort: agent-default
     slack.profile: slack
