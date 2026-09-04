@@ -60,6 +60,28 @@ def text_document(text: str, source: str) -> dict:
     }
 
 
+def _canonical_tool_calls(tool_calls: object) -> list[dict]:
+    if not isinstance(tool_calls, list):
+        raise ValueError("Chat message tool_calls must be a list")
+
+    canonical = []
+    for tool_call in tool_calls:
+        if not isinstance(tool_call, dict):
+            raise ValueError("Each chat tool call must be an object")
+        function = tool_call.get("function")
+        if not isinstance(function, dict) or not isinstance(function.get("name"), str):
+            raise ValueError("Each chat tool call requires a function name")
+
+        arguments = function.get("arguments")
+        if not isinstance(arguments, str):
+            arguments = json.dumps(arguments, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+        normalized = {key: tool_call[key] for key in ("id", "type") if key in tool_call}
+        normalized["function"] = {"name": function["name"], "arguments": arguments}
+        canonical.append(normalized)
+    return canonical
+
+
 def canonical_chat_messages(messages: list[dict]) -> list[dict]:
     """Normalize common role aliases and validate the canonical message contract."""
     canonical: list[dict] = []
@@ -80,6 +102,8 @@ def canonical_chat_messages(messages: list[dict]) -> list[dict]:
         normalized = {key: value for key, value in message.items() if key not in {"from", "value"}}
         normalized["role"] = role
         normalized["content"] = content
+        if message.get("tool_calls") is not None:
+            normalized["tool_calls"] = _canonical_tool_calls(message["tool_calls"])
         canonical.append(normalized)
     if not canonical:
         raise ValueError("A conversation must contain at least one message")

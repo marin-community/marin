@@ -1,8 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import pyarrow as pa
 import pytest
-from marin.datakit.download.rollout_transforms import canonical_chat_messages, render_tool_call, render_tool_message
+from marin.datakit.download.rollout_transforms import (
+    canonical_chat_messages,
+    chat_document,
+    render_tool_call,
+    render_tool_message,
+)
 
 
 def test_canonical_chat_messages_normalizes_role_aliases_and_preserves_tools():
@@ -17,9 +23,34 @@ def test_canonical_chat_messages_normalizes_role_aliases_and_preserves_tools():
 
     assert messages == [
         {"role": "user", "content": "Inspect the repository."},
-        {"tool_calls": tool_calls, "role": "assistant", "content": None},
+        {
+            "tool_calls": [{"id": "call_1", "function": {"name": "bash", "arguments": '{"cmd":"pwd"}'}}],
+            "role": "assistant",
+            "content": None,
+        },
         {"role": "tool", "content": "/workspace", "tool_call_id": "call_1"},
     ]
+
+
+def test_chat_document_tool_arguments_have_stable_arrow_schema():
+    documents = [
+        chat_document(
+            [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{"function": {"name": "edit", "arguments": arguments}}],
+                }
+            ],
+            "test",
+        )
+        for arguments in ({"path": "a.py", "lines": [1, 2]}, {"path": ["a.py"], "lines": "all"})
+    ]
+
+    table = pa.Table.from_pylist(documents)
+
+    assert table.num_rows == 2
+    assert documents[0]["messages"][0]["tool_calls"][0]["function"]["arguments"] == ('{"lines":[1,2],"path":"a.py"}')
 
 
 def test_canonical_chat_messages_rejects_unknown_roles():
