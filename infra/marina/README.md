@@ -18,7 +18,7 @@ infra/marina/
                    apps an app.py with create_api() and migrate(), tests/, journeys/
   .data/<app>/     the local data root (gitignored); gs://marin-marina in production
   Dockerfile       node stage builds every apps/*/web; python stage runs `marina serve`
-  __main__.py      Pulumi: database, bucket, the service, the migrate and echo-sync jobs
+  __main__.py      Pulumi: database, bucket, the service, and manifest-declared job runners
 ```
 
 `web/README.md` describes the kit and the frontend contract.
@@ -47,9 +47,22 @@ infra/marina/
    description = "Browse the TaskTrove task collection."
    connect_src = []          # extra origins the page may fetch; 'self' is implied
    build_command = "cd web && npm ci && npm run build"
+
+   [[jobs]]                  # optional non-serving work
+   name = "refresh"
+   runner = "hourly"
+   schedule = "0 * * * *"
+   command = ["python", "-m", "tasktrove.refresh"]
+   timeout = 1800
+   cpu = 1
+   memory_gib = 1
+   secrets = []              # environment names registered by this stack
    ```
 
-   Unknown keys are rejected.
+   Unknown keys are rejected. Jobs on one runner must declare the same schedule. A runner
+   migrates every Python app, then runs its jobs in stable app/name order with each job's
+   timeout and secrets. The runner takes the largest CPU and memory declaration among its
+   jobs. Ordinary job failures do not prevent later jobs from running.
 2. Put a Vue + rsbuild app in `apps/<name>/web/`, aliasing `@marina` to
    `../../../web`, emitting to `../dist` with asset prefix `/<name>/`, and
    rendering inside `<Shell app="<name>">`. Copy `apps/tasktrove/web` as the
@@ -122,9 +135,20 @@ cd infra/marina && uv run pulumi up
 ```
 
 The image builds from the repository root (`Dockerfile.dockerignore` allowlists
-what it copies). `pulumi up` builds the image, updates the service and the two
-jobs, and executes `marina-migrate` against the new image. `marina-echo-sync`
-runs the same image every ten minutes.
+what it copies). `pulumi up` builds the image, creates one Cloud Run job and
+Scheduler trigger per manifest runner, executes the longest-timeout runner in
+migration-only mode, and then updates the service. The service receives each
+runner's resource name as `<APP>_<JOB>_JOB`, with hyphens converted to
+underscores, so an app can trigger its own declared job. Scheduled runners also
+apply migrations before app work, so a scheduler tick cannot run new code
+against an old schema. One PostgreSQL advisory lock serializes migrations
+across every runner. Reader grants run only in the deployment migration.
+
+The service keeps one warm instance for Echo search latency but uses
+request-based billing: CPU is throttled outside requests because periodic work
+runs in Cloud Run jobs. The `hourly` runner refreshes every configured Echo
+repository at `0 * * * *` UTC. EvalDash uses its own 1-vCPU, 1-GiB runner every
+ten minutes.
 
 IAM for the service account, the deploy account, and IAP viewers is declared in
 the `marin` stack by `infra/pulumi/src/iac/gcp/marina.py`. Its bindings attach

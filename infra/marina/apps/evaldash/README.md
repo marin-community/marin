@@ -7,8 +7,8 @@ Eval runs write one canonical JSON record per run under `gs://marin-eval-metadat
 `s3://marin-us-east-02a/marin/evals` for CoreWeave. The run directory also holds the evaluator's
 results and per-sample artifacts. The app's own Postgres schema is the serving catalog: it loads the
 full validated record snapshot before answering, and object storage stays the durable producer and
-recovery input. A background reconciler scans it after the API is serving and commits changes to the
-catalog without delaying the first response.
+recovery input. The EvalDash Marina runner scans object storage and commits catalog changes; serving
+instances do no background reconciliation work.
 
 The default scan also includes the former flat `gs://marin-eval-metadata/runs` and
 `s3://marin-us-east-02a/marin/eval-metadata/runs` roots because older CLI checkouts still write there.
@@ -21,14 +21,17 @@ generation, S3 ETag, or local content hash in the PostgreSQL source inventory; t
 spread across the first day, then each is HEADed once per 24 hours and reread only when its version
 changes. A missing object must be absent on two successful checks before its source is removed. A
 failed prefix listing leaves that prefix's last committed rows untouched, and an invalid rewrite keeps
-the last valid record while surfacing the error on the Debug page. Failures in the catalog poll or the
-overall reconciliation cycle also remain visible there until a later pass succeeds.
+the last valid record while surfacing the error on the Debug page. Failures in a serving instance's
+generation check or the scheduled reconciliation pass remain visible there until a later check or
+pass succeeds.
 
 Each source change and its selected `eval_catalog_runs`/`eval_catalog_metrics` projection commit in one
 transaction. The lowest configured prefix priority wins duplicate run IDs, so a removed canonical
 record promotes its legacy copy without rereading it. The transaction advances
-`eval_catalog_state.generation`; the in-memory aggregate views swap to that complete generation only
-after commit. `marina migrate` applies the pending numbered migrations from `migrations/` under a
+`eval_catalog_state.generation`. Each serving instance checks that generation at most once every 10
+seconds and swaps its in-memory aggregate views only after a newer generation commits. A failed check
+serves the last good snapshot and retries after the same interval. `marina migrate` applies the
+pending numbered migrations from `migrations/` under a
 PostgreSQL advisory lock and rejects a database whose migration ledger is newer than the running
 binary; mounting the app only verifies the schema, and never writes. The initial migration adopts the
 pre-migration tables; the next seeds separate catalog projection tables so an overlapping old revision
@@ -89,7 +92,7 @@ GET  /compare?models=a,b[,c,d]&<panel filters>   head-to-head: per-benchmark cel
 GET  /history?model=&task=   every run's headline score for one cell, over time
 GET  /meta              distinct models / evals / suites / users / statuses / versions + filter facets + archived_models + current_user
 GET  /status            store info + per-prefix ingest probes (last probe/success/error)
-POST /refresh           run one ingest pass now; returns the /status payload
+POST /refresh           queue the EvalDash Cloud Run rescan; returns 202 + operation + /status
 POST /models/{model_name}/archive   set a model's archive flag ({"archived": bool})
 ```
 
@@ -170,7 +173,8 @@ Resolved once when the kernel mounts the app, from the environment:
 | --- | --- | --- |
 | `RECORDS_PREFIXES` | the four roots above | Comma-separated record roots, highest precedence first. |
 | `EVALDASH_STORE` | `postgres` | `local` serves from the record snapshot with no database. |
-| `EVALDASH_INGEST_INTERVAL` | `600` | Seconds between reconciliation passes. |
+| `EVALDASH_INGEST_INTERVAL` | `600` | Local-store polling cadence. Production uses the manifest's ten-minute schedule. |
+| `EVALDASH_INGEST_JOB` | unset | Full Cloud Run job resource queued by `POST /refresh`; Marina derives it from the manifest in production. |
 | `EVALDASH_REVALIDATE_AFTER` | `86400` | Seconds before a known object is rechecked. |
 | `EVALDASH_REVIEW_MODEL` | `claude-haiku-4-5-20251001` | The model behind `samples/review`. |
 | `ANTHROPIC_API_KEY` | unset | Without it the review endpoint degrades rather than failing. |
@@ -181,7 +185,8 @@ no EvalDash-specific database configuration.
 ## Layout
 
 ```
-app.py                  the JSON API, the record stores, and the background ingest
+app.py                  the JSON API, the record stores, and the local development ingest loop
+ingest.py               one durable PostgreSQL reconciliation pass for a Marina job
 results_db.py           serving catalog, source inventory, and transactional projection
 db_migrations.py        the migration runner and its schema ledger
 migrations/             frozen numbered database migrations

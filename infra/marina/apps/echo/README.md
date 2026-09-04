@@ -2,7 +2,7 @@
 
 Marin's shared agent-context store, served by the Marina kernel under `/echo/`. The API is
 mounted at `/echo/api/`; the tables live in the `echo` schema of Marina's database; the
-`marina-echo-sync` Cloud Run job keeps the corpus current.
+hourly Marina Cloud Run runner keeps the corpus current.
 
 - `chunks` holds issues, pull requests, comments, and Discord messages mirrored from
   [marinmirror](https://marinmirror.exe.xyz). Each row has a canonical URL, a weighted
@@ -56,12 +56,13 @@ JSONL through `history export`.
 
 ## Sync job
 
-`marina-echo-sync` runs `python -m echo.sync.main` from the Marina image every ten minutes.
-It refreshes GitHub and Discord activity from marinmirror, then takes one globally
-serialized repository turn: a Postgres advisory lock, a durable fair cursor, and one target
-per execution, so in steady state the six repositories rotate about once per hour. A lock
-loser finishes successfully without consuming a turn. Retries are disabled: an attempt is
-one turn.
+The `marina-hourly` runner runs `python -m echo.sync.main` from the Marina image at the top
+of every hour. It refreshes GitHub and Discord activity from marinmirror, then processes six
+globally serialized repository turns: a Postgres advisory lock, a durable fair cursor, and
+one target per turn. This checks every configured repository during each hourly execution
+while preserving the cursor's fair order. A lock loser finishes successfully without
+consuming a turn. Failures are collected so later repository turns still run, then reported
+together so the Cloud Run execution fails visibly.
 
 Each turn checks that repository's head. An unchanged head only advances the check time; a
 new head uses GitHub's compare API to delete, fetch, and re-embed changed paths, and falls
@@ -74,7 +75,7 @@ For a cold target that needs longer than the scheduled attempt, run one task wit
 timeout and a pinned target:
 
 ```bash
-gcloud run jobs execute marina-echo-sync \
+gcloud run jobs execute marina-hourly \
   --project=hai-gcp-models --region=us-central1 --tasks=1 --task-timeout=21600s \
   --update-env-vars=ECHO_REPOSITORY_TARGET=marin-community/vllm --wait
 ```

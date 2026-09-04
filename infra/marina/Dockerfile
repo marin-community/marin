@@ -64,7 +64,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 COPY --from=web /build/apps /app/apps
 ENV MARINA_APPS_DIR=/app/apps
 # Each app package is importable by its own name, the way the kernel imports it, so a
-# job can run one of an app's modules: `python -m echo.sync.main` is Echo's sync job.
+# manifest-declared command can run an app module.
 ENV PYTHONPATH=/app/apps
 # Echo's two ONNX models are baked in rather than fetched on demand: Cloud Run keeps no
 # disk between instances, so every cold start would otherwise download them before it

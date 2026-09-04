@@ -26,6 +26,7 @@ dependencies = [
     "anthropic>=0.71.0",
     "connect-python>=0.4",
     "google-cloud-compute>=1.19",
+    "google-auth>=2",
     # echo: ONNX embedding and cross-encoder reranking, its CLI's HTTP client, and the YAML
     # frontmatter of the wiki's OKF documents.
     "fastembed>=0.8,<0.9",
