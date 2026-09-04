@@ -6,7 +6,7 @@
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Protocol
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
@@ -23,7 +23,13 @@ from iris.cluster.controller.codec import proto_from_json, resource_spec_from_sc
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.reconcile.task import TerminalKind
 from iris.cluster.controller.schema import job_config_table, task_attempts_table, tasks_table, workers_table
-from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, task_row_can_be_scheduled
+from iris.cluster.controller.task_state import (
+    ACTIVE_TASK_STATES,
+    AttemptDetailRow,
+    TaskDetailRow,
+    attempt_is_worker_failure,
+    task_row_can_be_scheduled,
+)
 from iris.cluster.log_highlights import extract_failure_highlights
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.types import TERMINAL_TASK_STATES, JobName, TaskAttempt, WorkerId, is_federated
@@ -87,10 +93,10 @@ class TaskWithAttempts:
     backend_id: str
     cluster: str
     peer_worker_label: str
-    attempts: tuple[Any, ...]
+    attempts: tuple[AttemptDetailRow, ...]
 
     @classmethod
-    def from_row(cls, row, attempts: tuple[Any, ...]) -> "TaskWithAttempts":
+    def from_row(cls, row: TaskDetailRow, attempts: tuple[AttemptDetailRow, ...]) -> "TaskWithAttempts":
         return cls(
             task_id=row.task_id,
             job_id=row.job_id,
@@ -223,7 +229,7 @@ def read_task_with_attempts(db: ControllerDB, task_id: JobName) -> TaskWithAttem
             .where(task_attempts_table.c.task_id == task_id)
             .order_by(task_attempts_table.c.attempt_id.asc())
         ).all()
-    return TaskWithAttempts.from_row(task_row, tuple(attempt_rows))
+    return TaskWithAttempts.from_row(task_row, tuple(AttemptDetailRow.from_row(row) for row in attempt_rows))
 
 
 def tasks_for_listing(tx: Tx, *, job_id: JobName) -> list[TaskWithAttempts]:
@@ -264,8 +270,9 @@ def tasks_for_listing(tx: Tx, *, job_id: JobName) -> list[TaskWithAttempts]:
             )
         )
     ).all()
-    attempts_by_task: dict[JobName, dict[int, Any]] = {}
-    for attempt in (*current_attempt_rows, *failed_attempt_rows):
+    attempts_by_task: dict[JobName, dict[int, AttemptDetailRow]] = {}
+    for row in (*current_attempt_rows, *failed_attempt_rows):
+        attempt = AttemptDetailRow.from_row(row)
         attempts_by_task.setdefault(attempt.task_id, {})[attempt.attempt_id] = attempt
     return [
         TaskWithAttempts.from_row(
@@ -276,32 +283,32 @@ def tasks_for_listing(tx: Tx, *, job_id: JobName) -> list[TaskWithAttempts]:
     ]
 
 
+def attempt_to_proto(attempt: AttemptDetailRow) -> job_pb2.TaskAttempt:
+    result = job_pb2.TaskAttempt(
+        attempt_id=attempt.attempt_id,
+        worker_id=str(attempt.worker_id) if attempt.worker_id else "",
+        state=attempt.state,
+        exit_code=attempt.exit_code or 0,
+        error=attempt.error or "",
+        is_worker_failure=attempt_is_worker_failure(attempt.state),
+        attempt_uid=attempt.attempt_uid,
+        pod_name=attempt.pod_name or "",
+        pod_uid=attempt.pod_uid or "",
+        node_name=attempt.node_name or "",
+        terminal_reason=attempt.terminal_reason or "",
+    )
+    if attempt.output_archive_json:
+        result.output_archive.CopyFrom(proto_from_json(attempt.output_archive_json, job_pb2.TaskOutputArchive))
+    if attempt.started_at_ms is not None:
+        result.started_at.CopyFrom(timestamp_to_proto(attempt.started_at_ms))
+    if attempt.finished_at_ms is not None:
+        result.finished_at.CopyFrom(timestamp_to_proto(attempt.finished_at_ms))
+    return result
+
+
 def task_to_proto(task: TaskWithAttempts, worker_address: str = "") -> job_pb2.TaskStatus:
     current_attempt = task.attempts[-1] if task.attempts else None
-    attempts = []
-    for attempt in task.attempts:
-        attempt_proto = job_pb2.TaskAttempt(
-            attempt_id=attempt.attempt_id,
-            worker_id=str(attempt.worker_id) if attempt.worker_id else "",
-            state=attempt.state,
-            exit_code=attempt.exit_code or 0,
-            error=attempt.error or "",
-            is_worker_failure=attempt.state in (job_pb2.TASK_STATE_WORKER_FAILED, job_pb2.TASK_STATE_PREEMPTED),
-            attempt_uid=attempt.attempt_uid,
-            pod_name=attempt.pod_name or "",
-            pod_uid=attempt.pod_uid or "",
-            node_name=attempt.node_name or "",
-            terminal_reason=attempt.terminal_reason or "",
-        )
-        if attempt.output_archive_json:
-            attempt_proto.output_archive.CopyFrom(
-                proto_from_json(attempt.output_archive_json, job_pb2.TaskOutputArchive)
-            )
-        if attempt.started_at_ms is not None:
-            attempt_proto.started_at.CopyFrom(timestamp_to_proto(attempt.started_at_ms))
-        if attempt.finished_at_ms is not None:
-            attempt_proto.finished_at.CopyFrom(timestamp_to_proto(attempt.finished_at_ms))
-        attempts.append(attempt_proto)
+    attempts = [attempt_to_proto(attempt) for attempt in task.attempts]
 
     active_worker_id = None if task.state == job_pb2.TASK_STATE_PENDING else task_worker_id(task)
     display_worker_id = (
