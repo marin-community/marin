@@ -418,9 +418,10 @@ def build_workflow(
     debug_distributed: bool = False,
     collective_diagnostics: bool = False,
     telemetry_only: bool = False,
-    # Every MEASURED throughput flag defaults ON, and each default must match its click option -- otherwise a
-    # programmatic caller silently gets the old behaviour while the CLI gets the new one, which is
-    # exactly the skew the merge gate caught on bf16_grad_reduce.
+    # Every default here must match its click option -- otherwise a programmatic caller silently gets
+    # different behaviour from the CLI, which is exactly the skew the merge gate caught on
+    # bf16_grad_reduce and then caught AGAIN here when grouped_mm was turned off in one place only.
+    # A test pins the two together now (tests/post_training/test_snowball_e6_baseline_defaults.py).
     grouped_mm: bool = True,
     reshard_after_forward: bool = True,
     flash_attn: bool = True,
@@ -652,17 +653,18 @@ def build_workflow(
 )
 @click.option(
     "--grouped-mm/--no-grouped-mm",
-    default=False,
+    default=True,
     show_default=True,
     help="Route Grug MoE blocks through torch._grouped_mm instead of the eager 256-expert Python "
     "loop. This is the workstream's headline arm -- 22x on policy_train at PR488 geometry, and F2 "
     "measures the eager path at ~0.6% MFU against Megatron's 10%. Needs no expert parallelism; the "
     "EP constraint runs the other way. Encodes itself into the artifact name as -eagermoe when OFF, "
     "so its rows are separable by run_id. "
-    "DEFAULT OFF, deliberately: this flag alone breaks the exact PPO ratio invariant (F25/F26), and "
-    "shipping it on would default a known correctness defect into a config other people copy. Turn "
-    "it on to reproduce the timing; do not turn it on to train. See notes/workstreams/rl-perf/"
-    "grouped-mm-fix/ for the whole picture and the plan to make it correct.",
+    "It broke the exact PPO ratio invariant until 2026-09-04 and was default-OFF for that reason; "
+    "the grouped combine now reduces each token's rows in a fixed order (MarinSkyRL "
+    "atqamar/grouped-mm-fix), and the E6 smoke on the real checkpoint reports log_ratio_abs_max 0 "
+    "and exact-unit 1 on every step with the flag ON. See notes/workstreams/rl-perf/grouped-mm-fix/ "
+    "for the mechanism and the evidence.",
 )
 @click.option(
     "--reshard-after-forward/--no-reshard-after-forward",

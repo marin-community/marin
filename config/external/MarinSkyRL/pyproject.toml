@@ -8,7 +8,9 @@ dependencies = ["marinskyrl"]
 package = false
 
 [tool.uv.sources]
-# Temporarily tracking our own branch, not main: it carries the preemption-retry budget the
-# baseline measurement run needs (MarinSkyRL 50fc2bf3). Restore `branch = "main"` once that
-# lands upstream.
-marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", branch = "atqamar/rlperf-preemption-retries" }
+# Temporarily tracking our own branch, not main. It carries three things this experiment needs and
+# main does not yet have: the preemption-retry budget (50fc2bf3), the policy_train and generate span
+# trees the results are read from, and the fixed-order grouped-MoE combine without which
+# use_grouped_mm breaks the exact PPO ratio invariant (243c8c32). Restore `branch = "main"` once
+# those land upstream.
+marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", branch = "atqamar/grouped-mm-fix" }
