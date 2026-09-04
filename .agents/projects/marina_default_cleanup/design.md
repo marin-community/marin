@@ -8,7 +8,7 @@ The current Marina service keeps CPU allocated for its full lifetime because Eva
 
 ## Challenges
 
-EvalDash serves an in-memory snapshot of a PostgreSQL catalog. Moving reconciliation into an hourly process updates PostgreSQL but does not update snapshots already loaded by web instances. The first request after a job commit must refresh the snapshot before reading it.
+EvalDash serves an in-memory snapshot of a PostgreSQL catalog. Moving reconciliation into a scheduled process updates PostgreSQL but does not update snapshots already loaded by web instances. The first request after a job commit must refresh the snapshot before reading it.
 
 Deploy migrations must still finish before a new revision starts. Removing the dedicated migration job cannot turn schema ordering into a manual deploy step or add migrations to every web-container cold start.
 

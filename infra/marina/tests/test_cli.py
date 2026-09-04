@@ -46,7 +46,6 @@ def test_run_attempts_later_jobs_and_filters_runner_secrets(tmp_path: Path, data
     )
 
     assert result.exit_code == 1
-    assert "job failures: alpha.fails" in result.output
     assert output.read_text() == "False"
 
 

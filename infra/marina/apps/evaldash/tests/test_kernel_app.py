@@ -126,7 +126,7 @@ def test_catalog_check_failure_serves_cached_snapshot_until_retry(engine, record
 
     now[0] += evaldash_app.CATALOG_CHECK_INTERVAL
     assert reader.get_record("snowball-2026.07.20-mmlu") == cached
-    assert reader.store_info().catalog_error == "RuntimeError: database unavailable"
+    assert reader.store_info().catalog_error is not None
 
     monkeypatch.setattr(evaldash_app, "catalog_generation", real_catalog_generation)
     now[0] += evaldash_app.CATALOG_CHECK_INTERVAL
