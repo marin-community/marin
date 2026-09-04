@@ -306,9 +306,9 @@ class CausalSelfAttention(eqx.Module):
         # Split the flattened head dim (num_heads * head_dim) into (heads, head_dim).
         # Under tensor/model parallelism the projection output's last dim is sharded over the
         # ``model`` axis, and JAX's explicit-mesh reshape cannot infer which output axis carries
-        # that sharding on a split -> pass out_sharding explicitly (model on the head axis,
-        # head_dim replicated). At model_axis==1 this is byte-identical to the old einops rearrange.
-        _qkv_head_spec = P(_BATCH_AXES, None, "model", None)
+        # that sharding on a split -> pass the canonical attention layout explicitly (context on
+        # sequence, model on heads, head_dim replicated).
+        _qkv_head_spec = _seq_spec_4d()
         q = jnp.einsum("bsh,hd->bsd", x, self.w_q).reshape(
             (x.shape[0], seq_len, -1, head_dim), out_sharding=_qkv_head_spec
         )
