@@ -6,6 +6,8 @@
 import json
 import os
 import subprocess
+import tempfile
+import threading
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -26,6 +28,7 @@ from marina.client import DEFAULT_MARINA_URL, marina_request, publish_applet
 from marina.database_setup import APPLET_READER_ROLE, ensure_applet_provisioning
 from marina.db import (
     DatabaseSpec,
+    UrlDatabase,
     database_from_env,
     deployment_runner_lock,
     grant_read,
@@ -34,6 +37,8 @@ from marina.db import (
     schema_name,
 )
 from marina.journey_plugin import DEFAULT_SHOTS_DIR, JOURNEYS_DIR
+from marina.journeys import running_kernel
+from marina.local_postgres import docker_database
 from marina.manifest import AppManifest, JobRunner, discover_apps, job_runners
 from marina.server import APPS_DIR_ENV, MarinaConfig, create_app
 from marina.table_load import read_table, table_statements
@@ -207,12 +212,45 @@ def _print_publish_result(result: dict[str, object], service_url: str, *, json_o
     click.echo(result["url"])
 
 
+def _serve_local_applet(payload: bytes, *, json_output: bool) -> None:
+    try:
+        with docker_database() as database_url:
+            database = UrlDatabase(database_url)
+            _migrate_apps([], database, (), None)
+            with tempfile.TemporaryDirectory(prefix="marina-local-applet-") as directory:
+                root = Path(directory)
+                apps_dir = root / "apps"
+                data_root = root / "data"
+                apps_dir.mkdir()
+                data_root.mkdir()
+                config = MarinaConfig(
+                    apps_dir=apps_dir,
+                    data_root=str(data_root),
+                    iap_audience=None,
+                    database=database,
+                )
+                with running_kernel(config) as kernel:
+                    result = publish_applet(kernel.origin, payload)
+                    _print_publish_result(result, kernel.origin, json_output=json_output)
+                    click.echo("Serving until Ctrl-C; Postgres and Marina will be removed on exit.", err=True)
+                    try:
+                        threading.Event().wait()
+                    except KeyboardInterrupt:
+                        return
+    except subprocess.CalledProcessError as error:
+        detail = error.stderr.decode(errors="replace").strip() if isinstance(error.stderr, bytes) else error.stderr
+        raise click.ClickException(detail or str(error)) from error
+    except (OSError, RuntimeError) as error:
+        raise click.ClickException(str(error)) from error
+
+
 @cli.command()
 @click.argument("app_dir", type=click.Path(path_type=Path, file_okay=False, exists=True))
 @click.option("--url", "service_url", default=DEFAULT_MARINA_URL, show_default=True)
 @click.option("--update", "applet_id", default=None, help="Applet UUID to update.")
 @click.option("--base-version", type=int, default=None, help="Current version required by an update.")
 @click.option("--build/--no-build", default=True, help="Run build_command when dist/index.html is absent.")
+@click.option("--local", is_flag=True, help="Run this applet against disposable Postgres and Marina.")
 @click.option("--dry-run", is_flag=True, help="Validate and print package contents without publishing.")
 @click.option("--json", "json_output", is_flag=True, help="Print the publish result as JSON.")
 def publish(
@@ -221,11 +259,20 @@ def publish(
     applet_id: str | None,
     base_version: int | None,
     build: bool,
+    local: bool,
     dry_run: bool,
     json_output: bool,
 ) -> None:
     """Publish a built applet directory and print its URL."""
+    if local:
+        if dry_run:
+            raise click.UsageError("--local cannot be combined with --dry-run")
+        if applet_id is not None or base_version is not None:
+            raise click.UsageError("--local cannot be combined with --update or --base-version")
     payload, package = _publish_package(app_dir, build=build)
+    if local:
+        _serve_local_applet(payload, json_output=json_output)
+        return
     if dry_run:
         _print_dry_run(package, json_output=json_output)
         return

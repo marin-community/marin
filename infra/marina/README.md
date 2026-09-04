@@ -274,19 +274,26 @@ lifespan events, background workers, or local filesystem persistence.
 Migrations must remain compatible with retained backend revisions because every
 revision observes the same mutable schema.
 
-For local development, configure Postgres, create the registry, and run Marina
-before publishing to the loopback URL:
+For an end-to-end local run:
 
 ```bash
-MARINA_DATABASE_URL=postgresql+pg8000://... uv run marina migrate
-MARINA_DATABASE_URL=postgresql+pg8000://... uv run marina dev
-uv run marina publish infra/marina/examples/problem-set-applet \
-  --url http://127.0.0.1:8080
+uv run marina publish infra/marina/examples/problem-set-applet --local
 ```
 
+`--local` starts a disposable `pgvector/pgvector` Docker container, installs the
+applet provisioning function and Marina registry, starts Marina on a free
+loopback port, runs the applet migration through a normal publish, and prints
+the immutable revision URL. It remains in the foreground so the URL stays live.
+It requires a running Docker daemon, binds only to loopback, and does not enable
+IAP authentication. Ctrl-C stops Marina and removes the container. `--local`
+cannot be combined with `--dry-run`, `--update`, or `--base-version` because
+every run starts with an empty registry.
+
 Open the printed revision URL to exercise the exact published frontend and
-backend. Run `marina applets versions <uuid> --url http://127.0.0.1:8080`
-before choosing a rollback target.
+backend. Use `marina publish ... --url http://127.0.0.1:8080` instead when
+attaching to a separately managed local Marina server. Run
+`marina applets versions <uuid> --url http://127.0.0.1:8080` before choosing a
+rollback target on that persistent server.
 
 On local Postgres, `marina migrate` installs the provisioning function when the
 configured database user has `CREATEROLE`. In production the Marina Pulumi

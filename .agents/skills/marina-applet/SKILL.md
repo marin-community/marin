@@ -80,20 +80,20 @@ Respect the current package limits: 25 MiB total, 8 MiB per file, and 2,000
 regular files. Keep large data out of the package until Marina gains an object
 store path.
 
-For an end-to-end local check, configure Postgres, migrate Marina, start the
-server, and publish to loopback:
+Run the complete local stack with:
 
 ```bash
-MARINA_DATABASE_URL=postgresql+pg8000://... uv run marina migrate
-MARINA_DATABASE_URL=postgresql+pg8000://... uv run marina dev
-uv run marina publish my-applet --url http://127.0.0.1:8080
+uv run marina publish my-applet --local
 ```
 
-Use Postgres with the `vector` and `pg_trgm` extensions. The migration identity
-must have `CREATEROLE`, or an administrator must have installed
-`marina.provision_applet(uuid)` first. If `uv` cannot write its cache in a
-restricted checkout, use the current checkout's `.venv/bin/marina` executable
-instead of installing or synchronizing dependencies.
+This starts disposable Postgres in Docker, installs Marina's privileged applet
+provisioning, migrates the registry, starts Marina on a free loopback port,
+publishes the applet with its migration, and prints its immutable revision URL.
+It requires a running Docker daemon, binds only to loopback, and does not enable
+IAP authentication. It stays in the foreground. After validation, send Ctrl-C
+and verify that both Marina and the container stop. If `uv` cannot write its
+cache in a restricted checkout, use the current checkout's `.venv/bin/marina`
+executable instead of installing or synchronizing dependencies.
 
 Open the printed immutable revision URL. Exercise the frontend, every backend
 route, caller identity when used, and at least one schema read/write path. For
