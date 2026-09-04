@@ -3,14 +3,23 @@
 
 """Thin protobuf adapter for the controller's operation modules."""
 
-from typing import Any
-
 from connectrpc.request import RequestContext
 from finelog.client import LogClient
 from rigging.timing import Timer
 
 from iris.cluster.bundle import BundleStore
-from iris.cluster.controller import accounts, admin, attempts, backend_status, federation_service, jobs, tasks, workers
+from iris.cluster.controller import (
+    accounts,
+    artifacts,
+    attempts,
+    backend_status,
+    checkpoint,
+    diagnostics,
+    federation_service,
+    jobs,
+    tasks,
+    workers,
+)
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.backend import TaskBackend
 from iris.cluster.controller.db import ControllerDB
@@ -60,7 +69,9 @@ class ControllerServiceImpl:
         self._timer = Timer()
         self._auth = auth or ControllerAuth()
         self._accounts = accounts.AccountDependencies(db=self._db, auth=self._auth)
-        self._admin = admin.AdminDependencies(db=self._db, bundles=self._bundle_store, runtime=controller)
+        self._artifacts = artifacts.ArtifactDependencies(bundles=self._bundle_store)
+        self._diagnostics = diagnostics.DiagnosticDependencies(db=self._db)
+        self._checkpoint = checkpoint.CheckpointDependencies(runtime=controller)
         self._workers = workers.WorkerDependencies(db=self._db, runtime=controller, auth=self._auth)
         self._tasks = tasks.TaskDependencies(db=self._db, logs=self._log_client, runtime=controller, auth=self._auth)
         self._user_budget_defaults = user_budget_defaults or UserBudgetDefaults()
@@ -97,39 +108,39 @@ class ControllerServiceImpl:
         )
 
     def bundle_zip(self, bundle_id: str) -> bytes:
-        return admin.bundle_zip(self._admin, bundle_id)
+        return artifacts.bundle_zip(self._artifacts, bundle_id)
 
     def blob_data(self, blob_id: str) -> bytes:
-        return admin.blob_data(self._admin, blob_id)
+        return artifacts.blob_data(self._artifacts, blob_id)
 
     def probe_database(self) -> int | None:
-        return admin.probe_database(self._admin)
+        return diagnostics.probe_database(self._diagnostics)
 
     def launch_job(
         self,
         request: controller_pb2.Controller.LaunchJobRequest,
-        ctx: Any,
+        ctx: RequestContext,
     ) -> controller_pb2.Controller.LaunchJobResponse:
         return jobs.launch_job(self._jobs, request, ctx)
 
     def get_job_status(
         self,
         request: controller_pb2.Controller.GetJobStatusRequest,
-        ctx: Any,
+        ctx: RequestContext,
     ) -> controller_pb2.Controller.GetJobStatusResponse:
         return jobs.get_job_status(self._jobs, request, ctx)
 
     def get_job_state(
         self,
         request: controller_pb2.Controller.GetJobStateRequest,
-        ctx: Any,
+        ctx: RequestContext,
     ) -> controller_pb2.Controller.GetJobStateResponse:
         return jobs.get_job_state(self._jobs, request, ctx)
 
     def terminate_job(
         self,
         request: controller_pb2.Controller.TerminateJobRequest,
-        ctx: Any,
+        ctx: RequestContext,
     ) -> job_pb2.Empty:
         return jobs.terminate_job(self._jobs, request, ctx)
 
@@ -143,42 +154,42 @@ class ControllerServiceImpl:
     def list_jobs(
         self,
         request: controller_pb2.Controller.ListJobsRequest,
-        ctx: Any,
+        ctx: RequestContext,
     ) -> controller_pb2.Controller.ListJobsResponse:
         return jobs.list_jobs(self._jobs, request, ctx)
 
     def get_task_status(
         self,
         request: controller_pb2.Controller.GetTaskStatusRequest,
-        ctx: Any,
+        ctx: RequestContext,
     ) -> controller_pb2.Controller.GetTaskStatusResponse:
         return tasks.get_task_status(self._tasks, request, ctx)
 
     def list_tasks(
         self,
         request: controller_pb2.Controller.ListTasksRequest,
-        ctx: Any,
+        ctx: RequestContext,
     ) -> controller_pb2.Controller.ListTasksResponse:
         return tasks.list_tasks(self._tasks, request, ctx)
 
     def kick_tasks(
         self,
         request: controller_pb2.Controller.KickTasksRequest,
-        ctx: Any,
+        ctx: RequestContext,
     ) -> controller_pb2.Controller.KickTasksResponse:
         return tasks.kick_tasks(self._tasks, request, ctx)
 
     def register(
         self,
         request: controller_pb2.Controller.RegisterRequest,
-        ctx: Any,
+        ctx: RequestContext,
     ) -> controller_pb2.Controller.RegisterResponse:
         return workers.register(self._workers, request, ctx)
 
     def list_workers(
         self,
         request: controller_pb2.Controller.ListWorkersRequest,
-        ctx: Any,
+        ctx: RequestContext,
     ) -> controller_pb2.Controller.ListWorkersResponse:
         return workers.list_workers(self._workers, request, ctx)
 
@@ -188,20 +199,19 @@ class ControllerServiceImpl:
 
     @property
     def endpoint_service(self) -> EndpointServiceImpl:
-        """Return the EndpointService adapter shared with the dashboard."""
         return self._endpoint_service
 
     def get_autoscaler_status(
         self,
         request: controller_pb2.Controller.GetAutoscalerStatusRequest,
-        ctx: Any,
+        ctx: RequestContext,
     ) -> controller_pb2.Controller.GetAutoscalerStatusResponse:
         return backend_status.get_autoscaler_status(self._backend_status, request, ctx)
 
     def get_kubernetes_cluster_status(
         self,
         request: controller_pb2.Controller.GetKubernetesClusterStatusRequest,
-        ctx: Any,
+        ctx: RequestContext,
     ) -> controller_pb2.Controller.GetKubernetesClusterStatusResponse:
         return backend_status.get_kubernetes_cluster_status(self._backend_status, request, ctx)
 
@@ -215,104 +225,104 @@ class ControllerServiceImpl:
     def list_users(
         self,
         request: controller_pb2.Controller.ListUsersRequest,
-        ctx: Any,
+        ctx: RequestContext,
     ) -> controller_pb2.Controller.ListUsersResponse:
         return accounts.list_users(self._accounts, request, ctx)
 
     def get_worker_status(
         self,
         request: controller_pb2.Controller.GetWorkerStatusRequest,
-        ctx: Any,
+        ctx: RequestContext,
     ) -> controller_pb2.Controller.GetWorkerStatusResponse:
         return workers.get_worker_status(self._workers, request, ctx)
 
     def begin_checkpoint(
         self,
         request: controller_pb2.Controller.BeginCheckpointRequest,
-        ctx: Any,
+        ctx: RequestContext,
     ) -> controller_pb2.Controller.BeginCheckpointResponse:
-        return admin.begin_checkpoint(self._admin, request, ctx)
+        return checkpoint.begin_checkpoint_request(self._checkpoint, request, ctx)
 
     def get_process_status(
         self,
         request: job_pb2.GetProcessStatusRequest,
-        ctx: Any,
+        ctx: RequestContext,
     ) -> job_pb2.GetProcessStatusResponse:
         return attempts.get_process_status(self._attempts, request, ctx)
 
     def mint_endpoint_token(
         self,
         request: controller_pb2.Controller.MintEndpointTokenRequest,
-        ctx: Any,
+        ctx: RequestContext,
     ) -> controller_pb2.Controller.MintEndpointTokenResponse:
         return attempts.mint_endpoint_token(self._attempts, request, ctx)
 
     def get_current_user(
         self,
         request: job_pb2.GetCurrentUserRequest,
-        ctx: Any,
+        ctx: RequestContext,
     ) -> job_pb2.GetCurrentUserResponse:
         return accounts.get_current_user(request, ctx)
 
     def exec_in_container(
         self,
         request: controller_pb2.Controller.ExecInContainerRequest,
-        ctx: Any,
+        ctx: RequestContext,
     ) -> controller_pb2.Controller.ExecInContainerResponse:
         return attempts.exec_in_container(self._attempts, request, ctx)
 
     def execute_raw_query(
         self,
         request: query_pb2.RawQueryRequest,
-        ctx: Any,
+        ctx: RequestContext,
     ) -> query_pb2.RawQueryResponse:
-        return admin.execute_raw_query(self._admin, request, ctx)
+        return diagnostics.execute_raw_query(self._diagnostics, request, ctx)
 
     def set_user_budget(
         self,
         request: controller_pb2.Controller.SetUserBudgetRequest,
-        ctx: Any,
+        ctx: RequestContext,
     ) -> controller_pb2.Controller.SetUserBudgetResponse:
         return accounts.set_user_budget(self._accounts, request, ctx)
 
     def get_user_budget(
         self,
         request: controller_pb2.Controller.GetUserBudgetRequest,
-        ctx: Any,
+        ctx: RequestContext,
     ) -> controller_pb2.Controller.GetUserBudgetResponse:
         return accounts.get_user_budget(self._accounts, request, ctx)
 
     def list_user_budgets(
         self,
         request: controller_pb2.Controller.ListUserBudgetsRequest,
-        ctx: Any,
+        ctx: RequestContext,
     ) -> controller_pb2.Controller.ListUserBudgetsResponse:
         return accounts.list_user_budgets(self._accounts, request, ctx)
 
     def get_scheduler_state(
         self,
         request: controller_pb2.Controller.GetSchedulerStateRequest,
-        ctx: Any,
+        ctx: RequestContext,
     ) -> controller_pb2.Controller.GetSchedulerStateResponse:
         return backend_status.get_scheduler_state(self._backend_status, request, ctx)
 
     def list_backends(
         self,
         request: controller_pb2.Controller.ListBackendsRequest,
-        ctx: Any,
+        ctx: RequestContext,
     ) -> controller_pb2.Controller.ListBackendsResponse:
         return backend_status.list_backends(self._backend_status, request, ctx)
 
     def list_peers(
         self,
         request: controller_pb2.Controller.ListPeersRequest,
-        ctx: Any,
+        ctx: RequestContext,
     ) -> controller_pb2.Controller.ListPeersResponse:
         return federation_service.list_peers(self._federation, request, ctx)
 
     def federation_sync(
         self,
         request: controller_pb2.Controller.FederationSyncRequest,
-        ctx: Any,
+        ctx: RequestContext,
     ) -> controller_pb2.Controller.FederationSyncResponse:
         return federation_service.federation_sync(self._federation, request, ctx)

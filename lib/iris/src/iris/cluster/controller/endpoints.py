@@ -8,11 +8,11 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from threading import RLock
-from typing import Any
 from urllib.parse import urlsplit
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
+from connectrpc.request import RequestContext
 from rigging.timing import Duration, Timestamp
 
 from iris.cluster.controller.db import ControllerDB
@@ -126,7 +126,6 @@ class EndpointRegistry:
         )
 
     def subscribe_proxy_updates(self, listener: Callable[[ProxyMappingDelta | ProxyRegistryReset], None]) -> None:
-        """Subscribe to committed endpoint-registry transitions."""
         with self._proxy_lock:
             self._proxy_listeners.append(listener)
 
@@ -247,7 +246,7 @@ class EndpointDependencies:
 def register_endpoint(
     dependencies: EndpointDependencies,
     request: controller_pb2.Controller.RegisterEndpointRequest,
-    context: Any,
+    context: RequestContext,
 ) -> controller_pb2.Controller.RegisterEndpointResponse:
     """Register or renew a service endpoint and return its granted lease."""
     del context
@@ -290,7 +289,7 @@ def register_endpoint(
 def unregister_endpoint(
     dependencies: EndpointDependencies,
     request: controller_pb2.Controller.UnregisterEndpointRequest,
-    context: Any,
+    context: RequestContext,
 ) -> job_pb2.Empty:
     """Unregister a service endpoint idempotently."""
     del context
@@ -302,7 +301,7 @@ def unregister_endpoint(
 def list_endpoints(
     dependencies: EndpointDependencies,
     request: controller_pb2.Controller.ListEndpointsRequest,
-    context: Any,
+    context: RequestContext,
 ) -> controller_pb2.Controller.ListEndpointsResponse:
     """List live task or system endpoints matching the request."""
     del context

@@ -10,6 +10,7 @@ from typing import Any, Protocol
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
+from connectrpc.request import RequestContext
 from rigging.timing import Timestamp
 from sqlalchemy import bindparam, case, select
 
@@ -69,7 +70,7 @@ class WorkerDetail:
 def register(
     dependencies: WorkerDependencies,
     request: controller_pb2.Controller.RegisterRequest,
-    context: Any,
+    context: RequestContext,
 ) -> controller_pb2.Controller.RegisterResponse:
     """Register one worker and defer eviction of any recycled-address owner."""
     del context
@@ -99,7 +100,7 @@ def register(
 def list_workers(
     dependencies: WorkerDependencies,
     request: controller_pb2.Controller.ListWorkersRequest,
-    context: Any,
+    context: RequestContext,
 ) -> controller_pb2.Controller.ListWorkersResponse:
     """List workers with liveness and running-task counts."""
     del context
@@ -163,7 +164,7 @@ def list_workers(
 def get_worker_status(
     dependencies: WorkerDependencies,
     request: controller_pb2.Controller.GetWorkerStatusRequest,
-    context: Any,
+    context: RequestContext,
 ) -> controller_pb2.Controller.GetWorkerStatusResponse:
     """Return one worker's liveness, metadata, and recent attempts."""
     del context
@@ -198,7 +199,6 @@ def get_worker_status(
 
 
 def read_worker(db: ControllerDB, worker_id: WorkerId):
-    """Return the address-bearing worker row used by exact runtime operations."""
     with db.read_snapshot() as tx:
         return tx.execute(
             select(workers_table.c.worker_id, workers_table.c.address, workers_table.c.scale_group).where(
