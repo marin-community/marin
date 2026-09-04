@@ -215,6 +215,8 @@ def _validated_active_spec(
     )
     if spec is None:
         raise StatsError(f"catalog for namespace {namespace!r} has no retained TableSpec {active_version}")
+    if not spec.HasField("logical_schema"):
+        raise StatsError(f"catalog for namespace {namespace!r} TableSpec {active_version} has no logical schema")
     if spec.operating_policy.l0_mode != stats_pb2.L0_MODE_OBJECT_STORE:
         raise StatsError(f"namespace {namespace!r} active TableSpec {active_version} is not object-backed")
     return active_version, spec
