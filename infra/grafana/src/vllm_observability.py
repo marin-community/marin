@@ -308,6 +308,12 @@ WITH base AS (
            END AS value
     FROM gauge_replica_bins
     GROUP BY 1, 2
+), request_in_flight_bins AS (
+    SELECT t, SUM(value) AS value
+    FROM canonical_gauge_bins
+    WHERE name IN ('num_requests_running', 'num_requests_waiting')
+    GROUP BY 1
+    HAVING COUNT(*) = 2
 ), raw_gauge_peaks AS (
     SELECT name, MAX(value) AS peak
     FROM canonical_gauge_samples
@@ -680,6 +686,20 @@ WITH base AS (
 
     SELECT t AS t,
            'saturation' AS section,
+           'num_requests_in_flight' AS metric,
+           'value' AS stat,
+           'num_requests_in_flight' AS series,
+           value AS value,
+           'requests' AS unit,
+           CAST(NULL AS VARCHAR) AS status,
+           CAST(NULL AS BIGINT) AS samples,
+           CAST(NULL AS DOUBLE) AS gap_seconds
+    FROM request_in_flight_bins
+
+    UNION ALL
+
+    SELECT t AS t,
+           'saturation' AS section,
            'iteration_tokens' AS metric,
            'mean' AS stat,
            'iteration tokens per engine step' AS series,
@@ -867,10 +887,10 @@ SELECT t, section, metric, stat, series, value, unit, status, samples, gap_secon
 FROM output
 ORDER BY section,
          CASE WHEN section = 'telemetry_health' AND metric = 'collector' THEN 0 ELSE 1 END,
+         t,
          metric,
          stat,
-         series,
-         t
+         series
 LIMIT {VLLM_MAX_RESULT_ROWS}
 """.strip()
     return VllmOverviewQuery(
