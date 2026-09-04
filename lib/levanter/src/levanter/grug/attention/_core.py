@@ -467,6 +467,10 @@ def _tpu_splash_attention(
             # shard_map; nested SegmentIds inputs do not reliably inherit a resharded
             # tracer's sequence layout while the enclosing training jit is staged.
             q_segment_ids_axes = _replicated_sequence_segment_ids_pspec(q_pspec, q_segment_ids.ndim)
+            q_segment_ids = jax.sharding.reshard(
+                q_segment_ids,
+                NamedSharding(mesh, q_segment_ids_axes),
+            )
             kv_segment_ids_axes = _segment_ids_pspec(k_pspec, kv_segment_ids.ndim)
             segment_id_lowering = lower_splash_segment_ids(
                 q_segment_ids=q_segment_ids,
