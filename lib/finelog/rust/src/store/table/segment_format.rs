@@ -17,6 +17,7 @@ use crate::proto::finelog::stats::ColumnType;
 use crate::store::compaction::executor::CompactionLayout;
 use crate::store::schema::{resolve_key_column, resolve_sort_columns, schema_to_arrow, Schema};
 use crate::store::segment::MAX_ROW_GROUP_ROWS;
+use crate::store::string_column::StringColumn;
 
 /// The physical write format of one table's segments.
 pub struct SegmentFormat {
@@ -96,29 +97,45 @@ impl SegmentFormat {
         .with_adaptive_group_extrema(self.schema.grouped_extrema.clone())
     }
 
-    /// Int64 key-column bounds from an in-memory batch (cheaper than re-reading
-    /// the Parquet footer just written).
-    pub fn key_bounds(&self, batch: &RecordBatch) -> (Option<i64>, Option<i64>) {
+    /// Key-column bounds from an in-memory batch (cheaper than re-reading the
+    /// Parquet footer just written).
+    pub fn key_bounds(&self, batch: &RecordBatch) -> (Option<String>, Option<String>) {
         let Ok(index) = batch.schema().index_of(&self.key_column) else {
             return (None, None);
         };
-        let Some(column) = batch.column(index).as_any().downcast_ref::<Int64Array>() else {
+        let column = batch.column(index);
+        if let Some(column) = column.as_any().downcast_ref::<Int64Array>() {
+            if column.null_count() == column.len() {
+                return (None, None);
+            }
+            let mut low: Option<i64> = None;
+            let mut high: Option<i64> = None;
+            for row in 0..column.len() {
+                if column.is_null(row) {
+                    continue;
+                }
+                let value = column.value(row);
+                low = Some(low.map_or(value, |current: i64| current.min(value)));
+                high = Some(high.map_or(value, |current: i64| current.max(value)));
+            }
+            return (
+                low.map(|value| value.to_string()),
+                high.map(|value| value.to_string()),
+            );
+        }
+        let Some(column) = StringColumn::new(column.as_ref()) else {
             return (None, None);
         };
-        if column.null_count() == column.len() {
-            return (None, None);
-        }
-        let mut low: Option<i64> = None;
-        let mut high: Option<i64> = None;
-        for row in 0..column.len() {
-            if column.is_null(row) {
+        let mut low: Option<&str> = None;
+        let mut high: Option<&str> = None;
+        for row in 0..batch.num_rows() {
+            let Some(value) = column.value(row) else {
                 continue;
-            }
-            let value = column.value(row);
-            low = Some(low.map_or(value, |current: i64| current.min(value)));
-            high = Some(high.map_or(value, |current: i64| current.max(value)));
+            };
+            low = Some(low.map_or(value, |current| current.min(value)));
+            high = Some(high.map_or(value, |current| current.max(value)));
         }
-        (low, high)
+        (low.map(str::to_string), high.map(str::to_string))
     }
 
     /// Names of the STRING columns carrying a trigram substring index; one bloom

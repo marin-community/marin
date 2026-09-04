@@ -112,9 +112,9 @@ pub struct CompactionExecution<'a> {
 /// read in order and the merge takes the longest prefix that fits, leaving the
 /// rest of the run for the next tick.
 ///
-/// `input_key_bounds` supplies typed in-memory key bounds for each input (the
-/// catalog round-trip stringifies them, losing numeric ordering). A bump carries
-/// the single input's bounds; a merge folds them via `aggregate_key_bounds`.
+/// `input_key_bounds` supplies the encoded key bounds for each input. A bump
+/// carries the single input's bounds; a rewritten merge recovers its bounds
+/// from the output footer.
 #[cfg(test)]
 fn run_job(
     job: &CompactionJob,
@@ -123,7 +123,7 @@ fn run_job(
     layout: CompactionLayout<'_>,
     index_config: &SegmentIndexConfig,
     max_merge_arrow_bytes: i64,
-    input_key_bounds: impl Fn(&str) -> (Option<i64>, Option<i64>),
+    input_key_bounds: impl Fn(&str) -> (Option<String>, Option<String>),
 ) -> Result<PlannedSwap, StatsError> {
     let execution = CompactionExecution {
         layout,
@@ -172,7 +172,7 @@ pub fn run_job_with_partition_policy(
     dir: &Path,
     arrow_schema: &SchemaRef,
     execution: CompactionExecution<'_>,
-    input_key_bounds: impl Fn(&str) -> (Option<i64>, Option<i64>),
+    input_key_bounds: impl Fn(&str) -> (Option<String>, Option<String>),
 ) -> Result<PlannedSwap, StatsError> {
     let job_partition = job
         .inputs
@@ -224,7 +224,7 @@ fn apply_level_bump(
     output_level: i32,
     dir: &Path,
     partition_policy: Option<&dyn PhysicalPartitionPolicy>,
-    input_key_bounds: &impl Fn(&str) -> (Option<i64>, Option<i64>),
+    input_key_bounds: &impl Fn(&str) -> (Option<String>, Option<String>),
 ) -> Result<PlannedSwap, StatsError> {
     if !Path::new(&old.path).exists() {
         tracing::warn!(
@@ -298,7 +298,7 @@ fn apply_merge(
     arrow_schema: &SchemaRef,
     execution: CompactionExecution<'_>,
     needs_repartition: bool,
-    input_key_bounds: &impl Fn(&str) -> (Option<i64>, Option<i64>),
+    input_key_bounds: &impl Fn(&str) -> (Option<String>, Option<String>),
 ) -> Result<PlannedSwap, StatsError> {
     let job_partition = job
         .inputs
@@ -739,12 +739,11 @@ mod tests {
             output_level: 1,
             output_min_seq: 1,
         };
-        // typed key bounds per input.
-        let bounds = |path: &str| -> (Option<i64>, Option<i64>) {
+        let bounds = |path: &str| -> (Option<String>, Option<String>) {
             match path {
-                p if p == p1.to_string_lossy() => (Some(10), Some(30)),
-                p if p == p2.to_string_lossy() => (Some(20), Some(40)),
-                p if p == p3.to_string_lossy() => (Some(5), Some(25)),
+                p if p == p1.to_string_lossy() => (Some("10".into()), Some("30".into())),
+                p if p == p2.to_string_lossy() => (Some("20".into()), Some("40".into())),
+                p if p == p3.to_string_lossy() => (Some("5".into()), Some("25".into())),
                 _ => (None, None),
             }
         };
@@ -782,8 +781,8 @@ mod tests {
         assert_eq!(added_seg(&swap).min_seq, 1);
         assert_eq!(added_seg(&swap).max_seq, 6);
         // folded key bounds preserve numeric ordering.
-        assert_eq!(added_seg(&swap).min_key_value, Some(5));
-        assert_eq!(added_seg(&swap).max_key_value, Some(40));
+        assert_eq!(added_seg(&swap).min_key_value.as_deref(), Some("5"));
+        assert_eq!(added_seg(&swap).max_key_value.as_deref(), Some("40"));
 
         // the output file exists with the expected name and is (key,seq)-sorted.
         let out = PathBuf::from(&added_seg(&swap).path);
@@ -1262,7 +1261,7 @@ mod tests {
             output_level: 1,
             output_min_seq: 1,
         };
-        let bounds = |_: &str| (Some(1), Some(n));
+        let bounds = |_: &str| (Some("1".to_string()), Some(n.to_string()));
         let swap = run_job(
             &job,
             &dir,
@@ -1311,7 +1310,7 @@ mod tests {
             output_level: 3,
             output_min_seq: 1,
         };
-        let bounds = |_: &str| (Some(10), Some(20));
+        let bounds = |_: &str| (Some("10".to_string()), Some("20".to_string()));
         let swap = run_job(
             &job,
             &dir,
@@ -1343,8 +1342,8 @@ mod tests {
             size,
             "no rewrite -> same bytes"
         );
-        assert_eq!(added_seg(&swap).min_key_value, Some(10));
-        assert_eq!(added_seg(&swap).max_key_value, Some(20));
+        assert_eq!(added_seg(&swap).min_key_value.as_deref(), Some("10"));
+        assert_eq!(added_seg(&swap).max_key_value.as_deref(), Some("20"));
 
         // The executor itself does NOT rename (deferred to commit); the old file
         // is still present and the new one absent.

@@ -635,6 +635,10 @@ fn classify_coverage(
                 uncovered_paths.push(path.clone());
                 continue;
             };
+            let (Ok(min), Ok(max)) = (min.parse::<i64>(), max.parse::<i64>()) else {
+                uncovered_paths.push(path.clone());
+                continue;
+            };
             let disjoint = max < range.bounds.lower || min >= range.bounds.upper;
             if disjoint {
                 covered_segments += 1;

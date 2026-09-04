@@ -17,7 +17,7 @@ use std::time::SystemTime;
 use arrow::array::RecordBatch;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::arrow_writer::{ArrowWriter, ArrowWriterOptions};
-use parquet::basic::{Compression, ZstdLevel};
+use parquet::basic::{Compression, Type as PhysicalType, ZstdLevel};
 use parquet::file::metadata::{KeyValue, ParquetMetaData};
 use parquet::file::properties::WriterProperties;
 use parquet::file::reader::{FileReader, SerializedFileReader};
@@ -151,15 +151,16 @@ fn parquet_writer_properties_with_id(
 /// `min_seq`/`max_seq` come from Parquet statistics because partitioned files
 /// contain sparse namespace-wide sequence ranges. Files written before `seq`
 /// statistics were available fall back to the filename and row count.
-/// `min_key_value`/`max_key_value` are the Parquet statistics for an Int64 key.
+/// `min_key_value`/`max_key_value` are the Parquet statistics for an Int64 or
+/// UTF-8 key, encoded in the key's logical string representation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SegmentMetadata {
     pub level: i32,
     pub min_seq: i64,
     pub max_seq: i64,
     pub row_count: i64,
-    pub min_key_value: Option<i64>,
-    pub max_key_value: Option<i64>,
+    pub min_key_value: Option<String>,
+    pub max_key_value: Option<String>,
     pub partition: Option<SegmentPartition>,
 }
 
@@ -446,6 +447,17 @@ pub fn stage_rewritten_segment(
 pub fn read_segment_footer(path: &Path, key_column: Option<&str>) -> Option<SegmentMetadata> {
     let name = path.file_name()?.to_str()?;
     let (level, filename_min_seq) = parse_seg_filename(name)?;
+    read_segment_footer_at(path, level, filename_min_seq, key_column)
+}
+
+/// Read footer metadata for a content-addressed object whose filename does not
+/// encode its level or sequence origin.
+pub fn read_segment_footer_at(
+    path: &Path,
+    level: i32,
+    filename_min_seq: i64,
+    key_column: Option<&str>,
+) -> Option<SegmentMetadata> {
     let file = std::fs::File::open(path).ok()?;
     let reader = SerializedFileReader::new(file).ok()?;
     segment_metadata_from_parquet(reader.metadata(), level, filename_min_seq, key_column)
@@ -474,7 +486,7 @@ pub(crate) fn segment_metadata_from_parquet(
     let min_seq = seq_min.unwrap_or(filename_min_seq);
     let max_seq = seq_max.unwrap_or(filename_min_seq + num_rows - 1);
     let (min_key, max_key) = key_column
-        .and_then(|kc| metadata_int64_bounds(metadata, kc))
+        .and_then(|kc| metadata_key_bounds(metadata, kc))
         .unwrap_or((None, None));
     Some(SegmentMetadata {
         level,
@@ -485,15 +497,6 @@ pub(crate) fn segment_metadata_from_parquet(
         max_key_value: max_key,
         partition,
     })
-}
-
-/// Aggregate Int64 (min, max) for `key_column` across all row groups, or `None`
-/// if the column is absent or carries no Int64 statistics.
-fn key_int64_bounds(
-    reader: &SerializedFileReader<std::fs::File>,
-    key_column: &str,
-) -> Option<(Option<i64>, Option<i64>)> {
-    metadata_int64_bounds(reader.metadata(), key_column)
 }
 
 fn metadata_int64_bounds(
@@ -517,23 +520,69 @@ fn metadata_int64_bounds(
     Some((lo, hi))
 }
 
+fn metadata_key_bounds(
+    metadata: &ParquetMetaData,
+    key_column: &str,
+) -> Option<(Option<String>, Option<String>)> {
+    let schema = metadata.file_metadata().schema_descr();
+    let column =
+        (0..schema.num_columns()).find(|&index| schema.column(index).name() == key_column)?;
+    match schema.column(column).physical_type() {
+        PhysicalType::INT64 => {
+            metadata_int64_bounds(metadata, key_column).map(|(minimum, maximum)| {
+                (
+                    minimum.map(|value| value.to_string()),
+                    maximum.map(|value| value.to_string()),
+                )
+            })
+        }
+        PhysicalType::BYTE_ARRAY => {
+            let mut minimum: Option<Vec<u8>> = None;
+            let mut maximum: Option<Vec<u8>> = None;
+            for row_group in metadata.row_groups() {
+                let Some(Statistics::ByteArray(statistics)) = row_group.column(column).statistics()
+                else {
+                    continue;
+                };
+                if let Some(value) = statistics.min_opt() {
+                    let value = value.data();
+                    if minimum.as_deref().is_none_or(|current| value < current) {
+                        minimum = Some(value.to_vec());
+                    }
+                }
+                if let Some(value) = statistics.max_opt() {
+                    let value = value.data();
+                    if maximum.as_deref().is_none_or(|current| value > current) {
+                        maximum = Some(value.to_vec());
+                    }
+                }
+            }
+            Some((
+                minimum.and_then(|value| String::from_utf8(value).ok()),
+                maximum.and_then(|value| String::from_utf8(value).ok()),
+            ))
+        }
+        _ => Some((None, None)),
+    }
+}
+
 /// Footer-only `(row_count, min_key, max_key)` for `key_column` in the parquet
 /// file at `path`.
 ///
 /// Reads only the footer (no column page scan). `min_key`/`max_key` are the
-/// aggregated Int64 statistics for `key_column` across row groups, or `None`
-/// when the column is absent / key-less / carries no Int64 statistics. Used by
+/// aggregated Int64 or UTF-8 statistics for `key_column` across row groups, or
+/// `None` when the column is absent / key-less / carries no supported statistics. Used by
 /// the executor to recover a merged segment's row_count cheaply and by boot
 /// adoption. Returns `None` only on an unreadable footer.
 pub fn segment_bounds(
     path: &Path,
     key_column: Option<&str>,
-) -> Option<(i64, Option<i64>, Option<i64>)> {
+) -> Option<(i64, Option<String>, Option<String>)> {
     let file = std::fs::File::open(path).ok()?;
     let reader = SerializedFileReader::new(file).ok()?;
     let num_rows = reader.metadata().file_metadata().num_rows();
     let (lo, hi) = key_column
-        .and_then(|kc| key_int64_bounds(&reader, kc))
+        .and_then(|kc| metadata_key_bounds(reader.metadata(), kc))
         .unwrap_or((None, None));
     Some((num_rows, lo, hi))
 }
@@ -750,8 +799,32 @@ mod tests {
         assert_eq!(meta.min_seq, 1);
         assert_eq!(meta.max_seq, 3);
         assert_eq!(meta.row_count, 3);
-        assert_eq!(meta.min_key_value, Some(10));
-        assert_eq!(meta.max_key_value, Some(30));
+        assert_eq!(meta.min_key_value.as_deref(), Some("10"));
+        assert_eq!(meta.max_key_value.as_deref(), Some("30"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn string_key_bounds_round_trip_through_footer() {
+        let dir = crate::test_support::unique_dir("segment_string_key_test");
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("seq", DataType::Int64, false),
+            Field::new("key", DataType::Utf8, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int64Array::from(vec![1, 2, 3])),
+                Arc::new(StringArray::from(vec!["/task/z", "/task/a", "/task/m"])),
+            ],
+        )
+        .unwrap();
+        let (path, _) = write_segment_to_dir(&dir, 0, 1, &batch).unwrap();
+
+        let metadata = read_segment_footer(&path, Some("key")).unwrap();
+        assert_eq!(metadata.min_key_value.as_deref(), Some("/task/a"));
+        assert_eq!(metadata.max_key_value.as_deref(), Some("/task/z"));
 
         std::fs::remove_dir_all(&dir).ok();
     }

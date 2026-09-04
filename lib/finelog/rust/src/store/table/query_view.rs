@@ -38,8 +38,8 @@ pub struct PlannedSegment {
     pub path: String,
     pub min_seq: i64,
     pub max_seq: i64,
-    /// Exact Int64 key bounds, when the segment's key column carries them.
-    pub key_bounds: Option<(i64, i64)>,
+    /// Encoded key bounds, when the segment's key column carries them.
+    pub key_bounds: Option<(String, String)>,
     pub partition: Option<SegmentPartition>,
     /// Local files the segment's advertised artifacts resolve to.
     pub artifacts: LocalArtifacts,
@@ -109,10 +109,11 @@ fn plan_segment(
     })
 }
 
-fn key_bounds(segment: &CatalogSegment) -> Option<(i64, i64)> {
-    let minimum: i64 = segment.min_key_value.as_deref()?.parse().ok()?;
-    let maximum: i64 = segment.max_key_value.as_deref()?.parse().ok()?;
-    Some((minimum, maximum))
+fn key_bounds(segment: &CatalogSegment) -> Option<(String, String)> {
+    Some((
+        segment.min_key_value.clone()?,
+        segment.max_key_value.clone()?,
+    ))
 }
 
 /// Whether a committed object segment belongs to the version a query reads.

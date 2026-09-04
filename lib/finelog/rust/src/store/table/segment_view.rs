@@ -29,7 +29,7 @@ use crate::store::types::{segment_to_row, LocalSegment, SegmentRow};
 /// from files already on disk and carries no `sources`.
 pub struct SegmentSnapshot {
     pub paths: Vec<String>,
-    pub key_bounds: BTreeMap<String, (i64, i64)>,
+    pub key_bounds: BTreeMap<String, (String, String)>,
     /// Exact per-segment `seq` bounds, so a `seq`-bounded scan selects only the
     /// segments whose disjoint ranges it overlaps.
     pub seq_bounds: BTreeMap<String, (i64, i64)>,
@@ -145,15 +145,14 @@ impl SegmentView {
         segments.remove(index)
     }
 
-    /// Typed Int64 key bounds for one input segment. The catalog round-trip
-    /// stringifies them, losing numeric ordering, so compaction reads them here.
-    pub fn key_bounds(&self, path: &str) -> (Option<i64>, Option<i64>) {
+    /// Encoded key bounds for one input segment.
+    pub fn key_bounds(&self, path: &str) -> (Option<String>, Option<String>) {
         self.segments
             .lock()
             .unwrap()
             .iter()
             .find(|segment| segment.path == path)
-            .map(|segment| (segment.min_key_value, segment.max_key_value))
+            .map(|segment| (segment.min_key_value.clone(), segment.max_key_value.clone()))
             .unwrap_or((None, None))
     }
 
@@ -197,7 +196,10 @@ impl SegmentView {
                 .filter_map(|segment| {
                     Some((
                         segment.path.clone(),
-                        (segment.min_key_value?, segment.max_key_value?),
+                        (
+                            segment.min_key_value.clone()?,
+                            segment.max_key_value.clone()?,
+                        ),
                     ))
                 })
                 .collect(),
@@ -286,8 +288,8 @@ pub fn visible_segments(
             max_seq: row.max_seq,
             row_count: row.row_count,
             created_at_ms: row.created_at_ms,
-            min_key_value: row.min_key_value.and_then(|value| value.parse().ok()),
-            max_key_value: row.max_key_value.and_then(|value| value.parse().ok()),
+            min_key_value: row.min_key_value,
+            max_key_value: row.max_key_value,
             partition: row.partition,
             location: row.location,
             artifacts,

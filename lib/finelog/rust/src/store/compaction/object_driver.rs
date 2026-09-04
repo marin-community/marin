@@ -192,7 +192,7 @@ async fn run(
     let key_column = compaction.format.key_column().to_string();
     let max_row_group_rows = compaction.format.max_row_group_rows();
     let max_merge_arrow_bytes = compaction.config.max_merge_arrow_bytes;
-    let key_bounds: HashMap<String, (Option<i64>, Option<i64>)> = job
+    let key_bounds: HashMap<String, (Option<String>, Option<String>)> = job
         .inputs
         .iter()
         .map(|row| (row.path.clone(), compaction.segments.key_bounds(&row.path)))
@@ -221,7 +221,7 @@ async fn run(
                 max_merge_arrow_bytes,
                 output: OutputPolicy::PromoteWhenUnchanged,
             },
-            move |path| key_bounds.get(path).copied().unwrap_or((None, None)),
+            move |path| key_bounds.get(path).cloned().unwrap_or((None, None)),
         )
     })
     .await??;

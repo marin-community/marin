@@ -160,29 +160,6 @@ pub(crate) fn build_job(run: Vec<&SegmentRow>, output_level: i32) -> CompactionJ
     }
 }
 
-/// Fold per-input `(min, max)` Int64 key bounds into one `(min, max)`.
-///
-/// Operates on the typed `i64` values (the in-memory `LocalSegment` bounds) so
-/// numeric keys keep native ordering — the catalog's TEXT round-trip would flip
-/// `"10" < "2"`. Inputs whose value is `None` (empty segment / no stats) are
-/// skipped; returns `(None, None)` if every input was skipped.
-pub fn aggregate_key_bounds<I>(bounds: I) -> (Option<i64>, Option<i64>)
-where
-    I: IntoIterator<Item = (Option<i64>, Option<i64>)>,
-{
-    let mut overall_min: Option<i64> = None;
-    let mut overall_max: Option<i64> = None;
-    for (lo, hi) in bounds {
-        if let Some(lo) = lo {
-            overall_min = Some(overall_min.map_or(lo, |x| x.min(lo)));
-        }
-        if let Some(hi) = hi {
-            overall_max = Some(overall_max.map_or(hi, |x| x.max(hi)));
-        }
-    }
-    (overall_min, overall_max)
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -462,31 +439,6 @@ mod tests {
         let job = plan_forced_l0(&[second, first.clone()]).unwrap();
 
         assert_eq!(job.inputs, vec![first]);
-    }
-
-    // --- aggregate_key_bounds -------------------------------------------
-
-    #[test]
-    fn aggregate_key_bounds_preserves_numeric_ordering() {
-        // 2..10: stringified "10" < "2" would flip; native i64 must not.
-        let (lo, hi) = aggregate_key_bounds([(Some(2), Some(10)), (Some(5), Some(7))]);
-        assert_eq!(lo, Some(2));
-        assert_eq!(hi, Some(10));
-    }
-
-    #[test]
-    fn aggregate_key_bounds_skips_none_inputs() {
-        let (lo, hi) = aggregate_key_bounds([(None, None), (Some(3), Some(9))]);
-        assert_eq!(lo, Some(3));
-        assert_eq!(hi, Some(9));
-    }
-
-    #[test]
-    fn aggregate_key_bounds_all_none() {
-        assert_eq!(
-            aggregate_key_bounds([(None, None), (None, None)]),
-            (None, None)
-        );
     }
 
     // --- compaction_sort_keys -------------------------------------------

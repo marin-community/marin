@@ -817,8 +817,8 @@ mod tests {
 
         let snapshot = table.query_snapshot().unwrap();
         assert_eq!(
-            snapshot.key_bounds.values().copied().collect::<Vec<_>>(),
-            vec![(1000, 1002)]
+            snapshot.key_bounds.values().cloned().collect::<Vec<_>>(),
+            vec![("1000".to_string(), "1002".to_string())]
         );
         std::fs::remove_dir_all(&dir).ok();
     }

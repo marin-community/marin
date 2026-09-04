@@ -26,6 +26,7 @@ use crate::store::compaction::object_driver::{self, ObjectCompaction};
 use crate::store::legacy::archive::{self, LegacyArchive};
 use crate::store::legacy::layout::{self, LocalLayout};
 use crate::store::table::index_artifacts::{self, IndexBackfill, INDEX_BUNDLES_PER_TICK};
+use crate::store::table::key_bounds;
 use crate::store::table::runtime::TableRuntime;
 use crate::store::table::spec_migration::{self, SpecMigration};
 
@@ -39,6 +40,8 @@ pub enum TableWork {
     /// Compact one planner-issued run. `force_compact_l0` makes an L0 run
     /// eligible regardless of the size threshold.
     Compaction { force_compact_l0: bool },
+    /// Recover missing key bounds from immutable object footers.
+    KeyBounds,
     /// Build the derived index artifacts segments still owe, or remove them from
     /// a table whose policy disables them.
     IndexArtifacts,
@@ -125,6 +128,7 @@ async fn run_one(runtime: &Arc<TableRuntime>, work: TableWork) -> Result<WorkOut
             Ok(WorkOutcome::pending(owns_cycle))
         }
         TableWork::Compaction { force_compact_l0 } => compact(runtime, force_compact_l0).await,
+        TableWork::KeyBounds => Ok(WorkOutcome::pending(key_bounds::maintain(runtime).await?)),
         TableWork::IndexArtifacts => {
             let tracker = &runtime.layout_tracker;
             let layout_is_current = |path: &str| tracker.is_current(path);
@@ -230,13 +234,14 @@ async fn cycle(
         // then drains at the fast re-poll cadence through the dedicated slot
         // instead of one run per shared-queue visit, mirroring how a legacy
         // table drains its whole backlog in one cycle.
+        let bounds_pending = run_one(runtime, TableWork::KeyBounds).await?.pending;
         let compacted = run_one(runtime, TableWork::Compaction { force_compact_l0 })
             .await?
             .pending;
         runtime.controller.gc_objects().await?;
         run_one(runtime, TableWork::ObjectCollection).await?;
         run_one(runtime, TableWork::IndexArtifacts).await?;
-        return Ok(WorkOutcome::pending(compacted));
+        return Ok(WorkOutcome::pending(bounds_pending || compacted));
     }
 
     let placement_pending = run_one(runtime, TableWork::Placement).await?.pending;

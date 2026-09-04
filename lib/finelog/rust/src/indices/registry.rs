@@ -57,6 +57,13 @@ pub struct OpenedIndexes {
     pub row_group_rows: Arc<[usize]>,
 }
 
+/// A bundle validated from catalog-resident source identity and row count,
+/// without opening the source Parquet footer.
+pub struct OpenedIndexSummary {
+    bundle_path: PathBuf,
+    header: Arc<BundleHeader>,
+}
+
 impl OpenedIndexes {
     pub fn bundle_path(&self) -> &Path {
         &self.bundle_path
@@ -117,6 +124,30 @@ impl IndexRegistry {
     ) -> Option<OpenedIndexes> {
         let references = artifacts.get(parquet_path.to_str()?)?;
         self.open(parquet_path, references)
+    }
+
+    /// Open an advertised bundle using the immutable source binding carried by
+    /// the table state. This is safe for segment-level pruning before the
+    /// Parquet scan is planned: a missing or malformed binding declines the
+    /// optimization.
+    pub fn open_summary(&self, artifacts: &LocalArtifacts) -> Option<OpenedIndexSummary> {
+        let bundle_path = artifacts.bundle.clone()?;
+        let source_id = uuid::Uuid::parse_str(artifacts.binding.segment_uuid.as_deref()?).ok()?;
+        let row_count = u64::try_from(artifacts.binding.row_count).ok()?;
+        let header = self.cache.get_header(&bundle_path, source_id, row_count)?;
+        Some(OpenedIndexSummary {
+            bundle_path,
+            header,
+        })
+    }
+
+    pub fn summary_trigram(
+        &self,
+        opened: &OpenedIndexSummary,
+        column: &str,
+    ) -> Option<(TrigramCoverage, Arc<ColumnIndex>)> {
+        self.cache
+            .get_trigram(&opened.bundle_path, &opened.header, column)
     }
 
     /// The local covering-projection file `name` resolves to for the segment at

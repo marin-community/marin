@@ -174,8 +174,8 @@ fn adopt_namespace_from_disk(ns_dir: &Path, namespace: &str, schema: &Schema) ->
             row_count: meta.row_count,
             byte_size,
             created_at_ms,
-            min_key_value: meta.min_key_value.map(|v| v.to_string()),
-            max_key_value: meta.max_key_value.map(|v| v.to_string()),
+            min_key_value: meta.min_key_value,
+            max_key_value: meta.max_key_value,
             partition: meta.partition,
             location: SegmentLocation::Local,
         });

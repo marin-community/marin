@@ -63,7 +63,7 @@ pub struct NamespaceProvider {
     /// (no-segments) case.
     segment_paths: Vec<String>,
     segment_key_column: Option<String>,
-    segment_key_bounds: BTreeMap<String, (i64, i64)>,
+    segment_key_bounds: BTreeMap<String, (String, String)>,
     partition_policy: Option<&'static dyn PhysicalPartitionPolicy>,
     segment_partitions: BTreeMap<String, SegmentPartition>,
     /// Exact per-segment `seq` bounds, captured with the path snapshot.
@@ -308,27 +308,47 @@ impl NamespaceProvider {
     }
 
     fn segment_paths_for_filters(&self, filters: &[Expr]) -> Vec<String> {
-        let ranges = crate::query::predicate::int_column_ranges(filters);
-        let key_range = self
+        let int_ranges = crate::query::predicate::int_column_ranges(filters);
+        let string_ranges = crate::query::trigram_prune::string_column_ranges(filters);
+        let int_key_range = self
             .segment_key_column
             .as_ref()
-            .and_then(|column| ranges.get(column).map(|range| (column, range)));
+            .and_then(|column| int_ranges.get(column));
+        let string_key_range = self
+            .segment_key_column
+            .as_ref()
+            .and_then(|column| string_ranges.get(column));
         let exact_values = crate::query::exact_prune::values_by_column(filters);
         let partition_candidates = self
             .partition_policy
             .and_then(|policy| policy.partitions_for_exact_values(&exact_values));
-        let seq_range = ranges.get("seq");
+        let seq_range = int_ranges.get("seq");
         let paths = self
             .segment_paths
             .iter()
             .filter(|path| {
-                let key_matches = key_range.is_none_or(|(_, range)| {
+                let key_matches =
                     self.segment_key_bounds
                         .get(path.as_str())
-                        .is_none_or(|&(minimum, maximum)| {
-                            minimum > maximum || range.overlaps(minimum, maximum)
-                        })
-                });
+                        .is_none_or(|(minimum, maximum)| {
+                            let int_matches = int_key_range.is_none_or(|range| {
+                                let Ok(minimum) = minimum.parse::<i64>() else {
+                                    return true;
+                                };
+                                let Ok(maximum) = maximum.parse::<i64>() else {
+                                    return true;
+                                };
+                                minimum > maximum || range.overlaps(minimum, maximum)
+                            });
+                            let string_matches = string_key_range.is_none_or(|range| {
+                                let minimum = minimum.as_bytes();
+                                let maximum = maximum.as_bytes();
+                                minimum > maximum
+                                    || (range.lo.as_deref().is_none_or(|lower| maximum >= lower)
+                                        && range.hi.as_deref().is_none_or(|upper| minimum <= upper))
+                            });
+                            int_matches && string_matches
+                        });
                 let seq_matches = seq_range.is_none_or(|range| {
                     self.segment_seq_bounds
                         .get(path.as_str())
@@ -427,12 +447,12 @@ impl NamespaceProvider {
         self
     }
 
-    /// Attach exact Int64 key bounds captured with the segment path snapshot.
+    /// Attach exact key bounds captured with the segment path snapshot.
     /// Paths missing from `bounds` remain queryable for scan safety.
     pub fn with_segment_key_bounds(
         mut self,
         key_column: impl Into<String>,
-        bounds: BTreeMap<String, (i64, i64)>,
+        bounds: BTreeMap<String, (String, String)>,
     ) -> Self {
         self.segment_key_column = Some(key_column.into());
         self.segment_key_bounds = bounds;
@@ -540,7 +560,30 @@ impl TableProvider for NamespaceProvider {
                 // excluded. Object-backed segments then split by cache state:
                 // cached files scan locally, the rest scan the remote directly
                 // while a background fill warms the cache for the next query.
-                let segment_paths = self.segment_paths_for_filters(filters);
+                let mut segment_paths = self.segment_paths_for_filters(filters);
+                let needles = crate::query::trigram_prune::substring_needles_by_column(filters);
+                let key_ranges = crate::query::trigram_prune::string_column_ranges(filters);
+                if self.segment_indexes_enabled && !needles.is_empty() {
+                    let indices = Arc::clone(&self.indices);
+                    let artifacts = Arc::clone(&self.segment_artifacts);
+                    let early_needles = needles.clone();
+                    let early_key_ranges = key_ranges.clone();
+                    segment_paths = tokio::task::spawn_blocking(move || {
+                        crate::query::trigram_prune::prune_segment_paths(
+                            &segment_paths,
+                            &early_needles,
+                            &early_key_ranges,
+                            &indices,
+                            &artifacts,
+                        )
+                    })
+                    .await
+                    .map_err(|error| {
+                        datafusion::error::DataFusionError::Execution(format!(
+                            "trigram segment prune task join: {error}"
+                        ))
+                    })?;
+                }
                 // Delegate to DataFusion's parquet scan (which keeps the existing
                 // range / min-max row-group pruning), then layer bundle-backed
                 // filtered projections or access plans onto its files.
@@ -587,7 +630,6 @@ impl TableProvider for NamespaceProvider {
                 if !self.segment_indexes_enabled {
                     return Ok(plan);
                 }
-                let needles = crate::query::trigram_prune::substring_needles_by_column(filters);
                 let mut exact = crate::query::exact_prune::values_by_column(filters);
                 if let Some(policy) = &self.exact_postings_policy {
                     exact.retain(|column, values| {
@@ -604,7 +646,6 @@ impl TableProvider for NamespaceProvider {
                 // Key ranges (incl. the analyzer's synthesized prefix bounds) scope
                 // which segments' sections the prune reads — cheap expr inspection,
                 // done here before the blocking work.
-                let key_ranges = crate::query::trigram_prune::string_column_ranges(filters);
                 let mut required_columns: BTreeSet<String> = projection
                     .map(|indices| {
                         indices
@@ -967,7 +1008,10 @@ mod tests {
             .unwrap()
             .with_segment_key_bounds(
                 "mem_bytes",
-                BTreeMap::from([(paths[0].clone(), (10, 10)), (paths[1].clone(), (110, 110))]),
+                BTreeMap::from([
+                    (paths[0].clone(), ("10".to_string(), "10".to_string())),
+                    (paths[1].clone(), ("110".to_string(), "110".to_string())),
+                ]),
             );
         let filters = [
             col("worker_id").eq(lit("w-2")),
@@ -1029,6 +1073,97 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(values, vec![110, 120]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn string_key_range_prunes_disjoint_segments() {
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("seq", DataType::Int64, false),
+            Field::new("key", DataType::Utf8, false),
+        ]));
+        let paths = vec![
+            "/planned/a.parquet".to_string(),
+            "/planned/b.parquet".to_string(),
+            "/planned/unknown.parquet".to_string(),
+        ];
+        let provider = NamespaceProvider::build_with_local_artifacts(schema, &paths)
+            .unwrap()
+            .with_segment_key_bounds(
+                "key",
+                BTreeMap::from([
+                    (
+                        paths[0].clone(),
+                        ("/job/a/0".to_string(), "/job/a/9".to_string()),
+                    ),
+                    (
+                        paths[1].clone(),
+                        ("/job/b/0".to_string(), "/job/b/9".to_string()),
+                    ),
+                ]),
+            );
+
+        assert_eq!(
+            provider.segment_paths_for_filters(&[col("key").eq(lit("/job/b/4"))]),
+            vec![paths[1].clone(), paths[2].clone()]
+        );
+    }
+
+    #[tokio::test]
+    async fn prefix_trigram_prunes_a_whole_segment_before_parquet_planning() {
+        let dir = tempdir("prefix_segment_prune");
+        let unrelated = worker_batch(1, vec!["/other/job/0:0"], vec![10]);
+        let matching = worker_batch(2, vec!["/marin/hero/job/0:0"], vec![20]);
+        let (unrelated_path, _) = write_segment_to_dir(&dir, 1, 1, &unrelated).unwrap();
+        let (matching_path, _) = write_segment_to_dir(&dir, 1, 2, &matching).unwrap();
+        let index_config = crate::indices::SegmentIndexConfig::from_policies(
+            ["worker_id"],
+            &[],
+            &[],
+            Some("worker_id".to_string()),
+        );
+        for (path, batch) in [(&unrelated_path, &unrelated), (&matching_path, &matching)] {
+            crate::indices::write_segment_index(path, std::slice::from_ref(batch), &index_config)
+                .unwrap();
+        }
+        let paths =
+            [&unrelated_path, &matching_path].map(|path| path.to_string_lossy().into_owned());
+        let artifacts = crate::indices::sidecar_artifacts(&paths);
+        std::fs::remove_file(&unrelated_path).unwrap();
+
+        let ctx = crate::query::make_ctx();
+        let prefix = ctx.udf("prefix").unwrap();
+        let filter = Expr::ScalarFunction(ScalarFunction::new_udf(
+            prefix,
+            vec![col("worker_id"), lit("/marin/hero/")],
+        ));
+        let plan = NamespaceProvider::build(
+            worker_arrow(),
+            &paths,
+            crate::indices::test_index_registry(),
+        )
+        .unwrap()
+        .with_segment_artifacts(artifacts)
+        .scan(&ctx.state(), None, &[filter], None)
+        .await
+        .unwrap();
+        let exec = plan
+            .as_any()
+            .downcast_ref::<DataSourceExec>()
+            .expect("scan returns a parquet DataSourceExec");
+        let selected: Vec<_> = exec
+            .data_source()
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .unwrap()
+            .file_groups
+            .iter()
+            .flat_map(|group| group.files())
+            .map(|file| file.object_meta.location.as_ref())
+            .collect();
+        assert_eq!(selected.len(), 1);
+        assert!(selected[0].ends_with(matching_path.file_name().unwrap().to_str().unwrap()));
+
         std::fs::remove_dir_all(&dir).ok();
     }
 

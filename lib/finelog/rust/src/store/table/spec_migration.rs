@@ -539,7 +539,7 @@ async fn rewrite_batch(
         .unwrap_or(migration.format.max_row_group_rows());
     let max_merge_arrow_bytes = migration.max_merge_arrow_bytes;
     let partitions = target_layout.and_then(TargetPartitions::new);
-    let bounds_by_path: HashMap<String, (Option<i64>, Option<i64>)> = batch
+    let bounds_by_path: HashMap<String, (Option<String>, Option<String>)> = batch
         .iter()
         .map(|source| {
             (
@@ -572,7 +572,7 @@ async fn rewrite_batch(
                 max_merge_arrow_bytes,
                 output: OutputPolicy::AlwaysRewrite,
             },
-            move |path| bounds_by_path.get(path).copied().unwrap_or((None, None)),
+            move |path| bounds_by_path.get(path).cloned().unwrap_or((None, None)),
         )
     })
     .await??;

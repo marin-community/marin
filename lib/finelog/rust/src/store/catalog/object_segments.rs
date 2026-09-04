@@ -414,6 +414,66 @@ impl Catalog {
         transaction.commit().map_err(sqlite_err)?;
         Ok(revision)
     }
+
+    /// Fill key bounds for existing immutable object segments and advance one
+    /// catalog generation. The object identity and every other segment field
+    /// remain unchanged.
+    pub fn update_object_segment_key_bounds(
+        &self,
+        namespace: &str,
+        bounds: &[(String, String, String)],
+    ) -> Result<TableRevision, StatsError> {
+        if bounds.is_empty() {
+            return Err(StatsError::Internal(
+                "a key-bounds update must carry at least one segment".to_string(),
+            ));
+        }
+        let mut inner = self.inner.lock().unwrap();
+        let transaction = inner.conn.transaction().map_err(sqlite_err)?;
+        for (path, minimum, maximum) in bounds {
+            let changed = transaction
+                .execute(
+                    "UPDATE segments
+                     SET min_key_value = ?1, max_key_value = ?2
+                     WHERE namespace = ?3 AND path = ?4
+                       AND EXISTS (
+                         SELECT 1 FROM object_segments
+                         WHERE namespace = ?3 AND path = ?4
+                       )",
+                    rusqlite::params![minimum, maximum, namespace, path],
+                )
+                .map_err(sqlite_err)?;
+            if changed != 1 {
+                return Err(StatsError::SchemaConflict(format!(
+                    "object segment {path:?} is no longer live in {namespace:?}"
+                )));
+            }
+        }
+        let revision = advance_generation_in(&transaction, namespace)?;
+        transaction.commit().map_err(sqlite_err)?;
+        Ok(revision)
+    }
+
+    #[cfg(test)]
+    pub fn clear_object_segment_key_bounds(
+        &self,
+        namespace: &str,
+        path: &str,
+    ) -> Result<TableRevision, StatsError> {
+        let mut inner = self.inner.lock().unwrap();
+        let transaction = inner.conn.transaction().map_err(sqlite_err)?;
+        let changed = transaction
+            .execute(
+                "UPDATE segments SET min_key_value = NULL, max_key_value = NULL
+                 WHERE namespace = ?1 AND path = ?2",
+                rusqlite::params![namespace, path],
+            )
+            .map_err(sqlite_err)?;
+        assert_eq!(changed, 1, "test segment must exist");
+        let revision = advance_generation_in(&transaction, namespace)?;
+        transaction.commit().map_err(sqlite_err)?;
+        Ok(revision)
+    }
     /// Commit every output from one migrated source and checkpoint it once.
     pub fn commit_migration_segments(
         &self,

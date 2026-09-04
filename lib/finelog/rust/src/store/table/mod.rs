@@ -18,6 +18,7 @@ pub(crate) mod controller;
 pub mod flush;
 pub mod index_artifacts;
 pub mod ingest;
+mod key_bounds;
 pub mod maintenance;
 pub mod query_view;
 pub mod runtime;

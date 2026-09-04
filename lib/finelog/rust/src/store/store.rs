@@ -149,7 +149,7 @@ pub struct NamespaceSnapshot {
     pub exact_postings_policy: BTreeMap<String, Vec<String>>,
     pub key_column: String,
     pub paths: Vec<String>,
-    pub key_bounds: BTreeMap<String, (i64, i64)>,
+    pub key_bounds: BTreeMap<String, (String, String)>,
     pub seq_bounds: BTreeMap<String, (i64, i64)>,
     pub partitions: BTreeMap<String, crate::partition_policy::SegmentPartition>,
     pub min_seq: Option<i64>,
@@ -1838,6 +1838,107 @@ mod tests {
             initial_catalog,
             current_catalog,
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn maintenance_recovers_string_key_bounds_without_rewriting_object() {
+        let data_dir = crate::test_support::unique_dir("string_bounds_repair_data");
+        let remote_dir = crate::test_support::unique_dir("string_bounds_repair_remote");
+        let store = Store::new(
+            Some(data_dir.clone()),
+            remote_dir.to_string_lossy().into_owned(),
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Shadow,
+        )
+        .unwrap();
+        store
+            .register_versioned_table(
+                "iris.worker",
+                ObjectSpec::new(1)
+                    .schema(worker_schema_keyed_on("worker_id"))
+                    .validated(),
+            )
+            .unwrap();
+        store.publish_object_catalog("iris.worker").await.unwrap();
+
+        let batch_schema = schema_to_arrow(&worker_schema());
+        let batch = RecordBatch::try_new(
+            batch_schema.clone(),
+            vec![
+                Arc::new(StringArray::from(vec!["w-z", "w-a"])),
+                Arc::new(Int64Array::from(vec![128, 256])),
+                Arc::new(Int64Array::from(vec![1, 2])),
+            ],
+        )
+        .unwrap();
+        let ipc = crate::store::ipc::encode_ipc(&batch_schema, &[batch]).unwrap();
+        store.write_rows("iris.worker", &ipc, None).unwrap();
+        store
+            .maintain_namespace("iris.worker", false)
+            .await
+            .unwrap();
+        let before = store.query_snapshot("iris.worker").unwrap();
+        let path = before.paths[0].clone();
+        assert_eq!(
+            before.key_bounds.get(&path),
+            Some(&("w-a".to_string(), "w-z".to_string()))
+        );
+        let source = store.catalog.object_segments("iris.worker").unwrap()[0]
+            .source
+            .clone();
+
+        let runtime = store.tables.require("iris.worker").unwrap();
+        let lease = runtime.controller().begin_compaction().unwrap();
+        runtime
+            .controller()
+            .commit_maintenance(&lease, || {
+                let revision = store
+                    .catalog
+                    .clear_object_segment_key_bounds("iris.worker", &path)?;
+                Ok((revision, ()))
+            })
+            .await
+            .unwrap();
+        assert!(store
+            .query_snapshot("iris.worker")
+            .unwrap()
+            .key_bounds
+            .is_empty());
+        let localized = runtime.controller().localize(&source).await.unwrap();
+        let footer = crate::store::segment::read_segment_footer_at(
+            &localized,
+            0,
+            1,
+            Some(runtime.key_column()),
+        )
+        .unwrap();
+        assert_eq!(footer.min_key_value.as_deref(), Some("w-a"));
+
+        maintenance::run(&runtime, TableWork::KeyBounds)
+            .await
+            .unwrap();
+        let repaired_row = store
+            .catalog
+            .list_segments("iris.worker")
+            .unwrap()
+            .into_iter()
+            .find(|row| row.path == path)
+            .unwrap();
+        assert_eq!(repaired_row.min_key_value.as_deref(), Some("w-a"));
+        let after = store.query_snapshot("iris.worker").unwrap();
+        assert_eq!(
+            after.key_bounds.get(&path),
+            Some(&("w-a".to_string(), "w-z".to_string()))
+        );
+        assert_eq!(
+            store.catalog.object_segments("iris.worker").unwrap()[0].source,
+            source,
+            "metadata repair keeps the immutable data object"
+        );
+
+        store.shutdown(Duration::from_secs(10)).await;
+        std::fs::remove_dir_all(data_dir).ok();
+        std::fs::remove_dir_all(remote_dir).ok();
     }
 
     /// Scan `table` the way the Query RPC does, so the provider prunes from the

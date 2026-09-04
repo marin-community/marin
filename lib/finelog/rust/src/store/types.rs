@@ -56,9 +56,9 @@ pub struct SegmentRow {
 ///
 /// The deque only ever holds `Local` or `Both` entries; eviction flips to
 /// `Remote` and removes the entry. Segments are created `Local` at flush time.
-/// `min_key_value` / `max_key_value` are the Int64 key bounds when the
-/// namespace's key column is an Int64/timestamp column carrying parquet
-/// statistics.
+/// `min_key_value` / `max_key_value` are the key bounds encoded in the key
+/// column's logical representation. Query planning interprets them using the
+/// table schema, so both Int64/timestamp and UTF-8 keys retain native ordering.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalSegment {
     pub path: String,
@@ -68,8 +68,8 @@ pub struct LocalSegment {
     pub max_seq: i64,
     pub row_count: i64,
     pub created_at_ms: i64,
-    pub min_key_value: Option<i64>,
-    pub max_key_value: Option<i64>,
+    pub min_key_value: Option<String>,
+    pub max_key_value: Option<String>,
     pub partition: Option<SegmentPartition>,
     pub location: SegmentLocation,
     /// The local files this segment's advertised artifacts resolve to. Empty
@@ -89,8 +89,8 @@ pub fn segment_to_row(namespace: &str, segment: &LocalSegment) -> SegmentRow {
         row_count: segment.row_count,
         byte_size: segment.size_bytes,
         created_at_ms: segment.created_at_ms,
-        min_key_value: segment.min_key_value.map(|value| value.to_string()),
-        max_key_value: segment.max_key_value.map(|value| value.to_string()),
+        min_key_value: segment.min_key_value.clone(),
+        max_key_value: segment.max_key_value.clone(),
         partition: segment.partition.clone(),
         location: segment.location,
     }

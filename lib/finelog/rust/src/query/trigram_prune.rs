@@ -76,6 +76,86 @@ pub fn apply_with_needles(
     rewrite_file_groups(plan, &access_plans)
 }
 
+/// Eliminate whole segments whose advertised trigram bundle proves that no row
+/// can satisfy the required string predicates. Missing or uncached artifacts
+/// keep the segment, so this remains a fail-open optimization.
+pub fn prune_segment_paths(
+    segment_paths: &[String],
+    needles: &HashMap<String, Vec<String>>,
+    key_ranges: &HashMap<String, StringRange>,
+    indices: &IndexRegistry,
+    artifacts: &SegmentArtifacts,
+) -> Vec<String> {
+    let trigrams_by_column: HashMap<&str, Vec<Vec<[u8; 3]>>> = needles
+        .iter()
+        .filter_map(|(column, values)| {
+            let trigrams: Vec<_> = values
+                .iter()
+                .filter_map(|value| needle_trigrams(value))
+                .collect();
+            (!trigrams.is_empty()).then_some((column.as_str(), trigrams))
+        })
+        .collect();
+    if trigrams_by_column.is_empty() {
+        return segment_paths.to_vec();
+    }
+
+    let mut pruned = 0usize;
+    let retained = segment_paths
+        .iter()
+        .filter(|path| {
+            let Some(segment_artifacts) = artifacts.get(path.as_str()) else {
+                return true;
+            };
+            let Some(segment) = indices.open_summary(segment_artifacts) else {
+                return true;
+            };
+            let mut combined: Option<Vec<bool>> = None;
+            let mut span_rows = None;
+            for (&column, needle_sets) in &trigrams_by_column {
+                let Some((coverage, index)) = indices.summary_trigram(&segment, column) else {
+                    continue;
+                };
+                if !coverage.key_column.is_empty()
+                    && key_ranges.get(&coverage.key_column).is_some_and(|range| {
+                        !coverage.key_band_overlaps(range.lo.as_deref(), range.hi.as_deref())
+                    })
+                {
+                    pruned += 1;
+                    return false;
+                }
+                if span_rows.is_some_and(|rows| rows != coverage.span_rows)
+                    || combined
+                        .as_ref()
+                        .is_some_and(|mask| mask.len() != coverage.span_count as usize)
+                {
+                    return true;
+                }
+                span_rows = Some(coverage.span_rows);
+                let mask = combined.get_or_insert_with(|| vec![true; coverage.span_count as usize]);
+                for trigrams in needle_sets {
+                    for (keep, matches) in mask.iter_mut().zip(index.keep_mask_for(trigrams)) {
+                        *keep &= matches;
+                    }
+                }
+            }
+            if combined
+                .as_ref()
+                .is_some_and(|mask| mask.iter().all(|keep| !keep))
+            {
+                pruned += 1;
+                return false;
+            }
+            true
+        })
+        .cloned()
+        .collect();
+    if pruned > 0 {
+        tracing::debug!(segments_pruned = pruned, "trigram segment prune");
+    }
+    retained
+}
+
 /// Inclusive per-column key ranges implied by a query's top-level conjuncts.
 ///
 /// Walks `filters` (descending through top-level `AND`s) for `column <cmp>
@@ -226,7 +306,7 @@ fn scalar_function_needles(
     };
     let value = utf8_literal(&sf.args[1])?;
     match sf.func.name() {
-        "contains" => Some((col.name.clone(), vec![value])),
+        "contains" | "prefix" => Some((col.name.clone(), vec![value])),
         "regexp_matches" => Some((col.name.clone(), regex_required_literals(&value))),
         _ => None,
     }
