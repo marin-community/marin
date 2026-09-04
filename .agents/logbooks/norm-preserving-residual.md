@@ -9,9 +9,10 @@ author: kaiyuew
 
 ## Current TL;DR
 
-Gate-1 code is ready on snapshot `959fdb2b2`. The d512 and d768 cells preserve
-the canonical July recipe from #6882 and change only the two residual merges in
-each layer. No training result exists yet.
+Gate 1 is partially complete. `MOE-NPR-001-d512` finished at Paloma macro
+`3.5570` and `340,730` tokens/s, a `1.018x` effective speedup over the July
+d512 cell. `MOE-NPR-002-d768` is still running. A d768 learning-rate-transfer
+comparison, `MOE-NPR-003-d768-d512lr`, is queued from snapshot `d9aa145c8`.
 
 ## Scope
 
@@ -40,8 +41,11 @@ each layer. No training result exists yet.
 ### Active
 
 - `MOE-NPR-001/002`: learned norm-preserving residual mixing improves
-  effective wall-clock speed at both July Gate-1 scales. Next test: launch the
-  matched d512 and d768 cells from snapshot `959fdb2b2`.
+  effective wall-clock speed at both July Gate-1 scales. Evidence: d512 passed
+  narrowly at `1.018x`; d768 is running. Next test: finish d768.
+- `MOE-NPR-003`: using the d512 learning-rate pair at d768 improves final
+  Paloma macro loss enough to offset any throughput change. Evidence: none yet.
+  Next test: compare `MOE-NPR-003-d768-d512lr` with `MOE-NPR-002-d768`.
 
 ### Blocked
 
@@ -238,3 +242,24 @@ the `softplus(0)` initialization, shared attention/MoE parameters, or Marin's
   loss and `train/residual/beta_mean = softplus(0) = log(2)` at initialization,
   then monitor W&B steps, throughput, learned per-layer beta values, and final
   Paloma loss.
+
+### 2026-09-03 17:27 - d768 d512-LR transfer submitted
+
+- Hypothesis: d768 transfers better from the d512 learning rate than from the
+  May-recipe width-scaled learning rate.
+- Commit Hash: `d9aa145c8b6ff247e791561c1321e891ded63d2a`.
+- Command: `test -z "$(git status --porcelain)" && /Users/kaiyuew/Downloads/Project/marin-iris-transport-8860/.venv/bin/iris --config=/Users/kaiyuew/Downloads/Project/marin-iris-transport-8860/lib/iris/config/marin.yaml job run --no-wait --job-name moe-npr-d768-d512lr-8860 --cpu=1 --memory=2G --disk=5GB --extra=cpu --zone=us-east5-a --priority=interactive -e WANDB_API_KEY "${WANDB_API_KEY}" -- python -m experiments.grug.moe_norm_preserving_residual.launch_d768_d512_lr`.
+- Config: `MOE-NPR-003-d768-d512lr` matches `MOE-NPR-002-d768`: hidden
+  dimension 768, batch 32, 16,875 steps, seed 0, sequence length 8,192, d768
+  epsilon `1.2569492710527343e-15`, and d768 beta2 `0.998001`. Only the LR
+  pair changes: MuonH/AdamH LR `0.0083729565 -> 0.0098041002` and Adam LR
+  `0.0019322207 -> 0.0022624847`, copied from d512.
+- Result: parent `/kaiyuew/moe-npr-d768-d512lr-8860` is running. Its only
+  child, `grug-train-MOE-NPR-003-d768-d512lr`, is pending v5p-8 capacity with
+  zero failures. Output root:
+  `gs://marin-us-east5/grug/MOE-NPR-003-d768-d512lr-7513e9`.
+- Interpretation: launch containment and the optimizer probe match the intended
+  one-variable comparison. Training evidence does not exist yet.
+- Next action: after allocation, validate the W&B optimizer config, finite loss,
+  throughput, and early Paloma trajectory against `MOE-NPR-002-d768`; use final
+  Paloma macro loss and final-100-step throughput for the decision.

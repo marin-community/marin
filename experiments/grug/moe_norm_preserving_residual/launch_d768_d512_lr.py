@@ -121,7 +121,6 @@ if __name__ == "__main__":
     executor_main(
         steps=[_build_step()],
         description=(
-            "d768 norm-preserving residual run with the d512 learning-rate pair. "
-            f"run_id={_RUN_ID}, TPU={_TPU}."
+            "d768 norm-preserving residual run with the d512 learning-rate pair. " f"run_id={_RUN_ID}, TPU={_TPU}."
         ),
     )
