@@ -125,9 +125,12 @@ authorization, stable response types, or multiple database operations.
 
 ## Publish and operate
 
-Run a command that changes server state only when the user explicitly requests
-that external write. This includes first or update publish, table load,
-mutating SQL, rollback, and archive. The default target is
+Treat a request to build or update a Marina applet as authorization to publish
+it and perform the server writes needed for the requested behavior, including
+schema migrations and requested data loading. Validate the package, then publish
+without asking for separate confirmation. Honor requests for local-only work,
+drafts, or review before publishing. Rollback, archive, and unrelated data
+mutations still need authorization within the user's request. The default target is
 `https://marina.oa.dev`, and the CLI uses cached `iris login` credentials or
 ambient Google credentials through IAP.
 
