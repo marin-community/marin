@@ -794,7 +794,7 @@
       "id": 216,
       "type": "timeseries",
       "title": "Padding waste and attention work",
-      "description": "Left axis: the fraction of the trained batch that is padding, one minus real tokens over padded tokens. Right axis: the attention-work proxy B·S² ÷ ΣLᵢ², the factor by which eager attention's quadratic cost exceeds what the real sequence lengths would need. Packing is rejected for Grug, so batches are BSHD-padded, and eager attention is quadratic on the padded shape — which is why the linear padded fraction understates the cost and both lines have to be read together. The ratio is computed per rank and then averaged, so it is unaffected by how the batch is sharded.",
+      "description": "Left axis: the fraction of the trained batch that is padding, one minus real tokens over padded tokens. Right axis: the attention-work proxy B·S² ÷ ΣLᵢ², the factor by which eager attention's quadratic cost exceeds what the real sequence lengths would need. Packing is rejected for Grug, so batches are BSHD-padded, and eager attention is quadratic on the padded shape — which is why the linear padded fraction understates the cost and both lines have to be read together. The ratio is computed per rank and then averaged, so it is unaffected by how the batch is sharded. The token counters were renamed rank_tokens_real and rank_tokens_padded on 2026-09-03 to state that population -- they are one rank's shard, never the run total -- and both spellings are read, because naming only the new one empties the panel across the whole back catalogue and naming only the old one empties it on every run since.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -818,7 +818,7 @@
           "unit": "percentunit",
           "min": 0,
           "max": 1,
-          "noValue": "No policy_train_count rows. The spans and these counters are published from the same block, so spans without counters means the run predates them or the batch carried no attention_mask -- it does not mean the batch was unpadded."
+          "noValue": "No token counters. The spans and these counters are published from the same block, so spans without counters means the run predates them or the batch carried no attention_mask -- it does not mean the batch was unpadded."
         },
         "overrides": [
           {
@@ -868,7 +868,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "WITH counters AS ( SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS bucket, json_get(attributes_json, 'step') AS s, json_get(attributes_json, 'rank') AS worker_rank, json_get(attributes_json, 'counter') AS counter, value FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name = 'policy_train_count' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) ), per_rank AS ( SELECT bucket, s, worker_rank, MAX(CASE WHEN counter = 'tokens_real' THEN value END) AS tokens_real, MAX(CASE WHEN counter = 'tokens_padded' THEN value END) AS tokens_padded, MAX(CASE WHEN counter = 'attention_work_ratio' THEN value END) AS attention_work FROM counters GROUP BY 1, 2, 3 ) SELECT bucket AS t, AVG(1.0 - tokens_real / NULLIF(tokens_padded, 0)) AS padded_fraction, AVG(attention_work) AS attention_work_ratio FROM per_rank GROUP BY 1 ORDER BY 1"
+                "value": "WITH counters AS ( SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS bucket, json_get(attributes_json, 'step') AS s, json_get(attributes_json, 'rank') AS worker_rank, json_get(attributes_json, 'counter') AS counter, value FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name = 'policy_train_count' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) ), per_rank AS ( SELECT bucket, s, worker_rank, MAX(CASE WHEN counter IN ('rank_tokens_real', 'tokens_real') THEN value END) AS tokens_real, MAX(CASE WHEN counter IN ('rank_tokens_padded', 'tokens_padded') THEN value END) AS tokens_padded, MAX(CASE WHEN counter = 'attention_work_ratio' THEN value END) AS attention_work FROM counters GROUP BY 1, 2, 3 ) SELECT bucket AS t, AVG(1.0 - tokens_real / NULLIF(tokens_padded, 0)) AS padded_fraction, AVG(attention_work) AS attention_work_ratio FROM per_rank GROUP BY 1 ORDER BY 1"
               },
               {
                 "key": "from",

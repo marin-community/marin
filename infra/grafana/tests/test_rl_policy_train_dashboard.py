@@ -105,9 +105,21 @@ CONTAINED_SPANS = (
 # does not belong in this decomposition however exclusive its clock domain looks.
 SPAN_PUBLISH_SECONDS = 3.0
 
+# The token counters were renamed on 2026-09-03 to say that they are one rank's shard rather than
+# the run total. The fixture publishes the current spelling; the back catalogue carries the old one.
 WORKER_COUNTERS = {
-    "0": {"micro_step_count": 64.0, "tokens_real": 6000.0, "tokens_padded": 8000.0, "attention_work_ratio": 1.9},
-    "1": {"micro_step_count": 64.0, "tokens_real": 6400.0, "tokens_padded": 8000.0, "attention_work_ratio": 1.7},
+    "0": {
+        "micro_step_count": 64.0,
+        "rank_tokens_real": 6000.0,
+        "rank_tokens_padded": 8000.0,
+        "attention_work_ratio": 1.9,
+    },
+    "1": {
+        "micro_step_count": 64.0,
+        "rank_tokens_real": 6400.0,
+        "rank_tokens_padded": 8000.0,
+        "attention_work_ratio": 1.7,
+    },
 }
 
 # A cumulative Prometheus histogram: counts are cumulative in `le`, so +Inf carries the total.
@@ -711,12 +723,27 @@ def test_padding_is_a_per_rank_ratio_rather_than_a_ratio_of_summed_tokens(store)
     # Averaging the per-rank fractions (0.25 and 0.20) is unaffected by how the batch is sharded;
     # a ratio of summed tokens would not be.
     expected_padding = sum(
-        1.0 - counters["tokens_real"] / counters["tokens_padded"] for counters in WORKER_COUNTERS.values()
+        1.0 - counters["rank_tokens_real"] / counters["rank_tokens_padded"] for counters in WORKER_COUNTERS.values()
     ) / len(WORKER_COUNTERS)
     expected_work = sum(counters["attention_work_ratio"] for counters in WORKER_COUNTERS.values()) / len(WORKER_COUNTERS)
     for _, padded_fraction, attention_work_ratio in rows:
         assert padded_fraction == pytest.approx(expected_padding)
         assert attention_work_ratio == pytest.approx(expected_work)
+
+
+def test_the_padding_panel_reads_the_old_spelling_of_the_token_counters(store) -> None:
+    """Runs from before the 2026-09-03 rename publish tokens_real and tokens_padded. Reading only
+    the current spelling empties this panel across the whole back catalogue, and an empty padding
+    panel reads as an unpadded batch."""
+    fresh = store.execute(_panel_sql("Padding waste and attention work")).fetchall()
+    store.execute(
+        """UPDATE "telemetry_v1.marinskyrl"
+           SET attributes_json = replace(attributes_json, 'rank_tokens_', 'tokens_')"""
+    )
+    renamed = store.execute(_panel_sql("Padding waste and attention work")).fetchall()
+
+    assert [row[1] for row in renamed] == [pytest.approx(row[1]) for row in fresh]
+    assert all(row[1] is not None for row in renamed)
 
 
 def test_the_accelerator_panels_join_dcgm_to_the_run_through_its_nodes(store) -> None:
