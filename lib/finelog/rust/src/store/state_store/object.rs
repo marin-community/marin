@@ -372,8 +372,7 @@ impl ObjectTableStateStore {
         let current = current_id.table_relative(table).ok_or_else(|| {
             StatsError::Internal(format!("table HEAD for {table:?} points outside its table"))
         })?;
-        let pin_cutoff =
-            now_ms.saturating_sub(i64::try_from(pin_retention_ms).unwrap_or(i64::MAX));
+        let pin_cutoff = now_ms.saturating_sub(i64::try_from(pin_retention_ms).unwrap_or(i64::MAX));
         let state_cutoff =
             now_ms.saturating_sub(i64::try_from(state_retention_ms).unwrap_or(i64::MAX));
         let orphan_cutoff =
@@ -877,10 +876,8 @@ mod tests {
             .await
             .unwrap()
         {
-            let revision = state_revision_from_key(
-                metadata.id.table_relative(TABLE).unwrap(),
-            )
-            .unwrap();
+            let revision =
+                state_revision_from_key(metadata.id.table_relative(TABLE).unwrap()).unwrap();
             let modified = std::time::UNIX_EPOCH
                 + std::time::Duration::from_millis((base_ms + revision as i64 * 1_000) as u64);
             let file = std::fs::OpenOptions::new()
@@ -895,7 +892,15 @@ mod tests {
         // rollback target.
         assert_eq!(
             states
-                .gc_obsolete_states(TABLE, base_ms + 100_000, 10_000, 99_000, 99_000, false, fence)
+                .gc_obsolete_states(
+                    TABLE,
+                    base_ms + 100_000,
+                    10_000,
+                    99_000,
+                    99_000,
+                    false,
+                    fence
+                )
                 .await
                 .unwrap(),
             3
@@ -911,7 +916,15 @@ mod tests {
         // The elected keeper survives a repeated pass.
         assert_eq!(
             states
-                .gc_obsolete_states(TABLE, base_ms + 100_000, 10_000, 99_000, 99_000, false, fence)
+                .gc_obsolete_states(
+                    TABLE,
+                    base_ms + 100_000,
+                    10_000,
+                    99_000,
+                    99_000,
+                    false,
+                    fence
+                )
                 .await
                 .unwrap(),
             0
