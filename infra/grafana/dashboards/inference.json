@@ -381,6 +381,22 @@
           {
             "matcher": {
               "id": "byName",
+              "options": "engine\\signal"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Engine / producer"
+              },
+              {
+                "id": "custom.width",
+                "value": 500
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
               "options": "running_mean"
             },
             "properties": [

@@ -10,6 +10,21 @@
     "defaults": {},
     "overrides": []
   },
+  "transformations": [
+    {
+      "id": "organize",
+      "options": {
+        "indexByName": {
+          "status": 0,
+          "age at range end (s)": 1,
+          "largest sample gap (s)": 2,
+          "last sample": 3,
+          "replica samples": 4,
+          "producer/resource": 5
+        }
+      }
+    }
+  ],
   "targets": [
     {
       "refId": "A",

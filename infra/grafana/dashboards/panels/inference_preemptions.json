@@ -1,6 +1,6 @@
 {
   "type": "stat",
-  "title": "Preemptions in selected window",
+  "title": "Preemptions",
   "description": "Reset-aware counter total. Preemption can indicate KV-cache pressure; it is not a failed request. Missing records stay unknown, not zero.",
   "datasource": {
     "type": "yesoreyeram-infinity-datasource",

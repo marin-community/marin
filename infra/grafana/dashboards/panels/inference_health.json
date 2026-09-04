@@ -10,6 +10,20 @@
     "defaults": {},
     "overrides": []
   },
+  "transformations": [
+    {
+      "id": "organize",
+      "options": {
+        "indexByName": {
+          "status": 0,
+          "signal": 1,
+          "window value": 2,
+          "unit": 3,
+          "stage / reason": 4
+        }
+      }
+    }
+  ],
   "targets": [
     {
       "refId": "A",
