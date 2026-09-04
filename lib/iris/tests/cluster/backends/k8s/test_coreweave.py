@@ -927,16 +927,17 @@ def test_start_controller_errors_with_invalid_scale_group():
     provider.shutdown()
 
 
-def test_start_controller_errors_without_s3_credentials(monkeypatch):
-    """start_controller raises when S3 storage is configured but R2 credentials are not set."""
+def test_preflight_controller_errors_without_s3_credentials(monkeypatch):
+    """Preflight rejects missing S3 credentials before changing Kubernetes resources."""
     monkeypatch.delenv("CW_KEY_ID", raising=False)
     monkeypatch.delenv("CW_KEY_SECRET", raising=False)
-    provider, k8s = _make_provider()
+    provider, _ = _make_provider()
     cluster_config = _make_cluster_config(remote_state_dir="s3://my-bucket/bundles")
-    _seed_prerequisites(k8s, cluster_config)
 
-    with pytest.raises(InfraError, match="CW_KEY_ID and CW_KEY_SECRET"):
-        provider.start_controller(cluster_config)
+    with pytest.raises(InfraError) as exc_info:
+        provider.preflight_controller(cluster_config)
+    assert "CW_KEY_ID" in str(exc_info.value)
+    assert "CW_KEY_SECRET" in str(exc_info.value)
     provider.shutdown()
 
 

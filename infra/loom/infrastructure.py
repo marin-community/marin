@@ -35,6 +35,7 @@ SSH_FIREWALL_TAG = "loom-ssh"
 FIREWALL_PRIORITY = 1000
 GIT_COMMIT = re.compile(r"^[0-9a-f]{40}$")
 STARTUP_SCRIPT = (ROOT / "startup-script.sh").read_text()
+ACTIVATION_COMMAND = "python -m marin_deploy.loom"
 DOCKER_DAEMON_CONFIG = (
     json.dumps(
         {
@@ -838,8 +839,8 @@ def _create_activation(
 ) -> command.local.Command:
     return command.local.Command(
         "loom-activate",
-        create="./activate.sh",
-        update="./activate.sh",
+        create=ACTIVATION_COMMAND,
+        update=ACTIVATION_COMMAND,
         dir=".",
         environment={
             "LOOM_PROJECT": config.project,

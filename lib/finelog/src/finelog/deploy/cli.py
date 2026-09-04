@@ -133,30 +133,6 @@ def down_cmd(name: str, yes: bool) -> None:
     _gcp.gcp_down(cfg, yes=yes)
 
 
-@deploy.command("restart")
-@click.argument("name")
-@click.option(
-    "--build/--no-build",
-    "build",
-    default=True,
-    show_default=True,
-    help="Build and push the finelog image (using cfg.image as the tag) before restarting.",
-)
-@click.option(
-    "--fast",
-    is_flag=True,
-    default=False,
-    help="Build with the Rust `fast` profile (no LTO, parallel codegen) for a quicker build.",
-)
-def restart_cmd(name: str, build: bool, fast: bool) -> None:
-    """Restart a GCE deployment in place (refresh the container/image)."""
-    cfg = load_finelog_config(name)
-    _require_gcp_mutation(cfg)
-    if build:
-        build_finelog_image(image=cfg.image, cargo_profile="fast" if fast else "release")
-    _gcp.gcp_restart(cfg)
-
-
 @deploy.command("sync-secret")
 @click.argument("name")
 def sync_secret_cmd(name: str) -> None:

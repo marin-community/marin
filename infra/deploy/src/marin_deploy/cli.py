@@ -6,6 +6,7 @@
 import click
 
 from marin_deploy.finelog import finelog
+from marin_deploy.iris import iris
 from marin_deploy.pulumi import PULUMI_SERVICES, pulumi_service_group
 
 
@@ -15,5 +16,6 @@ def cli() -> None:
 
 
 cli.add_command(finelog)
+cli.add_command(iris)
 for service in PULUMI_SERVICES:
     cli.add_command(pulumi_service_group(service))

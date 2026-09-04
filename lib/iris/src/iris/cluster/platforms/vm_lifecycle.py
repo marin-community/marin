@@ -79,6 +79,16 @@ class ControllerStatus:
     vm_name: str | None = None
 
 
+@dataclass(frozen=True)
+class ControllerRestartPlan:
+    """Inputs needed to activate an existing VM controller."""
+
+    vm: StandaloneWorkerHandle
+    bootstrap_script: str
+    address: str
+    port: int
+
+
 @dataclass
 class HealthCheckResult:
     """Result of a health check with diagnostic info."""
@@ -266,7 +276,7 @@ def _controller_port(config: IrisClusterConfig) -> int:
     return DEFAULT_CONTROLLER_PORT
 
 
-def _discover_controller_vm(
+def discover_controller_vm(
     platform: WorkerInfraProvider,
     label_prefix: str,
 ) -> StandaloneWorkerHandle | None:
@@ -360,7 +370,7 @@ def start_controller(
     port = _controller_port(config)
 
     # Check for existing controller
-    existing_vm = _discover_controller_vm(platform, label_prefix)
+    existing_vm = discover_controller_vm(platform, label_prefix)
     if existing_vm:
         if fresh:
             logger.info(
@@ -411,39 +421,47 @@ def start_controller(
     return address, vm
 
 
+def controller_restart_plan(
+    platform: WorkerInfraProvider,
+    config: IrisClusterConfig,
+    resolve_image: Callable[[str, str | None], str] | None = None,
+) -> ControllerRestartPlan:
+    """Resolve the existing VM and bootstrap script for a controller restart."""
+    _resolve_image = resolve_image or _identity_resolve_image
+    label_prefix = config.platform.label_prefix or "iris"
+    port = _controller_port(config)
+
+    vm = discover_controller_vm(platform, label_prefix)
+    if vm is None:
+        raise RuntimeError("No existing controller VM found. Use 'iris cluster start' to create one first.")
+
+    bootstrap_script = build_controller_bootstrap_script_from_config(
+        with_injected_task_env(config), resolve_image=_resolve_image
+    )
+    return ControllerRestartPlan(
+        vm=vm,
+        bootstrap_script=bootstrap_script,
+        address=f"http://{vm.internal_address}:{port}",
+        port=port,
+    )
+
+
 def restart_controller(
     platform: WorkerInfraProvider,
     config: IrisClusterConfig,
     resolve_image: Callable[[str, str | None], str] | None = None,
     health_check_timeout: float = HEALTH_CHECK_TIMEOUT_SECONDS,
 ) -> tuple[str, StandaloneWorkerHandle]:
-    """Restart controller container in-place on existing VM.
+    """Restart a controller in place and return its address and VM handle."""
+    plan = controller_restart_plan(platform, config, resolve_image)
+    logger.info("Restarting controller container in-place on VM %s", plan.vm.vm_id)
+    plan.vm.bootstrap(plan.bootstrap_script)
 
-    Re-runs the bootstrap script on the existing controller VM, which stops the
-    running container, pulls the latest image, and starts a new container.
-    Much faster than a full stop+start cycle since it skips VM creation.
-    """
-    _resolve_image = resolve_image or _identity_resolve_image
-    label_prefix = config.platform.label_prefix or "iris"
-    port = _controller_port(config)
+    if not wait_healthy(plan.vm, plan.port, timeout=health_check_timeout):
+        raise RuntimeError(f"Controller at {plan.address} failed health check after restart")
 
-    vm = _discover_controller_vm(platform, label_prefix)
-    if vm is None:
-        raise RuntimeError("No existing controller VM found. Use 'iris cluster start' to create one first.")
-
-    logger.info("Restarting controller container in-place on VM %s", vm.vm_id)
-
-    bootstrap_script = build_controller_bootstrap_script_from_config(
-        with_injected_task_env(config), resolve_image=_resolve_image
-    )
-    vm.bootstrap(bootstrap_script)
-
-    address = f"http://{vm.internal_address}:{port}"
-    if not wait_healthy(vm, port, timeout=health_check_timeout):
-        raise RuntimeError(f"Controller at {address} failed health check after restart")
-
-    logger.info("Controller container restarted at %s", address)
-    return address, vm
+    logger.info("Controller container restarted at %s", plan.address)
+    return plan.address, plan.vm
 
 
 def stop_controller(platform: WorkerInfraProvider, config: IrisClusterConfig) -> None:
@@ -454,7 +472,7 @@ def stop_controller(platform: WorkerInfraProvider, config: IrisClusterConfig) ->
     checkpoints after remote state is cleared.
     """
     label_prefix = config.platform.label_prefix or "iris"
-    vm = _discover_controller_vm(platform, label_prefix)
+    vm = discover_controller_vm(platform, label_prefix)
     if vm:
         logger.info("Stopping controller VM %s", vm.vm_id)
         vm.terminate(wait=True)

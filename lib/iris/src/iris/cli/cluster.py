@@ -22,7 +22,7 @@ import click
 import uvicorn
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from finelog.deploy.cli import down_cmd, logs_cmd, restart_cmd, status_cmd, up_cmd
+from finelog.deploy.cli import down_cmd, logs_cmd, status_cmd, up_cmd
 from rigging.config_discovery import list_cluster_configs
 from rigging.provenance import Provenance
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
@@ -37,7 +37,12 @@ from iris.cli.build import (
     find_marin_root,
     get_git_provenance,
 )
-from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS, require_controller_url, rpc_client_for_ctx
+from iris.cli.connect import (
+    IRIS_CLUSTER_CONFIG_DIRS,
+    require_controller_url,
+    rpc_client_for_ctx,
+    take_controller_checkpoint,
+)
 from iris.cluster.composer import provider_bundle
 from iris.cluster.config import (
     KUBERNETES_WORKER_RUNTIME,
@@ -50,13 +55,6 @@ from iris.cluster.controller.autoscaler.scaling_group import (
 )
 from iris.cluster.controller.dashboard import ProxyControllerDashboard
 from iris.cluster.controller.main import controller_serve_options, run_controller_serve
-from iris.cluster.controller.rollout import (
-    ROLLOUT_RECORD_FILENAME,
-    RolloutPhase,
-    RolloutRecord,
-    read_rollout_record,
-    write_rollout_record,
-)
 from iris.cluster.dashboard_common import VUE_DIST_DIR
 from iris.cluster.inject_env import with_injected_task_env
 from iris.cluster.local_cluster import LocalCluster
@@ -298,17 +296,16 @@ def _pin_latest_images(config, provenance: Provenance, task_platforms: str | Non
     return {k: v for k, v in pinned.items() if v}
 
 
-def _build_and_pin_deploy_images(
-    ctx,
+def build_and_pin_deploy_images(
     config,
     *,
     task_platforms: str | None = None,
     cargo_profile: str = DEFAULT_CARGO_PROFILE,
+    verbose: bool = False,
 ) -> None:
-    """Pin :latest tags to the working-tree hash, build + push the images, echo them."""
+    """Pin, build, and push the images required by the configured platform."""
     provenance = get_git_provenance()
     _pin_latest_images(config, provenance, task_platforms)
-    verbose = ctx.obj.get("verbose", False)
     built = _build_cluster_images(
         config,
         provenance,
@@ -352,8 +349,8 @@ def _resolve_prebuilt_image(image: str) -> str:
     return f"{_image_repository(image)}@{digest}"
 
 
-def _use_prebuilt_kubernetes_images(config, tag: str) -> str:
-    """Pin Kubernetes controller and task images to verified multiarch digests."""
+def use_prebuilt_kubernetes_images(config, tag: str) -> None:
+    """Pin Kubernetes images to verified digests."""
     if config.defaults.worker.runtime != KUBERNETES_WORKER_RUNTIME:
         raise click.ClickException("--prebuilt-tag is only supported for Kubernetes clusters")
     if tag == "latest" or DOCKER_TAG_PATTERN.fullmatch(tag) is None:
@@ -376,7 +373,6 @@ def _use_prebuilt_kubernetes_images(config, tag: str) -> str:
     click.echo("Using verified prebuilt Kubernetes images (Docker build skipped):")
     click.echo(f"  controller: {controller_tag} -> {config.controller.image}")
     click.echo(f"  task: {task_tag} -> {config.defaults.worker.default_task_image}")
-    return config.controller.image
 
 
 # =============================================================================
@@ -786,7 +782,7 @@ def _require_log_server_config(ctx: click.Context) -> str:
         raise click.ClickException("--config is required for cluster log-server commands")
     if not cfg.finelog.config:
         raise click.ClickException(
-            "cluster does not declare finelog.config; set it or manage the log server via `finelog deploy` directly"
+            "cluster does not declare finelog.config; set it or manage the log server via `marin-deploy finelog`"
         )
     return cfg.finelog.config
 
@@ -813,21 +809,6 @@ def log_server_down(ctx: click.Context, yes: bool) -> None:
     """Tear down the cluster's finelog deployment."""
     name = _require_log_server_config(ctx)
     ctx.invoke(down_cmd, name=name, yes=yes)
-
-
-@log_server.command("restart")
-@click.option(
-    "--build/--no-build",
-    "build",
-    default=True,
-    show_default=True,
-    help="Build and push the finelog image before restarting. Pass --no-build to reuse the registry's :latest.",
-)
-@click.pass_context
-def log_server_restart(ctx: click.Context, build: bool) -> None:
-    """Restart the cluster's finelog deployment."""
-    name = _require_log_server_config(ctx)
-    ctx.invoke(restart_cmd, name=name, build=build)
 
 
 @log_server.command("status")
@@ -1194,12 +1175,15 @@ def controller_checkpoint(ctx, stop: bool):
     briefly and writes a consistent checkpoint DB copy.
     """
     controller_url = require_controller_url(ctx)
-    with rpc_client_for_ctx(ctx, url=controller_url) as client:
-        try:
-            resp = client.begin_checkpoint(controller_pb2.Controller.BeginCheckpointRequest(), timeout_ms=60_000)
-        except Exception as e:
-            click.echo(f"Checkpoint failed: {e}", err=True)
-            raise SystemExit(1) from e
+    try:
+        resp = take_controller_checkpoint(
+            controller_url,
+            (ctx.obj or {}).get("credentials"),
+            timeout_ms=60_000,
+        )
+    except Exception as e:
+        click.echo(f"Checkpoint failed: {e}", err=True)
+        raise SystemExit(1) from e
 
     click.echo(f"Checkpoint DB written: {resp.checkpoint_path}")
     click.echo(f"  Jobs:    {resp.job_count}")
@@ -1219,319 +1203,6 @@ def controller_checkpoint(ctx, stop: bool):
         except Exception as e:
             click.echo(f"Failed to stop controller: {e}", err=True)
             raise SystemExit(1) from e
-
-
-@controller.command("restart")
-@click.option(
-    "--skip-checkpoint",
-    is_flag=True,
-    default=False,
-    help="Skip the pre-restart checkpoint (use if checkpoint is timing out).",
-)
-@click.option(
-    "--checkpoint-timeout", type=int, default=300, show_default=True, help="Checkpoint RPC timeout in seconds."
-)
-@click.option(
-    "--rollback",
-    is_flag=True,
-    default=False,
-    help=(
-        "Revert the last deploy: read the previous image and pre-deploy checkpoint from the "
-        "rollout record in remote state and restore them, no coordinates needed. Available "
-        "once a prior restart has recorded a deploy."
-    ),
-)
-@click.option(
-    "--image-platform",
-    "task_image_platforms",
-    default=None,
-    help="Override the Docker platform(s) selected automatically for the task image.",
-)
-@click.option(
-    "--cargo-profile",
-    type=click.Choice(CARGO_PROFILES),
-    default=DEFAULT_CARGO_PROFILE,
-    show_default=True,
-    help="Rust profile used to build native Iris components; fast skips LTO for dev rollouts.",
-)
-@click.option(
-    "--prebuilt-tag",
-    default=None,
-    help="Verify and digest-pin existing multiarch Kubernetes images with this tag; skip Docker builds.",
-)
-@click.pass_context
-def controller_restart(
-    ctx,
-    skip_checkpoint: bool,
-    checkpoint_timeout: int,
-    rollback: bool,
-    task_image_platforms: str | None,
-    cargo_profile: str,
-    prebuilt_tag: str | None,
-):
-    """Restart the controller in place, preserving state (remote platforms only).
-
-    A forward deploy takes a pre-deploy checkpoint, then either builds images
-    from the working tree or verifies requested prebuilt images. It records the
-    rollout, restarts the controller, and health-checks it. A failed health check
-    auto-rolls back to the previous image and its pre-deploy checkpoint. Workers
-    on separate VMs survive the restart.
-
-    Pass ``--rollback`` to revert the last deploy — the previous image plus its
-    pre-deploy checkpoint, read from the rollout record.
-    """
-    config = ctx.obj.get("config")
-    if not config:
-        raise click.ClickException("--config is required")
-
-    is_local = config.controller.controller_kind() == "local"
-    if is_local:
-        raise click.ClickException(
-            "controller restart is not supported for local clusters. "
-            "Stop and restart the 'iris cluster start --local' process instead."
-        )
-
-    bundle = provider_bundle(config)
-    try:
-        bundle.controller.preflight_controller(config)
-    except Exception as e:
-        raise click.ClickException(f"Controller restart preflight failed: {e}") from e
-
-    remote_state_dir = config.storage.remote_state_dir
-    prior_record = read_rollout_record(remote_state_dir) if remote_state_dir else None
-
-    if rollback:
-        if prebuilt_tag is not None:
-            raise click.ClickException("--prebuilt-tag cannot be combined with --rollback")
-        _rollback_last_deploy(ctx, bundle, config, remote_state_dir, prior_record)
-        return
-
-    # Forward deploy. Fall back to a fresh start when no controller exists.
-    try:
-        controller_url = require_controller_url(ctx)
-    except (RuntimeError, click.ClickException):
-        click.echo("No existing controller found. Starting fresh...")
-        new_image = _build_forward_image(
-            ctx,
-            config,
-            task_platforms=task_image_platforms,
-            cargo_profile=cargo_profile,
-            prebuilt_tag=prebuilt_tag,
-        )
-        try:
-            address = bundle.controller.start_controller(config)
-        except Exception as e:
-            click.echo(f"Failed to start controller: {e}", err=True)
-            raise SystemExit(1) from e
-        click.echo(f"Controller started at {address}")
-        _record_rollout(
-            remote_state_dir,
-            RolloutRecord(
-                phase=RolloutPhase.COMMITTED,
-                image=new_image,
-                previous_image=(prior_record.image if prior_record else None),
-                rollback_checkpoint=None,
-                updated_at_ms=int(time.time() * 1000),
-            ),
-        )
-        return
-
-    pre_deploy_checkpoint: str | None = None
-    if skip_checkpoint:
-        click.echo("Skipping pre-restart checkpoint.")
-    else:
-        pre_deploy_checkpoint = _take_pre_deploy_checkpoint(ctx, controller_url, checkpoint_timeout)
-
-    new_image = _build_forward_image(
-        ctx,
-        config,
-        task_platforms=task_image_platforms,
-        cargo_profile=cargo_profile,
-        prebuilt_tag=prebuilt_tag,
-    )
-    previous_image = prior_record.image if prior_record else None
-
-    # Record the in-flight deploy before restarting: a crash mid-restart leaves a
-    # rollback pointer, and a later --rollback reads back these coordinates.
-    _record_rollout(
-        remote_state_dir,
-        RolloutRecord(
-            phase=RolloutPhase.PENDING,
-            image=new_image,
-            previous_image=previous_image,
-            rollback_checkpoint=pre_deploy_checkpoint,
-            updated_at_ms=int(time.time() * 1000),
-        ),
-    )
-
-    try:
-        address = bundle.controller.restart_controller(config)
-    except Exception as e:
-        click.echo(f"Deploy failed its post-restart health check: {e}", err=True)
-        _auto_rollback(bundle, config, remote_state_dir, previous_image, pre_deploy_checkpoint)
-        raise SystemExit(1) from e
-
-    click.echo(f"Controller restarted at {address}")
-    _record_rollout(
-        remote_state_dir,
-        RolloutRecord(
-            phase=RolloutPhase.COMMITTED,
-            image=new_image,
-            previous_image=previous_image,
-            rollback_checkpoint=pre_deploy_checkpoint,
-            updated_at_ms=int(time.time() * 1000),
-        ),
-    )
-
-
-def _rollback_last_deploy(ctx, bundle, config, remote_state_dir: str | None, prior_record: RolloutRecord | None) -> None:
-    """Revert the last deploy from the rollout record: previous image + pre-deploy checkpoint.
-
-    Restarts the previous image in place (a running controller is required) and lets
-    the restarted controller restore the pre-deploy checkpoint from the rollout record
-    on boot. There is no pre-deploy checkpoint of its own — this is a revert to older
-    state, not a forward deploy.
-    """
-    if not remote_state_dir:
-        raise click.ClickException("--rollback needs config.storage.remote_state_dir to read the rollout record.")
-    if prior_record is None or not prior_record.previous_image:
-        raise click.ClickException(f"No deploy to roll back to in {remote_state_dir}/{ROLLOUT_RECORD_FILENAME}.")
-    try:
-        require_controller_url(ctx)
-    except (RuntimeError, click.ClickException):
-        raise click.ClickException("Rollback needs a running controller to restart in place; none was found.") from None
-    _rollback_controller(bundle, config, remote_state_dir, prior_record.previous_image, prior_record.rollback_checkpoint)
-
-
-def _build_forward_image(
-    ctx,
-    config,
-    *,
-    task_platforms: str | None = None,
-    cargo_profile: str = DEFAULT_CARGO_PROFILE,
-    prebuilt_tag: str | None = None,
-) -> str:
-    """Resolve forward-deploy images and return the controller image reference."""
-    if prebuilt_tag is not None:
-        if task_platforms is not None:
-            raise click.ClickException("--prebuilt-tag cannot be combined with --image-platform")
-        if cargo_profile != DEFAULT_CARGO_PROFILE:
-            raise click.ClickException("--prebuilt-tag cannot be combined with a non-default --cargo-profile")
-        return _use_prebuilt_kubernetes_images(config, prebuilt_tag)
-    _build_and_pin_deploy_images(
-        ctx,
-        config,
-        task_platforms=task_platforms,
-        cargo_profile=cargo_profile,
-    )
-    return config.controller.image
-
-
-def _take_pre_deploy_checkpoint(ctx, controller_url: str, checkpoint_timeout: int) -> str:
-    """Checkpoint the running controller and return the checkpoint directory."""
-    click.echo(f"Taking checkpoint (timeout {checkpoint_timeout}s)...")
-    with rpc_client_for_ctx(ctx, url=controller_url) as client:
-        try:
-            resp = client.begin_checkpoint(
-                controller_pb2.Controller.BeginCheckpointRequest(),
-                timeout_ms=checkpoint_timeout * 1000,
-            )
-        except Exception as e:
-            click.echo(f"Checkpoint failed: {e}", err=True)
-            raise SystemExit(1) from e
-    click.echo(f"Checkpoint: {resp.checkpoint_path} ({resp.job_count} jobs, {resp.worker_count} workers)")
-    return resp.checkpoint_path
-
-
-def _rollback_controller(
-    bundle,
-    config,
-    remote_state_dir: str | None,
-    rollback_image: str,
-    rollback_checkpoint: str | None,
-) -> None:
-    """Restart the controller on ``rollback_image``, restoring ``rollback_checkpoint``.
-
-    Records ROLLBACK_REQUESTED so the restarted controller restores the pre-deploy
-    checkpoint on boot and self-clears to ROLLED_BACK.
-    """
-    config.controller.image = rollback_image
-    detail = rollback_checkpoint or "(none — reuse local DB)"
-    click.echo(f"Rolling back: image {rollback_image}, checkpoint {detail}")
-    _request_rollback(remote_state_dir, rollback_image, rollback_checkpoint)
-    try:
-        address = bundle.controller.restart_controller(config)
-    except Exception as e:
-        click.echo(f"Rollback restart failed: {e}", err=True)
-        raise SystemExit(1) from e
-    click.echo(f"Controller rolled back at {address}")
-
-
-def _auto_rollback(
-    bundle,
-    config,
-    remote_state_dir: str | None,
-    previous_image: str | None,
-    pre_deploy_checkpoint: str | None,
-) -> None:
-    """Revert a failed forward deploy to the previous image and its pre-deploy checkpoint."""
-    if not previous_image:
-        click.echo(
-            "No previous image recorded — cannot auto-roll back. Redeploy known-good code from the working tree.",
-            err=True,
-        )
-        return
-    click.echo(f"Auto-rolling back to previous image {previous_image}...")
-    _rollback_controller(bundle, config, remote_state_dir, previous_image, pre_deploy_checkpoint)
-
-
-def _request_rollback(remote_state_dir: str | None, rollback_image: str, rollback_checkpoint: str | None) -> None:
-    """Write a ROLLBACK_REQUESTED record so the restarted controller restores on boot.
-
-    A checkpoint restore requires the record: without it the old image would boot
-    on the migrated DB. A checkpoint-less rollback (image only) tolerates a failed
-    write, since the controller just reuses its local DB.
-    """
-    record = RolloutRecord(
-        phase=RolloutPhase.ROLLBACK_REQUESTED,
-        image=rollback_image,
-        previous_image=None,
-        rollback_checkpoint=rollback_checkpoint,
-        updated_at_ms=int(time.time() * 1000),
-    )
-    if not remote_state_dir:
-        if rollback_checkpoint:
-            raise click.ClickException(
-                "Rollback checkpoint restore needs config.storage.remote_state_dir to record the request."
-            )
-        return
-    try:
-        write_rollout_record(remote_state_dir, record)
-    except OSError as e:
-        if rollback_checkpoint:
-            raise click.ClickException(
-                f"Could not record the rollback request ({e}); aborting so the old image does not "
-                "boot on the migrated DB."
-            ) from e
-        click.echo(f"Warning: could not record rollback request: {e}", err=True)
-        return
-    click.echo(f"Rollout record: rollback_requested -> {remote_state_dir}/{ROLLOUT_RECORD_FILENAME}")
-
-
-def _record_rollout(remote_state_dir: str | None, record: RolloutRecord) -> None:
-    """Best-effort write of a PENDING/COMMITTED rollout marker; never fails the command.
-
-    A failed write only costs the later --rollback convenience, so it warns and
-    continues rather than aborting the restart.
-    """
-    if not remote_state_dir:
-        return
-    try:
-        write_rollout_record(remote_state_dir, record)
-    except OSError as e:
-        click.echo(f"Warning: could not write rollout record: {e}", err=True)
-        return
-    click.echo(f"Rollout record: {record.phase} -> {remote_state_dir}/{ROLLOUT_RECORD_FILENAME}")
 
 
 @controller.command("worker-restart")

@@ -444,7 +444,6 @@ class K8sControllerProvider:
             )
         self._poll_interval = poll_interval
         self._shutdown_event = threading.Event()
-        self._s3_enabled = False
         self.signing_key_spec: tuple[str, ...] = ()
         self._prepared_controller_env: dict[str, str] | None = None
 
@@ -469,7 +468,11 @@ class K8sControllerProvider:
         return f"{service_name}.{self._namespace}.svc.cluster.local:{port}"
 
     def preflight_controller(self, config: IrisClusterConfig) -> None:
-        """Resolve controller-only secrets without changing Kubernetes resources."""
+        """Resolve operator-side secrets without changing Kubernetes resources."""
+        self._prepared_controller_env = None
+        if self.uses_s3_storage(config):
+            self._s3_task_env()
+        collect_inject_env(config.defaults.inject_env)
         self.signing_key_spec = tuple(as_secret_spec(config.auth.signing_key)) if config.auth else ()
         self._prepared_controller_env = _controller_env(config)
 
@@ -502,9 +505,8 @@ class K8sControllerProvider:
         # every task via the iris-task-env Secret + envFrom. Resolution happens
         # here, in the operator's shell -- the controller never has these secrets.
         # S3 storage auth and operator-injected vars share one flow.
-        self._s3_enabled = self.uses_s3_storage(config)
         default_env: dict[str, str] = {}
-        if self._s3_enabled:
+        if self.uses_s3_storage(config):
             default_env.update(self._s3_task_env())
         default_env.update(collect_inject_env(config.defaults.inject_env))
         if default_env:
@@ -886,11 +888,13 @@ class K8sControllerProvider:
         store = store_config(StoreType.COREWEAVE)
         key_id = os.environ.get(store.key_id_env)
         key_secret = os.environ.get(store.key_secret_env)
-        if not key_id or not key_secret:
+        missing = [name for name, value in ((store.key_id_env, key_id), (store.key_secret_env, key_secret)) if not value]
+        if missing:
             raise InfraError(
-                f"{store.key_id_env} and {store.key_secret_env} environment variables are required "
-                "for S3-compatible object storage"
+                "Missing required environment variables for S3-compatible object storage: " + ", ".join(missing)
             )
+        assert key_id is not None
+        assert key_secret is not None
         env = {
             "AWS_ACCESS_KEY_ID": key_id,
             "AWS_SECRET_ACCESS_KEY": key_secret,

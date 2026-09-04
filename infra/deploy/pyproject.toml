@@ -10,6 +10,8 @@ requires-python = ">=3.12"
 dependencies = [
     "click>=8.3.1",
     "marin-finelog",
+    "marin-iris",
+    "marin-rigging",
 ]
 
 [dependency-groups]

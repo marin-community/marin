@@ -1,0 +1,4 @@
+config:
+  iris:cluster: cw-us-west-04a
+secretsprovider: gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key
+encryptedkey: CiQAKk3j6Rj/3iZUix5TNmyf86sgPbF1SLTPBViLTq35UGCZ8nESSQCdtF6iyUuQHezWwmJGDN2CVYA4p9Zbx6c0cVZeGf1/0w68f5/ErbljcwEhQfkcbNi5Whuz58qGXUwSXCz/YHgA4dKEymOj2VI=

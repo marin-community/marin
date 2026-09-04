@@ -26,6 +26,7 @@ from iris.cluster.composer import provider_bundle
 from iris.cluster.config import AuthConfig, IapAuthConfig, IrisClusterConfig, load_config
 from iris.cluster.local_cluster import LocalCluster
 from iris.cluster.platforms.factory import ProviderBundle
+from iris.rpc import controller_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync, EndpointServiceClientSync
 
@@ -252,6 +253,20 @@ def rpc_client(
         accept_compression=IRIS_RPC_COMPRESSIONS,
         send_compression=None,
     )
+
+
+def take_controller_checkpoint(
+    address: str,
+    credentials: ClientCredentials | None = None,
+    *,
+    timeout_ms: int,
+) -> controller_pb2.Controller.BeginCheckpointResponse:
+    """Take a controller checkpoint and return its path and row counts."""
+    with rpc_client(address, credentials) as client:
+        return client.begin_checkpoint(
+            controller_pb2.Controller.BeginCheckpointRequest(),
+            timeout_ms=timeout_ms,
+        )
 
 
 def rpc_client_for_ctx(

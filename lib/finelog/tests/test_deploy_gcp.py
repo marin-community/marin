@@ -41,7 +41,7 @@ def test_render_bootstrap_refuses_a_forwarding_config() -> None:
 
 
 def test_health_wait_holds_out_for_an_ingesting_server(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`/health` answers 200 while the server is only listening, so `safe_deploy`'s
+    """`/health` answers 200 while the server is only listening, so the GCE rollout
     gate reads the body. A binary whose schema the catalog rejects otherwise
     passes the gate and auto-rollback never fires."""
     cfg = FinelogConfig(

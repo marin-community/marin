@@ -52,7 +52,7 @@ iris cluster dashboard              # open tunnel, print URL, block
 iris cluster dashboard-proxy        # local proxy to remote controller (no tunnel needed)
 ```
 
-### Controller Restart
+### Controller Deploy
 
 For a rollout across more than one cluster, use the `use-iris` skill.
 It fixes the order (`marin-dev`, `marin`, then CoreWeave smallest first), puts a
@@ -60,56 +60,55 @@ human gate on every step, and drives `scripts/iris/rollout_controllers.py` for
 the credential preflight, the before/after snapshots, the 5-minute watch, and a
 one-job smoke test.
 
-`iris cluster controller restart` restarts the controller only (seconds of downtime, workers unaffected).
+`marin-deploy iris rollout` restarts the controller only (seconds of downtime, workers unaffected).
 `iris cluster restart` tears down **everything** — controller + all workers. All jobs die. **Never run the full `iris cluster restart` without explicit user approval.**
 
-Run controller lifecycle commands with the `controller` extra, which supplies
-the Kubernetes client used by CoreWeave prerequisite checks:
+Install the shared Pulumi environment once, then run deployments from the
+repository root:
 
 ```bash
-uv run --package marin-iris --extra controller iris \
-  --cluster=<name> cluster controller restart
+uv sync --all-packages --extra deploy
+uv run marin-deploy iris rollout <name>
 ```
 
-The base `uv run iris` environment omits this dependency and can report every
-CoreWeave prerequisite as missing even when the objects exist.
+The command applies the matching stack under `infra/iris`. Pulumi records each
+activation without owning controller deletion; `pulumi destroy` leaves the
+controller running.
 
 Workflow: confirm the tree holds exactly the code to ship (`git status`, `git log -1`) -> capture baseline (`iris cluster status`) -> restart -> verify.
 
-The restart preflight resolves operator-side controller secrets before taking a checkpoint, building images, or writing a rollout record. CoreWeave keeps the resolved signing key in memory and uses that value when it projects `iris-controller-env`. A missing Secret Manager dependency or inaccessible secret leaves the running controller and rollout record unchanged.
+The restart preflight validates operator-side controller secrets and task environment variables before taking a checkpoint, building images, or writing a rollout record. CoreWeave S3-backed clusters require `CW_KEY_ID` and `CW_KEY_SECRET`; an unset credential is reported by name at this gate. Activation projects the signing key and task environment from the operator's shell into `iris-controller-env` and `iris-task-env`. A missing environment variable, Secret Manager dependency, or inaccessible secret leaves the running controller and rollout record unchanged.
 
 `iris cluster controller serve --dry-run` is not a restart-validation step: it boots a full local controller that serves until killed (task dispatch, VM changes, and checkpoint writes suppressed) for interactive state inspection — e.g. replaying a checkpoint to debug scheduling. Rely on the unit suite / CI on the tree as the pre-restart gate.
 
-If checkpoint times out: `iris cluster controller restart --skip-checkpoint` (restores from last periodic checkpoint; some recent state may be lost).
+If checkpoint times out: `uv run marin-deploy iris rollout <name> --skip-checkpoint`
+(restores from the last periodic checkpoint; some recent state may be lost).
 
-**Restart builds and deploys your local working tree.** `iris cluster controller restart` builds the images required by the configured runtime from your **current checkout — HEAD plus any staged/unstaged changes** (`get_git_sha()` is a tree-content hash), pushes them, pins the deploy to `:<hash>` in memory, and restarts the container in place. So the restart ships whatever code is in your tree; there is no separate image-rebuild step. To deploy a merged controller fix: update your checkout (`git pull`, or check out the fix) **then** restart — restarting from a stale checkout ships that stale code. Always confirm the controller is running the `:<git-short-hash>` you expect (`iris cluster status`), not just that it came back up; a stale-checkout deploy once cost ~5 red-canary days ([incident record](https://echo.oa.dev/wiki/14)).
+**Rollout builds and deploys your local working tree.** `marin-deploy iris rollout` builds the images required by the configured runtime from your **current checkout — HEAD plus any staged/unstaged changes** (`get_git_sha()` is a tree-content hash), pushes them, pins the deploy to `:<hash>` in memory, and restarts the container in place. To deploy a merged controller fix: update your checkout (`git pull`, or check out the fix) **then** deploy. Always confirm the controller is running the `:<git-short-hash>` you expect (`iris cluster status`), not just that it came back up; a stale-checkout deploy once cost ~5 red-canary days ([incident record](https://echo.oa.dev/wiki/14)).
 
 Restarts default to the fast Rust profile, which skips LTO and reduces native link time. Kubernetes clusters build the controller and task images for amd64+arm64 because task Pods run the controller image as the log-shipper sidecar; they skip the unused worker image. VM clusters build amd64 controller, worker, and task images. `--image-platform` overrides only the task image, for example when a Kubernetes dev cluster has amd64 nodes only:
 
 ```bash
-uv run --package marin-iris --extra controller iris \
-  --config path/to/dev.yaml cluster controller restart \
-  --image-platform linux/amd64
+uv run marin-deploy iris rollout <name> --image-platform linux/amd64
 ```
 
 Pass `--cargo-profile release` for an LTO build. Keep the default task image platforms when the deployed cluster includes arm64 nodes.
 
-**Rollout state is recorded automatically.** Each `controller restart` writes a rollout record to `gs://…/<cluster>/state/rollout-record.json` — the image it deployed, the image it replaced, the pre-deploy checkpoint it took, and a phase (`pending` → `committed` for a forward deploy; `rollback_requested` → `rolled_back` for a revert). The rollback coordinates are captured as part of the deploy, so you never track them by hand. A forward restart also **health-checks the new controller and auto-rolls back** to the previous image + its pre-deploy checkpoint if the deploy fails to come up. (The *first* deploy after this landed has no prior record, so there is nothing to auto-roll back to — recover a failed first deploy by checking out known-good code and restarting forward, or use the on-VM procedure below.)
+**Rollout state is recorded automatically.** Each successful `marin-deploy iris rollout` writes a rollout record to `gs://…/<cluster>/state/rollout-record.json` — the image it deployed, the image it replaced, the pre-deploy checkpoint it took, and a phase. A forward deploy with a recorded previous image moves from `pending` to `committed`; a revert moves from `rollback_requested` to `rolled_back`. The rollback coordinates are captured as part of the deploy. A forward rollout health-checks the new controller and sends the previous image plus its pre-deploy checkpoint through the same Pulumi activation resource if the candidate fails. The first recorded deploy has no previous image; recover it by deploying known-good code or using the on-VM procedure below.
 
-**A failed SSH leg aborts the restart safely.** On a GCE cluster the restart drives the VM over `gcloud compute ssh --tunnel-through-iap`; if that SSH fails (it retries 3×), the CLI prints `Rollback restart failed: Command failed after 3 attempts: SSH exit code 255` and exits — but the running controller was never touched. Confirm with `iris cluster status`: the old version still healthy means nothing deployed and nothing needs rolling back; fix SSH and retry the restart.
+**A failed SSH leg aborts the rollout safely.** On a GCE cluster Pulumi drives the existing VM over `gcloud compute ssh`. The candidate startup metadata is written before activation; automatic recovery writes the previous startup metadata before attempting its own SSH activation. If SSH authentication fails for both attempts, the running controller and its reboot-time startup script remain on the previous deployment. Confirm with `iris cluster status`, fix SSH access, and retry the rollout.
 
 **GCE controller SSH auth is per-username, and agent/headless sessions may lack it.** `gcloud compute ssh` connects as your *local OS username*; `Permission denied (publickey)` right after the IAP tunnel opens means the VM refused that username+key pair, not that the tunnel failed. The controller VM does not necessarily honor every key visible in project/instance `ssh-keys` metadata for your username, so a key that "should" work from metadata inspection can still be refused — and adding new keys (metadata or OS Login) from an unattended session is exactly the kind of credential change an operator should approve first. If the restart's SSH leg is refused from your session, run the restart from a session that already has working SSH to the VM rather than minting access. Note this only gates GCE clusters (`marin`, `marin-dev`); CoreWeave controller restarts go through the Kubernetes API (kubeconfig at `~/.kube/coreweave-iris`, context pinned per cluster config) and need no SSH.
 
 ### Rolling back a controller deploy (migration-aware)
 
-**Roll back the last deploy.** `iris cluster controller restart --rollback` reads `rollout-record.json`, then redeploys the previous image and restores its pre-deploy checkpoint — no coordinates to look up. Run it while the controller is still reachable so it takes the in-place path.
+**Roll back the last deploy.** `marin-deploy iris rollback` reads `rollout-record.json`, then redeploys the previous image and restores its pre-deploy checkpoint. Run it while the controller is still reachable so it takes the in-place path.
 
 ```bash
-uv run --package marin-iris --extra controller iris \
-  --cluster=marin cluster controller restart --rollback
+uv run marin-deploy iris rollback marin
 ```
 
-**Why it restores a checkpoint, not just the old image.** A restart runs forward-only migrations in place on the on-VM state DB (`schema_migrations` tracks applied stems; there is no down-migration), and some are destructive — e.g. `0039_drop_api_keys`, `0040_drop_users`. Redeploying the old image alone would leave it loading a schema it does not understand, hitting missing-table errors at runtime. So a correct rollback must **also restore the pre-deploy (pre-migration) checkpoint** — the one taken while the old code was still running. `--rollback` does both from the record: it writes `rollback_requested` and restarts the previous image; on boot the controller restores that checkpoint over its migrated local DB, then marks the record `rolled_back`. That consume-once step is a one-shot — a later crash or VM reboot reuses the restored DB instead of rewinding to the checkpoint again.
+**Why it restores a checkpoint, not just the old image.** A rollout runs forward-only migrations in place on the on-VM state DB (`schema_migrations` tracks applied stems; there is no down-migration), and some are destructive — e.g. `0039_drop_api_keys`, `0040_drop_users`. Redeploying the old image alone would leave it loading a schema it does not understand, hitting missing-table errors at runtime. `marin-deploy iris rollback` writes `rollback_requested` and activates the previous image; on boot the controller restores the recorded pre-migration checkpoint over its local DB, then marks the record `rolled_back`. A later crash or VM reboot reuses the restored DB instead of rewinding to the checkpoint again.
 
 For a wedged/unreachable controller, or a deploy with no prior rollout record, use the fully-manual on-VM procedure below instead, which never risks recreating the VM.
 
