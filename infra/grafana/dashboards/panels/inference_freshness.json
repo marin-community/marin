@@ -1,0 +1,99 @@
+{
+  "type": "table",
+  "title": "Telemetry freshness (observed producers)",
+  "description": "Reports the stalest producer/resource identity, so a stopped replica cannot be hidden by a healthy peer. Explicitly distinguishes no matching records, a range ending after the last sample, an in-range scrape/export gap, and continuous samples. Age is relative to the selected range end, not wall-clock now. Only identities that emitted records are known; this is not expected-replica coverage.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {},
+    "overrides": []
+  },
+  "transformations": [
+    {
+      "id": "organize",
+      "options": {
+        "indexByName": {
+          "status": 0,
+          "age at range end (s)": 1,
+          "largest sample gap (s)": 2,
+          "last sample": 3,
+          "replica samples": 4,
+          "producer/resource": 5
+        }
+      }
+    }
+  ],
+  "targets": [
+    {
+      "refId": "A",
+      "type": "json",
+      "source": "url",
+      "format": "table",
+      "parser": "backend",
+      "url": "/v1/vllm/overview",
+      "url_options": {
+        "method": "GET",
+        "params": [
+          {
+            "key": "identity_kind",
+            "value": "${identity_kind}"
+          },
+          {
+            "key": "identity",
+            "value": "${identity}"
+          },
+          {
+            "key": "from",
+            "value": "${__from}"
+          },
+          {
+            "key": "to",
+            "value": "${__to}"
+          },
+          {
+            "key": "bucket_ms",
+            "value": "${__interval_ms}"
+          },
+          {
+            "key": "view",
+            "value": "freshness"
+          }
+        ]
+      },
+      "columns": [
+        {
+          "selector": "series",
+          "text": "producer/resource",
+          "type": "string"
+        },
+        {
+          "selector": "status",
+          "text": "status",
+          "type": "string"
+        },
+        {
+          "selector": "t",
+          "text": "last sample",
+          "type": "timestamp_epoch"
+        },
+        {
+          "selector": "value",
+          "text": "age at range end (s)",
+          "type": "number"
+        },
+        {
+          "selector": "gap_seconds",
+          "text": "largest sample gap (s)",
+          "type": "number"
+        },
+        {
+          "selector": "samples",
+          "text": "replica samples",
+          "type": "number"
+        }
+      ]
+    }
+  ]
+}

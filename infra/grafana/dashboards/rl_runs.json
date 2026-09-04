@@ -830,7 +830,7 @@
       "id": 10,
       "type": "timeseries",
       "title": "Engine queue and KV-cache",
-      "description": "Requests running and queued at the inference engines, with KV-cache occupancy on the right axis.\n\nQueued high with KV-cache low is a scheduling limit, so add engines or raise the concurrency cap. Both high is a real KV-cache limit.\n\nThe preemptions panel says whether that limit cost anything. Values are averaged across engines. Data from telemetry_v1.vllm, and from engines embedded in the trainer in telemetry_v1.marinskyrl.",
+      "description": "Requests running and queued at the inference engines, with KV-cache occupancy on the right axis.\n\nA growing queue with low KV usage can suggest a scheduling or compute limit; high KV usage and preemptions support cache pressure. Neither pattern alone identifies the cause or the right concurrency setting. A draining queue may be an intentional rollout boundary, not upstream starvation.\n\nValues here are averaged across engines, unlike the fleet sums in Inference overview and diagnostics. Data from telemetry_v1.vllm, and from engines embedded in the trainer in telemetry_v1.marinskyrl.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
