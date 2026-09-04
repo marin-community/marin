@@ -164,6 +164,20 @@ def test_grug_moe_layer_masks_preserve_thd_segment_metadata():
     assert long_mask.segment_ids is mask.segment_ids
 
 
+def test_june_tpu_training_strips_optional_thd_metadata_before_mixing():
+    train_module = importlib.import_module("experiments.june_tpu_67b_a2b.moe.train")
+    tokens = jnp.arange(8, dtype=jnp.int32)
+    segment_ids = jnp.array([0, 0, 0, 1, 1, 1, -1, -1], dtype=jnp.int32)
+    packed = GrugLmExample.causal(tokens, segment_ids=segment_ids, max_segments=3)
+    continuous = GrugLmExample.causal(tokens, segment_ids=segment_ids)
+
+    normalized = train_module._without_thd_segment_metadata(packed)
+
+    assert normalized.attn_mask.thd_segment_metadata is None
+    assert normalized.attn_mask.segment_ids is packed.attn_mask.segment_ids
+    assert jax.tree.structure(normalized) == jax.tree.structure(continuous)
+
+
 def test_grug_moe_xsa_forward_lowers_with_gpu_fa4_thd_gqa_sharding():
     if jax.default_backend() != "gpu":
         pytest.skip("gpu_fa4_thd requires the JAX GPU backend")

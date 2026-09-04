@@ -130,12 +130,25 @@ def build_train_dataset(
 
     initial_batch_size = batch_schedule.batch_size_at_step(0)
     datasets = data_config.train_sets(pos, key=shuffle_key, initial_batch_size=initial_batch_size)
+    # THD metadata is only consumed by the GPU FA4 path. Packed datasets carry it while
+    # continuous token datasets do not, so retaining it makes a mixed TPU dataset have
+    # inconsistent pytree structures and DataLoader cannot batch across components.
+    datasets = {name: dataset.map(_without_thd_segment_metadata) for name, dataset in datasets.items()}
     return MixtureDataset(
         datasets=datasets,
         weights=weights,
         stop_strategy=data_config.stop_strategy,
         key=mix_key,
         block_size=data_config.mixture_block_size,
+    )
+
+
+def _without_thd_segment_metadata(example: GrugLmExample) -> GrugLmExample:
+    if example.attn_mask.thd_segment_metadata is None:
+        return example
+    return dataclasses.replace(
+        example,
+        attn_mask=dataclasses.replace(example.attn_mask, thd_segment_metadata=None),
     )
 
 
