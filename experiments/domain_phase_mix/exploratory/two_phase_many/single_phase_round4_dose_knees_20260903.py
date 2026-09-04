@@ -88,16 +88,34 @@ def main() -> None:
     pd.set_option("display.max_rows", 100)
     for target, subset in knees.groupby("target"):
         finite = subset[np.isfinite(subset["quadratic_optimum_epochs"]) & subset["max_multiplier"].ge(8)]
-        print(f"\n=== {target}: {len(subset)} buckets, {len(finite)} with a finite quadratic optimum and max multiplier >= 8")
+        print(
+            f"\n=== {target}: {len(subset)} buckets, {len(finite)} with a finite quadratic optimum "
+            "and max multiplier >= 8"
+        )
         for covariate in ("log_inventory", "quality", "deletion_delta"):
             valid = finite[np.isfinite(finite[covariate])]
             if len(valid) >= 5:
                 rho, p_value = stats.spearmanr(valid[covariate], np.log(valid["quadratic_optimum_epochs"]))
-                rho_first, _ = stats.spearmanr(valid[covariate], np.log(valid["first_harmful_multiplier"].replace(np.inf, 64.0)))
-                print(f"  Spearman(log optimum epochs, {covariate}) = {rho:+.3f} (p = {p_value:.3f}, n = {len(valid)}); with first harmful multiplier {rho_first:+.3f}")
+                rho_first, _ = stats.spearmanr(
+                    valid[covariate], np.log(valid["first_harmful_multiplier"].replace(np.inf, 64.0))
+                )
+                print(
+                    f"  Spearman(log optimum epochs, {covariate}) = {rho:+.3f} (p = {p_value:.3f}, n = {len(valid)}); "
+                    f"with first harmful multiplier {rho_first:+.3f}"
+                )
         print(
             subset.sort_values("quadratic_optimum_epochs")[
-                ["bucket", "points", "max_multiplier", "quadratic_optimum_epochs", "first_harmful_multiplier", "delta_at_max", "deletion_delta", "log_inventory", "quality"]
+                [
+                    "bucket",
+                    "points",
+                    "max_multiplier",
+                    "quadratic_optimum_epochs",
+                    "first_harmful_multiplier",
+                    "delta_at_max",
+                    "deletion_delta",
+                    "log_inventory",
+                    "quality",
+                ]
             ]
             .round(3)
             .to_string(index=False)
