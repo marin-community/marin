@@ -511,7 +511,7 @@ def _tpu_splash_attention(
         if seg_ids is not None:
             local_q_segment_ids = _slice_query_segment_ids(
                 seg_ids.q,
-                local_sequence_length=q_bhsd.shape[2],
+                local_sequence_length=Sq // q_seq_shards,
                 sequence_axes=q_pspec[2],
                 mesh=mesh,
             )
