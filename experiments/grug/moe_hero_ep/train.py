@@ -286,7 +286,11 @@ def _apply_hero_ep_runtime_defaults(
                 "CUDA_COREDUMP_FILE": "/tmp/gpucore.%h.%p.%t.nvcudmp",
                 "CUDA_COREDUMP_PIPE": "/tmp/corepipe.cuda.%h.%p",
                 "NCCL_DEBUG": "INFO",
-                "NCCL_DEBUG_SUBSYS": "REG,INIT,NVLS",
+                # Not REG: it logs every per-peer buffer lookup (~1,900 lines per rank per
+                # step at hero shape, 98.5% of log volume, all cache hits). INIT carries the
+                # communicator inventory and NVLS the symmetric-window binding, which is what
+                # a stalled run needs on record.
+                "NCCL_DEBUG_SUBSYS": "INIT,NVLS",
             }
         )
     for name, value in env_defaults.items():
