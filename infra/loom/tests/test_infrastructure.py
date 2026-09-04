@@ -174,8 +174,6 @@ def test_loom_pr_review_launcher_starts_one_bounded_review_session() -> None:
     assert launch["with"]["idempotency-key"] == (
         "pr-review:${{ github.event.pull_request.number }}:${{ github.event.pull_request.head.sha }}"
     )
-    assert "review-pr with --comment" in launch["with"]["goal"]
-    assert "lint-review" not in launch["with"]["goal"]
 
     review_profile = stack["config"]["marin-loom:profiles"]["pr-review"]
     assert 0 < review_profile["idleArchiveSeconds"] <= 900

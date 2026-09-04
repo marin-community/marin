@@ -43,12 +43,8 @@ jobs:
           title: "PR review for #${{ github.event.pull_request.number }}"
           goal: >-
             Review pull request #${{ github.event.pull_request.number }} at head
-            ${{ github.event.pull_request.head.sha }}. Find only concrete defects
-            introduced by the change: correctness and security bugs, violations
-            of scoped repository instructions, low-value tests, maintainability
-            obstacles, or a pull-request description that cannot serve as the
-            squash-merge commit message. Validate every finding against the code
-            and relevant instructions. Remain read-only except for GitHub review
-            comments. Run review-pr with --comment and publish a typed result.
+            ${{ github.event.pull_request.head.sha }}. Remain read-only except for
+            GitHub review comments. Run review-pr with --comment and publish a
+            typed result.
           base: ${{ github.event.pull_request.head.sha }}
           github-issue: ${{ github.event.pull_request.number }}
