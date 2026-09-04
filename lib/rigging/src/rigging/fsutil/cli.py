@@ -58,6 +58,7 @@ from rigging.fsutil.usage import (
     render_usage_report,
     scan_usage,
 )
+from rigging.fsutil.verified_copy import DEFAULT_VERIFIED_COPY_WORKERS, VerifiedCopyError, verified_copy_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -371,6 +372,29 @@ def rsync(source: str, destination: str, delete: bool, dry_run: bool, checksum: 
         click.echo(f"delete {action.location.url}")
 
 
+@click.command("verified-copy")
+@click.argument("source")
+@click.argument("destination")
+@click.option("--status-prefix", default=None, help="Sibling prefix for verified per-object resume records.")
+@click.option(
+    "--workers",
+    default=DEFAULT_VERIFIED_COPY_WORKERS,
+    show_default=True,
+    type=click.IntRange(min=1, max=64),
+)
+def verified_copy(source: str, destination: str, status_prefix: str | None, workers: int) -> None:
+    """Copy and verify a prefix, publishing its completion manifest last."""
+    try:
+        result = verified_copy_prefix(source, destination, status_url=status_prefix, workers=workers)
+    except VerifiedCopyError as error:
+        raise click.ClickException(str(error)) from error
+    click.echo(
+        f"verified {result.total_files} files ({result.total_bytes} bytes): "
+        f"{result.copied_files} copied, {result.resumed_files} resumed"
+    )
+    click.echo(result.manifest_url)
+
+
 @click.command("hash")
 @click.argument("urls", nargs=-1, required=True)
 @click.option("--hex", "hexadecimal", is_flag=True, help="Print hexadecimal digests instead of base64.")
@@ -548,6 +572,7 @@ _COMMANDS = (
     cp,
     mv,
     rsync,
+    verified_copy,
     hash_command,
     rm,
     browse,
