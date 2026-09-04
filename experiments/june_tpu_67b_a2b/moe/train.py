@@ -539,7 +539,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             mesh=mesh,
         )
 
-        @jax.jit
         def _init_state(model_rng):
             return initial_state(
                 config.model,
@@ -549,7 +548,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 ema_beta=config.trainer.ema_beta,
             )
 
-        state = _init_state(model_key)
+        state_shape = eqx.filter_eval_shape(_init_state, model_key)
+        state_shardings = jax.tree.map(lambda leaf: leaf.sharding, state_shape)
+        state = jax.jit(_init_state, out_shardings=state_shardings)(model_key)
 
         checkpointer = trainer.checkpointer.create(run_id)
         if config.trainer.sft_weights_only_init:
