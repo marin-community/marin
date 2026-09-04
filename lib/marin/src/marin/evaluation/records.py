@@ -109,12 +109,8 @@ class ModelAgentConfig(BaseModel):
 class ModelConfigRef(BaseModel):
     """The complete normalized model catalog schema used by one launch.
 
-    These four blocks mirror the launcher's ``ModelConfig`` dataclasses, which gain fields the
-    record schema has not learned yet. An unknown key is dropped rather than rejected: a run's
-    metrics are worth more than a faithful copy of a serve option, and rejecting cost the whole
-    record on both sides -- the launcher could not write it, and a reader older than the writer
-    discarded it. ``tests/evals/test_records.py`` fails when a mirror falls behind, which is
-    where that drift is meant to surface.
+    These blocks mirror the launcher's ``ModelConfig`` dataclasses. A key none of them names is
+    dropped, so a record a newer launcher wrote still reads.
     """
 
     model_config = ConfigDict(frozen=True)
