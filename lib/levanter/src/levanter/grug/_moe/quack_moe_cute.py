@@ -128,11 +128,10 @@ def quack_gated_grouped_gemm(
     )
     ts = cjax.TensorSpec
     # divisibility is in physical-dim order (contiguous dim gets the vector width).
-    # B is physically [E,K,2N] but the kernel wants it as [K,2N,E] (expert = trailing
-    # batch/L mode); express that with mode=(1,2,0) rather than a physical transpose.
+    # QuACK 0.6.4 accepts batch-first tensors and rotates the expert axis internally.
     a_spec = ts(divisibility=(1, 8), static=False)  # [M,K] k-major
-    # B is physically [E,K,2N]; kernel wants n-major logical [2N,K,E] (leading_dim 0).
-    b_spec = ts(mode=(2, 1, 0), divisibility=(1, 1, 8), static=False)
+    # B is physically [E,K,2N]; present the n-major logical order [E,2N,K].
+    b_spec = ts(mode=(0, 2, 1), divisibility=(1, 1, 8), static=False)
     cu_spec = ts(static=False)  # [E+1] int32
     d_spec = ts(divisibility=(1, 8), static=False)  # [M,2N] n-major
     p_spec = ts(divisibility=(1, 8), static=False)  # [M,N]  n-major
@@ -219,8 +218,8 @@ def quack_grouped_gemm(
 ):
     """Plain grouped GEMM a[M,K] @ w -> [M,N], grouped by cu_seqlens (varlen_m).
 
-    b_major='n': w is [E,K,N] (n-major, mode (2,1,0)).  b_major='k': w is [E,N,K]
-    (k-major, mode (1,2,0)) for transposed/backward contractions."""
+    b_major='n': w is [E,K,N] (n-major, mode (0,2,1)). b_major='k': w is [E,N,K]
+    (k-major, identity mode) for transposed/backward contractions."""
     M = a.shape[0]
     N = w.shape[2] if b_major == "n" else w.shape[1]
     ts = cjax.TensorSpec
@@ -231,7 +230,7 @@ def quack_grouped_gemm(
         ragged_axis="m",
         a_spec=ts(divisibility=(1, _FEATURE_ALIGNMENT), static=False),
         b_spec=ts(
-            mode=(2, 1, 0) if b_major == "n" else (1, 2, 0), divisibility=(1, 1, _FEATURE_ALIGNMENT), static=False
+            mode=(0, 2, 1) if b_major == "n" else (0, 1, 2), divisibility=(1, 1, _FEATURE_ALIGNMENT), static=False
         ),
         d_spec=ts(divisibility=(1, _FEATURE_ALIGNMENT), static=False),
         out=jax.ShapeDtypeStruct((M, N), a.dtype),
@@ -284,7 +283,7 @@ def quack_grouped_wgrad(
         raise ValueError(f"cu_seqlens must be a rank-1 array of at least two offsets, got {cu_seqlens.shape}")
 
     ts = cjax.TensorSpec
-    # Logical order is (M, K) for A, (N, K) for B, (M, N, L) for D; `mode` maps each logical axis
+    # Logical order is (M, K) for A, (N, K) for B, (L, M, N) for D; `mode` maps each logical axis
     # to the physical one it comes from, and `divisibility` stays in physical order. varlen_k wants
     # A m-major and B n-major, which is what [rows, M] and [rows, N] already are.
     return _grouped_gemm_call(
@@ -294,7 +293,7 @@ def quack_grouped_wgrad(
         ragged_axis="k",
         a_spec=ts(mode=(1, 0), divisibility=(1, _FEATURE_ALIGNMENT), static=False),
         b_spec=ts(mode=(1, 0), divisibility=(1, _FEATURE_ALIGNMENT), static=False),
-        d_spec=ts(mode=(1, 2, 0), divisibility=(1, 1, _FEATURE_ALIGNMENT), static=False),
+        d_spec=ts(divisibility=(1, 1, _FEATURE_ALIGNMENT), static=False),
         out=jax.ShapeDtypeStruct((cu_seqlens.shape[0] - 1, lhs.shape[1], rhs.shape[1]), lhs.dtype),
         tile_mn=tile_mn,
         cluster_mnk=cluster_mnk,

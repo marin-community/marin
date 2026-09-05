@@ -44,8 +44,8 @@ def _cute_dtype(dt):
 
 
 def _transpose_mn(mD):
-    """aux = D^T (same storage): swap the two M modes of cute [M, M, L], keep batch L last."""
-    return cute.make_tensor(mD.iterator, cute.select(mD.layout, mode=[1, 0, 2]))
+    """aux = D^T (same storage): swap matrix axes of batch-first [L, M, M]."""
+    return cute.make_tensor(mD.iterator, cute.select(mD.layout, mode=[0, 2, 1]))
 
 
 def _symmetric_gemm_config(arch: int) -> tuple[int, tuple[int, int]]:
@@ -85,7 +85,7 @@ def quack_symmetric_gemm(
     """Batched symmetric GEMM: ``X[L, M, K] -> X @ X^T [L, M, M]`` (full symmetric, bit-exact).
 
     ``X`` must be device-local (no cross-device sharding on any axis) — call inside a shard_map.
-    The kernel computes ``A @ B^T``, so both operands are ``X``, k-major ([M, K, L], mode (1,2,0)).
+    The kernel computes ``A @ B^T``, so both operands are ``X``, k-major ([L, M, K]).
     """
     L, M, K = X.shape
     arch_family, default_mma_tiler = _symmetric_gemm_config(gpu_compute_capability())
@@ -102,7 +102,7 @@ def quack_symmetric_gemm(
         max_swizzle=max_swizzle,
     )
     ts = cjax.TensorSpec
-    spec = ts(mode=(1, 2, 0), divisibility=(1, 1, 8), static=False)
+    spec = ts(divisibility=(1, 1, 8), static=False)
     call = cutlass_call(
         launcher,
         output_shape_dtype=(jax.ShapeDtypeStruct((L, M, M), X.dtype),),

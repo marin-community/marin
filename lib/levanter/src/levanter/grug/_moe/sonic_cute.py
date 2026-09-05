@@ -4,7 +4,7 @@
 """Local Grug MoE backend using Tri Dao's QuACK SM100 kernels (SonicMoE) on B200.
 
 Dispatch/combine as in ``scatter``, but the expert MLP GEMMs run on QuACK's
-``GemmGatedSm100`` / ``GemmDefaultSm100`` via the vendored ``cutlass.jax.cutlass_call``
+gated and plain SM100 GEMMs via the vendored ``cutlass.jax.cutlass_call``
 shim. QuACK does all four activation-path grouped GEMMs (gate/up fwd fused with
 SwiGLU, down fwd, and the ``dh``/``dx`` backward matmuls); the SwiGLU backward is
 elementwise in JAX; the two weight-gradient GEMMs (``dw13``/``dw2``) stay on XLA
