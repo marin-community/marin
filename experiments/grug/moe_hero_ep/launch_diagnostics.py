@@ -45,6 +45,7 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     with_transport_remat_mode,
 )
 from experiments.grug.moe_hero_ep.heuristic import build_hero_configs
+from experiments.grug.sharding_dump import GRUG_SHARDING_DUMP_FILENAME
 from experiments.grug.moe_hero_ep.train import (
     RAGGED_MOE_IMPLEMENTATION,
     GrugEvalConfig,
@@ -277,7 +278,13 @@ def build_diagnostic_run(
             resources=ctx.runtime_arg("train_resources"),
             tensorstore_cache_bytes=HERO_TENSORSTORE_CACHE_BYTES,
             optimizer=optimizer,
-            trainer=dataclasses.replace(grug_trainer, trainer=trainer),
+            # Persist the state-sharding dump next to the run, as the ladder does. The default is the
+            # pod-local log dir, which is how the 2026-09-04 eleven-rack window's dump was lost (#8870).
+            trainer=dataclasses.replace(
+                grug_trainer,
+                trainer=trainer,
+                sharding_dump_path=prefix_join(ctx.output_path, "artifacts", GRUG_SHARDING_DUMP_FILENAME),
+            ),
             # Off by default so a throughput run stays a throughput run. Turn it on to make a
             # run scoreable: comparing configs needs held-out loss, not train loss.
             eval=(
