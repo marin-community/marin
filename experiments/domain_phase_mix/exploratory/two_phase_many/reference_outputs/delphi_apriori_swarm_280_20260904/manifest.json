@@ -341,7 +341,7 @@
     "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/single_phase_heldout_benchmark_20260902/manifest.json": "6cce727e50ccafe0d7d1eab9e6c13c9ad52c2cc35ff432b8a8e904e410eb8724"
   },
   "rows": 280,
-  "script_sha256": "931367ec611171f434f252ef44fced41b152b0f0ab979fb08d0a4f413e77d71e",
+  "script_sha256": "1b8cf7ea57866163614947b3d72b695257fb57d8b27d8d9022cba47e897e7609",
   "seed": 20260904,
   "target_budget_tokens": 6325183647689.0,
   "unique_tokens": {

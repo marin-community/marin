@@ -375,7 +375,6 @@ def identifiability_report(design: pd.DataFrame, panel: harness.BenchPanel) -> d
         "in the current panel every bucket's epochs equal share times inventory exactly, "
         "so the spread given share is 0 for all 39 buckets"
     )
-    )
     report["panel_max_epochs"] = {
         bucket: float((panel_weights[:, column] * inventory[column]).max()) for column, bucket in enumerate(buckets)
     }
