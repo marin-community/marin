@@ -1,392 +1,86 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Download and normalize the latest Uncheatable Eval data dumps."""
+"""Convert a released UncheatableEval dataset into per-category documents."""
 
-import json
-import logging
-import os
-import posixpath
-import re
 from collections.abc import Iterable
 from dataclasses import dataclass
+from functools import partial
 from typing import Any
 
-import requests
-from rigging.filesystem.atomic import atomic_rename
-from rigging.filesystem.factory import open_url
-from rigging.filesystem.storage_path import StoragePath
+from fray.types import ResourceConfig
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
+from zephyr.readers import load_parquet
+from zephyr.writers import write_jsonl_file
 
-from marin.datakit.download.http_session import build_retrying_session
-from marin.execution.step_spec import StepSpec
-
-logger = logging.getLogger(__name__)
-
-FILENAME_PATTERN = re.compile(r"^(?P<benchmark>.+)_(?P<start>\d{8})to(?P<end>\d{8})(?P<suffix>(?:\.[^.]+)*)$")
-
-TEXT_FIELD_CANDIDATES: tuple[str, ...] = (
-    "text",
-    "body",
-    "content",
-    "article",
-    "document",
-    "raw_text",
-    "code",
-    "message",
-    "description",
-    "story",
-)
-
-LIST_FIELD_CANDIDATES: tuple[str, ...] = (
-    "paragraphs",
-    "sentences",
-    "lines",
-    "messages",
-)
-
-ID_FIELD_CANDIDATES: tuple[str, ...] = (
-    "id",
-    "uuid",
-    "guid",
-    "doc_id",
-    "document_id",
-    "article_id",
-    "hash",
-    "sha",
-    "uid",
-)
+CATEGORY_FIELD = "category"
 
 
 @dataclass(frozen=True)
-class UncheatableEvalDataset:
-    """Information about a single data dump file from the Uncheatable Eval repository."""
+class UncheatableEvalTransformConfig:
+    """Configuration for splitting one Hugging Face release by category."""
 
-    benchmark: str
-    start_date: str
-    end_date: str
-    name: str
-    download_url: str
-    sha: str | None = None
-    size: int | None = None
-
-    @property
-    def date_range(self) -> str:
-        return f"{self.start_date}to{self.end_date}"
-
-    @property
-    def source_label(self) -> str:
-        return f"{self.benchmark}:{self.date_range}"
-
-    def output_filename(self, suffix: str = ".jsonl.gz") -> str:
-        return f"{self.benchmark}_{self.date_range}{suffix}"
+    input_path: str
+    output_path: str
+    categories: tuple[str, ...]
 
 
-@dataclass
-class UncheatableEvalDownloadConfig:
-    """Configuration for downloading and normalizing Uncheatable Eval dumps."""
+def uncheatable_eval_document(row: dict[str, Any]) -> dict[str, str]:
+    """Convert one released UncheatableEval row to Marin's text schema."""
+    content = row.get("content")
+    if not isinstance(content, str) or not content.strip():
+        raise ValueError("UncheatableEval row has no content")
 
-    output_path: str = ""
-    repo_owner: str = "Jellyfish042"
-    repo_name: str = "uncheatable_eval"
-    data_path: str = "data"
-    branch: str = "master"
-    max_concurrent_downloads: int = 8
-    request_timeout: int = 120
-    github_token: str | None = None
-    skip_existing: bool = True
-    metadata_filename: str = "metadata.json"
+    category = row.get(CATEGORY_FIELD)
+    if not isinstance(category, str) or not category:
+        raise ValueError("UncheatableEval row has no category")
 
+    url = row.get("url")
+    if not isinstance(url, str) or not url:
+        raise ValueError("UncheatableEval row has no URL")
 
-def _http_headers(cfg: UncheatableEvalDownloadConfig) -> dict[str, str]:
-    headers = {"Accept": "application/vnd.github+json"}
-    token = cfg.github_token or os.environ.get("GITHUB_TOKEN")
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    return headers
+    return {
+        "id": url,
+        "text": content,
+        "source": f"uncheatable_eval/{category}",
+    }
 
 
-def _fetch_directory_listing(cfg: UncheatableEvalDownloadConfig) -> list[dict[str, Any]]:
-    """Return the list of files in the configured GitHub repository directory."""
-
-    headers = _http_headers(cfg)
-    base_url = f"https://api.github.com/repos/{cfg.repo_owner!s}/{cfg.repo_name!s}/contents/{cfg.data_path!s}"
-    params = {"ref": str(cfg.branch)}
-    response = requests.get(base_url, headers=headers, params=params, timeout=cfg.request_timeout)
-    response.raise_for_status()
-    payload = response.json()
-    if not isinstance(payload, list):
-        raise ValueError(f"Unexpected response from GitHub API: {payload!r}")
-    return payload
+def _category_output_path(output_path: str, category: str) -> str:
+    return prefix_join(output_path, f"{category}.jsonl.gz")
 
 
-def _parse_available_dumps(entries: Iterable[dict[str, Any]]) -> list[UncheatableEvalDataset]:
-    """Parse GitHub directory entries into dataset metadata."""
-
-    datasets: list[UncheatableEvalDataset] = []
-    for entry in entries:
-        name = entry.get("name")
-        if not isinstance(name, str):
-            continue
-        match = FILENAME_PATTERN.match(name)
-        if not match:
-            continue
-        benchmark = match.group("benchmark")
-        start = match.group("start")
-        end = match.group("end")
-        download_url = entry.get("download_url")
-        if not isinstance(download_url, str):
-            logger.debug("Skipping %s because it has no download_url", name)
-            continue
-        datasets.append(
-            UncheatableEvalDataset(
-                benchmark=benchmark,
-                start_date=start,
-                end_date=end,
-                name=name,
-                download_url=download_url,
-                sha=entry.get("sha"),
-                size=entry.get("size"),
-            )
-        )
-    return datasets
+def _write_category(output_path: str, category: str, rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    path = _category_output_path(output_path, category)
+    result = write_jsonl_file((uncheatable_eval_document(row) for row in rows), path)
+    return {CATEGORY_FIELD: category, **result}
 
 
-def _select_latest_dumps(datasets: Iterable[UncheatableEvalDataset]) -> list[UncheatableEvalDataset]:
-    """Select the latest dump for each benchmark based on the end date (and start date as tie breaker)."""
-
-    latest: dict[str, UncheatableEvalDataset] = {}
-    for dataset in datasets:
-        existing = latest.get(dataset.benchmark)
-        if existing is None:
-            latest[dataset.benchmark] = dataset
-            continue
-        candidate_key = (dataset.end_date, dataset.start_date, dataset.name)
-        existing_key = (existing.end_date, existing.start_date, existing.name)
-        if candidate_key > existing_key:
-            latest[dataset.benchmark] = dataset
-    return sorted(latest.values(), key=lambda d: d.benchmark)
-
-
-def _extract_id(raw: Any, dataset: UncheatableEvalDataset, index: int) -> str:
-    if isinstance(raw, dict):
-        for key in ID_FIELD_CANDIDATES:
-            value = raw.get(key)
-            if value:
-                return str(value)
-        metadata = raw.get("metadata")
-        if isinstance(metadata, dict):
-            for key in ID_FIELD_CANDIDATES:
-                value = metadata.get(key)
-                if value:
-                    return str(value)
-    return f"{dataset.benchmark}_{dataset.date_range}_{index:06d}"
-
-
-def _join_list_field(value: Any) -> str | None:
-    if isinstance(value, list):
-        text_items = [str(item) for item in value if item is not None]
-        if text_items:
-            return "\n".join(text_items)
-    return None
-
-
-def _extract_text(raw: Any) -> str | None:
-    if raw is None:
-        return None
-    if isinstance(raw, str):
-        return raw
-    if isinstance(raw, dict):
-        for key in TEXT_FIELD_CANDIDATES:
-            value = raw.get(key)
-            if isinstance(value, str) and value.strip():
-                return value
-        for key in TEXT_FIELD_CANDIDATES:
-            value = raw.get(key)
-            joined = _join_list_field(value)
-            if joined:
-                return joined
-        for key in LIST_FIELD_CANDIDATES:
-            joined = _join_list_field(raw.get(key))
-            if joined:
-                return joined
-        title = raw.get("title")
-        body = raw.get("body")
-        if isinstance(title, str) and isinstance(body, str):
-            combined = f"{title.strip()}\n\n{body.strip()}"
-            if combined.strip():
-                return combined
-        if isinstance(title, str) and title.strip():
-            return title
-        return json.dumps(raw, ensure_ascii=False)
-    return str(raw)
-
-
-def _normalize_record(raw: Any, dataset: UncheatableEvalDataset, index: int) -> dict[str, str]:
-    text = _extract_text(raw)
-    if text is None or not str(text).strip():
-        raise ValueError(f"Record {index} in {dataset.name} does not contain text")
-    record_id = _extract_id(raw, dataset, index)
-    return {"id": record_id, "text": text, "source": dataset.source_label}
-
-
-def _download_and_convert_single(
-    task: "DownloadTask",
-) -> dict[str, Any]:
-    session = build_retrying_session(status_forcelist=(500, 502, 503, 504))
-
-    logger.info("Downloading %s from %s", task.dataset.name, task.download_url)
-    response = session.get(task.download_url, timeout=task.cfg.request_timeout, headers=_http_headers(task.cfg))
-    response.raise_for_status()
-
-    try:
-        payload = response.json()
-    except ValueError as exc:
-        raise ValueError(f"Failed to decode JSON payload for {task.dataset.name}") from exc
-
-    if not isinstance(payload, list):
-        raise ValueError(f"Expected list in dataset {task.dataset.name}, found {type(payload).__name__}")
-
-    StoragePath(os.path.dirname(task.output_file_path)).mkdirs(exist_ok=True)
-
-    record_count = 0
-    with atomic_rename(task.output_file_path) as temp_path:
-        with open_url(temp_path, "wt", encoding="utf-8", compression="gzip") as outfile:
-            for index, raw in enumerate(payload):
-                normalized = _normalize_record(raw, task.dataset, index)
-                json.dump(normalized, outfile, ensure_ascii=False)
-                outfile.write("\n")
-                record_count += 1
-
-    logger.info("Wrote %s records to %s", record_count, task.output_file_path)
-    return {"records": record_count, "output_file": task.output_file_path}
-
-
-@dataclass
-class DownloadTask:
-    download_url: str
-    output_file_path: str
-    dataset: UncheatableEvalDataset
-    cfg: UncheatableEvalDownloadConfig
-
-
-def _generate_tasks(
-    datasets: Iterable[UncheatableEvalDataset],
-    cfg: UncheatableEvalDownloadConfig,
-) -> tuple[list[DownloadTask], list[UncheatableEvalDataset]]:
-    tasks: list[DownloadTask] = []
-    filtered: list[UncheatableEvalDataset] = []
-    for dataset in datasets:
-        output_file = posixpath.join(str(cfg.output_path), dataset.output_filename())
-        tasks.append(DownloadTask(dataset.download_url, output_file, dataset, cfg))
-        filtered.append(dataset)
-    return tasks, filtered
-
-
-def _write_metadata(cfg: UncheatableEvalDownloadConfig, records: list[dict[str, Any]]) -> None:
-    if not records:
-        return
-    metadata_path = posixpath.join(str(cfg.output_path), cfg.metadata_filename)
-    StoragePath(metadata_path).write_text(json.dumps(records, indent=2, ensure_ascii=False), encoding="utf-8")
-    logger.info("Wrote metadata to %s", metadata_path)
-
-
-def download_latest_uncheatable_eval(cfg: UncheatableEvalDownloadConfig) -> dict[str, Any]:
-    """Download and normalize the newest Uncheatable Eval dump for each benchmark."""
-
-    entries = _fetch_directory_listing(cfg)
-    datasets = _parse_available_dumps(entries)
-    latest_datasets = _select_latest_dumps(datasets)
-
-    if not latest_datasets:
-        logger.warning("No datasets found that match the expected naming pattern")
-        return {"success": False, "reason": "no_datasets"}
-
-    output_path = str(cfg.output_path)
-    StoragePath(output_path).mkdirs(exist_ok=True)
-
-    tasks, filtered_datasets = _generate_tasks(latest_datasets, cfg)
-
-    if not tasks:
-        logger.info("No new datasets to process")
-        return {"success": True, "reason": "already_processed", "skipped": True}
-
-    metadata_records: list[dict[str, Any]] = []
-
+def transform_uncheatable_eval(cfg: UncheatableEvalTransformConfig) -> dict[str, Any]:
+    """Split a pinned UncheatableEval Parquet release into compressed JSONL files."""
+    selected_categories = frozenset(cfg.categories)
     pipeline = (
-        Dataset.from_list(tasks)
-        .map(lambda task: _download_and_convert_single(task))
-        .write_jsonl(f"{cfg.output_path}/.metrics/part-{{shard:05d}}.jsonl", skip_existing=True)
-    )
-    ctx = ZephyrContext(name="download-uncheatable-eval")
-    output_paths = ctx.execute(pipeline).results
-
-    for dataset, metadata_file in zip(filtered_datasets, output_paths, strict=True):
-        result = json.loads(StoragePath(metadata_file).read_text(encoding="utf-8"))
-
-        try:
-            metadata_records.append(
-                {
-                    "benchmark": dataset.benchmark,
-                    "start_date": dataset.start_date,
-                    "end_date": dataset.end_date,
-                    "source": dataset.source_label,
-                    "output_file": posixpath.join(output_path, dataset.output_filename()),
-                    "records": result.get("records"),
-                    "sha": dataset.sha,
-                    "size": dataset.size,
-                }
-            )
-        except Exception:
-            logger.exception("Failed to process dataset %s", dataset.name)
-            raise
-
-    _write_metadata(cfg, metadata_records)
-    return {"success": True, "processed": metadata_records}
-
-
-def uncheatable_eval_step(
-    name: str = "raw/uncheatable-eval/latest",
-    *,
-    repo_owner: str = "ziqing-huang",
-    repo_name: str = "uncheatable_eval",
-    data_path: str = "data",
-    branch: str = "master",
-    max_concurrent_downloads: int = 8,
-    request_timeout: int = 120,
-    github_token: str | None = None,
-    skip_existing: bool = True,
-    deps: list[StepSpec] | None = None,
-    output_path_prefix: str | None = None,
-    override_output_path: str | None = None,
-) -> StepSpec:
-    """Create a StepSpec that downloads the latest Uncheatable Eval dumps."""
-
-    def _run(output_path: str) -> dict:
-        cfg = UncheatableEvalDownloadConfig(
-            output_path=output_path,
-            repo_owner=repo_owner,
-            repo_name=repo_name,
-            data_path=data_path,
-            branch=branch,
-            max_concurrent_downloads=max_concurrent_downloads,
-            request_timeout=request_timeout,
-            github_token=github_token,
-            skip_existing=skip_existing,
+        Dataset.from_files(prefix_join(cfg.input_path, "**/*.parquet"))
+        .flat_map(load_parquet)
+        .filter(lambda row: row.get(CATEGORY_FIELD) in selected_categories)
+        .group_by(
+            key=lambda row: row[CATEGORY_FIELD],
+            reducer=partial(_write_category, cfg.output_path),
+            num_output_shards=len(selected_categories),
         )
-        return download_latest_uncheatable_eval(cfg)
-
-    return StepSpec(
-        name=name,
-        fn=_run,
-        deps=deps or [],
-        hash_attrs={
-            "repo_owner": repo_owner,
-            "repo_name": repo_name,
-            "data_path": data_path,
-            "branch": branch,
-        },
-        output_path_prefix=output_path_prefix,
-        override_output_path=override_output_path,
     )
+
+    ctx = ZephyrContext(name="transform-uncheatable-eval", resources=ResourceConfig(cpu=1, ram="8g"))
+    ctx.execute(pipeline)
+
+    missing_categories = [
+        category
+        for category in cfg.categories
+        if not StoragePath(_category_output_path(cfg.output_path, category)).exists()
+    ]
+    if missing_categories:
+        raise ValueError(f"UncheatableEval release is missing categories: {', '.join(missing_categories)}")
+
+    return {"categories": list(cfg.categories)}
