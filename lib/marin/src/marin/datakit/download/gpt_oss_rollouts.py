@@ -20,6 +20,7 @@ from marin.datakit.chat_normalize import normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import ReasoningFormatError, chat_document, text_document
 from marin.datakit.normalize import normalize_step
+from marin.datakit.terminal_chat import INLINE_TOOL_CALL
 from marin.execution.step_spec import StepSpec
 
 HF_DATASET_ID = "andyrdt/gpt-oss-20b-rollouts"
@@ -63,6 +64,9 @@ def row_to_chat_doc(row: dict) -> list[dict]:
         assistant = f"<think>\n{thinking}\n</think>\n\n{response}"
     else:
         assistant = response
+    if INLINE_TOOL_CALL.search(assistant):
+        counters.pipeline.update_counter("gpt_oss_rollouts/chat_inline_tool_syntax_filtered", 1)
+        return []
     messages = [{"role": "user", "content": user}, {"role": "assistant", "content": assistant}]
     try:
         return [chat_document(messages, HF_DATASET_ID)]
@@ -136,6 +140,6 @@ def gpt_oss_rollouts_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/gpt-oss-20b-rollouts",
         deps=[download],
         fn=lambda output_path: transform_chat(download.output_path, output_path),
-        hash_attrs={"version": "2026.09.04.1"},
+        hash_attrs={"version": "2026.09.04.2"},
     )
     return processed, normalize_chat_step(name="normalized-chat/gpt-oss-rollouts", download=processed)

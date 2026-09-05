@@ -26,6 +26,7 @@ from marin.datakit.download.rollout_transforms import (
     text_document,
 )
 from marin.datakit.normalize import normalize_step
+from marin.datakit.terminal_chat import INLINE_TOOL_CALL
 from marin.execution.step_spec import StepSpec
 
 HF_DATASET_ID = "nebius/SWE-rebench-openhands-trajectories"
@@ -47,7 +48,6 @@ def row_to_doc(row: dict) -> list[dict]:
         return []
     if isinstance(trajectory, str):
         trajectory = json.loads(trajectory)
-
     tag = resolved_to_tag(row.get("resolved"))
     rendered = "\n\n".join(render_role_message(m) for m in trajectory)
     text = f"{tag}\n\n{rendered}" if tag else rendered
@@ -62,6 +62,14 @@ def row_to_chat_doc(row: dict) -> list[dict]:
         return []
     if isinstance(trajectory, str):
         trajectory = json.loads(trajectory)
+    if any(
+        message.get("role") == "assistant"
+        and isinstance(message.get("content"), str)
+        and INLINE_TOOL_CALL.search(message["content"])
+        for message in trajectory
+    ):
+        counters.pipeline.update_counter("swe_rebench_openhands/chat_inline_tool_syntax_filtered", 1)
+        return []
     tag = resolved_to_tag(row.get("resolved"))
     if tag:
         trajectory = [{"role": "system", "content": tag}, *trajectory]
@@ -125,6 +133,6 @@ def swe_rebench_openhands_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/swe-rebench-openhands-trajectories",
         deps=[dl],
         fn=lambda output_path: transform_chat(dl.output_path, output_path),
-        hash_attrs={"version": "2026.09.04"},
+        hash_attrs={"version": "2026.09.04.1"},
     )
     return processed, normalize_chat_step(name="normalized-chat/swe-rebench-openhands", download=processed)
