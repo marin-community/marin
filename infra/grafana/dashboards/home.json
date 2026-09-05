@@ -164,6 +164,16 @@
       "title": "Infra",
       "type": "link",
       "url": "/d/infra"
+    },
+    {
+      "title": "Async RL Training",
+      "url": "/d/marin-async-rl",
+      "type": "link",
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "asDropdown": false
     }
   ],
   "panels": [

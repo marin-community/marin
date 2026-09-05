@@ -64,6 +64,16 @@
       "title": "Accelerators",
       "type": "link",
       "url": "/d/marin-accel"
+    },
+    {
+      "title": "Async RL Training",
+      "url": "/d/marin-async-rl",
+      "type": "link",
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "asDropdown": false
     }
   ],
   "templating": {

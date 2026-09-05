@@ -222,10 +222,25 @@ of repeating the Kubernetes object name.
 | Workload | Jobs | `jobs.json` | What is running, queued, and stuck? | cluster, job |
 | Workload | Runs | `runs.json` | How is each Levanter training run doing? | cluster, run |
 | Workload | RL runs | `rl_runs.json` | How is one reinforcement-learning run doing? | cluster, run |
+| Workload | Async RL Training | `async_rl.json` | Is concurrent rollout work useful, fresh, and keeping the policy trainer busy? | cluster, run, job, execution |
 | Workload | Training run | `training.json` | Is one training run on track? | run |
 | Workload | Inference overview | `inference_overview.json` | Is inference progressing, and are responses slow or queues growing? | identity kind, serve |
 | Workload | Inference diagnostics | `inference.json` | Which engines, request stages, or workload changes explain the slowdown? | identity kind, serve |
 | Services | Infra | `infra.json` | Are nightly runs, main CI, workers, and hero training healthy? | none |
+
+Async RL Training (`marin-async-rl`) reads native MarinSkyRL records from Finelog.
+Select a cluster, run, exact training job, and its driver and worker executions.
+The async recipe in `experiments/post_training/async_rl.py` enables the required
+rollout, policy, and training metrics. The dashboard links from Home and RL runs
+and needs no additional datasource or W&B credentials.
+
+Native token counters are summed; queue gauges use their latest observation.
+Concurrent producer waits can exceed elapsed time. Rollout completions are joined
+to policy intervals only within the same process clock; incomplete intervals and
+absent rollout records show unknown overlap. An observed zero does not establish
+GPU idleness. Evaluation retains phase and timestamp because periodic and final
+evaluation can share an optimizer step. Signed timing residuals remain visible
+below zero to expose overlapping child spans.
 
 The two inference dashboards keep the selected identity and time range when
 linked. The existing `marin-inference` UID now opens diagnostics, preserving old
