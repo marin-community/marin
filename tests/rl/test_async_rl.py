@@ -22,10 +22,12 @@ def test_scheduler_controls_share_fixtures_and_optimizer_semantics():
     asynchronous, async_eval = async_rl.build_experiment(
         version="2026.09.05.1", cluster="cw-us-east-02a", runner=async_rl.Runner.ASYNC, scale=async_rl.Scale.SMOKE
     )
-    sync_config = sync.build_config(StepContext.for_fingerprint(sync.runtime_args, sync.deps)).request
-    async_config = asynchronous.build_config(
+    sync_run_config = sync.build_config(StepContext.for_fingerprint(sync.runtime_args, sync.deps))
+    async_run_config = asynchronous.build_config(
         StepContext.for_fingerprint(asynchronous.runtime_args, asynchronous.deps)
-    ).request
+    )
+    sync_config = sync_run_config.request
+    async_config = async_run_config.request
     sync_yaml = yaml.safe_load(sync_config.config_yaml)
     async_yaml = yaml.safe_load(async_config.config_yaml)
     assert sync_yaml.pop("entrypoint") != async_yaml.pop("entrypoint")
@@ -36,6 +38,9 @@ def test_scheduler_controls_share_fixtures_and_optimizer_semantics():
     assert sync_config.topology == async_config.topology
     assert sync_config.run_id != async_config.run_id
     assert sync_eval.name != async_eval.name
+    assert (
+        sync.runtime_args["skyrl_execution"].priority == asynchronous.runtime_args["skyrl_execution"].priority == "batch"
+    )
 
 
 @pytest.mark.parametrize("changed", [{"spans": False}, {"staleness": 0}, {"scale": async_rl.Scale.QUALIFICATION}])
@@ -79,8 +84,22 @@ def test_gsm8k_artifact_preserves_contracts_and_disjoint_ids(tmp_path, monkeypat
             assert row["prompt"][0]["role"] == "system"
 
 
-def test_run_rejects_cross_region_artifact_prefix(monkeypatch):
-    monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin")
-    result = CliRunner().invoke(async_rl.main, ["--version", "2026.09.05.1", "--cluster", "cw-rno2a", "--run"])
+@pytest.mark.parametrize(
+    ("prefix", "cluster"),
+    [
+        ("s3://marin-us-east-02a/marin", "cw-rno2a"),
+        ("s3://marin-us-west-04a/marin", "cw-us-east-02a"),
+        ("s3://marin-na/marin", "cw-us-east-02a"),
+    ],
+)
+def test_run_rejects_cross_region_artifact_prefix(monkeypatch, prefix, cluster):
+    monkeypatch.setenv("MARIN_PREFIX", prefix)
+    result = CliRunner().invoke(async_rl.main, ["--version", "2026.09.05.1", "--cluster", cluster, "--run"])
     assert result.exit_code != 0
-    assert "not local to cw-rno2a" in result.output
+    assert f"not local to {cluster}" in result.output
+
+
+def test_east_run_accepts_configured_coreweave_bucket(monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin")
+
+    async_rl.validate_regional_storage(async_rl.marin_prefix(), "cw-us-east-02a")

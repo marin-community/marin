@@ -18,18 +18,17 @@ Source publication/pinning and current capacity checks precede submission.
 
 from __future__ import annotations
 
-import hashlib
 import json
 from dataclasses import asdict, dataclass, field, replace
 from enum import StrEnum
 from typing import cast
 
 import click
-import fsspec
 import yaml
 from fray.types import ResourceConfig
 from marin.evaluation.model_config import GenerationConfig, ModelConfig, ResourceHint, ServeConfig
 from marin.execution.artifact import Artifact, is_mutable_version, validate_version
+from marin.execution.fingerprint import canonical_json, fingerprint_hash
 from marin.execution.lazy import ArtifactStep, StepContext, run
 from marin.execution.remote import remote
 from marin.experiment.namespacing import user_owned_name
@@ -48,8 +47,8 @@ from marin.rl.skyrl import (
     skyrl_step,
 )
 from marin.training.training import LevanterCheckpoint
-from rigging.filesystem.cluster_config import marin_prefix, region_from_prefix
-from rigging.filesystem.storage_path import prefix_join
+from rigging.filesystem.cluster_config import StoreType, load_cluster_config, marin_prefix
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr.writers import write_parquet_file
 
 from experiments.evaluation.pipeline import EvaluationResult, eval_step
@@ -73,6 +72,7 @@ TRAIN_ROWS = 1024
 VALIDATION_ROWS = 128
 POLICY_GPUS = 8
 ROLE_PLAN = replace(SMOKE.role_plan, policy_mini_batch_size=64)
+H100_CLUSTERS = ("cw-rno2a", "cw-us-east-02a")
 
 
 class Runner(StrEnum):
@@ -99,7 +99,12 @@ class Gsm8kSubsetConfig:
 
 
 def write_gsm8k_subset(config: Gsm8kSubsetConfig) -> None:
-    """Reuse curriculum prompts/verifiers, retaining disjoint deterministic splits."""
+    """Write deterministic, disjoint train and validation data plus selected row IDs.
+
+    Both Parquet splits retain the curriculum prompt and verifier contracts. The
+    selection manifest records their exact source row IDs so a run can audit the
+    chosen training and validation examples.
+    """
     manifest: dict[str, object] = {"dataset": "openai/gsm8k", "revision": config.dataset_revision, "rows": {}}
     row_ids = {}
     for split, count, filename in (
@@ -115,8 +120,7 @@ def write_gsm8k_subset(config: Gsm8kSubsetConfig) -> None:
         write_parquet_file(records, prefix_join(config.output_path, filename))
         row_ids[split] = [f"{split}/{cast(dict, record['extra_info'])['index']}" for record in records]
     manifest["rows"] = row_ids
-    with fsspec.open(prefix_join(config.output_path, "selection.json"), "w") as stream:
-        json.dump(manifest, stream, sort_keys=True)
+    StoragePath(prefix_join(config.output_path, "selection.json")).write_text(json.dumps(manifest, sort_keys=True))
 
 
 def training_config(runner: Runner, scale: Scale, *, spans: bool, staleness: int) -> str:
@@ -164,6 +168,22 @@ def training_config(runner: Runner, scale: Scale, *, spans: bool, staleness: int
     return yaml.safe_dump(config, sort_keys=False)
 
 
+def validate_regional_storage(prefix: str, cluster: str) -> None:
+    """Require the artifact prefix to use the configured bucket for the target CoreWeave region."""
+    region = cluster.removeprefix("cw-")
+    expected = load_cluster_config("coreweave").region_buckets.get(region)
+    path = StoragePath(prefix)
+    if (
+        expected is None
+        or expected.store is not StoreType.COREWEAVE
+        or path.scheme != "s3"
+        or path.bucket != expected.name
+    ):
+        raise click.ClickException(
+            f"Artifact prefix {prefix!r} is not local to {cluster}; " "use its configured CoreWeave regional bucket"
+        )
+
+
 def build_experiment(
     *,
     version: str,
@@ -178,12 +198,13 @@ def build_experiment(
     validate_version(version)
     if is_mutable_version(version):
         raise ValueError("Use an immutable artifact version for the matched experiment")
-    if cluster not in ("cw-rno2a", "cw-us-east-02a"):
+    if cluster not in H100_CLUSTERS:
         raise ValueError("The development preset requires an H100 cluster")
     if timeout_seconds <= 0 or staleness < 0:
         raise ValueError("A positive training deadline and nonnegative staleness are required")
     config = training_config(runner, scale, spans=spans, staleness=staleness)
     cpu = ResourceConfig.with_cpu(cpu=4, ram="16g", disk="32g")
+    topology = SkyRLTopology(2, POLICY_GPUS, "H100", ROLE_PLAN)
     model = ArtifactStep(
         name=user_owned_name("models/async-rl-qwen3-0.6b"),
         version=version,
@@ -198,18 +219,17 @@ def build_experiment(
         run=remote(write_gsm8k_subset, resources=cpu),
         build_config=lambda ctx: Gsm8kSubsetConfig(output_path=ctx.output_path),
     )
-    identity = hashlib.sha256(
-        json.dumps(
+    identity = fingerprint_hash(
+        canonical_json(
             {
                 "config": config,
                 "model": model.fingerprint(),
                 "data": data.fingerprint(),
                 "seed": SEED,
-                "topology": asdict(SkyRLTopology(2, POLICY_GPUS, "H100", ROLE_PLAN)),
-            },
-            sort_keys=True,
-        ).encode()
-    ).hexdigest()[:12]
+                "topology": topology,
+            }
+        )
+    )
     name = user_owned_name(f"checkpoints/async-rl/{runner.value}-{scale.value}-{identity}")
     training = skyrl_step(
         SkyRLSpec(
@@ -220,7 +240,7 @@ def build_experiment(
             model=ArtifactHfModel(model, QWEN3_MODEL, MODEL_REVISION, relative_path="hf"),
             train_data=(ArtifactDataSource(data, relative_path=TRAIN_FILENAME),),
             validation_data=(ArtifactDataSource(data, relative_path=VALIDATION_FILENAME),),
-            topology=SkyRLTopology(2, POLICY_GPUS, "H100", ROLE_PLAN),
+            topology=topology,
             retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
             seed=SEED,
             overrides=("++trainer.hf_hub_repo_id=null", "++generator.chat_template_kwargs.enable_thinking=false"),
@@ -231,7 +251,7 @@ def build_experiment(
             cpu=16,
             memory="128GB",
             disk="2TB",
-            priority="interactive",
+            priority="batch",
             max_retries=0,
             wandb_entity="marin-community",
             timeout_seconds=timeout_seconds,
@@ -264,9 +284,7 @@ def build_experiment(
 @click.option("--version", required=True)
 @click.option("--runner", type=click.Choice([r.value for r in Runner]), default="async", show_default=True)
 @click.option("--scale", type=click.Choice([s.value for s in Scale]), default="smoke", show_default=True)
-@click.option(
-    "--cluster", type=click.Choice(["cw-rno2a", "cw-us-east-02a"]), default="cw-us-east-02a", show_default=True
-)
+@click.option("--cluster", type=click.Choice(H100_CLUSTERS), default="cw-us-east-02a", show_default=True)
 @click.option("--stage", type=click.Choice(["rl", "evaluation"]), default="evaluation", show_default=True)
 @click.option("--spans/--no-spans", default=True, show_default=True)
 @click.option("--staleness", type=click.IntRange(min=0), default=1, show_default=True)
@@ -293,10 +311,8 @@ def main(
         timeout_seconds=timeout_seconds,
     )
     prefix = marin_prefix()
-    if execute and region_from_prefix(prefix) != cluster.removeprefix("cw-"):
-        raise click.ClickException(
-            f"Artifact prefix {prefix!r} is not local to {cluster}; run the coordinator with verified regional storage"
-        )
+    if execute:
+        validate_regional_storage(prefix, cluster)
     context = StepContext.for_run(training.path(prefix), prefix, runtime_args=training.runtime_args, deps=training.deps)
     click.echo(json.dumps(asdict(training.build_config(context)), indent=2))
     if execute:
