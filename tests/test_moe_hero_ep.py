@@ -338,6 +338,21 @@ def test_the_patched_pjrt_wheel_pairs_with_the_pinned_jax():
     assert filename.endswith("aarch64.whl")
 
 
+def _run_on_cpu_devices(script: str, device_count: int) -> None:
+    """Run ``script`` in a fresh interpreter on ``device_count`` CPU devices and raise on failure."""
+    env = os.environ.copy()
+    env["JAX_PLATFORMS"] = "cpu"
+    env["XLA_FLAGS"] = f"--xla_force_host_platform_device_count={device_count}"
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(script)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def _tiny_state(params, master_params):
     return train.GrugTrainState(
         step=jnp.array(0, dtype=jnp.int32),
@@ -434,6 +449,46 @@ def test_a_master_bearing_checkpoint_migrates_in_process_into_a_master_less_rest
         np.testing.assert_array_equal(np.asarray(want), np.asarray(have))
 
 
+def test_the_step_counter_is_placed_on_the_sharding_the_train_step_returns():
+    """A step under a GSPMD sharding makes the next train step miss jit's compilation cache, which
+    keys on input shardings, and the second executable registers a second NCCL symmetric window over
+    the shared collective-memory arena (https://github.com/marin-community/marin/issues/8861)."""
+    script = """
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from jax._src.lib import xla_client as xc
+        from jax._src.sharding_impls import GSPMDSharding
+        from jax.sharding import AxisType, Mesh, set_mesh
+
+        from experiments.grug.moe_hero_ep import train
+
+        mesh = Mesh(
+            np.asarray(jax.devices()).reshape(1, 1, 2, 1),
+            ("replica_dcn", "data", "expert", "model"),
+            axis_types=(AxisType.Explicit,) * 4,
+        )
+        replicated = GSPMDSharding(tuple(jax.devices()), xc.HloSharding.replicate())
+        state = train.GrugTrainState(
+            step=jax.device_put(jnp.array(3, dtype=jnp.int32), replicated),
+            params=jnp.zeros(4),
+            master_params=None,
+            opt_state=(),
+            ema_params=None,
+            pending_qb_betas=jnp.zeros((1, 2)),
+        )
+        with set_mesh(mesh):
+            advance = jax.jit(lambda step: step + jnp.asarray(1, dtype=step.dtype))
+            assert advance(state.step).sharding != state.step.sharding
+            placed = train.place_step_on_mesh(state, mesh)
+            advanced = advance(placed.step)
+        assert advanced.sharding == placed.step.sharding, (advanced.sharding, placed.step.sharding)
+        assert int(placed.step) == 3
+    """
+
+    _run_on_cpu_devices(script, device_count=2)
+
+
 def test_the_carry_offload_overrides_an_inherited_collective_overlap_limit(monkeypatch):
     inherited = f"{train.XLA_COLLECTIVE_OVERLAP_FLAG}={train.DEFAULT_COLLECTIVE_OVERLAP_LIMIT}"
     monkeypatch.setenv("XLA_FLAGS", inherited)
@@ -511,9 +566,6 @@ def test_ep_newton_schulz_returns_to_expert_sharding():
 
 
 def test_ep_newton_schulz_matches_replicated_path():
-    env = os.environ.copy()
-    env["JAX_PLATFORMS"] = "cpu"
-    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=2"
     script = """
         import jax
         import jax.numpy as jnp
@@ -557,15 +609,7 @@ def test_ep_newton_schulz_matches_replicated_path():
         np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), atol=1e-5, rtol=1e-5)
     """
 
-    result = subprocess.run(
-        [sys.executable, "-c", textwrap.dedent(script)],
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-    assert result.returncode == 0, result.stderr
+    _run_on_cpu_devices(script, device_count=2)
 
 
 def test_ep_padded_newton_schulz_returns_to_parameter_sharding():
@@ -704,9 +748,6 @@ def test_odd_depth_config_is_not_silently_rounded():
 
 
 def test_hybrid_kv_branches_agree_on_sharding_when_model_axis_is_wide():
-    env = os.environ.copy()
-    env["JAX_PLATFORMS"] = "cpu"
-    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
     script = """
         import math
 
@@ -755,15 +796,7 @@ def test_hybrid_kv_branches_agree_on_sharding_when_model_axis_is_wide():
         assert output.shape == (2, 8, 32)
     """
 
-    result = subprocess.run(
-        [sys.executable, "-c", textwrap.dedent(script)],
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-    assert result.returncode == 0, result.stderr
+    _run_on_cpu_devices(script, device_count=4)
 
 
 def _explicit_mesh(*axis_sizes):

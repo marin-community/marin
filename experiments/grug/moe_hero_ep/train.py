@@ -127,6 +127,20 @@ class TrainingDataMode(StrEnum):
     SYNTHETIC = "synthetic"
 
 
+def place_step_on_mesh(state: "GrugTrainState", mesh: Mesh) -> "GrugTrainState":
+    """Place the step counter under the sharding `train_step` returns it with.
+
+    `_init_state` and the checkpoint restore hand the scalar back under a GSPMD sharding, and jit
+    keys its compilation cache on input shardings. Without this the second train step compiles a
+    second executable, and each executable registers its own NCCL symmetric window over the shared
+    collective-memory arena. Every other leaf already carries an explicit sharding.
+    """
+    # `jax.device_put` asserts inside `_different_device_order_reshard` when the source is a
+    # GSPMDSharding whose device order differs from the mesh's, so reshard through a jit instead.
+    place = jax.jit(lambda leaf: leaf, out_shardings=NamedSharding(mesh, P()))
+    return dataclasses.replace(state, step=place(state.step))
+
+
 def restore_template_from(state):
     """ShapeDtypeStructs carrying each leaf's concrete sharding, releasing the leaves.
 
@@ -975,6 +989,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             state = take_master_as_params(state)
         if released_initial_state and any(isinstance(leaf, jax.ShapeDtypeStruct) for leaf in jax.tree.leaves(state)):
             state = _init_state(model_key)
+        state = place_step_on_mesh(state, mesh)
         dump_grug_state_sharding_run_artifact(
             state,
             log_dir=trainer.log_dir,
