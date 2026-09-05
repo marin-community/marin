@@ -69,6 +69,24 @@ def test_chat_identity_includes_tool_definitions():
     assert first["id"] != second["id"]
 
 
+@pytest.mark.parametrize(
+    "messages",
+    [
+        [
+            {"role": "user", "content": "Question"},
+            {"role": "assistant", "content": "Answer"},
+        ],
+        [
+            {"role": "system", "content": "Follow instructions."},
+            {"role": "user", "content": "Question"},
+            {"role": "assistant", "content": "Answer"},
+        ],
+    ],
+)
+def test_validate_chat_messages_allows_optional_system_prefix(messages):
+    validate_chat_messages(messages, [])
+
+
 def test_normalize_chat_to_parquet_keeps_varying_tool_schemas_arrow_stable(tmp_path: Path):
     input_dir = tmp_path / "input"
     output_dir = tmp_path / "output"
