@@ -18,7 +18,12 @@ from zephyr.readers import load_jsonl
 
 from marin.datakit.chat_normalize import normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
-from marin.datakit.download.rollout_transforms import ReasoningFormatError, chat_document, text_document
+from marin.datakit.download.rollout_transforms import (
+    CHAT_CONTROL_TOKEN,
+    ReasoningFormatError,
+    chat_document,
+    text_document,
+)
 from marin.datakit.normalize import normalize_step
 from marin.datakit.terminal_chat import INLINE_TOOL_CALL
 from marin.execution.step_spec import StepSpec
@@ -58,6 +63,9 @@ def row_to_chat_doc(row: dict) -> list[dict]:
     if not user or not response:
         return []
     thinking = row.get("assistant_thinking") or ""
+    if any(CHAT_CONTROL_TOKEN.search(text) for text in (user, thinking, response)):
+        counters.pipeline.update_counter("gpt_oss_rollouts/chat_control_token_filtered", 1)
+        return []
     if thinking and any(token in thinking for token in ("<think>", "<|start_think|>")):
         assistant = f"{thinking}\n\n{response}"
     elif thinking:
@@ -140,6 +148,6 @@ def gpt_oss_rollouts_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/gpt-oss-20b-rollouts",
         deps=[download],
         fn=lambda output_path: transform_chat(download.output_path, output_path),
-        hash_attrs={"version": "2026.09.04.2"},
+        hash_attrs={"version": "2026.09.04.3"},
     )
     return processed, normalize_chat_step(name="normalized-chat/gpt-oss-rollouts", download=processed)

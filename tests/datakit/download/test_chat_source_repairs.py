@@ -69,6 +69,15 @@ def test_gpt_oss_drops_assistant_reply_that_demonstrates_inline_tool_protocol() 
     assert gpt_oss_row_to_chat_doc(row) == []
 
 
+def test_gpt_oss_drops_embedded_tokenizer_control_tokens() -> None:
+    row = {
+        "user_content": 'What does tokenizer.convert_tokens_to_ids("<|eot_id|>") return?',
+        "assistant_content": "It returns the end-of-turn token ID.",
+    }
+
+    assert gpt_oss_row_to_chat_doc(row) == []
+
+
 def test_openhands_drops_unparsed_inline_tool_action() -> None:
     row = {
         "resolved": 0,

@@ -17,6 +17,11 @@ from zephyr import counters
 logger = logging.getLogger(__name__)
 
 CANONICAL_CHAT_ROLES = frozenset({"assistant", "system", "tool", "user"})
+CHAT_CONTROL_TOKEN = re.compile(
+    r"<\|(?:begin_of_text|end_of_text|finetune_right_pad_id|start_header_id|end_header_id|"
+    r"eom_id|eot_id|python_tag|reserved_special_token_\d+)\|>"
+)
+REASONING_TOKEN = re.compile(r"<\|(?:start|end)_think\|>")
 CHAT_ROLE_ALIASES = MappingProxyType(
     {
         "bot": "assistant",
