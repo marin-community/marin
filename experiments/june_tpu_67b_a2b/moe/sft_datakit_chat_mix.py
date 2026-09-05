@@ -162,6 +162,8 @@ def _pretrain_child(bucket: str, length: str) -> DatasetComponent:
         format=TextLmDatasetFormat(),
         tags=[bucket, length],
         flat_cache=True,
+        pack=True,
+        packing_slice_strategy="drop",
     )
 
 

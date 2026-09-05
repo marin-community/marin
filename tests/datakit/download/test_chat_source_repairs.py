@@ -3,6 +3,7 @@
 
 from marin.datakit.download.davinci_dev import env_row_to_chat_doc as davinci_row_to_chat_doc
 from marin.datakit.download.gpt_oss_rollouts import row_to_chat_doc as gpt_oss_row_to_chat_doc
+from marin.datakit.download.numinamath_tir import row_to_chat_doc as numinamath_row_to_chat_doc
 from marin.datakit.download.swe_rebench_openhands import row_to_chat_doc as openhands_row_to_chat_doc
 from marin.datakit.download.swe_zero_12m import row_to_chat_doc as swe_zero_row_to_chat_doc
 
@@ -176,3 +177,41 @@ def test_swe_zero_does_not_treat_inspecting_completion_marker_as_completion() ->
         "tool",
         "assistant",
     ]
+
+
+def test_swe_zero_drops_control_tokens_in_commands() -> None:
+    row = {
+        "messages": [
+            {"role": "user", "content": "Fix the parser."},
+            {"role": "assistant", "content": "THOUGHT: Inspect.\n```bash\nprintf '<|end_of_text|>'\n```"},
+            {"role": "user", "content": "Observation: done"},
+            {"role": "assistant", "content": "THOUGHT: Done.\n```bash\necho COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\n```"},
+        ]
+    }
+
+    assert swe_zero_row_to_chat_doc(row) == []
+
+
+def test_numinamath_splits_reasoning_python_and_output() -> None:
+    row = {
+        "messages": [
+            {"role": "user", "content": "Compute it."},
+            {
+                "role": "assistant",
+                "content": (
+                    "I should calculate it.\n\n```python\nprint(6 * 7)\n```\n"
+                    "```output\n42\n```\nTherefore, the answer is 42."
+                ),
+            },
+        ]
+    }
+
+    [document] = numinamath_row_to_chat_doc(row)
+    assert [message["role"] for message in document["messages"]] == ["user", "assistant", "tool", "assistant"]
+    assert document["messages"][1]["content"] == "<|start_think|>I should calculate it.<|end_think|>"
+    assert document["messages"][1]["tool_calls"][0]["function"] == {
+        "name": "python",
+        "arguments": '{"code":"print(6 * 7)"}',
+    }
+    assert document["messages"][2]["content"] == "42"
+    assert document["messages"][3]["content"] == "Therefore, the answer is 42."

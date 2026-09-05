@@ -34,8 +34,26 @@ from marin.datakit.normalize import (
 )
 from marin.execution.step_spec import StepSpec
 
-CHAT_NORMALIZE_VERSION = "2026.09.04.1"
+CHAT_NORMALIZE_VERSION = "2026.09.05"
 _INLINE_TOOL_SYNTAX = re.compile(r"<tool_call(?::[^>]*)?>", re.IGNORECASE)
+_RAW_REASONING_TOKEN = re.compile(r"</?think>", re.IGNORECASE)
+_TOOL_WRAPPER_TOKEN = re.compile(r"</?tool_(?:call|response)(?:\s[^>]*)?>", re.IGNORECASE)
+_SAFE_TOOL_IDENTIFIER = re.compile(r"[A-Za-z0-9_.:-]+")
+
+
+def _contains_unsafe_markup(value: object) -> bool:
+    if isinstance(value, str):
+        return bool(
+            CHAT_CONTROL_TOKEN.search(value)
+            or REASONING_TOKEN.search(value)
+            or _RAW_REASONING_TOKEN.search(value)
+            or _TOOL_WRAPPER_TOKEN.search(value)
+        )
+    if isinstance(value, dict):
+        return any(_contains_unsafe_markup(key) or _contains_unsafe_markup(item) for key, item in value.items())
+    if isinstance(value, list):
+        return any(_contains_unsafe_markup(item) for item in value)
+    return False
 
 
 def _tool_name(tool: dict) -> str | None:
@@ -51,9 +69,13 @@ def _validate_tools(tools: list[dict]) -> set[str]:
     for tool in tools:
         if not isinstance(tool, dict):
             raise ValueError("Tool definitions must be JSON objects")
+        if _contains_unsafe_markup(tool):
+            raise ValueError("Tool definitions must not contain chat control or reasoning tokens")
         name = _tool_name(tool)
         if not name:
             raise ValueError("Every tool definition must have a non-empty name")
+        if _SAFE_TOOL_IDENTIFIER.fullmatch(name) is None:
+            raise ValueError(f"Tool definition names contain unsafe characters: {name!r}")
         if name in names:
             raise ValueError(f"Tool definition names must be unique: {name!r}")
         names.add(name)
@@ -93,6 +115,8 @@ def validate_chat_messages(messages: list[dict], tools: list[dict]) -> None:
             raise ValueError(f"Unsupported canonical chat role {role!r}")
         if isinstance(content, str) and CHAT_CONTROL_TOKEN.search(content):
             raise ValueError("Message content must not contain tokenizer control tokens")
+        if isinstance(content, str) and _RAW_REASONING_TOKEN.search(content):
+            raise ValueError("Raw reasoning tags must be normalized before chat validation")
         if role != "assistant" and isinstance(content, str) and REASONING_TOKEN.search(content):
             raise ValueError("Reasoning delimiters are only valid in assistant messages")
         if role == "system":
@@ -129,6 +153,8 @@ def validate_chat_messages(messages: list[dict], tools: list[dict]) -> None:
                 if isinstance(provider_payload, dict) and ({"analysis", "commands"} & provider_payload.keys()):
                     raise ValueError("Provider JSON protocols must be split out by the source adapter")
             calls = message.get("tool_calls") or []
+            if _contains_unsafe_markup(calls):
+                raise ValueError("Tool calls must not contain chat control or reasoning tokens")
             if not calls and (not isinstance(content, str) or not content.strip()):
                 raise ValueError("Assistant turns must contain text, reasoning, or a tool call")
             for call in calls:
@@ -137,6 +163,8 @@ def validate_chat_messages(messages: list[dict], tools: list[dict]) -> None:
                 name = function.get("name")
                 if not isinstance(call_id, str) or call_id in seen_call_ids:
                     raise ValueError("Tool-call IDs must be present and unique")
+                if _SAFE_TOOL_IDENTIFIER.fullmatch(call_id) is None:
+                    raise ValueError("Tool-call IDs contain unsafe characters")
                 seen_call_ids.add(call_id)
                 arguments = function.get("arguments")
                 if isinstance(arguments, str):
@@ -145,6 +173,8 @@ def validate_chat_messages(messages: list[dict], tools: list[dict]) -> None:
                     raise ValueError("Tool-call arguments must encode a JSON object")
                 if not isinstance(name, str):
                     raise ValueError("Tool calls must name a function")
+                if _SAFE_TOOL_IDENTIFIER.fullmatch(name) is None:
+                    raise ValueError("Tool-call names contain unsafe characters")
                 if name not in tool_names:
                     raise ValueError(f"Tool call {name!r} has no matching tool definition")
                 pending_calls[call_id] = name
@@ -175,6 +205,8 @@ def _normalize_chat_record(record: dict[str, Any], messages_field: str, id_field
     if not isinstance(raw_kwargs, dict):
         raise ValueError("chat_template_kwargs must be a JSON object")
     kwargs = dict(raw_kwargs)
+    if _contains_unsafe_markup({key: value for key, value in kwargs.items() if key != "tools"}):
+        raise ValueError("Chat template arguments must not contain chat control or reasoning tokens")
     tools = list(kwargs.get("tools") or [])
     existing_names = {_tool_name(tool) for tool in tools if isinstance(tool, dict)}
     tools.extend(tool for tool in inferred_tool_definitions(messages) if tool["name"] not in existing_names)

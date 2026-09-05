@@ -10,6 +10,7 @@ renders those messages into the tagged transcript format used by Marin's
 datakit reasoning sources.
 """
 
+import re
 from typing import Any
 
 from fray.types import ResourceConfig
@@ -28,6 +29,20 @@ HF_DATASET_ID = "AI-MO/NuminaMath-TIR"
 HF_REVISION = "77a91d7"
 TRAIN_PARQUET_GLOB = "data/train-*.parquet"
 VALID_ROLES = frozenset({"assistant", "system", "tool", "user"})
+_PYTHON_EXECUTION = re.compile(
+    r"```python\s*\n(?P<code>.*?)\n```\s*```output\s*\n(?P<output>.*?)\n```",
+    re.DOTALL | re.IGNORECASE,
+)
+PYTHON_TOOL = {
+    "type": "function",
+    "name": "python",
+    "description": "Execute Python code and return its output.",
+    "parameters": {
+        "type": "object",
+        "properties": {"code": {"type": "string"}},
+        "required": ["code"],
+    },
+}
 
 
 def _message_text(message: Any) -> str | None:
@@ -78,7 +93,48 @@ def row_to_chat_doc(row: dict) -> list[dict]:
     messages = row.get("messages")
     if not isinstance(messages, list) or any(_message_text(message) is None for message in messages):
         return []
-    return [chat_document([dict(message) for message in messages], HF_DATASET_ID)]
+
+    canonical: list[dict] = []
+    call_index = 0
+    for message in messages:
+        if message["role"] != "assistant":
+            canonical.append(dict(message))
+            continue
+
+        content = message["content"]
+        matches = list(_PYTHON_EXECUTION.finditer(content))
+        if not matches:
+            counters.pipeline.update_counter("numinamath_tir/chat_without_execution_filtered", 1)
+            return []
+        cursor = 0
+        for match in matches:
+            reasoning = content[cursor : match.start()].strip()
+            call_id = f"call_python_{call_index}"
+            call_index += 1
+            canonical.append(
+                {
+                    "role": "assistant",
+                    "content": f"<think>{reasoning}</think>" if reasoning else None,
+                    "tool_calls": [
+                        {
+                            "id": call_id,
+                            "type": "function",
+                            "function": {"name": "python", "arguments": {"code": match.group("code")}},
+                        }
+                    ],
+                }
+            )
+            canonical.append(
+                {"role": "tool", "content": match.group("output"), "name": "python", "tool_call_id": call_id}
+            )
+            cursor = match.end()
+        final_answer = content[cursor:].strip()
+        if not final_answer:
+            counters.pipeline.update_counter("numinamath_tir/chat_without_final_answer_filtered", 1)
+            return []
+        canonical.append({"role": "assistant", "content": final_answer})
+
+    return [chat_document(canonical, HF_DATASET_ID, chat_template_kwargs={"tools": [PYTHON_TOOL]})]
 
 
 def transform(input_path: str, output_path: str) -> None:
@@ -142,6 +198,6 @@ def numinamath_tir_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/numinamath-tir",
         deps=[download],
         fn=lambda output_path: transform_chat(download.output_path, output_path),
-        hash_attrs={"version": "2026.09.04"},
+        hash_attrs={"version": "2026.09.05"},
     )
     return processed, normalize_chat_step(name="normalized-chat/numinamath-tir", download=processed)

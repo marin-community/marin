@@ -219,6 +219,16 @@ def test_causal_loss_mask_does_not_train_across_packed_documents():
     np.testing.assert_array_equal(np.asarray(example.loss_weight), [1, 1, 0, 1, 0, 0])
 
 
+def test_causal_loss_mask_does_not_train_across_eos_derived_documents():
+    example = GrugLmExample.causal(
+        tokens=jnp.array([128000, 7, 128001, 128000, 8, 128001]),
+        eos_id=128001,
+        block_cross_document_attention=True,
+    )
+
+    np.testing.assert_array_equal(np.asarray(example.loss_weight), [1, 1, 0, 1, 1, 0])
+
+
 def test_packed_leading_document_loss_matches_unpacked(tokenizer, tmp_path):
     """Packing must not change the leading document's per-token loss.
 

@@ -19,6 +19,8 @@ from zephyr.dataset import Dataset
 from marin.datakit.chat_normalize import normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import (
+    CHAT_CONTROL_TOKEN,
+    REASONING_TOKEN,
     chat_document,
     load_parquet_batched,
     render_role_message,
@@ -109,6 +111,14 @@ def row_to_chat_doc(row: dict) -> list[dict]:
         reasoning = _THOUGHT_PREFIX.sub("", match.group("reasoning"), count=1).strip()
         reasoning_content = f"<think>{reasoning}</think>" if reasoning else ""
         command = match.group("command").strip()
+        if (
+            CHAT_CONTROL_TOKEN.search(command)
+            or REASONING_TOKEN.search(command)
+            or "<think>" in command
+            or "</think>" in command
+        ):
+            counters.pipeline.update_counter("swe_zero_12m/chat_control_token_filtered", 1)
+            return []
         remaining = messages[index + 1 :]
         has_final_observation = (
             len(remaining) == 1
@@ -203,6 +213,6 @@ def swe_zero_12m_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/swe-zero-12m-trajectories",
         deps=[dl],
         fn=lambda output_path: transform_chat(dl.output_path, output_path),
-        hash_attrs={"version": "2026.09.04.2"},
+        hash_attrs={"version": "2026.09.05"},
     )
     return processed, normalize_chat_step(name="normalized-chat/swe-zero-12m", download=processed)

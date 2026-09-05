@@ -141,6 +141,11 @@ class GrugLmExample:
         seq_len = tokens.shape[0]
         causal_loss_mask = GrugLmExample.causal_loss_mask(seq_len)
 
+        if block_cross_document_attention and eos_id is not None and segment_ids is None:
+            eos_mask = jnp.roll(tokens, 1) == eos_id
+            eos_mask = eos_mask.at[0].set(False).astype(jnp.int32)
+            segment_ids = jnp.cumsum(eos_mask, axis=0)
+
         if loss_weight is not None:
             dtype = jnp.result_type(loss_weight.dtype, jnp.float32)
             loss_weight = loss_weight.astype(dtype) * causal_loss_mask.astype(dtype)
@@ -165,12 +170,7 @@ class GrugLmExample:
 
         attn_mask = GrugAttentionMask.causal(sliding_window=sliding_window)
         if block_cross_document_attention:
-            if eos_id is not None and segment_ids is None:
-                eos_mask = jnp.roll(tokens, 1) == eos_id
-                eos_mask = eos_mask.at[0].set(False).astype(jnp.int32)
-                segment_ids = jnp.cumsum(eos_mask, axis=0)
-                attn_mask = attn_mask.with_segment_ids(segment_ids, max_segments=max_segments)
-            elif segment_ids is not None:
+            if segment_ids is not None:
                 attn_mask = attn_mask.with_segment_ids(segment_ids, max_segments=max_segments)
 
         return GrugLmExample(tokens=tokens, loss_weight=loss_weight, attn_mask=attn_mask)

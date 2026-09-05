@@ -90,7 +90,7 @@ def test_opencode_protocol_matches_parallel_calls_to_separate_observations():
                 {
                     "role": "assistant",
                     "content": (
-                        '<tool_call>{"name":"read","arguments":{"path":"a.py"}}</tool_call>'
+                        '<tool_call>{"name":"read","arguments":{"path":"a.py","offset":10}}</tool_call>'
                         '<tool_call>{"name":"read","arguments":{"path":"b.py"}}</tool_call>'
                     ),
                 },
@@ -106,6 +106,9 @@ def test_opencode_protocol_matches_parallel_calls_to_separate_observations():
         calls[0]["id"],
         calls[1]["id"],
     ]
+    [tool] = json.loads(document["chat_template_kwargs"])["tools"]
+    assert tool["parameters"]["properties"] == {"offset": {"type": "number"}, "path": {"type": "string"}}
+    assert tool["parameters"]["required"] == ["path"]
 
 
 def test_opencode_protocol_drops_ambiguous_parallel_call_observation():

@@ -114,25 +114,31 @@ def terminal_protocol_messages(conversations: list[dict]) -> tuple[list[dict], d
     return messages, {"chat_template_kwargs": {"tools": [TERMINAL_TOOL]}}
 
 
-def _tool_schema(name: str, arguments: dict) -> dict:
+def _tool_schema(name: str, invocations: list[dict]) -> dict:
     properties = {}
-    for key, value in arguments.items():
-        if isinstance(value, bool):
-            json_type = "boolean"
-        elif isinstance(value, (int, float)):
-            json_type = "number"
-        elif isinstance(value, list):
-            json_type = "array"
-        elif isinstance(value, dict):
-            json_type = "object"
-        else:
-            json_type = "string"
-        properties[key] = {"type": json_type}
+    required = set(invocations[0])
+    observed_types: dict[str, set[str]] = {}
+    for arguments in invocations:
+        required.intersection_update(arguments)
+        for key, value in arguments.items():
+            if isinstance(value, bool):
+                json_type = "boolean"
+            elif isinstance(value, (int, float)):
+                json_type = "number"
+            elif isinstance(value, list):
+                json_type = "array"
+            elif isinstance(value, dict):
+                json_type = "object"
+            else:
+                json_type = "string"
+            observed_types.setdefault(key, set()).add(json_type)
+    for key, json_types in observed_types.items():
+        properties[key] = {"type": sorted(json_types) if len(json_types) > 1 else next(iter(json_types))}
     return {
         "type": "function",
         "name": name,
         "description": f"Execute the {name} tool.",
-        "parameters": {"type": "object", "properties": properties, "required": list(arguments)},
+        "parameters": {"type": "object", "properties": properties, "required": sorted(required)},
     }
 
 
@@ -141,7 +147,7 @@ def opencode_protocol_messages(
 ) -> tuple[list[dict], dict] | None:
     """Convert inline OpenCode tool tags and observations to canonical messages."""
     messages: list[dict] = []
-    tools: dict[str, dict] = {}
+    tool_invocations: dict[str, list[dict]] = {}
     pending_calls: list[tuple[str, str]] = []
     for index, message in enumerate(conversations):
         role = message.get("role")
@@ -190,7 +196,7 @@ def opencode_protocol_messages(
                     "function": {"name": call["name"], "arguments": call["arguments"]},
                 }
             )
-            tools[call["name"]] = _tool_schema(call["name"], call["arguments"])
+            tool_invocations.setdefault(call["name"], []).append(call["arguments"])
             pending_calls.append((call_id, call["name"]))
         assistant_content = INLINE_TOOL_CALL.sub("", content).strip()
         messages.append(
@@ -202,7 +208,8 @@ def opencode_protocol_messages(
         )
     if not messages or messages[-1]["role"] != "assistant":
         return None
-    return messages, {"chat_template_kwargs": {"tools": list(tools.values())}}
+    tools = [_tool_schema(name, invocations) for name, invocations in tool_invocations.items()]
+    return messages, {"chat_template_kwargs": {"tools": tools}}
 
 
 def agent_protocol_messages(conversations: list[dict]) -> tuple[list[dict], dict] | None:

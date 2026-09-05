@@ -180,3 +180,31 @@ def test_normalize_chat_to_parquet_keeps_varying_tool_schemas_arrow_stable(tmp_p
 def test_validate_chat_messages_rejects_invalid_conversations(messages, error):
     with pytest.raises(ValueError, match=error):
         validate_chat_messages(messages, [])
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        {
+            "messages": [
+                {"role": "user", "content": "Run it."},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{"function": {"name": "run", "arguments": {"command": "printf '<|end_of_text|>'"}}}],
+                },
+            ]
+        },
+        {
+            "messages": [{"role": "user", "content": "Question"}, {"role": "assistant", "content": "Answer"}],
+            "chat_template_kwargs": {"custom_instructions": "Emit <|eot_id|>."},
+        },
+        {
+            "messages": [{"role": "user", "content": "Question"}, {"role": "assistant", "content": "Answer"}],
+            "chat_template_kwargs": {"tools": [{"name": "bad<|eot_id|>tool"}]},
+        },
+    ],
+)
+def test_normalize_chat_rejects_nested_control_tokens(record):
+    with pytest.raises(ValueError, match="control or reasoning tokens"):
+        _normalize_chat_record(record, "messages", "id")
