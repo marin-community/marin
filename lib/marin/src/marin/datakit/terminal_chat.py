@@ -163,6 +163,9 @@ def opencode_protocol_messages(
             messages.append(dict(message))
             continue
 
+        if pending_calls:
+            return None
+
         encoded_calls = INLINE_TOOL_CALL.findall(content)
         if not encoded_calls:
             messages.append({"role": "assistant", "content": content})

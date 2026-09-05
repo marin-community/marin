@@ -81,6 +81,57 @@ def test_opencode_protocol_becomes_structured_call_and_observation():
     assert json.loads(document["chat_template_kwargs"])["tools"][0]["name"] == "bash"
 
 
+def test_opencode_protocol_matches_parallel_calls_to_separate_observations():
+    transform = row_to_chat_doc(_dataset("qwen35-122b-131k-opencode"))
+    [document] = transform(
+        {
+            "conversations": [
+                {"role": "user", "content": "Inspect both files."},
+                {
+                    "role": "assistant",
+                    "content": (
+                        '<tool_call>{"name":"read","arguments":{"path":"a.py"}}</tool_call>'
+                        '<tool_call>{"name":"read","arguments":{"path":"b.py"}}</tool_call>'
+                    ),
+                },
+                {"role": "user", "content": "contents of a.py"},
+                {"role": "user", "content": "contents of b.py"},
+                {"role": "assistant", "content": "Both files are valid."},
+            ]
+        }
+    )
+
+    calls = document["messages"][1]["tool_calls"]
+    assert [message["tool_call_id"] for message in document["messages"][2:4]] == [
+        calls[0]["id"],
+        calls[1]["id"],
+    ]
+
+
+def test_opencode_protocol_drops_ambiguous_parallel_call_observation():
+    transform = row_to_chat_doc(_dataset("qwen35-122b-131k-opencode"))
+
+    assert (
+        transform(
+            {
+                "conversations": [
+                    {"role": "user", "content": "Inspect both files."},
+                    {
+                        "role": "assistant",
+                        "content": (
+                            '<tool_call>{"name":"read","arguments":{"path":"a.py"}}</tool_call>'
+                            '<tool_call>{"name":"read","arguments":{"path":"b.py"}}</tool_call>'
+                        ),
+                    },
+                    {"role": "user", "content": "combined output"},
+                    {"role": "assistant", "content": "Both files are valid."},
+                ]
+            }
+        )
+        == []
+    )
+
+
 def test_opencode_protocol_recovers_prompt_from_instruction():
     transform = row_to_chat_doc(_dataset("qwen35-122b-131k-opencode"))
 
