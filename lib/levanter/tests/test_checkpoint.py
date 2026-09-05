@@ -6,6 +6,7 @@ import datetime
 import json
 import os
 import pathlib
+import shutil
 import tempfile
 from datetime import timedelta
 
@@ -1098,3 +1099,62 @@ def test_backward_compatibility_with_ocdbt():
         )
         assert all(np.isclose(restored_state.training_key, initial_state.training_key))
         assert restored_state.step == initial_state.step
+
+
+def _tear_checkpoint(checkpoint_dir: pathlib.Path) -> None:
+    """Delete a checkpoint's array data, keeping metadata.json, as a crashed save would."""
+    for entry in checkpoint_dir.iterdir():
+        if entry.name == "metadata.json":
+            continue
+        if entry.is_dir():
+            shutil.rmtree(entry)
+        else:
+            entry.unlink()
+
+
+def test_restore_falls_back_past_an_unreadable_newest_checkpoint(tmp_path):
+    """A torn newest checkpoint must not beat a complete older one."""
+
+    def init_fn(key):
+        return {"w": jax.random.normal(key, (4,))}
+
+    good = eqx.filter_jit(init_fn)(jax.random.PRNGKey(0))
+    save_checkpoint(good, step=1, checkpoint_path=str(tmp_path / "step-1"))
+    save_checkpoint({"w": jnp.zeros(4)}, step=2, checkpoint_path=str(tmp_path / "step-2"))
+    _tear_checkpoint(tmp_path / "step-2")
+
+    with use_test_mesh():
+        loaded = load_checkpoint_or_initialize(init_fn, [str(tmp_path)], donate_args=False)(jax.random.PRNGKey(1))
+
+    assert_trees_all_equal(np.asarray(loaded["w"]), np.asarray(good["w"]))
+
+
+def test_a_resume_that_finds_checkpoints_and_loads_none_fails_instead_of_initializing(tmp_path):
+    """Optional resume, so nothing requested a load -- but a checkpoint is here and unreadable.
+
+    Initializing from scratch would overwrite it and report plausible progress from step 0, which
+    is why a silent fall-through is worse than a crash.
+    """
+
+    def init_fn(key):
+        return {"w": jax.random.normal(key, (4,))}
+
+    save_checkpoint({"w": jnp.zeros(4)}, step=2, checkpoint_path=str(tmp_path / "step-2"))
+    _tear_checkpoint(tmp_path / "step-2")
+
+    with use_test_mesh(), pytest.raises(FileNotFoundError, match="could be loaded"):
+        load_checkpoint_or_initialize(init_fn, [str(tmp_path)], donate_args=False)(jax.random.PRNGKey(1))
+
+
+def test_an_explicit_non_checkpoint_path_still_initializes_from_scratch(tmp_path):
+    """discover_latest=False with a path that holds no checkpoint keeps the optional-load default."""
+
+    def init_fn(key):
+        return {"w": jax.random.normal(key, (4,))}
+
+    with use_test_mesh():
+        loaded = load_checkpoint_or_initialize(
+            init_fn, [str(tmp_path / "absent")], discover_latest=False, donate_args=False
+        )(jax.random.PRNGKey(1))
+
+    assert not any(isinstance(leaf, ShapeDtypeStruct) for leaf in jax.tree_util.tree_leaves(loaded))
