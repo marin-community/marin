@@ -9,7 +9,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from levanter.kernels.pallas.fused_cross_entropy_loss import batched_xla
+from levanter.kernels.pallas.fused_cross_entropy_loss import batched_xla, config
 from levanter.kernels.pallas.fused_cross_entropy_loss import api as fused_api
 from levanter.kernels.pallas.fused_cross_entropy_loss import pallas_tpu
 from levanter.kernels.pallas.fused_cross_entropy_loss import tuned_block_sizes
@@ -631,6 +631,53 @@ def test_infer_block_sizes_preserves_defaults_without_128_aligned_divisors():
 
     assert block_sizes.b_block_size == 1024
     assert block_sizes.h_block_size == 512
+
+
+def test_infer_block_sizes_untuned_default_fits_the_nvidia_weight_tile_budget():
+    """The batched_xla launch check refuses a weight tile over the shared-memory budget; an
+    inferred default over it can never trace, so the autotune result is never retained and
+    every call repeats the block-size sweep (#8853)."""
+    default = BlockSizes.get_default()
+    limit = config.NVIDIA_WEIGHT_TILE_BYTES_LIMIT
+    assert default.h_block_size * default.v_block_size * 2 > limit  # the premise: default is over
+
+    # b=98304, h=4096 falls in no NVIDIA tuned bucket, so inference lands on the default entry.
+    block_sizes = infer_block_sizes(
+        b=98304,
+        h=4096,
+        v=131072,
+        dtype=jnp.float32,
+        x_dtype=jnp.bfloat16,
+        w_dtype=jnp.bfloat16,
+        device_kind="NVIDIA GH200 480GB",
+    )
+
+    assert block_sizes.h_block_size * block_sizes.v_block_size * 2 <= limit
+    # The clamp halves v first and touches nothing else.
+    assert block_sizes.b_block_size == default.b_block_size
+    assert block_sizes.h_block_size == default.h_block_size
+    assert block_sizes.v_block_size == 64
+
+    # The launch check must accept what inference produced.
+    batched_xla._validate_launch_feasibility(
+        w_dtype=jnp.dtype(jnp.bfloat16),
+        h_block_size=block_sizes.h_block_size,
+        v_block_size=block_sizes.v_block_size,
+        num_h_blocks=1,
+    )
+
+
+def test_infer_block_sizes_weight_tile_budget_ignores_non_nvidia_devices():
+    block_sizes = infer_block_sizes(
+        b=98304,
+        h=4096,
+        v=131072,
+        dtype=jnp.float32,
+        x_dtype=jnp.bfloat16,
+        w_dtype=jnp.bfloat16,
+        device_kind="AMD MI300X",
+    )
+    assert block_sizes == BlockSizes.get_default()
 
 
 def test_infer_num_tensorcores_uses_device_kind(monkeypatch):
