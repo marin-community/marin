@@ -167,6 +167,14 @@ def test_normalize_chat_to_parquet_keeps_varying_tool_schemas_arrow_stable(tmp_p
             ],
             "only valid in assistant",
         ),
+        (
+            [
+                {"role": "user", "content": "question"},
+                {"role": "system", "content": "late instruction"},
+                {"role": "assistant", "content": "answer"},
+            ],
+            "precede all conversation turns",
+        ),
     ],
 )
 def test_validate_chat_messages_rejects_invalid_conversations(messages, error):
