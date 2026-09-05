@@ -50,7 +50,7 @@ MARIN_CHAT_TEMPLATE = """
 {%- set _has_aux_header = (_reasoning_mode is not none) or _custom_instructions or (_xml_tools_list) or (_python_tools) -%}
 {%- if _has_aux_header -%}
 <|start_header_id|>system<|end_header_id|>
-{%- if _reasoning_mode is not none -%}
+{% if _reasoning_mode is not none -%}
 Reasoning: {{ _reasoning_mode }}
 {%- endif %}
 {%- if _custom_instructions %}

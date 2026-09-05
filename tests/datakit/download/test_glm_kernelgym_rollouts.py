@@ -57,3 +57,17 @@ def test_chat_row_drops_trajectory_with_any_truncated_generation() -> None:
     }
 
     assert row_to_chat_doc(row, TruncationFilter.ANY_TURN) == []
+
+
+def test_chat_row_drops_multiple_reasoning_boundaries() -> None:
+    response = "first</think>answer text containing another </think> marker"
+    row = {
+        "messages": [
+            {"role": "user", "content": "Optimize this kernel."},
+            {"role": "assistant", "content": response},
+        ],
+        "turns": [{"response": response, "usage": {"completion_tokens": 8}}],
+        "max_tokens": 16,
+    }
+
+    assert row_to_chat_doc(row, TruncationFilter.ANY_TURN) == []

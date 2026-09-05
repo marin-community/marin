@@ -36,6 +36,7 @@ from zephyr.readers import load_jsonl
 from marin.datakit.chat_normalize import normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import (
+    ReasoningFormatError,
     chat_document,
     normalize_reasoning_tokens,
     render_role_message,
@@ -135,7 +136,7 @@ def chat_conversation_messages(messages: list[dict], turns: list[dict]) -> list[
 
         content = message["content"]
         if content.count(REASONING_CLOSE_TAG) > 1:
-            raise ValueError("GLM assistant response has multiple reasoning close tags")
+            raise ReasoningFormatError("GLM assistant response has multiple reasoning close tags")
         if REASONING_CLOSE_TAG not in content:
             repaired.append(message)
             continue
@@ -187,7 +188,11 @@ def row_to_chat_doc(row: dict, truncation_filter: TruncationFilter) -> list[dict
     truncated = [turn["usage"]["completion_tokens"] >= row["max_tokens"] for turn in turns]
     if truncated[-1] or (truncation_filter is TruncationFilter.ANY_TURN and any(truncated)):
         return []
-    kept = chat_conversation_messages(messages, turns)
+    try:
+        kept = chat_conversation_messages(messages, turns)
+    except ReasoningFormatError:
+        counters.pipeline.update_counter("glm_kernelgym_rollouts/dropped_malformed_reasoning", 1)
+        return []
     return [chat_document(kept, HF_DATASET_ID)] if kept else []
 
 
@@ -261,6 +266,6 @@ def glm_kernelgym_rollouts_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/glm-5.2-kernelgym-rollouts",
         deps=[download],
         fn=lambda output_path: transform_chat(download.output_path, output_path, truncation_filter),
-        hash_attrs={"version": "2026.09.04.1", "truncation_filter": truncation_filter.value},
+        hash_attrs={"version": "2026.09.04.2", "truncation_filter": truncation_filter.value},
     )
     return processed, normalize_chat_step(name="normalized-chat/glm-5.2-kernelgym-rollouts", download=processed)

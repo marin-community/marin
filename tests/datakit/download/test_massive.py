@@ -9,7 +9,7 @@ import tarfile
 
 import pyarrow.parquet as pq
 from levanter.tokenizers import load_tokenizer
-from marin.datakit.chat import _messages_for_template
+from marin.datakit.chat import _messages_for_template, validate_rendered_chat
 from marin.datakit.download import massive
 from marin.datakit.download.massive import (
     parse_annot_utt,
@@ -79,10 +79,16 @@ def test_row_to_chat_doc_renders_with_marin_tool_template():
         load_tokenizer("marin-community/marin-tokenizer")
         .with_chat_template(MARIN_CHAT_TEMPLATE)
         .apply_chat_template(
-            _messages_for_template(doc["messages"]), tokenize=False, add_generation_prompt=False, tools=tools
+            _messages_for_template(doc["messages"]),
+            tokenize=False,
+            add_generation_prompt=False,
+            tools=tools,
+            enable_thinking=False,
         )
     )
     assert '<tool_call>{"name": "alarm_set"' in rendered
+    assert "<|start_header_id|>system<|end_header_id|>\nReasoning: /nothink" in rendered
+    validate_rendered_chat(doc["messages"], {"tools": tools, "enable_thinking": False}, rendered)
 
 
 def test_transform_staged_massive_end_to_end(tmp_path):
