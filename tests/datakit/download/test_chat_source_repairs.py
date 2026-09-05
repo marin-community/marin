@@ -85,6 +85,20 @@ def test_openhands_drops_unparsed_inline_tool_action() -> None:
     assert openhands_row_to_chat_doc(row) == []
 
 
+def test_openhands_merges_adjacent_user_context() -> None:
+    row = {
+        "trajectory": [
+            {"role": "user", "content": "Fix the bug."},
+            {"role": "user", "content": "Repository: example/project"},
+            {"role": "assistant", "content": "I fixed it."},
+        ]
+    }
+
+    [document] = openhands_row_to_chat_doc(row)
+    assert [message["role"] for message in document["messages"]] == ["user", "assistant"]
+    assert document["messages"][0]["content"] == "Fix the bug.\n\nRepository: example/project"
+
+
 def test_swe_zero_converts_reasoning_bash_and_observation() -> None:
     row = {
         "messages": [
