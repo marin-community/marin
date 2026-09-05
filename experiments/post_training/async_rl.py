@@ -142,6 +142,7 @@ def training_config(runner: Runner, scale: Scale, *, spans: bool, staleness: int
         async_spans=spans,
         training_metrics=True,
         logger="wandb",
+        tracker_commit_each_step=True,
         project_name="marin-async-non-agentic-rl",
         resume_mode=None,
         eval_before_train=True,
