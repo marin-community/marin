@@ -13,6 +13,7 @@ from infra.ci.select_tests import (
     UV_PACKAGE,
     MatrixLeg,
     classify,
+    extra_suites,
     matrix_leg,
     select_changed_tests,
     select_local_tests,
@@ -232,3 +233,9 @@ def test_broad_trigger_does_not_source_build(tmp_path: Path) -> None:
     matrix = select_matrix(["uv.lock"], tmp_path)
     assert matrix, "broad trigger emits the full matrix"
     assert all(leg.setup == "" for leg in matrix)
+
+
+def test_workflow_change_selects_the_browser_smoke() -> None:
+    """The smoke suite runs its own workflow edits; nothing else selects them for it."""
+    assert extra_suites([".github/workflows/unified-unit.yaml"]) == ["iris-e2e-smoke"]
+    assert extra_suites([".github/workflows/marin-integration.yaml"]) == []
