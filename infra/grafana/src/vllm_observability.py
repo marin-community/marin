@@ -4,13 +4,24 @@
 """Bounded Finelog query for one standalone or MarinSkyRL-embedded vLLM serve."""
 
 import math
+import threading
 from dataclasses import dataclass
 from enum import StrEnum
+
+import duckdb
+import pyarrow as pa
+import pyarrow.compute as pc
+from finelog.errors import QueryResultTooLargeError
 
 VLLM_MAX_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
 # Leave room for latency/outcome series and bounded producer tables in the shared result.
 VLLM_MAX_POINTS = 360
 VLLM_MAX_RESULT_ROWS = 10_000
+VLLM_MAX_SAMPLES = 1_000_000
+VLLM_MAX_SERIES = 50_000
+# Grafana and the bridge share one CPU and 2 GiB. Serialize these bounded local
+# projections; the existing cache still coalesces every panel of an overview.
+_PROJECTION_LOCK = threading.Lock()
 VLLM_MIN_BUCKET_MS = 15_000
 VLLM_SCRAPE_INTERVAL_MS = 60_000
 VLLM_HISTOGRAM_COHERENCE_MS = 15_000
@@ -51,6 +62,7 @@ class VllmOverviewQuery:
     """Validated SQL and canonical parameters for one vLLM overview."""
 
     sql: str
+    samples_sql: str
     identity_field: VllmIdentityField
     identity: str
     start_ms: int
@@ -176,7 +188,7 @@ def vllm_overview_query(
     histogram_component = _case_for(_histogram_component_mapping(), "name")
     histogram_source_family = _case_for(_histogram_source_mapping(), "name")
 
-    sql = f"""
+    samples_sql = f"""
 WITH base AS (
     SELECT COALESCE(NULLIF(cluster, ''), 'local') AS origin_cluster,
            service,
@@ -212,6 +224,31 @@ WITH base AS (
       AND name IN ({metric_names})
       AND timestamp_ms >= {scan_start_ms}
       AND timestamp_ms < {end_ms}
+)
+SELECT origin_cluster, service, name, kind, resource_attributes_json, attributes_json,
+       array_agg(named_struct('timestamp_ms', timestamp_ms, 'seq', seq, 'value', value)) AS points
+FROM (SELECT * FROM base LIMIT {VLLM_MAX_SAMPLES + 1}) AS bounded_samples
+GROUP BY 1, 2, 3, 4, 5, 6
+LIMIT {VLLM_MAX_SERIES + 1}
+""".strip()
+    # Retain the whole leading coherence interval and one predecessor per
+    # series. Older points can affect neither an in-window delta nor freshness.
+    coherence_start_ms = start_ms - start_ms % VLLM_HISTOGRAM_COHERENCE_MS
+    sql = f"""
+WITH base AS MATERIALIZED (
+    SELECT origin_cluster, service, name, kind, resource_attributes_json, attributes_json,
+           point.timestamp_ms AS timestamp_ms, point.seq AS seq, point.value AS value
+    FROM (
+        SELECT * EXCLUDE (points), unnest(list_concat(
+            list_slice(list_filter(points, p -> p.timestamp_ms < {coherence_start_ms}), -1, -1),
+            list_filter(points, p -> p.timestamp_ms >= {coherence_start_ms})
+        )) AS point
+        FROM (SELECT * REPLACE (
+            list_sort(points) AS points,
+            CAST(resource_attributes_json AS resource_labels) AS resource_attributes_json,
+            CAST(attributes_json AS metric_labels) AS attributes_json
+        ) FROM series)
+    )
 ), cumulative_samples AS (
     SELECT *,
            LAG(value) OVER (
@@ -545,7 +582,7 @@ WITH base AS (
            END AS value,
            samples
     FROM histogram_stats
-    -- A UNION per statistic would repeat the histogram pipeline in Finelog's plan.
+    -- Share the histogram pipeline across statistics.
     CROSS JOIN (VALUES ('mean'), ('p50'), ('p90'), ('p99')) AS quantile(stat)
 ), outcome_increments AS (
     SELECT timestamp_ms,
@@ -1103,9 +1140,39 @@ LIMIT {VLLM_MAX_RESULT_ROWS + 1}
 """.strip()
     return VllmOverviewQuery(
         sql=sql,
+        samples_sql=samples_sql,
         identity_field=identity_field,
         identity=identity,
         start_ms=start_ms,
         end_ms=end_ms,
         bucket_ms=bucket_ms,
     )
+
+
+def vllm_overview_table(overview: VllmOverviewQuery, series: pa.Table, *, max_rows: int) -> pa.Table:
+    """Project one compact Finelog scan into the shared diagnostic result."""
+    sample_count = pc.sum(pc.list_value_length(series["points"])).as_py() or 0
+    if series.num_rows > VLLM_MAX_SERIES or sample_count > VLLM_MAX_SAMPLES:
+        raise QueryResultTooLargeError("vLLM sample budget exceeded")
+    with (
+        _PROJECTION_LOCK,
+        duckdb.connect(config={"threads": 1, "memory_limit": "512MB", "temp_directory": ""}) as database,
+    ):
+        database.register("series", series)
+        # Dictionary labels stay compact through repeated window and histogram
+        # joins. Ordered dictionaries preserve the original string tie breaks.
+        for column, label_type in (
+            ("resource_attributes_json", "resource_labels"),
+            ("attributes_json", "metric_labels"),
+        ):
+            database.execute(
+                f"CREATE TYPE {label_type} AS ENUM (SELECT DISTINCT {column} FROM series UNION SELECT '' ORDER BY 1)"
+            )
+        database.execute("CREATE MACRO json_get(d, f) AS json_extract_string(CAST(d AS VARCHAR), concat('$.', f))")
+        try:
+            table = database.execute(overview.sql).to_arrow_table()
+        except duckdb.OutOfMemoryException as err:
+            raise QueryResultTooLargeError("vLLM projection memory budget exceeded") from err
+    if table.num_rows > max_rows:
+        raise QueryResultTooLargeError(f"vLLM overview returned more than {max_rows} rows")
+    return table
