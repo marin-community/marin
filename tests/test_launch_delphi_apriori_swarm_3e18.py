@@ -99,3 +99,10 @@ def test_the_committed_design_is_the_pinned_one_and_round_trips_through_the_laun
     assert len(full) == 180
     by_name = {spec.run_name: spec for spec in full}
     assert all(by_name[spec.run_name] == spec for spec in pilot)
+
+
+def test_unpaired_seeds_and_bad_fractions_are_rejected():
+    with pytest.raises(ValueError, match="paired seeds"):
+        launcher.run_specs_from_rows([_row("unpaired", subset_seed=1)], wave="pilot", **SPEC_KWARGS)
+    with pytest.raises(ValueError, match="outside"):
+        launcher.run_specs_from_rows([_row("bad", fractions={"dolmino_synth_qa": 1.5})], wave="pilot", **SPEC_KWARGS)

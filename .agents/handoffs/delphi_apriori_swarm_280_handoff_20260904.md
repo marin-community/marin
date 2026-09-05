@@ -153,7 +153,8 @@ blocks of Δ(t, a, 1/4) exceeds 2σ in magnitude, (ii) both blocks give it the s
 SD of the full-support controls pooled over anchors (three proportional runs and two anchor-B runs, three degrees of
 freedom), never the raw SD across anchors, whose means differ. A contrast pairs two runs that share a data seed,
 so its noise is σ√(2(1−ρ)) with ρ the seed-induced correlation, which the pilot does not estimate; 2σ on the
-two-block mean is therefore a preregistered conservative threshold (exact only if ρ = 0), not a standard error. Table 9 decides; a target that passes on Uncheatable
+two-block mean is a preregistered heuristic threshold, not a standard error. It is conservative only if ρ ≥ 0 and
+the two blocks are independent, which is the working assumption. Table 9 decides; a target that passes on Uncheatable
 only is reported, not counted. The second wave runs if at least two of the four targets pass; otherwise the swarm
 stops at the pilot, the result is recorded as "repetition below noise at 3e18 for these buckets", and the goal is
 pursued with share-space models and per-bucket support caps only.
@@ -310,3 +311,10 @@ OLMix.
   a table must match the pin and its sibling manifest, and a test checks the committed table against the pin.
 - P2, the gate's variance derivation assumed independent runs despite paired seeds: corrected as above; 2σ stays as
   a preregistered conservative threshold.
+
+### Codex review of revision 5 (revision 6)
+
+- P2, "conservative" needs ρ ≥ 0 and independent blocks: the assumption is now stated with the threshold.
+- P3, the negative launcher tests for unpaired seeds and out-of-range pool fractions had been dropped: restored.
+- Verdict recorded: no design or launcher blocker remains; submission waits for the registry collector and the
+  run-config-to-registry-to-exposure check on one pilot row.
