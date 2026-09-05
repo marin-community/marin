@@ -125,7 +125,12 @@ def write_gsm8k_subset(config: Gsm8kSubsetConfig) -> None:
 
 def training_config(runner: Runner, scale: Scale, *, spans: bool, staleness: int) -> str:
     """Keep optimizer and inference settings identical across scheduler controls."""
-    preset = replace(SMOKE, role_plan=ROLE_PLAN, max_steps=4 if scale is Scale.SMOKE else 30)
+    preset = replace(
+        SMOKE,
+        role_plan=ROLE_PLAN,
+        micro_forward_batch_size_per_gpu=ROLE_PLAN.micro_train_batch_size_per_gpu,
+        max_steps=4 if scale is Scale.SMOKE else 30,
+    )
     config = yaml.safe_load(rl_config_yaml(preset))
     config["entrypoint"] = "standard" if runner is Runner.SYNC else "fully_async"
     trainer = config["trainer"]
@@ -267,8 +272,13 @@ def build_experiment(
                 tokenizer=QWEN3_MODEL,
                 apply_chat_template=True,
                 resource_hint=ResourceHint(gpu={"H100": 1}),
-                serve=ServeConfig(tensor_parallel_size=1, max_model_len=4096, max_num_seqs=32),
-                generation=GenerationConfig(max_gen_toks=2048),
+                serve=ServeConfig(
+                    tensor_parallel_size=1,
+                    max_model_len=4096,
+                    max_num_seqs=32,
+                    vllm_extra_args=("--default-chat-template-kwargs", '{"enable_thinking":false}'),
+                ),
+                generation=GenerationConfig(max_gen_toks=512),
             ),
         ),
         "gsm8k-smoke",
