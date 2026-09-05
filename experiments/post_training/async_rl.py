@@ -129,7 +129,8 @@ def training_config(runner: Runner, scale: Scale, *, spans: bool, staleness: int
         SMOKE,
         role_plan=ROLE_PLAN,
         micro_forward_batch_size_per_gpu=ROLE_PLAN.micro_train_batch_size_per_gpu,
-        max_steps=4 if scale is Scale.SMOKE else 30,
+        max_steps=4 if scale is Scale.SMOKE else 100,
+        ckpt_interval=2 if scale is Scale.SMOKE else 25,
     )
     config = yaml.safe_load(rl_config_yaml(preset))
     config["entrypoint"] = "standard" if runner is Runner.SYNC else "fully_async"

@@ -242,6 +242,31 @@ GPU idleness. Evaluation retains phase and timestamp because periodic and final
 evaluation can share an optimizer step. Signed timing residuals remain visible
 below zero to expose overlapping child spans.
 
+The async drift panels compare pre-update learner logprob minus the generator's
+reported logprob on tokens selected by the training loss mask. They show the
+signed mean, absolute mean and exact token quantiles over the gathered batch.
+Finite coverage is the fraction of selected tokens with finite logprobs on both
+sides. PPO-window pressure is the fraction below or above the configured ratio
+bounds; the eventual clipping decision also depends on the advantage sign.
+Token-weight concentration is `(sum(w))² / (N * sum(w²))`, with
+`w = exp(learner_logprob - reported_behavior_logprob)` over finite selected tokens.
+It does not count independent trajectories and can remain 1 under a uniform
+ratio shift. Raw vLLM logprobs precede sampling processors, so they need not equal
+the actual sampling distribution. These diagnostics are not KL estimates.
+Old runs without these metrics show no data.
+
+Useful work means consumed response tokens or tokens selected by the loss mask,
+as named by each series. Core runs from batch admission wait through weight
+synchronization. Cycle starts there and ends before metric publication, including
+checkpoint/evaluation callbacks; both exclude startup, epoch cleanup and final
+export. Role-normalized rates divide useful tokens by cycle seconds and the
+configured GPU count for that role. Do not add overlapping role counts or infer
+whole-job billed efficiency from them. Qwen P8/I8 uses two exclusive nodes.
+For sizing, inspect buffer-empty learner waits alongside producer slot/enqueue
+waits and completed-buffer dwell (completion to consumption). Existing inference
+running/waiting request counts and token rates describe engine demand; physical
+engine-to-GPU mapping is still needed for per-engine hardware attribution.
+
 The two inference dashboards keep the selected identity and time range when
 linked. The existing `marin-inference` UID now opens diagnostics, preserving old
 links and panel IDs; `marin-inference-overview` is the entry point from Home.

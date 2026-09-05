@@ -131,6 +131,19 @@ def store():
             ("eval/all/avg_score", 0.25),
             ("policy/policy_loss", -0.2),
             ("policy/raw_grad_norm", 4),
+            ("policy/behavior_drift/log_ratio_mean", -0.1),
+            ("policy/behavior_drift/abs_log_ratio_p99", 0.7),
+            ("policy/behavior_drift/lower_clip_pressure", 0.2),
+            ("policy/behavior_drift/upper_clip_pressure", 0.1),
+            ("policy/behavior_drift/finite_fraction", 0.75),
+            ("policy/behavior_drift/token_weight_ess_fraction", 0.8),
+            ("async/performance/core_seconds", 10),
+            ("async/performance/cycle_seconds", 25),
+            ("async/performance/consumed_loss_tokens_per_core_second", 100),
+            ("async/performance/consumed_loss_tokens_per_cycle_second", 40),
+            ("async/performance/buffer_wait_fraction", 0.2),
+            ("async/performance/loss_tokens_per_configured_policy_gpu_second", 5),
+            ("async/performance/configured_policy_gpus", 8),
         ]:
             add(
                 "training_metric_value",
@@ -163,6 +176,24 @@ def test_wait_means_use_await_counts_and_queue_gauges_use_last_value(store):
     assert waits == {"slot mean · driver": pytest.approx(40 / 12), "slot max · driver": 18}
     gauges = {row["series"]: row["value"] for row in query(store, "Completed buffer depth and capacity")}
     assert gauges == {"rollout_queue_depth · driver": 3, "rollout_capacity · driver": 64}
+
+
+def test_drift_panels_preserve_signed_values_and_do_not_invent_missing_observations(store):
+    drift = {row["series"]: row["value"] for row in query(store, "Pre-update model log-ratio drift")}
+    assert drift == {
+        "policy/behavior_drift/log_ratio_mean · driver": -0.1,
+        "policy/behavior_drift/abs_log_ratio_p99 · driver": 0.7,
+    }
+    store.execute("DELETE FROM \"telemetry_v1.marinskyrl\" WHERE name='training_metric_value'")
+    assert query(store, "Drift coverage and token-weight concentration") == []
+
+
+def test_useful_work_panels_keep_core_and_cycle_denominators_separate(store):
+    rates = {row["series"]: row["value"] for row in query(store, "Consumed loss tokens per second")}
+    assert rates == {
+        "async/performance/consumed_loss_tokens_per_core_second · driver": 100,
+        "async/performance/consumed_loss_tokens_per_cycle_second · driver": 40,
+    }
 
 
 def test_overlap_joins_only_the_identical_process_clock_and_distinguishes_unknown(store):
