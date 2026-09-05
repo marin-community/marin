@@ -131,6 +131,7 @@ def training_config(runner: Runner, scale: Scale, *, spans: bool, staleness: int
     trainer = config["trainer"]
     trainer.update(
         strategy="megatron",
+        flash_attn=False,
         policy_train_spans=spans,
         generate_spans=spans,
         async_spans=spans,
