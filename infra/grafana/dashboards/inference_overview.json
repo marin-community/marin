@@ -10,9 +10,9 @@
   "timezone": "utc",
   "editable": false,
   "schemaVersion": 39,
-  "refresh": "1m",
+  "refresh": "2m",
   "time": {
-    "from": "now-3h",
+    "from": "now-5m",
     "to": "now"
   },
   "templating": {
