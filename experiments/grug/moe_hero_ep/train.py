@@ -15,6 +15,7 @@ from dataclasses import dataclass, field, replace
 from enum import StrEnum
 
 import equinox as eqx
+from experiments.grug.moe_hero_ep.gpu_sampler import maybe_start_gpu_sampler
 import jax
 import jax.numpy as jnp
 import jmp
@@ -1012,6 +1013,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
     trainer = config.trainer.trainer
     trainer.initialize()
+    # #8870: one-second GPU clock/throttle and NVLink error-counter samples, env-gated, one per node.
+    maybe_start_gpu_sampler()
     levanter.tracker.log_configuration(config)
 
     run_id = trainer.id
