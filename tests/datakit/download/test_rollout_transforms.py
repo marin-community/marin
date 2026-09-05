@@ -28,7 +28,7 @@ def test_canonical_chat_messages_normalizes_role_aliases_and_preserves_tools():
             "role": "assistant",
             "content": None,
         },
-        {"role": "tool", "content": "/workspace", "tool_call_id": "call_1"},
+        {"role": "tool", "content": "/workspace", "tool_call_id": "call_1", "name": "bash"},
     ]
 
 
@@ -73,15 +73,13 @@ def test_canonical_chat_messages_serializes_parallel_tool_calls():
         {
             "role": "assistant",
             "content": "I will inspect both files.",
-            "tool_calls": [{"id": "call_1", "function": {"name": "read", "arguments": '{"path":"a.py"}'}}],
+            "tool_calls": [
+                {"id": "call_1", "function": {"name": "read", "arguments": '{"path":"a.py"}'}},
+                {"id": "call_2", "function": {"name": "read", "arguments": '{"path":"b.py"}'}},
+            ],
         },
-        {
-            "role": "assistant",
-            "content": None,
-            "tool_calls": [{"id": "call_2", "function": {"name": "read", "arguments": '{"path":"b.py"}'}}],
-        },
-        {"role": "tool", "content": "a", "tool_call_id": "call_1"},
-        {"role": "tool", "content": "b", "tool_call_id": "call_2"},
+        {"role": "tool", "content": "a", "tool_call_id": "call_1", "name": "read"},
+        {"role": "tool", "content": "b", "tool_call_id": "call_2", "name": "read"},
     ]
 
 
@@ -101,7 +99,7 @@ def test_canonical_chat_messages_converts_legacy_function_call_and_drops_unknown
         {
             "role": "assistant",
             "content": None,
-            "tool_calls": [{"function": {"name": "search", "arguments": '{"query":"marin"}'}}],
+            "tool_calls": [{"id": "call_0_0", "function": {"name": "search", "arguments": '{"query":"marin"}'}}],
         }
     ]
 
@@ -109,6 +107,17 @@ def test_canonical_chat_messages_converts_legacy_function_call_and_drops_unknown
 def test_canonical_chat_messages_rejects_unknown_roles():
     with pytest.raises(ValueError, match="Unsupported chat role"):
         canonical_chat_messages([{"role": "critic", "content": "No."}])
+
+
+def test_canonical_chat_messages_uses_atomic_reasoning_tokens_for_assistant():
+    messages = canonical_chat_messages([{"role": "assistant", "content": "<think>plan</think>answer"}])
+
+    assert messages[0]["content"] == "<|start_think|>plan<|end_think|>answer"
+
+
+def test_canonical_chat_messages_rejects_unbalanced_reasoning_tokens():
+    with pytest.raises(ValueError, match="reasoning delimiters must be balanced"):
+        canonical_chat_messages([{"role": "assistant", "content": "<think>unfinished"}])
 
 
 def test_render_tool_call_dict_arguments():

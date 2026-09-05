@@ -63,10 +63,7 @@ You may call one or more functions to assist with the user query.
 You are provided with function signatures within <tools> </tools> tags:
 
 <tools>
-{% for tool in _xml_tools_list %}
-{{ tool | string }}{% if not loop.last %}
-{% endif %}
-{% endfor %}
+{{ _xml_tools_list | tojson }}
 </tools>
 
 For each function call, pass a json object with function name and arguments within <tool_call> </tool_call> tags:
@@ -160,15 +157,19 @@ You can use the following tools in your python code like regular functions:
 {% endif %}
 <|eot_id|>
 {% elif has_tool_calls -%}
-    {%- if message.tool_calls|length != 1 -%}
-      {{- raise_exception("This template expects exactly one tool call per assistant turn.") -}}
-    {%- endif -%}
-    {%- set tool_call = message.tool_calls[0].function -%}
 <|start_header_id|>assistant<|end_header_id|>
 {% generation %}
+{%- if message.get('content') is string and message.get('content') | trim %}
+{{- message.get('content') | trim }}
+{%- endif %}
+{%- for call in message.tool_calls %}
+{%- set tool_call = call.function %}
+<tool_call>
 {{- '{\"name\": \"' + tool_call.name + '\", \"arguments\": ' -}}
 {{- tool_call.arguments | tojson -}}
-{{- \"}\" -}}<|eot_id|>
+{{- \"}\" -}}
+</tool_call>
+{%- endfor %}<|eot_id|>
 {% endgeneration %}
   {%- endif -%}
 {%- endfor -%}

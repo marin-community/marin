@@ -13,6 +13,7 @@ from zephyr import counters
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
+from marin.datakit.chat_normalize import normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import (
     chat_document,
@@ -20,7 +21,8 @@ from marin.datakit.download.rollout_transforms import (
     render_role_message,
     text_document,
 )
-from marin.datakit.normalize import normalize_chat_step, normalize_step
+from marin.datakit.normalize import normalize_step
+from marin.datakit.terminal_chat import agent_protocol_messages
 from marin.execution.step_spec import StepSpec
 
 HF_DATASET_ID = "nvidia/Nemotron-Terminal-Corpus"
@@ -43,7 +45,11 @@ def row_to_chat_doc(row: dict) -> list[dict]:
     conversations = row.get("conversations")
     if not conversations:
         return []
-    return [chat_document([dict(message) for message in conversations], HF_DATASET_ID)]
+    converted = agent_protocol_messages(conversations)
+    if converted is None:
+        return []
+    messages, metadata = converted
+    return [chat_document(messages, HF_DATASET_ID, **metadata)]
 
 
 def transform(input_path: str, output_path: str) -> None:
@@ -103,6 +109,6 @@ def nemotron_terminal_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/nemotron-terminal-corpus",
         deps=[download],
         fn=lambda output_path: transform_chat(download.output_path, output_path),
-        hash_attrs={"version": "v1"},
+        hash_attrs={"version": "2026.09.04"},
     )
     return processed, normalize_chat_step(name="normalized-chat/nemotron-terminal", download=processed)

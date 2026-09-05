@@ -28,7 +28,7 @@ from experiments.june_tpu_67b_a2b.moe.launch_datakit_moe_mix import _TAIL_BUCKET
 from experiments.june_tpu_67b_a2b.moe.optimizer import GrugMoeMuonHConfig
 from experiments.june_tpu_67b_a2b.moe.sft_launch import GrugMoeSFTConfig, run_grug_moe_sft_trial
 from experiments.june_tpu_67b_a2b.moe.train import GrugTrainerConfig
-from experiments.marin_tokenizer import marin_tokenizer
+from experiments.marin_tokenizer import MARIN_CHAT_TEMPLATE, marin_tokenizer
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ _BASE_CHECKPOINT = (
     "checkpoints/step-157000/"
 )
 _PRETRAIN_STORE = "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24"
-_RUN_NAME = "grug/moe_67b_a2b_step157k_sft_datakit80_pretrain20_ctx262k"
+_RUN_NAME = "grug/moe_67b_a2b_step157k_sft_datakit80_pretrain20_ctx262k_v2"
 _TOKENIZER = marin_tokenizer
 _SEQ_LEN = 262_144
 _BATCH_SIZE = 256
@@ -72,7 +72,7 @@ _OPTIMIZER = GrugMoeMuonHConfig(
 
 @dataclass(frozen=True)
 class _SftMixture:
-    components: dict[str, DatasetComponent]
+    components: dict[str, DatasetComponent | ConcatDatasetComponent]
     weights: dict[str, float]
     deps: list[StepSpec]
 
@@ -105,14 +105,20 @@ def _tokenize_rendered_source(name: str, rendered: StepSpec) -> StepSpec:
 def _sft_mixture() -> _SftMixture:
     sources = all_sft_sources()
     total_tokens = sum(source.rough_token_count_b for source in sources.values())
-    components: dict[str, DatasetComponent] = {}
+    components: dict[str, DatasetComponent | ConcatDatasetComponent] = {}
     weights: dict[str, float] = {}
     deps: list[StepSpec] = []
+    penfever_children: dict[str, DatasetComponent] = {}
+    penfever_tokens = 0.0
     for name, source in sources.items():
+        source = dataclasses.replace(
+            source,
+            format=dataclasses.replace(source.format, chat_template=MARIN_CHAT_TEMPLATE),
+        )
         rendered = render_chat_source(source, tokenizer=_TOKENIZER)
         terminal = rendered.normalized
         tokenized = _tokenize_rendered_source(name, terminal)
-        components[f"sft/{name}"] = DatasetComponent(
+        component = DatasetComponent(
             source=None,
             cache_dir=tokenized.output_path,
             format=TextLmDatasetFormat(),
@@ -120,8 +126,18 @@ def _sft_mixture() -> _SftMixture:
             pack=True,
             packing_slice_strategy="drop",
         )
-        weights[f"sft/{name}"] = _SFT_FRACTION * source.rough_token_count_b / total_tokens
+        if name.startswith("penfever-traces/"):
+            penfever_children[name.removeprefix("penfever-traces/")] = component
+            penfever_tokens += source.rough_token_count_b
+        else:
+            components[f"sft/{name}"] = component
+            weights[f"sft/{name}"] = _SFT_FRACTION * source.rough_token_count_b / total_tokens
         deps.append(tokenized)
+    components["sft/penfever-traces"] = ConcatDatasetComponent(
+        children=penfever_children,
+        tags=["sft", "penfever-traces"],
+    )
+    weights["sft/penfever-traces"] = _SFT_FRACTION * penfever_tokens / total_tokens
     return _SftMixture(components=components, weights=weights, deps=deps)
 
 

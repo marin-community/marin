@@ -31,6 +31,7 @@ from zephyr import counters
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
+from marin.datakit.chat_normalize import normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import (
     TRAJECTORY_FAILED_TAG,
@@ -41,7 +42,8 @@ from marin.datakit.download.rollout_transforms import (
     render_role_message,
     text_document,
 )
-from marin.datakit.normalize import normalize_chat_step, normalize_step
+from marin.datakit.normalize import normalize_step
+from marin.datakit.terminal_chat import agent_protocol_messages
 from marin.execution.step_spec import StepSpec
 
 HF_DATASET_ID = "open-thoughts/AgentTrove"
@@ -116,7 +118,10 @@ def row_to_chat_doc(row: dict) -> list[dict]:
     conversations = row.get("conversations")
     if not conversations:
         return []
-    messages = [dict(message) for message in conversations]
+    converted = agent_protocol_messages(conversations)
+    if converted is None:
+        return []
+    messages, metadata = converted
     tag = result_to_tag(row.get("result"))
     if tag:
         messages.insert(0, {"role": "system", "content": tag})
@@ -126,6 +131,7 @@ def row_to_chat_doc(row: dict) -> list[dict]:
             HF_DATASET_ID,
             teacher=row.get("original_teacher") or "",
             task_source=row.get("original_source") or "",
+            **metadata,
         )
     ]
 
@@ -188,6 +194,6 @@ def agenttrove_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/agenttrove",
         deps=[download],
         fn=lambda output_path: transform_chat(download.output_path, output_path),
-        hash_attrs={"version": "v1"},
+        hash_attrs={"version": "2026.09.04"},
     )
     return processed, normalize_chat_step(name="normalized-chat/agenttrove", download=processed)

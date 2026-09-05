@@ -31,9 +31,10 @@ from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.readers import load_jsonl
 
+from marin.datakit.chat_normalize import normalize_chat_step
 from marin.datakit.download.http_session import build_retrying_session
 from marin.datakit.download.rollout_transforms import chat_document
-from marin.datakit.normalize import normalize_chat_step, normalize_step
+from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
 logger = logging.getLogger(__name__)
@@ -845,7 +846,7 @@ def massive_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/massive_function_calling",
         deps=[staged],
         fn=lambda output_path: transform_staged_massive_chat(staged.output_path, output_path),
-        hash_attrs={"schema_version": "v1"},
+        hash_attrs={"version": "2026.09.04"},
     )
     return (
         staged,

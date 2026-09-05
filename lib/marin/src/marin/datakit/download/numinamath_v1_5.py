@@ -17,9 +17,10 @@ from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.readers import load_parquet
 
+from marin.datakit.chat_normalize import normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import chat_document
-from marin.datakit.normalize import normalize_chat_step, normalize_step
+from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
 HF_DATASET_ID = "AI-MO/NuminaMath-1.5"
@@ -161,6 +162,6 @@ def numinamath_v1_5_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/numinamath-1.5",
         deps=[download],
         fn=lambda output_path: transform_chat(download.output_path, output_path),
-        hash_attrs={"version": "v1"},
+        hash_attrs={"version": "2026.09.04"},
     )
     return processed, normalize_chat_step(name="normalized-chat/numinamath-1.5", download=processed)

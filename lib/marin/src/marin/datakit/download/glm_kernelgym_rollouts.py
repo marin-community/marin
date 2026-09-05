@@ -36,9 +36,10 @@ from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.readers import load_jsonl
 
+from marin.datakit.chat_normalize import normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import chat_document, render_role_message, text_document
-from marin.datakit.normalize import normalize_chat_step, normalize_step
+from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
 HF_DATASET_ID = "marin-community/glm-5.2-kernelgym-rollouts"
@@ -221,6 +222,6 @@ def glm_kernelgym_rollouts_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/glm-5.2-kernelgym-rollouts",
         deps=[download],
         fn=lambda output_path: transform_chat(download.output_path, output_path, truncation_filter),
-        hash_attrs={"version": "v1", "truncation_filter": truncation_filter.value},
+        hash_attrs={"version": "2026.09.04", "truncation_filter": truncation_filter.value},
     )
     return processed, normalize_chat_step(name="normalized-chat/glm-5.2-kernelgym-rollouts", download=processed)

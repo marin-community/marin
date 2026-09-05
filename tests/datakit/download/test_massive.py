@@ -9,6 +9,7 @@ import tarfile
 
 import pyarrow.parquet as pq
 from levanter.tokenizers import load_tokenizer
+from marin.datakit.chat import _messages_for_template
 from marin.datakit.download import massive
 from marin.datakit.download.massive import (
     parse_annot_utt,
@@ -16,6 +17,8 @@ from marin.datakit.download.massive import (
     row_to_doc,
     transform_staged_massive,
 )
+
+from experiments.marin_tokenizer import MARIN_CHAT_TEMPLATE
 
 
 def test_parse_annot_utt_handles_messy_real_world_input():
@@ -67,17 +70,19 @@ def test_row_to_chat_doc_renders_with_marin_tool_template():
     [doc] = row_to_chat_doc(_row("alarm_set"))
     assert [message["role"] for message in doc["messages"]] == ["user", "assistant"]
     tool_call = doc["messages"][1]["tool_calls"][0]
-    assert tool_call["function"] == {
-        "name": "alarm_set",
-        "arguments": {"date": ["friday"], "time": ["nine am"]},
-    }
-    tools = doc["chat_template_kwargs"]["tools"]
+    assert tool_call["function"]["name"] == "alarm_set"
+    assert json.loads(tool_call["function"]["arguments"]) == {"date": ["friday"], "time": ["nine am"]}
+    tools = json.loads(doc["chat_template_kwargs"])["tools"]
     assert "alarm_set" in {tool["name"] for tool in tools}
 
-    rendered = load_tokenizer("marin-community/marin-tokenizer").apply_chat_template(
-        doc["messages"], tokenize=False, add_generation_prompt=False, tools=tools
+    rendered = (
+        load_tokenizer("marin-community/marin-tokenizer")
+        .with_chat_template(MARIN_CHAT_TEMPLATE)
+        .apply_chat_template(
+            _messages_for_template(doc["messages"]), tokenize=False, add_generation_prompt=False, tools=tools
+        )
     )
-    assert '<|start_header_id|>assistant<|end_header_id|>\n{"name": "alarm_set"' in rendered
+    assert '<tool_call>{"name": "alarm_set"' in rendered
 
 
 def test_transform_staged_massive_end_to_end(tmp_path):

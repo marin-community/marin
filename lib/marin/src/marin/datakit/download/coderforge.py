@@ -17,6 +17,7 @@ from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.readers import load_parquet
 
+from marin.datakit.chat_normalize import normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import (
     TRAJECTORY_FAILED_TAG,
@@ -25,7 +26,7 @@ from marin.datakit.download.rollout_transforms import (
     render_tool_message,
     text_document,
 )
-from marin.datakit.normalize import normalize_chat_step, normalize_step
+from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
 HF_DATASET_ID = "togethercomputer/CoderForge-Preview"
@@ -134,6 +135,6 @@ def coderforge_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/coderforge-preview",
         deps=[dl],
         fn=lambda output_path: transform_chat(dl.output_path, output_path),
-        hash_attrs={"version": "v2"},
+        hash_attrs={"version": "2026.09.04"},
     )
     return processed, normalize_chat_step(name="normalized-chat/coderforge", download=processed)

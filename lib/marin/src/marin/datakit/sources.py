@@ -57,6 +57,7 @@ from marin.datakit.download.nemotron_v2 import (
 from marin.datakit.download.nsf_awards import nsf_awards_normalize_steps
 from marin.datakit.download.numinamath_tir import numinamath_tir_normalize_steps
 from marin.datakit.download.numinamath_v1_5 import numinamath_v1_5_normalize_steps
+from marin.datakit.download.openthoughts4_code import openthoughts4_code_normalize_steps
 from marin.datakit.download.penfever_rollouts import penfever_rollouts_normalize_steps
 from marin.datakit.download.sec_edgar import sec_edgar_normalize_steps
 from marin.datakit.download.stack_v3 import stack_v3_normalize_steps
@@ -216,6 +217,9 @@ def all_sources() -> dict[str, DatakitSource]:
         ("nsf_awards", nsf_awards_normalize_steps, 0.17),
         ("numinamath-1.5", numinamath_v1_5_normalize_steps, 0.40),
         ("numinamath-tir", numinamath_tir_normalize_steps, 0.08),
+        # The pinned manifest reports 3,341,347,579 completion tokens. This is a
+        # conservative rough weight because it excludes the repeated prompts.
+        ("openthoughts4-code-glm-5.2-n4", openthoughts4_code_normalize_steps, 3.341347579),
         ("sec-edgar", sec_edgar_normalize_steps, 334.90),
         # Exact count measured with marin-community/marin-tokenizer:
         # 3,363,007,313,642 tokens / 172,898,790 docs.

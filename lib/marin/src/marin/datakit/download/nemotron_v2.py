@@ -20,9 +20,10 @@ from zephyr import counters
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
+from marin.datakit.chat_normalize import normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import chat_document, load_parquet_batched
-from marin.datakit.normalize import normalize_chat_step, normalize_step
+from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
 
@@ -317,7 +318,7 @@ def nemotron_sft_chat_normalize_steps() -> dict[str, tuple[StepSpec, ...]]:
             fn=lambda output_path, source_subset=subset, source_dir=subset_dir: _transform_nemotron_sft_chat(
                 prefix_join(download.output_path, source_dir), output_path, source_subset
             ),
-            hash_attrs={"version": "v1", "subset": subset},
+            hash_attrs={"version": "2026.09.04", "subset": subset},
         )
         normalized = normalize_chat_step(
             name=f"normalized-chat/{family}/{subset}",

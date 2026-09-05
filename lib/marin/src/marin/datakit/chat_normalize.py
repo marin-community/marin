@@ -1,0 +1,310 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Normalize structured conversations into Datakit's canonical chat artifact."""
+
+import json
+import re
+from collections.abc import Callable, Iterator
+from typing import Any
+
+import dupekit
+from fray.types import ResourceConfig
+from rigging.filesystem.storage_path import prefix_join
+from zephyr import counters
+from zephyr.context import ZephyrContext
+from zephyr.dataset import Dataset
+from zephyr.readers import load_file
+
+from marin.datakit.download.rollout_transforms import canonical_chat_messages, inferred_tool_definitions
+from marin.datakit.normalize import (
+    DEFAULT_MAX_WORKERS,
+    DedupMode,
+    ExactDupSideOutput,
+    MainOutput,
+    NormalizedData,
+    _compute_total_bytes,
+    _discover_files,
+    _make_split_writer,
+)
+from marin.execution.step_spec import StepSpec
+
+CHAT_NORMALIZE_VERSION = "2026.09.04"
+_INLINE_TOOL_SYNTAX = re.compile(r"<tool_call(?::[^>]*)?>", re.IGNORECASE)
+
+
+def _tool_name(tool: dict) -> str | None:
+    name = tool.get("name")
+    if isinstance(name, str):
+        return name
+    function = tool.get("function")
+    return function.get("name") if isinstance(function, dict) and isinstance(function.get("name"), str) else None
+
+
+def _validate_tools(tools: list[dict]) -> set[str]:
+    names: set[str] = set()
+    for tool in tools:
+        if not isinstance(tool, dict):
+            raise ValueError("Tool definitions must be JSON objects")
+        name = _tool_name(tool)
+        if not name:
+            raise ValueError("Every tool definition must have a non-empty name")
+        if name in names:
+            raise ValueError(f"Tool definition names must be unique: {name!r}")
+        names.add(name)
+        parameters = tool.get("parameters")
+        if parameters is None and isinstance(tool.get("function"), dict):
+            parameters = tool["function"].get("parameters")
+        if parameters is not None and not isinstance(parameters, dict):
+            raise ValueError(f"Tool definition {name!r} parameters must be a JSON object")
+    return names
+
+
+def _validate_reasoning(content: str) -> None:
+    start = "<|start_think|>"
+    end = "<|end_think|>"
+    if start not in content and end not in content:
+        return
+    if content.count(start) != 1 or content.count(end) != 1:
+        raise ValueError("Assistant reasoning must contain exactly one balanced delimiter pair")
+    if not content.startswith(start) or content.index(end) <= len(start):
+        raise ValueError("Assistant reasoning must be a non-empty prefix of the reply")
+
+
+def validate_chat_messages(messages: list[dict], tools: list[dict]) -> None:
+    """Validate turn order, reasoning spans, and tool-call linkage."""
+    if not messages:
+        raise ValueError("A chat record must contain messages")
+
+    tool_names = _validate_tools(tools)
+    pending_calls: dict[str, str] = {}
+    seen_call_ids: set[str] = set()
+    seen_non_system = False
+    previous_role: str | None = None
+    for message in messages:
+        role = message["role"]
+        content = message.get("content")
+        if role not in {"assistant", "system", "tool", "user"}:
+            raise ValueError(f"Unsupported canonical chat role {role!r}")
+        if role == "system":
+            if seen_non_system:
+                raise ValueError("System messages must precede all conversation turns")
+            continue
+        if not seen_non_system:
+            if role != "user":
+                raise ValueError("The first non-system message must be a user message")
+            seen_non_system = True
+
+        if role == "user":
+            if not isinstance(content, str) or not content.strip():
+                raise ValueError("User messages must contain non-empty text")
+            if pending_calls:
+                raise ValueError("A user turn cannot replace a pending tool observation")
+            if previous_role == "user":
+                raise ValueError("Consecutive user turns must be merged by the source adapter")
+        elif role == "assistant":
+            if pending_calls:
+                raise ValueError("Every tool call must be followed by its observations before another assistant turn")
+            if previous_role == "assistant":
+                raise ValueError("Consecutive assistant turns must be merged by the source adapter")
+            if not isinstance(content, str) and content is not None:
+                raise ValueError("Assistant content must be text or null")
+            if isinstance(content, str):
+                _validate_reasoning(content)
+                if _INLINE_TOOL_SYNTAX.search(content):
+                    raise ValueError("Inline tool-call syntax must be split out by the source adapter")
+                try:
+                    provider_payload = json.loads(content)
+                except json.JSONDecodeError:
+                    provider_payload = None
+                if isinstance(provider_payload, dict) and ({"analysis", "commands"} & provider_payload.keys()):
+                    raise ValueError("Provider JSON protocols must be split out by the source adapter")
+            calls = message.get("tool_calls") or []
+            if not calls and (not isinstance(content, str) or not content.strip()):
+                raise ValueError("Assistant turns must contain text, reasoning, or a tool call")
+            for call in calls:
+                call_id = call.get("id")
+                function = call.get("function") or {}
+                name = function.get("name")
+                if not isinstance(call_id, str) or call_id in seen_call_ids:
+                    raise ValueError("Tool-call IDs must be present and unique")
+                seen_call_ids.add(call_id)
+                arguments = function.get("arguments")
+                if isinstance(arguments, str):
+                    arguments = json.loads(arguments)
+                if not isinstance(arguments, dict):
+                    raise ValueError("Tool-call arguments must encode a JSON object")
+                if not isinstance(name, str):
+                    raise ValueError("Tool calls must name a function")
+                if name not in tool_names:
+                    raise ValueError(f"Tool call {name!r} has no matching tool definition")
+                pending_calls[call_id] = name
+        elif role == "tool":
+            if not isinstance(content, str):
+                raise ValueError("Tool observations must contain text")
+            call_id = message.get("tool_call_id")
+            if call_id not in pending_calls:
+                raise ValueError("Tool observations must reference a pending call")
+            if message.get("name") not in (None, pending_calls[call_id]):
+                raise ValueError("Tool observation name must match its call")
+            del pending_calls[call_id]
+        previous_role = role
+
+    if not seen_non_system or messages[-1]["role"] != "assistant":
+        raise ValueError("A chat training record must end with an assistant response")
+
+
+def _normalize_chat_record(record: dict[str, Any], messages_field: str, id_field: str) -> dict[str, Any]:
+    messages_value = record[messages_field]
+    if not isinstance(messages_value, list):
+        raise ValueError(f"{messages_field!r} must be a list")
+    messages = canonical_chat_messages(messages_value)
+
+    raw_kwargs = record.get("chat_template_kwargs") or {}
+    if isinstance(raw_kwargs, str):
+        raw_kwargs = json.loads(raw_kwargs)
+    if not isinstance(raw_kwargs, dict):
+        raise ValueError("chat_template_kwargs must be a JSON object")
+    kwargs = dict(raw_kwargs)
+    tools = list(kwargs.get("tools") or [])
+    existing_names = {_tool_name(tool) for tool in tools if isinstance(tool, dict)}
+    tools.extend(tool for tool in inferred_tool_definitions(messages) if tool["name"] not in existing_names)
+    if tools:
+        kwargs["tools"] = tools
+    validate_chat_messages(messages, tools)
+
+    source_id = record.get(id_field)
+    out = {key: value for key, value in record.items() if key not in {id_field, messages_field, "chat_template_kwargs"}}
+    identity = json.dumps(
+        {"messages": messages, "chat_template_kwargs": kwargs},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    out["id"] = format(dupekit.hash_xxh3_128(identity), "032x")
+    out["messages"] = messages
+    if kwargs:
+        out["chat_template_kwargs"] = json.dumps(kwargs, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    if source_id is not None:
+        out["source_id"] = source_id
+    return out
+
+
+def _build_chat_pipeline(
+    files: list[str],
+    output_dir: str,
+    num_shards: int,
+    messages_field: str,
+    id_field: str,
+    dedup_mode: DedupMode,
+) -> Dataset:
+    def normalize_record(record: dict[str, Any]) -> dict[str, Any]:
+        normalized = _normalize_chat_record(record, messages_field, id_field)
+        counters.pipeline.update_counter("normalize_chat/records_validated", 1)
+        return normalized
+
+    def dedup(_key: str, items: Iterator[dict[str, Any]]) -> Iterator[MainOutput | ExactDupSideOutput]:
+        previous_id: str | None = None
+        for record in items:
+            if record["id"] != previous_id:
+                previous_id = record["id"]
+                yield MainOutput(data=record)
+            else:
+                yield ExactDupSideOutput(data=record)
+
+    def passthrough(_key: str, items: Iterator[dict[str, Any]]) -> Iterator[MainOutput]:
+        yield from (MainOutput(data=item) for item in items)
+
+    def has_messages(record: dict[str, Any]) -> bool:
+        messages = record.get(messages_field)
+        if not isinstance(messages, list) or not messages:
+            counters.pipeline.update_counter("normalize_chat/empty_messages_filtered", 1)
+            return False
+        return True
+
+    reducers: dict[DedupMode, Callable] = {DedupMode.EXACT: dedup, DedupMode.NONE: passthrough}
+    return (
+        Dataset.from_list(files)
+        .flat_map(load_file)
+        .filter(has_messages)
+        .map(normalize_record)
+        .group_by(
+            key=lambda record: record["id"],
+            reducer=reducers[dedup_mode],
+            sort_by=lambda record: record["id"],
+            num_output_shards=num_shards,
+        )
+        .map_shard(_make_split_writer(output_dir))
+    )
+
+
+def normalize_chat_to_parquet(
+    *,
+    input_path: str,
+    output_path: str,
+    messages_field: str = "messages",
+    id_field: str = "id",
+    target_partition_bytes: int = 256 * 1024 * 1024,
+    worker_resources: ResourceConfig | None = None,
+    max_workers: int = DEFAULT_MAX_WORKERS,
+    file_extensions: tuple[str, ...] | None = None,
+    dedup_mode: DedupMode = DedupMode.EXACT,
+) -> NormalizedData:
+    """Normalize, validate, and deduplicate structured chat records."""
+    resources = worker_resources or ResourceConfig(cpu=2, ram="32g", disk="10g")
+    files = _discover_files(input_path, file_extensions=file_extensions)
+    if not files:
+        raise FileNotFoundError(f"No data files found under {input_path}")
+    num_shards = max(1, _compute_total_bytes(files) // target_partition_bytes)
+    pipeline = _build_chat_pipeline(files, output_path, num_shards, messages_field, id_field, dedup_mode)
+    outcome = ZephyrContext(name="normalize-chat", resources=resources, max_workers=max_workers).execute(pipeline)
+    counters_dict = dict(outcome.counters)
+    total_in = counters_dict.get("zephyr/records_in", 0)
+    if total_in > 0 and counters_dict.get("normalize_chat/empty_messages_filtered", 0) == total_in:
+        raise ValueError(f"All {total_in} records were filtered because {messages_field!r} was empty or missing")
+    if not counters_dict.get("normalize_chat/records_validated", 0):
+        raise ValueError(f"Chat source {input_path} contained no valid records")
+    return NormalizedData(
+        main_output_dir=prefix_join(output_path, "outputs/main"),
+        dup_output_dir=prefix_join(output_path, "outputs/dups"),
+        counters=counters_dict,
+    )
+
+
+def normalize_chat_step(
+    *,
+    name: str,
+    download: StepSpec,
+    messages_field: str = "messages",
+    id_field: str = "id",
+    target_partition_bytes: int = 256 * 1024 * 1024,
+    worker_resources: ResourceConfig | None = None,
+    max_workers: int = DEFAULT_MAX_WORKERS,
+    file_extensions: tuple[str, ...] | None = None,
+    dedup_mode: DedupMode = DedupMode.EXACT,
+) -> StepSpec:
+    """Create a versioned canonical-chat normalization step."""
+    hash_attrs = {
+        "version": CHAT_NORMALIZE_VERSION,
+        "messages_field": messages_field,
+        "id_field": id_field,
+        "target_partition_bytes": target_partition_bytes,
+        "file_extensions": file_extensions,
+        "dedup_mode": dedup_mode,
+    }
+    return StepSpec(
+        name=name,
+        fn=lambda output_path: normalize_chat_to_parquet(
+            input_path=download.output_path,
+            output_path=output_path,
+            messages_field=messages_field,
+            id_field=id_field,
+            target_partition_bytes=target_partition_bytes,
+            worker_resources=worker_resources,
+            max_workers=max_workers,
+            file_extensions=file_extensions,
+            dedup_mode=dedup_mode,
+        ),
+        deps=[download],
+        hash_attrs=hash_attrs,
+    )

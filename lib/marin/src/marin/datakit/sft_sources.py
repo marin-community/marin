@@ -19,6 +19,7 @@ from marin.datakit.download.nemotron_terminal import nemotron_terminal_chat_norm
 from marin.datakit.download.nemotron_v2 import nemotron_sft_chat_normalize_steps
 from marin.datakit.download.numinamath_tir import numinamath_tir_chat_normalize_steps
 from marin.datakit.download.numinamath_v1_5 import numinamath_v1_5_chat_normalize_steps
+from marin.datakit.download.openthoughts4_code import openthoughts4_code_chat_normalize_steps
 from marin.datakit.download.penfever_rollouts import penfever_rollouts_chat_normalize_steps
 from marin.datakit.download.superior_reasoning import superior_reasoning_chat_normalize_steps
 from marin.datakit.download.swe_rebench_openhands import swe_rebench_openhands_chat_normalize_steps
@@ -27,7 +28,11 @@ from marin.datakit.download.synthetic1 import synthetic1_chat_normalize_steps
 from marin.datakit.sources import all_sources
 from marin.execution.step_spec import StepSpec
 
-_CHAT_FORMAT = ChatLmDatasetFormat(mask_user_turns=False, pack=True)
+_CHAT_FORMAT = ChatLmDatasetFormat(
+    mask_user_turns=False,
+    pack=True,
+    chat_template_kwargs="chat_template_kwargs",
+)
 _ChatSourceRow = tuple[str, Callable[[], tuple[StepSpec, ...]]]
 
 
@@ -46,6 +51,7 @@ def all_sft_sources() -> dict[str, DatakitChatSource]:
         ("nemotron-terminal", nemotron_terminal_chat_normalize_steps),
         ("numinamath-1.5", numinamath_v1_5_chat_normalize_steps),
         ("numinamath-tir", numinamath_tir_chat_normalize_steps),
+        ("openthoughts4-code-glm-5.2-n4", openthoughts4_code_chat_normalize_steps),
         ("superior-reasoning", superior_reasoning_chat_normalize_steps),
         ("swe-rebench-openhands", swe_rebench_openhands_chat_normalize_steps),
         ("swe-zero-12m", swe_zero_12m_chat_normalize_steps),

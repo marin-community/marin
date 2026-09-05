@@ -149,10 +149,11 @@ class GrugLmExample:
             loss_weight = causal_loss_mask.astype(dtype)
 
         # Prepacked datasets mark padding positions with segment id -1. A position whose
-        # successor is padding predicts a pad token, so it must never contribute loss --
-        # otherwise the (arbitrary) padding value would leak into the objective.
+        # successor is padding or another document must never contribute loss. The latter
+        # keeps packing from introducing an artificial EOS-to-BOS training target.
         if segment_ids is not None:
-            predicts_real_token = (jnp.roll(segment_ids, -1) >= 0).astype(dtype)
+            next_segment_ids = jnp.roll(segment_ids, -1)
+            predicts_real_token = ((next_segment_ids >= 0) & (next_segment_ids == segment_ids)).astype(dtype)
             loss_weight = loss_weight * predicts_real_token
 
         if ignore_id is not None:

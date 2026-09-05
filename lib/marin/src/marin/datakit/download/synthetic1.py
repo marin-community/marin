@@ -13,9 +13,10 @@ from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.readers import load_parquet
 
+from marin.datakit.chat_normalize import normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import chat_document, strip_think_tags, text_document
-from marin.datakit.normalize import normalize_chat_step, normalize_step
+from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
 HF_DATASET_ID = "PrimeIntellect/SYNTHETIC-1"
@@ -61,13 +62,17 @@ def row_to_doc(row: dict) -> list[dict]:
 
 def row_to_chat_doc(row: dict) -> list[dict]:
     prompt = row.get("prompt", "")
-    response = strip_think_tags(row.get("llm_response", ""))
+    response = row.get("llm_response", "")
     if not prompt or not response.strip():
         return []
     tag = score_to_tag(row.get("score"))
     return [
         chat_document(
-            [{"role": "user", "content": prompt}, {"role": "assistant", "content": f"{tag}\n\n{response}"}],
+            [
+                {"role": "system", "content": tag},
+                {"role": "user", "content": prompt},
+                {"role": "assistant", "content": response},
+            ],
             HF_DATASET_ID,
         )
     ]
@@ -128,6 +133,6 @@ def synthetic1_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/synthetic-1",
         deps=[dl],
         fn=lambda output_path: transform_chat(dl.output_path, output_path),
-        hash_attrs={"version": "v1"},
+        hash_attrs={"version": "2026.09.04"},
     )
     return processed, normalize_chat_step(name="normalized-chat/synthetic-1", download=processed)

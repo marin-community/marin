@@ -23,7 +23,7 @@ from haliax.partitioning import ResourceAxis
 from jax.sharding import NamedSharding, PartitionSpec
 
 from levanter.data.text.datasets import ChatDataset
-from levanter.data.text.examples import named_lm_example_from_grug
+from levanter.data.text.examples import GrugLmExample, named_lm_example_from_grug
 from levanter.data.text.formats import ChatProcessor
 from levanter.grug.attention import reference_attention
 from levanter.layers.attention import AttentionBackend, AttentionMask, dot_product_attention
@@ -208,6 +208,15 @@ def test_packed_loss_weight_charges_only_generation_spans(tokenizer, tmp_path):
 
     # Padding carries no loss.
     assert float(loss_weight[segments == -1].sum()) == 0.0
+
+
+def test_causal_loss_mask_does_not_train_across_packed_documents():
+    example = GrugLmExample.causal(
+        tokens=jnp.array([10, 11, 12, 20, 21, 0]),
+        segment_ids=jnp.array([0, 0, 0, 1, 1, -1]),
+    )
+
+    np.testing.assert_array_equal(np.asarray(example.loss_weight), [1, 1, 0, 1, 0, 0])
 
 
 def test_packed_leading_document_loss_matches_unpacked(tokenizer, tmp_path):

@@ -6,6 +6,7 @@
 import hashlib
 import json
 import logging
+import re
 from collections.abc import Iterator
 from types import MappingProxyType
 
@@ -45,6 +46,23 @@ def load_parquet_batched(path: str) -> Iterator[dict]:
 
 def strip_think_tags(text: str) -> str:
     return text.replace("<think>", "").replace("</think>", "").strip()
+
+
+def normalize_reasoning_tokens(text: str) -> str:
+    """Normalize balanced reasoning tags to the tokenizer's atomic delimiters."""
+    text = text.replace("<think>", "<|start_think|>").replace("</think>", "<|end_think|>")
+    text = re.sub(r"<\|start_think\|>\s*<\|end_think\|>\s*", "", text)
+    depth = 0
+    for match in re.finditer(r"<\|(start|end)_think\|>", text):
+        if match.group(1) == "start":
+            depth += 1
+        else:
+            depth -= 1
+        if depth not in (0, 1):
+            raise ValueError("Assistant reasoning delimiters must be balanced and cannot nest")
+    if depth != 0:
+        raise ValueError("Assistant reasoning delimiters must be balanced and cannot nest")
+    return text
 
 
 def text_document(text: str, source: str) -> dict:
@@ -102,6 +120,8 @@ def canonical_chat_messages(messages: list[dict]) -> list[dict]:
         content = message.get("content", message.get("value"))
         if content is not None and not isinstance(content, str):
             raise ValueError(f"Chat message content must be a string or null, got {type(content).__name__}")
+        if role == "assistant" and content is not None:
+            content = normalize_reasoning_tokens(content)
         has_tool_call = bool(message.get("tool_calls") or message.get("function_call"))
         if content is None and (role != "assistant" or not has_tool_call):
             raise ValueError("Only assistant tool-call messages may have null content")
@@ -122,25 +142,86 @@ def canonical_chat_messages(messages: list[dict]) -> list[dict]:
             tool_calls_value = [{"function": legacy_function_call}]
         if tool_calls_value:
             normalized["tool_calls"] = _canonical_tool_calls(tool_calls_value)
-        tool_calls = normalized.get("tool_calls") or []
-        if len(tool_calls) <= 1:
-            canonical.append(normalized)
-            continue
-
-        for index, tool_call in enumerate(tool_calls):
-            serialized: dict[str, object] = dict(normalized)
-            serialized["content"] = content if index == 0 else None
-            serialized["tool_calls"] = [tool_call]
-            canonical.append(serialized)
+        canonical.append(normalized)
     if not canonical:
         raise ValueError("A conversation must contain at least one message")
-    return canonical
+    return _link_tool_messages(canonical)
+
+
+def _link_tool_messages(messages: list[dict[str, object]]) -> list[dict]:
+    linked: list[dict] = []
+    pending: dict[str, str] = {}
+    for message_index, message in enumerate(messages):
+        message = dict(message)
+        calls = message.get("tool_calls") or []
+        if calls:
+            linked_calls = []
+            for call_index, call_value in enumerate(calls):
+                call = dict(call_value)
+                call_id = call.get("id") or f"call_{message_index}_{call_index}"
+                call["id"] = call_id
+                function = call["function"]
+                pending[call_id] = function["name"]
+                linked_calls.append(call)
+            message["tool_calls"] = linked_calls
+        if message["role"] == "tool":
+            call_id = message.get("tool_call_id")
+            if call_id is None and len(pending) == 1:
+                call_id = next(iter(pending))
+                message["tool_call_id"] = call_id
+            if call_id not in pending:
+                raise ValueError("Tool messages must reference a pending tool call")
+            message.setdefault("name", pending.pop(call_id))
+        elif message["role"] == "user" and pending:
+            raise ValueError("Tool observations must use the tool role, not the user role")
+        linked.append(message)
+    return linked
+
+
+def inferred_tool_definitions(messages: list[dict]) -> list[dict]:
+    """Build minimal JSON schemas for tools called by a canonical conversation."""
+    definitions: dict[str, dict] = {}
+    for message in messages:
+        for call in message.get("tool_calls") or []:
+            function = call["function"]
+            arguments = function["arguments"]
+            if isinstance(arguments, str):
+                arguments = json.loads(arguments)
+            if not isinstance(arguments, dict):
+                raise ValueError("Tool-call arguments must be JSON objects")
+            properties = definitions.setdefault(function["name"], {})
+            for key, value in arguments.items():
+                if isinstance(value, bool):
+                    json_type = "boolean"
+                elif isinstance(value, (int, float)):
+                    json_type = "number"
+                elif isinstance(value, list):
+                    json_type = "array"
+                elif isinstance(value, dict):
+                    json_type = "object"
+                else:
+                    json_type = "string"
+                properties[key] = {"type": json_type}
+    return [
+        {
+            "type": "function",
+            "name": name,
+            "description": f"Execute the {name} tool.",
+            "parameters": {"type": "object", "properties": properties},
+        }
+        for name, properties in definitions.items()
+    ]
 
 
 def chat_document(messages: list[dict], source: str, **metadata: object) -> dict:
     """Build a canonical structured-chat document with a content-derived ID."""
     messages = canonical_chat_messages(messages)
     encoded = json.dumps(messages, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    chat_template_kwargs = metadata.get("chat_template_kwargs")
+    if isinstance(chat_template_kwargs, dict):
+        metadata["chat_template_kwargs"] = json.dumps(
+            chat_template_kwargs, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
     return {
         "id": hashlib.sha256(encoded).hexdigest(),
         "messages": messages,
