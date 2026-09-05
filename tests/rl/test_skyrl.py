@@ -275,7 +275,8 @@ def test_evaluation_uses_the_validated_training_tokenizer() -> None:
     assert model.tokenizer == terminal.tokenizer_uri
 
 
-def test_run_skyrl_returns_external_terminal_model(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("timeout_seconds", [0, 1800])
+def test_run_skyrl_returns_external_terminal_model(monkeypatch: pytest.MonkeyPatch, timeout_seconds: int) -> None:
     output = SkyRLOutputPaths(
         checkpoint_root="s3://test/run/checkpoints",
         export_root="s3://test/run/exports",
@@ -339,7 +340,7 @@ def test_run_skyrl_returns_external_terminal_model(monkeypatch: pytest.MonkeyPat
     model = run_skyrl(
         SkyRLRunConfig(
             request=request,
-            execution=_execution(),
+            execution=dataclasses.replace(_execution(), timeout_seconds=timeout_seconds),
             launcher_requirement=MARIN_SKYRL.requirement(),
         )
     )
@@ -352,6 +353,7 @@ def test_run_skyrl_returns_external_terminal_model(monkeypatch: pytest.MonkeyPat
         "profile": SkyRLRuntimeProfile.FSDP.value,
     }
     assert launch_envelopes[0]["execution"]["job_name"] == "checkpoints-iceball-rl-2026.08.01-attempt-1"
+    assert launch_envelopes[0]["execution"]["timeout_seconds"] == timeout_seconds
 
 
 def test_launcher_failure_reports_the_launcher_stderr(monkeypatch: pytest.MonkeyPatch) -> None:

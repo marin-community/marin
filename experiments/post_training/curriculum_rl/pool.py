@@ -305,8 +305,10 @@ def _pool_record(
     }
 
 
-def _gsm8k_records(split: str, rows: int, *, data_source: str | None = None) -> list[dict[str, object]]:
-    dataset = load_dataset(GSM8K_DATASET, "main", split=split, revision=GSM8K_REVISION).select(range(rows))
+def _gsm8k_records(
+    split: str, rows: int, *, data_source: str | None = None, revision: str = GSM8K_REVISION
+) -> list[dict[str, object]]:
+    dataset = load_dataset(GSM8K_DATASET, "main", split=split, revision=revision).select(range(rows))
     records = []
     for index, example in enumerate(dataset):
         match = _GSM8K_FINAL_ANSWER.search(example["answer"])
@@ -554,9 +556,11 @@ def _reasoning_gym_records(rg_bin: ReasoningGymBin, split: str) -> list[dict[str
     return records
 
 
-def _drop_over_length_records(records: list[dict[str, object]]) -> list[dict[str, object]]:
+def _drop_over_length_records(
+    records: list[dict[str, object]], *, tokenizer_revision: str = QWEN3_REVISION
+) -> list[dict[str, object]]:
     """Drop rows whose templated prompt would be skipped by the trainer."""
-    tokenizer = AutoTokenizer.from_pretrained(QWEN3_MODEL, revision=QWEN3_REVISION)
+    tokenizer = AutoTokenizer.from_pretrained(QWEN3_MODEL, revision=tokenizer_revision)
     kept = []
     dropped: Counter[str] = Counter()
     for record in records:

@@ -199,6 +199,11 @@ class IrisSkyRLExecution:
     target_cluster: str | None = None
     parent_cluster_config: str | None = None
     wandb_entity: str | None = None
+    timeout_seconds: int = 0
+
+    def __post_init__(self) -> None:
+        if self.timeout_seconds < 0:
+            raise ValueError("SkyRL timeout_seconds must be nonnegative (0 disables the deadline)")
 
 
 @dataclass(frozen=True)
