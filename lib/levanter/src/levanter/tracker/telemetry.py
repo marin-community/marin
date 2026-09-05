@@ -50,7 +50,8 @@ def _metric_name(name: str) -> str:
 # drops records under queue pressure, so several missed beats must not un-enroll a
 # live job. The reader's window lives in infra/grafana/src/training_stalls.py.
 _PHASE_HEARTBEAT_SECONDS = 60.0
-_NCCL_RAS_POLL_SECONDS = 10 * 60.0
+# Override for diagnostics: a 600 s cadence cannot resolve sub-second collective stalls (#8870).
+_NCCL_RAS_POLL_SECONDS = float(os.environ.get("MARIN_DEBUG_NCCL_RAS_POLL_SECONDS", 10 * 60.0))
 _NCCL_STALL_CAPTURE_SECONDS = 8.0
 _STALL_TELEMETRY_FLUSH_SECONDS = 5.0
 
