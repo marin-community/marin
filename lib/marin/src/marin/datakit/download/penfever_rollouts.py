@@ -1189,7 +1189,7 @@ def _rollout_chat_steps(dataset: PenfeverRollout) -> tuple[StepSpec, StepSpec]:
         name=f"processed-chat/{dataset.marin_name}",
         deps=[download],
         fn=lambda output_path: transform_chat(dataset, download.output_path, output_path),
-        hash_attrs={"version": "2026.09.04", "teacher": dataset.teacher, "task_source": dataset.task_source},
+        hash_attrs={"version": "2026.09.04.1", "teacher": dataset.teacher, "task_source": dataset.task_source},
     )
     return processed, normalize_chat_step(name=f"normalized-chat/{dataset.marin_name}", download=processed)
 

@@ -25,7 +25,7 @@ def test_terminal_protocol_becomes_reasoning_call_and_observation():
                 {
                     "role": "assistant",
                     "content": (
-                        '<think>Inspect first.</think>\n{"analysis":"duplicate","plan":"duplicate",'
+                        '<think><think>Inspect first.</think></think>\n{"analysis":"duplicate","plan":"duplicate",'
                         '"commands":[{"keystrokes":"ls\\n","duration":0.1}]}'
                     ),
                 },

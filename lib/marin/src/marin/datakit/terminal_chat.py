@@ -56,6 +56,7 @@ def _reasoning_content(content: str, payload: dict) -> str:
             for key in ("analysis", "plan")
             if isinstance((value := payload.get(key)), str) and value.strip()
         )
+    reasoning = re.sub(r"</?think>|<\|(start|end)_think\|>", "", reasoning).strip()
     return f"<think>{reasoning}</think>" if reasoning else ""
 
 

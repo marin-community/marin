@@ -35,6 +35,7 @@ from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import (
     TRAJECTORY_FAILED_TAG,
     TRAJECTORY_SOLVED_TAG,
+    ReasoningFormatError,
     chat_document,
     load_parquet_batched,
     render_tool_message,
@@ -194,7 +195,11 @@ def env_row_to_chat_doc(row: dict) -> list[dict]:
     tag = _success_to_tag(row.get("success") if "success" in row else None)
     if tag:
         messages = [{"role": "system", "content": tag}, *messages]
-    return [chat_document(messages, "GAIR/daVinci-Dev/env-native")]
+    try:
+        return [chat_document(messages, "GAIR/daVinci-Dev/env-native")]
+    except ReasoningFormatError:
+        counters.pipeline.update_counter("davinci_dev/env/chat_malformed_reasoning_filtered", 1)
+        return []
 
 
 def transform_env_native(input_path: str, output_path: str) -> None:
@@ -260,7 +265,7 @@ def davinci_dev_env_native_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/davinci-dev-env-native",
         deps=[dl],
         fn=lambda output_path: transform_env_native_chat(dl.output_path, output_path),
-        hash_attrs={"version": "2026.09.04"},
+        hash_attrs={"version": "2026.09.04.1"},
     )
     return processed, normalize_chat_step(
         name="normalized-chat/davinci-dev-env-native",

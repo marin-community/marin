@@ -28,6 +28,10 @@ CHAT_ROLE_ALIASES = MappingProxyType(
 )
 
 
+class ReasoningFormatError(ValueError):
+    """Raised when an assistant reasoning span cannot be normalized safely."""
+
+
 def load_parquet_batched(path: str) -> Iterator[dict]:
     """Read parquet via iter_batches to avoid OOM on large nested-struct columns."""
     with open_url(path, "rb") as f:
@@ -59,9 +63,9 @@ def normalize_reasoning_tokens(text: str) -> str:
         else:
             depth -= 1
         if depth not in (0, 1):
-            raise ValueError("Assistant reasoning delimiters must be balanced and cannot nest")
+            raise ReasoningFormatError("Assistant reasoning delimiters must be balanced and cannot nest")
     if depth != 0:
-        raise ValueError("Assistant reasoning delimiters must be balanced and cannot nest")
+        raise ReasoningFormatError("Assistant reasoning delimiters must be balanced and cannot nest")
     return text
 
 
