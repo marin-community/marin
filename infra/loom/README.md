@@ -16,7 +16,9 @@ the production stack explicitly.
 The `loom-oa-dev` GitHub App must be installed on the repositories Loom serves.
 Its private key, webhook secret, and client secret belong only in the
 `LOOM_DOTENV` Secret Manager secret. The App callback and webhook URL use
-`https://loom.oa.dev`.
+`https://loom.oa.dev`. Its organization permissions must grant **Members:
+Read-only** so Loom can verify private `Open-Athena` membership during sign-in
+and hourly revalidation.
 
 Authenticate Pulumi's providers and the local Docker client:
 
@@ -86,7 +88,25 @@ so uploading another secret version does not change the running service.
 
 Runtime profiles and workload federation mappings live in
 `Pulumi.marin-loom.yaml` and are applied through Loom's deployment API during
-activation. The `grafana-alerts` federation mapping authorizes the Google
+activation. The deployment setting
+`auth.github_organizations: Open-Athena:188075292` binds admission to the
+organization's immutable GitHub id. An active member receives the `user` role
+at GitHub sign-in and a one-hour authorization lease. Loom revalidates the
+membership before the lease expires with a short-lived GitHub App installation
+token; it does not retain the user's OAuth token.
+
+Only an active result renews access. Removal from the organization, a GitHub
+outage, a timeout, or a permission failure invalidates the user's browser and
+session credentials and closes sessions they own. Signed `@loom` requests use
+the same policy and can revalidate a stale lease. Loom retains the identity row
+for history and later re-admission, but that row is not an approval. An
+administrator can explicitly convert an organization-derived user to manual
+authorization in **People & security**. Enabling organization authorization
+permanently latches this database into shared-deployment mode. Clearing the
+setting, removing users, or completing workloads never restores implicit
+loopback or machine-token administration.
+
+The `grafana-alerts` federation mapping authorizes the Google
 identity of the existing `marin-grafana` Cloud Run service account to select
 only the `ops` profile. The profile names `marin-community/marin` in
 `githubRepositories` because Grafana launches the operator session in that
