@@ -101,6 +101,19 @@ gpu = [
   # forcing an exact patch version.
   "triton>=3.6.0,<3.7; sys_platform == 'linux'",
 ]
+# Companion to marin-core's gpu-stock-pjrt extra (non-Blackwell aarch64 hosts, e.g. GH200).
+# Levanter never pins the patched PJRT wheel, so this stays a copy of the gpu extra;
+# tests/test_moe_hero_ep.py::test_the_stock_pjrt_extra_tracks_the_gpu_extra enforces that.
+gpu-stock-pjrt = [
+  "jax[cuda13]==0.11.1",
+  "nvidia-cublas>=13.2.0.9; sys_platform == 'linux'",
+  "nvidia-nccl-cu13>=2.29.3; sys_platform == 'linux'",
+  "nvidia-cutlass-dsl[cu13]==4.6.0; sys_platform == 'linux'",
+  "flash-attn-4[cu13]>=4.0.0b16,<4.1; sys_platform == 'linux'",
+  "quack-kernels[cu13]==0.6.1; sys_platform == 'linux'",
+  "jax-triton==0.3.1; sys_platform == 'linux'",
+  "triton>=3.6.0,<3.7; sys_platform == 'linux'",
+]
 deepep = [
   # DeepEP itself remains an external source checkout addressed by DEEPEP_SRC_ROOT.
   # The Levanter wheel ships the JAX FFI shim sources; CUDA toolchain dependencies
@@ -183,6 +196,10 @@ dev = [
 conflicts = [
   [
     { extra = "gpu" },
+    { extra = "tpu" },
+  ],
+  [
+    { extra = "gpu-stock-pjrt" },
     { extra = "tpu" },
   ],
 ]  # Never solve for both GPU and TPU at once

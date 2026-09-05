@@ -102,6 +102,20 @@ conflicts = [
         { extra = "gpu" },
         { extra = "cpu" },
     ],
+    # gpu and gpu-stock-pjrt resolve jax-cuda13-pjrt from different sources on aarch64
+    # (patched wheel vs PyPI), so they must fork the resolution.
+    [
+        { extra = "gpu" },
+        { extra = "gpu-stock-pjrt" },
+    ],
+    [
+        { extra = "gpu-stock-pjrt" },
+        { extra = "tpu" },
+    ],
+    [
+        { extra = "gpu-stock-pjrt" },
+        { extra = "cpu" },
+    ],
 ]
 
 
@@ -109,9 +123,9 @@ conflicts = [
 
 gpu = [
   "jax[cuda13]==0.11.1",
-  # On GB200 this resolves to Marin's patched PJRT build (see [tool.uv.sources]). Declared
-  # explicitly even though jax[cuda13] pins it transitively, because uv sources cannot override
-  # a transitive dependency: without this line the patched-wheel source is silently ignored.
+  # On aarch64 this resolves to Marin's patched, Blackwell-only PJRT build (see
+  # [tool.uv.sources]); declared explicitly because uv sources cannot override a transitive
+  # dependency. Non-Blackwell aarch64 hosts (e.g. GH200) need gpu-stock-pjrt instead (#8852).
   "jax-cuda13-pjrt==0.11.1",
   # B200 emits a cuBLAS warning with older CUDA 13 cuBLAS builds.
   "nvidia-cublas>=13.2.0.9; sys_platform == 'linux'",
@@ -126,6 +140,20 @@ gpu = [
   "jax-triton==0.3.1; sys_platform == 'linux'",
   # This module imports Triton directly; stay on the tested minor without
   # forcing an exact patch version.
+  "triton>=3.6.0,<3.7; sys_platform == 'linux'",
+  "torch==2.11.0",
+  "torchvision==0.26.0",
+]
+# The gpu stack with the stock upstream PJRT plugin, for aarch64 hosts whose GPU is not
+# Blackwell (e.g. GH200). Must match the gpu extra minus the jax-cuda13-pjrt pin;
+# tests/test_moe_hero_ep.py::test_the_stock_pjrt_extra_tracks_the_gpu_extra enforces that.
+gpu-stock-pjrt = [
+  "jax[cuda13]==0.11.1",
+  "nvidia-cublas>=13.2.0.9; sys_platform == 'linux'",
+  "nvidia-nccl-cu13>=2.29.3; sys_platform == 'linux'",
+  "nvidia-cutlass-dsl[cu13]==4.6.0; sys_platform == 'linux'",
+  "flash-attn-4[cu13]>=4.0.0b16,<4.1; sys_platform == 'linux'",
+  "jax-triton==0.3.1; sys_platform == 'linux'",
   "triton>=3.6.0,<3.7; sys_platform == 'linux'",
   "torch==2.11.0",
   "torchvision==0.26.0",
@@ -182,7 +210,8 @@ url = "https://marin-community.github.io/chatnoir-resiliparse/simple"
 
 [tool.uv.sources]
 # Marin's patched ragged all-to-all PJRT plugin, promoted from marin-community/xla
-# (docs/dev-guide/forking-policy.md). Non-aarch64 resolution falls back to PyPI.
+# (docs/dev-guide/forking-policy.md). Non-aarch64 resolution falls back to PyPI, as does the
+# gpu-stock-pjrt extra: the wheel embeds only Blackwell kernel images.
 jax-cuda13-pjrt = { url = "https://github.com/marin-community/xla/releases/download/marin-xla-pjrt-20260831-e94a45d2a446/jax_cuda13_pjrt-0.11.1%2Bmarin.e94a45d2a446-py3-none-manylinux_2_27_aarch64.whl", extra = "gpu", marker = "platform_machine == 'aarch64'" }
 torchvision = [
     # Default to the CPU index for TPU/CPU builds
@@ -190,11 +219,13 @@ torchvision = [
     { index = "pytorch-cpu", extra = "tpu" },
     # PyTorch cu130 pins an older cuBLAS than the B200 guard above allows.
     { index = "pytorch-cu128", extra = "gpu", marker = "sys_platform == 'linux'" },
+    { index = "pytorch-cu128", extra = "gpu-stock-pjrt", marker = "sys_platform == 'linux'" },
 ]
 resiliparse = { index = "marin-resiliparse" }
 torch = [
     # PyTorch cu130 pins an older cuBLAS than the B200 guard above allows.
     { index = "pytorch-cu128", extra = "gpu", marker = "sys_platform == 'linux'" },
+    { index = "pytorch-cu128", extra = "gpu-stock-pjrt", marker = "sys_platform == 'linux'" },
     { index = "pytorch-cpu", extra = "cpu" },
     { index = "pytorch-cpu", extra = "tpu" },
 ]

@@ -30,6 +30,17 @@ extra installs the CUDA 13 JAX runtime, including CUDA, cuDNN, and NCCL Python w
 uv sync --extra=gpu
 ```
 
+On aarch64 hosts the `gpu` extra installs Marin's patched PJRT plugin, whose GPU kernels are
+built for Blackwell (GB200). On a non-Blackwell aarch64 host such as GH200, install the stock
+plugin instead, or XLA aborts with `cudaErrorNoKernelImageForDevice` at the first training step:
+
+```bash
+uv sync --extra=gpu-stock-pjrt
+```
+
+The stock plugin lacks the ragged all-to-all patch, which only expert-parallel MoE training uses;
+dense training is unaffected.
+
 If you install a local CUDA toolkit for custom kernels, use CUDA 13 and keep older CUDA libraries
 out of `LD_LIBRARY_PATH` so they do not override the JAX wheel libraries.
 
