@@ -24,13 +24,16 @@ class QualityScores(BaseModel):
     ``read_artifact(step.output_path, QualityScores)``.
 
     Attributes:
-        main_output_dir: Directory of lean scored parquet
-            (``source``/``id``/``score``/``quality_bucket``), one file per input
+        main_output_dir: Directory of lean scored parquet, one file per input
             shard, co-partitioned with the source ``NormalizedData`` by basename
-            and row order.
+            and row order. Every producer writes ``id``, the calibrated ``score``
+            and ``quality_bucket``; :func:`score.score_normalized` adds
+            ``source``, and :func:`bucket.bucket_quality_scores` adds ``source``,
+            ``raw_score`` and ``content_type``.
         samples_output_dir: Directory of the ~``sample_pct`` systematic sample
             side output (same columns plus truncated ``text``) the stage report
-            reads for spot-checks.
+            reads for spot-checks. ``None`` for a producer that scores from
+            tokens and embeddings and never sees the text.
         model_dir: Scorer artifacts + calibration json used. Model dirs are
             immutable by convention -- the step hash covers the *path*, not the
             bytes, so retrained models must land in new dirs.
@@ -42,7 +45,7 @@ class QualityScores(BaseModel):
 
     version: str = "v1"
     main_output_dir: DatakitArtifactPath
-    samples_output_dir: DatakitArtifactPath
+    samples_output_dir: DatakitArtifactPath | None = None
     model_dir: DatakitArtifactPath
     calib_file: str
     bucket_edges: list[float]

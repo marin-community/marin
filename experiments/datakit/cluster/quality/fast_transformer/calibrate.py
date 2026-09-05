@@ -38,6 +38,27 @@ DEFAULT_LABELS = "s3://marin-us-east-02a/marin/datakit/quality_labels_20260709.p
 YK = [0.0, *BUCKET_EDGES, 1.0]  # the interior IS BUCKET_EDGES, so the two can't drift
 
 
+def apply_calibration(raw: np.ndarray, types: np.ndarray | None, knots: dict) -> np.ndarray:
+    """Remap raw scores through the calibration knots.
+
+    A global ``{xk, yk}`` calibration applies to every document. A per-type
+    ``{default, types}`` calibration routes each document through its content
+    type's remap and falls back to the default for a type without one; ``types``
+    is then required, one label per row of ``raw``.
+    """
+    if "types" not in knots:
+        return np.interp(raw, knots["xk"], knots["yk"])
+    if types is None:
+        raise ValueError("a per-type calibration needs one content type per document")
+    default = knots["default"]
+    out = np.empty(len(raw), dtype=np.float64)
+    for name in set(types.tolist()):
+        mask = types == name
+        curve = knots["types"].get(name, default)
+        out[mask] = np.interp(raw[mask], curve["xk"], curve["yk"])
+    return out
+
+
 def fit_cutpoints(raw: np.ndarray, levels: np.ndarray) -> tuple[dict[int, float], list[float]]:
     """Return (per-level medians, cutpoints). The cutpoint between level k and k+1 is
     the midpoint of the two level medians; the cutpoints are enforced non-decreasing.

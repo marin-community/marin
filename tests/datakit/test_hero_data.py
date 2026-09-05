@@ -12,15 +12,17 @@ nothing behind it, or at a tokenize output built from a different normalize.
 """
 
 import json
+from dataclasses import replace
 
 import pytest
 from marin.datakit.sources import all_sources
 
 from experiments.datakit import hero_data
+from experiments.datakit.cluster.quality.fast_transformer import run as quality_run
 
 PREFIX = hero_data.MANIFEST_PREFIX
 MANIFEST = hero_data.manifest_path()
-EMBED_MANIFEST = hero_data.harrier_paths_path()
+PINNED_STAGES = ("harrier", "fusion_scores", "content_type")
 
 
 @pytest.fixture(autouse=True)
@@ -47,13 +49,19 @@ def test_paths_match_the_checked_in_manifest():
     assert _relative_paths() == json.loads(MANIFEST.read_text())
 
 
-def test_harrier_paths_are_complete_relative_and_include_focus():
-    paths = json.loads(EMBED_MANIFEST.read_text())
+@pytest.mark.parametrize("stage", PINNED_STAGES)
+def test_pinned_maps_are_complete_and_relative(stage):
+    paths = json.loads(hero_data.pinned_map_path(stage).read_text())
 
     assert set(paths) == set(hero_data.source_names())
     assert all("://" not in path and not path.startswith("/") for path in paths.values())
-    expected = f"{PREFIX}/datakit/embed/harrier-all/common-crawl-focus-2026-22_fc8cffa4"
-    assert hero_data.harrier("common-crawl-focus-2026-22") == expected
+
+
+def test_pinned_leaves_resolve_under_the_prefix():
+    focus = "common-crawl-focus-2026-22"
+    assert hero_data.harrier(focus).output_path == f"{PREFIX}/datakit/embed/harrier-all/{focus}_fc8cffa4"
+    assert hero_data.fusion_scores(focus).output_path.startswith(f"{PREFIX}/datakit/quality/{focus}_")
+    assert hero_data.content_type(focus).output_path.startswith(f"{PREFIX}/datakit/content-type/{focus}_")
 
 
 def test_every_registered_source_has_every_stage():
@@ -61,7 +69,17 @@ def test_every_registered_source_has_every_stage():
     missing = {
         f"{stage}/{source}"
         for source in hero_data.source_names()
-        for stage in ("normalized", "minhash", "tokenize.marin", "tokenize.nemotron")
+        for stage in (
+            "normalized",
+            "minhash",
+            "tokenize.marin",
+            "tokenize.nemotron",
+            "harrier",
+            "cluster_assign",
+            "fusion_scores",
+            "content_type",
+            "quality",
+        )
     } - keys
     assert not missing
 
@@ -77,6 +95,10 @@ def test_steps_refuse_to_run():
         hero_data.fuzzy_dups(),
         hero_data.domain_cluster_assignment(),
         hero_data.assigned_clusters("stack-v3"),
+        hero_data.harrier("stack-v3"),
+        hero_data.fusion_scores("stack-v3"),
+        hero_data.content_type("stack-v3"),
+        hero_data.quality("stack-v3"),
     ]
     for step in steps:
         with pytest.raises(AssertionError, match="must never execute"):
@@ -98,3 +120,37 @@ def test_repointing_a_dedup_pin_changes_dependency_identity(monkeypatch):
 def test_unknown_source_is_rejected():
     with pytest.raises(KeyError):
         hero_data.normalized("no-such-source")
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("calibration_sha256", "0" * 64),
+        ("name", "some-other-scorer"),
+    ],
+)
+def test_quality_path_moves_with_the_calibration(field, value):
+    """The bucket step's identity is the remap it applies; a refit moves the output."""
+    base = hero_data.NEMOTRON_88K
+    changed = replace(base, **{field: value})
+    assert hero_data.quality("stack-v3", changed).output_path != hero_data.quality("stack-v3", base).output_path
+
+
+def test_quality_path_moves_with_its_pinned_inputs(monkeypatch):
+    # Repointing the fusion scores or the content types is a different dataset even
+    # under the same calibration: the frozen inputs carry their paths in hash_attrs.
+    before = hero_data.quality("stack-v3").output_path
+    monkeypatch.setitem(hero_data.pinned_map("content_type"), "stack-v3", "datakit/content-type/stack-v3_ffffffff")
+    assert hero_data.quality("stack-v3").output_path != before
+
+
+def test_fusion_scores_refuse_a_pin_that_is_another_model():
+    """The pinned scores were written by one model; bucketing them under another lies."""
+    other = replace(hero_data.NEMOTRON_88K, model_sha256="0" * 64)
+    with pytest.raises(ValueError, match="score the corpus"):
+        hero_data.quality("stack-v3", other)
+
+
+def test_the_bucket_driver_resolves_to_the_registered_quality_path():
+    (step,) = quality_run.build_bucket_steps(["stack-v3"])
+    assert step.output_path == hero_data.quality("stack-v3").output_path
