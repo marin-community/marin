@@ -50,6 +50,7 @@ _LONG_CONTEXT_SKEW = 4
 _TOKENIZE_MAX_WORKERS = 64
 _TAIL_BUCKETS_WITHOUT_LONG = frozenset({"c07q3", "c38q1", "c38q3", "c38q4", "c39q0", "c39q1", "c39q2", "c39q3", "c39q4"})
 _SFT_LR = 5e-5
+_MIN_SAMPLES_PER_MIXTURE_BLOCK = 1.000001
 
 # AdamH is used by the H100 SFT recipe because MuonH's Newton-Schulz workspace is
 # expensive on 80 GB GPUs. On this v4-2048 geometry, however, AdamH's two expert
@@ -75,6 +76,20 @@ class _SftMixture:
     components: dict[str, DatasetComponent | ConcatDatasetComponent]
     weights: dict[str, float]
     deps: list[StepSpec]
+
+
+def _floor_component_weights(weights: dict[str, float], total_weight: float) -> dict[str, float]:
+    """Floor mixture weights without changing the aggregate mixture share."""
+    minimum_weight = _MIN_SAMPLES_PER_MIXTURE_BLOCK / _MIXTURE_BLOCK_SIZE
+    minimum_total = len(weights) * minimum_weight
+    if minimum_total >= total_weight:
+        raise ValueError("Mixture block is too small to sample every component")
+    surplus = sum(max(weight - minimum_weight, 0.0) for weight in weights.values())
+    target_surplus = total_weight - minimum_total
+    return {
+        name: minimum_weight + max(weight - minimum_weight, 0.0) * target_surplus / surplus
+        for name, weight in weights.items()
+    }
 
 
 def _tokenize_rendered_source(name: str, rendered: StepSpec) -> StepSpec:
@@ -108,8 +123,6 @@ def _sft_mixture() -> _SftMixture:
     components: dict[str, DatasetComponent | ConcatDatasetComponent] = {}
     weights: dict[str, float] = {}
     deps: list[StepSpec] = []
-    penfever_children: dict[str, DatasetComponent] = {}
-    penfever_tokens = 0.0
     for name, source in sources.items():
         source = dataclasses.replace(
             source,
@@ -126,18 +139,10 @@ def _sft_mixture() -> _SftMixture:
             pack=True,
             packing_slice_strategy="drop",
         )
-        if name.startswith("penfever-traces/"):
-            penfever_children[name.removeprefix("penfever-traces/")] = component
-            penfever_tokens += source.rough_token_count_b
-        else:
-            components[f"sft/{name}"] = component
-            weights[f"sft/{name}"] = _SFT_FRACTION * source.rough_token_count_b / total_tokens
+        components[f"sft/{name}"] = component
+        weights[f"sft/{name}"] = _SFT_FRACTION * source.rough_token_count_b / total_tokens
         deps.append(tokenized)
-    components["sft/penfever-traces"] = ConcatDatasetComponent(
-        children=penfever_children,
-        tags=["sft", "penfever-traces"],
-    )
-    weights["sft/penfever-traces"] = _SFT_FRACTION * penfever_tokens / total_tokens
+    weights = _floor_component_weights(weights, _SFT_FRACTION)
     return _SftMixture(components=components, weights=weights, deps=deps)
 
 
@@ -169,10 +174,14 @@ def _pretrain_component(bucket: str) -> ConcatDatasetComponent:
 
 def _pretrain_components() -> tuple[dict[str, ConcatDatasetComponent], dict[str, float]]:
     phase_weights = _phase_weights(1)
-    return (
-        {f"pretrain/{bucket}": _pretrain_component(bucket) for bucket in phase_weights},
-        {f"pretrain/{bucket}": _PRETRAIN_FRACTION * weight for bucket, weight in phase_weights.items()},
-    )
+    tail_weight = phase_weights["tail"] / len(_TAIL_BUCKETS)
+    bucket_weights = {
+        **{bucket: weight for bucket, weight in phase_weights.items() if bucket != "tail"},
+        **dict.fromkeys(_TAIL_BUCKETS, tail_weight),
+    }
+    components = {f"pretrain/{bucket}": _pretrain_component(bucket) for bucket in bucket_weights}
+    weights = {f"pretrain/{bucket}": _PRETRAIN_FRACTION * weight for bucket, weight in bucket_weights.items()}
+    return components, _floor_component_weights(weights, _PRETRAIN_FRACTION)
 
 
 def _model_config():
@@ -193,6 +202,9 @@ def build() -> StepSpec:
     pretrain_components, pretrain_weights = _pretrain_components()
     weights = {**sft.weights, **pretrain_weights}
     assert abs(sum(weights.values()) - 1.0) < 1e-9
+    zero_count_components = [name for name, weight in weights.items() if int(weight * _MIXTURE_BLOCK_SIZE) == 0]
+    if zero_count_components:
+        raise ValueError(f"Mixture weights round to zero samples per block: {zero_count_components}")
 
     data = LmDataConfig(
         tokenizer=_TOKENIZER,
@@ -201,6 +213,7 @@ def build() -> StepSpec:
         train_weights=weights,
         auto_build_caches=False,
         mixture_block_size=_MIXTURE_BLOCK_SIZE,
+        block_cross_document_attention=True,
     )
 
     def train(output_path: str) -> None:
