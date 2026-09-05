@@ -190,6 +190,59 @@ description = "Browse generated math problem sets."
 python_entrypoint = "server.app:create_api"
 ```
 
+### Vue and other built frontends
+
+Marina serves any frontend that builds into `dist/`. Plain HTML and JavaScript
+fit a small single-view applet. Vue with Vite fits applets with multiple views,
+reusable components, or substantial client state. Keep frontend sources beside
+the files Marina packages:
+
+```text
+my-applet/
+  applet.toml
+  package.json
+  package-lock.json
+  index.html                # Vite source entry
+  vite.config.ts
+  src/
+  dist/                     # generated and uploaded
+  server/                   # optional and uploaded
+```
+
+Configure Vite to emit relative asset URLs:
+
+```ts
+import vue from "@vitejs/plugin-vue";
+import { defineConfig } from "vite";
+
+export default defineConfig({
+  base: "./",
+  plugins: [vue()],
+});
+```
+
+Use `createWebHashHistory()` from `vue-router` for client-side routes. Hash
+routes keep the server path at the applet revision root and avoid a router base
+that contains the generated UUID and revision. Use relative backend URLs such
+as `fetch("api/results")` and `fetch("query", ...)`; a leading `/` escapes the
+applet prefix. Bundle dependencies into `dist/` because the applet content
+security policy permits scripts from the applet origin only.
+
+The manifest may define its local build:
+
+```toml
+build_command = "npm ci && npm run build"
+```
+
+`marina publish` runs a declared `build_command` before every publish by
+default, including when `dist/index.html` already exists. Pass `--no-build`
+only to reuse an existing bundle that has already been built and validated:
+
+```bash
+uv run marina publish .
+uv run marina publish . --no-build
+```
+
 Publish a built directory:
 
 ```bash
