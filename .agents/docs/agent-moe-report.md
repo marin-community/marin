@@ -189,6 +189,10 @@ will reject a generated page that differs from the structured snapshot.
 
 ## Scheduled automation contract
 
+`.github/workflows/ops-agent-moe-report.yaml` launches a dedicated Loom session
+every Monday at 09:17 UTC and supports manual dispatch. Each run reports its
+outcome on the durable `agent-moe-report` channel.
+
 A scheduled agent should:
 
 1. Read this playbook.

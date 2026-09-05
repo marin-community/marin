@@ -187,26 +187,65 @@ def test_loom_launch_action_uses_registered_automation_endpoint() -> None:
     assert '"$LOOM_URL/api/runs/create"' in launch_script
 
 
-def test_codehealth_refinement_workflow_launches_one_database_backed_agent() -> None:
-    workflow_path = ROOT.parent.parent / ".github/workflows/ops-codehealth-refinement.yaml"
+@pytest.mark.parametrize(
+    ("workflow_name", "job_name", "checkout_name", "launch_name", "profile", "channel"),
+    [
+        (
+            "ops-codehealth-refinement.yaml",
+            "refine",
+            "Checkout repository",
+            "Launch refinement agent",
+            "${{ vars.LOOM_CODEHEALTH_REFINEMENT_PROFILE }}",
+            "codehealth-refinement",
+        ),
+        (
+            "ops-agent-moe-report.yaml",
+            "refresh",
+            "Checkout workflow action",
+            "Launch report refresh agent",
+            "${{ vars.LOOM_AGENT_MOE_REPORT_PROFILE }}",
+            "agent-moe-report",
+        ),
+    ],
+)
+def test_scheduled_loom_workflow_uses_federated_profile(
+    workflow_name: str,
+    job_name: str,
+    checkout_name: str,
+    launch_name: str,
+    profile: str,
+    channel: str,
+) -> None:
+    workflow_path = ROOT.parent.parent / ".github/workflows" / workflow_name
     workflow = yaml.safe_load(workflow_path.read_text())
-    steps = {step["name"]: step for step in workflow["jobs"]["refine"]["steps"]}
+    steps = {step["name"]: step for step in workflow["jobs"][job_name]["steps"]}
     trigger = workflow.get("on", workflow.get(True))
 
     assert set(trigger) == {"schedule", "workflow_dispatch"}
     assert workflow["permissions"] == {"contents": "read", "id-token": "write"}
 
-    checkout = steps["Checkout repository"]
+    checkout = steps[checkout_name]
     assert checkout["with"]["persist-credentials"] is False
-    assert set(steps) == {"Checkout repository", "Launch refinement agent"}
-    assert [step["uses"] for step in workflow["jobs"]["refine"]["steps"]] == [
+    assert set(steps) == {checkout_name, launch_name}
+    assert [step["uses"] for step in workflow["jobs"][job_name]["steps"]] == [
         "actions/checkout@v6",
         "./.github/actions/launch-loom-run",
     ]
-    launch = steps["Launch refinement agent"]
+    launch = steps[launch_name]
     assert launch["uses"] == "./.github/actions/launch-loom-run"
-    assert launch["with"]["profile"] == "${{ vars.LOOM_CODEHEALTH_REFINEMENT_PROFILE }}"
-    assert launch["with"]["channel"] == "codehealth-refinement"
+    assert launch["with"]["profile"] == profile
+    assert launch["with"]["channel"] == channel
+
+
+def test_agent_moe_report_workflow_runs_weekly() -> None:
+    workflow_path = ROOT.parent.parent / ".github/workflows/ops-agent-moe-report.yaml"
+    workflow = yaml.safe_load(workflow_path.read_text())
+    trigger = workflow.get("on", workflow.get(True))
+
+    assert trigger["schedule"] == [{"cron": "17 9 * * 1"}]
+    assert workflow["concurrency"] == {"group": "agent-moe-report", "cancel-in-progress": False}
+    checkout = workflow["jobs"]["refresh"]["steps"][0]
+    assert checkout["with"]["sparse-checkout"] == ".github/actions/launch-loom-run"
 
 
 def test_release_reference_must_be_the_expected_registry_digest() -> None:
