@@ -20,6 +20,7 @@ from marin.datakit.sft_sources import all_sft_sources
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize import TokenizeConfig, tokenize
+from rigging.filesystem.cluster_config import marin_prefix, region_from_prefix
 from rigging.filesystem.storage_path import prefix_join
 from rigging.log_setup import configure_logging
 
@@ -51,6 +52,8 @@ _TOKENIZE_MAX_WORKERS = 64
 _TAIL_BUCKETS_WITHOUT_LONG = frozenset({"c07q3", "c38q1", "c38q3", "c38q4", "c39q0", "c39q1", "c39q2", "c39q3", "c39q4"})
 _SFT_LR = 5e-5
 _MIN_SAMPLES_PER_MIXTURE_BLOCK = 1.000001
+_TRAIN_REGION = "us-central2"
+_TRAIN_ZONE = "us-central2-b"
 
 # AdamH is used by the H100 SFT recipe because MuonH's Newton-Schulz workspace is
 # expensive on 80 GB GPUs. On this v4-2048 geometry, however, AdamH's two expert
@@ -198,6 +201,15 @@ def _model_config():
 
 
 def build() -> StepSpec:
+    storage_paths = {
+        "MARIN_PREFIX": marin_prefix(),
+        "base checkpoint": _BASE_CHECKPOINT,
+        "pretraining store": _PRETRAIN_STORE,
+    }
+    misplaced = {name: path for name, path in storage_paths.items() if region_from_prefix(path) != _TRAIN_REGION}
+    if misplaced:
+        raise ValueError(f"SFT storage must be in {_TRAIN_REGION}: {misplaced}")
+
     sft = _sft_mixture()
     pretrain_components, pretrain_weights = _pretrain_components()
     weights = {**sft.weights, **pretrain_weights}
@@ -223,7 +235,7 @@ def build() -> StepSpec:
                 data=data,
                 output_path=output_path,
                 run_id=_RUN_NAME.removeprefix("grug/"),
-                resources=ResourceConfig.with_tpu("v4-2048", preemptible=False),
+                resources=ResourceConfig.with_tpu("v4-2048", zone=_TRAIN_ZONE, preemptible=False),
                 steps=_TRAIN_STEPS,
                 batch_size=_BATCH_SIZE,
                 seed=0,

@@ -4,6 +4,7 @@
 import pytest
 from marin.datakit.sft_sources import all_sft_sources
 
+from experiments.june_tpu_67b_a2b.moe import sft_datakit_chat_mix as recipe
 from experiments.june_tpu_67b_a2b.moe.sft_datakit_chat_mix import (
     _MIXTURE_BLOCK_SIZE,
     _PRETRAIN_FRACTION,
@@ -27,3 +28,10 @@ def test_every_pretrain_bucket_gets_samples_in_each_mixture_block() -> None:
     assert set(components) == set(weights)
     assert sum(weights.values()) == pytest.approx(_PRETRAIN_FRACTION)
     assert all(int(weight * _MIXTURE_BLOCK_SIZE) >= 1 for weight in weights.values())
+
+
+def test_recipe_rejects_cross_region_output_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(recipe, "marin_prefix", lambda: "gs://marin-eu-west4")
+
+    with pytest.raises(ValueError, match="SFT storage must be in us-central2"):
+        recipe.build()
