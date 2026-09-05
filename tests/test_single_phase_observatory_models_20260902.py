@@ -403,3 +403,23 @@ def test_grid_model_selects_a_link_by_inner_cv_and_predicts_with_it():
     assert chosen.diagnostics["link"] in {"identity", "log_deficit_bounded"}
     assert chosen.diagnostics["inner_cv_rmse"] <= plain.diagnostics["inner_cv_rmse"]
     assert np.isfinite(both.predict(chosen, features, train)).all()
+
+
+def test_features_from_panel_scales_exposures_by_pool_fraction():
+    weights = np.array([[0.5, 0.5], [0.5, 0.5]])
+    inventory = np.array([2.0, 8.0])
+    pools = np.array([[1.0, 1.0], [0.5, 1.0]])
+    features = models.features_from_panel(
+        weights, inventory, ("a", "b"), early_fraction=None, label="t", pool_fractions=pools
+    )
+    np.testing.assert_allclose(features.exposures, [[1.0, 4.0], [2.0, 4.0]])
+    np.testing.assert_allclose(features.weights, weights)
+    with pytest.raises(ValueError, match="pool_fractions"):
+        models.features_from_panel(
+            weights,
+            inventory,
+            ("a", "b"),
+            early_fraction=None,
+            label="t",
+            pool_fractions=np.array([[1.0, 1.5], [1.0, 1.0]]),
+        )

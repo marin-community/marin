@@ -540,6 +540,53 @@ def test_max_train_batches_fixed_subset_is_independent_of_training_shuffle():
     assert len(first_order["uncapped"]) == 1_024
 
 
+def test_simulated_epoch_pool_fraction_keeps_a_nested_subset_of_the_full_support():
+    Pos = hax.Axis("position", 4)
+    components = {
+        name: DirectDatasetComponent(
+            datasets={
+                "train": ListAsyncDataset(
+                    [
+                        GrugLmExample.causal(jnp.full((Pos.size,), offset + value, dtype=jnp.int32))
+                        for value in range(4_096)
+                    ]
+                )
+            }
+        )
+        for name, offset in (("fractioned", 0), ("full", 10_000))
+    }
+
+    def selected(pool_fractions: dict[str, float] | None) -> dict[str, list[int]]:
+        config = LmDataConfig(
+            components=components,
+            tokenizer="passthrough",
+            vocab_size=16_384,
+            shuffle=DEFAULT_LM_DATA_SHUFFLE,
+            target_budget=4_096,
+            experiment_budget=1_024,
+            simulated_epoch_subset_seed=7,
+            simulated_epoch_pool_fractions=pool_fractions,
+        )
+        dataset = config.train_sets(Pos, initial_batch_size=1, key=jax.random.PRNGKey(1))
+        return {
+            name: [int(np.asarray(row.tokens)[0]) for row in component.as_sync_dataset()]
+            for name, component in dataset.items()
+        }
+
+    baseline = selected(None)
+    halved = selected({"fractioned": 0.5})
+    assert len(baseline["fractioned"]) == 1_024 and len(halved["fractioned"]) == 512
+    assert set(halved["fractioned"]) < set(baseline["fractioned"])
+    assert set(halved["full"]) == set(baseline["full"])
+    with pytest.raises(ValueError, match="requires experiment_budget"):
+        LmDataConfig(
+            components=components,
+            tokenizer="passthrough",
+            vocab_size=16_384,
+            simulated_epoch_pool_fractions={"fractioned": 0.5},
+        )
+
+
 def test_train_holdout_precedes_fixed_support_and_training_shuffle():
     Pos = hax.Axis("position", 4)
     source = ListAsyncDataset(

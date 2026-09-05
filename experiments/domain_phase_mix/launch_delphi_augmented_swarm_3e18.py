@@ -149,6 +149,8 @@ class DelphiSwarmRunSpec:
     mean_phase_tv_to_proportional: float
     phase_weights: dict[str, dict[str, float]]
     simulated_epoch_subset_seed: int | None = None
+    simulated_epoch_pool_fractions: dict[str, float] | None = None
+    """Per-domain pool fractions for fixed-share repetition rows; None keeps every domain at full simulated support."""
 
 
 @dataclass(frozen=True)
@@ -472,6 +474,7 @@ def _build_mixture_data(run_spec: DelphiSwarmRunSpec):
         target_budget=SIMULATED_EPOCH_TARGET_BUDGET,
         experiment_budget=run_spec.realized_train_tokens,
         simulated_epoch_subset_seed=run_spec.simulated_epoch_subset_seed,
+        simulated_epoch_pool_fractions=run_spec.simulated_epoch_pool_fractions,
     )
 
 

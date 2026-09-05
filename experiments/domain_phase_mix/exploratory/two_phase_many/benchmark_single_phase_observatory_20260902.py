@@ -1898,6 +1898,7 @@ def complexity_runtime(fits: pd.DataFrame, workers: int) -> pd.DataFrame:
 # ---------------------------------------------------------------------------------------------
 
 
+POOL_FRACTION_PREFIX = "pool_fraction::"  # registry columns for rows whose bucket pools were subsampled at fixed share
 HELDOUT_TARGET_COLUMNS = {
     "uncheatable": ("uncheatable_n", "uncheatable_mean_bpb"),
     "table9": ("table9_macro_n", "table9_macro_mean_bpb"),
@@ -1933,11 +1934,16 @@ def heldout_features(panel: BenchPanel, target: str) -> tuple[pd.DataFrame, mode
     weights = bank.loc[:, [f"weight::{bucket}" for bucket in panel.buckets]].to_numpy(float)
     if not np.allclose(weights.sum(axis=1), 1.0, atol=1e-6):
         raise ValueError(f"{panel.name}: heldout weights are not normalized")
+    pool_columns = [f"{POOL_FRACTION_PREFIX}{bucket}" for bucket in panel.buckets]
+    present = [column for column in pool_columns if column in bank.columns]
+    if present and len(present) != len(pool_columns):
+        raise ValueError(f"{panel.name}: pool-fraction columns are incomplete ({len(present)} of {len(pool_columns)})")
+    pool_fractions = bank.loc[:, pool_columns].fillna(1.0).to_numpy(float) if present else np.ones_like(weights)
     features = dataclasses.replace(
         panel.features,
-        exposures=weights * panel.features.inventory[None, :],
+        exposures=weights * panel.features.inventory[None, :] / pool_fractions,
         weights=weights,
-        label=f"{panel.name}|heldout|{target}",
+        label=f"{panel.name}|heldout|{target}" + ("|pool_fractions" if present else ""),
     )
     return bank, features
 

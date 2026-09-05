@@ -290,12 +290,18 @@ def features_from_panel(
     *,
     early_fraction: np.ndarray | None,
     label: str,
+    pool_fractions: np.ndarray | None = None,
 ) -> Features:
+    """Features from mixture weights; ``pool_fractions`` (rows x buckets, in (0, 1]) scale exposures for rows whose
+    bucket pools were subsampled at fixed share, so materialized epochs are weight x inventory / fraction."""
     weights = np.asarray(weights, dtype=float)
     inventory = np.asarray(inventory, dtype=float)
     fraction = np.ones(len(buckets)) if early_fraction is None else np.asarray(early_fraction, dtype=float)
+    pools = np.ones_like(weights) if pool_fractions is None else np.asarray(pool_fractions, dtype=float)
+    if pools.shape != weights.shape or (pools <= 0).any() or (pools > 1).any():
+        raise ValueError("pool_fractions must match the weights matrix and lie in (0, 1]")
     return Features(
-        exposures=weights * inventory[None, :],
+        exposures=weights * inventory[None, :] / pools,
         weights=weights,
         inventory=inventory,
         early_fraction=fraction,

@@ -797,6 +797,10 @@ class LmDataConfig:
     target_budget: int | None = None
     experiment_budget: int | None = None
     simulated_epoch_subset_seed: int | None = None
+    simulated_epoch_pool_fractions: dict[str, float] | None = None
+    """Per-component multipliers on the simulated data ratio, in (0, 1]: a component listed at 0.5 keeps half the
+    sequences the simulated budget would give it, so its materialized epochs double at fixed mixture weight. Slicing
+    uses the same seeded permutation as the unfractioned component, so the fractioned support is a nested subset."""
     mixture_block_size: int = 2048
     max_train_batches: dict[str, int] | None = None
     max_train_batches_subset_seed: int | None = None
@@ -840,6 +844,14 @@ class LmDataConfig:
             assert (
                 self.experiment_budget is None and self.target_budget is None
             ), "max_train_batches/num_validation_sequences and simulated data budget cannot all be set"
+        if self.simulated_epoch_pool_fractions is not None:
+            if self.experiment_budget is None or self.target_budget is None:
+                raise ValueError("simulated_epoch_pool_fractions requires experiment_budget and target_budget")
+            unknown = set(self.simulated_epoch_pool_fractions) - set(self.components)
+            if unknown:
+                raise ValueError(f"simulated_epoch_pool_fractions names unknown components: {sorted(unknown)}")
+            if any(not 0.0 < fraction <= 1.0 for fraction in self.simulated_epoch_pool_fractions.values()):
+                raise ValueError("simulated_epoch_pool_fractions values must lie in (0, 1]")
         if self.max_train_batches_subset_seed is not None and self.max_train_batches is None:
             raise ValueError("max_train_batches_subset_seed requires max_train_batches")
         if self.max_train_batches_subset_seed is not None and not self.shuffle:
@@ -1245,7 +1257,8 @@ class LmDataConfig:
                     )
 
                 true_length_of_dataset = len(ds.as_sync_dataset())
-                simulated_length_of_dataset = int(true_length_of_dataset * simulated_data_ratio)
+                pool_fraction = (self.simulated_epoch_pool_fractions or {}).get(name, 1.0)
+                simulated_length_of_dataset = int(true_length_of_dataset * simulated_data_ratio * pool_fraction)
                 sliced_datasets[name] = subset_dataset.slice_dataset(end_index=simulated_length_of_dataset)
 
             return sliced_datasets

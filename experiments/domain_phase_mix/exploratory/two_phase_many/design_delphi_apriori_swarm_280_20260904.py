@@ -64,6 +64,10 @@ PANEL = "delphi_3e18_39bucket"
 BUDGET_ROWS = 280
 SEED = 20_260_904
 BASE_DATA_SEED = 662_009  # the matched-seed comparison's data seed; seed block k uses BASE_DATA_SEED + k
+TRAINER_SEED = 0
+HISTORICAL_MANIFEST = (
+    SCRIPT_DIR / "reference_outputs" / "delphi_one_phase_augmented_swarm_3e18_20260715" / "training_manifest.csv"
+)
 DEFAULT_OUTPUT_DIR = SCRIPT_DIR / "reference_outputs" / "delphi_apriori_swarm_280_20260904"
 TYPES = ("cc_high", "cc_low", "code", "curated", "math", "synthetic")
 LHS_ROWS = 76
@@ -161,7 +165,22 @@ def load_dose_frame(panel: harness.BenchPanel) -> pd.DataFrame:
     return dose.reset_index(drop=True)
 
 
-def build_design(panel: harness.BenchPanel, dose: pd.DataFrame) -> pd.DataFrame:
+def historical_seeds(manifest_path: Path) -> dict[str, int]:
+    """Data seeds of the current panel's runs, from the augmented-swarm training manifest."""
+    if not manifest_path.exists():
+        return {}
+    manifest = pd.read_csv(manifest_path)
+    return {str(row.run_name): int(row.data_seed) for row in manifest.itertuples()}
+
+
+def build_design(
+    panel: harness.BenchPanel, dose: pd.DataFrame, panel_seeds: dict[str, int] | None = None
+) -> pd.DataFrame:
+    seeds = panel_seeds or {}
+
+    def historical_seed(run_names: str) -> int:
+        return seeds.get(run_names, -1)
+
     buckets = list(panel.buckets)
     inventory = panel.features.inventory
     types = np.array([policies.bucket_type(bucket) for bucket in buckets])
@@ -200,8 +219,9 @@ def build_design(panel: harness.BenchPanel, dose: pd.DataFrame) -> pd.DataFrame:
                 "source": source,
                 "source_coordinate_id": source_coordinate_id,
                 "source_run_names": source_run_names,
-                "seed_block": seed_block,
-                "data_seed": BASE_DATA_SEED + seed_block if source == "new" else -1,
+                "seed_block": seed_block if source == "new" else -1,
+                "data_seed": BASE_DATA_SEED + seed_block if source == "new" else historical_seed(source_run_names),
+                "trainer_seed": TRAINER_SEED,
                 "wave": wave,
                 "repeat_of": repeat_of,
                 "weights": weights / weights.sum(),
@@ -235,13 +255,13 @@ def build_design(panel: harness.BenchPanel, dose: pd.DataFrame) -> pd.DataFrame:
         source="reused_panel",
         source_run_names=names[uniform_index],
     )
-    for repeat in range(PROPORTIONAL_REPEATS):
+    for repeat in range(PROPORTIONAL_REPEATS):  # fresh full-support runs of A in seed blocks 0, 1, 2
         add(
-            f"proportional_repeat_{repeat + 1}",
+            f"proportional_repeat_block{repeat}",
             "reserved",
             proportional,
             anchor="A_proportional",
-            seed_block=repeat + 1,
+            seed_block=repeat,
             wave="pilot",
             repeat_of="baseline_proportional",
         )
@@ -288,6 +308,11 @@ def build_design(panel: harness.BenchPanel, dose: pd.DataFrame) -> pd.DataFrame:
                         pool_fractions={m: fraction for m in members(target)},
                         seed_block=seed_block,
                         wave="pilot",
+                        repeat_of=(
+                            f"subsample_{anchor}_{target}_pool{fraction:g}_block{PILOT_SEED_BLOCKS[0]}"
+                            if seed_block != PILOT_SEED_BLOCKS[0]
+                            else ""
+                        ),
                     )
     for target in EXTRA_TARGETS:
         for fraction in POOL_FRACTIONS:
@@ -400,6 +425,7 @@ def launcher_table(design: pd.DataFrame, buckets: list[str], inventory: np.ndarr
             "repeat_of": row["repeat_of"],
             "seed_block": row["seed_block"],
             "data_seed": row["data_seed"],
+            "trainer_seed": row["trainer_seed"],
             "subset_seed": row["data_seed"],  # paired: the data seed also selects the subsampled pool
         }
         for phase in PHASE_NAMES:
@@ -525,7 +551,7 @@ def main() -> None:
     harness.HELDOUT_DIR = args.registry_dir.resolve()
     panel = harness.load_panel(PANEL)
     _coordinates, _components, registry_hashes = harness.heldout_registry()
-    design = build_design(panel, load_dose_frame(panel))
+    design = build_design(panel, load_dose_frame(panel), historical_seeds(HISTORICAL_MANIFEST))
     buckets = list(panel.buckets)
     table = launcher_table(design, buckets, panel.features.inventory)
     table.to_csv(args.output_dir / "swarm_mixtures.csv", index=False)

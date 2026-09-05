@@ -4,7 +4,7 @@ Purpose: replace the current 280-run fit panel with a swarm, frozen before any m
 surrogate the evidence it needs to select a better Table-9 / Uncheatable optimum than OLMix fitted on the same
 swarm. The rows were placed without any model-proposed or measured optimum, but the lattice box and the anchors were
 chosen with this project's earlier results in view: a prospectively frozen adaptive design, not a blind one.
-Revision 2 incorporates the Codex review (section 8). This document is written for a reviewer who has not followed the project; every claim points at an artifact.
+Revisions 2 and 3 incorporate the two Codex reviews (section 8). This document is written for a reviewer who has not followed the project; every claim points at an artifact.
 Nothing has been launched. The materialized design is
 `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_apriori_swarm_280_20260904/`
 (`swarm_mixtures.csv`, `design_rows.csv`, `manifest.json`), produced by
@@ -132,21 +132,33 @@ epochs and shares are separated can derive per-bucket caps from the subsampled r
 harm curve, and search inside the resulting box with a zero-or-≥2% share rule, so the two failure modes of round 5
 are removed at the source rather than corrected afterwards.
 
-**Pilot first (37 new runs plus the existing proportional baseline).** Two seed blocks; within a block the data seed
-and the pool-subset seed are the same number (`data_seed` = `subset_seed` = 662009 + block), so a block's half- and
-quarter-pool rows are nested in its own full-support run and the block's training noise is shared. Block 0: the
-proportional baseline (existing) and anchor B at full support, then anchors A and B × synthetic QA, OLMOCR,
+**Pilot first (37 new runs).** Two paired seed blocks. Within a block every run, control or intervention, uses
+`data_seed` = `subset_seed` = 662009 + block and `trainer_seed` 0, so a block's half- and quarter-pool rows are nested
+in its own full-support runs and share their training noise. Block 0: fresh full-support runs of A (proportional,
+`proportional_repeat_block0`) and B (`anchor_B_small_pools_forward`), then anchors A and B × synthetic QA, OLMOCR,
 stack_edu, CC-high group × pool fractions 1/2 and 1/4 (16 rows). Block 1: the same 16 rows plus fresh full-support
-runs of A (proportional repeat 1) and B (anchor B repeat). Proportional repeats 2 and 3 (blocks 2 and 3) are the
-noise controls. The pilot's question is whether the per-bucket repetition effect at 3e18 is larger than the seed
-noise for these four targets; only if it is does the epoch information pay for the remaining 143 runs. The 8
-anchor-D subsampled rows, the lattice, the ladders and the corners are the second wave.
+runs of A (`proportional_repeat_block1`) and B (`anchor_B_small_pools_forward_repeat`). `proportional_repeat_block2`
+is the third noise control. The historical proportional baseline (data seed 7141000) stays in the swarm as a reused
+row and is not a pilot control. The 8 anchor-D subsampled rows, the lattice, the ladders and the corners are the
+second wave.
+
+**Continuation gate, fixed before block 0 runs.** For each pilot target t, anchor a, fraction f and block k, the
+contrast is Δ(t, a, f, k) = macro(subsampled) − macro(full-support control of a in block k), on the Table-9 macro
+BPB, with the Uncheatable BPB reported alongside. The seed SD σ is the pooled standard deviation of the proportional
+controls (blocks 0–2) and the two anchor-B controls. A target *passes* if, at either anchor, (i) the mean over the two
+blocks of Δ(t, a, 1/4) exceeds 2σ/√2 in magnitude, (ii) both blocks give it the same sign, and (iii)
+|Δ(t, a, 1/4)| ≥ |Δ(t, a, 1/2)| on average (dose monotonicity). Table 9 decides; a target that passes on Uncheatable
+only is reported, not counted. The second wave runs if at least two of the four targets pass; otherwise the swarm
+stops at the pilot, the result is recorded as "repetition below noise at 3e18 for these buckets", and the goal is
+pursued with share-space models and per-bucket support caps only.
 
 Pre-registered comparison, to be fixed before any fit:
 
 1. Fit OLMix (delta 0.01, KL 0.005, uniform cap 4, its published fitter) twice on the new swarm: on the full-support
-   rows only (240) and on all 280 rows. Its optimum is the one from whichever fit has the lower held-out Huber loss
-   under the swarm's inner folds, decided before either optimum runs. Fit our surrogate on all 280 rows.
+   rows only (240) and on all 280 rows. Freeze one set of five held-out folds over the 240 full-support rows, with
+   every support variant of a base mixture assigned to its base's fold, and score both fits by Huber loss on those
+   exact held-out full-support rows; the lower loss supplies OLMix's optimum, decided before either optimum runs.
+   Fit our surrogate on all 280 rows.
 2. Our optimizer: per-bucket caps read from the subsampled rows (knee = first pool fraction whose target loss is worse
    than the full-support run in the same seed block by more than the seed SD; support cap otherwise), shares zero or
    ≥ 2%, min-plus search.
@@ -164,40 +176,51 @@ non-CC types, no fitted value, but not blind). Eight targeted buckets keep knees
 cap only. The design counts rows, not compute; every row is a full 3e18 run, about 3e18 FLOPs each, 5.4e20 for the
 180 new rows and 1.1e20 for the pilot.
 
-## 5. What has to change end to end for the subsampled rows
+## 5. The pipeline for the subsampled rows: what is implemented, what remains
 
-The launcher is not the only change; the pool fraction has to reach the model.
+Implemented in this branch, each with a test:
 
-1. Launcher (`launch_delphi_augmented_swarm_3e18.py` pattern): for a row with any `pool_fraction_<domain>` below 1,
-   set for every dataset `max_train_batches[d] = floor(pool_fraction[d] × (experiment_budget / target_budget) ×
-   sequences[d] / batch_size)` and `max_train_batches_subset_seed = subset_seed`, instead of `experiment_budget` /
-   `target_budget` (Levanter forbids combining them, `datasets.py` lines 839–842). `max_train_batches` takes the
-   first N sequences of the same seeded stable permutation the simulated-epoch path uses
-   (`_stable_simulated_epoch_subset_key(name, "train", seed)`, lines 1276–1290), so the half- and quarter-pool
-   rows are nested subsets of the full-support run with the same seed; the mixture restarts an exhausted dataset
-   (`StopStrategy.RESTART_STRATEGY`), which is repetition. Log `pool_fractions`, `seed_block`, `data_seed` and
-   `subset_seed` in the run config so the collector can read them.
-2. Registry collector (`prepare_single_phase_heldout_benchmark_20260902.py`): read the pool fractions from the run
-   config into `pool_fraction::<domain>` columns on `heldout_runs.csv` and `heldout_coordinates.csv`, and include
-   them in the coordinate identity. Today a coordinate is its weight vector; without this, the half- and
-   quarter-pool rows collapse into the full-support coordinate and their outcomes are averaged away.
-3. Panel and bank features (`benchmark_single_phase_observatory_20260902.py`, `heldout_features` and the panel
-   loader; `single_phase_observatory_models_20260902.Features`): build `exposures` as `weights × inventory /
-   pool_fraction` per row. `exposures` is already a per-row matrix, so the successor needs no other change;
-   anything that reads the per-bucket `inventory` constant (onset covariates, the unique-token benefit input) must
-   read the per-row effective inventory instead for subsampled rows.
-4. OLMix's fitter sees shares only; it needs no change, which is the point.
+1. Levanter: `LMMixtureDatasetConfig.simulated_epoch_pool_fractions` (per-component multipliers on the simulated data
+   ratio, validated to (0, 1] and to require the simulated budgets). `slice_for_simulated_epoching` takes
+   `int(length × ratio × fraction)` sequences of the same seeded stable permutation, so a fractioned component is a
+   nested subset of its full-support run under the same `simulated_epoch_subset_seed`; an exhausted component
+   restarts (`StopStrategy.RESTART_STRATEGY`), which is repetition. Test:
+   `test_simulated_epoch_pool_fraction_keeps_a_nested_subset_of_the_full_support` (512 of 1024 sequences, strict
+   subset, other components untouched).
+2. Launcher: `launch_delphi_apriori_swarm_3e18.py` reads `swarm_mixtures.csv`, builds one `DelphiSwarmRunSpec` per
+   new row of the requested wave (`--wave pilot|full`), takes `data_seed`, `trainer_seed` and `subset_seed` from the
+   table (rejecting unpaired seeds), passes the row's sub-unit pool fractions as `simulated_epoch_pool_fractions`
+   (a new optional field on the run spec, threaded through `_build_mixture_data`), and reuses the augmented-swarm
+   model, horizon, optimizer, validation sets and Table-9 evaluation. Reused rows are skipped. `--dry-run` writes
+   the manifest locally. Test: `tests/test_launch_delphi_apriori_swarm_3e18.py`.
+3. Surrogate features: `features_from_panel(..., pool_fractions=)` builds exposures as weight × inventory / fraction,
+   and `heldout_features` reads `pool_fraction::<bucket>` registry columns when present (all or none). Unit pool
+   fractions reproduce the canonical exposures bit for bit (pin refreshed on that evidence). Test in
+   `tests/test_single_phase_observatory_models_20260902.py`.
+
+Not implemented here: the registry collector (`prepare_single_phase_heldout_benchmark_20260902.py`, being edited in
+another session) must read `simulated_epoch_pool_fractions`, `data_seed` and `subset_seed` from the run config into
+`pool_fraction::<bucket>` and seed columns on `heldout_runs.csv` / `heldout_coordinates.csv` and include the pool
+fractions in the coordinate identity; today a coordinate is its weight vector, so without this the half- and
+quarter-pool rows would be averaged into the full-support coordinate. This is the last gap before the pilot can be
+scored, and it needs an end-to-end check on one pilot run (config in the W&B run, columns in the registry, exposures
+in the bank) before block 0 is submitted.
 
 `swarm_mixtures.csv` follows the augmented-swarm launcher's row convention (`phase_0_<domain>` and
 `phase_1_<domain>` columns, equal in every row, single phase) with `pool_fraction_<domain>`,
 `materialized_epochs_<domain>`, provenance (`source_coordinate_id`, `source_run_names`, `repeat_of`), `seed_block`,
-`data_seed`, `subset_seed` and `wave` columns appended.
+`data_seed`, `trainer_seed`, `subset_seed` and `wave` columns appended. Reused panel rows carry their historical data
+seeds from the augmented-swarm training manifest.
 
 ## 6. Files
 
 - `experiments/domain_phase_mix/exploratory/two_phase_many/design_delphi_apriori_swarm_280_20260904.py`: the
   design (seeded, deterministic), the launcher table, the row summary, the support-separation and coverage diagnostics.
-- `tests/test_design_delphi_apriori_swarm_280_20260904.py`: budget, simplex rows, reserved rows, subsample semantics.
+- `tests/test_design_delphi_apriori_swarm_280_20260904.py`: budget, simplex rows, reserved rows, unique run
+  conditions, paired seeds per block, provenance, subsample semantics.
+- `experiments/domain_phase_mix/launch_delphi_apriori_swarm_3e18.py` and `tests/test_launch_delphi_apriori_swarm_3e18.py`;
+  `launch_delphi_augmented_swarm_3e18.py` (run-spec field); `lib/levanter/src/levanter/data/text/datasets.py` and
+  `lib/levanter/tests/test_text.py` (pool fractions); the harness and models changes named in section 5.
 - `reference_outputs/delphi_apriori_swarm_280_20260904/swarm_mixtures.csv` (280 rows), `design_rows.csv`,
   `manifest.json` (seeds, script and mixture hashes, unique tokens, support separation, coverage).
 - Evidence documents: round 5 and round 6 reports under `.agents/handoffs/`, Fieldbook notes
@@ -238,3 +261,16 @@ OLMix.
 - Recommendation not to launch the 180 runs or the earlier pilot: adopted. The order is pipeline changes (section
   5), then the 37-run pilot, then a decision on the second wave.
 
+### Codex review of revision 2, and what changed (revision 3)
+
+- P1, block 0 was not paired (the reused proportional baseline ran at data seed 7141000): correct. The proportional
+  repeats now occupy seed blocks 0, 1, 2, so block 0 has fresh full-support runs of both pilot anchors at 662009;
+  `trainer_seed` is carried explicitly; reused rows record their historical data seeds; the design test asserts
+  control–treatment seed equality within each pilot block.
+- P1, seed pairing and pool-fraction propagation were specifications: now implemented for Levanter, the launcher and
+  the surrogate features (section 5), each with a test; the registry collector remains, and an end-to-end check on
+  one pilot run is required before block 0.
+- P1, the OLMix selection rule lacked a common evaluation population: fixed to one frozen set of held-out
+  full-support folds, support variants in their base's fold, both fits scored on the same rows.
+- P2, the continuation gate was not operational: defined in section 4 (metric, contrast, noise estimate, sign
+  consistency, dose monotonicity, the Table-9-decides rule, and the stop outcome).

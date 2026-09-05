@@ -51,7 +51,7 @@
     "note": "diagnostic against measured Table-9 coordinates; the design was placed without them"
   },
   "design_seed": 20260904,
-  "mixtures_sha256": "9f3133279db4ca5a209ddcd6a11e6892d5f629f60dfb9870d7014ff252f6cdaa",
+  "mixtures_sha256": "e89118afc7150c2d654f108a88561eca0c76cb4a80d4402fa3397e5a194ae5b3",
   "new_runs": 180,
   "panel_inputs": {
     "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_3e18_observed_components_20260724/observed_component_panel.csv": "209802db7bcad05d09da01d846d1be75140b181993a08761cee430c7ca19fbed",
@@ -68,7 +68,7 @@
   },
   "reused_dose_rows_require": "table9_macro_n > 0 and uncheatable_n > 0 in the registry",
   "rows": 280,
-  "script_sha256": "a22afd1817c96274cfc671a35259760050ebe739acb185eef929f10e3265e1ec",
+  "script_sha256": "31e18b3d43616a52042a0bd39eb2e9fafb901e43a068b037509fd5d0aae2ffca",
   "support_separation": {
     "buckets": 39,
     "design_rank_shares_and_exposures": 47,

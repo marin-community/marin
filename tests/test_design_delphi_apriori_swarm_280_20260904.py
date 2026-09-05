@@ -35,7 +35,8 @@ def built():
     dose = pd.DataFrame(weights, columns=[f"weight::{b}" for b in panel.buckets])
     dose["coordinate_id"] = [f"coord{i}" for i in range(60)]
     dose["source_run_names"] = [f"run{i}" for i in range(60)]
-    return panel, design.build_design(panel, dose)
+    seeds = {name: 7_141_000 for name in panel.runs}
+    return panel, design.build_design(panel, dose, seeds)
 
 
 def test_design_meets_budget_with_simplex_rows_and_reserved_baselines(built):
@@ -45,7 +46,7 @@ def test_design_meets_budget_with_simplex_rows_and_reserved_baselines(built):
     assert weights.min() >= 0 and np.allclose(weights.sum(1), 1.0)
     kinds = set(frame["kind"])
     assert {"baseline_proportional", "baseline_unimax", "baseline_uniform"} <= kinds
-    assert sum(k.startswith("proportional_repeat_") for k in kinds) == design.PROPORTIONAL_REPEATS
+    assert sum(k.startswith("proportional_repeat_block") for k in kinds) == design.PROPORTIONAL_REPEATS
     assert sum(k.startswith("pctrl_del_") for k in kinds) == len(panel.buckets)
     assert frame["run_name"].is_unique
 
@@ -59,15 +60,19 @@ def test_run_conditions_are_unique_and_repeats_differ_only_by_seed_block(built):
         for w, f, block in zip(frame["weights"], fractions, frame["seed_block"], strict=True)
     ]
     assert not pd.Series(keys).duplicated().any()
-    mixtures = [design.condition_key(w, f, 0) for w, f in zip(frame["weights"], fractions, strict=True)]
-    same_mixture = pd.Series(mixtures).duplicated(keep="first").to_numpy()
-    assert frame.loc[same_mixture, "seed_block"].gt(0).all()  # every repeated mixture is a fresh seed block
+    mixtures = pd.Series([design.condition_key(w, f, 0) for w, f in zip(frame["weights"], fractions, strict=True)])
+    for _, group in frame.groupby(mixtures.to_numpy()):
+        if len(group) > 1:  # repeated mixtures are distinct runs: distinct data seeds, later ones marked as repeats
+            assert group["data_seed"].is_unique
+            assert group["repeat_of"].iloc[1:].ne("").all()
 
 
 def test_reused_rows_keep_their_provenance(built):
     _panel, frame = built
     reused = frame[frame["source"].ne("new")]
     assert reused["source_run_names"].ne("").all()
+    assert reused["seed_block"].eq(-1).all()
+    assert reused.loc[reused["source"].eq("reused_panel"), "data_seed"].eq(7_141_000).all()
     dose = frame[frame["block"].eq("reused_dose_ladder")]
     assert dose["source_coordinate_id"].str.startswith("coord").all()
 
@@ -91,6 +96,15 @@ def test_subsampled_rows_keep_anchor_weights_and_pair_seeds_within_blocks(built)
             assert list(fractions) == [row["target_bucket"]]
     anchors = frame[frame["block"].eq("anchor")]
     assert set(anchors.loc[anchors["seed_block"].eq(1), "kind"]) == {"anchor_B_small_pools_forward_repeat"}
+    # every pilot block has a fresh full-support control of each pilot anchor at the block's paired seed
+    for block in design.PILOT_SEED_BLOCKS:
+        controls = frame[
+            frame["wave"].eq("pilot") & frame["seed_block"].eq(block) & frame["block"].isin(["reserved", "anchor"])
+        ]
+        assert set(controls["anchor"]) == set(design.PILOT_ANCHORS)
+        treated = pilot[pilot["seed_block"].eq(block)]
+        assert set(controls["data_seed"]) == set(treated["data_seed"]) == {design.BASE_DATA_SEED + block}
+    assert frame["trainer_seed"].eq(design.TRAINER_SEED).all()
     assert all(bucket in buckets for fractions in subsampled["pool_fractions"] for bucket in fractions)
 
 
