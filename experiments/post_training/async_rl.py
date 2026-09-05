@@ -141,7 +141,7 @@ def training_config(runner: Runner, scale: Scale, *, spans: bool, staleness: int
         generate_spans=spans,
         async_spans=spans,
         training_metrics=True,
-        logger="console",
+        logger="wandb",
         project_name="marin-async-non-agentic-rl",
         resume_mode=None,
         eval_before_train=True,
@@ -260,7 +260,6 @@ def build_experiment(
             disk="2TB",
             priority="batch",
             max_retries=0,
-            wandb_entity="marin-community",
             timeout_seconds=timeout_seconds,
         ),
     )
