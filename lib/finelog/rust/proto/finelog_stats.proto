@@ -206,7 +206,7 @@ message ObjectRef {
   string provider_version = 2;
   string etag = 3;
   uint64 byte_size = 4;
-  bytes sha256 = 5;
+  reserved 5;
 }
 
 message CatalogSegment {

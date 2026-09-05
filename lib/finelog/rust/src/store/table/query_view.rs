@@ -38,6 +38,7 @@ pub struct PlannedSegment {
     pub path: String,
     pub min_seq: i64,
     pub max_seq: i64,
+    pub row_count: Option<u64>,
     /// Encoded key bounds, when the segment's key column carries them.
     pub key_bounds: Option<(String, String)>,
     pub partition: Option<SegmentPartition>,
@@ -99,6 +100,7 @@ fn plan_segment(
         min_seq: segment.min_seq.unwrap_or(0),
         // A missing bound must never prune: i64::MAX makes every range overlap.
         max_seq: segment.max_seq.unwrap_or(i64::MAX),
+        row_count: segment.row_count.and_then(|rows| u64::try_from(rows).ok()),
         key_bounds: key_bounds(segment),
         partition,
         artifacts: crate::store::table::segment_view::local_artifacts(store, &artifacts)?,
