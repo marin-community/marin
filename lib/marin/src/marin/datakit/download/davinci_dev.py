@@ -163,6 +163,7 @@ def davinci_dev_ctx_native_normalize_steps() -> tuple[StepSpec, ...]:
 # ---------------------------------------------------------------------------
 
 ENV_GLOBS = ["env-native.jsonl"]
+TERMINAL_SUBMISSION_TOOLS = frozenset({"finish", "submit"})
 
 
 def _success_to_tag(success: bool | None) -> str | None:
@@ -192,6 +193,23 @@ def env_row_to_chat_doc(row: dict) -> list[dict]:
         return []
     if isinstance(messages, str):
         messages = json.loads(messages)
+    if messages[-1].get("role") == "tool" and len(messages) >= 2:
+        final_call_id = messages[-1].get("tool_call_id")
+        previous = messages[-2]
+        terminal_call = next(
+            (
+                call
+                for call in previous.get("tool_calls") or []
+                if call.get("id") == final_call_id
+                and (call.get("function") or {}).get("name") in TERMINAL_SUBMISSION_TOOLS
+            ),
+            None,
+        )
+        if previous.get("role") == "assistant" and terminal_call is not None:
+            messages = messages[:-1]
+    if messages[-1].get("role") != "assistant":
+        counters.pipeline.update_counter("davinci_dev/env/chat_incomplete_filtered", 1)
+        return []
     tag = _success_to_tag(row.get("success") if "success" in row else None)
     if tag:
         messages = [{"role": "system", "content": tag}, *messages]
@@ -265,7 +283,7 @@ def davinci_dev_env_native_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/davinci-dev-env-native",
         deps=[dl],
         fn=lambda output_path: transform_env_native_chat(dl.output_path, output_path),
-        hash_attrs={"version": "2026.09.04.1"},
+        hash_attrs={"version": "2026.09.04.2"},
     )
     return processed, normalize_chat_step(
         name="normalized-chat/davinci-dev-env-native",

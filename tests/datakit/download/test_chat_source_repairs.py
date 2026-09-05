@@ -1,9 +1,62 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from marin.datakit.download.davinci_dev import env_row_to_chat_doc as davinci_row_to_chat_doc
 from marin.datakit.download.gpt_oss_rollouts import row_to_chat_doc as gpt_oss_row_to_chat_doc
 from marin.datakit.download.swe_rebench_openhands import row_to_chat_doc as openhands_row_to_chat_doc
 from marin.datakit.download.swe_zero_12m import row_to_chat_doc as swe_zero_row_to_chat_doc
+
+
+def test_davinci_drops_terminal_submit_observation() -> None:
+    row = {
+        "success": True,
+        "messages": [
+            {"role": "user", "content": "Fix the bug."},
+            {
+                "role": "assistant",
+                "content": "The fix is complete.",
+                "tool_calls": [
+                    {
+                        "id": "submit_1",
+                        "type": "function",
+                        "function": {"name": "submit", "arguments": {}},
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "content": "diff --git a/app.py b/app.py",
+                "name": "submit",
+                "tool_call_id": "submit_1",
+            },
+        ],
+    }
+
+    [document] = davinci_row_to_chat_doc(row)
+    assert [message["role"] for message in document["messages"]] == ["system", "user", "assistant"]
+    assert document["messages"][-1]["tool_calls"][0]["function"]["name"] == "submit"
+
+
+def test_davinci_drops_nonterminal_trailing_observation() -> None:
+    row = {
+        "messages": [
+            {"role": "user", "content": "Fix the bug."},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "bash_1",
+                        "type": "function",
+                        "function": {"name": "bash", "arguments": {"command": "pytest"}},
+                    }
+                ],
+            },
+            {"role": "tool", "content": "tests failed", "name": "bash", "tool_call_id": "bash_1"},
+        ]
+    }
+
+    assert davinci_row_to_chat_doc(row) == []
 
 
 def test_gpt_oss_drops_assistant_reply_that_demonstrates_inline_tool_protocol() -> None:
