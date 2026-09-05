@@ -34,6 +34,7 @@ _BASH_ACTION = re.compile(r"\A\s*(?P<reasoning>.*?)```bash\s*\n(?P<command>.*?)\
 _THOUGHT_PREFIX = re.compile(r"\A\s*THOUGHT:\s*", re.IGNORECASE)
 _OBSERVATION_PREFIX = re.compile(r"\A\s*Observation:\s*", re.IGNORECASE)
 _COMPLETION_MARKER = "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
+_COMPLETION_COMMAND = re.compile(rf"\A\s*(?:echo|printf)\s+[\"']?{_COMPLETION_MARKER}(?:[\"'\\n]|\s|;|&|\||\Z)")
 
 SWE_ZERO_SYSTEM_PROMPT = """You are a software-engineering agent working in a repository.
 Use the bash tool to inspect and edit files. Each command runs in a fresh subshell from the
@@ -108,7 +109,13 @@ def row_to_chat_doc(row: dict) -> list[dict]:
         reasoning = _THOUGHT_PREFIX.sub("", match.group("reasoning"), count=1).strip()
         reasoning_content = f"<think>{reasoning}</think>" if reasoning else ""
         command = match.group("command").strip()
-        if _COMPLETION_MARKER in command:
+        remaining = messages[index + 1 :]
+        has_final_observation = (
+            len(remaining) == 1
+            and remaining[0].get("role") == "user"
+            and _COMPLETION_MARKER in (remaining[0].get("content") or "")
+        )
+        if _COMPLETION_COMMAND.search(command) and (not remaining or has_final_observation):
             canonical.append({"role": "assistant", "content": f"{reasoning_content}\n\nTask complete.".strip()})
             skip_completion_observation = True
             continue
@@ -196,6 +203,6 @@ def swe_zero_12m_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/swe-zero-12m-trajectories",
         deps=[dl],
         fn=lambda output_path: transform_chat(dl.output_path, output_path),
-        hash_attrs={"version": "2026.09.04.1"},
+        hash_attrs={"version": "2026.09.04.2"},
     )
     return processed, normalize_chat_step(name="normalized-chat/swe-zero-12m", download=processed)

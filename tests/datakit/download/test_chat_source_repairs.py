@@ -72,3 +72,31 @@ def test_swe_zero_drops_trajectory_ending_with_observation() -> None:
     }
 
     assert swe_zero_row_to_chat_doc(row) == []
+
+
+def test_swe_zero_does_not_treat_inspecting_completion_marker_as_completion() -> None:
+    row = {
+        "messages": [
+            {"role": "user", "content": "Fix the bug."},
+            {
+                "role": "assistant",
+                "content": (
+                    "THOUGHT: Find the protocol.\n\n```bash\ngrep COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT README.md\n```"
+                ),
+            },
+            {"role": "user", "content": "Observation: README.md: completion instructions"},
+            {
+                "role": "assistant",
+                "content": "THOUGHT: Done.\n\n```bash\necho COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\n```",
+            },
+            {"role": "user", "content": "Observation: COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"},
+        ]
+    }
+
+    [document] = swe_zero_row_to_chat_doc(row)
+    assert [message["role"] for message in document["messages"]] == [
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+    ]
