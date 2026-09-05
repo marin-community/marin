@@ -1,8 +1,10 @@
-# Handoff: an a priori 280-row Delphi 3e18 swarm for the 39-bucket mixing problem (2026-09-04)
+# Handoff: a prospectively frozen 280-row Delphi 3e18 swarm for the 39-bucket mixing problem (2026-09-04)
 
-Purpose: replace the current 280-run fit panel with a swarm, fixed before any model is fitted, that gives a
+Purpose: replace the current 280-run fit panel with a swarm, frozen before any model is fitted on it, that gives a
 surrogate the evidence it needs to select a better Table-9 / Uncheatable optimum than OLMix fitted on the same
-swarm. This document is written for a reviewer who has not followed the project; every claim points at an artifact.
+swarm. The rows were placed without any model-proposed or measured optimum, but the lattice box and the anchors were
+chosen with this project's earlier results in view: a prospectively frozen adaptive design, not a blind one.
+Revision 2 incorporates the Codex review (section 8). This document is written for a reviewer who has not followed the project; every claim points at an artifact.
 Nothing has been launched. The materialized design is
 `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_apriori_swarm_280_20260904/`
 (`swarm_mixtures.csv`, `design_rows.csv`, `manifest.json`), produced by
@@ -69,52 +71,56 @@ per-round timelines and TLDRs; Fieldbook experiment `exp_01m1ge7ye6hz2epd0mjkbkr
 ## 2. The design and what each block is for
 
 All 280 rows are fixed by the script from bucket metadata (unique-token counts, bucket type read from the name) and
-the literature's repetition priors. No row comes from a fitted model or a measured optimum. OLMix is refitted on the
-identical 280 rows.
+the literature's repetition priors; the box and anchors reflect this project's earlier results (section 4, risks).
+No row comes from a fitted model or a measured optimum. OLMix is refitted on the identical 280 rows.
 
 | block | rows | new runs | placement rule | problem it addresses |
 |---|---|---|---|---|
-| baselines: proportional, UniMax, uniform | 3 | 0 | reused | comparability with every earlier swarm |
-| proportional repeats | 3 | 3 | reused mixture, fresh seeds | seed noise floor (Table-9 macro SD 0.0031 today) |
+| baselines: proportional, UniMax, uniform | 3 | 0 | reused (panel run names recorded) | comparability with every earlier swarm |
+| proportional repeats, seed blocks 1–3 | 3 | 3 | reused mixture, fresh paired seeds | seed noise floor and the full-support controls of the pilot |
 | leave-one-bucket-out from proportional | 39 | 0 | reused | per-bucket deletion effects, as before |
-| type-level anchors B (small pools forward), C (code and math forward), D (CC halved, low bin dropped) | 3 | 3 | relative epoch levels per type: B = CC-high 1, CC-low 0.5, code 2, curated 4, math 4, synthetic 4; C = CC 0.5, code 6, math 6, curated 2, synthetic 2; D = CC-high 0.5, CC-low 0, others 4 | bases for the ladders and subsampled rows in concentrated regions |
-| **fixed-share subsampled pools** | 40 | 40 | anchors A (proportional), B, D; targets synthetic QA, OLMOCR, both stack buckets, wikipedia, stem-heavy crawl, synth math, the CC-high group; pool fractions 1/2 and 1/4 | problem 2: the only rows in which epochs move and shares do not |
-| epoch-ratio Latin hypercube | 77 | 77 | six type levels drawn from a log box (CC 1/4–2, others 1/4–16), per-bucket jitter σ 0.35, shares = level × unique tokens normalized | problem 1: joint elevation of clean pools with reduced CC; problem 3: concentrated rows on which spread credit is testable |
+| type-level anchors B, C, D at full support, plus B repeated in seed block 1 | 4 | 4 | B = CC-high 1, CC-low 0.5, code 2, curated 4, math 4, synthetic 4; C = CC 0.5, code 6, math 6, curated 2, synthetic 2; D = CC-high 0.5, CC-low 0, others 4 | bases for the ladders and subsampled rows; full-support controls per seed block |
+| **fixed-share subsampled pools** | 40 | 40 | pilot: anchors A and B × targets synthetic QA, OLMOCR, stack_edu, CC-high group × pool fractions 1/2, 1/4 × seed blocks 0 and 1 (32 rows); plus anchor D × stack_fim, wikipedia, stem-heavy crawl, synth math × 1/2, 1/4 (8 rows) | problem 2: the only rows in which epochs move and shares do not |
+| epoch-ratio Latin hypercube | 76 | 76 | six type levels from a log box (CC 1/4–2, others 1/4–16), per-bucket jitter σ 0.35, shares = level × unique tokens normalized | problem 1: joint elevation of clean pools with reduced CC; problem 3: concentrated rows on which spread credit is testable |
 | single-bucket share ladders at B and C | 48 | 48 | 8 buckets × multipliers 0.25, 3, 8 | per-bucket knees in concentrated regions rather than around the proportional row |
-| CC-removal corners | 9 | 9 | CC-high in {1, 0.5, 0.25}, CC-low in {0, 0.25}, other types at 2/4/8 | how much web can go |
-| random panel rows, farthest-point subset | 18 | 0 | reused | keeps the spread region covered |
-| highest-epoch conditional dose ladders | 40 | 0 | reused | CC over-exposure and proportional-anchor knees already paid for |
+| CC-removal corners | 9 | 9 | (CC-high, CC-low, others) ratios 2:0:4, 1:0:4, 1/4:0:4, 1/8:0:4, 1:1/4:4, 1/4:1/4:4, 1:1/2:4, 1/2:1/4:4, 1/10:1/10:4, all distinct from each other and from anchor D | how much web can go |
+| random panel rows, farthest-point subset | 18 | 0 | reused (panel run names recorded) | keeps the spread region covered |
+| highest-epoch conditional dose ladders with both targets measured | 40 | 0 | reused (registry coordinate ids and run names recorded) | CC over-exposure and proportional-anchor knees already paid for |
 
-New runs: 180 of 280. The reserved 45 rows are unchanged from the current panel, so every baseline comparison that
-exists today remains possible.
+New runs: 180 of 280, of which 37 form the pilot (section 4). Every run condition (shares, pool fractions, seed
+block) is unique; repeated mixtures differ only by seed block. The reserved 45 rows are unchanged from the current
+panel, so every baseline comparison that exists today remains possible.
 
 ## 3. Evidence that the design addresses the problems
 
 All numbers are from `manifest.json` and `design_rows.csv`; the coverage comparison uses measured coordinates only
 as a diagnostic after placement.
 
-- **Support (problem 1).** Median TV from the ten best measured Table-9 mixtures to the nearest design row 0.26
-  (min 0.18) against 0.34 (min 0.28) for the current panel; 122 design rows under 35% CC (panel 0), 139 rows below
-  15 effective buckets (panel 0), 19 rows with synthetic QA at or above 25% share (panel 0), synthetic QA reaching
-  7.2 epochs at full pool (panel 2.3), OLMOCR 14.5 (3.5), stack 21.6 (6.9). A random Dirichlet swarm of 280 rows,
+- **Support (problem 1).** Median TV from the ten best measured Table-9 mixtures to the nearest design row 0.28
+  (min 0.20) against 0.34 (min 0.28) for the current panel (`manifest.json`, `coverage_diagnostic`); design rows
+  under 35% CC, below 15 effective buckets and with synthetic QA at or above 25% share number in the hundreds,
+  tens and tens respectively where the panel has none (`design_rows.csv`); synthetic QA reaches 7.2 epochs at full
+  pool (panel 2.3), OLMOCR 14.5 (3.5), stack 21.6 (6.9). A random Dirichlet swarm of 280 rows,
   the RegMix-style alternative, does no better than the panel (median 0.38, none under 35% CC).
-- **Identifiability (problem 2).** In the panel the spread of log epochs given share is exactly zero for all 39
-  buckets. In the design it is 0.16 for synthetic QA, OLMOCR, both stack buckets and the CC-high group (six rows each
-  with a reduced pool, at three anchors) and 0.13 for wikipedia, stem-heavy crawl and synth math (four rows each).
-  Those rows are usable by an epoch-aware model and invisible to OLMix, whose surrogate sees identical shares.
-  Half- and quarter-pool rows are nested subsets of the full pool under the same seed (section 5), so the contrast is
-  clean.
+- **Support separation (problem 2).** The surrogate's inputs are shares and exposures. In the current panel the joint
+  matrix [shares | exposures] has rank 39: exposures are shares times a constant, so no exposure direction exists
+  that shares do not imply. In the design it has rank 47: eight independent exposure directions, one per subsampled
+  target group (`manifest.json`, `support_separation`). Per bucket, the centred (share, exposure) pair has a
+  singular-value ratio of 0 in the panel and above 0 for the eight targets in the design. Those rows are usable by
+  an epoch-aware model and invisible to OLMix, whose surrogate sees identical shares. Half- and quarter-pool rows
+  are nested subsets of the full pool under the same seed (section 5). This shows the directions exist; whether
+  eight knees are estimable at the seed noise is the pilot's question, not a property of the matrix.
 - **Spread credit (problem 3).** The lattice and corners give 139 concentrated rows. If the true response does not
   reward spreading, a per-bucket concave benefit fitted on them will misfit those rows and lose the inner
   cross-validation to a pooled form; on the current panel that contest cannot happen because every row is spread.
-- **Reuse (problem 4).** The reserved and reused rows are exactly the a priori rows round 6 tested; the 180 new rows
+- **Reuse (problem 4).** The reserved and reused rows are exactly the sampled and intervention rows round 6 tested; the 180 new rows
   are the ones round 6 showed to be missing (nothing near the frontier region, nothing separating epochs from
   shares).
 
 What this evidence does not show: that a surrogate fitted on the new swarm will pick a better mixture. No run in
 the new blocks exists, so that cannot be measured offline; section 4 states the test that would measure it.
 
-## 4. Why this can reach the goal, and the pre-registered test
+## 4. Why this can reach the goal, the pilot, and the pre-registered test
 
 Goal: a surrogate optimum from the new swarm that beats OLMix's optimum from the same swarm. The mechanism is not
 a better model; it is information OLMix cannot consume. OLMix's surrogate is a positive log-linear law in shares
@@ -126,41 +132,66 @@ epochs and shares are separated can derive per-bucket caps from the subsampled r
 harm curve, and search inside the resulting box with a zero-or-≥2% share rule, so the two failure modes of round 5
 are removed at the source rather than corrected afterwards.
 
+**Pilot first (37 new runs plus the existing proportional baseline).** Two seed blocks; within a block the data seed
+and the pool-subset seed are the same number (`data_seed` = `subset_seed` = 662009 + block), so a block's half- and
+quarter-pool rows are nested in its own full-support run and the block's training noise is shared. Block 0: the
+proportional baseline (existing) and anchor B at full support, then anchors A and B × synthetic QA, OLMOCR,
+stack_edu, CC-high group × pool fractions 1/2 and 1/4 (16 rows). Block 1: the same 16 rows plus fresh full-support
+runs of A (proportional repeat 1) and B (anchor B repeat). Proportional repeats 2 and 3 (blocks 2 and 3) are the
+noise controls. The pilot's question is whether the per-bucket repetition effect at 3e18 is larger than the seed
+noise for these four targets; only if it is does the epoch information pay for the remaining 143 runs. The 8
+anchor-D subsampled rows, the lattice, the ladders and the corners are the second wave.
+
 Pre-registered comparison, to be fixed before any fit:
 
-1. Fit OLMix (delta 0.01, KL 0.005, uniform cap 4, its published fitter) and our surrogate on the same 280 rows.
-2. Our optimizer: per-bucket caps read from the subsampled rows (knee = first pool fraction whose target loss is
-   worse than the full pool by more than the repeat SD; support cap otherwise), shares zero or ≥ 2%, min-plus search.
-3. Materialize both optima at two data seeds each (seed SD 0.0031 on the Table-9 macro; a 0.01 difference is
-   detected at two seeds per arm). Report both against the replicated centre (1.0639, 26 seeds) as the fixed
+1. Fit OLMix (delta 0.01, KL 0.005, uniform cap 4, its published fitter) twice on the new swarm: on the full-support
+   rows only (240) and on all 280 rows. Its optimum is the one from whichever fit has the lower held-out Huber loss
+   under the swarm's inner folds, decided before either optimum runs. Fit our surrogate on all 280 rows.
+2. Our optimizer: per-bucket caps read from the subsampled rows (knee = first pool fraction whose target loss is worse
+   than the full-support run in the same seed block by more than the seed SD; support cap otherwise), shares zero or
+   ≥ 2%, min-plus search.
+3. Materialize both optima at two data seeds each as a screen. The replicated centre's SD is 0.0041 on the Table-9
+   macro (26 seeds), so two seeds per arm resolve a 0.01 difference and not a 0.005 one; a screen that passes is
+   confirmed with four seeds per arm. Both arms are reported against the replicated centre (1.0639) as the fixed
    reference and against each other.
-4. Success: our optimum beats OLMix's at both seeds by more than the paired seed SD. Failure modes are informative:
-   if the subsampled rows show no repetition harm at 3e18 for the targeted buckets, the epoch information is not
-   worth having at this scale and share-space models are the right tool; if our optimum lands in the lattice's
-   corners far from any measured point, the extrapolation gate (predicted gain mostly from beyond-support buckets)
-   rejects it before a run.
+4. Success: our optimum beats the better OLMix optimum at confirmation. Failure modes are informative: if the pilot
+   shows no repetition effect above noise, the epoch information is not worth having at this scale and share-space
+   models are the right tool; if our optimum lands in the lattice's corners far from any measured point, the
+   extrapolation gate (predicted gain mostly from beyond-support buckets) rejects it before a run.
 
-Risks: the lattice box and the three anchors were chosen after seeing this project's results; they are symmetric
-across the non-CC types and use no fitted value, but a sceptic should set the box before looking. Eight targeted
-buckets and 40 subsampled rows estimate eight knees; buckets outside the targets keep support caps only. The
-design counts rows, not compute; every row is a full 3e18 run.
+Risks: the lattice box and the anchors were chosen after seeing this project's results (symmetric across the
+non-CC types, no fitted value, but not blind). Eight targeted buckets keep knees; every other bucket keeps a support
+cap only. The design counts rows, not compute; every row is a full 3e18 run, about 3e18 FLOPs each, 5.4e20 for the
+180 new rows and 1.1e20 for the pilot.
 
-## 5. How the subsampled-pool rows run
+## 5. What has to change end to end for the subsampled rows
 
-Levanter's mixture config already supports this without code changes. `max_train_batches` (per dataset) with
-`max_train_batches_subset_seed` takes the first N sequences of a seeded stable permutation of the dataset
-(`_stable_simulated_epoch_subset_key(name, "train", seed)`, the same key the simulated-epoch path uses), and the
-mixture restarts an exhausted dataset (`StopStrategy.RESTART_STRATEGY`), which is repetition. Constraint: it cannot
-be combined with `experiment_budget`/`target_budget`, so for a subsampled row the launcher sets, for every dataset,
+The launcher is not the only change; the pool fraction has to reach the model.
 
-    max_train_batches[d] = floor(pool_fraction[d] × (experiment_budget / target_budget) × sequences[d] / batch_size)
+1. Launcher (`launch_delphi_augmented_swarm_3e18.py` pattern): for a row with any `pool_fraction_<domain>` below 1,
+   set for every dataset `max_train_batches[d] = floor(pool_fraction[d] × (experiment_budget / target_budget) ×
+   sequences[d] / batch_size)` and `max_train_batches_subset_seed = subset_seed`, instead of `experiment_budget` /
+   `target_budget` (Levanter forbids combining them, `datasets.py` lines 839–842). `max_train_batches` takes the
+   first N sequences of the same seeded stable permutation the simulated-epoch path uses
+   (`_stable_simulated_epoch_subset_key(name, "train", seed)`, lines 1276–1290), so the half- and quarter-pool
+   rows are nested subsets of the full-support run with the same seed; the mixture restarts an exhausted dataset
+   (`StopStrategy.RESTART_STRATEGY`), which is repetition. Log `pool_fractions`, `seed_block`, `data_seed` and
+   `subset_seed` in the run config so the collector can read them.
+2. Registry collector (`prepare_single_phase_heldout_benchmark_20260902.py`): read the pool fractions from the run
+   config into `pool_fraction::<domain>` columns on `heldout_runs.csv` and `heldout_coordinates.csv`, and include
+   them in the coordinate identity. Today a coordinate is its weight vector; without this, the half- and
+   quarter-pool rows collapse into the full-support coordinate and their outcomes are averaged away.
+3. Panel and bank features (`benchmark_single_phase_observatory_20260902.py`, `heldout_features` and the panel
+   loader; `single_phase_observatory_models_20260902.Features`): build `exposures` as `weights × inventory /
+   pool_fraction` per row. `exposures` is already a per-row matrix, so the successor needs no other change;
+   anything that reads the per-bucket `inventory` constant (onset covariates, the unique-token benefit input) must
+   read the per-row effective inventory instead for subsampled rows.
+4. OLMix's fitter sees shares only; it needs no change, which is the point.
 
-with `pool_fraction` from the `pool_fraction_<domain>` columns (1.0 for every other dataset) and
-`max_train_batches_subset_seed` equal to the swarm's simulated-epoch subset seed. Rows with all fractions at 1.0 run
-through the normal simulated-epoch path and select the same sequences, so the half- and quarter-pool rows are nested
-subsets of the full-pool row. `swarm_mixtures.csv` follows the augmented-swarm launcher's row convention
-(`phase_0_<domain>` and `phase_1_<domain>` columns, equal in every row, single phase) with the pool-fraction columns
-appended; the launcher needs the pool-fraction branch added and nothing else.
+`swarm_mixtures.csv` follows the augmented-swarm launcher's row convention (`phase_0_<domain>` and
+`phase_1_<domain>` columns, equal in every row, single phase) with `pool_fraction_<domain>`,
+`materialized_epochs_<domain>`, provenance (`source_coordinate_id`, `source_run_names`, `repeat_of`), `seed_block`,
+`data_seed`, `subset_seed` and `wave` columns appended.
 
 ## 6. Files
 
@@ -174,11 +205,36 @@ appended; the launcher needs the pool-fraction branch added and nothing else.
 
 ## 7. Review brief (for Codex)
 
-Read section 1b's round reports first; the claim that the data and not the model class is the constraint rests on them. Check hardest: (a) that no row's placement depends on a fitted model or a measured coordinate (the coverage
-diagnostic must be the only place the registry's outcomes are read); (b) that the subsampled rows' semantics in
-section 5 match `lib/levanter/src/levanter/data/text/datasets.py` (nested subsets, restart on exhaustion, the
-incompatibility with simulated budgets) and that the batch-count formula is right; (c) that the evidence in
-sections 1 and 3 is stated no more strongly than the artifacts support, in particular that the design's coverage of
-the measured best region is a post-hoc diagnostic and that the goal test in section 4 has not been run; (d) whether
-the 40 subsampled rows and 8 targets are enough to estimate per-bucket knees at seed SD 0.0031; (e) whether 180 new
-runs is justified against a smaller pilot (for example the 40 subsampled rows and the 3 anchors first).
+Read section 1b's round reports first; the claim that the data and not the model class is the constraint rests on
+them. Check hardest: (a) that no row's placement depends on a fitted model or a measured coordinate (the coverage
+diagnostic must be the only place the registry's outcomes are read); (b) that section 5 matches
+`lib/levanter/src/levanter/data/text/datasets.py` and that the batch-count formula is right; (c) that the evidence
+in sections 1 and 3 is stated no more strongly than the artifacts support; (d) whether the pilot in section 4
+isolates repetition from subset quality and training noise; (e) whether the OLMix protocol in section 4 is fair to
+OLMix.
+
+## 8. Codex review of revision 1, and what changed
+
+- P1, pool fractions never reach the model: correct; revision 1 claimed only the launcher changes. Section 5 now
+  lists the four touch points, including the coordinate identity in the registry, and the launcher table carries
+  `materialized_epochs_<domain>` so the intended exposures are explicit.
+- P1, only 14 of 40 reused dose rows had Table 9: correct. The generator now selects from the 89 dose coordinates
+  with both targets measured, ranked by epochs, and raises if fewer than 40 exist; the registry refresh (all 237 with
+  Table 9) will widen the pool.
+- P1, provenance of reused rows lost: correct. Each reused row now records the panel run name or the registry
+  coordinate id and the W&B run ids behind it; `repeat_of` marks intentional repeats.
+- P1, the 43-run pilot did not isolate repetition: accepted in full. The pilot is now two paired seed blocks, four
+  targets, anchors A and B, with a full-support run of each anchor in each block and three proportional controls
+  (37 new runs); the extra targets moved to anchor D in the second wave.
+- P1, OLMix degraded by duplicate-share rows: accepted. OLMix is fitted on the full-support rows and on all rows,
+  and the better fit by a frozen held-out rule supplies its optimum.
+- P2, three unintended duplicate conditions: correct (two corner groups collapsed onto anchor D and onto each
+  other). Corners are now nine distinct ratios, and the generator rejects any repeated (shares, pool fractions,
+  seed block) condition.
+- P2, the identifiability diagnostic was tautological: correct. Replaced by the rank of [shares | exposures] (39 in
+  the panel, 47 in the design) and per-bucket singular-value ratios; the estimability of knees is left to the pilot.
+- P2, wording and power: "a priori" is now "prospectively frozen adaptive design"; the power statement uses the
+  centre's SD 0.0041, two seeds are a screen and four seeds the confirmation.
+- Recommendation not to launch the 180 runs or the earlier pilot: adopted. The order is pipeline changes (section
+  5), then the 37-run pilot, then a decision on the second wave.
+
