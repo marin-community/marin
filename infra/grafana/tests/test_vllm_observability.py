@@ -42,9 +42,15 @@ def test_dashboard_vllm_overview_end_to_end(invalid_histogram):
         sample("request_success_total", value, timestamp, finished_reason="stop", **cumulative)
         for timestamp, value in ((0, 0), (15_000, 1))
     ]
+    samples += [
+        sample(name, value, timestamp, finished_reason=reason, **cumulative)
+        for name, reason, final in (("request_success_total", "length", 1), ("request_failure_total", "error", 100))
+        for timestamp, value in ((0, 0), (15_000, final))
+    ]
     for family, mean in (
         ("request_time_per_output_token_seconds", 0.1),
         ("time_to_first_token_seconds", 2),
+        ("inter_token_latency_seconds", 0.02),
         ("request_prefill_time_seconds", 1),
         ("request_decode_time_seconds", 10),
         ("request_generation_tokens", 100),
@@ -55,6 +61,11 @@ def test_dashboard_vllm_overview_end_to_end(invalid_histogram):
                 sample(f"{family}_{component}", value, timestamp, **labels)
                 for timestamp, value in ((0, 0), (15_000, final))
             ]
+    samples += [
+        sample("request_generation_tokens_bucket", value, timestamp, le=bound, **cumulative)
+        for bound, final in (("10", 0), ("+Inf", 1))
+        for timestamp, value in ((0, 0), (15_000, final))
+    ]
     # A second engine must not skew the fleet mean/tails with a reset or partial scrape.
     for component in ("sum", "count", "bucket"):
         labels = {**cumulative, "engine": "physical-b", "engine_index": "1"}
@@ -127,6 +138,16 @@ def test_dashboard_vllm_overview_end_to_end(invalid_histogram):
     assert {row["section"] for row in rows} == VLLM_OVERVIEW_SECTIONS
     values = {(row["section"], row["metric"], row["stat"], row["series"], row["t"]): row["value"] for row in rows}
     assert values[("request_outcome", "requests", "total", "stop", None)] == 1
+    assert (
+        values[("length_finish_fraction", "length_finish_fraction", "fraction", "length / all engine finishes", None)]
+        == 0.5
+    )
+    assert values[("output_length_distribution", "output_tokens", "interval_count", "100", None)] == 1
+    assert [(row["series"], row["value"]) for row in rows if row["section"] == "output_length_distribution"] == [
+        ("10", 0),
+        ("100", 1),
+        ("+Inf", 0),
+    ]
     assert values[("request_rate", "requests", "rate", "stop", 15_000)] == pytest.approx(1 / 15)
     assert values[("latency", "tpot", "mean_over_time", "time per output token", 15_000)] == 0.1
     assert values[("latency", "ttft", "mean_over_time", "ttft", 15_000)] == 2
@@ -151,6 +172,7 @@ def test_dashboard_vllm_overview_end_to_end(invalid_histogram):
     assert engines[("physical-a", "waiting_mean")] == 1
     assert engines[("physical-b", "kv_cache_peak")] == 0.75
     assert engines[("physical-a", "generated_tokens_per_second")] == 10
+    assert engines[("physical-a", "inter_token_latency_mean")] == 0.02
     assert ("physical-b", "generated_tokens_per_second") not in engines  # Missing is not idle.
     freshness = {row["series"].rsplit(":", 1)[-1]: row["status"] for row in rows if row["section"] == "freshness_detail"}
     assert freshness == {"physical-a": "stale_or_stopped", "physical-b": "fresh"}

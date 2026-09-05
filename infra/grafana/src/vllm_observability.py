@@ -25,6 +25,8 @@ VLLM_OVERVIEW_SECTIONS = frozenset(
         "freshness",
         "freshness_detail",
         "latency",
+        "length_finish_fraction",
+        "output_length_distribution",
         "request_outcome",
         "request_rate",
         "saturation",
@@ -446,6 +448,10 @@ WITH base AS (
     GROUP BY 1, 2, 3, 4, 5, 6
 ), coherent_histogram_increments AS (
     SELECT samples.sample_t,
+           samples.origin_cluster,
+           samples.service,
+           samples.resource_attributes_json,
+           samples.producer_identity,
            samples.family,
            samples.component,
            samples.upper_bound,
@@ -459,6 +465,18 @@ WITH base AS (
      AND samples.source_family = validity.source_family
      AND samples.sample_t = validity.sample_t
     WHERE validity.valid_sample = 1
+), engine_itl AS (
+    SELECT producer_identity || ' @ ' || origin_cluster || ':' || service || ':' || resource_attributes_json AS series,
+           SUM(CASE WHEN component = 'sum' THEN delta ELSE 0 END)
+               / NULLIF(SUM(CASE WHEN component = 'count' THEN delta ELSE 0 END), 0) AS value,
+           SUM(CASE WHEN component = 'count' THEN delta ELSE 0 END) AS samples
+    FROM coherent_histogram_increments
+    WHERE family = 'inter_token_latency'
+    GROUP BY 1
+    HAVING SUM(CASE WHEN component = 'count' THEN delta ELSE 0 END) > 0
+), ranked_engine_itl AS (
+    SELECT *, ROW_NUMBER() OVER (ORDER BY series) AS producer_rank
+    FROM engine_itl
 ), histogram_time_means AS (
     SELECT {start_ms} + (sample_t - {start_ms}) - (sample_t - {start_ms}) % {bucket_ms} AS t,
            family,
@@ -487,6 +505,15 @@ WITH base AS (
            bucket_count,
            MAX(bucket_count) OVER (PARTITION BY family) AS total_count
     FROM histogram_buckets
+), output_length_distribution AS (
+    SELECT upper_bound,
+           bucket_count - COALESCE(LAG(bucket_count) OVER (
+               ORDER BY CASE WHEN upper_bound IN ('+Inf', 'Inf') THEN 1e308
+                             ELSE CAST(upper_bound AS DOUBLE) END
+           ), 0) AS value,
+           total_count
+    FROM histogram_ranked_buckets
+    WHERE family = 'output_tokens'
 ), histogram_quantiles AS (
     SELECT family,
            MIN(CASE
@@ -523,6 +550,7 @@ WITH base AS (
 ), outcome_increments AS (
     SELECT timestamp_ms,
            service,
+           name,
            COALESCE(
                json_get(attributes_json, 'finished_reason'),
                json_get(attributes_json, 'finish_reason'),
@@ -538,6 +566,12 @@ WITH base AS (
     SELECT outcome, SUM(delta) AS value
     FROM outcome_increments
     GROUP BY 1
+), length_finish_fraction AS (
+    SELECT SUM(CASE WHEN outcome = 'length' THEN delta ELSE 0 END) / NULLIF(SUM(delta), 0) AS value,
+           SUM(delta) AS samples
+    FROM outcome_increments
+    WHERE name = 'request_success_total'
+    HAVING SUM(delta) > 0
 ), outcome_source_rates AS (
     SELECT {start_ms} + (timestamp_ms - {start_ms})
                - (timestamp_ms - {start_ms}) % CASE
@@ -812,6 +846,21 @@ WITH base AS (
 
     UNION ALL
 
+    SELECT CAST(NULL AS BIGINT) AS t,
+           'engine_summary' AS section,
+           'inter_token_latency_mean' AS metric,
+           'observed' AS stat,
+           series AS series,
+           value AS value,
+           's' AS unit,
+           CAST(NULL AS VARCHAR) AS status,
+           CAST(samples AS BIGINT) AS samples,
+           CAST(NULL AS DOUBLE) AS gap_seconds
+    FROM ranked_engine_itl
+    WHERE producer_rank <= {VLLM_MAX_FRESHNESS_DETAILS}
+
+    UNION ALL
+
     SELECT t AS t,
            'saturation' AS section,
            'iteration_tokens' AS metric,
@@ -910,6 +959,34 @@ WITH base AS (
            CAST(NULL AS BIGINT) AS samples,
            CAST(NULL AS DOUBLE) AS gap_seconds
     FROM outcome_totals
+
+    UNION ALL
+
+    SELECT CAST(NULL AS BIGINT) AS t,
+           'length_finish_fraction' AS section,
+           'length_finish_fraction' AS metric,
+           'fraction' AS stat,
+           'length / all engine finishes' AS series,
+           value AS value,
+           'ratio' AS unit,
+           CAST(NULL AS VARCHAR) AS status,
+           CAST(samples AS BIGINT) AS samples,
+           CAST(NULL AS DOUBLE) AS gap_seconds
+    FROM length_finish_fraction
+
+    UNION ALL
+
+    SELECT CAST(NULL AS BIGINT) AS t,
+           'output_length_distribution' AS section,
+           'output_tokens' AS metric,
+           'interval_count' AS stat,
+           upper_bound AS series,
+           value AS value,
+           'requests' AS unit,
+           CAST(NULL AS VARCHAR) AS status,
+           CAST(total_count AS BIGINT) AS samples,
+           CAST(NULL AS DOUBLE) AS gap_seconds
+    FROM output_length_distribution
 
     UNION ALL
 
@@ -1018,6 +1095,9 @@ ORDER BY section,
          t,
          metric,
          stat,
+         CASE WHEN section = 'output_length_distribution'
+              THEN CASE WHEN series IN ('+Inf', 'Inf') THEN 1e308 ELSE CAST(series AS DOUBLE) END
+              ELSE 0 END,
          series
 LIMIT {VLLM_MAX_RESULT_ROWS + 1}
 """.strip()
