@@ -48,6 +48,24 @@ Six rounds of model work on this panel (registry of 135 entries, calibration rul
 objectives, exposure clamps, share floors, kernel corrections, pooled laws, hub interactions) moved calibration and
 never selection. That is the case for changing the data.
 
+## 1b. The six modeling rounds behind section 1
+
+All under `.agents/handoffs/`, each with its Codex and DeepSeek dispositions; commits on
+`calvin/swarm-olmo3-regmix-test`. Read these before judging whether the data, and not the model class, is the
+constraint.
+
+| round | report | what it tested on the current panel | outcome |
+|---|---|---|---|
+| 1 | `single_phase_observatory_benchmark_cc_report_20260902.md`, `single_phase_observatory_ablation_and_modeling_cc_handoff_20260902.md` | the Observatory benchmark: Screen / Certify tiers, 135 registry entries, matched ablations for every term; the successor `weibull_softplus_unscaled` | successor selected; its predicted Table-9 gain over the frontier did not validate (sweep report in `reference_outputs/delphi_one_phase_weibull_softplus_epoch_cap_sweep_20260902/`) |
+| 2 | `single_phase_observatory_round2_cc_report_20260902.md` | link functions (bounded log-deficit, link by CV), refinement, shape sharing, priors; prospective test on 12 proposed coordinates; StarCoder gate | no mechanism beats the successor at Screen; bounded link is the best coverage user; StarCoder gate passes only as a decision rule |
+| 3 | `single_phase_observatory_round3_cc_report_20260903.md` (commits 8240201184, 0decb97c67) | the 247/408-coordinate development bank: frozen-model selection scoring, dose anatomy, shape scans, coarse rules, ensembles, proposals, leave-one-source-out and dose regimes; registry defects found and repaired | Uncheatable is coverage-limited, Table 9 is not for additive models; bank-selected shapes fail split-half; with the frontier's neighbours in training every model degrades on Table 9 |
+| 4 | `single_phase_observatory_round4_cc_report_20260903.md`, `single_phase_related_work_review_20260903.md` (commit 94a6d148fa) | seven literature mechanisms nested on the successor (share penalty, onset covariates, hierarchical harm, hub interactions, unique-token benefit) and a pooled effective-data law; typed cap policies; dose knees | none selects better; calibration moves, selection does not (fourth time); knees follow inventory, the successor's harm term does not |
+| 5 | `single_phase_observatory_round5_olmix_gap_report_20260904.md` (commits d216cc944d, 2a9f3cf3dd) | why WSPU barely beat matched-seed OLMix: 51-row predicted-vs-observed tables per cap, exact per-bucket decomposition, dose curves, bank residual audit, offline remedies, candidate set | the heads never predicted the 15 regressions; spread credit and an over-steep stack curve explain 89% of the predicted gain; no remedy improves selection |
+| 6 | `single_phase_observatory_round6_training_sets_report_20260904.md` (commits 174921a8c6, e6e95cc359) | alternative 280-row training sets from sampled and intervention runs only, four models, both targets, over-budget reference | no design improves any pick; the budget is not what binds, the placement is |
+
+The deck `.agents/handoffs/slides/single_phase_observatory_benchmark_20260902/slides.md` (PDF alongside) carries
+per-round timelines and TLDRs; Fieldbook experiment `exp_01m1ge7ye6hz2epd0mjkbkrvt8` holds the round notes.
+
 ## 2. The design and what each block is for
 
 All 280 rows are fixed by the script from bucket metadata (unique-token counts, bucket type read from the name) and
@@ -156,7 +174,7 @@ appended; the launcher needs the pool-fraction branch added and nothing else.
 
 ## 7. Review brief (for Codex)
 
-Check hardest: (a) that no row's placement depends on a fitted model or a measured coordinate (the coverage
+Read section 1b's round reports first; the claim that the data and not the model class is the constraint rests on them. Check hardest: (a) that no row's placement depends on a fitted model or a measured coordinate (the coverage
 diagnostic must be the only place the registry's outcomes are read); (b) that the subsampled rows' semantics in
 section 5 match `lib/levanter/src/levanter/data/text/datasets.py` (nested subsets, restart on exhaustion, the
 incompatibility with simulated budgets) and that the batch-count formula is right; (c) that the evidence in
