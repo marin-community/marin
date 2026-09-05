@@ -208,3 +208,19 @@ def test_validate_chat_messages_rejects_invalid_conversations(messages, error):
 def test_normalize_chat_rejects_nested_control_tokens(record):
     with pytest.raises(ValueError, match="control or reasoning tokens"):
         _normalize_chat_record(record, "messages", "id")
+
+
+def test_normalize_chat_allows_protocol_text_inside_tool_arguments():
+    record = {
+        "messages": [
+            {"role": "user", "content": "Inspect the parser."},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"function": {"name": "search", "arguments": {"query": "<tool_call> in source code"}}}],
+            },
+        ]
+    }
+
+    normalized = _normalize_chat_record(record, "messages", "id")
+    assert normalized["messages"][1]["tool_calls"]

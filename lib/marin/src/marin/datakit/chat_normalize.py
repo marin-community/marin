@@ -34,20 +34,16 @@ from marin.datakit.normalize import (
 )
 from marin.execution.step_spec import StepSpec
 
-CHAT_NORMALIZE_VERSION = "2026.09.05"
+CHAT_NORMALIZE_VERSION = "2026.09.05.1"
 _INLINE_TOOL_SYNTAX = re.compile(r"<tool_call(?::[^>]*)?>", re.IGNORECASE)
 _RAW_REASONING_TOKEN = re.compile(r"</?think>", re.IGNORECASE)
-_TOOL_WRAPPER_TOKEN = re.compile(r"</?tool_(?:call|response)(?:\s[^>]*)?>", re.IGNORECASE)
 _SAFE_TOOL_IDENTIFIER = re.compile(r"[A-Za-z0-9_.:-]+")
 
 
 def _contains_unsafe_markup(value: object) -> bool:
     if isinstance(value, str):
         return bool(
-            CHAT_CONTROL_TOKEN.search(value)
-            or REASONING_TOKEN.search(value)
-            or _RAW_REASONING_TOKEN.search(value)
-            or _TOOL_WRAPPER_TOKEN.search(value)
+            CHAT_CONTROL_TOKEN.search(value) or REASONING_TOKEN.search(value) or _RAW_REASONING_TOKEN.search(value)
         )
     if isinstance(value, dict):
         return any(_contains_unsafe_markup(key) or _contains_unsafe_markup(item) for key, item in value.items())
