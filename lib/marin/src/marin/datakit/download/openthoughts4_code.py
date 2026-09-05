@@ -7,6 +7,7 @@ from fray.types import ResourceConfig
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
+from marin.datakit.chat_normalize import normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import (
     chat_document,
@@ -14,7 +15,6 @@ from marin.datakit.download.rollout_transforms import (
     render_role_message,
     text_document,
 )
-from marin.datakit.chat_normalize import normalize_chat_step
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 

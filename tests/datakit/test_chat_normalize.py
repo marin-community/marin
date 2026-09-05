@@ -8,7 +8,6 @@ import pyarrow.parquet as pq
 import pytest
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
-
 from marin.datakit.chat_normalize import _normalize_chat_record, normalize_chat_to_parquet, validate_chat_messages
 
 
