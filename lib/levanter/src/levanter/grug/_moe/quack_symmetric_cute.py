@@ -13,13 +13,9 @@ import cutlass.cute as cute
 import cutlass.jax as cjax
 from cutlass import Float32
 from levanter.cutlass_kernel_cache import cute_launcher_factory, cutlass_call, gpu_compute_capability
-from quack.gemm import make_scheduler_args
+from quack.cute_dsl_utils import get_max_active_clusters
+from quack.gemm_tvm_ffi_utils import make_scheduler_args
 from quack.gemm_symmetric import GemmSymmetricMixin, GemmSymmetricSm90, GemmSymmetricSm100
-
-try:
-    from quack.cute_dsl_utils import get_max_active_clusters
-except Exception:  # pragma: no cover - name moved across quack versions
-    from quack.gemm_act import get_max_active_clusters
 
 _ACC = cutlass.Float32
 _JAX_TO_CUTE = {
@@ -72,9 +68,7 @@ def _build_launcher(*, arch_family, a_dtype, mma_tiler_mnk, cluster_mnk, mac, ma
         gemm = gemm_type(_ACC, a_dtype, mma_tiler_mnk, cluster_mnk, use_clc_persistence=False)
         # aux = D.mT (transposed view of the single output): the kernel writes each lower tile to D
         # and its mirror to D.mT, so D is fully symmetric. alpha/beta must be set (D = a*acc + b*C).
-        epi_args = GemmSymmetricMixin.EpilogueArguments(
-            _transpose_mn(mD), act_fn=None, alpha=Float32(1.0), beta=Float32(1.0)
-        )
+        epi_args = GemmSymmetricMixin.EpilogueArguments(_transpose_mn(mD), alpha=Float32(1.0), beta=Float32(1.0))
         scheduler_args = make_scheduler_args(mac, max_swizzle, None)
         gemm(mA, mB, mD, None, epi_args, scheduler_args, None, stream)
 

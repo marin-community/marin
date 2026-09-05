@@ -6,7 +6,7 @@
 
 Mirrors David's `_fa4_cute_backend.py` pattern: build a thin ``@cute.jit`` launcher
 with the JAX ``cutlass_call`` signature ``(stream, *inputs, *outputs, **scalars)``
-that reuses QuACK's ``GemmGatedSm100`` kernel, then wrap it with
+that composes QuACK's SM100 kernel with a gated epilogue, then wrap it with
 ``cutlass.jax.cutlass_call``. Forward-only for now (grouped SwiGLU): tokens are
 pre-sorted by expert (varlen_m via ``cu_seqlens_m``; no A_idx gather).
 
@@ -20,11 +20,12 @@ import jax.numpy as jnp
 import cutlass
 import cutlass.cute as cute
 import cutlass.jax as cjax
-from quack.gemm_act import GemmActMixin, GemmGatedSm100, act_fn_map, gate_fn_map
-from quack.gemm_act import get_max_active_clusters
+from quack.cute_dsl_utils import get_max_active_clusters
+from quack.epilogue.library import linear_act_mod
 from quack.gemm_default_epi import GemmDefaultEpiMixin, GemmDefaultSm100
 from levanter.cutlass_kernel_cache import cute_launcher_factory, cutlass_call
 from quack.gemm_tvm_ffi_utils import make_scheduler_args, make_varlen_args
+from quack.rounding import RoundingMode
 
 _ACC = cutlass.Float32
 _FALLBACK_MAX_ACTIVE_CLUSTERS = 148
@@ -62,11 +63,23 @@ def _build_launcher(
       mA:[M,K] tokens (k-major)  mB:[E,K,2N] weights  mCuSeqlens:[E+1] int32
       mD:[M,2N] preact out (n-major)  mPostAct:[M,N] swiglu out (n-major)
     """
-    act = gate_fn_map[activation] if activation in gate_fn_map else act_fn_map[activation]
+    epilogue = linear_act_mod(activation, gated=True, has_c=False, has_rowvec=False, has_colvec=False)
+    # QuACK 0.6.4 composes gated GEMMs from epilogues. Mint the kernel directly because
+    # its public launch planner accepts Torch tensors, while this launcher receives CuTe tensors.
+    gemm_type = epilogue._mint(
+        kind_sig=(),
+        sm=10,
+        paired_acc=True,
+        packed_c=False,
+        prepass_sig=(),
+        rounding=RoundingMode.RN,
+        arg_forms=(),
+        add_to_output=False,
+    )
 
     @cute.jit
     def launcher(stream, mA, mB, mCuSeqlens, mD, mPostAct):
-        gemm = GemmGatedSm100(
+        gemm = gemm_type(
             _ACC,
             a_dtype,
             tile_mn,
@@ -74,12 +87,7 @@ def _build_launcher(
             gather_A=False,
             use_clc_persistence=use_clc_persistence,
         )
-        epi_args = GemmActMixin.EpilogueArguments(
-            mPostAct,
-            act,  # SwiGLU activation function (Constexpr)
-            mRowVecBroadcast=None,
-            mColVecBroadcast=None,
-        )
+        epi_args = gemm_type.EpilogueArguments(mAuxOut=mPostAct)
         scheduler_args = make_scheduler_args(max_active_clusters, max_swizzle, None)
         varlen_args = make_varlen_args(mCuSeqlens, None, None)
         gemm(mA, mB, mD, None, epi_args, scheduler_args, varlen_args, stream)
