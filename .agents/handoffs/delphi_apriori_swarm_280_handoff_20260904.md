@@ -196,10 +196,10 @@ The launcher is not the only change; the pool fraction has to reach the model.
 ## 6. Files
 
 - `experiments/domain_phase_mix/exploratory/two_phase_many/design_delphi_apriori_swarm_280_20260904.py`: the
-  design (seeded, deterministic), the launcher table, the row summary, the identifiability and coverage diagnostics.
+  design (seeded, deterministic), the launcher table, the row summary, the support-separation and coverage diagnostics.
 - `tests/test_design_delphi_apriori_swarm_280_20260904.py`: budget, simplex rows, reserved rows, subsample semantics.
 - `reference_outputs/delphi_apriori_swarm_280_20260904/swarm_mixtures.csv` (280 rows), `design_rows.csv`,
-  `manifest.json` (seed, script and mixture hashes, unique tokens, identifiability, coverage).
+  `manifest.json` (seeds, script and mixture hashes, unique tokens, support separation, coverage).
 - Evidence documents: round 5 and round 6 reports under `.agents/handoffs/`, Fieldbook notes
   `note_01m1qg02egfday31819cqsgpjp` (round 6) and the round-5 note on experiment `exp_01m1msmaf8p4wenrgyfxw2cm54`.
 
