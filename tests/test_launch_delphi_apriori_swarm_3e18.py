@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """The frozen-swarm launcher takes seeds and pool fractions from the design table and skips reused rows."""
 
+import hashlib
+import json
+
 import pytest
 
 from experiments.domain_phase_mix import launch_delphi_apriori_swarm_3e18 as launcher
@@ -64,6 +67,27 @@ def test_specs_carry_paired_seeds_and_pool_fractions_and_skip_reused_rows():
     assert pilot[0].phase_weights[PHASE_NAMES[0]] == pilot[0].phase_weights[PHASE_NAMES[1]]
     everything = launcher.run_specs_from_rows(rows, wave="full", **SPEC_KWARGS)
     assert [spec.run_name for spec in everything] == ["full_support", "half_pool", "second_wave"]
+    by_name = {spec.run_name: spec for spec in everything}
+    assert all(by_name[spec.run_name] == spec for spec in pilot)  # identities do not depend on the wave
+    assert [spec.run_id for spec in everything] == [
+        launcher.RUN_ID_BASE + 1,
+        launcher.RUN_ID_BASE + 2,
+        launcher.RUN_ID_BASE + 3,
+    ]
+
+
+def test_only_the_frozen_table_is_accepted(tmp_path):
+    table = tmp_path / "swarm_mixtures.csv"
+    table.write_text("run_name\nx\n")
+    with pytest.raises(FileNotFoundError, match=r"manifest\.json"):
+        launcher.frozen_design_sha256(table)
+    (tmp_path / "manifest.json").write_text(json.dumps({"mixtures_sha256": "0" * 64}))
+    with pytest.raises(ValueError, match="does not match the frozen manifest"):
+        launcher.frozen_design_sha256(table)
+    (tmp_path / "manifest.json").write_text(
+        json.dumps({"mixtures_sha256": hashlib.sha256(table.read_bytes()).hexdigest()})
+    )
+    assert launcher.frozen_design_sha256(table) == hashlib.sha256(table.read_bytes()).hexdigest()
 
 
 def test_unpaired_seeds_and_bad_fractions_are_rejected():

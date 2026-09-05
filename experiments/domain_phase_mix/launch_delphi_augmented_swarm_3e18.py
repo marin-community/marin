@@ -643,6 +643,7 @@ def build_launch_artifacts(
     permanent_checkpoint_interval: int | None = 5000,
     table9_request_set_dir: InputName = TABLE9_REQUEST_SET_DIR,
     table9_eval_resources: ResourceConfig = TABLE9_EVAL_RESOURCES,
+    source_panel_sha256: str = SOURCE_PANEL_SHA256,
 ) -> LaunchArtifacts:
     """Build the full 280-train plus 280-native-eval graph."""
     training_steps: list[ExecutorStep] = []
@@ -698,7 +699,7 @@ def build_launch_artifacts(
             output_path=this_output_path(),
             experiment_name=experiment_name,
             source_panel=source_panel,
-            source_panel_sha256=SOURCE_PANEL_SHA256,
+            source_panel_sha256=source_panel_sha256,
             analysis_output_path=analysis_output_path,
             run_specs_json=json.dumps([asdict(spec) for spec in run_specs], sort_keys=True),
             architecture_target_flops=architecture_target_flops,

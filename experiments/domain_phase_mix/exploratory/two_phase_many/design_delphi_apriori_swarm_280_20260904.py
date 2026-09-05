@@ -118,6 +118,48 @@ CORNER_LEVELS = (  # (cc_high, cc_low, other types); ratios distinct from each o
 PROPORTIONAL_REPEATS = 3
 REUSED_RANDOM_PANEL_ROWS = 18
 REUSED_DOSE_ROWS = 40
+REUSED_DOSE_COORDINATES = (  # frozen 2026-09-04: the 40 highest-epoch dose ladders that carried both targets
+    "delphi_3e18_39bucket:4d2a9f8e18ebd65e0860eaa7996c71b4bc666ece79a59f99599bf658eaaf1ca6",
+    "delphi_3e18_39bucket:39df5a66a6bcbdc5f52f9f37dfd15b1fdd08a415743db8fb17cc8b0512ac963f",
+    "delphi_3e18_39bucket:b5ee1f40e4fe0358ac680a969cd93dfe1b00c483ee3b2d4ff4bc73bd6424437b",
+    "delphi_3e18_39bucket:479b4c0d010ec8af266c712fad85c52a6b25371b206b9d3bea78ede611674b9e",
+    "delphi_3e18_39bucket:9cb37ee04e914fba68e7aa6ea382c6a5dcc2b405ec78b251b537abc8f70b15f2",
+    "delphi_3e18_39bucket:f9e5fad6cd843eef1ec963c775019a7ed2d37fb9fc6d6458f98c8bb15b000248",
+    "delphi_3e18_39bucket:f387ec3241cb7be9b883e93ed53e1940f5fbf725f14ef13b1c76e1634c9e0704",
+    "delphi_3e18_39bucket:e65243af3fc92306e4aa4ea80d2c3f7aa6058bba97560ecd10959066d8d64383",
+    "delphi_3e18_39bucket:6a6a57cc90489b1821b2d65721b9c2e1d907405a1cb08fb12b0a637f75a245c7",
+    "delphi_3e18_39bucket:71eb42d48f6b6a336390c690ce1e47364dfe485e2a4f06e168075c88b0def0a9",
+    "delphi_3e18_39bucket:9a343b0b93b0bad4f87152437bb40a403f7be5b9f572cfae5e7703e50bc7093a",
+    "delphi_3e18_39bucket:c721e392dcf2947fea2da8fcf1ef91d058c717ffb8e74e8402734e31f22578fc",
+    "delphi_3e18_39bucket:46346afc1e8f516e3cf8db030395bc5bdba3094e0d1d6ce3d9212fbb3736b08f",
+    "delphi_3e18_39bucket:d6f6db3e0cc1a598f7eb00a7cdd40d78f821a9336eb0eaafc14da93a04575fc5",
+    "delphi_3e18_39bucket:e94c9cbd4ee682a9780bbcea3bf6df3497572253ed953eef164fa75ea4f66a2c",
+    "delphi_3e18_39bucket:e283e505de0059b81a2b58a66a9af312bc1f3c7a7440e50c3fdcb3ff8213a34f",
+    "delphi_3e18_39bucket:4dcd25089f067b1c4aa3d94b5a6046e58c872c7192b21d095899daf4324f9073",
+    "delphi_3e18_39bucket:e0a4d646094bff9aad92ca04cd9c5ca30c296001c0b7d65c3c20a1df0bd8ef08",
+    "delphi_3e18_39bucket:d160bb3271ba96668590d3b3c7781ad51718216823831c921585a8f73ffc9cf7",
+    "delphi_3e18_39bucket:d82c377f5bda11f52b93db01e55fa25c844255cf016ad96b80cba7cc1e618d90",
+    "delphi_3e18_39bucket:d941fe99995a0f675ffc09f1d7883ac2d032a87a00fdfc22e934c5e5ca0b3452",
+    "delphi_3e18_39bucket:ec06eca900d6ea9ba81679ee6cca83871b018289aec1505cba76db1fc87b6802",
+    "delphi_3e18_39bucket:ff65381e6c6fa2fd41b3444cc7dae32b0a07f1eaf50d99b9dc409da261b0a1ac",
+    "delphi_3e18_39bucket:09ab1aa79a519d8cbef31696066513a006253831fb687b610438ea9b39faef2c",
+    "delphi_3e18_39bucket:742dd349c1fbc18af63f516a37aaff216490071ad5e744e3cf744b4b49367d40",
+    "delphi_3e18_39bucket:0066da643d35e694a311d26516399114a1c69adba1f7795b773b704d93c0e945",
+    "delphi_3e18_39bucket:02c70e578e5784e551eefe679886439d9c803cedd53b283f3333a0c5fbe3e5cf",
+    "delphi_3e18_39bucket:9dd4959b60a619086be7a961944fc3ecdd885a9e689014e9469cefc96b05d519",
+    "delphi_3e18_39bucket:5268fc7970fdd1757c78b3d28d3b4a01e39ae7eb48d9eff786688b6aa8419e2c",
+    "delphi_3e18_39bucket:1bd2258fc50c2f2300cfee3ccf288fcf65b55a83f6f4e754166ad83968fd2bc5",
+    "delphi_3e18_39bucket:9e9c69194eb0212d58b2cd82c37cfb3cd0425cc53145c90e62e8fdaa0146b72c",
+    "delphi_3e18_39bucket:100cd66fd89a88c77157afcbddc20547cc115238f2281abf552b8c0d0374cc36",
+    "delphi_3e18_39bucket:7132c13eee4b70ca34a33f9a9ae7366f1bfa0fced8aaf9fa0323bc319b97506a",
+    "delphi_3e18_39bucket:1186365305df843132a2b49cf1f4f3279bc6792218502b2ddb658ff6a8909811",
+    "delphi_3e18_39bucket:6eff5c2c6d0c6033485ec4cb97a6edae6de89063ea34c89f669ff4e4e0629eea",
+    "delphi_3e18_39bucket:1f764babd33705edc89b9384b3ade86c50adefb121d72a48eead725f2f99fdbb",
+    "delphi_3e18_39bucket:fafbc2ba18f1c7971ddf8e7eff5f92f1b11469cf1d80181209696d8655812553",
+    "delphi_3e18_39bucket:e8e86e247324e07114d17c3fe9b93415a22bc9d717bbeb492e8a949f59ffc574",
+    "delphi_3e18_39bucket:435fc59b9f74ea68a12a16abcf01b49d1d751709400f056661ece786c4fb97f4",
+    "delphi_3e18_39bucket:037a604380dcbb0bd031ab6fe4d27d6f859ec425fb267f14b984c1fb545aefe5",
+)
 DOSE_SOURCE = "conditional_epoch_dose_response"
 CONDITION_DECIMALS = 8
 
@@ -158,28 +200,38 @@ def load_dose_frame(panel: harness.BenchPanel) -> pd.DataFrame:
     ]
     complete = dose["table9_macro_n"].fillna(0).gt(0) & dose["uncheatable_n"].fillna(0).gt(0)
     dose = dose[complete].copy()
-    run_names = runs.groupby("coordinate_id")["training_wandb_run_id"].apply(
-        lambda s: ";".join(sorted(set(s.astype(str))))
+    grouped = runs.groupby("coordinate_id")
+    dose["source_run_names"] = dose["coordinate_id"].map(
+        grouped["training_wandb_run_id"].apply(lambda s: ";".join(sorted(set(s.astype(str)))))
     )
-    dose["source_run_names"] = dose["coordinate_id"].map(run_names).fillna("")
+    for column in ("data_seed", "trainer_seed"):
+        unique = grouped[column].apply(lambda s: tuple(sorted(set(s.dropna().astype(int)))))
+        dose[column] = dose["coordinate_id"].map(unique.map(lambda values: values[0] if len(values) == 1 else np.nan))
     return dose.reset_index(drop=True)
 
 
-def historical_seeds(manifest_path: Path) -> dict[str, int]:
-    """Data seeds of the current panel's runs, from the augmented-swarm training manifest."""
+def historical_seeds(manifest_path: Path) -> dict[str, tuple[int, int]]:
+    """(data seed, trainer seed) of the current panel's runs, from the augmented-swarm training manifest."""
     if not manifest_path.exists():
-        return {}
+        raise FileNotFoundError(f"{manifest_path} is required for the reused panel rows' seed provenance")
     manifest = pd.read_csv(manifest_path)
-    return {str(row.run_name): int(row.data_seed) for row in manifest.itertuples()}
+    return {str(row.run_name): (int(row.data_seed), int(row.trainer_seed)) for row in manifest.itertuples()}
 
 
 def build_design(
-    panel: harness.BenchPanel, dose: pd.DataFrame, panel_seeds: dict[str, int] | None = None
+    panel: harness.BenchPanel, dose: pd.DataFrame, panel_seeds: dict[str, tuple[int, int]] | None = None
 ) -> pd.DataFrame:
     seeds = panel_seeds or {}
 
-    def historical_seed(run_names: str) -> int:
-        return seeds.get(run_names, -1)
+    def historical_seeds_for(source: str, run_names: str, historical: tuple[int, int] | None) -> tuple[int, int]:
+        """Seeds a reused row was trained with; reused rows never get invented seeds."""
+        if source == "reused_panel":
+            if run_names not in seeds:
+                raise ValueError(f"no historical seeds for panel run {run_names!r}; the training manifest is required")
+            return seeds[run_names]
+        if historical is None:
+            raise ValueError(f"reused row {run_names!r} has no historical seeds")
+        return historical
 
     buckets = list(panel.buckets)
     inventory = panel.features.inventory
@@ -204,6 +256,7 @@ def build_design(
         seed_block: int = 0,
         wave: str = "full",
         repeat_of: str = "",
+        historical: tuple[int, int] | None = None,
     ) -> None:
         weights = np.asarray(weights, dtype=float)
         if weights.min() < 0 or not np.isclose(weights.sum(), 1.0, atol=1e-9):
@@ -220,8 +273,15 @@ def build_design(
                 "source_coordinate_id": source_coordinate_id,
                 "source_run_names": source_run_names,
                 "seed_block": seed_block if source == "new" else -1,
-                "data_seed": BASE_DATA_SEED + seed_block if source == "new" else historical_seed(source_run_names),
-                "trainer_seed": TRAINER_SEED,
+                "data_seed": (
+                    BASE_DATA_SEED + seed_block
+                    if source == "new"
+                    else historical_seeds_for(source, source_run_names, historical)[0]
+                ),
+                "trainer_seed": (
+                    TRAINER_SEED if source == "new" else historical_seeds_for(source, source_run_names, historical)[1]
+                ),
+                "subset_seed": BASE_DATA_SEED + seed_block if source == "new" else None,
                 "wave": wave,
                 "repeat_of": repeat_of,
                 "weights": weights / weights.sum(),
@@ -374,17 +434,22 @@ def build_design(
             source="reused_panel",
             source_run_names=names[index],
         )
-    if len(dose) < REUSED_DOSE_ROWS:
-        raise ValueError(f"only {len(dose)} dose coordinates carry both targets; {REUSED_DOSE_ROWS} needed")
-    dose_weights = dose[[f"weight::{bucket}" for bucket in buckets]].to_numpy(float)
-    for rank, index in enumerate(np.argsort(-(dose_weights * inventory[None, :]).max(1))[:REUSED_DOSE_ROWS]):
+    by_coordinate = dose.set_index("coordinate_id")
+    missing = [cid for cid in REUSED_DOSE_COORDINATES if cid not in by_coordinate.index]
+    if missing:
+        raise ValueError(f"{len(missing)} frozen dose coordinates are absent or lack a target: {missing[:3]}")
+    for rank, cid in enumerate(REUSED_DOSE_COORDINATES):
+        row = by_coordinate.loc[cid]
+        if not np.isfinite(float(row["data_seed"])) or not np.isfinite(float(row["trainer_seed"])):
+            raise ValueError(f"frozen dose coordinate {cid} has missing or conflicting seeds in the registry")
         add(
             f"dose_ladder_reused_{rank:02d}",
             "reused_dose_ladder",
-            dose_weights[index],
+            row[[f"weight::{bucket}" for bucket in buckets]].to_numpy(float),
             source="reused_dose",
-            source_coordinate_id=str(dose["coordinate_id"].iloc[index]),
-            source_run_names=str(dose["source_run_names"].iloc[index]),
+            source_coordinate_id=cid,
+            source_run_names=str(row["source_run_names"]),
+            historical=(int(row["data_seed"]), int(row["trainer_seed"])),
         )
 
     frame = pd.DataFrame(rows)
@@ -426,7 +491,7 @@ def launcher_table(design: pd.DataFrame, buckets: list[str], inventory: np.ndarr
             "seed_block": row["seed_block"],
             "data_seed": row["data_seed"],
             "trainer_seed": row["trainer_seed"],
-            "subset_seed": row["data_seed"],  # paired: the data seed also selects the subsampled pool
+            "subset_seed": "" if row["subset_seed"] is None else row["subset_seed"],  # blank for reused rows
         }
         for phase in PHASE_NAMES:
             for domain in DOMAIN_NAMES:

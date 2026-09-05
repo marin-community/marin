@@ -2,9 +2,11 @@
 
 Purpose: replace the current 280-run fit panel with a swarm, frozen before any model is fitted on it, that gives a
 surrogate the evidence it needs to select a better Table-9 / Uncheatable optimum than OLMix fitted on the same
-swarm. The rows were placed without any model-proposed or measured optimum, but the lattice box and the anchors were
-chosen with this project's earlier results in view: a prospectively frozen adaptive design, not a blind one.
-Revisions 2 and 3 incorporate the two Codex reviews (section 8). This document is written for a reviewer who has not followed the project; every claim points at an artifact.
+swarm. The rows were placed without any model-proposed or measured optimum and without reading any measured value, but
+the lattice box and the anchors were chosen with this project's earlier results in view, and the 40 reused dose
+ladders were selected among those that carried both targets when the design was frozen (their coordinate ids are
+now a constant in the script). A prospectively frozen adaptive design, not an outcome-blind one.
+Revisions 2–4 incorporate the three Codex reviews (section 8). This document is written for a reviewer who has not followed the project; every claim points at an artifact.
 Nothing has been launched. The materialized design is
 `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_apriori_swarm_280_20260904/`
 (`swarm_mixtures.csv`, `design_rows.csv`, `manifest.json`), produced by
@@ -85,7 +87,7 @@ No row comes from a fitted model or a measured optimum. OLMix is refitted on the
 | single-bucket share ladders at B and C | 48 | 48 | 8 buckets × multipliers 0.25, 3, 8 | per-bucket knees in concentrated regions rather than around the proportional row |
 | CC-removal corners | 9 | 9 | (CC-high, CC-low, others) ratios 2:0:4, 1:0:4, 1/4:0:4, 1/8:0:4, 1:1/4:4, 1/4:1/4:4, 1:1/2:4, 1/2:1/4:4, 1/10:1/10:4, all distinct from each other and from anchor D | how much web can go |
 | random panel rows, farthest-point subset | 18 | 0 | reused (panel run names recorded) | keeps the spread region covered |
-| highest-epoch conditional dose ladders with both targets measured | 40 | 0 | reused (registry coordinate ids and run names recorded) | CC over-exposure and proportional-anchor knees already paid for |
+| conditional dose ladders, 40 frozen coordinate ids (the highest-epoch ladders with both targets measured at freeze time) | 40 | 0 | reused (coordinate ids, run names, historical seeds recorded) | CC over-exposure and proportional-anchor knees already paid for |
 
 New runs: 180 of 280, of which 37 form the pilot (section 4). Every run condition (shares, pool fractions, seed
 block) is unique; repeated mixtures differ only by seed block. The reserved 45 rows are unchanged from the current
@@ -146,8 +148,11 @@ second wave.
 contrast is Δ(t, a, f, k) = macro(subsampled) − macro(full-support control of a in block k), on the Table-9 macro
 BPB, with the Uncheatable BPB reported alongside. The seed SD σ is the pooled standard deviation of the proportional
 controls (blocks 0–2) and the two anchor-B controls. A target *passes* if, at either anchor, (i) the mean over the two
-blocks of Δ(t, a, 1/4) exceeds 2σ/√2 in magnitude, (ii) both blocks give it the same sign, and (iii)
-|Δ(t, a, 1/4)| ≥ |Δ(t, a, 1/2)| on average (dose monotonicity). Table 9 decides; a target that passes on Uncheatable
+blocks of Δ(t, a, 1/4) exceeds 2σ in magnitude, (ii) both blocks give it the same sign, and (iii)
+|Δ(t, a, 1/4)| ≥ |Δ(t, a, 1/2)| on average (dose monotonicity). σ is the per-run seed SD: the within-anchor residual
+SD of the full-support controls pooled over anchors (three proportional runs and two anchor-B runs, three degrees of
+freedom), never the raw SD across anchors, whose means differ. A single contrast is a paired difference of two runs
+with SD σ√2; the mean over two blocks has SD σ, hence the 2σ threshold. Table 9 decides; a target that passes on Uncheatable
 only is reported, not counted. The second wave runs if at least two of the four targets pass; otherwise the swarm
 stops at the pilot, the result is recorded as "repetition below noise at 3e18 for these buckets", and the goal is
 pursued with share-space models and per-bucket support caps only.
@@ -209,8 +214,12 @@ in the bank) before block 0 is submitted.
 `swarm_mixtures.csv` follows the augmented-swarm launcher's row convention (`phase_0_<domain>` and
 `phase_1_<domain>` columns, equal in every row, single phase) with `pool_fraction_<domain>`,
 `materialized_epochs_<domain>`, provenance (`source_coordinate_id`, `source_run_names`, `repeat_of`), `seed_block`,
-`data_seed`, `trainer_seed`, `subset_seed` and `wave` columns appended. Reused panel rows carry their historical data
-seeds from the augmented-swarm training manifest.
+`data_seed`, `trainer_seed`, `subset_seed` and `wave` columns appended. Reused rows carry the data and trainer seeds
+they were trained with (panel rows from the augmented-swarm training manifest, dose rows from the registry; the
+generator fails if either is missing) and a blank `subset_seed`, because those runs predate subset seeding. The
+launcher accepts only the frozen table: the table's sha256 must equal `mixtures_sha256` in the manifest beside it,
+that hash is recorded in the live manifest, and run identities come from the table's row index, so the pilot's specs
+are byte-identical under `--wave full`.
 
 ## 6. Files
 
@@ -274,3 +283,18 @@ OLMix.
   full-support folds, support variants in their base's fold, both fits scored on the same rows.
 - P2, the continuation gate was not operational: defined in section 4 (metric, contrast, noise estimate, sign
   consistency, dose monotonicity, the Table-9-decides rule, and the stop outcome).
+
+### Codex review of revision 3, and what changed (revision 4)
+
+- P1, the frozen design was not enforced at launch (the live manifest recorded the old augmented-panel hash):
+  correct. The launcher now refuses any table whose sha256 differs from `mixtures_sha256` in the manifest beside it,
+  and passes that hash into the shared artifact builder, which gained a `source_panel_sha256` parameter.
+- P1, pilot and full submissions did not share identities (33 of 37 pilot ids changed under `--wave full`):
+  correct. Run order and id now come from the unfiltered table row index; a test asserts the pilot specs are
+  identical under both waves.
+- P2, the a priori claim: reworded as above; the 40 reused dose coordinate ids are frozen in the script and the
+  generator fails if any is missing.
+- P2, invented `subset_seed` on reused rows: reused rows now carry blank subset seeds and their historical data and
+  trainer seeds from the manifest or the registry, and the generator fails when provenance is missing.
+- P2, the noise formula: σ is the within-anchor residual SD of the controls pooled over anchors, contrasts are paired
+  two-run differences, and the gate threshold is 2σ on the two-block mean (section 4).

@@ -31,11 +31,13 @@ def test_farthest_point_picks_the_most_distant_rows_first():
 def built():
     panel = harness.load_panel(design.PANEL)
     rng = np.random.default_rng(0)
-    weights = rng.dirichlet(np.ones(len(panel.buckets)), size=60)
+    weights = rng.dirichlet(np.ones(len(panel.buckets)), size=len(design.REUSED_DOSE_COORDINATES))
     dose = pd.DataFrame(weights, columns=[f"weight::{b}" for b in panel.buckets])
-    dose["coordinate_id"] = [f"coord{i}" for i in range(60)]
-    dose["source_run_names"] = [f"run{i}" for i in range(60)]
-    seeds = {name: 7_141_000 for name in panel.runs}
+    dose["coordinate_id"] = list(design.REUSED_DOSE_COORDINATES)
+    dose["source_run_names"] = [f"run{i}" for i in range(len(dose))]
+    dose["data_seed"] = 5_000
+    dose["trainer_seed"] = 0
+    seeds = {name: (7_141_000, 0) for name in panel.runs}
     return panel, design.build_design(panel, dose, seeds)
 
 
@@ -74,7 +76,9 @@ def test_reused_rows_keep_their_provenance(built):
     assert reused["seed_block"].eq(-1).all()
     assert reused.loc[reused["source"].eq("reused_panel"), "data_seed"].eq(7_141_000).all()
     dose = frame[frame["block"].eq("reused_dose_ladder")]
-    assert dose["source_coordinate_id"].str.startswith("coord").all()
+    assert list(dose["source_coordinate_id"]) == list(design.REUSED_DOSE_COORDINATES)
+    assert dose["data_seed"].eq(5_000).all()
+    assert reused["subset_seed"].isna().all()  # historical runs had no subset seed; none is invented
 
 
 def test_subsampled_rows_keep_anchor_weights_and_pair_seeds_within_blocks(built):
@@ -108,12 +112,17 @@ def test_subsampled_rows_keep_anchor_weights_and_pair_seeds_within_blocks(built)
     assert all(bucket in buckets for fractions in subsampled["pool_fractions"] for bucket in fractions)
 
 
-def test_dose_rows_below_the_reuse_count_are_rejected():
+def test_missing_frozen_dose_coordinates_and_missing_panel_seeds_are_rejected():
     panel = harness.load_panel(design.PANEL)
     dose = pd.DataFrame(
         np.full((5, len(panel.buckets)), 1 / len(panel.buckets)), columns=[f"weight::{b}" for b in panel.buckets]
     )
     dose["coordinate_id"] = [f"c{i}" for i in range(5)]
     dose["source_run_names"] = ""
-    with pytest.raises(ValueError, match="carry both targets"):
-        design.build_design(panel, dose)
+    dose["data_seed"] = 1
+    dose["trainer_seed"] = 0
+    seeds = {name: (7_141_000, 0) for name in panel.runs}
+    with pytest.raises(ValueError, match="frozen dose coordinates"):
+        design.build_design(panel, dose, seeds)
+    with pytest.raises(ValueError, match="no historical seeds"):
+        design.build_design(panel, dose, {})

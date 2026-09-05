@@ -55,6 +55,18 @@ def read_design_rows(path: Path) -> list[dict[str, str]]:
     return rows
 
 
+def frozen_design_sha256(design_table: Path) -> str:
+    """The table's hash, required to equal ``mixtures_sha256`` in the manifest written next to it."""
+    manifest_path = design_table.with_name("manifest.json")
+    if not manifest_path.exists():
+        raise FileNotFoundError(f"{design_table} has no manifest.json beside it; the launcher only runs frozen tables")
+    expected = json.loads(manifest_path.read_text())["mixtures_sha256"]
+    actual = hashlib.sha256(design_table.read_bytes()).hexdigest()
+    if actual != expected:
+        raise ValueError(f"{design_table} (sha256 {actual}) does not match the frozen manifest ({expected})")
+    return actual
+
+
 def pool_fractions_from_row(row: dict[str, str]) -> dict[str, float] | None:
     fractions = {}
     for domain in DOMAIN_NAMES:
@@ -87,7 +99,7 @@ def run_specs_from_rows(
         raise ValueError(f"wave must be one of {WAVES}")
     realized_train_tokens = train_steps * batch_size * swarm.SEQ_LEN_DELPHI
     specs: list[swarm.DelphiSwarmRunSpec] = []
-    for row in rows:
+    for table_index, row in enumerate(rows):  # identities come from the unfiltered table, not from the wave
         if row["source"] != "new" or (wave == "pilot" and row["wave"] != "pilot"):
             continue
         phase_weights = swarm._phase_weights_from_row(row, source_run_name=row["run_name"])
@@ -99,11 +111,10 @@ def run_specs_from_rows(
                 f"{row['run_name']}: paired seeds required (data seed {data_seed}, subset seed {subset_seed})"
             )
         max_epoch, q95_epoch, phase_tv = swarm._weight_diagnostics(phase_weights)
-        run_order = len(specs)
         specs.append(
             swarm.DelphiSwarmRunSpec(
-                run_order=run_order,
-                run_id=RUN_ID_BASE + run_order,
+                run_order=table_index,
+                run_id=RUN_ID_BASE + table_index,
                 run_name=row["run_name"],
                 source_run_name=row["run_name"],
                 source_experiment=EXPERIMENT_NAME,
@@ -144,6 +155,7 @@ def run_specs_from_rows(
 def load_design(
     design_table: Path, *, wave: str, analysis_output_path: str, tpu_type: str, tpu_region: str, tpu_zone: str
 ) -> list[swarm.DelphiSwarmRunSpec]:
+    frozen_design_sha256(design_table)
     rows = read_design_rows(design_table)
     scaling_fits = swarm._read_scaling_fits(analysis_output_path)
     candidate = swarm._candidate_for_budget(scaling_fits=scaling_fits)
@@ -178,7 +190,7 @@ def write_local_dry_run(
             output_path=str(LOCAL_ARTIFACT_DIR),
             experiment_name=EXPERIMENT_NAME,
             source_panel=str(design_table),
-            source_panel_sha256=hashlib.sha256(design_table.read_bytes()).hexdigest(),
+            source_panel_sha256=frozen_design_sha256(design_table),
             analysis_output_path=analysis_output_path,
             run_specs_json=json.dumps([asdict(spec) for spec in run_specs], sort_keys=True),
             architecture_target_flops=swarm.TARGET_FLOPS,
@@ -239,6 +251,7 @@ def main() -> None:
             training_wandb_group=f"{PROVENANCE_PANEL}_{args.wave}",
             table9_wandb_group=TABLE9_WANDB_GROUP,
             provenance_panel=PROVENANCE_PANEL,
+            source_panel_sha256=frozen_design_sha256(args.design_table),
         )
     if os.getenv("CI") is not None:
         logger.info(
