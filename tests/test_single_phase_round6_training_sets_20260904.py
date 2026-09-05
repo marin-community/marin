@@ -5,6 +5,12 @@
 import numpy as np
 
 from experiments.domain_phase_mix.exploratory.two_phase_many import (
+    single_phase_observatory_models_20260902 as models,
+)
+from experiments.domain_phase_mix.exploratory.two_phase_many import (
+    single_phase_round3_union_loso_20260903 as loso,
+)
+from experiments.domain_phase_mix.exploratory.two_phase_many import (
     single_phase_round6_training_sets_20260904 as training,
 )
 
@@ -30,13 +36,6 @@ def test_total_variation_is_half_the_l1_distance():
 
 
 def _synthetic_union(panel_rows: int, dose_rows: int):
-    from experiments.domain_phase_mix.exploratory.two_phase_many import (
-        single_phase_observatory_models_20260902 as models,
-    )
-    from experiments.domain_phase_mix.exploratory.two_phase_many import (
-        single_phase_round3_union_loso_20260903 as loso,
-    )
-
     rng = np.random.default_rng(0)
     weights = rng.dirichlet(np.ones(3), size=panel_rows + dose_rows)
     features = models.Features(
