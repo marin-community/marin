@@ -6,7 +6,7 @@ swarm. The rows were placed without any model-proposed or measured optimum and w
 the lattice box and the anchors were chosen with this project's earlier results in view, and the 40 reused dose
 ladders were selected among those that carried both targets when the design was frozen (their coordinate ids are
 now a constant in the script). A prospectively frozen adaptive design, not an outcome-blind one.
-Revisions 2–4 incorporate the three Codex reviews (section 8). This document is written for a reviewer who has not followed the project; every claim points at an artifact.
+Revisions 2–5 incorporate the four Codex reviews (section 8). This document is written for a reviewer who has not followed the project; every claim points at an artifact.
 Nothing has been launched. The materialized design is
 `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_apriori_swarm_280_20260904/`
 (`swarm_mixtures.csv`, `design_rows.csv`, `manifest.json`), produced by
@@ -151,8 +151,9 @@ controls (blocks 0–2) and the two anchor-B controls. A target *passes* if, at 
 blocks of Δ(t, a, 1/4) exceeds 2σ in magnitude, (ii) both blocks give it the same sign, and (iii)
 |Δ(t, a, 1/4)| ≥ |Δ(t, a, 1/2)| on average (dose monotonicity). σ is the per-run seed SD: the within-anchor residual
 SD of the full-support controls pooled over anchors (three proportional runs and two anchor-B runs, three degrees of
-freedom), never the raw SD across anchors, whose means differ. A single contrast is a paired difference of two runs
-with SD σ√2; the mean over two blocks has SD σ, hence the 2σ threshold. Table 9 decides; a target that passes on Uncheatable
+freedom), never the raw SD across anchors, whose means differ. A contrast pairs two runs that share a data seed,
+so its noise is σ√(2(1−ρ)) with ρ the seed-induced correlation, which the pilot does not estimate; 2σ on the
+two-block mean is therefore a preregistered conservative threshold (exact only if ρ = 0), not a standard error. Table 9 decides; a target that passes on Uncheatable
 only is reported, not counted. The second wave runs if at least two of the four targets pass; otherwise the swarm
 stops at the pilot, the result is recorded as "repetition below noise at 3e18 for these buckets", and the goal is
 pursued with share-space models and per-bucket support caps only.
@@ -217,9 +218,11 @@ in the bank) before block 0 is submitted.
 `data_seed`, `trainer_seed`, `subset_seed` and `wave` columns appended. Reused rows carry the data and trainer seeds
 they were trained with (panel rows from the augmented-swarm training manifest, dose rows from the registry; the
 generator fails if either is missing) and a blank `subset_seed`, because those runs predate subset seeding. The
-launcher accepts only the frozen table: the table's sha256 must equal `mixtures_sha256` in the manifest beside it,
-that hash is recorded in the live manifest, and run identities come from the table's row index, so the pilot's specs
-are byte-identical under `--wave full`.
+launcher accepts only the reviewed table: its sha256 must equal `FROZEN_DESIGN_SHA256` pinned in the launcher
+(`c5ec2b0a…`) and `mixtures_sha256` in the manifest beside it, that hash is recorded in the live manifest, and run
+identities come from the table's row index, so the pilot's specs are byte-identical under `--wave full`. Seed
+columns are nullable integers: reused rows have a blank `subset_seed`, and a test parses the committed table through
+the launcher (37 pilot specs, 180 full, identical where they overlap).
 
 ## 6. Files
 
@@ -298,3 +301,12 @@ OLMix.
   trainer seeds from the manifest or the registry, and the generator fails when provenance is missing.
 - P2, the noise formula: σ is the within-anchor residual SD of the controls pooled over anchors, contrasts are paired
   two-run differences, and the gate threshold is 2σ on the two-block mean (section 4).
+
+### Codex review of revision 4, and what changed (revision 5)
+
+- P1, the committed table could not launch (`subset_seed` serialized as `662009.0`): correct. Seed columns are
+  written as nullable integers, and a test parses the committed table through the launcher end to end.
+- P1, the reviewed hash was not independently pinned: correct. `FROZEN_DESIGN_SHA256` is pinned in the launcher;
+  a table must match the pin and its sibling manifest, and a test checks the committed table against the pin.
+- P2, the gate's variance derivation assumed independent runs despite paired seeds: corrected as above; 2σ stays as
+  a preregistered conservative threshold.

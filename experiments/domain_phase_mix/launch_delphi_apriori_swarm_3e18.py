@@ -43,6 +43,8 @@ WANDB_TAGS = ("delphi-3e18-apriori-swarm", "fit-panel", "single-phase")
 TABLE9_WANDB_GROUP = "olmo_base_eval_table9_delphi_3e18_apriori_swarm"
 PROVENANCE_PANEL = "delphi_3e18_apriori_swarm"
 RUN_ID_BASE = 7_150_000
+# sha256 of the reviewed swarm_mixtures.csv; the launcher runs nothing else.
+FROZEN_DESIGN_SHA256 = "c5ec2b0ae1b5c68dc44f6ede1a5caa1bd2918f5bfd9f6d0f23be508637856bd6"
 WAVES = ("pilot", "full")
 POOL_FRACTION_PREFIX = "pool_fraction_"
 
@@ -56,14 +58,16 @@ def read_design_rows(path: Path) -> list[dict[str, str]]:
 
 
 def frozen_design_sha256(design_table: Path) -> str:
-    """The table's hash, required to equal ``mixtures_sha256`` in the manifest written next to it."""
+    """The table's hash, required to equal the pinned ``FROZEN_DESIGN_SHA256`` and the manifest beside the table."""
+    actual = hashlib.sha256(design_table.read_bytes()).hexdigest()
+    if actual != FROZEN_DESIGN_SHA256:
+        raise ValueError(f"{design_table} (sha256 {actual}) is not the reviewed design ({FROZEN_DESIGN_SHA256})")
     manifest_path = design_table.with_name("manifest.json")
     if not manifest_path.exists():
         raise FileNotFoundError(f"{design_table} has no manifest.json beside it; the launcher only runs frozen tables")
     expected = json.loads(manifest_path.read_text())["mixtures_sha256"]
-    actual = hashlib.sha256(design_table.read_bytes()).hexdigest()
     if actual != expected:
-        raise ValueError(f"{design_table} (sha256 {actual}) does not match the frozen manifest ({expected})")
+        raise ValueError(f"{design_table} (sha256 {actual}) does not match its manifest ({expected})")
     return actual
 
 

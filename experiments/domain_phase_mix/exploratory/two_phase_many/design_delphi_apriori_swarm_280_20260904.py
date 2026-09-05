@@ -491,7 +491,7 @@ def launcher_table(design: pd.DataFrame, buckets: list[str], inventory: np.ndarr
             "seed_block": row["seed_block"],
             "data_seed": row["data_seed"],
             "trainer_seed": row["trainer_seed"],
-            "subset_seed": "" if row["subset_seed"] is None else row["subset_seed"],  # blank for reused rows
+            "subset_seed": row["subset_seed"],  # None for reused rows; written as a blank cell, never as a float
         }
         for phase in PHASE_NAMES:
             for domain in DOMAIN_NAMES:
@@ -501,7 +501,10 @@ def launcher_table(design: pd.DataFrame, buckets: list[str], inventory: np.ndarr
             record[f"pool_fraction_{domain}"] = fraction
             record[f"materialized_epochs_{domain}"] = epochs_at_full[domain] / fraction
         records.append(record)
-    return pd.DataFrame(records)
+    table = pd.DataFrame(records)
+    for column in ("seed_block", "data_seed", "trainer_seed", "subset_seed"):
+        table[column] = pd.array(table[column].tolist(), dtype="Int64")  # nullable integers: blanks stay blank
+    return table
 
 
 def row_summary(design: pd.DataFrame, panel: harness.BenchPanel) -> pd.DataFrame:

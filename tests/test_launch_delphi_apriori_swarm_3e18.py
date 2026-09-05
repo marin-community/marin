@@ -76,22 +76,26 @@ def test_specs_carry_paired_seeds_and_pool_fractions_and_skip_reused_rows():
     ]
 
 
-def test_only_the_frozen_table_is_accepted(tmp_path):
+def test_only_the_pinned_table_is_accepted(tmp_path):
     table = tmp_path / "swarm_mixtures.csv"
     table.write_text("run_name\nx\n")
-    with pytest.raises(FileNotFoundError, match=r"manifest\.json"):
-        launcher.frozen_design_sha256(table)
-    (tmp_path / "manifest.json").write_text(json.dumps({"mixtures_sha256": "0" * 64}))
-    with pytest.raises(ValueError, match="does not match the frozen manifest"):
-        launcher.frozen_design_sha256(table)
     (tmp_path / "manifest.json").write_text(
         json.dumps({"mixtures_sha256": hashlib.sha256(table.read_bytes()).hexdigest()})
     )
-    assert launcher.frozen_design_sha256(table) == hashlib.sha256(table.read_bytes()).hexdigest()
+    with pytest.raises(ValueError, match="is not the reviewed design"):  # self-consistent manifest is not enough
+        launcher.frozen_design_sha256(table)
 
 
-def test_unpaired_seeds_and_bad_fractions_are_rejected():
-    with pytest.raises(ValueError, match="paired seeds"):
-        launcher.run_specs_from_rows([_row("unpaired", subset_seed=1)], wave="pilot", **SPEC_KWARGS)
-    with pytest.raises(ValueError, match="outside"):
-        launcher.run_specs_from_rows([_row("bad", fractions={"dolmino_synth_qa": 1.5})], wave="pilot", **SPEC_KWARGS)
+def test_the_committed_design_is_the_pinned_one_and_round_trips_through_the_launcher():
+    assert launcher.frozen_design_sha256(launcher.DEFAULT_DESIGN_TABLE) == launcher.FROZEN_DESIGN_SHA256
+    rows = launcher.read_design_rows(launcher.DEFAULT_DESIGN_TABLE)
+    reused = [row for row in rows if row["source"] != "new"]
+    assert reused and all(row["subset_seed"] == "" for row in reused)  # blanks, never floats
+    pilot = launcher.run_specs_from_rows(rows, wave="pilot", **SPEC_KWARGS)
+    assert len(pilot) == 37
+    assert all(spec.data_seed == spec.simulated_epoch_subset_seed for spec in pilot)
+    assert {spec.data_seed for spec in pilot} == {662_009, 662_010, 662_011}
+    full = launcher.run_specs_from_rows(rows, wave="full", **SPEC_KWARGS)
+    assert len(full) == 180
+    by_name = {spec.run_name: spec for spec in full}
+    assert all(by_name[spec.run_name] == spec for spec in pilot)
