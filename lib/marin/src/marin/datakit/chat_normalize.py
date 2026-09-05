@@ -29,8 +29,13 @@ from marin.datakit.normalize import (
 )
 from marin.execution.step_spec import StepSpec
 
-CHAT_NORMALIZE_VERSION = "2026.09.04"
+CHAT_NORMALIZE_VERSION = "2026.09.04.1"
 _INLINE_TOOL_SYNTAX = re.compile(r"<tool_call(?::[^>]*)?>", re.IGNORECASE)
+_CHAT_CONTROL_TOKEN = re.compile(
+    r"<\|(?:begin_of_text|end_of_text|finetune_right_pad_id|start_header_id|end_header_id|"
+    r"eom_id|eot_id|python_tag|reserved_special_token_\d+)\|>"
+)
+_REASONING_TOKEN = re.compile(r"<\|(?:start|end)_think\|>")
 
 
 def _tool_name(tool: dict) -> str | None:
@@ -86,6 +91,10 @@ def validate_chat_messages(messages: list[dict], tools: list[dict]) -> None:
         content = message.get("content")
         if role not in {"assistant", "system", "tool", "user"}:
             raise ValueError(f"Unsupported canonical chat role {role!r}")
+        if isinstance(content, str) and _CHAT_CONTROL_TOKEN.search(content):
+            raise ValueError("Message content must not contain tokenizer control tokens")
+        if role != "assistant" and isinstance(content, str) and _REASONING_TOKEN.search(content):
+            raise ValueError("Reasoning delimiters are only valid in assistant messages")
         if role == "system":
             if seen_non_system:
                 raise ValueError("System messages must precede all conversation turns")
