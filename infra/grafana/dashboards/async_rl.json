@@ -1714,7 +1714,7 @@
       "gridPos": {
         "x": 0,
         "y": 46,
-        "w": 8,
+        "w": 6,
         "h": 8
       },
       "fieldConfig": {
@@ -1804,9 +1804,9 @@
         "uid": "finelog-marin"
       },
       "gridPos": {
-        "x": 8,
+        "x": 6,
         "y": 46,
-        "w": 8,
+        "w": 6,
         "h": 8
       },
       "fieldConfig": {
@@ -1887,6 +1887,99 @@
       "interval": "1m"
     },
     {
+      "id": 40,
+      "type": "timeseries",
+      "title": "Consumed length stops and coverage",
+      "description": "Length-stop fraction uses admitted response sequences before DP padding, and is published only after the learner update completes. Coverage is the fraction of those sequences with a recorded stop reason. A length stop means the engine or runner exhausted a length budget; it does not prove the answer is incomplete. Missing fractions remain gaps rather than zero, including steps with incomplete coverage.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 46,
+        "w": 6,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "noValue": "No matching records in this window.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "WITH r AS (SELECT * FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND run_id IN (${run:sqlstring}) AND job_id IN (${job:sqlstring}) AND execution_uid IN (${execution:sqlstring})), s AS (SELECT execution_uid,json_get(attributes_json,'step') AS step,MAX(timestamp_ms) AS timestamp_ms,MAX(CASE WHEN json_get(attributes_json,'metric')='consumed/length_stop_fraction' THEN value END) AS length_fraction,MAX(CASE WHEN json_get(attributes_json,'metric')='consumed/stop_reason_coverage' THEN value END) AS coverage FROM r WHERE name='training_metric_value' AND json_get(attributes_json,'phase')='train' AND json_get(attributes_json,'role')='trainer' AND json_get(attributes_json,'metric') IN ('consumed/length_stop_fraction','consumed/stop_reason_coverage') GROUP BY execution_uid,json_get(attributes_json,'step')) SELECT to_timestamp_millis(timestamp_ms) AS t,'consumed/length_stop_fraction · ' || execution_uid AS series,CASE WHEN coverage=1 THEN length_fraction END AS value FROM s UNION ALL SELECT to_timestamp_millis(timestamp_ms) AS t,'consumed/stop_reason_coverage · ' || execution_uid AS series,coverage AS value FROM s ORDER BY t,series"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
       "id": 24,
       "type": "timeseries",
       "title": "Optimizer diagnostics",
@@ -1896,9 +1989,9 @@
         "uid": "finelog-marin"
       },
       "gridPos": {
-        "x": 16,
+        "x": 18,
         "y": 46,
-        "w": 8,
+        "w": 6,
         "h": 8
       },
       "fieldConfig": {

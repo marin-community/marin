@@ -255,6 +255,13 @@ ratio shift. Raw vLLM logprobs precede sampling processors, so they need not equ
 the actual sampling distribution. These diagnostics are not KL estimates.
 Old runs without these metrics show no data.
 
+Consumed length stops use admitted response sequences before data-parallel padding,
+and are reported after the learner update completes. Read the length-stop fraction
+with stop-reason coverage: incomplete coverage leaves a gap, while complete coverage
+can establish a measured zero. A length stop identifies engine or runner budget
+exhaustion and does not establish that an answer is incomplete. The panel preserves
+missing fractions as null points so the chart does not bridge incomplete steps.
+
 Useful work means consumed response tokens or tokens selected by the loss mask,
 as named by each series. Core runs from batch admission wait through weight
 synchronization. Cycle starts there and ends before metric publication, including

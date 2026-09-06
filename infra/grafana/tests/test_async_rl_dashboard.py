@@ -131,6 +131,8 @@ def store():
             ("eval/all/avg_score", 0.25),
             ("policy/policy_loss", -0.2),
             ("policy/raw_grad_norm", 4),
+            ("consumed/length_stop_fraction", 0.25),
+            ("consumed/stop_reason_coverage", 1),
             ("policy/behavior_drift/log_ratio_mean", -0.1),
             ("policy/behavior_drift/abs_log_ratio_p99", 0.7),
             ("policy/behavior_drift/lower_clip_pressure", 0.2),
@@ -194,6 +196,34 @@ def test_useful_work_panels_keep_core_and_cycle_denominators_separate(store):
         "async/performance/consumed_loss_tokens_per_core_second · driver": 100,
         "async/performance/consumed_loss_tokens_per_cycle_second · driver": 40,
     }
+
+
+def test_consumed_length_stops_distinguish_zero_from_incomplete_coverage(store):
+    title = "Consumed length stops and coverage"
+    values = {row["series"]: row["value"] for row in query(store, title)}
+    assert values == {
+        "consumed/length_stop_fraction · driver": 0.25,
+        "consumed/stop_reason_coverage · driver": 1,
+    }
+    store.execute(
+        'UPDATE "telemetry_v1.marinskyrl" SET value=0 '
+        "WHERE json_get(attributes_json,'metric')='consumed/length_stop_fraction'"
+    )
+    assert next(row["value"] for row in query(store, title) if "length_stop_fraction" in row["series"]) == 0
+    store.execute(
+        'DELETE FROM "telemetry_v1.marinskyrl" '
+        "WHERE json_get(attributes_json,'metric')='consumed/length_stop_fraction'"
+    )
+    store.execute(
+        'UPDATE "telemetry_v1.marinskyrl" SET value=0.5 '
+        "WHERE json_get(attributes_json,'metric')='consumed/stop_reason_coverage'"
+    )
+    assert {row["series"]: row["value"] for row in query(store, title)} == {
+        "consumed/length_stop_fraction · driver": None,
+        "consumed/stop_reason_coverage · driver": 0.5,
+    }
+    store.execute("DELETE FROM \"telemetry_v1.marinskyrl\" WHERE name='training_metric_value'")
+    assert query(store, title) == []
 
 
 def test_overlap_joins_only_the_identical_process_clock_and_distinguishes_unknown(store):

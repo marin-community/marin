@@ -153,7 +153,7 @@ def training_config(scale: Scale) -> str:
         tracker_commit_each_step=True,
         project_name="marin-async-non-agentic-rl",
         resume_mode=None,
-        eval_before_train=False,
+        eval_before_train=not gate,
         eval_batch_size=128,
     )
     trainer["algorithm"].update(
