@@ -24,7 +24,8 @@ from iris.cluster.types import JobName
 from iris.env_resources import _read_iris_resource_proto
 from iris.runtime.jax_init import configure_jax_compilation_cache, initialize_jax, resolve_coordinator_port
 
-_JOB_TOKEN = JobName.from_string("/testuser/testjob").to_safe_token()
+_DEFAULT_JOB_ID = "/testuser/testjob"
+_JOB_TOKEN = JobName.from_string(_DEFAULT_JOB_ID).to_safe_token()
 SCOPED_ENDPOINT_NAME = f"jax_coordinator-{_JOB_TOKEN}"
 
 
@@ -107,7 +108,7 @@ def _make_job_info(
     task_index: int = 0,
     num_tasks: int = 1,
     attempt_id: int = 0,
-    job_id: str = "/testuser/testjob",
+    job_id: str = _DEFAULT_JOB_ID,
 ) -> JobInfo:
     job_name = JobName.from_string(f"{job_id}/{task_index}")
     return JobInfo(
