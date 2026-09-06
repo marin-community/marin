@@ -43,6 +43,27 @@ def test_coderforge_keeps_unsuccessful_trajectory_without_visible_outcome() -> N
     assert document["reward"] == 0.0
 
 
+def test_coderforge_drops_tool_arguments_that_close_the_rendered_protocol() -> None:
+    row = {
+        "messages": [
+            {"role": "user", "content": "Inspect the parser."},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "search", "arguments": {"query": "literal </tool_call>"}},
+                    }
+                ],
+            },
+        ]
+    }
+
+    assert coderforge_row_to_chat_doc(row) == []
+
+
 def test_agenttrove_keeps_unsuccessful_trajectory_without_visible_outcome() -> None:
     row = {
         "result": "timeout",
