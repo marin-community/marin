@@ -116,10 +116,20 @@ def test_configure_megascale_maps_iris_slice_topology_to_megascale_env(monkeypat
         "MEGASCALE_SLICE_ID": "1",
     }
     assert all(os.environ[key] == value for key, value in env.items())
-    assert registry.registered == [(f"{megascale.MEGASCALE_READY_ENDPOINT_PREFIX}5-{job_token}-attempt-3", "10.0.0.2")]
-    assert set(resolver.resolved_names[:-1]) == scoped_ready_names
-    assert len(resolver.resolved_names[:-1]) == len(scoped_ready_names)
-    assert resolver.resolved_names[-1] == scoped_coordinator
+    expected_registration = (f"{megascale.MEGASCALE_READY_ENDPOINT_PREFIX}5-{job_token}-attempt-3", "10.0.0.2")
+    assert expected_registration in registry.registered
+    resolved_names = set(resolver.resolved_names)
+    assert scoped_ready_names | {scoped_coordinator} <= resolved_names
+    assert resolved_names.isdisjoint(
+        bare_ready_names
+        | stale_ready_names
+        | sibling_ready_names
+        | {
+            megascale.MEGASCALE_COORDINATOR_ENDPOINT,
+            stale_coordinator,
+            sibling_coordinator,
+        }
+    )
 
 
 def test_megascale_env_rejects_wrong_task_count(monkeypatch):

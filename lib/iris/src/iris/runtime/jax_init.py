@@ -300,19 +300,6 @@ def _parse_local_device_ids(raw: str | None) -> list[int] | None:
     return [int(part) for part in raw.split(",") if part]
 
 
-def _scoped_endpoint_name(endpoint_name: str, job_info: JobInfo) -> str:
-    """Scope the coordinator endpoint to the child job and its attempt.
-
-    The Iris endpoint registry namespaces by user and root job, so every job in
-    one hierarchy shares a registry. Without the child job token, concurrent
-    sibling jobs all publish and poll ``jax_coordinator-attempt-0`` and let ranks
-    from different distributed worlds join one coordinator. The job token keeps
-    siblings apart while staying identical across a job's tasks so peers still
-    discover task 0; the attempt id keeps retries of one job apart.
-    """
-    return f"{endpoint_name}-{job_info.job_id.to_safe_token()}-attempt-{job_info.attempt_id}"
-
-
 def _register_coordinator(job_info: JobInfo, port: int | None, endpoint_name: str) -> str:
     """Choose and publish global process 0's coordinator address."""
     coordinator = f"{job_info.advertise_host}:{resolve_coordinator_port(job_info, port)}"
@@ -436,7 +423,7 @@ def initialize_jax(
 
     job_info = get_job_info()
     if job_info is not None:
-        endpoint_name = _scoped_endpoint_name(endpoint_name, job_info)
+        endpoint_name = job_info.scoped_endpoint_name(endpoint_name)
     _log_jax_bootstrap_inputs(job_info, port=port, endpoint_name=endpoint_name)
 
     # Supervised (multi-process-per-task) mode short-circuits the task-derived

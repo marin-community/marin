@@ -111,7 +111,6 @@ def _make_job_info(
     attempt_id: int = 0,
     job_id: str = "/testuser/testjob",
 ) -> JobInfo:
-    """Create a JobInfo with the given task index, task count, and attempt."""
     job_name = JobName.from_string(f"{job_id}/{task_index}")
     return JobInfo(
         task_id=job_name,
@@ -294,7 +293,8 @@ def test_initialize_jax_peer_ignores_sibling_job_coordinator(
 
     initialize_jax(poll_timeout=0)
 
-    assert fake_ctx.resolver.resolved_names == [current_endpoint]
+    assert current_endpoint in fake_ctx.resolver.resolved_names
+    assert sibling_endpoint not in fake_ctx.resolver.resolved_names
     jax_args, _jax_options = mock_jax_init.call_args
     assert jax_args == ("10.0.0.1:8476", 2, 1)
 

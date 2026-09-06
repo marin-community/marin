@@ -63,6 +63,10 @@ class JobInfo:
         """Get the structured task identity (task_id + attempt_id)."""
         return TaskAttempt(task_id=self.task_id, attempt_id=self.attempt_id)
 
+    def scoped_endpoint_name(self, endpoint_name: str) -> str:
+        """Return an endpoint name isolated to this job and attempt."""
+        return f"{endpoint_name}-{self.job_id.to_safe_token()}-attempt-{self.attempt_id}"
+
     @property
     def job_id(self) -> JobName:
         return self.task_id.parent or self.task_id
