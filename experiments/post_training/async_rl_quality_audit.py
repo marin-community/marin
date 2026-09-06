@@ -1,9 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
+# /// script
+# requires-python = ">=3.12,<3.14"
+# dependencies = [
+#   "wandb==0.26.0", "s3fs==2026.1.0", "hydra-core==1.4.0.dev1",
+#   "omegaconf==2.4.0.dev15", "PyYAML==6.0.3", "tokenizers==0.22.2",
+# ]
+# ///
 
 """Qualify supplemental answer extraction on retained development responses.
 
-Run as a module in a CPU job in the artifacts' region. The JSON specification
+Run in a CPU job in the artifacts' region, from the repository root:
+PYTHONPATH=. uv run --locked --script experiments/post_training/async_rl_quality_audit.py --spec spec.json
+The JSON specification
 contains historical run specs accepted by async_rl_audit, matching prior dump
 proofs, and an output_prefix for bounded adjudication artifacts. Only 128-row
 development evaluations are accepted. No model generation or reward changes.

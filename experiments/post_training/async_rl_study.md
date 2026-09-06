@@ -225,8 +225,9 @@ from fields emitted by the original runtime. The audit CLI accepts at most one
 `paired_studies` entry per invocation; submit separate CPU audits for distinct
 contrasts.
 
-Run `python -m experiments.post_training.async_rl_quality_audit --spec spec.json`
-in a CPU job in the retained artifacts' region. Supply up to six historical audit
+Run `PYTHONPATH=. uv run --locked --script experiments/post_training/async_rl_quality_audit.py --spec spec.json`
+from the repository root in a CPU job in the retained artifacts' region. Its
+standalone lock includes the terminal auditor's Hydra dependency. Supply up to six historical audit
 run specifications, initial/final `quality_steps`, explicit `thinking` mode,
 `prior_dump_proofs` from successful terminal audits, an integer `sample_seed`,
 and a fresh regional `output_prefix`. The capture verifies the actual development
