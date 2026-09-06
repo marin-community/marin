@@ -143,7 +143,7 @@ def training_config(scale: Scale) -> str:
     trainer.update(
         strategy="megatron",
         flash_attn=False,
-        offload_optimizer_during_rollouts=True,
+        offload_optimizer_during_rollouts=False,
         gradient_checkpointing=True,
         policy_train_spans=True,
         generate_spans=True,
