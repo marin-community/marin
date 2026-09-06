@@ -664,10 +664,15 @@ def test_qwen_screening_long_confirmation_keeps_fixture_and_changes_only_schedul
     assert configs[0] == configs[1]
 
 
-@pytest.mark.parametrize("change", [{"seed": 18}, {"kl_loss": True}, {"correction": async_rl.Correction.REGULAR_TIS}])
+@pytest.mark.parametrize(
+    "change",
+    [{"seed": 18}, {"kl_loss": True}, {"correction": async_rl.Correction.REGULAR_TIS}, {"correction": "regular_no_tis"}],
+)
 def test_qwen_objective_and_seed_changes_have_distinct_identity(change):
     baseline = qwen_metrics_request()
-    variant = qwen_metrics_request(**change)
+    variant = qwen_metrics_request(
+        **(change | {"correction": async_rl.Correction(change["correction"])} if "correction" in change else change)
+    )
     assert baseline.run_id != variant.run_id
     assert baseline.model == variant.model
     assert baseline.train_data == variant.train_data
@@ -681,10 +686,12 @@ def test_qwen_objective_and_seed_changes_have_distinct_identity(change):
         assert configs[1]["trainer"]["algorithm"].pop("use_kl_loss")
     else:
         algorithm = configs[1]["trainer"]["algorithm"]
-        assert algorithm.pop("tis_imp_ratio_cap") == 2.0
+        use_tis = change["correction"] == async_rl.Correction.REGULAR_TIS
+        if use_tis:
+            assert algorithm.pop("tis_imp_ratio_cap") == 2.0
         assert algorithm.pop("require_rollout_logprobs") is True
         assert algorithm["policy_loss_type"] == "regular"
-        assert algorithm["use_tis"]
+        assert algorithm["use_tis"] is use_tis
         algorithm.update(policy_loss_type="behavior_clip", use_tis=False)
         assert configs[1]["generator"]["sampling_params"]["logprobs"] == 0
     assert configs[0] == configs[1]

@@ -1,7 +1,7 @@
 # Async non-agentic RL experiments
 
 The [Qwen recipe](async_rl.py), [Snowball recipe](async_snowball.py) and
-[terminal auditor](async_rl_audit.py) support controlled Megatron RL experiments
+[terminal auditor](async_rl_audit.py) support controlled RL experiments
 launched through Marin. Both recipes use GRPO advantages and math-verifier
 rewards. Run results and decisions are tracked in [epic #8936](https://github.com/marin-community/marin/issues/8936).
 
@@ -81,6 +81,21 @@ For a five-update correctness gate, use `--scale cadence-gate`, omit
 `--runner sync --weight-sync-interval 1`. The synchronous runner publishes after
 every update; it does not implement delayed publication.
 
+Snowball defaults to Megatron. `--backend fsdp2` selects the optimized FSDP2
+configuration for memory qualification: deterministic grouped expert reduction,
+FlashAttention, resharding after forward, nonreentrant gradient checkpointing,
+BF16 gradient reduction and stochastic BF16 AdamW updates. It uses a separate
+runtime profile and experiment identity. Start with the five-update gate and
+verify PPO, logprob-forward and publication memory events before longer runs.
+
+This compares configuration packages. FSDP2 stores BF16 optimizer moments;
+the default Megatron optimizer uses FP32 moments and master weights. Memory
+differences therefore cannot be attributed to sharding alone. Compare warmed
+persistent allocation and phase peaks, and retain reserved-memory measurements.
+Overlapping memory scopes are flagged rather than assigned independent peaks.
+Optimizer precision requires its own controlled Qwen study before changing the
+Snowball reference or qualifying a smaller learner allocation.
+
 ## Experimental controls
 
 | Control | Meaning |
@@ -89,6 +104,7 @@ every update; it does not implement delayed publication.
 | `--max-staleness-steps A` | Maximum admitted group age in completed updates; requires C ≤ A + 1. Measure realized ages as well. |
 | `--correction behavior_clip` | Reference objective using learner/behavior probability ratios and clipping. |
 | `--correction regular_tis` | Regular PPO plus truncated importance sampling, cap 2, with required rollout logprobs. This changes an objective package. |
+| `--correction regular_no_tis` | Regular PPO without importance weighting; rollout logprobs remain required for matched drift diagnostics. Use with the TIS arm to isolate the correction. |
 | `--epoch-seeded-shuffle` | Shared seed-plus-epoch source permutation. Async completion can still change consumed order and samples. |
 | `--completion metrics` | Durable training result and evaluations; no native checkpoint or HF model export. |
 | `--completion checkpoint` | Retain resumable training state. |
@@ -189,3 +205,32 @@ both endpoints. Each response keeps its place in the denominator; responses
 outside `complete`, `end_turn`, `eos` and `stop` contribute zero. The primary
 reward records and comparison remain unchanged. Declare this secondary outcome
 before accessing held-out results.
+
+
+### Supplemental answer extraction qualification
+
+`async_rl_quality.py` implements the candidate numeric-answer contract
+`numeric-answer-candidate-1`. It extracts explicit scalars without receiving the
+reference answer and reports missing, malformed, conflicting, ambiguous and
+role-continuation cases separately. Quoted concluding markers and boxed numbers
+are supported. It does not replace the canonical reward or certify semantic
+correctness. The caller must isolate the final assistant segment using the pinned
+tokenizer's thinking boundary before extraction.
+
+This contract requires blinded development-response adjudication and measured
+coverage/error rates before it can rank study arms. The current frozen study
+continues using its declared raw reward and completed-stop supplement. Historical
+reanalysis must retain the original scorer and distinguish newly computed fields
+from fields emitted by the original runtime. The audit CLI accepts at most one
+`paired_studies` entry per invocation; submit separate CPU audits for distinct
+contrasts.
+
+Run `python -m experiments.post_training.async_rl_quality_audit --spec spec.json`
+in a CPU job in the retained artifacts' region. Supply up to six historical audit
+run specifications, initial/final `quality_steps`, explicit `thinking` mode,
+`prior_dump_proofs` from successful terminal audits, an integer `sample_seed`,
+and a fresh regional `output_prefix`. The capture verifies the actual development
+selection manifest and token hashes. It writes a bounded blinded sample, a
+separate prediction/reference key, and diagnostic aggregates. Review and save
+independent labels before opening the key. Capture success leaves
+`qualification_complete` false; semantic qualification is a separate decision.

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Matched sync/async Megatron Snowball/GSM8K using the regional SFT export.
+"""Matched sync/async Snowball/GSM8K using the regional SFT export.
 
 Run the two-update gate before the 25-update qualification. Both keep the staged
 export's thinking template and use four policy nodes plus one node per inference replica.
@@ -18,6 +18,9 @@ Use --scale cadence-gate --weight-sync-interval 2 --max-staleness-steps 1
 for five updates with initial/final evaluation and a forced final publication.
 Use --runner sync for the synchronous control, which publishes every update.
 Use --inference-replicas 2 for two independent, node-local DP8/EP8 groups.
+Use --backend fsdp2 for the optimized FSDP2 memory qualification. This selects
+grouped MM, FlashAttention, BF16 gradient reduction and stochastic BF16 AdamW;
+optimizer-state precision differs from the default Megatron configuration.
 """
 
 from __future__ import annotations
@@ -87,6 +90,17 @@ from experiments.post_training.curriculum_rl.pool import (
 TOKENIZER_REVISION = "a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2"
 CLUSTER = "cw-us-east-02a"
 ROLE_PLAN = replace(SNOWBALL_SMOKE.role_plan, micro_train_batch_size_per_gpu=1)
+# These keys are absent from the base Hydra schema; the YAML translator emits
+# plain overrides, so they must travel through the explicit add-or-override path.
+FSDP2_OVERRIDES = (
+    "++trainer.policy.fsdp_config.mixed_precision.reduce_dtype=bf16",
+    "++trainer.policy.optimizer_config.bf16_update_mode=stochastic",
+)
+
+
+class Backend(StrEnum):
+    MEGATRON = "megatron"
+    FSDP2 = "fsdp2"
 
 
 class Scale(StrEnum):
@@ -176,6 +190,7 @@ def write_snowball_gsm8k(config: SnowballDataConfig, *, validation_offset: int =
 def training_config(
     scale: Scale,
     *,
+    backend: Backend = Backend.MEGATRON,
     runner: Runner = Runner.ASYNC,
     inference_replicas: int = 1,
     response_tokens: int | None = None,
@@ -190,6 +205,7 @@ def training_config(
     study_steps: int | None = None,
     eval_interval: int | None = None,
 ) -> str:
+    backend = Backend(backend)
     gate = scale is Scale.GATE
     if not isinstance(epoch_seeded_shuffle, bool):
         raise ValueError("epoch_seeded_shuffle must be a boolean")
@@ -250,6 +266,8 @@ def training_config(
         trainer["algorithm"].update(
             policy_loss_type="regular", use_tis=True, tis_imp_ratio_cap=2.0, require_rollout_logprobs=True
         )
+    elif correction == Correction.REGULAR_NO_TIS:
+        trainer["algorithm"].update(policy_loss_type="regular", require_rollout_logprobs=True)
     trainer["fully_async"] = {
         "max_staleness_steps": max_staleness_steps,
         "weight_sync_interval": weight_sync_interval,
@@ -263,10 +281,19 @@ def training_config(
         "expert_model_parallel_size": 8,
         "expert_tensor_parallel_size": 1,
     }
-    trainer["policy"].pop("fsdp_config")
     trainer["policy"]["optimizer_config"]["lr"] = 1e-6
-    trainer["policy"]["megatron_config"] = dict(megatron)
-    trainer["ref"] = {"megatron_config": dict(megatron)}
+    if backend is Backend.MEGATRON:
+        trainer["policy"].pop("fsdp_config")
+        trainer["policy"]["megatron_config"] = dict(megatron)
+        trainer["ref"] = {"megatron_config": dict(megatron)}
+    else:
+        trainer.update(strategy="fsdp2", flash_attn=True, gradient_checkpointing_use_reentrant=False)
+        trainer["policy"]["fsdp_config"].update(
+            use_grouped_mm=True,
+            reshard_after_forward=True,
+            expert_model_parallel_size=1,
+        )
+        trainer["policy"]["optimizer_config"]["optimizer"] = "AdamW"
     config["generator"].update(
         inference_engine_data_parallel_size=8,
         inference_engine_expert_parallel_size=8,
@@ -304,6 +331,7 @@ def build_experiment(
     scale: Scale,
     timeout_seconds: int,
     completion: str = "model",
+    backend: Backend = Backend.MEGATRON,
     runner: Runner = Runner.ASYNC,
     inference_replicas: int = 1,
     response_tokens: int | None = None,
@@ -322,6 +350,7 @@ def build_experiment(
     validation_rows: int = VALIDATION_ROWS,
 ) -> ArtifactStep[SkyRLModel] | ArtifactStep[SkyRLCheckpoint] | ArtifactStep[SkyRLTrainingResult]:
     """Build Snowball training with the requested terminal artifact."""
+    backend = Backend(backend)
     validate_version(version)
     if is_mutable_version(version) or timeout_seconds <= 0:
         raise ValueError("Use an immutable version and positive training deadline")
@@ -351,6 +380,7 @@ def build_experiment(
     )
     config = training_config(
         scale,
+        backend=backend,
         runner=runner,
         inference_replicas=inference_replicas,
         response_tokens=response_tokens,
@@ -383,14 +413,16 @@ def build_experiment(
         name=user_owned_name(f"checkpoints/async-rl/snowball-{runner.value}-{scale.value}-{identity}"),
         version=version,
         config_yaml=config,
-        runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
+        runtime=SkyRLRuntime(
+            profile=SkyRLRuntimeProfile.MEGATRON if backend is Backend.MEGATRON else SkyRLRuntimeProfile.FSDP
+        ),
         model=ArtifactHfModel(SNOWBALL_MODEL, SNOWBALL_POLICY.tokenizer_uri, TOKENIZER_REVISION, relative_path=""),
         train_data=(ArtifactDataSource(data, relative_path=TRAIN_FILENAME),),
         validation_data=(ArtifactDataSource(data, relative_path=VALIDATION_FILENAME),),
         topology=topology,
         retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
         seed=seed,
-        overrides=("++trainer.hf_hub_repo_id=null",),
+        overrides=("++trainer.hf_hub_repo_id=null",) + (FSDP2_OVERRIDES if backend is Backend.FSDP2 else ()),
     )
     execution = IrisSkyRLExecution(
         cluster=CLUSTER,
@@ -414,6 +446,7 @@ def build_experiment(
 
 @click.command(help=__doc__)
 @click.option("--version", required=True)
+@click.option("--backend", type=click.Choice([b.value for b in Backend]), default="megatron", show_default=True)
 @click.option("--runner", type=click.Choice([r.value for r in Runner]), default="async", show_default=True)
 @click.option("--inference-replicas", type=click.IntRange(min=1), default=1, show_default=True)
 @click.option("--scale", type=click.Choice([s.value for s in Scale]), default="gate", show_default=True)
@@ -456,6 +489,7 @@ def build_experiment(
 @click.option("--run/--dry-run", "execute", default=False, show_default=True)
 def main(
     version: str,
+    backend: str,
     runner: str,
     inference_replicas: int,
     scale: str,
@@ -479,6 +513,7 @@ def main(
 ) -> None:
     training = build_experiment(
         version=version,
+        backend=Backend(backend),
         runner=Runner(runner),
         inference_replicas=inference_replicas,
         scale=Scale(scale),

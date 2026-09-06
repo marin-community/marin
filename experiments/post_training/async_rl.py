@@ -98,6 +98,7 @@ class Scale(StrEnum):
 class Correction(StrEnum):
     BEHAVIOR_CLIP = "behavior_clip"
     REGULAR_TIS = "regular_tis"
+    REGULAR_NO_TIS = "regular_no_tis"
 
 
 @dataclass(frozen=True)
@@ -275,6 +276,8 @@ def training_config(
     trainer["algorithm"].update(use_kl_loss=kl_loss, policy_loss_type="behavior_clip", use_tis=False)
     if not kl_loss:
         trainer["algorithm"]["use_kl_in_reward"] = False
+    if correction == Correction.REGULAR_NO_TIS:
+        trainer["algorithm"].update(policy_loss_type="regular", require_rollout_logprobs=True)
     if correction == Correction.REGULAR_TIS:
         trainer["algorithm"].update(
             policy_loss_type="regular", use_tis=True, tis_imp_ratio_cap=2.0, require_rollout_logprobs=True
