@@ -36,6 +36,12 @@ LEVANTER_MEGASCALE_TIMEOUT = "LEVANTER_MEGASCALE_TIMEOUT"
 LEVANTER_MEGASCALE_POLL_INTERVAL = "LEVANTER_MEGASCALE_POLL_INTERVAL"
 
 
+def _job_scoped_endpoint_name(endpoint_name: str, job_info: JobInfo) -> str:
+    # Iris namespaces child endpoints under the root job, so include the child
+    # token and attempt to isolate concurrent and restarted distributed worlds.
+    return f"{endpoint_name}-{job_info.job_id.to_safe_token()}-attempt-{job_info.attempt_id}"
+
+
 def _wait_for_all_tasks_ready(
     job_info: JobInfo,
     *,
@@ -43,7 +49,10 @@ def _wait_for_all_tasks_ready(
     poll_interval: float,
 ) -> None:
     ctx = iris_ctx()
-    endpoint_name = f"{MEGASCALE_READY_ENDPOINT_PREFIX}{job_info.task_index}"
+    endpoint_name = _job_scoped_endpoint_name(
+        f"{MEGASCALE_READY_ENDPOINT_PREFIX}{job_info.task_index}",
+        job_info,
+    )
     endpoint_id = ctx.registry.register(endpoint_name, job_info.advertise_host)
     atexit.register(ctx.registry.unregister, endpoint_id)
 
@@ -51,7 +60,9 @@ def _wait_for_all_tasks_ready(
         missing = [
             task_index
             for task_index in range(job_info.num_tasks)
-            if ctx.resolver.resolve(f"{MEGASCALE_READY_ENDPOINT_PREFIX}{task_index}").is_empty
+            if ctx.resolver.resolve(
+                _job_scoped_endpoint_name(f"{MEGASCALE_READY_ENDPOINT_PREFIX}{task_index}", job_info)
+            ).is_empty
         ]
         if missing:
             logger.info("Waiting for Iris tasks before Megascale init; missing task indexes: %s", missing)
@@ -75,6 +86,7 @@ def _coordinator_address(
     poll_interval: float,
 ) -> str:
     ctx = iris_ctx()
+    endpoint_name = _job_scoped_endpoint_name(endpoint_name, job_info)
 
     if job_info.task_index == 0:
         coordinator = f"{job_info.advertise_host}:{port}"

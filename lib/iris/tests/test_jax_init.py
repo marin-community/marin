@@ -26,6 +26,7 @@ from iris.runtime.jax_init import configure_jax_compilation_cache, initialize_ja
 
 _JOB_TOKEN = JobName.from_string("/testuser/testjob").to_safe_token()
 INITIAL_ATTEMPT_ENDPOINT_NAME = f"jax_coordinator-{_JOB_TOKEN}-attempt-0"
+PREVIOUS_ATTEMPT_ENDPOINT_NAME = f"jax_coordinator-{_JOB_TOKEN}-attempt-2"
 RETRY_ATTEMPT_ENDPOINT_NAME = f"jax_coordinator-{_JOB_TOKEN}-attempt-3"
 
 
@@ -47,9 +48,11 @@ class FakeRegistry:
 class FakeResolver:
     results: list[ResolveResult] = field(default_factory=list)
     results_by_name: dict[str, ResolveResult] = field(default_factory=dict)
+    resolved_names: list[str] = field(default_factory=list)
     call_count: int = 0
 
     def resolve(self, name: str) -> ResolveResult:
+        self.resolved_names.append(name)
         if self.results_by_name:
             return self.results_by_name.get(name, ResolveResult(name=name))
         idx = min(self.call_count, len(self.results) - 1)
@@ -102,9 +105,14 @@ def exit_hooks(monkeypatch: pytest.MonkeyPatch) -> FakeExitHooks:
     return hooks
 
 
-def _make_job_info(task_index: int = 0, num_tasks: int = 1, attempt_id: int = 0) -> JobInfo:
+def _make_job_info(
+    task_index: int = 0,
+    num_tasks: int = 1,
+    attempt_id: int = 0,
+    job_id: str = "/testuser/testjob",
+) -> JobInfo:
     """Create a JobInfo with the given task index, task count, and attempt."""
-    job_name = JobName.from_string(f"/testuser/testjob/{task_index}")
+    job_name = JobName.from_string(f"{job_id}/{task_index}")
     return JobInfo(
         task_id=job_name,
         num_tasks=num_tasks,
@@ -186,7 +194,12 @@ def test_initialize_jax_maps_supervised_global_rank_zero(
     monkeypatch: pytest.MonkeyPatch,
     exit_hooks: FakeExitHooks,
 ) -> None:
-    info = _make_job_info(task_index=0, num_tasks=2, attempt_id=3)
+    info = _make_job_info(
+        task_index=0,
+        num_tasks=2,
+        attempt_id=3,
+        job_id="/testuser/testroot/train-a",
+    )
     info.ports = {"jax": 12345}
     mock_get_job_info.return_value = info
     fake_ctx = FakeContext()
@@ -197,7 +210,8 @@ def test_initialize_jax_maps_supervised_global_rank_zero(
 
     initialize_jax()
 
-    assert fake_ctx.registry.registered == [(RETRY_ATTEMPT_ENDPOINT_NAME, "10.0.0.1:12345")]
+    expected_endpoint = f"jax_coordinator-{info.job_id.to_safe_token()}-attempt-3"
+    assert fake_ctx.registry.registered == [(expected_endpoint, "10.0.0.1:12345")]
     jax_args, jax_options = mock_jax_init.call_args
     assert jax_args == ("10.0.0.1:12345", 16, 0)
     assert jax_options["local_device_ids"] == [0]
@@ -217,7 +231,7 @@ def test_initialize_jax_maps_supervised_peer_global_rank_and_device(
 ) -> None:
     mock_get_job_info.return_value = _make_job_info(task_index=1, num_tasks=2, attempt_id=3)
     stale = ResolveResult(
-        name="jax_coordinator",
+        name=PREVIOUS_ATTEMPT_ENDPOINT_NAME,
         endpoints=[ResolvedEndpoint(url="10.0.0.1:27055", actor_id="attempt-2")],
     )
     current = ResolveResult(
@@ -227,7 +241,7 @@ def test_initialize_jax_maps_supervised_peer_global_rank_and_device(
     fake_ctx = FakeContext(
         resolver=FakeResolver(
             results_by_name={
-                "jax_coordinator": stale,
+                PREVIOUS_ATTEMPT_ENDPOINT_NAME: stale,
                 RETRY_ATTEMPT_ENDPOINT_NAME: current,
             }
         )
@@ -245,27 +259,44 @@ def test_initialize_jax_maps_supervised_peer_global_rank_and_device(
     assert fake_ctx.registry.registered == []
 
 
-def test_scoped_endpoint_name_isolates_sibling_jobs() -> None:
-    """Concurrent sibling jobs under one root must not share a coordinator endpoint.
+@patch("jax.distributed.initialize")
+@patch("iris.runtime.jax_init.iris_ctx")
+@patch("iris.runtime.jax_init.get_job_info")
+def test_initialize_jax_peer_ignores_sibling_job_coordinator(
+    mock_get_job_info: MagicMock,
+    mock_iris_ctx: MagicMock,
+    mock_jax_init: MagicMock,
+) -> None:
+    current_job = JobName.from_string("/testuser/testroot/train-a")
+    sibling_job = JobName.from_string("/testuser/testroot/train-b")
+    current_endpoint = f"jax_coordinator-{current_job.to_safe_token()}-attempt-0"
+    sibling_endpoint = f"jax_coordinator-{sibling_job.to_safe_token()}-attempt-0"
+    mock_get_job_info.return_value = _make_job_info(
+        task_index=1,
+        num_tasks=2,
+        job_id=str(current_job),
+    )
+    fake_ctx = FakeContext(
+        resolver=FakeResolver(
+            results_by_name={
+                current_endpoint: ResolveResult(
+                    name=current_endpoint,
+                    endpoints=[ResolvedEndpoint(url="10.0.0.1:8476", actor_id="train-a")],
+                ),
+                sibling_endpoint: ResolveResult(
+                    name=sibling_endpoint,
+                    endpoints=[ResolvedEndpoint(url="10.0.0.2:8476", actor_id="train-b")],
+                ),
+            }
+        )
+    )
+    mock_iris_ctx.return_value = fake_ctx
 
-    The registry namespaces by user/root job, so the coordinator name has to
-    carry the child job identity. Otherwise two children both publish and poll
-    the same endpoint and ranks from different distributed worlds join one
-    coordinator.
-    """
+    initialize_jax(poll_timeout=0)
 
-    def child(name: str, task_index: int, attempt_id: int = 0) -> JobInfo:
-        return JobInfo(task_id=JobName.from_string(f"/u/root/{name}/{task_index}"), attempt_id=attempt_id)
-
-    scoped = jax_init_module._scoped_endpoint_name
-    child_a = scoped("jax_coordinator", child("child-a", 0))
-
-    # Same child job, different tasks: identical so peers discover task 0.
-    assert scoped("jax_coordinator", child("child-a", 1)) == child_a
-    # Sibling child jobs: distinct, so neither resolves the other's coordinator.
-    assert scoped("jax_coordinator", child("child-b", 0)) != child_a
-    # Retries of one child stay separated.
-    assert scoped("jax_coordinator", child("child-a", 0, attempt_id=2)) != child_a
+    assert fake_ctx.resolver.resolved_names == [current_endpoint]
+    jax_args, _jax_options = mock_jax_init.call_args
+    assert jax_args == ("10.0.0.1:8476", 2, 1)
 
 
 @pytest.mark.parametrize("assigned", [{}, {"jax": 0}], ids=["unassigned", "k8s-placeholder"])
