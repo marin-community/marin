@@ -14,6 +14,8 @@ HF export stage as well. W&B and Finelog remain enabled in every mode.
 For response-budget calibration, use --context-tokens 8192 and
 --eval-response-tokens 4096 for both --response-tokens 2048 and 4096.
 Gate the larger budget before running qualification with it.
+Use --scale cadence-gate --weight-sync-interval 2 --max-staleness-steps 1
+for five updates with initial/final evaluation and a forced final publication.
 """
 
 from __future__ import annotations
@@ -77,6 +79,7 @@ ROLE_PLAN = replace(SNOWBALL_SMOKE.role_plan, micro_train_batch_size_per_gpu=1)
 
 class Scale(StrEnum):
     GATE = "gate"
+    CADENCE_GATE = "cadence-gate"
     QUALIFICATION = "qualification"
 
 
@@ -142,9 +145,13 @@ def training_config(
     response_tokens: int | None = None,
     eval_response_tokens: int | None = None,
     context_tokens: int | None = None,
+    weight_sync_interval: int = 1,
+    max_staleness_steps: int = 1,
 ) -> str:
     gate = scale is Scale.GATE
-    steps = 2 if gate else 25
+    steps = {Scale.GATE: 2, Scale.CADENCE_GATE: 5, Scale.QUALIFICATION: 25}[scale]
+    if weight_sync_interval < 1 or max_staleness_steps < 0 or weight_sync_interval > max_staleness_steps + 1:
+        raise ValueError("Weight sync interval must be positive and at most max_staleness_steps + 1")
     response_tokens = response_tokens if response_tokens is not None else (512 if gate else 2048)
     context_tokens = context_tokens if context_tokens is not None else (2048 if gate else 4096)
     eval_tokens = eval_response_tokens if eval_response_tokens is not None else response_tokens
@@ -157,7 +164,7 @@ def training_config(
         role_plan=ROLE_PLAN,
         max_steps=steps,
         ckpt_interval=steps,
-        eval_interval=-1 if gate else 25,
+        eval_interval=-1 if gate else steps,
         request_window_tokens=context_tokens,
         max_new_tokens=response_tokens,
         micro_forward_batch_size_per_gpu=1,
@@ -185,7 +192,8 @@ def training_config(
         use_kl_loss=False, use_kl_in_reward=False, policy_loss_type="behavior_clip", use_tis=False
     )
     trainer["fully_async"] = {
-        "max_staleness_steps": 1,
+        "max_staleness_steps": max_staleness_steps,
+        "weight_sync_interval": weight_sync_interval,
         "num_parallel_generation_workers": 64,
         "admission_stall_timeout": 900,
     }
@@ -231,6 +239,8 @@ def build_experiment(
     response_tokens: int | None = None,
     eval_response_tokens: int | None = None,
     context_tokens: int | None = None,
+    weight_sync_interval: int = 1,
+    max_staleness_steps: int = 1,
 ) -> ArtifactStep[SkyRLModel] | ArtifactStep[SkyRLCheckpoint] | ArtifactStep[SkyRLTrainingResult]:
     """Build Snowball training with the requested terminal artifact."""
     validate_version(version)
@@ -251,6 +261,8 @@ def build_experiment(
         response_tokens=response_tokens,
         eval_response_tokens=eval_response_tokens,
         context_tokens=context_tokens,
+        weight_sync_interval=weight_sync_interval,
+        max_staleness_steps=max_staleness_steps,
     )
     topology = SkyRLTopology(5, 8, "H100", ROLE_PLAN)
     identity = fingerprint_hash(
@@ -308,6 +320,8 @@ def build_experiment(
 @click.option(
     "--context-tokens", type=click.IntRange(min=1), help="Engine context window; defaults to the scale preset."
 )
+@click.option("--weight-sync-interval", type=click.IntRange(min=1), default=1, show_default=True)
+@click.option("--max-staleness-steps", type=click.IntRange(min=0), default=1, show_default=True)
 @click.option("--run/--dry-run", "execute", default=False, show_default=True)
 def main(
     version: str,
@@ -317,6 +331,8 @@ def main(
     response_tokens: int | None,
     eval_response_tokens: int | None,
     context_tokens: int | None,
+    weight_sync_interval: int,
+    max_staleness_steps: int,
     execute: bool,
 ) -> None:
     training = build_experiment(
@@ -327,6 +343,8 @@ def main(
         response_tokens=response_tokens,
         eval_response_tokens=eval_response_tokens,
         context_tokens=context_tokens,
+        weight_sync_interval=weight_sync_interval,
+        max_staleness_steps=max_staleness_steps,
     )
     prefix = marin_prefix()
     if execute:

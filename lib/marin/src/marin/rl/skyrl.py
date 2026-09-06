@@ -253,6 +253,17 @@ class NativeCheckpointFile:
     size: int
 
 
+class SkyRLTrainingFailed(RuntimeError):
+    """Failed orchestration with its launcher response, including any verified training receipt."""
+
+    def __init__(self, message: str, response: dict[str, object]) -> None:
+        super().__init__(message, response)
+        self.response = response
+
+    def __str__(self) -> str:
+        return self.args[0]
+
+
 class SkyRLTrainingResult(Artifact):
     """Durable proof that SkyRL training completed, without a model claim."""
 
@@ -399,8 +410,9 @@ def run_skyrl_training(config: SkyRLRunConfig) -> SkyRLTrainingResult | SkyRLChe
     response = json.loads(completed.stdout)
     if completed.returncode != 0 or response["state"] != "succeeded":
         failure = response.get("failure") or f"launcher exited {completed.returncode}"
-        raise RuntimeError(
-            f"MarinSkyRL attempt {config.request.attempt_id} failed: {failure}\n{completed.stderr.strip()}"
+        raise SkyRLTrainingFailed(
+            f"MarinSkyRL attempt {config.request.attempt_id} failed: {failure}\n{completed.stderr.strip()}",
+            response,
         )
     training = response["training"]
     common = dict(

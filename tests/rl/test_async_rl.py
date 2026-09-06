@@ -219,3 +219,47 @@ def test_snowball_fixture_checks_actual_export_token_lengths(tmp_path, monkeypat
     assert rows[0]["reward_spec"]["ground_truth"] == "2"
     encoded = tokenizer.apply_chat_template(rows[0]["prompt"], add_generation_prompt=True, return_dict=True)
     assert manifest["prompt_lengths"]["train"]["max"] == len(encoded["input_ids"]) > 2
+
+
+def test_snowball_cadence_pair_preserves_objective_and_evaluation_contract() -> None:
+    requests = []
+    for interval in (1, 2):
+        result = CliRunner().invoke(
+            async_snowball.main,
+            [
+                "--version",
+                "2026.09.06.4",
+                "--scale",
+                "cadence-gate",
+                "--completion",
+                "metrics",
+                "--weight-sync-interval",
+                str(interval),
+                "--max-staleness-steps",
+                "1",
+                "--dry-run",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        requests.append(json.loads(result.output)["request"])
+    assert requests[0]["run_id"] != requests[1]["run_id"]
+    configs = [yaml.safe_load(request["config_yaml"]) for request in requests]
+    for config, interval in zip(configs, (1, 2), strict=True):
+        trainer = config["trainer"]
+        assert trainer["fully_async"].pop("weight_sync_interval") == interval
+        assert trainer["fully_async"]["max_staleness_steps"] == 1
+        assert trainer["max_steps"] == trainer["eval_interval"] == 5
+        assert trainer["eval_before_train"]
+    assert configs[0] == configs[1]
+
+
+def test_snowball_rejects_cadence_that_cannot_admit_rollouts_before_submission(monkeypatch) -> None:
+    submitted = []
+    monkeypatch.setattr(async_snowball, "run", lambda *args, **kwargs: submitted.append(args))
+    result = CliRunner().invoke(
+        async_snowball.main,
+        ["--version", "2026.09.06.4", "--weight-sync-interval", "2", "--max-staleness-steps", "0", "--run"],
+    )
+    assert result.exit_code != 0
+    assert "at most max_staleness_steps + 1" in str(result.exception)
+    assert submitted == []

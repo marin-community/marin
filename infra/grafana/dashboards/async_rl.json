@@ -3114,6 +3114,316 @@
         }
       ],
       "interval": "1m"
+    },
+    {
+      "id": 41,
+      "type": "table",
+      "title": "Learner memory by phase",
+      "description": "PyTorch native allocator observations, per worker/GPU in the selected window. Peaks include the resident baseline; reserved bytes include allocator cache. Current bytes and device free bytes are boundary samples, not interval minima of the whole device. Model-ready precedes lazy Adam allocation and has no interval peak. Missing telemetry is unknown; initialization, checkpoint and export peaks are excluded.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 91,
+        "w": 12,
+        "h": 9
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No matching observations"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "WITH r AS (SELECT * FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND run_id IN (${run:sqlstring}) AND job_id IN (${job:sqlstring}) AND execution_uid IN (${execution:sqlstring})), m AS (SELECT execution_uid,resource_attributes_json,json_get(attributes_json,'rank') AS rank,json_get(attributes_json,'gpu_uuid') AS gpu,json_get(attributes_json,'phase') AS phase,body_json FROM r WHERE name='cuda_memory_observation' AND json_get(attributes_json,'worker_role')='policy')\nSELECT execution_uid AS execution,json_get(resource_attributes_json,'host') AS host,rank,gpu,phase,COUNT(*) AS observations,\nMAX(CAST(json_get(body_json,'peak_allocated_bytes') AS DOUBLE))/1073741824 AS peak_allocated_gib,\nMAX(CAST(json_get(body_json,'peak_reserved_bytes') AS DOUBLE))/1073741824 AS peak_reserved_gib,\nMAX(CAST(json_get(body_json,'allocated_bytes') AS DOUBLE))/1073741824 AS sampled_allocated_gib,\nMIN(CAST(json_get(body_json,'device_free_bytes') AS DOUBLE))/1073741824 AS sampled_free_gib,\nMAX(CAST(json_get(body_json,'device_total_bytes') AS DOUBLE))/1073741824 AS device_total_gib\nFROM m GROUP BY execution_uid,resource_attributes_json,rank,gpu,phase ORDER BY execution,rank,phase"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "execution",
+              "text": "execution",
+              "type": "string"
+            },
+            {
+              "selector": "host",
+              "text": "host",
+              "type": "string"
+            },
+            {
+              "selector": "rank",
+              "text": "rank",
+              "type": "string"
+            },
+            {
+              "selector": "gpu",
+              "text": "gpu",
+              "type": "string"
+            },
+            {
+              "selector": "phase",
+              "text": "phase",
+              "type": "string"
+            },
+            {
+              "selector": "observations",
+              "text": "observations",
+              "type": "number"
+            },
+            {
+              "selector": "peak_allocated_gib",
+              "text": "peak_allocated_gib",
+              "type": "number"
+            },
+            {
+              "selector": "peak_reserved_gib",
+              "text": "peak_reserved_gib",
+              "type": "number"
+            },
+            {
+              "selector": "sampled_allocated_gib",
+              "text": "sampled_allocated_gib",
+              "type": "number"
+            },
+            {
+              "selector": "sampled_free_gib",
+              "text": "sampled_free_gib",
+              "type": "number"
+            },
+            {
+              "selector": "device_total_gib",
+              "text": "device_total_gib",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 42,
+      "type": "table",
+      "title": "Inference sampled throughput by learner phase",
+      "description": "Reset-safe imported vLLM token counters aligned with driver UTC phase windows. Only sample intervals wholly inside one successful phase count; reset and boundary-crossing intervals are excluded. Rate is tokens divided by covered sample seconds, not whole phase duration. Coverage reveals gaps; NULL rate means unobserved, not idle. Collector process and unique engine identity are preserved. This measures sampled service, not GPU execution or exact kernel overlap; collection delay and clock alignment limit precision.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 91,
+        "w": 12,
+        "h": 9
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No matching observations"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "WITH r AS (SELECT * FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND run_id IN (${run:sqlstring}) AND job_id IN (${job:sqlstring}) AND execution_uid IN (${execution:sqlstring})), windows AS (\nSELECT execution_uid,resource_attributes_json,seq,json_get(attributes_json,'phase') AS phase,\nCAST(json_get(body_json,'started_unix_ms') AS BIGINT) AS started_ms,\nCAST(json_get(body_json,'finished_unix_ms') AS BIGINT) AS finished_ms\nFROM r WHERE name='async_phase_window' AND json_get(attributes_json,'outcome')='success'\nAND CAST(json_get(body_json,'finished_unix_ms') AS BIGINT)>CAST(json_get(body_json,'started_unix_ms') AS BIGINT)\nAND ABS((CAST(json_get(body_json,'finished_unix_ms') AS DOUBLE)-CAST(json_get(body_json,'started_unix_ms') AS DOUBLE))/1000-CAST(json_get(body_json,'duration_seconds') AS DOUBLE))<0.005\n), counters AS (\nSELECT execution_uid,resource_attributes_json,name,json_get(attributes_json,'engine') AS engine,\nCOALESCE(json_get(attributes_json,'model_name'),'') AS model,timestamp_ms,seq,value\nFROM r WHERE name IN ('generation_tokens_total','prompt_tokens_total')\nAND json_get(attributes_json,'metric_source')='vllm'\nAND json_get(attributes_json,'source_temporality')='cumulative_snapshot'\nAND json_get(attributes_json,'engine') IS NOT NULL\n), lagged AS (\nSELECT *,LAG(timestamp_ms) OVER (PARTITION BY execution_uid,resource_attributes_json,name,engine,model ORDER BY timestamp_ms,seq) AS previous_ms,\nLAG(value) OVER (PARTITION BY execution_uid,resource_attributes_json,name,engine,model ORDER BY timestamp_ms,seq) AS previous_value FROM counters\n), engines AS (SELECT DISTINCT execution_uid,resource_attributes_json,name,engine,model FROM counters), per_window AS (\nSELECT w.execution_uid,w.resource_attributes_json,w.seq,w.phase,e.name,e.engine,e.model,\n(w.finished_ms-w.started_ms)/1000.0 AS window_seconds,\nSUM(l.value-l.previous_value) AS tokens,SUM((l.timestamp_ms-l.previous_ms)/1000.0) AS covered_seconds,COUNT(l.timestamp_ms) AS intervals\nFROM windows w JOIN engines e ON w.execution_uid=e.execution_uid AND w.resource_attributes_json=e.resource_attributes_json\nLEFT JOIN lagged l ON e.execution_uid=l.execution_uid AND e.resource_attributes_json=l.resource_attributes_json AND e.name=l.name AND e.engine=l.engine AND e.model=l.model\nAND l.previous_ms>=w.started_ms AND l.timestamp_ms<=w.finished_ms AND l.timestamp_ms>l.previous_ms AND l.value>=l.previous_value\nGROUP BY w.execution_uid,w.resource_attributes_json,w.seq,w.phase,e.name,e.engine,e.model,w.started_ms,w.finished_ms\n)\nSELECT execution_uid AS execution,json_get(resource_attributes_json,'host') AS collector,phase,engine,model,name AS counter,\nSUM(tokens)/NULLIF(SUM(covered_seconds),0) AS tokens_per_sampled_second,\nCOALESCE(SUM(covered_seconds),0)/NULLIF(SUM(window_seconds),0) AS coverage_fraction,\nSUM(intervals) AS intervals,SUM(window_seconds) AS phase_seconds\nFROM per_window GROUP BY execution_uid,resource_attributes_json,phase,engine,model,name ORDER BY execution,phase,engine,counter"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "execution",
+              "text": "execution",
+              "type": "string"
+            },
+            {
+              "selector": "collector",
+              "text": "collector",
+              "type": "string"
+            },
+            {
+              "selector": "phase",
+              "text": "phase",
+              "type": "string"
+            },
+            {
+              "selector": "engine",
+              "text": "engine",
+              "type": "string"
+            },
+            {
+              "selector": "model",
+              "text": "model",
+              "type": "string"
+            },
+            {
+              "selector": "counter",
+              "text": "counter",
+              "type": "string"
+            },
+            {
+              "selector": "tokens_per_sampled_second",
+              "text": "tokens_per_sampled_second",
+              "type": "number"
+            },
+            {
+              "selector": "coverage_fraction",
+              "text": "coverage_fraction",
+              "type": "number"
+            },
+            {
+              "selector": "intervals",
+              "text": "intervals",
+              "type": "number"
+            },
+            {
+              "selector": "phase_seconds",
+              "text": "phase_seconds",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 43,
+      "type": "timeseries",
+      "title": "Cumulative core GPU-hours in selected window",
+      "description": "Core step seconds × configured policy plus inference GPUs / 3600, accumulated only over complete metric rows in the selected window. This charges allocated role time, including idle waits; it is not active GPU execution. Excludes startup, evaluation, checkpoint/export and gaps outside the core. Use whole-job allocated GPU-hours for billing comparisons.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 82,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No matching records in this window.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "WITH r AS (SELECT * FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND run_id IN (${run:sqlstring}) AND job_id IN (${job:sqlstring}) AND execution_uid IN (${execution:sqlstring})), steps AS (\nSELECT execution_uid,json_get(attributes_json,'step') AS step,MAX(timestamp_ms) AS timestamp_ms,\nMAX(CASE WHEN json_get(attributes_json,'metric')='async/performance/core_seconds' THEN value END) AS seconds,\nMAX(CASE WHEN json_get(attributes_json,'metric')='async/performance/configured_policy_gpus' THEN value END) AS policy_gpus,\nMAX(CASE WHEN json_get(attributes_json,'metric')='async/performance/configured_inference_gpus' THEN value END) AS inference_gpus\nFROM r WHERE name='training_metric_value' AND json_get(attributes_json,'phase')='train'\nAND json_get(attributes_json,'metric') IN ('async/performance/core_seconds','async/performance/configured_policy_gpus','async/performance/configured_inference_gpus')\nGROUP BY execution_uid,json_get(attributes_json,'step'))\nSELECT to_timestamp_millis(timestamp_ms) AS t,'core GPU-hours · ' || execution_uid AS series,\nSUM(seconds*(policy_gpus+inference_gpus)/3600) OVER (PARTITION BY execution_uid ORDER BY CAST(step AS BIGINT) ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\nFROM steps WHERE seconds IS NOT NULL AND policy_gpus IS NOT NULL AND inference_gpus IS NOT NULL ORDER BY timestamp_ms"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
     }
   ],
   "version": 2

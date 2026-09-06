@@ -50,7 +50,7 @@ def store():
         database.execute("CREATE MACRO approx_percentile_cont(value, q) AS quantile_cont(value, q)")
         rows = []
 
-        def add(name, value=0, *, attributes=None, body=None, process="trainer", execution="driver"):
+        def add(name, value=0, *, attributes=None, body=None, process="trainer", execution="driver", timestamp=None):
             rows.append(
                 (
                     "cw-us-east-02a",
@@ -58,7 +58,7 @@ def store():
                     "run",
                     "job",
                     execution,
-                    1788566460000 + len(rows),
+                    1788566460000 + len(rows) if timestamp is None else timestamp,
                     len(rows),
                     name,
                     value,
@@ -146,11 +146,69 @@ def store():
             ("async/performance/buffer_wait_fraction", 0.2),
             ("async/performance/loss_tokens_per_configured_policy_gpu_second", 5),
             ("async/performance/configured_policy_gpus", 8),
+            ("async/performance/configured_inference_gpus", 8),
         ]:
             add(
                 "training_metric_value",
                 value,
                 attributes={"metric": metric, "phase": "eval" if metric.startswith("eval/") else "train"},
+            )
+        add(
+            "cuda_memory_observation",
+            execution="worker",
+            process="learner",
+            attributes={
+                "worker_role": "policy",
+                "rank": "0",
+                "gpu_uuid": "GPU-A",
+                "phase": "ppo_forward_backward_update",
+            },
+            body={
+                "peak_allocated_bytes": 4 * 2**30,
+                "peak_reserved_bytes": 6 * 2**30,
+                "allocated_bytes": 3 * 2**30,
+                "device_free_bytes": 2**30,
+                "device_total_bytes": 8 * 2**30,
+            },
+        )
+        phase_start = 1788566460000
+        for phase, start, finish in [("training", 0, 10000), ("publication", 10000, 14000)]:
+            add(
+                "async_phase_window",
+                attributes={"phase": phase, "outcome": "success"},
+                body={
+                    "started_unix_ms": phase_start + start,
+                    "finished_unix_ms": phase_start + finish,
+                    "duration_seconds": (finish - start) / 1000,
+                },
+            )
+        # Valid 0->4s (40 tokens); counter reset 4->6s excluded; valid 6->8s (20).
+        # 8->12s crosses publication boundary: cannot attribute it to either phase.
+        for engine, samples in [
+            ("engine-A", [(0, 100), (4000, 140), (6000, 5), (8000, 25), (12000, 100)]),
+            ("engine-B", [(0, 1000), (4000, 1080)]),
+        ]:
+            for offset, value in samples:
+                add(
+                    "generation_tokens_total",
+                    value,
+                    timestamp=phase_start + offset,
+                    attributes={
+                        "engine": engine,
+                        "engine_index": "0",
+                        "metric_source": "vllm",
+                        "source_temporality": "cumulative_snapshot",
+                        "step": str(offset),
+                    },
+                )
+        # Collector identity is part of the clock domain, even with the same engine label.
+        for offset, value in [(0, 0), (4000, 99999)]:
+            add(
+                "generation_tokens_total",
+                value,
+                timestamp=phase_start + offset,
+                process="other",
+                attributes={"engine": "engine-A", "metric_source": "vllm", "source_temporality": "cumulative_snapshot"},
             )
         add("telemetry_lost_records", 0)
         add("telemetry_rejected_records", 0)
@@ -312,3 +370,52 @@ def test_empty_telemetry_is_unknown_and_startup_only_runs_are_discoverable(store
     assert store.execute(resolve(sql)).fetchall() == [("run",)]
     assert query(store, "Generated and consumed response tokens / s") == []
     assert query(store, "Rollouts completing during policy training") == []
+
+
+def test_phase_service_rates_exclude_resets_boundaries_and_other_collectors(store):
+    rows = query(store, "Inference sampled throughput by learner phase")
+    selected = {(row["phase"], row["engine"]): row for row in rows}
+    assert len(rows) == 4
+    a = selected["training", "engine-A"]
+    assert a["tokens_per_sampled_second"] == 10
+    assert a["coverage_fraction"] == 0.6
+    assert a["intervals"] == 2
+    assert a["phase_seconds"] == 10
+    b = selected["training", "engine-B"]
+    assert b["tokens_per_sampled_second"] == 20
+    assert b["coverage_fraction"] == 0.4
+    for engine in ["engine-A", "engine-B"]:
+        publication = selected["publication", engine]
+        assert publication["tokens_per_sampled_second"] is None
+        assert publication["coverage_fraction"] == 0
+        assert publication["intervals"] == 0
+
+
+def test_learner_memory_keeps_interval_peak_separate_from_current_and_device_usage(store):
+    rows = query(store, "Learner memory by phase")
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["gpu"] == "GPU-A"
+    assert row["peak_allocated_gib"] == 4
+    assert row["peak_reserved_gib"] == 6
+    assert row["sampled_allocated_gib"] == 3
+    assert row["sampled_free_gib"] == 1
+    assert row["device_total_gib"] == 8
+
+
+def test_core_gpu_hours_charge_both_roles_and_require_complete_counts(store):
+    title = "Cumulative core GPU-hours in selected window"
+    assert query(store, title)[0]["value"] == pytest.approx(10 * 16 / 3600)
+    store.execute(
+        'DELETE FROM "telemetry_v1.marinskyrl" '
+        "WHERE json_get(attributes_json,'metric')='async/performance/configured_inference_gpus'"
+    )
+    assert query(store, title) == []
+
+
+def test_phase_service_rates_reject_clock_adjusted_windows(store):
+    store.execute(
+        'UPDATE "telemetry_v1.marinskyrl" '
+        "SET body_json=json_merge_patch(body_json,'{\"duration_seconds\":99}') WHERE name='async_phase_window'"
+    )
+    assert query(store, "Inference sampled throughput by learner phase") == []

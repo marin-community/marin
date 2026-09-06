@@ -242,6 +242,21 @@ GPU idleness. Evaluation retains phase and timestamp because periodic and final
 evaluation can share an optimizer step. Signed timing residuals remain visible
 below zero to expose overlapping child spans.
 
+Learner memory rows distinguish native PyTorch interval peaks, current allocator
+bytes and sampled whole-device free memory for each worker/GPU. Peaks include the
+resident baseline; reserved memory includes cache. Model-ready precedes lazy Adam
+state, and initialization/checkpoint/export peaks are not covered.
+
+Inference service rates use reset-safe imported token-counter deltas whose entire
+sample interval falls within a successful driver phase window. The rate divides
+by covered sample time; coverage shows how much of each phase was observed. Missing
+intervals are unknown, not zero service. Collector and unique engine identities
+remain separate. Clock-adjusted windows are excluded; collection delay still limits
+alignment precision. No additional engine polling or vLLM changes are required.
+Core GPU-hours charge both configured roles for core step time, including waiting,
+and accumulate within the selected window. They exclude startup/eval/export and
+must not be presented as whole-job billing or active GPU execution.
+
 The async drift panels compare pre-update learner logprob minus the generator's
 reported logprob on tokens selected by the training loss mask. They show the
 signed mean, absolute mean and exact token quantiles over the gathered batch.

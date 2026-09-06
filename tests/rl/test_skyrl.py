@@ -6,6 +6,7 @@ from __future__ import annotations
 import dataclasses
 import io
 import json
+import pickle
 import subprocess
 import sys
 from dataclasses import asdict
@@ -40,6 +41,7 @@ from marin.rl.skyrl import (
     SkyRLRuntimeProfile,
     SkyRLSpec,
     SkyRLTopology,
+    SkyRLTrainingFailed,
     run_skyrl_training,
     skyrl_checkpoint_step,
     skyrl_export_step,
@@ -530,6 +532,44 @@ def test_launcher_failure_reports_the_launcher_stderr(monkeypatch: pytest.Monkey
 
     with pytest.raises(RuntimeError, match="entrypoint must be a registered name"):
         run_skyrl_training(config)
+
+
+def test_failed_training_exposes_verified_receipt_without_returning_artifact(monkeypatch: pytest.MonkeyPatch) -> None:
+    step = skyrl_metrics_step(_spec(), _execution())
+    config = step.build_config(
+        StepContext.for_run(
+            output_path="s3://durable/rl/run",
+            prefix="s3://durable",
+            runtime_args=step.runtime_args,
+            deps=step.deps,
+        )
+    )
+    response = {
+        "state": "failed",
+        "iris_job_state": "worker_failed",
+        "iris_job_id": "/tester/rl-run",
+        "failure": "Iris job reached worker_failed",
+        "training": {
+            "global_step": 8,
+            "receipt_uri": "s3://durable/rl/run/receipts/attempt-1.json",
+            "resolved_config_uri": config.request.output.resolved_config_uri,
+            "checkpoint": None,
+        },
+    }
+    monkeypatch.setattr(
+        subprocess,
+        "Popen",
+        lambda command, **kwargs: _FakeLauncherProcess(response=json.dumps(response), stdout=kwargs["stdout"]),
+    )
+
+    with pytest.raises(SkyRLTrainingFailed, match="Iris job reached worker_failed") as caught:
+        run_skyrl_training(config)
+
+    assert caught.value.response == response
+    # Step failures cross process boundaries; preserve both the cause and the receipt.
+    restored = pickle.loads(pickle.dumps(caught.value))
+    assert restored.response == response
+    assert str(restored) == str(caught.value)
 
 
 def test_launcher_logs_reach_stderr_while_the_run_is_live(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
