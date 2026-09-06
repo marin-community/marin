@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Async Megatron Snowball/GSM8K qualification using the regional SFT export.
+"""Matched sync/async Megatron Snowball/GSM8K using the regional SFT export.
 
 Run the two-update gate before the 25-update qualification. Both keep the staged
 export's thinking template and require four policy nodes and one inference node.
@@ -16,6 +16,7 @@ For response-budget calibration, use --context-tokens 8192 and
 Gate the larger budget before running qualification with it.
 Use --scale cadence-gate --weight-sync-interval 2 --max-staleness-steps 1
 for five updates with initial/final evaluation and a forced final publication.
+Use --runner sync for the synchronous control, which publishes every update.
 """
 
 from __future__ import annotations
@@ -57,7 +58,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from transformers import AutoTokenizer
 from zephyr.writers import write_parquet_file
 
-from experiments.post_training.async_rl import DATA_REVISION, SEED, validate_regional_storage
+from experiments.post_training.async_rl import DATA_REVISION, SEED, Runner, validate_regional_storage
 from experiments.post_training.curriculum_rl.launch import (
     SNOWBALL_MODEL,
     SNOWBALL_POLICY,
@@ -142,6 +143,7 @@ def write_snowball_gsm8k(config: SnowballDataConfig) -> None:
 def training_config(
     scale: Scale,
     *,
+    runner: Runner = Runner.ASYNC,
     response_tokens: int | None = None,
     eval_response_tokens: int | None = None,
     context_tokens: int | None = None,
@@ -152,6 +154,8 @@ def training_config(
     steps = {Scale.GATE: 2, Scale.CADENCE_GATE: 5, Scale.QUALIFICATION: 25}[scale]
     if weight_sync_interval < 1 or max_staleness_steps < 0 or weight_sync_interval > max_staleness_steps + 1:
         raise ValueError("Weight sync interval must be positive and at most max_staleness_steps + 1")
+    if runner is Runner.SYNC and weight_sync_interval != 1:
+        raise ValueError("The synchronous runner publishes every update; weight_sync_interval must be 1")
     response_tokens = response_tokens if response_tokens is not None else (512 if gate else 2048)
     context_tokens = context_tokens if context_tokens is not None else (2048 if gate else 4096)
     eval_tokens = eval_response_tokens if eval_response_tokens is not None else response_tokens
@@ -170,7 +174,7 @@ def training_config(
         micro_forward_batch_size_per_gpu=1,
     )
     config = yaml.safe_load(rl_config_yaml(preset))
-    config["entrypoint"] = "fully_async"
+    config["entrypoint"] = "standard" if runner is Runner.SYNC else "fully_async"
     trainer = config["trainer"]
     trainer.update(
         strategy="megatron",
@@ -236,6 +240,7 @@ def build_experiment(
     scale: Scale,
     timeout_seconds: int,
     completion: str = "model",
+    runner: Runner = Runner.ASYNC,
     response_tokens: int | None = None,
     eval_response_tokens: int | None = None,
     context_tokens: int | None = None,
@@ -258,6 +263,7 @@ def build_experiment(
     )
     config = training_config(
         scale,
+        runner=runner,
         response_tokens=response_tokens,
         eval_response_tokens=eval_response_tokens,
         context_tokens=context_tokens,
@@ -278,7 +284,7 @@ def build_experiment(
         )
     )
     spec = SkyRLSpec(
-        name=user_owned_name(f"checkpoints/async-rl/snowball-{scale.value}-{identity}"),
+        name=user_owned_name(f"checkpoints/async-rl/snowball-{runner.value}-{scale.value}-{identity}"),
         version=version,
         config_yaml=config,
         runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
@@ -312,6 +318,7 @@ def build_experiment(
 
 @click.command(help=__doc__)
 @click.option("--version", required=True)
+@click.option("--runner", type=click.Choice([r.value for r in Runner]), default="async", show_default=True)
 @click.option("--scale", type=click.Choice([s.value for s in Scale]), default="gate", show_default=True)
 @click.option("--timeout-seconds", type=click.IntRange(min=1), default=3600, show_default=True)
 @click.option("--completion", type=click.Choice(["metrics", "checkpoint", "model"]), default="model", show_default=True)
@@ -325,6 +332,7 @@ def build_experiment(
 @click.option("--run/--dry-run", "execute", default=False, show_default=True)
 def main(
     version: str,
+    runner: str,
     scale: str,
     timeout_seconds: int,
     completion: str,
@@ -337,6 +345,7 @@ def main(
 ) -> None:
     training = build_experiment(
         version=version,
+        runner=Runner(runner),
         scale=Scale(scale),
         timeout_seconds=timeout_seconds,
         completion=completion,

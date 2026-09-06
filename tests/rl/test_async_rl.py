@@ -253,6 +253,53 @@ def test_snowball_cadence_pair_preserves_objective_and_evaluation_contract() -> 
     assert configs[0] == configs[1]
 
 
+@pytest.mark.parametrize("completion", ["metrics", "checkpoint", "model"])
+def test_snowball_sync_control_changes_only_scheduler(completion) -> None:
+    requests = []
+    for runner in ("sync", "async"):
+        result = CliRunner().invoke(
+            async_snowball.main,
+            [
+                "--version",
+                "2026.09.06.7",
+                "--runner",
+                runner,
+                "--scale",
+                "qualification",
+                "--completion",
+                completion,
+                "--response-tokens",
+                "4096",
+                "--eval-response-tokens",
+                "4096",
+                "--context-tokens",
+                "8192",
+                "--dry-run",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        preview = json.loads(result.output)
+        requests.append(preview["training"]["request"] if completion == "model" else preview["request"])
+    configs = [yaml.safe_load(request["config_yaml"]) for request in requests]
+    assert [config.pop("entrypoint") for config in configs] == ["standard", "fully_async"]
+    assert configs[0] == configs[1]
+    assert requests[0]["run_id"] != requests[1]["run_id"]
+    for field in ("model", "train_data", "validation_data", "topology", "runtime", "seed", "completion_mode"):
+        assert requests[0][field] == requests[1][field]
+
+
+def test_snowball_sync_rejects_unsupported_publication_cadence_before_submission(monkeypatch) -> None:
+    submitted = []
+    monkeypatch.setattr(async_snowball, "run", lambda *args, **kwargs: submitted.append(args))
+    result = CliRunner().invoke(
+        async_snowball.main,
+        ["--version", "2026.09.06.7", "--runner", "sync", "--weight-sync-interval", "2", "--run"],
+    )
+    assert result.exit_code != 0
+    assert "synchronous runner publishes every update" in str(result.exception)
+    assert submitted == []
+
+
 def test_snowball_rejects_cadence_that_cannot_admit_rollouts_before_submission(monkeypatch) -> None:
     submitted = []
     monkeypatch.setattr(async_snowball, "run", lambda *args, **kwargs: submitted.append(args))
