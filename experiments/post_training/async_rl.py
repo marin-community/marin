@@ -83,6 +83,25 @@ class Runner(StrEnum):
 class Scale(StrEnum):
     SMOKE = "smoke"
     QUALIFICATION = "qualification"
+    COMPARISON = "comparison"
+
+
+@dataclass(frozen=True)
+class Schedule:
+    max_steps: int
+    checkpoint_interval: int
+    eval_interval: int
+    eval_before_train: bool
+    train_rows: int
+
+
+SCHEDULES = {
+    Scale.SMOKE: Schedule(4, 2, 2, True, TRAIN_ROWS),
+    Scale.QUALIFICATION: Schedule(100, 25, 10, True, TRAIN_ROWS),
+    # Keep both controls inside one epoch, with room for async lookahead. Measure
+    # publication 0 -> 20; the final evaluation/checkpoint follows that interval.
+    Scale.COMPARISON: Schedule(20, 20, 20, False, 1536),
+}
 
 
 @dataclass(frozen=True)
@@ -125,12 +144,13 @@ def write_gsm8k_subset(config: Gsm8kSubsetConfig) -> None:
 
 def training_config(runner: Runner, scale: Scale, *, spans: bool, staleness: int) -> str:
     """Keep optimizer and inference settings identical across scheduler controls."""
+    schedule = SCHEDULES[scale]
     preset = replace(
         SMOKE,
         role_plan=ROLE_PLAN,
         micro_forward_batch_size_per_gpu=ROLE_PLAN.micro_train_batch_size_per_gpu,
-        max_steps=4 if scale is Scale.SMOKE else 100,
-        ckpt_interval=2 if scale is Scale.SMOKE else 25,
+        max_steps=schedule.max_steps,
+        ckpt_interval=schedule.checkpoint_interval,
     )
     config = yaml.safe_load(rl_config_yaml(preset))
     config["entrypoint"] = "standard" if runner is Runner.SYNC else "fully_async"
@@ -146,8 +166,8 @@ def training_config(runner: Runner, scale: Scale, *, spans: bool, staleness: int
         tracker_commit_each_step=True,
         project_name="marin-async-non-agentic-rl",
         resume_mode=None,
-        eval_before_train=True,
-        eval_interval=2 if scale is Scale.SMOKE else 10,
+        eval_before_train=schedule.eval_before_train,
+        eval_interval=schedule.eval_interval,
         eval_batch_size=VALIDATION_ROWS,
     )
     trainer["algorithm"].update(policy_loss_type="behavior_clip", use_tis=False)
@@ -226,7 +246,7 @@ def build_experiment(
         version=version,
         artifact_type=Artifact,
         run=remote(write_gsm8k_subset, resources=cpu),
-        build_config=lambda ctx: Gsm8kSubsetConfig(output_path=ctx.output_path),
+        build_config=lambda ctx: Gsm8kSubsetConfig(output_path=ctx.output_path, train_rows=SCHEDULES[scale].train_rows),
     )
     identity = fingerprint_hash(
         canonical_json(

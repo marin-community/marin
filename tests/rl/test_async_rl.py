@@ -15,12 +15,13 @@ from experiments.post_training import async_rl
 from experiments.post_training.curriculum_rl import pool
 
 
-def test_scheduler_controls_share_fixtures_and_optimizer_semantics():
+@pytest.mark.parametrize("scale", list(async_rl.Scale))
+def test_scheduler_controls_share_fixtures_and_optimizer_semantics(scale):
     sync, sync_eval = async_rl.build_experiment(
-        version="2026.09.05.1", cluster="cw-us-east-02a", runner=async_rl.Runner.SYNC, scale=async_rl.Scale.SMOKE
+        version="2026.09.05.1", cluster="cw-us-east-02a", runner=async_rl.Runner.SYNC, scale=scale
     )
     asynchronous, async_eval = async_rl.build_experiment(
-        version="2026.09.05.1", cluster="cw-us-east-02a", runner=async_rl.Runner.ASYNC, scale=async_rl.Scale.SMOKE
+        version="2026.09.05.1", cluster="cw-us-east-02a", runner=async_rl.Runner.ASYNC, scale=scale
     )
     sync_run_config = sync.build_config(StepContext.for_fingerprint(sync.runtime_args, sync.deps))
     async_run_config = asynchronous.build_config(
