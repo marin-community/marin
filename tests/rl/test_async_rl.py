@@ -140,6 +140,54 @@ def test_snowball_model_run_submits_graph_without_resolving_checkpoint(monkeypat
     assert len(submitted) == 1
 
 
+def test_snowball_budget_pair_keeps_evaluation_and_training_controls_matched() -> None:
+    previews = []
+    for response_tokens in (2048, 4096):
+        result = CliRunner().invoke(
+            async_snowball.main,
+            [
+                "--version",
+                "2026.09.06.3",
+                "--scale",
+                "qualification",
+                "--completion",
+                "metrics",
+                "--response-tokens",
+                str(response_tokens),
+                "--eval-response-tokens",
+                "4096",
+                "--context-tokens",
+                "8192",
+                "--dry-run",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        previews.append(json.loads(result.output)["request"])
+    assert previews[0]["run_id"] != previews[1]["run_id"]
+    configs = [yaml.safe_load(preview["config_yaml"]) for preview in previews]
+    for config, response_tokens in zip(configs, (2048, 4096), strict=True):
+        assert config["context_budget"].pop("max_new_tokens_per_turn") == response_tokens
+        assert config["generator"]["eval_sampling_params"]["max_generate_length"] == 4096
+        assert config["context_budget"]["request_window_tokens"] == 8192
+    assert configs[0] == configs[1]
+    assert previews[0]["model"] == previews[1]["model"]
+    assert previews[0]["train_data"] == previews[1]["train_data"]
+    assert previews[0]["validation_data"] == previews[1]["validation_data"]
+    assert previews[0]["topology"] == previews[1]["topology"]
+
+
+def test_snowball_rejects_evaluation_budget_that_cannot_fit_before_submission(monkeypatch) -> None:
+    submitted = []
+    monkeypatch.setattr(async_snowball, "run", lambda *args, **kwargs: submitted.append(args))
+    result = CliRunner().invoke(
+        async_snowball.main,
+        ["--version", "2026.09.06.3", "--eval-response-tokens", "4096", "--run"],
+    )
+    assert result.exit_code != 0
+    assert "Context budget must fit" in str(result.exception)
+    assert submitted == []
+
+
 @pytest.mark.parametrize("prompt_limit", [2, 1024])
 def test_snowball_fixture_checks_actual_export_token_lengths(tmp_path, monkeypatch, prompt_limit):
     tokenizer_backend = Tokenizer(WordLevel({"[UNK]": 0}, unk_token="[UNK]"))

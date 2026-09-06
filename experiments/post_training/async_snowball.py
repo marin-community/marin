@@ -10,6 +10,10 @@ Check H100 and host-memory capacity before submitting in cw-us-east-02a.
 Use --completion metrics for timing/quality experiments that need no saved model,
 checkpoint to retain resumable state, or model (the default) to run the separate
 HF export stage as well. W&B and Finelog remain enabled in every mode.
+
+For response-budget calibration, use --context-tokens 8192 and
+--eval-response-tokens 4096 for both --response-tokens 2048 and 4096.
+Gate the larger budget before running qualification with it.
 """
 
 from __future__ import annotations
@@ -132,17 +136,30 @@ def write_snowball_gsm8k(config: SnowballDataConfig) -> None:
     StoragePath(prefix_join(config.output_path, "selection.json")).write_text(json.dumps(manifest, sort_keys=True))
 
 
-def training_config(scale: Scale) -> str:
+def training_config(
+    scale: Scale,
+    *,
+    response_tokens: int | None = None,
+    eval_response_tokens: int | None = None,
+    context_tokens: int | None = None,
+) -> str:
     gate = scale is Scale.GATE
     steps = 2 if gate else 25
+    response_tokens = response_tokens if response_tokens is not None else (512 if gate else 2048)
+    context_tokens = context_tokens if context_tokens is not None else (2048 if gate else 4096)
+    eval_tokens = eval_response_tokens if eval_response_tokens is not None else response_tokens
+    if min(response_tokens, eval_tokens) <= 0:
+        raise ValueError("Training and evaluation response budgets must be positive")
+    if context_tokens < SnowballDataConfig.max_prompt_tokens + max(response_tokens, eval_tokens):
+        raise ValueError("Context budget must fit the validated prompt limit plus either response budget")
     preset = replace(
         SNOWBALL_SMOKE,
         role_plan=ROLE_PLAN,
         max_steps=steps,
         ckpt_interval=steps,
         eval_interval=-1 if gate else 25,
-        request_window_tokens=2048 if gate else 4096,
-        max_new_tokens=512 if gate else 2048,
+        request_window_tokens=context_tokens,
+        max_new_tokens=response_tokens,
         micro_forward_batch_size_per_gpu=1,
     )
     config = yaml.safe_load(rl_config_yaml(preset))
@@ -185,6 +202,8 @@ def training_config(scale: Scale) -> str:
     trainer["ref"] = {"megatron_config": dict(megatron)}
     config["generator"].update(inference_engine_data_parallel_size=8, inference_engine_expert_parallel_size=8)
     config["generator"]["sampling_params"]["logprobs"] = 0
+    if eval_response_tokens is not None:
+        config["generator"]["eval_sampling_params"] = {"max_generate_length": eval_response_tokens}
     config["generator"]["trajectory_retention"] = {
         "sample_count_per_step": 4,
         "always_retain_failures": False,
@@ -204,7 +223,14 @@ def training_config(scale: Scale) -> str:
 
 
 def build_experiment(
-    *, version: str, scale: Scale, timeout_seconds: int, completion: str = "model"
+    *,
+    version: str,
+    scale: Scale,
+    timeout_seconds: int,
+    completion: str = "model",
+    response_tokens: int | None = None,
+    eval_response_tokens: int | None = None,
+    context_tokens: int | None = None,
 ) -> ArtifactStep[SkyRLModel] | ArtifactStep[SkyRLCheckpoint] | ArtifactStep[SkyRLTrainingResult]:
     """Build Snowball training with the requested terminal artifact."""
     validate_version(version)
@@ -220,7 +246,12 @@ def build_experiment(
             output_path=ctx.output_path, model_path=ctx.artifact_path(SNOWBALL_MODEL)
         ),
     )
-    config = training_config(scale)
+    config = training_config(
+        scale,
+        response_tokens=response_tokens,
+        eval_response_tokens=eval_response_tokens,
+        context_tokens=context_tokens,
+    )
     topology = SkyRLTopology(5, 8, "H100", ROLE_PLAN)
     identity = fingerprint_hash(
         canonical_json(
@@ -272,10 +303,30 @@ def build_experiment(
 @click.option("--scale", type=click.Choice([s.value for s in Scale]), default="gate", show_default=True)
 @click.option("--timeout-seconds", type=click.IntRange(min=1), default=3600, show_default=True)
 @click.option("--completion", type=click.Choice(["metrics", "checkpoint", "model"]), default="model", show_default=True)
+@click.option("--response-tokens", type=click.IntRange(min=1), help="Training output cap; defaults to the scale preset.")
+@click.option("--eval-response-tokens", type=click.IntRange(min=1), help="Evaluation output cap; defaults to training.")
+@click.option(
+    "--context-tokens", type=click.IntRange(min=1), help="Engine context window; defaults to the scale preset."
+)
 @click.option("--run/--dry-run", "execute", default=False, show_default=True)
-def main(version: str, scale: str, timeout_seconds: int, completion: str, execute: bool) -> None:
+def main(
+    version: str,
+    scale: str,
+    timeout_seconds: int,
+    completion: str,
+    response_tokens: int | None,
+    eval_response_tokens: int | None,
+    context_tokens: int | None,
+    execute: bool,
+) -> None:
     training = build_experiment(
-        version=version, scale=Scale(scale), timeout_seconds=timeout_seconds, completion=completion
+        version=version,
+        scale=Scale(scale),
+        timeout_seconds=timeout_seconds,
+        completion=completion,
+        response_tokens=response_tokens,
+        eval_response_tokens=eval_response_tokens,
+        context_tokens=context_tokens,
     )
     prefix = marin_prefix()
     if execute:
