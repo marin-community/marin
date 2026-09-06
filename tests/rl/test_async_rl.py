@@ -27,9 +27,13 @@ def test_scheduler_controls_share_fixtures_and_optimizer_semantics(scale):
     asynchronous, async_eval = async_rl.build_experiment(
         version="2026.09.05.1", cluster="cw-us-east-02a", runner=async_rl.Runner.ASYNC, scale=scale
     )
-    sync_run_config = sync.build_config(StepContext.for_fingerprint(sync.runtime_args, sync.deps))
-    async_run_config = asynchronous.build_config(
-        StepContext.for_fingerprint(asynchronous.runtime_args, asynchronous.deps)
+    sync_training = sync.deps[0]
+    async_training = asynchronous.deps[0]
+    sync_run_config = sync_training.build_config(
+        StepContext.for_fingerprint(sync_training.runtime_args, sync_training.deps)
+    )
+    async_run_config = async_training.build_config(
+        StepContext.for_fingerprint(async_training.runtime_args, async_training.deps)
     )
     sync_config = sync_run_config.request
     async_config = async_run_config.request
@@ -108,6 +112,32 @@ def test_east_run_accepts_configured_coreweave_bucket(monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin")
 
     async_rl.validate_regional_storage(async_rl.marin_prefix(), "cw-us-east-02a")
+
+
+def test_qwen_cli_dry_run_previews_training_and_export() -> None:
+    result = CliRunner().invoke(async_rl.main, ["--version", "2026.09.05.1", "--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    preview = json.loads(result.output)
+    assert preview["training"]["request"]["completion_mode"] == "checkpoint"
+    assert preview["export"]["source_runtime_commit"] == "<from-checkpoint-artifact>"
+
+
+def test_snowball_model_run_submits_graph_without_resolving_checkpoint(monkeypatch) -> None:
+    submitted = []
+    monkeypatch.setattr(async_snowball, "validate_regional_storage", lambda *_args: None)
+    monkeypatch.setattr(async_snowball, "run", lambda step, **_kwargs: submitted.append(step))
+
+    result = CliRunner().invoke(
+        async_snowball.main,
+        ["--version", "2026.09.05.1", "--completion", "model", "--run"],
+    )
+
+    assert result.exit_code == 0, result.output
+    preview = json.loads(result.output)
+    assert preview["training"]["request"]["completion_mode"] == "checkpoint"
+    assert preview["export"]["source_runtime_commit"] == "<from-checkpoint-artifact>"
+    assert len(submitted) == 1
 
 
 @pytest.mark.parametrize("prompt_limit", [2, 1024])

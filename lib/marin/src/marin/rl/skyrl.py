@@ -30,6 +30,7 @@ _LAUNCHER_PYTHON = "3.12"
 _MARINSKYRL_STAGING_ROOT = PurePosixPath("/tmp/marinskyrl")
 _TEMPORARY_OUTPUT_PREFIX = "skyrl"
 _LAUNCHER_DIAGNOSTIC_LINES = 20
+_PROTOCOL_SCHEMA_VERSION = 2
 SKYRL_POLICY_LOCATION = "<skyrl-policy>"
 
 
@@ -38,6 +39,13 @@ class SkyRLRuntimeProfile(StrEnum):
 
     FSDP = "fsdp"
     MEGATRON = "megatron"
+
+
+class SkyRLCompletionMode(StrEnum):
+    """Artifact retained after a successful training process."""
+
+    METRICS = "metrics"
+    CHECKPOINT = "checkpoint"
 
 
 @dataclass(frozen=True)
@@ -77,8 +85,8 @@ class SkyRLTopology:
 class SkyRLRetentionPolicy:
     """Temporary storage lifetime and rolling resume depth for one SkyRL run.
 
-    Every successful run produces one durable canonical export from its terminal
-    checkpoint.
+    Metrics completion retains no checkpoint. Checkpoint completion retains native
+    state under this lifetime; a separate export step produces a durable HF model.
     """
 
     resume_checkpoint_count: int = 2
@@ -228,6 +236,8 @@ class SkyRLLaunchRequest:
     output: SkyRLOutputPaths
     seed: int
     overrides: tuple[str, ...]
+    completion_mode: SkyRLCompletionMode
+    checkpoint_retention_days: int | None
 
 
 @dataclass(frozen=True)
@@ -235,6 +245,57 @@ class SkyRLRunConfig:
     request: SkyRLLaunchRequest
     execution: IrisSkyRLExecution
     launcher_requirement: str
+
+
+@dataclass(frozen=True)
+class NativeCheckpointFile:
+    path: str
+    size: int
+
+
+class SkyRLTrainingResult(Artifact):
+    """Durable proof that SkyRL training completed, without a model claim."""
+
+    global_step: int
+    receipt_uri: str
+    resolved_config_uri: str
+    terminal_manifest_uri: str
+    iris_job_id: str
+
+
+class SkyRLCheckpoint(SkyRLTrainingResult):
+    """A native, resumable checkpoint retained under an explicit TTL policy."""
+
+    checkpoint_path: str
+    trainer_state_sha256: str
+    files: tuple[NativeCheckpointFile, ...]
+    checkpoint_retention_days: int
+    runtime_commit: str
+    runtime_profile: SkyRLRuntimeProfile
+    tokenizer_uri: str
+    tokenizer_revision: str
+
+
+@dataclass(frozen=True)
+class SkyRLExportOutputPaths:
+    export_root: str
+    attempts_root: str
+    terminal_manifest_uri: str
+
+
+@dataclass(frozen=True)
+class SkyRLExportRequest:
+    training_manifest_uri: str
+    attempt_id: str
+    output: SkyRLExportOutputPaths
+
+
+@dataclass(frozen=True)
+class SkyRLExportConfig:
+    request: SkyRLExportRequest
+    execution: IrisSkyRLExecution
+    source_runtime_commit: str
+    source_runtime_profile: SkyRLRuntimeProfile | str
 
 
 class SkyRLModel(Artifact):
@@ -276,7 +337,7 @@ class SkyRLEvaluationModel:
         return replace(self.model, location=location, tokenizer=tokenizer)
 
 
-def _launcher_command(requirement: str, request_path: str) -> list[str]:
+def _launcher_command(requirement: str, request_path: str, action: str = "launch") -> list[str]:
     return [
         "uv",
         "run",
@@ -289,7 +350,7 @@ def _launcher_command(requirement: str, request_path: str) -> list[str]:
         requirement,
         "marinskyrl",
         "iris",
-        "launch",
+        action,
         "--request",
         request_path,
     ]
@@ -316,9 +377,10 @@ def _run_launcher(command: list[str]) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(command, returncode, response.read(), "".join(tail))
 
 
-def run_skyrl(config: SkyRLRunConfig) -> SkyRLModel:
-    """Run the pinned external launcher and return its validated model value."""
+def run_skyrl_training(config: SkyRLRunConfig) -> SkyRLTrainingResult | SkyRLCheckpoint:
+    """Run training and return its validated metrics or checkpoint result."""
     envelope = {
+        "schema_version": _PROTOCOL_SCHEMA_VERSION,
         "request": asdict(config.request),
         "execution": {
             **asdict(config.execution),
@@ -340,22 +402,51 @@ def run_skyrl(config: SkyRLRunConfig) -> SkyRLModel:
         raise RuntimeError(
             f"MarinSkyRL attempt {config.request.attempt_id} failed: {failure}\n{completed.stderr.strip()}"
         )
-    model = response["model"]
-    return SkyRLModel(
+    training = response["training"]
+    common = dict(
         path=config.request.output.terminal_manifest_uri,
-        policy_export_uri=model["policy_export_uri"],
-        global_step=model["global_step"],
-        tokenizer_uri=model["tokenizer_uri"],
-        tokenizer_revision=model["tokenizer_revision"],
-        checkpoint_root=model["checkpoint_root"],
-        terminal_manifest_uri=model["terminal_manifest_uri"],
+        global_step=training["global_step"],
+        receipt_uri=training["receipt_uri"],
+        resolved_config_uri=training["resolved_config_uri"],
+        terminal_manifest_uri=config.request.output.terminal_manifest_uri,
         iris_job_id=response["iris_job_id"],
+    )
+    checkpoint = training["checkpoint"]
+    if checkpoint is None:
+        return SkyRLTrainingResult(**common)
+    return SkyRLCheckpoint(
+        **common,
+        checkpoint_path=checkpoint["checkpoint_path"],
+        trainer_state_sha256=checkpoint["trainer_state_sha256"],
+        files=tuple(NativeCheckpointFile(**item) for item in checkpoint["files"]),
+        checkpoint_retention_days=cast(int, config.request.checkpoint_retention_days),
+        runtime_commit=config.request.runtime.commit,
+        runtime_profile=config.request.runtime.profile,
+        tokenizer_uri=config.request.model.tokenizer_uri,
+        tokenizer_revision=config.request.model.tokenizer_revision,
     )
 
 
-def skyrl_step(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[SkyRLModel]:
-    """Build a versioned MarinSkyRL training artifact."""
-    step_name = spec.name
+def _training_step(
+    spec: SkyRLSpec,
+    execution: IrisSkyRLExecution,
+    *,
+    completion_mode: SkyRLCompletionMode,
+    step_name: str,
+) -> ArtifactStep:
+    """Build the common training node used by metrics and checkpoint APIs."""
+    forbidden_positive_intervals = {"trainer.hf_save_interval"}
+    if completion_mode is SkyRLCompletionMode.METRICS:
+        forbidden_positive_intervals.add("trainer.ckpt_interval")
+    for override in spec.overrides:
+        key, separator, raw_value = override.lstrip("+").partition("=")
+        if separator and key in forbidden_positive_intervals:
+            try:
+                enabled = int(raw_value) > 0
+            except ValueError:
+                enabled = True
+            if enabled:
+                raise ValueError(f"{completion_mode.value} completion forbids positive {key}: {override}")
     deps = tuple(
         dict.fromkeys(
             (
@@ -384,6 +475,11 @@ def skyrl_step(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[S
             resolved_config_uri=prefix_join(ctx.output_path, "resolved-skyrl.json"),
             terminal_manifest_uri=prefix_join(ctx.output_path, "terminal.json"),
         )
+        completion_overrides = (
+            ("++trainer.ckpt_interval=-1", "++trainer.hf_save_interval=-1")
+            if completion_mode is SkyRLCompletionMode.METRICS
+            else ("++trainer.hf_save_interval=-1",)
+        )
         retention_overrides = (
             f"++trainer.max_ckpts_to_keep={spec.retention.resume_checkpoint_count}",
             f"++terminal_bench_config.trials_dir='{prefix_join(attempts_root, 'trace_jobs')}'",
@@ -400,7 +496,11 @@ def skyrl_step(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[S
             topology=spec.topology,
             output=output,
             seed=spec.seed,
-            overrides=(*spec.overrides, *retention_overrides),
+            overrides=(*spec.overrides, *retention_overrides, *completion_overrides),
+            completion_mode=completion_mode,
+            checkpoint_retention_days=(
+                spec.retention.temporary_storage_ttl_days if completion_mode is SkyRLCompletionMode.CHECKPOINT else None
+            ),
         )
         return SkyRLRunConfig(
             request=request,
@@ -408,12 +508,120 @@ def skyrl_step(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[S
             launcher_requirement=MARIN_SKYRL.requirement(),
         )
 
+    artifact_type = SkyRLCheckpoint if completion_mode is SkyRLCompletionMode.CHECKPOINT else SkyRLTrainingResult
     return ArtifactStep(
         name=step_name,
         version=spec.version,
-        artifact_type=SkyRLModel,
-        run=run_skyrl,
+        artifact_type=artifact_type,
+        run=run_skyrl_training,
         build_config=build_config,
         deps=deps,
         runtime_args={_EXECUTION: execution},
     )
+
+
+def skyrl_metrics_step(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[SkyRLTrainingResult]:
+    """Train without creating a native checkpoint or portable model."""
+    return _training_step(
+        spec,
+        execution,
+        completion_mode=SkyRLCompletionMode.METRICS,
+        step_name=f"{spec.name}-metrics",
+    )
+
+
+def skyrl_checkpoint_step(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[SkyRLCheckpoint]:
+    """Train once and retain an exact native checkpoint for resume or later export."""
+    return _training_step(
+        spec,
+        execution,
+        completion_mode=SkyRLCompletionMode.CHECKPOINT,
+        step_name=f"{spec.name}-training",
+    )
+
+
+def _run_export(config: SkyRLExportConfig) -> SkyRLModel:
+    source_dependency = replace(MARIN_SKYRL, commit=config.source_runtime_commit)
+    envelope = {
+        "schema_version": _PROTOCOL_SCHEMA_VERSION,
+        "request": asdict(config.request),
+        "execution": {
+            **asdict(config.execution),
+            "job_name": sanitize_job_name(f"{config.request.attempt_id}-export"),
+        },
+    }
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", encoding="utf-8") as request_file:
+        json.dump(envelope, request_file, sort_keys=True)
+        request_file.flush()
+        completed = _run_launcher(_launcher_command(source_dependency.requirement(), request_file.name, action="export"))
+    if not completed.stdout.strip():
+        raise RuntimeError(
+            f"MarinSkyRL export exited {completed.returncode} without a terminal response:\n"
+            f"{completed.stderr.strip() or '(the launcher wrote nothing to stderr)'}"
+        )
+    response = json.loads(completed.stdout)
+    if completed.returncode != 0 or response["state"] != "succeeded":
+        failure = response.get("failure") or f"launcher exited {completed.returncode}"
+        raise RuntimeError(
+            f"MarinSkyRL export {config.request.attempt_id} failed: {failure}\n{completed.stderr.strip()}"
+        )
+    model = response["model"]
+    return SkyRLModel(
+        path=config.request.output.terminal_manifest_uri,
+        policy_export_uri=model["policy_export_uri"],
+        global_step=model["global_step"],
+        tokenizer_uri=model["tokenizer_uri"],
+        tokenizer_revision=model["tokenizer_revision"],
+        checkpoint_root=model["checkpoint_root"],
+        terminal_manifest_uri=model["terminal_manifest_uri"],
+        iris_job_id=response["training_iris_job_id"],
+    )
+
+
+def skyrl_export_step(
+    checkpoint_step: ArtifactStep[SkyRLCheckpoint],
+    execution: IrisSkyRLExecution,
+) -> ArtifactStep[SkyRLModel]:
+    """Export an immutable native checkpoint without rerunning training."""
+    final_name = checkpoint_step.name.removesuffix("-training")
+
+    def build_config(ctx: StepContext) -> SkyRLExportConfig:
+        attempt_id = "<attempt_id>" if ctx.is_fingerprint else uuid.uuid4().hex[:12]
+        if ctx.is_fingerprint:
+            training_manifest_uri = f"{_artifact_identity(checkpoint_step)}/terminal.json"
+            source_runtime_commit = "<from-checkpoint-artifact>"
+            source_runtime_profile: SkyRLRuntimeProfile | str = "<from-checkpoint-artifact>"
+        else:
+            checkpoint = ctx.resolved(checkpoint_step)
+            training_manifest_uri = checkpoint.terminal_manifest_uri
+            source_runtime_commit = checkpoint.runtime_commit
+            source_runtime_profile = checkpoint.runtime_profile
+        return SkyRLExportConfig(
+            request=SkyRLExportRequest(
+                training_manifest_uri=training_manifest_uri,
+                attempt_id=attempt_id,
+                output=SkyRLExportOutputPaths(
+                    export_root=prefix_join(ctx.output_path, "exports"),
+                    attempts_root=prefix_join(ctx.output_path, "attempts"),
+                    terminal_manifest_uri=prefix_join(ctx.output_path, "terminal.json"),
+                ),
+            ),
+            execution=cast(IrisSkyRLExecution, ctx.runtime_arg(_EXECUTION)),
+            source_runtime_commit=source_runtime_commit,
+            source_runtime_profile=source_runtime_profile,
+        )
+
+    return ArtifactStep(
+        name=final_name,
+        version=checkpoint_step.version,
+        artifact_type=SkyRLModel,
+        run=_run_export,
+        build_config=build_config,
+        deps=(checkpoint_step,),
+        runtime_args={_EXECUTION: execution},
+    )
+
+
+def skyrl_step(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[SkyRLModel]:
+    """Compatibility facade: train to a native checkpoint, then export a portable model."""
+    return skyrl_export_step(skyrl_checkpoint_step(spec, execution), execution)

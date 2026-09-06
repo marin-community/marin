@@ -346,8 +346,14 @@ def main(
     prefix = marin_prefix()
     if execute:
         validate_regional_storage(prefix, cluster)
-    context = StepContext.for_run(training.path(prefix), prefix, runtime_args=training.runtime_args, deps=training.deps)
-    click.echo(json.dumps(asdict(training.build_config(context)), indent=2))
+    checkpoint = training.deps[0]
+    training_context = StepContext.for_fingerprint(checkpoint.runtime_args.keys(), checkpoint.deps)
+    export_context = StepContext.for_fingerprint(training.runtime_args.keys(), training.deps)
+    preview = {
+        "training": asdict(checkpoint.build_config(training_context)),
+        "export": asdict(training.build_config(export_context)),
+    }
+    click.echo(json.dumps(preview, indent=2))
     if execute:
         run(evaluation if stage == "evaluation" else training, max_concurrent=2)
 

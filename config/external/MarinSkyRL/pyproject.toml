@@ -8,4 +8,4 @@ dependencies = ["marinskyrl"]
 package = false
 
 [tool.uv.sources]
-marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", rev = "133bb5541eb61c2f65f077195ee907efc38fe144" }
+marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", rev = "7160a11ecd7485aac9efbf5f3206f9ff289b199d" }

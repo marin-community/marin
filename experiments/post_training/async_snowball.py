@@ -6,6 +6,10 @@
 Run the two-update gate before the 25-update qualification. Both keep the staged
 export's thinking template and require four policy nodes and one inference node.
 Check H100 and host-memory capacity before submitting in cw-us-east-02a.
+
+Use --completion metrics for timing/quality experiments that need no saved model,
+checkpoint to retain resumable state, or model (the default) to run the separate
+HF export stage as well. W&B and Finelog remain enabled in every mode.
 """
 
 from __future__ import annotations
@@ -30,12 +34,16 @@ from marin.rl.skyrl import (
     ArtifactDataSource,
     ArtifactHfModel,
     IrisSkyRLExecution,
+    SkyRLCheckpoint,
     SkyRLModel,
     SkyRLRetentionPolicy,
     SkyRLRuntime,
     SkyRLRuntimeProfile,
     SkyRLSpec,
     SkyRLTopology,
+    SkyRLTrainingResult,
+    skyrl_checkpoint_step,
+    skyrl_metrics_step,
     skyrl_step,
 )
 from rigging.filesystem.cluster_config import marin_prefix
@@ -195,8 +203,10 @@ def training_config(scale: Scale) -> str:
     return yaml.safe_dump(config, sort_keys=False)
 
 
-def build_experiment(*, version: str, scale: Scale, timeout_seconds: int) -> ArtifactStep[SkyRLModel]:
-    """Build the regional data audit, training, and terminal Megatron HF export."""
+def build_experiment(
+    *, version: str, scale: Scale, timeout_seconds: int, completion: str = "model"
+) -> ArtifactStep[SkyRLModel] | ArtifactStep[SkyRLCheckpoint] | ArtifactStep[SkyRLTrainingResult]:
+    """Build Snowball training with the requested terminal artifact."""
     validate_version(version)
     if is_mutable_version(version) or timeout_seconds <= 0:
         raise ValueError("Use an immutable version and positive training deadline")
@@ -224,46 +234,64 @@ def build_experiment(*, version: str, scale: Scale, timeout_seconds: int) -> Art
             }
         )
     )
-    return skyrl_step(
-        SkyRLSpec(
-            name=user_owned_name(f"checkpoints/async-rl/snowball-{scale.value}-{identity}"),
-            version=version,
-            config_yaml=config,
-            runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
-            model=ArtifactHfModel(SNOWBALL_MODEL, SNOWBALL_POLICY.tokenizer_uri, TOKENIZER_REVISION, relative_path=""),
-            train_data=(ArtifactDataSource(data, relative_path=TRAIN_FILENAME),),
-            validation_data=(ArtifactDataSource(data, relative_path=VALIDATION_FILENAME),),
-            topology=topology,
-            retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
-            seed=SEED,
-            overrides=("++trainer.hf_hub_repo_id=null",),
-        ),
-        IrisSkyRLExecution(
-            cluster=CLUSTER,
-            cluster_config=f"lib/iris/config/{CLUSTER}.yaml",
-            cpu=16,
-            # Megatron checkpoint staging can use ~146GB per rank on eight ranks.
-            memory="1800GB",
-            disk="2TB",
-            priority="batch",
-            max_retries=0,
-            timeout_seconds=timeout_seconds,
-        ),
+    spec = SkyRLSpec(
+        name=user_owned_name(f"checkpoints/async-rl/snowball-{scale.value}-{identity}"),
+        version=version,
+        config_yaml=config,
+        runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
+        model=ArtifactHfModel(SNOWBALL_MODEL, SNOWBALL_POLICY.tokenizer_uri, TOKENIZER_REVISION, relative_path=""),
+        train_data=(ArtifactDataSource(data, relative_path=TRAIN_FILENAME),),
+        validation_data=(ArtifactDataSource(data, relative_path=VALIDATION_FILENAME),),
+        topology=topology,
+        retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
+        seed=SEED,
+        overrides=("++trainer.hf_hub_repo_id=null",),
     )
+    execution = IrisSkyRLExecution(
+        cluster=CLUSTER,
+        cluster_config=f"lib/iris/config/{CLUSTER}.yaml",
+        cpu=16,
+        # Megatron checkpoint staging can use ~146GB per rank on eight ranks.
+        memory="1800GB",
+        disk="2TB",
+        priority="batch",
+        max_retries=0,
+        timeout_seconds=timeout_seconds,
+    )
+    if completion == "metrics":
+        return skyrl_metrics_step(spec, execution)
+    if completion == "checkpoint":
+        return skyrl_checkpoint_step(spec, execution)
+    if completion == "model":
+        return skyrl_step(spec, execution)
+    raise ValueError(f"Unknown completion mode: {completion}")
 
 
 @click.command(help=__doc__)
 @click.option("--version", required=True)
 @click.option("--scale", type=click.Choice([s.value for s in Scale]), default="gate", show_default=True)
 @click.option("--timeout-seconds", type=click.IntRange(min=1), default=3600, show_default=True)
+@click.option("--completion", type=click.Choice(["metrics", "checkpoint", "model"]), default="model", show_default=True)
 @click.option("--run/--dry-run", "execute", default=False, show_default=True)
-def main(version: str, scale: str, timeout_seconds: int, execute: bool) -> None:
-    training = build_experiment(version=version, scale=Scale(scale), timeout_seconds=timeout_seconds)
+def main(version: str, scale: str, timeout_seconds: int, completion: str, execute: bool) -> None:
+    training = build_experiment(
+        version=version, scale=Scale(scale), timeout_seconds=timeout_seconds, completion=completion
+    )
     prefix = marin_prefix()
     if execute:
         validate_regional_storage(prefix, CLUSTER)
-    context = StepContext.for_run(training.path(prefix), prefix, runtime_args=training.runtime_args, deps=training.deps)
-    click.echo(json.dumps(asdict(training.build_config(context)), indent=2))
+    if completion == "model":
+        checkpoint = cast(ArtifactStep[SkyRLCheckpoint], training.deps[0])
+        training_context = StepContext.for_fingerprint(checkpoint.runtime_args.keys(), checkpoint.deps)
+        export_context = StepContext.for_fingerprint(training.runtime_args.keys(), training.deps)
+        preview = {
+            "training": asdict(checkpoint.build_config(training_context)),
+            "export": asdict(training.build_config(export_context)),
+        }
+    else:
+        context = StepContext.for_fingerprint(training.runtime_args.keys(), training.deps)
+        preview = asdict(training.build_config(context))
+    click.echo(json.dumps(preview, indent=2))
     if execute:
         run(training, max_concurrent=2)
 
