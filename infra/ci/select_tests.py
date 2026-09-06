@@ -63,7 +63,8 @@ SOURCE_ROOTS: tuple[SourceRoot, ...] = (
     SourceRoot("infra/pulumi/src/iac", "infra/pulumi/src"),
     SourceRoot("experiments", "."),
     SourceRoot("infra/ci", "."),
-    SourceRoot("infra/evaldash/src", "."),
+    SourceRoot("infra/marina/src/marina", "infra/marina/src"),
+    SourceRoot("infra/marina/apps", "infra/marina/apps"),
 )
 
 # Dependency and native-build changes can affect every local test environment.

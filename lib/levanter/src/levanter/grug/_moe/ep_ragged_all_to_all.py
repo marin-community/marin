@@ -16,12 +16,14 @@ Axis names used in the shape annotations:
     Echunk  experts in one sequential chunk, Elocal / chunks
     C       rows in one chunk's receiver buffer, the per-chunk capacity
     S       shards on the expert axis
+    U       expert-granular transfers on the expert axis
 """
 
 import functools
 import logging
 import math
 from collections.abc import Callable
+from enum import auto, IntEnum
 from typing import Protocol
 
 import jax
@@ -32,6 +34,7 @@ from haliax.nn.ragged_dot import ragged_dot
 from levanter.grug._moe.common import CapacityOverflow, _interleave_gate_up
 from levanter.grug._moe.sonic import sonic_gather_sum, sonic_gather_sum_available
 from levanter.grug._moe.ep_common import (
+    ExpertA2aParams,
     _clip_receiver_group_sizes,
     _expert_granular_a2a_params,
     _sort_activations,
@@ -209,6 +212,98 @@ def _gather_dispatch_rows_bwd(
 _gather_dispatch_rows.defvjp(_gather_dispatch_rows_fwd, _gather_dispatch_rows_bwd)
 
 
+class _LoopLocalZeroSite(IntEnum):
+    DISPATCH_OUTPUT = auto()
+    RETURN_OUTPUT = auto()
+    OPERAND_COTANGENT = auto()
+    OUTPUT_PASSTHROUGH = auto()
+
+
+def _loop_local_zeros(
+    rows: int, hidden_dim: int, dtype, tie: Int[Array, "N"], site: _LoopLocalZeroSite
+) -> Float[Array, "rows H"]:
+    """Return an exact-zero output init for an in-place ``ragged_all_to_all``.
+
+    A ``jnp.zeros`` init is a trace-time constant. XLA hoists it out of the layer loop and merges
+    equal-shaped inits under CSE. Each collective then writes into one shared constant, so
+    CopyInsertion copies the pristine zeros into every output slot on every layer (#8822).
+
+    ``min(tie[0], -site) + site`` is zero for every non-negative ``tie`` but depends on a
+    loop-carried value, so XLA cannot hoist or fold it. ``site`` makes each call's expression
+    distinct, so CSE cannot merge two inits into one shared buffer.
+
+    ``tie`` must contain non-negative integers. ``site`` must identify the call site.
+    """
+    zero = (jnp.minimum(tie[0], -site) + site).astype(dtype)
+    return jax.lax.broadcast(zero, (rows, hidden_dim))
+
+
+# JAX's transpose rule uses hoisted zero inits, so this wrapper reproduces it with loop-local buffers.
+@functools.partial(jax.custom_vjp, nondiff_argnums=(0,))
+def _ragged_a2a(
+    operand_rows: int,
+    operand: Float[Array, "R H"],
+    output_init: Float[Array, "O H"],
+    params: ExpertA2aParams,
+) -> Float[Array, "O H"]:
+    """``ragged_all_to_all`` over the expert axis whose transpose builds its zero inits in the loop.
+
+    ``operand_rows`` is ``operand.shape[0]``. The backward needs it and does not see the operand.
+    """
+    del operand_rows
+    return jax.lax.ragged_all_to_all(operand, output_init, *params, axis_name="expert")
+
+
+def _ragged_a2a_fwd(
+    operand_rows: int,
+    operand: Float[Array, "R H"],
+    output_init: Float[Array, "O H"],
+    params: ExpertA2aParams,
+) -> tuple[Float[Array, "O H"], ExpertA2aParams]:
+    return _ragged_a2a(operand_rows, operand, output_init, params), params
+
+
+def _ragged_a2a_bwd(
+    operand_rows: int,
+    params: ExpertA2aParams,
+    cotangent: Float[Array, "O H"],
+) -> tuple[Float[Array, "R H"], Float[Array, "O H"], None]:
+    hidden_dim = cotangent.shape[1]
+    # Reverse the collective with exchanged offsets, matching JAX's transpose rule.
+    exchanged_output_offsets = jax.lax.all_to_all(params.output_offsets, "expert", 0, 0, tiled=True)
+    exchanged_input_offsets = jax.lax.all_to_all(params.input_offsets, "expert", 0, 0, tiled=True)
+    init = _loop_local_zeros(
+        operand_rows, hidden_dim, cotangent.dtype, params.recv_sizes, site=_LoopLocalZeroSite.OPERAND_COTANGENT
+    )
+    operand_ct = jax.lax.ragged_all_to_all(
+        cotangent,
+        init,
+        exchanged_output_offsets,
+        params.recv_sizes,
+        exchanged_input_offsets,
+        params.send_sizes,
+        axis_name="expert",
+    )
+    # Match JAX's transpose rule when masking rows overwritten in the primal. When ``output_init``
+    # carries no gradient, JAX drops this branch at lowering.
+    interval_marks = (
+        jnp.zeros(cotangent.shape[0], jnp.int32)
+        .at[exchanged_output_offsets]
+        .set(1)
+        .at[exchanged_output_offsets + params.recv_sizes]
+        .add(-1)
+    )
+    written = jnp.broadcast_to(jnp.cumsum(interval_marks)[:, None], cotangent.shape)
+    passthrough_zero = _loop_local_zeros(
+        cotangent.shape[0], hidden_dim, cotangent.dtype, params.send_sizes, site=_LoopLocalZeroSite.OUTPUT_PASSTHROUGH
+    )
+    output_ct = jax.lax.select_n(written, cotangent, passthrough_zero)
+    return operand_ct, output_ct, None
+
+
+_ragged_a2a.defvjp(_ragged_a2a_fwd, _ragged_a2a_bwd)
+
+
 def _moe_mlp_ep_ragged_a2a_local(
     x_local: Float[Array, "Tlocal H"],
     selected_experts_local: Int[Array, "Tlocal K"],
@@ -253,7 +348,10 @@ def _moe_mlp_ep_ragged_a2a_local(
 
     expert_mlp = _select_expert_mlp(activation_fn)
     chunk_of_expert = (jnp.arange(num_experts, dtype=jnp.int32) % local_experts) // chunk_experts  # [E]
-    returned = jnp.zeros((assignments_per_shard, hidden_dim), dtype=x_local.dtype)  # [TK, H]
+    # Unwritten rows remain zero for the final combine.
+    returned = _loop_local_zeros(
+        assignments_per_shard, hidden_dim, x_local.dtype, group_sizes, site=_LoopLocalZeroSite.RETURN_OUTPUT
+    )  # [TK, H]
     accepted_local = jnp.zeros((), dtype=jnp.int32)
     for chunk_index in range(chunks):
         with jax.named_scope(f"moe_chunk_{chunk_index}"):
@@ -277,16 +375,17 @@ def _moe_mlp_ep_ragged_a2a_local(
             # But it does not increase the speed. The transport and the MLP compete for the
             # same SMs.
             chunk_source, _ = jax.lax.optimization_barrier((sorted_x, returned))
-            dispatch_out_shape = jnp.zeros((chunk_capacity, hidden_dim), dtype=x_local.dtype)  # [C, H]
             # Accepted rows are the prefix of each unclipped expert group and receiver offsets
             # pack arrivals expert-major, so the received buffer feeds the grouped MLP
             # directly: no sender compaction and no receiver-side permute.
-            x_dispatch = jax.lax.ragged_all_to_all(  # [C, H]
-                chunk_source,
-                dispatch_out_shape,
-                *dispatch_params,
-                axis_name="expert",
+            dispatch_init = _loop_local_zeros(  # [C, H]
+                chunk_capacity,
+                hidden_dim,
+                x_local.dtype,
+                dispatch_params.send_sizes,
+                site=_LoopLocalZeroSite.DISPATCH_OUTPUT,
             )
+            x_dispatch = _ragged_a2a(assignments_per_shard, chunk_source, dispatch_init, dispatch_params)  # [C, H]
             active_all = jnp.sum(  # [Elocal]
                 clipped_group_sizes.reshape(ep_size, ep_size, local_experts)[:, shard_id, :], axis=0
             )
@@ -307,12 +406,7 @@ def _moe_mlp_ep_ragged_a2a_local(
             # Chaining every chunk through one output buffer composes the disjoint writes;
             # dropped rows keep the buffer's zeros, so the final gather-sum reads dropped
             # slots as zero contributions with no expansion step.
-            returned = jax.lax.ragged_all_to_all(
-                out_dispatch,
-                returned,
-                *return_params,
-                axis_name="expert",
-            )
+            returned = _ragged_a2a(chunk_capacity, out_dispatch, returned, return_params)
             accepted_local = accepted_local + jnp.sum(clipped_group_sizes[shard_id], dtype=jnp.int32)
 
     with jax.named_scope("combine"):

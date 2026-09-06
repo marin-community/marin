@@ -14,7 +14,8 @@ source shard's sidecar to get its own target's exact payload bytes and
 to size the merge plan. Row width can vary sharply by target shard, so this
 average is computed per target rather than across a mapper's whole output.
 
-On the read side, each reducer scans only its target shard via
+On the read side, a reducer skips every mapper whose ``shard_rows`` records no
+row for its target and scans only its target shard in the rest via
 ``pl.scan_parquet(path).filter(pl.col(_SHARD_COL) == target).drop(_SHARD_COL)``.
 Polars predicate pushdown with row-group statistics skips non-matching row
 groups via byte-range GETs, so each reducer reads roughly 1/N of each file.
@@ -491,10 +492,18 @@ class ScatterReader:
             f"from {len(scatter_paths)} sidecars (concurrency={_SIDECAR_READ_CONCURRENCY})"
         ):
             sidecars = _Sidecar.read_all(scatter_paths)
+            contributing_sidecars = 0
             for sidecar in sidecars:
+                target_rows = sidecar.target_rows(target_shard)
+                if target_rows == 0:
+                    # No row routed here, so this mapper's files hold none. Skipping
+                    # them drops a footer read and a merge input per file, and keeps
+                    # the merge plan's per-chunk mean over chunks that carry data.
+                    continue
+                contributing_sidecars += 1
                 chunk_files.extend(sidecar.files)
                 shard_payload_bytes += sidecar.target_bytes(target_shard)
-                shard_payload_rows += sidecar.target_rows(target_shard)
+                shard_payload_rows += target_rows
 
         # Computed from this target's own exact bytes and row count, not a
         # mapper-wide average, so row width that varies by target (e.g. a
@@ -502,9 +511,10 @@ class ScatterReader:
         avg_item_bytes = shard_payload_bytes / shard_payload_rows if shard_payload_rows > 0 else 0.0
 
         logger.info(
-            "ScatterReader for shard %d: %d source shards, %d total chunks, "
+            "ScatterReader for shard %d: %d of %d source shards contribute, %d total chunks, "
             "avg_item_bytes=%.1f, shard_payload_bytes=%.0f",
             target_shard,
+            contributing_sidecars,
             len(sidecars),
             len(chunk_files),
             avg_item_bytes,

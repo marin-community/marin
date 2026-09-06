@@ -71,8 +71,6 @@ printf '%s' cloudflare-token
     ("service", "stack"),
     [
         ("ducky", "ducky-marin"),
-        ("echo", "marin-echo"),
-        ("evaldash", "marin-evaldash"),
         ("grafana", "marin-grafana"),
         ("loom", "marin-loom"),
         ("xprof", "xprof-marin"),
@@ -109,7 +107,7 @@ def test_service_rollout_applies_stack_from_project_directory(
 
 
 def test_service_rollout_loads_secret_environment(deployment_record: DeploymentRecord) -> None:
-    result = CliRunner().invoke(cli, ["echo", "rollout"])
+    result = CliRunner().invoke(cli, ["marina", "rollout"])
 
     assert result.exit_code == 0, result.output
     assert deployment_record.gcloud.read_text().splitlines() == [
@@ -128,6 +126,6 @@ def test_service_rollout_preserves_pulumi_failure_exit_code(
 ) -> None:
     monkeypatch.setenv("PULUMI_EXIT", "42")
 
-    result = CliRunner().invoke(cli, ["echo", "rollout"])
+    result = CliRunner().invoke(cli, ["marina", "rollout"])
 
     assert result.exit_code == 42

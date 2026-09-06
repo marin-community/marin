@@ -9,7 +9,7 @@ This run puts the same hooks on a one-step cadence on up to two GB200 trays, so 
 100 checkpoints, tagged evaluations, and dropless evaluations.
 
 The shape is downsized but the memory-relevant machinery is the hero's: MuonH optimizer state
-offloaded to pinned host memory, and the ragged all-to-all transport. Those decide what the
+offloaded to pinned host memory, and the hero's all-to-all transport. Those decide what the
 checkpoint path has to move through host memory, which is what the soak measures.
 
 Checkpoints go to a one-day temporary prefix, never to the hero's own checkpoint root.

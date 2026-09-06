@@ -1,0 +1,54 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "marin-marina"
+version = "0.1.0"
+description = "Marina: one Cloud Run service hosting many small Marin web apps behind one login."
+requires-python = ">=3.12"
+dependencies = [
+    "marin-rigging",
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "click>=8.3.1",
+    "sqlalchemy>=2",
+    "pg8000>=1.31",
+    "cloud-sql-python-connector[pg8000]>=1.9",
+    "pgvector>=0.3",
+    # evaldash: the per-sample parquet reader and the finestore archive behind it, the LLM
+    # sample review, and the Connect clients plus GCE lookup its live job/log panels use.
+    "marin-core",
+    "marin-finestore",
+    "marin-iris",
+    "marin-finelog",
+    "pyarrow>=17",
+    "anthropic>=0.71.0",
+    "connect-python>=0.4",
+    "google-cloud-compute>=1.19",
+    "google-auth>=2",
+    # echo: ONNX embedding and cross-encoder reranking, its CLI's HTTP client, and the YAML
+    # frontmatter of the wiki's OKF documents.
+    "fastembed>=0.8,<0.9",
+    "requests>=2.32",
+    "pyyaml>=6",
+    # `marina journey` drives apps through pytest and a Chromium page, so the runner is part
+    # of the kernel rather than a test-only extra.
+    "pytest>=8.4",
+    "pytest-timeout",
+    "httpx>=0.27",
+    "playwright>=1.49",
+]
+
+[project.scripts]
+marina = "marina.cli:cli"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/marina"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "apps"]
+timeout = 30
+timeout_method = "thread"
+addopts = "--durations=10 -v"
+log_level = "INFO"
