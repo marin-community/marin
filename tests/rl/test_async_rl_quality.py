@@ -24,7 +24,7 @@ from experiments.post_training.async_rl_quality import AnswerStatus, extract_num
         (r"The result is \boxed{18}", "18"),
         ("The final answer is #### 18", "18"),
         ("The final answer is 18.", "18"),
-        ("We calculated 7 + 11.\n18", "18"),
+        ("The final answer is\n18", "18"),
         ("#### 18\nThe final answer is 18.", "18"),
         ("#### -0.50", "-1/2"),
         (r"\boxed{1/2}", "1/2"),
@@ -65,6 +65,44 @@ def test_numeric_answer_reports_tail_without_certifying_semantics():
     assert result.characters_after_last_candidate == len("\nMore discussion with 19.")
     # The unmarked 19 is intentionally not treated as a competing final answer.
     # Independent adjudication must measure this extractor's semantic coverage.
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Let's compute the sum:\n12. Glass 12: 0.018915648\n13. Glass 13: 0.011349408\n1",
+        "We calculated 7 + 11.\n18",
+        "The running totals are:\n5\n8\n9.8",
+        "There are several quantities still to combine.\n**18**",
+    ],
+)
+def test_trailing_reasoning_number_without_answer_cue_is_missing(text):
+    result = extract_numeric_answer(text)
+    assert result.status == AnswerStatus.MISSING
+    assert result.value is None
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [("18", "18"), ("\n 18 \n", "18"), ("1,234", "1234"), ("-0.50", "-1/2"), ("1/2", "1/2")],
+)
+def test_wholly_numeric_answer_retains_bare_value_support(text, expected):
+    result = extract_numeric_answer(text)
+    assert (result.status, result.value) == (AnswerStatus.EXTRACTED, expected)
+
+
+@pytest.mark.parametrize("text", ["#### 18\n19", "The final answer is 18.\n1", "\\boxed{18}\n19"])
+def test_numeric_tail_conflicting_with_explicit_answer_abstains(text):
+    result = extract_numeric_answer(text)
+    assert result.status == AnswerStatus.AMBIGUOUS
+    assert result.value is None
+
+
+def test_equal_numeric_tail_does_not_replace_explicit_answer_evidence():
+    result = extract_numeric_answer("#### 18\n18")
+    assert (result.status, result.value) == (AnswerStatus.EXTRACTED, "18")
+    assert result.candidate_count == 1
+    assert result.characters_after_last_candidate == len("\n18")
 
 
 @pytest.mark.parametrize(

@@ -210,12 +210,14 @@ before accessing held-out results.
 ### Supplemental answer extraction qualification
 
 `async_rl_quality.py` implements the candidate numeric-answer contract
-`numeric-answer-candidate-2`. It extracts explicit scalars without receiving the
+`numeric-answer-candidate-3`. It extracts explicit scalars without receiving the
 reference answer and reports missing, malformed, conflicting, ambiguous and
 role-continuation cases separately. Quoted concluding markers and boxed numbers
-are supported. It does not replace the canonical reward or certify semantic
-correctness. The caller must isolate the final assistant segment using the pinned
-tokenizer's thinking boundary before extraction.
+are supported. Without an explicit answer cue, the entire delivered answer must
+be numeric; an arbitrary numeric last line is insufficient. A numeric tail that
+differs from an explicit answer causes abstention. It does not replace
+the canonical reward or certify semantic correctness. The caller must isolate the
+final assistant segment using the pinned tokenizer's thinking boundary before extraction.
 
 This contract requires blinded development-response adjudication and measured
 coverage/error rates before it can rank study arms. The current frozen study

@@ -15,7 +15,7 @@ from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from fractions import Fraction
 
-QUALITY_VERSION = "numeric-answer-candidate-2"
+QUALITY_VERSION = "numeric-answer-candidate-3"
 NUMBER = r"[+-]?(?:(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?"
 NUMERIC_VALUE = re.compile(rf"{NUMBER}(?:/{NUMBER})?")
 # Capture the whole non-whitespace candidate before validating its grammar. A
@@ -121,8 +121,8 @@ def extract_numeric_answer(final_assistant_text: str) -> NumericAnswer:
     """Extract explicit answer candidates; retain disagreement and parse failures.
 
     Supported forms are #### scalars, boxed scalars, concluding answer prose and
-    a final line consisting solely of a scalar. Repeated equal values are allowed.
-    Different explicit values remain conflicting even if one matches a reference.
+    an entire delivered answer consisting solely of a scalar. Repeated equal values
+    are allowed. Different explicit values remain conflicting even if one matches a reference.
     Unmarked arithmetic in reasoning is never searched for a reference value.
     """
     candidates: list[tuple[str, int]] = []
@@ -160,11 +160,11 @@ def extract_numeric_answer(final_assistant_text: str) -> NumericAnswer:
                 continue  # A heading introducing prose, not a scalar assertion.
             unfinished |= not value or not raw.strip("\"'`*$<> \\()[]")
             candidates.append((value, end))
-    # A bare numeric final line is useful for models omitting the requested marker.
-    # It cannot promote an arbitrary number from earlier explanatory prose.
-    lines = final_assistant_text.rstrip().splitlines()
-    if lines and normalize_numeric_answer(lines[-1]) is not None:
-        candidates.append((lines[-1], len(final_assistant_text.rstrip())))
+    # Without an explicit answer cue, require the entire delivered answer to be
+    # numeric. A last-line number can be an unfinished list or running total.
+    bare_value = final_assistant_text.strip()
+    if normalize_numeric_answer(bare_value) is not None:
+        candidates.append((bare_value, len(final_assistant_text.rstrip())))
     ambiguous = any(
         re.match(
             r"(?:\s+(?:or\b|and\s+\$?[+-]?(?:\d|\.\d))|\s*[+*/=\-]\s*\$?[+-]?(?:\d|\.\d))",
@@ -179,6 +179,10 @@ def extract_numeric_answer(final_assistant_text: str) -> NumericAnswer:
     )
     normalized = [normalize_numeric_answer(value) for value, _ in candidates]
     values = set(normalized) - {None}
+    # A differing numeric tail can veto an explicit answer, but never supply one.
+    lines = final_assistant_text.rstrip().splitlines()
+    tail_value = normalize_numeric_answer(lines[-1]) if lines else None
+    numeric_tail_conflict = tail_value is not None and len(values) == 1 and tail_value not in values
     tail = len(final_assistant_text) - max(end for _, end in candidates) if candidates else None
     reconsidered = bool(
         candidates
@@ -193,7 +197,7 @@ def extract_numeric_answer(final_assistant_text: str) -> NumericAnswer:
         status = AnswerStatus.ROLE_CONTINUATION
     elif not candidates:
         status = AnswerStatus.MISSING
-    elif ambiguous or unfinished or reconsidered:
+    elif ambiguous or unfinished or reconsidered or numeric_tail_conflict:
         status = AnswerStatus.AMBIGUOUS
     elif None in normalized:
         status = AnswerStatus.MALFORMED
