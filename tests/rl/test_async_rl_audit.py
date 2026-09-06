@@ -14,6 +14,7 @@ import types
 import unittest
 from unittest.mock import patch
 
+import pytest
 from fsspec.implementations.local import LocalFileSystem
 from fsspec.spec import AbstractBufferedFile
 
@@ -200,6 +201,18 @@ class AuditTests(unittest.TestCase):
         self.assertTrue(result["storage"]["receipt_verified"])
         self.assertTrue(all(item["hashes_verified"] == 4 for item in result["eval_dumps"]))
         self.assertNotIn("prompt_token_ids", json.dumps(result))
+
+    def test_paired_snapshot_reuses_verified_dump_after_storage_removed(self):
+        self.input["label"] = "reference"
+        snapshots = {}
+        result = audit.audit_run(self.input, self.api, snapshots, retain_evaluations=True)
+        shutil.rmtree(self.root / "exports")
+        # These are the audited token hashes and rewards, not a second read or
+        # a caller-supplied replacement for a missing durable dump.
+        identity, scores = audit.question_scores(snapshots["reference"]["evaluations"][2])
+        self.assertEqual(scores, {"0": 0, "1": 1})
+        self.assertEqual(identity, [[str(i), audit.canonical_sha([i, 3])] for i in range(2)])
+        self.assertNotIn("evaluations", result)
 
     def test_preview_attempt_is_not_used_for_receipt_sha(self):
         preview = copy.deepcopy(self.envelope)
@@ -606,6 +619,204 @@ class AuditTests(unittest.TestCase):
                 "trainer.completion.attempt_id": "00123",
             },
         )
+
+
+@pytest.fixture
+def paired_study_inputs():
+    study = {
+        "label": "cadence",
+        "pairs": [
+            {"seed": seed, "reference": f"reference-{seed}", "candidate": f"candidate-{seed}"} for seed in (17, 29)
+        ],
+        "initial_step": 0,
+        "final_step": 2,
+        "differing_config_paths": ["trainer.fully_async.weight_sync_interval"],
+        "bootstrap_seed": 2026,
+        "bootstrap_repetitions": 500,
+    }
+    results, snapshots = {}, {}
+    # Two questions, two responses per question. The response-level scores
+    # intentionally differ, so using only one response gives the wrong mean.
+    scores = {
+        "reference-17": {0: [[0, 0], [0, 0]], 2: [[0, 1], [0, 1]]},
+        "candidate-17": {0: [[0, 1], [0, 1]], 2: [[1, 1], [1, 1]]},
+        "reference-29": {0: [[0, 1], [0, 1]], 2: [[0, 1], [0, 1]]},
+        "candidate-29": {0: [[0, 0], [0, 0]], 2: [[0, 1], [1, 1]]},
+    }
+    for pair in study["pairs"]:
+        for arm in ("reference", "candidate"):
+            label = pair[arm]
+            results[label] = {"training_evidence_pass": True, "clean_end_to_end": True}
+            snapshots[label] = {
+                "request": {
+                    "run_id": label,
+                    "runtime": {"commit": "a" * 40},
+                    "model": {"identity": "frozen-model"},
+                    "train_data": ["train-revision"],
+                    "validation_data": ["val-revision"],
+                    "topology": {"policy_gpus": 8, "inference_gpus": 8},
+                    "seed": pair["seed"],
+                },
+                "source_config": {
+                    "entrypoint": "fully_async",
+                    "data": {"epoch_seeded_shuffle": True},
+                    "trainer": {"fully_async": {"weight_sync_interval": 1 if arm == "reference" else 4}},
+                },
+                "expected_steps": 2,
+                "resolved_epoch_seeded_shuffle": True,
+                "expected_eval_steps": [0, 2],
+                "initial_eval_repeat_count": 1,
+                "evaluations": {
+                    step: [
+                        [f"question-{uid}", audit.canonical_sha([uid, 3]), "response-hash", reward, "stop", 0]
+                        for uid, responses in enumerate(questions)
+                        for reward in responses
+                    ]
+                    for step, questions in scores[label].items()
+                },
+            }
+    return study, results, snapshots
+
+
+def test_paired_study_point_estimate_and_initial_adjustment(paired_study_inputs):
+    result = audit.paired_evaluation_study(*paired_study_inputs)
+    first, second = result["seed_results"]
+    assert first["final_reward_delta"] == 0.5
+    assert first["initial_reward_delta"] == 0.5
+    assert first["initial_to_final_change_delta"] == 0
+    assert first["reference_initial_to_final_change"] == 0.5
+    assert first["candidate_initial_to_final_change"] == 0.5
+    assert second["final_reward_delta"] == 0.25
+    assert second["initial_reward_delta"] == -0.5
+    assert second["initial_to_final_change_delta"] == 0.75
+    assert result["mean_final_reward_delta"] == 0.375
+    assert result["mean_initial_to_final_change_delta"] == 0.375
+    assert result["questions"] == 2
+    assert result["seed_final_reward_delta_range"] == [0.25, 0.5]
+    assert result["bootstrap"]["percentile_intervals"] == {
+        "final_reward_delta": [0.25, 0.5],
+        "initial_to_final_change_delta": [0.25, 0.5],
+    }
+    assert result["source_order"]["actual_consumed_order_verified"] is False
+    assert result["evaluation_scope"] == {"classification": "development_or_unspecified"}
+    assert len(json.dumps(result)) < 8192
+    assert "response-hash" not in json.dumps(result)
+
+
+def test_paired_study_duplicate_responses_do_not_inflate_questions_or_precision(paired_study_inputs):
+    expected = audit.paired_evaluation_study(*paired_study_inputs)
+    for snapshot in paired_study_inputs[2].values():
+        for step, records in snapshot["evaluations"].items():
+            snapshot["evaluations"][step] = [row for row in records for _ in range(3)]
+    actual = audit.paired_evaluation_study(*paired_study_inputs)
+    assert actual == expected
+
+
+def test_paired_study_constant_difference_has_degenerate_interval(paired_study_inputs):
+    study, results, snapshots = paired_study_inputs
+    for pair in study["pairs"]:
+        for step in (0, 2):
+            for row in snapshots[pair["reference"]]["evaluations"][step]:
+                row[3] = 0.25 if step == 0 else 0.5
+            for row in snapshots[pair["candidate"]]["evaluations"][step]:
+                row[3] = 0.25 if step == 0 else 0.75
+    result = audit.paired_evaluation_study(study, results, snapshots)
+    assert result["mean_final_reward_delta"] == 0.25
+    assert result["bootstrap"]["percentile_intervals"] == {
+        "final_reward_delta": [0.25, 0.25],
+        "initial_to_final_change_delta": [0.25, 0.25],
+    }
+
+
+@pytest.mark.parametrize("unverified_arm", [None, "absent", "different_window"])
+def test_paired_study_labels_holdout_only_when_every_run_has_same_verified_window(paired_study_inputs, unverified_arm):
+    window = {
+        "source_indices_verified": True,
+        "dataset": "openai/gsm8k",
+        "revision": "locked-revision",
+        "purpose": "locked_holdout",
+        "offset": 128,
+        "count": 1191,
+    }
+    results = paired_study_inputs[1]
+    for result in results.values():
+        result["locked_validation"] = copy.deepcopy(window)
+    if unverified_arm == "absent":
+        results["candidate-29"]["locked_validation"] = None
+    elif unverified_arm == "different_window":
+        results["candidate-29"]["locked_validation"]["offset"] = 129
+    result = audit.paired_evaluation_study(*paired_study_inputs)
+    expected = (
+        {"classification": "verified_locked_holdout", "validation": window}
+        if unverified_arm is None
+        else {"classification": "development_or_unspecified"}
+    )
+    assert result["evaluation_scope"] == expected
+
+
+@pytest.mark.parametrize("corruption", ["permutation", "prompt_hash", "uid", "within_uid_hash", "missing_question"])
+def test_paired_study_rejects_question_identity_changes(paired_study_inputs, corruption):
+    records = paired_study_inputs[2]["candidate-29"]["evaluations"][2]
+    if corruption == "permutation":
+        records[:] = records[2:] + records[:2]
+    elif corruption == "missing_question":
+        del records[2:]
+    else:
+        records[0][0 if corruption == "uid" else 1] = "different"
+        if corruption == "prompt_hash":
+            records[1][1] = "different"
+    with pytest.raises(ValueError, match=r"(identity|order|different prompts)"):
+        audit.paired_evaluation_study(*paired_study_inputs)
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "missing_seed",
+        "duplicate_seed",
+        "wrong_seed",
+        "failed_run",
+        "runtime",
+        "endpoint",
+        "undeclared_config",
+        "different_seed_arm",
+        "source_order",
+        "resolved_source_order",
+        "launcher_override",
+        "reused_run",
+    ],
+)
+def test_paired_study_rejects_unmatched_or_unaudited_controls(paired_study_inputs, corruption):
+    study, results, snapshots = paired_study_inputs
+    candidate = snapshots["candidate-29"]
+    if corruption == "missing_seed":
+        del results["candidate-29"]
+    elif corruption == "duplicate_seed":
+        study["pairs"][1]["seed"] = 17
+    elif corruption == "wrong_seed":
+        candidate["request"]["seed"] = 31
+    elif corruption == "failed_run":
+        results["candidate-29"]["clean_end_to_end"] = False
+    elif corruption == "runtime":
+        candidate["request"]["runtime"]["commit"] = "b" * 40
+    elif corruption == "launcher_override":
+        candidate["request"]["overrides"] = ["++trainer.policy.optimizer_config.lr=0.1"]
+    elif corruption == "reused_run":
+        candidate["request"]["run_id"] = "reference-29"
+    elif corruption == "endpoint":
+        candidate["expected_steps"] = 3
+    elif corruption == "source_order":
+        candidate["source_config"]["data"]["epoch_seeded_shuffle"] = False
+    elif corruption == "resolved_source_order":
+        for snapshot in snapshots.values():
+            snapshot["resolved_epoch_seeded_shuffle"] = False
+    elif corruption == "different_seed_arm":
+        candidate["source_config"]["trainer"]["fully_async"]["weight_sync_interval"] = 5
+    else:
+        for label in ("candidate-17", "candidate-29"):
+            snapshots[label]["source_config"]["trainer"]["learning_rate"] = 0.01
+    with pytest.raises(ValueError):
+        audit.paired_evaluation_study(study, results, snapshots)
 
 
 if __name__ == "__main__":

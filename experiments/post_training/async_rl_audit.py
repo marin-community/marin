@@ -20,6 +20,12 @@ from a failed launcher without calling it clean end-to-end completion.
 initial_eval_repeat_count verifies startup_pass_N dumps and W&B namespaces.
 Optional locked_validation contains manifest_uri, dataset_revision, offset and
 count; its source-row window is verified before reading evaluation dumps.
+Optional paired_studies (at most one) declares label, pairs of
+{seed, reference, candidate} run labels, initial_step=0, final_step,
+differing_config_paths (exact cadence/age/loss leaves), bootstrap_seed and
+bootstrap_repetitions (100-10000). It requires clean audited runs, equal
+provenance and ordered evaluation questions, and shared epoch-seeded shuffling.
+Intervals resample questions jointly across fixed observed training seeds.
 Alternatively set ASYNC_RL_AUDIT_SPEC to the JSON specification.
 No training runtime, credentials, prompt text, or token arrays are emitted.
 """
@@ -31,6 +37,8 @@ import json
 import math
 import os
 import posixpath
+import random
+import statistics
 from collections.abc import Iterator, Mapping
 from typing import Any, Protocol
 from urllib.parse import urlparse
@@ -638,8 +646,233 @@ def resolved_dispatch_engine_count(config: Mapping[str, Any]) -> int:
     return replicas
 
 
-def audit_run(spec: JSONDict, api: RunAPI, comparison_snapshots: JSONDict | None = None) -> JSONDict:
+def config_leaves(config: Mapping[str, Any], prefix: str = "") -> JSONDict:
+    leaves = {}
+    for key, value in config.items():
+        path = f"{prefix}.{key}" if prefix else key
+        if isinstance(value, dict) and value:
+            leaves.update(config_leaves(value, path))
+        else:
+            leaves[path] = value
+    return leaves
+
+
+def question_scores(records: EvalRecords) -> tuple[list[list[str]], dict[str, float]]:
+    scores, hashes = collections.defaultdict(list), {}
+    for uid, prompt_hash, _, score, *_ in records:
+        check(uid not in hashes or hashes[uid] == prompt_hash, "Evaluation UID identifies different prompts")
+        check(math.isfinite(score), "Nonfinite paired evaluation score")
+        hashes[uid] = prompt_hash
+        scores[uid].append(score)
+    check(0 < len(scores) <= 4096, "Paired study requires 1-4096 questions")
+    return [[uid, digest] for uid, digest in hashes.items()], {
+        uid: statistics.mean(values) for uid, values in scores.items()
+    }
+
+
+def percentile(values: list[float], fraction: float) -> float:
+    position = (len(values) - 1) * fraction
+    lower = int(position)
+    upper = min(lower + 1, len(values) - 1)
+    return values[lower] + (values[upper] - values[lower]) * (position - lower)
+
+
+def paired_evaluation_study(study: JSONDict, results: JSONDict, snapshots: JSONDict) -> JSONDict:
+    """Bootstrap paired questions, conditional on the predeclared observed training seeds.
+
+    Each response contributes only to its question's mean. Each bootstrap draw
+    reuses the same question indices for every arm, endpoint and training seed;
+    training seeds are never treated as additional independent questions.
+    """
+    pairs = study["pairs"]
+    check(0 < len(pairs) <= 4, "Paired study requires 1-4 seed pairs (at most eight runs)")
+    seeds = [pair["seed"] for pair in pairs]
+    check(all(type(seed) is int for seed in seeds) and len(set(seeds)) == len(seeds), "Duplicate/invalid study seeds")
+    labels = [pair[arm] for pair in pairs for arm in ("reference", "candidate")]
+    check(len(set(labels)) == len(labels), "Paired study must use distinct runs")
+    check(all(label in results and label in snapshots for label in labels), "Paired study requires fully audited runs")
+    check(
+        len({snapshots[label]["request"]["run_id"] for label in labels}) == len(labels),
+        "Paired study labels reuse the same training run",
+    )
+    check(
+        all(results[label]["training_evidence_pass"] and results[label]["clean_end_to_end"] for label in labels),
+        "Paired study requires clean end-to-end audited runs",
+    )
+    repetitions, bootstrap_seed = study["bootstrap_repetitions"], study["bootstrap_seed"]
+    check(type(repetitions) is int and 100 <= repetitions <= 10000, "Bootstrap repetitions must be 100-10000")
+    check(type(bootstrap_seed) is int and 0 <= bootstrap_seed < 2**32, "Invalid bootstrap seed")
+    initial, final = study["initial_step"], study["final_step"]
+    check(
+        type(initial) is int and initial == 0 and type(final) is int and final > 0,
+        "Study requires initial zero/final endpoint",
+    )
+    allowed = study["differing_config_paths"]
+    check(isinstance(allowed, list) and len(set(allowed)) == len(allowed), "Invalid declared differing config paths")
+    # Paths are exact leaves, never subtree wildcards. Changes outside the
+    # predeclared cadence, age and loss package invalidate the comparison.
+    permitted = {
+        "trainer.fully_async.weight_sync_interval",
+        "trainer.fully_async.max_staleness_steps",
+        "trainer.algorithm.policy_loss_type",
+        "trainer.algorithm.use_tis",
+        "trainer.algorithm.tis_imp_ratio_cap",
+        "trainer.algorithm.require_rollout_logprobs",
+    }
+    check(set(allowed) <= permitted, "Study declares an unsupported differing config path")
+    fixed_fields = ("runtime", "model", "train_data", "validation_data", "topology")
+    reference_snapshot = snapshots[pairs[0]["reference"]]
+    reference_contract = {field: reference_snapshot["request"][field] for field in fixed_fields}
+    arm_configs = {}
+    common_overrides = None
+    question_identity, response_order = None, None
+    seed_results, per_seed_final, per_seed_change = [], [], []
+    for pair in pairs:
+        controls, scores, order_controls = {}, {}, {}
+        for arm in ("reference", "candidate"):
+            label = pair[arm]
+            snapshot = snapshots[label]
+            request = snapshot["request"]
+            check(request["seed"] == pair["seed"], "Pair training seed differs from declared seed")
+            check(
+                {field: request[field] for field in fixed_fields} == reference_contract,
+                "Paired study runtime/model/data/topology differs",
+            )
+            check(snapshot["expected_steps"] == final, "Paired study training endpoint differs")
+            check(
+                snapshot["expected_eval_steps"] == reference_snapshot["expected_eval_steps"],
+                "Paired evaluation schedules differ",
+            )
+            check(snapshot["initial_eval_repeat_count"] == 1, "Paired study requires one declared initial evaluation")
+            overrides = parse_hydra_args(request.get("overrides", []))
+            # These launcher-assigned observation locations contain run names.
+            # Every other override value remains part of the control contract.
+            for path in ("terminal_bench_config.trials_dir", "generator.trajectory_retention.output_path"):
+                overrides.pop(path, None)
+            if common_overrides is None:
+                common_overrides = overrides
+            check(overrides == common_overrides, "Paired study launcher overrides differ")
+            controls[arm] = config_leaves(snapshot["source_config"])
+            controls[arm].pop("trainer.seed", None)
+            if arm in arm_configs:
+                check(controls[arm] == arm_configs[arm], "Source configuration within an arm differs across seeds")
+            else:
+                arm_configs[arm] = controls[arm]
+            order_controls[arm] = lookup(snapshot["source_config"], "data.epoch_seeded_shuffle")
+            check(
+                order_controls[arm] is True and snapshot["resolved_epoch_seeded_shuffle"] is True,
+                "Paired study requires the shared epoch-seeded source-order control",
+            )
+            for step in (initial, final):
+                records = snapshot["evaluations"].get(step, [])
+                identity, means = question_scores(records)
+                order = [[row[0], row[1]] for row in records]
+                if question_identity is None:
+                    question_identity, response_order = identity, order
+                check(identity == question_identity, "Paired question UID/prompt identity or order differs")
+                check(order == response_order, "Paired evaluation response UID/prompt order differs")
+                scores[arm, step] = list(means.values())
+        keys = controls["reference"].keys() | controls["candidate"].keys()
+        differences = {
+            key
+            for key in keys
+            if (key in controls["reference"]) != (key in controls["candidate"])
+            or controls["reference"].get(key) != controls["candidate"].get(key)
+        }
+        check(
+            differences <= set(allowed),
+            f"Undeclared source configuration differences: {sorted(differences - set(allowed))}",
+        )
+        final_deltas = [b - a for a, b in zip(scores["reference", final], scores["candidate", final], strict=True)]
+        initial_deltas = [b - a for a, b in zip(scores["reference", initial], scores["candidate", initial], strict=True)]
+        change_deltas = [b - a for a, b in zip(initial_deltas, final_deltas, strict=True)]
+        per_seed_final.append(final_deltas)
+        per_seed_change.append(change_deltas)
+        seed_results.append(
+            {
+                **pair,
+                "reference_initial_reward": statistics.mean(scores["reference", initial]),
+                "candidate_initial_reward": statistics.mean(scores["candidate", initial]),
+                "reference_final_reward": statistics.mean(scores["reference", final]),
+                "candidate_final_reward": statistics.mean(scores["candidate", final]),
+                "initial_reward_delta": statistics.mean(initial_deltas),
+                "final_reward_delta": statistics.mean(final_deltas),
+                "reference_initial_to_final_change": (
+                    statistics.mean(scores["reference", final]) - statistics.mean(scores["reference", initial])
+                ),
+                "candidate_initial_to_final_change": (
+                    statistics.mean(scores["candidate", final]) - statistics.mean(scores["candidate", initial])
+                ),
+                "initial_to_final_change_delta": statistics.mean(change_deltas),
+                "actual_differing_config_paths": sorted(differences),
+            }
+        )
+    # Averaging seeds before resampling is equivalent to jointly resampling
+    # question clusters across all fixed seeds, without duplicating sample size.
+    final_by_question = [statistics.mean(values) for values in zip(*per_seed_final, strict=True)]
+    change_by_question = [statistics.mean(values) for values in zip(*per_seed_change, strict=True)]
+    count = len(final_by_question)
+    rng = random.Random(bootstrap_seed)
+    final_draws, change_draws = [], []
+    for _ in range(repetitions):
+        indices = rng.choices(range(count), k=count)
+        final_draws.append(sum(final_by_question[index] for index in indices) / count)
+        change_draws.append(sum(change_by_question[index] for index in indices) / count)
+    intervals = {}
+    for name, draws in (("final_reward_delta", final_draws), ("initial_to_final_change_delta", change_draws)):
+        draws.sort()
+        intervals[name] = [percentile(draws, 0.025), percentile(draws, 0.975)]
+    locked_windows = [results[label].get("locked_validation") for label in labels]
+    evaluation_scope = {"classification": "development_or_unspecified"}
+    if all(window is not None and window.get("source_indices_verified") for window in locked_windows):
+        if all(window == locked_windows[0] for window in locked_windows):
+            evaluation_scope = {"classification": "verified_locked_holdout", "validation": locked_windows[0]}
+    return {
+        "label": study["label"],
+        "evaluation_scope": evaluation_scope,
+        "seed_results": seed_results,
+        "training_seeds": seeds,
+        "questions": count,
+        "question_identity_sha256": canonical_sha(question_identity),
+        "mean_final_reward_delta": statistics.mean(final_by_question),
+        "mean_initial_to_final_change_delta": statistics.mean(change_by_question),
+        "seed_final_reward_delta_range": [
+            min(row["final_reward_delta"] for row in seed_results),
+            max(row["final_reward_delta"] for row in seed_results),
+        ],
+        "bootstrap": {
+            "seed": bootstrap_seed,
+            "repetitions": repetitions,
+            "confidence": 0.95,
+            "percentile_intervals": intervals,
+        },
+        "uncertainty_scope": (
+            "Question-paired percentile bootstrap conditional on observed training seeds; "
+            "seeds are fixed, not resampled. "
+            "Three training seeds do not establish strong unconditional training-seed uncertainty."
+        ),
+        "reward_reduction": (
+            "Average token-reward sums within each question, then equal-weight questions and training seeds; "
+            "candidate minus reference."
+        ),
+        "source_order": {
+            "epoch_seeded_shuffle": True,
+            "same_seed_within_pairs": True,
+            "actual_consumed_order_verified": False,
+            "scope": (
+                "Shared seeded source order; asynchronous completion and consumed order may differ. "
+                "Evaluation UID/prompt order is verified separately."
+            ),
+        },
+    }
+
+
+def audit_run(
+    spec: JSONDict, api: RunAPI, comparison_snapshots: JSONDict | None = None, *, retain_evaluations: bool = False
+) -> JSONDict:
     check(type(spec["expected_steps"]) is int and 0 < spec["expected_steps"] <= 10000, "Invalid expected step count")
+    if retain_evaluations:
+        check(0 < spec["expected_eval_rows"] <= 8192, "Paired study retains at most 8192 evaluation rows per endpoint")
     request, resolved, storage = audit_storage(spec)
     locked_validation = audit_locked_validation(spec, request)
     entity, project, run_id = wandb_identity(spec["wandb_url"])
@@ -702,6 +935,7 @@ def audit_run(spec: JSONDict, api: RunAPI, comparison_snapshots: JSONDict | None
     if repeats > 1:
         check(0 in expected_evals, "Repeated startup evaluation requires step zero in expected_eval_steps")
     dumps, startup_records = [], []
+    study_records = {}
     for step in expected_evals:
         namespaces = [f"startup_pass_{index}" for index in range(repeats)] if step == 0 and repeats > 1 else [None]
         if namespaces != [None]:
@@ -736,6 +970,8 @@ def audit_run(spec: JSONDict, api: RunAPI, comparison_snapshots: JSONDict | None
                 engine_count,
             )
             dumps.append(summary)
+            if retain_evaluations and step in (0, spec["expected_steps"]) and namespace is None:
+                study_records[step] = records
             if namespace is not None:
                 startup_records.append(records)
     repeatability = None
@@ -770,6 +1006,11 @@ def audit_run(spec: JSONDict, api: RunAPI, comparison_snapshots: JSONDict | None
             "startup": startup_records,
             "request": request,
             "source_config": source_cfg,
+            "resolved_epoch_seeded_shuffle": lookup(cfg, "data.epoch_seeded_shuffle"),
+            "evaluations": study_records,
+            "expected_steps": spec["expected_steps"],
+            "expected_eval_steps": expected_evals,
+            "initial_eval_repeat_count": repeats,
         }
     config_keys = (
         "trainer.weight_change_probe",
@@ -821,13 +1062,16 @@ def main() -> None:
     specification = read_json(args.spec) if args.spec else json.loads(os.environ["ASYNC_RL_AUDIT_SPEC"])
     runs = specification["runs"]
     check(0 < len(runs) <= 8, "Audit between one and eight runs")
+    studies = specification.get("paired_studies", [])
+    check(len(studies) <= 1, "Audit at most one predeclared paired study")
+    study_labels = {pair[arm] for study in studies for pair in study["pairs"] for arm in ("reference", "candidate")}
     api = wandb.Api(timeout=45)
     results, errors, snapshots = {}, {}, {}
     for spec in runs:
         label = spec["label"]
         check(label not in results and label not in errors, "Audit labels must be unique")
         try:
-            results[label] = audit_run(spec, api, snapshots)
+            results[label] = audit_run(spec, api, snapshots, retain_evaluations=label in study_labels)
         except Exception as error:
             errors[label] = {"type": type(error).__name__, "message": str(error)[:2000]}
     comparisons = []
@@ -837,6 +1081,12 @@ def main() -> None:
             comparisons.append(compare_startup_runs(left, right, snapshots))
         except Exception as error:
             errors[f"comparison:{left}:{right}"] = {"type": type(error).__name__, "message": str(error)[:2000]}
+    paired_studies = []
+    for study in studies:
+        try:
+            paired_studies.append(paired_evaluation_study(study, results, snapshots))
+        except Exception as error:
+            errors[f"study:{study['label']}"] = {"type": type(error).__name__, "message": str(error)[:2000]}
     clean = not errors and all(result["clean_end_to_end"] for result in results.values())
     print(
         "ASYNC_RL_TERMINAL_AUDIT_JSON "
@@ -848,6 +1098,7 @@ def main() -> None:
                 "clean_end_to_end": clean,
                 "runs": results,
                 "startup_comparisons": comparisons,
+                **({"paired_studies": paired_studies} if studies else {}),
                 "errors": errors,
             },
             allow_nan=False,
