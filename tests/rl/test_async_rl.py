@@ -19,6 +19,53 @@ from experiments.post_training import async_rl, async_snowball
 from experiments.post_training.curriculum_rl import pool
 
 
+@pytest.mark.parametrize("recipe", [async_rl, async_snowball])
+@pytest.mark.parametrize("runner", list(async_rl.Runner))
+def test_epoch_shuffle_cli_and_builder_share_reproducible_variant_identity(recipe, runner):
+    version = "2026.09.06.10"
+    options = dict(version=version, runner=runner, completion="metrics", epoch_seeded_shuffle=True)
+    arguments = ["--version", version, "--runner", runner.value, "--completion", "metrics"]
+    if recipe is async_rl:
+        options.update(cluster="cw-us-east-02a", scale=recipe.Scale.SCREENING)
+        arguments += ["--scale", "screening", "--stage", "rl"]
+        built, _ = recipe.build_experiment(**options)
+    else:
+        options.update(scale=recipe.Scale.QUALIFICATION, timeout_seconds=3600)
+        arguments += ["--scale", "qualification"]
+        built = recipe.build_experiment(**options)
+    built_request = built.build_config(StepContext.for_fingerprint(built.runtime_args, built.deps)).request
+    requests = []
+    for flags in ([], ["--no-epoch-seeded-shuffle"], ["--epoch-seeded-shuffle"], ["--epoch-seeded-shuffle"]):
+        result = CliRunner().invoke(recipe.main, arguments + flags)
+        assert result.exit_code == 0, result.output
+        requests.append(json.loads(result.output)["request"])
+    assert requests[0]["config_yaml"] == requests[1]["config_yaml"]
+    assert requests[0]["run_id"] == requests[1]["run_id"] != requests[2]["run_id"]
+    assert requests[2]["run_id"] == requests[3]["run_id"] == built_request.run_id
+    assert requests[2]["config_yaml"] == built_request.config_yaml
+    baseline, enabled = [yaml.safe_load(requests[i]["config_yaml"]) for i in (0, 2)]
+    assert "epoch_seeded_shuffle" not in baseline["data"]
+    assert enabled["data"].pop("epoch_seeded_shuffle") is True
+    assert enabled == baseline
+    for field in ("model", "train_data", "validation_data", "runtime", "topology", "seed"):
+        assert requests[2][field] == requests[0][field]
+
+
+@pytest.mark.parametrize("recipe", [async_rl, async_snowball])
+@pytest.mark.parametrize("value", [0, 1, "false", None])
+def test_epoch_shuffle_builder_rejects_non_boolean_values(recipe, value):
+    with pytest.raises(ValueError, match="epoch_seeded_shuffle must be a boolean"):
+        if recipe is async_rl:
+            qwen_metrics_request(epoch_seeded_shuffle=value)
+        else:
+            recipe.build_experiment(
+                version="2026.09.06.10",
+                scale=recipe.Scale.QUALIFICATION,
+                timeout_seconds=3600,
+                epoch_seeded_shuffle=value,
+            )
+
+
 @pytest.mark.parametrize(
     ("recipe", "schedule"),
     [

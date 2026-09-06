@@ -184,10 +184,13 @@ def training_config(
     max_staleness_steps: int = 1,
     initial_eval_repeat_count: int = 1,
     weight_change_probe: bool = False,
+    epoch_seeded_shuffle: bool = False,
     study_steps: int | None = None,
     eval_interval: int | None = None,
 ) -> str:
     gate = scale is Scale.GATE
+    if not isinstance(epoch_seeded_shuffle, bool):
+        raise ValueError("epoch_seeded_shuffle must be a boolean")
     if inference_replicas < 1:
         raise ValueError("Inference replica count must be positive")
     steps = {Scale.GATE: 2, Scale.CADENCE_GATE: 5, Scale.QUALIFICATION: 25}[scale]
@@ -282,6 +285,8 @@ def training_config(
     apply_observation_options(
         config, initial_eval_repeat_count=initial_eval_repeat_count, weight_change_probe=weight_change_probe
     )
+    if epoch_seeded_shuffle:
+        config.setdefault("data", {})["epoch_seeded_shuffle"] = True
     return yaml.safe_dump(config, sort_keys=False)
 
 
@@ -300,6 +305,7 @@ def build_experiment(
     max_staleness_steps: int = 1,
     initial_eval_repeat_count: int = 1,
     weight_change_probe: bool = False,
+    epoch_seeded_shuffle: bool = False,
     study_steps: int | None = None,
     eval_interval: int | None = None,
     seed: int = SEED,
@@ -345,6 +351,7 @@ def build_experiment(
         max_staleness_steps=max_staleness_steps,
         initial_eval_repeat_count=initial_eval_repeat_count,
         weight_change_probe=weight_change_probe,
+        epoch_seeded_shuffle=epoch_seeded_shuffle,
         study_steps=study_steps,
         eval_interval=eval_interval,
     )
@@ -422,6 +429,12 @@ def build_experiment(
 )
 @click.option("--weight-sync-interval", type=click.IntRange(min=1), default=1, show_default=True)
 @click.option("--max-staleness-steps", type=click.IntRange(min=0), default=1, show_default=True)
+@click.option(
+    "--epoch-seeded-shuffle/--no-epoch-seeded-shuffle",
+    default=False,
+    show_default=True,
+    help="Use a shared seed+epoch prompt permutation; off preserves each runner's historical ordering.",
+)
 @click.option("--study-steps", type=click.IntRange(min=1), help="Qualification-only update count; defaults to 25.")
 @click.option("--eval-interval", type=click.IntRange(min=1), help="Evaluation cadence; must divide the update count.")
 @click.option("--seed", type=click.IntRange(min=0, max=2**32 - 1), default=SEED, show_default=True)
@@ -442,6 +455,7 @@ def main(
     max_staleness_steps: int,
     initial_eval_repeat_count: int,
     weight_change_probe: bool,
+    epoch_seeded_shuffle: bool,
     study_steps: int | None,
     eval_interval: int | None,
     seed: int,
@@ -463,6 +477,7 @@ def main(
         max_staleness_steps=max_staleness_steps,
         initial_eval_repeat_count=initial_eval_repeat_count,
         weight_change_probe=weight_change_probe,
+        epoch_seeded_shuffle=epoch_seeded_shuffle,
         study_steps=study_steps,
         eval_interval=eval_interval,
         seed=seed,

@@ -214,9 +214,12 @@ def training_config(
     eval_interval: int | None = None,
     initial_eval_repeat_count: int = 1,
     weight_change_probe: bool = False,
+    epoch_seeded_shuffle: bool = False,
 ) -> str:
     """Keep optimizer and inference settings identical across scheduler controls."""
     schedule = SCHEDULES[scale]
+    if not isinstance(epoch_seeded_shuffle, bool):
+        raise ValueError("epoch_seeded_shuffle must be a boolean")
     if screening_steps is not None:
         if scale is not Scale.SCREENING or screening_steps <= 0:
             raise ValueError("screening_steps must be positive and is only supported by the screening scale")
@@ -307,6 +310,8 @@ def training_config(
     apply_observation_options(
         config, initial_eval_repeat_count=initial_eval_repeat_count, weight_change_probe=weight_change_probe
     )
+    if epoch_seeded_shuffle:
+        config.setdefault("data", {})["epoch_seeded_shuffle"] = True
     return yaml.safe_dump(config, sort_keys=False)
 
 
@@ -385,6 +390,7 @@ def build_experiment(
     validation_rows: int = VALIDATION_ROWS,
     initial_eval_repeat_count: int = 1,
     weight_change_probe: bool = False,
+    epoch_seeded_shuffle: bool = False,
 ) -> tuple[ArtifactStep[SkyRLModel] | ArtifactStep[SkyRLTrainingResult], ArtifactStep[EvaluationResult] | None]:
     """Construct versioned dependencies and a bounded, namespaced training attempt."""
     validate_version(version)
@@ -415,6 +421,7 @@ def build_experiment(
         eval_interval=eval_interval,
         initial_eval_repeat_count=initial_eval_repeat_count,
         weight_change_probe=weight_change_probe,
+        epoch_seeded_shuffle=epoch_seeded_shuffle,
     )
     cpu = ResourceConfig.with_cpu(cpu=4, ram="16g", disk="32g")
     topology = SkyRLTopology(
@@ -537,6 +544,12 @@ def build_experiment(
     help="Sample actual wire weights during publication; adds diagnostic overhead.",
 )
 @click.option("--weight-sync-interval", type=click.IntRange(min=1), default=1, show_default=True)
+@click.option(
+    "--epoch-seeded-shuffle/--no-epoch-seeded-shuffle",
+    default=False,
+    show_default=True,
+    help="Use a shared seed+epoch prompt permutation; off preserves each runner's historical ordering.",
+)
 @click.option("--inference-replicas", type=click.Choice(["8", "16"]), default="8", show_default=True)
 @click.option("--seed", type=click.IntRange(min=0, max=2**32 - 1), default=SEED, show_default=True)
 @click.option("--kl-loss/--no-kl-loss", default=True, show_default=True)
@@ -577,6 +590,7 @@ def main(
     validation_rows: int,
     initial_eval_repeat_count: int,
     weight_change_probe: bool,
+    epoch_seeded_shuffle: bool,
     timeout_seconds: int,
     execute: bool,
 ) -> None:
@@ -605,6 +619,7 @@ def main(
         validation_rows=validation_rows,
         initial_eval_repeat_count=initial_eval_repeat_count,
         weight_change_probe=weight_change_probe,
+        epoch_seeded_shuffle=epoch_seeded_shuffle,
     )
     prefix = marin_prefix()
     if execute:
