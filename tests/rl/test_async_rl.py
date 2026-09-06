@@ -300,6 +300,42 @@ def test_snowball_sync_rejects_unsupported_publication_cadence_before_submission
     assert submitted == []
 
 
+def test_snowball_replica_pair_preserves_independent_ep8_geometry() -> None:
+    requests = []
+    for replicas in (1, 2):
+        result = CliRunner().invoke(
+            async_snowball.main,
+            [
+                "--version",
+                "2026.09.06.8",
+                "--completion",
+                "metrics",
+                "--inference-replicas",
+                str(replicas),
+                "--dry-run",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        request = json.loads(result.output)["request"]
+        requests.append(request)
+        topology = request["topology"]
+        assert topology["num_nodes"] == 4 + replicas
+        assert topology["gpus_per_node"] == 8
+        assert topology["role_plan"]["policy_num_nodes"] == 4
+        assert topology["role_plan"]["num_inference_engines"] == replicas
+    configs = [yaml.safe_load(request["config_yaml"]) for request in requests]
+    for config, replicas in zip(configs, (1, 2), strict=True):
+        generator = config["generator"]
+        assert generator.pop("num_inference_engines") == replicas
+        assert generator["inference_engine_data_parallel_size"] == 8
+        assert generator["inference_engine_expert_parallel_size"] == 8
+        assert generator["inference_engine_node_local"]
+    assert configs[0] == configs[1]
+    assert requests[0]["run_id"] != requests[1]["run_id"]
+    for field in ("model", "train_data", "validation_data", "runtime", "seed", "completion_mode"):
+        assert requests[0][field] == requests[1][field]
+
+
 def test_snowball_rejects_cadence_that_cannot_admit_rollouts_before_submission(monkeypatch) -> None:
     submitted = []
     monkeypatch.setattr(async_snowball, "run", lambda *args, **kwargs: submitted.append(args))

@@ -4,7 +4,7 @@
 """Matched sync/async Megatron Snowball/GSM8K using the regional SFT export.
 
 Run the two-update gate before the 25-update qualification. Both keep the staged
-export's thinking template and require four policy nodes and one inference node.
+export's thinking template and use four policy nodes plus one node per inference replica.
 Check H100 and host-memory capacity before submitting in cw-us-east-02a.
 
 Use --completion metrics for timing/quality experiments that need no saved model,
@@ -17,6 +17,7 @@ Gate the larger budget before running qualification with it.
 Use --scale cadence-gate --weight-sync-interval 2 --max-staleness-steps 1
 for five updates with initial/final evaluation and a forced final publication.
 Use --runner sync for the synchronous control, which publishes every update.
+Use --inference-replicas 2 for two independent, node-local DP8/EP8 groups.
 """
 
 from __future__ import annotations
@@ -144,6 +145,7 @@ def training_config(
     scale: Scale,
     *,
     runner: Runner = Runner.ASYNC,
+    inference_replicas: int = 1,
     response_tokens: int | None = None,
     eval_response_tokens: int | None = None,
     context_tokens: int | None = None,
@@ -151,6 +153,8 @@ def training_config(
     max_staleness_steps: int = 1,
 ) -> str:
     gate = scale is Scale.GATE
+    if inference_replicas < 1:
+        raise ValueError("Inference replica count must be positive")
     steps = {Scale.GATE: 2, Scale.CADENCE_GATE: 5, Scale.QUALIFICATION: 25}[scale]
     if weight_sync_interval < 1 or max_staleness_steps < 0 or weight_sync_interval > max_staleness_steps + 1:
         raise ValueError("Weight sync interval must be positive and at most max_staleness_steps + 1")
@@ -165,7 +169,7 @@ def training_config(
         raise ValueError("Context budget must fit the validated prompt limit plus either response budget")
     preset = replace(
         SNOWBALL_SMOKE,
-        role_plan=ROLE_PLAN,
+        role_plan=replace(ROLE_PLAN, num_inference_engines=inference_replicas),
         max_steps=steps,
         ckpt_interval=steps,
         eval_interval=-1 if gate else steps,
@@ -212,7 +216,11 @@ def training_config(
     trainer["policy"]["optimizer_config"]["lr"] = 1e-6
     trainer["policy"]["megatron_config"] = dict(megatron)
     trainer["ref"] = {"megatron_config": dict(megatron)}
-    config["generator"].update(inference_engine_data_parallel_size=8, inference_engine_expert_parallel_size=8)
+    config["generator"].update(
+        inference_engine_data_parallel_size=8,
+        inference_engine_expert_parallel_size=8,
+        inference_engine_node_local=True,
+    )
     config["generator"]["sampling_params"]["logprobs"] = 0
     if eval_response_tokens is not None:
         config["generator"]["eval_sampling_params"] = {"max_generate_length": eval_response_tokens}
@@ -241,6 +249,7 @@ def build_experiment(
     timeout_seconds: int,
     completion: str = "model",
     runner: Runner = Runner.ASYNC,
+    inference_replicas: int = 1,
     response_tokens: int | None = None,
     eval_response_tokens: int | None = None,
     context_tokens: int | None = None,
@@ -264,13 +273,15 @@ def build_experiment(
     config = training_config(
         scale,
         runner=runner,
+        inference_replicas=inference_replicas,
         response_tokens=response_tokens,
         eval_response_tokens=eval_response_tokens,
         context_tokens=context_tokens,
         weight_sync_interval=weight_sync_interval,
         max_staleness_steps=max_staleness_steps,
     )
-    topology = SkyRLTopology(5, 8, "H100", ROLE_PLAN)
+    role_plan = replace(ROLE_PLAN, num_inference_engines=inference_replicas)
+    topology = SkyRLTopology(role_plan.policy_num_nodes + inference_replicas, 8, "H100", role_plan)
     identity = fingerprint_hash(
         canonical_json(
             {
@@ -319,6 +330,7 @@ def build_experiment(
 @click.command(help=__doc__)
 @click.option("--version", required=True)
 @click.option("--runner", type=click.Choice([r.value for r in Runner]), default="async", show_default=True)
+@click.option("--inference-replicas", type=click.IntRange(min=1), default=1, show_default=True)
 @click.option("--scale", type=click.Choice([s.value for s in Scale]), default="gate", show_default=True)
 @click.option("--timeout-seconds", type=click.IntRange(min=1), default=3600, show_default=True)
 @click.option("--completion", type=click.Choice(["metrics", "checkpoint", "model"]), default="model", show_default=True)
@@ -333,6 +345,7 @@ def build_experiment(
 def main(
     version: str,
     runner: str,
+    inference_replicas: int,
     scale: str,
     timeout_seconds: int,
     completion: str,
@@ -346,6 +359,7 @@ def main(
     training = build_experiment(
         version=version,
         runner=Runner(runner),
+        inference_replicas=inference_replicas,
         scale=Scale(scale),
         timeout_seconds=timeout_seconds,
         completion=completion,
