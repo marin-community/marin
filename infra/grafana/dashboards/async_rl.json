@@ -3790,6 +3790,229 @@
           ]
         }
       ]
+    },
+    {
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "description": "Only optimizer batches with native async/staleness_min = async/staleness_max at an exact nonnegative integer age. Rows preserve run, job and execution identity. Mixed-age batches are excluded: aggregate drift cannot be decomposed by group age. Requires complete, finite diagnostics and full reported-behavior coverage; conflicting duplicate step metrics are excluded. Response length = summed consumed response tokens / summed sequences. MSLR = consumed-loss-token-weighted mean of batch mean squared learner/reported-behavior log ratio. ESS is the minimum batch token-weight ESS fraction; raw reward is the unweighted mean of batch means. These are selected-population associations, not isolated temporal KL or a causal age effect. Informative fraction is omitted because its group denominator varies with training mode. See token coverage alongside.",
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "No matching diagnostics.",
+          "unit": "none"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Token-weighted MSLR"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 6
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Minimum batch ESS fraction"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 6
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 18,
+        "x": 0,
+        "y": 118
+      },
+      "id": 47,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        },
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "columns": [
+            {
+              "selector": "status",
+              "text": "Coverage status",
+              "type": "string"
+            },
+            {
+              "selector": "execution",
+              "text": "Execution",
+              "type": "string"
+            },
+            {
+              "selector": "age",
+              "text": "Exact group age",
+              "type": "number"
+            },
+            {
+              "selector": "updates",
+              "text": "Updates",
+              "type": "number"
+            },
+            {
+              "selector": "mean_response_tokens",
+              "text": "Response tokens / sequence",
+              "type": "number"
+            },
+            {
+              "selector": "token_weighted_mslr",
+              "text": "Token-weighted MSLR",
+              "type": "number"
+            },
+            {
+              "selector": "minimum_ess_fraction",
+              "text": "Minimum batch ESS fraction",
+              "type": "number"
+            },
+            {
+              "selector": "mean_update_raw_reward",
+              "text": "Mean update raw reward",
+              "type": "number"
+            }
+          ],
+          "format": "table",
+          "parser": "backend",
+          "refId": "A",
+          "source": "url",
+          "type": "json",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "WITH r AS (SELECT * FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND run_id IN (${run:sqlstring}) AND job_id IN (${job:sqlstring}) AND execution_uid IN (${execution:sqlstring})), metrics AS (\n SELECT run_id,job_id,execution_uid,CAST(json_get(attributes_json,'step') AS BIGINT) AS step,\n json_get(attributes_json,'metric') AS metric,MIN(value) AS minimum,MAX(value) AS maximum,COUNT(*) AS samples,COUNT(value) AS values_present\n FROM r WHERE name='training_metric_value' AND json_get(attributes_json,'phase')='train'\n AND CAST(json_get(attributes_json,'step') AS BIGINT)>0 AND json_get(attributes_json,'metric') IN ('async/staleness_min','async/staleness_max','async/performance/consumed_loss_tokens','async/performance/consumed_response_tokens','consumed/sequences','policy/behavior_drift/mean_squared_log_ratio','policy/behavior_drift/token_weight_ess_fraction','reward/avg_raw_reward','policy/behavior_drift/finite_fraction','policy/behavior_drift/missing_behavior','policy/policy_loss')\n GROUP BY run_id,job_id,execution_uid,step,metric\n), batches AS (\n SELECT run_id,job_id,execution_uid,step,MAX(CASE WHEN metric='async/staleness_min' THEN maximum END) AS age_min, MAX(CASE WHEN metric='async/staleness_max' THEN maximum END) AS age_max, MAX(CASE WHEN metric='async/performance/consumed_loss_tokens' THEN maximum END) AS loss_tokens, MAX(CASE WHEN metric='async/performance/consumed_response_tokens' THEN maximum END) AS response_tokens, MAX(CASE WHEN metric='consumed/sequences' THEN maximum END) AS sequences, MAX(CASE WHEN metric='policy/behavior_drift/mean_squared_log_ratio' THEN maximum END) AS mslr, MAX(CASE WHEN metric='policy/behavior_drift/token_weight_ess_fraction' THEN maximum END) AS ess, MAX(CASE WHEN metric='reward/avg_raw_reward' THEN maximum END) AS reward, MAX(CASE WHEN metric='policy/behavior_drift/finite_fraction' THEN maximum END) AS finite_fraction, MAX(CASE WHEN metric='policy/behavior_drift/missing_behavior' THEN maximum END) AS missing_behavior, MAX(CASE WHEN metric='policy/policy_loss' THEN maximum END) AS policy_loss,\n SUM(CASE WHEN minimum<>maximum OR samples<>values_present THEN 1 ELSE 0 END) AS conflicts,\n SUM(CASE WHEN metric='async/performance/consumed_loss_tokens' AND (samples<>values_present OR minimum<>maximum OR minimum<0 OR maximum>=1e308 OR maximum<>FLOOR(maximum)) THEN 1 ELSE 0 END) AS loss_conflicts\n FROM metrics GROUP BY run_id,job_id,execution_uid,step\n), classified AS (\n SELECT *, CASE WHEN conflicts=0 AND age_min=age_max AND age_min>=0 AND age_min=FLOOR(age_min)\n AND loss_tokens>0 AND loss_tokens<1e308 AND loss_tokens=FLOOR(loss_tokens)\n AND response_tokens>=0 AND response_tokens<1e308 AND response_tokens=FLOOR(response_tokens) AND sequences>0 AND sequences<1e308 AND sequences=FLOOR(sequences)\n AND mslr>=0 AND mslr<1e308 AND ess>0 AND ess<=1 AND finite_fraction=1 AND missing_behavior=0\n AND reward BETWEEN -1e308 AND 1e308 AND policy_loss BETWEEN -1e308 AND 1e308 THEN 1 ELSE 0 END AS eligible\n FROM batches\n), grouped AS (\n SELECT 'Uniform-age batches' AS status,execution_uid AS execution,CAST(age_min AS BIGINT) AS age,\n COUNT(*) AS updates,SUM(response_tokens)/SUM(sequences) AS mean_response_tokens,\n SUM(mslr*loss_tokens)/SUM(loss_tokens) AS token_weighted_mslr,MIN(ess) AS minimum_ess_fraction,\n AVG(reward) AS mean_update_raw_reward\n FROM classified WHERE eligible=1 GROUP BY run_id,job_id,execution_uid,age_min\n)\nSELECT * FROM grouped\nUNION ALL\nSELECT 'No qualifying uniform-age batches' AS status,CAST(NULL AS VARCHAR) AS execution,CAST(NULL AS BIGINT) AS age,CAST(NULL AS BIGINT) AS updates,\n CAST(NULL AS DOUBLE) AS mean_response_tokens,CAST(NULL AS DOUBLE) AS token_weighted_mslr,CAST(NULL AS DOUBLE) AS minimum_ess_fraction,CAST(NULL AS DOUBLE) AS mean_update_raw_reward\nWHERE NOT EXISTS (SELECT 1 FROM grouped)\nORDER BY execution,age"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          }
+        }
+      ],
+      "title": "Uniform-age batch diagnostics",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "description": "Fraction of all observed consumed loss tokens represented in the uniform-age table, across the selected runs/jobs/executions and time window. The denominator includes mixed-age batches and batches missing other diagnostics. The numerator excludes them. Null means no observed tokens or conflicting/invalid token counts, not zero or full coverage. This is telemetry-selection coverage, not proof that unobserved batches do not exist. Query fields also report observed, represented and mixed-age token counts plus included/excluded batch counts. Mixed-age batch drift is never attributed to individual ages.",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 1,
+          "max": 1,
+          "min": 0,
+          "noValue": "No valid token denominator",
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 6,
+        "x": 18,
+        "y": 118
+      },
+      "id": 48,
+      "options": {
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/uniform_age_token_fraction/",
+          "values": false
+        },
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "columns": [
+            {
+              "selector": "uniform_age_token_fraction",
+              "text": "uniform_age_token_fraction",
+              "type": "number"
+            },
+            {
+              "selector": "observed_loss_tokens",
+              "text": "observed_loss_tokens",
+              "type": "number"
+            },
+            {
+              "selector": "represented_loss_tokens",
+              "text": "represented_loss_tokens",
+              "type": "number"
+            },
+            {
+              "selector": "mixed_age_loss_tokens",
+              "text": "mixed_age_loss_tokens",
+              "type": "number"
+            },
+            {
+              "selector": "uniform_updates",
+              "text": "uniform_updates",
+              "type": "number"
+            },
+            {
+              "selector": "excluded_updates",
+              "text": "excluded_updates",
+              "type": "number"
+            }
+          ],
+          "format": "table",
+          "parser": "backend",
+          "refId": "A",
+          "source": "url",
+          "type": "json",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "WITH r AS (SELECT * FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND run_id IN (${run:sqlstring}) AND job_id IN (${job:sqlstring}) AND execution_uid IN (${execution:sqlstring})), metrics AS (\n SELECT run_id,job_id,execution_uid,CAST(json_get(attributes_json,'step') AS BIGINT) AS step,\n json_get(attributes_json,'metric') AS metric,MIN(value) AS minimum,MAX(value) AS maximum,COUNT(*) AS samples,COUNT(value) AS values_present\n FROM r WHERE name='training_metric_value' AND json_get(attributes_json,'phase')='train'\n AND CAST(json_get(attributes_json,'step') AS BIGINT)>0 AND json_get(attributes_json,'metric') IN ('async/staleness_min','async/staleness_max','async/performance/consumed_loss_tokens','async/performance/consumed_response_tokens','consumed/sequences','policy/behavior_drift/mean_squared_log_ratio','policy/behavior_drift/token_weight_ess_fraction','reward/avg_raw_reward','policy/behavior_drift/finite_fraction','policy/behavior_drift/missing_behavior','policy/policy_loss')\n GROUP BY run_id,job_id,execution_uid,step,metric\n), batches AS (\n SELECT run_id,job_id,execution_uid,step,MAX(CASE WHEN metric='async/staleness_min' THEN maximum END) AS age_min, MAX(CASE WHEN metric='async/staleness_max' THEN maximum END) AS age_max, MAX(CASE WHEN metric='async/performance/consumed_loss_tokens' THEN maximum END) AS loss_tokens, MAX(CASE WHEN metric='async/performance/consumed_response_tokens' THEN maximum END) AS response_tokens, MAX(CASE WHEN metric='consumed/sequences' THEN maximum END) AS sequences, MAX(CASE WHEN metric='policy/behavior_drift/mean_squared_log_ratio' THEN maximum END) AS mslr, MAX(CASE WHEN metric='policy/behavior_drift/token_weight_ess_fraction' THEN maximum END) AS ess, MAX(CASE WHEN metric='reward/avg_raw_reward' THEN maximum END) AS reward, MAX(CASE WHEN metric='policy/behavior_drift/finite_fraction' THEN maximum END) AS finite_fraction, MAX(CASE WHEN metric='policy/behavior_drift/missing_behavior' THEN maximum END) AS missing_behavior, MAX(CASE WHEN metric='policy/policy_loss' THEN maximum END) AS policy_loss,\n SUM(CASE WHEN minimum<>maximum OR samples<>values_present THEN 1 ELSE 0 END) AS conflicts,\n SUM(CASE WHEN metric='async/performance/consumed_loss_tokens' AND (samples<>values_present OR minimum<>maximum OR minimum<0 OR maximum>=1e308 OR maximum<>FLOOR(maximum)) THEN 1 ELSE 0 END) AS loss_conflicts\n FROM metrics GROUP BY run_id,job_id,execution_uid,step\n), classified AS (\n SELECT *, CASE WHEN conflicts=0 AND age_min=age_max AND age_min>=0 AND age_min=FLOOR(age_min)\n AND loss_tokens>0 AND loss_tokens<1e308 AND loss_tokens=FLOOR(loss_tokens)\n AND response_tokens>=0 AND response_tokens<1e308 AND response_tokens=FLOOR(response_tokens) AND sequences>0 AND sequences<1e308 AND sequences=FLOOR(sequences)\n AND mslr>=0 AND mslr<1e308 AND ess>0 AND ess<=1 AND finite_fraction=1 AND missing_behavior=0\n AND reward BETWEEN -1e308 AND 1e308 AND policy_loss BETWEEN -1e308 AND 1e308 THEN 1 ELSE 0 END AS eligible\n FROM batches\n)\nSELECT CASE WHEN SUM(loss_conflicts)=0 THEN SUM(CASE WHEN eligible=1 THEN loss_tokens ELSE 0 END)/NULLIF(SUM(loss_tokens),0) ELSE NULL END AS uniform_age_token_fraction,\n CASE WHEN SUM(loss_conflicts)=0 THEN SUM(loss_tokens) ELSE NULL END AS observed_loss_tokens,\n SUM(CASE WHEN eligible=1 THEN loss_tokens ELSE 0 END) AS represented_loss_tokens,\n SUM(CASE WHEN age_min<age_max AND age_min>=0 AND age_min=FLOOR(age_min) AND age_max=FLOOR(age_max) THEN loss_tokens ELSE 0 END) AS mixed_age_loss_tokens,\n SUM(CASE WHEN eligible=1 THEN 1 ELSE 0 END) AS uniform_updates,\n SUM(CASE WHEN eligible=0 THEN 1 ELSE 0 END) AS excluded_updates\nFROM classified"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          }
+        }
+      ],
+      "title": "Uniform-age diagnostic token coverage",
+      "type": "stat"
     }
   ],
   "version": 2

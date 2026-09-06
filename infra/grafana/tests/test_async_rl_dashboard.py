@@ -134,6 +134,9 @@ def store():
             ("consumed/length_stop_fraction", 0.25),
             ("consumed/stop_reason_coverage", 1),
             ("policy/behavior_drift/log_ratio_mean", -0.1),
+            ("policy/behavior_drift/mean_squared_log_ratio", 0.04),
+            ("tis/batch_skipped_no_logprobs", 0),
+            ("tis/skipped_fraction", 0),
             ("policy/behavior_drift/abs_log_ratio_p99", 0.7),
             ("policy/behavior_drift/lower_clip_pressure", 0.2),
             ("policy/behavior_drift/upper_clip_pressure", 0.1),
@@ -210,6 +213,20 @@ def store():
                 process="other",
                 attributes={"engine": "engine-A", "metric_source": "vllm", "source_temporality": "cumulative_snapshot"},
             )
+        add(
+            "weight_change_probe",
+            body={
+                "target_update": 2,
+                "status": "valid",
+                "coverage_complete": 1,
+                "dense_wire_bytes": 1000,
+                "estimated_changed_element_fraction": 0.025,
+                "estimated_index32_value_bytes": 75,
+                "capture_enqueue_seconds": 0.01,
+                "sample_cuda_milliseconds": 2,
+                "compare_commit_seconds": 0.03,
+            },
+        )
         add("telemetry_lost_records", 0)
         add("telemetry_rejected_records", 0)
         # Same run/step but another job, another execution, or no execution must not contaminate panels.
@@ -419,3 +436,140 @@ def test_phase_service_rates_reject_clock_adjusted_windows(store):
         "SET body_json=json_merge_patch(body_json,'{\"duration_seconds\":99}') WHERE name='async_phase_window'"
     )
     assert query(store, "Inference sampled throughput by learner phase") == []
+
+
+@pytest.fixture
+def age_store(store):
+    """An empty native telemetry table for independent weighted-batch cases."""
+    store.execute('DELETE FROM "telemetry_v1.marinskyrl"')
+    return store
+
+
+AGE_METRICS = {
+    "age_min": "async/staleness_min",
+    "age_max": "async/staleness_max",
+    "loss": "async/performance/consumed_loss_tokens",
+    "tokens": "async/performance/consumed_response_tokens",
+    "seqs": "consumed/sequences",
+    "mslr": "policy/behavior_drift/mean_squared_log_ratio",
+    "ess": "policy/behavior_drift/token_weight_ess_fraction",
+    "reward": "reward/avg_raw_reward",
+    "finite": "policy/behavior_drift/finite_fraction",
+    "missing": "policy/behavior_drift/missing_behavior",
+    "policy_loss": "policy/policy_loss",
+}
+
+
+def add_age_batch(d, step, *, omit=None, job="job", execution="driver", phase="train", **changes):
+    vals = dict(
+        age_min=1,
+        age_max=1,
+        loss=100,
+        tokens=200,
+        seqs=2,
+        mslr=0.1,
+        ess=0.9,
+        reward=0.25,
+        finite=1,
+        missing=0,
+        policy_loss=-0.01,
+    )
+    vals.update(changes)
+    rows = [
+        (
+            "cw-us-east-02a",
+            "marinskyrl",
+            "run",
+            job,
+            execution,
+            1788566460000,
+            step,
+            "training_metric_value",
+            v,
+            json.dumps({"step": str(step), "metric": AGE_METRICS[k], "phase": phase}),
+            "{}",
+            "{}",
+        )
+        for k, v in vals.items()
+        if k != omit
+    ]
+    d.executemany('INSERT INTO "telemetry_v1.marinskyrl" VALUES (?,?,?,?,?,?,?,?,?,?,?,?)', rows)
+
+
+def query_age_panels(d):
+    return query(d, "Uniform-age batch diagnostics"), query(d, "Uniform-age diagnostic token coverage")[0]
+
+
+def test_weighting_mixed_duplicates_and_filters(age_store):
+    add_age_batch(age_store, 1)
+    add_age_batch(age_store, 1)  # duplicate delivery must not double count
+    add_age_batch(age_store, 2, loss=300, tokens=1200, seqs=3, mslr=0.3, ess=0.8, reward=0.75)
+    add_age_batch(age_store, 3, age_min=0, age_max=2, loss=600, mslr=900)  # integer mean still mixed
+    add_age_batch(age_store, 4, job="other-job", loss=10000)
+    add_age_batch(age_store, 4, execution="other-execution", loss=10000)
+    add_age_batch(age_store, 4, phase="eval", loss=10000)
+    table, c = query_age_panels(age_store)
+    assert len(table) == 1
+    row = table[0]
+    assert row["age"] == 1 and row["updates"] == 2
+    assert row["mean_response_tokens"] == 280
+    assert row["token_weighted_mslr"] == pytest.approx(0.25)
+    assert row["minimum_ess_fraction"] == 0.8 and row["mean_update_raw_reward"] == 0.5
+    assert (
+        c["uniform_age_token_fraction"] == 0.4
+        and c["mixed_age_loss_tokens"] == 600
+        and c["observed_loss_tokens"] == 1000
+    )
+    assert c["uniform_updates"] == 2 and c["excluded_updates"] == 1
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"age_min": 0.5, "age_max": 0.5},
+        {"age_min": -1, "age_max": -1},
+        {"omit": "age_min"},
+        {"omit": "mslr"},
+        {"finite": 0.9},
+        {"missing": 1},
+        {"mslr": float("nan")},
+        {"mslr": float("inf")},
+        {"ess": 0},
+        {"seqs": float("inf")},
+        {"seqs": float("nan")},
+        {"seqs": 0.5},
+        {"tokens": float("inf")},
+        {"tokens": float("nan")},
+        {"tokens": 0.5},
+    ],
+)
+def test_incomplete_or_invalid_batch_keeps_token_denominator(age_store, change):
+    add_age_batch(age_store, 1)
+    add_age_batch(age_store, 2, loss=300, **change)
+    table, c = query_age_panels(age_store)
+    assert table[0]["updates"] == 1
+    assert c["uniform_age_token_fraction"] == 0.25 and c["observed_loss_tokens"] == 400
+
+
+@pytest.mark.parametrize("loss", [None, -1, 0.5, float("inf"), float("nan")])
+def test_invalid_loss_denominator_is_unavailable(age_store, loss):
+    add_age_batch(age_store, 1)
+    add_age_batch(age_store, 2, loss=loss)
+    _, c = query_age_panels(age_store)
+    assert c["uniform_age_token_fraction"] is None and c["observed_loss_tokens"] is None
+
+
+def test_conflicting_diagnostic_excluded_but_conflicting_loss_invalidates_coverage(age_store):
+    add_age_batch(age_store, 1)
+    add_age_batch(age_store, 1, mslr=0.2)
+    table, c = query_age_panels(age_store)
+    assert table[0]["age"] is None and c["uniform_age_token_fraction"] == 0 and c["observed_loss_tokens"] == 100
+    add_age_batch(age_store, 1, loss=101)
+    _, c = query_age_panels(age_store)
+    assert c["uniform_age_token_fraction"] is None
+
+
+def test_empty_selection_is_explicit_and_unavailable(age_store):
+    table, c = query_age_panels(age_store)
+    assert table[0]["status"] == "No qualifying uniform-age batches" and table[0]["age"] is None
+    assert c["uniform_age_token_fraction"] is None and c["observed_loss_tokens"] is None
