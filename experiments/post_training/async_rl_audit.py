@@ -849,7 +849,7 @@ def paired_evaluation_study(study: JSONDict, results: JSONDict, snapshots: JSOND
         "uncertainty_scope": (
             "Question-paired percentile bootstrap conditional on observed training seeds; "
             "seeds are fixed, not resampled. "
-            "Three training seeds do not establish strong unconditional training-seed uncertainty."
+            "Question resampling does not quantify uncertainty over new training seeds."
         ),
         "reward_reduction": (
             "Average token-reward sums within each question, then equal-weight questions and training seeds; "

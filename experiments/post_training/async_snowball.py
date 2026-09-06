@@ -63,6 +63,7 @@ from experiments.post_training.async_rl import (
     DATA_REVISION,
     SEED,
     VALIDATION_ROWS,
+    Correction,
     Runner,
     apply_observation_options,
     validate_eval_interval,
@@ -182,6 +183,7 @@ def training_config(
     context_tokens: int | None = None,
     weight_sync_interval: int = 1,
     max_staleness_steps: int = 1,
+    correction: Correction = Correction.BEHAVIOR_CLIP,
     initial_eval_repeat_count: int = 1,
     weight_change_probe: bool = False,
     epoch_seeded_shuffle: bool = False,
@@ -193,6 +195,8 @@ def training_config(
         raise ValueError("epoch_seeded_shuffle must be a boolean")
     if inference_replicas < 1:
         raise ValueError("Inference replica count must be positive")
+    if correction not in Correction:
+        raise ValueError(f"Unknown correction mode: {correction}")
     steps = {Scale.GATE: 2, Scale.CADENCE_GATE: 5, Scale.QUALIFICATION: 25}[scale]
     if study_steps is not None:
         if scale is not Scale.QUALIFICATION or type(study_steps) is not int or study_steps <= 0:
@@ -242,6 +246,10 @@ def training_config(
     trainer["algorithm"].update(
         use_kl_loss=False, use_kl_in_reward=False, policy_loss_type="behavior_clip", use_tis=False
     )
+    if correction == Correction.REGULAR_TIS:
+        trainer["algorithm"].update(
+            policy_loss_type="regular", use_tis=True, tis_imp_ratio_cap=2.0, require_rollout_logprobs=True
+        )
     trainer["fully_async"] = {
         "max_staleness_steps": max_staleness_steps,
         "weight_sync_interval": weight_sync_interval,
@@ -303,6 +311,7 @@ def build_experiment(
     context_tokens: int | None = None,
     weight_sync_interval: int = 1,
     max_staleness_steps: int = 1,
+    correction: Correction = Correction.BEHAVIOR_CLIP,
     initial_eval_repeat_count: int = 1,
     weight_change_probe: bool = False,
     epoch_seeded_shuffle: bool = False,
@@ -349,6 +358,7 @@ def build_experiment(
         context_tokens=context_tokens,
         weight_sync_interval=weight_sync_interval,
         max_staleness_steps=max_staleness_steps,
+        correction=correction,
         initial_eval_repeat_count=initial_eval_repeat_count,
         weight_change_probe=weight_change_probe,
         epoch_seeded_shuffle=epoch_seeded_shuffle,
@@ -430,6 +440,9 @@ def build_experiment(
 @click.option("--weight-sync-interval", type=click.IntRange(min=1), default=1, show_default=True)
 @click.option("--max-staleness-steps", type=click.IntRange(min=0), default=1, show_default=True)
 @click.option(
+    "--correction", type=click.Choice([c.value for c in Correction]), default="behavior_clip", show_default=True
+)
+@click.option(
     "--epoch-seeded-shuffle/--no-epoch-seeded-shuffle",
     default=False,
     show_default=True,
@@ -453,6 +466,7 @@ def main(
     context_tokens: int | None,
     weight_sync_interval: int,
     max_staleness_steps: int,
+    correction: str,
     initial_eval_repeat_count: int,
     weight_change_probe: bool,
     epoch_seeded_shuffle: bool,
@@ -475,6 +489,7 @@ def main(
         context_tokens=context_tokens,
         weight_sync_interval=weight_sync_interval,
         max_staleness_steps=max_staleness_steps,
+        correction=Correction(correction),
         initial_eval_repeat_count=initial_eval_repeat_count,
         weight_change_probe=weight_change_probe,
         epoch_seeded_shuffle=epoch_seeded_shuffle,

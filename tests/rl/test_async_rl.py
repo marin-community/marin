@@ -458,6 +458,55 @@ def test_snowball_cadence_pair_preserves_objective_and_evaluation_contract() -> 
     assert configs[0] == configs[1]
 
 
+@pytest.mark.parametrize("scale", list(async_snowball.Scale))
+def test_snowball_correction_package_preserves_default_and_changes_only_objective(scale):
+    args = ["--version", "2026.09.06.13", "--scale", scale.value, "--completion", "metrics"]
+    requests = []
+    for extra in ([], ["--correction", "behavior_clip"], ["--correction", "regular_tis"]):
+        result = CliRunner().invoke(async_snowball.main, args + extra)
+        assert result.exit_code == 0, result.output
+        requests.append(json.loads(result.output)["request"])
+    baseline, explicit, tis = requests
+    assert baseline == explicit
+    assert baseline["run_id"] != tis["run_id"]
+    configs = [yaml.safe_load(request["config_yaml"]) for request in (baseline, tis)]
+    algorithm = configs[1]["trainer"]["algorithm"]
+    assert algorithm.pop("tis_imp_ratio_cap") == 2.0
+    assert algorithm.pop("require_rollout_logprobs") is True
+    assert algorithm["policy_loss_type"] == "regular"
+    assert algorithm["use_tis"] is True
+    assert algorithm["use_kl_loss"] is False
+    assert algorithm["use_kl_in_reward"] is False
+    algorithm.update(policy_loss_type="behavior_clip", use_tis=False)
+    assert configs[0] == configs[1]
+    assert configs[1]["generator"]["sampling_params"]["logprobs"] == 0
+    for field in ("model", "train_data", "validation_data", "topology", "runtime", "seed", "completion_mode"):
+        assert baseline[field] == tis[field]
+    step = async_snowball.build_experiment(
+        version="2026.09.06.13",
+        scale=scale,
+        timeout_seconds=3600,
+        completion="metrics",
+        correction=async_rl.Correction.REGULAR_TIS,
+    )
+    built = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps)).request
+    assert built.config_yaml == tis["config_yaml"]
+    assert built.run_id == tis["run_id"]
+
+
+def test_snowball_rejects_unknown_correction_before_submission(monkeypatch):
+    submitted = []
+    monkeypatch.setattr(async_snowball, "run", lambda *args, **kwargs: submitted.append(args))
+    result = CliRunner().invoke(
+        async_snowball.main,
+        ["--version", "2026.09.06.13", "--correction", "unknown", "--run"],
+    )
+    assert result.exit_code != 0
+    assert submitted == []
+    with pytest.raises(ValueError, match="Unknown correction mode"):
+        async_snowball.training_config(async_snowball.Scale.CADENCE_GATE, correction="unknown")
+
+
 @pytest.mark.parametrize("completion", ["metrics", "checkpoint", "model"])
 def test_snowball_sync_control_changes_only_scheduler(completion) -> None:
     requests = []
