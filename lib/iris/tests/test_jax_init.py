@@ -24,8 +24,9 @@ from iris.cluster.types import JobName
 from iris.env_resources import _read_iris_resource_proto
 from iris.runtime.jax_init import configure_jax_compilation_cache, initialize_jax, resolve_coordinator_port
 
-INITIAL_ATTEMPT_ENDPOINT_NAME = "jax_coordinator-attempt-0"
-RETRY_ATTEMPT_ENDPOINT_NAME = "jax_coordinator-attempt-3"
+_JOB_TOKEN = JobName.from_string("/testuser/testjob").to_safe_token()
+INITIAL_ATTEMPT_ENDPOINT_NAME = f"jax_coordinator-{_JOB_TOKEN}-attempt-0"
+RETRY_ATTEMPT_ENDPOINT_NAME = f"jax_coordinator-{_JOB_TOKEN}-attempt-3"
 
 
 @dataclass
@@ -242,6 +243,29 @@ def test_initialize_jax_maps_supervised_peer_global_rank_and_device(
     assert jax_args == ("10.0.0.9:8476", 16, 9)
     assert jax_options["local_device_ids"] == [1]
     assert fake_ctx.registry.registered == []
+
+
+def test_scoped_endpoint_name_isolates_sibling_jobs() -> None:
+    """Concurrent sibling jobs under one root must not share a coordinator endpoint.
+
+    The registry namespaces by user/root job, so the coordinator name has to
+    carry the child job identity. Otherwise two children both publish and poll
+    the same endpoint and ranks from different distributed worlds join one
+    coordinator.
+    """
+
+    def child(name: str, task_index: int, attempt_id: int = 0) -> JobInfo:
+        return JobInfo(task_id=JobName.from_string(f"/u/root/{name}/{task_index}"), attempt_id=attempt_id)
+
+    scoped = jax_init_module._scoped_endpoint_name
+    child_a = scoped("jax_coordinator", child("child-a", 0))
+
+    # Same child job, different tasks: identical so peers discover task 0.
+    assert scoped("jax_coordinator", child("child-a", 1)) == child_a
+    # Sibling child jobs: distinct, so neither resolves the other's coordinator.
+    assert scoped("jax_coordinator", child("child-b", 0)) != child_a
+    # Retries of one child stay separated.
+    assert scoped("jax_coordinator", child("child-a", 0, attempt_id=2)) != child_a
 
 
 @pytest.mark.parametrize("assigned", [{}, {"jax": 0}], ids=["unassigned", "k8s-placeholder"])
