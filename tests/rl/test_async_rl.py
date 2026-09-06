@@ -346,3 +346,180 @@ def test_snowball_rejects_cadence_that_cannot_admit_rollouts_before_submission(m
     assert result.exit_code != 0
     assert "at most max_staleness_steps + 1" in str(result.exception)
     assert submitted == []
+
+
+def qwen_metrics_request(**changes):
+    step, evaluation = async_rl.build_experiment(
+        **(
+            dict(
+                version="2026.09.06.10",
+                cluster="cw-us-east-02a",
+                runner=async_rl.Runner.ASYNC,
+                scale=async_rl.Scale.SCREENING,
+                completion="metrics",
+                kl_loss=False,
+            )
+            | changes
+        )
+    )
+    assert evaluation is None
+    return step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps)).request
+
+
+def test_qwen_screening_arms_change_only_requested_scheduler_controls():
+    arms = [
+        {"runner": async_rl.Runner.SYNC},
+        {},
+        {"weight_sync_interval": 2},
+        {"staleness": 3},
+    ]
+    requests = [qwen_metrics_request(**arm) for arm in arms]
+    configs = [yaml.safe_load(request.config_yaml) for request in requests]
+    assert len({request.run_id for request in requests}) == 4
+    assert [config.pop("entrypoint") for config in configs] == ["standard"] + ["fully_async"] * 3
+    for config, cadence, age in zip(configs, (1, 1, 2, 1), (1, 1, 1, 3), strict=True):
+        trainer = config["trainer"]
+        assert trainer["fully_async"].pop("weight_sync_interval", 1) == cadence
+        assert trainer["fully_async"].pop("max_staleness_steps") == age
+        assert trainer["max_steps"] == trainer["eval_interval"] == 25
+        assert trainer["eval_before_train"]
+        assert not trainer["algorithm"]["use_kl_loss"]
+        assert not trainer["algorithm"]["use_kl_in_reward"]
+        assert trainer["algorithm"]["policy_loss_type"] == "behavior_clip"
+        assert not trainer["algorithm"]["use_tis"]
+    assert all(config == configs[0] for config in configs)
+    for request in requests:
+        assert request.completion_mode == "metrics"
+        for field in ("model", "train_data", "validation_data", "topology", "runtime", "seed"):
+            assert getattr(request, field) == getattr(requests[0], field)
+
+
+def test_qwen_screening_long_confirmation_keeps_fixture_and_changes_only_schedule():
+    short = qwen_metrics_request()
+    long = qwen_metrics_request(screening_steps=100)
+    assert short.train_data == long.train_data
+    assert short.validation_data == long.validation_data
+    assert short.run_id != long.run_id
+    configs = [yaml.safe_load(request.config_yaml) for request in (short, long)]
+    for config, steps in zip(configs, (25, 100), strict=True):
+        trainer = config["trainer"]
+        assert trainer.pop("max_steps") == steps
+        assert trainer.pop("eval_interval") == steps
+        assert trainer.pop("ckpt_interval") == steps
+        assert trainer["eval_before_train"]
+    assert configs[0] == configs[1]
+
+
+@pytest.mark.parametrize("change", [{"seed": 18}, {"kl_loss": True}, {"correction": async_rl.Correction.REGULAR_TIS}])
+def test_qwen_objective_and_seed_changes_have_distinct_identity(change):
+    baseline = qwen_metrics_request()
+    variant = qwen_metrics_request(**change)
+    assert baseline.run_id != variant.run_id
+    assert baseline.model == variant.model
+    assert baseline.train_data == variant.train_data
+    assert baseline.validation_data == variant.validation_data
+    configs = [yaml.safe_load(request.config_yaml) for request in (baseline, variant)]
+    if "seed" in change:
+        assert (baseline.seed, variant.seed) == (17, 18)
+    elif "kl_loss" in change:
+        assert not configs[0]["trainer"]["algorithm"].pop("use_kl_loss")
+        assert not configs[0]["trainer"]["algorithm"].pop("use_kl_in_reward")
+        assert configs[1]["trainer"]["algorithm"].pop("use_kl_loss")
+    else:
+        algorithm = configs[1]["trainer"]["algorithm"]
+        assert algorithm.pop("tis_imp_ratio_cap") == 2.0
+        assert algorithm.pop("require_rollout_logprobs") is True
+        assert algorithm["policy_loss_type"] == "regular"
+        assert algorithm["use_tis"]
+        algorithm.update(policy_loss_type="behavior_clip", use_tis=False)
+        assert configs[1]["generator"]["sampling_params"]["logprobs"] == 0
+    assert configs[0] == configs[1]
+
+
+def test_qwen_replica_count_reserves_complete_inference_nodes():
+    requests = [qwen_metrics_request(inference_replicas=replicas) for replicas in (8, 16)]
+    configs = [yaml.safe_load(request.config_yaml) for request in requests]
+    assert requests[0].run_id != requests[1].run_id
+    for request, config, replicas in zip(requests, configs, (8, 16), strict=True):
+        assert request.topology.num_nodes * request.topology.gpus_per_node == 8 + replicas
+        plan = request.topology.role_plan
+        assert plan.num_inference_engines == replicas
+        assert plan.policy_num_nodes == 1
+        assert plan.policy_num_gpus_per_node == 8
+        assert plan.inference_engine_tensor_parallel_size == 1
+        assert plan.train_batch_size == plan.policy_mini_batch_size == 64
+        assert config["generator"].pop("num_inference_engines") == replicas
+    assert configs[0] == configs[1]
+
+
+def test_qwen_training_budget_does_not_change_explicit_evaluation_budget():
+    requests = [
+        qwen_metrics_request(response_tokens=tokens, eval_response_tokens=1024, context_tokens=4096)
+        for tokens in (1024, 2048)
+    ]
+    configs = [yaml.safe_load(request.config_yaml) for request in requests]
+    assert requests[0].run_id != requests[1].run_id
+    for config, tokens in zip(configs, (1024, 2048), strict=True):
+        assert config["context_budget"].pop("max_new_tokens_per_turn") == tokens
+        assert config["generator"]["eval_sampling_params"]["max_generate_length"] == 1024
+    assert configs[0] == configs[1]
+
+
+@pytest.mark.parametrize(
+    "options, message",
+    [
+        (["--stage", "evaluation"], "Metrics completion requires --stage rl"),
+        (["--runner", "sync", "--weight-sync-interval", "2"], "synchronous runner publishes every update"),
+        (["--weight-sync-interval", "3", "--staleness", "1"], "at most max_staleness_steps + 1"),
+        (["--eval-response-tokens", "2048"], "Context budget must fit"),
+        (["--inference-replicas", "4"], "Invalid value"),
+        (["--scale", "smoke", "--screening-steps", "100"], "only supported by the screening scale"),
+    ],
+)
+def test_qwen_invalid_screening_configuration_rejected_before_submission(monkeypatch, options, message):
+    submitted = []
+    monkeypatch.setattr(async_rl, "run", lambda *args, **kwargs: submitted.append(args))
+    result = CliRunner().invoke(
+        async_rl.main,
+        ["--version", "2026.09.06.10", "--completion", "metrics", "--stage", "rl", "--run", *options],
+    )
+    assert result.exit_code != 0
+    assert message in result.output + str(result.exception)
+    assert submitted == []
+
+
+def test_qwen_metrics_preview_and_submission_have_no_export_stage(monkeypatch):
+    submitted = []
+    monkeypatch.setattr(async_rl, "validate_regional_storage", lambda *_args: None)
+    monkeypatch.setattr(async_rl, "run", lambda step, **kwargs: submitted.append(step))
+    result = CliRunner().invoke(
+        async_rl.main,
+        [
+            "--version",
+            "2026.09.06.10",
+            "--completion",
+            "metrics",
+            "--stage",
+            "rl",
+            "--scale",
+            "screening",
+            "--no-kl-loss",
+            "--max-staleness-steps",
+            "3",
+            "--seed",
+            "18",
+            "--run",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    preview = json.loads(result.output)
+    assert "export" not in preview
+    assert preview["request"]["completion_mode"] == "metrics"
+    assert preview["request"]["seed"] == 18
+    config = yaml.safe_load(preview["request"]["config_yaml"])
+    assert config["trainer"]["fully_async"]["max_staleness_steps"] == 3
+    assert not config["trainer"]["algorithm"]["use_kl_loss"]
+    assert len(submitted) == 1
+    root = submitted[0]
+    assert root.artifact_type is async_rl.SkyRLTrainingResult
+    assert {dep.artifact_type for dep in root.deps} == {async_rl.LevanterCheckpoint, async_rl.Artifact}

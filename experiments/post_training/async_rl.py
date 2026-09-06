@@ -13,6 +13,11 @@ Use ``--run`` to build the graph. The default evaluation stage includes the mode
 mirror, deterministic GSM8K fixture, training, terminal HF export, and a 32-row
 GSM8K evaluation. ``--stage rl`` stops after export. The training deadline includes
 setup; export and evaluation are separate jobs with their own resource accounting.
+``--completion metrics --stage rl`` retains training metrics and internal evaluation
+without checkpointing or export. Screening runs 25 updates over the 1,024-row
+fixture (16 updates per epoch), with initial and final evaluation only. Use
+``--screening-steps 100`` for a longer confirmation with the same fixture. Use
+``--no-kl-loss`` explicitly for the new screening controls; historical defaults use KL.
 Source publication/pinning and current capacity checks precede submission.
 """
 
@@ -44,6 +49,8 @@ from marin.rl.skyrl import (
     SkyRLRuntimeProfile,
     SkyRLSpec,
     SkyRLTopology,
+    SkyRLTrainingResult,
+    skyrl_metrics_step,
     skyrl_step,
 )
 from marin.training.training import LevanterCheckpoint
@@ -84,6 +91,12 @@ class Scale(StrEnum):
     SMOKE = "smoke"
     QUALIFICATION = "qualification"
     COMPARISON = "comparison"
+    SCREENING = "screening"
+
+
+class Correction(StrEnum):
+    BEHAVIOR_CLIP = "behavior_clip"
+    REGULAR_TIS = "regular_tis"
 
 
 @dataclass(frozen=True)
@@ -101,6 +114,7 @@ SCHEDULES = {
     # Keep both controls inside one epoch, with room for async lookahead. Measure
     # publication 0 -> 20; the final evaluation/checkpoint follows that interval.
     Scale.COMPARISON: Schedule(20, 20, 20, False, 1536),
+    Scale.SCREENING: Schedule(25, 25, 25, True, TRAIN_ROWS),
 }
 
 
@@ -142,12 +156,50 @@ def write_gsm8k_subset(config: Gsm8kSubsetConfig) -> None:
     StoragePath(prefix_join(config.output_path, "selection.json")).write_text(json.dumps(manifest, sort_keys=True))
 
 
-def training_config(runner: Runner, scale: Scale, *, spans: bool, staleness: int) -> str:
+def training_config(
+    runner: Runner,
+    scale: Scale,
+    *,
+    spans: bool,
+    staleness: int,
+    weight_sync_interval: int = 1,
+    inference_replicas: int = 8,
+    kl_loss: bool = True,
+    correction: Correction = Correction.BEHAVIOR_CLIP,
+    response_tokens: int | None = None,
+    eval_response_tokens: int | None = None,
+    context_tokens: int | None = None,
+    screening_steps: int | None = None,
+) -> str:
     """Keep optimizer and inference settings identical across scheduler controls."""
     schedule = SCHEDULES[scale]
+    if screening_steps is not None:
+        if scale is not Scale.SCREENING or screening_steps <= 0:
+            raise ValueError("screening_steps must be positive and is only supported by the screening scale")
+        schedule = replace(
+            schedule, max_steps=screening_steps, checkpoint_interval=screening_steps, eval_interval=screening_steps
+        )
+    if weight_sync_interval < 1 or staleness < 0 or weight_sync_interval > staleness + 1:
+        raise ValueError("Weight sync interval must be positive and at most max_staleness_steps + 1")
+    if runner is Runner.SYNC and weight_sync_interval != 1:
+        raise ValueError("The synchronous runner publishes every update; weight_sync_interval must be 1")
+    if inference_replicas not in (8, 16):
+        raise ValueError("Qwen inference replicas must be 8 or 16, using one or two complete H100 nodes")
+    if correction not in Correction:
+        raise ValueError(f"Unknown correction mode: {correction}")
+    response_tokens = SMOKE.max_new_tokens if response_tokens is None else response_tokens
+    context_tokens = SMOKE.request_window_tokens if context_tokens is None else context_tokens
+    eval_tokens = response_tokens if eval_response_tokens is None else eval_response_tokens
+    if min(response_tokens, eval_tokens) <= 0:
+        raise ValueError("Training and evaluation response budgets must be positive")
+    if context_tokens < MAX_PROMPT_TOKENS + max(response_tokens, eval_tokens):
+        raise ValueError("Context budget must fit the validated prompt limit plus either response budget")
     preset = replace(
         SMOKE,
-        role_plan=ROLE_PLAN,
+        role_plan=replace(ROLE_PLAN, num_inference_engines=inference_replicas),
+        num_nodes=1 + inference_replicas // POLICY_GPUS,
+        request_window_tokens=context_tokens,
+        max_new_tokens=response_tokens,
         micro_forward_batch_size_per_gpu=ROLE_PLAN.micro_train_batch_size_per_gpu,
         max_steps=schedule.max_steps,
         ckpt_interval=schedule.checkpoint_interval,
@@ -170,12 +222,21 @@ def training_config(runner: Runner, scale: Scale, *, spans: bool, staleness: int
         eval_interval=schedule.eval_interval,
         eval_batch_size=VALIDATION_ROWS,
     )
-    trainer["algorithm"].update(policy_loss_type="behavior_clip", use_tis=False)
+    trainer["algorithm"].update(use_kl_loss=kl_loss, policy_loss_type="behavior_clip", use_tis=False)
+    if not kl_loss:
+        trainer["algorithm"]["use_kl_in_reward"] = False
+    if correction == Correction.REGULAR_TIS:
+        trainer["algorithm"].update(
+            policy_loss_type="regular", use_tis=True, tis_imp_ratio_cap=2.0, require_rollout_logprobs=True
+        )
     trainer["fully_async"] = {
         "max_staleness_steps": staleness,
         "num_parallel_generation_workers": 64,
         "admission_stall_timeout": 300,
     }
+    # Omit the default to preserve historical configuration fingerprints.
+    if weight_sync_interval != 1:
+        trainer["fully_async"]["weight_sync_interval"] = weight_sync_interval
     megatron = {
         "tensor_model_parallel_size": 2,
         "pipeline_model_parallel_size": 1,
@@ -186,6 +247,8 @@ def training_config(runner: Runner, scale: Scale, *, spans: bool, staleness: int
     trainer["policy"]["megatron_config"] = dict(megatron)
     trainer["ref"] = {"megatron_config": dict(megatron)}
     config["generator"]["sampling_params"]["logprobs"] = 0
+    if eval_response_tokens is not None:
+        config["generator"]["eval_sampling_params"] = {"max_generate_length": eval_response_tokens}
     config["generator"]["trajectory_retention"] = {
         "sample_count_per_step": 2,
         "always_retain_failures": False,
@@ -222,7 +285,17 @@ def build_experiment(
     spans: bool = True,
     staleness: int = 1,
     timeout_seconds: int = 1800,
-) -> tuple[ArtifactStep[SkyRLModel], ArtifactStep[EvaluationResult]]:
+    completion: str = "model",
+    weight_sync_interval: int = 1,
+    inference_replicas: int = 8,
+    seed: int = SEED,
+    kl_loss: bool = True,
+    correction: Correction = Correction.BEHAVIOR_CLIP,
+    response_tokens: int | None = None,
+    eval_response_tokens: int | None = None,
+    context_tokens: int | None = None,
+    screening_steps: int | None = None,
+) -> tuple[ArtifactStep[SkyRLModel] | ArtifactStep[SkyRLTrainingResult], ArtifactStep[EvaluationResult] | None]:
     """Construct versioned dependencies and a bounded, namespaced training attempt."""
     validate_version(version)
     if is_mutable_version(version):
@@ -231,9 +304,31 @@ def build_experiment(
         raise ValueError("The development preset requires an H100 cluster")
     if timeout_seconds <= 0 or staleness < 0:
         raise ValueError("A positive training deadline and nonnegative staleness are required")
-    config = training_config(runner, scale, spans=spans, staleness=staleness)
+    if completion not in ("model", "metrics"):
+        raise ValueError(f"Unknown completion mode: {completion}")
+    if not 0 <= seed < 2**32:
+        raise ValueError("Seed must be between 0 and 2**32 - 1")
+    config = training_config(
+        runner,
+        scale,
+        spans=spans,
+        staleness=staleness,
+        weight_sync_interval=weight_sync_interval,
+        inference_replicas=inference_replicas,
+        kl_loss=kl_loss,
+        correction=correction,
+        response_tokens=response_tokens,
+        eval_response_tokens=eval_response_tokens,
+        context_tokens=context_tokens,
+        screening_steps=screening_steps,
+    )
     cpu = ResourceConfig.with_cpu(cpu=4, ram="16g", disk="32g")
-    topology = SkyRLTopology(2, POLICY_GPUS, "H100", ROLE_PLAN)
+    topology = SkyRLTopology(
+        1 + inference_replicas // POLICY_GPUS,
+        POLICY_GPUS,
+        "H100",
+        replace(ROLE_PLAN, num_inference_engines=inference_replicas),
+    )
     model = ArtifactStep(
         name=user_owned_name("models/async-rl-qwen3-0.6b"),
         version=version,
@@ -254,37 +349,38 @@ def build_experiment(
                 "config": config,
                 "model": model.fingerprint(),
                 "data": data.fingerprint(),
-                "seed": SEED,
+                "seed": seed,
                 "topology": topology,
             }
         )
     )
     name = user_owned_name(f"checkpoints/async-rl/{runner.value}-{scale.value}-{identity}")
-    training = skyrl_step(
-        SkyRLSpec(
-            name=name,
-            version=version,
-            config_yaml=config,
-            runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
-            model=ArtifactHfModel(model, QWEN3_MODEL, MODEL_REVISION, relative_path="hf"),
-            train_data=(ArtifactDataSource(data, relative_path=TRAIN_FILENAME),),
-            validation_data=(ArtifactDataSource(data, relative_path=VALIDATION_FILENAME),),
-            topology=topology,
-            retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
-            seed=SEED,
-            overrides=("++trainer.hf_hub_repo_id=null", "++generator.chat_template_kwargs.enable_thinking=false"),
-        ),
-        IrisSkyRLExecution(
-            cluster=cluster,
-            cluster_config=f"lib/iris/config/{cluster}.yaml",
-            cpu=16,
-            memory="128GB",
-            disk="2TB",
-            priority="batch",
-            max_retries=0,
-            timeout_seconds=timeout_seconds,
-        ),
+    spec = SkyRLSpec(
+        name=name,
+        version=version,
+        config_yaml=config,
+        runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
+        model=ArtifactHfModel(model, QWEN3_MODEL, MODEL_REVISION, relative_path="hf"),
+        train_data=(ArtifactDataSource(data, relative_path=TRAIN_FILENAME),),
+        validation_data=(ArtifactDataSource(data, relative_path=VALIDATION_FILENAME),),
+        topology=topology,
+        retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
+        seed=seed,
+        overrides=("++trainer.hf_hub_repo_id=null", "++generator.chat_template_kwargs.enable_thinking=false"),
     )
+    execution = IrisSkyRLExecution(
+        cluster=cluster,
+        cluster_config=f"lib/iris/config/{cluster}.yaml",
+        cpu=16,
+        memory="128GB",
+        disk="2TB",
+        priority="batch",
+        max_retries=0,
+        timeout_seconds=timeout_seconds,
+    )
+    if completion == "metrics":
+        return skyrl_metrics_step(spec, execution), None
+    training = skyrl_step(spec, execution)
     evaluation = eval_step(
         SkyRLEvaluationModel(
             step=training,
@@ -319,8 +415,22 @@ def build_experiment(
 @click.option("--scale", type=click.Choice([s.value for s in Scale]), default="smoke", show_default=True)
 @click.option("--cluster", type=click.Choice(H100_CLUSTERS), default="cw-us-east-02a", show_default=True)
 @click.option("--stage", type=click.Choice(["rl", "evaluation"]), default="evaluation", show_default=True)
+@click.option("--completion", type=click.Choice(["metrics", "model"]), default="model", show_default=True)
 @click.option("--spans/--no-spans", default=True, show_default=True)
-@click.option("--staleness", type=click.IntRange(min=0), default=1, show_default=True)
+@click.option("--staleness", "--max-staleness-steps", type=click.IntRange(min=0), default=1, show_default=True)
+@click.option("--weight-sync-interval", type=click.IntRange(min=1), default=1, show_default=True)
+@click.option("--inference-replicas", type=click.Choice(["8", "16"]), default="8", show_default=True)
+@click.option("--seed", type=click.IntRange(min=0, max=2**32 - 1), default=SEED, show_default=True)
+@click.option("--kl-loss/--no-kl-loss", default=True, show_default=True)
+@click.option(
+    "--correction", type=click.Choice([c.value for c in Correction]), default="behavior_clip", show_default=True
+)
+@click.option("--response-tokens", type=click.IntRange(min=1), help="Training output cap; defaults to 1024.")
+@click.option(
+    "--eval-response-tokens", type=click.IntRange(min=1), help="Internal evaluation cap; defaults to training."
+)
+@click.option("--context-tokens", type=click.IntRange(min=1), help="Engine context window; defaults to 2048.")
+@click.option("--screening-steps", type=click.IntRange(min=1), help="Screening-only update count; defaults to 25.")
 @click.option("--timeout-seconds", type=click.IntRange(min=1), default=1800, show_default=True)
 @click.option("--run/--dry-run", "execute", default=False, show_default=True)
 def main(
@@ -329,11 +439,23 @@ def main(
     scale: str,
     cluster: str,
     stage: str,
+    completion: str,
     spans: bool,
     staleness: int,
+    weight_sync_interval: int,
+    inference_replicas: str,
+    seed: int,
+    kl_loss: bool,
+    correction: str,
+    response_tokens: int | None,
+    eval_response_tokens: int | None,
+    context_tokens: int | None,
+    screening_steps: int | None,
     timeout_seconds: int,
     execute: bool,
 ) -> None:
+    if completion == "metrics" and stage == "evaluation":
+        raise click.UsageError("Metrics completion requires --stage rl; external evaluation requires a model export")
     training, evaluation = build_experiment(
         version=version,
         cluster=cluster,
@@ -342,20 +464,36 @@ def main(
         spans=spans,
         staleness=staleness,
         timeout_seconds=timeout_seconds,
+        completion=completion,
+        weight_sync_interval=weight_sync_interval,
+        inference_replicas=int(inference_replicas),
+        seed=seed,
+        kl_loss=kl_loss,
+        correction=Correction(correction),
+        response_tokens=response_tokens,
+        eval_response_tokens=eval_response_tokens,
+        context_tokens=context_tokens,
+        screening_steps=screening_steps,
     )
     prefix = marin_prefix()
     if execute:
         validate_regional_storage(prefix, cluster)
-    checkpoint = training.deps[0]
-    training_context = StepContext.for_fingerprint(checkpoint.runtime_args.keys(), checkpoint.deps)
-    export_context = StepContext.for_fingerprint(training.runtime_args.keys(), training.deps)
-    preview = {
-        "training": asdict(checkpoint.build_config(training_context)),
-        "export": asdict(training.build_config(export_context)),
-    }
+    if completion == "model":
+        checkpoint = training.deps[0]
+        training_context = StepContext.for_fingerprint(checkpoint.runtime_args.keys(), checkpoint.deps)
+        export_context = StepContext.for_fingerprint(training.runtime_args.keys(), training.deps)
+        preview = {
+            "training": asdict(checkpoint.build_config(training_context)),
+            "export": asdict(training.build_config(export_context)),
+        }
+    else:
+        context = StepContext.for_fingerprint(training.runtime_args.keys(), training.deps)
+        preview = asdict(training.build_config(context))
     click.echo(json.dumps(preview, indent=2))
     if execute:
-        run(evaluation if stage == "evaluation" else training, max_concurrent=2)
+        target = evaluation if stage == "evaluation" else training
+        assert target is not None
+        run(target, max_concurrent=2)
 
 
 if __name__ == "__main__":
