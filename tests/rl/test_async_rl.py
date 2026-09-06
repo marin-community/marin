@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-from dataclasses import asdict
+from dataclasses import asdict, replace
 
 import pyarrow.parquet as pq
 import pytest
@@ -17,6 +17,164 @@ from transformers import PreTrainedTokenizerFast
 
 from experiments.post_training import async_rl, async_snowball
 from experiments.post_training.curriculum_rl import pool
+
+
+@pytest.mark.parametrize(
+    ("recipe", "schedule"),
+    [
+        (async_rl, ["--scale", "screening", "--screening-steps", "100", "--stage", "rl"]),
+        (async_snowball, ["--scale", "qualification", "--study-steps", "100"]),
+    ],
+)
+def test_study_preview_locks_schedule_seed_and_validation_identity(recipe, schedule):
+    args = ["--version", "2026.09.06.10", "--completion", "metrics", *schedule]
+
+    def preview(extra):
+        result = CliRunner().invoke(recipe.main, args + extra)
+        assert result.exit_code == 0, result.output
+        return json.loads(result.output)["request"]
+
+    baseline = preview([])
+    options = ["--eval-interval", "25", "--seed", "29", "--validation-offset", "128", "--validation-rows", "1191"]
+    locked = preview(options)
+    repeated = preview(options)
+    assert locked["run_id"] == repeated["run_id"] != baseline["run_id"]
+    assert locked["validation_data"] == repeated["validation_data"] != baseline["validation_data"]
+    assert locked["seed"] == 29
+    config = yaml.safe_load(locked["config_yaml"])
+    assert config["trainer"]["max_steps"] == 100
+    assert config["trainer"]["eval_interval"] == 25
+    assert config["trainer"]["eval_before_train"]
+    # Evaluation batches are independent of the selected set size; the final
+    # short batch must remain eligible in the runtime (drop_last=False).
+    assert config["trainer"]["eval_batch_size"] == 128
+    for change in [["--seed", "43"], ["--eval-interval", "20"], ["--validation-rows", "1000"]]:
+        assert preview(options + change)["run_id"] != locked["run_id"]
+
+
+@pytest.mark.parametrize("recipe", [async_rl, async_snowball])
+@pytest.mark.parametrize("offset,rows", [(0, 1191), (127, 3), (128, 1192), (1319, 1)])
+def test_study_rejects_overlapping_or_out_of_bounds_windows_before_submission(monkeypatch, recipe, offset, rows):
+    submitted = []
+    monkeypatch.setattr(recipe, "run", lambda step, **_kwargs: submitted.append(step))
+    monkeypatch.setattr(recipe, "validate_regional_storage", lambda *_args: None)
+    args = [
+        "--version",
+        "2026.09.06.10",
+        "--completion",
+        "metrics",
+        "--validation-offset",
+        str(offset),
+        "--validation-rows",
+        str(rows),
+        "--run",
+    ]
+    if recipe is async_rl:
+        args += ["--stage", "rl"]
+    result = CliRunner().invoke(recipe.main, args)
+    assert isinstance(result.exception, ValueError)
+    assert "test[128:1319]" in str(result.exception)
+    assert submitted == []
+
+
+@pytest.mark.parametrize("recipe", [async_rl, async_snowball])
+@pytest.mark.parametrize("interval", [0, 7, 101])
+def test_study_requires_a_complete_declared_evaluation_schedule(recipe, interval):
+    if recipe is async_rl:
+        with pytest.raises(ValueError, match="eval_interval"):
+            recipe.training_config(
+                recipe.Runner.ASYNC,
+                recipe.Scale.SCREENING,
+                spans=True,
+                staleness=1,
+                screening_steps=100,
+                eval_interval=interval,
+            )
+    else:
+        with pytest.raises(ValueError, match="eval_interval"):
+            recipe.training_config(recipe.Scale.QUALIFICATION, study_steps=100, eval_interval=interval)
+
+
+def test_explicit_eval_cadence_preserves_comparison_startup_contract():
+    baseline = qwen_metrics_request(scale=async_rl.Scale.COMPARISON)
+    variant = qwen_metrics_request(scale=async_rl.Scale.COMPARISON, eval_interval=10)
+    before, after = [yaml.safe_load(request.config_yaml) for request in (baseline, variant)]
+    assert before["trainer"]["eval_interval"] == 20
+    assert after["trainer"]["eval_interval"] == 10
+    assert not after["trainer"]["eval_before_train"]
+    assert before["trainer"]["max_steps"] == after["trainer"]["max_steps"] == 20
+    assert baseline.run_id != variant.run_id
+
+
+@pytest.mark.parametrize("scale", [async_snowball.Scale.GATE, async_snowball.Scale.CADENCE_GATE])
+def test_snowball_study_cannot_silently_repurpose_correctness_gate(scale):
+    with pytest.raises(ValueError, match="qualification"):
+        async_snowball.training_config(scale, study_steps=100)
+
+
+@pytest.mark.parametrize("recipe", [async_rl, async_snowball])
+@pytest.mark.parametrize("oversized", [False, True])
+def test_locked_window_preserves_source_indices_and_rejects_partial_filtering(tmp_path, monkeypatch, recipe, oversized):
+    tokenizer_backend = Tokenizer(WordLevel({"[UNK]": 0}, unk_token="[UNK]"))
+    tokenizer_backend.pre_tokenizer = Whitespace()
+    tokenizer = PreTrainedTokenizerFast(tokenizer_object=tokenizer_backend, unk_token="[UNK]")
+    tokenizer.chat_template = (
+        "{% for message in messages %}{{ message['content'] }}\n{% endfor %}"
+        "{% if add_generation_prompt %}{{ '<|start_think|>\n' }}{% endif %}"
+    )
+    model_path = tmp_path / "model"
+    tokenizer.save_pretrained(model_path)
+    original_load = pool.AutoTokenizer.from_pretrained
+    monkeypatch.setattr(pool.AutoTokenizer, "from_pretrained", lambda *_args, **kwargs: original_load(model_path))
+
+    def dataset_from_hub(_name, _subset, *, split, revision):
+        records = [
+            {"question": f"question {i}", "answer": "Work. #### 2"} for i in range(1024 if split == "train" else 131)
+        ]
+        if oversized and split == "test":
+            records[129]["question"] = "word " * 1100
+        return Dataset.from_list(records)
+
+    monkeypatch.setattr(pool, "load_dataset", dataset_from_hub)
+    options = dict(version="2026.09.06.10", completion="metrics", validation_offset=128, validation_rows=3)
+    if recipe is async_rl:
+        training, _ = recipe.build_experiment(
+            **options, cluster="cw-us-east-02a", runner=recipe.Runner.ASYNC, scale=recipe.Scale.SCREENING
+        )
+        writer = recipe.write_gsm8k_window
+    else:
+        training = recipe.build_experiment(**options, scale=recipe.Scale.QUALIFICATION, timeout_seconds=3600)
+        writer = recipe.write_snowball_window
+    data = next(dep for dep in training.deps if "/documents/" in dep.name)
+    manifests = []
+    for suffix in ("first", "repeat"):
+        output = tmp_path / suffix
+        output.mkdir()
+        context = replace(StepContext.for_fingerprint(data.runtime_args, data.deps), output_path=str(output))
+        config = data.build_config(context)
+        if recipe is async_snowball:
+            # Substitute only the external model artifact with a real local tokenizer.
+            config = replace(config, subset=replace(config.subset, model_path=str(model_path)))
+        if oversized:
+            with pytest.raises(ValueError, match=r"truncated|prompt exceeds"):
+                writer(config)
+            assert not (output / "selection.json").exists()
+            return
+        writer(config)
+        manifest = json.loads((output / "selection.json").read_text())
+        rows = pq.read_table(output / "validation.parquet").to_pylist()
+        assert [row["extra_info"]["index"] for row in rows] == [128, 129, 130]
+        assert manifest["rows"]["test"] == ["test/128", "test/129", "test/130"]
+        assert manifest["validation_window"] == {
+            "purpose": "locked_holdout",
+            "split": "test",
+            "offset": 128,
+            "count": 3,
+            "excluded_development_rows": [0, 128],
+        }
+        assert not set(manifest["rows"]["test"]) & {f"test/{i}" for i in range(128)}
+        manifests.append(manifest)
+    assert manifests[0] == manifests[1]
 
 
 @pytest.mark.parametrize("scale", list(async_rl.Scale))

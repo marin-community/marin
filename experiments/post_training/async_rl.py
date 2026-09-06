@@ -77,6 +77,7 @@ DATA_REVISION = "e53f048856ff4f594e959d75785d2c2d37b678ee"
 SEED = 17
 TRAIN_ROWS = 1024
 VALIDATION_ROWS = 128
+GSM8K_TEST_ROWS = 1319
 POLICY_GPUS = 8
 ROLE_PLAN = replace(SMOKE.role_plan, policy_mini_batch_size=64)
 H100_CLUSTERS = ("cw-rno2a", "cw-us-east-02a")
@@ -131,7 +132,35 @@ class Gsm8kSubsetConfig:
     answer_instruction: str = field(init=False, default=GSM8K_INSTRUCTION)
 
 
-def write_gsm8k_subset(config: Gsm8kSubsetConfig) -> None:
+@dataclass(frozen=True)
+class Gsm8kWindowConfig:
+    subset: Gsm8kSubsetConfig
+    validation_offset: int
+
+
+def validate_validation_window(offset: int, rows: int) -> None:
+    """Accept the historical development set or a disjoint pinned test window."""
+    if type(offset) is not int or type(rows) is not int or rows <= 0 or offset < 0:
+        raise ValueError("Validation offset must be nonnegative and row count positive integers")
+    if (offset, rows) == (0, VALIDATION_ROWS):
+        return
+    if offset < VALIDATION_ROWS or offset + rows > GSM8K_TEST_ROWS:
+        raise ValueError("Locked validation must exclude test[0:128] and fit within test[128:1319]")
+
+
+def validate_eval_interval(interval: int | None, steps: int, *, enabled: bool) -> None:
+    if interval is not None and (type(interval) is not int or interval <= 0 or not enabled or steps % interval != 0):
+        raise ValueError(
+            "Explicit eval_interval must be positive, divide the update count, and use an evaluation schedule"
+        )
+
+
+def write_gsm8k_window(config: Gsm8kWindowConfig) -> None:
+    validate_validation_window(config.validation_offset, config.subset.validation_rows)
+    write_gsm8k_subset(config.subset, validation_offset=config.validation_offset)
+
+
+def write_gsm8k_subset(config: Gsm8kSubsetConfig, *, validation_offset: int = 0) -> None:
     """Write deterministic, disjoint train and validation data plus selected row IDs.
 
     Both Parquet splits retain the curriculum prompt and verifier contracts. The
@@ -144,15 +173,27 @@ def write_gsm8k_subset(config: Gsm8kSubsetConfig) -> None:
         ("train", config.train_rows, TRAIN_FILENAME),
         ("test", config.validation_rows, VALIDATION_FILENAME),
     ):
+        offset = validation_offset if split == "test" else 0
+        selected = _gsm8k_records(split, offset + count, revision=config.dataset_revision)[offset:]
         records = _drop_over_length_records(
-            _gsm8k_records(split, count, revision=config.dataset_revision),
+            selected,
             tokenizer_revision=config.tokenizer_revision,
         )
-        if len(records) < ROLE_PLAN.train_batch_size:
+        if offset and len(records) != count:
+            raise ValueError("Locked validation window cannot be truncated by prompt filtering")
+        if (split == "train" or not offset) and len(records) < ROLE_PLAN.train_batch_size:
             raise ValueError(f"GSM8K {split} has fewer than one batch after prompt filtering")
         write_parquet_file(records, prefix_join(config.output_path, filename))
         row_ids[split] = [f"{split}/{cast(dict, record['extra_info'])['index']}" for record in records]
     manifest["rows"] = row_ids
+    if validation_offset:
+        manifest["validation_window"] = {
+            "purpose": "locked_holdout",
+            "split": "test",
+            "offset": validation_offset,
+            "count": config.validation_rows,
+            "excluded_development_rows": [0, VALIDATION_ROWS],
+        }
     StoragePath(prefix_join(config.output_path, "selection.json")).write_text(json.dumps(manifest, sort_keys=True))
 
 
@@ -170,6 +211,7 @@ def training_config(
     eval_response_tokens: int | None = None,
     context_tokens: int | None = None,
     screening_steps: int | None = None,
+    eval_interval: int | None = None,
     initial_eval_repeat_count: int = 1,
     weight_change_probe: bool = False,
 ) -> str:
@@ -181,6 +223,9 @@ def training_config(
         schedule = replace(
             schedule, max_steps=screening_steps, checkpoint_interval=screening_steps, eval_interval=screening_steps
         )
+    validate_eval_interval(eval_interval, schedule.max_steps, enabled=schedule.eval_interval > 0)
+    if eval_interval is not None:
+        schedule = replace(schedule, eval_interval=eval_interval)
     if weight_sync_interval < 1 or staleness < 0 or weight_sync_interval > staleness + 1:
         raise ValueError("Weight sync interval must be positive and at most max_staleness_steps + 1")
     if runner is Runner.SYNC and weight_sync_interval != 1:
@@ -335,6 +380,9 @@ def build_experiment(
     eval_response_tokens: int | None = None,
     context_tokens: int | None = None,
     screening_steps: int | None = None,
+    eval_interval: int | None = None,
+    validation_offset: int = 0,
+    validation_rows: int = VALIDATION_ROWS,
     initial_eval_repeat_count: int = 1,
     weight_change_probe: bool = False,
 ) -> tuple[ArtifactStep[SkyRLModel] | ArtifactStep[SkyRLTrainingResult], ArtifactStep[EvaluationResult] | None]:
@@ -350,6 +398,7 @@ def build_experiment(
         raise ValueError(f"Unknown completion mode: {completion}")
     if not 0 <= seed < 2**32:
         raise ValueError("Seed must be between 0 and 2**32 - 1")
+    validate_validation_window(validation_offset, validation_rows)
     config = training_config(
         runner,
         scale,
@@ -363,6 +412,7 @@ def build_experiment(
         eval_response_tokens=eval_response_tokens,
         context_tokens=context_tokens,
         screening_steps=screening_steps,
+        eval_interval=eval_interval,
         initial_eval_repeat_count=initial_eval_repeat_count,
         weight_change_probe=weight_change_probe,
     )
@@ -381,11 +431,22 @@ def build_experiment(
         build_config=lambda ctx: HfSnapshotConfig(output_path=ctx.output_path, revision=MODEL_REVISION),
     )
     data = ArtifactStep(
-        name=user_owned_name("documents/async-rl-gsm8k"),
+        name=user_owned_name(
+            "documents/async-rl-gsm8k" + (f"-test{validation_offset}-{validation_rows}" if validation_offset else "")
+        ),
         version=version,
         artifact_type=Artifact,
-        run=remote(write_gsm8k_subset, resources=cpu),
-        build_config=lambda ctx: Gsm8kSubsetConfig(output_path=ctx.output_path, train_rows=SCHEDULES[scale].train_rows),
+        run=remote(write_gsm8k_window if validation_offset else write_gsm8k_subset, resources=cpu),
+        build_config=lambda ctx: (
+            Gsm8kWindowConfig(
+                Gsm8kSubsetConfig(
+                    ctx.output_path, train_rows=SCHEDULES[scale].train_rows, validation_rows=validation_rows
+                ),
+                validation_offset,
+            )
+            if validation_offset
+            else Gsm8kSubsetConfig(ctx.output_path, train_rows=SCHEDULES[scale].train_rows)
+        ),
     )
     identity = fingerprint_hash(
         canonical_json(
@@ -488,6 +549,9 @@ def build_experiment(
 )
 @click.option("--context-tokens", type=click.IntRange(min=1), help="Engine context window; defaults to 2048.")
 @click.option("--screening-steps", type=click.IntRange(min=1), help="Screening-only update count; defaults to 25.")
+@click.option("--eval-interval", type=click.IntRange(min=1), help="Evaluation cadence; must divide the update count.")
+@click.option("--validation-offset", type=click.IntRange(min=0), default=0, show_default=True)
+@click.option("--validation-rows", type=click.IntRange(min=1), default=VALIDATION_ROWS, show_default=True)
 @click.option("--timeout-seconds", type=click.IntRange(min=1), default=1800, show_default=True)
 @click.option("--run/--dry-run", "execute", default=False, show_default=True)
 def main(
@@ -508,6 +572,9 @@ def main(
     eval_response_tokens: int | None,
     context_tokens: int | None,
     screening_steps: int | None,
+    eval_interval: int | None,
+    validation_offset: int,
+    validation_rows: int,
     initial_eval_repeat_count: int,
     weight_change_probe: bool,
     timeout_seconds: int,
@@ -533,6 +600,9 @@ def main(
         eval_response_tokens=eval_response_tokens,
         context_tokens=context_tokens,
         screening_steps=screening_steps,
+        eval_interval=eval_interval,
+        validation_offset=validation_offset,
+        validation_rows=validation_rows,
         initial_eval_repeat_count=initial_eval_repeat_count,
         weight_change_probe=weight_change_probe,
     )

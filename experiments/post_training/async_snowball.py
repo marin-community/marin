@@ -62,9 +62,12 @@ from zephyr.writers import write_parquet_file
 from experiments.post_training.async_rl import (
     DATA_REVISION,
     SEED,
+    VALIDATION_ROWS,
     Runner,
     apply_observation_options,
+    validate_eval_interval,
     validate_regional_storage,
+    validate_validation_window,
 )
 from experiments.post_training.curriculum_rl.launch import (
     SNOWBALL_MODEL,
@@ -103,7 +106,18 @@ class SnowballDataConfig:
     answer_instruction: str = field(init=False, default=GSM8K_INSTRUCTION)
 
 
-def write_snowball_gsm8k(config: SnowballDataConfig) -> None:
+@dataclass(frozen=True)
+class SnowballWindowConfig:
+    subset: SnowballDataConfig
+    validation_offset: int
+
+
+def write_snowball_window(config: SnowballWindowConfig) -> None:
+    validate_validation_window(config.validation_offset, config.subset.validation_rows)
+    write_snowball_gsm8k(config.subset, validation_offset=config.validation_offset)
+
+
+def write_snowball_gsm8k(config: SnowballDataConfig, *, validation_offset: int = 0) -> None:
     """Validate all selected prompts with the actual export tokenizer and template.
 
     Only tokenizer metadata is downloaded. Keep hashes and prompt-length bounds
@@ -122,7 +136,10 @@ def write_snowball_gsm8k(config: SnowballDataConfig) -> None:
             ("train", config.train_rows, TRAIN_FILENAME),
             ("test", config.validation_rows, VALIDATION_FILENAME),
         ):
-            records = _gsm8k_records(split, count, revision=config.dataset_revision)
+            offset = validation_offset if split == "test" else 0
+            records = _gsm8k_records(split, offset + count, revision=config.dataset_revision)[offset:]
+            if offset and len(records) != count:
+                raise ValueError("Locked validation window cannot be truncated")
             lengths = []
             for record in records:
                 rendered = tokenizer.apply_chat_template(record["prompt"], tokenize=False, add_generation_prompt=True)
@@ -144,6 +161,14 @@ def write_snowball_gsm8k(config: SnowballDataConfig) -> None:
         "tokenizer_sha256": hashes,
         "prompt_lengths": length_bounds,
     }
+    if validation_offset:
+        manifest["validation_window"] = {
+            "purpose": "locked_holdout",
+            "split": "test",
+            "offset": validation_offset,
+            "count": config.validation_rows,
+            "excluded_development_rows": [0, VALIDATION_ROWS],
+        }
     StoragePath(prefix_join(config.output_path, "selection.json")).write_text(json.dumps(manifest, sort_keys=True))
 
 
@@ -159,11 +184,18 @@ def training_config(
     max_staleness_steps: int = 1,
     initial_eval_repeat_count: int = 1,
     weight_change_probe: bool = False,
+    study_steps: int | None = None,
+    eval_interval: int | None = None,
 ) -> str:
     gate = scale is Scale.GATE
     if inference_replicas < 1:
         raise ValueError("Inference replica count must be positive")
     steps = {Scale.GATE: 2, Scale.CADENCE_GATE: 5, Scale.QUALIFICATION: 25}[scale]
+    if study_steps is not None:
+        if scale is not Scale.QUALIFICATION or type(study_steps) is not int or study_steps <= 0:
+            raise ValueError("study_steps must be positive and is only supported by the qualification scale")
+        steps = study_steps
+    validate_eval_interval(eval_interval, steps, enabled=not gate)
     if weight_sync_interval < 1 or max_staleness_steps < 0 or weight_sync_interval > max_staleness_steps + 1:
         raise ValueError("Weight sync interval must be positive and at most max_staleness_steps + 1")
     if runner is Runner.SYNC and weight_sync_interval != 1:
@@ -180,7 +212,7 @@ def training_config(
         role_plan=replace(ROLE_PLAN, num_inference_engines=inference_replicas),
         max_steps=steps,
         ckpt_interval=steps,
-        eval_interval=-1 if gate else steps,
+        eval_interval=eval_interval if eval_interval is not None else (-1 if gate else steps),
         request_window_tokens=context_tokens,
         max_new_tokens=response_tokens,
         micro_forward_batch_size_per_gpu=1,
@@ -268,19 +300,38 @@ def build_experiment(
     max_staleness_steps: int = 1,
     initial_eval_repeat_count: int = 1,
     weight_change_probe: bool = False,
+    study_steps: int | None = None,
+    eval_interval: int | None = None,
+    seed: int = SEED,
+    validation_offset: int = 0,
+    validation_rows: int = VALIDATION_ROWS,
 ) -> ArtifactStep[SkyRLModel] | ArtifactStep[SkyRLCheckpoint] | ArtifactStep[SkyRLTrainingResult]:
     """Build Snowball training with the requested terminal artifact."""
     validate_version(version)
     if is_mutable_version(version) or timeout_seconds <= 0:
         raise ValueError("Use an immutable version and positive training deadline")
+    if type(seed) is not int or not 0 <= seed < 2**32:
+        raise ValueError("Seed must be between 0 and 2**32 - 1")
+    validate_validation_window(validation_offset, validation_rows)
     data = ArtifactStep(
-        name=user_owned_name("documents/async-rl-snowball-gsm8k"),
+        name=user_owned_name(
+            "documents/async-rl-snowball-gsm8k"
+            + (f"-test{validation_offset}-{validation_rows}" if validation_offset else "")
+        ),
         version=version,
         artifact_type=Artifact,
         deps=(SNOWBALL_MODEL,),
-        run=remote(write_snowball_gsm8k, resources=ResourceConfig.with_cpu(cpu=4, ram="16g", disk="32g")),
-        build_config=lambda ctx: SnowballDataConfig(
-            output_path=ctx.output_path, model_path=ctx.artifact_path(SNOWBALL_MODEL)
+        run=remote(
+            write_snowball_window if validation_offset else write_snowball_gsm8k,
+            resources=ResourceConfig.with_cpu(cpu=4, ram="16g", disk="32g"),
+        ),
+        build_config=lambda ctx: (
+            SnowballWindowConfig(
+                SnowballDataConfig(ctx.output_path, ctx.artifact_path(SNOWBALL_MODEL), validation_rows=validation_rows),
+                validation_offset,
+            )
+            if validation_offset
+            else SnowballDataConfig(output_path=ctx.output_path, model_path=ctx.artifact_path(SNOWBALL_MODEL))
         ),
     )
     config = training_config(
@@ -294,6 +345,8 @@ def build_experiment(
         max_staleness_steps=max_staleness_steps,
         initial_eval_repeat_count=initial_eval_repeat_count,
         weight_change_probe=weight_change_probe,
+        study_steps=study_steps,
+        eval_interval=eval_interval,
     )
     role_plan = replace(ROLE_PLAN, num_inference_engines=inference_replicas)
     topology = SkyRLTopology(role_plan.policy_num_nodes + inference_replicas, 8, "H100", role_plan)
@@ -305,7 +358,7 @@ def build_experiment(
                 "tokenizer_revision": TOKENIZER_REVISION,
                 "data": data.fingerprint(),
                 "topology": topology,
-                "seed": SEED,
+                "seed": seed,
             }
         )
     )
@@ -319,7 +372,7 @@ def build_experiment(
         validation_data=(ArtifactDataSource(data, relative_path=VALIDATION_FILENAME),),
         topology=topology,
         retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
-        seed=SEED,
+        seed=seed,
         overrides=("++trainer.hf_hub_repo_id=null",),
     )
     execution = IrisSkyRLExecution(
@@ -369,6 +422,11 @@ def build_experiment(
 )
 @click.option("--weight-sync-interval", type=click.IntRange(min=1), default=1, show_default=True)
 @click.option("--max-staleness-steps", type=click.IntRange(min=0), default=1, show_default=True)
+@click.option("--study-steps", type=click.IntRange(min=1), help="Qualification-only update count; defaults to 25.")
+@click.option("--eval-interval", type=click.IntRange(min=1), help="Evaluation cadence; must divide the update count.")
+@click.option("--seed", type=click.IntRange(min=0, max=2**32 - 1), default=SEED, show_default=True)
+@click.option("--validation-offset", type=click.IntRange(min=0), default=0, show_default=True)
+@click.option("--validation-rows", type=click.IntRange(min=1), default=VALIDATION_ROWS, show_default=True)
 @click.option("--run/--dry-run", "execute", default=False, show_default=True)
 def main(
     version: str,
@@ -384,6 +442,11 @@ def main(
     max_staleness_steps: int,
     initial_eval_repeat_count: int,
     weight_change_probe: bool,
+    study_steps: int | None,
+    eval_interval: int | None,
+    seed: int,
+    validation_offset: int,
+    validation_rows: int,
     execute: bool,
 ) -> None:
     training = build_experiment(
@@ -400,6 +463,11 @@ def main(
         max_staleness_steps=max_staleness_steps,
         initial_eval_repeat_count=initial_eval_repeat_count,
         weight_change_probe=weight_change_probe,
+        study_steps=study_steps,
+        eval_interval=eval_interval,
+        seed=seed,
+        validation_offset=validation_offset,
+        validation_rows=validation_rows,
     )
     prefix = marin_prefix()
     if execute:
