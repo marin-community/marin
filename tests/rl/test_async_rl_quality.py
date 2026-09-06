@@ -3,6 +3,7 @@
 
 import collections
 import copy
+import hashlib
 import json
 from pathlib import Path
 
@@ -271,3 +272,69 @@ def test_capture_rejects_a_dump_changed_between_proof_and_quality_passes(quality
     monkeypatch.setattr(capture.audit, "audit_eval_dump", audited_then_changed)
     with pytest.raises(ValueError, match="differs from verified dump"):
         capture.qualify(specification)
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("#### <22.5>", "45/2"),
+        ("#### $ 1,200 $ pets.", "1200"),
+        ("The final answer is **18**.", "18"),
+        (r"The final answer is \(\boxed{18}\). Do not use \boxed{}.", "18"),
+        ("### Final Answer:\nThe count is **18**.\n#### 18", "18"),
+        (r'The final answer is "#### 18". Do not use \boxed{} or additional text.', "18"),
+        (r"\boxed{18}. The \boxed{} is not used as per the instructions.", "18"),
+    ],
+)
+def test_candidate_wrappers_and_explicit_empty_format_instructions(text, expected):
+    result = extract_numeric_answer(text)
+    assert (result.status, result.value) == (AnswerStatus.EXTRACTED, expected)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "The answer is 1000 feet. Wait, this is confusing. The answer is",
+        "#### 18\nActually, the final answer is **",
+        "#### 18\nThe answer is 19 or 20.",
+        "#### 18\n#### <18abc>",
+        "#### 18\n#### $1,23$",
+        r"#### 18\n\boxed{not a number}",
+        r"#### 18\n\boxed{}",
+        "#### 18\n#### <18 or 19>",
+    ],
+)
+def test_new_incomplete_or_substantive_malformed_candidate_cannot_reuse_earlier_answer(text):
+    result = extract_numeric_answer(text)
+    assert result.status != AnswerStatus.EXTRACTED
+    assert result.value is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "#### <18>abc",
+        "#### **18**xyz",
+        r"\boxed{18}+2",
+        "The answer is 18. Wait, this is confusing. Let me think again.",
+        r"#### 18. Do not use \boxed{19oops}.",
+        r"#### 18. The final answer is \(\boxed{19",
+        r"#### 18. \boxed{19",
+        r"\boxed{18}abc",
+        "Final Answer:\nNaN\n#### 18",
+        "#### 18..",
+    ],
+)
+def test_numeric_candidate_does_not_drop_suffixes_or_unresolved_reconsideration(text):
+    assert extract_numeric_answer(text).value is None
+
+
+def test_fresh_capture_excludes_prior_text_in_every_endpoint_without_changing_metrics(quality_capture):
+    specification, fs_path, _ = quality_capture
+    specification["exclude_response_text_sha256"] = [hashlib.sha256(b"#### 18 <|endoftext|>").hexdigest()]
+    result = capture.qualify(specification)
+    assert result["sample_rows"] == 0
+    assert result["sample_candidates_excluded_previous_by_endpoint"] == {"hidden-arm/0": 128, "hidden-arm/100": 128}
+    assert [row["counts"]["raw_correct"] for row in result["runs"]["hidden-arm"]["evaluations"]] == [128, 128]
+    key = json.loads(Path(fs_path(specification["output_prefix"] + "/adjudication-key.json")[1]).read_text())
+    assert key["rows"] == []

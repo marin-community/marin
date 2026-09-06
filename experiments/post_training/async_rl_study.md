@@ -210,7 +210,7 @@ before accessing held-out results.
 ### Supplemental answer extraction qualification
 
 `async_rl_quality.py` implements the candidate numeric-answer contract
-`numeric-answer-candidate-1`. It extracts explicit scalars without receiving the
+`numeric-answer-candidate-2`. It extracts explicit scalars without receiving the
 reference answer and reports missing, malformed, conflicting, ambiguous and
 role-continuation cases separately. Quoted concluding markers and boxed numbers
 are supported. It does not replace the canonical reward or certify semantic
@@ -235,3 +235,7 @@ selection manifest and token hashes. It writes a bounded blinded sample, a
 separate prediction/reference key, and diagnostic aggregates. Review and save
 independent labels before opening the key. Capture success leaves
 `qualification_complete` false; semantic qualification is a separate decision.
+For another qualification round, supply `exclude_response_text_sha256` with
+hashes of all previously adjudicated full assistant texts. Sampling excludes
+those texts across endpoints while aggregate diagnostics still cover every row.
+Keep the previous labels, extractor version and results when revising the contract.

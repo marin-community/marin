@@ -16,6 +16,8 @@ The JSON specification
 contains historical run specs accepted by async_rl_audit, matching prior dump
 proofs, and an output_prefix for bounded adjudication artifacts. Only 128-row
 development evaluations are accepted. No model generation or reward changes.
+An optional exclude_response_text_sha256 list excludes previously adjudicated
+full-turn UTF-8 texts before endpoint-balanced sampling, including duplicates.
 """
 
 import argparse
@@ -35,6 +37,7 @@ from experiments.post_training.async_rl_quality import QUALITY_VERSION, extract_
 MAX_TOKENIZER_BYTES = 25 * 1024 * 1024
 MAX_ADJUDICATION_BYTES = 1024 * 1024
 MAX_ADJUDICATION_ROWS = 48
+MAX_ADJUDICATION_EXCLUSIONS = 6 * 2 * 128
 REGIONAL_PREFIX = "s3://marin-us-east-02a/"
 EOS_MARKERS = {"<|im_end|>", "<|eot_id|>", "<|end_of_text|>", "<|endoftext|>"}
 THINKING_MARKERS = {"<think>", "</think>", "<|start_think|>", "<|end_think|>"}
@@ -159,6 +162,18 @@ def qualify(specification: dict) -> dict:
     prefix = specification["output_prefix"].rstrip("/")
     audit.check(prefix.startswith(REGIONAL_PREFIX), "Unqualified output region")
     audit.check(type(specification["sample_seed"]) is int, "Declare an integer sample seed")
+    excluded_hashes = specification.get("exclude_response_text_sha256", [])
+    audit.check(
+        isinstance(excluded_hashes, list)
+        and len(excluded_hashes) <= MAX_ADJUDICATION_EXCLUSIONS
+        and all(
+            isinstance(value, str) and len(value) == 64 and all(c in "0123456789abcdef" for c in value)
+            for value in excluded_hashes
+        ),
+        "Expected bounded SHA256 response-text exclusions within the development population",
+    )
+    excluded_hashes = set(excluded_hashes)
+    excluded_previous = collections.Counter()
     for name in ("adjudication-blind.json", "adjudication-key.json", "summary.json"):
         fs, path = audit.fs_path(prefix + "/" + name)
         audit.check(not fs.exists(path), "Qualification output already exists; choose a new candidate prefix")
@@ -271,9 +286,16 @@ def qualify(specification: dict) -> dict:
                         )
                         # Stratify by endpoint, extraction status and stop class, but hide
                         # those labels, arm identity, prediction and gold from the reader.
+                        text = assistant_turn_text(decoder, row["prompt_token_ids"], tokens, thinking=thinking)
+                        text_sha = hashlib.sha256(text.encode()).hexdigest()
+                        if text_sha in excluded_hashes:
+                            excluded_previous[f"{run['label']}/{step}"] += 1
+                            continue
                         candidates[(run["label"], step)][(status, stopped)].append(
                             {
-                                "text": assistant_turn_text(decoder, row["prompt_token_ids"], tokens, thinking=thinking),
+                                "text": text,
+                                "response_text_sha256": text_sha,
+                                "response_ids_sha256": row["response_ids_sha256"],
                                 "boundary_resolved": segment is not None,
                                 "label": run["label"],
                                 "step": step,
@@ -306,6 +328,8 @@ def qualify(specification: dict) -> dict:
         "sample_rows": len(blind),
         "output_prefix": prefix,
         "sample_candidates_excluded_for_bytes": excluded_for_bytes,
+        "exclude_response_text_sha256": sorted(excluded_hashes),
+        "sample_candidates_excluded_previous_by_endpoint": dict(excluded_previous),
         "sample_unique_texts": len({row["text"] for row in blind}),
         "scope": "Retrospective development diagnostics; independent blinded adjudication pending",
     }
