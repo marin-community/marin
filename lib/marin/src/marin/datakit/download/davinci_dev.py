@@ -211,9 +211,6 @@ def env_row_to_chat_doc(row: dict) -> list[dict]:
         counters.pipeline.update_counter("davinci_dev/env/chat_incomplete_filtered", 1)
         return []
     success = row.get("success") if "success" in row else None
-    if success is False:
-        counters.pipeline.update_counter("davinci_dev/env/chat_failed_filtered", 1)
-        return []
     try:
         return [chat_document(messages, "GAIR/daVinci-Dev/env-native", success=success)]
     except ReasoningFormatError:
@@ -284,7 +281,7 @@ def davinci_dev_env_native_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/davinci-dev-env-native",
         deps=[dl],
         fn=lambda output_path: transform_env_native_chat(dl.output_path, output_path),
-        hash_attrs={"version": "2026.09.05"},
+        hash_attrs={"version": "2026.09.05.1"},
     )
     return processed, normalize_chat_step(
         name="normalized-chat/davinci-dev-env-native",

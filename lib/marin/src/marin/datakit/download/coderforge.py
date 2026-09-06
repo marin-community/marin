@@ -68,11 +68,7 @@ def row_to_chat_doc(row: dict) -> list[dict]:
     messages = json.loads(messages_raw) if isinstance(messages_raw, str) else messages_raw
     if not messages:
         return []
-    reward = row.get("reward")
-    if reward is not None and reward < 1.0:
-        counters.pipeline.update_counter("coderforge/chat_failed_filtered", 1)
-        return []
-    return [chat_document(messages, HF_DATASET_ID, reward=reward)]
+    return [chat_document(messages, HF_DATASET_ID, reward=row.get("reward"))]
 
 
 def transform(input_path: str, output_path: str) -> None:
@@ -137,6 +133,6 @@ def coderforge_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/coderforge-preview",
         deps=[dl],
         fn=lambda output_path: transform_chat(dl.output_path, output_path),
-        hash_attrs={"version": "2026.09.05.1"},
+        hash_attrs={"version": "2026.09.05.2"},
     )
     return processed, normalize_chat_step(name="normalized-chat/coderforge", download=processed)

@@ -28,7 +28,7 @@ def test_coderforge_keeps_reward_out_of_model_visible_messages() -> None:
     assert document["reward"] == 1.0
 
 
-def test_coderforge_drops_explicitly_failed_trajectory() -> None:
+def test_coderforge_keeps_unsuccessful_trajectory_without_visible_outcome() -> None:
     row = {
         "reward": 0.0,
         "messages": [
@@ -37,10 +37,12 @@ def test_coderforge_drops_explicitly_failed_trajectory() -> None:
         ],
     }
 
-    assert coderforge_row_to_chat_doc(row) == []
+    [document] = coderforge_row_to_chat_doc(row)
+    assert document["messages"] == row["messages"]
+    assert document["reward"] == 0.0
 
 
-def test_agenttrove_drops_explicitly_failed_trajectory() -> None:
+def test_agenttrove_keeps_unsuccessful_trajectory_without_visible_outcome() -> None:
     row = {
         "result": "timeout",
         "conversations": [
@@ -49,7 +51,9 @@ def test_agenttrove_drops_explicitly_failed_trajectory() -> None:
         ],
     }
 
-    assert agenttrove_row_to_chat_doc(row) == []
+    [document] = agenttrove_row_to_chat_doc(row)
+    assert [message["role"] for message in document["messages"]] == ["user", "assistant"]
+    assert document["result"] == "timeout"
 
 
 def test_davinci_drops_terminal_submit_observation() -> None:
@@ -81,6 +85,20 @@ def test_davinci_drops_terminal_submit_observation() -> None:
     assert [message["role"] for message in document["messages"]] == ["user", "assistant"]
     assert document["success"] is True
     assert document["messages"][-1]["tool_calls"][0]["function"]["name"] == "submit"
+
+
+def test_davinci_keeps_unsuccessful_trajectory_without_visible_outcome() -> None:
+    row = {
+        "success": False,
+        "messages": [
+            {"role": "user", "content": "Fix the bug."},
+            {"role": "assistant", "content": "I could not fix it."},
+        ],
+    }
+
+    [document] = davinci_row_to_chat_doc(row)
+    assert document["messages"] == row["messages"]
+    assert document["success"] is False
 
 
 def test_davinci_drops_nonterminal_trailing_observation() -> None:
@@ -154,7 +172,7 @@ def test_openhands_merges_adjacent_user_context() -> None:
     assert document["messages"][0]["content"] == "Fix the bug.\n\nRepository: example/project"
 
 
-def test_openhands_drops_explicitly_failed_trajectory() -> None:
+def test_openhands_keeps_unsuccessful_trajectory_without_visible_outcome() -> None:
     row = {
         "resolved": 0,
         "trajectory": [
@@ -163,10 +181,12 @@ def test_openhands_drops_explicitly_failed_trajectory() -> None:
         ],
     }
 
-    assert openhands_row_to_chat_doc(row) == []
+    [document] = openhands_row_to_chat_doc(row)
+    assert document["messages"] == row["trajectory"]
+    assert document["resolved"] == 0
 
 
-def test_penfever_drops_explicitly_failed_trajectory() -> None:
+def test_penfever_keeps_unsuccessful_trajectory_without_visible_outcome() -> None:
     row = {
         "result": "0",
         "conversations": [
@@ -175,13 +195,20 @@ def test_penfever_drops_explicitly_failed_trajectory() -> None:
         ],
     }
 
-    assert penfever_row_to_chat_doc(PENFEVER_ROLLOUTS[0])(row) == []
+    [document] = penfever_row_to_chat_doc(PENFEVER_ROLLOUTS[0])(row)
+    assert [message["role"] for message in document["messages"]] == ["user", "assistant"]
+    assert document["outcome"] == "This trajectory failed to solve the task."
 
 
-def test_synthetic1_drops_incorrect_solution() -> None:
+def test_synthetic1_keeps_incorrect_solution_without_visible_outcome() -> None:
     row = {"score": 0.2, "prompt": "Solve it.", "llm_response": "A wrong answer."}
 
-    assert synthetic1_row_to_chat_doc(row) == []
+    [document] = synthetic1_row_to_chat_doc(row)
+    assert document["messages"] == [
+        {"role": "user", "content": "Solve it."},
+        {"role": "assistant", "content": "A wrong answer."},
+    ]
+    assert document["score"] == 0.2
 
 
 def test_swe_zero_converts_reasoning_bash_and_observation() -> None:
