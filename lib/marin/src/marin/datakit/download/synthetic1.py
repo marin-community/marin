@@ -15,7 +15,7 @@ from zephyr.readers import load_parquet
 
 from marin.datakit.chat_normalize import normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
-from marin.datakit.download.rollout_transforms import chat_document, strip_think_tags, text_document
+from marin.datakit.download.rollout_transforms import checked_chat_document, strip_think_tags, text_document
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
@@ -63,19 +63,18 @@ def row_to_doc(row: dict) -> list[dict]:
 def row_to_chat_doc(row: dict) -> list[dict]:
     prompt = row.get("prompt", "")
     response = row.get("llm_response", "")
-    if not prompt or not response.strip():
+    if not isinstance(prompt, str) or not isinstance(response, str) or not prompt or not response.strip():
         return []
     tag = score_to_tag(row.get("score"))
-    return [
-        chat_document(
-            [
-                {"role": "system", "content": tag},
-                {"role": "user", "content": prompt},
-                {"role": "assistant", "content": response},
-            ],
-            HF_DATASET_ID,
-        )
-    ]
+    return checked_chat_document(
+        [
+            {"role": "system", "content": tag},
+            {"role": "user", "content": prompt},
+            {"role": "assistant", "content": response},
+        ],
+        HF_DATASET_ID,
+        counter_prefix="synthetic1/chat",
+    )
 
 
 def transform(input_path: str, output_path: str) -> None:
@@ -133,6 +132,6 @@ def synthetic1_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/synthetic-1",
         deps=[dl],
         fn=lambda output_path: transform_chat(dl.output_path, output_path),
-        hash_attrs={"version": "2026.09.04"},
+        hash_attrs={"version": "2026.09.05.2"},
     )
     return processed, normalize_chat_step(name="normalized-chat/synthetic-1", download=processed)

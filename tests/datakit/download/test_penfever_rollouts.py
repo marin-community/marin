@@ -111,28 +111,30 @@ def test_opencode_protocol_matches_parallel_calls_to_separate_observations():
     assert tool["parameters"]["required"] == ["path"]
 
 
-def test_opencode_protocol_drops_ambiguous_parallel_call_observation():
+def test_opencode_protocol_links_bundled_parallel_call_observation_to_each_call():
     transform = row_to_chat_doc(_dataset("qwen35-122b-131k-opencode"))
 
-    assert (
-        transform(
-            {
-                "conversations": [
-                    {"role": "user", "content": "Inspect both files."},
-                    {
-                        "role": "assistant",
-                        "content": (
-                            '<tool_call>{"name":"read","arguments":{"path":"a.py"}}</tool_call>'
-                            '<tool_call>{"name":"read","arguments":{"path":"b.py"}}</tool_call>'
-                        ),
-                    },
-                    {"role": "user", "content": "combined output"},
-                    {"role": "assistant", "content": "Both files are valid."},
-                ]
-            }
-        )
-        == []
+    [document] = transform(
+        {
+            "conversations": [
+                {"role": "user", "content": "Inspect both files."},
+                {
+                    "role": "assistant",
+                    "content": (
+                        '<tool_call>{"name":"read","arguments":{"path":"a.py"}}</tool_call>'
+                        '<tool_call>{"name":"read","arguments":{"path":"b.py"}}</tool_call>'
+                    ),
+                },
+                {"role": "user", "content": "combined output"},
+                {"role": "assistant", "content": "Both files are valid."},
+            ]
+        }
     )
+
+    calls = document["messages"][1]["tool_calls"]
+    observations = document["messages"][2:4]
+    assert [message["tool_call_id"] for message in observations] == [call["id"] for call in calls]
+    assert [message["content"] for message in observations] == ["combined output", "combined output"]
 
 
 def test_opencode_protocol_recovers_prompt_from_instruction():

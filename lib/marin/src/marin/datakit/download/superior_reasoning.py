@@ -15,7 +15,7 @@ from zephyr.readers import load_jsonl
 
 from marin.datakit.chat_normalize import normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
-from marin.datakit.download.rollout_transforms import chat_document, strip_think_tags, text_document
+from marin.datakit.download.rollout_transforms import checked_chat_document, strip_think_tags, text_document
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
@@ -52,7 +52,7 @@ def row_to_chat_doc(row: dict) -> list[dict]:
     if not prompt or not response:
         return []
     messages = [{"role": "user", "content": prompt}, {"role": "assistant", "content": response}]
-    return [chat_document(messages, HF_DATASET_ID)]
+    return checked_chat_document(messages, HF_DATASET_ID, counter_prefix="superior_reasoning/chat")
 
 
 def transform(input_path: str, output_path: str) -> None:
@@ -115,6 +115,6 @@ def superior_reasoning_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/superior-reasoning-sft",
         deps=[download],
         fn=lambda output_path: transform_chat(download.output_path, output_path),
-        hash_attrs={"version": "2026.09.04"},
+        hash_attrs={"version": "2026.09.05.2"},
     )
     return processed, normalize_chat_step(name="normalized-chat/superior-reasoning", download=processed)

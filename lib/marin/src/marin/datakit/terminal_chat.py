@@ -154,11 +154,22 @@ def opencode_protocol_messages(
         content = message.get("content")
         if not isinstance(content, str):
             return None
-        if role == "user":
+        if role in {"tool", "user"}:
             if pending_calls:
-                call_id, tool_name = pending_calls.pop(0)
-                messages.append({"role": "tool", "content": content, "name": tool_name, "tool_call_id": call_id})
+                consecutive_observations = 0
+                for following in conversations[index:]:
+                    if following.get("role") not in {"tool", "user"}:
+                        break
+                    consecutive_observations += 1
+                calls_for_observation = (
+                    pending_calls[:1] if consecutive_observations >= len(pending_calls) else pending_calls[:]
+                )
+                for call_id, tool_name in calls_for_observation:
+                    messages.append({"role": "tool", "content": content, "name": tool_name, "tool_call_id": call_id})
+                del pending_calls[: len(calls_for_observation)]
                 continue
+            if role == "tool":
+                return None
             if not messages and not content.strip() and initial_user_content is not None:
                 content = initial_user_content
             if not content.strip():

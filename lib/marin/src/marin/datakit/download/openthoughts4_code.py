@@ -10,7 +10,7 @@ from zephyr.dataset import Dataset
 from marin.datakit.chat_normalize import normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import (
-    chat_document,
+    checked_chat_document,
     load_parquet_batched,
     render_role_message,
     text_document,
@@ -40,15 +40,14 @@ def row_to_chat_doc(row: dict) -> list[dict]:
     messages = row.get("messages")
     if not isinstance(messages, list) or not messages:
         return []
-    return [
-        chat_document(
-            [_repair_reasoning_delimiters(message) for message in messages],
-            HF_DATASET_ID,
-            prompt_index=row.get("prompt_index"),
-            response_index=row.get("response_index"),
-            source_id=row.get("source_id"),
-        )
-    ]
+    return checked_chat_document(
+        [_repair_reasoning_delimiters(message) for message in messages],
+        HF_DATASET_ID,
+        counter_prefix="openthoughts4_code/chat",
+        prompt_index=row.get("prompt_index"),
+        response_index=row.get("response_index"),
+        source_id=row.get("source_id"),
+    )
 
 
 def row_to_doc(row: dict) -> list[dict]:
@@ -88,7 +87,7 @@ def openthoughts4_code_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed/openthoughts4-code-glm-5.2-n4",
         deps=[download],
         fn=lambda output_path: _transform(download.output_path, output_path, chat=False),
-        hash_attrs={"version": "2026.09.04"},
+        hash_attrs={"version": "2026.09.05.2"},
     )
     return processed, normalize_step(name="normalized/openthoughts4-code-glm-5.2-n4", download=processed)
 
@@ -99,6 +98,6 @@ def openthoughts4_code_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/openthoughts4-code-glm-5.2-n4",
         deps=[download],
         fn=lambda output_path: _transform(download.output_path, output_path, chat=True),
-        hash_attrs={"version": "2026.09.04"},
+        hash_attrs={"version": "2026.09.05.2"},
     )
     return processed, normalize_chat_step(name="normalized-chat/openthoughts4-code-glm-5.2-n4", download=processed)

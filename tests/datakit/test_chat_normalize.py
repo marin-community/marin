@@ -120,6 +120,37 @@ def test_normalize_chat_to_parquet_keeps_varying_tool_schemas_arrow_stable(tmp_p
     }
 
 
+def test_normalize_chat_to_parquet_quarantines_invalid_rows_and_keeps_valid_rows(tmp_path: Path):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    records = [
+        {
+            "messages": [
+                {"role": "user", "content": "Question"},
+                {"role": "assistant", "content": "Answer"},
+            ]
+        },
+        {
+            "messages": [
+                {"role": "user", "content": "Question"},
+                {"role": "assistant", "content": "first"},
+                {"role": "assistant", "content": "second"},
+            ]
+        },
+    ]
+    (input_dir / "data.jsonl").write_text("".join(json.dumps(record) + "\n" for record in records))
+
+    normalized_data = normalize_chat_to_parquet(input_path=str(input_dir), output_path=str(output_dir))
+
+    normalized = [
+        row for path in (output_dir / "outputs" / "main").glob("*.parquet") for row in pq.read_table(path).to_pylist()
+    ]
+    assert len(normalized) == 1
+    assert normalized_data.counters["normalize_chat/records_validated"] == 1
+    assert normalized_data.counters["normalize_chat/records_quarantined"] == 1
+
+
 @pytest.mark.parametrize(
     "messages,error",
     [

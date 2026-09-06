@@ -37,8 +37,7 @@ from marin.datakit.download.rollout_transforms import (
     TRAJECTORY_FAILED_TAG,
     TRAJECTORY_SOLVED_TAG,
     TRAJECTORY_UNVERIFIED_TAG,
-    ReasoningFormatError,
-    chat_document,
+    checked_chat_document,
     load_parquet_batched,
     render_role_message,
     text_document,
@@ -126,19 +125,14 @@ def row_to_chat_doc(row: dict) -> list[dict]:
     tag = result_to_tag(row.get("result"))
     if tag:
         messages.insert(0, {"role": "system", "content": tag})
-    try:
-        return [
-            chat_document(
-                messages,
-                HF_DATASET_ID,
-                teacher=row.get("original_teacher") or "",
-                task_source=row.get("original_source") or "",
-                **metadata,
-            )
-        ]
-    except ReasoningFormatError:
-        counters.pipeline.update_counter("agenttrove/chat_malformed_reasoning_filtered", 1)
-        return []
+    return checked_chat_document(
+        messages,
+        HF_DATASET_ID,
+        counter_prefix="agenttrove/chat",
+        teacher=row.get("original_teacher") or "",
+        task_source=row.get("original_source") or "",
+        **metadata,
+    )
 
 
 def transform(input_path: str, output_path: str) -> None:
@@ -199,6 +193,6 @@ def agenttrove_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/agenttrove",
         deps=[download],
         fn=lambda output_path: transform_chat(download.output_path, output_path),
-        hash_attrs={"version": "2026.09.04.1"},
+        hash_attrs={"version": "2026.09.05.2"},
     )
     return processed, normalize_chat_step(name="normalized-chat/agenttrove", download=processed)

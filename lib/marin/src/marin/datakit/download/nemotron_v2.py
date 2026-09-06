@@ -22,7 +22,7 @@ from zephyr.dataset import Dataset
 
 from marin.datakit.chat_normalize import normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
-from marin.datakit.download.rollout_transforms import chat_document, load_parquet_batched
+from marin.datakit.download.rollout_transforms import checked_chat_document, load_parquet_batched
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
@@ -236,7 +236,11 @@ def _nemotron_sft_row_to_chat(row: dict, subset: str) -> list[dict]:
     if messages is None:
         counters.pipeline.update_counter(f"nemotron_sft/{subset}/unparsed", 1)
         return []
-    return [chat_document(messages, NEMOTRON_V2_DATASETS[NEMOTRON_PRETRAINING_SFT_V1].hf_dataset_id)]
+    return checked_chat_document(
+        messages,
+        NEMOTRON_V2_DATASETS[NEMOTRON_PRETRAINING_SFT_V1].hf_dataset_id,
+        counter_prefix=f"nemotron_sft/{subset}/chat",
+    )
 
 
 def _transform_nemotron_sft_chat(input_path: str, output_path: str, subset: str) -> None:
@@ -318,7 +322,7 @@ def nemotron_sft_chat_normalize_steps() -> dict[str, tuple[StepSpec, ...]]:
             fn=lambda output_path, source_subset=subset, source_dir=subset_dir: _transform_nemotron_sft_chat(
                 prefix_join(download.output_path, source_dir), output_path, source_subset
             ),
-            hash_attrs={"version": "2026.09.04", "subset": subset},
+            hash_attrs={"version": "2026.09.05.2", "subset": subset},
         )
         normalized = normalize_chat_step(
             name=f"normalized-chat/{family}/{subset}",

@@ -59,7 +59,8 @@ def strip_think_tags(text: str) -> str:
 
 def normalize_reasoning_tokens(text: str) -> str:
     """Normalize balanced reasoning tags to the tokenizer's atomic delimiters."""
-    text = text.replace("<think>", "<|start_think|>").replace("</think>", "<|end_think|>")
+    text = re.sub(r"<think>", "<|start_think|>", text, flags=re.IGNORECASE)
+    text = re.sub(r"</think>", "<|end_think|>", text, flags=re.IGNORECASE)
     text = re.sub(r"<\|start_think\|>\s*<\|end_think\|>\s*", "", text)
     depth = 0
     for match in re.finditer(r"<\|(start|end)_think\|>", text):
@@ -71,7 +72,7 @@ def normalize_reasoning_tokens(text: str) -> str:
             raise ReasoningFormatError("Assistant reasoning delimiters must be balanced and cannot nest")
     if depth != 0:
         raise ReasoningFormatError("Assistant reasoning delimiters must be balanced and cannot nest")
-    return text
+    return text.strip()
 
 
 def text_document(text: str, source: str) -> dict:
@@ -237,6 +238,16 @@ def chat_document(messages: list[dict], source: str, **metadata: object) -> dict
         "source": source,
         **metadata,
     }
+
+
+def checked_chat_document(messages: list[dict], source: str, *, counter_prefix: str, **metadata: object) -> list[dict]:
+    """Build a chat document, quarantining rows with malformed source data."""
+    try:
+        return [chat_document(messages, source, **metadata)]
+    except (UnicodeError, ValueError) as error:
+        counters.pipeline.update_counter(f"{counter_prefix}/quarantined", 1)
+        counters.pipeline.update_counter(f"{counter_prefix}/quarantined/{type(error).__name__}", 1)
+        return []
 
 
 def render_role_message(msg: dict) -> str:

@@ -34,7 +34,7 @@ from marin.datakit.normalize import (
 )
 from marin.execution.step_spec import StepSpec
 
-CHAT_NORMALIZE_VERSION = "2026.09.05.1"
+CHAT_NORMALIZE_VERSION = "2026.09.05.2"
 _INLINE_TOOL_SYNTAX = re.compile(r"<tool_call(?::[^>]*)?>", re.IGNORECASE)
 _RAW_REASONING_TOKEN = re.compile(r"</?think>", re.IGNORECASE)
 _SAFE_TOOL_IDENTIFIER = re.compile(r"[A-Za-z0-9_.:-]+")
@@ -235,10 +235,15 @@ def _build_chat_pipeline(
     id_field: str,
     dedup_mode: DedupMode,
 ) -> Dataset:
-    def normalize_record(record: dict[str, Any]) -> dict[str, Any]:
-        normalized = _normalize_chat_record(record, messages_field, id_field)
+    def normalize_record(record: dict[str, Any]) -> list[dict[str, Any]]:
+        try:
+            normalized = _normalize_chat_record(record, messages_field, id_field)
+        except (UnicodeError, ValueError) as error:
+            counters.pipeline.update_counter("normalize_chat/records_quarantined", 1)
+            counters.pipeline.update_counter(f"normalize_chat/quarantined/{type(error).__name__}", 1)
+            return []
         counters.pipeline.update_counter("normalize_chat/records_validated", 1)
-        return normalized
+        return [normalized]
 
     def dedup(_key: str, items: Iterator[dict[str, Any]]) -> Iterator[MainOutput | ExactDupSideOutput]:
         previous_id: str | None = None
@@ -264,7 +269,7 @@ def _build_chat_pipeline(
         Dataset.from_list(files)
         .flat_map(load_file)
         .filter(has_messages)
-        .map(normalize_record)
+        .flat_map(normalize_record)
         .group_by(
             key=lambda record: record["id"],
             reducer=reducers[dedup_mode],

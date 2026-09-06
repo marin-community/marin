@@ -115,6 +115,12 @@ def test_canonical_chat_messages_uses_atomic_reasoning_tokens_for_assistant():
     assert messages[0]["content"] == "<|start_think|>plan<|end_think|>answer"
 
 
+def test_canonical_chat_messages_normalizes_case_and_outer_whitespace_in_reasoning():
+    messages = canonical_chat_messages([{"role": "assistant", "content": "  \n<THINK>plan</Think>answer\n  "}])
+
+    assert messages[0]["content"] == "<|start_think|>plan<|end_think|>answer"
+
+
 def test_canonical_chat_messages_rejects_unbalanced_reasoning_tokens():
     with pytest.raises(ValueError, match="reasoning delimiters must be balanced"):
         canonical_chat_messages([{"role": "assistant", "content": "<think>unfinished"}])
