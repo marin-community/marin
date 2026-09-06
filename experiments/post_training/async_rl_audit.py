@@ -28,6 +28,8 @@ differing_config_paths (exact cadence/age/loss leaves), bootstrap_seed and
 bootstrap_repetitions (100-10000). It requires clean audited runs, equal
 provenance and ordered evaluation questions, and shared epoch-seeded shuffling.
 Intervals resample questions jointly across fixed observed training seeds.
+Optional include_completed_stop_score=true adds a secondary paired score using
+accepted stop labels, over all responses; full stop coverage is required.
 Alternatively set ASYNC_RL_AUDIT_SPEC to the JSON specification.
 No training runtime, credentials, prompt text, or token arrays are emitted.
 """
@@ -777,6 +779,8 @@ def paired_evaluation_study(study: JSONDict, results: JSONDict, snapshots: JSOND
     reuses the same question indices for every arm, endpoint and training seed;
     training seeds are never treated as additional independent questions.
     """
+    include_completed = study.get("include_completed_stop_score", False)
+    check(type(include_completed) is bool, "include_completed_stop_score must be boolean")
     pairs = study["pairs"]
     check(0 < len(pairs) <= 4, "Paired study requires 1-4 seed pairs (at most eight runs)")
     seeds = [pair["seed"] for pair in pairs]
@@ -858,6 +862,11 @@ def paired_evaluation_study(study: JSONDict, results: JSONDict, snapshots: JSOND
             )
             for step in (initial, final):
                 records = snapshot["evaluations"].get(step, [])
+                if include_completed:
+                    check(
+                        all(row[4] is not None and row[4] != "" for row in records),
+                        "Completed-stop secondary score requires full evaluation stop coverage",
+                    )
                 identity, means = question_scores(records)
                 order = [[row[0], row[1]] for row in records]
                 if question_identity is None:
@@ -920,7 +929,7 @@ def paired_evaluation_study(study: JSONDict, results: JSONDict, snapshots: JSOND
     if all(window is not None and window.get("source_indices_verified") for window in locked_windows):
         if all(window == locked_windows[0] for window in locked_windows):
             evaluation_scope = {"classification": "verified_locked_holdout", "validation": locked_windows[0]}
-    return {
+    result = {
         "label": study["label"],
         "evaluation_scope": evaluation_scope,
         "seed_results": seed_results,
@@ -958,6 +967,38 @@ def paired_evaluation_study(study: JSONDict, results: JSONDict, snapshots: JSOND
             ),
         },
     }
+
+    if include_completed:
+        # Reuse the same statistical path and RNG seed with score-only copies.
+        # Retaining every response preserves its question's original denominator.
+        accepted = {"complete", "end_turn", "eos", "stop"}
+        completed_snapshots = {
+            label: {
+                **snapshots[label],
+                "evaluations": {
+                    step: [
+                        [*row[:3], row[3] if row[4] in accepted else 0.0, *row[4:]]
+                        for row in snapshots[label]["evaluations"][step]
+                    ]
+                    for step in (initial, final)
+                },
+            }
+            for label in labels
+        }
+        secondary = paired_evaluation_study(
+            {**study, "include_completed_stop_score": False}, results, completed_snapshots
+        )
+        secondary["metric"] = "completed_stop_score"
+        secondary["reward_reduction"] = (
+            "Optimization score times accepted-stop indicator, averaged over ALL responses within each question; "
+            "then equal-weight questions and observed training seeds. Candidate minus reference."
+        )
+        secondary["interpretation"] = (
+            "Secondary stop-label score, not conditional accuracy or a certificate of semantic final-answer "
+            "correctness, natural model EOS, or balanced thinking. Accepted labels: complete/end_turn/eos/stop."
+        )
+        result["secondary_completed_stop_score"] = secondary
+    return result
 
 
 def audit_run(

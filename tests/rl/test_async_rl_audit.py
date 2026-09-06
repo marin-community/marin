@@ -985,5 +985,64 @@ def test_paired_study_rejects_unmatched_or_unaudited_controls(paired_study_input
         audit.paired_evaluation_study(study, results, snapshots)
 
 
+def test_completed_stop_secondary_opposite_ranking_preserves_primary_and_all_response_denominator(paired_study_inputs):
+    study, results, snapshots = paired_study_inputs
+    for pair in study["pairs"]:
+        for arm in ("reference", "candidate"):
+            for step, rows in snapshots[pair[arm]]["evaluations"].items():
+                for index, row in enumerate(rows):
+                    row[3] = 0.25 if step == 0 else (0.5 if arm == "reference" else 0.75)
+                    row[4] = "stop" if step == 0 or arm == "reference" or index % 2 == 0 else "length"
+    original = copy.deepcopy(snapshots)
+    primary = audit.paired_evaluation_study(study, results, snapshots)
+    result = audit.paired_evaluation_study(study | {"include_completed_stop_score": True}, results, snapshots)
+    secondary = result.pop("secondary_completed_stop_score")
+    assert json.dumps(result, sort_keys=True) == json.dumps(primary, sort_keys=True)
+    assert json.dumps(snapshots, sort_keys=True) == json.dumps(original, sort_keys=True)
+    assert snapshots == original  # Six-column records and their raw scores are never transformed in place.
+    assert primary["mean_final_reward_delta"] == 0.25
+    # Candidate: one 0.75 completed response + one length-stopped response per UID, divided by TWO.
+    # Reference: both 0.5 responses completed. Thus completed score reverses the raw-score ranking.
+    assert secondary["mean_final_reward_delta"] == -0.125
+    assert secondary["mean_initial_to_final_change_delta"] == -0.125
+    assert secondary["questions"] == 2 and secondary["training_seeds"] == [17, 29]
+    assert secondary["bootstrap"]["percentile_intervals"] == {
+        "final_reward_delta": [-0.125, -0.125],
+        "initial_to_final_change_delta": [-0.125, -0.125],
+    }
+    assert [row["candidate_final_reward"] for row in secondary["seed_results"]] == [0.375, 0.375]
+    assert secondary["metric"] == "completed_stop_score"
+    assert "ALL responses" in secondary["reward_reduction"]
+    assert "not conditional accuracy" in secondary["interpretation"]
+    for snapshot in snapshots.values():
+        for step, rows in snapshot["evaluations"].items():
+            snapshot["evaluations"][step] = [row for row in rows for _ in range(3)]
+    repeated = audit.paired_evaluation_study(study | {"include_completed_stop_score": True}, results, snapshots)
+    assert repeated["secondary_completed_stop_score"] == secondary
+
+
+@pytest.mark.parametrize("reason", [None, ""])
+@pytest.mark.parametrize("step", [0, 2])
+def test_completed_stop_secondary_requires_coverage_at_both_endpoints(paired_study_inputs, reason, step):
+    study, results, snapshots = paired_study_inputs
+    snapshots["candidate-29"]["evaluations"][step][0][4] = reason
+    # The existing primary question score does not depend on stop-label coverage.
+    assert "secondary_completed_stop_score" not in audit.paired_evaluation_study(study, results, snapshots)
+    with pytest.raises(ValueError, match="requires full evaluation stop coverage"):
+        audit.paired_evaluation_study(study | {"include_completed_stop_score": True}, results, snapshots)
+
+
+def test_completed_stop_secondary_known_noncompleted_labels_contribute_zero(paired_study_inputs):
+    study, results, snapshots = paired_study_inputs
+    for pair in study["pairs"]:
+        for row, reason in zip(
+            snapshots[pair["candidate"]]["evaluations"][2], ["abort", "unknown", "STOP", " stop"], strict=True
+        ):
+            row[4] = reason
+    result = audit.paired_evaluation_study(study | {"include_completed_stop_score": True}, results, snapshots)
+    assert result["secondary_completed_stop_score"]["mean_final_reward_delta"] == -0.5
+    assert result["mean_final_reward_delta"] == 0.375
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -125,6 +125,12 @@ finite metrics, probability coverage, receipts, evaluation hashes and aggregates
 and successful launcher/Iris completion. `locked_validation` additionally locks
 the dataset revision and row window. Training evidence from a failed launcher
 can be inspected explicitly, but does not count as clean end-to-end completion.
+Set run-level `require_eval_response_metrics: true` for instrumented runs: this
+requires response-length and stop metrics in both the retained evaluation
+aggregates and W&B, checked against independently reduced response records.
+Older runs can omit this requirement; their available supplements are still
+computed from the dumps. Missing stop labels suppress fractions and score
+contributions rather than treating them as completed responses.
 
 The artifact's `terminal.json` contains the actual `request`, `execution` and
 `response`; extract its first two fields plus `schema_version` as the audit
@@ -166,3 +172,20 @@ questions jointly across arms and seeds; intervals are conditional on those
 training seeds. Report per-seed results and spread as well. A wide interval does
 not establish quality equivalence. The initial study may recommend the conservative
 configuration while leaving the acceptable drift range unresolved.
+
+Evaluation reward can be positive even when generation stops at its token limit:
+the GSM8K verifier accepts the first matching `####` answer marker. Report
+`completed_stop_score_contribution` and `length_stop_score_contribution` alongside
+`avg_score`, response lengths and stop fractions. Both contributions divide by
+all evaluated responses; completed-stop score is not accuracy conditional on
+completion. An accepted stop label does not certify semantic final-answer
+correctness, balanced thinking, or a naturally generated EOS. Literal final-line
+format checks can reject correct concluding prose and need separate interpretation.
+
+Set paired-study `include_completed_stop_score: true` to add a
+`secondary_completed_stop_score` comparison with the same paired questions and
+bootstrap draws as the primary score. It requires full stop-label coverage at
+both endpoints. Each response keeps its place in the denominator; responses
+outside `complete`, `end_turn`, `eos` and `stop` contribute zero. The primary
+reward records and comparison remain unchanged. Declare this secondary outcome
+before accessing held-out results.
