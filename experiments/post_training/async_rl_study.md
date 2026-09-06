@@ -123,6 +123,35 @@ at another training seed before Snowball promotion. C1/A1 versus C4/A3 changes
 both publication cadence and the allowed age; an additional control is needed
 to isolate their individual effects.
 
+### Qwen optimizer-state precision screens
+
+Use `--optimizer-state-metrics` on the native control to record actual storage
+after its first successful update. `--optimizer-precision` accepts these
+screening presets; every nonnative preset enables the same observation:
+
+| Preset | Optimizer path | First / second moments | Master storage |
+| --- | --- | --- | --- |
+| `native` | Existing distributed Adam | FP32 / FP32 | Existing FP32 shards |
+| `aware_fp32` | Precision-aware Adam | FP32 / FP32 | FP32 |
+| `bf16_first` | Precision-aware Adam | BF16 / FP32 | FP32 |
+| `bf16_both` | Precision-aware Adam | BF16 / BF16 | FP32 |
+| `fp32_remainders` | Precision-aware Adam | FP32 / FP32 | BF16 parameter bits plus int16 remainder |
+
+The remainder representation retains FP32 master information; it is separate
+from reducing moment precision. These presets keep FP32 main gradients and
+gradient reduction, disable optimizer CUDA graphs and CPU offload, and preserve
+the model's BF16 parameters. They require policy training spans. The default
+native recipe omits the new fields to preserve existing experiment identities.
+
+Qualify each new path with five updates before a 100-update quality comparison.
+Compare native against `aware_fp32` first, then change one storage setting at a
+time. A preset's availability does not establish hardware compatibility or
+learning equivalence. Measure actual per-rank state bytes and PPO peaks together:
+temporary FP32 moment expansion can offset persistent-memory savings. Retain
+raw reward, accepted-stop completion, truncation, extractor coverage, token work,
+and drift at every declared evaluation point. BF16 moments do not directly
+reduce the already-BF16 weights sent to inference.
+
 ## Experimental controls
 
 | Control | Meaning |

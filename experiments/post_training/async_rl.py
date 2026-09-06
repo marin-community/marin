@@ -101,6 +101,14 @@ class Correction(StrEnum):
     REGULAR_NO_TIS = "regular_no_tis"
 
 
+class OptimizerPrecision(StrEnum):
+    NATIVE = "native"
+    AWARE_FP32 = "aware_fp32"
+    BF16_FIRST = "bf16_first"
+    BF16_BOTH = "bf16_both"
+    FP32_REMAINDERS = "fp32_remainders"
+
+
 @dataclass(frozen=True)
 class Schedule:
     max_steps: int
@@ -216,6 +224,8 @@ def training_config(
     initial_eval_repeat_count: int = 1,
     weight_change_probe: bool = False,
     epoch_seeded_shuffle: bool = False,
+    optimizer_precision: OptimizerPrecision = OptimizerPrecision.NATIVE,
+    optimizer_state_metrics: bool = False,
 ) -> str:
     """Keep optimizer and inference settings identical across scheduler controls."""
     schedule = SCHEDULES[scale]
@@ -299,6 +309,7 @@ def training_config(
     trainer["policy"].pop("fsdp_config")
     trainer["policy"]["megatron_config"] = dict(megatron)
     trainer["ref"] = {"megatron_config": dict(megatron)}
+    apply_optimizer_precision(trainer, scale=scale, precision=optimizer_precision, state_metrics=optimizer_state_metrics)
     config["generator"]["sampling_params"]["logprobs"] = 0
     if eval_response_tokens is not None:
         config["generator"]["eval_sampling_params"] = {"max_generate_length": eval_response_tokens}
@@ -316,6 +327,37 @@ def training_config(
     if epoch_seeded_shuffle:
         config.setdefault("data", {})["epoch_seeded_shuffle"] = True
     return yaml.safe_dump(config, sort_keys=False)
+
+
+def apply_optimizer_precision(
+    trainer: dict, *, scale: Scale, precision: OptimizerPrecision, state_metrics: bool
+) -> None:
+    """Keep native identities stable and isolate the declared optimizer storage change."""
+    if precision not in OptimizerPrecision or type(state_metrics) is not bool:
+        raise ValueError("Declare a supported optimizer precision and boolean state-metrics setting")
+    if precision == OptimizerPrecision.NATIVE and not state_metrics:
+        return
+    if scale != Scale.SCREENING:
+        raise ValueError("Optimizer precision experiments require the Qwen screening scale")
+    if not trainer["policy_train_spans"]:
+        raise ValueError("Optimizer state metrics require policy training spans for matching memory peaks")
+    trainer["optimizer_state_metrics"] = True
+    if precision == OptimizerPrecision.NATIVE:
+        return
+    config = trainer["policy"]["megatron_config"]
+    config["ddp_config"] = {"grad_reduce_in_fp32": True}
+    config["optimizer_config_kwargs"] = {
+        "use_precision_aware_optimizer": True,
+        "optimizer_cuda_graph": False,
+        "store_param_remainders": precision == OptimizerPrecision.FP32_REMAINDERS,
+        "optimizer_cpu_offload": False,
+        "main_params_dtype": "float32",
+        "main_grads_dtype": "float32",
+        "exp_avg_dtype": (
+            "bfloat16" if precision in (OptimizerPrecision.BF16_FIRST, OptimizerPrecision.BF16_BOTH) else "float32"
+        ),
+        "exp_avg_sq_dtype": "bfloat16" if precision == OptimizerPrecision.BF16_BOTH else "float32",
+    }
 
 
 def apply_observation_options(config: dict, *, initial_eval_repeat_count: int, weight_change_probe: bool) -> None:
@@ -394,6 +436,8 @@ def build_experiment(
     initial_eval_repeat_count: int = 1,
     weight_change_probe: bool = False,
     epoch_seeded_shuffle: bool = False,
+    optimizer_precision: OptimizerPrecision = OptimizerPrecision.NATIVE,
+    optimizer_state_metrics: bool = False,
 ) -> tuple[ArtifactStep[SkyRLModel] | ArtifactStep[SkyRLTrainingResult], ArtifactStep[EvaluationResult] | None]:
     """Construct versioned dependencies and a bounded, namespaced training attempt."""
     validate_version(version)
@@ -425,6 +469,8 @@ def build_experiment(
         initial_eval_repeat_count=initial_eval_repeat_count,
         weight_change_probe=weight_change_probe,
         epoch_seeded_shuffle=epoch_seeded_shuffle,
+        optimizer_precision=optimizer_precision,
+        optimizer_state_metrics=optimizer_state_metrics,
     )
     cpu = ResourceConfig.with_cpu(cpu=4, ram="16g", disk="32g")
     topology = SkyRLTopology(
@@ -557,6 +603,19 @@ def build_experiment(
 @click.option("--seed", type=click.IntRange(min=0, max=2**32 - 1), default=SEED, show_default=True)
 @click.option("--kl-loss/--no-kl-loss", default=True, show_default=True)
 @click.option(
+    "--optimizer-precision",
+    type=click.Choice([precision.value for precision in OptimizerPrecision]),
+    default="native",
+    show_default=True,
+    help="Qwen screening optimizer-state preset; nonnative settings require runtime qualification.",
+)
+@click.option(
+    "--optimizer-state-metrics/--no-optimizer-state-metrics",
+    default=False,
+    show_default=True,
+    help="Inventory actual optimizer storage after its first update; automatic for nonnative presets.",
+)
+@click.option(
     "--correction", type=click.Choice([c.value for c in Correction]), default="behavior_clip", show_default=True
 )
 @click.option("--response-tokens", type=click.IntRange(min=1), help="Training output cap; defaults to 1024.")
@@ -583,6 +642,8 @@ def main(
     inference_replicas: str,
     seed: int,
     kl_loss: bool,
+    optimizer_precision: str,
+    optimizer_state_metrics: bool,
     correction: str,
     response_tokens: int | None,
     eval_response_tokens: int | None,
@@ -612,6 +673,8 @@ def main(
         inference_replicas=int(inference_replicas),
         seed=seed,
         kl_loss=kl_loss,
+        optimizer_precision=OptimizerPrecision(optimizer_precision),
+        optimizer_state_metrics=optimizer_state_metrics,
         correction=Correction(correction),
         response_tokens=response_tokens,
         eval_response_tokens=eval_response_tokens,

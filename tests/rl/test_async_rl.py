@@ -19,6 +19,84 @@ from experiments.post_training import async_rl, async_snowball
 from experiments.post_training.curriculum_rl import pool
 
 
+def test_optimizer_precision_cli_keeps_controls_distinct_and_reproducible():
+    arguments = [
+        "--version",
+        "2026.09.06.17",
+        "--scale",
+        "screening",
+        "--stage",
+        "rl",
+        "--completion",
+        "metrics",
+        "--screening-steps",
+        "5",
+        "--eval-interval",
+        "5",
+    ]
+    requests = []
+    for precision in async_rl.OptimizerPrecision:
+        result = CliRunner().invoke(
+            async_rl.main, [*arguments, "--optimizer-precision", precision.value, "--optimizer-state-metrics"]
+        )
+        assert result.exit_code == 0, result.output
+        request = json.loads(result.output)["request"]
+        built, _ = async_rl.build_experiment(
+            version="2026.09.06.17",
+            cluster="cw-us-east-02a",
+            runner=async_rl.Runner.ASYNC,
+            scale=async_rl.Scale.SCREENING,
+            completion="metrics",
+            screening_steps=5,
+            eval_interval=5,
+            optimizer_precision=precision,
+            optimizer_state_metrics=True,
+        )
+        direct = built.build_config(StepContext.for_fingerprint(built.runtime_args, built.deps)).request
+        assert request["run_id"] == direct.run_id
+        assert request["config_yaml"] == direct.config_yaml
+        requests.append(request)
+    assert len({request["run_id"] for request in requests}) == len(async_rl.OptimizerPrecision)
+    for field in ("model", "train_data", "validation_data", "runtime", "topology", "seed"):
+        assert all(request[field] == requests[0][field] for request in requests)
+    configs = [yaml.safe_load(request["config_yaml"]) for request in requests]
+    for config in configs:
+        assert config["trainer"]["optimizer_state_metrics"] is True
+        policy = config["trainer"]["policy"]["megatron_config"]
+        policy.pop("optimizer_config_kwargs", None)
+        policy.pop("ddp_config", None)
+        assert config == configs[0]
+
+
+def test_optimizer_precision_defaults_preserve_existing_recipe_and_require_observation():
+    base = dict(spans=True, staleness=1)
+    native = async_rl.training_config(async_rl.Runner.ASYNC, async_rl.Scale.SCREENING, **base)
+    explicit = async_rl.training_config(
+        async_rl.Runner.ASYNC,
+        async_rl.Scale.SCREENING,
+        **base,
+        optimizer_precision=async_rl.OptimizerPrecision.NATIVE,
+        optimizer_state_metrics=False,
+    )
+    assert explicit == native
+    assert "optimizer_state_metrics" not in yaml.safe_load(native)["trainer"]
+    with pytest.raises(ValueError, match="require policy training spans"):
+        async_rl.training_config(
+            async_rl.Runner.ASYNC,
+            async_rl.Scale.SCREENING,
+            spans=False,
+            staleness=1,
+            optimizer_precision=async_rl.OptimizerPrecision.BF16_BOTH,
+        )
+    with pytest.raises(ValueError, match="screening scale"):
+        async_rl.training_config(
+            async_rl.Runner.ASYNC,
+            async_rl.Scale.QUALIFICATION,
+            **base,
+            optimizer_state_metrics=True,
+        )
+
+
 @pytest.mark.parametrize("recipe", [async_rl, async_snowball])
 @pytest.mark.parametrize("runner", list(async_rl.Runner))
 def test_epoch_shuffle_cli_and_builder_share_reproducible_variant_identity(recipe, runner):
