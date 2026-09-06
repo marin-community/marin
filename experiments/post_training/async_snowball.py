@@ -44,7 +44,12 @@ from transformers import AutoTokenizer
 from zephyr.writers import write_parquet_file
 
 from experiments.post_training.async_rl import DATA_REVISION, SEED, validate_regional_storage
-from experiments.post_training.curriculum_rl.launch import SNOWBALL_MODEL, SNOWBALL_POLICY, SNOWBALL_SMOKE, rl_config_yaml
+from experiments.post_training.curriculum_rl.launch import (
+    SNOWBALL_MODEL,
+    SNOWBALL_POLICY,
+    SNOWBALL_SMOKE,
+    rl_config_yaml,
+)
 from experiments.post_training.curriculum_rl.pool import (
     GSM8K_INSTRUCTION,
     SYSTEM_PROMPT,
@@ -151,7 +156,9 @@ def training_config(scale: Scale) -> str:
         eval_before_train=False,
         eval_batch_size=128,
     )
-    trainer["algorithm"].update(use_kl_loss=False, use_kl_in_reward=False, policy_loss_type="behavior_clip", use_tis=False)
+    trainer["algorithm"].update(
+        use_kl_loss=False, use_kl_in_reward=False, policy_loss_type="behavior_clip", use_tis=False
+    )
     trainer["fully_async"] = {
         "max_staleness_steps": 1,
         "num_parallel_generation_workers": 64,
@@ -178,7 +185,13 @@ def training_config(scale: Scale) -> str:
         "max_bytes_per_step": 262144,
         "max_bytes_per_run": 4194304,
     }
-    config["extra_env"] = {"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"}
+    config["extra_env"] = {
+        "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+        # Capture the selected transport at communicator initialization, without
+        # enabling per-collective logging or changing NCCL transport selection.
+        "NCCL_DEBUG": "INFO",
+        "NCCL_DEBUG_SUBSYS": "INIT,NET",
+    }
     return yaml.safe_dump(config, sort_keys=False)
 
 
