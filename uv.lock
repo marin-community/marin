@@ -2591,6 +2591,19 @@ wheels = [
 ]
 
 [[package]]
+name = "hydra-core"
+version = "1.4.0.dev1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "omegaconf" },
+    { name = "packaging" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/5a/05/01eac7f7e16d91933bfb802724847fd004952bff38a72fde51dc19a42af7/hydra_core-1.4.0.dev1.tar.gz", hash = "sha256:664e6755ea78f070b403df911fc460ea3464fdc59bd03affc0d6ffef9dd53221", size = 3287831, upload-time = "2024-07-10T20:09:41.548Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d0/d2/cf3b19412d1e8b397fd041500d1dccc5e902eb078bc91e3a7244452be9ff/hydra_core-1.4.0.dev1-py3-none-any.whl", hash = "sha256:e82753fe3aff8526ee1e72711f6f941beffcc9a2c1830b76c34242963835d039", size = 154173, upload-time = "2024-07-10T20:09:39.213Z" },
+]
+
+[[package]]
 name = "identify"
 version = "2.6.16"
 source = { registry = "https://pypi.org/simple" }
@@ -3645,6 +3658,7 @@ dev = [
     { name = "black" },
     { name = "click" },
     { name = "cloud-sql-python-connector", extra = ["pg8000"] },
+    { name = "hydra-core" },
     { name = "mkdocs" },
     { name = "mkdocs-git-authors-plugin" },
     { name = "mkdocs-git-revision-date-localized-plugin" },
@@ -3687,6 +3701,7 @@ lint = [
 ]
 test = [
     { name = "cloud-sql-python-connector", extra = ["pg8000"] },
+    { name = "hydra-core" },
     { name = "plotly" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -3772,6 +3787,7 @@ dev = [
     { name = "black", specifier = ">=26.3.1" },
     { name = "click", specifier = ">=8.0" },
     { name = "cloud-sql-python-connector", extras = ["pg8000"], specifier = ">=1.9" },
+    { name = "hydra-core", specifier = "==1.4.0.dev1" },
     { name = "mkdocs", specifier = ">=1.5.0" },
     { name = "mkdocs-git-authors-plugin", specifier = ">=0.9.0" },
     { name = "mkdocs-git-revision-date-localized-plugin", specifier = ">=1.2.0" },
@@ -3814,6 +3830,7 @@ lint = [
 ]
 test = [
     { name = "cloud-sql-python-connector", extras = ["pg8000"], specifier = ">=1.9" },
+    { name = "hydra-core", specifier = "==1.4.0.dev1" },
     { name = "plotly" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-asyncio" },
@@ -6401,6 +6418,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/0b/5f/19930f824ffeb0ad4372da4812c50edbd1434f678c90c2733e1188edfc63/oauthlib-3.3.1.tar.gz", hash = "sha256:0f0f8aa759826a193cf66c12ea1af1637f87b9b4622d46e866952bb022e538c9", size = 185918, upload-time = "2025-06-19T22:48:08.269Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/be/9c/92789c596b8df838baa98fa71844d84283302f7604ed565dafe5a6b5041a/oauthlib-3.3.1-py3-none-any.whl", hash = "sha256:88119c938d2b8fb88561af5f6ee0eec8cc8d552b7bb1f712743136eb7523b7a1", size = 160065, upload-time = "2025-06-19T22:48:06.508Z" },
+]
+
+[[package]]
+name = "omegaconf"
+version = "2.4.0.dev15"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pyyaml" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/62/8a/92db36ac7659bb9cb24ab108971ce3a2c78d467f815adf21f8d68ef3bb30/omegaconf-2.4.0.dev15.tar.gz", hash = "sha256:36b707ea4f0dd4289d004dee804dbd7c66c07fe7217cbcf039500e5cc9316a0a", size = 3495480, upload-time = "2026-08-07T21:23:16.201Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/36/ed/4f24634c3925b5262a1626e76b08a13dd00f1e743f1da2501580758dc027/omegaconf-2.4.0.dev15-py3-none-any.whl", hash = "sha256:2f2c12201d15230888d6e82ad0f3540bdf889d011c35f7f472b0e9286ce737af", size = 246202, upload-time = "2026-08-07T21:23:12.133Z" },
 ]
 
 [[package]]
