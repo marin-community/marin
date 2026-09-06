@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 from marin.execution.lazy import StepContext
+from marin.rl.skyrl import SkyRLCheckpoint, SkyRLModel
 
 from experiments.post_training import iceball_micro
 
@@ -44,11 +45,39 @@ def test_workflow_is_one_dependency_chain_through_both_evaluators(monkeypatch) -
     monkeypatch.setattr("marin.experiment.namespacing.username_segment", lambda: "alice")
     workflow = iceball_micro.build_workflow(version="2026.08.01")
 
+    assert workflow.pretrain.deps == (workflow.fineweb,)
     assert workflow.pretrain in workflow.sft.deps
-    assert workflow.sft in workflow.rl.deps
-    assert workflow.gsm8k in workflow.rl.deps
+    (native_training,) = workflow.rl.deps
+    assert native_training.artifact_type is SkyRLCheckpoint
+    assert native_training.deps == (workflow.sft, workflow.gsm8k)
+    assert workflow.rl.artifact_type is SkyRLModel
     assert workflow.evaluation.deps == (workflow.rl,)
     assert workflow.evaluation.name.endswith("gsm8k-smoke,aime-smoke")
     assert workflow.rl.name == f"users/alice/checkpoints/{iceball_micro.ICEBALL_MODEL_NAME}-rl"
-    rl_config = workflow.rl.build_config(StepContext.for_fingerprint(workflow.rl.runtime_args, workflow.rl.deps))
-    assert "++trainer.max_ckpts_to_keep=1" in rl_config.request.overrides
+    training_config = native_training.build_config(
+        StepContext.for_fingerprint(native_training.runtime_args, native_training.deps)
+    )
+    request = training_config.request
+    assert request.completion_mode == "checkpoint"
+    assert "++trainer.max_ckpts_to_keep=1" in request.overrides
+    assert "++trainer.hf_save_interval=-1" in request.overrides
+    assert request.model.identity == f"{workflow.sft.name}@{workflow.sft.version}:{workflow.sft.fingerprint()}"
+    (train_data,) = request.train_data
+    (validation_data,) = request.validation_data
+    assert (
+        train_data.identity
+        == validation_data.identity
+        == (f"{workflow.gsm8k.name}@{workflow.gsm8k.version}:{workflow.gsm8k.fingerprint()}")
+    )
+    assert (train_data.relative_path, validation_data.relative_path) == ("train.parquet", "validation.parquet")
+    export_config = workflow.rl.build_config(StepContext.for_fingerprint(workflow.rl.runtime_args, workflow.rl.deps))
+    assert export_config.request.training_manifest_uri == (
+        f"{native_training.name}@{native_training.version}:{native_training.fingerprint()}/terminal.json"
+    )
+    evaluation_config = workflow.evaluation.build_config(
+        StepContext.for_fingerprint(workflow.evaluation.runtime_args, workflow.evaluation.deps)
+    )
+    assert evaluation_config.evals == "gsm8k-smoke,aime-smoke"
+    assert evaluation_config.model.location == (
+        f"{workflow.rl.name}@{workflow.rl.version}:{workflow.rl.fingerprint()}/policy"
+    )

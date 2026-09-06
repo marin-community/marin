@@ -170,6 +170,8 @@ def training_config(
     eval_response_tokens: int | None = None,
     context_tokens: int | None = None,
     screening_steps: int | None = None,
+    initial_eval_repeat_count: int = 1,
+    weight_change_probe: bool = False,
 ) -> str:
     """Keep optimizer and inference settings identical across scheduler controls."""
     schedule = SCHEDULES[scale]
@@ -257,7 +259,45 @@ def training_config(
         "max_bytes_per_step": 262144,
         "max_bytes_per_run": 4194304,
     }
+    apply_observation_options(
+        config, initial_eval_repeat_count=initial_eval_repeat_count, weight_change_probe=weight_change_probe
+    )
     return yaml.safe_dump(config, sort_keys=False)
+
+
+def apply_observation_options(config: dict, *, initial_eval_repeat_count: int, weight_change_probe: bool) -> None:
+    """Validate opt-in diagnostics and omit defaults to preserve recipe identities."""
+    if (
+        isinstance(initial_eval_repeat_count, bool)
+        or not isinstance(initial_eval_repeat_count, int)
+        or initial_eval_repeat_count < 1
+    ):
+        raise ValueError("initial_eval_repeat_count must be a positive integer")
+    if not isinstance(weight_change_probe, bool):
+        raise ValueError("weight_change_probe must be a boolean")
+    trainer, generator = config["trainer"], config["generator"]
+    if initial_eval_repeat_count > 1:
+        if (
+            not trainer["eval_before_train"]
+            or trainer["eval_interval"] <= 0
+            or not trainer.get("dump_eval_results", True)
+        ):
+            raise ValueError(
+                "Initial evaluation repeats require a schedule with eval_before_train=true, "
+                "eval_interval>0, and evaluation dumps"
+            )
+        trainer["initial_eval_repeat_count"] = initial_eval_repeat_count
+    if weight_change_probe:
+        if (
+            trainer["strategy"] != "megatron"
+            or trainer["placement"]["colocate_all"]
+            or generator.get("fuse_weights", False)
+            or not generator["run_engines_locally"]
+        ):
+            raise ValueError(
+                "Weight change probe requires Megatron with noncolocated, unfused, locally managed inference engines"
+            )
+        trainer["weight_change_probe"] = True
 
 
 def validate_regional_storage(prefix: str, cluster: str) -> None:
@@ -295,6 +335,8 @@ def build_experiment(
     eval_response_tokens: int | None = None,
     context_tokens: int | None = None,
     screening_steps: int | None = None,
+    initial_eval_repeat_count: int = 1,
+    weight_change_probe: bool = False,
 ) -> tuple[ArtifactStep[SkyRLModel] | ArtifactStep[SkyRLTrainingResult], ArtifactStep[EvaluationResult] | None]:
     """Construct versioned dependencies and a bounded, namespaced training attempt."""
     validate_version(version)
@@ -321,6 +363,8 @@ def build_experiment(
         eval_response_tokens=eval_response_tokens,
         context_tokens=context_tokens,
         screening_steps=screening_steps,
+        initial_eval_repeat_count=initial_eval_repeat_count,
+        weight_change_probe=weight_change_probe,
     )
     cpu = ResourceConfig.with_cpu(cpu=4, ram="16g", disk="32g")
     topology = SkyRLTopology(
@@ -418,6 +462,19 @@ def build_experiment(
 @click.option("--completion", type=click.Choice(["metrics", "model"]), default="model", show_default=True)
 @click.option("--spans/--no-spans", default=True, show_default=True)
 @click.option("--staleness", "--max-staleness-steps", type=click.IntRange(min=0), default=1, show_default=True)
+@click.option(
+    "--initial-eval-repeat-count",
+    type=click.IntRange(min=1),
+    default=1,
+    show_default=True,
+    help="Sequential startup evaluation passes; the selected schedule must enable evaluation.",
+)
+@click.option(
+    "--weight-change-probe/--no-weight-change-probe",
+    default=False,
+    show_default=True,
+    help="Sample actual wire weights during publication; adds diagnostic overhead.",
+)
 @click.option("--weight-sync-interval", type=click.IntRange(min=1), default=1, show_default=True)
 @click.option("--inference-replicas", type=click.Choice(["8", "16"]), default="8", show_default=True)
 @click.option("--seed", type=click.IntRange(min=0, max=2**32 - 1), default=SEED, show_default=True)
@@ -451,6 +508,8 @@ def main(
     eval_response_tokens: int | None,
     context_tokens: int | None,
     screening_steps: int | None,
+    initial_eval_repeat_count: int,
+    weight_change_probe: bool,
     timeout_seconds: int,
     execute: bool,
 ) -> None:
@@ -474,6 +533,8 @@ def main(
         eval_response_tokens=eval_response_tokens,
         context_tokens=context_tokens,
         screening_steps=screening_steps,
+        initial_eval_repeat_count=initial_eval_repeat_count,
+        weight_change_probe=weight_change_probe,
     )
     prefix = marin_prefix()
     if execute:

@@ -59,7 +59,13 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from transformers import AutoTokenizer
 from zephyr.writers import write_parquet_file
 
-from experiments.post_training.async_rl import DATA_REVISION, SEED, Runner, validate_regional_storage
+from experiments.post_training.async_rl import (
+    DATA_REVISION,
+    SEED,
+    Runner,
+    apply_observation_options,
+    validate_regional_storage,
+)
 from experiments.post_training.curriculum_rl.launch import (
     SNOWBALL_MODEL,
     SNOWBALL_POLICY,
@@ -151,6 +157,8 @@ def training_config(
     context_tokens: int | None = None,
     weight_sync_interval: int = 1,
     max_staleness_steps: int = 1,
+    initial_eval_repeat_count: int = 1,
+    weight_change_probe: bool = False,
 ) -> str:
     gate = scale is Scale.GATE
     if inference_replicas < 1:
@@ -239,6 +247,9 @@ def training_config(
         "NCCL_DEBUG": "INFO",
         "NCCL_DEBUG_SUBSYS": "INIT,NET",
     }
+    apply_observation_options(
+        config, initial_eval_repeat_count=initial_eval_repeat_count, weight_change_probe=weight_change_probe
+    )
     return yaml.safe_dump(config, sort_keys=False)
 
 
@@ -255,6 +266,8 @@ def build_experiment(
     context_tokens: int | None = None,
     weight_sync_interval: int = 1,
     max_staleness_steps: int = 1,
+    initial_eval_repeat_count: int = 1,
+    weight_change_probe: bool = False,
 ) -> ArtifactStep[SkyRLModel] | ArtifactStep[SkyRLCheckpoint] | ArtifactStep[SkyRLTrainingResult]:
     """Build Snowball training with the requested terminal artifact."""
     validate_version(version)
@@ -279,6 +292,8 @@ def build_experiment(
         context_tokens=context_tokens,
         weight_sync_interval=weight_sync_interval,
         max_staleness_steps=max_staleness_steps,
+        initial_eval_repeat_count=initial_eval_repeat_count,
+        weight_change_probe=weight_change_probe,
     )
     role_plan = replace(ROLE_PLAN, num_inference_engines=inference_replicas)
     topology = SkyRLTopology(role_plan.policy_num_nodes + inference_replicas, 8, "H100", role_plan)
@@ -339,6 +354,19 @@ def build_experiment(
 @click.option(
     "--context-tokens", type=click.IntRange(min=1), help="Engine context window; defaults to the scale preset."
 )
+@click.option(
+    "--initial-eval-repeat-count",
+    type=click.IntRange(min=1),
+    default=1,
+    show_default=True,
+    help="Sequential startup evaluation passes; use cadence-gate or qualification to enable evaluation.",
+)
+@click.option(
+    "--weight-change-probe/--no-weight-change-probe",
+    default=False,
+    show_default=True,
+    help="Sample actual wire weights during publication; adds diagnostic overhead.",
+)
 @click.option("--weight-sync-interval", type=click.IntRange(min=1), default=1, show_default=True)
 @click.option("--max-staleness-steps", type=click.IntRange(min=0), default=1, show_default=True)
 @click.option("--run/--dry-run", "execute", default=False, show_default=True)
@@ -354,6 +382,8 @@ def main(
     context_tokens: int | None,
     weight_sync_interval: int,
     max_staleness_steps: int,
+    initial_eval_repeat_count: int,
+    weight_change_probe: bool,
     execute: bool,
 ) -> None:
     training = build_experiment(
@@ -368,6 +398,8 @@ def main(
         context_tokens=context_tokens,
         weight_sync_interval=weight_sync_interval,
         max_staleness_steps=max_staleness_steps,
+        initial_eval_repeat_count=initial_eval_repeat_count,
+        weight_change_probe=weight_change_probe,
     )
     prefix = marin_prefix()
     if execute:

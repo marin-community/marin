@@ -523,3 +523,113 @@ def test_qwen_metrics_preview_and_submission_have_no_export_stage(monkeypatch):
     root = submitted[0]
     assert root.artifact_type is async_rl.SkyRLTrainingResult
     assert {dep.artifact_type for dep in root.deps} == {async_rl.LevanterCheckpoint, async_rl.Artifact}
+
+
+@pytest.mark.parametrize(
+    "recipe,arguments,steps",
+    [
+        (async_rl, ["--stage", "rl", "--scale", "screening"], 25),
+        (async_snowball, ["--scale", "cadence-gate"], 5),
+    ],
+)
+def test_observation_cli_preview_preserves_defaults_and_isolates_enabled_variants(recipe, arguments, steps):
+    requests = []
+    for options in (
+        [],
+        ["--initial-eval-repeat-count", "1", "--no-weight-change-probe"],
+        ["--initial-eval-repeat-count", "3"],
+        ["--weight-change-probe"],
+        ["--initial-eval-repeat-count", "3", "--weight-change-probe"],
+    ):
+        result = CliRunner().invoke(
+            recipe.main,
+            ["--version", "2026.09.06.12", "--completion", "metrics", "--dry-run", *arguments, *options],
+        )
+        assert result.exit_code == 0, result.output + str(result.exception)
+        requests.append(json.loads(result.output)["request"])
+    assert requests[0]["config_yaml"] == requests[1]["config_yaml"]
+    assert requests[0]["run_id"] == requests[1]["run_id"]
+    assert len({request["run_id"] for request in requests}) == 4
+    baseline = yaml.safe_load(requests[0]["config_yaml"])
+    assert "initial_eval_repeat_count" not in baseline["trainer"]
+    assert "weight_change_probe" not in baseline["trainer"]
+    for request, repeats, probe in zip(requests[2:], (3, 1, 3), (False, True, True), strict=True):
+        config = yaml.safe_load(request["config_yaml"])
+        trainer = config["trainer"]
+        assert trainer.pop("initial_eval_repeat_count", 1) == repeats
+        assert trainer.pop("weight_change_probe", False) == probe
+        assert trainer["max_steps"] == trainer["eval_interval"] == steps
+        assert trainer["eval_before_train"]
+        assert trainer["strategy"] == "megatron"
+        assert not trainer["placement"]["colocate_all"]
+        assert config["generator"]["run_engines_locally"]
+        assert not config["generator"].get("fuse_weights", False)
+        assert config == baseline
+        for key in ("model", "train_data", "validation_data", "topology", "runtime", "seed", "completion_mode"):
+            assert request[key] == requests[0][key]
+
+
+@pytest.mark.parametrize(
+    "recipe,arguments",
+    [
+        (async_rl, ["--stage", "rl", "--scale", "comparison"]),
+        (async_snowball, ["--scale", "gate"]),
+    ],
+)
+def test_observation_repeats_cannot_silently_enable_disabled_evaluation(recipe, arguments, monkeypatch):
+    submitted = []
+    monkeypatch.setattr(recipe, "run", lambda *args, **kwargs: submitted.append(args))
+    result = CliRunner().invoke(
+        recipe.main,
+        [
+            "--version",
+            "2026.09.06.12",
+            "--completion",
+            "metrics",
+            "--run",
+            *arguments,
+            "--initial-eval-repeat-count",
+            "3",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "require a schedule" in str(result.exception)
+    assert submitted == []
+
+
+@pytest.mark.parametrize("recipe", [async_rl, async_snowball])
+@pytest.mark.parametrize("value", ["0", "-1", "1.5"])
+def test_observation_cli_rejects_invalid_repeat_count(recipe, value):
+    result = CliRunner().invoke(recipe.main, ["--version", "2026.09.06.12", "--initial-eval-repeat-count", value])
+    assert result.exit_code != 0
+    assert "Invalid value for '--initial-eval-repeat-count'" in result.output
+
+
+@pytest.mark.parametrize("value", [True, 0, -1, 1.5])
+def test_observation_builder_rejects_invalid_repeat_count(value):
+    with pytest.raises(ValueError, match="positive integer"):
+        qwen_metrics_request(initial_eval_repeat_count=value)
+
+
+@pytest.mark.parametrize("value", [1, None, "true"])
+def test_observation_builder_requires_boolean_probe(value):
+    with pytest.raises(ValueError, match="must be a boolean"):
+        qwen_metrics_request(weight_change_probe=value)
+
+
+@pytest.mark.parametrize(
+    "section,key,value",
+    [
+        ("trainer", "strategy", "fsdp2"),
+        ("placement", "colocate_all", True),
+        ("generator", "fuse_weights", True),
+        ("generator", "run_engines_locally", False),
+    ],
+)
+def test_observation_probe_rejects_unsupported_resolved_runtime(section, key, value):
+    config = yaml.safe_load(async_snowball.training_config(async_snowball.Scale.CADENCE_GATE))
+    target = config["trainer"]["placement"] if section == "placement" else config[section]
+    target[key] = value
+    with pytest.raises(ValueError, match="Weight change probe requires"):
+        async_rl.apply_observation_options(config, initial_eval_repeat_count=1, weight_change_probe=True)
+    assert "weight_change_probe" not in config["trainer"]
