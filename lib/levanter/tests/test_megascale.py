@@ -72,24 +72,24 @@ def test_configure_megascale_maps_iris_slice_topology_to_megascale_env(monkeypat
     job_token = info.job_id.to_safe_token()
     sibling_token = JobName.from_string("/testuser/testroot/train-b").to_safe_token()
     scoped_ready_names = {
-        f"{megascale.MEGASCALE_READY_ENDPOINT_PREFIX}{task_index}-{job_token}-attempt-3" for task_index in range(8)
+        f"{megascale.MEGASCALE_READY_ENDPOINT_PREFIX}{task_index}-{job_token}" for task_index in range(8)
     }
     bare_ready_names = {f"{megascale.MEGASCALE_READY_ENDPOINT_PREFIX}{task_index}" for task_index in range(8)}
-    stale_ready_names = {
+    attempt_scoped_ready_names = {
         f"{megascale.MEGASCALE_READY_ENDPOINT_PREFIX}{task_index}-{job_token}-attempt-2" for task_index in range(8)
     }
     sibling_ready_names = {
-        f"{megascale.MEGASCALE_READY_ENDPOINT_PREFIX}{task_index}-{sibling_token}-attempt-3" for task_index in range(8)
+        f"{megascale.MEGASCALE_READY_ENDPOINT_PREFIX}{task_index}-{sibling_token}" for task_index in range(8)
     }
-    scoped_coordinator = f"{megascale.MEGASCALE_COORDINATOR_ENDPOINT}-{job_token}-attempt-3"
-    stale_coordinator = f"{megascale.MEGASCALE_COORDINATOR_ENDPOINT}-{job_token}-attempt-2"
-    sibling_coordinator = f"{megascale.MEGASCALE_COORDINATOR_ENDPOINT}-{sibling_token}-attempt-3"
+    scoped_coordinator = f"{megascale.MEGASCALE_COORDINATOR_ENDPOINT}-{job_token}"
+    attempt_scoped_coordinator = f"{megascale.MEGASCALE_COORDINATOR_ENDPOINT}-{job_token}-attempt-2"
+    sibling_coordinator = f"{megascale.MEGASCALE_COORDINATOR_ENDPOINT}-{sibling_token}"
     registry = _FakeRegistry()
     resolver = _FakeResolver(
-        ready_names=scoped_ready_names | bare_ready_names | stale_ready_names | sibling_ready_names,
+        ready_names=scoped_ready_names | bare_ready_names | attempt_scoped_ready_names | sibling_ready_names,
         coordinators={
             scoped_coordinator: "10.0.0.1:8081",
-            stale_coordinator: "10.0.0.8:8081",
+            attempt_scoped_coordinator: "10.0.0.8:8081",
             sibling_coordinator: "10.0.0.7:8081",
             megascale.MEGASCALE_COORDINATOR_ENDPOINT: "10.0.0.9:8081",
         },
@@ -104,6 +104,8 @@ def test_configure_megascale_maps_iris_slice_topology_to_megascale_env(monkeypat
         monkeypatch.setenv(name, "")
     monkeypatch.setenv(megascale.IRIS_SLICE_COUNT, "2")
     monkeypatch.setenv(megascale.IRIS_TASKS_PER_SLICE, "4")
+    monkeypatch.setenv(megascale.LEVANTER_MEGASCALE_TIMEOUT, "0.1")
+    monkeypatch.setenv(megascale.LEVANTER_MEGASCALE_POLL_INTERVAL, "0.01")
     monkeypatch.setattr(megascale, "get_job_info", lambda: info)
     monkeypatch.setattr(megascale, "iris_ctx", lambda: _FakeIrisContext(registry=registry, resolver=resolver))
 
@@ -116,20 +118,46 @@ def test_configure_megascale_maps_iris_slice_topology_to_megascale_env(monkeypat
         "MEGASCALE_SLICE_ID": "1",
     }
     assert all(os.environ[key] == value for key, value in env.items())
-    expected_registration = (f"{megascale.MEGASCALE_READY_ENDPOINT_PREFIX}5-{job_token}-attempt-3", "10.0.0.2")
+    expected_registration = (f"{megascale.MEGASCALE_READY_ENDPOINT_PREFIX}5-{job_token}", "10.0.0.2")
     assert expected_registration in registry.registered
     resolved_names = set(resolver.resolved_names)
     assert scoped_ready_names | {scoped_coordinator} <= resolved_names
     assert resolved_names.isdisjoint(
         bare_ready_names
-        | stale_ready_names
+        | attempt_scoped_ready_names
         | sibling_ready_names
         | {
             megascale.MEGASCALE_COORDINATOR_ENDPOINT,
-            stale_coordinator,
+            attempt_scoped_coordinator,
             sibling_coordinator,
         }
     )
+
+
+def test_megascale_env_rank_zero_registers_job_scoped_coordinator(monkeypatch):
+    info = _make_job_info(task_index=0, num_tasks=2, attempt_id=2)
+    job_token = info.job_id.to_safe_token()
+    scoped_ready_names = {
+        f"{megascale.MEGASCALE_READY_ENDPOINT_PREFIX}{task_index}-{job_token}" for task_index in range(2)
+    }
+    registry = _FakeRegistry()
+    resolver = _FakeResolver(ready_names=scoped_ready_names, coordinators={})
+    monkeypatch.setattr(megascale, "get_job_info", lambda: info)
+    monkeypatch.setattr(megascale, "iris_ctx", lambda: _FakeIrisContext(registry=registry, resolver=resolver))
+
+    env = megascale.megascale_env_for_iris_task(
+        slice_count=2,
+        tasks_per_slice=1,
+        timeout=0.1,
+        poll_interval=0.01,
+    )
+
+    expected_registrations = {
+        (f"{megascale.MEGASCALE_READY_ENDPOINT_PREFIX}0-{job_token}", "10.0.0.2"),
+        (f"{megascale.MEGASCALE_COORDINATOR_ENDPOINT}-{job_token}", "10.0.0.2:8081"),
+    }
+    assert expected_registrations <= set(registry.registered)
+    assert env[megascale.MEGASCALE_COORDINATOR_ADDRESS] == "10.0.0.2:8081"
 
 
 def test_megascale_env_rejects_wrong_task_count(monkeypatch):

@@ -25,9 +25,7 @@ from iris.env_resources import _read_iris_resource_proto
 from iris.runtime.jax_init import configure_jax_compilation_cache, initialize_jax, resolve_coordinator_port
 
 _JOB_TOKEN = JobName.from_string("/testuser/testjob").to_safe_token()
-INITIAL_ATTEMPT_ENDPOINT_NAME = f"jax_coordinator-{_JOB_TOKEN}-attempt-0"
-PREVIOUS_ATTEMPT_ENDPOINT_NAME = f"jax_coordinator-{_JOB_TOKEN}-attempt-2"
-RETRY_ATTEMPT_ENDPOINT_NAME = f"jax_coordinator-{_JOB_TOKEN}-attempt-3"
+SCOPED_ENDPOINT_NAME = f"jax_coordinator-{_JOB_TOKEN}"
 
 
 @dataclass
@@ -172,7 +170,7 @@ def test_initialize_jax_supervised_peer_times_out_without_coordinator(
     monkeypatch.setenv("IRIS_MULTIGPU_PROCESS_INDEX", "3")
     monkeypatch.setenv("IRIS_MULTIGPU_LOCAL_DEVICE_IDS", "3")
 
-    empty = ResolveResult(name=INITIAL_ATTEMPT_ENDPOINT_NAME, endpoints=[])
+    empty = ResolveResult(name=SCOPED_ENDPOINT_NAME, endpoints=[])
     fake_ctx = FakeContext(resolver=FakeResolver(results=[empty]))
     mock_iris_ctx.return_value = fake_ctx
 
@@ -209,7 +207,7 @@ def test_initialize_jax_maps_supervised_global_rank_zero(
 
     initialize_jax()
 
-    expected_endpoint = f"jax_coordinator-{info.job_id.to_safe_token()}-attempt-3"
+    expected_endpoint = f"jax_coordinator-{info.job_id.to_safe_token()}"
     assert fake_ctx.registry.registered == [(expected_endpoint, "10.0.0.1:12345")]
     jax_args, jax_options = mock_jax_init.call_args
     assert jax_args == ("10.0.0.1:12345", 16, 0)
@@ -222,6 +220,36 @@ def test_initialize_jax_maps_supervised_global_rank_zero(
 @patch("jax.distributed.initialize")
 @patch("iris.runtime.jax_init.iris_ctx")
 @patch("iris.runtime.jax_init.get_job_info")
+def test_initialize_jax_multitask_rank_zero_registers_job_scoped_coordinator(
+    mock_get_job_info: MagicMock,
+    mock_iris_ctx: MagicMock,
+    mock_jax_init: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    info = _make_job_info(task_index=0, num_tasks=2, attempt_id=2, job_id="/testuser/testroot/train-a")
+    info.ports = {"jax": 12345}
+    mock_get_job_info.return_value = info
+    fake_ctx = FakeContext()
+    mock_iris_ctx.return_value = fake_ctx
+    for name in (
+        jax_init_module.IRIS_MULTIGPU_PROCESS_COUNT_ENV,
+        jax_init_module.IRIS_MULTIGPU_PROCESS_INDEX_ENV,
+        jax_init_module.IRIS_MULTIGPU_LOCAL_DEVICE_IDS_ENV,
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    initialize_jax()
+
+    expected_endpoint = f"jax_coordinator-{info.job_id.to_safe_token()}"
+    assert (expected_endpoint, "10.0.0.1:12345") in fake_ctx.registry.registered
+    assert all(name != "jax_coordinator" for name, _address in fake_ctx.registry.registered)
+    jax_args, _jax_options = mock_jax_init.call_args
+    assert jax_args == ("10.0.0.1:12345", 2, 0)
+
+
+@patch("jax.distributed.initialize")
+@patch("iris.runtime.jax_init.iris_ctx")
+@patch("iris.runtime.jax_init.get_job_info")
 def test_initialize_jax_maps_supervised_peer_global_rank_and_device(
     mock_get_job_info: MagicMock,
     mock_iris_ctx: MagicMock,
@@ -229,19 +257,14 @@ def test_initialize_jax_maps_supervised_peer_global_rank_and_device(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     mock_get_job_info.return_value = _make_job_info(task_index=1, num_tasks=2, attempt_id=3)
-    stale = ResolveResult(
-        name=PREVIOUS_ATTEMPT_ENDPOINT_NAME,
-        endpoints=[ResolvedEndpoint(url="10.0.0.1:27055", actor_id="attempt-2")],
-    )
     current = ResolveResult(
-        name=RETRY_ATTEMPT_ENDPOINT_NAME,
+        name=SCOPED_ENDPOINT_NAME,
         endpoints=[ResolvedEndpoint(url="10.0.0.9:8476", actor_id="attempt-3")],
     )
     fake_ctx = FakeContext(
         resolver=FakeResolver(
             results_by_name={
-                PREVIOUS_ATTEMPT_ENDPOINT_NAME: stale,
-                RETRY_ATTEMPT_ENDPOINT_NAME: current,
+                SCOPED_ENDPOINT_NAME: current,
             }
         )
     )
@@ -256,6 +279,7 @@ def test_initialize_jax_maps_supervised_peer_global_rank_and_device(
     assert jax_args == ("10.0.0.9:8476", 16, 9)
     assert jax_options["local_device_ids"] == [1]
     assert fake_ctx.registry.registered == []
+    assert "jax_coordinator" not in fake_ctx.resolver.resolved_names
 
 
 @patch("jax.distributed.initialize")
@@ -268,11 +292,13 @@ def test_initialize_jax_peer_ignores_sibling_job_coordinator(
 ) -> None:
     current_job = JobName.from_string("/testuser/testroot/train-a")
     sibling_job = JobName.from_string("/testuser/testroot/train-b")
-    current_endpoint = f"jax_coordinator-{current_job.to_safe_token()}-attempt-0"
-    sibling_endpoint = f"jax_coordinator-{sibling_job.to_safe_token()}-attempt-0"
+    current_endpoint = f"jax_coordinator-{current_job.to_safe_token()}"
+    sibling_endpoint = f"jax_coordinator-{sibling_job.to_safe_token()}"
+    attempt_scoped_endpoint = f"{current_endpoint}-attempt-2"
     mock_get_job_info.return_value = _make_job_info(
         task_index=1,
         num_tasks=2,
+        attempt_id=3,
         job_id=str(current_job),
     )
     fake_ctx = FakeContext(
@@ -286,6 +312,14 @@ def test_initialize_jax_peer_ignores_sibling_job_coordinator(
                     name=sibling_endpoint,
                     endpoints=[ResolvedEndpoint(url="10.0.0.2:8476", actor_id="train-b")],
                 ),
+                attempt_scoped_endpoint: ResolveResult(
+                    name=attempt_scoped_endpoint,
+                    endpoints=[ResolvedEndpoint(url="10.0.0.3:8476", actor_id="attempt-2")],
+                ),
+                "jax_coordinator": ResolveResult(
+                    name="jax_coordinator",
+                    endpoints=[ResolvedEndpoint(url="10.0.0.4:8476", actor_id="root")],
+                ),
             }
         )
     )
@@ -295,6 +329,8 @@ def test_initialize_jax_peer_ignores_sibling_job_coordinator(
 
     assert current_endpoint in fake_ctx.resolver.resolved_names
     assert sibling_endpoint not in fake_ctx.resolver.resolved_names
+    assert attempt_scoped_endpoint not in fake_ctx.resolver.resolved_names
+    assert "jax_coordinator" not in fake_ctx.resolver.resolved_names
     jax_args, _jax_options = mock_jax_init.call_args
     assert jax_args == ("10.0.0.1:8476", 2, 1)
 

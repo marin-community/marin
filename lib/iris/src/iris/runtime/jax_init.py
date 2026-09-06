@@ -392,8 +392,8 @@ def initialize_jax(
             ``IRIS_PORT_JAX`` named port and otherwise asks the kernel to select
             an available port. Pass a port only to pin it.
         endpoint_name: Base name for coordinator discovery. Iris scopes the
-            registered name to the child job and its attempt so concurrent
-            sibling jobs in one hierarchy cannot share a coordinator.
+            registered name to the child job so concurrent sibling jobs in one
+            hierarchy cannot share a coordinator.
         poll_timeout: Maximum seconds for non-coordinator tasks to wait for the
             coordinator endpoint to register. Defaults to ``_JAX_DIST_INIT_TIMEOUT``
             so a slow coordinator host on a large-gang cold restart does not abort

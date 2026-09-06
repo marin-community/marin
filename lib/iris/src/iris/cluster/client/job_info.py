@@ -64,8 +64,8 @@ class JobInfo:
         return TaskAttempt(task_id=self.task_id, attempt_id=self.attempt_id)
 
     def scoped_endpoint_name(self, endpoint_name: str) -> str:
-        """Return an endpoint name isolated to this job and attempt."""
-        return f"{endpoint_name}-{self.job_id.to_safe_token()}-attempt-{self.attempt_id}"
+        """Return a name isolated to this job and stable across task attempts."""
+        return f"{endpoint_name}-{self.job_id.to_safe_token()}"
 
     @property
     def job_id(self) -> JobName:
