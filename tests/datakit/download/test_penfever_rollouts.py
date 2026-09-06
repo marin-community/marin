@@ -40,17 +40,17 @@ def test_terminal_protocol_becomes_reasoning_call_and_observation():
     )
 
     messages = document["messages"]
-    assert messages[1]["content"].startswith("Task Description:")
-    assert messages[2]["content"] == "<|start_think|>Inspect first.<|end_think|>"
-    call = messages[2]["tool_calls"][0]
+    assert messages[0]["content"].startswith("Task Description:")
+    assert messages[1]["content"] == "<|start_think|>Inspect first.<|end_think|>"
+    call = messages[1]["tool_calls"][0]
     assert json.loads(call["function"]["arguments"])["commands"][0]["keystrokes"] == "ls\n"
-    assert messages[3] == {
+    assert messages[2] == {
         "role": "tool",
         "content": "New Terminal Output:\nfile.py",
         "name": "terminal",
         "tool_call_id": call["id"],
     }
-    assert messages[4]["content"].endswith("Task complete.")
+    assert messages[3]["content"].endswith("Task complete.")
     assert json.loads(document["chat_template_kwargs"])["tools"][0]["name"] == "terminal"
 
 

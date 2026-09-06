@@ -34,7 +34,7 @@ from marin.datakit.normalize import (
 )
 from marin.execution.step_spec import StepSpec
 
-CHAT_NORMALIZE_VERSION = "2026.09.05.3"
+CHAT_NORMALIZE_VERSION = "2026.09.06"
 MAX_REJECTED_RECORD_FRACTION = 0.05
 _INLINE_TOOL_SYNTAX = re.compile(r"<tool_call(?::[^>]*)?>", re.IGNORECASE)
 _TOOL_RESPONSE_SYNTAX = re.compile(r"</?tool_response(?:\s|>)", re.IGNORECASE)
