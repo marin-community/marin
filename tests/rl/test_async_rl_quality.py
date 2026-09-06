@@ -312,6 +312,34 @@ def test_capture_rejects_a_dump_changed_between_proof_and_quality_passes(quality
         capture.qualify(specification)
 
 
+def test_capture_reduces_a_proven_intermediate_evaluation_without_replacing_reward(quality_capture):
+    specification, fs_path, _ = quality_capture
+    run = specification["runs"][0]
+    run["quality_steps"] = run["expected_eval_steps"] = [0, 20, 100]
+    root = run["envelope"]["request"]["output"]["export_root"]
+    for filename in ("rows.jsonl", "aggregated_results.jsonl"):
+        original = Path(fs_path(root + "/dumped_evals/global_step_0_evals/" + filename)[1])
+        target = Path(fs_path(root + "/dumped_evals/global_step_20_evals/" + filename)[1])
+        target.write_bytes(original.read_bytes())
+    run["prior_dump_proofs"]["20"] = run["prior_dump_proofs"]["0"]
+    result = capture.qualify(specification)
+    evaluations = result["runs"]["hidden-arm"]["evaluations"]
+    assert [evaluation["step"] for evaluation in evaluations] == [0, 20, 100]
+    assert [evaluation["counts"]["raw_correct"] for evaluation in evaluations] == [128, 128, 128]
+    assert [evaluation["counts"]["extracted_correct"] for evaluation in evaluations] == [64, 64, 64]
+    assert result["sample_rows"] == 48
+
+
+@pytest.mark.parametrize("steps", [[0, 40, 20, 100], [0, 20, 20, 100], [20, 100], [0, 20], [0, 21, 100]])
+def test_capture_rejects_undeclared_or_selected_endpoint_schedules(quality_capture, steps):
+    specification, _, _ = quality_capture
+    run = specification["runs"][0]
+    run["expected_eval_steps"] = [0, 20, 40, 60, 80, 100]
+    run["quality_steps"] = steps
+    with pytest.raises(ValueError, match="ordered evaluation points"):
+        capture.qualify(specification)
+
+
 @pytest.mark.parametrize(
     "text,expected",
     [

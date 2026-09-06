@@ -96,6 +96,33 @@ Overlapping memory scopes are flagged rather than assigned independent peaks.
 Optimizer precision requires its own controlled Qwen study before changing the
 Snowball reference or qualifying a smaller learner allocation.
 
+## Preview the Qwen objective and cadence comparison
+
+The six-arm development family crosses C1/A1 and C4/A3 with `behavior_clip`,
+`regular_no_tis`, and `regular_tis`. Each arm uses 100 updates, evaluations at
+0/20/40/60/80/100, eight learner GPUs, eight inference GPUs, and native Megatron
+optimizer precision. Preview one arm with:
+
+```bash
+uv run --no-sync python -m experiments.post_training.async_rl \
+  --version "$RL_STUDY_VERSION" --cluster cw-us-east-02a \
+  --scale screening --runner async --stage rl --completion metrics \
+  --screening-steps 100 --eval-interval 20 --seed 17 --no-kl-loss \
+  --response-tokens 1024 --eval-response-tokens 1024 --context-tokens 2048 \
+  --inference-replicas 8 --weight-sync-interval 4 --max-staleness-steps 3 \
+  --correction behavior_clip --epoch-seeded-shuffle \
+  --timeout-seconds 3600 --dry-run
+```
+
+For the other arms, change only the cadence/staleness pair and correction choice.
+Use one immutable family version and the same published source pin. Run through
+a bounded regional CPU coordinator after checking capacity; the six-arm cohort
+allocates 96 H100s. Shared epoch shuffling does not guarantee equal consumed
+token work. Report token counts and contention, and repeat promising contrasts
+at another training seed before Snowball promotion. C1/A1 versus C4/A3 changes
+both publication cadence and the allowed age; an additional control is needed
+to isolate their individual effects.
+
 ## Experimental controls
 
 | Control | Meaning |
@@ -230,7 +257,8 @@ contrasts.
 Run `PYTHONPATH=. uv run --locked --script experiments/post_training/async_rl_quality_audit.py --spec spec.json`
 from the repository root in a CPU job in the retained artifacts' region. Its
 standalone lock includes the terminal auditor's Hydra dependency. Supply up to six historical audit
-run specifications, initial/final `quality_steps`, explicit `thinking` mode,
+run specifications, two to six ordered `quality_steps` including initial/final
+endpoints, explicit `thinking` mode,
 `prior_dump_proofs` from successful terminal audits, an integer `sample_seed`,
 and a fresh regional `output_prefix`. The capture verifies the actual development
 selection manifest and token hashes. It writes a bounded blinded sample, a
@@ -241,3 +269,8 @@ For another qualification round, supply `exclude_response_text_sha256` with
 hashes of all previously adjudicated full assistant texts. Sampling excludes
 those texts across endpoints while aggregate diagnostics still cover every row.
 Keep the previous labels, extractor version and results when revising the contract.
+For a frozen extractor's development learning curves, use the declared schedule
+`[0, 20, 40, 60, 80, 100]` with a prior terminal-audit dump proof for every point.
+The same response-integrity and development-window checks apply to intermediate
+evaluations. Retain the extractor's qualification evidence separately: running
+this capture does not establish qualification or change the original reward.

@@ -183,9 +183,17 @@ def qualify(specification: dict) -> dict:
     for run in runs:
         audit.check(run["expected_eval_rows"] == 128, "Quality qualification uses development128 only")
         audit.check(not run.get("locked_validation"), "Do not tune extraction on held-out responses")
+        steps = run["quality_steps"]
         audit.check(
-            run["quality_steps"] == [0, run["expected_steps"]] and run["expected_steps"] > 0,
-            "Qualify initial/final endpoints only",
+            isinstance(steps, list)
+            and 2 <= len(steps) <= 6
+            and all(type(step) is int for step in steps)
+            and steps == sorted(set(steps))
+            and steps[0] == 0
+            and steps[-1] == run["expected_steps"]
+            and run["expected_steps"] > 0
+            and set(steps) <= set(run["expected_eval_steps"]),
+            "Declare two to six ordered evaluation points including initial/final endpoints",
         )
         if "envelope_uri" in run:
             audit.check(run["envelope_uri"].startswith(REGIONAL_PREFIX), "Unqualified envelope region")
