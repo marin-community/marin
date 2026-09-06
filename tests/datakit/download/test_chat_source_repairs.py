@@ -11,6 +11,7 @@ from marin.datakit.download.penfever_rollouts import row_to_chat_doc as penfever
 from marin.datakit.download.swe_rebench_openhands import row_to_chat_doc as openhands_row_to_chat_doc
 from marin.datakit.download.swe_zero_12m import row_to_chat_doc as swe_zero_row_to_chat_doc
 from marin.datakit.download.synthetic1 import row_to_chat_doc as synthetic1_row_to_chat_doc
+from marin.datakit.sft_sources import all_sft_sources
 
 
 def test_coderforge_keeps_reward_out_of_model_visible_messages() -> None:
@@ -198,6 +199,10 @@ def test_penfever_keeps_unsuccessful_trajectory_without_visible_outcome() -> Non
     [document] = penfever_row_to_chat_doc(PENFEVER_ROLLOUTS[0])(row)
     assert [message["role"] for message in document["messages"]] == ["user", "assistant"]
     assert document["outcome"] == "This trajectory failed to solve the task."
+
+
+def test_sft_sources_exclude_transcripts_without_user_prompts() -> None:
+    assert "penfever-traces/qwen35-122b-131k-opencode/nemotron-gym-agent-workplace-v2" not in all_sft_sources()
 
 
 def test_synthetic1_keeps_incorrect_solution_without_visible_outcome() -> None:

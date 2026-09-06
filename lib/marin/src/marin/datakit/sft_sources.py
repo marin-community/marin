@@ -33,6 +33,13 @@ _CHAT_FORMAT = ChatLmDatasetFormat(
     pack=True,
     chat_template_kwargs="chat_template_kwargs",
 )
+_EXCLUDED_CHAT_SOURCES = frozenset(
+    {
+        # These OpenCode traces omit the user request from every conversation, so
+        # they cannot form valid training examples without inventing prompt text.
+        "penfever-traces/qwen35-122b-131k-opencode/nemotron-gym-agent-workplace-v2",
+    }
+)
 _ChatSourceRow = tuple[str, Callable[[], tuple[StepSpec, ...]]]
 
 
@@ -60,7 +67,7 @@ def all_sft_sources() -> dict[str, DatakitChatSource]:
     rows.extend(
         (name, lambda source_name=name: penfever_steps()[source_name])
         for name in all_sources()
-        if name.startswith("penfever-traces/")
+        if name.startswith("penfever-traces/") and name not in _EXCLUDED_CHAT_SOURCES
     )
     rows.extend(
         (name, lambda source_name=name: nemotron_steps()[source_name])
