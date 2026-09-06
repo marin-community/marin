@@ -123,14 +123,16 @@ def row_to_chat_doc(row: dict) -> list[dict]:
         return []
     messages, metadata = converted
     tag = result_to_tag(row.get("result"))
-    if tag:
-        messages.insert(0, {"role": "system", "content": tag})
+    if tag == TRAJECTORY_FAILED_TAG:
+        counters.pipeline.update_counter("agenttrove/chat_failed_filtered", 1)
+        return []
     return checked_chat_document(
         messages,
         HF_DATASET_ID,
         counter_prefix="agenttrove/chat",
         teacher=row.get("original_teacher") or "",
         task_source=row.get("original_source") or "",
+        result=row.get("result") or "",
         **metadata,
     )
 
@@ -193,6 +195,6 @@ def agenttrove_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/agenttrove",
         deps=[download],
         fn=lambda output_path: transform_chat(download.output_path, output_path),
-        hash_attrs={"version": "2026.09.05.2"},
+        hash_attrs={"version": "2026.09.05.3"},
     )
     return processed, normalize_chat_step(name="normalized-chat/agenttrove", download=processed)

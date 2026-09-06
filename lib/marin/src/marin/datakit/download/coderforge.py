@@ -4,9 +4,8 @@
 """togethercomputer/CoderForge-Preview dataset download and transform.
 
 Downloads raw parquet files from HuggingFace, then transforms each trajectory
-into a single document by rendering the chat messages as readable text with a
-reward tag prefix so the model learns to distinguish successful and failed
-rollouts.
+into either legacy rendered text or canonical chat. The legacy path prefixes a
+reward tag; canonical chat preserves reward only as non-model-visible metadata.
 """
 
 import json
@@ -69,8 +68,11 @@ def row_to_chat_doc(row: dict) -> list[dict]:
     messages = json.loads(messages_raw) if isinstance(messages_raw, str) else messages_raw
     if not messages:
         return []
-    tag = reward_to_tag(row.get("reward"))
-    return [chat_document([{"role": "system", "content": tag}, *messages], HF_DATASET_ID)]
+    reward = row.get("reward")
+    if reward is not None and reward < 1.0:
+        counters.pipeline.update_counter("coderforge/chat_failed_filtered", 1)
+        return []
+    return [chat_document(messages, HF_DATASET_ID, reward=reward)]
 
 
 def transform(input_path: str, output_path: str) -> None:
@@ -135,6 +137,6 @@ def coderforge_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/coderforge-preview",
         deps=[dl],
         fn=lambda output_path: transform_chat(dl.output_path, output_path),
-        hash_attrs={"version": "2026.09.04"},
+        hash_attrs={"version": "2026.09.05.1"},
     )
     return processed, normalize_chat_step(name="normalized-chat/coderforge", download=processed)

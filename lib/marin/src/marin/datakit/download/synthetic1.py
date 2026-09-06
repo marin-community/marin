@@ -65,15 +65,18 @@ def row_to_chat_doc(row: dict) -> list[dict]:
     response = row.get("llm_response", "")
     if not isinstance(prompt, str) or not isinstance(response, str) or not prompt or not response.strip():
         return []
-    tag = score_to_tag(row.get("score"))
+    score = row.get("score")
+    if score is not None and score < 1.0:
+        counters.pipeline.update_counter("synthetic1/chat_incorrect_filtered", 1)
+        return []
     return checked_chat_document(
         [
-            {"role": "system", "content": tag},
             {"role": "user", "content": prompt},
             {"role": "assistant", "content": response},
         ],
         HF_DATASET_ID,
         counter_prefix="synthetic1/chat",
+        score=score,
     )
 
 
@@ -132,6 +135,6 @@ def synthetic1_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/synthetic-1",
         deps=[dl],
         fn=lambda output_path: transform_chat(dl.output_path, output_path),
-        hash_attrs={"version": "2026.09.05.2"},
+        hash_attrs={"version": "2026.09.05.3"},
     )
     return processed, normalize_chat_step(name="normalized-chat/synthetic-1", download=processed)

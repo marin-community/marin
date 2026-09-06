@@ -1,11 +1,55 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from marin.datakit.download.agenttrove import row_to_chat_doc as agenttrove_row_to_chat_doc
+from marin.datakit.download.coderforge import row_to_chat_doc as coderforge_row_to_chat_doc
 from marin.datakit.download.davinci_dev import env_row_to_chat_doc as davinci_row_to_chat_doc
 from marin.datakit.download.gpt_oss_rollouts import row_to_chat_doc as gpt_oss_row_to_chat_doc
 from marin.datakit.download.numinamath_tir import row_to_chat_doc as numinamath_row_to_chat_doc
+from marin.datakit.download.penfever_rollouts import PENFEVER_ROLLOUTS
+from marin.datakit.download.penfever_rollouts import row_to_chat_doc as penfever_row_to_chat_doc
 from marin.datakit.download.swe_rebench_openhands import row_to_chat_doc as openhands_row_to_chat_doc
 from marin.datakit.download.swe_zero_12m import row_to_chat_doc as swe_zero_row_to_chat_doc
+from marin.datakit.download.synthetic1 import row_to_chat_doc as synthetic1_row_to_chat_doc
+
+
+def test_coderforge_keeps_reward_out_of_model_visible_messages() -> None:
+    row = {
+        "reward": 1.0,
+        "messages": [
+            {"role": "system", "content": "You are a coding agent."},
+            {"role": "user", "content": "Fix the bug."},
+            {"role": "assistant", "content": "Done."},
+        ],
+    }
+
+    [document] = coderforge_row_to_chat_doc(row)
+    assert document["messages"] == row["messages"]
+    assert document["reward"] == 1.0
+
+
+def test_coderforge_drops_explicitly_failed_trajectory() -> None:
+    row = {
+        "reward": 0.0,
+        "messages": [
+            {"role": "user", "content": "Fix the bug."},
+            {"role": "assistant", "content": "I could not fix it."},
+        ],
+    }
+
+    assert coderforge_row_to_chat_doc(row) == []
+
+
+def test_agenttrove_drops_explicitly_failed_trajectory() -> None:
+    row = {
+        "result": "timeout",
+        "conversations": [
+            {"role": "user", "content": "Fix the bug."},
+            {"role": "assistant", "content": '{"commands":[],"task_complete":true}'},
+        ],
+    }
+
+    assert agenttrove_row_to_chat_doc(row) == []
 
 
 def test_davinci_drops_terminal_submit_observation() -> None:
@@ -34,7 +78,8 @@ def test_davinci_drops_terminal_submit_observation() -> None:
     }
 
     [document] = davinci_row_to_chat_doc(row)
-    assert [message["role"] for message in document["messages"]] == ["system", "user", "assistant"]
+    assert [message["role"] for message in document["messages"]] == ["user", "assistant"]
+    assert document["success"] is True
     assert document["messages"][-1]["tool_calls"][0]["function"]["name"] == "submit"
 
 
@@ -107,6 +152,36 @@ def test_openhands_merges_adjacent_user_context() -> None:
     [document] = openhands_row_to_chat_doc(row)
     assert [message["role"] for message in document["messages"]] == ["user", "assistant"]
     assert document["messages"][0]["content"] == "Fix the bug.\n\nRepository: example/project"
+
+
+def test_openhands_drops_explicitly_failed_trajectory() -> None:
+    row = {
+        "resolved": 0,
+        "trajectory": [
+            {"role": "user", "content": "Fix the bug."},
+            {"role": "assistant", "content": "I could not fix it."},
+        ],
+    }
+
+    assert openhands_row_to_chat_doc(row) == []
+
+
+def test_penfever_drops_explicitly_failed_trajectory() -> None:
+    row = {
+        "result": "0",
+        "conversations": [
+            {"role": "user", "content": "Fix the bug."},
+            {"role": "assistant", "content": '{"commands":[],"task_complete":true}'},
+        ],
+    }
+
+    assert penfever_row_to_chat_doc(PENFEVER_ROLLOUTS[0])(row) == []
+
+
+def test_synthetic1_drops_incorrect_solution() -> None:
+    row = {"score": 0.2, "prompt": "Solve it.", "llm_response": "A wrong answer."}
+
+    assert synthetic1_row_to_chat_doc(row) == []
 
 
 def test_swe_zero_converts_reasoning_bash_and_observation() -> None:

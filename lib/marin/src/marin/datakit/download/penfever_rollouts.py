@@ -1096,6 +1096,8 @@ def row_to_doc(dataset: PenfeverRollout) -> Callable[[dict], list[dict]]:
 def row_to_chat_doc(dataset: PenfeverRollout) -> Callable[[dict], list[dict]]:
     """Build a row-to-structured-chat transform for one repository."""
 
+    counter_prefix = f"penfever_rollouts/{dataset.cohort_name}/{dataset.task_source}"
+
     def transform_row(row: dict) -> list[dict]:
         conversations = row.get("conversations")
         if not conversations:
@@ -1111,14 +1113,16 @@ def row_to_chat_doc(dataset: PenfeverRollout) -> Callable[[dict], list[dict]]:
             return []
         messages, metadata = converted
         tag = outcome_tag(row.get("verifier_output"), row.get("result"))
-        if tag:
-            messages.insert(0, {"role": "system", "content": tag})
+        if tag == TRAJECTORY_FAILED_TAG:
+            counters.pipeline.update_counter(f"{counter_prefix}/chat_failed_filtered", 1)
+            return []
         return [
             chat_document(
                 messages,
                 dataset.hf_dataset_id,
                 teacher=dataset.teacher,
                 task_source=dataset.task_source,
+                outcome=tag or "",
                 **metadata,
             )
         ]
@@ -1189,7 +1193,7 @@ def _rollout_chat_steps(dataset: PenfeverRollout) -> tuple[StepSpec, StepSpec]:
         name=f"processed-chat/{dataset.marin_name}",
         deps=[download],
         fn=lambda output_path: transform_chat(dataset, download.output_path, output_path),
-        hash_attrs={"version": "2026.09.05.2", "teacher": dataset.teacher, "task_source": dataset.task_source},
+        hash_attrs={"version": "2026.09.05.3", "teacher": dataset.teacher, "task_source": dataset.task_source},
     )
     return processed, normalize_chat_step(name=f"normalized-chat/{dataset.marin_name}", download=processed)
 

@@ -210,11 +210,12 @@ def env_row_to_chat_doc(row: dict) -> list[dict]:
     if messages[-1].get("role") != "assistant":
         counters.pipeline.update_counter("davinci_dev/env/chat_incomplete_filtered", 1)
         return []
-    tag = _success_to_tag(row.get("success") if "success" in row else None)
-    if tag:
-        messages = [{"role": "system", "content": tag}, *messages]
+    success = row.get("success") if "success" in row else None
+    if success is False:
+        counters.pipeline.update_counter("davinci_dev/env/chat_failed_filtered", 1)
+        return []
     try:
-        return [chat_document(messages, "GAIR/daVinci-Dev/env-native")]
+        return [chat_document(messages, "GAIR/daVinci-Dev/env-native", success=success)]
     except ReasoningFormatError:
         counters.pipeline.update_counter("davinci_dev/env/chat_malformed_reasoning_filtered", 1)
         return []
@@ -283,7 +284,7 @@ def davinci_dev_env_native_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/davinci-dev-env-native",
         deps=[dl],
         fn=lambda output_path: transform_env_native_chat(dl.output_path, output_path),
-        hash_attrs={"version": "2026.09.04.2"},
+        hash_attrs={"version": "2026.09.05"},
     )
     return processed, normalize_chat_step(
         name="normalized-chat/davinci-dev-env-native",

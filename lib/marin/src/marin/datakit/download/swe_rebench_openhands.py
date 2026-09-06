@@ -62,6 +62,10 @@ def row_to_chat_doc(row: dict) -> list[dict]:
         return []
     if isinstance(trajectory, str):
         trajectory = json.loads(trajectory)
+    resolved = row.get("resolved")
+    if resolved is not None and resolved < 1:
+        counters.pipeline.update_counter("swe_rebench_openhands/chat_failed_filtered", 1)
+        return []
     if any(
         message.get("role") == "assistant"
         and isinstance(message.get("content"), str)
@@ -79,10 +83,7 @@ def row_to_chat_doc(row: dict) -> list[dict]:
             continue
         merged_trajectory.append(dict(message))
     trajectory = merged_trajectory
-    tag = resolved_to_tag(row.get("resolved"))
-    if tag:
-        trajectory = [{"role": "system", "content": tag}, *trajectory]
-    return [chat_document(trajectory, HF_DATASET_ID)]
+    return [chat_document(trajectory, HF_DATASET_ID, resolved=resolved)]
 
 
 def transform(input_path: str, output_path: str) -> None:
@@ -142,6 +143,6 @@ def swe_rebench_openhands_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/swe-rebench-openhands-trajectories",
         deps=[dl],
         fn=lambda output_path: transform_chat(dl.output_path, output_path),
-        hash_attrs={"version": "2026.09.04.2"},
+        hash_attrs={"version": "2026.09.05"},
     )
     return processed, normalize_chat_step(name="normalized-chat/swe-rebench-openhands", download=processed)
