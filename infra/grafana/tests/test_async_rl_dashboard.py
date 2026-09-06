@@ -129,6 +129,13 @@ def store():
         for metric, value in [
             ("reward/avg_raw_reward", 0.5),
             ("eval/all/avg_score", 0.25),
+            ("eval/all/response_tokens_mean", 150),
+            ("eval/all/response_tokens_max", 300),
+            ("eval/all/length_stop_fraction", 0.5),
+            ("eval/all/completed_stop_fraction", 0.5),
+            ("eval/all/stop_reason_coverage", 1),
+            ("eval/all/length_stop_score_contribution", 0.2),
+            ("eval/all/completed_stop_score_contribution", 0.05),
             ("policy/policy_loss", -0.2),
             ("policy/raw_grad_norm", 4),
             ("consumed/length_stop_fraction", 0.25),
@@ -573,3 +580,44 @@ def test_empty_selection_is_explicit_and_unavailable(age_store):
     table, c = query_age_panels(age_store)
     assert table[0]["status"] == "No qualifying uniform-age batches" and table[0]["age"] is None
     assert c["uniform_age_token_fraction"] is None and c["observed_loss_tokens"] is None
+
+
+def test_evaluation_stop_panels_preserve_score_contributions_and_missing_coverage(store):
+    length = {row["series"]: row["value"] for row in query(store, "Evaluation response length and stop coverage")}
+    assert length == {
+        "eval/all/response_tokens_mean · driver": 150,
+        "eval/all/response_tokens_max · driver": 300,
+        "eval/all/length_stop_fraction · driver": 0.5,
+        "eval/all/completed_stop_fraction · driver": 0.5,
+        "eval/all/stop_reason_coverage · driver": 1,
+    }
+    score = {row["series"]: row["value"] for row in query(store, "Evaluation score contributions by stop class")}
+    assert score == {
+        "eval/all/avg_score · driver": 0.25,
+        "eval/all/length_stop_score_contribution · driver": 0.2,
+        "eval/all/completed_stop_score_contribution · driver": 0.05,
+    }
+    store.execute(
+        'DELETE FROM "telemetry_v1.marinskyrl" WHERE '
+        "json_get(attributes_json,'metric') LIKE 'eval/%/length_stop_%' OR "
+        "json_get(attributes_json,'metric') LIKE 'eval/%/completed_stop_%'"
+    )
+    # Partial/legacy coverage has no fraction/contribution records: the SQL must not synthesize zeros.
+    length = query(store, "Evaluation response length and stop coverage")
+    assert len(length) == 3
+    assert query(store, "Evaluation score contributions by stop class")[0]["value"] == 0.25
+    assert len(query(store, "Evaluation score contributions by stop class")) == 1
+    store.execute('DELETE FROM "telemetry_v1.marinskyrl"')
+    assert query(store, "Evaluation response length and stop coverage") == []
+    assert query(store, "Evaluation score contributions by stop class") == []
+
+
+def test_periodic_evaluation_metrics_logged_in_train_phase_are_visible(store):
+    # The real trainer logs the initial eval separately, then merges periodic evals into its training row.
+    store.execute(
+        'UPDATE "telemetry_v1.marinskyrl" SET '
+        'attributes_json=json_merge_patch(attributes_json, \'{"phase":"train"}\') '
+        "WHERE json_get(attributes_json,'metric') LIKE 'eval/%'"
+    )
+    assert len(query(store, "Evaluation response length and stop coverage")) == 5
+    assert len(query(store, "Evaluation score contributions by stop class")) == 3

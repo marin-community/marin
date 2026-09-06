@@ -15,6 +15,8 @@ Run in the artifacts' region with inherited credentials. No training runtime is 
 The spec contains one to eight runs with label, run_id, attempt_id, receipt_uri,
 envelope or envelope_uri, wandb_url, expected_steps, expected_eval_steps, and
 expected_eval_rows. Optional expected_request/expected_config maps lock provenance.
+require_eval_response_metrics defaults false; true requires all independently
+available response/stop supplements in both aggregate dumps and W&B.
 require_launcher_success defaults true; false permits verified training evidence
 from a failed launcher without calling it clean end-to-end completion.
 initial_eval_repeat_count verifies startup_pass_N dumps and W&B namespaces.
@@ -448,6 +450,60 @@ def audit_locked_validation(spec: JSONDict, request: JSONDict) -> JSONDict | Non
     }
 
 
+EVAL_RESPONSE_METRICS = {
+    "response_tokens",
+    "response_tokens_mean",
+    "response_tokens_max",
+    "sequences",
+    "length_stop_count",
+    "known_stop_count",
+    "unknown_stop_count",
+    "stop_reason_coverage",
+    "length_stop_fraction",
+    "completed_stop_fraction",
+    "length_stop_score_contribution",
+    "completed_stop_score_contribution",
+}
+
+
+def evaluation_response_metrics(responses: list[tuple[int, float, str | None]]) -> JSONDict:
+    """Independently summarize finalized dump lengths and optimization-score sums.
+
+    Stop labels describe engine/runner termination, not semantic answer quality.
+    None and empty labels alone are unknown, matching the native consumed ledger.
+    """
+    count = len(responses)
+    check(count > 0, "Cannot summarize an empty evaluation population")
+    tokens = sum(length for length, _, _ in responses)
+    known = sum(reason is not None and reason != "" for _, _, reason in responses)
+    length_count = sum(reason == "length" for _, _, reason in responses)
+    metrics = {
+        "response_tokens": tokens,
+        "response_tokens_mean": tokens / count,
+        "response_tokens_max": max(length for length, _, _ in responses),
+        "sequences": count,
+        "length_stop_count": length_count,
+        "known_stop_count": known,
+        "unknown_stop_count": count - known,
+        "stop_reason_coverage": known / count,
+    }
+    if known == count:
+        completed = {"complete", "end_turn", "eos", "stop"}
+        metrics.update(
+            {
+                "length_stop_fraction": length_count / count,
+                "completed_stop_fraction": sum(reason in completed for _, _, reason in responses) / count,
+                "length_stop_score_contribution": (
+                    sum(score for _, score, reason in responses if reason == "length") / count
+                ),
+                "completed_stop_score_contribution": (
+                    sum(score for _, score, reason in responses if reason in completed) / count
+                ),
+            }
+        )
+    return metrics
+
+
 def audit_eval_dump(
     root: str,
     step: int,
@@ -458,7 +514,9 @@ def audit_eval_dump(
     dump_namespace: str | None = None,
     require_engine_indices: bool = False,
     expected_engine_count: int | None = None,
+    require_eval_response_metrics: bool = False,
 ) -> tuple[JSONDict, EvalRecords]:
+    check(type(require_eval_response_metrics) is bool, "require_eval_response_metrics must be boolean")
     uri = posixpath.join(root, "dumped_evals", f"global_step_{step}_evals")
     if dump_namespace is not None:
         check(
@@ -468,7 +526,7 @@ def audit_eval_dump(
         uri = posixpath.join(uri, dump_namespace)
     entries = list_entries(uri)
     if not entries:
-        check(not required, f"Missing evaluation dump at step {step}")
+        check(not (required or require_eval_response_metrics), f"Missing evaluation dump at step {step}")
         return {"step": step, "present": False, "dump_namespace": dump_namespace}, []
     check(all(entry["type"] == "file" for entry in entries), "Unexpected nested evaluation directory")
     files = [entry for entry in entries if posixpath.basename(entry["name"]) != "aggregated_results.jsonl"]
@@ -476,6 +534,7 @@ def audit_eval_dump(
     aggregate = read_json(posixpath.join(uri, "aggregated_results.jsonl"))
     ordinal_records = {}
     source_scores = collections.defaultdict(list)
+    source_responses = collections.defaultdict(list)
     uid_scores = collections.defaultdict(list)
     source_uids = collections.defaultdict(lambda: collections.defaultdict(list))
     stops = collections.Counter()
@@ -539,6 +598,7 @@ def audit_eval_dump(
                 ]
                 dataset = (row["data_source"] or "unknown").replace("/", "_")
                 source_scores[dataset].append(score)
+                source_responses[dataset].append((len(row["response_ids"]), score, row["stop_reason"]))
                 uid_scores[row["uid"]].append(outcome)
                 source_uids[dataset][row["uid"]].append(outcome)
                 stops[str(row["stop_reason"])] += 1
@@ -563,6 +623,29 @@ def audit_eval_dump(
                 key in metrics and math.isclose(value, metrics[key], abs_tol=1e-7, rel_tol=1e-7),
                 f"Evaluation {label} differs at step {step}: {key}",
             )
+    supplemental = {}
+    populations = {"all": [row for rows in source_responses.values() for row in rows], **source_responses}
+    for dataset, responses in populations.items():
+        supplemental.update(
+            {f"eval/{dataset}/{name}": value for name, value in evaluation_response_metrics(responses).items()}
+        )
+    for label, metrics in (("dump aggregate", aggregate), ("W&B", wandb_metrics)):
+        if require_eval_response_metrics:
+            check(
+                supplemental.keys() <= metrics.keys(),
+                f"Evaluation {label} missing required response metrics at step {step}: "
+                f"{sorted(supplemental.keys() - metrics.keys())}",
+            )
+        for key, value in metrics.items():
+            if key.startswith("eval/") and key.rsplit("/", 1)[-1] in EVAL_RESPONSE_METRICS:
+                check(key in supplemental, f"Evaluation {label} reports {key} without a covered population")
+                check(
+                    isinstance(value, (int, float))
+                    and math.isfinite(value)
+                    and math.isclose(supplemental[key], value, abs_tol=1e-7, rel_tol=1e-7),
+                    f"Evaluation {label} differs at step {step}: {key}",
+                )
+    reconstructed.update(supplemental)
     ordered = [ordinal_records[i] for i in range(expected_rows)]
     return {
         "step": step,
@@ -584,6 +667,16 @@ def audit_eval_dump(
         "bytes_streamed": byte_count,
         "reward_reduction": "mean of token-reward sums; pass@n from final reward (checked against aggregate)",
         "unshaped_reward_channel_in_dump": False,
+        "response_metric_scope": (
+            "finalized trajectory token lengths; stop labels do not certify answer completeness or balanced thinking"
+        ),
+        "stop_score_contribution_denominator": (
+            "all evaluation sequences in the reported dataset; optimization-score sums, not conditional accuracy"
+        ),
+        "response_metrics_required": require_eval_response_metrics,
+        "supplemental_metric_verification": (
+            "each advertised dump/W&B supplemental metric checked; absent legacy metrics allowed"
+        ),
     }, ordered
 
 
@@ -968,6 +1061,7 @@ def audit_run(
                 namespace,
                 spec.get("require_engine_indices", False),
                 engine_count,
+                require_eval_response_metrics=spec.get("require_eval_response_metrics", False),
             )
             dumps.append(summary)
             if retain_evaluations and step in (0, spec["expected_steps"]) and namespace is None:

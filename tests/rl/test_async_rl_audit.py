@@ -470,6 +470,172 @@ class AuditTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "dump aggregate differs"):
             audit.audit_run(self.input, self.api)
 
+    def response_dump(self, reasons, scores, datasets=None, metrics=None):
+        rows = []
+        for i, (reason, score) in enumerate(zip(reasons, scores, strict=True)):
+            rows.append(
+                {
+                    "uid": str(i),
+                    "row_ordinal": i,
+                    "token_provenance": "finalized_trajectory",
+                    "generator_engine_index": 0,
+                    "prompt_token_ids": [i],
+                    "response_ids": [7] * i,
+                    "prompt_token_ids_sha256": audit.canonical_sha([i]),
+                    "response_ids_sha256": audit.canonical_sha([7] * i),
+                    "response_length": i,
+                    "score": score,
+                    "stop_reason": reason,
+                    "data_source": "gsm8k" if datasets is None else datasets[i],
+                }
+            )
+        self.dump_paths[0].write_text("".join(json.dumps(row) + "\n" for row in rows))
+        self.write(self.dump_paths[0].parent / "aggregated_results.jsonl", metrics)
+        return rows
+
+    def test_response_supplements_preserve_legacy_primary_and_use_all_sequence_denominator(self):
+        # Scalar and tokenwise scores differ from final-token outcome semantics.
+        primary = {
+            "eval/all/avg_score": 0.25,
+            "eval/all/pass_at_1": 0.25,
+            "eval/gsm8k/avg_score": 0.25,
+            "eval/gsm8k/pass_at_1": 0.25,
+        }
+        self.response_dump(["length", "stop", "abort", "unknown"], [0.5, [2, -1], -0.5, []], metrics=primary)
+        summary, records = audit.audit_eval_dump(self.request["output"]["export_root"], 0, 4, 1, primary, True)
+        values = summary["metrics"]
+        self.assertEqual([r[3] for r in records], [0.5, 1, -0.5, 0])
+        self.assertEqual([len(r) for r in records], [6] * 4)
+        self.assertEqual({key: values[key] for key in primary}, primary)
+        self.assertEqual(values["eval/all/response_tokens"], 6)
+        self.assertEqual(values["eval/all/response_tokens_mean"], 1.5)
+        self.assertEqual(values["eval/all/response_tokens_max"], 3)
+        self.assertEqual(values["eval/all/known_stop_count"], 4)
+        self.assertEqual(values["eval/all/length_stop_fraction"], 0.25)
+        self.assertEqual(values["eval/all/completed_stop_fraction"], 0.25)
+        self.assertEqual(values["eval/all/length_stop_score_contribution"], 0.125)
+        self.assertEqual(values["eval/all/completed_stop_score_contribution"], 0.25)
+        # Abort is known but neither completed nor length; contributions need not sum to raw score.
+
+    def test_unknown_stop_omits_global_contributions_but_keeps_covered_dataset(self):
+        primary = {
+            "eval/all/avg_score": 0.5,
+            "eval/all/pass_at_1": 0.5,
+            "eval/a_b/avg_score": 1.0,
+            "eval/a_b/pass_at_1": 1.0,
+            "eval/other/avg_score": 0.0,
+            "eval/other/pass_at_1": 0.0,
+        }
+        self.response_dump(["length", "eos", None, ""], [1, 1, 0, 0], ["a/b", "a/b", "other", "other"], primary)
+        result, _ = audit.audit_eval_dump(self.request["output"]["export_root"], 0, 4, 1, primary, True)
+        values = result["metrics"]
+        self.assertEqual(values["eval/all/stop_reason_coverage"], 0.5)
+        self.assertEqual(values["eval/all/unknown_stop_count"], 2)
+        self.assertNotIn("eval/all/length_stop_fraction", values)
+        self.assertNotIn("eval/all/completed_stop_score_contribution", values)
+        self.assertEqual(values["eval/a_b/completed_stop_score_contribution"], 0.5)
+        self.assertEqual(values["eval/other/response_tokens"], 5)
+
+    def test_completed_stop_labels_are_exact_and_not_semantic_answer_checks(self):
+        reasons = ["complete", "end_turn", "eos", "stop", "STOP", " stop", "abort"]
+        primary = {f"eval/{source}/{name}": 1.0 for source in ("all", "gsm8k") for name in ("avg_score", "pass_at_1")}
+        self.response_dump(reasons, [1] * 7, metrics=primary)
+        result, _ = audit.audit_eval_dump(self.request["output"]["export_root"], 0, 7, 1, primary, True)
+        self.assertEqual(result["metrics"]["eval/all/completed_stop_fraction"], 4 / 7)
+        self.assertEqual(result["metrics"]["eval/all/stop_reason_coverage"], 1)
+
+    def test_advertised_supplements_are_verified_in_both_sources(self):
+        for source in ("aggregate", "wandb"):
+            for value in (5, float("nan")):
+                with self.subTest(source=source, value=value):
+                    wrong = self.metrics | {"eval/all/response_tokens": value}
+                    self.write(
+                        self.dump_paths[0].parent / "aggregated_results.jsonl",
+                        wrong if source == "aggregate" else self.metrics,
+                    )
+                    with self.assertRaisesRegex(ValueError, "differs at step 0: eval/all/response_tokens"):
+                        audit.audit_eval_dump(
+                            self.request["output"]["export_root"],
+                            0,
+                            2,
+                            1,
+                            wrong if source == "wandb" else self.metrics,
+                            True,
+                        )
+        valid = self.metrics | {"eval/all/response_tokens": 4, "eval/gsm8k/completed_stop_score_contribution": 0.5}
+        self.write(self.dump_paths[0].parent / "aggregated_results.jsonl", valid)
+        result, _ = audit.audit_eval_dump(self.request["output"]["export_root"], 0, 2, 1, valid, True)
+        self.assertEqual(result["metrics"]["eval/all/response_tokens"], 4)
+
+    def test_advertised_fraction_without_stop_coverage_fails(self):
+        self.response_dump([None, "stop"], [0, 1], metrics=self.metrics)
+        advertised = self.metrics | {"eval/all/length_stop_fraction": 0}
+        with self.assertRaisesRegex(ValueError, "without a covered population"):
+            audit.audit_eval_dump(self.request["output"]["export_root"], 0, 2, 1, advertised, True)
+
+    def enable_required_response_metrics(self):
+        values = {
+            "response_tokens": 4,
+            "response_tokens_mean": 2,
+            "response_tokens_max": 2,
+            "sequences": 2,
+            "length_stop_count": 0,
+            "known_stop_count": 2,
+            "unknown_stop_count": 0,
+            "stop_reason_coverage": 1,
+            "length_stop_fraction": 0,
+            "completed_stop_fraction": 1,
+            "length_stop_score_contribution": 0,
+            "completed_stop_score_contribution": 0.5,
+        }
+        metrics = self.metrics | {
+            f"eval/{source}/{key}": value for source in ("all", "gsm8k") for key, value in values.items()
+        }
+        for path in self.dump_paths:
+            self.write(path.parent / "aggregated_results.jsonl", metrics)
+        self.history[0].update(metrics)
+        self.history[-1].update(metrics)
+        self.input["require_eval_response_metrics"] = True
+        return metrics
+
+    def test_run_spec_requires_response_metrics_in_both_sources(self):
+        for source in ("dump aggregate", "W&B"):
+            with self.subTest(source=source):
+                metrics = self.enable_required_response_metrics()
+                missing = "eval/gsm8k/completed_stop_score_contribution"
+                if source == "dump aggregate":
+                    metrics.pop(missing)
+                    self.write(self.dump_paths[0].parent / "aggregated_results.jsonl", metrics)
+                else:
+                    self.history[0].pop(missing)
+                with self.assertRaisesRegex(ValueError, f"{source} missing required response metrics"):
+                    audit.audit_run(self.input, self.api)
+        self.enable_required_response_metrics()
+        result = audit.audit_run(self.input, self.api)
+        self.assertTrue(all(row["response_metrics_required"] for row in result["eval_dumps"]))
+
+    def test_required_response_metrics_excludes_unavailable_partial_stop_fractions(self):
+        values = {
+            "response_tokens": 1,
+            "response_tokens_mean": 0.5,
+            "response_tokens_max": 1,
+            "sequences": 2,
+            "length_stop_count": 0,
+            "known_stop_count": 1,
+            "unknown_stop_count": 1,
+            "stop_reason_coverage": 0.5,
+        }
+        metrics = self.metrics | {
+            f"eval/{source}/{key}": value for source in ("all", "gsm8k") for key, value in values.items()
+        }
+        self.response_dump([None, "stop"], [0, 1], metrics=metrics)
+        result, _ = audit.audit_eval_dump(
+            self.request["output"]["export_root"], 0, 2, 1, metrics, True, require_eval_response_metrics=True
+        )
+        self.assertTrue(result["response_metrics_required"])
+        self.assertNotIn("eval/all/completed_stop_fraction", result["metrics"])
+        self.assertNotIn("eval/all/length_stop_score_contribution", result["metrics"])
+
     def test_missing_update_fails(self):
         self.history.pop(1)
         with self.assertRaisesRegex(ValueError, "optimizer-step coverage"):
