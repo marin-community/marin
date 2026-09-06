@@ -346,7 +346,7 @@ def compact_mde_vertex_features(config: CompactMdeVertexFeaturesConfig) -> None:
         "token_feature_dir": config.token_feature_dir,
         "expert_manifest_path": expert_manifest_path,
         "dtype": str(dtype),
-        "num_experts": int(len(expert_manifest)),
+        "num_experts": len(expert_manifest),
         "semantics": (
             "Rows follow expert_manifest.csv order. Raw text primary features are NLL substrates; "
             "BPB matrices are diagnostic ratios derived after NLL aggregation."

@@ -32,7 +32,6 @@ from experiments.domain_phase_mix.dolma3_dolmino_top_level_domains import (
     TOP_LEVEL_DOMAIN_TOKEN_COUNTS,
 )
 
-
 TWO_PHASE_ROOT = Path(__file__).resolve().parent
 PPERT_DIR = TWO_PHASE_ROOT / "metric_registry" / "proportional_perturbation_scale_transfer"
 NOISE_DIR = TWO_PHASE_ROOT / "metric_registry" / "raw_metric_matrix_300m"
@@ -259,9 +258,9 @@ def build_epoch_multipliers() -> pd.DataFrame:
                     "phase_0_materialized_epochs": phase_epochs["phase_0"],
                     "phase_1_materialized_epochs": phase_epochs["phase_1"],
                     "materialized_epochs": materialized_epochs,
-                    "epoch_multiplier_vs_proportional": materialized_epochs / proportional_epochs
-                    if proportional_epochs > 0
-                    else np.nan,
+                    "epoch_multiplier_vs_proportional": (
+                        materialized_epochs / proportional_epochs if proportional_epochs > 0 else np.nan
+                    ),
                     "quality_swap_fraction": float(row["quality_swap_fraction"]),
                     "quality_swap_mass": float(row["quality_swap_mass"]),
                     "tv_distance": float(row["tv_distance"]),
@@ -409,8 +408,7 @@ def main() -> None:
     epochs = build_epoch_multipliers()
     target_order = (
         epochs.drop_duplicates("target_unit")
-        .assign(target_label=lambda frame: frame["target_unit"].map(topic_label))
-        ["target_label"]
+        .assign(target_label=lambda frame: frame["target_unit"].map(topic_label))["target_label"]
         .tolist()
     )
     effects.to_csv(EFFECTS_CSV, index=False)

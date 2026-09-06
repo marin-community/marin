@@ -1432,6 +1432,18 @@ SUCCESSOR_HUB_SHAPES = tuple(
     {**s, "interaction_shrink": shrink} for s in SUCCESSOR_SHAPES for shrink in INTERACTION_SHRINKS
 )
 SUCCESSOR_HEAD = models.HeadSpec(kind=models.HeadKind.NNLS, scale_columns=True)
+# Bucket pairs whose product explains the panel's out-of-fold residuals after the single-bucket terms (partial
+# correlation -0.43 / +0.27 / +0.30 for WSPU on Table 9, 2026-09-06; chosen from panel residuals only).
+PANEL_PAIRS = (
+    ("dolmino_synth_qa", "dolmino_synth_instruction"),
+    ("dolmino_synth_math", "dolmino_synth_instruction"),
+    ("dolmino_synth_instruction", "dolma3_arxiv"),
+)
+# Log-deficit floor fractions for the link-with-floor-selection variant (the fixed link uses 0.95).
+LINK_FLOOR_FRACTIONS = (0.5, 0.8, 0.95, 0.99)
+LINK_FLOOR_SHAPES = tuple(
+    {**s, "floor_fraction": fraction} for s in SUCCESSOR_SHAPES for fraction in LINK_FLOOR_FRACTIONS
+)
 
 
 def _successor(
@@ -1843,6 +1855,57 @@ SUCCESSOR_ABLATIONS: tuple[ModelEntry, ...] = (
             "weibull_softplus_unscaled@log_deficit_bounded_link",
             head=models.HeadSpec(kind=models.HeadKind.NNLS, link=models.LinkKind.LOG_DEFICIT_BOUNDED),
         ),
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@log_deficit_bounded_link_floor_cv",
+        "weibull_softplus_unscaled",
+        "link=log_deficit_bounded,floor=inner_cv",
+        _successor(
+            "weibull_softplus_unscaled@log_deficit_bounded_link_floor_cv",
+            shapes=LINK_FLOOR_SHAPES,
+            head=models.HeadSpec(kind=models.HeadKind.NNLS, link=models.LinkKind.LOG_DEFICIT_BOUNDED),
+            extra_dof=1,
+        ),
+        note="Bounded log-deficit link with the floor fraction chosen by inner CV per component (2026-09-06).",
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@log_deficit_bounded_link_total_hub",
+        "weibull_softplus_unscaled",
+        "link=log_deficit_bounded,interaction=total_hub_products",
+        _successor(
+            "weibull_softplus_unscaled@log_deficit_bounded_link_total_hub",
+            _options(SUCCESSOR_OPTIONS, interaction="total_hub"),
+            SUCCESSOR_HUB_SHAPES,
+            head=models.HeadSpec(kind=models.HeadKind.NNLS, link=models.LinkKind.LOG_DEFICIT_BOUNDED),
+            extra_dof=1,
+        ),
+        note="Scheffe hub interactions under the bounded log-deficit link (2026-09-06).",
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@named_pairs",
+        "weibull_softplus_unscaled",
+        "interaction=named_pair_products",
+        _successor(
+            "weibull_softplus_unscaled@named_pairs",
+            _options(SUCCESSOR_OPTIONS, interaction="named_pairs", interaction_pairs=PANEL_PAIRS),
+            SUCCESSOR_HUB_SHAPES,
+            head=NNLS,
+            extra_dof=1,
+        ),
+        note="Signed products of three named bucket pairs chosen from panel out-of-fold residuals (2026-09-06).",
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@log_deficit_bounded_link_named_pairs",
+        "weibull_softplus_unscaled",
+        "link=log_deficit_bounded,interaction=named_pair_products",
+        _successor(
+            "weibull_softplus_unscaled@log_deficit_bounded_link_named_pairs",
+            _options(SUCCESSOR_OPTIONS, interaction="named_pairs", interaction_pairs=PANEL_PAIRS),
+            SUCCESSOR_HUB_SHAPES,
+            head=models.HeadSpec(kind=models.HeadKind.NNLS, link=models.LinkKind.LOG_DEFICIT_BOUNDED),
+            extra_dof=1,
+        ),
+        note="The three named pair products under the bounded log-deficit link (2026-09-06).",
     ),
     _ablation(
         "weibull_softplus_unscaled@ablation_prior",

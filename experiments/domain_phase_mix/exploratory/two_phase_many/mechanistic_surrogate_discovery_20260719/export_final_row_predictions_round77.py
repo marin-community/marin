@@ -80,9 +80,7 @@ def main() -> None:
                         "target_relation": (
                             "non_adversarial"
                             if not candidate_target
-                            else "target_matched"
-                            if candidate_target == target
-                            else "cross_target"
+                            else "target_matched" if candidate_target == target else "cross_target"
                         ),
                         "selection_stratum": "" if adversarial_row is None else adversarial_row["selection_stratum"],
                         "proposal_origin": "" if adversarial_row is None else adversarial_row["origin"],

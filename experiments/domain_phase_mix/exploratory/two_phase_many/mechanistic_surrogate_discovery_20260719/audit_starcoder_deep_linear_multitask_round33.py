@@ -235,7 +235,9 @@ def update_status(status: str, evidence: str, output_dir: Path) -> None:
         "round_id": "round_33_starcoder_gate",
         "candidate_id": "DLSF",
         "candidate_family": "Deep-linear shared-feature multitask flow",
-        "hyperparameters": "Frozen Round 33 grid; exact frozen-shared-feature ablation; nested selection only after stage-1 survival",
+        "hyperparameters": (
+            "Frozen Round 33 grid; exact frozen-shared-feature ablation; nested selection only after stage-1 survival"
+        ),
         "adversarial_outcomes_available_before_proposal": True,
         "adversarial_outcomes_inspected_before_proposal": True,
         "observations_inspiring_mechanism": "See round_33_batch_preregistration",

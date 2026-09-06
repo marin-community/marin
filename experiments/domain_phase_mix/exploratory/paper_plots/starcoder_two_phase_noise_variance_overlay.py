@@ -18,8 +18,7 @@ from matplotlib.colors import LogNorm
 from matplotlib.lines import Line2D
 from matplotlib.patches import Circle
 from matplotlib.ticker import FuncFormatter, NullFormatter
-from mpl_toolkits.mplot3d import Axes3D
-from mpl_toolkits.mplot3d import proj3d
+from mpl_toolkits.mplot3d import Axes3D, proj3d
 
 from experiments.domain_phase_mix.exploratory.paper_plots import (
     starcoder_two_phase_heteroskedastic_landscape as hetero,

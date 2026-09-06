@@ -52,17 +52,11 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REFERENCE_OUTPUTS = SCRIPT_DIR / "reference_outputs"
 DEFAULT_OUTPUT_DIR = REFERENCE_OUTPUTS / "olmo_base_easy_per_component_dsp_decision_300m_20260626"
 DEFAULT_FIT_PANEL = (
-    REFERENCE_OUTPUTS
-    / "olmo_base_easy_paper_faithful_olmix_300m_20260625"
-    / "fit_panel_table9_macro.csv"
+    REFERENCE_OUTPUTS / "olmo_base_easy_paper_faithful_olmix_300m_20260625" / "fit_panel_table9_macro.csv"
 )
-DEFAULT_RELIABILITY = (
-    REFERENCE_OUTPUTS / "olmo_base_easy_reliability_weighting_20260625" / "component_reliability.csv"
-)
+DEFAULT_RELIABILITY = REFERENCE_OUTPUTS / "olmo_base_easy_reliability_weighting_20260625" / "component_reliability.csv"
 DEFAULT_OLMIX_PREDICTIONS = (
-    REFERENCE_OUTPUTS
-    / "olmo_base_easy_paper_faithful_olmix_300m_20260625"
-    / "macro_fit_predictions.csv"
+    REFERENCE_OUTPUTS / "olmo_base_easy_paper_faithful_olmix_300m_20260625" / "macro_fit_predictions.csv"
 )
 DEFAULT_AGGREGATE_DSP_PREDICTIONS = (
     REFERENCE_OUTPUTS
@@ -193,7 +187,9 @@ def panel_stratified_folds(panel: pd.DataFrame, *, n_splits: int, seed: int) -> 
     return folds
 
 
-def fit_oof_with_folds(packet: dsp.PacketData, model: dsp.FittedDSPModel, folds: list[tuple[np.ndarray, np.ndarray]]) -> np.ndarray:
+def fit_oof_with_folds(
+    packet: dsp.PacketData, model: dsp.FittedDSPModel, folds: list[tuple[np.ndarray, np.ndarray]]
+) -> np.ndarray:
     oof = np.zeros_like(packet.y, dtype=float)
     for train_idx, test_idx in folds:
         fold_model = dsp.fit_linear_head(
@@ -260,7 +256,7 @@ def fit_component_dsp(
                 ComponentDspSummary(
                     component=component,
                     linear_reg=float(linear_reg),
-                    n_rows=int(len(panel)),
+                    n_rows=len(panel),
                     train_rmse=train_rmse,
                     train_spearman=train_spearman,
                     oof_rmse=oof_rmse,
@@ -380,7 +376,7 @@ def summarize_decision(
         selection_score_name="selection_score",
         hyperparameter_name=hyperparameter_name,
         hyperparameter_value=float(hyperparameter_value),
-        n_rows=int(len(indices)),
+        n_rows=len(indices),
         train_rmse=train_rmse,
         train_spearman=train_spearman,
         oof_rmse=oof_rmse,
@@ -410,10 +406,14 @@ def summarize_decision(
 
 
 def readiness_score(component_summary: pd.DataFrame, reliability: pd.DataFrame, components: list[str]) -> np.ndarray:
-    merged = pd.DataFrame({"component": components}).merge(component_summary, on="component", how="left").merge(
-        reliability,
-        on="component",
-        how="left",
+    merged = (
+        pd.DataFrame({"component": components})
+        .merge(component_summary, on="component", how="left")
+        .merge(
+            reliability,
+            on="component",
+            how="left",
+        )
     )
     fit = pd.to_numeric(merged["oof_spearman"], errors="coerce").fillna(0.0).clip(lower=0.0, upper=1.0)
     sensitivity = pd.to_numeric(merged["two_sided_t_excess"], errors="coerce").fillna(0.0).clip(lower=0.0, upper=1.0)
@@ -599,7 +599,9 @@ def plot_decision_summary(output_dir: Path, decisions: pd.DataFrame) -> None:
         height=1000,
         showlegend=False,
     )
-    fig.write_html(output_dir / "decision_diagnostics_qsplit_top_methods.html", include_plotlyjs="cdn", config=PLOT_CONFIG)
+    fig.write_html(
+        output_dir / "decision_diagnostics_qsplit_top_methods.html", include_plotlyjs="cdn", config=PLOT_CONFIG
+    )
 
 
 def plot_component_summary(output_dir: Path, component_summary: pd.DataFrame, reliability: pd.DataFrame) -> None:
@@ -705,7 +707,9 @@ def main() -> None:
     components = component_columns(panel)
     if args.component_limit is not None:
         components = components[: int(args.component_limit)]
-        panel = panel[[col for col in panel.columns if col not in paper_olmix.table9_component_order() or col in components]].copy()
+        panel = panel[
+            [col for col in panel.columns if col not in paper_olmix.table9_component_order() or col in components]
+        ].copy()
         panel[MACRO_TARGET] = panel[components].mean(axis=1)
     reliability = pd.DataFrame({"component": components}).merge(reliability, on="component", how="left")
     if reliability.isna().any().any():
@@ -831,8 +835,12 @@ def main() -> None:
         readiness = readiness_score(component_summary, reliability, components)
         for shrink_strength in shrink_strengths:
             shrink = (1.0 - shrink_strength) + shrink_strength * readiness
-            train_shrunk = prop_component_mean[None, :] + shrink[None, :] * (train_component_pred - prop_component_mean[None, :])
-            oof_shrunk = prop_component_mean[None, :] + shrink[None, :] * (oof_component_pred - prop_component_mean[None, :])
+            train_shrunk = prop_component_mean[None, :] + shrink[None, :] * (
+                train_component_pred - prop_component_mean[None, :]
+            )
+            oof_shrunk = prop_component_mean[None, :] + shrink[None, :] * (
+                oof_component_pred - prop_component_mean[None, :]
+            )
             method = f"per_component_shrink_s{shrink_strength:g}_linear_reg_{linear_reg:g}".replace(".", "p")
             method_component_predictions[method] = oof_shrunk
             add_method_summaries(

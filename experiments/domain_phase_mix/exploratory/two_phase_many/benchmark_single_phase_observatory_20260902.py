@@ -78,6 +78,11 @@ HELDOUT_DIR = REFERENCE_OUTPUTS / "single_phase_heldout_benchmark_20260902"
 STARCODER_INVENTORY_DIR = starcoder_curves.INVENTORY_DIR
 TIED_DIAGONAL_DIR = REFERENCE_OUTPUTS / "starcoder_wsd80_fixed_model_tied_diagonal_20260730" / "results_20260731"
 SIXTY_M_REPEATS = REFERENCE_OUTPUTS / "60m_39bucket_checkpoint_audit_20260724" / "repeat_observations.csv"
+THREE_HUNDRED_M_REPEATS = (
+    REFERENCE_OUTPUTS
+    / "one_phase_swarm_scores_export_300m_20260630"
+    / "proportional_reference_uncheatable_table9_scores_300m.csv"
+)
 DELPHI_NOISE_DIR = REFERENCE_OUTPUTS / "delphi_3e18_proportional_noise_floor_20260703"
 PROTOCOL_SCHEMA_VERSION = 1
 OUTER_FOLDS = 5
@@ -201,6 +206,25 @@ def _sixty_m_repeat_noise() -> dict[str, float]:
     return result
 
 
+def _three_hundred_m_repeat_noise() -> dict[str, float]:
+    frame = pd.read_csv(THREE_HUNDRED_M_REPEATS)
+    expected_names = tuple(f"propvar_300m_6b_trainer_seed_{seed}" for seed in range(10_000, 10_010))
+    repeats = frame[frame["run_name"].isin(expected_names)].copy()
+    if len(repeats) != len(expected_names) or repeats["run_name"].nunique() != len(expected_names):
+        raise ValueError(f"Expected one 300M proportional repeat for each of {expected_names}")
+    repeats = repeats.set_index("run_name").loc[list(expected_names)]
+    target_columns = {
+        "uncheatable": "eval_uncheatable_eval_bpb",
+        "table9": "table9_macro_bpb",
+    }
+    missing = sorted(set(target_columns.values()) - set(repeats.columns))
+    if missing:
+        raise ValueError(f"300M proportional repeats are missing aggregate columns: {missing}")
+    if repeats.loc[:, list(target_columns.values())].isna().any().any():
+        raise ValueError("300M proportional repeats have incomplete aggregate measurements")
+    return {target: float(repeats[column].std(ddof=1)) for target, column in target_columns.items()}
+
+
 def _delphi_repeat_noise() -> tuple[dict[str, float], dict[str, float]]:
     summary = json.loads((DELPHI_NOISE_DIR / "noise_floor_summary.json").read_text())
     heldout = pd.read_csv(HELDOUT_DIR / "heldout_runs.csv")
@@ -301,6 +325,9 @@ def load_tabular_panel(name: str) -> BenchPanel:
     elif name == "60m_39bucket":
         repeat_sd = _sixty_m_repeat_noise()
         metadata["noise_sources"].append(str(SIXTY_M_REPEATS.relative_to(REPO_ROOT)))
+    elif name == "300m_39bucket":
+        repeat_sd = _three_hundred_m_repeat_noise()
+        metadata["noise_sources"].append(str(THREE_HUNDRED_M_REPEATS.relative_to(REPO_ROOT)))
     elif name == "delphi_3e18_39bucket":
         repeat_sd, component_sd = _delphi_repeat_noise()
         metadata["noise_sources"].extend(
@@ -309,8 +336,6 @@ def load_tabular_panel(name: str) -> BenchPanel:
                 str((HELDOUT_DIR / "heldout_runs.csv").relative_to(REPO_ROOT)),
             ]
         )
-    else:
-        metadata["noise_sources"].append("none identified for Uncheatable or Table 9 at 300M")
     return BenchPanel(
         name=name,
         kind="tabular",

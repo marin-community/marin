@@ -470,7 +470,7 @@ def main() -> None:
             {
                 "target_metric": olmix.UNCHEATABLE_TARGET,
                 "variant": str(args.variant),
-                "panel_rows": int(len(panel)),
+                "panel_rows": len(panel),
                 "phase_fractions": olmix.PHASE_FRACTIONS.tolist(),
                 "linear_reg_values": linear_regs,
                 "kl_reg_values": kl_regs,

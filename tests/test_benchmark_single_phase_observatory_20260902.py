@@ -140,6 +140,24 @@ def test_aggregate_reconstruction_requires_every_component():
     assert partial.empty
 
 
+def test_300m_panel_uses_proportional_repeat_noise():
+    panel = harness.load_panel("300m_39bucket")
+
+    assert panel.repeat_sd == pytest.approx(
+        {
+            "uncheatable": 0.0011879189058984774,
+            "table9": 0.0035056453786448806,
+        }
+    )
+    assert panel.metadata["noise_sources"] == [
+        (
+            "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/"
+            "one_phase_swarm_scores_export_300m_20260630/"
+            "proportional_reference_uncheatable_table9_scores_300m.csv"
+        )
+    ]
+
+
 def test_starcoder_curve_panel_exposures_follow_the_support_rule():
     panel = harness.load_panel("starcoder::fixed_model_wsd80_1b__endpoint")
 

@@ -38,9 +38,7 @@ OLMO_FULL_WIDE = (
     / "olmo_base_easy_300m_full_results_20260625"
     / "olmo_base_easy_300m_full_results_wide.csv"
 )
-DEFAULT_OUTPUT_DIR = (
-    SCRIPT_DIR / "reference_outputs" / "olmo_base_easy_paper_faithful_olmix_300m_20260625"
-)
+DEFAULT_OUTPUT_DIR = SCRIPT_DIR / "reference_outputs" / "olmo_base_easy_paper_faithful_olmix_300m_20260625"
 
 ADAPTIVE_OLMIX_RUN_NAME = base.ADAPTIVE_OLMIX_RUN_NAME
 PHASE_FRACTIONS = base.PHASE_FRACTIONS
@@ -323,9 +321,9 @@ def build_fit_panel(columns: list[str]) -> tuple[pd.DataFrame, dict[str, Any]]:
 
     olmo = load_olmo_wide_with_table9_components()
     components = table9_component_order()
-    proportional_reference = olmo[
-        olmo["run_name"].eq("baseline_proportional") | olmo["panel"].eq("proportional_noise")
-    ][components]
+    proportional_reference = olmo[olmo["run_name"].eq("baseline_proportional") | olmo["panel"].eq("proportional_noise")][
+        components
+    ]
     if len(proportional_reference) != 11:
         raise ValueError(f"Expected 11 proportional rows, found {len(proportional_reference)}")
     component_means = proportional_reference.mean(axis=0)
@@ -346,7 +344,7 @@ def build_fit_panel(columns: list[str]) -> tuple[pd.DataFrame, dict[str, Any]]:
     metadata = {
         "components": components,
         "source_metric_wide": str(OLMO_FULL_WIDE),
-        "n_proportional_reference_rows": int(len(proportional_reference)),
+        "n_proportional_reference_rows": len(proportional_reference),
         "proportional_reference_macro_mean": float(component_means.mean()),
         "proportional_reference_component_means": {key: float(component_means[key]) for key in components},
         "proportional_reference_component_stds": {key: float(component_stds[key]) for key in components},
@@ -416,9 +414,7 @@ def solve_multi_two_phase(
     solved = solved / solved.sum(axis=1, keepdims=True)
     predicted_value = float(np.mean(predict_components(log_cs, coefficients, solved[None, :, :])))
     aggregate_solved = np.einsum("p,pd->d", phase_fractions, solved)
-    aggregate_kl = float(
-        np.sum(aggregate_solved * (np.log(np.clip(aggregate_solved, 1e-12, 1.0)) - np.log(natural)))
-    )
+    aggregate_kl = float(np.sum(aggregate_solved * (np.log(np.clip(aggregate_solved, 1e-12, 1.0)) - np.log(natural))))
     regularized = predicted_value + kl_reg * aggregate_kl
     return solved, predicted_value, regularized, status
 
@@ -434,7 +430,9 @@ def solve_multi_single(
     n_components = len(log_cs)
     n_domains = len(natural)
     weights = cp.Variable(n_domains)
-    component_logits = [cp.sum(cp.multiply(coefficients[component_idx], weights)) for component_idx in range(n_components)]
+    component_logits = [
+        cp.sum(cp.multiply(coefficients[component_idx], weights)) for component_idx in range(n_components)
+    ]
     predicted = cp.sum(cp.exp(log_cs)) / n_components + cp.sum(cp.exp(cp.hstack(component_logits))) / n_components
     kl = cp.sum(cp.rel_entr(weights, natural))
     constraints: list[Any] = [weights >= 0, cp.sum(weights) == 1, weights <= repetition_caps]
@@ -469,9 +467,7 @@ def solve_problem(problem: cp.Problem) -> str:
 
 
 def predict_components(log_cs: np.ndarray, coefficients: np.ndarray, weights: np.ndarray) -> np.ndarray:
-    return np.column_stack(
-        [base.predict(float(log_c), coefficients[idx], weights) for idx, log_c in enumerate(log_cs)]
-    )
+    return np.column_stack([base.predict(float(log_c), coefficients[idx], weights) for idx, log_c in enumerate(log_cs)])
 
 
 def feature_tensor(panel: pd.DataFrame, columns: list[str], domains: list[str], variant: str) -> np.ndarray:
@@ -538,7 +534,7 @@ def fit_variant(
                 variant=variant,
                 huber_delta=float(huber_delta),
                 component=component,
-                n_rows=int(len(panel)),
+                n_rows=len(panel),
                 fit_log_c=float(log_c),
                 fit_huber_loss=float(loss),
                 train_rmse=float(train_rmse),
@@ -782,9 +778,9 @@ def write_summary_plots(output_dir: Path, summaries: pd.DataFrame, components: p
     fig2 = go.Figure(
         go.Bar(
             x=best_components["oof_spearman"],
-            y=best_components["component"].str.replace("olmo_base_eval/easy_bpb/", "", regex=False).str.replace(
-                "/bpb", "", regex=False
-            ),
+            y=best_components["component"]
+            .str.replace("olmo_base_eval/easy_bpb/", "", regex=False)
+            .str.replace("/bpb", "", regex=False),
             orientation="h",
         )
     )
@@ -877,9 +873,7 @@ def main() -> None:
             )
             summaries.append(summary)
             component_frames.append(component_frame)
-            prediction_frames.append(
-                prediction_frame.assign(variant=variant, huber_delta=float(huber_delta))
-            )
+            prediction_frames.append(prediction_frame.assign(variant=variant, huber_delta=float(huber_delta)))
 
     summary_frame = pd.DataFrame([asdict(row) for row in summaries])
     component_frame = pd.concat(component_frames, ignore_index=True)

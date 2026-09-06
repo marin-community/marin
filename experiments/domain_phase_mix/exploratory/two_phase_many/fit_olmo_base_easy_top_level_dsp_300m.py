@@ -311,7 +311,7 @@ def fit_one(
         target_metric=target_metric,
         variant=variant_name,
         variant_description=variant.description,
-        n_rows=int(len(panel)),
+        n_rows=len(panel),
         n_signal_rows=int(panel["panel_source"].eq("qsplit_signal").sum()),
         n_deletion_rows=int(panel["panel_source"].eq("domain_deletion").sum()),
         n_proportional_reference_rows=int(metadata["n_proportional_reference_rows"]),

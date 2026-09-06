@@ -36,17 +36,17 @@ from scipy.stats import spearmanr
 
 from experiments.domain_phase_mix.exploratory.two_phase_many.standalone_code import dsp_exact as dsp
 
-
 SCRIPT_DIR = Path(__file__).resolve().parent
 REFERENCE_DIR = SCRIPT_DIR / "reference_outputs"
 DEFAULT_OUTPUT_DIR = REFERENCE_DIR / "noise_shape_winner_curse_20260616"
 DEFAULT_RAW_WITH_PROP_NOISE = (
-    REFERENCE_DIR
-    / "raw_metric_matrix_300m_dclm_updated_20260615"
-    / "raw_metric_matrix_300m_with_proportional_noise.csv"
+    REFERENCE_DIR / "raw_metric_matrix_300m_dclm_updated_20260615" / "raw_metric_matrix_300m_with_proportional_noise.csv"
 )
 DEFAULT_STARCODER_REPEATS = (
-    SCRIPT_DIR.parent / "reference_outputs" / "starcoder_heteroskedastic_snr_20260523" / "collected_train_only_metrics_live.csv"
+    SCRIPT_DIR.parent
+    / "reference_outputs"
+    / "starcoder_heteroskedastic_snr_20260523"
+    / "collected_train_only_metrics_live.csv"
 )
 DEFAULT_READINESS_OUTPUT = REFERENCE_DIR / "readiness_weighted_aggregate_dsp_20260616"
 TO_IMAGE_CONFIG = {"toImageButtonOptions": {"format": "png", "scale": 4}}
@@ -127,7 +127,7 @@ def sample_skew(values: np.ndarray) -> float:
     if m2 <= 0.0:
         return float("nan")
     m3 = float(np.mean(centered**3))
-    return m3 / (m2 ** 1.5)
+    return m3 / (m2**1.5)
 
 
 def tail_asymmetry(values: np.ndarray) -> float:
@@ -186,7 +186,7 @@ def metric_stats(metric: str, values: np.ndarray, *, panel: str, group: str) -> 
         metric=metric,
         panel=panel,
         group=group,
-        n=int(len(raw)),
+        n=len(raw),
         lower_is_better=is_lower,
         bounded_raw=bounded,
         mean=float(np.mean(raw)),
@@ -256,7 +256,7 @@ def summarize_starcoder_rarity(starcoder_stats: pd.DataFrame) -> pd.DataFrame:
         finite = finite.dropna(subset=["rarity_proxy"])
         if len(finite) < 5:
             continue
-        row: dict[str, Any] = {"metric": metric, "anchor_count": int(len(finite))}
+        row: dict[str, Any] = {"metric": metric, "anchor_count": len(finite)}
         for column in ["utility_skew", "utility_sd", "utility_tail_asymmetry"]:
             valid = finite[["rarity_proxy", column]].dropna()
             if len(valid) < 5 or valid[column].nunique() <= 1:
@@ -270,7 +270,9 @@ def summarize_starcoder_rarity(starcoder_stats: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def bootstrap_max_residual(residuals: np.ndarray, candidate_count: int, reps: int, rng: np.random.Generator) -> dict[str, float]:
+def bootstrap_max_residual(
+    residuals: np.ndarray, candidate_count: int, reps: int, rng: np.random.Generator
+) -> dict[str, float]:
     """Estimate selection optimism when taking max over candidate_count noisy predictions."""
     finite = residuals[np.isfinite(residuals)]
     if len(finite) == 0:
@@ -309,7 +311,9 @@ def load_label_weights(weights_path: Path, label: str, domain_order: list[str]) 
     return weights / sums
 
 
-def path_candidate_diagnostics(readiness_output: Path, *, reps: int, rng: np.random.Generator) -> tuple[pd.DataFrame, pd.DataFrame]:
+def path_candidate_diagnostics(
+    readiness_output: Path, *, reps: int, rng: np.random.Generator
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Build path candidate and winner's-curse diagnostics for readiness targets."""
     all_predictions = pd.read_csv(readiness_output / "all_observed_predictions.csv")
     rows: list[dict[str, Any]] = []
@@ -328,7 +332,11 @@ def path_candidate_diagnostics(readiness_output: Path, *, reps: int, rng: np.ran
             correction = bootstrap_max_residual(residuals, int(candidate_count), reps, rng)
             correction["target_name"] = target_name
             correction_rows.append(correction)
-        path_count_correction = next(row for row in correction_rows if row["target_name"] == target_name and row["candidate_count"] == len(t_values))
+        path_count_correction = next(
+            row
+            for row in correction_rows
+            if row["target_name"] == target_name and row["candidate_count"] == len(t_values)
+        )
         proportional_pred = -float(dsp.predict(model, proportional[None, :, :])[0])
         for t in t_values:
             weights = (1.0 - t) * proportional + t * raw_optimum
@@ -508,14 +516,14 @@ def write_report(
 ) -> None:
     """Write a concise report."""
     prop_summary = {
-        "metric_count": int(len(prop_stats)),
+        "metric_count": len(prop_stats),
         "median_utility_skew": float(prop_stats["utility_skew"].median()),
         "share_positive_utility_skew": float((prop_stats["utility_skew"] > 0).mean()),
         "share_abs_skew_gt_1": float((prop_stats["utility_skew"].abs() > 1).mean()),
     }
     bounded = prop_stats[prop_stats["bounded_raw"] & prop_stats["logit_utility_skew"].notna()]
     if not bounded.empty:
-        prop_summary["bounded_metric_count"] = int(len(bounded))
+        prop_summary["bounded_metric_count"] = len(bounded)
         prop_summary["bounded_raw_logit_skew_corr"] = float(
             bounded[["utility_skew", "logit_utility_skew"]].corr(method="spearman").iloc[0, 1]
         )
@@ -633,16 +641,16 @@ def main() -> None:
 
     summary = {
         "output_dir": str(args.output_dir),
-        "proportional_repeat_rows": int(len(prop_noise_rows)),
-        "proportional_metric_count": int(len(prop_stats)),
+        "proportional_repeat_rows": len(prop_noise_rows),
+        "proportional_metric_count": len(prop_stats),
         "proportional_median_utility_skew": float(prop_stats["utility_skew"].median()),
         "proportional_share_positive_utility_skew": float((prop_stats["utility_skew"] > 0).mean()),
-        "starcoder_repeat_rows": int(len(starcoder_rows)),
-        "starcoder_anchor_metric_rows": int(len(starcoder_stats)),
+        "starcoder_repeat_rows": len(starcoder_rows),
+        "starcoder_anchor_metric_rows": len(starcoder_stats),
         "path_targets": sorted(path_candidates["target_name"].unique().tolist()),
-        "best_p50_adjusted_path": path_candidates.sort_values("p50_adjusted_gain", ascending=False)
-        .head(1)
-        .to_dict(orient="records")[0],
+        "best_p50_adjusted_path": (
+            path_candidates.sort_values("p50_adjusted_gain", ascending=False).head(1).to_dict(orient="records")[0]
+        ),
     }
     (args.output_dir / "summary.json").write_text(json.dumps(summary, indent=2))
     print(json.dumps(summary, indent=2), flush=True)

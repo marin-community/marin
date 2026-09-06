@@ -26,7 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -46,9 +46,6 @@ from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E
 )
 from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E402
     fit_dsp_l2_kl_sweep_deletion_augmented_300m as l2_sweep,
-)
-from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E402
-    fit_dsp_vs_olmix_deletion_augmented_300m as dsp_compare,
 )
 from experiments.domain_phase_mix.exploratory.two_phase_many.standalone_code import dsp_exact as dsp  # noqa: E402
 
@@ -220,7 +217,9 @@ def build_support_fit(
     )
 
 
-def predict_support(fit: SupportAwareFit, packet: dsp.PacketData, weights: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def predict_support(
+    fit: SupportAwareFit, packet: dsp.PacketData, weights: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     query_design = fixed_dsp_design(fit.phase_model, packet, weights)
     distance, alpha, indices = support_alpha(
         fit.train_design,
@@ -259,12 +258,18 @@ def with_floor_calibration(
     )
 
 
-def oof_support(packet: dsp.PacketData, no_phase_model: dsp.FittedDSPModel, phase_model: dsp.FittedDSPModel, args: argparse.Namespace) -> np.ndarray:
+def oof_support(
+    packet: dsp.PacketData, no_phase_model: dsp.FittedDSPModel, phase_model: dsp.FittedDSPModel, args: argparse.Namespace
+) -> np.ndarray:
     folds = eta_diag.olmix.kfold_indices(len(packet.y), n_splits=eta_diag.olmix.N_SPLITS, seed=eta_diag.olmix.CV_SEED)
     oof = np.zeros_like(packet.y, dtype=float)
     for train_idx, test_idx in folds:
-        fold_no = dsp.fit_linear_head(packet.w[train_idx], packet.y[train_idx], packet, no_phase_model.variant, no_phase_model.params)
-        fold_phase = dsp.fit_linear_head(packet.w[train_idx], packet.y[train_idx], packet, phase_model.variant, phase_model.params)
+        fold_no = dsp.fit_linear_head(
+            packet.w[train_idx], packet.y[train_idx], packet, no_phase_model.variant, no_phase_model.params
+        )
+        fold_phase = dsp.fit_linear_head(
+            packet.w[train_idx], packet.y[train_idx], packet, phase_model.variant, phase_model.params
+        )
         train_design = fixed_dsp_design(fold_phase, packet, packet.w[train_idx])
         scaler = fit_support_scaler(
             train_design,
@@ -293,8 +298,12 @@ def calibrate_optimism_delta(
     folds = eta_diag.olmix.kfold_indices(len(packet.y), n_splits=eta_diag.olmix.N_SPLITS, seed=eta_diag.olmix.CV_SEED)
     optimism: list[float] = []
     for train_idx, test_idx in folds:
-        fold_no = dsp.fit_linear_head(packet.w[train_idx], packet.y[train_idx], packet, no_phase_model.variant, no_phase_model.params)
-        fold_phase = dsp.fit_linear_head(packet.w[train_idx], packet.y[train_idx], packet, phase_model.variant, phase_model.params)
+        fold_no = dsp.fit_linear_head(
+            packet.w[train_idx], packet.y[train_idx], packet, no_phase_model.variant, no_phase_model.params
+        )
+        fold_phase = dsp.fit_linear_head(
+            packet.w[train_idx], packet.y[train_idx], packet, phase_model.variant, phase_model.params
+        )
         train_design = fixed_dsp_design(fold_phase, packet, packet.w[train_idx])
         scaler = fit_support_scaler(
             train_design,
@@ -359,10 +368,16 @@ def leave_good_out(
     holdout_count = max(5, int(np.ceil(0.15 * len(packet.y))))
     test_idx = np.argsort(packet.y)[:holdout_count]
     train_idx = np.setdiff1d(np.arange(len(packet.y)), test_idx)
-    fold_no = dsp.fit_linear_head(packet.w[train_idx], packet.y[train_idx], packet, no_phase_model.variant, no_phase_model.params)
-    fold_phase = dsp.fit_linear_head(packet.w[train_idx], packet.y[train_idx], packet, phase_model.variant, phase_model.params)
+    fold_no = dsp.fit_linear_head(
+        packet.w[train_idx], packet.y[train_idx], packet, no_phase_model.variant, no_phase_model.params
+    )
+    fold_phase = dsp.fit_linear_head(
+        packet.w[train_idx], packet.y[train_idx], packet, phase_model.variant, phase_model.params
+    )
     train_design = fixed_dsp_design(fold_phase, packet, packet.w[train_idx])
-    scaler = fit_support_scaler(train_design, low_quantile=float(args.low_quantile), high_quantile=float(args.high_quantile))
+    scaler = fit_support_scaler(
+        train_design, low_quantile=float(args.low_quantile), high_quantile=float(args.high_quantile)
+    )
     query_design = fixed_dsp_design(fold_phase, packet, packet.w[test_idx])
     _distance, alpha, indices = support_alpha(train_design, scaler, query_design, local_k=int(args.local_k))
     pred = dsp.predict(fold_no, packet.w[test_idx]) + alpha * (
@@ -397,7 +412,9 @@ def raw_optimize_support(fit: SupportAwareFit, packet: dsp.PacketData) -> tuple[
     best_weights: np.ndarray | None = None
     for start in starts:
         result = minimize(
-            lambda z: float(predict_support(fit, packet, logits_to_weights(np.asarray(z, dtype=float))[None, :, :])[0][0]),
+            lambda z: float(
+                predict_support(fit, packet, logits_to_weights(np.asarray(z, dtype=float))[None, :, :])[0][0]
+            ),
             start,
             method="L-BFGS-B",
             options={"maxiter": 180, "ftol": 1e-8},
@@ -507,7 +524,9 @@ def main() -> None:
     summary = pd.DataFrame([SummaryRow(**row)])
     summary.to_csv(args.output_dir / "support_aware_summary.csv", index=False)
     repaired.to_csv(args.output_dir / "support_aware_heldout_predictions.csv", index=False)
-    pd.DataFrame({"oof_prediction": oof, "target": packet.y}).to_csv(args.output_dir / "support_aware_oof_predictions.csv", index=False)
+    pd.DataFrame({"oof_prediction": oof, "target": packet.y}).to_csv(
+        args.output_dir / "support_aware_oof_predictions.csv", index=False
+    )
     write_outputs(args.output_dir, summary, repaired)
     (args.output_dir / "metadata.json").write_text(
         json.dumps(
@@ -521,7 +540,7 @@ def main() -> None:
                 "floor_quantile": float(args.floor_quantile),
                 "optimism_delta": optimism_delta,
                 "floor_alpha_threshold": float(args.floor_alpha_threshold),
-                "fit_rows": int(len(packet.y)),
+                "fit_rows": len(packet.y),
                 "repair_results": str(args.repair_results),
                 "repair_mixture_dir": str(args.repair_mixture_dir),
             },

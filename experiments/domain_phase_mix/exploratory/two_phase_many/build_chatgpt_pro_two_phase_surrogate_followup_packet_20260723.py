@@ -297,10 +297,10 @@ def build_data() -> dict[str, Any]:
             "phase_tv": 0.5 * np.sum(np.abs(two_weights[:, 1] - two_weights[:, 0]), axis=1),
             "uncheatable_one_phase_bpb": one["uncheatable_bpb"],
             "uncheatable_two_phase_bpb": two["uncheatable_bpb"],
-            "uncheatable_phase_delta": (two["uncheatable_bpb"] - one["uncheatable_bpb"]),
+            "uncheatable_phase_delta": two["uncheatable_bpb"] - one["uncheatable_bpb"],
             "table9_one_phase_bpb": one["table9_macro_bpb"],
             "table9_two_phase_bpb": two["table9_macro_bpb"],
-            "table9_phase_delta": (two["table9_macro_bpb"] - one["table9_macro_bpb"]),
+            "table9_phase_delta": two["table9_macro_bpb"] - one["table9_macro_bpb"],
         }
     )
     pair_index.to_csv(PACKET / "data/delphi_3e18_pair_index.csv", index=False)

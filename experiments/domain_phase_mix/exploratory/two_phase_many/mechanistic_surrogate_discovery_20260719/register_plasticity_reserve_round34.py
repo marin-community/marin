@@ -44,7 +44,9 @@ def main() -> None:
             "ds/dt=k_s p r(1-s); Y=b+A_g(1-g_T)+A_s(1-s_T)+H_b R_b+H_s R_s, all amplitudes nonnegative. "
             "d=0 is the exact nondepleting-reserve ablation."
         ),
-        "latent_state": "Foundation competence g, specialist-plasticity reserve r, and specialist competence s, all in [0,1].",
+        "latent_state": (
+            "Foundation competence g, specialist-plasticity reserve r, and specialist competence s, all in [0,1]."
+        ),
         "state_transition": (
             "Exact piecewise-constant integration: g and r have closed-form linear hazards, and specialist acquisition "
             "uses the exact within-phase integral of r."

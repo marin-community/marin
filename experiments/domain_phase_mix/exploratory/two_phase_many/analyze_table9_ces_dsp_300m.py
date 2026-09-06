@@ -32,10 +32,10 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E402
-    analyze_table9_phase_split_dsp_300m as phase_dsp,
+    analyze_olmo_base_easy_per_component_dsp_decision_300m as component_dsp,
 )
 from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E402
-    analyze_olmo_base_easy_per_component_dsp_decision_300m as component_dsp,
+    analyze_table9_phase_split_dsp_300m as phase_dsp,
 )
 from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E402
     fit_olmix_reference_deletion_augmented_300m as base,
@@ -277,8 +277,7 @@ def main() -> None:
     fig = go.Figure()
     for _, row in summary.iterrows():
         subset = predictions[
-            predictions["base_variant_key"].eq(row["base_variant_key"])
-            & predictions["linear_reg"].eq(row["linear_reg"])
+            predictions["base_variant_key"].eq(row["base_variant_key"]) & predictions["linear_reg"].eq(row["linear_reg"])
         ]
         fig.add_trace(
             go.Scatter(

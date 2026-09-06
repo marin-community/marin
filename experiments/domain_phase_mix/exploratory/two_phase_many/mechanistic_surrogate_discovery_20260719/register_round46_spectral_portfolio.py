@@ -29,9 +29,7 @@ def main() -> None:
             "CSNRF carries a fixed quadrature over a broad Hessian spectrum, so slow and fast residual modes "
             "coexist and cannot be replaced by retuning one relaxation rate."
         ),
-        "materially_new_mechanism": (
-            "A distribution of learning time constants induced by the network Hessian spectrum."
-        ),
+        "materially_new_mechanism": "A distribution of learning time constants induced by the network Hessian spectrum.",
         "mechanistic_premise": (
             "Neural-network loss is a superposition of curvature modes. Fast modes saturate early while slow modes "
             "retain unresolved error; domain Hessians rotate these modes differently, so ordered phases apply "
@@ -42,7 +40,7 @@ def main() -> None:
             "H_m(p)=lambda_m[(1-p)H_B+c p H_R]; dz_m/dtau=-k H_m(p)z_m; "
             "Y=b+A sum_m pi_m z_m(T)^T H_eval z_m(T), A>=0. s=1 is the exact single-mode ablation."
         ),
-        "latent_state": ("Three two-dimensional unresolved-error vectors, one at each fixed geometric curvature node."),
+        "latent_state": "Three two-dimensional unresolved-error vectors, one at each fixed geometric curvature node.",
         "state_transition": (
             "Exact path-ordered linear contraction under phase-specific mixtures; each phase uses a matrix exponential."
         ),
@@ -88,7 +86,9 @@ def main() -> None:
         "round_id": "round_46_spectral_portfolio_freeze",
         "candidate_id": row["id"],
         "candidate_family": row["family"],
-        "hyperparameters": "Frozen three-node geometric spectrum, span/tilt and task-geometry grids, exact s=1 ablation, and immutable StarCoder gate",
+        "hyperparameters": (
+            "Frozen three-node geometric spectrum, span/tilt and task-geometry grids, exact s=1 ablation, and immutable StarCoder gate"
+        ),
         "adversarial_outcomes_available_before_proposal": True,
         "adversarial_outcomes_inspected_before_proposal": True,
         "observations_inspiring_mechanism": (

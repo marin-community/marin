@@ -27,10 +27,12 @@ import plotly.express as px
 import plotly.graph_objects as go
 from scipy import stats
 
-
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_REPEATS = (
-    SCRIPT_DIR.parent / "reference_outputs" / "starcoder_heteroskedastic_snr_20260523" / "collected_train_only_metrics_live.csv"
+    SCRIPT_DIR.parent
+    / "reference_outputs"
+    / "starcoder_heteroskedastic_snr_20260523"
+    / "collected_train_only_metrics_live.csv"
 )
 DEFAULT_OUTPUT_DIR = SCRIPT_DIR / "reference_outputs" / "starcoder_heteroskedasticity_mechanisms_20260617"
 TO_IMAGE_CONFIG = {"toImageButtonOptions": {"format": "png", "scale": 4}}
@@ -95,14 +97,17 @@ def binary_entropy(p: np.ndarray) -> np.ndarray:
 
 def phase_entropy(phase_0_starcoder: float, phase_1_starcoder: float) -> float:
     """Average two-domain entropy across phases."""
-    return float(0.5 * (binary_entropy(np.array([phase_0_starcoder]))[0] + binary_entropy(np.array([phase_1_starcoder]))[0]))
+    return float(
+        0.5 * (binary_entropy(np.array([phase_0_starcoder]))[0] + binary_entropy(np.array([phase_1_starcoder]))[0])
+    )
 
 
 def add_anchor_features(frame: pd.DataFrame) -> pd.DataFrame:
     """Add concentration and effective-support features."""
     out = frame.copy()
     out["phase_hhi"] = [
-        phase_hhi(float(p0), float(p1)) for p0, p1 in zip(out["phase_0_starcoder"], out["phase_1_starcoder"], strict=True)
+        phase_hhi(float(p0), float(p1))
+        for p0, p1 in zip(out["phase_0_starcoder"], out["phase_1_starcoder"], strict=True)
     ]
     out["phase_entropy"] = [
         phase_entropy(float(p0), float(p1))
@@ -139,7 +144,7 @@ def anchor_summary(frame: pd.DataFrame, metric_columns: list[str]) -> pd.DataFra
             row.update(
                 {
                     "metric": metric,
-                    "count": int(len(values)),
+                    "count": len(values),
                     "mean": float(np.mean(values)),
                     "std": std,
                     "variance": std**2,
@@ -178,7 +183,14 @@ def brown_forsythe_tests(frame: pd.DataFrame, metric_columns: list[str]) -> pd.D
         if len(groups) < 2:
             continue
         stat = stats.levene(*groups, center="median")
-        rows.append({"metric": metric, "anchor_count": len(groups), "statistic": float(stat.statistic), "p_value": float(stat.pvalue)})
+        rows.append(
+            {
+                "metric": metric,
+                "anchor_count": len(groups),
+                "statistic": float(stat.statistic),
+                "p_value": float(stat.pvalue),
+            }
+        )
     out = pd.DataFrame(rows)
     if not out.empty:
         out["reject_p05"] = out["p_value"] < 0.05
@@ -200,7 +212,14 @@ def fit_simple_ols(x: np.ndarray, y: np.ndarray) -> tuple[float, float, float, f
 def regression_summaries(summary: pd.DataFrame) -> pd.DataFrame:
     """Fit log-std association regressions for each metric."""
     rows: list[RegressionResult] = []
-    predictors = ["log_mean", "phase_hhi", "phase_effective_support", "max_phase_weight", "phase_imbalance", "total_starcoder_epochs"]
+    predictors = [
+        "log_mean",
+        "phase_hhi",
+        "phase_effective_support",
+        "max_phase_weight",
+        "phase_imbalance",
+        "total_starcoder_epochs",
+    ]
     for metric, group in summary.groupby("metric"):
         for predictor in predictors:
             slope, intercept, r2, p_value = fit_simple_ols(
@@ -212,7 +231,7 @@ def regression_summaries(summary: pd.DataFrame) -> pd.DataFrame:
                     metric=metric,
                     target="log_std",
                     predictor=predictor,
-                    n=int(len(group)),
+                    n=len(group),
                     slope=slope,
                     intercept=intercept,
                     r2=r2,
@@ -273,7 +292,9 @@ def residual_correlation(frame: pd.DataFrame, metric_columns: list[str]) -> pd.D
     return pd.DataFrame(pairs).sort_values("residual_correlation", ascending=False)
 
 
-def write_plots(output_dir: Path, summary: pd.DataFrame, tests: pd.DataFrame, regressions: pd.DataFrame, transforms: pd.DataFrame) -> None:
+def write_plots(
+    output_dir: Path, summary: pd.DataFrame, tests: pd.DataFrame, regressions: pd.DataFrame, transforms: pd.DataFrame
+) -> None:
     """Write diagnostic plots."""
     key = summary[summary["metric"].isin(KEY_METRICS)].copy()
     if not key.empty:
@@ -318,7 +339,9 @@ def write_plots(output_dir: Path, summary: pd.DataFrame, tests: pd.DataFrame, re
         fig.write_html(output_dir / "brown_forsythe_top_metrics.html", config=TO_IMAGE_CONFIG)
 
     if not regressions.empty:
-        plot_reg = regressions[regressions["predictor"].isin(["log_mean", "phase_hhi", "phase_effective_support"])].copy()
+        plot_reg = regressions[
+            regressions["predictor"].isin(["log_mean", "phase_hhi", "phase_effective_support"])
+        ].copy()
         plot_reg = plot_reg[plot_reg["metric"].isin(KEY_METRICS)]
         fig = px.bar(
             plot_reg,
@@ -386,7 +409,7 @@ def write_report(
         )
     key_ratio_frame = pd.DataFrame(key_ratios)
     bf_summary = {
-        "metric_count": int(len(tests)),
+        "metric_count": len(tests),
         "reject_p05_share": float(tests["reject_p05"].mean()) if "reject_p05" in tests else float("nan"),
         "reject_p10_share": float(tests["reject_p10"].mean()) if "reject_p10" in tests else float("nan"),
     }
@@ -409,9 +432,9 @@ def write_report(
         "",
         "Top metrics by equal-variance evidence:",
         "",
-        tests.sort_values("p_value").head(12)[["metric", "anchor_count", "statistic", "p_value"]].to_markdown(
-            index=False, floatfmt=".4g"
-        ),
+        tests.sort_values("p_value")
+        .head(12)[["metric", "anchor_count", "statistic", "p_value"]]
+        .to_markdown(index=False, floatfmt=".4g"),
         "",
         "## Predictors of Log Local Std",
         "",
@@ -465,9 +488,7 @@ def main() -> None:
 
     key = summary[summary["metric"].isin(KEY_METRICS)].copy()
     key_ratio_max = float(
-        key.groupby("metric")
-        .apply(lambda group: group["std"].max() / group["std"].min(), include_groups=False)
-        .max()
+        key.groupby("metric").apply(lambda group: group["std"].max() / group["std"].min(), include_groups=False).max()
     )
     no_vertex = key[~key["anchor_id"].eq("starcoder_only")]
     key_ratio_no_vertex_max = float(
@@ -477,9 +498,9 @@ def main() -> None:
     )
     summary_json = {
         "output_dir": str(args.output_dir),
-        "repeat_rows": int(len(frame)),
+        "repeat_rows": len(frame),
         "anchor_count": int(frame["anchor_id"].nunique()),
-        "metric_count": int(len(metric_columns)),
+        "metric_count": len(metric_columns),
         "key_metric_max_std_ratio": key_ratio_max,
         "key_metric_max_std_ratio_excluding_starcoder_only": key_ratio_no_vertex_max,
         "brown_forsythe_reject_p05_share": float(tests["reject_p05"].mean()) if "reject_p05" in tests else None,

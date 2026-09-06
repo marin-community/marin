@@ -277,7 +277,9 @@ def update_status(status: str, evidence: str, output_dir: Path) -> None:
         "round_id": "round_30_starcoder_gate",
         "candidate_id": "CTGI",
         "candidate_family": "Competence-triggered gradient interference",
-        "hyperparameters": "Frozen Round 30 grid; exact interference-zero ablation; nested selection only after stage-1 survival",
+        "hyperparameters": (
+            "Frozen Round 30 grid; exact interference-zero ablation; nested selection only after stage-1 survival"
+        ),
         "adversarial_outcomes_available_before_proposal": True,
         "adversarial_outcomes_inspected_before_proposal": True,
         "observations_inspiring_mechanism": "See round_30_batch_preregistration",

@@ -227,7 +227,9 @@ def update_status(status: str, evidence: str, output_dir: Path) -> None:
         "round_id": "round_31_starcoder_gate",
         "candidate_id": "BRSF",
         "candidate_family": "Bistable representation-switch flow",
-        "hyperparameters": "Frozen Round 31 grid; exact barrier-zero ablation; nested selection only after stage-1 survival",
+        "hyperparameters": (
+            "Frozen Round 31 grid; exact barrier-zero ablation; nested selection only after stage-1 survival"
+        ),
         "adversarial_outcomes_available_before_proposal": True,
         "adversarial_outcomes_inspected_before_proposal": True,
         "observations_inspiring_mechanism": "See round_31_batch_preregistration",

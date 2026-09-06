@@ -39,3 +39,8 @@ def test_full_canonical_run_specs_preserve_common_random_numbers():
     assert {spec.trainer_seed for spec in specs} == {sweep.TRAINER_SEED}
     assert all(spec.phase_weights["phase_0"] == spec.phase_weights["phase_1"] for spec in specs)
     assert all(spec.run_name.startswith("onephase_fullcanonical_dsp_") for spec in specs)
+
+    eval_names = [sweep.table9_eval_step_name(full.SWEEP_DEFINITION, spec) for spec in specs]
+    assert len(set(eval_names)) == 16
+    assert eval_names == [f"t9_fcdsp_{candidate_id}" for candidate_id in full.NOMINAL_CANDIDATE_IDS]
+    assert max(map(len, eval_names)) <= 32

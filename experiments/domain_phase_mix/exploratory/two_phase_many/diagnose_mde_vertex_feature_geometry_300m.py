@@ -23,8 +23,8 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 from scipy.stats import spearmanr
-from sklearn.model_selection import KFold
 from sklearn.linear_model import RidgeCV
+from sklearn.model_selection import KFold
 from sklearn.preprocessing import StandardScaler
 
 from experiments.domain_phase_mix.exploratory.two_phase_many.fit_mde_token_dsp_uncheatable_300m import (
@@ -136,7 +136,9 @@ def spectral_summary(name: str, features: np.ndarray) -> dict[str, float | int |
     }
 
 
-def projection_r2_summary(source_name: str, source: np.ndarray, target_name: str, target: np.ndarray) -> dict[str, float | str]:
+def projection_r2_summary(
+    source_name: str, source: np.ndarray, target_name: str, target: np.ndarray
+) -> dict[str, float | str]:
     """Summarize how well source features span target features in sample."""
     x, _x_keep = standardized_matrix(source)
     y, _y_keep = standardized_matrix(target)
@@ -388,12 +390,12 @@ def main() -> None:
     summary = {
         "target": args.target,
         "target_transform": transform,
-        "rows": int(len(packet.y)),
+        "rows": len(packet.y),
         "enabled_blocks": sorted(enabled_blocks),
         "vertex_feature_count": int(vertex_features.shape[1]),
         "vertex_feature_names_sample": vertex_names[:20],
         "dsp_variant": dsp_model.variant.name,
-        "dsp_trace_rows": int(len(trace)),
+        "dsp_trace_rows": len(trace),
         "permutations": int(args.permutations),
         "geometry_csv": str(args.output_dir / "feature_geometry.csv"),
         "projection_csv": str(args.output_dir / "feature_projection_r2.csv"),

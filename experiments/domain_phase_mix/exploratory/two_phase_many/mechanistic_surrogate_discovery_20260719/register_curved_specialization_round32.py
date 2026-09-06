@@ -43,8 +43,12 @@ def main() -> None:
             "The exact linear-manifold ablation is m=1."
         ),
         "latent_state": "Dimensionless general capability g and specialist capability s.",
-        "state_transition": "Autonomous gradient flow in a mixture-weighted sum of broad and specialist task potentials.",
-        "response_link": "One nonnegative amplitude on the same evaluation-weighted task potential used by the transition, plus intercept.",
+        "state_transition": (
+            "Autonomous gradient flow in a mixture-weighted sum of broad and specialist task potentials."
+        ),
+        "response_link": (
+            "One nonnegative amplitude on the same evaluation-weighted task potential used by the transition, plus intercept."
+        ),
         "additional_degrees_of_freedom": (
             "Manifold power, broad specialist regularization, rare general weight, flow speed, evaluation mixture, one amplitude, intercept, and ridge."
         ),
@@ -97,7 +101,9 @@ def main() -> None:
         "novelty_class": "Conservative gradient flow toward a nonlinear general-specialist task manifold",
         "evaluation_status": "frozen before two-stage StarCoder evaluation",
         "evidence_path": "round32_curved_specialization_starcoder/report.md",
-        "notes": "Derived independently of Round 31 results; no adversarial outcomes will be read during the StarCoder gate.",
+        "notes": (
+            "Derived independently of Round 31 results; no adversarial outcomes will be read during the StarCoder gate."
+        ),
     }
     identity = ["round_id", "candidate_id", "evaluation_status"]
     existing = set(map(tuple, ledger[identity].itertuples(index=False, name=None)))

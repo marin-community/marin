@@ -50,7 +50,9 @@ def update_status(status: str, evidence: str, output_dir: Path) -> None:
         "round_id": "round_45_source_discrete_muon_algebra",
         "candidate_id": "SDMMF",
         "candidate_family": "Source-discrete momentum Muon flow",
-        "hyperparameters": "Source beta=0.95, Nesterov, NS5, epsilon=1e-5, peak LR=0.02, exact schedules; target-free 3x3x3 task geometry",
+        "hyperparameters": (
+            "Source beta=0.95, Nesterov, NS5, epsilon=1e-5, peak LR=0.02, exact schedules; target-free 3x3x3 task geometry"
+        ),
         "adversarial_outcomes_available_before_proposal": True,
         "adversarial_outcomes_inspected_before_proposal": True,
         "observations_inspiring_mechanism": "See round-45 portfolio preregistration.",

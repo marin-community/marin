@@ -213,7 +213,9 @@ def update_status(status: str, evidence: str, output_dir: Path) -> None:
         "round_id": "round_44_matrix_information_decision",
         "candidate_id": "MKBIF",
         "candidate_family": "Matrix Kalman-Bucy information flow",
-        "hyperparameters": "Frozen information angle, anisotropy, process ratio, relaxation, evaluation, and ridge grids; zero-process and isotropic ablations",
+        "hyperparameters": (
+            "Frozen information angle, anisotropy, process ratio, relaxation, evaluation, and ridge grids; zero-process and isotropic ablations"
+        ),
         "adversarial_outcomes_available_before_proposal": True,
         "adversarial_outcomes_inspected_before_proposal": True,
         "observations_inspiring_mechanism": "See round-41 portfolio preregistration.",

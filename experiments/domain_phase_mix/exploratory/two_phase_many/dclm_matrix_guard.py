@@ -12,7 +12,6 @@ import pandas as pd
 
 from experiments.domain_phase_mix.exploratory.two_phase_many import recompute_dclm_bigbench_generation_scores as rescore
 
-
 MACRO_COLUMN = "lm_eval/dclm_core/centered_accuracy_macro"
 TASK_COUNT_COLUMN = "lm_eval/dclm_core/task_count"
 MISSING_TASK_COUNT_COLUMN = "lm_eval/dclm_core/missing_task_count"
@@ -38,9 +37,7 @@ def dclm_centered_columns(frame: pd.DataFrame) -> list[str]:
     return sorted(
         column
         for column in frame.columns
-        if column.startswith("lm_eval/dclm_core/")
-        and column.endswith("/centered_accuracy")
-        and column != MACRO_COLUMN
+        if column.startswith("lm_eval/dclm_core/") and column.endswith("/centered_accuracy") and column != MACRO_COLUMN
     )
 
 
@@ -102,8 +99,7 @@ def _assert_complete_task_counts(frame: pd.DataFrame) -> None:
     bad = (task_count != float(rescore.DCLM_TOTAL_TASKS)) | (missing_count != 0.0)
     if bad.any():
         raise ValueError(
-            "DCLM matrix has incomplete task counts for rows with a macro score; "
-            f"bad row count={int(bad.sum())}"
+            "DCLM matrix has incomplete task counts for rows with a macro score; " f"bad row count={int(bad.sum())}"
         )
 
 

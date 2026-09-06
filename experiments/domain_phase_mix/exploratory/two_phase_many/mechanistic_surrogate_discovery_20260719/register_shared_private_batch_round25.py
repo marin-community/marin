@@ -103,7 +103,9 @@ def main() -> None:
                 "dg/dt=k_g[(1-p)+rho p](1-g); ds/dt=k_s p g^nu(1-s); "
                 "Y=b+A_g(1-g_T)+A_s(1-s_T), A_g,A_s>=0. nu=0 is the exact no-prerequisite ablation."
             ),
-            "latent_state": "Bounded foundation competence g and bounded specialist competence s, both initialized at zero.",
+            "latent_state": (
+                "Bounded foundation competence g and bounded specialist competence s, both initialized at zero."
+            ),
             "state_transition": (
                 "Autonomous monotone acquisition within each constant-mixture phase; the specialist hazard integrates the "
                 "current foundation state exactly."
@@ -156,7 +158,9 @@ def main() -> None:
                 "L_b=(g-1)^2/2+lambda s^2/2; L_r=(gs-1)^2/2+rho(g-1)^2/2; "
                 "d(g,s)/dt=-k grad[(1-p)L_b+pL_r]; Y=b+A L_r(g_T,s_T), A>=0. lambda=0 removes broad forgetting."
             ),
-            "latent_state": "Dimensionless shared foundation factor g and private specialist factor s, initialized at zero.",
+            "latent_state": (
+                "Dimensionless shared foundation factor g and private specialist factor s, initialized at zero."
+            ),
             "state_transition": (
                 "Deterministic gradient flow on the current mixture-weighted broad/specialist task potential through each "
                 "piecewise-constant phase."

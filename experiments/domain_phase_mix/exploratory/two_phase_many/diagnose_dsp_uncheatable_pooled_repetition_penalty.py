@@ -48,9 +48,6 @@ from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E
 from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E402
     diagnose_dsp_uncheatable_shared_late_capacity as shared_diag,
 )
-from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E402
-    fit_dsp_vs_olmix_deletion_augmented_300m as dsp_compare,
-)
 from experiments.domain_phase_mix.exploratory.two_phase_many.standalone_code import dsp_exact as dsp  # noqa: E402
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -262,7 +259,9 @@ def start_bank(packet: dsp.PacketData, fixed_tau: float | None) -> list[np.ndarr
 
 def profile_objective(packet: dsp.PacketData, kappa: np.ndarray, theta: np.ndarray, fixed_tau: float | None) -> float:
     rho, gamma, tau = unpack_theta(np.asarray(theta, dtype=float), packet.m, fixed_tau)
-    fit = fit_head(packet.w, packet.y, packet, rho=rho, gamma=gamma, tau=tau, kappa=kappa, fixed_tau=fixed_tau is not None)
+    fit = fit_head(
+        packet.w, packet.y, packet, rho=rho, gamma=gamma, tau=tau, kappa=kappa, fixed_tau=fixed_tau is not None
+    )
     pred = predict_pooled(fit, packet.w)
     residual = pred - packet.y
     rmse = float(np.sqrt(np.mean(residual * residual)))
@@ -316,7 +315,9 @@ def fit_pooled(
         raise RuntimeError("No pooled repetition fit selected")
     rho, gamma, tau = unpack_theta(best_theta, packet.m, fixed_tau)
     return (
-        fit_head(packet.w, packet.y, packet, rho=rho, gamma=gamma, tau=tau, kappa=kappa, fixed_tau=fixed_tau is not None),
+        fit_head(
+            packet.w, packet.y, packet, rho=rho, gamma=gamma, tau=tau, kappa=kappa, fixed_tau=fixed_tau is not None
+        ),
         pd.DataFrame.from_records(rows),
     )
 
@@ -490,7 +491,9 @@ def summarize_fit(
     return SummaryRow(**row), repaired
 
 
-def transfer_visibility(packet: dsp.PacketData, fit: PooledPenaltyFit, heldout: pd.DataFrame, top_k: int = 8) -> pd.DataFrame:
+def transfer_visibility(
+    packet: dsp.PacketData, fit: PooledPenaltyFit, heldout: pd.DataFrame, top_k: int = 8
+) -> pd.DataFrame:
     base_like = dsp.FittedDSPModel(
         variant=dsp.VARIANTS["no_phase"],
         params={"rho": fit.rho, "tau": np.full_like(fit.rho, fit.tau)},
@@ -620,10 +623,20 @@ def main() -> None:
     )
     fig.add_vline(x=0.70, line_dash="dash", line_color="gray")
     fig.add_hline(y=0.030, line_dash="dash", line_color="gray")
-    fig.write_html(args.output_dir / "pooled_repetition_penalty_gate_scatter.html", include_plotlyjs="cdn", config=PLOT_CONFIG)
-    write_report(args.output_dir, summary_frame, summary_frame[["model_name", "gamma", "tau", "pooled_penalty_coef", "train_rmse", "train_spearman"]])
+    fig.write_html(
+        args.output_dir / "pooled_repetition_penalty_gate_scatter.html", include_plotlyjs="cdn", config=PLOT_CONFIG
+    )
+    write_report(
+        args.output_dir,
+        summary_frame,
+        summary_frame[["model_name", "gamma", "tau", "pooled_penalty_coef", "train_rmse", "train_spearman"]],
+    )
 
-    print(summary_frame.sort_values(["pass_gates", "heldout_uncheatable_mae"], ascending=[False, True]).to_string(index=False))
+    print(
+        summary_frame.sort_values(["pass_gates", "heldout_uncheatable_mae"], ascending=[False, True]).to_string(
+            index=False
+        )
+    )
 
 
 if __name__ == "__main__":

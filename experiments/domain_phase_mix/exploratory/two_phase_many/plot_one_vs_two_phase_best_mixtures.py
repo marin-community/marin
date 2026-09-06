@@ -24,7 +24,6 @@ import plotly.graph_objects as go
 import plotly.io as pio
 from plotly.subplots import make_subplots
 
-
 REPO_ROOT = Path(__file__).resolve().parents[4]
 REFERENCE_OUTPUTS = (
     REPO_ROOT / "experiments" / "domain_phase_mix" / "exploratory" / "two_phase_many" / "reference_outputs"
@@ -211,19 +210,15 @@ def read_mixture(spec: MixtureSpec) -> pd.DataFrame:
         frame["phase_1_epoch_multiplier"] = float("nan")
     if "simulated_epochs" not in frame.columns:
         frame["simulated_epochs"] = (
-            PHASE_0_FRACTION * frame["phase_0_epoch_multiplier"]
-            + PHASE_1_FRACTION * frame["phase_1_epoch_multiplier"]
+            PHASE_0_FRACTION * frame["phase_0_epoch_multiplier"] + PHASE_1_FRACTION * frame["phase_1_epoch_multiplier"]
         )
     phase_sums = frame[["phase_0_weight", "phase_1_weight"]].sum()
     aggregate_sum = frame["aggregate_weight"].sum()
     if (phase_sums.sub(1.0).abs() > 1e-5).any() or abs(aggregate_sum - 1.0) > 1e-5:
         raise ValueError(
-            f"{spec.label} has invalid sums: phase_sums={phase_sums.to_dict()} "
-            f"aggregate_sum={aggregate_sum}"
+            f"{spec.label} has invalid sums: phase_sums={phase_sums.to_dict()} " f"aggregate_sum={aggregate_sum}"
         )
-    aggregate_from_phases = (
-        PHASE_0_FRACTION * frame["phase_0_weight"] + PHASE_1_FRACTION * frame["phase_1_weight"]
-    )
+    aggregate_from_phases = PHASE_0_FRACTION * frame["phase_0_weight"] + PHASE_1_FRACTION * frame["phase_1_weight"]
     max_aggregate_error = float((frame["aggregate_weight"] - aggregate_from_phases).abs().max())
     if max_aggregate_error > 1e-5:
         raise ValueError(
@@ -244,19 +239,13 @@ def comparison_frames(spec: ComparisonSpec) -> tuple[pd.DataFrame, pd.DataFrame,
     )
     merged["domain_short"] = merged["domain"].map(clean_domain)
     merged["domain_group"] = merged["domain"].map(domain_group)
-    merged["aggregate_delta_two_minus_single"] = (
-        merged["aggregate_weight_two_phase"] - merged["aggregate_weight_single"]
-    )
+    merged["aggregate_delta_two_minus_single"] = merged["aggregate_weight_two_phase"] - merged["aggregate_weight_single"]
     merged["aggregate_exposure_delta_two_minus_single"] = (
         merged["simulated_epochs_two_phase"] - merged["simulated_epochs_single"]
     )
     merged["aggregate_abs_delta"] = merged["aggregate_delta_two_minus_single"].abs()
-    merged["phase_gap_single"] = (
-        merged["phase_1_weight_single"] - merged["phase_0_weight_single"]
-    )
-    merged["phase_gap_two_phase"] = (
-        merged["phase_1_weight_two_phase"] - merged["phase_0_weight_two_phase"]
-    )
+    merged["phase_gap_single"] = merged["phase_1_weight_single"] - merged["phase_0_weight_single"]
+    merged["phase_gap_two_phase"] = merged["phase_1_weight_two_phase"] - merged["phase_0_weight_two_phase"]
     merged["phase_gap_delta"] = merged["phase_gap_two_phase"] - merged["phase_gap_single"]
     return single, two_phase, merged
 
@@ -266,16 +255,8 @@ def tv_distance(left: pd.Series, right: pd.Series) -> float:
 
 
 def summarize_comparison(spec: ComparisonSpec, merged: pd.DataFrame) -> dict[str, object]:
-    top_up = (
-        merged.sort_values("aggregate_delta_two_minus_single", ascending=False)
-        .head(5)["domain"]
-        .tolist()
-    )
-    top_down = (
-        merged.sort_values("aggregate_delta_two_minus_single", ascending=True)
-        .head(5)["domain"]
-        .tolist()
-    )
+    top_up = merged.sort_values("aggregate_delta_two_minus_single", ascending=False).head(5)["domain"].tolist()
+    top_down = merged.sort_values("aggregate_delta_two_minus_single", ascending=True).head(5)["domain"].tolist()
     return {
         "comparison": f"{spec.task} / {spec.method}",
         "task": spec.task,
@@ -293,12 +274,8 @@ def summarize_comparison(spec: ComparisonSpec, merged: pd.DataFrame) -> dict[str
         "phase1_tv_single_vs_two_phase": tv_distance(
             merged["phase_1_weight_single"], merged["phase_1_weight_two_phase"]
         ),
-        "two_phase_phase_tv": tv_distance(
-            merged["phase_0_weight_two_phase"], merged["phase_1_weight_two_phase"]
-        ),
-        "single_phase_phase_tv": tv_distance(
-            merged["phase_0_weight_single"], merged["phase_1_weight_single"]
-        ),
+        "two_phase_phase_tv": tv_distance(merged["phase_0_weight_two_phase"], merged["phase_1_weight_two_phase"]),
+        "single_phase_phase_tv": tv_distance(merged["phase_0_weight_single"], merged["phase_1_weight_single"]),
         "max_single_simulated_epochs": float(merged["simulated_epochs_single"].max()),
         "max_two_phase_simulated_epochs": float(merged["simulated_epochs_two_phase"].max()),
         "top_two_phase_aggregate_up_domains": "; ".join(top_up),
@@ -313,9 +290,7 @@ def comparison_long(spec: ComparisonSpec, merged: pd.DataFrame) -> pd.DataFrame:
             for phase in ["phase_0", "phase_1", "aggregate"]:
                 weight_column = f"{phase}_weight_{family}" if phase != "aggregate" else f"aggregate_weight_{family}"
                 epoch_column = (
-                    f"{phase}_epoch_multiplier_{family}"
-                    if phase != "aggregate"
-                    else f"simulated_epochs_{family}"
+                    f"{phase}_epoch_multiplier_{family}" if phase != "aggregate" else f"simulated_epochs_{family}"
                 )
                 rows.append(
                     {
@@ -330,9 +305,7 @@ def comparison_long(spec: ComparisonSpec, merged: pd.DataFrame) -> pd.DataFrame:
                         "domain_group": row["domain_group"],
                         "weight": float(row[weight_column]),
                         "epoch_multiplier": float(row[epoch_column]),
-                        "aggregate_delta_two_minus_single": float(
-                            row["aggregate_delta_two_minus_single"]
-                        ),
+                        "aggregate_delta_two_minus_single": float(row["aggregate_delta_two_minus_single"]),
                         "aggregate_exposure_delta_two_minus_single": float(
                             row["aggregate_exposure_delta_two_minus_single"]
                         ),
@@ -588,13 +561,7 @@ def main() -> None:
         delta_df["method"] = spec.method
         all_deltas.append(delta_df)
         fig = plot_phase_bars(spec, long_df)
-        safe_name = (
-            comparison.lower()
-            .replace(" ", "_")
-            .replace("/", "_")
-            .replace("-", "_")
-            .replace("=", "")
-        )
+        safe_name = comparison.lower().replace(" ", "_").replace("/", "_").replace("-", "_").replace("=", "")
         fig_path = OUTPUT_DIR / f"{safe_name}_phase_bars.html"
         fig.write_html(fig_path, include_plotlyjs="cdn", config=PLOT_CONFIG)
         figures.append((comparison, fig))

@@ -284,8 +284,9 @@ def main() -> None:
             {
                 "surface": panel.name,
                 "selected_config": config.key,
-                "parameter_count": len(primed.primed_design(primed.primer_geometry(panel), panel.weights[:1], config)[1])
-                + 3,
+                "parameter_count": (
+                    len(primed.primed_design(primed.primer_geometry(panel), panel.weights[:1], config)[1]) + 3
+                ),
                 **paired_screen.scalar_metrics(panel.two_phase_target, prediction),
             }
         )

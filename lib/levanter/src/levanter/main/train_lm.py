@@ -191,7 +191,9 @@ def _load_lm_model_from_configured_source(
             dtype=trainer.mp.compute_dtype,
         )
         model = named_jit(trainer.mp.cast_to_param, parameter_axis_mapping)(model)
-    elif config.initialize_from_checkpoint_path is not None or config.initialize_model_from_checkpoint_path is not None:
+    elif (
+        config.initialize_from_checkpoint_path is not None or config.initialize_model_from_checkpoint_path is not None
+    ):
         # Both build a fresh base model and load only the checkpoint's `model` subtree into it (weights
         # only, strict). They differ only in how main() drives them, not in how the base is loaded here.
         source = config.initialize_from_checkpoint_path or config.initialize_model_from_checkpoint_path
@@ -505,7 +507,9 @@ def main(config: TrainLmConfig):
         @named_jit(axis_resources=compute_axis_mapping)
         def compute_logits(model: LmHeadModel, example: LmExample):
             model = trainer.mp.cast_to_compute(model)
-            activations, _ = split_activations(model.activations(example.tokens, key=None, attn_mask=example.attn_mask))
+            activations, _ = split_activations(
+                model.activations(example.tokens, key=None, attn_mask=example.attn_mask)
+            )
             head = model.get_lm_head()
             logits = hax.dot(activations, head, axis=model.Embed)
             return logits

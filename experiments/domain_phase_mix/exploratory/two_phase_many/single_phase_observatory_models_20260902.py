@@ -570,7 +570,9 @@ class FamilyOptions:
     row_scrambled_harm: bool = False
     # Round-2 mechanisms: additive interaction columns, quality-axis pooling across families, and a
     # per-(component, bucket) ridge multiplier table keyed by bucket name.
-    interaction: str = "none"  # none | total_square | family_products | total_hub | cc_hub
+    interaction: str = "none"  # none | total_square | family_products | total_hub | cc_hub | named_pairs
+    # Bucket-name pairs for interaction="named_pairs": signed products of the two buckets' benefit signals.
+    interaction_pairs: tuple[tuple[str, str], ...] = ()
     quality_axis: str = "none"
     shuffled_quality: bool = False
     component_ridge: tuple[tuple[str, tuple[tuple[str, float], ...]], ...] = ()
@@ -780,6 +782,18 @@ def family_design(features: Features, shape: Shape, options: FamilyOptions) -> D
         ridge.extend([shrink] * (2 * features.buckets))
         names.extend(f"interaction:hub_plus:{index}" for index in range(features.buckets))
         names.extend(f"interaction:hub_minus:{index}" for index in range(features.buckets))
+    elif options.interaction == "named_pairs":
+        if not features.buckets_names:
+            raise ValueError("named_pairs interaction needs bucket names")
+        if not options.interaction_pairs:
+            raise ValueError("named_pairs interaction needs at least one bucket pair")
+        shrink = float(shape.get("interaction_shrink", 1.0))
+        position = {name: index for index, name in enumerate(features.buckets_names)}
+        for first, second in options.interaction_pairs:
+            product = bucket_signal[:, [position[first]]] * bucket_signal[:, [position[second]]]
+            pieces.extend([product, -product])
+            ridge.extend([shrink, shrink])
+            names.extend([f"interaction:pair_plus:{first}+{second}", f"interaction:pair_minus:{first}+{second}"])
     elif options.interaction != "none":
         raise ValueError(f"unknown interaction {options.interaction}")
 
@@ -1156,6 +1170,9 @@ class GridModel:
         spec = self.head
         if "floor_margin" in shape:
             spec = dataclasses.replace(spec, floor_margin=float(shape["floor_margin"]))
+        if "floor_fraction" in shape:
+            # A grid axis for the log-deficit floor: lower fractions make the link closer to additive.
+            spec = dataclasses.replace(spec, floor_fraction=float(shape["floor_fraction"]))
         return spec if link is None else dataclasses.replace(spec, link=link)
 
     def _shortlist(

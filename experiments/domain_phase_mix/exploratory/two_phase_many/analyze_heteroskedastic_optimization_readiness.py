@@ -17,8 +17,8 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 import numpy as np
 import pandas as pd
@@ -35,7 +35,6 @@ from experiments.domain_phase_mix.exploratory.two_phase_many.analyze_proportiona
     metric_kind,
     utility_values,
 )
-
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REFERENCE_DIR = SCRIPT_DIR / "reference_outputs"
@@ -88,7 +87,7 @@ def noise_stats_for_metric(frame: pd.DataFrame, metric: str) -> dict[str, float]
     if len(values) == 0:
         return {"n": 0, "mean": math.nan, "sd": math.nan}
     return {
-        "n": int(len(values)),
+        "n": len(values),
         "mean": float(np.mean(values)),
         "sd": float(np.std(values, ddof=1)) if len(values) >= 2 else math.nan,
     }
@@ -328,9 +327,8 @@ def build_readiness(log_tilt: pd.DataFrame, bump: pd.DataFrame, noise: pd.DataFr
     robust_bump_steerable = merged["bump_optimization_readiness"].isin(
         ["finite_steerable_high_confidence", "finite_steerable_moderate"]
     )
-    robust_detectable = (
-        (merged["actuation_max_all_anchor_sd_bh_q_value"] <= 0.05)
-        | (merged["bump_max_all_anchor_sd_bh_q_value"] <= 0.05)
+    robust_detectable = (merged["actuation_max_all_anchor_sd_bh_q_value"] <= 0.05) | (
+        merged["bump_max_all_anchor_sd_bh_q_value"] <= 0.05
     )
     fragile_detectable = (
         (merged["actuation_bh_q_value"] <= 0.05) | (merged["bump_bh_q_value"] <= 0.05)
@@ -373,11 +371,16 @@ def dclm_component_use(row: pd.Series) -> str:
     alignment = row["proxy_hard_alignment_bucket"]
     fit = row["dsp_fit_bucket"]
     role = row["optimization_role"]
-    if alignment == "strong" and fit in {"strong", "moderate"} and role in {
-        "local_steerable",
-        "local_and_finite_steerable",
-        "finite_effect_steerable",
-    }:
+    if (
+        alignment == "strong"
+        and fit in {"strong", "moderate"}
+        and role
+        in {
+            "local_steerable",
+            "local_and_finite_steerable",
+            "finite_effect_steerable",
+        }
+    ):
         return "direct_steering_candidate"
     if alignment == "strong" and fit in {"strong", "moderate"}:
         return "surrogate_objective_candidate"
@@ -632,9 +635,7 @@ def write_report(
             "max_all_over_proportional_sd",
         ]
     ].sort_values(["optimization_role", "metric"])
-    high_variance_shift = noise[
-        noise["anchor_sd_ratio"].notna() & (noise["anchor_sd_ratio"] >= 2.0)
-    ]
+    high_variance_shift = noise[noise["anchor_sd_ratio"].notna() & (noise["anchor_sd_ratio"] >= 2.0)]
     dclm_lines: list[str] = []
     if not dclm_readiness.empty:
         dclm_counts = (
@@ -776,8 +777,8 @@ def main() -> None:
     reportable = readiness[readiness["reportable_metric"].fillna(False)]
     summary = {
         "output_dir": str(OUTPUT_DIR),
-        "metrics": int(len(readiness)),
-        "reportable_metrics": int(len(reportable)),
+        "metrics": len(readiness),
+        "reportable_metrics": len(reportable),
         "curated_metrics": int(readiness["curated_metric"].fillna(False).sum()),
         "reportable_anchor_sd_ratio_ge_2": int((reportable["anchor_sd_ratio"] >= 2.0).sum()),
         "log_tilt_original_q_le_0p05_reportable": int(
@@ -786,9 +787,7 @@ def main() -> None:
         "log_tilt_conservative_q_le_0p05_reportable": int(
             (log_tilt[log_tilt["reportable_metric"]]["actuation_max_all_anchor_sd_bh_q_value"] <= 0.05).sum()
         ),
-        "bump_original_q_le_0p05_reportable": int(
-            (bump[bump["reportable_metric"]]["bump_bh_q_value"] <= 0.05).sum()
-        ),
+        "bump_original_q_le_0p05_reportable": int((bump[bump["reportable_metric"]]["bump_bh_q_value"] <= 0.05).sum()),
         "bump_conservative_q_le_0p05_reportable": int(
             (bump[bump["reportable_metric"]]["bump_max_all_anchor_sd_bh_q_value"] <= 0.05).sum()
         ),
@@ -797,7 +796,7 @@ def main() -> None:
         },
     }
     if not dclm_readiness.empty:
-        summary["dclm_components"] = int(len(dclm_readiness))
+        summary["dclm_components"] = len(dclm_readiness)
         summary["dclm_exact_controllability_diagnostics"] = int(
             dclm_readiness["has_exact_controllability_diagnostic"].sum()
         )

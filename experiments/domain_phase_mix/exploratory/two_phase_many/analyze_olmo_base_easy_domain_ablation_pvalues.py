@@ -247,7 +247,7 @@ def compute_cell_pvalues(metrics: pd.DataFrame, domain_metadata: pd.DataFrame) -
     for benchmark, reference_group in reference.groupby("benchmark_key", sort=True):
         # Utility is higher-is-better. For BPB, utility is negative BPB.
         ref_utility = -reference_group["value_bpb"].to_numpy(dtype=float)
-        n_noise = int(len(ref_utility))
+        n_noise = len(ref_utility)
         noise_sd = float(np.std(ref_utility, ddof=1))
         if not np.isfinite(noise_sd) or noise_sd <= 0.0:
             continue
@@ -337,7 +337,7 @@ def main() -> None:
         "reference_definition": "baseline_proportional plus 10 proportional_noise repeats",
         "deleted_domain_count": int(cell["target_domain"].nunique()),
         "benchmark_count": int(cell["benchmark_key"].nunique()),
-        "cell_count": int(len(cell)),
+        "cell_count": len(cell),
         "csqa_key_present": bool((metrics["benchmark_key"] == f"{KEY_PREFIX}/csqa/bpb").any()),
         "metric_families": {
             str(key): int(value)

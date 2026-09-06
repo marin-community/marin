@@ -59,7 +59,6 @@ from experiments.domain_phase_mix.exploratory.two_phase_many.fit_mde_checkpoint_
 )
 from experiments.domain_phase_mix.exploratory.two_phase_many.standalone_code import dsp_exact as dsp
 
-
 SCRIPT_DIR = Path(__file__).resolve().parent
 OUTPUT_DIR = SCRIPT_DIR / "reference_outputs/mde_dsp_strict_stacking_300m_20260529"
 N_SPLITS = dsp.N_SPLITS
@@ -294,8 +293,7 @@ def fit_strict_oof(
         start = time.perf_counter()
         train_packet = subset_packet(packet, train_index)
         print(
-            f"fold {fold_id + 1}/{N_SPLITS}: fitting DSP on {len(train_index)} rows, "
-            f"testing {len(test_index)} rows",
+            f"fold {fold_id + 1}/{N_SPLITS}: fitting DSP on {len(train_index)} rows, " f"testing {len(test_index)} rows",
             flush=True,
         )
         model, tuning = dsp.fit_variant(
@@ -313,8 +311,8 @@ def fit_strict_oof(
         fold_rows.append(
             {
                 "fold": fold_id,
-                "train_rows": int(len(train_index)),
-                "test_rows": int(len(test_index)),
+                "train_rows": len(train_index),
+                "test_rows": len(test_index),
                 "elapsed_sec": float(time.perf_counter() - start),
                 "dsp_train_rmse": float(np.sqrt(np.mean((y_factor[train_index] - base_train) ** 2))),
                 "dsp_test_rmse": float(np.sqrt(np.mean((y_factor[test_index] - base_test) ** 2))),
@@ -362,7 +360,7 @@ def fit_strict_oof(
                 "uses_observed_checkpoint_features_at_test": bool(
                     (design.use_teacher_forced or design.use_mcq) and not design.queryable
                 ),
-                "n": int(len(y_factor)),
+                "n": len(y_factor),
                 **scores,
                 "rmse_delta_vs_dsp": scores["rmse"] - baseline_scores["rmse"],
                 "r2_delta_vs_dsp": scores["r2"] - baseline_scores["r2"],
@@ -460,8 +458,8 @@ def main() -> None:
     best_observed = metrics[metrics["uses_observed_checkpoint_features_at_test"]].head(1).iloc[0]
     best_queryable = metrics[metrics["queryable"]].head(1).iloc[0]
     summary = {
-        "rows": int(len(raw)),
-        "domains": int(len(domains)),
+        "rows": len(raw),
+        "domains": len(domains),
         "target": "aggregate/y_factor",
         "cv": {"kind": "KFold", "splits": N_SPLITS, "seed": CV_SEED},
         "inner_cv": {"kind": "KFold", "splits": INNER_SPLITS},

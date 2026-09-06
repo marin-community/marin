@@ -244,10 +244,15 @@ def optimize_spec(
         elif spec.method == "tv_uncertainty_penalty":
             tv = phase_tv_to_proportional(weights, natural)
             adjusted = prop_pred + (pred - prop_pred) * r
-            return float(np.mean(adjusted)) + spec.gamma * macro_sigma * (1.0 + tv / tv_scale) + spec.kl_reg * base.weighted_multiclass_kl(
-                weights,
-                natural,
-                base.PHASE_FRACTIONS,
+            return (
+                float(np.mean(adjusted))
+                + spec.gamma * macro_sigma * (1.0 + tv / tv_scale)
+                + spec.kl_reg
+                * base.weighted_multiclass_kl(
+                    weights,
+                    natural,
+                    base.PHASE_FRACTIONS,
+                )
             )
         else:
             raise ValueError(f"Unknown shrinkage method {spec.method}")

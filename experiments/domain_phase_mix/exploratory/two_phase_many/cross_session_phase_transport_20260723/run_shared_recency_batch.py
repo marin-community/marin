@@ -199,7 +199,7 @@ def run_cv(panel) -> tuple[pd.DataFrame, pd.DataFrame]:
                         "fold": fold,
                         "model_id": model_id,
                         "theta": fit.theta,
-                        "implied_recency_share": (panel.alpha0 + fit.theta * panel.alpha0 * panel.alpha1),
+                        "implied_recency_share": panel.alpha0 + fit.theta * panel.alpha0 * panel.alpha1,
                         "condition_number": fit.condition_number,
                         "rank": fit.rank,
                         **{f"gamma::{target}": fit.gamma_by_target[target] for target in TARGETS},
@@ -233,7 +233,7 @@ def run_cv(panel) -> tuple[pd.DataFrame, pd.DataFrame]:
                                 "observed_delta": observed_delta[local],
                                 "predicted_delta": predicted_delta[local],
                                 "observed_two": panel.two_targets[target][row_index],
-                                "predicted_two": (predicted_one[local] + predicted_delta[local]),
+                                "predicted_two": predicted_one[local] + predicted_delta[local],
                             }
                         )
     return pd.DataFrame(rows), pd.DataFrame(fits)
@@ -275,7 +275,7 @@ def run_heldouts(panel) -> tuple[pd.DataFrame, pd.DataFrame]:
             {
                 "model_id": model_id,
                 "theta": fit.theta,
-                "implied_recency_share": (panel.alpha0 + fit.theta * panel.alpha0 * panel.alpha1),
+                "implied_recency_share": panel.alpha0 + fit.theta * panel.alpha0 * panel.alpha1,
                 "condition_number": fit.condition_number,
                 "rank": fit.rank,
                 **{f"gamma::{target}": fit.gamma_by_target[target] for target in TARGETS},

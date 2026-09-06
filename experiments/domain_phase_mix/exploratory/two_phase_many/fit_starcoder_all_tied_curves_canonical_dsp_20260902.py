@@ -6,7 +6,7 @@
 # dependencies = ["numpy", "pandas", "plotly", "scikit-learn", "scipy", "tabulate"]
 # ///
 
-"""Compare canonical DSP and OLMix on every retained StarCoder endpoint curve."""
+"""Compare canonical DSP, Weibull-softplus, and OLMix on retained StarCoder curves."""
 
 from __future__ import annotations
 
@@ -39,6 +39,12 @@ from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E
     benchmark_dsp_single_phase_ladder_20260824 as dsp_ladder,
 )
 from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E402
+    single_phase_observatory_models_20260902 as observatory_models,
+)
+from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E402
+    single_phase_observatory_registry_20260902 as observatory_registry,
+)
+from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E402
     starcoder_wsd80_epoch_accounting as epoch_accounting,
 )
 
@@ -54,6 +60,8 @@ INNER_FOLDS = 3
 FOLD_SEED = 20_260_902
 DENSE_POINTS = 1001
 CACHE_SCHEMA_VERSION = 2
+SUCCESSOR_CACHE_SCHEMA_VERSION = 1
+SUCCESSOR_MODEL_ID = "weibull_softplus_unscaled"
 PLOTLY_CONFIG = {
     "displaylogo": False,
     "responsive": True,
@@ -65,6 +73,17 @@ FAMILY_LABELS = {
     "dense_horizon_replay": "Training horizon by StarCoder replay burden",
     "coupled_lr_onset": "Coupled phase-boundary and LR-decay onset",
 }
+FAMILY_ORDER = (
+    "fixed_model_token_ladder",
+    "matched_nd",
+    "dense_horizon_replay",
+    "coupled_lr_onset",
+)
+MATCHED_SCALING_PATHS = (
+    ("Scale model size <i>N</i>", "_increase_n_"),
+    ("Scale token budget <i>D</i>", "_increase_d_"),
+    ("Scale <i>N</i> and <i>D</i> together", "_increase_nd_"),
+)
 SUPPORT_LABELS = {
     "full": "Full cache",
     "m0125": "0.125x burden",
@@ -92,6 +111,7 @@ class CurveTask:
     curve_id: str
     weights: np.ndarray
     response: np.ndarray
+    inventory: np.ndarray
     input_hash: str
 
 
@@ -114,6 +134,24 @@ class CurveFit:
     olmix_log_c: float
     olmix_coefficients: np.ndarray
     olmix_huber_loss: float
+
+
+@dataclass(frozen=True)
+class SuccessorFit:
+    """Full-data Weibull-softplus fit evaluated on observed and dense grids."""
+
+    curve_id: str
+    input_hash: str
+    inventory: np.ndarray
+    observed_prediction: np.ndarray
+    dense_weights: np.ndarray
+    dense_prediction: np.ndarray
+    shape: dict[str, float]
+    ridge: float
+    intercept: float
+    coefficients: np.ndarray
+    coefficient_names: tuple[str, ...]
+    diagnostics: dict[str, float | int | bool | str]
 
 
 def parse_args() -> argparse.Namespace:
@@ -183,11 +221,40 @@ def predict_canonical(
     return intercept + design @ coefficients
 
 
+def ordered_curves(curves: pd.DataFrame) -> pd.DataFrame:
+    """Assign stable C01-C45 references in report presentation order."""
+    blocks: list[pd.DataFrame] = []
+    for family in FAMILY_ORDER:
+        block = curves.loc[curves["family"].eq(family)].copy()
+        if family == "fixed_model_token_ladder":
+            block = block.sort_values(["planned_materialized_tokens", "curve_id"])
+        elif family == "matched_nd":
+            block = block.sort_values(["planned_materialized_tokens", "hidden_size", "curve_id"])
+        elif family == "dense_horizon_replay":
+            block["cell"] = block["curve_id"].map(cell_id)
+            block["support_rank"] = block["support_id"].map({value: index for index, value in enumerate(SUPPORT_ORDER)})
+            if block["support_rank"].isna().any():
+                raise ValueError("A replay curve has an unknown support ordering")
+            block = block.sort_values(["cell", "support_rank", "curve_id"])
+            block = block.drop(columns=["cell", "support_rank"])
+        elif family == "coupled_lr_onset":
+            block = block.sort_values(["lr_decay_onset_fraction", "curve_id"])
+        blocks.append(block)
+
+    ordered = pd.concat(blocks, ignore_index=True)
+    if len(ordered) != EXPECTED_CURVES or ordered["curve_id"].nunique() != EXPECTED_CURVES:
+        raise ValueError(f"Expected {EXPECTED_CURVES} uniquely ordered curves")
+    ordered.insert(0, "curve_number", np.arange(1, len(ordered) + 1))
+    ordered.insert(1, "curve_ref", ordered["curve_number"].map(lambda number: f"C{number:02d}"))
+    return ordered
+
+
 def load_inputs(inventory_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     curves = pd.read_csv(inventory_dir / CURVE_INVENTORY_FILE)
     core = curves.loc[curves["protocol_group"].eq("core_endpoint")].copy()
     if len(core) != EXPECTED_CURVES or not core["primary_target_ready"].all():
         raise ValueError(f"Expected {EXPECTED_CURVES} protocol-ready endpoint curves")
+    core = ordered_curves(core)
 
     memberships = pd.read_csv(inventory_dir / CURVE_MEMBERSHIPS_FILE)
     targets = pd.read_csv(inventory_dir / TARGET_OBSERVATIONS_FILE)
@@ -195,7 +262,7 @@ def load_inputs(inventory_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     points = memberships.merge(primary, on=["observation_id", "training_run_id"], validate="many_to_one")
     points = points.loc[points["curve_id"].isin(core["curve_id"])].copy()
     points = points.merge(
-        core[["curve_id", "family", "primary_target_points"]],
+        core[["curve_id", "curve_number", "curve_ref", "family", "primary_target_points"]],
         on="curve_id",
         validate="many_to_one",
     )
@@ -207,20 +274,23 @@ def load_inputs(inventory_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
         raise ValueError("Primary observations do not match the frozen curve inventory")
     if not np.isfinite(points["bpb"]).all():
         raise ValueError("Primary curve data contain nonfinite BPB values")
-    return core.sort_values(["family", "curve_id"]).reset_index(drop=True), points
+    return core, points
 
 
 def build_tasks(curves: pd.DataFrame, points: pd.DataFrame) -> list[CurveTask]:
     tasks: list[CurveTask] = []
+    curve_lookup = curves.set_index("curve_id")
     for curve_id in curves["curve_id"]:
         block = points.loc[points["curve_id"].eq(curve_id)].sort_values("starcoder_weight")
         weights = block["starcoder_weight"].to_numpy(float)
         response = block["bpb"].to_numpy(float)
+        inventory = curve_epoch_inventory(curve_lookup.loc[curve_id])
         tasks.append(
             CurveTask(
                 curve_id=curve_id,
                 weights=weights,
                 response=response,
+                inventory=inventory,
                 input_hash=array_sha256(curve_id, weights, response),
             )
         )
@@ -427,12 +497,212 @@ def fit_all_curves(
     return [completed[task.curve_id] for task in tasks]
 
 
+def successor_features(task: CurveTask, weights: np.ndarray, *, suffix: str) -> observatory_models.Features:
+    return observatory_models.features_from_panel(
+        tied_weights(weights),
+        task.inventory,
+        ("nemotron_full", "starcoder"),
+        early_fraction=None,
+        label=f"starcoder-curve-report::{task.curve_id}|{suffix}",
+    )
+
+
+def fit_successor_curve(task: CurveTask) -> SuccessorFit:
+    entry = observatory_registry.ENTRY_BY_ID[SUCCESSOR_MODEL_ID]
+    features = observatory_registry.apply_transform(
+        successor_features(task, task.weights, suffix="observed"),
+        entry,
+    )
+    model = entry.build(features)
+    if not isinstance(model, observatory_models.GridModel):
+        raise TypeError(f"{SUCCESSOR_MODEL_ID} must resolve to a GridModel")
+    train = np.arange(len(task.weights))
+    fitted = model.fit(
+        features,
+        task.response,
+        train,
+        interleaved_folds(len(task.response), INNER_FOLDS),
+        stable_seed(task.curve_id),
+    )
+    if not isinstance(fitted.head, observatory_models.FittedHead):
+        raise TypeError(f"{SUCCESSOR_MODEL_ID} must use a single fitted head")
+    dense_weights = np.linspace(float(task.weights.min()), float(task.weights.max()), DENSE_POINTS)
+    dense_features = successor_features(task, dense_weights, suffix="dense")
+    observed_prediction = model.predict(fitted, features, train)
+    dense_prediction = model.predict(fitted, dense_features, np.arange(DENSE_POINTS))
+    if not np.isfinite(observed_prediction).all() or not np.isfinite(dense_prediction).all():
+        raise ValueError(f"{task.curve_id}: {SUCCESSOR_MODEL_ID} produced nonfinite predictions")
+    design = model.design(features, fitted.shape)
+    return SuccessorFit(
+        curve_id=task.curve_id,
+        input_hash=task.input_hash,
+        inventory=task.inventory,
+        observed_prediction=observed_prediction,
+        dense_weights=dense_weights,
+        dense_prediction=dense_prediction,
+        shape=fitted.shape,
+        ridge=fitted.ridge,
+        intercept=fitted.head.intercept,
+        coefficients=fitted.head.coefficients,
+        coefficient_names=design.names,
+        diagnostics=fitted.diagnostics,
+    )
+
+
+def successor_fit_cache_path(output_dir: Path, curve_id: str) -> Path:
+    return output_dir / "successor_fit_cache" / f"{curve_id}.json"
+
+
+def successor_cache_metadata(task: CurveTask) -> dict[str, Any]:
+    entry = observatory_registry.ENTRY_BY_ID[SUCCESSOR_MODEL_ID]
+    features = successor_features(task, task.weights, suffix="observed")
+    model = entry.build(features)
+    description = json.dumps(observatory_models.describe_model(model), sort_keys=True, default=str)
+    return {
+        "schema_version": SUCCESSOR_CACHE_SCHEMA_VERSION,
+        "model_id": SUCCESSOR_MODEL_ID,
+        "dense_points": DENSE_POINTS,
+        "inner_folds": INNER_FOLDS,
+        "fold_seed": FOLD_SEED,
+        "model_description_sha256": hashlib.sha256(description.encode()).hexdigest(),
+        "models_sha256": file_sha256(Path(observatory_models.__file__).resolve()),
+        "registry_sha256": file_sha256(Path(observatory_registry.__file__).resolve()),
+    }
+
+
+def successor_fit_to_payload(result: SuccessorFit, metadata: dict[str, Any]) -> dict[str, Any]:
+    return {
+        **metadata,
+        "curve_id": result.curve_id,
+        "input_hash": result.input_hash,
+        "inventory": result.inventory.tolist(),
+        "observed_prediction": result.observed_prediction.tolist(),
+        "dense_weights": result.dense_weights.tolist(),
+        "dense_prediction": result.dense_prediction.tolist(),
+        "shape": result.shape,
+        "ridge": result.ridge,
+        "intercept": result.intercept,
+        "coefficients": result.coefficients.tolist(),
+        "coefficient_names": list(result.coefficient_names),
+        "diagnostics": result.diagnostics,
+    }
+
+
+def payload_to_successor_fit(payload: dict[str, Any]) -> SuccessorFit:
+    return SuccessorFit(
+        curve_id=str(payload["curve_id"]),
+        input_hash=str(payload["input_hash"]),
+        inventory=np.asarray(payload["inventory"], dtype=float),
+        observed_prediction=np.asarray(payload["observed_prediction"], dtype=float),
+        dense_weights=np.asarray(payload["dense_weights"], dtype=float),
+        dense_prediction=np.asarray(payload["dense_prediction"], dtype=float),
+        shape={str(key): float(value) for key, value in payload["shape"].items()},
+        ridge=float(payload["ridge"]),
+        intercept=float(payload["intercept"]),
+        coefficients=np.asarray(payload["coefficients"], dtype=float),
+        coefficient_names=tuple(str(value) for value in payload["coefficient_names"]),
+        diagnostics=dict(payload["diagnostics"]),
+    )
+
+
+def load_cached_successor_fit(path: Path, task: CurveTask, metadata: dict[str, Any]) -> SuccessorFit | None:
+    if not path.exists():
+        return None
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    expected = {
+        **metadata,
+        "curve_id": task.curve_id,
+        "input_hash": task.input_hash,
+        "inventory": task.inventory.tolist(),
+    }
+    if any(payload.get(key) != value for key, value in expected.items()):
+        return None
+    result = payload_to_successor_fit(payload)
+    if (
+        len(result.dense_weights) != DENSE_POINTS
+        or not np.isfinite(result.observed_prediction).all()
+        or not np.isfinite(result.dense_prediction).all()
+    ):
+        return None
+    return result
+
+
+def write_cached_successor_fit(path: Path, result: SuccessorFit, metadata: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = path.with_suffix(".tmp")
+    temporary_path.write_text(
+        json.dumps(successor_fit_to_payload(result, metadata), separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    temporary_path.replace(path)
+
+
+def fit_all_successor_curves(
+    tasks: list[CurveTask],
+    *,
+    output_dir: Path,
+    workers: int,
+    force_refit: bool,
+) -> list[SuccessorFit]:
+    completed: dict[str, SuccessorFit] = {}
+    pending: list[CurveTask] = []
+    for task in tasks:
+        metadata = successor_cache_metadata(task)
+        cached = (
+            None
+            if force_refit
+            else load_cached_successor_fit(successor_fit_cache_path(output_dir, task.curve_id), task, metadata)
+        )
+        if cached is None:
+            pending.append(task)
+        else:
+            completed[task.curve_id] = cached
+    print(
+        f"Reusing {len(completed)} cached {SUCCESSOR_MODEL_ID} fits; "
+        f"fitting {len(pending)} curves with {workers} workers",
+        flush=True,
+    )
+
+    if workers == 1:
+        for index, task in enumerate(pending, start=1):
+            result = fit_successor_curve(task)
+            write_cached_successor_fit(
+                successor_fit_cache_path(output_dir, result.curve_id),
+                result,
+                successor_cache_metadata(task),
+            )
+            completed[result.curve_id] = result
+            print(f"[{index}/{len(pending)}] {result.curve_id}", flush=True)
+    elif pending:
+        with ProcessPoolExecutor(max_workers=min(workers, len(pending))) as executor:
+            futures = {executor.submit(fit_successor_curve, task): task for task in pending}
+            for index, future in enumerate(as_completed(futures), start=1):
+                task = futures[future]
+                result = future.result()
+                write_cached_successor_fit(
+                    successor_fit_cache_path(output_dir, result.curve_id),
+                    result,
+                    successor_cache_metadata(task),
+                )
+                completed[result.curve_id] = result
+                print(f"[{index}/{len(pending)}] {result.curve_id}", flush=True)
+
+    missing = sorted({task.curve_id for task in tasks} - completed.keys())
+    if missing:
+        raise ValueError(f"Missing {SUCCESSOR_MODEL_ID} fitted curves: {missing}")
+    return [completed[task.curve_id] for task in tasks]
+
+
 def compile_outputs(
     curves: pd.DataFrame,
     points: pd.DataFrame,
     results: list[CurveFit],
+    successor_results: list[SuccessorFit],
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     curve_lookup = curves.set_index("curve_id")
+    successor_lookup = {result.curve_id: result for result in successor_results}
+    if set(successor_lookup) != {result.curve_id for result in results}:
+        raise ValueError("DSP/OLMix and Weibull-softplus fits cover different curves")
     point_rows: list[dict[str, Any]] = []
     dense_rows: list[dict[str, Any]] = []
     metric_rows: list[dict[str, Any]] = []
@@ -446,6 +716,7 @@ def compile_outputs(
     )
 
     for result in results:
+        successor = successor_lookup[result.curve_id]
         metadata = curve_lookup.loc[result.curve_id]
         source_points = points.loc[points["curve_id"].eq(result.curve_id)].sort_values("starcoder_weight")
         if not np.allclose(source_points["starcoder_weight"], result.weights, atol=1e-12):
@@ -454,24 +725,34 @@ def compile_outputs(
             raise ValueError(f"{result.curve_id}: cached response differs from the inventory")
 
         residual = result.observed_prediction - result.response
+        successor_residual = successor.observed_prediction - result.response
         olmix_residual = result.olmix_observed_prediction - result.response
         observed_best = int(np.argmin(result.response))
         fit_grid_best = int(np.argmin(result.observed_prediction))
+        successor_grid_best = int(np.argmin(successor.observed_prediction))
         olmix_grid_best = int(np.argmin(result.olmix_observed_prediction))
         dense_best = int(np.argmin(result.dense_prediction))
+        successor_dense_best = int(np.argmin(successor.dense_prediction))
         olmix_dense_best = int(np.argmin(result.olmix_dense_prediction))
         centered = result.response - result.response.mean()
         denominator = float(centered @ centered)
         r_squared = 1.0 - float(residual @ residual) / denominator if denominator > 0 else float("nan")
+        successor_r_squared = (
+            1.0 - float(successor_residual @ successor_residual) / denominator if denominator > 0 else float("nan")
+        )
         olmix_r_squared = 1.0 - float(olmix_residual @ olmix_residual) / denominator if denominator > 0 else float("nan")
         spearman = float(stats.spearmanr(result.observed_prediction, result.response).statistic)
+        successor_spearman = float(stats.spearmanr(successor.observed_prediction, result.response).statistic)
         rmse = float(np.sqrt(np.mean(residual**2)))
+        successor_rmse = float(np.sqrt(np.mean(successor_residual**2)))
         olmix_rmse = float(np.sqrt(np.mean(olmix_residual**2)))
 
-        for (_, source), prediction, error, olmix_prediction, olmix_error in zip(
+        for (_, source), prediction, error, successor_prediction, successor_error, olmix_prediction, olmix_error in zip(
             source_points.iterrows(),
             result.observed_prediction,
             residual,
+            successor.observed_prediction,
+            successor_residual,
             result.olmix_observed_prediction,
             olmix_residual,
             strict=True,
@@ -479,11 +760,15 @@ def compile_outputs(
             point_rows.append(
                 {
                     "curve_id": result.curve_id,
+                    "curve_number": int(metadata["curve_number"]),
+                    "curve_ref": str(metadata["curve_ref"]),
                     "family": str(metadata["family"]),
                     "starcoder_weight": float(source["starcoder_weight"]),
                     "observed_bpb": float(source["bpb"]),
                     "full_fit_prediction_bpb": float(prediction),
                     "residual_prediction_minus_observed": float(error),
+                    "weibull_softplus_unscaled_full_fit_prediction_bpb": float(successor_prediction),
+                    "weibull_softplus_unscaled_residual_prediction_minus_observed": float(successor_error),
                     "olmix_full_fit_prediction_bpb": float(olmix_prediction),
                     "olmix_residual_prediction_minus_observed": float(olmix_error),
                     "training_run_id": str(source["training_run_id"]),
@@ -493,14 +778,18 @@ def compile_outputs(
         dense_rows.extend(
             {
                 "curve_id": result.curve_id,
+                "curve_number": int(metadata["curve_number"]),
+                "curve_ref": str(metadata["curve_ref"]),
                 "family": str(metadata["family"]),
                 "starcoder_weight": float(weight),
                 "full_fit_prediction_bpb": float(prediction),
+                "weibull_softplus_unscaled_full_fit_prediction_bpb": float(successor_prediction),
                 "olmix_full_fit_prediction_bpb": float(olmix_prediction),
             }
-            for weight, prediction, olmix_prediction in zip(
+            for weight, prediction, successor_prediction, olmix_prediction in zip(
                 result.dense_weights,
                 result.dense_prediction,
+                successor.dense_prediction,
                 result.olmix_dense_prediction,
                 strict=True,
             )
@@ -508,6 +797,8 @@ def compile_outputs(
         metric_rows.append(
             {
                 "curve_id": result.curve_id,
+                "curve_number": int(metadata["curve_number"]),
+                "curve_ref": str(metadata["curve_ref"]),
                 "family": str(metadata["family"]),
                 "rows": len(result.weights),
                 "full_fit_rmse": rmse,
@@ -523,6 +814,24 @@ def compile_outputs(
                 "full_fit_dense_min_predicted_bpb": float(result.dense_prediction[dense_best]),
                 "dense_min_distance_from_observed_min": float(
                     abs(result.dense_weights[dense_best] - result.weights[observed_best])
+                ),
+                "weibull_softplus_unscaled_full_fit_rmse": successor_rmse,
+                "weibull_softplus_unscaled_full_fit_max_abs_residual": float(np.max(np.abs(successor_residual))),
+                "weibull_softplus_unscaled_full_fit_r_squared": successor_r_squared,
+                "weibull_softplus_unscaled_full_fit_spearman": successor_spearman,
+                "weibull_softplus_unscaled_fit_selected_grid_weight": float(result.weights[successor_grid_best]),
+                "weibull_softplus_unscaled_fit_selected_grid_actual_bpb": float(result.response[successor_grid_best]),
+                "weibull_softplus_unscaled_fit_selected_grid_regret": float(
+                    result.response[successor_grid_best] - result.response[observed_best]
+                ),
+                "weibull_softplus_unscaled_full_fit_dense_min_weight": float(
+                    successor.dense_weights[successor_dense_best]
+                ),
+                "weibull_softplus_unscaled_full_fit_dense_min_predicted_bpb": float(
+                    successor.dense_prediction[successor_dense_best]
+                ),
+                "weibull_softplus_unscaled_dense_min_distance_from_observed_min": float(
+                    abs(successor.dense_weights[successor_dense_best] - result.weights[observed_best])
                 ),
                 "olmix_full_fit_rmse": olmix_rmse,
                 "olmix_full_fit_max_abs_residual": float(np.max(np.abs(olmix_residual))),
@@ -566,11 +875,42 @@ def compile_outputs(
                 },
             ]
         )
+        parameter_rows.extend(
+            {"curve_id": result.curve_id, "parameter": f"weibull_softplus_unscaled_{name}", "value": value}
+            for name, value in successor.shape.items()
+        )
+        parameter_rows.extend(
+            [
+                {
+                    "curve_id": result.curve_id,
+                    "parameter": "weibull_softplus_unscaled_ridge",
+                    "value": successor.ridge,
+                },
+                {
+                    "curve_id": result.curve_id,
+                    "parameter": "weibull_softplus_unscaled_intercept",
+                    "value": successor.intercept,
+                },
+            ]
+        )
+        parameter_rows.extend(
+            {
+                "curve_id": result.curve_id,
+                "parameter": f"weibull_softplus_unscaled_{name}",
+                "value": float(value),
+            }
+            for name, value in zip(successor.coefficient_names, successor.coefficients, strict=True)
+        )
 
-    predictions = pd.DataFrame(point_rows).sort_values(["family", "curve_id", "starcoder_weight"])
-    dense = pd.DataFrame(dense_rows).sort_values(["family", "curve_id", "starcoder_weight"])
-    metrics = pd.DataFrame(metric_rows).sort_values(["family", "curve_id"]).reset_index(drop=True)
-    parameters = pd.DataFrame(parameter_rows).sort_values(["curve_id", "parameter"]).reset_index(drop=True)
+    predictions = pd.DataFrame(point_rows).sort_values(["curve_number", "starcoder_weight"])
+    dense = pd.DataFrame(dense_rows).sort_values(["curve_number", "starcoder_weight"])
+    metrics = pd.DataFrame(metric_rows).sort_values("curve_number").reset_index(drop=True)
+    parameters = pd.DataFrame(parameter_rows).merge(
+        curves[["curve_id", "curve_number", "curve_ref"]],
+        on="curve_id",
+        validate="many_to_one",
+    )
+    parameters = parameters.sort_values(["curve_number", "parameter"]).reset_index(drop=True)
     if len(metrics) != EXPECTED_CURVES or metrics["curve_id"].nunique() != EXPECTED_CURVES:
         raise ValueError("Compiled fit metrics are incomplete")
     return predictions, dense, metrics, parameters
@@ -596,6 +936,17 @@ def starcoder_epoch_scale(metadata: pd.Series) -> float:
     raise ValueError(f"Unknown StarCoder support for epoch axis: {support_id}")
 
 
+def curve_epoch_inventory(metadata: pd.Series) -> np.ndarray:
+    """Materialized epochs at full share for the two sources on one physical curve."""
+    support_id = str(metadata["support_id"])
+    nemotron = (
+        float(metadata["planned_materialized_tokens"]) / epoch_accounting.NEMOTRON_SOURCE_TOKENS
+        if support_id == "full"
+        else epoch_accounting.SIMULATED_EPOCH_TARGET_BUDGET / epoch_accounting.NEMOTRON_SOURCE_TOKENS
+    )
+    return np.asarray([nemotron, starcoder_epoch_scale(metadata)], dtype=float)
+
+
 def epoch_tick_label(value: float, *, maximum: float) -> str:
     if maximum < 0.1:
         return f"{value:.3f} ep"
@@ -619,6 +970,24 @@ def scale_mode(curve_id: str) -> str:
     if "_increase_d_" in identifier:
         return "D"
     return "shared"
+
+
+def matched_scaling_paths(curves: pd.DataFrame) -> list[tuple[str, list[str]]]:
+    """Return the three matched-ladder paths with their common baseline."""
+    matched = curves.loc[curves["family"].eq("matched_nd")].copy()
+    baseline = matched.loc[matched["curve_id"].str.contains("__r0_shared_")]
+    if len(baseline) != 1:
+        raise ValueError(f"Expected one matched-ladder baseline, found {len(baseline)}")
+    baseline_id = str(baseline.iloc[0]["curve_id"])
+
+    paths: list[tuple[str, list[str]]] = []
+    for heading, marker in MATCHED_SCALING_PATHS:
+        track = matched.loc[matched["curve_id"].str.contains(marker, regex=False)].sort_values("curve_id")
+        curve_ids = [baseline_id, *track["curve_id"].astype(str).tolist()]
+        if len(curve_ids) != 4:
+            raise ValueError(f"Expected four curves in matched scaling path {heading!r}, found {len(curve_ids)}")
+        paths.append((heading, curve_ids))
+    return paths
 
 
 def short_curve_label(metadata: pd.Series) -> str:
@@ -661,15 +1030,7 @@ def build_grid_figure(
     titles = []
     for curve_id in curve_ids:
         metadata = curve_lookup.loc[curve_id]
-        metric = metric_lookup.loc[curve_id]
-        titles.append(
-            f"<b>{short_curve_label(metadata)}</b><br>"
-            f"<span style='font-size:9px'>RMSE D/O {metric['full_fit_rmse']:.4f} / "
-            f"{metric['olmix_full_fit_rmse']:.4f}<br>"
-            f"p* obs/D/O {metric['observed_grid_min_weight']:.3f} / "
-            f"{metric['full_fit_dense_min_weight']:.3f} / "
-            f"{metric['olmix_full_fit_dense_min_weight']:.3f}</span>"
-        )
+        titles.append(f"<b>{metadata['curve_ref']} · {short_curve_label(metadata)}</b>")
     figure = make_subplots(
         rows=rows,
         cols=columns,
@@ -695,12 +1056,17 @@ def build_grid_figure(
                 mode="lines+markers",
                 line={"color": "#9aa5ad", "width": 1.2},
                 marker={"color": "#173042", "size": 6},
+                meta=str(metadata["curve_ref"]),
                 customdata=point_epochs,
                 hovertemplate=(
-                    "StarCoder p=%{x:.4f}<br>StarCoder materialized epochs=%{customdata:.3f}"
+                    "<b>%{meta}</b><br>StarCoder p=%{x:.4f}<br>"
+                    "StarCoder materialized epochs=%{customdata:.3f}"
                     "<br>observed=%{y:.6f}<extra>Observed</extra>"
                 ),
-                showlegend=False,
+                name="Observed",
+                legendgroup="observed",
+                legendrank=1,
+                showlegend=index == 0,
             ),
             row=row,
             col=column,
@@ -711,12 +1077,38 @@ def build_grid_figure(
                 y=smooth["full_fit_prediction_bpb"],
                 mode="lines",
                 line={"color": "#d95d39", "width": 2.6},
+                meta=str(metadata["curve_ref"]),
                 customdata=smooth_epochs,
                 hovertemplate=(
-                    "StarCoder p=%{x:.4f}<br>StarCoder materialized epochs=%{customdata:.3f}"
+                    "<b>%{meta}</b><br>StarCoder p=%{x:.4f}<br>"
+                    "StarCoder materialized epochs=%{customdata:.3f}"
                     "<br>DSP=%{y:.6f}<extra>Canonical DSP</extra>"
                 ),
-                showlegend=False,
+                name="Canonical DSP",
+                legendgroup="canonical-dsp",
+                legendrank=2,
+                showlegend=index == 0,
+            ),
+            row=row,
+            col=column,
+        )
+        figure.add_trace(
+            go.Scatter(
+                x=smooth["starcoder_weight"],
+                y=smooth["weibull_softplus_unscaled_full_fit_prediction_bpb"],
+                mode="lines",
+                line={"color": "#0b7a75", "width": 2.6},
+                meta=str(metadata["curve_ref"]),
+                customdata=smooth_epochs,
+                hovertemplate=(
+                    "<b>%{meta}</b><br>StarCoder p=%{x:.4f}<br>"
+                    "StarCoder materialized epochs=%{customdata:.3f}"
+                    "<br>Weibull-softplus=%{y:.6f}<extra>Weibull-softplus unscaled</extra>"
+                ),
+                name="Weibull-softplus unscaled",
+                legendgroup="weibull-softplus-unscaled",
+                legendrank=3,
+                showlegend=index == 0,
             ),
             row=row,
             col=column,
@@ -727,12 +1119,17 @@ def build_grid_figure(
                 y=smooth["olmix_full_fit_prediction_bpb"],
                 mode="lines",
                 line={"color": "#277da1", "width": 2.2, "dash": "dash"},
+                meta=str(metadata["curve_ref"]),
                 customdata=smooth_epochs,
                 hovertemplate=(
-                    "StarCoder p=%{x:.4f}<br>StarCoder materialized epochs=%{customdata:.3f}"
+                    "<b>%{meta}</b><br>StarCoder p=%{x:.4f}<br>"
+                    "StarCoder materialized epochs=%{customdata:.3f}"
                     "<br>OLMix=%{y:.6f}<extra>OLMix log-linear</extra>"
                 ),
-                showlegend=False,
+                name="OLMix log-linear",
+                legendgroup="olmix-loglinear",
+                legendrank=4,
+                showlegend=index == 0,
             ),
             row=row,
             col=column,
@@ -743,11 +1140,13 @@ def build_grid_figure(
                 y=[metric["observed_grid_min_bpb"]],
                 mode="markers",
                 marker={"color": "#16845b", "size": 12, "symbol": "star"},
+                meta=str(metadata["curve_ref"]),
                 customdata=[metric["observed_grid_min_weight"] * epoch_scale],
                 hovertemplate=(
-                    "Observed minimum<br>StarCoder p=%{x:.4f}"
+                    "<b>%{meta}</b><br>Observed minimum<br>StarCoder p=%{x:.4f}"
                     "<br>StarCoder materialized epochs=%{customdata:.3f}<br>BPB=%{y:.6f}<extra></extra>"
                 ),
+                legendgroup="observed",
                 showlegend=False,
             ),
             row=row,
@@ -759,11 +1158,36 @@ def build_grid_figure(
                 y=[metric["full_fit_dense_min_predicted_bpb"]],
                 mode="markers",
                 marker={"color": "#a71930", "size": 10, "symbol": "x", "line": {"width": 2}},
+                meta=str(metadata["curve_ref"]),
                 customdata=[metric["full_fit_dense_min_weight"] * epoch_scale],
                 hovertemplate=(
-                    "DSP minimum<br>StarCoder p=%{x:.4f}"
+                    "<b>%{meta}</b><br>DSP minimum<br>StarCoder p=%{x:.4f}"
                     "<br>StarCoder materialized epochs=%{customdata:.3f}<br>predicted=%{y:.6f}<extra></extra>"
                 ),
+                legendgroup="canonical-dsp",
+                showlegend=False,
+            ),
+            row=row,
+            col=column,
+        )
+        figure.add_trace(
+            go.Scatter(
+                x=[metric["weibull_softplus_unscaled_full_fit_dense_min_weight"]],
+                y=[metric["weibull_softplus_unscaled_full_fit_dense_min_predicted_bpb"]],
+                mode="markers",
+                marker={
+                    "color": "#0b7a75",
+                    "size": 9,
+                    "symbol": "diamond-open",
+                    "line": {"width": 2},
+                },
+                meta=str(metadata["curve_ref"]),
+                customdata=[metric["weibull_softplus_unscaled_full_fit_dense_min_weight"] * epoch_scale],
+                hovertemplate=(
+                    "<b>%{meta}</b><br>Weibull-softplus minimum<br>StarCoder p=%{x:.4f}"
+                    "<br>StarCoder materialized epochs=%{customdata:.3f}<br>predicted=%{y:.6f}<extra></extra>"
+                ),
+                legendgroup="weibull-softplus-unscaled",
                 showlegend=False,
             ),
             row=row,
@@ -773,6 +1197,7 @@ def build_grid_figure(
             [
                 point["observed_bpb"].to_numpy(),
                 smooth["full_fit_prediction_bpb"].to_numpy(),
+                smooth["weibull_softplus_unscaled_full_fit_prediction_bpb"].to_numpy(),
                 smooth["olmix_full_fit_prediction_bpb"].to_numpy(),
             ]
         )
@@ -781,7 +1206,7 @@ def build_grid_figure(
         padding = max(0.004, 0.07 * (upper - lower))
         figure.update_xaxes(
             range=[float(point["starcoder_weight"].min()) - 0.015, float(point["starcoder_weight"].max()) + 0.015],
-            tickvals=[0.0, 0.25, 0.5, 0.75, 1.0],
+            tickvals=[0.0, 0.5, 1.0] if columns >= 5 else [0.0, 0.25, 0.5, 0.75, 1.0],
             tickformat=".2f",
             title="StarCoder p" if row == rows else None,
             row=row,
@@ -842,14 +1267,28 @@ def build_grid_figure(
 
     figure.update_layout(
         template="plotly_white",
-        height=max(440, 350 * rows + 90),
-        margin={"l": 58, "r": 24, "t": 112, "b": 62},
-        font={"family": "Avenir Next, Helvetica Neue, sans-serif", "color": "#173042", "size": 11},
+        height=max(500, 390 * rows + 105),
+        margin={"l": 64, "r": 28, "t": 136, "b": 66},
+        font={"family": "Avenir Next, Helvetica Neue, sans-serif", "color": "#173042", "size": 12},
         paper_bgcolor="#fbf8f0",
         plot_bgcolor="#fbf8f0",
         hoverlabel={"font_size": 12},
+        legend={
+            "orientation": "h",
+            "x": 0.0 if columns >= 7 else 0.5,
+            "xanchor": "left" if columns >= 7 else "center",
+            "y": 1.16,
+            "yanchor": "bottom",
+            "groupclick": "togglegroup",
+            "itemclick": "toggle",
+            "itemdoubleclick": "toggleothers",
+            "bgcolor": "rgba(251,248,240,0.88)",
+            "bordercolor": "#d9d1c3",
+            "borderwidth": 1,
+            "font": {"size": 12},
+        },
     )
-    figure.update_annotations(font={"size": 12, "color": "#173042"}, yshift=30)
+    figure.update_annotations(font={"size": 13, "color": "#173042"}, yshift=22)
     figure.update_xaxes(gridcolor="#e4ded2", zeroline=False)
     figure.update_yaxes(gridcolor="#e4ded2", zeroline=False)
     return figure
@@ -870,34 +1309,91 @@ def metric_table_html(metrics: pd.DataFrame, curves: pd.DataFrame) -> str:
         validate="one_to_one",
     ).copy()
     table["curve"] = table.apply(short_curve_label, axis=1)
+    table["reference"] = table["curve_ref"]
     table["family"] = table["family"].map(FAMILY_LABELS)
     table["DSP RMSE"] = table["full_fit_rmse"].map(lambda value: f"{value:.6f}")
+    table["Weibull RMSE"] = table["weibull_softplus_unscaled_full_fit_rmse"].map(lambda value: f"{value:.6f}")
     table["OLMix RMSE"] = table["olmix_full_fit_rmse"].map(lambda value: f"{value:.6f}")
     table["DSP R2"] = table["full_fit_r_squared"].map(lambda value: f"{value:.4f}")
+    table["Weibull R2"] = table["weibull_softplus_unscaled_full_fit_r_squared"].map(lambda value: f"{value:.4f}")
     table["OLMix R2"] = table["olmix_full_fit_r_squared"].map(lambda value: f"{value:.4f}")
     table["observed min p"] = table["observed_grid_min_weight"].map(lambda value: f"{value:.4f}")
     table["DSP min p"] = table["full_fit_dense_min_weight"].map(lambda value: f"{value:.4f}")
+    table["Weibull min p"] = table["weibull_softplus_unscaled_full_fit_dense_min_weight"].map(
+        lambda value: f"{value:.4f}"
+    )
     table["OLMix min p"] = table["olmix_full_fit_dense_min_weight"].map(lambda value: f"{value:.4f}")
     table["DSP grid regret"] = table["fit_selected_grid_regret"].map(lambda value: f"{value:+.6f}")
+    table["Weibull grid regret"] = table["weibull_softplus_unscaled_fit_selected_grid_regret"].map(
+        lambda value: f"{value:+.6f}"
+    )
     table["OLMix grid regret"] = table["olmix_fit_selected_grid_regret"].map(lambda value: f"{value:+.6f}")
     table = table.sort_values("full_fit_rmse", ascending=False)
     display = table[
         [
+            "reference",
             "family",
             "curve",
             "rows",
             "DSP RMSE",
+            "Weibull RMSE",
             "OLMix RMSE",
             "DSP R2",
+            "Weibull R2",
             "OLMix R2",
             "observed min p",
             "DSP min p",
+            "Weibull min p",
             "OLMix min p",
             "DSP grid regret",
+            "Weibull grid regret",
             "OLMix grid regret",
         ]
     ]
     return display.to_html(index=False, classes="metric-table", table_id="fit-metrics", border=0)
+
+
+def curve_reference_frame(curves: pd.DataFrame) -> pd.DataFrame:
+    reference = curves.sort_values("curve_number").copy()
+    reference["family_label"] = reference["family"].map(FAMILY_LABELS)
+    reference["curve_label"] = reference.apply(short_curve_label, axis=1)
+    reference["starcoder_epochs_at_p1"] = reference.apply(starcoder_epoch_scale, axis=1)
+    reference["observations"] = reference["primary_target_points"].astype(int)
+    return reference[
+        [
+            "curve_number",
+            "curve_ref",
+            "family",
+            "family_label",
+            "curve_label",
+            "observations",
+            "starcoder_epochs_at_p1",
+            "curve_id",
+        ]
+    ]
+
+
+def curve_reference_table_html(curves: pd.DataFrame) -> str:
+    display = curve_reference_frame(curves).rename(
+        columns={
+            "curve_ref": "reference",
+            "family_label": "section",
+            "curve_label": "panel label",
+            "starcoder_epochs_at_p1": "epochs at p=1",
+        }
+    )
+    display["epochs at p=1"] = display["epochs at p=1"].map(lambda value: f"{value:.3f}")
+    display = display[
+        [
+            "reference",
+            "section",
+            "panel label",
+            "observations",
+            "epochs at p=1",
+            "curve_id",
+        ]
+    ]
+    return display.to_html(index=False, classes="metric-table", table_id="curve-reference", border=0)
 
 
 def figure_fragment(figure: go.Figure, *, include_plotlyjs: bool) -> str:
@@ -916,19 +1412,10 @@ def build_html(
     metrics: pd.DataFrame,
 ) -> str:
     curve_lookup = curves.set_index("curve_id")
-    fixed_ids = (
-        curves.loc[curves["family"].eq("fixed_model_token_ladder")]
-        .sort_values("planned_materialized_tokens")["curve_id"]
-        .tolist()
-    )
-    matched_ids = (
-        curves.loc[curves["family"].eq("matched_nd")]
-        .sort_values(["planned_materialized_tokens", "hidden_size", "curve_id"])["curve_id"]
-        .tolist()
-    )
-    onset_ids = (
-        curves.loc[curves["family"].eq("coupled_lr_onset")].sort_values("lr_decay_onset_fraction")["curve_id"].tolist()
-    )
+    ids_by_family = curves.sort_values("curve_number").groupby("family", sort=False)["curve_id"].agg(list)
+    fixed_ids = ids_by_family["fixed_model_token_ladder"]
+    matched_paths = matched_scaling_paths(curves)
+    onset_ids = ids_by_family["coupled_lr_onset"]
     dense_curves = curves.loc[curves["family"].eq("dense_horizon_replay")].copy()
     dense_curves["cell"] = dense_curves["curve_id"].map(cell_id)
     dense_curves["support_rank"] = dense_curves["support_id"].map(
@@ -942,14 +1429,6 @@ def build_html(
         dense=dense,
         metrics=metrics,
         columns=2,
-    )
-    matched_figure = build_grid_figure(
-        matched_ids,
-        curves=curves,
-        predictions=predictions,
-        dense=dense,
-        metrics=metrics,
-        columns=5,
     )
     onset_figure = build_grid_figure(
         onset_ids,
@@ -965,15 +1444,30 @@ def build_html(
         "<section id='fixed'><h2>Fixed-model token ladder</h2>"
         "<p>One 157M-parameter model trained for four token budgets. Each panel uses its union of regular and "
         "irregular measured tied-mixture coordinates.</p>"
-        f"<div class='chart'>{figure_fragment(fixed_figure, include_plotlyjs=True)}</div></section>"
+        "<div class='chart-scroll'><div class='chart fixed-chart'>"
+        f"{figure_fragment(fixed_figure, include_plotlyjs=True)}</div></div></section>"
     )
+    matched_fragments: list[str] = []
+    for heading, curve_ids in matched_paths:
+        figure = build_grid_figure(
+            curve_ids,
+            curves=curves,
+            predictions=predictions,
+            dense=dense,
+            metrics=metrics,
+            columns=4,
+        )
+        matched_fragments.append(
+            f"<article class='matched-row'><h3>{heading}</h3><div class='chart-scroll'>"
+            f"<div class='chart matched-chart'>{figure_fragment(figure, include_plotlyjs=False)}</div>"
+            "</div></article>"
+        )
     fragments.append(
         "<section id='matched'><h2>Matched model-size and token-budget ladder</h2>"
-        "<p>Ten cells separate increasing model size, increasing training duration, and jointly increasing both. "
-        "The measured range is approximately p=0.036 to p=0.90.</p>"
-        "<div class='chart-scroll'><div class='chart matched-chart'>"
-        f"{figure_fragment(matched_figure, include_plotlyjs=False)}"
-        "</div></div></section>"
+        "<p>Ten unique cells form three four-rung scaling paths. The shared rung-0 curve "
+        "<code>C05</code> starts every row and is repeated visually without changing its stable reference.</p>"
+        + "".join(matched_fragments)
+        + "</section>"
     )
     dense_fragments: list[str] = []
     for _cell, block in dense_curves.groupby("cell", sort=True):
@@ -1003,13 +1497,20 @@ def build_html(
         "<section id='onset'><h2>Coupled LR-decay onset</h2>"
         "<p>Three independently trained 8B-token surfaces move the phase boundary and cosine-decay onset together. "
         "Because p is tied across phases, the data-policy boundary itself is inert.</p>"
-        f"<div class='chart'>{figure_fragment(onset_figure, include_plotlyjs=False)}</div></section>"
+        "<div class='chart-scroll'><div class='chart onset-chart'>"
+        f"{figure_fragment(onset_figure, include_plotlyjs=False)}</div></div></section>"
     )
 
     median_rmse = float(metrics["full_fit_rmse"].median())
+    median_successor_rmse = float(metrics["weibull_softplus_unscaled_full_fit_rmse"].median())
     median_olmix_rmse = float(metrics["olmix_full_fit_rmse"].median())
     worst = metrics.loc[metrics["full_fit_rmse"].idxmax()]
-    dsp_wins = int((metrics["full_fit_rmse"] < metrics["olmix_full_fit_rmse"]).sum())
+    successor_wins = int(
+        (
+            metrics["weibull_softplus_unscaled_full_fit_rmse"]
+            <= metrics[["full_fit_rmse", "olmix_full_fit_rmse"]].min(axis=1)
+        ).sum()
+    )
     weight_bounds = predictions.groupby("curve_id")["starcoder_weight"].agg(["min", "max"])
     olmix_minimum = metrics.set_index("curve_id")["olmix_full_fit_dense_min_weight"]
     olmix_edge_minima = int(
@@ -1019,13 +1520,14 @@ def build_html(
         ).sum()
     )
     table = metric_table_html(metrics, curves)
+    reference_table = curve_reference_table_html(curves)
     body = "".join(fragments)
     return f"""<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Canonical DSP versus OLMix across 45 StarCoder single-phase curves</title>
+<title>Three surrogate fits across 45 StarCoder single-phase curves</title>
 <style>
 :root {{
   --ink:#173042;
@@ -1061,7 +1563,7 @@ p {{ max-width:1000px; color:var(--muted); font-size:1.05rem; line-height:1.58; 
   padding:8px 13px;
   background:rgba(255,255,255,.55);
 }}
-.cards {{ display:grid; grid-template-columns:repeat(5,minmax(150px,1fr)); gap:12px; margin:24px 0; }}
+.cards {{ display:grid; grid-template-columns:repeat(6,minmax(145px,1fr)); gap:12px; margin:24px 0; }}
 .card {{
   padding:18px;
   border:1px solid var(--line);
@@ -1071,21 +1573,13 @@ p {{ max-width:1000px; color:var(--muted); font-size:1.05rem; line-height:1.58; 
 }}
 .card strong {{ display:block; font-family:Georgia,serif; font-size:1.8rem; }}
 .card span {{ color:var(--muted); font-size:.88rem; }}
-.legend {{
-  display:flex;
-  flex-wrap:wrap;
-  gap:20px;
-  align-items:center;
+.legend-guide {{
   margin:22px 0 4px;
   padding:13px 16px;
   border-left:4px solid var(--accent);
   background:rgba(255,255,255,.5);
+  color:var(--muted);
 }}
-.key {{ display:inline-flex; align-items:center; gap:8px; }}
-.swatch {{ width:24px; height:3px; display:inline-block; background:var(--accent); }}
-.swatch-olmix {{ width:24px; height:0; display:inline-block; border-top:3px dashed #277da1; }}
-.dot {{ width:9px; height:9px; border-radius:50%; display:inline-block; background:var(--ink); }}
-.star {{ color:var(--good); font-size:1.15rem; }} .cross {{ color:#a71930; font-size:1.15rem; font-weight:700; }}
 .caveat {{
   margin:20px 0 42px;
   padding:18px 20px;
@@ -1104,7 +1598,12 @@ section {{ margin-top:58px; scroll-margin-top:20px; }}
   box-shadow:0 9px 30px rgba(47,40,25,.05);
 }}
 .chart-scroll {{ overflow-x:auto; padding-bottom:4px; }}
-.matched-chart {{ min-width:1180px; }} .dense-chart {{ min-width:1500px; }}
+.fixed-chart {{ min-width:1080px; }}
+.matched-chart {{ min-width:1320px; }}
+.dense-chart {{ min-width:2240px; }}
+.onset-chart {{ min-width:1280px; }}
+.matched-row {{ margin-top:28px; }}
+.matched-row h3 {{ font-size:1.35rem; }}
 .dense-row {{ margin-top:26px; }}
 details {{ margin-top:58px; border:1px solid var(--line); border-radius:14px; background:var(--card); padding:18px; }}
 summary {{ cursor:pointer; font-family:Georgia,serif; font-size:1.55rem; font-weight:700; }}
@@ -1128,48 +1627,61 @@ footer {{ margin-top:52px; padding-top:20px; border-top:1px solid var(--line); c
 </head>
 <body><main>
 <header>
-<h1>Canonical DSP versus OLMix across 45 StarCoder single-phase curves</h1>
+<h1>Three surrogate fits across 45 StarCoder single-phase curves</h1>
 <p class="lede">
 Every retained endpoint curve is shown. Navy points and the thin gray path are measured Programming Languages
-BPB; orange is canonical DSP and dashed blue is exact OLMix log-linear, each fit to all points on that curve.
-The lower x-axis remains StarCoder fraction <em>p</em>; the synchronized upper axis expresses the same coordinate
-as curve-specific StarCoder materialized epochs.
+BPB; orange is canonical DSP, teal is <code>weibull_softplus_unscaled</code>, and dashed blue is exact OLMix
+log-linear. Each model is fit independently to all points on that curve. The lower x-axis remains StarCoder
+fraction <em>p</em>; the synchronized upper axis expresses the same coordinate as curve-specific StarCoder
+materialized epochs.
 </p>
 <nav class="nav">
 <a href="#fixed">Token ladder</a>
 <a href="#matched">Matched N,D</a>
 <a href="#replay">Replay panel</a>
 <a href="#onset">LR onset</a>
+<a href="#curve-index">Curve index</a>
 <a href="#diagnostics">Diagnostics</a>
 </nav>
 <div class="cards">
 <div class="card"><strong>45</strong><span>physical endpoint curves</span></div>
 <div class="card"><strong>{median_rmse:.4f}</strong><span>median DSP RMSE</span></div>
+<div class="card"><strong>{median_successor_rmse:.4f}</strong><span>median Weibull-softplus RMSE</span></div>
 <div class="card"><strong>{median_olmix_rmse:.4f}</strong><span>median OLMix RMSE</span></div>
-<div class="card"><strong>{dsp_wins}/45</strong><span>lower RMSE for DSP</span></div>
+<div class="card"><strong>{successor_wins}/45</strong><span>lowest RMSE for Weibull-softplus</span></div>
 <div class="card"><strong>{olmix_edge_minima}/45</strong><span>OLMix minima at an edge</span></div>
 </div>
-<div class="legend">
-<span class="key"><i class="dot"></i> observed</span>
-<span class="key"><i class="swatch"></i> canonical DSP</span>
-<span class="key"><i class="swatch-olmix"></i> OLMix log-linear</span>
-<span class="key"><b class="star">★</b> observed grid minimum</span>
-<span class="key"><b class="cross">x</b> smooth DSP minimum</span>
+<div class="legend-guide">
+<strong>Interactive model visibility.</strong> Click an item in any chart legend to hide or restore that model
+across the chart; double-click to isolate it. The star marks the observed grid minimum, the red x marks the DSP
+minimum, and the open teal diamond marks the Weibull-softplus minimum. Minimum markers follow their model toggle.
+Every panel has a stable reference from <code>C01</code> to <code>C45</code>; detailed statistics stay in the
+diagnostics table rather than crowding the panel headers.
 </div>
 <div class="caveat">
 <strong>Capacity check, not generalization evidence.</strong> Each full curve selects DSP shape parameters and fits
 the linear head using all 15-26 observations. Canonical two-bucket DSP has four nonlinear shape parameters, four
-nonnegative amplitudes, and an intercept. OLMix uses the exact positive law
+nonnegative amplitudes, and an intercept. Weibull-softplus uses curve-specific materialized-epoch inventories, a
+shared Weibull benefit shape, a shared softplus-harm threshold, four nonnegative amplitudes, and an intercept.
+OLMix uses the exact positive law
 <code>L(p)=c+exp(beta_N(1-p)+beta_S p)</code> with summed Huber loss and 48 starts. Along this one-dimensional edge,
 OLMix is necessarily monotone or flat, so it cannot represent an interior U-shaped optimum. Use the separate
 benchmark protocol for held-out claims.
 </div>
+<details id="curve-index" class="curve-index"><summary>Curve reference index (C01-C45)</summary>
+<p>
+References follow the unique physical curves: token budget, matched N,D, replay burden, then LR onset. The matched
+section repeats the shared baseline <code>C05</code> in each scaling path without assigning a new reference. The
+mapping is generated from explicit physical metadata rather than input row order, so it is reproducible. Use the
+reference in a panel title or tooltip when pointing to a fit.
+</p>
+<div class="table-wrap reference-wrap">{reference_table}</div></details>
 </header>
 {body}
 <details id="diagnostics" open><summary>Fit diagnostics, worst RMSE first</summary>
 <p>
 The worst DSP fit is <code>{worst["curve_id"]}</code> at RMSE {worst["full_fit_rmse"]:.6f}.
-Filter by family, curve label, or value.
+Its stable reference is <code>{worst["curve_ref"]}</code>. Filter by reference, family, curve label, or value.
 </p>
 <input class="filter" id="metric-filter" type="search" placeholder="Filter diagnostics...">
 <div class="table-wrap">{table}</div></details>
@@ -1193,17 +1705,28 @@ filter.addEventListener('input', () => {{
 
 
 def write_report(output_dir: Path, metrics: pd.DataFrame) -> None:
-    metrics = metrics.assign(dsp_lower_rmse=metrics["full_fit_rmse"] < metrics["olmix_full_fit_rmse"])
+    metrics = metrics.assign(
+        successor_lowest_rmse=(
+            metrics["weibull_softplus_unscaled_full_fit_rmse"]
+            <= metrics[["full_fit_rmse", "olmix_full_fit_rmse"]].min(axis=1)
+        )
+    )
     family = (
         metrics.groupby("family", as_index=False)
         .agg(
             curves=("curve_id", "nunique"),
             median_dsp_rmse=("full_fit_rmse", "median"),
+            median_weibull_rmse=("weibull_softplus_unscaled_full_fit_rmse", "median"),
             median_olmix_rmse=("olmix_full_fit_rmse", "median"),
             p90_dsp_rmse=("full_fit_rmse", lambda values: values.quantile(0.9)),
+            p90_weibull_rmse=("weibull_softplus_unscaled_full_fit_rmse", lambda values: values.quantile(0.9)),
             p90_olmix_rmse=("olmix_full_fit_rmse", lambda values: values.quantile(0.9)),
-            dsp_lower_rmse=("dsp_lower_rmse", "sum"),
+            successor_lowest_rmse=("successor_lowest_rmse", "sum"),
             dsp_exact_grid_optima=("fit_selected_grid_regret", lambda values: int((values.abs() <= 1e-12).sum())),
+            weibull_exact_grid_optima=(
+                "weibull_softplus_unscaled_fit_selected_grid_regret",
+                lambda values: int((values.abs() <= 1e-12).sum()),
+            ),
             olmix_exact_grid_optima=(
                 "olmix_fit_selected_grid_regret",
                 lambda values: int((values.abs() <= 1e-12).sum()),
@@ -1212,25 +1735,46 @@ def write_report(output_dir: Path, metrics: pd.DataFrame) -> None:
         .sort_values("family")
     )
     family["family"] = family["family"].map(FAMILY_LABELS)
-    for column in ("median_dsp_rmse", "median_olmix_rmse", "p90_dsp_rmse", "p90_olmix_rmse"):
+    for column in (
+        "median_dsp_rmse",
+        "median_weibull_rmse",
+        "median_olmix_rmse",
+        "p90_dsp_rmse",
+        "p90_weibull_rmse",
+        "p90_olmix_rmse",
+    ):
         family[column] = family[column].map(lambda value: f"{value:.6f}")
     worst = metrics.nlargest(10, "full_fit_rmse").copy()
     worst["family"] = worst["family"].map(FAMILY_LABELS)
     worst["DSP RMSE"] = worst["full_fit_rmse"].map(lambda value: f"{value:.6f}")
+    worst["Weibull RMSE"] = worst["weibull_softplus_unscaled_full_fit_rmse"].map(lambda value: f"{value:.6f}")
     worst["OLMix RMSE"] = worst["olmix_full_fit_rmse"].map(lambda value: f"{value:.6f}")
     worst["observed min p"] = worst["observed_grid_min_weight"].map(lambda value: f"{value:.4f}")
     worst["DSP min p"] = worst["full_fit_dense_min_weight"].map(lambda value: f"{value:.4f}")
+    worst["Weibull min p"] = worst["weibull_softplus_unscaled_full_fit_dense_min_weight"].map(
+        lambda value: f"{value:.4f}"
+    )
     worst["OLMix min p"] = worst["olmix_full_fit_dense_min_weight"].map(lambda value: f"{value:.4f}")
     lines = [
-        "# Canonical DSP versus OLMix across 45 StarCoder single-phase curves",
+        "# Three surrogate fits across 45 StarCoder single-phase curves",
         "",
-        "This is a descriptive capacity check. Canonical DSP and exact OLMix log-linear are fit independently to "
-        "all measured Programming Languages BPB points on each of the 45 endpoint curves in the deduplicated "
-        "registry. These are not out-of-fold fits.",
+        "This is a descriptive capacity check. Canonical DSP, `weibull_softplus_unscaled`, and exact OLMix "
+        "log-linear are fit independently to all measured Programming Languages BPB points on each of the 45 "
+        "endpoint curves in the deduplicated registry. These are not out-of-fold fits.",
+        "",
+        "The successor uses each physical curve's true-inventory materialized epochs, a shared three-parameter "
+        "Weibull-benefit/softplus-harm shape, and an unscaled nonnegative per-bucket head. The interactive legend "
+        "in each HTML chart toggles a model and its minimum marker across every subplot in that chart.",
         "",
         "The OLMix law is `L(p) = c + exp(beta_N * (1-p) + beta_S * p)`, fit with summed Huber loss and 48 "
         "starts. It is necessarily monotone or flat on this two-bucket simplex edge, so it cannot express an "
         "interior U-shaped optimum.",
+        "",
+        "Stable references `C01` through `C45` identify unique physical curves: fixed-model token ladder, matched "
+        "model-size/token-budget ladder, replay burden, then LR onset. The matched section repeats the shared "
+        "baseline `C05` at the start of all three scaling paths without assigning a new reference. The exact "
+        "mapping is in `curve_reference.csv`, and every panel title, tooltip, and diagnostic row carries the same "
+        "reference.",
         "",
         family.to_markdown(index=False),
         "",
@@ -1238,13 +1782,16 @@ def write_report(output_dir: Path, metrics: pd.DataFrame) -> None:
         "",
         worst[
             [
+                "curve_ref",
                 "curve_id",
                 "family",
                 "rows",
                 "DSP RMSE",
+                "Weibull RMSE",
                 "OLMix RMSE",
                 "observed min p",
                 "DSP min p",
+                "Weibull min p",
                 "OLMix min p",
             ]
         ].to_markdown(index=False),
@@ -1253,9 +1800,10 @@ def write_report(output_dir: Path, metrics: pd.DataFrame) -> None:
         "StarCoder materialized epochs on the upper axis. Full-cache curves use the run's materialized token "
         "budget divided by the full StarCoder pool; finite-support curves use the preregistered replay multiplier.",
         "",
-        "Panels use independent y-axis ranges and search both smooth minima only over each curve's measured "
+        "Panels use independent y-axis ranges and search all smooth minima only over each curve's measured "
         "mixture range. DSP uses the same canonical rung, three-fold profiled nonlinear objective, and "
-        "simulated-epoch coordinates as the validated four-curve artifact.",
+        "simulated-epoch coordinates as the validated four-curve artifact; Weibull-softplus uses the physical "
+        "curve inventory from the benchmark protocol.",
     ]
     (output_dir / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -1275,17 +1823,25 @@ def main() -> None:
         workers=args.workers,
         force_refit=args.force_refit,
     )
-    predictions, dense, metrics, parameters = compile_outputs(curves, points, results)
+    successor_results = fit_all_successor_curves(
+        tasks,
+        output_dir=args.output_dir,
+        workers=args.workers,
+        force_refit=args.force_refit,
+    )
+    predictions, dense, metrics, parameters = compile_outputs(curves, points, results, successor_results)
     predictions.to_csv(args.output_dir / "predictions.csv", index=False)
     dense.to_csv(args.output_dir / "dense_curves.csv", index=False)
     metrics.to_csv(args.output_dir / "metrics.csv", index=False)
     parameters.to_csv(args.output_dir / "full_fit_parameters.csv", index=False)
+    curve_reference_frame(curves).to_csv(args.output_dir / "curve_reference.csv", index=False)
 
     input_hashes = {filename: file_sha256(args.inventory_dir / filename) for filename in INPUT_FILES}
     protocol = {
-        "schema_version": 2,
+        "schema_version": 4,
         "purpose": (
-            "descriptive full-data DSP-versus-OLMix capacity check across every retained StarCoder endpoint curve"
+            "descriptive full-data DSP-versus-Weibull-softplus-versus-OLMix capacity check across every retained "
+            "StarCoder endpoint curve"
         ),
         "models": {
             "canonical_dsp": {
@@ -1294,6 +1850,18 @@ def main() -> None:
                 "maxiter": args.maxiter,
                 "restarts": args.restarts,
                 "optimizer_sha256": file_sha256(Path(dsp_ladder.__file__).resolve()),
+            },
+            SUCCESSOR_MODEL_ID: {
+                "fit_scope": "independent full-data fit per curve",
+                "exposure_coordinate": "curve-specific true-inventory materialized epochs",
+                "inner_folds": INNER_FOLDS,
+                "configuration": observatory_models.describe_model(
+                    observatory_registry.ENTRY_BY_ID[SUCCESSOR_MODEL_ID].build(
+                        successor_features(tasks[0], tasks[0].weights, suffix="protocol")
+                    )
+                ),
+                "models_sha256": file_sha256(Path(observatory_models.__file__).resolve()),
+                "registry_sha256": file_sha256(Path(observatory_registry.__file__).resolve()),
             },
             "olmix_loglinear": {
                 "fit_scope": "independent full-data fit per curve",
@@ -1307,6 +1875,10 @@ def main() -> None:
         "target_id": PRIMARY_TARGET,
         "curve_count": len(curves),
         "curve_ids": curves["curve_id"].tolist(),
+        "curve_reference_order": {
+            "rule": "fixed-model token ladder, matched N,D ladder, replay burden, then LR onset",
+            "references": curves[["curve_ref", "curve_id"]].to_dict(orient="records"),
+        },
         "inner_folds": INNER_FOLDS,
         "fold_assignment": "ordered row index modulo fold count",
         "fold_seed": FOLD_SEED,
@@ -1314,9 +1886,15 @@ def main() -> None:
         "maxiter": args.maxiter,
         "restarts": args.restarts,
         "workers": args.workers,
-        "epoch_scales": {
+        "canonical_dsp_epoch_scales": {
             "nemotron": epoch_accounting.SIMULATED_EPOCH_TARGET_BUDGET / epoch_accounting.NEMOTRON_SOURCE_TOKENS,
             "starcoder": epoch_accounting.SIMULATED_EPOCH_TARGET_BUDGET / epoch_accounting.STARCODER_SOURCE_TOKENS,
+        },
+        "weibull_softplus_epoch_scales": {
+            "rule": "one two-element inventory per physical curve",
+            "nemotron_full_cache": "planned_materialized_tokens / full_nemotron_source_tokens",
+            "starcoder_full_cache": "planned_materialized_tokens / full_starcoder_source_tokens",
+            "finite_support": "preregistered simulated-support burden",
         },
         "materialized_epoch_axis": {
             "lower_axis": "StarCoder fraction p",

@@ -89,7 +89,9 @@ def freeze() -> None:
         "exclusionCounts": list(EXCLUSION_COUNTS),
         "fitPolicy": "two_phase",
         "hyperparameterPolicy": "Freeze every structural hyperparameter at the full 280-row Observatory selection.",
-        "refitPolicy": "Refit only the constrained linear/nonnegative response head after deleting the k lowest outcomes.",
+        "refitPolicy": (
+            "Refit only the constrained linear/nonnegative response head after deleting the k lowest outcomes."
+        ),
         "optimization": {
             "parameterization": "two independent simplex logits with one reference logit removed per phase",
             "starts": "proportional, empirical fit frontier, and four seeded Dirichlet policies",

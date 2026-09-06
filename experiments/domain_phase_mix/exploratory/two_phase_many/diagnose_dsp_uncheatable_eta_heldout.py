@@ -48,12 +48,8 @@ from experiments.domain_phase_mix.exploratory.two_phase_many.standalone_code imp
 SCRIPT_DIR = Path(__file__).resolve().parent
 REFERENCE_OUTPUTS = SCRIPT_DIR / "reference_outputs"
 DEFAULT_OUTPUT_DIR = REFERENCE_OUTPUTS / "dsp_uncheatable_eta_diagnostic_20260703"
-DEFAULT_REPAIR_RESULTS = (
-    REFERENCE_OUTPUTS / "delphi_dsp_exposure_repair_validation_20260702" / "results_from_wandb.csv"
-)
-DEFAULT_REPAIR_MIXTURE_DIR = (
-    REFERENCE_OUTPUTS / "dsp_exposure_repair_validation_mixtures_20260702" / "mixtures"
-)
+DEFAULT_REPAIR_RESULTS = REFERENCE_OUTPUTS / "delphi_dsp_exposure_repair_validation_20260702" / "results_from_wandb.csv"
+DEFAULT_REPAIR_MIXTURE_DIR = REFERENCE_OUTPUTS / "dsp_exposure_repair_validation_mixtures_20260702" / "mixtures"
 PLOT_CONFIG = {"toImageButtonOptions": {"format": "png", "scale": 4}}
 LINEAR_REG = 0.01
 
@@ -219,9 +215,7 @@ def summarize_model(
     predicted_best = str(
         uncheatable_predictions.loc[uncheatable_predictions["predicted_uncheatable_bpb"].idxmin(), "mixture"]
     )
-    actual_best = str(
-        uncheatable_predictions.loc[uncheatable_predictions["actual_uncheatable_bpb"].idxmin(), "mixture"]
-    )
+    actual_best = str(uncheatable_predictions.loc[uncheatable_predictions["actual_uncheatable_bpb"].idxmin(), "mixture"])
     summary = ModelSummary(
         model_name=model_name,
         variant=model.variant.name,

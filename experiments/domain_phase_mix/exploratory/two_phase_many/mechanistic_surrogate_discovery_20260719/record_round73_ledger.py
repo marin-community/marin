@@ -35,11 +35,15 @@ def main() -> None:
         "hyperparameters": "exact coordinate tolerance=1e-10; no fitted response; phase fractions 0.5/0.5 and 0.8/0.2",
         "adversarial_outcomes_available_before_proposal": True,
         "adversarial_outcomes_inspected_before_proposal": True,
-        "observations_inspiring_mechanism": "Rejected phase models confound odd order effects with even phase-variation costs when aggregate and contrast are correlated.",
+        "observations_inspiring_mechanism": (
+            "Rejected phase models confound odd order effects with even phase-variation costs when aggregate and contrast are correlated."
+        ),
         "novelty_class": "identification invariant; no candidate mechanism and no reopening of rejected phase models",
         "evaluation_status": "completed_design_observability_audit_no_promotion",
         "evidence_path": "round73_phase_reversal_observability/report.md",
-        "notes": "Exact reversal identifies odd/even components on supported StarCoder triples; the 39-bucket random swarm lacks exact reflected contrasts.",
+        "notes": (
+            "Exact reversal identifies odd/even components on supported StarCoder triples; the 39-bucket random swarm lacks exact reflected contrasts."
+        ),
     }
     updated = pd.concat([ledger, pd.DataFrame([row], columns=ledger.columns)], ignore_index=True)
     candidate_rows = updated["candidate_id"].astype(str).str.strip().ne("")

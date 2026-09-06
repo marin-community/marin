@@ -53,10 +53,10 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E402
-    analyze_table9_phase_split_dsp_300m as phase_dsp,
+    analyze_olmo_base_easy_per_component_dsp_decision_300m as component_dsp,
 )
 from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E402
-    analyze_olmo_base_easy_per_component_dsp_decision_300m as component_dsp,
+    analyze_table9_phase_split_dsp_300m as phase_dsp,
 )
 from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E402
     diagnose_dsp_uncheatable_eta_heldout as eta_diag,
@@ -143,8 +143,13 @@ def fit_asymmetric_bowl(packet, l2):
     for gamma in (1.0, 4.0, 16.0):
         for shift in (-1.5, -0.5, 0.5):
             s = np.concatenate([np.clip(base_mu + shift, -2, 8), [np.log(gamma)]])
-            res = minimize(lambda t: _abowl_profile(t, packet, l2), s, method="L-BFGS-B", bounds=bounds,
-                           options={"maxiter": 80, "ftol": 1e-8})
+            res = minimize(
+                lambda t: _abowl_profile(t, packet, l2),
+                s,
+                method="L-BFGS-B",
+                bounds=bounds,
+                options={"maxiter": 80, "ftol": 1e-8},
+            )
             if best is None or float(res.fun) < float(best.fun):
                 best = res
     theta = np.asarray(best.x, float)
@@ -158,7 +163,7 @@ def optimize(predict_fn, m, natural, kl_reg, starts):
     def to_w(logits):
         out = np.zeros((2, m))
         for ph in range(2):
-            zz = logits[ph * m:(ph + 1) * m]
+            zz = logits[ph * m : (ph + 1) * m]
             e = np.exp(zz - zz.max())
             out[ph] = e / e.sum()
         return out
@@ -202,13 +207,28 @@ def main() -> None:
         print(f"==== {objective} ====", flush=True)
         packet, domains, natural, token_counts, tb, folds = load_objective(objective)
         m = packet.m
-        canonical, _ = phase_dsp.fit_variant_with_l2(packet, "canonical", LINEAR_REG, maxiter=40, coarse_top_k=3, basin_hopping_iters=0)
-        effexp, _ = phase_dsp.fit_variant_with_l2(packet, "effective_exposure", LINEAR_REG, maxiter=40, coarse_top_k=3, basin_hopping_iters=0)
+        canonical, _ = phase_dsp.fit_variant_with_l2(
+            packet, "canonical", LINEAR_REG, maxiter=40, coarse_top_k=3, basin_hopping_iters=0
+        )
+        effexp, _ = phase_dsp.fit_variant_with_l2(
+            packet, "effective_exposure", LINEAR_REG, maxiter=40, coarse_top_k=3, basin_hopping_iters=0
+        )
         bowl = fit_asymmetric_bowl(packet, LINEAR_REG)
-        (args.output_dir / f"bowl_model_{objective}.json").write_text(json.dumps(
-            {"objective": objective, "gamma": bowl["gamma"], "b0": bowl["b0"], "domains": domains,
-             "mu": bowl["mu"].tolist(), "c_under": bowl["coef"][:m].tolist(), "c_over": bowl["coef"][m:].tolist()},
-            indent=2) + "\n")
+        (args.output_dir / f"bowl_model_{objective}.json").write_text(
+            json.dumps(
+                {
+                    "objective": objective,
+                    "gamma": bowl["gamma"],
+                    "b0": bowl["b0"],
+                    "domains": domains,
+                    "mu": bowl["mu"].tolist(),
+                    "c_under": bowl["coef"][:m].tolist(),
+                    "c_over": bowl["coef"][m:].tolist(),
+                },
+                indent=2,
+            )
+            + "\n"
+        )
 
         predict_fns = {
             "canonical": lambda w: float(dsp.predict(canonical, w[None, :, :])[0]),
@@ -221,8 +241,9 @@ def main() -> None:
         for model_name, fn in predict_fns.items():
             for kl in KL_REGS:
                 weights = optimize(fn, m, natural, kl, starts)
-                frame = per_component.mixture_frame(domains=domains, natural=natural, weights=weights,
-                                                    token_counts=token_counts, target_budget=tb)
+                frame = per_component.mixture_frame(
+                    domains=domains, natural=natural, weights=weights, token_counts=token_counts, target_budget=tb
+                )
                 out_dir = args.output_dir / objective / model_name / f"kl_{kl_str(kl)}"
                 out_dir.mkdir(parents=True, exist_ok=True)
                 frame.to_csv(out_dir / "proposed_mixture_weights.csv", index=False)
@@ -230,26 +251,50 @@ def main() -> None:
                 nidx = int(np.argmin(dists))
                 sim = base.simulated_epochs(weights, token_counts, target_budget=tb)
                 pred = float(fn(weights))
-                manifest_rows.append({
-                    "objective": objective, "model": model_name, "kl_reg": kl,
-                    "candidate": "raw_diagnostic" if kl == 0 else "deployment",
-                    "weights_csv": str((out_dir / "proposed_mixture_weights.csv").relative_to(args.output_dir)),
-                    "predicted_bpb": pred, "best_observed_bpb": best_observed,
-                    "optimism_vs_best_observed": best_observed - pred,
-                    "nearest_observed_bpb": float(packet.y[nidx]), "nearest_observed_tv": float(dists[nidx]),
-                    "tv_to_proportional": float(0.5 * np.abs(weights - reference).sum(axis=1).mean()),
-                    "max_weight": float(np.max(weights)), "max_simulated_epoch": float(np.max(sim)),
-                    "q95_simulated_epoch": float(np.quantile(sim, 0.95)),
-                })
-                print(f"  {model_name:20s} kl={kl}: pred={pred:.4f} tv_prop={manifest_rows[-1]['tv_to_proportional']:.3f} "
-                      f"maxw={manifest_rows[-1]['max_weight']:.3f} maxepoch={manifest_rows[-1]['max_simulated_epoch']:.1f}", flush=True)
+                manifest_rows.append(
+                    {
+                        "objective": objective,
+                        "model": model_name,
+                        "kl_reg": kl,
+                        "candidate": "raw_diagnostic" if kl == 0 else "deployment",
+                        "weights_csv": str((out_dir / "proposed_mixture_weights.csv").relative_to(args.output_dir)),
+                        "predicted_bpb": pred,
+                        "best_observed_bpb": best_observed,
+                        "optimism_vs_best_observed": best_observed - pred,
+                        "nearest_observed_bpb": float(packet.y[nidx]),
+                        "nearest_observed_tv": float(dists[nidx]),
+                        "tv_to_proportional": float(0.5 * np.abs(weights - reference).sum(axis=1).mean()),
+                        "max_weight": float(np.max(weights)),
+                        "max_simulated_epoch": float(np.max(sim)),
+                        "q95_simulated_epoch": float(np.quantile(sim, 0.95)),
+                    }
+                )
+                print(
+                    f"  {model_name:20s} kl={kl}: pred={pred:.4f} tv_prop={manifest_rows[-1]['tv_to_proportional']:.3f} "
+                    f"maxw={manifest_rows[-1]['max_weight']:.3f} maxepoch={manifest_rows[-1]['max_simulated_epoch']:.1f}",
+                    flush=True,
+                )
 
     manifest = pd.DataFrame(manifest_rows)
     manifest.to_csv(args.output_dir / "candidate_manifest.csv", index=False)
     print("\n=== candidate_manifest.csv ===")
     pd.set_option("display.width", 220)
-    print(manifest[["objective", "model", "kl_reg", "candidate", "predicted_bpb", "tv_to_proportional",
-                    "max_weight", "q95_simulated_epoch"]].round(4).to_string(index=False))
+    print(
+        manifest[
+            [
+                "objective",
+                "model",
+                "kl_reg",
+                "candidate",
+                "predicted_bpb",
+                "tv_to_proportional",
+                "max_weight",
+                "q95_simulated_epoch",
+            ]
+        ]
+        .round(4)
+        .to_string(index=False)
+    )
     print(f"\nWrote candidates to {args.output_dir}")
 
 

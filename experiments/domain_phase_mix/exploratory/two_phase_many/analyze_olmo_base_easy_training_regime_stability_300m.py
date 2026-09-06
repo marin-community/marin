@@ -39,9 +39,6 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E402
-    analyze_olmo_base_easy_per_component_dsp_decision_300m as pc,
-)
-from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E402
     fit_olmix_reference_deletion_augmented_300m as base,
 )
 from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E402
@@ -56,9 +53,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REFERENCE_OUTPUTS = SCRIPT_DIR / "reference_outputs"
 DEFAULT_OUTPUT_DIR = REFERENCE_OUTPUTS / "olmo_base_easy_training_regime_stability_300m_20260626"
 DEFAULT_FIT_PANEL = (
-    REFERENCE_OUTPUTS
-    / "olmo_base_easy_paper_faithful_olmix_300m_20260625"
-    / "fit_panel_table9_macro.csv"
+    REFERENCE_OUTPUTS / "olmo_base_easy_paper_faithful_olmix_300m_20260625" / "fit_panel_table9_macro.csv"
 )
 DEFAULT_FULL_PER_COMPONENT = (
     REFERENCE_OUTPUTS
@@ -70,9 +65,7 @@ DEFAULT_FULL_AGGREGATE_DSP = (
     / "olmo_base_easy_table9_macro_dsp_300m_20260625"
     / "effective_exposure_table9_macro_predictions.csv"
 )
-DEFAULT_RELIABILITY = (
-    REFERENCE_OUTPUTS / "olmo_base_easy_reliability_weighting_20260625" / "component_reliability.csv"
-)
+DEFAULT_RELIABILITY = REFERENCE_OUTPUTS / "olmo_base_easy_reliability_weighting_20260625" / "component_reliability.csv"
 
 MACRO_TARGET = "table9_macro_bpb"
 CV_SEED = 0
@@ -256,7 +249,7 @@ def summarize_prediction(
         train_regime=train_regime,
         eval_subset=eval_subset,
         prediction_convention=prediction_convention,
-        n_rows=int(len(indices)),
+        n_rows=len(indices),
         rmse=rmse,
         pearson=pearson,
         spearman=spearman,
@@ -389,9 +382,7 @@ def load_full_component_predictions(panel: pd.DataFrame, path: Path, components:
 
 def load_best_full_aggregate_prediction(panel: pd.DataFrame, path: Path, *, linear_reg: float) -> np.ndarray:
     data = pd.read_csv(path)
-    view = data[
-        data["variant"].eq("effective_exposure") & np.isclose(data["hyperparameter_value"], linear_reg)
-    ].copy()
+    view = data[data["variant"].eq("effective_exposure") & np.isclose(data["hyperparameter_value"], linear_reg)].copy()
     if view.empty:
         raise ValueError(f"No effective-exposure aggregate DSP predictions found for linear_reg={linear_reg:g}")
     merged = panel[["run_name"]].merge(
@@ -512,15 +503,21 @@ def write_method_plots(output_dir: Path, decisions: pd.DataFrame, stability: pd.
         height=650,
         showlegend=False,
     )
-    fig.write_html(output_dir / "training_regime_qsplit_decision_diagnostics.html", include_plotlyjs="cdn", config=PLOT_CONFIG)
+    fig.write_html(
+        output_dir / "training_regime_qsplit_decision_diagnostics.html", include_plotlyjs="cdn", config=PLOT_CONFIG
+    )
 
     fig = make_subplots(
         rows=1,
         cols=2,
         subplot_titles=("Residual-bootstrap top selection probability", "Unique selected count"),
     )
-    fig.add_trace(go.Bar(x=stability["method"], y=stability["top_selected_probability"], marker_color="#2f5d8a"), row=1, col=1)
-    fig.add_trace(go.Bar(x=stability["method"], y=stability["unique_selected_count"], marker_color="#8f4775"), row=1, col=2)
+    fig.add_trace(
+        go.Bar(x=stability["method"], y=stability["top_selected_probability"], marker_color="#2f5d8a"), row=1, col=1
+    )
+    fig.add_trace(
+        go.Bar(x=stability["method"], y=stability["unique_selected_count"], marker_color="#8f4775"), row=1, col=2
+    )
     fig.update_xaxes(tickangle=60)
     fig.update_layout(
         title="Qsplit selection stability under empirical residual perturbations",

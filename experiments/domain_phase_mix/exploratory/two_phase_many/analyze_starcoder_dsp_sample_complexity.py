@@ -45,9 +45,7 @@ if str(REPO_ROOT) not in sys.path:
 from experiments.domain_phase_mix.exploratory.two_phase_many.standalone_code import dsp_exact as dsp
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-DEFAULT_SOURCE_CSV = (
-    SCRIPT_DIR.parent / "paper_plots" / "data" / "two_phase_starcoder_combined_143_from_wandb.csv"
-)
+DEFAULT_SOURCE_CSV = SCRIPT_DIR.parent / "paper_plots" / "data" / "two_phase_starcoder_combined_143_from_wandb.csv"
 DEFAULT_OUTPUT_DIR = SCRIPT_DIR / "reference_outputs" / "starcoder_dsp_sample_complexity_20260702"
 TARGET = "eval/paloma/dolma_100_programing_languages/bpb"
 DOMAIN_NAMES = ["nemotron_full", "starcoder"]
@@ -550,7 +548,9 @@ def write_plots(
             width=1050,
             height=780,
         )
-        landscape.write_html(output_dir / "solved_optima_on_dense_surface.html", include_plotlyjs="cdn", config=PLOTLY_CONFIG)
+        landscape.write_html(
+            output_dir / "solved_optima_on_dense_surface.html", include_plotlyjs="cdn", config=PLOTLY_CONFIG
+        )
 
 
 def write_summary_json(output_dir: Path, surface: DenseSurface, summary: pd.DataFrame, thresholds: pd.DataFrame) -> None:
@@ -558,7 +558,7 @@ def write_summary_json(output_dir: Path, surface: DenseSurface, summary: pd.Data
     payload = {
         "source_csv": str(surface.source_csv),
         "target": TARGET,
-        "dense_row_count": int(len(surface.frame)),
+        "dense_row_count": len(surface.frame),
         "epoch_multipliers": {
             "phase_0": dict(zip(DOMAIN_NAMES, surface.packet.c0.tolist(), strict=True)),
             "phase_1": dict(zip(DOMAIN_NAMES, surface.packet.c1.tolist(), strict=True)),

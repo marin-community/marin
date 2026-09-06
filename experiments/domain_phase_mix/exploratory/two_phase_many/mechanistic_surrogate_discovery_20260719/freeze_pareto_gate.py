@@ -590,7 +590,9 @@ def initial_data_use_ledger(metrics_frame: pd.DataFrame) -> pd.DataFrame:
                 "novelty_class": "existing exposed baseline",
                 "evaluation_status": "adversarial development outcomes reconstructed",
                 "evidence_path": "frozen_gate/baseline_metrics.csv",
-                "notes": "Adversarial outcomes were observed before this drive; this row records exposure, not confirmation.",
+                "notes": (
+                    "Adversarial outcomes were observed before this drive; this row records exposure, not confirmation."
+                ),
             }
             for model in models
         ]

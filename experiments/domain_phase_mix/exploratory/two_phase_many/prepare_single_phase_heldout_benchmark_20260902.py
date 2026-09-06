@@ -52,7 +52,25 @@ RECENT_DELPHI_SOURCES = {
     "shared_shape_dsp_epoch_cap": REFERENCE_OUTPUTS / "delphi_one_phase_dsp_epoch_cap_sweep_20260828",
     "aggregate_v_epoch_cap": REFERENCE_OUTPUTS / "delphi_one_phase_surrogate_challenger_validations_20260831",
     "full_canonical_dsp_epoch_cap": REFERENCE_OUTPUTS / "delphi_one_phase_full_canonical_dsp_epoch_cap_sweep_20260901",
+    "weibull_softplus_unscaled_epoch_cap": (
+        REFERENCE_OUTPUTS / "delphi_one_phase_weibull_softplus_epoch_cap_sweep_20260902"
+    ),
 }
+EPOCH_DOSE_DIR = REFERENCE_OUTPUTS / "bucket_epoch_dose_response_20260729" / "full" / "delphi_3e18"
+EPOCH_DOSE_RECOVERY_DIR = REFERENCE_OUTPUTS / "bucket_epoch_dose_response_20260729" / "recovery" / "delphi_3e18_20260902"
+EPOCH_DOSE_RUN_MANIFEST = EPOCH_DOSE_DIR / "run_manifest.csv"
+EPOCH_DOSE_PHASE_WEIGHTS = EPOCH_DOSE_DIR / "phase_weights.csv"
+EPOCH_DOSE_RESULTS = EPOCH_DOSE_RECOVERY_DIR / "heldout_results.csv"
+EPOCH_DOSE_UNCHEATABLE_COMPONENTS = EPOCH_DOSE_RECOVERY_DIR / "uncheatable_components.csv"
+EPOCH_DOSE_TABLE9_COMPONENTS = EPOCH_DOSE_RECOVERY_DIR / "table9_components.csv"
+EPOCH_DOSE_MATERIALIZATION_MANIFEST = EPOCH_DOSE_RECOVERY_DIR / "heldout_materialization_manifest.json"
+APRIORI_SWARM_DIR = REFERENCE_OUTPUTS / "delphi_apriori_swarm_280_20260904"
+APRIORI_SWARM_DESIGN = APRIORI_SWARM_DIR / "swarm_mixtures.csv"
+APRIORI_SWARM_MATERIALIZATION_DIR = APRIORI_SWARM_DIR / "pilot_materialization"
+APRIORI_SWARM_RESULTS = APRIORI_SWARM_MATERIALIZATION_DIR / "heldout_results.csv"
+APRIORI_SWARM_UNCHEATABLE_COMPONENTS = APRIORI_SWARM_MATERIALIZATION_DIR / "uncheatable_components.csv"
+APRIORI_SWARM_TABLE9_COMPONENTS = APRIORI_SWARM_MATERIALIZATION_DIR / "table9_components.csv"
+APRIORI_SWARM_MATERIALIZATION_MANIFEST = APRIORI_SWARM_MATERIALIZATION_DIR / "heldout_materialization_manifest.json"
 
 FIT_PANEL_PATHS = {
     "60m_39bucket": SIXTY_M_FIT,
@@ -100,7 +118,8 @@ TABLE9_AGGREGATE_KEYS = (
 PHASE_TOLERANCE = 1e-10
 FIT_OVERLAP_TOLERANCE = 1e-10
 AGGREGATE_TOLERANCE = 3e-6
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+POOL_FRACTION_PREFIX = "pool_fraction::"
 
 AUDIT_COLUMNS = (
     "panel",
@@ -118,6 +137,7 @@ AUDIT_COLUMNS = (
     "table9_eval_url",
     "data_seed",
     "trainer_seed",
+    "subset_seed",
     "phase_tv",
     "fit_panel_max_abs_distance",
     "coordinate_id",
@@ -163,6 +183,17 @@ def table9_summary_keys() -> dict[str, str]:
     return mapping
 
 
+def _canonical_table9_component(component: str) -> str:
+    aliases: dict[str, str] = {}
+    for canonical in table9_components():
+        aliases[canonical] = canonical
+        if canonical.startswith("olmo_base_eval/easy_bpb/") and canonical.endswith("/bpb"):
+            aliases[canonical.removeprefix("olmo_base_eval/easy_bpb/").removesuffix("/bpb")] = canonical
+    if component not in aliases:
+        raise ValueError(f"Unknown Table-9 component: {component}")
+    return aliases[component]
+
+
 def domains() -> tuple[str, ...]:
     values = tuple(json.loads(TABLE9_METADATA.read_text())["domains"])
     if len(values) != 39 or len(set(values)) != 39:
@@ -181,12 +212,26 @@ def nearest_fit_distance(weights: np.ndarray, fit_weights: np.ndarray) -> np.nda
     return result
 
 
-def coordinate_id(panel: str, weights: np.ndarray) -> str:
+def coordinate_id(panel: str, weights: np.ndarray, pool_fractions: np.ndarray | None = None) -> str:
+    """Return a stable coordinate identity over mixture shares and materialized support.
+
+    Full-support rows retain the schema-v1 digest so frozen coordinate references do not
+    change. Subsampled rows add all pool fractions to the digest.
+    """
     normalized = np.asarray(weights, dtype="<f8")
     if normalized.shape != (39,) or not np.isfinite(normalized).all():
         raise ValueError(f"{panel}: invalid coordinate")
     rounded = np.round(normalized, 12)
-    digest = hashlib.sha256(panel.encode() + b"\0" + rounded.tobytes()).hexdigest()
+    fractions = np.ones_like(normalized) if pool_fractions is None else np.asarray(pool_fractions, dtype="<f8")
+    if fractions.shape != normalized.shape or not np.isfinite(fractions).all():
+        raise ValueError(f"{panel}: invalid pool fractions")
+    if np.any(fractions <= 0.0) or np.any(fractions > 1.0):
+        raise ValueError(f"{panel}: pool fractions must lie in (0, 1]")
+    rounded_fractions = np.round(fractions, 12)
+    payload = panel.encode() + b"\0" + rounded.tobytes()
+    if not np.array_equal(rounded_fractions, np.ones_like(rounded_fractions)):
+        payload += b"\0pool_fractions\0" + rounded_fractions.tobytes()
+    digest = hashlib.sha256(payload).hexdigest()
     return f"{panel}:{digest}"
 
 
@@ -201,22 +246,39 @@ def _fit_weights(panel: str, bucket_names: tuple[str, ...]) -> np.ndarray:
     return weights
 
 
-def _finalize_audit(frame: pd.DataFrame, weights: np.ndarray, fit_weights: np.ndarray) -> pd.DataFrame:
+def _finalize_audit(
+    frame: pd.DataFrame,
+    weights: np.ndarray,
+    fit_weights: np.ndarray,
+    pool_fractions: np.ndarray | None = None,
+) -> pd.DataFrame:
     frame = frame.copy()
     if len(frame) != len(weights):
         raise ValueError("Audit metadata and weights differ in length")
+    fractions = np.ones_like(weights) if pool_fractions is None else np.asarray(pool_fractions, dtype=float)
+    if fractions.shape != weights.shape or not np.isfinite(fractions).all():
+        raise ValueError("Audit pool fractions differ from mixture weights")
+    if np.any(fractions <= 0.0) or np.any(fractions > 1.0):
+        raise ValueError("Audit pool fractions must lie in (0, 1]")
+    if "subset_seed" not in frame:
+        frame["subset_seed"] = np.nan
     fit_distance = nearest_fit_distance(weights, fit_weights)
     frame["fit_panel_max_abs_distance"] = fit_distance
-    frame["coordinate_id"] = [coordinate_id(str(panel), row) for panel, row in zip(frame["panel"], weights, strict=True)]
+    frame["coordinate_id"] = [
+        coordinate_id(str(panel), row, row_fractions)
+        for panel, row, row_fractions in zip(frame["panel"], weights, fractions, strict=True)
+    ]
     frame["exclusion_reason"] = ""
     frame.loc[frame["phase_tv"] > PHASE_TOLERANCE, "exclusion_reason"] = "not_single_phase"
-    overlap = (frame["exclusion_reason"] == "") & (fit_distance <= FIT_OVERLAP_TOLERANCE)
+    full_support = np.all(np.isclose(fractions, 1.0, atol=FIT_OVERLAP_TOLERANCE, rtol=0.0), axis=1)
+    overlap = (frame["exclusion_reason"] == "") & (fit_distance <= FIT_OVERLAP_TOLERANCE) & full_support
     frame.loc[overlap, "exclusion_reason"] = "fit_coordinate_overlap"
     missing = (frame["exclusion_reason"] == "") & frame["uncheatable_bpb"].isna() & frame["table9_macro_bpb"].isna()
     frame.loc[missing, "exclusion_reason"] = "missing_primary_targets"
     frame["eligible"] = frame["exclusion_reason"].eq("")
     for bucket_index, bucket in enumerate(domains()):
         frame[f"weight::{bucket}"] = weights[:, bucket_index]
+        frame[f"{POOL_FRACTION_PREFIX}{bucket}"] = fractions[:, bucket_index]
     return frame
 
 
@@ -230,6 +292,7 @@ def _empty_metadata(rows: int) -> dict[str, list[Any]]:
         "table9_eval_url": [""] * rows,
         "data_seed": [np.nan] * rows,
         "trainer_seed": [np.nan] * rows,
+        "subset_seed": [np.nan] * rows,
     }
 
 
@@ -382,28 +445,141 @@ def _audit_recent_delphi(bucket_names: tuple[str, ...]) -> pd.DataFrame:
     return pd.concat(rows, ignore_index=True)
 
 
+def _audit_epoch_dose_delphi(bucket_names: tuple[str, ...]) -> pd.DataFrame:
+    manifest = pd.read_csv(EPOCH_DOSE_RUN_MANIFEST)
+    results = pd.read_csv(EPOCH_DOSE_RESULTS)
+    source = manifest.merge(results, on=["run_order", "run_name"], validate="one_to_one")
+    if len(source) != len(manifest) or len(source) != 277:
+        raise ValueError("Delphi epoch-dose materialization must contain all 277 designed runs")
+
+    long_weights = pd.read_csv(EPOCH_DOSE_PHASE_WEIGHTS)
+    weight_table = long_weights.pivot(index="run_name", columns=["phase", "domain"], values="weight")
+    weights = np.asarray(
+        [[weight_table.loc[run_name, ("phase_0", bucket)] for bucket in bucket_names] for run_name in source.run_name],
+        dtype=float,
+    )
+    phase1 = np.asarray(
+        [[weight_table.loc[run_name, ("phase_1", bucket)] for bucket in bucket_names] for run_name in source.run_name],
+        dtype=float,
+    )
+    frame = pd.DataFrame(
+        {
+            "panel": "delphi_3e18_39bucket",
+            "scale": PANEL_SCALE["delphi_3e18_39bucket"],
+            "row_id": "delphi_epoch_dose::" + source["run_name"].astype(str),
+            "source": "conditional_epoch_dose_response",
+            "source_row_id": source["run_name"].astype(str),
+            "source_experiment": "bucket_epoch_dose_response_20260729",
+            "proposal_model": "designed_conditional_epoch_dose",
+            "proposal_target": "uncheatable_and_table9",
+            "epoch_cap": np.nan,
+            "training_wandb_run_id": source["training_wandb_run_id"].astype(str),
+            "training_wandb_url": source["training_wandb_url"].astype(str),
+            "table9_eval_run_id": source["table9_eval_run_id"].fillna("").astype(str),
+            "table9_eval_url": source["table9_eval_url"].fillna("").astype(str),
+            "data_seed": source["data_seed"],
+            "trainer_seed": source["trainer_seed"],
+            "subset_seed": source["simulated_epoch_subset_seed"],
+            "phase_tv": 0.5 * np.abs(weights - phase1).sum(axis=1),
+            "uncheatable_bpb": source["uncheatable_bpb"],
+            "table9_macro_bpb": source["table9_macro_bpb"],
+        }
+    )
+    return _finalize_audit(frame, weights, _fit_weights("delphi_3e18_39bucket", bucket_names))
+
+
+def _apriori_materialization_present() -> bool:
+    paths = (
+        APRIORI_SWARM_RESULTS,
+        APRIORI_SWARM_UNCHEATABLE_COMPONENTS,
+        APRIORI_SWARM_TABLE9_COMPONENTS,
+        APRIORI_SWARM_MATERIALIZATION_MANIFEST,
+    )
+    present = [path.exists() for path in paths]
+    if any(present) and not all(present):
+        missing = [str(path) for path, exists in zip(paths, present, strict=True) if not exists]
+        raise FileNotFoundError(f"A-priori swarm materialization is partial; missing {missing}")
+    return all(present)
+
+
+def _audit_apriori_delphi(bucket_names: tuple[str, ...]) -> pd.DataFrame:
+    design = pd.read_csv(APRIORI_SWARM_DESIGN, low_memory=False).reset_index(names="run_order")
+    results = pd.read_csv(APRIORI_SWARM_RESULTS, low_memory=False)
+    source = design.merge(
+        results, on=["run_order", "run_name"], suffixes=("_design", "_observed"), validate="one_to_one"
+    )
+    if len(source) != len(results) or not source["source"].eq("new").all():
+        raise ValueError("A-priori materialization contains rows outside the frozen new-run design")
+
+    for seed in ("data_seed", "trainer_seed", "subset_seed"):
+        designed = pd.to_numeric(source[f"{seed}_design"], errors="raise").astype(int)
+        observed = pd.to_numeric(source[f"{seed}_observed"], errors="raise").astype(int)
+        if not designed.equals(observed):
+            raise ValueError(f"A-priori materialized {seed} differs from the frozen design")
+
+    weights = source.loc[:, [f"phase_0_{bucket}" for bucket in bucket_names]].to_numpy(float)
+    phase1 = source.loc[:, [f"phase_1_{bucket}" for bucket in bucket_names]].to_numpy(float)
+    designed_fractions = source.loc[:, [f"pool_fraction_{bucket}" for bucket in bucket_names]].to_numpy(float)
+    observed_fractions = source.loc[:, [f"{POOL_FRACTION_PREFIX}{bucket}" for bucket in bucket_names]].to_numpy(float)
+    if not np.allclose(designed_fractions, observed_fractions, atol=1e-12, rtol=0.0):
+        raise ValueError("A-priori materialized pool fractions differ from the frozen design")
+
+    frame = pd.DataFrame(
+        {
+            "panel": "delphi_3e18_39bucket",
+            "scale": PANEL_SCALE["delphi_3e18_39bucket"],
+            "row_id": "delphi_apriori::" + source["run_name"].astype(str),
+            "source": "prospectively_frozen_apriori_swarm",
+            "source_row_id": source["run_name"].astype(str),
+            "source_experiment": "delphi_apriori_swarm_280_20260904",
+            "proposal_model": "apriori_design",
+            "proposal_target": "uncheatable_and_table9",
+            "epoch_cap": np.nan,
+            "training_wandb_run_id": source["training_wandb_run_id"].astype(str),
+            "training_wandb_url": source["training_wandb_url"].astype(str),
+            "table9_eval_run_id": source["table9_eval_run_id"].fillna("").astype(str),
+            "table9_eval_url": source["table9_eval_url"].fillna("").astype(str),
+            "data_seed": source["data_seed_observed"],
+            "trainer_seed": source["trainer_seed_observed"],
+            "subset_seed": source["subset_seed_observed"],
+            "phase_tv": 0.5 * np.abs(weights - phase1).sum(axis=1),
+            "uncheatable_bpb": source["uncheatable_bpb"],
+            "table9_macro_bpb": source["table9_macro_bpb"],
+        }
+    )
+    return _finalize_audit(
+        frame,
+        weights,
+        _fit_weights("delphi_3e18_39bucket", bucket_names),
+        observed_fractions,
+    )
+
+
 def audit_sources() -> pd.DataFrame:
     bucket_names = domains()
-    audit = pd.concat(
-        [
-            _audit_60m(bucket_names),
-            _audit_300m(bucket_names),
-            _audit_delphi_archive(bucket_names),
-            _audit_recent_delphi(bucket_names),
-        ],
-        ignore_index=True,
-    )
+    sources = [
+        _audit_60m(bucket_names),
+        _audit_300m(bucket_names),
+        _audit_delphi_archive(bucket_names),
+        _audit_recent_delphi(bucket_names),
+        _audit_epoch_dose_delphi(bucket_names),
+    ]
+    if _apriori_materialization_present():
+        sources.append(_audit_apriori_delphi(bucket_names))
+    audit = pd.concat(sources, ignore_index=True)
     if audit["row_id"].duplicated().any():
         raise ValueError("Audit row IDs are not unique")
     weight_columns = [f"weight::{bucket}" for bucket in bucket_names]
+    pool_columns = [f"{POOL_FRACTION_PREFIX}{bucket}" for bucket in bucket_names]
     weights = audit.loc[:, weight_columns].to_numpy(float)
     if not np.isfinite(weights).all() or not np.allclose(weights.sum(axis=1), 1.0, atol=1e-9):
         raise ValueError("Audited mixture weights are invalid")
-    return audit.loc[:, [*AUDIT_COLUMNS, *weight_columns]]
+    return audit.loc[:, [*AUDIT_COLUMNS, *weight_columns, *pool_columns]]
 
 
 def _local_table9_components(eligible: pd.DataFrame) -> pd.DataFrame:
     components = table9_components()
+    eligible_row_ids = set(eligible["row_id"])
     records: list[dict[str, object]] = []
 
     sixty = pd.read_csv(SIXTY_M_TABLE9).set_index("run_name")
@@ -442,10 +618,12 @@ def _local_table9_components(eligible: pd.DataFrame) -> pd.DataFrame:
         payload = pd.read_csv(source_dir / "measured_table9_components.csv")
         for item in payload.to_dict("records"):
             row_id = f"delphi_recent::{source_name}::{item['candidate_id']}"
-            if row_id not in set(eligible["row_id"]):
+            if row_id not in eligible_row_ids:
                 continue
-            component = str(item["component"])
             position = int(item["component_position"])
+            component = _canonical_table9_component(str(item["component"]))
+            if position >= len(components) or component != components[position]:
+                raise ValueError(f"{row_id}: Table-9 component does not match position {position}")
             records.append(
                 _component_record(
                     row_id,
@@ -483,6 +661,43 @@ def _local_uncheatable_components(eligible: pd.DataFrame) -> pd.DataFrame:
                 )
             )
     return pd.DataFrame(records)
+
+
+def _local_epoch_dose_components(eligible: pd.DataFrame) -> pd.DataFrame:
+    eligible_row_ids = set(eligible["row_id"])
+    frames: list[pd.DataFrame] = []
+    for target, path in (
+        ("uncheatable", EPOCH_DOSE_UNCHEATABLE_COMPONENTS),
+        ("table9", EPOCH_DOSE_TABLE9_COMPONENTS),
+    ):
+        source = pd.read_csv(path)
+        source["row_id"] = "delphi_epoch_dose::" + source["run_name"].astype(str)
+        source = source[source["row_id"].isin(eligible_row_ids)].copy()
+        source["panel"] = "delphi_3e18_39bucket"
+        source["target"] = target
+        frames.append(source[["row_id", "panel", "target", "component_position", "component", "bpb", "provenance"]])
+    return pd.concat(frames, ignore_index=True)
+
+
+def _local_apriori_components(eligible: pd.DataFrame) -> pd.DataFrame:
+    columns = ["row_id", "panel", "target", "component_position", "component", "bpb", "provenance"]
+    if not _apriori_materialization_present():
+        return pd.DataFrame(columns=columns)
+    eligible_row_ids = set(eligible["row_id"])
+    frames: list[pd.DataFrame] = []
+    for target, path in (
+        ("uncheatable", APRIORI_SWARM_UNCHEATABLE_COMPONENTS),
+        ("table9", APRIORI_SWARM_TABLE9_COMPONENTS),
+    ):
+        source = pd.read_csv(path)
+        source["row_id"] = "delphi_apriori::" + source["run_name"].astype(str)
+        source = source[source["row_id"].isin(eligible_row_ids)].copy()
+        source["panel"] = "delphi_3e18_39bucket"
+        source["target"] = target
+        if target == "table9" and not source.empty:
+            source["component"] = source["component"].map(_canonical_table9_component)
+        frames.append(source.loc[:, columns])
+    return pd.concat(frames, ignore_index=True)
 
 
 def _component_record(
@@ -596,7 +811,7 @@ def _fetch_component_request(
                     )
                     for position, (component, value) in enumerate(zip(components, values, strict=True))
                 ]
-        result = {
+        result: dict[str, object] = {
             "row_id": request.row_id,
             "panel": request.panel,
             "target": request.target,
@@ -683,16 +898,24 @@ def fetch_wandb_components(
 
 
 def _validate_components(runs: pd.DataFrame, components: pd.DataFrame) -> pd.DataFrame:
-    expected_counts = {"uncheatable": 7, "table9": 51}
+    expected_components = {"uncheatable": UNCHEATABLE_COMPONENTS, "table9": table9_components()}
     aggregates = runs.set_index("row_id")[["panel", "uncheatable_bpb", "table9_macro_bpb"]]
     checks: list[dict[str, object]] = []
     for (row_id, target), group in components.groupby(["row_id", "target"], sort=False):
+        if target not in expected_components:
+            raise ValueError(f"{row_id}: unknown component target {target}")
         if group["component"].duplicated().any():
             raise ValueError(f"{row_id}/{target}: duplicate atomic components")
-        expected_count = expected_counts[target]
+        inventory = expected_components[target]
+        expected_count = len(inventory)
         if len(group) != expected_count:
             raise ValueError(f"{row_id}/{target}: partial component payload included")
-        values = group.sort_values("component_position")["bpb"].to_numpy(float)
+        ordered = group.sort_values("component_position")
+        if ordered["component_position"].tolist() != list(range(expected_count)):
+            raise ValueError(f"{row_id}/{target}: component positions do not match canonical inventory")
+        if tuple(ordered["component"]) != inventory:
+            raise ValueError(f"{row_id}/{target}: components do not match canonical component inventory")
+        values = ordered["bpb"].to_numpy(float)
         panel = str(aggregates.loc[row_id, "panel"])
         if target == "table9":
             expected = float(aggregates.loc[row_id, "table9_macro_bpb"])
@@ -717,10 +940,21 @@ def _validate_components(runs: pd.DataFrame, components: pd.DataFrame) -> pd.Dat
 
 
 def coordinate_table(runs: pd.DataFrame) -> pd.DataFrame:
+    runs = runs.copy()
     weight_columns = [f"weight::{bucket}" for bucket in domains()]
+    pool_columns = [f"{POOL_FRACTION_PREFIX}{bucket}" for bucket in domains()]
+    for column in pool_columns:
+        if column not in runs:
+            runs[column] = 1.0
+    for column in ("data_seed", "trainer_seed", "subset_seed"):
+        if column not in runs:
+            runs[column] = np.nan
     rows: list[dict[str, object]] = []
     for (_panel, _coordinate), group in runs.groupby(["panel", "coordinate_id"], sort=False):
-        record = {column: group.iloc[0][column] for column in ["panel", "scale", "coordinate_id", *weight_columns]}
+        record = {
+            column: group.iloc[0][column]
+            for column in ["panel", "scale", "coordinate_id", *weight_columns, *pool_columns]
+        }
         record.update(
             {
                 "run_count": len(group),
@@ -729,6 +963,10 @@ def coordinate_table(runs: pd.DataFrame) -> pd.DataFrame:
                 "row_ids": ";".join(group["row_id"].astype(str)),
             }
         )
+        for seed_column in ("data_seed", "trainer_seed", "subset_seed"):
+            values = sorted(set(pd.to_numeric(group[seed_column], errors="coerce").dropna().astype(int)))
+            record[seed_column] = values[0] if len(values) == 1 else np.nan
+            record[f"{seed_column}s"] = ";".join(str(value) for value in values)
         for target in ("uncheatable_bpb", "table9_macro_bpb"):
             values = group[target].dropna().to_numpy(float)
             prefix = target.removesuffix("_bpb")
@@ -803,6 +1041,8 @@ def _write_report(
     delphi = audit[audit["panel"].eq("delphi_3e18_39bucket")]
     delphi_overlap_count = int(delphi["exclusion_reason"].eq("fit_coordinate_overlap").sum())
     recent_delphi_count = int(runs["source"].isin(RECENT_DELPHI_SOURCES).sum())
+    epoch_dose_audit = audit[audit["source"].eq("conditional_epoch_dose_response")]
+    epoch_dose_runs = runs[runs["source"].eq("conditional_epoch_dose_response")]
     lines = [
         "# Single-phase heldout benchmark inventory",
         "",
@@ -840,7 +1080,15 @@ def _write_report(
             "match a current fit coordinate and are excluded. Its older overlap flag is not used.",
             (
                 "- The Delphi set includes 187 archival one-phase validation runs plus "
-                f"{recent_delphi_count} recent epoch-cap validation runs."
+                f"{recent_delphi_count} recent epoch-cap validation runs and "
+                f"{len(epoch_dose_runs)} fit-panel-disjoint conditional epoch-dose runs."
+            ),
+            (
+                f"- The conditional epoch-dose source contributes {len(epoch_dose_audit)} raw single-phase runs. "
+                f"{epoch_dose_audit.exclusion_reason.eq('fit_coordinate_overlap').sum()} overlap the canonical fit "
+                f"panel and remain development/noise evidence rather than fresh heldouts; all {len(epoch_dose_runs)} "
+                f"remaining runs have complete Uncheatable payloads and "
+                f"{epoch_dose_runs.table9_macro_bpb.notna().sum()} currently have complete Table-9 payloads."
             ),
             (
                 "- The 300M packet contains all 280 current fit rows, which are excluded. Its 134 external coordinates "
@@ -894,10 +1142,21 @@ def prepare(output_dir: Path, workers: int, offline: bool) -> dict[str, object]:
     audit = audit_sources()
     eligible = audit[audit["eligible"]].copy().reset_index(drop=True)
     local_components = pd.concat(
-        [_local_table9_components(eligible), _local_uncheatable_components(eligible)],
+        [
+            _local_table9_components(eligible),
+            _local_uncheatable_components(eligible),
+            _local_epoch_dose_components(eligible),
+            _local_apriori_components(eligible),
+        ],
         ignore_index=True,
     )
-    status, wandb_components = fetch_wandb_components(component_requests(eligible), output_dir, workers, offline)
+    local_component_keys = set(zip(local_components["row_id"], local_components["target"], strict=True))
+    requests = [
+        request
+        for request in component_requests(eligible)
+        if (request.row_id, request.target) not in local_component_keys
+    ]
+    status, wandb_components = fetch_wandb_components(requests, output_dir, workers, offline)
     components = pd.concat([local_components, wandb_components], ignore_index=True)
     if not components.empty:
         components = components.drop_duplicates(["row_id", "target", "component"], keep="first")
@@ -945,6 +1204,12 @@ def prepare(output_dir: Path, workers: int, offline: bool) -> dict[str, object]:
         SIXTY_M_TABLE9,
         THREE_HUNDRED_M_PACKET,
         DELPHI_ARCHIVE,
+        EPOCH_DOSE_RUN_MANIFEST,
+        EPOCH_DOSE_PHASE_WEIGHTS,
+        EPOCH_DOSE_RESULTS,
+        EPOCH_DOSE_UNCHEATABLE_COMPONENTS,
+        EPOCH_DOSE_TABLE9_COMPONENTS,
+        EPOCH_DOSE_MATERIALIZATION_MANIFEST,
     ]
     for source_dir in RECENT_DELPHI_SOURCES.values():
         source_paths.extend(
@@ -954,11 +1219,24 @@ def prepare(output_dir: Path, workers: int, offline: bool) -> dict[str, object]:
                 source_dir / "measured_table9_components.csv",
             ]
         )
+    if _apriori_materialization_present():
+        source_paths.extend(
+            [
+                APRIORI_SWARM_DESIGN,
+                APRIORI_SWARM_RESULTS,
+                APRIORI_SWARM_UNCHEATABLE_COMPONENTS,
+                APRIORI_SWARM_TABLE9_COMPONENTS,
+                APRIORI_SWARM_MATERIALIZATION_MANIFEST,
+            ]
+        )
     manifest: dict[str, object] = {
         "schema_version": SCHEMA_VERSION,
         "eligibility": {
             "phase_tv_tolerance": PHASE_TOLERANCE,
             "fit_overlap_max_abs_tolerance": FIT_OVERLAP_TOLERANCE,
+            "coordinate_identity": (
+                "mixture weights plus per-bucket pool fractions; full-support IDs retain schema-v1 hashes"
+            ),
             "fit_panels": {panel: str(path.relative_to(REPO_ROOT)) for panel, path in FIT_PANEL_PATHS.items()},
         },
         "aggregate_tolerance": AGGREGATE_TOLERANCE,

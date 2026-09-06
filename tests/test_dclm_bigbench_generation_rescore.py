@@ -73,7 +73,7 @@ def test_apply_rescores_replaces_task_and_derived_scores(monkeypatch) -> None:
     )
 
     class FakeFS:
-        def open(self, path: str, mode: str):  # noqa: ANN001
+        def open(self, path: str, mode: str):
             assert path == "bucket/sample.jsonl"
             return open(__file__)
 

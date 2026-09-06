@@ -50,7 +50,9 @@ def main() -> None:
                 "Autonomous nonlinear gradient flow of the mixture-weighted logistic training loss plus isotropic "
                 "representation decay, integrated in token or source-derived optimizer time."
             ),
-            "response_link": "The same two task log losses used by training, with nonnegative BPB amplitudes and an intercept.",
+            "response_link": (
+                "The same two task log losses used by training, with nonnegative BPB amplitudes and an intercept."
+            ),
             "additional_degrees_of_freedom": (
                 "A task angle, representation-decay rate, acquisition rate, and rare-to-broad gradient scale; orthogonal "
                 "theta=90 degrees is the exact no-transfer/no-conflict ablation."

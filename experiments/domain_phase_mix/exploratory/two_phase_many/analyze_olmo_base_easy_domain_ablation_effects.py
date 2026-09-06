@@ -243,7 +243,7 @@ def summarize_metrics(cell: pd.DataFrame) -> pd.DataFrame:
                 "mean_delta_bpb": float(group["delta_bpb"].mean()),
                 "median_delta_bpb": float(group["delta_bpb"].median()),
                 "fraction_domains_harm": float(group["deletion_hurts"].mean()),
-                "n_domains": int(len(group)),
+                "n_domains": len(group),
             }
         )
     return pd.DataFrame(rows).sort_values(["metric_group", "max_harm_delta_bpb"], ascending=[True, False])
@@ -426,7 +426,7 @@ def main() -> None:
         "baseline_run_name": BASELINE_RUN_NAME,
         "metric_count": int(cell["benchmark_key"].nunique()),
         "deleted_domain_count": int(cell["target_domain"].nunique()),
-        "cell_count": int(len(cell)),
+        "cell_count": len(cell),
         "metric_groups": {
             str(k): int(v)
             for k, v in cell[["benchmark_key", "metric_group"]].drop_duplicates()["metric_group"].value_counts().items()

@@ -88,7 +88,9 @@ def main() -> None:
                     "round_id": "round_55_low_tail_influence",
                     "candidate_id": candidate_id,
                     "candidate_family": model,
-                    "hyperparameters": "Frozen full-panel structural setting; delete k in {0,1,3,7,14}; refit response head only",
+                    "hyperparameters": (
+                        "Frozen full-panel structural setting; delete k in {0,1,3,7,14}; refit response head only"
+                    ),
                     "adversarial_outcomes_available_before_proposal": True,
                     "adversarial_outcomes_inspected_before_proposal": True,
                     "observations_inspiring_mechanism": (

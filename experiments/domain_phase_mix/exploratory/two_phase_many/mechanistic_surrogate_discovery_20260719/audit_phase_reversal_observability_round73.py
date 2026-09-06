@@ -110,9 +110,7 @@ def starcoder_reversal_rows(dataset: Any, phase0_fraction: float) -> tuple[pd.Da
         "mean_absolute_even_effect_bpb": (
             float(frame.loc[finite_even, "even_variation_effect_bpb"].abs().mean()) if finite_even.any() else np.nan
         ),
-        "median_absolute_odd_effect_bpb": (
-            float(frame["odd_order_effect_bpb"].abs().median()) if len(frame) else np.nan
-        ),
+        "median_absolute_odd_effect_bpb": float(frame["odd_order_effect_bpb"].abs().median()) if len(frame) else np.nan,
         "median_absolute_even_effect_bpb": (
             float(frame.loc[finite_even, "even_variation_effect_bpb"].abs().median()) if finite_even.any() else np.nan
         ),

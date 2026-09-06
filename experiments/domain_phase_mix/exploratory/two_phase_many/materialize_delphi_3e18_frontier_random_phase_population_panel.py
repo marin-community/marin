@@ -439,7 +439,7 @@ def validate_candidates(
             f"{anchor_id}/seed_{seed_block}": int(count) for (anchor_id, seed_block), count in seed_counts.items()
         },
         "realized_phase_fractions": {"phase_0": alpha0, "phase_1": alpha1},
-        "sampling_law": ("u=(z-mean(z))/||z-mean(z)|| for z~N(0,I_39); d=rho*r_max(a,u)*u; rho in {0.25,0.50,0.75}"),
+        "sampling_law": "u=(z-mean(z))/||z-mean(z)|| for z~N(0,I_39); d=rho*r_max(a,u)*u; rho in {0.25,0.50,0.75}",
         "common_random_directions_across_anchors": True,
         "random_direction_seed": RANDOM_DIRECTION_SEED,
         "direction_rank": direction_rank,

@@ -109,8 +109,8 @@ def fold_metrics(
         "profile": profile_name,
         "variant": variant_name,
         "fold": int(fold),
-        "train_size": int(len(train_idx)),
-        "test_size": int(len(test_idx)),
+        "train_size": len(train_idx),
+        "test_size": len(test_idx),
         "heldout_spearman": safe_spearman(y_test, pred_test),
         "heldout_rmse": float(np.sqrt(np.mean((pred_test - y_test) ** 2))),
         "heldout_regret_at_1": float(y_test[chosen_local] - y_test[best_local]),
@@ -122,7 +122,7 @@ def fold_metrics(
         "linear_head_param_count": int(model.params.get("_linear_head_param_count", 2 * packet.m)),
         "benefit_zero_count": int(np.sum(np.isclose(model.benefit_coef, 0.0, atol=1e-10))),
         "penalty_zero_count": int(np.sum(np.isclose(model.penalty_coef, 0.0, atol=1e-10))),
-        "nonlinear_param_count": int(len(_pack_params(model.params, model.variant))),
+        "nonlinear_param_count": len(_pack_params(model.params, model.variant)),
     }
     trace = trace.assign(profile=profile_name, variant=variant_name, fold=int(fold))
     return row, trace
@@ -137,7 +137,7 @@ def full_fit_boundary_metrics(packet: PacketData, profile_name: str, variant_nam
     return {
         "profile": profile_name,
         "variant": variant_name,
-        "fit_size": int(len(packet.y)),
+        "fit_size": len(packet.y),
         "benefit_zero_count": int(np.sum(np.isclose(model.benefit_coef, 0.0, atol=1e-10))),
         "penalty_zero_count": int(np.sum(np.isclose(model.penalty_coef, 0.0, atol=1e-10))),
         "benefit_negative_count": int(np.sum(model.benefit_coef < 0.0)),
@@ -210,7 +210,7 @@ def main() -> None:
                 "profiles": list(profiles),
                 "splits": int(args.splits),
                 "seed": int(args.seed),
-                "rows": int(len(packet.y)),
+                "rows": len(packet.y),
                 "domains": int(packet.m),
             },
             indent=2,

@@ -60,11 +60,7 @@ DEFAULT_NOISE_AUDIT_CSV = (
     / "dclm_calibrated_auxiliary_noise_floor_20260616"
     / "component_noise_reliability.csv"
 )
-DEFAULT_OUTPUT_DIR = (
-    SCRIPT_DIR
-    / "reference_outputs"
-    / "dclm_calibrated_auxiliary_anchored_regression_20260616"
-)
+DEFAULT_OUTPUT_DIR = SCRIPT_DIR / "reference_outputs" / "dclm_calibrated_auxiliary_anchored_regression_20260616"
 MACRO_COLUMN = "lm_eval/dclm_core/centered_accuracy_macro"
 PLOT_CONFIG = {"toImageButtonOptions": {"format": "png", "scale": 4}}
 RIDGE_ALPHAS = np.logspace(-2, 8, 31)
@@ -243,7 +239,9 @@ def finite_metric(y_true: np.ndarray, y_pred: np.ndarray, metric: str) -> float:
     raise ValueError(f"Unknown metric: {metric}")
 
 
-def fit_oof_predictions(model: Pipeline, x: np.ndarray, y: np.ndarray, folds: int, repeats: int, seed: int) -> list[dict[str, float]]:
+def fit_oof_predictions(
+    model: Pipeline, x: np.ndarray, y: np.ndarray, folds: int, repeats: int, seed: int
+) -> list[dict[str, float]]:
     """Fit repeated K-fold predictions and return per-repeat metrics."""
     results = []
     for repeat in range(repeats):
@@ -343,7 +341,7 @@ def summarize_results(rows: list[dict[str, Any]]) -> pd.DataFrame:
         for metric in metric_cols:
             item[f"{metric}_mean"] = float(group[metric].mean())
             item[f"{metric}_std"] = float(group[metric].std(ddof=1)) if len(group) > 1 else 0.0
-        item["repeat_count"] = int(len(group))
+        item["repeat_count"] = len(group)
         summaries.append(item)
     return pd.DataFrame(summaries)
 
@@ -432,7 +430,7 @@ def main() -> None:
         "component_summary_csv": str(args.component_summary_csv),
         "noise_audit_csv": str(args.noise_audit_csv),
         "output_dir": str(args.output_dir),
-        "signal_rows": int(len(signal)),
+        "signal_rows": len(signal),
         "folds": int(args.folds),
         "repeats": int(args.repeats),
         "feature_groups": {group.name: len(group.columns) for group in feature_groups},

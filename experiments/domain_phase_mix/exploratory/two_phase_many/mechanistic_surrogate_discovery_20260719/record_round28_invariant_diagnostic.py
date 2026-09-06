@@ -47,7 +47,9 @@ def main() -> None:
         "catastrophic_optimism_resolution": "None; unconstrained polynomials can extrapolate catastrophically.",
         "response_compression_resolution": "None; diagnostic only.",
         "scale_transfer_expectation": "No transfer claim.",
-        "cheapest_falsification": "A low OOF error paired with a remote raw optimum demonstrates nonmechanistic extrapolation.",
+        "cheapest_falsification": (
+            "A low OOF error paired with a remote raw optimum demonstrates nonmechanistic extrapolation."
+        ),
         "status": "descriptive_only_not_admissible",
         "status_evidence": (
             "Nested RMSE was 0.03895 on cosine and 0.04977 on WSD, but raw optimum distance was 0.384 and 0.214; "

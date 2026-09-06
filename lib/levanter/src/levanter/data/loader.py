@@ -449,7 +449,9 @@ class DataLoaderIterator(Iterator[Ex]):
             global_indices_for_each_batch.append(global_indices_for_this_batch)
 
         # flattened view so we can load all the data at once
-        indices_for_this_batch_of_batches: list[int] = [i for indices in global_indices_for_each_batch for i in indices]
+        indices_for_this_batch_of_batches: list[int] = [
+            i for indices in global_indices_for_each_batch for i in indices
+        ]
         individual_datums = await self.run_and_report_slowness(
             self.dl.data_store.get_batch(indices_for_this_batch_of_batches),
             f"Waiting for {len(indices_for_this_batch_of_batches)} items.",
@@ -572,7 +574,9 @@ def _stack_tree_on_host(batch_name, individual_datums):
     def _stack_leaves_on_host(*leaves):
         if is_named_array(leaves[0]):
             batch_axis = hax.Axis(batch_name, len(leaves)) if isinstance(batch_name, str) else batch_name
-            return hax.NamedArray(np.stack([np.asarray(leaf.array) for leaf in leaves]), (batch_axis,) + leaves[0].axes)
+            return hax.NamedArray(
+                np.stack([np.asarray(leaf.array) for leaf in leaves]), (batch_axis,) + leaves[0].axes
+            )
         else:
             return np.stack([np.asarray(leaf) for leaf in leaves])
 

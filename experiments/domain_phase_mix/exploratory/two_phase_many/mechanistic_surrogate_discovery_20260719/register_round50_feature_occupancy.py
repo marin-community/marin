@@ -47,7 +47,9 @@ def main() -> None:
                 r"dr_state/dtau=a r p u+h r p b-h(1-p)r_state. Unresolved broad mass is u+r_state and "
                 r"unresolved rare mass is u+b; Y=b0+A_b(u+r_state)+A_r(u+b), A_b,A_r>=0."
             ),
-            "latent_state": "Fractions of unallocated, broad-specialized, and rare-specialized feature slots, summing to one.",
+            "latent_state": (
+                "Fractions of unallocated, broad-specialized, and rare-specialized feature slots, summing to one."
+            ),
             "state_transition": (
                 "Exact linear CTMC evolution within each constant-mixture phase. Acquisition leaves the unallocated state; "
                 "overwrite transfers mass between specializations."
@@ -97,7 +99,9 @@ def main() -> None:
         "round_id": "round_50_preregistration",
         "candidate_id": "FOMF",
         "candidate_family": "Finite feature-occupancy Markov flow",
-        "hyperparameters": "Frozen clock/acquisition/overwrite/rare-scale/ridge grid with independent-acquisition ablation",
+        "hyperparameters": (
+            "Frozen clock/acquisition/overwrite/rare-scale/ridge grid with independent-acquisition ablation"
+        ),
         "adversarial_outcomes_available_before_proposal": True,
         "adversarial_outcomes_inspected_before_proposal": True,
         "observations_inspiring_mechanism": (

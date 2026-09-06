@@ -72,7 +72,7 @@ DEFAULT_OUTPUT_DIRS = {
     "delphi_3e18": SCRIPT_DIR / "reference_outputs/hpr_3e18_to_3e18_optimum_validation_panel_20260720",
 }
 DEFAULT_GCS_OUTPUT_DIRS = {
-    "300m": ("gs://marin-us-east5/pinlin_calvin_xu/data_mixture/hpr_300m_to_3e18_optimum_validation_panel_20260720"),
+    "300m": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/hpr_300m_to_3e18_optimum_validation_panel_20260720",
     "delphi_3e18": (
         "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/hpr_3e18_to_3e18_optimum_validation_panel_20260720"
     ),
@@ -1135,12 +1135,12 @@ def main() -> None:
         "deployment_hyperparameters_require_validation": True,
         "jobs_submitted": False,
         "cross_panel_aliases": int(manifest["cross_panel_alias"].notna().sum()),
-        "candidate_manifest_sha256": hashlib.sha256(
-            (args.output_dir / "candidate_manifest.csv").read_bytes()
-        ).hexdigest(),
-        "launcher_source_panel_sha256": hashlib.sha256(
-            (args.output_dir / "launcher_source_panel.csv").read_bytes()
-        ).hexdigest(),
+        "candidate_manifest_sha256": (
+            hashlib.sha256((args.output_dir / "candidate_manifest.csv").read_bytes()).hexdigest()
+        ),
+        "launcher_source_panel_sha256": (
+            hashlib.sha256((args.output_dir / "launcher_source_panel.csv").read_bytes()).hexdigest()
+        ),
     }
     (args.output_dir / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
     selected_configs = pd.DataFrame(config_rows)

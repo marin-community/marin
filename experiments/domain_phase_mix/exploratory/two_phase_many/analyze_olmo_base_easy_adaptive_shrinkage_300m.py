@@ -391,7 +391,9 @@ def write_plots(output_dir: Path, summary: pd.DataFrame, quality: pd.DataFrame) 
         width=1000,
         height=600,
     )
-    fig3.write_html(output_dir / "component_reliability_weight_histograms.html", include_plotlyjs="cdn", config=PLOT_CONFIG)
+    fig3.write_html(
+        output_dir / "component_reliability_weight_histograms.html", include_plotlyjs="cdn", config=PLOT_CONFIG
+    )
 
 
 def report_lines(summary: pd.DataFrame, quality: pd.DataFrame, validation: pd.DataFrame | None) -> list[str]:

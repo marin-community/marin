@@ -85,9 +85,17 @@ the frozen evaluator rules; Michael's panels use the frozen eight-task mean. Met
 (observed 15% quantile, minimum 5 rows), the basin-hit tolerance (one pooled repeat SD), top-k = 5,
 selection optimism (observed minus predicted at the selected row), the promotion rule, and all input
 hashes are in `protocol.json`. Repeat noise: 60M from the audit's single-phase repeats, Delphi from the
-ten-run proportional noise floor pooled with seven heldout repeat coordinates, StarCoder fixed-model
-curves from `repeat_noise.csv`; 300M has no identified same-mixture repeats for Uncheatable or Table 9
-and reports continuous regret only.
+ten-run proportional noise floor pooled with seven heldout repeat coordinates, and StarCoder fixed-model
+curves from `repeat_noise.csv`.
+
+**Erratum, 2026-09-06.** The original benchmark omitted an existing ten-seed proportional repeat panel at
+300M and incorrectly reported that no same-mixture repeats were identified. The ten runs have complete
+Uncheatable and 51-component Table-9 measurements; their aggregate repeat SDs are `0.001188` and `0.003506`
+BPB, respectively. The harness now loads
+`reference_outputs/one_phase_swarm_scores_export_300m_20260630/proportional_reference_uncheatable_table9_scores_300m.csv`.
+The archived raw predictions, RMSE, rank correlations, and continuous regrets do not depend on this noise
+estimate. Archived 300M noise-normalized metrics and basin-hit tolerances predate the correction and must be
+rematerialized before use.
 
 ## 3. Solvers and throughput
 
@@ -474,8 +482,9 @@ Every choice made after seeing results is listed here so a reader can discount i
   Observatory's own choice), with its removal as an ablation.
 - Michael's cluster ids `cXX` were treated as declared domain families with an unordered quality
   index; GRP quality discounts are therefore inert there.
-- Repeat noise for 300M Uncheatable and Table 9 is not identified, so 300M reports continuous regret
-  only; the Delphi heldout tolerance pools ten proportional-noise runs with seven repeated coordinates.
+- The original run failed to load the available ten-seed 300M proportional repeat panel. See the Section 2
+  erratum; do not use its archived 300M noise-normalized metrics or basin-hit classifications until they are
+  rematerialized. The Delphi heldout tolerance pools ten proportional-noise runs with seven repeated coordinates.
 - The successor was designed after the Codex review but before a DeepSeek review, which could not run
   (account quota).
 

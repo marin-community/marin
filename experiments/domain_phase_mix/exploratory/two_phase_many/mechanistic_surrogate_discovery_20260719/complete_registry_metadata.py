@@ -40,7 +40,7 @@ LATENT_STATE_BACKFILLS = {
     "prior_N": (
         "The unresolved error masses \\(z_i\\ge 0\\) from model M, driven by competition-adjusted effective evidence."
     ),
-    "prior_R": ("Foundation competence \\(s_F(t)\\in[0,1]\\) and the specialist effective-exposure integrals it gates."),
+    "prior_R": "Foundation competence \\(s_F(t)\\in[0,1]\\) and the specialist effective-exposure integrals it gates.",
     "prior_U": (
         "Per-bucket retained unique-coverage fraction \\(u_i\\in[0,1]\\); its complement is unseen or forgotten mass."
     ),
@@ -75,7 +75,7 @@ STATE_TRANSITION_BACKFILLS = {
         "Static aggregation of bucket unique coverage into family coverage "
         "\\(c_f=\\sum_{i\\in f}p_iu_i/\\sum_{i\\in f}p_i\\); no recurrent transition."
     ),
-    "prior_D": ("For each phase, \\(z_k^{(t+1)}=z_k^{(t)}\\exp[-\\sum_iq_{ki}e_i^{(t)}]\\exp[g_k\\Delta_t]\\)."),
+    "prior_D": "For each phase, \\(z_k^{(t+1)}=z_k^{(t)}\\exp[-\\sum_iq_{ki}e_i^{(t)}]\\exp[g_k\\Delta_t]\\).",
     "prior_E": (
         "Static dose-response map \\(s_i=1-\\exp[-(e_i/\\kappa_f)^{k_f}]\\) with literal "
         "duplicate mass \\(r_i=e_i-(1-e^{-e_i})\\); no recurrent transition."

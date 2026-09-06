@@ -78,7 +78,9 @@ def main() -> None:
                 "du/dt=-k_g[(1-p)+rho p]u^(1+zeta); dv/dt=-k_s p(1-u)^nu v^(1+zeta); "
                 "R_i=(E_i-1)_+; Y=b+A_g u_T+A_s v_T+sum_i H_iR_i. zeta=0 is FSCR."
             ),
-            "latent_state": "Positive foundation error u, specialist error v, cumulative exposure E, and literal replay R.",
+            "latent_state": (
+                "Positive foundation error u, specialist error v, cumulative exposure E, and literal replay R."
+            ),
             "state_transition": (
                 "Analytic power-law error decay per phase, with the specialist hazard integrating current foundation "
                 "competence along the phase trajectory."

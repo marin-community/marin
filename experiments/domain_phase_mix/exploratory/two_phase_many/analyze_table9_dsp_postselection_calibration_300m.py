@@ -57,9 +57,7 @@ DEFAULT_AGGREGATE_SWEEP = (
     / "effective_exposure_table9_macro_kl_sweep_summary.csv"
 )
 DEFAULT_MATERIALIZED_SUMMARY = (
-    REFERENCE_OUTPUTS
-    / "table9_dsp_validation_mixtures_300m_20260628"
-    / "materialized_mixture_summary.csv"
+    REFERENCE_OUTPUTS / "table9_dsp_validation_mixtures_300m_20260628" / "materialized_mixture_summary.csv"
 )
 
 PLOT_CONFIG = {"toImageButtonOptions": {"format": "png", "scale": 4}}
@@ -282,14 +280,19 @@ def baseline_selector_summary(frame: pd.DataFrame) -> pd.DataFrame:
         "nearest_observed_value": frame["nearest_observed_value"].to_numpy(dtype=float),
         "tv_only": frame["mean_phase_tv_to_proportional"].to_numpy(dtype=float),
     }
-    for subset_name, subset in [("all_dsp", frame), *[(family, group) for family, group in frame.groupby("model_family")]]:
+    for subset_name, subset in [
+        ("all_dsp", frame),
+        *[(family, group) for family, group in frame.groupby("model_family")],
+    ]:
         for selector_name, score in selectors.items():
             subset_score = score[subset.index.to_numpy(dtype=int)]
             rows.append({"subset": subset_name, "selector": selector_name, **selected_regret(subset, subset_score)})
     return pd.DataFrame(rows)
 
 
-def make_feature_pipeline(numeric_features: list[str], categorical_features: list[str], *, ridge_alpha: float) -> Pipeline:
+def make_feature_pipeline(
+    numeric_features: list[str], categorical_features: list[str], *, ridge_alpha: float
+) -> Pipeline:
     transformer = ColumnTransformer(
         [
             ("num", StandardScaler(), numeric_features),
@@ -351,9 +354,14 @@ def calibration_model_summary(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.Dat
 def pessimism_sweep(frame: pd.DataFrame) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
     alpha_grid = np.round(np.arange(0.0, 1.501, 0.025), 3)
-    for subset_name, subset in [("all_dsp", frame), *[(family, group) for family, group in frame.groupby("model_family")]]:
+    for subset_name, subset in [
+        ("all_dsp", frame),
+        *[(family, group) for family, group in frame.groupby("model_family")],
+    ]:
         for alpha in alpha_grid:
-            score = subset["predicted_objective"].to_numpy(dtype=float) + alpha * subset["nearest_gap"].to_numpy(dtype=float)
+            score = subset["predicted_objective"].to_numpy(dtype=float) + alpha * subset["nearest_gap"].to_numpy(
+                dtype=float
+            )
             rows.append(
                 {
                     "subset": subset_name,
@@ -392,7 +400,7 @@ def trust_region_gate_sweep(frame: pd.DataFrame) -> pd.DataFrame:
                         "column": column,
                         "direction": direction,
                         "threshold": float(threshold),
-                        "n_eligible": int(len(eligible)),
+                        "n_eligible": len(eligible),
                         "selector": "min_predicted_objective_inside_gate",
                         **selected_regret(eligible, eligible["predicted_objective"].to_numpy(dtype=float)),
                     }
@@ -425,7 +433,9 @@ def write_residual_plot(path: Path, frame: pd.DataFrame) -> None:
                     name=family,
                     legendgroup=family,
                     showlegend=col == 1,
-                    customdata=np.stack([group["eval_run_name"], group["observed_bpb"], group["predicted_objective"]], axis=1),
+                    customdata=np.stack(
+                        [group["eval_run_name"], group["observed_bpb"], group["predicted_objective"]], axis=1
+                    ),
                     hovertemplate=(
                         "%{customdata[0]}<br>x=%{x:.4f}<br>optimism=%{y:.4f}"
                         "<br>observed=%{customdata[1]:.6f}<br>predicted=%{customdata[2]:.6f}<extra></extra>"
@@ -580,7 +590,9 @@ def main() -> None:
     alpha_sweep.to_csv(args.output_dir / "nearest_observed_pessimism_sweep.csv", index=False)
     gate_sweep.to_csv(args.output_dir / "trust_region_gate_sweep.csv", index=False)
     write_residual_plot(args.output_dir / "validated_residuals_vs_trust_region.html", validated)
-    write_observed_predicted_plot(args.output_dir / "validated_observed_vs_calibrated.html", validated, calibration_predictions)
+    write_observed_predicted_plot(
+        args.output_dir / "validated_observed_vs_calibrated.html", validated, calibration_predictions
+    )
     write_pessimism_plot(args.output_dir / "nearest_observed_pessimism_selector_sweep.html", alpha_sweep)
     write_gate_plot(args.output_dir / "trust_region_gate_selector_sweep.html", gate_sweep)
 
@@ -609,7 +621,9 @@ def main() -> None:
     print("\nCalibration summary:")
     print(calibration_summary.to_string(index=False))
     print("\nBest hard trust-region gates by subset/gate:")
-    best_gate = gate_sweep.sort_values(["subset", "gate", "observed_regret", "n_eligible"], ascending=[True, True, True, False])
+    best_gate = gate_sweep.sort_values(
+        ["subset", "gate", "observed_regret", "n_eligible"], ascending=[True, True, True, False]
+    )
     print(best_gate.groupby(["subset", "gate"], as_index=False).head(1).to_string(index=False))
 
 

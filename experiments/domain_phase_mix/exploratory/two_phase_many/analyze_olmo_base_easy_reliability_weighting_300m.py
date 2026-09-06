@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -56,10 +55,7 @@ from experiments.domain_phase_mix.exploratory.two_phase_many.standalone_code imp
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_FIT_PANEL = (
-    SCRIPT_DIR
-    / "reference_outputs"
-    / "olmo_base_easy_paper_faithful_olmix_300m_20260625"
-    / "fit_panel_table9_macro.csv"
+    SCRIPT_DIR / "reference_outputs" / "olmo_base_easy_paper_faithful_olmix_300m_20260625" / "fit_panel_table9_macro.csv"
 )
 DEFAULT_PVALUE_CELLS = (
     SCRIPT_DIR
@@ -245,8 +241,8 @@ def component_reliability_table(cells: pd.DataFrame, components: list[str]) -> t
         rows.append(
             {
                 "component": component,
-                "n_deletions": int(len(view)),
-                "n_sources": int(len(component_crosswalk)),
+                "n_deletions": len(view),
+                "n_sources": len(component_crosswalk),
                 "mean_predictive_sd": float(np.sqrt(np.mean(pred_sd * pred_sd))),
                 "inverse_variance": float(1.0 / max(float(np.mean(pred_sd * pred_sd)), 1e-18)),
                 "min_p_harm": float(np.min(p_harm)),
@@ -345,8 +341,8 @@ def summarize_method(
         statistic=statistic,
         lambda_value=float(lambda_value),
         linear_reg=float(linear_reg),
-        n_rows=int(len(panel)),
-        n_components=int(len(weights)),
+        n_rows=len(panel),
+        n_components=len(weights),
         min_component_weight=float(np.min(weights)),
         max_component_weight=float(np.max(weights)),
         q05_component_weight=float(np.quantile(weights, 0.05)),
@@ -368,7 +364,9 @@ def summarize_method(
         headline_predicted_best_predicted_value=float(oof_prediction[predicted_best_idx]),
         headline_best_observed_run_name=str(panel.iloc[best_idx]["run_name"]),
         headline_best_observed_value=float(headline[best_idx]),
-        headline_selection_score=float(headline_oof["rmse"] + 0.5 * max(float(headline_oof["lower_tail_optimism"]), 0.0)),
+        headline_selection_score=float(
+            headline_oof["rmse"] + 0.5 * max(float(headline_oof["lower_tail_optimism"]), 0.0)
+        ),
     )
 
 
@@ -389,7 +387,11 @@ def write_weight_plots(output_dir: Path, reliability: pd.DataFrame) -> None:
             mode="markers+text",
             text=reliability["component"].str.replace("olmo_base_eval/easy_bpb/", "", regex=False),
             textposition="top center",
-            marker={"color": reliability["mean_predictive_sd"], "colorscale": "RdYlGn_r", "colorbar": {"title": "noise sd"}},
+            marker={
+                "color": reliability["mean_predictive_sd"],
+                "colorscale": "RdYlGn_r",
+                "colorbar": {"title": "noise sd"},
+            },
             hovertemplate="%{text}<br>harm=%{x:.3f}<br>two-sided=%{y:.3f}<extra></extra>",
         ),
         row=1,
@@ -463,12 +465,16 @@ def write_method_plots(output_dir: Path, summary: pd.DataFrame, predictions: pd.
             col=2,
         )
         fig.add_trace(
-            go.Scatter(x=x, y=group["headline_fold_mean_regret_at_1"], mode="lines+markers", name=method, showlegend=False),
+            go.Scatter(
+                x=x, y=group["headline_fold_mean_regret_at_1"], mode="lines+markers", name=method, showlegend=False
+            ),
             row=2,
             col=1,
         )
         fig.add_trace(
-            go.Scatter(x=x, y=group["headline_lower_tail_optimism"], mode="lines+markers", name=method, showlegend=False),
+            go.Scatter(
+                x=x, y=group["headline_lower_tail_optimism"], mode="lines+markers", name=method, showlegend=False
+            ),
             row=2,
             col=2,
         )
@@ -491,7 +497,9 @@ def write_method_plots(output_dir: Path, summary: pd.DataFrame, predictions: pd.
             mode="markers",
             text=best_predictions["run_name"],
             marker={
-                "color": best_predictions["panel_source"].map({"qsplit_signal": "#335c81", "domain_deletion": "#c75035"}),
+                "color": (
+                    best_predictions["panel_source"].map({"qsplit_signal": "#335c81", "domain_deletion": "#c75035"})
+                ),
                 "size": 9,
                 "line": {"color": "white", "width": 0.7},
             },
@@ -500,7 +508,9 @@ def write_method_plots(output_dir: Path, summary: pd.DataFrame, predictions: pd.
     )
     lo = float(min(best_predictions[COMPONENT_TARGET].min(), best_predictions["oof_prediction"].min()))
     hi = float(max(best_predictions[COMPONENT_TARGET].max(), best_predictions["oof_prediction"].max()))
-    fig2.add_trace(go.Scatter(x=[lo, hi], y=[lo, hi], mode="lines", line={"dash": "dash", "color": "#555"}, showlegend=False))
+    fig2.add_trace(
+        go.Scatter(x=[lo, hi], y=[lo, hi], mode="lines", line={"dash": "dash", "color": "#555"}, showlegend=False)
+    )
     fig2.update_layout(
         title=f"Best reliability variant: {best['method']} OOF prediction vs unweighted macro",
         xaxis_title="Observed unweighted Table-9 macro BPB",

@@ -42,8 +42,12 @@ def main() -> None:
             "Y=b0+A(z_T-z_eval)^2, A>=0. The exact no-bistability ablation is a=0."
         ),
         "latent_state": "One dimensionless representation coordinate z with broad and specialist basins.",
-        "state_transition": "Autonomous gradient flow in a data-tilted quartic potential, continuous across phase boundaries.",
-        "response_link": "One nonnegative amplitude on squared terminal distance to a fixed evaluation representation, plus intercept.",
+        "state_transition": (
+            "Autonomous gradient flow in a data-tilted quartic potential, continuous across phase boundaries."
+        ),
+        "response_link": (
+            "One nonnegative amplitude on squared terminal distance to a fixed evaluation representation, plus intercept."
+        ),
         "additional_degrees_of_freedom": (
             "Barrier strength, data tilt, transition speed, evaluation coordinate, one response amplitude, intercept, and ridge."
         ),
@@ -95,7 +99,9 @@ def main() -> None:
         "novelty_class": "Nonconvex bistable representation state with hysteresis",
         "evaluation_status": "frozen before two-stage StarCoder evaluation",
         "evidence_path": "round31_bistable_representation_starcoder/report.md",
-        "notes": "Derived independently of Round 30 results; no adversarial outcomes will be read during the StarCoder gate.",
+        "notes": (
+            "Derived independently of Round 30 results; no adversarial outcomes will be read during the StarCoder gate."
+        ),
     }
     identity = ["round_id", "candidate_id", "evaluation_status"]
     existing = set(map(tuple, ledger[identity].itertuples(index=False, name=None)))

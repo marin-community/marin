@@ -224,7 +224,9 @@ def active_rows() -> list[dict[str, object]]:
                 "Y=b-sum_f A_f[(1-omega)f_f+omega s_f]+physical replay."
             ),
             "latent_state": "Per-family fast competence f_f and consolidated competence s_f.",
-            "state_transition": "Exact two-phase integration of the coupled acquisition, forgetting, and consolidation ODE.",
+            "state_transition": (
+                "Exact two-phase integration of the coupled acquisition, forgetting, and consolidation ODE."
+            ),
             "response_link": "Nonnegative family capability benefit plus physical repetition harm.",
             "additional_degrees_of_freedom": (
                 "Global dimensionless q,h,k,omega selected using paired CV, plus nonnegative family response amplitudes."
@@ -282,7 +284,9 @@ def append_ledger(output_dir: Path) -> None:
                 "novelty_class": candidate["materially_new_mechanism"],
                 "evaluation_status": "preregistered; adversarial evaluation forbidden until batch freeze",
                 "evidence_path": "approach_registry.csv",
-                "notes": "All exposed adversarial outcomes are development evidence; any survivor requires a new sealed panel.",
+                "notes": (
+                    "All exposed adversarial outcomes are development evidence; any survivor requires a new sealed panel."
+                ),
             }
         )
     combined = pd.concat([ledger, pd.DataFrame(additions)], ignore_index=True, sort=False)

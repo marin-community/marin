@@ -389,7 +389,7 @@ def prediction_records(
                 "phase_config": phase_config.key,
                 "observed_two_phase": float(panel.two_phase_target[index]),
                 "predicted_two_phase": float(prediction.combined[index]),
-                "observed_one_phase": (float(panel.one_phase_target[index]) if panel.paired_mask[index] else math.nan),
+                "observed_one_phase": float(panel.one_phase_target[index]) if panel.paired_mask[index] else math.nan,
                 "predicted_aggregate": float(prediction.aggregate[index]),
                 "observed_delta": float(observed_delta[index]) if panel.paired_mask[index] else math.nan,
                 "predicted_delta": float(prediction.delta[index]),

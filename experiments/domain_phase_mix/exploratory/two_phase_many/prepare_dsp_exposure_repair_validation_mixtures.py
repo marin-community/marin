@@ -27,7 +27,6 @@ from pathlib import Path
 
 import pandas as pd
 import plotly.io as pio
-
 from plot_dsp_uncheatable_exposure_repair import (
     original_frame,
     plot_repair,
@@ -35,17 +34,16 @@ from plot_dsp_uncheatable_exposure_repair import (
 )
 from plot_one_vs_two_phase_best_mixtures import (
     COMPARISONS,
-    OUTPUT_DIR as BEST_MIXTURE_OUTPUT_DIR,
     PHASE_0_FRACTION,
     PHASE_1_FRACTION,
     PLOT_CONFIG,
     comparison_frames,
 )
-
-
-OUTPUT_DIR = (
-    BEST_MIXTURE_OUTPUT_DIR.parent / "dsp_exposure_repair_validation_mixtures_20260702"
+from plot_one_vs_two_phase_best_mixtures import (
+    OUTPUT_DIR as BEST_MIXTURE_OUTPUT_DIR,
 )
+
+OUTPUT_DIR = BEST_MIXTURE_OUTPUT_DIR.parent / "dsp_exposure_repair_validation_mixtures_20260702"
 MIXTURE_DIR = OUTPUT_DIR / "mixtures"
 
 TARGETED_REPAIR_DOMAINS = {
@@ -136,8 +134,7 @@ def launch_ready_frame(frame: pd.DataFrame) -> pd.DataFrame:
 
     p = output["aggregate_weight"] / output["simulated_epochs"]
     output["aggregate_weight"] = (
-        PHASE_0_FRACTION * output["phase_0_weight"]
-        + PHASE_1_FRACTION * output["phase_1_weight"]
+        PHASE_0_FRACTION * output["phase_0_weight"] + PHASE_1_FRACTION * output["phase_1_weight"]
     )
     output["simulated_epochs"] = output["aggregate_weight"] / p
     output["phase_0_epoch_multiplier"] = output["phase_0_weight"] / p
@@ -192,9 +189,7 @@ def objective_repair(task: str) -> tuple[list[CandidateSummary], list[tuple[str,
         merged["simulated_epochs_single"] - merged["simulated_epochs_two_phase"]
     )
     targeted_domains = TARGETED_REPAIR_DOMAINS[task]
-    all_deficit_domains = merged.loc[
-        merged["exposure_deficit_single_minus_two"] > 1e-9, "domain"
-    ].tolist()
+    all_deficit_domains = merged.loc[merged["exposure_deficit_single_minus_two"] > 1e-9, "domain"].tolist()
     objective_key = OBJECTIVE_TO_KEY[task]
     repairs = [
         (
@@ -230,10 +225,7 @@ def objective_repair(task: str) -> tuple[list[CandidateSummary], list[tuple[str,
         ]
     ].to_csv(deficit_path, index=False)
 
-    order_domains = (
-        merged.sort_values("exposure_deficit_single_minus_two", ascending=True)["domain"]
-        .tolist()
-    )
+    order_domains = merged.sort_values("exposure_deficit_single_minus_two", ascending=True)["domain"].tolist()
     for mixture_id, repair_type, selected_domains, label in repairs:
         repaired = repair_aggregate_exposure(
             merged,

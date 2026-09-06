@@ -187,7 +187,9 @@ def update_status(status: str, evidence: str, output_dir: Path) -> None:
         "round_id": "round_42_batch_composition_starcoder_decision",
         "candidate_id": "BCNSF",
         "candidate_family": "Batch-composition Newton-Schulz flow",
-        "hyperparameters": "Finite-NS geometries independently selected in round 41; exact B=128/N=2048 law; l2 {0,0.1,1}; 31x31 raw-optimum grid",
+        "hyperparameters": (
+            "Finite-NS geometries independently selected in round 41; exact B=128/N=2048 law; l2 {0,0.1,1}; 31x31 raw-optimum grid"
+        ),
         "adversarial_outcomes_available_before_proposal": True,
         "adversarial_outcomes_inspected_before_proposal": True,
         "observations_inspiring_mechanism": "See round-41 portfolio preregistration.",
@@ -237,27 +239,29 @@ def main() -> None:
                     "surface": panel.name,
                     "composition_rule": rule,
                     "integration_error_64_vs_192": float(np.max(np.abs(coarse - fine))),
-                    "trajectory_separation_from_mean": float(
-                        np.mean(
-                            np.linalg.norm(
-                                candidate.terminal_state(
-                                    panel.weights,
-                                    clock.optimizer_phase0_fraction(panel),
-                                    all_configs[1],
-                                    steps_per_unit=192,
+                    "trajectory_separation_from_mean": (
+                        float(
+                            np.mean(
+                                np.linalg.norm(
+                                    candidate.terminal_state(
+                                        panel.weights,
+                                        clock.optimizer_phase0_fraction(panel),
+                                        all_configs[1],
+                                        steps_per_unit=192,
+                                    )
+                                    - candidate.terminal_state(
+                                        panel.weights,
+                                        clock.optimizer_phase0_fraction(panel),
+                                        all_configs[0],
+                                        steps_per_unit=192,
+                                    ),
+                                    axis=(1, 2),
                                 )
-                                - candidate.terminal_state(
-                                    panel.weights,
-                                    clock.optimizer_phase0_fraction(panel),
-                                    all_configs[0],
-                                    steps_per_unit=192,
-                                ),
-                                axis=(1, 2),
                             )
                         )
-                    )
-                    if rule == "hypergeometric"
-                    else np.nan,
+                        if rule == "hypergeometric"
+                        else np.nan
+                    ),
                 }
             )
     summary = pd.concat(summaries, ignore_index=True)

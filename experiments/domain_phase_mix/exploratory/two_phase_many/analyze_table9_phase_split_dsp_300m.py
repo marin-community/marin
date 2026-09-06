@@ -27,7 +27,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from scipy.optimize import minimize
-from scipy.stats import pearsonr, spearmanr
+from scipy.stats import spearmanr
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(REPO_ROOT) not in sys.path:
@@ -190,7 +190,9 @@ def fit_variant_with_l2(
         dsp.LINEAR_REG = original_linear_reg
 
 
-def fixed_param_oof(packet: dsp.PacketData, model: dsp.FittedDSPModel, folds: list[tuple[np.ndarray, np.ndarray]]) -> np.ndarray:
+def fixed_param_oof(
+    packet: dsp.PacketData, model: dsp.FittedDSPModel, folds: list[tuple[np.ndarray, np.ndarray]]
+) -> np.ndarray:
     out = np.zeros_like(packet.y, dtype=float)
     for train_idx, test_idx in folds:
         fold_model = dsp.fit_linear_head(
@@ -317,7 +319,7 @@ def summarize_variant(
         variant_key=variant_key,
         variant_name=full_model.variant.name,
         linear_reg=float(linear_reg),
-        n_rows=int(len(y)),
+        n_rows=len(y),
         total_param_count=int(full_model.total_param_count),
         train_rmse=train_rmse,
         train_spearman=train_spearman,
@@ -369,7 +371,9 @@ def write_scatter(predictions: pd.DataFrame, output_path: Path) -> None:
         )
     lo = min(float(predictions["actual"].min()), float(predictions["nested_oof_prediction"].min()))
     hi = max(float(predictions["actual"].max()), float(predictions["nested_oof_prediction"].max()))
-    fig.add_trace(go.Scatter(x=[lo, hi], y=[lo, hi], mode="lines", name="y=x", line={"dash": "dash", "color": "#64748b"}))
+    fig.add_trace(
+        go.Scatter(x=[lo, hi], y=[lo, hi], mode="lines", name="y=x", line={"dash": "dash", "color": "#64748b"})
+    )
     fig.update_layout(
         title="Table-9 DSP phase variants: nested OOF prediction vs actual",
         xaxis_title="Observed Table-9 macro BPB",
@@ -669,7 +673,7 @@ def main() -> None:
         "variants": variants,
         "linear_regs": linear_regs,
         "kl_regs": kl_regs,
-        "n_rows": int(len(panel)),
+        "n_rows": len(panel),
         "n_qsplit_signal_rows": int(panel["panel_source"].eq("qsplit_signal").sum()),
         "n_domain_deletion_rows": int(panel["panel_source"].eq("domain_deletion").sum()),
         "best_by_nested_regret_rmse": summary_frame.iloc[0].to_dict(),

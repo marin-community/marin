@@ -35,11 +35,15 @@ def main() -> None:
         "hyperparameters": "20,000 paired policy bootstraps; seed=20260719; no fitted response",
         "adversarial_outcomes_available_before_proposal": True,
         "adversarial_outcomes_inspected_before_proposal": True,
-        "observations_inspiring_mechanism": "Substantial phase-effect correlation across targets could support a shared latent transition, subject to sign and scale tests.",
+        "observations_inspiring_mechanism": (
+            "Substantial phase-effect correlation across targets could support a shared latent transition, subject to sign and scale tests."
+        ),
         "novelty_class": "shared-state identification diagnostic; does not reopen rejected joint latent transport",
         "evaluation_status": "completed_scalar_shared_state_falsification_no_promotion",
         "evidence_path": "round71_cross_target_phase_state/report.md",
-        "notes": "Targets share phase signal but differ in sign for about one fifth of policies and have significantly different scale attenuation ratios.",
+        "notes": (
+            "Targets share phase signal but differ in sign for about one fifth of policies and have significantly different scale attenuation ratios."
+        ),
     }
     updated = pd.concat([ledger, pd.DataFrame([row], columns=ledger.columns)], ignore_index=True)
     candidate_rows = updated["candidate_id"].astype(str).str.strip().ne("")

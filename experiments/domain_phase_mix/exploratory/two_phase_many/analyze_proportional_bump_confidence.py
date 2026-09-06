@@ -36,17 +36,17 @@ from experiments.domain_phase_mix.exploratory.two_phase_many.compare_ppert_bumps
     BUMP_EPSILON,
     CURATED_METRICS,
     build_bump_effects,
-    is_metric_column,
     load_ppert_matrix,
     lower_is_better,
     read_csv,
     utility,
 )
 
-
 SCRIPT_DIR = Path(__file__).resolve().parent
 OUTPUT_DIR = SCRIPT_DIR / "reference_outputs" / "proportional_bump_actuation_direction_predictability_20260616"
-NOISE_MATRIX = SCRIPT_DIR / "metric_registry" / "raw_metric_matrix_300m" / "raw_metric_matrix_300m_with_proportional_noise.csv"
+NOISE_MATRIX = (
+    SCRIPT_DIR / "metric_registry" / "raw_metric_matrix_300m" / "raw_metric_matrix_300m_with_proportional_noise.csv"
+)
 LOG_TILT_CONFIDENCE = (
     SCRIPT_DIR
     / "reference_outputs"
@@ -214,9 +214,9 @@ def compute_metric_row(
         "lower_is_better": lower_is_better(metric),
         "reportable_metric": is_reportable_metric(metric),
         "curated_metric": metric in CURATED_METRICS,
-        "n_domain_bumps": int(len(delta)),
+        "n_domain_bumps": len(delta),
         "bump_wald_chi2_statistic": wald_statistic,
-        "bump_wald_chi2_df": int(len(delta)),
+        "bump_wald_chi2_df": len(delta),
         "bump_chi2_p_value": float(chi2.sf(wald_statistic, len(delta))),
         "bump_bootstrap_p_value": bootstrap_p_value(
             observed_statistic=wald_statistic,
@@ -225,7 +225,7 @@ def compute_metric_row(
             n=len(delta),
             rng=rng,
         ),
-        "proportional_noise_n": int(len(noise)),
+        "proportional_noise_n": len(noise),
         "proportional_noise_sd": sigma,
         "proportional_signal_sd": signal_sd,
         "proportional_signal_to_noise": signal_sd / sigma if sigma > 0.0 else math.nan,
@@ -365,7 +365,9 @@ def plot_outputs(summary: pd.DataFrame) -> None:
 def write_report(summary: pd.DataFrame) -> None:
     reportable = summary[summary["reportable_metric"]]
     curated = summary[summary["curated_metric"]]
-    bucket_counts = reportable["direction_predictability_bucket"].value_counts().rename_axis("bucket").reset_index(name="n")
+    bucket_counts = (
+        reportable["direction_predictability_bucket"].value_counts().rename_axis("bucket").reset_index(name="n")
+    )
     top = reportable.sort_values(["bump_bh_q_value", "bump_rms_over_independent_contrast_noise_sd"]).head(20)
     lines = [
         "# +5pp Bump vs Proportional Actuation Confidence and Direction Predictability Diagnostic",
@@ -440,14 +442,15 @@ def main() -> None:
     reportable = summary[summary["reportable_metric"]]
     result = {
         "output_dir": str(OUTPUT_DIR),
-        "metrics_tested": int(len(summary)),
-        "reportable_metrics_tested": int(len(reportable)),
+        "metrics_tested": len(summary),
+        "reportable_metrics_tested": len(reportable),
         "reportable_bh_q_le_0p05": int((reportable["bump_bh_q_value"] <= 0.05).sum()),
         "reportable_bump_rms_ge_1_noise_contrast_sd": int(
             (reportable["bump_rms_over_independent_contrast_noise_sd"] >= 1.0).sum()
         ),
         "reportable_direction_predictability_buckets": {
-            str(key): int(value) for key, value in reportable["direction_predictability_bucket"].value_counts().to_dict().items()
+            str(key): int(value)
+            for key, value in reportable["direction_predictability_bucket"].value_counts().to_dict().items()
         },
         "median_reportable_bump_rms_over_noise_contrast": float(
             reportable["bump_rms_over_independent_contrast_noise_sd"].median()

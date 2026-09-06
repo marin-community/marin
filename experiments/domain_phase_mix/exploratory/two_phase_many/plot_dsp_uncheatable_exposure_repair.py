@@ -17,27 +17,24 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from pathlib import Path
 
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.io as pio
-from plotly.subplots import make_subplots
-
 from plot_one_vs_two_phase_best_mixtures import (
     COMPARISONS,
-    OUTPUT_DIR as BEST_MIXTURE_OUTPUT_DIR,
     PHASE_0_FRACTION,
     PHASE_1_FRACTION,
     PLOT_CONFIG,
     clean_domain,
     comparison_frames,
 )
-
-
-OUTPUT_DIR = (
-    BEST_MIXTURE_OUTPUT_DIR.parent / "dsp_uncheatable_exposure_repair_20260702"
+from plot_one_vs_two_phase_best_mixtures import (
+    OUTPUT_DIR as BEST_MIXTURE_OUTPUT_DIR,
 )
+from plotly.subplots import make_subplots
+
+OUTPUT_DIR = BEST_MIXTURE_OUTPUT_DIR.parent / "dsp_uncheatable_exposure_repair_20260702"
 PRIMARY_REPAIR_DOMAINS = [
     "dolmino_synth_code",
     "dolma3_wikipedia",
@@ -73,9 +70,7 @@ def proportional_mass(merged: pd.DataFrame) -> pd.Series:
     return inferred
 
 
-def reconstruct_with_aggregate(
-    merged: pd.DataFrame, aggregate_weight: pd.Series
-) -> tuple[pd.DataFrame, float]:
+def reconstruct_with_aggregate(merged: pd.DataFrame, aggregate_weight: pd.Series) -> tuple[pd.DataFrame, float]:
     """Reconstruct phase weights from aggregate mass and original phase contrast."""
 
     contrast = merged["phase_0_weight_two_phase"] - merged["phase_1_weight_two_phase"]
@@ -90,12 +85,7 @@ def reconstruct_with_aggregate(
     if negative.any():
         scale = min(
             scale,
-            float(
-                (
-                    aggregate_weight[negative]
-                    / (PHASE_1_FRACTION * (-contrast[negative]))
-                ).min()
-            ),
+            float((aggregate_weight[negative] / (PHASE_1_FRACTION * (-contrast[negative]))).min()),
         )
     scale = max(0.0, min(1.0, scale))
     repaired = merged[["domain", "domain_short", "domain_group"]].copy()
@@ -217,9 +207,7 @@ def plot_repair(
     mixtures = list(dict.fromkeys(long_df["mixture"].tolist()))
     for col, (phase, value_column, x_title) in enumerate(panels, start=1):
         for mixture in mixtures:
-            data = long_df[
-                (long_df["phase"] == phase) & (long_df["mixture"] == mixture)
-            ].copy()
+            data = long_df[(long_df["phase"] == phase) & (long_df["mixture"] == mixture)].copy()
             data["domain_short"] = data["domain"].map(domain_to_y)
             data = data.set_index("domain").loc[order_domains].reset_index()
             fig.add_trace(
@@ -292,9 +280,7 @@ def main() -> None:
         ]
         .copy()
     )
-    all_deficit_domains = merged.loc[
-        merged["exposure_deficit_single_minus_two"] > 1e-9, "domain"
-    ].tolist()
+    all_deficit_domains = merged.loc[merged["exposure_deficit_single_minus_two"] > 1e-9, "domain"].tolist()
     top3 = repair_aggregate_exposure(
         merged,
         PRIMARY_REPAIR_DOMAINS,
@@ -319,10 +305,7 @@ def main() -> None:
         (all_deficits.name, all_deficits.label, all_deficits.frame),
         ("single_phase_reference", "single-phase DSP reference", single_reference),
     ]
-    order_domains = (
-        merged.sort_values("exposure_deficit_single_minus_two", ascending=True)["domain"]
-        .tolist()
-    )
+    order_domains = merged.sort_values("exposure_deficit_single_minus_two", ascending=True)["domain"].tolist()
     top3_long = long_frame(named_top3)
     all_long = long_frame(named_all)
     top3_long.to_csv(OUTPUT_DIR / "dsp_uncheatable_top3_exposure_repair_long.csv", index=False)

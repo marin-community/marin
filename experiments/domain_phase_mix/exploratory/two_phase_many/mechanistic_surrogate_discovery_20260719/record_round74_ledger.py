@@ -35,11 +35,15 @@ def main() -> None:
         "hyperparameters": "FWER=0.05; two superiority targets; Holm first threshold=0.025; effect=0.005 BPB",
         "adversarial_outcomes_available_before_proposal": True,
         "adversarial_outcomes_inspected_before_proposal": True,
-        "observations_inspiring_mechanism": "The inactive confirmation acceptance rule allowed a superiority claim on either of two targets without explicit multiplicity control.",
+        "observations_inspiring_mechanism": (
+            "The inactive confirmation acceptance rule allowed a superiority claim on either of two targets without explicit multiplicity control."
+        ),
         "novelty_class": "preregistration multiplicity and power audit; no candidate mechanism",
         "evaluation_status": "completed_inactive_design_correction_no_promotion",
         "evidence_path": "round74_confirmation_multiplicity/report.md",
-        "notes": "Holm correction requires 7 Table-9 repeats at point noise or 15 at its upper-95% nuisance bound; inactive design uses 15.",
+        "notes": (
+            "Holm correction requires 7 Table-9 repeats at point noise or 15 at its upper-95% nuisance bound; inactive design uses 15."
+        ),
     }
     updated = pd.concat([ledger, pd.DataFrame([row], columns=ledger.columns)], ignore_index=True)
     candidate_rows = updated["candidate_id"].astype(str).str.strip().ne("")

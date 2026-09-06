@@ -35,11 +35,15 @@ def main() -> None:
         "hyperparameters": "gamma=(0.8,0.2); simplex safety=0.90; direction seed=20260719; six decisive repeats",
         "adversarial_outcomes_available_before_proposal": True,
         "adversarial_outcomes_inspected_before_proposal": True,
-        "observations_inspiring_mechanism": "The inactive confirmation plan required an exact contrast-ray and family-direction algorithm to be independently reproducible.",
+        "observations_inspiring_mechanism": (
+            "The inactive confirmation plan required an exact contrast-ray and family-direction algorithm to be independently reproducible."
+        ),
         "novelty_class": "preregistration specification audit; no candidate mechanism",
         "evaluation_status": "completed_inactive_design_validation_no_promotion",
         "evidence_path": "round72_future_confirmation_design/report.md",
-        "notes": "Validated deterministic direction generation and 86-policy/116-run arithmetic; panel remains inactive.",
+        "notes": (
+            "Validated deterministic direction generation and 86-policy/116-run arithmetic; panel remains inactive."
+        ),
     }
     updated = pd.concat([ledger, pd.DataFrame([row], columns=ledger.columns)], ignore_index=True)
     candidate_rows = updated["candidate_id"].astype(str).str.strip().ne("")

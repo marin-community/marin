@@ -62,14 +62,10 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REFERENCE_OUTPUTS = SCRIPT_DIR / "reference_outputs"
 DEFAULT_OUTPUT_DIR = REFERENCE_OUTPUTS / "olmo_base_easy_matched_sample_count_control_300m_20260626"
 DEFAULT_FIT_PANEL = (
-    REFERENCE_OUTPUTS
-    / "olmo_base_easy_paper_faithful_olmix_300m_20260625"
-    / "fit_panel_table9_macro.csv"
+    REFERENCE_OUTPUTS / "olmo_base_easy_paper_faithful_olmix_300m_20260625" / "fit_panel_table9_macro.csv"
 )
 DEFAULT_PRIOR_METHOD_PREDICTIONS = (
-    REFERENCE_OUTPUTS
-    / "olmo_base_easy_training_regime_stability_300m_20260626"
-    / "method_macro_predictions.csv"
+    REFERENCE_OUTPUTS / "olmo_base_easy_training_regime_stability_300m_20260626" / "method_macro_predictions.csv"
 )
 DEFAULT_FULL_AGGREGATE_DSP = (
     REFERENCE_OUTPUTS
@@ -183,7 +179,7 @@ def metric_summary(
         replicate=int(replicate),
         train_regime=train_regime,
         train_subset_kind=train_subset_kind,
-        n_train=int(len(train_indices)),
+        n_train=len(train_indices),
         n_train_qsplit=int(np.intersect1d(train_indices, qsplit_indices).size),
         n_train_deletion=int(np.intersect1d(train_indices, deletion_indices).size),
         linear_reg=float(linear_reg),
@@ -219,7 +215,8 @@ def load_prior_prediction(panel: pd.DataFrame, path: Path, column: str) -> np.nd
 def load_full_augmented_prediction(panel: pd.DataFrame, path: Path, *, linear_reg: float) -> np.ndarray:
     data = pd.read_csv(path)
     view = data[
-        data["variant"].eq("effective_exposure") & np.isclose(data["hyperparameter_value"].to_numpy(dtype=float), linear_reg)
+        data["variant"].eq("effective_exposure")
+        & np.isclose(data["hyperparameter_value"].to_numpy(dtype=float), linear_reg)
     ][["run_name", "oof_prediction"]].copy()
     if view.empty:
         raise ValueError(f"No full-panel aggregate prediction for linear_reg={linear_reg:g}")
@@ -256,10 +253,7 @@ def random_full_subsets(
     n_train: int,
     replicates: int,
 ) -> list[np.ndarray]:
-    return [
-        np.sort(rng.choice(all_indices, size=n_train, replace=False).astype(int))
-        for _ in range(replicates)
-    ]
+    return [np.sort(rng.choice(all_indices, size=n_train, replace=False).astype(int)) for _ in range(replicates)]
 
 
 def all_deletion_plus_qsplit_subsets(
@@ -343,12 +337,19 @@ def write_plots(output_dir: Path, rows: pd.DataFrame, reference_rows: pd.DataFra
             col=1,
         )
         fig.add_trace(
-            go.Box(y=group["qsplit_spearman"], name=method, marker_color=colors.get(method, "#555555"), showlegend=False),
+            go.Box(
+                y=group["qsplit_spearman"], name=method, marker_color=colors.get(method, "#555555"), showlegend=False
+            ),
             row=1,
             col=2,
         )
         fig.add_trace(
-            go.Box(y=group["selected_actual_rank"], name=method, marker_color=colors.get(method, "#555555"), showlegend=False),
+            go.Box(
+                y=group["selected_actual_rank"],
+                name=method,
+                marker_color=colors.get(method, "#555555"),
+                showlegend=False,
+            ),
             row=1,
             col=3,
         )
@@ -386,7 +387,9 @@ def write_plots(output_dir: Path, rows: pd.DataFrame, reference_rows: pd.DataFra
         xaxis_title="Deletion rows in 241-row training subset",
         yaxis_title="Qsplit RMSE",
     )
-    fig.write_html(output_dir / "matched_sample_count_deletion_count_vs_rmse.html", include_plotlyjs="cdn", config=PLOT_CONFIG)
+    fig.write_html(
+        output_dir / "matched_sample_count_deletion_count_vs_rmse.html", include_plotlyjs="cdn", config=PLOT_CONFIG
+    )
 
 
 def write_report(output_dir: Path, rows: pd.DataFrame, summary: pd.DataFrame, reference_rows: pd.DataFrame) -> None:
@@ -400,9 +403,7 @@ def write_report(output_dir: Path, rows: pd.DataFrame, summary: pd.DataFrame, re
         additive_pairs = base_202[
             ["replicate", "qsplit_rmse", "qsplit_spearman", "qsplit_regret_at_3", "selected_actual_rank"]
         ].merge(
-            additive[
-                ["replicate", "qsplit_rmse", "qsplit_spearman", "qsplit_regret_at_3", "selected_actual_rank"]
-            ],
+            additive[["replicate", "qsplit_rmse", "qsplit_spearman", "qsplit_regret_at_3", "selected_actual_rank"]],
             on="replicate",
             suffixes=("_base_202", "_additive"),
             validate="one_to_one",
@@ -474,7 +475,15 @@ def write_report(output_dir: Path, rows: pd.DataFrame, summary: pd.DataFrame, re
             ]
         )
     best_random = stochastic.sort_values("qsplit_rmse").head(5)[
-        ["method", "replicate", "n_train_deletion", "qsplit_rmse", "qsplit_spearman", "selected_run_name", "selected_actual_rank"]
+        [
+            "method",
+            "replicate",
+            "n_train_deletion",
+            "qsplit_rmse",
+            "qsplit_spearman",
+            "selected_run_name",
+            "selected_actual_rank",
+        ]
     ]
     lines.extend(
         [
@@ -497,7 +506,7 @@ def main() -> None:
     qsplit_indices = np.flatnonzero(panel["panel_source"].eq("qsplit_signal").to_numpy(dtype=bool))
     deletion_indices = np.flatnonzero(panel["panel_source"].eq("domain_deletion").to_numpy(dtype=bool))
     all_indices = np.arange(len(panel), dtype=int)
-    n_train = int(len(qsplit_indices))
+    n_train = len(qsplit_indices)
 
     _signal, columns, domains, _natural = base.load_raw_signal_panel()
     token_counts = base.load_domain_token_counts(domains)
@@ -674,8 +683,8 @@ def main() -> None:
                 "maxiter": int(args.maxiter),
                 "coarse_top_k": int(args.coarse_top_k),
                 "basin_hopping_iters": int(args.basin_hopping_iters),
-                "n_qsplit": int(len(qsplit_indices)),
-                "n_deletion": int(len(deletion_indices)),
+                "n_qsplit": len(qsplit_indices),
+                "n_deletion": len(deletion_indices),
                 "headline_objective": "unweighted 51-component Table-9 macro BPB",
             },
             indent=2,

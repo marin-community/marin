@@ -227,7 +227,7 @@ def summarize_family(component_summary: pd.DataFrame) -> dict[str, Any]:
     """Summarize component-level train and OOF fit quality."""
     return {
         "variant": str(component_summary["variant"].iloc[0]) if not component_summary.empty else "",
-        "component_count": int(len(component_summary)),
+        "component_count": len(component_summary),
         "fit_row_count_min": int(component_summary["fit_row_count"].min()),
         "fit_row_count_max": int(component_summary["fit_row_count"].max()),
         "train_spearman_mean": float(component_summary["train_spearman"].mean()),
@@ -258,7 +258,9 @@ def _proxy_label(row: pd.Series) -> str:
     return f"{row['smooth_column']} ({row['metric_kind']}, {row['utility_transform']})"
 
 
-def write_plot(hard_summary: pd.DataFrame, smooth_summary: pd.DataFrame, proxy_map: pd.DataFrame, output_path: Path) -> None:
+def write_plot(
+    hard_summary: pd.DataFrame, smooth_summary: pd.DataFrame, proxy_map: pd.DataFrame, output_path: Path
+) -> None:
     """Write hard and smooth train/OOF component fit diagnostics."""
     hard_ordered = hard_summary.sort_values("oof_spearman", ascending=True, na_position="first")
     smooth_ordered = smooth_summary.sort_values("oof_spearman", ascending=True, na_position="first")

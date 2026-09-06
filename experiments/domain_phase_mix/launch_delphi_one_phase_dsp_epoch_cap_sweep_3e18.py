@@ -135,6 +135,7 @@ class SweepDefinition:
     common_data_seed: int
     trainer_seed: int
     run_name_prefix: str
+    table9_run_name_prefix: str
     panel_source: str
     table9_wandb_group: str
     provenance_panel: str
@@ -150,6 +151,7 @@ DEFAULT_SWEEP_DEFINITION = SweepDefinition(
     common_data_seed=COMMON_DATA_SEED,
     trainer_seed=TRAINER_SEED,
     run_name_prefix="onephase_dsp",
+    table9_run_name_prefix="t9_dsp",
     panel_source="dsp_epoch_cap_optimum",
     table9_wandb_group="olmo_base_eval_table9_delphi_3e18_one_phase_dsp_epoch_cap_sweep",
     provenance_panel="delphi_3e18_one_phase_dsp_epoch_cap_sweep",
@@ -371,6 +373,11 @@ def build_run_specs(
     return run_specs
 
 
+def table9_eval_step_name(definition: SweepDefinition, run_spec: base.DelphiSwarmRunSpec) -> str:
+    """Return a compact evaluator identity that survives Iris child-name limits."""
+    return f"{definition.table9_run_name_prefix}_{run_spec.source_run_name}"
+
+
 def save_sweep_manifest(config: SaveSweepManifestConfig) -> None:
     """Persist the exact launch rows, aliases, runtime counts, and weights."""
     candidates = [CandidateMixture(**item) for item in json.loads(config.candidates_json)]
@@ -550,7 +557,7 @@ def build_launch_artifacts(
         training_steps.append(training_step)
         eval_steps.append(
             olmo_base_eval_step(
-                name=f"t9_{run_spec.run_name}",
+                name=table9_eval_step_name(definition, run_spec),
                 checkpoint=training_step / f"hf/step-{run_spec.expected_checkpoint_step}",
                 request_set_dir=base.TABLE9_REQUEST_SET_DIR,
                 resource_config=base.TABLE9_EVAL_RESOURCES,
@@ -680,8 +687,7 @@ def run_sweep(
         steps=artifacts.steps,
         description=(
             f"{definition.experiment_name}: {definition.expected_run_count} runtime-distinct "
-            "single-phase DSP optima under "
-            "whole-run epoch caps, with Uncheatable and native Table-9 evaluation"
+            "single-phase epoch-capped optima, with Uncheatable and native Table-9 evaluation"
         ),
     )
 

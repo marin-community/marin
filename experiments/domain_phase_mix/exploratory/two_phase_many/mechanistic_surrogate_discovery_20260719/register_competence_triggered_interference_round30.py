@@ -46,7 +46,9 @@ def main() -> None:
         "state_transition": (
             "Autonomous bounded acquisition plus a competence-triggered specialist-forgetting hazard, integrated continuously across phases."
         ),
-        "response_link": "One nonnegative amplitude on a fixed convex combination of unresolved general and specialist error, plus an intercept.",
+        "response_link": (
+            "One nonnegative amplitude on a fixed convex combination of unresolved general and specialist error, plus an intercept."
+        ),
         "additional_degrees_of_freedom": (
             "General acquisition rate, rare-data general efficiency, specialist acquisition rate, interference rate, "
             "competence threshold, fixed transition softness, evaluation mixture, one amplitude, intercept, and ridge."

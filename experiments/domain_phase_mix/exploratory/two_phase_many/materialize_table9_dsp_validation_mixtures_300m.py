@@ -201,7 +201,9 @@ def materialize_aggregate(
                 source_csv=str(csv_path),
                 predicted_bpb=float(dsp.predict(model, weights[None, :, :])[0]),
                 regularized_objective=float(regularized),
-                mean_phase_tv_to_proportional=float(0.5 * np.abs(weights - np.stack([natural, natural])).sum(axis=1).mean()),
+                mean_phase_tv_to_proportional=float(
+                    0.5 * np.abs(weights - np.stack([natural, natural])).sum(axis=1).mean()
+                ),
                 max_simulated_epoch=float(frame["simulated_epochs"].max()),
                 q95_simulated_epoch=float(frame["simulated_epochs"].quantile(0.95)),
                 optimizer_status=status,
@@ -261,7 +263,9 @@ def materialize_per_component(
                 source_csv=str(csv_path),
                 predicted_bpb=float(np.mean(per_component.predict_component_matrix(models, weights[None, :, :]))),
                 regularized_objective=float(regularized),
-                mean_phase_tv_to_proportional=float(0.5 * np.abs(weights - np.stack([natural, natural])).sum(axis=1).mean()),
+                mean_phase_tv_to_proportional=float(
+                    0.5 * np.abs(weights - np.stack([natural, natural])).sum(axis=1).mean()
+                ),
                 max_simulated_epoch=float(frame["simulated_epochs"].max()),
                 q95_simulated_epoch=float(frame["simulated_epochs"].quantile(0.95)),
                 optimizer_status=status,

@@ -41,9 +41,6 @@ from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E
     diagnose_dsp_uncheatable_eta_heldout as eta_diag,
 )
 from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E402
-    diagnose_dsp_uncheatable_shared_late_capacity as shared_diag,
-)
-from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E402
     fit_dsp_vs_olmix_deletion_augmented_300m as dsp_compare,
 )
 from experiments.domain_phase_mix.exploratory.two_phase_many.standalone_code import dsp_exact as dsp  # noqa: E402
@@ -325,7 +322,9 @@ def leave_good_out(packet: dsp.PacketData, base_model: dsp.FittedDSPModel, predi
     test_idx = np.argsort(packet.y)[:holdout_count]
     train_idx = np.setdiff1d(np.arange(len(packet.y)), test_idx)
     if predict_kind == "no_phase":
-        fold_model = dsp.fit_linear_head(packet.w[train_idx], packet.y[train_idx], packet, base_model.variant, base_model.params)
+        fold_model = dsp.fit_linear_head(
+            packet.w[train_idx], packet.y[train_idx], packet, base_model.variant, base_model.params
+        )
         pred = dsp.predict(fold_model, packet.w[test_idx])
     elif predict_kind == "phase_separable":
         fit = fit_best_phase_separable(packet, base_model, idx=train_idx)
@@ -370,7 +369,9 @@ def raw_optimize_phase_separable(fit: PhaseSeparableFit, packet: dsp.PacketData)
     return float(best.fun), float(distances[nearest_idx]), float(packet.y[nearest_idx])
 
 
-def summarize_no_phase(packet: dsp.PacketData, base_model: dsp.FittedDSPModel, heldout: pd.DataFrame) -> tuple[SummaryRow, pd.DataFrame]:
+def summarize_no_phase(
+    packet: dsp.PacketData, base_model: dsp.FittedDSPModel, heldout: pd.DataFrame
+) -> tuple[SummaryRow, pd.DataFrame]:
     train_pred = dsp.predict(base_model, packet.w)
     train_rmse, _mae, _pearson, train_spearman = regression_metrics(packet.y, train_pred)
     oof, _folds = dsp_compare.fit_dsp_oof_predictions(packet, base_model)
@@ -378,7 +379,9 @@ def summarize_no_phase(packet: dsp.PacketData, base_model: dsp.FittedDSPModel, h
     repaired = repaired_predictions(base_model, lambda weights: dsp.predict(base_model, weights), heldout)
     stats = repaired_gate_stats(repaired)
     leave_rmse, leave_optimism = leave_good_out(packet, base_model, "no_phase")
-    raw_result, raw_weights = dsp.optimize_raw(base_model, num_starts=8, observed_start_weights=packet.w, max_observed_starts=16)
+    raw_result, raw_weights = dsp.optimize_raw(
+        base_model, num_starts=8, observed_start_weights=packet.w, max_observed_starts=16
+    )
     distances = dsp.average_phase_tv_distance(packet.w, raw_weights[None, :, :])
     nearest_idx = int(np.argmin(distances))
     row: dict[str, Any] = {
@@ -554,7 +557,7 @@ def main() -> None:
                 "late_priors": list(LATE_PRIORS),
                 "shrink_lambdas": list(SHRINK_LAMBDAS),
                 "tau_grid": [None if tau is None else float(tau) for tau in TAU_GRID],
-                "fit_rows": int(len(packet.y)),
+                "fit_rows": len(packet.y),
                 "repair_results": str(args.repair_results),
                 "repair_mixture_dir": str(args.repair_mixture_dir),
             },

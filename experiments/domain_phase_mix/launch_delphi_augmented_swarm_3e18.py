@@ -512,6 +512,8 @@ def run_delphi_swarm_training(config: DelphiSwarmTrainingConfig) -> None:
                         f"N={params:.1e}",
                         f"data_seed={run_spec.data_seed}",
                         f"trainer_seed={run_spec.trainer_seed}",
+                        f"tpu_type={run_spec.tpu_type}",
+                        f"tpu_zone={run_spec.tpu_zone}",
                     )
                 ],
             ),

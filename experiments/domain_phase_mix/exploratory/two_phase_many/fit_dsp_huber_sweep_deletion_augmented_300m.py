@@ -588,7 +588,7 @@ def main() -> None:
         json.dump(
             {
                 "target_metric": olmix.UNCHEATABLE_TARGET,
-                "panel_rows": int(len(panel)),
+                "panel_rows": len(panel),
                 "phase_fractions": olmix.PHASE_FRACTIONS.tolist(),
                 "huber_deltas": deltas,
                 "linear_reg": float(args.linear_reg),

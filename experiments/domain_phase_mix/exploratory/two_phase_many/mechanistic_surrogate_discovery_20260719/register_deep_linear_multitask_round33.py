@@ -43,7 +43,9 @@ def main() -> None:
             "Y=b0+A[(1-q)L_b+qL_r], A>=0. The exact frozen-feature ablation is gamma=0."
         ),
         "latent_state": "One shared feature amplitude r and two task-specific head amplitudes h_b and h_r.",
-        "state_transition": "Exact gradient flow of a two-layer scalar multitask network with L2 weight decay under each phase mixture.",
+        "state_transition": (
+            "Exact gradient flow of a two-layer scalar multitask network with L2 weight decay under each phase mixture."
+        ),
         "response_link": "One nonnegative amplitude on the evaluation-weighted broad/rare task loss, plus intercept.",
         "additional_degrees_of_freedom": (
             "Shared-feature rate, head rate, weight decay, evaluation mixture, one response amplitude, intercept, and ridge."

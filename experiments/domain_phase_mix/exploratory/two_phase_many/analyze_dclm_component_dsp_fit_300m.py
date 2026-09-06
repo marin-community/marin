@@ -29,7 +29,6 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from scipy.stats import pearsonr, spearmanr
 
 from experiments.domain_phase_mix.exploratory.two_phase_many.fit_dclm_core_dsp_300m import (
     DCLM_MATRIX_CSV,
@@ -65,9 +64,7 @@ def dclm_component_columns(frame: pd.DataFrame) -> list[str]:
     columns = [
         column
         for column in frame.columns
-        if column.startswith("lm_eval/dclm_core/")
-        and column.endswith("/centered_accuracy")
-        and column != TARGET_COLUMN
+        if column.startswith("lm_eval/dclm_core/") and column.endswith("/centered_accuracy") and column != TARGET_COLUMN
     ]
     return sorted(columns)
 
@@ -80,7 +77,7 @@ def task_label(column: str) -> str:
 
 
 def r2_score(actual: np.ndarray, predicted: np.ndarray) -> float:
-    """Compute ordinary \(R^2\)."""
+    r"""Compute ordinary \(R^2\)."""
     ss_res = float(np.sum((actual - predicted) ** 2))
     ss_tot = float(np.sum((actual - actual.mean()) ** 2))
     return 1.0 - ss_res / ss_tot if ss_tot > 0.0 else float("nan")
@@ -125,7 +122,7 @@ def fit_target(
         "target_column": target_column,
         "task": "macro" if target_column == TARGET_COLUMN else task_label(target_column),
         "variant": variant.name,
-        "fit_row_count": int(len(packet.y)),
+        "fit_row_count": len(packet.y),
         "target_mean": float(np.mean(actual)),
         "target_std": float(np.std(actual, ddof=1)),
         "target_min": float(np.min(actual)),
@@ -146,15 +143,15 @@ def fit_target(
     return row, predictions
 
 
-def macro_from_components(component_predictions: pd.DataFrame, actual_macro: pd.DataFrame) -> tuple[dict[str, float], pd.DataFrame]:
+def macro_from_components(
+    component_predictions: pd.DataFrame, actual_macro: pd.DataFrame
+) -> tuple[dict[str, float], pd.DataFrame]:
     """Average component-wise predictions and compare to actual macro."""
     wide_actual = component_predictions.pivot(index="run_name", columns="task", values="actual")
     wide_oof = component_predictions.pivot(index="run_name", columns="task", values="oof_pred")
     wide_train = component_predictions.pivot(index="run_name", columns="task", values="train_pred")
     out = actual_macro[["run_name", TARGET_COLUMN]].copy()
-    out = out.merge(
-        wide_actual.mean(axis=1).rename("component_actual_macro").reset_index(), on="run_name", how="inner"
-    )
+    out = out.merge(wide_actual.mean(axis=1).rename("component_actual_macro").reset_index(), on="run_name", how="inner")
     out = out.merge(wide_oof.mean(axis=1).rename("component_oof_macro").reset_index(), on="run_name", how="inner")
     out = out.merge(wide_train.mean(axis=1).rename("component_train_macro").reset_index(), on="run_name", how="inner")
     metrics = {
@@ -169,7 +166,9 @@ def macro_from_components(component_predictions: pd.DataFrame, actual_macro: pd.
             "component_ensemble_train_macro",
         ),
         "component_actual_macro_max_abs_diff": float(
-            np.max(np.abs(out[TARGET_COLUMN].to_numpy(dtype=float) - out["component_actual_macro"].to_numpy(dtype=float)))
+            np.max(
+                np.abs(out[TARGET_COLUMN].to_numpy(dtype=float) - out["component_actual_macro"].to_numpy(dtype=float))
+            )
         ),
     }
     return metrics, out
@@ -347,7 +346,7 @@ def main() -> None:
     )
     summary = {
         "variant": variant.name,
-        "component_count": int(len(component_summary)),
+        "component_count": len(component_summary),
         "component_oof_spearman_mean": float(component_summary["oof_spearman"].mean()),
         "component_oof_spearman_median": float(component_summary["oof_spearman"].median()),
         "component_oof_spearman_min": float(component_summary["oof_spearman"].min()),

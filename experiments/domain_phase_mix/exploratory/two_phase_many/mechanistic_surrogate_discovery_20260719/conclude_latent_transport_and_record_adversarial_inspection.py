@@ -45,11 +45,17 @@ def main() -> None:
             "hyperparameters": "Frozen rank={1,2,3}, remaining-offset, ridge, and nonnegative contrast-cost grid",
             "adversarial_outcomes_available_before_proposal": True,
             "adversarial_outcomes_inspected_before_proposal": True,
-            "observations_inspiring_mechanism": "Cross-target and cross-scale phase-delta correlations on matched fit coordinates.",
+            "observations_inspiring_mechanism": (
+                "Cross-target and cross-scale phase-delta correlations on matched fit coordinates."
+            ),
             "novelty_class": "Joint multi-output identification of a shared phase-displacement subspace",
-            "evaluation_status": "rejected at matched-coordinate identification gate; no candidate-level adversarial evaluation",
+            "evaluation_status": (
+                "rejected at matched-coordinate identification gate; no candidate-level adversarial evaluation"
+            ),
             "evidence_path": "round8_joint_latent_phase_transport/report.md",
-            "notes": "The low-rank restriction is not selected over full rank and all four outputs lose to existing independently fitted phase laws.",
+            "notes": (
+                "The low-rank restriction is not selected over full rank and all four outputs lose to existing independently fitted phase laws."
+            ),
         },
         {
             "timestamp": now,
@@ -59,11 +65,15 @@ def main() -> None:
             "hyperparameters": "No candidate fit; descriptive rank correlations and physical-feature diagnostics only",
             "adversarial_outcomes_available_before_proposal": True,
             "adversarial_outcomes_inspected_before_proposal": True,
-            "observations_inspiring_mechanism": "Target-matched outcomes, policy class, selection stratum, proposer origin, aggregate/phase concentration, support distance, simulated epochs, and existing baseline residuals were inspected.",
+            "observations_inspiring_mechanism": (
+                "Target-matched outcomes, policy class, selection stratum, proposer origin, aggregate/phase concentration, support distance, simulated epochs, and existing baseline residuals were inspected."
+            ),
             "novelty_class": "Development-panel diagnosis, not a surrogate",
             "evaluation_status": "inspection complete; no new candidate predictions evaluated",
             "evidence_path": "data_use_ledger.csv",
-            "notes": "High-disagreement strata are harder. Coarse physical summaries explain much of Uncheatable variation but less Table-9 variation; domain correlations are proposal-series confounded. This inspection does not justify a universal concentration penalty or any output calibrator.",
+            "notes": (
+                "High-disagreement strata are harder. Coarse physical summaries explain much of Uncheatable variation but less Table-9 variation; domain correlations are proposal-series confounded. This inspection does not justify a universal concentration penalty or any output calibrator."
+            ),
         },
     ]
     identity = ["round_id", "candidate_id", "evaluation_status"]

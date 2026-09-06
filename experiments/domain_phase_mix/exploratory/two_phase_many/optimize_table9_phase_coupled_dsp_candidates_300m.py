@@ -25,7 +25,9 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from experiments.domain_phase_mix.exploratory.two_phase_many import fit_olmix_reference_deletion_augmented_300m as base  # noqa: E402
+from experiments.domain_phase_mix.exploratory.two_phase_many import (
+    fit_olmix_reference_deletion_augmented_300m as base,
+)
 from experiments.domain_phase_mix.exploratory.two_phase_many.standalone_code import dsp_exact as dsp  # noqa: E402
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -40,9 +42,7 @@ DEFAULT_MODEL = (
     / "model.json"
 )
 DEFAULT_PANEL = (
-    REFERENCE_OUTPUTS
-    / "olmo_base_easy_extra_300m_heldout_eval_20260630"
-    / "expanded_300m_table9_diagnostic_panel.csv"
+    REFERENCE_OUTPUTS / "olmo_base_easy_extra_300m_heldout_eval_20260630" / "expanded_300m_table9_diagnostic_panel.csv"
 )
 PLOT_CONFIG = {"toImageButtonOptions": {"format": "png", "scale": 4}}
 TARGET_COL = "table9_macro_bpb"
@@ -101,7 +101,9 @@ def multinomial_kl(p: np.ndarray, q: np.ndarray) -> float:
 
 
 def proportional_kl(weights: np.ndarray, natural: np.ndarray) -> float:
-    return float(sum(float(frac) * multinomial_kl(weights[idx], natural) for idx, frac in enumerate(base.PHASE_FRACTIONS)))
+    return float(
+        sum(float(frac) * multinomial_kl(weights[idx], natural) for idx, frac in enumerate(base.PHASE_FRACTIONS))
+    )
 
 
 def phase_symmetric_kl(weights: np.ndarray) -> float:
@@ -193,6 +195,7 @@ def optimize_candidate(
     m = len(natural)
     best: Any | None = None
     for weights in starts:
+
         def loss(logits: np.ndarray) -> float:
             return objective(logits, model=model, m=m, natural=natural, kl_reg=kl_reg, phase_reg=phase_reg)
 
@@ -209,7 +212,14 @@ def optimize_candidate(
     return softmax_pair(np.asarray(best.x, dtype=float), m), float(best.fun), str(best.message)
 
 
-def write_weights(path: Path, domains: list[str], natural: np.ndarray, weights: np.ndarray, token_counts: np.ndarray, target_budget: int) -> None:
+def write_weights(
+    path: Path,
+    domains: list[str],
+    natural: np.ndarray,
+    weights: np.ndarray,
+    token_counts: np.ndarray,
+    target_budget: int,
+) -> None:
     sim_epochs = base.simulated_epochs(weights, token_counts, target_budget=target_budget)
     frame = pd.DataFrame(
         {
@@ -237,7 +247,9 @@ def write_plot(path: Path, summary: pd.DataFrame) -> None:
                 y=group["predicted_bpb"],
                 mode="lines+markers",
                 name=f"KL={float(kl_reg):g}",
-                customdata=np.stack([group["phase_tv"], group["max_simulated_epoch"], group["nearest_observed_bpb"]], axis=1),
+                customdata=np.stack(
+                    [group["phase_tv"], group["max_simulated_epoch"], group["nearest_observed_bpb"]], axis=1
+                ),
                 hovertemplate=(
                     "phase coupling=%{x}<br>pred=%{y:.5f}<br>phase TV=%{customdata[0]:.3f}"
                     "<br>max epoch=%{customdata[1]:.2f}<br>nearest observed=%{customdata[2]:.5f}<extra></extra>"
@@ -293,7 +305,9 @@ def main() -> None:
                     proportional_kl=proportional_kl(weights, natural),
                     phase_symmetric_kl=phase_symmetric_kl(weights),
                     phase_tv=float(0.5 * np.abs(weights[0] - weights[1]).sum()),
-                    tv_to_proportional=float(0.5 * np.abs(weights - np.stack([natural, natural])[None, :, :]).sum(axis=2).mean()),
+                    tv_to_proportional=float(
+                        0.5 * np.abs(weights - np.stack([natural, natural])[None, :, :]).sum(axis=2).mean()
+                    ),
                     max_simulated_epoch=float(np.max(sim_epochs)),
                     q95_simulated_epoch=float(np.quantile(sim_epochs, 0.95)),
                     nearest_observed_run_name=nearest_name,

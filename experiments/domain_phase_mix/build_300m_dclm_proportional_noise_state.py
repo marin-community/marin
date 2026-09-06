@@ -17,11 +17,11 @@ from pathlib import Path
 import pandas as pd
 
 from experiments.domain_phase_mix.launch_300m_dclm_core_evals import (
+    DCLM_GENERATION_SMOOTH_MODE,
     DEFAULT_EXPECTED_300M_STEP,
     DEFAULT_TPU_REGION,
     DEFAULT_TPU_TYPE,
     DEFAULT_TPU_ZONE,
-    DCLM_GENERATION_SMOOTH_MODE,
     DCLMEvalCandidate,
     DCLMEvalMode,
     DCLMEvalSpec,

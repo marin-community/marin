@@ -25,7 +25,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from scipy.stats import pearsonr, spearmanr
-from sklearn.linear_model import Ridge, RidgeCV
+from sklearn.linear_model import RidgeCV
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
@@ -163,7 +163,7 @@ def summarize_variant(
     best_idx = int(np.argmin(y))
     return VariantResult(
         variant=variant,
-        n_rows=int(len(frame)),
+        n_rows=len(frame),
         rmse=rmse,
         mae=mae,
         pearson=pearson,
@@ -270,7 +270,9 @@ def family_phase_features(packet: dsp.PacketData, domains: list[str]) -> pd.Data
         mask = np.asarray([domain_family(domain) == family for domain in domains])
         rows[f"family_{family}_log_exposure_delta"] = log_delta[:, mask].mean(axis=1)
         rows[f"family_{family}_abs_log_exposure_delta"] = np.abs(log_delta[:, mask]).mean(axis=1)
-        rows[f"family_{family}_phase1_minus_phase0_weight"] = packet.w[:, 1, mask].sum(axis=1) - packet.w[:, 0, mask].sum(axis=1)
+        rows[f"family_{family}_phase1_minus_phase0_weight"] = packet.w[:, 1, mask].sum(axis=1) - packet.w[
+            :, 0, mask
+        ].sum(axis=1)
     return pd.DataFrame(rows)
 
 
@@ -361,7 +363,9 @@ def write_scatter(path: Path, predictions: pd.DataFrame) -> None:
         )
     lo = min(float(predictions[TARGET_COL].min()), float(predictions["prediction"].min()))
     hi = max(float(predictions[TARGET_COL].max()), float(predictions["prediction"].max()))
-    fig.add_trace(go.Scatter(x=[lo, hi], y=[lo, hi], mode="lines", name="y=x", line={"color": "#64748b", "dash": "dash"}))
+    fig.add_trace(
+        go.Scatter(x=[lo, hi], y=[lo, hi], mode="lines", name="y=x", line={"color": "#64748b", "dash": "dash"})
+    )
     fig.update_layout(
         title="Table-9 phase-correction variants: OOF predictions",
         xaxis_title="Observed Table-9 macro BPB",
@@ -389,7 +393,9 @@ def write_regret_plot(path: Path, summary: pd.DataFrame) -> None:
     for idx, metric in enumerate(metrics):
         visible = [False] * len(metrics)
         visible[idx] = True
-        buttons.append({"label": metric, "method": "update", "args": [{"visible": visible}, {"yaxis.title.text": metric}]})
+        buttons.append(
+            {"label": metric, "method": "update", "args": [{"visible": visible}, {"yaxis.title.text": metric}]}
+        )
     fig.update_layout(
         title="Table-9 phase-correction variant diagnostics",
         xaxis_title="Variant",
@@ -432,17 +438,24 @@ def main() -> None:
     )
 
     variant_predictions: dict[str, tuple[np.ndarray, str]] = {
-        "baseline_aggregate_dsp": (base_pred, "Existing expanded-panel aggregate effective-exposure DSP OOF prediction."),
+        "baseline_aggregate_dsp": (
+            base_pred,
+            "Existing expanded-panel aggregate effective-exposure DSP OOF prediction.",
+        ),
         "residual_global_phase_ridge": (
             residual_ridge_oof(y=y, base_pred=base_pred, features=global_features, folds=folds),
             "OOF ridge correction to aggregate DSP residuals using global phase diagnostics.",
         ),
         "residual_family_phase_ridge": (
-            residual_ridge_oof(y=y, base_pred=base_pred, features=pd.concat([global_features, family_features], axis=1), folds=folds),
+            residual_ridge_oof(
+                y=y, base_pred=base_pred, features=pd.concat([global_features, family_features], axis=1), folds=folds
+            ),
             "OOF ridge correction using global diagnostics plus coarse domain-family phase contrasts.",
         ),
         "residual_domain_phase_ridge": (
-            residual_ridge_oof(y=y, base_pred=base_pred, features=pd.concat([global_features, domain_features], axis=1), folds=folds),
+            residual_ridge_oof(
+                y=y, base_pred=base_pred, features=pd.concat([global_features, domain_features], axis=1), folds=folds
+            ),
             "OOF ridge correction using global diagnostics plus per-domain phase exposure contrasts.",
         ),
         "collapsed_prediction_blend_ridge": (
@@ -495,8 +508,8 @@ def main() -> None:
         "family_features": family_features.columns.tolist(),
         "domain_features": domain_features.columns.tolist(),
         "ridge_alphas": RIDGE_ALPHAS.tolist(),
-        "n_rows": int(len(panel)),
-        "n_domains": int(len(domains)),
+        "n_rows": len(panel),
+        "n_domains": len(domains),
         "domains": domains,
     }
     summary.to_csv(args.output_dir / "phase_correction_variant_summary.csv", index=False)

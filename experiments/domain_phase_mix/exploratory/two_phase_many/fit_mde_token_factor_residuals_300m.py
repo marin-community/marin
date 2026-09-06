@@ -30,7 +30,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import plotly.express as px
-from scipy.stats import pearsonr, spearmanr
 from sklearn.cross_decomposition import PLSRegression
 from sklearn.decomposition import PCA
 from sklearn.linear_model import Ridge, RidgeCV
@@ -461,18 +460,22 @@ def main() -> None:
         "feature_modes": feature_modes,
         "methods": methods,
         "queryable_options": queryable_options,
-        "rows": int(len(metrics)),
-        "prediction_rows": int(len(predictions)),
+        "rows": len(metrics),
+        "prediction_rows": len(predictions),
         "best_queryable_mean_spearman_delta_vs_dsp": float(best_queryable["spearman_delta_vs_dsp"].mean()),
         "best_queryable_max_spearman_delta_vs_dsp": float(best_queryable["spearman_delta_vs_dsp"].max()),
         "best_observed_mean_spearman_delta_vs_dsp": float(best_observed["spearman_delta_vs_dsp"].mean()),
         "best_observed_max_spearman_delta_vs_dsp": float(best_observed["spearman_delta_vs_dsp"].max()),
-        "best_queryable": best_queryable[
-            ["target", "model", "spearman_r", "spearman_delta_vs_dsp", "r2", "rmse"]
-        ].to_dict(orient="records"),
-        "best_observed_upper_bound": best_observed[
-            ["target", "model", "spearman_r", "spearman_delta_vs_dsp", "r2", "rmse"]
-        ].to_dict(orient="records"),
+        "best_queryable": (
+            best_queryable[["target", "model", "spearman_r", "spearman_delta_vs_dsp", "r2", "rmse"]].to_dict(
+                orient="records"
+            )
+        ),
+        "best_observed_upper_bound": (
+            best_observed[["target", "model", "spearman_r", "spearman_delta_vs_dsp", "r2", "rmse"]].to_dict(
+                orient="records"
+            )
+        ),
         "semantics": (
             "Observed upper bound rows use held-out checkpoint token factors and are not deployable for unseen "
             "candidate mixtures. Queryable rows predict token factors from mixture features within each fold."

@@ -29,8 +29,8 @@ lands in the right pattern.
 Skills are task-focused playbooks in `.agents/skills/` (also accessible as
 `.claude/skills/`). **Before starting any non-trivial task, check whether a
 matching skill exists** by scanning the skill descriptions in your system
-prompt. If a skill matches, invoke it via the Skill tool — do not skip it in
-favor of ad-hoc commands.
+prompt. If a skill matches, load and follow it — do not skip it in favor of
+ad-hoc commands.
 
 For long-running research experiments, Fieldbook is the local experiment
 ledger. If `.experiments/ledger.sqlite` exists, or the task asks about active
@@ -38,11 +38,11 @@ experiments, job recovery, retries, experiment progress, context switching, or
 source-of-truth bookkeeping, start with:
 
 ```bash
-fieldbook db where --json
-fieldbook experiment list --json
+uv run fieldbook db where --json
+uv run fieldbook experiment list --json
 ```
 
-Then inspect the relevant experiment with `fieldbook experiment status
+Then inspect the relevant experiment with `uv run fieldbook experiment status
 <experiment> --json` before relying on Iris, W&B, logbooks, or chat history.
 Record submissions, retries, artifacts, validations, and checkpoints back into
 Fieldbook when the task changes experiment state.
@@ -82,24 +82,26 @@ working tree. See the `consult-echo` skill for the complete workflow.
 ```bash
 # Lint and format
 ./infra/pre-commit.py --all-files --fix
-- `./infra/pre-commit.py` is the required lint entry point for this repo.
-- Do not replace it with `uv run pre-commit ...`!
 
 # Type checking (also done by pre-commit.py)
 uv run pyrefly check
-- Keep type hints passing under `uv run pyrefly check`; configuration lives in `pyproject.toml`.
 
 # Safe tests affected by the current branch and working tree
 uv run --no-project infra/ci/run_tests.py
 
 # Lint review — agentic pass over the branch diff against the infra/lint/ catalog
 ./infra/pre-commit.py --review
-- Run this once before opening or updating a PR, and fix or respond to every
-  finding it reports (see the `commit` skill). Do not rerun it after small,
-  targeted touch-ups made in response to its findings. Rerun only when the
-  follow-up materially changes the implementation approach or scope.
 ```
 
+- `./infra/pre-commit.py` is the required lint entry point for this repo. Do
+  not replace it with `uv run pre-commit ...`.
+- Keep type hints passing under `uv run pyrefly check`; configuration lives in
+  `pyproject.toml`.
+- Run `./infra/pre-commit.py --review` once before opening or updating a PR,
+  and fix or respond to every finding it reports (see the `commit` skill). Do
+  not rerun it after small, targeted touch-ups made in response to its
+  findings. Rerun only when the follow-up materially changes the
+  implementation approach or scope.
 - Python >=3.12. Use `uv run` for entry points.
 - Do not replace pytest's default marker expression with a partial expression
   such as `-m "not slow"`; `-m` overrides the whole default and can select live

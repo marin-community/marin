@@ -21,7 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import numpy as np
@@ -53,12 +53,7 @@ from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E
 from experiments.domain_phase_mix.exploratory.two_phase_many.standalone_code import dsp_exact as dsp  # noqa: E402
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-DEFAULT_OUTPUT_DIR = (
-    SCRIPT_DIR
-    / "reference_outputs"
-    / "table9_dsp_phase_functional_form_20260630"
-    / "robustness"
-)
+DEFAULT_OUTPUT_DIR = SCRIPT_DIR / "reference_outputs" / "table9_dsp_phase_functional_form_20260630" / "robustness"
 MACRO_TARGET = "table9_macro_bpb"
 PLOT_CONFIG = {"toImageButtonOptions": {"format": "png", "scale": 4}}
 
@@ -119,15 +114,13 @@ def load_table9_context() -> tuple[pd.DataFrame, dict[str, object], list[str], l
 
 def proportional_noise_floor(components: list[str]) -> tuple[pd.DataFrame, NoiseFloorSummary]:
     olmo = paper_olmix.load_olmo_wide_with_table9_components()
-    proportional = olmo[
-        olmo["run_name"].eq("baseline_proportional") | olmo["panel"].eq("proportional_noise")
-    ].copy()
+    proportional = olmo[olmo["run_name"].eq("baseline_proportional") | olmo["panel"].eq("proportional_noise")].copy()
     if len(proportional) != 11:
         raise ValueError(f"Expected 11 proportional rows, found {len(proportional)}")
     proportional[MACRO_TARGET] = proportional[components].mean(axis=1)
     component_std = proportional[components].std(axis=0, ddof=1)
     summary = NoiseFloorSummary(
-        n_rows=int(len(proportional)),
+        n_rows=len(proportional),
         macro_mean=float(proportional[MACRO_TARGET].mean()),
         macro_std=float(proportional[MACRO_TARGET].std(ddof=1)),
         macro_sem=float(proportional[MACRO_TARGET].std(ddof=1) / np.sqrt(len(proportional))),

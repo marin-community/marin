@@ -311,8 +311,9 @@ def learning_curve_ceiling(round9_output: Path) -> tuple[pd.DataFrame, pd.DataFr
                     "predicted_rmse": point,
                     "ci_low": float(np.quantile(boot[:, column], 0.025)),
                     "ci_high": float(np.quantile(boot[:, column], 0.975)),
-                    "fraction_of_phase_delta_sd": point
-                    / float(round9.feature_sets()[1][:, round8.OUTPUT_LABELS.index(output)].std(ddof=1)),
+                    "fraction_of_phase_delta_sd": (
+                        point / float(round9.feature_sets()[1][:, round8.OUTPUT_LABELS.index(output)].std(ddof=1))
+                    ),
                 }
             )
     return pd.DataFrame(summary_rows), pd.DataFrame(extrapolation_rows)

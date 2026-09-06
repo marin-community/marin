@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import textwrap
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,7 +27,6 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from scipy.stats import pearsonr, spearmanr
 
 from experiments.domain_phase_mix.exploratory.two_phase_many.fit_grug_v4_aggregate_canonical_dsp import (
     DEFAULT_METADATA_CSV,
@@ -36,7 +34,6 @@ from experiments.domain_phase_mix.exploratory.two_phase_many.fit_grug_v4_aggrega
     DEFAULT_RAW_CSV,
     DEFAULT_VARIANT,
     EPS,
-    average_phase_tv,
     entropy,
     mixture_comparison,
     prediction_metrics,
@@ -52,7 +49,6 @@ from experiments.domain_phase_mix.exploratory.two_phase_many.reproduce_collabora
     proportional_weights,
 )
 from experiments.domain_phase_mix.exploratory.two_phase_many.standalone_code import dsp_exact as dsp
-
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REFERENCE_DIR = SCRIPT_DIR / "reference_outputs"
@@ -166,9 +162,7 @@ def metric_weight_frame(
 ) -> pd.DataFrame:
     """Build metric weights for one readiness policy."""
     readiness_by_metric = {
-        str(row.metric): row._asdict()
-        for row in readiness.itertuples(index=False)
-        if isinstance(row.metric, str)
+        str(row.metric): row._asdict() for row in readiness.itertuples(index=False) if isinstance(row.metric, str)
     }
     rows: list[dict[str, Any]] = []
     for metric in task_cols:
@@ -184,9 +178,7 @@ def metric_weight_frame(
                 "normalized_weight": 0.0,
                 "log_tilt_optimization_readiness": readiness_row.get("log_tilt_optimization_readiness"),
                 "bump_optimization_readiness": readiness_row.get("bump_optimization_readiness"),
-                "actuation_max_all_anchor_sd_bh_q_value": readiness_row.get(
-                    "actuation_max_all_anchor_sd_bh_q_value"
-                ),
+                "actuation_max_all_anchor_sd_bh_q_value": readiness_row.get("actuation_max_all_anchor_sd_bh_q_value"),
                 "bump_max_all_anchor_sd_bh_q_value": readiness_row.get("bump_max_all_anchor_sd_bh_q_value"),
                 "max_all_over_proportional_sd": readiness_row.get("max_all_over_proportional_sd"),
             }
@@ -356,10 +348,10 @@ def fit_target(
         "target_name": target.name,
         "description": target.description,
         "variant": model.variant.name,
-        "fit_row_count": int(len(target.y)),
+        "fit_row_count": len(target.y),
         "target_mean": float(np.mean(target.y)),
         "target_std": float(np.std(target.y, ddof=1)),
-        "metric_count": int(len(target.metric_weights)),
+        "metric_count": len(target.metric_weights),
         "active_metric_count": int((target.metric_weights["normalized_weight"].fillna(0.0) > 0.0).sum()),
         "total_param_count": int(model.total_param_count),
         "m_dependent_params_per_domain": int(model.m_dependent_params_per_domain),
@@ -367,8 +359,7 @@ def fit_target(
         "active_benefit_coef_count": int(np.sum(model.benefit_coef > EPS)),
         "active_penalty_coef_count": int(np.sum(model.penalty_coef > EPS)),
         "raw_pred_target": -float(raw_result.fun),
-        "raw_pred_delta_vs_proportional": pred_target_by_label["raw_dsp_optimum"]
-        - pred_target_by_label["proportional"],
+        "raw_pred_delta_vs_proportional": pred_target_by_label["raw_dsp_optimum"] - pred_target_by_label["proportional"],
         "raw_nearest_observed_tv": float(raw_distances[nearest_idx]),
         "raw_nearest_observed_run_name": str(packet.frame.iloc[nearest_idx][packet.name_col]),
         "raw_nearest_observed_target": float(target.y[nearest_idx]),
@@ -409,7 +400,9 @@ def write_target_plots(output_dir: Path, summaries: pd.DataFrame, predictions: p
     fig = make_subplots(rows=1, cols=2, subplot_titles=("OOF Spearman", "Raw optimum delta vs proportional"))
     order = summaries.sort_values("oof_spearman", ascending=False)["target_name"].tolist()
     sorted_summary = summaries.set_index("target_name").loc[order].reset_index()
-    fig.add_trace(go.Bar(x=sorted_summary["target_name"], y=sorted_summary["oof_spearman"], name="OOF Spearman"), row=1, col=1)
+    fig.add_trace(
+        go.Bar(x=sorted_summary["target_name"], y=sorted_summary["oof_spearman"], name="OOF Spearman"), row=1, col=1
+    )
     fig.add_trace(
         go.Bar(
             x=sorted_summary["target_name"],
@@ -444,7 +437,9 @@ def write_mixture_plot(
         title=f"Materialized epochs by mixture: {target_name}",
         hover_data=["phase_0_weight", "phase_1_weight", "phase_0_epochs", "phase_1_epochs"],
     )
-    fig.update_layout(width=1300, height=max(720, 24 * len(domains)), yaxis={"categoryorder": "array", "categoryarray": domains})
+    fig.update_layout(
+        width=1300, height=max(720, 24 * len(domains)), yaxis={"categoryorder": "array", "categoryarray": domains}
+    )
     fig.write_html(output_dir / f"{target_name}_mixture_epochs.html", config=TO_IMAGE_CONFIG)
 
 

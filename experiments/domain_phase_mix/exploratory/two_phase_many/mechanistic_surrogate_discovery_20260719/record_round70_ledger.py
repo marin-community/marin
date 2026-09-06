@@ -35,11 +35,15 @@ def main() -> None:
         "hyperparameters": "Independent-run phase-difference noise=2*sigma^2; point and upper-95pct nuisance bounds",
         "adversarial_outcomes_available_before_proposal": True,
         "adversarial_outcomes_inspected_before_proposal": True,
-        "observations_inspiring_mechanism": "Round-61 found weak and attenuated cross-scale phase-effect transfer; repeat data can falsify a measurement-error explanation.",
+        "observations_inspiring_mechanism": (
+            "Round-61 found weak and attenuated cross-scale phase-effect transfer; repeat data can falsify a measurement-error explanation."
+        ),
         "novelty_class": "errors-in-variables diagnostic; no candidate mechanism",
         "evaluation_status": "completed_measurement_error_bound_no_promotion",
         "evidence_path": "round70_cross_scale_measurement_error/report.md",
-        "notes": "Deattenuation does not repair cross-scale phase transfer; nuisance noise is too small relative to the observed phase-effect variance.",
+        "notes": (
+            "Deattenuation does not repair cross-scale phase transfer; nuisance noise is too small relative to the observed phase-effect variance."
+        ),
     }
     updated = pd.concat([ledger, pd.DataFrame([row], columns=ledger.columns)], ignore_index=True)
     candidate_rows = updated["candidate_id"].astype(str).str.strip().ne("")

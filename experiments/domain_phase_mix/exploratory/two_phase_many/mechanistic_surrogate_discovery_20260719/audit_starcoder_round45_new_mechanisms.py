@@ -272,7 +272,9 @@ def update_status(mechanism: Mechanism, status: str, evidence: str, output_dir: 
         "round_id": f"round_45_{mechanism.candidate_id.lower()}_decision",
         "candidate_id": mechanism.candidate_id,
         "candidate_family": mechanism.family,
-        "hyperparameters": "Frozen source/architecture constants, finite mechanistic grids, mandatory nested ablations, and ridge grid",
+        "hyperparameters": (
+            "Frozen source/architecture constants, finite mechanistic grids, mandatory nested ablations, and ridge grid"
+        ),
         "adversarial_outcomes_available_before_proposal": True,
         "adversarial_outcomes_inspected_before_proposal": True,
         "observations_inspiring_mechanism": "See round-45 portfolio preregistration.",

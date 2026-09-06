@@ -27,14 +27,14 @@ def main() -> None:
         "relationship_to_prior": (
             "Distinct from scalar DLSF and direct-matrix NQGF/MPMTF. DLSF had one shared scalar factor and two scalar heads; direct-matrix routes evolved W itself. DMFSB evolves two matrix factors whose product is the representation, introducing the balanced-factor invariant and singular-mode learning delay."
         ),
-        "materially_new_mechanism": ("Implicit low-rank spectral bias from a bilinear representation W=U V^T."),
+        "materially_new_mechanism": "Implicit low-rank spectral bias from a bilinear representation W=U V^T.",
         "mechanistic_premise": (
             "Deep linear and locally linearized neural networks learn singular modes at rates that depend on their current factor amplitudes. Early data can establish a shared singular direction, after which late data learns a compatible specialist direction faster; incompatible targets compete through finite factor rank."
         ),
         "governing_equations": (
             "W=UV^T; G(p,W)=(1-p)(W-T_B)+c p(W-T_R); dU/dtau=-k G V; dV/dtau=-k G^T U; Y=b+A[(1-q)||W-T_B||_F^2+q||W-T_R||_F^2]/2, A>=0. Direct dW/dtau=-kG is the exact no-factorization ablation."
         ),
-        "latent_state": ("Two balanced 2x2 representation factors U and V; their product is the learned task matrix."),
+        "latent_state": "Two balanced 2x2 representation factors U and V; their product is the learned task matrix.",
         "state_transition": (
             "Autonomous bilinear gradient flow through each phase, with both factors continuous across the phase boundary."
         ),
@@ -77,10 +77,14 @@ def main() -> None:
         "round_id": "round_47_matrix_factorization_freeze",
         "candidate_id": row["id"],
         "candidate_family": row["family"],
-        "hyperparameters": "Frozen rank-2 balanced factorization, task-geometry and clock grids, direct-W ablation, and immutable StarCoder gate",
+        "hyperparameters": (
+            "Frozen rank-2 balanced factorization, task-geometry and clock grids, direct-W ablation, and immutable StarCoder gate"
+        ),
         "adversarial_outcomes_available_before_proposal": True,
         "adversarial_outcomes_inspected_before_proposal": True,
-        "observations_inspiring_mechanism": "Scalar and direct-matrix flows failed both schedules; this route introduces factorized singular-mode dynamics rather than another scalar clock.",
+        "observations_inspiring_mechanism": (
+            "Scalar and direct-matrix flows failed both schedules; this route introduces factorized singular-mode dynamics rather than another scalar clock."
+        ),
         "novelty_class": "Bilinear matrix-factorization latent state",
         "evaluation_status": "preregistered_before_evaluation",
         "evidence_path": "approach_registry.csv#DMFSB",

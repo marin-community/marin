@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 from experiments.domain_phase_mix.exploratory.two_phase_many import plot_ppert_hellaswag_quality_swaps as plotter
 
 

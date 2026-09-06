@@ -62,30 +62,110 @@ class ProxyComponent:
 
 
 BPB_PROXY_COMPONENTS = [
-    ProxyComponent("arc_challenge_10shot", "arc_challenge_5shot", "bpb", "lm_eval/arc_challenge_5shot/bpb", "negate", "shot_mismatch"),
+    ProxyComponent(
+        "arc_challenge_10shot",
+        "arc_challenge_5shot",
+        "bpb",
+        "lm_eval/arc_challenge_5shot/bpb",
+        "negate",
+        "shot_mismatch",
+    ),
     ProxyComponent("arc_easy_10shot", "arc_easy_5shot", "bpb", "lm_eval/arc_easy_5shot/bpb", "negate", "shot_mismatch"),
     ProxyComponent("boolq_10shot", "boolq_10shot", "bpb", "lm_eval/boolq_10shot/bpb", "negate", "exact"),
-    ProxyComponent("commonsense_qa_10shot", "csqa_5shot", "bpb", "lm_eval/csqa_5shot/bpb", "negate", "shot_mismatch_alias"),
+    ProxyComponent(
+        "commonsense_qa_10shot", "csqa_5shot", "bpb", "lm_eval/csqa_5shot/bpb", "negate", "shot_mismatch_alias"
+    ),
     ProxyComponent("copa_0shot", "copa_0shot", "bpb", "lm_eval/copa_0shot/bpb", "negate", "exact"),
     ProxyComponent("hellaswag_0shot", "hellaswag_0shot", "bpb", "lm_eval/hellaswag_0shot/bpb", "negate", "exact"),
-    ProxyComponent("hellaswag_10shot", "hellaswag_5shot", "bpb", "lm_eval/hellaswag_5shot/bpb", "negate", "shot_mismatch"),
-    ProxyComponent("lambada_0shot", "lambada_0shot", "perplexity", "lm_eval/lambada_0shot/perplexity", "neg_log", "exact"),
+    ProxyComponent(
+        "hellaswag_10shot", "hellaswag_5shot", "bpb", "lm_eval/hellaswag_5shot/bpb", "negate", "shot_mismatch"
+    ),
+    ProxyComponent(
+        "lambada_0shot", "lambada_0shot", "perplexity", "lm_eval/lambada_0shot/perplexity", "neg_log", "exact"
+    ),
     ProxyComponent("openbookqa_0shot", "openbookqa_0shot", "bpb", "lm_eval/openbookqa_0shot/bpb", "negate", "exact"),
     ProxyComponent("piqa_10shot", "piqa_5shot", "bpb", "lm_eval/piqa_5shot/bpb", "negate", "shot_mismatch"),
-    ProxyComponent("winogrande_0shot", "winogrande_5shot", "bpb", "lm_eval/winogrande_5shot/bpb", "negate", "shot_mismatch"),
+    ProxyComponent(
+        "winogrande_0shot", "winogrande_5shot", "bpb", "lm_eval/winogrande_5shot/bpb", "negate", "shot_mismatch"
+    ),
 ]
 
 CHOICE_NORM_PROXY_COMPONENTS = [
-    ProxyComponent("arc_challenge_10shot", "arc_challenge_5shot", "choice_logprob_norm", "lm_eval/arc_challenge_5shot/choice_logprob_norm", "identity", "shot_mismatch"),
-    ProxyComponent("arc_easy_10shot", "arc_easy_5shot", "choice_logprob_norm", "lm_eval/arc_easy_5shot/choice_logprob_norm", "identity", "shot_mismatch"),
-    ProxyComponent("boolq_10shot", "boolq_10shot", "choice_logprob_norm", "lm_eval/boolq_10shot/choice_logprob_norm", "identity", "exact"),
-    ProxyComponent("commonsense_qa_10shot", "csqa_5shot", "choice_logprob_norm", "lm_eval/csqa_5shot/choice_logprob_norm", "identity", "shot_mismatch_alias"),
-    ProxyComponent("copa_0shot", "copa_0shot", "choice_logprob_norm", "lm_eval/copa_0shot/choice_logprob_norm", "identity", "exact"),
-    ProxyComponent("hellaswag_0shot", "hellaswag_0shot", "choice_logprob_norm", "lm_eval/hellaswag_0shot/choice_logprob_norm", "identity", "exact"),
-    ProxyComponent("hellaswag_10shot", "hellaswag_5shot", "choice_logprob_norm", "lm_eval/hellaswag_5shot/choice_logprob_norm", "identity", "shot_mismatch"),
-    ProxyComponent("openbookqa_0shot", "openbookqa_0shot", "choice_logprob_norm", "lm_eval/openbookqa_0shot/choice_logprob_norm", "identity", "exact"),
-    ProxyComponent("piqa_10shot", "piqa_5shot", "choice_logprob_norm", "lm_eval/piqa_5shot/choice_logprob_norm", "identity", "shot_mismatch"),
-    ProxyComponent("winogrande_0shot", "winogrande_5shot", "choice_logprob_norm", "lm_eval/winogrande_5shot/choice_logprob_norm", "identity", "shot_mismatch"),
+    ProxyComponent(
+        "arc_challenge_10shot",
+        "arc_challenge_5shot",
+        "choice_logprob_norm",
+        "lm_eval/arc_challenge_5shot/choice_logprob_norm",
+        "identity",
+        "shot_mismatch",
+    ),
+    ProxyComponent(
+        "arc_easy_10shot",
+        "arc_easy_5shot",
+        "choice_logprob_norm",
+        "lm_eval/arc_easy_5shot/choice_logprob_norm",
+        "identity",
+        "shot_mismatch",
+    ),
+    ProxyComponent(
+        "boolq_10shot",
+        "boolq_10shot",
+        "choice_logprob_norm",
+        "lm_eval/boolq_10shot/choice_logprob_norm",
+        "identity",
+        "exact",
+    ),
+    ProxyComponent(
+        "commonsense_qa_10shot",
+        "csqa_5shot",
+        "choice_logprob_norm",
+        "lm_eval/csqa_5shot/choice_logprob_norm",
+        "identity",
+        "shot_mismatch_alias",
+    ),
+    ProxyComponent(
+        "copa_0shot", "copa_0shot", "choice_logprob_norm", "lm_eval/copa_0shot/choice_logprob_norm", "identity", "exact"
+    ),
+    ProxyComponent(
+        "hellaswag_0shot",
+        "hellaswag_0shot",
+        "choice_logprob_norm",
+        "lm_eval/hellaswag_0shot/choice_logprob_norm",
+        "identity",
+        "exact",
+    ),
+    ProxyComponent(
+        "hellaswag_10shot",
+        "hellaswag_5shot",
+        "choice_logprob_norm",
+        "lm_eval/hellaswag_5shot/choice_logprob_norm",
+        "identity",
+        "shot_mismatch",
+    ),
+    ProxyComponent(
+        "openbookqa_0shot",
+        "openbookqa_0shot",
+        "choice_logprob_norm",
+        "lm_eval/openbookqa_0shot/choice_logprob_norm",
+        "identity",
+        "exact",
+    ),
+    ProxyComponent(
+        "piqa_10shot",
+        "piqa_5shot",
+        "choice_logprob_norm",
+        "lm_eval/piqa_5shot/choice_logprob_norm",
+        "identity",
+        "shot_mismatch",
+    ),
+    ProxyComponent(
+        "winogrande_0shot",
+        "winogrande_5shot",
+        "choice_logprob_norm",
+        "lm_eval/winogrande_5shot/choice_logprob_norm",
+        "identity",
+        "shot_mismatch",
+    ),
 ]
 
 
@@ -171,7 +251,9 @@ def add_proportional_tv(frame: pd.DataFrame, metadata: pd.DataFrame) -> pd.DataF
     return out
 
 
-def add_proxy_columns(frame: pd.DataFrame, components: list[ProxyComponent], proxy_name: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+def add_proxy_columns(
+    frame: pd.DataFrame, components: list[ProxyComponent], proxy_name: str
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Add component utility/z-score columns and aggregate proxy columns."""
     out = frame.copy()
     rows = []
@@ -264,16 +346,14 @@ def fit_target(
     row = {
         "target_column": target_column,
         "variant": variant.name,
-        "fit_row_count": int(len(packet.y)),
+        "fit_row_count": len(packet.y),
         "target_mean": float(actual.mean()),
         "target_std": float(actual.std(ddof=1)),
         "target_range": float(actual.max() - actual.min()),
         "best_observed_run_name": str(packet.frame.iloc[best_idx]["run_name"]),
         "best_observed_score": float(actual[best_idx]),
         "proportional_score": float(actual[prop_mask][0]) if prop_mask.any() else np.nan,
-        "best_minus_proportional": (
-            float(actual[best_idx] - actual[prop_mask][0]) if prop_mask.any() else np.nan
-        ),
+        "best_minus_proportional": float(actual[best_idx] - actual[prop_mask][0]) if prop_mask.any() else np.nan,
         "raw_predicted_score": raw_predicted_score,
         "raw_nearest_observed_run_name": raw_nearest_observed_run_name,
         "raw_nearest_observed_score": raw_nearest_observed_score,
@@ -333,9 +413,7 @@ def add_hard_dclm_coupling(
     row["raw_nearest_observed_hard_dclm_macro"] = (
         float(nearest_hard_rows.iloc[0]) if not nearest_hard_rows.empty else np.nan
     )
-    row["raw_nearest_observed_hard_minus_proportional"] = (
-        row["raw_nearest_observed_hard_dclm_macro"] - proportional_hard
-    )
+    row["raw_nearest_observed_hard_minus_proportional"] = row["raw_nearest_observed_hard_dclm_macro"] - proportional_hard
     if local_frame[proxy_column].notna().any():
         local_best_index = pd.to_numeric(local_frame[proxy_column], errors="coerce").idxmax()
         local_best = frame.loc[local_best_index]
@@ -529,11 +607,10 @@ def main() -> None:
             pd.to_numeric(map_frame["utility_vs_hard_spearman"], errors="coerce").ge(args.positive_coupling_threshold)
         ].copy()
         if len(positive_map) >= 2:
-            subset_proxy_name = f"{proxy_name}_positive_coupling_ge{str(args.positive_coupling_threshold).replace('.', 'p')}"
-            subset_z_columns = [
-                f"{proxy_name}/{task}/z_utility"
-                for task in positive_map["dclm_task"].tolist()
-            ]
+            subset_proxy_name = (
+                f"{proxy_name}_positive_coupling_ge{str(args.positive_coupling_threshold).replace('.', 'p')}"
+            )
+            subset_z_columns = [f"{proxy_name}/{task}/z_utility" for task in positive_map["dclm_task"].tolist()]
             subset_aggregate_column = f"{subset_proxy_name}/zscore_macro"
             frame[subset_aggregate_column] = frame[subset_z_columns].mean(axis=1)
             subset_row, subset_predictions, subset_weights = fit_target(
@@ -611,23 +688,27 @@ def main() -> None:
     weights.to_csv(args.output_dir / "proxy_raw_optimum_weights.csv", index=False)
     summary = {
         "variant": variant.name,
-        "proxy_count": int(len(aggregate_summary)),
-        "proxies": aggregate_summary[
-            [
-                "proxy_name",
-                "component_count",
-                "oof_spearman",
-                "oof_r2",
-                "hard_dclm_macro_spearman",
-                "best_observed_run_name",
-                "best_observed_hard_dclm_macro",
-                "proportional_hard_dclm_macro",
-                "raw_nearest_observed_tv",
-            ]
-        ].to_dict(orient="records"),
+        "proxy_count": len(aggregate_summary),
+        "proxies": (
+            aggregate_summary[
+                [
+                    "proxy_name",
+                    "component_count",
+                    "oof_spearman",
+                    "oof_r2",
+                    "hard_dclm_macro_spearman",
+                    "best_observed_run_name",
+                    "best_observed_hard_dclm_macro",
+                    "proportional_hard_dclm_macro",
+                    "raw_nearest_observed_tv",
+                ]
+            ].to_dict(orient="records")
+        ),
     }
     (args.output_dir / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    write_plot(aggregate_summary, component_summary, proxy_component_map, args.output_dir / "smooth_proxy_fit_diagnostics.html")
+    write_plot(
+        aggregate_summary, component_summary, proxy_component_map, args.output_dir / "smooth_proxy_fit_diagnostics.html"
+    )
     write_report(args.output_dir, aggregate_summary, component_summary, proxy_component_map)
     print(json.dumps(summary, indent=2, sort_keys=True))
 

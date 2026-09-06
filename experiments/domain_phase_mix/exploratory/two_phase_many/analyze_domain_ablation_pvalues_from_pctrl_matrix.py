@@ -201,7 +201,7 @@ def compute_pvalues(matrix: pd.DataFrame, noise_matrix: pd.DataFrame) -> tuple[p
         base_utility = float(np.mean(reference))
         noise = reference
         noise_sd = float(np.std(noise, ddof=1))
-        n_noise = int(len(noise))
+        n_noise = len(noise)
         df = n_noise - 1
         predictive_sd = noise_sd * math.sqrt(1.0 + 1.0 / n_noise)
         for _, deletion in deletions.iterrows():
@@ -240,7 +240,7 @@ def compute_pvalues(matrix: pd.DataFrame, noise_matrix: pd.DataFrame) -> tuple[p
 
     summaries = []
     for metric, group in cell.groupby("metric", sort=False):
-        n_domains = int(len(group))
+        n_domains = len(group)
         best = group.loc[group["p_harm"].idxmin()]
         summaries.append(
             {
@@ -277,7 +277,7 @@ def main() -> None:
         "noise_matrix": str(args.noise_matrix),
         "cell_pvalues": str(cell_path),
         "benchmark_min_pvalues": str(summary_path),
-        "cells": int(len(cell)),
+        "cells": len(cell),
         "benchmarks": int(cell["benchmark_key"].nunique()),
         "domains": int(cell["target_domain"].nunique()),
         "metrics": int(cell["metric"].nunique()),

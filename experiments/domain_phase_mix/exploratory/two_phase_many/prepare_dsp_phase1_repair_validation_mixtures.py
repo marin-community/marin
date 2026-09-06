@@ -23,28 +23,26 @@ from pathlib import Path
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.io as pio
-from plotly.subplots import make_subplots
-
 from plot_dsp_uncheatable_exposure_repair import original_frame, proportional_mass
 from plot_one_vs_two_phase_best_mixtures import (
     COMPARISONS,
-    OUTPUT_DIR as BEST_MIXTURE_OUTPUT_DIR,
     PHASE_0_FRACTION,
     PHASE_1_FRACTION,
     PLOT_CONFIG,
     clean_domain,
     comparison_frames,
 )
+from plot_one_vs_two_phase_best_mixtures import (
+    OUTPUT_DIR as BEST_MIXTURE_OUTPUT_DIR,
+)
+from plotly.subplots import make_subplots
 from prepare_dsp_exposure_repair_validation_mixtures import (
     OBJECTIVE_TO_KEY,
     TARGETED_REPAIR_DOMAINS,
     launch_ready_frame,
 )
 
-
-OUTPUT_DIR = (
-    BEST_MIXTURE_OUTPUT_DIR.parent / "dsp_phase1_repair_validation_mixtures_20260702"
-)
+OUTPUT_DIR = BEST_MIXTURE_OUTPUT_DIR.parent / "dsp_phase1_repair_validation_mixtures_20260702"
 MIXTURE_DIR = OUTPUT_DIR / "mixtures"
 
 COLORS = {
@@ -169,9 +167,7 @@ def phase1_repair(
             f"{objective}/{donor_policy} applied phase1 delta {total_applied_delta} "
             f"exceeds donor capacity {donor_capacity}"
         )
-    donor_surplus_scale = (
-        1.0 if donor_capacity == 0 else 1.0 - total_applied_delta / donor_capacity
-    )
+    donor_surplus_scale = 1.0 if donor_capacity == 0 else 1.0 - total_applied_delta / donor_capacity
     w1_new.loc[donors] = donor_floor.loc[donors] + donor_surplus_scale * donor_surplus
 
     phase1_sum_error = float(abs(w1_new.sum() - 1.0))
@@ -190,19 +186,12 @@ def phase1_repair(
     frame["phase_1_epoch_multiplier"] = frame["phase_1_weight"] / p
     frame["simulated_epochs"] = frame["aggregate_weight"] / p
     selected_aggregate_deficit = float(
-        (
-            merged.loc[selected, "aggregate_weight_single"]
-            - merged.loc[selected, "aggregate_weight_two_phase"]
-        )
+        (merged.loc[selected, "aggregate_weight_single"] - merged.loc[selected, "aggregate_weight_two_phase"])
         .clip(lower=0.0)
         .sum()
     )
     selected_aggregate_repaired = PHASE_1_FRACTION * total_applied_delta
-    policy_label = (
-        "phase-1 surplus-donor max repair"
-        if donor_policy == "surplus"
-        else "phase-1 any-donor max repair"
-    )
+    policy_label = "phase-1 surplus-donor max repair" if donor_policy == "surplus" else "phase-1 any-donor max repair"
     objective_key = OBJECTIVE_TO_KEY[objective]
     return Phase1Repair(
         name=f"dsp_{objective_key}_phase1_{donor_policy}_rhomax",
@@ -238,9 +227,7 @@ def remaining_deficit_stats(merged: pd.DataFrame, frame: pd.DataFrame) -> tuple[
     )
 
 
-def summarize_candidate(
-    repair: Phase1Repair, merged: pd.DataFrame, output_csv: Path
-) -> CandidateSummary:
+def summarize_candidate(repair: Phase1Repair, merged: pd.DataFrame, output_csv: Path) -> CandidateSummary:
     frame = repair.frame
     positive_remaining, max_remaining, worsened_count = remaining_deficit_stats(merged, frame)
     repair_fraction = (
@@ -331,9 +318,7 @@ def plot_phase1_repair(
     mixtures = list(dict.fromkeys(long_df["mixture"].tolist()))
     for col, (phase, value_column, x_title) in enumerate(panels, start=1):
         for mixture in mixtures:
-            data = long_df[
-                (long_df["phase"] == phase) & (long_df["mixture"] == mixture)
-            ].copy()
+            data = long_df[(long_df["phase"] == phase) & (long_df["mixture"] == mixture)].copy()
             data["domain_short"] = data["domain"].map(domain_to_y)
             data = data.set_index("domain").loc[order_domains].reset_index()
             fig.add_trace(
@@ -417,17 +402,12 @@ def objective_repairs(task: str) -> tuple[list[CandidateSummary], tuple[str, go.
     long_df = long_frame(named_frames)
     objective_key = OBJECTIVE_TO_KEY[task]
     long_df.to_csv(OUTPUT_DIR / f"{objective_key}_phase1_repair_long.csv", index=False)
-    order_domains = (
-        merged.sort_values("exposure_deficit_single_minus_two", ascending=True)["domain"]
-        .tolist()
-    )
+    order_domains = merged.sort_values("exposure_deficit_single_minus_two", ascending=True)["domain"].tolist()
     figure = plot_phase1_repair(
         title=f"{task} DSP phase-1-only exposure repair",
         long_df=long_df,
         order_domains=order_domains,
-        subtitle=(
-            "Phase 0 fixed; selected deficits repaired through phase 1 up to feasible rho_max."
-        ),
+        subtitle=("Phase 0 fixed; selected deficits repaired through phase 1 up to feasible rho_max."),
     )
     figure.write_html(
         OUTPUT_DIR / f"{objective_key}_phase1_repair.html",

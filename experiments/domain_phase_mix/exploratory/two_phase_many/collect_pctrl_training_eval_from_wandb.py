@@ -126,7 +126,7 @@ def collect(
             values = eval_summary(run)
             record["training_eval_metric_count"] = len(values)
             record.update(values)
-        except Exception as exc:  # noqa: BLE001 - record per-row API failures for audit.
+        except Exception as exc:
             record["training_eval_metric_count"] = 0
             record["collection_error"] = f"{type(exc).__name__}: {exc}"
             failures.append(
@@ -160,8 +160,8 @@ def collect(
         "input_matrix": str(input_matrix),
         "collection_csv": str(collect_path),
         "augmented_matrix": str(augmented_path),
-        "rows": int(len(augmented)),
-        "eval_metric_columns": int(len(eval_columns)),
+        "rows": len(augmented),
+        "eval_metric_columns": len(eval_columns),
         "uncheatable_eval_metric_columns": int(sum("uncheatable_eval" in column for column in eval_columns)),
         "rows_with_any_training_eval": int((collected["training_eval_metric_count"] > 0).sum()),
         "failures": failures,

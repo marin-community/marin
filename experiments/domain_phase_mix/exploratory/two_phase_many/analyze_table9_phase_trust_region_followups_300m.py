@@ -167,7 +167,9 @@ def build_packet_for_frame(frame: pd.DataFrame, domains: list[str]) -> dsp.Packe
     return top_level_dsp.build_dsp_packet(frame, columns, domains, token_counts, TARGET_COL)
 
 
-def feature_bundle(frame: pd.DataFrame, model: dsp.FittedDSPModel) -> tuple[dsp.PacketData, np.ndarray, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def feature_bundle(
+    frame: pd.DataFrame, model: dsp.FittedDSPModel
+) -> tuple[dsp.PacketData, np.ndarray, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     domains = list(model.domain_names)
     packet = build_packet_for_frame(frame, domains)
     baseline_row = frame["run_name"].eq("baseline_proportional")
@@ -272,7 +274,9 @@ def write_retrodiction_plot(path: Path, frame: pd.DataFrame) -> None:
         )
     lo = min(float(frame["actual_bpb"].min()), float(frame["predicted_bpb"].min()))
     hi = max(float(frame["actual_bpb"].max()), float(frame["predicted_bpb"].max()))
-    fig.add_trace(go.Scatter(x=[lo, hi], y=[lo, hi], mode="lines", name="y=x", line={"dash": "dash", "color": "#64748b"}))
+    fig.add_trace(
+        go.Scatter(x=[lo, hi], y=[lo, hi], mode="lines", name="y=x", line={"dash": "dash", "color": "#64748b"})
+    )
     fig.update_layout(
         title="Retrodiction on already validated Table-9 proposals",
         xaxis_title="Validated Table-9 macro BPB",
@@ -300,7 +304,9 @@ def write_groupkfold_plot(path: Path, summary: pd.DataFrame) -> None:
     for idx, metric in enumerate(metrics):
         visible = [False] * len(metrics)
         visible[idx] = True
-        buttons.append({"label": metric, "method": "update", "args": [{"visible": visible}, {"yaxis.title.text": metric}]})
+        buttons.append(
+            {"label": metric, "method": "update", "args": [{"visible": visible}, {"yaxis.title.text": metric}]}
+        )
     fig.update_layout(
         title="Strict diagnostic-group-heldout Table-9 phase variants",
         xaxis_title="Variant",
@@ -338,7 +344,10 @@ def main() -> None:
     )
 
     variant_predictions: dict[str, tuple[np.ndarray, str]] = {
-        "baseline_aggregate_dsp": (base_pred, "Existing expanded-panel aggregate effective-exposure DSP OOF prediction."),
+        "baseline_aggregate_dsp": (
+            base_pred,
+            "Existing expanded-panel aggregate effective-exposure DSP OOF prediction.",
+        ),
         "residual_global_phase_ridge": (
             residuals.residual_ridge_oof(y=y, base_pred=base_pred, features=global_features, folds=folds),
             "Group-heldout ridge correction using global phase diagnostics.",
@@ -384,7 +393,9 @@ def main() -> None:
     ).sort_values(["fold_mean_regret_at_1", "lower_tail_optimism", "rmse"])
 
     proposals = proposal_frame(domains)
-    proposal_packet, _proposal_natural, proposal_global, proposal_family, proposal_domain = feature_bundle(proposals, model)
+    proposal_packet, _proposal_natural, proposal_global, proposal_family, proposal_domain = feature_bundle(
+        proposals, model
+    )
     proposal_base_pred = shared_model_prediction(model, proposal_packet)
     proposal_collapsed_pred = residuals.collapsed_dsp_prediction(args.aggregate_dsp_model, proposal_packet)
     proposal_collapsed_features = pd.concat(
@@ -403,7 +414,9 @@ def main() -> None:
     proposal_actual = proposals[TARGET_COL].to_numpy(dtype=float)
     retrodiction_predictions: dict[str, np.ndarray] = {
         "shared_aggregate_dsp": proposal_base_pred,
-        "nearest_observed": nearest_observed_predictions(panel, proposals, domains)["nearest_observed_bpb"].to_numpy(dtype=float),
+        "nearest_observed": (
+            nearest_observed_predictions(panel, proposals, domains)["nearest_observed_bpb"].to_numpy(dtype=float)
+        ),
         "residual_global_phase_ridge": full_fit_residual_prediction(
             train_y=y,
             train_base_pred=base_pred,
@@ -483,9 +496,9 @@ def main() -> None:
         "best_retrodiction_variant_by_mae": str(retrodiction_summary.iloc[0]["variant"]),
         "best_retrodiction_mean_abs_error": float(retrodiction_summary.iloc[0]["mean_abs_error"]),
         "shared_aggregate_retrodiction_mean_abs_error": float(
-            retrodiction_summary.loc[
-                retrodiction_summary["variant"].eq("shared_aggregate_dsp"), "mean_abs_error"
-            ].iloc[0]
+            retrodiction_summary.loc[retrodiction_summary["variant"].eq("shared_aggregate_dsp"), "mean_abs_error"].iloc[
+                0
+            ]
         ),
     }
     (args.output_dir / "trust_region_followup_summary.json").write_text(

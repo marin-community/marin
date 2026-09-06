@@ -31,28 +31,25 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from scipy.stats import pearsonr, spearmanr
-from sklearn.decomposition import FactorAnalysis, PCA
+from sklearn.decomposition import PCA, FactorAnalysis
 
 from experiments.domain_phase_mix.exploratory.two_phase_many.analyze_dclm_all22_smooth_dsp_300m import (
-    OUTPUT_DIR as SMOOTH_OUTPUT_DIR,
-)
-from experiments.domain_phase_mix.exploratory.two_phase_many.analyze_dclm_all22_smooth_dsp_300m import (
+    DEFAULT_DCLM_MATRIX_CSV,
     add_hard_coupling,
     add_smooth_targets,
+    fit_target,
     hard_component_variance_audit,
     load_joined_frame,
     safe_corr,
     write_weights_plot,
 )
+from experiments.domain_phase_mix.exploratory.two_phase_many.analyze_dclm_all22_smooth_dsp_300m import (
+    OUTPUT_DIR as SMOOTH_OUTPUT_DIR,
+)
 from experiments.domain_phase_mix.exploratory.two_phase_many.fit_dclm_core_dsp_300m import (
     METADATA_CSV,
     RAW_MATRIX_CSV,
     TARGET_COLUMN,
-)
-from experiments.domain_phase_mix.exploratory.two_phase_many.analyze_dclm_all22_smooth_dsp_300m import (
-    DEFAULT_DCLM_MATRIX_CSV,
-    fit_target,
 )
 from experiments.domain_phase_mix.exploratory.two_phase_many.standalone_code import dsp_exact as dsp
 
@@ -113,7 +110,9 @@ def component_matrix(frame: pd.DataFrame, aliases: list[str]) -> tuple[np.ndarra
     return values[complete_mask], columns, complete_mask
 
 
-def orient_columns(scores: np.ndarray, loadings: np.ndarray, anchor: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def orient_columns(
+    scores: np.ndarray, loadings: np.ndarray, anchor: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Orient factor score columns to have nonnegative correlation with anchor."""
     oriented_scores = np.asarray(scores, dtype=float).copy()
     oriented_loadings = np.asarray(loadings, dtype=float).copy()
@@ -244,9 +243,14 @@ def add_group_targets(
             factor_rows.append(row)
         score_frames.append(pd.DataFrame.from_records(factor_rows))
 
-    return out, pd.DataFrame.from_records(target_rows), pd.concat(loading_frames, ignore_index=True), pd.concat(
-        score_frames,
-        ignore_index=True,
+    return (
+        out,
+        pd.DataFrame.from_records(target_rows),
+        pd.concat(loading_frames, ignore_index=True),
+        pd.concat(
+            score_frames,
+            ignore_index=True,
+        ),
     )
 
 
@@ -255,12 +259,16 @@ def build_component_groups(component_map: pd.DataFrame, hard_audit: pd.DataFrame
     all_aliases = component_map["alias"].astype(str).tolist()
     anchor_aliases = component_map.loc[component_map["proportional_available"], "alias"].astype(str).tolist()
     merged = component_map.merge(hard_audit[["alias", "hard_unique"]], on="alias", how="left")
-    hard_positive = merged.loc[
-        merged["proportional_available"]
-        & merged["hard_unique"].gt(1)
-        & pd.to_numeric(merged["utility_vs_hard_spearman"], errors="coerce").gt(0.0),
-        "alias",
-    ].astype(str).tolist()
+    hard_positive = (
+        merged.loc[
+            merged["proportional_available"]
+            & merged["hard_unique"].gt(1)
+            & pd.to_numeric(merged["utility_vs_hard_spearman"], errors="coerce").gt(0.0),
+            "alias",
+        ]
+        .astype(str)
+        .tolist()
+    )
     return [
         ComponentGroup("proportional_anchor20", anchor_aliases, "20 components with proportional smooth coverage"),
         ComponentGroup("all22_complete", all_aliases, "all 22 components; complete-case rows only"),
@@ -398,9 +406,7 @@ def smooth_reference_rows(frame: pd.DataFrame) -> pd.DataFrame:
                 "best_observed_run_name": str(frame.loc[best_index, "run_name"]),
                 "best_observed_hard_dclm_macro": float(frame.loc[best_index, TARGET_COLUMN]),
                 "best_observed_hard_minus_proportional": float(frame.loc[best_index, TARGET_COLUMN] - proportional_hard),
-                "oof_spearman": (
-                    float(previous_rows["oof_spearman"].iloc[0]) if not previous_rows.empty else np.nan
-                ),
+                "oof_spearman": float(previous_rows["oof_spearman"].iloc[0]) if not previous_rows.empty else np.nan,
                 "oof_r2": float(previous_rows["oof_r2"].iloc[0]) if not previous_rows.empty else np.nan,
                 "raw_tv_to_proportional": (
                     float(previous_rows["raw_tv_to_proportional"].iloc[0]) if not previous_rows.empty else np.nan
@@ -499,9 +505,7 @@ def main() -> None:
         None,
     )
     posthoc_z_columns = (
-        [f"dclm_smooth/{alias}/z_utility" for alias in posthoc_group.aliases]
-        if posthoc_group is not None
-        else []
+        [f"dclm_smooth/{alias}/z_utility" for alias in posthoc_group.aliases] if posthoc_group is not None else []
     )
     if len(posthoc_z_columns) >= 2:
         frame["dclm_smooth/posthoc_hard_signal_positive_zscore_macro"] = frame[posthoc_z_columns].mean(
@@ -581,11 +585,11 @@ def main() -> None:
         "dclm_matrix_csv": str(args.dclm_matrix_csv),
         "smooth_reference_output_dir": str(SMOOTH_OUTPUT_DIR),
         "output_dir": str(args.output_dir),
-        "target_count": int(len(factor_targets)),
-        "smooth_reference_count": int(len(smooth_reference)),
-        "best_by_hard_spearman": fit_summary.sort_values("hard_macro_spearman", ascending=False)
-        .head(5)
-        .to_dict(orient="records"),
+        "target_count": len(factor_targets),
+        "smooth_reference_count": len(smooth_reference),
+        "best_by_hard_spearman": (
+            fit_summary.sort_values("hard_macro_spearman", ascending=False).head(5).to_dict(orient="records")
+        ),
     }
     (args.output_dir / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
     print(json.dumps(summary, indent=2, sort_keys=True))

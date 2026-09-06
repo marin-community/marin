@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # /// script
 # requires-python = ">=3.12"
 # dependencies = ["numpy","pandas","scipy","scikit-learn"]

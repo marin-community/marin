@@ -18,7 +18,6 @@ import argparse
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -29,14 +28,10 @@ from scipy.stats import spearmanr
 SCRIPT_DIR = Path(__file__).resolve().parent
 REFERENCE_OUTPUTS = SCRIPT_DIR / "reference_outputs"
 DEFAULT_TRAINING_REGIME_DIR = REFERENCE_OUTPUTS / "olmo_base_easy_training_regime_stability_300m_20260626"
-DEFAULT_RELIABILITY = (
-    REFERENCE_OUTPUTS / "olmo_base_easy_reliability_weighting_20260625" / "component_reliability.csv"
-)
+DEFAULT_RELIABILITY = REFERENCE_OUTPUTS / "olmo_base_easy_reliability_weighting_20260625" / "component_reliability.csv"
 DEFAULT_OUTPUT_DIR = REFERENCE_OUTPUTS / "olmo_base_easy_deletion_uncertainty_300m_20260626"
 DEFAULT_FIT_PANEL = (
-    REFERENCE_OUTPUTS
-    / "olmo_base_easy_paper_faithful_olmix_300m_20260625"
-    / "fit_panel_table9_macro.csv"
+    REFERENCE_OUTPUTS / "olmo_base_easy_paper_faithful_olmix_300m_20260625" / "fit_panel_table9_macro.csv"
 )
 MACRO_TARGET = "table9_macro_bpb"
 PLOT_CONFIG = {"toImageButtonOptions": {"format": "png", "scale": 4}}
@@ -165,7 +160,7 @@ def metric_rows(
                 scope=scope,
                 target=target,
                 method=method,
-                n_rows=int(len(y)),
+                n_rows=len(y),
                 spearman=observed,
                 bootstrap_ci_low=ci_low,
                 bootstrap_ci_high=ci_high,
@@ -329,21 +324,25 @@ def write_report(output_dir: Path, rows: pd.DataFrame) -> None:
         "",
         "## Components with positive held-out deletion rank signal after BH correction",
         "",
-        significant[
-            [
-                "target",
-                "spearman",
-                "bootstrap_ci_low",
-                "bootstrap_ci_high",
-                "permutation_two_sided_p",
-                "bh_q_value",
-                "bias",
-                "rmse",
-                "two_sided_t_excess",
+        (
+            significant[
+                [
+                    "target",
+                    "spearman",
+                    "bootstrap_ci_low",
+                    "bootstrap_ci_high",
+                    "permutation_two_sided_p",
+                    "bh_q_value",
+                    "bias",
+                    "rmse",
+                    "two_sided_t_excess",
+                ]
             ]
-        ].head(20).to_markdown(index=False, floatfmt=".6f")
-        if not significant.empty
-        else "(none under CI-low > 0 and BH q < 0.05)",
+            .head(20)
+            .to_markdown(index=False, floatfmt=".6f")
+            if not significant.empty
+            else "(none under CI-low > 0 and BH q < 0.05)"
+        ),
         "",
         "## Components whose deletion rank signal is CI-consistent with zero",
         "",
@@ -358,7 +357,9 @@ def write_report(output_dir: Path, rows: pd.DataFrame) -> None:
                 "bias",
                 "two_sided_t_excess",
             ]
-        ].head(20).to_markdown(index=False, floatfmt=".6f"),
+        ]
+        .head(20)
+        .to_markdown(index=False, floatfmt=".6f"),
         "",
         "## Family-pooled deletion rank signal",
         "",
@@ -374,7 +375,9 @@ def write_report(output_dir: Path, rows: pd.DataFrame) -> None:
                 "bias",
                 "rmse",
             ]
-        ].sort_values(["method", "spearman"], ascending=[True, False]).to_markdown(index=False, floatfmt=".6f"),
+        ]
+        .sort_values(["method", "spearman"], ascending=[True, False])
+        .to_markdown(index=False, floatfmt=".6f"),
         "",
         "## Artifacts",
         "",
@@ -392,7 +395,9 @@ def main() -> None:
     macro = pd.read_csv(args.training_regime_dir / "method_macro_predictions.csv")
     fit_panel = pd.read_csv(args.fit_panel)
     qsplit_components = load_component_predictions(args.training_regime_dir / "qsplit_only_component_predictions.csv")
-    full_components = load_component_predictions(args.training_regime_dir / "deletion_augmented_component_predictions.csv")
+    full_components = load_component_predictions(
+        args.training_regime_dir / "deletion_augmented_component_predictions.csv"
+    )
     actual_components = qsplit_components[["run_name", "panel_source"]].merge(
         fit_panel,
         on="run_name",
@@ -406,16 +411,18 @@ def main() -> None:
     deletion_mask = macro["panel_source"].eq("domain_deletion").to_numpy(dtype=bool)
     rows: list[SpearmanUncertainty] = []
     macro_predictions = {
-        "aggregate_dsp_effective_exposure_qsplit_only": macro.loc[
-            deletion_mask, "aggregate_dsp_effective_exposure_qsplit_only"
-        ].to_numpy(dtype=float),
-        "aggregate_dsp_effective_exposure_deletion_augmented": macro.loc[
-            deletion_mask, "aggregate_dsp_effective_exposure_deletion_augmented"
-        ].to_numpy(dtype=float),
-        "per_component_mean_qsplit_only": macro.loc[deletion_mask, "per_component_mean_qsplit_only"].to_numpy(dtype=float),
-        "per_component_mean_deletion_augmented": macro.loc[
-            deletion_mask, "per_component_mean_deletion_augmented"
-        ].to_numpy(dtype=float),
+        "aggregate_dsp_effective_exposure_qsplit_only": (
+            macro.loc[deletion_mask, "aggregate_dsp_effective_exposure_qsplit_only"].to_numpy(dtype=float)
+        ),
+        "aggregate_dsp_effective_exposure_deletion_augmented": (
+            macro.loc[deletion_mask, "aggregate_dsp_effective_exposure_deletion_augmented"].to_numpy(dtype=float)
+        ),
+        "per_component_mean_qsplit_only": (
+            macro.loc[deletion_mask, "per_component_mean_qsplit_only"].to_numpy(dtype=float)
+        ),
+        "per_component_mean_deletion_augmented": (
+            macro.loc[deletion_mask, "per_component_mean_deletion_augmented"].to_numpy(dtype=float)
+        ),
     }
     rows.extend(
         metric_rows(
@@ -459,11 +466,11 @@ def main() -> None:
         actual_cols = [pred_col.removeprefix("pred::") for pred_col in family_cols]
         y = actual_components.loc[deletion_mask, actual_cols].mean(axis=1).to_numpy(dtype=float)
         predictions = {
-            "per_component_mean_qsplit_only": qsplit_components.loc[deletion_mask, family_cols].mean(axis=1).to_numpy(
-                dtype=float
+            "per_component_mean_qsplit_only": (
+                qsplit_components.loc[deletion_mask, family_cols].mean(axis=1).to_numpy(dtype=float)
             ),
-            "per_component_mean_deletion_augmented": full_components.loc[deletion_mask, family_cols].mean(axis=1).to_numpy(
-                dtype=float
+            "per_component_mean_deletion_augmented": (
+                full_components.loc[deletion_mask, family_cols].mean(axis=1).to_numpy(dtype=float)
             ),
         }
         rows.extend(

@@ -299,7 +299,9 @@ def update_status(status: str, evidence: str, output_dir: Path) -> None:
         "round_id": "round_29_starcoder_gate",
         "candidate_id": "VAMGF",
         "candidate_family": "Vector adaptive-moment gradient flow",
-        "hyperparameters": "Frozen Round 29 grid; exact vector-gradient-flow ablation; nested selection only after stage-1 survival",
+        "hyperparameters": (
+            "Frozen Round 29 grid; exact vector-gradient-flow ablation; nested selection only after stage-1 survival"
+        ),
         "adversarial_outcomes_available_before_proposal": True,
         "adversarial_outcomes_inspected_before_proposal": True,
         "observations_inspiring_mechanism": "See round_29_batch_preregistration",

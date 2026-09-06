@@ -18,9 +18,9 @@ SPEC_KWARGS = dict(
     non_embedding_params=100_000_000,
     total_trainable_params=110_000_000,
     tensor_parallel_size=1,
-    tpu_type="v5p-8",
+    tpu_type="v6e-8",
     tpu_region="us-east5",
-    tpu_zone="us-east5-a",
+    tpu_zone="us-east5-b",
 )
 
 
@@ -92,6 +92,11 @@ def test_the_committed_design_is_the_pinned_one_and_round_trips_through_the_laun
     reused = [row for row in rows if row["source"] != "new"]
     assert reused and all(row["subset_seed"] == "" for row in reused)  # blanks, never floats
     pilot = launcher.run_specs_from_rows(rows, wave="pilot", **SPEC_KWARGS)
+    canary = launcher.run_specs_from_rows(rows, wave="canary", **SPEC_KWARGS)
+    assert len(canary) == 1
+    assert canary[0].run_name == launcher.CANARY_RUN_NAME
+    assert canary[0].simulated_epoch_pool_fractions == {"dolmino_synth_qa": 0.5}
+    assert canary[0] == next(spec for spec in pilot if spec.run_name == launcher.CANARY_RUN_NAME)
     assert len(pilot) == 37
     assert all(spec.data_seed == spec.simulated_epoch_subset_seed for spec in pilot)
     assert {spec.data_seed for spec in pilot} == {662_009, 662_010, 662_011}

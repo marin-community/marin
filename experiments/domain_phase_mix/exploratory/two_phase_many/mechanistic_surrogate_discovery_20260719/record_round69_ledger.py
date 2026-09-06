@@ -35,11 +35,15 @@ def main() -> None:
         "hyperparameters": "Leave one of 10 exact-policy repeat groups out; effect=0.005 BPB; alpha=0.05; power=0.80",
         "adversarial_outcomes_available_before_proposal": True,
         "adversarial_outcomes_inspected_before_proposal": True,
-        "observations_inspiring_mechanism": "Round-67 pooled repeat variance had only 16 residual degrees of freedom and a wide Table-9 interval.",
+        "observations_inspiring_mechanism": (
+            "Round-67 pooled repeat variance had only 16 residual degrees of freedom and a wide Table-9 interval."
+        ),
         "novelty_class": "nuisance-variance influence diagnostic; no candidate mechanism",
         "evaluation_status": "completed_confirmation_design_robustness_no_promotion",
         "evidence_path": "round69_repeat_noise_influence/report.md",
-        "notes": "Tests whether the future repeat allocation is driven by one exact-policy group; no response model or threshold changed.",
+        "notes": (
+            "Tests whether the future repeat allocation is driven by one exact-policy group; no response model or threshold changed."
+        ),
     }
     updated = pd.concat([ledger, pd.DataFrame([row], columns=ledger.columns)], ignore_index=True)
     candidate_rows = updated["candidate_id"].astype(str).str.strip().ne("")

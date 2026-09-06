@@ -166,9 +166,11 @@ def semigroup_error(rare_weight: float, config: Config) -> float:
         )
     uninterrupted = np.asarray(
         [
-            state[0]
-            if config.levels == 1
-            else (1.0 - config.durable_weight) * state[0] + config.durable_weight * state[-1]
+            (
+                state[0]
+                if config.levels == 1
+                else (1.0 - config.durable_weight) * state[0] + config.durable_weight * state[-1]
+            )
             for state in states
         ]
     )

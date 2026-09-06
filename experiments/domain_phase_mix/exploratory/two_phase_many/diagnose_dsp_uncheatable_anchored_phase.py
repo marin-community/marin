@@ -30,19 +30,19 @@ from typing import Any, Literal
 import numpy as np
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 from scipy.optimize import nnls
 from scipy.stats import pearsonr, spearmanr
-from sklearn.model_selection import KFold
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from experiments.domain_phase_mix.exploratory.two_phase_many import (
+    diagnose_dsp_uncheatable_eta_heldout as eta_diag,
+)
 from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E402
     fit_olmix_reference_deletion_augmented_300m as olmix,
 )
-from experiments.domain_phase_mix.exploratory.two_phase_many import diagnose_dsp_uncheatable_eta_heldout as eta_diag  # noqa: E402
 from experiments.domain_phase_mix.exploratory.two_phase_many.standalone_code import dsp_exact as dsp  # noqa: E402
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -388,9 +388,7 @@ def summarize_variant(
     predicted_best = str(uncheatable.loc[uncheatable["predicted_uncheatable_bpb"].idxmin(), "mixture"])
     actual_best = str(uncheatable.loc[uncheatable["actual_uncheatable_bpb"].idxmin(), "mixture"])
     selection_score = float(
-        leave_extreme_rmse
-        + 0.5 * max(leave_extreme_signed_optimism, 0.0)
-        + 0.5 * np.mean(np.abs(uncheatable_errors))
+        leave_extreme_rmse + 0.5 * max(leave_extreme_signed_optimism, 0.0) + 0.5 * np.mean(np.abs(uncheatable_errors))
     )
     result = VariantResult(
         model_name=name,
@@ -541,7 +539,9 @@ def write_plots(output_dir: Path, summary: pd.DataFrame, heldout: pd.DataFrame) 
         template="plotly_white",
     )
     fig2.update_layout(width=1300, height=650, xaxis_tickangle=-20)
-    fig2.write_html(output_dir / "anchored_phase_residual_heldout_errors.html", include_plotlyjs="cdn", config=PLOT_CONFIG)
+    fig2.write_html(
+        output_dir / "anchored_phase_residual_heldout_errors.html", include_plotlyjs="cdn", config=PLOT_CONFIG
+    )
 
 
 def write_report(output_dir: Path, summary: pd.DataFrame) -> None:
@@ -623,7 +623,9 @@ def main() -> None:
     summary = pd.DataFrame([asdict(result) for result in results]).sort_values("selection_score")
     heldout_predictions = pd.concat(heldout_frames, ignore_index=True)
     train_predictions = pd.concat(train_frames, ignore_index=True)
-    _train_idx, _test_idx, extreme_frame = extreme_holdout_indices(packet, natural, extreme_frac=float(args.extreme_frac))
+    _train_idx, _test_idx, extreme_frame = extreme_holdout_indices(
+        packet, natural, extreme_frac=float(args.extreme_frac)
+    )
 
     summary.to_csv(args.output_dir / "anchored_phase_residual_summary.csv", index=False)
     heldout_predictions.to_csv(args.output_dir / "anchored_phase_residual_heldout_predictions.csv", index=False)

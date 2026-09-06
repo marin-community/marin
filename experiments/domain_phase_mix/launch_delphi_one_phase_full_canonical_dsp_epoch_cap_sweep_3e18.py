@@ -36,6 +36,7 @@ SWEEP_DEFINITION = sweep.SweepDefinition(
     common_data_seed=sweep.COMMON_DATA_SEED,
     trainer_seed=sweep.TRAINER_SEED,
     run_name_prefix="onephase_fullcanonical_dsp",
+    table9_run_name_prefix="t9_fcdsp",
     panel_source="full_canonical_dsp_epoch_cap_optimum",
     table9_wandb_group="olmo_base_eval_table9_delphi_3e18_one_phase_full_canonical_dsp_epoch_cap_sweep",
     provenance_panel="delphi_3e18_one_phase_full_canonical_dsp_epoch_cap_sweep",

@@ -85,14 +85,10 @@ DEFAULT_PER_COMPONENT_DSP_DIR = REFERENCE_OUTPUTS / "olmo_base_easy_per_componen
 DEFAULT_PER_COMPONENT_DSP_SUMMARY = DEFAULT_PER_COMPONENT_DSP_DIR / "per_component_dsp_kl_sweep_summary.csv"
 DEFAULT_OLMIX_SUMMARY = REFERENCE_OUTPUTS / "olmo_base_easy_paper_faithful_olmix_300m_20260625" / "summary.csv"
 DEFAULT_SINGLE_PHASE_WIDE = (
-    REFERENCE_OUTPUTS
-    / "olmo_base_easy_one_phase_parity_panel_300m_20260628"
-    / "single_phase_table9_wide.csv"
+    REFERENCE_OUTPUTS / "olmo_base_easy_one_phase_parity_panel_300m_20260628" / "single_phase_table9_wide.csv"
 )
 DEFAULT_SINGLE_PHASE_PANEL = (
-    REFERENCE_OUTPUTS
-    / "olmo_base_easy_one_phase_parity_panel_300m_20260628"
-    / "one_phase_augmented_fit_panel.csv"
+    REFERENCE_OUTPUTS / "olmo_base_easy_one_phase_parity_panel_300m_20260628" / "one_phase_augmented_fit_panel.csv"
 )
 
 COMPONENT_PREFIX = "olmo_base_eval/easy_bpb/"
@@ -320,7 +316,9 @@ def regression_summary(actual: np.ndarray, pred: np.ndarray) -> dict[str, float]
     }
 
 
-def selection_summary(actual: np.ndarray, pred: np.ndarray, run_names: np.ndarray, *, prefix: str = "") -> dict[str, Any]:
+def selection_summary(
+    actual: np.ndarray, pred: np.ndarray, run_names: np.ndarray, *, prefix: str = ""
+) -> dict[str, Any]:
     order = np.argsort(pred)
     best_actual_idx = int(np.argmin(actual))
     out: dict[str, Any] = {
@@ -401,7 +399,7 @@ def model_metrics(
     return {
         "model_name": model_name,
         "subset": method,
-        "n_rows": int(len(actual)),
+        "n_rows": len(actual),
         **regression_summary(actual, pred),
         **selection_summary(actual, pred, run_names),
     }
@@ -423,7 +421,7 @@ def cv_model_metrics(
     return {
         "model_name": model_name,
         "subset": subset_name,
-        "n_rows": int(len(subset_idx)),
+        "n_rows": len(subset_idx),
         **regression_summary(sub_actual, sub_pred),
         **selection_summary(sub_actual, sub_pred, sub_names),
         **fold_regrets(actual, pred, run_names, folds, subset_idx),
@@ -613,7 +611,12 @@ def write_prediction_plot(path: Path, predictions: pd.DataFrame) -> None:
                 x=frame["table9_macro_bpb"],
                 y=frame["predicted_table9_macro_bpb"],
                 mode="markers",
-                marker={"size": 9, "color": frame["method_code"], "colorscale": "RdYlGn_r", "showscale": idx == len(models)},
+                marker={
+                    "size": 9,
+                    "color": frame["method_code"],
+                    "colorscale": "RdYlGn_r",
+                    "showscale": idx == len(models),
+                },
                 text=frame["run_name"],
                 customdata=np.stack([frame["method"], frame["panel"]], axis=1),
                 hovertemplate=(
@@ -662,7 +665,9 @@ def write_regret_plot(path: Path, summary: pd.DataFrame) -> None:
 
 
 def write_cv_plot(path: Path, summary: pd.DataFrame) -> None:
-    frame = summary[summary["subset"].isin(["all", "old_280_fit_panel", "extra_300m_interventions", "single_phase_300m"])]
+    frame = summary[
+        summary["subset"].isin(["all", "old_280_fit_panel", "extra_300m_interventions", "single_phase_300m"])
+    ]
     fig = make_subplots(rows=1, cols=2, subplot_titles=["OOF RMSE", "OOF Spearman"])
     for metric, col in [("rmse", 1), ("spearman", 2)]:
         for model_name, group in frame.groupby("model_name", sort=False):
@@ -869,13 +874,13 @@ def main() -> None:
     with (args.output_dir / "metadata.json").open("w") as f:
         json.dump(
             {
-                "n_extra_300m_rows": int(len(heldout)),
+                "n_extra_300m_rows": len(heldout),
                 "heldout_rows_by_family": heldout["diagnostic_family"].value_counts().sort_index().astype(int).to_dict(),
                 "heldout_rows_by_group": heldout["diagnostic_group"].value_counts().sort_index().astype(int).to_dict(),
                 "method_counts": heldout["method"].value_counts().sort_index().astype(int).to_dict(),
-                "expanded_cv_rows": int(len(diagnostic_panel)),
+                "expanded_cv_rows": len(diagnostic_panel),
                 "expanded_cv_splits": int(N_SPLITS),
-                "fit_panel_rows": int(len(fit_panel)),
+                "fit_panel_rows": len(fit_panel),
                 "fit_panel_metadata": fit_metadata,
                 "components": components,
                 "olmix_huber_delta": float(args.olmix_huber_delta),
@@ -892,7 +897,11 @@ def main() -> None:
 
     print("Wrote", args.output_dir)
     print(summary[summary["subset"].eq("all")].to_string(index=False))
-    print(cv_summary[cv_summary["subset"].isin(["all", "old_280_fit_panel", "extra_300m_interventions", "single_phase_300m"])].to_string(index=False))
+    print(
+        cv_summary[
+            cv_summary["subset"].isin(["all", "old_280_fit_panel", "extra_300m_interventions", "single_phase_300m"])
+        ].to_string(index=False)
+    )
 
 
 if __name__ == "__main__":

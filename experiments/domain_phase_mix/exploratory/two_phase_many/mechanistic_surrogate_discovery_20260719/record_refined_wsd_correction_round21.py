@@ -204,14 +204,22 @@ def append_ledger() -> None:
         "round_id": "round_21_refined_wsd_correction",
         "candidate_id": "PROVENANCE-CORRECTION",
         "candidate_family": "Refined StarCoder WSD audit correction",
-        "hyperparameters": "No model or hyperparameter changes; all affected candidates rerun from frozen grids on 107 unique WSD policies",
+        "hyperparameters": (
+            "No model or hyperparameter changes; all affected candidates rerun from frozen grids on 107 unique WSD policies"
+        ),
         "adversarial_outcomes_available_before_proposal": True,
         "adversarial_outcomes_inspected_before_proposal": True,
-        "observations_inspiring_mechanism": "The Observatory loader omitted 43 completed refined WSD policies, including the true observed optimum; this is a data-provenance correction, not a new mechanism.",
+        "observations_inspiring_mechanism": (
+            "The Observatory loader omitted 43 completed refined WSD policies, including the true observed optimum; this is a data-provenance correction, not a new mechanism."
+        ),
         "novelty_class": "None; provenance repair",
-        "evaluation_status": "corrected StarCoder shape evidence; no candidate status changed and no adversarial model evaluation occurred",
+        "evaluation_status": (
+            "corrected StarCoder shape evidence; no candidate status changed and no adversarial model evaluation occurred"
+        ),
         "evidence_path": "round21_refined_wsd_provenance_correction/report.md",
-        "notes": "The corrected WSD frontier is 0.04577 RMSE from identified fast-slow consolidation on 107 policies. Future shape gates use this frontier.",
+        "notes": (
+            "The corrected WSD frontier is 0.04577 RMSE from identified fast-slow consolidation on 107 policies. Future shape gates use this frontier."
+        ),
     }
     identity = ["round_id", "candidate_id", "evaluation_status"]
     existing = set(map(tuple, ledger[identity].itertuples(index=False, name=None)))

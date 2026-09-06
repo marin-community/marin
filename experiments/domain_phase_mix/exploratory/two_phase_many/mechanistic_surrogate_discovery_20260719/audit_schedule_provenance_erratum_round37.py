@@ -126,7 +126,9 @@ def main() -> None:
         "hyperparameters": "No model hyperparameters changed; exact persisted warmup/stable/decay schedule only",
         "adversarial_outcomes_available_before_proposal": True,
         "adversarial_outcomes_inspected_before_proposal": True,
-        "observations_inspiring_mechanism": "Source and W&B audit found a 1000-step warmup omitted from the historical cosine clock",
+        "observations_inspiring_mechanism": (
+            "Source and W&B audit found a 1000-step warmup omitted from the historical cosine clock"
+        ),
         "novelty_class": "Identification/provenance correction, not a new model mechanism",
         "evaluation_status": "affected_routes_reopened_without_adversarial_evaluation",
         "evidence_path": str(args.output_dir.relative_to(OUTPUT_ROOT)),

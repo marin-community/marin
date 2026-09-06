@@ -21,8 +21,8 @@ only for an intentional in-region extraction job.
 from __future__ import annotations
 
 import argparse
-import heapq
 import hashlib
+import heapq
 import json
 import math
 import os
@@ -75,7 +75,7 @@ class ReverseTokenSortKey:
     hash_value: int
     token_key: str
 
-    def __lt__(self, other: "ReverseTokenSortKey") -> bool:
+    def __lt__(self, other: ReverseTokenSortKey) -> bool:
         return (self.hash_value, self.token_key) > (other.hash_value, other.token_key)
 
 

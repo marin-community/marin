@@ -46,12 +46,12 @@ def cross_target_metrics(data: pd.DataFrame) -> pd.DataFrame:
                     "n": len(uncheatable),
                     "pearson": float(np.corrcoef(uncheatable, table9)[0, 1]),
                     "spearman": float(spearmanr(uncheatable, table9).statistic),
-                    "raw_sign_agreement": float(np.mean(np.sign(uncheatable) == np.sign(table9)))
-                    if component == "phase_delta"
-                    else np.nan,
-                    "both_targets_improve_fraction": float(np.mean((uncheatable < 0) & (table9 < 0)))
-                    if component == "phase_delta"
-                    else np.nan,
+                    "raw_sign_agreement": (
+                        float(np.mean(np.sign(uncheatable) == np.sign(table9))) if component == "phase_delta" else np.nan
+                    ),
+                    "both_targets_improve_fraction": (
+                        float(np.mean((uncheatable < 0) & (table9 < 0))) if component == "phase_delta" else np.nan
+                    ),
                 }
             )
     return pd.DataFrame(records)

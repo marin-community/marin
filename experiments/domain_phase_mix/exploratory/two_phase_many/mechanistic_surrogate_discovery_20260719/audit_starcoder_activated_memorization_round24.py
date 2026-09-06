@@ -398,16 +398,16 @@ def gate_and_record(
         "timestamp": datetime.now(UTC).isoformat(),
         "round_id": "round_24_starcoder_gate",
         "candidate_id": candidate_id,
-        "candidate_family": "Activation-barrier annealing gradient flow"
-        if candidate_id == "AAGF"
-        else "Recoverable replay memorization",
+        "candidate_family": (
+            "Activation-barrier annealing gradient flow" if candidate_id == "AAGF" else "Recoverable replay memorization"
+        ),
         "hyperparameters": "Frozen round-24 batch grid with nested StarCoder selection",
         "adversarial_outcomes_available_before_proposal": True,
         "adversarial_outcomes_inspected_before_proposal": True,
         "observations_inspiring_mechanism": "See round_24_batch_preregistration",
-        "novelty_class": "Kramers transition clock"
-        if candidate_id == "AAGF"
-        else "Recoverable replay-memorization state",
+        "novelty_class": (
+            "Kramers transition clock" if candidate_id == "AAGF" else "Recoverable replay-memorization state"
+        ),
         "evaluation_status": status,
         "evidence_path": str(output_dir.relative_to(OUTPUT_ROOT)),
         "notes": evidence,

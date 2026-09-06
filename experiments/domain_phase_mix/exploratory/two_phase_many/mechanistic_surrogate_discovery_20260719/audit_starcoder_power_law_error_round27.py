@@ -336,8 +336,9 @@ def main() -> None:
                 (candidate_nested[candidate_nested["surface"] == surface]["learning_curve_power"] > 0.0).mean() >= 0.6
                 for surface in SHAPE_REFERENCE
             ),
-            "mechanism_global_both": mechanism_active(candidate_id, chosen_cosine)
-            and mechanism_active(candidate_id, chosen_wsd),
+            "mechanism_global_both": (
+                mechanism_active(candidate_id, chosen_cosine) and mechanism_active(candidate_id, chosen_wsd)
+            ),
             "mechanism_fold_majority_both": all(
                 (candidate_nested[candidate_nested["surface"] == surface][mechanism_field(candidate_id)] > 0.0).mean()
                 >= 0.6

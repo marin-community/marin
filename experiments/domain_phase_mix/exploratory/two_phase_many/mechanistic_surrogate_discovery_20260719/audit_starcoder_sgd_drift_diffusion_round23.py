@@ -434,7 +434,9 @@ def main() -> None:
                     f"tied_{key}": value
                     for key, value in metrics.scalar_metrics(panel.two_phase_target[tied], tied_prediction).items()
                 },
-                "algebraic_fit_note": "This fits the two-phase observations at tied coordinates; no independent one-phase outcomes exist on these StarCoder panels.",
+                "algebraic_fit_note": (
+                    "This fits the two-phase observations at tied coordinates; no independent one-phase outcomes exist on these StarCoder panels."
+                ),
                 "best_tied_grid_rmse": float(tied_grid.iloc[0]["rmse"]),
             }
         )

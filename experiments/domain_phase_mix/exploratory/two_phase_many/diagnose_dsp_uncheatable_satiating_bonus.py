@@ -26,20 +26,18 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 from scipy.stats import pearsonr, spearmanr
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from experiments.domain_phase_mix.exploratory.two_phase_many import (
+    diagnose_dsp_uncheatable_eta_heldout as eta_diag,
+)
 from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E402
     fit_dsp_vs_olmix_deletion_augmented_300m as dsp_compare,
 )
-from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E402
-    fit_olmix_reference_deletion_augmented_300m as olmix,
-)
-from experiments.domain_phase_mix.exploratory.two_phase_many import diagnose_dsp_uncheatable_eta_heldout as eta_diag  # noqa: E402
 from experiments.domain_phase_mix.exploratory.two_phase_many.standalone_code import dsp_exact as dsp  # noqa: E402
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -181,7 +179,9 @@ def repaired_predictions(model: dsp.FittedDSPModel, heldout: pd.DataFrame) -> pd
     return pd.DataFrame(rows)
 
 
-def leave_good_out(packet: dsp.PacketData, variant_key: str, args: argparse.Namespace) -> tuple[float, float, pd.DataFrame]:
+def leave_good_out(
+    packet: dsp.PacketData, variant_key: str, args: argparse.Namespace
+) -> tuple[float, float, pd.DataFrame]:
     holdout_count = max(5, int(np.ceil(float(args.good_frac) * len(packet.y))))
     test_idx = np.argsort(packet.y)[:holdout_count]
     train_idx = np.setdiff1d(np.arange(len(packet.y)), test_idx)
@@ -204,7 +204,9 @@ def leave_good_out(packet: dsp.PacketData, variant_key: str, args: argparse.Name
     return rmse, signed_optimism, frame
 
 
-def raw_frontier(model: dsp.FittedDSPModel, packet: dsp.PacketData, variant_key: str) -> tuple[float | None, float | None, float | None]:
+def raw_frontier(
+    model: dsp.FittedDSPModel, packet: dsp.PacketData, variant_key: str
+) -> tuple[float | None, float | None, float | None]:
     if variant_key not in {"no_phase", "effective_exposure", "satiating_late_bonus"}:
         return None, None, None
     result, weights = dsp.optimize_raw(
@@ -368,7 +370,9 @@ def write_plots(output_dir: Path, summary: pd.DataFrame, heldout: pd.DataFrame, 
         )
         fig3.add_hline(y=0.030, line_dash="dot", line_color="gray")
         fig3.update_layout(width=1100, height=700)
-        fig3.write_html(output_dir / "satiating_beta_scale_tension_sweep.html", include_plotlyjs="cdn", config=PLOT_CONFIG)
+        fig3.write_html(
+            output_dir / "satiating_beta_scale_tension_sweep.html", include_plotlyjs="cdn", config=PLOT_CONFIG
+        )
 
 
 def write_report(output_dir: Path, summary: pd.DataFrame, sweep: pd.DataFrame) -> None:
@@ -442,7 +446,7 @@ def main() -> None:
                 "target": TARGET,
                 "linear_reg": LINEAR_REG,
                 "variant_keys": variant_keys,
-                "fit_rows": int(len(packet.y)),
+                "fit_rows": len(packet.y),
                 "repair_results": str(args.repair_results),
                 "repair_mixture_dir": str(args.repair_mixture_dir),
             },

@@ -12,7 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -25,7 +25,9 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from experiments.domain_phase_mix.exploratory.two_phase_many import fit_olmix_reference_deletion_augmented_300m as base  # noqa: E402
+from experiments.domain_phase_mix.exploratory.two_phase_many import (
+    fit_olmix_reference_deletion_augmented_300m as base,
+)
 from experiments.domain_phase_mix.exploratory.two_phase_many.standalone_code import dsp_exact as dsp  # noqa: E402
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -40,14 +42,10 @@ DEFAULT_MODEL = (
     / "model.json"
 )
 DEFAULT_EXPANDED_PANEL = (
-    REFERENCE_OUTPUTS
-    / "olmo_base_easy_extra_300m_heldout_eval_20260630"
-    / "expanded_300m_table9_diagnostic_panel.csv"
+    REFERENCE_OUTPUTS / "olmo_base_easy_extra_300m_heldout_eval_20260630" / "expanded_300m_table9_diagnostic_panel.csv"
 )
 DEFAULT_VALIDATION_RESULTS = (
-    REFERENCE_OUTPUTS
-    / "table9_dsp_phase_functional_form_20260630"
-    / "validation_results_wandb_probe.csv"
+    REFERENCE_OUTPUTS / "table9_dsp_phase_functional_form_20260630" / "validation_results_wandb_probe.csv"
 )
 DEFAULT_KL_SUMMARY = (
     REFERENCE_OUTPUTS
@@ -267,7 +265,7 @@ def qsplit_within_aggregate_diagnostic(panel_path: Path) -> pd.DataFrame:
         rows.append(
             {
                 "aggregate_cluster": int(cluster),
-                "n": int(len(group)),
+                "n": len(group),
                 "spearman_pred_actual": rho,
                 "actual_bpb_min": float(group[TARGET_COL].min()),
                 "actual_bpb_range": float(group[TARGET_COL].max() - group[TARGET_COL].min()),
@@ -298,24 +296,24 @@ def main() -> None:
 
     summary = {
         "candidate_scores": candidate_scores.to_dict(orient="records"),
-        "optimism_spearman_vs_phase_tv": float(
-            spearmanr(optimism["mean_phase_tv_to_proportional"], optimism["actual_minus_predicted"]).statistic
-        )
-        if len(optimism) >= 3
-        else None,
-        "optimism_spearman_vs_max_epoch": float(
-            spearmanr(optimism["max_simulated_epoch"], optimism["actual_minus_predicted"]).statistic
-        )
-        if len(optimism) >= 3
-        else None,
-        "qsplit_cluster_mean_spearman": float(qsplit_clusters["spearman_pred_actual"].mean())
-        if not qsplit_clusters.empty
-        else None,
-        "qsplit_cluster_weighted_spearman": float(
-            np.average(qsplit_clusters["spearman_pred_actual"], weights=qsplit_clusters["n"])
-        )
-        if not qsplit_clusters.empty
-        else None,
+        "optimism_spearman_vs_phase_tv": (
+            float(spearmanr(optimism["mean_phase_tv_to_proportional"], optimism["actual_minus_predicted"]).statistic)
+            if len(optimism) >= 3
+            else None
+        ),
+        "optimism_spearman_vs_max_epoch": (
+            float(spearmanr(optimism["max_simulated_epoch"], optimism["actual_minus_predicted"]).statistic)
+            if len(optimism) >= 3
+            else None
+        ),
+        "qsplit_cluster_mean_spearman": (
+            float(qsplit_clusters["spearman_pred_actual"].mean()) if not qsplit_clusters.empty else None
+        ),
+        "qsplit_cluster_weighted_spearman": (
+            float(np.average(qsplit_clusters["spearman_pred_actual"], weights=qsplit_clusters["n"]))
+            if not qsplit_clusters.empty
+            else None
+        ),
     }
     (args.output_dir / "failure_mode_summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
     print(json.dumps(summary, indent=2, sort_keys=True), flush=True)

@@ -216,7 +216,9 @@ def update_status(status: str, evidence: str, output_dir: Path) -> None:
         "round_id": "round_46_curvature_spectrum_decision",
         "candidate_id": "CSNRF",
         "candidate_family": "Curvature-spectrum noncommuting residual flow",
-        "hyperparameters": "Frozen three-node geometric spectrum, span/tilt and task-geometry grids, s=1 ablation, and ridge grid",
+        "hyperparameters": (
+            "Frozen three-node geometric spectrum, span/tilt and task-geometry grids, s=1 ablation, and ridge grid"
+        ),
         "adversarial_outcomes_available_before_proposal": True,
         "adversarial_outcomes_inspected_before_proposal": True,
         "observations_inspiring_mechanism": "See round-46 preregistration.",

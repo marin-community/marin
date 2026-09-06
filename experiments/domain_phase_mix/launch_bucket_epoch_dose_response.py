@@ -217,6 +217,14 @@ class LaunchArtifacts:
         return [self.manifest_step, *self.training_steps, *self.eval_steps]
 
 
+@dataclass(frozen=True)
+class Table9RecoveryEntry:
+    """One exact completed checkpoint selected for Table-9-only recovery."""
+
+    run_name: str
+    checkpoint: str
+
+
 def _slug(value: str) -> str:
     slug = RUN_NAME_PATTERN.sub("_", value).strip("_").lower()
     if not slug:
@@ -860,6 +868,8 @@ def _build_delphi_artifacts(
                 output_path=this_output_path(),
                 run_spec=delphi_spec,
                 validation_configs=validation_configs,
+                steps_per_eval=1000,
+                permanent_checkpoint_interval=5000,
                 wandb_tags=(
                     "bucket-epoch-dose-response",
                     "phase-tied",
@@ -895,12 +905,7 @@ def _build_table9_recovery_step(
     scale: Scale,
     stage: Stage,
 ) -> ExecutorStep:
-    if checkpoint.startswith("gs://"):
-        raise ValueError("--eval-only-checkpoint must be relative to MARIN_PREFIX")
-    if not checkpoint.endswith(f"/hf/step-{run_spec.expected_checkpoint_step}"):
-        raise ValueError(
-            f"--eval-only-checkpoint must end with /hf/step-{run_spec.expected_checkpoint_step}: {checkpoint}"
-        )
+    _validate_table9_recovery_checkpoint(run_spec, checkpoint=checkpoint, scale=scale, stage=stage)
     return olmo_base_eval_step(
         name=f"t9_{run_spec.run_name}",
         checkpoint=InputName.hardcoded(checkpoint),
@@ -909,6 +914,73 @@ def _build_table9_recovery_step(
         wandb_group=f"olmo_base_eval_table9_bucket_epoch_dose_{scale.value}_{stage.value}_20260729",
         provenance=_eval_provenance(run_spec, scale=scale, stage=stage),
     )
+
+
+def _validate_table9_recovery_checkpoint(
+    run_spec: EpochSweepRunSpec,
+    *,
+    checkpoint: str,
+    scale: Scale,
+    stage: Stage,
+) -> None:
+    if checkpoint.startswith("gs://") or checkpoint.startswith("/"):
+        raise ValueError(f"Recovery checkpoint must be relative to MARIN_PREFIX: {checkpoint}")
+    if ".." in Path(checkpoint).parts:
+        raise ValueError(f"Recovery checkpoint must not traverse parent directories: {checkpoint}")
+    expected_prefix = f"{_experiment_name(scale, stage)}/{run_spec.run_name}-"
+    expected_suffix = f"/hf/step-{run_spec.expected_checkpoint_step}"
+    expected_pattern = re.compile(rf"{re.escape(expected_prefix)}[0-9a-f]{{6,8}}{re.escape(expected_suffix)}")
+    if expected_pattern.fullmatch(checkpoint) is None:
+        if not checkpoint.endswith(expected_suffix):
+            raise ValueError(f"Recovery checkpoint must end with {expected_suffix}: {checkpoint}")
+        raise ValueError(f"Recovery checkpoint does not belong to {run_spec.run_name}: {checkpoint}")
+
+
+def _load_table9_recovery_entries(path: str) -> list[Table9RecoveryEntry]:
+    with fsspec.open(path, "r") as source:
+        reader = csv.DictReader(source)
+        if reader.fieldnames != ["run_name", "checkpoint"]:
+            raise ValueError(f"Recovery manifest must have exactly run_name,checkpoint columns: {path}")
+        entries = [
+            Table9RecoveryEntry(
+                run_name=str(row["run_name"]).strip(),
+                checkpoint=str(row["checkpoint"]).strip(),
+            )
+            for row in reader
+        ]
+    if not entries:
+        raise ValueError(f"Recovery manifest is empty: {path}")
+    if any(not entry.run_name or not entry.checkpoint for entry in entries):
+        raise ValueError(f"Recovery manifest contains an empty run_name or checkpoint: {path}")
+    run_names = [entry.run_name for entry in entries]
+    checkpoints = [entry.checkpoint for entry in entries]
+    if len(set(run_names)) != len(run_names):
+        raise ValueError(f"Recovery manifest contains duplicate run names: {path}")
+    if len(set(checkpoints)) != len(checkpoints):
+        raise ValueError(f"Recovery manifest contains duplicate checkpoints: {path}")
+    return entries
+
+
+def _build_table9_recovery_steps(
+    entries: list[Table9RecoveryEntry],
+    run_specs: list[EpochSweepRunSpec],
+    *,
+    scale: Scale,
+    stage: Stage,
+) -> list[ExecutorStep]:
+    specs_by_name = {spec.run_name: spec for spec in run_specs}
+    unknown = sorted(entry.run_name for entry in entries if entry.run_name not in specs_by_name)
+    if unknown:
+        raise ValueError(f"Recovery manifest contains unknown frozen run names: {unknown}")
+    return [
+        _build_table9_recovery_step(
+            specs_by_name[entry.run_name],
+            checkpoint=entry.checkpoint,
+            scale=scale,
+            stage=stage,
+        )
+        for entry in entries
+    ]
 
 
 def _validate_graph(
@@ -995,6 +1067,7 @@ def _parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument("--max-concurrent", type=int, default=DEFAULT_MAX_CONCURRENT)
     parser.add_argument("--eval-only-run-name")
     parser.add_argument("--eval-only-checkpoint")
+    parser.add_argument("--eval-only-manifest")
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_known_args()
 
@@ -1019,9 +1092,12 @@ def main() -> None:
         _validate_full_gate(args.pilot_evidence, scale=scale)
     elif args.pilot_evidence is not None:
         raise ValueError("--pilot-evidence is only valid with --stage full")
-    eval_only = args.eval_only_run_name is not None or args.eval_only_checkpoint is not None
-    if eval_only and (args.eval_only_run_name is None or args.eval_only_checkpoint is None):
+    single_eval_only = args.eval_only_run_name is not None or args.eval_only_checkpoint is not None
+    if single_eval_only and (args.eval_only_run_name is None or args.eval_only_checkpoint is None):
         raise ValueError("--eval-only-run-name and --eval-only-checkpoint must be specified together")
+    if single_eval_only and args.eval_only_manifest is not None:
+        raise ValueError("Use either the single-run eval-only flags or --eval-only-manifest, not both")
+    eval_only = single_eval_only or args.eval_only_manifest is not None
 
     points = build_points()
     with executor_context():
@@ -1035,18 +1111,28 @@ def main() -> None:
                 stage=Stage.FULL,
             )
             run_specs = _pilot_run_specs(full_run_specs, scale=scale) if stage == Stage.PILOT else full_run_specs
-        if eval_only:
+        if args.eval_only_manifest is not None:
+            recovery_entries = _load_table9_recovery_entries(args.eval_only_manifest)
+            recovery_steps = _build_table9_recovery_steps(
+                recovery_entries,
+                run_specs,
+                scale=scale,
+                stage=stage,
+            )
+        elif single_eval_only:
             matching_specs = [spec for spec in run_specs if spec.run_name == args.eval_only_run_name]
             if len(matching_specs) != 1:
                 raise ValueError(
                     f"Expected exactly one run named {args.eval_only_run_name!r}; found {len(matching_specs)}"
                 )
-            recovery_step = _build_table9_recovery_step(
-                matching_specs[0],
-                checkpoint=args.eval_only_checkpoint,
-                scale=scale,
-                stage=stage,
-            )
+            recovery_steps = [
+                _build_table9_recovery_step(
+                    matching_specs[0],
+                    checkpoint=args.eval_only_checkpoint,
+                    scale=scale,
+                    stage=stage,
+                )
+            ]
         elif scale == Scale.SIXTY_M:
             artifacts = _build_60m_artifacts(run_specs, stage=stage)
         else:
@@ -1057,18 +1143,18 @@ def main() -> None:
             )
     if eval_only:
         logger.info(
-            "Validated native Table-9 recovery for %s from %s.",
-            args.eval_only_run_name,
-            args.eval_only_checkpoint,
+            "Validated %d native Table-9 recovery steps%s.",
+            len(recovery_steps),
+            f" from {args.eval_only_manifest}" if args.eval_only_manifest is not None else "",
         )
         if args.dry_run or os.getenv("CI") is not None:
             return
         recovery_description = (
-            f"{PANEL_TAG}: recover native Table-9 evaluation for completed checkpoint {args.eval_only_run_name}."
+            f"{PANEL_TAG}: recover native Table-9 evaluations for {len(recovery_steps)} completed checkpoints."
         )
         executor_main(
-            ExecutorMainConfig(max_concurrent=1),
-            steps=[recovery_step],
+            ExecutorMainConfig(max_concurrent=args.max_concurrent),
+            steps=recovery_steps,
             description=recovery_description,
         )
         return

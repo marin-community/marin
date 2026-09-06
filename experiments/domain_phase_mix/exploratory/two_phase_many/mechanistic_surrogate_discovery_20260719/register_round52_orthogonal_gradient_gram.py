@@ -46,7 +46,9 @@ def main() -> None:
                 r"u(w)=GGLLF terminal excess loss; Delta u=u(w_0,w_1)-u(a_tau,a_tau), where a_tau uses the selected "
                 r"dynamics clock. Y=F(a)+A_b Delta u_b+A_r Delta u_r, A_b,A_r>=0."
             ),
-            "latent_state": "Two log excess losses under a PSD task-gradient Gram, plus no additional aggregate latent state.",
+            "latent_state": (
+                "Two log excess losses under a PSD task-gradient Gram, plus no additional aggregate latent state."
+            ),
             "state_transition": (
                 "GGLLF power-law loss flow is integrated for the actual path and its clock-matched tied counterfactual."
             ),

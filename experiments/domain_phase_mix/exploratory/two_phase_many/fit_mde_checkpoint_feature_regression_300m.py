@@ -22,23 +22,19 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 from scipy.stats import pearsonr, spearmanr
-from sklearn.decomposition import PCA
-from sklearn.decomposition import FactorAnalysis
+from sklearn.decomposition import PCA, FactorAnalysis
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import RidgeCV
 from sklearn.model_selection import KFold
 from sklearn.preprocessing import StandardScaler
 
-
 SCRIPT_DIR = Path(__file__).resolve().parent
 RAW_MATRIX_CSV = (
-    SCRIPT_DIR
-    / "reference_outputs/collaborator_grug_v4_aggregate_repro_20260525/sent_zip_input/"
+    SCRIPT_DIR / "reference_outputs/collaborator_grug_v4_aggregate_repro_20260525/sent_zip_input/"
     "raw_metric_matrix_300m/raw_metric_matrix_300m.csv"
 )
 SELECTED_TASKS_CSV = (
-    SCRIPT_DIR
-    / "reference_outputs/collaborator_grug_v4_aggregate_repro_20260525/sent_raw_metric_matrix_300m_zip/"
+    SCRIPT_DIR / "reference_outputs/collaborator_grug_v4_aggregate_repro_20260525/sent_raw_metric_matrix_300m_zip/"
     "selected_tasks.csv"
 )
 MDE_DIR = SCRIPT_DIR / "reference_outputs/mde_checkpoint_features_full_swarm_20260529"
@@ -250,7 +246,9 @@ def write_plots(metrics: pd.DataFrame, output_dir: Path) -> None:
         title="OOF Spearman by metric and MDE-style feature block",
     )
     fig.update_layout(width=1200, height=max(700, 18 * len(pivot)))
-    fig.write_html(output_dir / "spearman_heatmap.html", include_plotlyjs="cdn", config={"toImageButtonOptions": {"scale": 4}})
+    fig.write_html(
+        output_dir / "spearman_heatmap.html", include_plotlyjs="cdn", config={"toImageButtonOptions": {"scale": 4}}
+    )
 
     if "spearman_lift_vs_phase" in metrics.columns:
         merged = metrics.copy()
@@ -291,7 +289,9 @@ def write_plots(metrics: pd.DataFrame, output_dir: Path) -> None:
         title="Mean Spearman lift over phase-weight ridge by metric family",
     )
     fig.update_layout(width=1200, height=650)
-    fig.write_html(output_dir / "family_mean_lift.html", include_plotlyjs="cdn", config={"toImageButtonOptions": {"scale": 4}})
+    fig.write_html(
+        output_dir / "family_mean_lift.html", include_plotlyjs="cdn", config={"toImageButtonOptions": {"scale": 4}}
+    )
 
 
 def main() -> None:
@@ -362,9 +362,9 @@ def main() -> None:
     phase_best = metrics.loc[metrics["model"].eq("phase_ridge")].set_index("metric")
     hybrid = metrics.loc[metrics["model"].eq("phase_teacher_forced_mcq_pca_ridge")].set_index("metric")
     summary = {
-        "rows": int(len(raw)),
+        "rows": len(raw),
         "targets_evaluated": int(metrics["metric"].nunique()),
-        "domains": int(len(domains)),
+        "domains": len(domains),
         "teacher_forced_features": int(teacher_forced.shape[1]),
         "mcq_features": int(mcq.shape[1]),
         "cv": {"kind": "KFold", "splits": N_SPLITS, "seed": CV_SEED},

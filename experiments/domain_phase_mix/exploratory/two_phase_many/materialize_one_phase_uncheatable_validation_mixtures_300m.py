@@ -47,9 +47,7 @@ from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E
 from experiments.domain_phase_mix.exploratory.two_phase_many.standalone_code import dsp_exact as dsp  # noqa: E402
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-DEFAULT_OUTPUT_DIR = (
-    SCRIPT_DIR / "reference_outputs" / "one_phase_uncheatable_validation_mixtures_300m_20260629"
-)
+DEFAULT_OUTPUT_DIR = SCRIPT_DIR / "reference_outputs" / "one_phase_uncheatable_validation_mixtures_300m_20260629"
 DEFAULT_OLMIX_SOURCE = (
     SCRIPT_DIR
     / "reference_outputs"
@@ -196,9 +194,7 @@ def fit_effective_exposure_dsp(
             basin_hopping_iters=basin_hopping_iters,
         )
         train_prediction = dsp.predict(model, packet.w)
-        train_rmse, train_mae, train_pearson, train_spearman = dsp_compare.regression_metrics(
-            packet.y, train_prediction
-        )
+        train_rmse, train_mae, train_pearson, train_spearman = dsp_compare.regression_metrics(packet.y, train_prediction)
         oof_prediction, folds = dsp_compare.fit_dsp_oof_predictions(packet, model)
         oof_metrics = olmix.predictive_diagnostics(packet.y, oof_prediction, folds)
         train_metrics = {
@@ -377,7 +373,7 @@ def main() -> None:
             model_family="OLMix",
             target_metric=olmix.UNCHEATABLE_TARGET,
             source=str(args.olmix_source),
-            fit_panel_rows=int(len(panel)),
+            fit_panel_rows=len(panel),
             n_signal_rows=int(panel["panel_source"].eq("qsplit_signal").sum()),
             n_deletion_rows=int(panel["panel_source"].eq("domain_deletion").sum()),
             n_proportional_reference_rows=int(metadata.get("n_proportional_reference_rows", 0)),
@@ -401,7 +397,7 @@ def main() -> None:
             model_family="DSP",
             target_metric=olmix.UNCHEATABLE_TARGET,
             source="materialized_by_this_script",
-            fit_panel_rows=int(len(panel)),
+            fit_panel_rows=len(panel),
             n_signal_rows=int(panel["panel_source"].eq("qsplit_signal").sum()),
             n_deletion_rows=int(panel["panel_source"].eq("domain_deletion").sum()),
             n_proportional_reference_rows=int(metadata.get("n_proportional_reference_rows", 0)),
@@ -427,7 +423,7 @@ def main() -> None:
         json.dumps(
             {
                 "target_metric": olmix.UNCHEATABLE_TARGET,
-                "fit_panel_rows": int(len(panel)),
+                "fit_panel_rows": len(panel),
                 "fit_panel_metadata": metadata,
                 "output_mixtures": [OLMIX_KEY, DSP_KEY],
                 "dsp_start_count": len(starts),

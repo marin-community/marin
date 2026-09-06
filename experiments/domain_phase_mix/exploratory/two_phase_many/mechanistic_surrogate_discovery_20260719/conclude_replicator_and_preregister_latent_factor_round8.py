@@ -34,52 +34,84 @@ def main() -> None:
     row = {
         "id": "JLPT",
         "family": "Joint latent phase transport",
-        "relationship_to_prior": "Reopens PMVT/TPRB only through a materially new identification argument. PMVT "
-        "fit each target independently and TPRB transferred a direction estimated from one source. JLPT jointly "
-        "identifies a low-rank phase-response subspace from four coordinate-matched scale-target outputs while holding "
-        "the same policy coordinates out from every output.",
-        "materially_new_mechanism": "A small set of latent capability-displacement directions is shared across smooth "
-        "targets and model scales. Each target-scale panel observes a different BPB loading on those same terminal "
-        "capability perturbations.",
-        "mechanistic_premise": "At fixed aggregate exposure, moving data between phases perturbs a common terminal "
-        "capability state. Evaluation suites and model scales weight that state differently, but should not require "
-        "unrelated bucket-level phase directions if the perturbation is physical.",
-        "governing_equations": "a=alpha0*w0+alpha1*w1; d=alpha0*alpha1*(w1-w0); "
-        "z_f=sum_{i in f} p_i[d_i/p_i]/(tau+a_i/p_i); Delta Y_q=z^T U lambda_q+chi_q q(z), "
-        "rank(U lambda^T)=r and chi_q>=0; Y_q=F_q(a)+Delta Y_q.",
-        "latent_state": "A rank-r vector of dimensionless terminal capability displacements U^T z along the phase "
-        "fiber, plus a nonnegative finite-contrast magnitude q(z).",
-        "state_transition": "The phase contrast transports the aggregate state once along shared latent directions. "
-        "Remaining learnability scales transport by inverse relative aggregate exposure; finite contrast incurs a "
-        "nonnegative second-order loss.",
-        "response_link": "Each target-scale output has signed BPB loadings on the shared transport coordinates and a "
-        "nonnegative BPB loading on contrast cost. There is no free phase intercept or output calibration layer.",
-        "additional_degrees_of_freedom": "For three predeclared families and four outputs, rank r contributes "
-        "r(3+4-r) identifiable coefficient degrees of freedom; optional contrast cost contributes four nonnegative "
-        "loadings. Tau, rank, and ridge are selected by coordinate-grouped nested CV.",
-        "units_and_symmetries": "a, d, z, and q are dimensionless; target loadings have BPB units. The low-rank "
-        "coefficient product is identifiable although factor rotations are not; diagnostics use its singular subspace, "
-        "not arbitrary factor signs.",
-        "single_phase_restriction": "When w0=w1, d=z=q=0 exactly, so the two-phase correction vanishes. F_q is fitted "
-        "independently on one-phase outcomes; algebraically tying a two-phase fit is reported separately.",
-        "starcoder_signature": "A shared transport direction should orient both StarCoder valleys while schedule-specific "
-        "loadings change their magnitude. The second-order cost should raise remote phase-contrast arms without moving "
-        "the tied spine.",
-        "catastrophic_optimism_resolution": "Low-rank joint identification prevents one target from assigning a large "
-        "benefit to a phase direction unsupported by related panels; nonnegative contrast cost prevents unbounded "
-        "off-diagonal reward.",
-        "response_compression_resolution": "Target-specific loadings preserve each output's phase-response scale while "
-        "shared directions pool coordinate-level evidence. The model must expand held-out variation through input state, "
-        "not output calibration.",
-        "scale_transfer_expectation": "The shared latent subspace should be stable across 300M and Delphi. Output "
-        "loadings may vary with optimization progress; direction signs and principal angles should remain stable.",
-        "cheapest_falsification": "Coordinate-grouped nested CV fails to improve a zero phase correction on at least "
-        "three of four outputs, the selected rank is unstable, the shared subspace has low fold agreement, or an "
-        "independent per-output ridge materially dominates it.",
+        "relationship_to_prior": (
+            "Reopens PMVT/TPRB only through a materially new identification argument. PMVT "
+            "fit each target independently and TPRB transferred a direction estimated from one source. JLPT jointly "
+            "identifies a low-rank phase-response subspace from four coordinate-matched scale-target outputs while holding "
+            "the same policy coordinates out from every output."
+        ),
+        "materially_new_mechanism": (
+            "A small set of latent capability-displacement directions is shared across smooth "
+            "targets and model scales. Each target-scale panel observes a different BPB loading on those same terminal "
+            "capability perturbations."
+        ),
+        "mechanistic_premise": (
+            "At fixed aggregate exposure, moving data between phases perturbs a common terminal "
+            "capability state. Evaluation suites and model scales weight that state differently, but should not require "
+            "unrelated bucket-level phase directions if the perturbation is physical."
+        ),
+        "governing_equations": (
+            "a=alpha0*w0+alpha1*w1; d=alpha0*alpha1*(w1-w0); "
+            "z_f=sum_{i in f} p_i[d_i/p_i]/(tau+a_i/p_i); Delta Y_q=z^T U lambda_q+chi_q q(z), "
+            "rank(U lambda^T)=r and chi_q>=0; Y_q=F_q(a)+Delta Y_q."
+        ),
+        "latent_state": (
+            "A rank-r vector of dimensionless terminal capability displacements U^T z along the phase "
+            "fiber, plus a nonnegative finite-contrast magnitude q(z)."
+        ),
+        "state_transition": (
+            "The phase contrast transports the aggregate state once along shared latent directions. "
+            "Remaining learnability scales transport by inverse relative aggregate exposure; finite contrast incurs a "
+            "nonnegative second-order loss."
+        ),
+        "response_link": (
+            "Each target-scale output has signed BPB loadings on the shared transport coordinates and a "
+            "nonnegative BPB loading on contrast cost. There is no free phase intercept or output calibration layer."
+        ),
+        "additional_degrees_of_freedom": (
+            "For three predeclared families and four outputs, rank r contributes "
+            "r(3+4-r) identifiable coefficient degrees of freedom; optional contrast cost contributes four nonnegative "
+            "loadings. Tau, rank, and ridge are selected by coordinate-grouped nested CV."
+        ),
+        "units_and_symmetries": (
+            "a, d, z, and q are dimensionless; target loadings have BPB units. The low-rank "
+            "coefficient product is identifiable although factor rotations are not; diagnostics use its singular subspace, "
+            "not arbitrary factor signs."
+        ),
+        "single_phase_restriction": (
+            "When w0=w1, d=z=q=0 exactly, so the two-phase correction vanishes. F_q is fitted "
+            "independently on one-phase outcomes; algebraically tying a two-phase fit is reported separately."
+        ),
+        "starcoder_signature": (
+            "A shared transport direction should orient both StarCoder valleys while schedule-specific "
+            "loadings change their magnitude. The second-order cost should raise remote phase-contrast arms without moving "
+            "the tied spine."
+        ),
+        "catastrophic_optimism_resolution": (
+            "Low-rank joint identification prevents one target from assigning a large "
+            "benefit to a phase direction unsupported by related panels; nonnegative contrast cost prevents unbounded "
+            "off-diagonal reward."
+        ),
+        "response_compression_resolution": (
+            "Target-specific loadings preserve each output's phase-response scale while "
+            "shared directions pool coordinate-level evidence. The model must expand held-out variation through input state, "
+            "not output calibration."
+        ),
+        "scale_transfer_expectation": (
+            "The shared latent subspace should be stable across 300M and Delphi. Output "
+            "loadings may vary with optimization progress; direction signs and principal angles should remain stable."
+        ),
+        "cheapest_falsification": (
+            "Coordinate-grouped nested CV fails to improve a zero phase correction on at least "
+            "three of four outputs, the selected rank is unstable, the shared subspace has low fold agreement, or an "
+            "independent per-output ridge materially dominates it."
+        ),
         "status": "active_preregistered",
-        "status_evidence": "Preregistered after observing only matched fit-panel phase-delta correlations and before "
-        "fitting JLPT. Historical and adversarial outcomes are forbidden until the coordinate-grouped identification "
-        "and StarCoder gates pass.",
+        "status_evidence": (
+            "Preregistered after observing only matched fit-panel phase-delta correlations and before "
+            "fitting JLPT. Historical and adversarial outcomes are forbidden until the coordinate-grouped identification "
+            "and StarCoder gates pass."
+        ),
     }
     registry = registry.loc[~registry["id"].eq("JLPT")]
     registry = pd.concat([registry, pd.DataFrame([row], columns=registry.columns)], ignore_index=True)
@@ -108,11 +140,17 @@ def main() -> None:
             "hyperparameters": "Frozen tau/rank/ridge/contrast-cost grid; coordinate-grouped nested CV",
             "adversarial_outcomes_available_before_proposal": True,
             "adversarial_outcomes_inspected_before_proposal": True,
-            "observations_inspiring_mechanism": "Phase deltas correlate across targets (0.78/0.70) and Uncheatable transfers across scale (0.67), while source-only TPRB directions fail.",
+            "observations_inspiring_mechanism": (
+                "Phase deltas correlate across targets (0.78/0.70) and Uncheatable transfers across scale (0.67), while source-only TPRB directions fail."
+            ),
             "novelty_class": "Joint multi-output identification of shared phase-displacement subspace",
-            "evaluation_status": "preregistered; no historical or adversarial evaluation before identification and StarCoder gates",
+            "evaluation_status": (
+                "preregistered; no historical or adversarial evaluation before identification and StarCoder gates"
+            ),
             "evidence_path": "approach_registry.csv",
-            "notes": "All outputs at a held-out coordinate are excluded together; phase features vanish for tied policies.",
+            "notes": (
+                "All outputs at a held-out coordinate are excluded together; phase features vanish for tied policies."
+            ),
         },
     ]
     identity = ["round_id", "candidate_id", "evaluation_status"]

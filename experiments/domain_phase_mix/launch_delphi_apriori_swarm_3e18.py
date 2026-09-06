@@ -7,8 +7,9 @@ new mixture (reused rows already have runs and are skipped), with the design's p
 row is its seed block's seed, the trainer seed is fixed, and the simulated-epoch subset seed equals the data seed,
 so half- and quarter-pool rows are nested subsets of the full-support control of the same block. Rows with a pool
 fraction below one pass ``simulated_epoch_pool_fractions`` to the mixture config; every other setting (model,
-horizon, optimizer, validation sets, Table-9 evaluation) is the augmented-swarm launcher's. ``--wave pilot`` limits
-the graph to the pilot rows. ``--dry-run`` writes the resolved manifest locally and launches nothing.
+horizon, optimizer, validation sets, Table-9 evaluation) is the augmented-swarm launcher's. Training runs on
+v6e-8 in us-east5-b. ``--wave canary`` releases one subsampled pilot row, ``--wave pilot`` releases all pilot rows,
+and ``--dry-run`` writes the resolved manifest locally without launching.
 """
 
 from __future__ import annotations
@@ -45,7 +46,11 @@ PROVENANCE_PANEL = "delphi_3e18_apriori_swarm"
 RUN_ID_BASE = 7_150_000
 # sha256 of the reviewed swarm_mixtures.csv; the launcher runs nothing else.
 FROZEN_DESIGN_SHA256 = "c5ec2b0ae1b5c68dc44f6ede1a5caa1bd2918f5bfd9f6d0f23be508637856bd6"
-WAVES = ("pilot", "full")
+TARGET_TPU_TYPE = "v6e-8"
+DEFAULT_TPU_REGION = "us-east5"
+DEFAULT_TPU_ZONE = "us-east5-b"
+CANARY_RUN_NAME = "apriori_swarm_049_subsample_A_proportional_dolmino_synth_qa_pool0.5_block0"
+WAVES = ("canary", "pilot", "full")
 POOL_FRACTION_PREFIX = "pool_fraction_"
 
 
@@ -104,7 +109,8 @@ def run_specs_from_rows(
     realized_train_tokens = train_steps * batch_size * swarm.SEQ_LEN_DELPHI
     specs: list[swarm.DelphiSwarmRunSpec] = []
     for table_index, row in enumerate(rows):  # identities come from the unfiltered table, not from the wave
-        if row["source"] != "new" or (wave == "pilot" and row["wave"] != "pilot"):
+        selected = wave == "full" or (wave == "pilot" and row["wave"] == "pilot") or row["run_name"] == CANARY_RUN_NAME
+        if row["source"] != "new" or not selected:
             continue
         phase_weights = swarm._phase_weights_from_row(row, source_run_name=row["run_name"])
         if phase_weights[PHASE_NAMES[0]] != phase_weights[PHASE_NAMES[1]]:
@@ -207,10 +213,10 @@ def _parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument("--design-table", type=Path, default=DEFAULT_DESIGN_TABLE)
     parser.add_argument("--wave", choices=WAVES, default="pilot")
     parser.add_argument("--analysis-output-path", default=swarm.DEFAULT_ANALYSIS_OUTPUT_PATH)
-    parser.add_argument("--tpu-type", default=swarm.TARGET_TPU_TYPE)
-    parser.add_argument("--tpu-region", default=swarm.DEFAULT_TPU_REGION)
-    parser.add_argument("--tpu-zone", default=swarm.DEFAULT_TPU_ZONE)
-    parser.add_argument("--max-concurrent", type=int, default=swarm.DEFAULT_MAX_CONCURRENT)
+    parser.add_argument("--tpu-type", default=TARGET_TPU_TYPE)
+    parser.add_argument("--tpu-region", default=DEFAULT_TPU_REGION)
+    parser.add_argument("--tpu-zone", default=DEFAULT_TPU_ZONE)
+    parser.add_argument("--max-concurrent", type=int)
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_known_args()
 
@@ -219,10 +225,8 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO)
     args, remaining = _parse_args()
     sys.argv = [sys.argv[0], *remaining]
-    if args.tpu_region != swarm.DEFAULT_TPU_REGION or args.tpu_zone != swarm.DEFAULT_TPU_ZONE:
-        raise ValueError(f"This launcher is pinned to {swarm.DEFAULT_TPU_REGION}/{swarm.DEFAULT_TPU_ZONE}")
-    if args.max_concurrent < 1 or args.max_concurrent > swarm.DEFAULT_MAX_CONCURRENT:
-        raise ValueError(f"--max-concurrent must be in [1, {swarm.DEFAULT_MAX_CONCURRENT}]")
+    if (args.tpu_type, args.tpu_region, args.tpu_zone) != (TARGET_TPU_TYPE, DEFAULT_TPU_REGION, DEFAULT_TPU_ZONE):
+        raise ValueError(f"This launcher is pinned to {TARGET_TPU_TYPE} in {DEFAULT_TPU_REGION}/{DEFAULT_TPU_ZONE}")
     expected_prefix = marin_prefix_for_region(args.tpu_region)
     current_prefix = os.environ.get("MARIN_PREFIX")
     if current_prefix is not None and current_prefix != expected_prefix:
@@ -236,6 +240,9 @@ def main() -> None:
         tpu_region=args.tpu_region,
         tpu_zone=args.tpu_zone,
     )
+    max_concurrent = len(run_specs) if args.max_concurrent is None else args.max_concurrent
+    if max_concurrent < 1 or max_concurrent > len(run_specs):
+        raise ValueError(f"--max-concurrent must be in [1, {len(run_specs)}] for the released {args.wave} batch")
     if args.dry_run:
         write_local_dry_run(args.design_table, run_specs, args.analysis_output_path)
         logger.info("Wrote %d dry-run run specs for wave %s under %s", len(run_specs), args.wave, LOCAL_ARTIFACT_DIR)
@@ -265,7 +272,7 @@ def main() -> None:
         )
         return
     executor_main(
-        ExecutorMainConfig(max_concurrent=args.max_concurrent),
+        ExecutorMainConfig(max_concurrent=max_concurrent),
         steps=artifacts.steps,
         description=(
             f"{EXPERIMENT_NAME}: {args.wave} wave of the frozen 280-row swarm at Delphi 3e18 "

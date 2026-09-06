@@ -27,8 +27,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from dataclasses import dataclass
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -306,7 +305,9 @@ def build_vertex_features(
                         scale_to_bpb=block.scale_to_bpb,
                     )
                 feature_parts.append(values)
-                feature_names.extend(f"{block.name}:{semantics}:{phase_name}:{group_name}" for group_name, _idx in groups)
+                feature_names.extend(
+                    f"{block.name}:{semantics}:{phase_name}:{group_name}" for group_name, _idx in groups
+                )
     if not feature_parts:
         raise ValueError("No MDE vertex feature blocks selected")
     return np.hstack(feature_parts), feature_names, summary
@@ -483,11 +484,11 @@ def run_target(
     target_summary = {
         "target": target,
         "target_transform": transform,
-        "rows": int(len(packet.y)),
+        "rows": len(packet.y),
         "vertex_feature_count": int(vertex_features.shape[1]),
         "vertex_feature_names_sample": feature_names[:20],
         "dsp_variant": dsp_model.variant.name,
-        "dsp_trace_rows": int(len(trace)),
+        "dsp_trace_rows": len(trace),
         **feature_summary,
     }
     return pd.DataFrame.from_records(rows), pred_frame, target_summary

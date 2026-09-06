@@ -33,12 +33,14 @@ from sklearn.model_selection import KFold
 from experiments.domain_phase_mix.exploratory.two_phase_many.fit_grug_v4_aggregate_canonical_dsp import (
     DEFAULT_METADATA_CSV,
     DEFAULT_NOISE_CSV,
-    DEFAULT_OUTPUT_DIR as CANONICAL_DSP_OUTPUT_DIR,
     DEFAULT_RAW_CSV,
     DatasetBundle,
     aggregate_targets,
     load_data,
     weights_to_packet,
+)
+from experiments.domain_phase_mix.exploratory.two_phase_many.fit_grug_v4_aggregate_canonical_dsp import (
+    DEFAULT_OUTPUT_DIR as CANONICAL_DSP_OUTPUT_DIR,
 )
 from experiments.domain_phase_mix.exploratory.two_phase_many.fit_mde_checkpoint_feature_regression_300m import (
     RIDGE_ALPHAS,
@@ -48,7 +50,6 @@ from experiments.domain_phase_mix.exploratory.two_phase_many.fit_mde_checkpoint_
     transform_block,
 )
 from experiments.domain_phase_mix.exploratory.two_phase_many.standalone_code import dsp_exact as dsp
-
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 OUTPUT_DIR = SCRIPT_DIR / "reference_outputs/mde_dsp_stacked_regression_300m_20260529"
@@ -289,7 +290,7 @@ def main() -> None:
             raise ValueError(f"DSP baseline changed while evaluating {block.name}")
         predictions[block.name] = pred
         scores = score_predictions(y_factor, pred)
-        metrics_rows.append({"model": block.name, "n": int(len(y_factor)), **scores})
+        metrics_rows.append({"model": block.name, "n": len(y_factor), **scores})
 
     metrics = pd.DataFrame(metrics_rows)
     if metrics.empty:
@@ -307,8 +308,8 @@ def main() -> None:
     canonical_summary_path = CANONICAL_DSP_OUTPUT_DIR / "summary.json"
     canonical_summary = json.loads(canonical_summary_path.read_text()) if canonical_summary_path.exists() else {}
     summary = {
-        "rows": int(len(raw)),
-        "domains": int(len(domains)),
+        "rows": len(raw),
+        "domains": len(domains),
         "target": "aggregate/y_factor",
         "canonical_dsp_model_json": str(CANONICAL_DSP_OUTPUT_DIR / "model.json"),
         "canonical_dsp_summary_oof_spearman": canonical_summary.get("oof_spearman"),

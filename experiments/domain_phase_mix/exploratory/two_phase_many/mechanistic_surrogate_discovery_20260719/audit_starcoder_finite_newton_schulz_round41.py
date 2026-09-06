@@ -91,7 +91,9 @@ def update_status(status: str, evidence: str, output_dir: Path) -> None:
         "round_id": "round_41_finite_newton_schulz_decision",
         "candidate_id": "FNSMF",
         "candidate_family": "Finite Newton-Schulz Muon flow",
-        "hyperparameters": "Frozen round-41 grid; source-fixed quintic coefficients, five iterations, and epsilon; exact polar, normalized, and Euclidean ablations",
+        "hyperparameters": (
+            "Frozen round-41 grid; source-fixed quintic coefficients, five iterations, and epsilon; exact polar, normalized, and Euclidean ablations"
+        ),
         "adversarial_outcomes_available_before_proposal": True,
         "adversarial_outcomes_inspected_before_proposal": True,
         "observations_inspiring_mechanism": "See round-41 portfolio preregistration.",

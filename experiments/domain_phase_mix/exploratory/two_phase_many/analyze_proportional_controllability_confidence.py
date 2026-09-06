@@ -30,7 +30,6 @@ from scipy.stats import chi2, spearmanr
 from experiments.domain_phase_mix.exploratory.two_phase_many.analyze_proportional_controllability_log_tilts import (
     ALPHA,
     CURATED_METRICS,
-    OUTPUT_DIR as LOG_TILT_OUTPUT_DIR,
     Geometry,
     is_metric_column,
     is_reportable_metric,
@@ -43,10 +42,14 @@ from experiments.domain_phase_mix.exploratory.two_phase_many.analyze_proportiona
     read_csv,
     utility_values,
 )
-
+from experiments.domain_phase_mix.exploratory.two_phase_many.analyze_proportional_controllability_log_tilts import (
+    OUTPUT_DIR as LOG_TILT_OUTPUT_DIR,
+)
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-OUTPUT_DIR = SCRIPT_DIR / "reference_outputs" / "proportional_controllability_actuation_direction_predictability_20260616"
+OUTPUT_DIR = (
+    SCRIPT_DIR / "reference_outputs" / "proportional_controllability_actuation_direction_predictability_20260616"
+)
 FINAL_MATRIX = LOG_TILT_OUTPUT_DIR / "pctrl_final_metric_matrix.csv"
 BUMP_SUMMARY = (
     SCRIPT_DIR
@@ -237,9 +240,9 @@ def compute_metric_row(
         "lower_is_better": lower_is_better(metric),
         "reportable_metric": is_reportable_metric(metric),
         "curated_metric": metric in CURATED_METRICS,
-        "n_direction_pairs": int(len(d)),
+        "n_direction_pairs": len(d),
         "design_rank": design.rank,
-        "proportional_noise_n": int(len(noise)),
+        "proportional_noise_n": len(noise),
         "proportional_noise_sd": proportional_noise_sd,
         "proportional_signal_sd": signal_sd,
         "proportional_signal_to_noise": signal_sd / proportional_noise_sd if proportional_noise_sd > 0.0 else math.nan,
@@ -324,7 +327,9 @@ def plot_diagnostics(summary: pd.DataFrame) -> None:
         },
         title="Projected actuation confidence vs internal direction predictability",
         labels={
-            "alpha_gradient_over_proportional_noise_sd": "Trust-region effect size: alpha * ||gradient|| / prop-noise SD",
+            "alpha_gradient_over_proportional_noise_sd": (
+                "Trust-region effect size: alpha * ||gradient|| / prop-noise SD"
+            ),
             "loo_derivative_spearman": "Leave-one-direction-out derivative Spearman",
             "neg_log10_actuation_q": "-log10 BH q",
         },
@@ -387,9 +392,13 @@ def plot_diagnostics(summary: pd.DataFrame) -> None:
 def write_report(summary: pd.DataFrame) -> None:
     reportable = summary[summary["reportable_metric"]]
     curated = summary[summary["curated_metric"]]
-    bucket_counts = reportable["direction_predictability_bucket"].value_counts().rename_axis("bucket").reset_index(name="n")
+    bucket_counts = (
+        reportable["direction_predictability_bucket"].value_counts().rename_axis("bucket").reset_index(name="n")
+    )
     top = reportable.sort_values(["actuation_bh_q_value", "alpha_gradient_over_proportional_noise_sd"]).head(20)
-    direction_predictable = reportable[reportable["direction_predictability_bucket"].eq("actuated_direction_predictable")]
+    direction_predictable = reportable[
+        reportable["direction_predictability_bucket"].eq("actuated_direction_predictable")
+    ]
     lines = [
         "# Proportional Controllability Actuation Confidence and Direction Predictability Diagnostic",
         "",
@@ -474,14 +483,15 @@ def main() -> None:
     reportable = summary[summary["reportable_metric"]]
     result = {
         "output_dir": str(OUTPUT_DIR),
-        "metrics_tested": int(len(summary)),
-        "reportable_metrics_tested": int(len(reportable)),
+        "metrics_tested": len(summary),
+        "reportable_metrics_tested": len(reportable),
         "reportable_bh_q_le_0p05": int((reportable["actuation_bh_q_value"] <= 0.05).sum()),
         "reportable_alpha_effect_ge_1_noise_sd": int(
             (reportable["alpha_gradient_over_proportional_noise_sd"] >= 1.0).sum()
         ),
         "reportable_direction_predictability_buckets": {
-            str(key): int(value) for key, value in reportable["direction_predictability_bucket"].value_counts().to_dict().items()
+            str(key): int(value)
+            for key, value in reportable["direction_predictability_bucket"].value_counts().to_dict().items()
         },
         "median_reportable_alpha_effect_over_noise": float(
             reportable["alpha_gradient_over_proportional_noise_sd"].median()

@@ -94,7 +94,9 @@ def read_source_paths(feature_dir: str) -> tuple[str, str, dict[str, object]]:
         raise FileNotFoundError(f"Missing source summary: {summary_path}")
     with fsspec.open(summary_path, "rt") as handle:
         summary = json.load(handle)
-    selected_tokens_path = str(summary.get("selected_tokens_path", join_path_or_uri(feature_dir, "selected_tokens.parquet")))
+    selected_tokens_path = str(
+        summary.get("selected_tokens_path", join_path_or_uri(feature_dir, "selected_tokens.parquet"))
+    )
     shard_manifest_path = str(summary.get("shard_manifest_path", join_path_or_uri(feature_dir, "shard_manifest.csv")))
     return selected_tokens_path, shard_manifest_path, summary
 
@@ -104,7 +106,9 @@ def compact_matrix(*, feature_dir: str, output_dir: str, dtype: np.dtype) -> dic
     prepare_output_dir(output_dir)
     selected_tokens_path, shard_manifest_path, source_summary = read_source_paths(feature_dir)
     selected = pd.read_parquet(selected_tokens_path)
-    token_metadata = selected[["token_key", "dataset_name", "request_id", "token_index", "token_bytes", "hash_value"]].copy()
+    token_metadata = selected[
+        ["token_key", "dataset_name", "request_id", "token_index", "token_bytes", "hash_value"]
+    ].copy()
     token_metadata["token_key"] = token_metadata["token_key"].astype(str)
     token_keys = token_metadata["token_key"].tolist()
 

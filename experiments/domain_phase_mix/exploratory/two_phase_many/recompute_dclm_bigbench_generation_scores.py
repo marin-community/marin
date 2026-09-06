@@ -34,7 +34,6 @@ import fsspec
 import pandas as pd
 from tqdm import tqdm
 
-
 TWO_PHASE_MANY_DIR = Path("experiments/domain_phase_mix/exploratory/two_phase_many")
 METRIC_REGISTRY_DIR = TWO_PHASE_MANY_DIR / "metric_registry" / "300m_dclm_core_completion"
 DEFAULT_SAMPLE_PREFIX = (
@@ -73,10 +72,18 @@ class BigBenchGenerationTask:
 
 
 RESCORABLE_TASKS = (
-    BigBenchGenerationTask("bb_qa_wikidata_10shot", "bigbench_qa_wikidata_generate_until", "bigbench_qa_wikidata_generate_until"),
-    BigBenchGenerationTask("bb_dyck_languages_10shot", "bigbench_dyck_languages_generate_until", "bigbench_dyck_languages_generate_until"),
-    BigBenchGenerationTask("bb_operators_10shot", "bigbench_operators_generate_until", "bigbench_operators_generate_until"),
-    BigBenchGenerationTask("bb_cs_algorithms_10shot", "bigbench_cs_algorithms_generate_until", "bigbench_cs_algorithms_generate_until"),
+    BigBenchGenerationTask(
+        "bb_qa_wikidata_10shot", "bigbench_qa_wikidata_generate_until", "bigbench_qa_wikidata_generate_until"
+    ),
+    BigBenchGenerationTask(
+        "bb_dyck_languages_10shot", "bigbench_dyck_languages_generate_until", "bigbench_dyck_languages_generate_until"
+    ),
+    BigBenchGenerationTask(
+        "bb_operators_10shot", "bigbench_operators_generate_until", "bigbench_operators_generate_until"
+    ),
+    BigBenchGenerationTask(
+        "bb_cs_algorithms_10shot", "bigbench_cs_algorithms_generate_until", "bigbench_cs_algorithms_generate_until"
+    ),
 )
 RERUN_REQUIRED_TASKS = ("bb_repeat_copy_logic_10shot",)
 
@@ -142,7 +149,9 @@ def _select_sample_path(paths: list[str]) -> str:
     return sorted(paths)[-1]
 
 
-def build_sample_index(sample_prefix: str, tasks: tuple[BigBenchGenerationTask, ...]) -> dict[tuple[str, str], list[str]]:
+def build_sample_index(
+    sample_prefix: str, tasks: tuple[BigBenchGenerationTask, ...]
+) -> dict[tuple[str, str], list[str]]:
     """Map ``(task_alias, generation_eval_key)`` to matching sample files."""
     fs = fsspec.filesystem("gcs")
     index: dict[tuple[str, str], list[str]] = {}
@@ -261,7 +270,7 @@ def apply_rescores(
 def write_summary(corrected: pd.DataFrame, audit: pd.DataFrame, output_dir: Path, input_csv: Path) -> None:
     summary: dict[str, Any] = {
         "input_csv": str(input_csv),
-        "row_count": int(len(corrected)),
+        "row_count": len(corrected),
         "rescorable_tasks": [task.alias for task in RESCORABLE_TASKS],
         "rerun_required_tasks": list(RERUN_REQUIRED_TASKS),
         "audit_status_counts": audit["status"].value_counts(dropna=False).to_dict() if not audit.empty else {},

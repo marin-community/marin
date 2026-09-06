@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # /// script
 # requires-python = ">=3.12"
 # dependencies = []
@@ -14,15 +17,13 @@ import math
 from pathlib import Path
 from typing import Any
 
-
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parents[3]
 DESIGN_DIR = SCRIPT_DIR / "reference_outputs/starcoder_wsd80_gradient_conflict_design_20260810"
 OUTPUT_DIR = SCRIPT_DIR / "reference_outputs/starcoder_wsd80_gradient_conflict_launch_20260811"
 SOURCE_DESIGN = REPO_ROOT / "experiments/domain_phase_mix/starcoder_wsd80_dense_support_surface_design_20260808.json"
 FITTED_SURFACES = (
-    SCRIPT_DIR
-    / "reference_outputs/starcoder_wsd80_matched_nd_stage1_20260731/"
+    SCRIPT_DIR / "reference_outputs/starcoder_wsd80_matched_nd_stage1_20260731/"
     "stage3_dense_surface_results_20260802/fitted_surface_candidates.csv"
 )
 INPUT_TRAJECTORIES = DESIGN_DIR / "trajectory_manifest.csv"

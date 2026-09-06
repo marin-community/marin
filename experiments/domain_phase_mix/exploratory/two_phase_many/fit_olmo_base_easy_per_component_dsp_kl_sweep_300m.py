@@ -43,9 +43,6 @@ from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E
     fit_dsp_l2_kl_sweep_deletion_augmented_300m as dsp_sweep,
 )
 from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E402
-    fit_dsp_vs_olmix_deletion_augmented_300m as dsp_compare,
-)
-from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E402
     fit_olmix_reference_deletion_augmented_300m as base,
 )
 from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E402
@@ -59,9 +56,7 @@ from experiments.domain_phase_mix.exploratory.two_phase_many.standalone_code imp
 SCRIPT_DIR = Path(__file__).resolve().parent
 REFERENCE_OUTPUTS = SCRIPT_DIR / "reference_outputs"
 DEFAULT_OUTPUT_DIR = REFERENCE_OUTPUTS / "olmo_base_easy_per_component_dsp_kl_sweep_300m_20260628"
-DEFAULT_OLMIX_SUMMARY = (
-    REFERENCE_OUTPUTS / "olmo_base_easy_paper_faithful_olmix_300m_20260625" / "summary.csv"
-)
+DEFAULT_OLMIX_SUMMARY = REFERENCE_OUTPUTS / "olmo_base_easy_paper_faithful_olmix_300m_20260625" / "summary.csv"
 DEFAULT_OLMIX_WEIGHTS = (
     REFERENCE_OUTPUTS
     / "olmo_base_easy_paper_faithful_olmix_300m_20260625"
@@ -140,7 +135,10 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--linear-reg-values", default="1e-6,1e-5,1e-4,1e-3,1e-2")
-    parser.add_argument("--kl-reg-values", default="0,0.001,0.0025,0.005,0.0075,0.01,0.0125,0.015,0.0175,0.02,0.025,0.05,0.075,0.1,0.15,0.2,0.3,0.5,0.75,1.0")
+    parser.add_argument(
+        "--kl-reg-values",
+        default="0,0.001,0.0025,0.005,0.0075,0.01,0.0125,0.015,0.0175,0.02,0.025,0.05,0.075,0.1,0.15,0.2,0.3,0.5,0.75,1.0",
+    )
     parser.add_argument("--maxiter", type=int, default=dsp.FIT_MAXITER)
     parser.add_argument("--coarse-top-k", type=int, default=dsp.START_TOP_K)
     parser.add_argument("--basin-hopping-iters", type=int, default=0)
@@ -386,7 +384,9 @@ def summarize_kl(
     observed_macro = panel[components].astype(float).to_numpy().mean(axis=1)
     train_macro = train_predictions.mean(axis=1)
     oof_macro = oof_predictions.mean(axis=1)
-    train_rmse, _train_mae, _train_pearson, train_spearman = component_dsp.regression_metrics(observed_macro, train_macro)
+    train_rmse, _train_mae, _train_pearson, train_spearman = component_dsp.regression_metrics(
+        observed_macro, train_macro
+    )
     oof_diag = base.predictive_diagnostics(observed_macro, oof_macro, folds)
     distances = base.mean_phase_tv(phase_weights, weights)
     nearest_idx = int(np.argmin(distances))
@@ -455,8 +455,7 @@ def write_component_predictions(
 def load_olmix_marker(path: Path) -> pd.DataFrame:
     frame = pd.read_csv(path)
     rows = frame[
-        frame["variant"].eq("two_phase_adapted")
-        & np.isclose(pd.to_numeric(frame["huber_delta"], errors="coerce"), 0.01)
+        frame["variant"].eq("two_phase_adapted") & np.isclose(pd.to_numeric(frame["huber_delta"], errors="coerce"), 0.01)
     ].copy()
     if rows.empty:
         rows = frame[frame["variant"].eq("two_phase_adapted")].copy()
@@ -651,8 +650,10 @@ def write_component_fit_plots(output_dir: Path, all_summary: pd.DataFrame, selec
         subplot_titles=("Selected L2 by component", "Selected component fit quality"),
         horizontal_spacing=0.16,
     )
-    short = selected["component"].str.replace("olmo_base_eval/easy_bpb/", "", regex=False).str.replace(
-        "/bpb", "", regex=False
+    short = (
+        selected["component"]
+        .str.replace("olmo_base_eval/easy_bpb/", "", regex=False)
+        .str.replace("/bpb", "", regex=False)
     )
     fig.add_trace(
         go.Bar(
@@ -690,7 +691,11 @@ def write_component_fit_plots(output_dir: Path, all_summary: pd.DataFrame, selec
 
     best_by_l2 = (
         all_summary.groupby("linear_reg", as_index=False)
-        .agg(mean_oof_rmse=("oof_rmse", "mean"), median_oof_rmse=("oof_rmse", "median"), mean_oof_spearman=("oof_spearman", "mean"))
+        .agg(
+            mean_oof_rmse=("oof_rmse", "mean"),
+            median_oof_rmse=("oof_rmse", "median"),
+            mean_oof_spearman=("oof_spearman", "mean"),
+        )
         .sort_values("linear_reg")
     )
     fig2 = go.Figure()
@@ -872,7 +877,11 @@ def main() -> None:
     aggregate = load_aggregate_sweep(args.aggregate_dsp_sweep)
     if aggregate is not None:
         for kl_value in (0.025, 0.05, 0.1, 0.2, 0.5):
-            proposal_path = args.aggregate_dsp_sweep.parent / f"kl_{str(kl_value).replace('.', 'p')}" / "proposed_mixture_weights.csv"
+            proposal_path = (
+                args.aggregate_dsp_sweep.parent
+                / f"kl_{str(kl_value).replace('.', 'p')}"
+                / "proposed_mixture_weights.csv"
+            )
             if proposal_path.exists():
                 proposal = pd.read_csv(proposal_path)
                 starts.append(proposal[["phase_0_weight", "phase_1_weight"]].to_numpy(dtype=float).T)
@@ -926,7 +935,7 @@ def main() -> None:
             {
                 "metadata": {
                     "target_metric": "mean_51_table9_bpb_components",
-                    "panel_rows": int(len(panel)),
+                    "panel_rows": len(panel),
                     "components": components,
                     "component_count": len(components),
                     "linear_reg_values": linear_regs,

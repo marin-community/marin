@@ -210,7 +210,9 @@ def update_status(status: str, evidence: str, output_dir: Path) -> None:
         "round_id": "round_43_dual_muon_adam_decision",
         "candidate_id": "DMACF",
         "candidate_family": "Dual Muon-Adam capability flow",
-        "hyperparameters": "Frozen angle, relaxation, readout-rate-ratio, evaluation, and ridge grids; frozen-feature and equal-channel ablations",
+        "hyperparameters": (
+            "Frozen angle, relaxation, readout-rate-ratio, evaluation, and ridge grids; frozen-feature and equal-channel ablations"
+        ),
         "adversarial_outcomes_available_before_proposal": True,
         "adversarial_outcomes_inspected_before_proposal": True,
         "observations_inspiring_mechanism": "See round-41 portfolio preregistration.",

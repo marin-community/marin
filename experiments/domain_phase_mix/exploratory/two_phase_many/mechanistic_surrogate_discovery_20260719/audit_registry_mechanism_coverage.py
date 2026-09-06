@@ -210,9 +210,11 @@ def main() -> None:
             "",
             f"The token-overlap screen found {len(similarity)} route pairs at Jaccard >= 0.35. This is a triage screen, not evidence of algebraic equivalence; each flagged pair remains justified by its recorded new state, transition, or identification argument.",
             "",
-            markdown_table(similarity[["left_id", "right_id", "token_jaccard", "same_mechanism_group"]].head(20))
-            if len(similarity)
-            else "No pair crossed the threshold.",
+            (
+                markdown_table(similarity[["left_id", "right_id", "token_jaccard", "same_mechanism_group"]].head(20))
+                if len(similarity)
+                else "No pair crossed the threshold."
+            ),
             "",
             "The sole flagged pair is not an algebraic duplicate. PWD uses a one-step local Bregman displacement of the tied potential; ESR carries a scalar stress state through exact two-phase relaxation. Both fail independently at the StarCoder shape gate, so neither is being reopened.",
             "",

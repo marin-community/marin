@@ -47,7 +47,9 @@ def _registry_rows() -> list[dict[str, object]]:
                 "Autonomous tangent flow driven by the exact source-defined finite Newton-Schulz polynomial. "
                 "Exact polar, vector-normalized, and Euclidean maps are mandatory nested ablations."
             ),
-            "response_link": "One nonnegative BPB amplitude on covariance-weighted terminal task debt plus an intercept.",
+            "response_link": (
+                "One nonnegative BPB amplitude on covariance-weighted terminal task debt plus an intercept."
+            ),
             "additional_degrees_of_freedom": (
                 "No transition degree of freedom beyond MAPTF: Newton-Schulz coefficients, iteration count, and "
                 "epsilon are fixed from MuonH source. Task angle, covariance anisotropy, relaxation, target mix, and "
@@ -105,12 +107,16 @@ def _registry_rows() -> list[dict[str, object]]:
                 "F_B(W,p)=E_K[NS5(G_K)]; dW/dtau=-k[I-W W^T_F]F_B; "
                 "Y=b+A[(1-q)L_B(W_T)+q r L_R(W_T)], A>=0."
             ),
-            "latent_state": "One constant-norm 2x2 representation W; batch composition is integrated out from the transition.",
+            "latent_state": (
+                "One constant-norm 2x2 representation W; batch composition is integrated out from the transition."
+            ),
             "state_transition": (
                 "Autonomous expected finite-Newton-Schulz tangent flow under the exact marginal hypergeometric batch law. "
                 "Applying NS5 once to the mean composition is the exact nested ablation."
             ),
-            "response_link": "One nonnegative amplitude on terminal task debt plus an intercept; no variance feature enters the output.",
+            "response_link": (
+                "One nonnegative amplitude on terminal task debt plus an intercept; no variance feature enters the output."
+            ),
             "additional_degrees_of_freedom": (
                 "Zero stochastic-strength parameters. Batch size 128, block size 2,048, deterministic count rounding, "
                 "Newton-Schulz coefficients, and iteration count are fixed by source."
@@ -155,7 +161,9 @@ def _registry_rows() -> list[dict[str, object]]:
                 "flow for a scalar shared feature and both task heads. DMACF places a shared vector representation on "
                 "MuonH's constant-norm manifold while task readouts follow a separate Adam-like Euclidean channel."
             ),
-            "materially_new_mechanism": "Coupled capability learning through optimizer-specific matrix and readout channels.",
+            "materially_new_mechanism": (
+                "Coupled capability learning through optimizer-specific matrix and readout channels."
+            ),
             "mechanistic_premise": (
                 "MuonH trains linear matrices with normalized constant-norm updates, but embeddings, biases, and the LM "
                 "head use Adam/AdamH. Broad data can orient shared features while late specialist data adapts its readout; "
@@ -172,7 +180,9 @@ def _registry_rows() -> list[dict[str, object]]:
                 "Autonomous coupled deep-linear task flow with a Muon tangent-normalized feature channel and Euclidean "
                 "readout channel. Freezing u and setting the channels equal are mandatory ablations."
             ),
-            "response_link": "One nonnegative BPB amplitude on evaluation-weighted terminal broad/rare task loss plus intercept.",
+            "response_link": (
+                "One nonnegative BPB amplitude on evaluation-weighted terminal broad/rare task loss plus intercept."
+            ),
             "additional_degrees_of_freedom": (
                 "Task angle, total Muon relaxation, Adam-to-Muon rate ratio, evaluation mix, and ridge. Equal fixed initial "
                 "readouts remove deep-linear rescaling; no task-specific response amplitudes are allowed."
@@ -216,7 +226,9 @@ def _registry_rows() -> list[dict[str, object]]:
                 "cannot encode noncommuting information directions; MKBIF's SPD covariance and domain-specific Fisher "
                 "and process matrices introduce an identifiable orientation invariant."
             ),
-            "materially_new_mechanism": "Noncommuting matrix information acquisition and interference in posterior covariance.",
+            "materially_new_mechanism": (
+                "Noncommuting matrix information acquisition and interference in posterior covariance."
+            ),
             "mechanistic_premise": (
                 "Different data domains constrain different representation directions. Training accumulates information "
                 "in observed directions while distribution-specific interference reintroduces uncertainty elsewhere. "
@@ -232,7 +244,9 @@ def _registry_rows() -> list[dict[str, object]]:
                 "Autonomous matrix Riccati/Kalman-Bucy covariance flow through each phase, preserving positive definiteness. "
                 "Information contracts uncertainty; process interference injects it in domain-oriented directions."
             ),
-            "response_link": "One nonnegative BPB amplitude on evaluation-weighted posterior uncertainty plus intercept.",
+            "response_link": (
+                "One nonnegative BPB amplitude on evaluation-weighted posterior uncertainty plus intercept."
+            ),
             "additional_degrees_of_freedom": (
                 "Information anisotropy and angle, dimensionless process-to-information ratio, total relaxation, evaluation "
                 "mix, and ridge. Unit traces and fixed initial V remove scale non-identifiability."
@@ -289,7 +303,9 @@ def main() -> None:
                 "round_id": "round_41_portfolio_preregistration",
                 "candidate_id": row["id"],
                 "candidate_family": row["family"],
-                "hyperparameters": "Frozen finite grids documented in the candidate-specific audit; exact source constants are not tuned.",
+                "hyperparameters": (
+                    "Frozen finite grids documented in the candidate-specific audit; exact source constants are not tuned."
+                ),
                 "adversarial_outcomes_available_before_proposal": True,
                 "adversarial_outcomes_inspected_before_proposal": True,
                 "observations_inspiring_mechanism": (

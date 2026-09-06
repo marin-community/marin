@@ -251,7 +251,7 @@ def main() -> None:
     )
     status = {
         "algebraic_tied_error": candidate.tied_policy_error(candidate.cascade_terminal_state, selected_cosine),
-        "prerequisite_global_both": (selected_cosine.prerequisite_power > 0.0 and selected_wsd.prerequisite_power > 0.0),
+        "prerequisite_global_both": selected_cosine.prerequisite_power > 0.0 and selected_wsd.prerequisite_power > 0.0,
         "prerequisite_fold_majority_both": fold_mechanism,
         "specialist_replay_active_both": replay_active,
         "beats_no_replay_nested_both": beats_no_replay,

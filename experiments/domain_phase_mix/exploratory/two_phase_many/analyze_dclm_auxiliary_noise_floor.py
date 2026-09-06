@@ -46,11 +46,7 @@ DEFAULT_COMPONENT_SUMMARY_CSV = (
     / "raw_metric_matrix_300m_dclm_updated_20260615"
     / "dclm_component_smooth_proxy_summary.csv"
 )
-DEFAULT_OUTPUT_DIR = (
-    SCRIPT_DIR
-    / "reference_outputs"
-    / "dclm_calibrated_auxiliary_noise_floor_20260616"
-)
+DEFAULT_OUTPUT_DIR = SCRIPT_DIR / "reference_outputs" / "dclm_calibrated_auxiliary_noise_floor_20260616"
 MACRO_COLUMN = "lm_eval/dclm_core/centered_accuracy_macro"
 PLOT_CONFIG = {"toImageButtonOptions": {"format": "png", "scale": 4}}
 
@@ -136,8 +132,8 @@ def metric_noise_row(
     return {
         "label": label,
         "column": column,
-        "signal_n": int(len(signal_values)),
-        "noise_n": int(len(noise_values)),
+        "signal_n": len(signal_values),
+        "noise_n": len(noise_values),
         "signal_mean": float(signal_values.mean()) if len(signal_values) else math.nan,
         "signal_sd": signal_sd,
         "signal_range": signal_range,
@@ -238,9 +234,7 @@ def write_plots(macro: pd.DataFrame, components: pd.DataFrame, matrix: pd.DataFr
     fig.write_html(output_dir / "dclm_hard_macro_noise_floor.html", include_plotlyjs="cdn", config=PLOT_CONFIG)
 
     plot_components = components.copy()
-    plot_components["best_minus_prop_abs_noise_units"] = plot_components[
-        "best_minus_proportional_over_noise_sd"
-    ].abs()
+    plot_components["best_minus_prop_abs_noise_units"] = plot_components["best_minus_proportional_over_noise_sd"].abs()
     plot_components["best_minus_prop_marker_size"] = (
         plot_components["best_minus_prop_abs_noise_units"].replace([np.inf, -np.inf], np.nan).fillna(0.0)
     )
@@ -268,7 +262,9 @@ def write_plots(macro: pd.DataFrame, components: pd.DataFrame, matrix: pd.DataFr
     )
     fig.add_hline(y=0.0, line_dash="dash", line_color="gray")
     fig.update_layout(template="plotly_white")
-    fig.write_html(output_dir / "dclm_component_reliability_vs_smooth_coupling.html", include_plotlyjs="cdn", config=PLOT_CONFIG)
+    fig.write_html(
+        output_dir / "dclm_component_reliability_vs_smooth_coupling.html", include_plotlyjs="cdn", config=PLOT_CONFIG
+    )
 
     ordered = components.sort_values("smooth_hard_spearman")
     fig = make_subplots(rows=1, cols=2, subplot_titles=("Smooth-hard Spearman", "Best over proportional in noise SDs"))
@@ -346,9 +342,7 @@ def write_readme(output_dir: Path, macro: pd.DataFrame, components: pd.DataFrame
         "",
         "## Highest Reliability Proxies",
         "",
-        reliable[
-            ["label", "reliability_proxy", "signal_to_noise_sd", "smooth_hard_spearman"]
-        ].to_markdown(index=False),
+        reliable[["label", "reliability_proxy", "signal_to_noise_sd", "smooth_hard_spearman"]].to_markdown(index=False),
         "",
         "## Outputs",
         "",
@@ -384,7 +378,7 @@ def main() -> None:
         "component_summary_csv": str(args.component_summary_csv),
         "excluded_run_names": sorted(args.exclude_run_name),
         "macro": macro.iloc[0].to_dict(),
-        "component_count": int(len(component_summary)),
+        "component_count": len(component_summary),
         "components_with_positive_smooth_hard_spearman": int((component_summary["smooth_hard_spearman"] > 0.0).sum()),
         "components_with_reliability_proxy_ge_0p5": int((component_summary["reliability_proxy"] >= 0.5).sum()),
         "median_component_signal_to_noise_sd": float(component_summary["signal_to_noise_sd"].median()),

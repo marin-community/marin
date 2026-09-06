@@ -237,7 +237,9 @@ def add_smooth_targets(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]
                 "hard_column": hard_column,
                 "hard_nonnull_count": int(out[hard_column].notna().sum()) if hard_column in out.columns else 0,
                 "utility_vs_hard_spearman": (
-                    safe_corr(out[utility_column], out[hard_column], "spearman") if hard_column in out.columns else np.nan
+                    safe_corr(out[utility_column], out[hard_column], "spearman")
+                    if hard_column in out.columns
+                    else np.nan
                 ),
                 "utility_vs_hard_pearson": (
                     safe_corr(out[utility_column], out[hard_column], "pearson") if hard_column in out.columns else np.nan
@@ -327,7 +329,7 @@ def fit_target(
     summary: dict[str, Any] = {
         "target_name": target_column,
         "variant": variant.name,
-        "fit_row_count": int(len(packet.y)),
+        "fit_row_count": len(packet.y),
         "total_param_count": int(model.total_param_count),
         "m_dependent_params_per_domain": int(model.m_dependent_params_per_domain),
         "target_mean": float(np.mean(actual)),
@@ -798,7 +800,9 @@ def main() -> None:
     component_predictions.to_csv(args.output_dir / "component_predictions_long.csv", index=False)
 
     if not raw_weights.empty:
-        write_weights_plot(raw_weights.drop(columns=["target_name"]), args.output_dir / "smooth_raw_optimum_weights.html")
+        write_weights_plot(
+            raw_weights.drop(columns=["target_name"]), args.output_dir / "smooth_raw_optimum_weights.html"
+        )
     write_fit_plot(fit_summary, predictions, args.output_dir / "aggregate_fit_diagnostics.html")
     write_component_plot(component_map, component_fit, args.output_dir / "component_diagnostics.html")
     write_tradeoff_plot(frame, args.output_dir / "smooth_vs_hard_tradeoff.html")
@@ -809,11 +813,11 @@ def main() -> None:
         "dclm_matrix_csv": str(args.dclm_matrix_csv),
         "output_dir": str(args.output_dir),
         "aggregate_fits": fit_summary.to_dict(orient="records"),
-        "component_count": int(len(component_map)),
+        "component_count": len(component_map),
         "complete_all22_rows": int(frame["dclm_smooth/all22_complete_zscore_macro"].notna().sum()),
         "proportional_anchor_component_count": int(component_map["proportional_available"].sum()),
         "constant_hard_component_count": int(hard_audit["hard_unique"].le(1).sum()),
-        "posthoc_hard_signal_positive_component_count": int(len(posthoc_component_map)),
+        "posthoc_hard_signal_positive_component_count": len(posthoc_component_map),
     }
     (args.output_dir / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
     print(json.dumps(summary, indent=2, sort_keys=True))

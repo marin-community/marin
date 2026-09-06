@@ -71,7 +71,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def r2_score(actual: np.ndarray, predicted: np.ndarray) -> float:
-    """Compute ordinary \(R^2\)."""
+    r"""Compute ordinary \(R^2\)."""
     ss_res = float(np.sum((actual - predicted) ** 2))
     ss_tot = float(np.sum((actual - actual.mean()) ** 2))
     return 1.0 - ss_res / ss_tot if ss_tot > 0.0 else float("nan")
@@ -172,7 +172,9 @@ def weights_with_model_params(
                 "phase_1_delta_vs_proportional": float(weights[1, index] - proportional[1, index]),
                 "phase_0_effective_epochs": float(weights[0, index] * model.c0[index]),
                 "phase_1_effective_epochs": float(weights[1, index] * model.c1[index]),
-                "total_effective_epochs": float(weights[0, index] * model.c0[index] + weights[1, index] * model.c1[index]),
+                "total_effective_epochs": float(
+                    weights[0, index] * model.c0[index] + weights[1, index] * model.c1[index]
+                ),
                 "benefit_coef": float(model.benefit_coef[index]),
                 "penalty_coef": float(model.penalty_coef[index]),
                 "rho": float(np.asarray(model.params["rho"])[index]),
@@ -451,7 +453,7 @@ def main() -> None:
     summary: dict[str, Any] = {
         "target_column": args.target_column,
         "variant": variant.name,
-        "fit_row_count": int(len(packet.y)),
+        "fit_row_count": len(packet.y),
         "excluded_missing_dclm_count": int(
             pd.read_csv(args.dclm_matrix_csv, usecols=["run_name", args.target_column])[args.target_column].isna().sum()
         ),
@@ -489,7 +491,9 @@ def main() -> None:
     stability.to_csv(output_dir / "raw_optimum_stability.csv", index=False)
     pd.DataFrame([summary]).to_csv(output_dir / "summary.csv", index=False)
     (output_dir / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    (output_dir / "model.json").write_text(json.dumps(dsp.model_to_json(model, model_metrics), indent=2), encoding="utf-8")
+    (output_dir / "model.json").write_text(
+        json.dumps(dsp.model_to_json(model, model_metrics), indent=2), encoding="utf-8"
+    )
     write_fit_plot(predictions, output_dir / "dclm_dsp_fit_diagnostics.html")
     write_weights_plot(raw_weights_frame, output_dir / "dclm_dsp_raw_optimum_weights.html")
     write_report(output_dir, summary, raw_weights_frame)

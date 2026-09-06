@@ -31,8 +31,8 @@ import pandas as pd
 import plotly.express as px
 
 from experiments.domain_phase_mix.exploratory.two_phase_many.analyze_dclm_auxiliary_anchored_regression import (
-    FeatureGroup,
     PLOT_CONFIG,
+    FeatureGroup,
     complete_smooth_columns,
     dclm_task_prefixes,
     fit_oof_predictions,
@@ -53,11 +53,7 @@ DEFAULT_COMPONENT_SUMMARY_CSV = (
     / "raw_metric_matrix_300m_dclm_updated_20260615"
     / "dclm_component_smooth_proxy_summary.csv"
 )
-DEFAULT_OUTPUT_DIR = (
-    SCRIPT_DIR
-    / "reference_outputs"
-    / "dclm_leave_task_out_prediction_20260616"
-)
+DEFAULT_OUTPUT_DIR = SCRIPT_DIR / "reference_outputs" / "dclm_leave_task_out_prediction_20260616"
 MODELS_TO_RUN = {"ridge", "pca5_ridge", "pls3"}
 
 
@@ -173,7 +169,9 @@ def summarize(rows: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     return per_component, aggregate
 
 
-def write_outputs(output_dir: Path, per_component: pd.DataFrame, aggregate: pd.DataFrame, metadata: dict[str, Any]) -> None:
+def write_outputs(
+    output_dir: Path, per_component: pd.DataFrame, aggregate: pd.DataFrame, metadata: dict[str, Any]
+) -> None:
     """Write artifacts."""
     output_dir.mkdir(parents=True, exist_ok=True)
     per_component.to_csv(output_dir / "leave_task_out_component_summary.csv", index=False)
@@ -217,14 +215,16 @@ def main() -> None:
     matrix = pd.read_csv(args.matrix_csv, low_memory=False)
     components = pd.read_csv(args.component_summary_csv)
     signal = matrix.loc[matrix["row_kind"].eq("signal") & ~matrix["run_name"].isin(args.exclude_run_name)].copy()
-    rows = run_component_models(frame=signal, components=components, folds=args.folds, repeats=args.repeats, seed=args.seed)
+    rows = run_component_models(
+        frame=signal, components=components, folds=args.folds, repeats=args.repeats, seed=args.seed
+    )
     per_component, aggregate = summarize(rows)
     metadata = {
         "matrix_csv": str(args.matrix_csv),
         "component_summary_csv": str(args.component_summary_csv),
         "output_dir": str(args.output_dir),
-        "signal_rows": int(len(signal)),
-        "components": int(len(components)),
+        "signal_rows": len(signal),
+        "components": len(components),
         "folds": int(args.folds),
         "repeats": int(args.repeats),
         "models": sorted(MODELS_TO_RUN),

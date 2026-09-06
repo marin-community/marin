@@ -159,7 +159,7 @@ def preregistration() -> dict[str, Any]:
             Variant.LINEAR_PHYSICAL_FAMILY_HPR.value: (
                 "Replace curved harm with sum_f b_f mean_i_in_f [E_i-tau]_+; b_f>=0."
             ),
-            Variant.LINEAR_PHYSICAL_BUCKET_HPR.value: ("Replace curved harm with sum_i b_i [E_i-tau]_+; b_i>=0."),
+            Variant.LINEAR_PHYSICAL_BUCKET_HPR.value: "Replace curved harm with sum_i b_i [E_i-tau]_+; b_i>=0.",
         },
         "fixed_grids": {"threshold_epochs": list(THRESHOLD_GRID), "l2": list(L2_GRID)},
         "selection": (

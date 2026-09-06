@@ -574,9 +574,7 @@ def main() -> None:
         "best_queryable_spearman_delta_vs_dsp": float(best_queryable["spearman_r"] - dsp_row["spearman_r"]),
         "best_standalone_mde_model": str(best_standalone_mde["model"]),
         "best_standalone_mde_spearman": float(best_standalone_mde["spearman_r"]),
-        "best_standalone_mde_spearman_delta_vs_dsp": float(
-            best_standalone_mde["spearman_r"] - dsp_row["spearman_r"]
-        ),
+        "best_standalone_mde_spearman_delta_vs_dsp": float(best_standalone_mde["spearman_r"] - dsp_row["spearman_r"]),
         "semantics": (
             "The observed_token_sketch_bpb_leaky row directly aggregates each checkpoint's own token losses "
             "and is included only as a token-sketch fidelity check. Queryable token-MDE rows use train-fold "

@@ -1,14 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from types import SimpleNamespace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
 
-from experiments.domain_phase_mix import launch_300m_dclm_core_evals as launcher
 from experiments.domain_phase_mix import build_300m_dclm_proportional_noise_state as proportional_noise
+from experiments.domain_phase_mix import launch_300m_dclm_core_evals as launcher
 from experiments.evals import dclm_core
 
 
@@ -549,8 +549,7 @@ def test_build_eval_steps_runs_generation_smooth_as_levanter_loglikelihood() -> 
         eligible=True,
         launch_decision="launch",
         step_name=(
-            "evaluation/lm_evaluation_harness_levanter/"
-            "lmeval_debug_dclm300m_000_generation_smooth_candidate_a"
+            "evaluation/lm_evaluation_harness_levanter/" "lmeval_debug_dclm300m_000_generation_smooth_candidate_a"
         ),
         result_path="executor_output:dclm300m_000_generation_smooth_candidate_a",
     )
@@ -569,8 +568,7 @@ def test_build_eval_steps_runs_generation_smooth_as_levanter_loglikelihood() -> 
 
     assert len(steps) == 1
     assert steps[0].name == (
-        "evaluation/lm_evaluation_harness_levanter/"
-        "lmeval_debug_dclm300m_000_generation_smooth_candidate_a"
+        "evaluation/lm_evaluation_harness_levanter/" "lmeval_debug_dclm300m_000_generation_smooth_candidate_a"
     )
     assert steps[0].config.log_samples is True
     assert steps[0].config.sample_log_all is True
@@ -676,9 +674,7 @@ def test_build_eval_steps_can_reuse_existing_eval_dataset_cache_without_cache_st
     assert checked_paths == ["gs://marin-us-east5/raw/eval-datasets/300m-dclm-core-v1"]
     assert len(steps) == 1
     assert "cache_eval_datasets" not in steps[0].name
-    assert steps[0].config.eval_datasets_cache_path.value == (
-        "gs://marin-us-east5/raw/eval-datasets/300m-dclm-core-v1"
-    )
+    assert steps[0].config.eval_datasets_cache_path.value == ("gs://marin-us-east5/raw/eval-datasets/300m-dclm-core-v1")
     assert steps[0].config.eval_datasets_cache_dependency is None
 
 
@@ -1130,8 +1126,7 @@ def test_write_smooth_gapfill_state_from_results_includes_generation_smooth_rows
             eligible=True,
             launch_decision="launch",
             step_name=(
-                "evaluation/lm_evaluation_harness_levanter/"
-                "lmeval_debug_dclm300m_000_generation_smooth_candidate_a"
+                "evaluation/lm_evaluation_harness_levanter/" "lmeval_debug_dclm300m_000_generation_smooth_candidate_a"
             ),
             result_path="executor_output:dclm300m_000_generation_smooth_candidate_a",
         ),

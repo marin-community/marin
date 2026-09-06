@@ -971,7 +971,9 @@ def main() -> None:
         "statistical_review": review_path.name,
         "archive_observations_after_hybrid": 1518,
         "archive_unique_policies_after_hybrid": 1472,
-        "note": "Hybrid rows are complete and coordinate-disjoint but were not yet present in the July-20 registry materialization.",
+        "note": (
+            "Hybrid rows are complete and coordinate-disjoint but were not yet present in the July-20 registry materialization."
+        ),
     }
     (OUTPUT_DIR / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
     print(f"Wrote {len(manifest)} figures and report to {OUTPUT_DIR}")

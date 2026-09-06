@@ -61,7 +61,7 @@ def candidate_definitions() -> dict[str, dict[str, Any]]:
     return {
         "paired_marginal_value_transport": {
             "status": "frozen_for_historical_gate",
-            "equation": ("Y(w0,w1)=F(a)+sum_i theta_i m_i(a)d_i+sum_f chi_f sum_{i in f} p(i|f)[m_i(a)d_i]^2"),
+            "equation": "Y(w0,w1)=F(a)+sum_i theta_i m_i(a)d_i+sum_f chi_f sum_{i in f} p(i|f)[m_i(a)d_i]^2",
             "definitions": {
                 "a": "alpha0*w0+alpha1*w1",
                 "d": "alpha0*alpha1*(w1-w0)/p",
@@ -102,7 +102,7 @@ def candidate_definitions() -> dict[str, dict[str, Any]]:
         },
         "terminal_equilibrium_adaptation": {
             "status": "frozen_for_historical_gate",
-            "equation": ("Y(w0,w1)=F(a)-sum_i b_i[phi_r(w1_i)-phi_r(a_i)], phi_r(w)=w/(w+r(1-w)), b_i>=0"),
+            "equation": "Y(w0,w1)=F(a)-sum_i b_i[phi_r(w1_i)-phi_r(a_i)], phi_r(w)=w/(w+r(1-w)), b_i>=0",
             "definitions": {"a": "alpha0*w0+alpha1*w1", "phi": "terminal equilibrium competence"},
             "mechanisms": (
                 "terminal competence relaxes rapidly to the equilibrium induced by the final mixture; "

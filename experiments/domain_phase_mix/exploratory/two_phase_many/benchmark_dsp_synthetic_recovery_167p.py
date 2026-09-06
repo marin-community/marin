@@ -21,16 +21,14 @@ import csv
 import json
 import math
 import time
-from dataclasses import dataclass
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
-from scipy.optimize import basinhopping, minimize
-from scipy.optimize import nnls
+from scipy.optimize import basinhopping, minimize, nnls
 from scipy.stats import spearmanr
 from sklearn.model_selection import KFold
 
@@ -41,12 +39,12 @@ from experiments.domain_phase_mix.exploratory.two_phase_many.design_production_s
 )
 from experiments.domain_phase_mix.exploratory.two_phase_many.fit_dsp_canonical_variants_300m import (
     CV_SEED,
+    LINEAR_REG,
+    VARIANTS,
     DSPVariant,
     FittedDSPModel,
-    LINEAR_REG,
     LinearMode,
     PenaltyMode,
-    VARIANTS,
     _bounds,
     _features,
     _fit_linear_head,
@@ -326,10 +324,7 @@ def load_production_packet(candidate_csv: Path, bucket_csv: Path) -> PacketData:
     if list(frame.columns) != expected_columns:
         raise ValueError("Candidate CSV columns do not match bucket CSV order")
     weights = np.stack(
-        [
-            frame[[f"{phase}/{bucket}" for bucket in buckets]].to_numpy(dtype=float)
-            for phase in PHASE_NAMES
-        ],
+        [frame[[f"{phase}/{bucket}" for bucket in buckets]].to_numpy(dtype=float) for phase in PHASE_NAMES],
         axis=1,
     )
     if np.any(weights < 0.0):
@@ -409,7 +404,11 @@ def synthetic_truth_model(
         )
     else:
         benefit_coef = rng.normal(loc=0.5, scale=1.0, size=packet.m)
-        penalty_coef = rng.normal(loc=0.25, scale=0.8, size=packet.m) if variant.penalty_mode != PenaltyMode.NONE else np.zeros(packet.m, dtype=float)
+        penalty_coef = (
+            rng.normal(loc=0.25, scale=0.8, size=packet.m)
+            if variant.penalty_mode != PenaltyMode.NONE
+            else np.zeros(packet.m, dtype=float)
+        )
     return FittedDSPModel(
         variant=variant,
         params=params,
@@ -642,9 +641,9 @@ def fit_shared_linear_head(
         params,
         num_domains,
         ridge_alpha=ridge_alpha,
-        nnls_maxiter=None
-        if profile.nnls_maxiter_multiplier is None
-        else profile.nnls_maxiter_multiplier * shared_design.shape[1],
+        nnls_maxiter=(
+            None if profile.nnls_maxiter_multiplier is None else profile.nnls_maxiter_multiplier * shared_design.shape[1]
+        ),
     )
     model.params["_linear_reg"] = ridge_alpha
     model.params["_linear_head_mode"] = LinearHeadMode.SHARED.value
@@ -911,7 +910,7 @@ def run_trial(
             "truth_variant": variant.name,
             "fit_variant": fitted_model.variant.name,
             "sample_size": int(sample_size),
-            "candidate_count": int(len(full_packet.frame)),
+            "candidate_count": len(full_packet.frame),
             "partition_count": int(full_packet.m),
             "noise_sigma": float(sigma),
             "heteroskedastic": bool(heteroskedastic),
@@ -921,7 +920,7 @@ def run_trial(
             "elapsed_sec": float(elapsed),
             "total_param_count": int(fitted_model.total_param_count),
             "m_dependent_params_per_domain": int(fitted_model.m_dependent_params_per_domain),
-            "nonlinear_param_count": int(len(_pack_params(fitted_model.params, fitted_model.variant))),
+            "nonlinear_param_count": len(_pack_params(fitted_model.params, fitted_model.variant)),
             "n_over_total_params": float(sample_size / fitted_model.total_param_count),
             "n_over_nonlinear_params": float(sample_size / len(_pack_params(fitted_model.params, fitted_model.variant))),
             "best_trace_objective": float(trace["objective"].min()),
@@ -973,7 +972,7 @@ def main() -> None:
     noise_sigmas = (0.0,) if args.quick else parse_float_schedule(args.noise_sigmas)
     seeds = (CV_SEED,) if args.quick else parse_seed_schedule(args.seeds)
     default_profiles = ["current", "current_nnls20"] if args.quick else ["current"]
-    profiles = tuple(SOLVER_PROFILES[name] for name in (args.solver_profile or default_profiles))
+    profiles = tuple(SOLVER_PROFILES[name] for name in args.solver_profile or default_profiles)
     full_packet = load_production_packet(args.candidate_csv, args.bucket_csv)
 
     progress(
@@ -1012,7 +1011,7 @@ def main() -> None:
                             "truth_variant": variant.name,
                             "fit_variant": variant_for_profile(variant, profile).name,
                             "sample_size": int(sample_size),
-                            "candidate_count": int(len(full_packet.frame)),
+                            "candidate_count": len(full_packet.frame),
                             "partition_count": int(full_packet.m),
                             "noise_sigma": float(sigma),
                             "heteroskedastic": bool(args.heteroskedastic),
@@ -1076,7 +1075,7 @@ def main() -> None:
                 "heteroskedastic": bool(args.heteroskedastic),
                 "truth_regime": args.truth_regime,
                 "coefficient_regime": args.coefficient_regime,
-                "candidate_count": int(len(full_packet.frame)),
+                "candidate_count": len(full_packet.frame),
                 "partition_count": int(full_packet.m),
             },
             indent=2,

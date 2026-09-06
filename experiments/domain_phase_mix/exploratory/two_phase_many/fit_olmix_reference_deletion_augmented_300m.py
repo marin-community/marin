@@ -442,7 +442,7 @@ def replace_proportional_target_with_reference_mean(
         return panel, 0, None, None
     out = panel.copy()
     out.loc[out["run_name"].eq("baseline_proportional"), target_column] = float(values.mean())
-    return out, int(len(values)), float(values.mean()), float(values.std(ddof=1)) if len(values) > 1 else None
+    return out, len(values), float(values.mean()), float(values.std(ddof=1)) if len(values) > 1 else None
 
 
 def build_uncheatable_panel(columns: list[str]) -> tuple[pd.DataFrame, dict[str, Any]]:
@@ -623,7 +623,7 @@ def fit_target(
         target_name=target_name,
         target_metric=target_metric,
         objective_direction="lower_is_better",
-        n_rows=int(len(panel)),
+        n_rows=len(panel),
         n_signal_rows=int(panel["panel_source"].eq("qsplit_signal").sum()),
         n_deletion_rows=int(panel["panel_source"].eq("domain_deletion").sum()),
         n_proportional_reference_rows=int(metadata.get("n_proportional_reference_rows", 0)),
@@ -817,7 +817,7 @@ def fit_target_single_simplex_tied_phases(
         target_name=target_name,
         target_metric=target_metric,
         objective_direction="lower_is_better",
-        n_rows=int(len(panel)),
+        n_rows=len(panel),
         n_signal_rows=int(panel["panel_source"].eq("qsplit_signal").sum()),
         n_deletion_rows=int(panel["panel_source"].eq("domain_deletion").sum()),
         n_proportional_reference_rows=int(metadata.get("n_proportional_reference_rows", 0)),
