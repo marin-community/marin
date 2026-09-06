@@ -3515,6 +3515,188 @@
         }
       ],
       "interval": "1m"
+    },
+    {
+      "id": 45,
+      "type": "table",
+      "title": "Wire-weight change survey by publication",
+      "description": "Opt-in bounded survey of exact converted BF16/FP32 wire bits. Changed and hypothetical uint32-index plus replacement-value payload fractions are estimates, not gradient sparsity or measured compression speedups. Baseline/incomplete publications have no change estimate. Capture, CUDA and compare timings overlap and must not be summed. Dense wire inventory may include tied tensors more than once. No codec is enabled by this probe.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 100,
+        "w": 24,
+        "h": 10
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No matching records in this window."
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "changed_fraction"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "patch_fraction"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "dense_bytes"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "bytes"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "capture_seconds"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "cuda_ms"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "ms"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "compare_seconds"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "WITH r AS (SELECT * FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND run_id IN (${run:sqlstring}) AND job_id IN (${job:sqlstring}) AND execution_uid IN (${execution:sqlstring})) SELECT execution_uid AS execution,CAST(json_get(body_json,'target_update') AS BIGINT) AS update,json_get(body_json,'status') AS status,CAST(json_get(body_json,'coverage_complete') AS BIGINT) AS complete,CAST(json_get(body_json,'dense_wire_bytes') AS DOUBLE) AS dense_bytes,CAST(json_get(body_json,'estimated_changed_element_fraction') AS DOUBLE) AS changed_fraction,CAST(json_get(body_json,'estimated_index32_value_bytes') AS DOUBLE)/NULLIF(CAST(json_get(body_json,'dense_wire_bytes') AS DOUBLE),0) AS patch_fraction,CAST(json_get(body_json,'capture_enqueue_seconds') AS DOUBLE) AS capture_seconds,CAST(json_get(body_json,'sample_cuda_milliseconds') AS DOUBLE) AS cuda_ms,CAST(json_get(body_json,'compare_commit_seconds') AS DOUBLE) AS compare_seconds FROM r WHERE name='weight_change_probe' ORDER BY timestamp_ms"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "execution",
+              "text": "execution",
+              "type": "string"
+            },
+            {
+              "selector": "update",
+              "text": "update",
+              "type": "number"
+            },
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "string"
+            },
+            {
+              "selector": "complete",
+              "text": "complete",
+              "type": "number"
+            },
+            {
+              "selector": "dense_bytes",
+              "text": "dense_bytes",
+              "type": "number"
+            },
+            {
+              "selector": "changed_fraction",
+              "text": "changed_fraction",
+              "type": "number"
+            },
+            {
+              "selector": "patch_fraction",
+              "text": "patch_fraction",
+              "type": "number"
+            },
+            {
+              "selector": "capture_seconds",
+              "text": "capture_seconds",
+              "type": "number"
+            },
+            {
+              "selector": "cuda_ms",
+              "text": "cuda_ms",
+              "type": "number"
+            },
+            {
+              "selector": "compare_seconds",
+              "text": "compare_seconds",
+              "type": "number"
+            }
+          ]
+        }
+      ]
     }
   ],
   "version": 2
