@@ -217,7 +217,11 @@ def test_chat_processor_renders_tool_calls(marin_chat_tokenizer: MarinTokenizer)
     )[0]
 
     rendered = _decode(marin_chat_tokenizer, result["input_ids"])
-    assert '<tool_call>{"name": "check_valid_vin", "arguments": {"vin": "1FMXK92W8YPA12345"}}</tool_call>' in rendered
+    assert (
+        '<tool_call>{"id": "call_abc", "name": "check_valid_vin", '
+        '"arguments": {"vin": "1FMXK92W8YPA12345"}}</tool_call>' in rendered
+    )
+    assert '"id": "call_abc", "name": "check_valid_vin"' in rendered
     assert '<tool_response name="check_valid_vin" id="call_abc">' in rendered
     assert result["assistant_masks"].sum() > 0
 
@@ -299,7 +303,7 @@ def test_chat_processor_renders_ipython_output(marin_chat_tokenizer: MarinTokeni
     )[0]
 
     rendered = _decode(marin_chat_tokenizer, result["input_ids"])
-    assert '{"name": "python_exec", "arguments": {"code": "print(1+1)"}}' in rendered
+    assert '{"id": "call_output", "name": "python_exec", "arguments": {"code": "print(1+1)"}}' in rendered
     assert "<|start_header_id|>ipython<|end_header_id|>" in rendered
     assert '{"output": "4\\n"}' in rendered
     assert result["assistant_masks"].sum() > 0

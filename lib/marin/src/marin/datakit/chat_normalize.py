@@ -34,8 +34,10 @@ from marin.datakit.normalize import (
 )
 from marin.execution.step_spec import StepSpec
 
-CHAT_NORMALIZE_VERSION = "2026.09.05.2"
+CHAT_NORMALIZE_VERSION = "2026.09.05.3"
+MAX_REJECTED_RECORD_FRACTION = 0.05
 _INLINE_TOOL_SYNTAX = re.compile(r"<tool_call(?::[^>]*)?>", re.IGNORECASE)
+_TOOL_RESPONSE_SYNTAX = re.compile(r"</?tool_response(?:\s|>)", re.IGNORECASE)
 _RAW_REASONING_TOKEN = re.compile(r"</?think>", re.IGNORECASE)
 _SAFE_TOOL_IDENTIFIER = re.compile(r"[A-Za-z0-9_.:-]+")
 
@@ -177,6 +179,8 @@ def validate_chat_messages(messages: list[dict], tools: list[dict]) -> None:
         elif role == "tool":
             if not isinstance(content, str):
                 raise ValueError("Tool observations must contain text")
+            if _INLINE_TOOL_SYNTAX.search(content) or _TOOL_RESPONSE_SYNTAX.search(content):
+                raise ValueError("Tool observations must not contain chat protocol wrappers")
             call_id = message.get("tool_call_id")
             if call_id not in pending_calls:
                 raise ValueError("Tool observations must reference a pending call")
@@ -306,6 +310,14 @@ def normalize_chat_to_parquet(
         raise ValueError(f"All {total_in} records were filtered because {messages_field!r} was empty or missing")
     if not counters_dict.get("normalize_chat/records_validated", 0):
         raise ValueError(f"Chat source {input_path} contained no valid records")
+    rejected = counters_dict.get("normalize_chat/empty_messages_filtered", 0) + counters_dict.get(
+        "normalize_chat/records_quarantined", 0
+    )
+    if total_in and rejected / total_in > MAX_REJECTED_RECORD_FRACTION:
+        raise ValueError(
+            f"Chat source {input_path} rejected {rejected}/{total_in} records, above the "
+            f"{MAX_REJECTED_RECORD_FRACTION:.0%} health limit"
+        )
     return NormalizedData(
         main_output_dir=prefix_join(output_path, "outputs/main"),
         dup_output_dir=prefix_join(output_path, "outputs/dups"),

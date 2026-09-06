@@ -152,8 +152,12 @@ def validate_rendered_chat(messages: list[dict], kwargs: dict, rendered: str) ->
             for call, encoded in zip(calls, rendered_calls, strict=True):
                 payload = json.loads(encoded)
                 function = call["function"]
-                if payload.get("name") != function["name"] or not isinstance(payload.get("arguments"), dict):
-                    raise ValueError("Rendered tool call must contain the canonical name and JSON-object arguments")
+                if (
+                    payload.get("id") != call["id"]
+                    or payload.get("name") != function["name"]
+                    or not isinstance(payload.get("arguments"), dict)
+                ):
+                    raise ValueError("Rendered tool call must contain the canonical ID, name, and JSON-object arguments")
                 if function["name"] not in tool_names:
                     raise ValueError(f"Rendered tool call {function['name']!r} has no matching tool definition")
             if not calls:

@@ -66,9 +66,9 @@ You are provided with function signatures within <tools> </tools> tags:
 {{ _xml_tools_list | tojson }}
 </tools>
 
-For each function call, pass a json object with function name and arguments within <tool_call> </tool_call> tags:
+For each function call, pass a json object with a unique id, function name, and arguments within <tool_call> </tool_call> tags:
 <tool_call>
-{"name": <function-name>, "arguments": <args-json-object>}
+{"id": <unique-call-id>, "name": <function-name>, "arguments": <args-json-object>}
 </tool_call>
 
 {% endif %}
@@ -165,7 +165,11 @@ You can use the following tools in your python code like regular functions:
 {%- for call in message.tool_calls %}
 {%- set tool_call = call.function %}
 <tool_call>
-{{- '{\"name\": \"' + tool_call.name + '\", \"arguments\": ' -}}
+{{- '{' -}}
+{%- if call.get('id') %}
+{{- '\"id\": ' + (call.get('id') | tojson) + ', ' -}}
+{%- endif %}
+{{- '\"name\": \"' + tool_call.name + '\", \"arguments\": ' -}}
 {{- tool_call.arguments | tojson -}}
 {{- \"}\" -}}
 </tool_call>

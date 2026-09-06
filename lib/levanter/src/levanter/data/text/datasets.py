@@ -1086,6 +1086,15 @@ def _get_token_key_for_component(component: DatasetComponentBase) -> str:
     return "input_ids"
 
 
+def _document_lengths(cache: TreeCache, token_key: str) -> np.ndarray:
+    token_store = cache.jagged_array_tree()
+    for part in token_key.split("/"):
+        token_store = token_store[part]
+    offsets = np.asarray(token_store.offsets[0 : token_store.num_rows + 1].read().result()).copy()
+    offsets[0] = 0
+    return offsets[1:] - offsets[:-1]
+
+
 def count_corpus_sizes(
     config: LmDataConfig,
     prefix: str = "data/stats/",
@@ -1109,8 +1118,17 @@ def count_corpus_sizes(
         component = config.components[name]
         token_key = _get_token_key_for_component(component)
         total_tokens = cache.flat_field_length(token_key)
+        total_docs = cache.flat_field_num_rows(token_key)
         stats[f"{metric_prefix}total_tokens"] = total_tokens
-        stats[f"{metric_prefix}total_docs"] = cache.flat_field_num_rows(token_key)
+        stats[f"{metric_prefix}total_docs"] = total_docs
+        document_lengths = _document_lengths(cache, token_key) if total_docs else np.array([], dtype=np.int64)
+        overlong = document_lengths > seq_len
+        overlong_docs = int(np.count_nonzero(overlong))
+        overlong_tokens = int(document_lengths[overlong].sum())
+        stats[f"{metric_prefix}overlong_docs"] = overlong_docs
+        stats[f"{metric_prefix}overlong_tokens"] = overlong_tokens
+        stats[f"{metric_prefix}overlong_doc_fraction"] = overlong_docs / total_docs if total_docs else 0.0
+        stats[f"{metric_prefix}overlong_token_fraction"] = overlong_tokens / total_tokens if total_tokens else 0.0
         train_set = dataset_for_component(
             component,
             Pos,

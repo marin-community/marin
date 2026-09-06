@@ -55,6 +55,7 @@ _TOKENIZE_MAX_WORKERS = 64
 _TAIL_BUCKETS_WITHOUT_LONG = frozenset({"c07q3", "c38q1", "c38q3", "c38q4", "c39q0", "c39q1", "c39q2", "c39q3", "c39q4"})
 _SFT_LR = 5e-5
 _MIN_SAMPLES_PER_MIXTURE_BLOCK = 1.000001
+_MAX_OVERLONG_TOKEN_FRACTION = 0.05
 _TRAIN_REGION = "us-central2"
 _TRAIN_ZONE = "us-central2-b"
 
@@ -207,6 +208,13 @@ def _sft_packing_validation(sft: _SftMixture) -> StepSpec:
         empty = [name for name in sft.components if stats[f"sft/packing/train/{name}/total_seqs"] == 0]
         if empty:
             raise ValueError(f"SFT components have no examples after drop packing: {empty}")
+        excessive_overlong = {
+            name: stats[f"sft/packing/train/{name}/overlong_token_fraction"]
+            for name in sft.components
+            if stats[f"sft/packing/train/{name}/overlong_token_fraction"] > _MAX_OVERLONG_TOKEN_FRACTION
+        }
+        if excessive_overlong:
+            raise ValueError(f"SFT components drop too many overlong tokens: {excessive_overlong}")
         with fsspec.open(prefix_join(output_path, "stats.json"), "w") as handle:
             json.dump(stats, handle, indent=2, sort_keys=True)
 

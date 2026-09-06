@@ -87,6 +87,10 @@ def test_count_corpus_sizes_handles_empty_train_cache(monkeypatch):
     assert stats[f"{prefix}total_tokens"] == 0
     assert stats[f"{prefix}total_docs"] == 0
     assert stats[f"{prefix}total_seqs"] == 0
+    assert stats[f"{prefix}overlong_docs"] == 0
+    assert stats[f"{prefix}overlong_tokens"] == 0
+    assert stats[f"{prefix}overlong_doc_fraction"] == 0.0
+    assert stats[f"{prefix}overlong_token_fraction"] == 0.0
     assert f"{prefix}padding_fraction" not in stats
     assert f"{prefix}truncation_fraction" not in stats
 

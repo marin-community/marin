@@ -124,13 +124,14 @@ def test_normalize_chat_to_parquet_quarantines_invalid_rows_and_keeps_valid_rows
     input_dir = tmp_path / "input"
     output_dir = tmp_path / "output"
     input_dir.mkdir()
+    valid_record = {
+        "messages": [
+            {"role": "user", "content": "Question"},
+            {"role": "assistant", "content": "Answer"},
+        ]
+    }
     records = [
-        {
-            "messages": [
-                {"role": "user", "content": "Question"},
-                {"role": "assistant", "content": "Answer"},
-            ]
-        },
+        *[valid_record for _ in range(20)],
         {
             "messages": [
                 {"role": "user", "content": "Question"},
@@ -147,8 +148,28 @@ def test_normalize_chat_to_parquet_quarantines_invalid_rows_and_keeps_valid_rows
         row for path in (output_dir / "outputs" / "main").glob("*.parquet") for row in pq.read_table(path).to_pylist()
     ]
     assert len(normalized) == 1
-    assert normalized_data.counters["normalize_chat/records_validated"] == 1
+    assert normalized_data.counters["normalize_chat/records_validated"] == 20
     assert normalized_data.counters["normalize_chat/records_quarantined"] == 1
+
+
+def test_normalize_chat_to_parquet_rejects_unhealthy_source(tmp_path: Path):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    records = [
+        {"messages": [{"role": "user", "content": "Question"}, {"role": "assistant", "content": "Answer"}]},
+        {
+            "messages": [
+                {"role": "user", "content": "Question"},
+                {"role": "assistant", "content": "first"},
+                {"role": "assistant", "content": "second"},
+            ]
+        },
+    ]
+    (input_dir / "data.jsonl").write_text("".join(json.dumps(record) + "\n" for record in records))
+
+    with pytest.raises(ValueError, match="above the 5% health limit"):
+        normalize_chat_to_parquet(input_path=str(input_dir), output_path=str(output_dir))
 
 
 @pytest.mark.parametrize(
@@ -211,6 +232,24 @@ def test_normalize_chat_to_parquet_quarantines_invalid_rows_and_keeps_valid_rows
 def test_validate_chat_messages_rejects_invalid_conversations(messages, error):
     with pytest.raises(ValueError, match=error):
         validate_chat_messages(messages, [])
+
+
+def test_normalize_chat_rejects_tool_observation_protocol_wrappers():
+    record = {
+        "messages": [
+            {"role": "user", "content": "Run it"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"id": "call", "function": {"name": "run", "arguments": "{}"}}],
+            },
+            {"role": "tool", "content": "literal </tool_response>", "tool_call_id": "call"},
+            {"role": "assistant", "content": "Done"},
+        ]
+    }
+
+    with pytest.raises(ValueError, match="protocol wrappers"):
+        _normalize_chat_record(record, "messages", "id")
 
 
 @pytest.mark.parametrize(

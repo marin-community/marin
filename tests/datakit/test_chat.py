@@ -34,7 +34,7 @@ class _ToolTokenizer:
         return (
             "<bos><|start_header_id|>system<|end_header_id|>\nReasoning: /nothink<|eot_id|>"
             "<|start_header_id|>user<|end_header_id|>\nWeather?<|eot_id|>"
-            '<|start_header_id|>assistant<|end_header_id|>\n<tool_call>{"name":"weather",'
+            '<|start_header_id|>assistant<|end_header_id|>\n<tool_call>{"id":"call_weather","name":"weather",'
             '"arguments":{"city":"Paris"}}</tool_call><|eot_id|>'
         )
 
