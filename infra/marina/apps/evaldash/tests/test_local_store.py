@@ -31,7 +31,7 @@ def client(store) -> Iterator[TestClient]:
     # keeps the test hermetic (it never scans the remote gs://+s3:// defaults).
     config = evaldash_app.EvaldashConfig.from_env({"EVALDASH_STORE": "local", "RECORDS_PREFIXES": " "})
     api = evaldash_app.build_api(store, evaldash_app.NullClusterGateway(), config)
-    with TestClient(api) as client:
+    with TestClient(api.app) as client:
         yield client
 
 

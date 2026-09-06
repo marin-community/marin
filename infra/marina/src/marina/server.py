@@ -62,6 +62,7 @@ from marina.apps import create_api, data_url_for, is_python_app, services_for
 from marina.auth import build_policy, identity_for
 from marina.db import DatabaseSpec, database_from_env
 from marina.manifest import AppManifest, discover_apps
+from marina.operations import OperationList, operation_catalog
 
 INDEX_FILE = "index.html"
 # A file committed as `x.gz` is served at `x` with a Content-Encoding header, so a large
@@ -426,6 +427,13 @@ def create_app(config: MarinaConfig) -> RouteAuthMiddleware:
     if shadowed:
         raise ValueError(f"app {shadowed[0]!r} is named for a kernel route; rename it")
     policy = build_policy(config.iap_audience)
+    app_names = {app.name for app in apps}
+    registered_apis = {
+        app.name: create_api(app, services_for(app, config.data_root, config.database))
+        for app in apps
+        if is_python_app(app)
+    }
+    operations = operation_catalog(registered_apis)
     api = FastAPI(title="Marina", docs_url=None, redoc_url=None)
     applet_store = AppletStore(config.database) if config.database is not None else None
     applet_runtime = AppletRuntime(applet_store) if applet_store is not None else None
@@ -439,6 +447,14 @@ def create_app(config: MarinaConfig) -> RouteAuthMiddleware:
     @requires_auth
     def list_apps() -> JSONResponse:
         return JSONResponse({"apps": [*app_directory(apps), *applet_directory(applet_store, config.applet_origin)]})
+
+    @api.get("/api/marina/operations", response_model=OperationList)
+    @requires_auth
+    def list_operations(app: str | None = None) -> OperationList:
+        if app is not None and app not in app_names:
+            raise HTTPException(status_code=404, detail="unknown app")
+        selected = operations if app is None else (operation for operation in operations if operation.app == app)
+        return OperationList(operations=list(selected))
 
     @api.get("/api/marina/applets")
     @requires_auth
@@ -761,8 +777,7 @@ def create_app(config: MarinaConfig) -> RouteAuthMiddleware:
 
     for app in apps:
         if is_python_app(app):
-            services = services_for(app, config.data_root, config.database)
-            api.mount(app.path.rstrip("/") + API_PREFIX, AuthenticatedMount(create_api(app, services), policy))
+            api.mount(app.path.rstrip("/") + API_PREFIX, AuthenticatedMount(registered_apis[app.name].app, policy))
         install_app_routes(api, app, config.data_root)
 
     return RouteAuthMiddleware(api, policy)

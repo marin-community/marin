@@ -36,21 +36,34 @@ def write_api_app(apps_dir: Path, name: str) -> Path:
     (root / "__init__.py").write_text("")
     (root / "app.py").write_text(
         """from fastapi import FastAPI, Request
-from marina.apps import Services
+from marina.apps import RegisteredApi, Services, registered_api
+from pydantic import BaseModel
 
 
-def create_api(_services: Services) -> FastAPI:
+class FeedbackRequest(BaseModel):
+    grade: int
+
+
+class FeedbackResponse(BaseModel):
+    body: dict[str, int]
+    query: str | None
+    request_id: str | None
+
+
+def create_api(_services: Services) -> RegisteredApi:
     api = FastAPI()
 
-    @api.post("/feedback")
-    async def feedback(request: Request) -> dict[str, object]:
-        return {
-            "body": await request.json(),
-            "query": request.query_params.get("execution"),
-            "request_id": request.headers.get("x-request-id"),
-        }
+    @api.post(
+        "/feedback",
+        operation_id="feedback",
+        description="Record one feedback grade for a search execution.",
+        response_model=FeedbackResponse,
+        openapi_extra={"x-marina": {"agent": True, "risk": "write"}},
+    )
+    async def feedback(body: FeedbackRequest, request: Request, execution: str | None = None) -> FeedbackResponse:
+        return FeedbackResponse(body=body.model_dump(), query=execution, request_id=request.headers.get("x-request-id"))
 
-    return api
+    return registered_api(api)
 """
     )
     return root
@@ -162,6 +175,40 @@ def test_app_directory_and_identity(client: TestClient) -> None:
     assert [app["path"] for app in apps] == ["/tasktrove/", "/unbuilt/"]
     me = client.get("/api/marina/me").json()
     assert me == {"user": "anonymous", "role": "admin"}
+
+
+def test_registered_application_operations_are_machine_readable(tmp_path: Path) -> None:
+    client = aliased_client(tmp_path)
+
+    response = client.get("/api/marina/operations", params={"app": "tasktrove"})
+
+    assert response.status_code == 200
+    (operation,) = response.json()["operations"]
+    assert operation["id"] == "tasktrove.feedback"
+    assert operation["app"] == "tasktrove"
+    assert operation["method"] == "POST"
+    assert operation["path"] == "/feedback"
+    assert operation["risk"] == "write"
+    assert operation["input_schema"] == {
+        "type": "object",
+        "properties": {
+            "execution": {
+                "anyOf": [{"type": "string"}, {"type": "null"}],
+                "title": "Execution",
+            },
+            "grade": {"title": "Grade", "type": "integer"},
+        },
+        "required": ["grade"],
+    }
+    assert operation["output_schema"]["properties"] == {
+        "body": {
+            "additionalProperties": {"type": "integer"},
+            "title": "Body",
+            "type": "object",
+        },
+        "query": {"anyOf": [{"type": "string"}, {"type": "null"}], "title": "Query"},
+        "request_id": {"anyOf": [{"type": "string"}, {"type": "null"}], "title": "Request Id"},
+    }
 
 
 def test_static_file_and_spa_fallback(client: TestClient) -> None:
