@@ -2726,13 +2726,106 @@
       "interval": "1m"
     },
     {
+      "id": 46,
+      "type": "timeseries",
+      "title": "TIS correction skips",
+      "description": "Driver TIS skip observations: batch_skipped_no_logprobs is a 0/1 batch indicator and skipped_fraction is a fraction. Zero is required for the controlled correction studies. Missing records can mean TIS is disabled or this source predates TIS telemetry; absence is not zero.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 72,
+        "w": 24,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No matching records in this window.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "WITH r AS (SELECT * FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND run_id IN (${run:sqlstring}) AND job_id IN (${job:sqlstring}) AND execution_uid IN (${execution:sqlstring})) SELECT to_timestamp_millis(timestamp_ms) AS t,json_get(attributes_json,'metric') || ' · ' || execution_uid AS series,value FROM r WHERE name='training_metric_value' AND json_get(attributes_json,'phase')='train' AND json_get(attributes_json,'metric') IN ('tis/batch_skipped_no_logprobs','tis/skipped_fraction') ORDER BY timestamp_ms,seq"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
       "id": 33,
       "type": "row",
       "title": "Useful work and role balance",
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 72,
+        "y": 80,
         "w": 24,
         "h": 1
       },
@@ -2749,7 +2842,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 73,
+        "y": 81,
         "w": 8,
         "h": 8
       },
@@ -2840,7 +2933,7 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 73,
+        "y": 81,
         "w": 8,
         "h": 8
       },
@@ -2931,7 +3024,7 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 73,
+        "y": 81,
         "w": 8,
         "h": 8
       },
@@ -3018,7 +3111,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 81,
+        "y": 89,
         "w": 24,
         "h": 1
       },
@@ -3035,7 +3128,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 82,
+        "y": 90,
         "w": 8,
         "h": 8
       },
@@ -3126,7 +3219,7 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 82,
+        "y": 90,
         "w": 8,
         "h": 8
       },
@@ -3217,7 +3310,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 91,
+        "y": 99,
         "w": 12,
         "h": 9
       },
@@ -3329,7 +3422,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 91,
+        "y": 99,
         "w": 12,
         "h": 9
       },
@@ -3436,7 +3529,7 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 82,
+        "y": 90,
         "w": 8,
         "h": 8
       },
@@ -3527,7 +3620,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 100,
+        "y": 108,
         "w": 24,
         "h": 10
       },
