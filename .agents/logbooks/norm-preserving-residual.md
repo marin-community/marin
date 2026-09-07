@@ -9,10 +9,10 @@ author: kaiyuew
 
 ## Current TL;DR
 
-Gate 1 is partially complete. `MOE-NPR-001-d512` finished at Paloma macro
-`3.5570` and `340,730` tokens/s, a `1.018x` effective speedup over the July
-d512 cell. `MOE-NPR-002-d768` is still running. A d768 learning-rate-transfer
-comparison, `MOE-NPR-003-d768-d512lr`, is queued from snapshot `d9aa145c8`.
+Gate 1 failed. `MOE-NPR-001-d512` reached `1.018x` effective speedup, but
+`MOE-NPR-002-d768` reached `0.950x`; both widths had to exceed `1.0x`.
+Transferring the d512 learning-rate pair to d768 reduced effective speedup
+further to `0.894x`. Stop the series without Gate 2 or production upstreaming.
 
 ## Scope
 
@@ -40,12 +40,7 @@ comparison, `MOE-NPR-003-d768-d512lr`, is queued from snapshot `d9aa145c8`.
 
 ### Active
 
-- `MOE-NPR-001/002`: learned norm-preserving residual mixing improves
-  effective wall-clock speed at both July Gate-1 scales. Evidence: d512 passed
-  narrowly at `1.018x`; d768 is running. Next test: finish d768.
-- `MOE-NPR-003`: using the d512 learning-rate pair at d768 improves final
-  Paloma macro loss enough to offset any throughput change. Evidence: none yet.
-  Next test: compare `MOE-NPR-003-d768-d512lr` with `MOE-NPR-002-d768`.
+None.
 
 ### Blocked
 
@@ -53,11 +48,28 @@ None.
 
 ### Falsified / Dead End
 
-None.
+- `MOE-NPR-001/002`: norm-preserving residual mixing did not improve effective
+  wall-clock speed at both Gate-1 widths. d512 reached `1.018x`; d768 reached
+  `0.950x`. Evidence: [d512](https://wandb.ai/marin-community/dial_moe/runs/MOE-NPR-001-d512),
+  [d768](https://wandb.ai/marin-community/dial_moe/runs/MOE-NPR-002-d768).
+- `MOE-NPR-003`: the d512 learning-rate pair worsened d768 Paloma macro loss
+  from `3.22823` to `3.23768` at nearly unchanged throughput. Evidence:
+  [W&B](https://wandb.ai/marin-community/dial_moe/runs/MOE-NPR-003-d768-d512lr).
 
 ### Promoted
 
 None.
+
+## Decision Log
+
+- 2026-09-07: stop after Gate 1. The d768 result failed the `>1.0x` effective
+  speedup criterion, and the d512-LR transfer was worse. Do not run d1024 or
+  d1280 and do not upstream the residual change.
+
+## Negative Results Index
+
+- Norm-preserving residual mixing: `0.950x` effective speedup at d768.
+- d512 learning-rate transfer: `0.894x` effective speedup at d768.
 
 ## Entry Log
 
@@ -263,3 +275,37 @@ the `softplus(0)` initialization, shared attention/MoE parameters, or Marin's
 - Next action: after allocation, validate the W&B optimizer config, finite loss,
   throughput, and early Paloma trajectory against `MOE-NPR-002-d768`; use final
   Paloma macro loss and final-100-step throughput for the decision.
+
+### 2026-09-07 15:00 - Gate 1 concluded
+
+- Hypothesis: learned norm-preserving residual mixing improves effective
+  wall-clock speed at both July Gate-1 widths; using the d512 LR pair may
+  improve transfer at d768.
+- Commit Hash: implementation snapshot `d9aa145c8b6ff247e791561c1321e891ded63d2a`.
+- Command: query `marin-community/dial_moe` with the W&B API, require
+  `run.state == finished`, average `throughput/tokens_per_second` over the final
+  100 history rows, and compute effective speedup with the formula in
+  `experiments/grug/moe_norm_preserving_residual/agent.md`.
+- Config: July-matched d512 and d768 runs plus one d768 ablation that changes
+  only MuonH/AdamH LR `0.0083729565 -> 0.0098041002` and Adam LR
+  `0.0019322207 -> 0.0022624847`.
+- Result:
+
+  | Run | Paloma macro | Final-100 tokens/s | Effective speedup | Final beta mean |
+  |---|---:|---:|---:|---:|
+  | `MOE-NPR-001-d512` | 3.55702 | 340,730 | 1.018x | 2.3024 |
+  | `MOE-NPR-002-d768` | 3.22823 | 239,031 | 0.950x | 2.6869 |
+  | `MOE-NPR-003-d768-d512lr` | 3.23768 | 239,305 | 0.894x | 2.6590 |
+
+  All W&B runs finished at their configured step counts. Iris reported exit 0
+  and zero failures for all three children, with 1, 8, and 11 preemptions
+  respectively. Final checkpoint metadata exists at:
+  - `gs://marin-us-east5/grug/MOE-NPR-001-d512-69288a/checkpoints/step-10980/metadata.json`
+  - `gs://marin-us-east5/grug/MOE-NPR-002-d768-75a03a/checkpoints/step-16875/metadata.json`
+  - `gs://marin-us-east5/grug/MOE-NPR-003-d768-d512lr-7513e9/checkpoints/step-16875/metadata.json`
+- Interpretation: `exploratory`, one seed per cell. The residual mixture passes
+  d512 narrowly but fails d768, so Gate 1 fails. The larger transferred LR
+  worsens d768 loss by `0.00945` with a `0.11%` throughput gain and does not
+  rescue the result. Learned beta values moved well away from initialization,
+  so the negative result is not caused by a frozen gate.
+- Next action: close #8860. Do not spend Gate-2 compute or upstream this variant.
