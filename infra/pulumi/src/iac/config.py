@@ -20,10 +20,6 @@ from typing import Annotated, Literal
 
 from finelog.deploy.config import FinelogConfig, load_finelog_config
 from iris.cluster.config import IrisClusterConfig, load_config
-from iris.cluster.platforms.k8s.kueue_manifests import (
-    DEFAULT_CLIENT_CONNECTION_BURST,
-    DEFAULT_CLIENT_CONNECTION_QPS,
-)
 from iris.cluster.platforms.k8s.network_manifests import DEFAULT_CLUSTER_ISSUER
 from iris.cluster.platforms.k8s.types import parse_k8s_quantity
 from pydantic import BaseModel, Field, field_validator
@@ -38,6 +34,14 @@ from rigging.config_discovery import resolve_cluster_config
 IAC_CLUSTER_CONFIG_DIR = "lib/iris/config"
 IAC_FINELOG_CONFIG_DIR = "lib/finelog/config"
 MIN_KUEUE_MANAGER_MEMORY = "2Gi"
+# IaC-managed CoreWeave clusters need enough memory to retain their watched Pods
+# and Workloads during startup resync. East08 OOM-killed at 10,466 Workloads with
+# the 2Gi default (https://echo.oa.dev/wiki/65), and East02 repeated the failure at
+# 6,893 Workloads. The higher API client limits keep leader renewal responsive as
+# the larger heap lets resync progress.
+DEFAULT_KUEUE_MANAGER_MEMORY = "8Gi"
+DEFAULT_KUEUE_CLIENT_CONNECTION_QPS = 1000.0
+DEFAULT_KUEUE_CLIENT_CONNECTION_BURST = 2000
 
 
 class Provider(StrEnum):
@@ -55,8 +59,8 @@ class CksClusterSpec(BaseModel):
 class KueueClientConnectionSpec(BaseModel):
     """Kubernetes API client rate limit for the Kueue controller-manager."""
 
-    qps: float = Field(default=DEFAULT_CLIENT_CONNECTION_QPS, gt=0)
-    burst: int = Field(default=DEFAULT_CLIENT_CONNECTION_BURST, gt=0)
+    qps: float = Field(default=DEFAULT_KUEUE_CLIENT_CONNECTION_QPS, gt=0)
+    burst: int = Field(default=DEFAULT_KUEUE_CLIENT_CONNECTION_BURST, gt=0)
 
 
 class KueueProvisioningSpec(BaseModel):
@@ -75,7 +79,7 @@ class KueueProvisioningSpec(BaseModel):
     # controllerManager.manager.resources memory request and limit. Kueue retains
     # every watched Pod and Workload during restart resync, so the chart's 512Mi
     # default is too small for Marin clusters.
-    manager_memory_limit: str = MIN_KUEUE_MANAGER_MEMORY
+    manager_memory_limit: str = DEFAULT_KUEUE_MANAGER_MEMORY
     # Override Iris's shared Kueue client-side API rate limit.
     client_connection: KueueClientConnectionSpec = Field(default_factory=KueueClientConnectionSpec)
 
@@ -136,6 +140,12 @@ class GrafanaObserverRbacSpec(BaseModel):
     usernames: tuple[str, ...] = Field(min_length=1)
 
 
+class LoomSessionRbacSpec(BaseModel):
+    """CoreWeave Managed Auth usernames accepted from Loom sessions."""
+
+    usernames: tuple[str, ...] = Field(min_length=1)
+
+
 class CoreweaveProvisioning(BaseModel):
     cluster: CksClusterSpec
     kueue: KueueProvisioningSpec
@@ -143,6 +153,7 @@ class CoreweaveProvisioning(BaseModel):
     federation_dns: FederationDnsSpec | None = None
     rbac: RbacSpec = RbacSpec()
     grafana_observer_rbac: GrafanaObserverRbacSpec | None = None
+    loom_session_rbac: LoomSessionRbacSpec | None = None
 
 
 class GcpAddressSpec(BaseModel):

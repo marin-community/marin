@@ -176,42 +176,30 @@ server-maintained list or a separate SQL schema. Legacy Levanter gauge rows sent
 through `/v1/telemetry` are recognized from their complete record and converted
 to the same typed metric table while clients roll out.
 
-`levanter.metrics` uses exact hidden `run_id` partitions (spec 1). Partitions are
-segment metadata, not SQL namespaces: queries name `levanter.metrics` and use an
-exact `run_id` predicate. The planner prunes other current-spec run partitions.
-It retains unpartitioned, malformed, or older-spec files, so a rolling
-conversion cannot hide rows. A partition transform change requires a new spec
-id rather than reinterpreting existing metadata.
+`levanter.metrics` version 1 is unpartitioned. Its Parquet order is
+`(run_id, name, step, timestamp_ms, seq)`, which clusters the deployed exact
+`run_id` and metric-name filters without rewriting the active object set to add
+partition metadata. The static exact-`run_id` policy remains relevant only to
+legacy-local compaction. Adding an object-native partition requires a later
+table-spec version and a separately justified migration.
 
-L0 remains flat and unpartitioned so a busy run cannot strand a separate stream
-of tiny files. Compaction writes L1 and higher segments under the bounded
-physical layout `levanter.metrics/run_id/00..31/`, while each footer and catalog
-row retains the full run id for exact pruning and future run deletion. The
-bucket only limits directory fanout; it does not replace the logical partition.
+`levanter.metrics` intentionally has no secondary indexes. Its run-first
+Parquet order and row-group statistics serve deployed selectors without
+telemetry's `name` trigram, `kind` postings, or adaptive string value counts.
+Server-owned registration removes the old declarations, queries ignore old
+`.fidx` bundles, and bounded maintenance deletes those derived files online.
+Source Parquet remains authoritative throughout cleanup.
 
-`levanter.metrics` intentionally has no secondary indexes. Exact `run_id`
-partition pruning and the `(run_id, name, step, timestamp_ms)` Parquet order
-serve its deployed exact-match queries without telemetry's `name` trigram,
-`kind` postings, or adaptive string value counts. Server-owned registration
-removes the old declarations, queries ignore old `.fidx` bundles, and bounded
-maintenance deletes those derived files online. Source Parquet remains
-authoritative throughout cleanup.
-
-Maintenance converges older layouts online. It merges migration-produced or
-partition-stamped L0s into partitioned L1, rebuilds stale local partition
-metadata, and moves current local L1 files into their bucket directory under the
-query-visibility lock. Evicted objects move with an in-bucket copy, atomic
-catalog swap, then old-key deletion, so the server does not download archived
-bytes. Startup reconciliation resolves a crash between those phases by keeping
-the key named by the catalog. One store-wide L0 rebuild wave runs two
-independent workers; each coalesces about 32 MiB of compressed inputs, sorts and
-partitions that bounded stream, then publishes its source span atomically. The
-global permit prevents several namespaces from multiplying that memory
-envelope and leaves half of the four-core hub available for queries. A cycle starts work for at most three seconds, flushes and syncs live
-writes, and resumes after 100 ms while local migration remains. Remote copies retain their separate
-three-second budget. An individual job already in flight may exceed its budget.
-Watch `physical layout migration advanced` and `remote physical layout migration
-advanced` until their remaining counts reach zero.
+Object-backed maintenance treats all unpartitioned files at one nonterminal
+level as a sparse stream. Sequence gaps and overlapping footer ranges therefore
+cannot split a level into sub-threshold runs and strand aggregate debt. The
+planner promotes the shortest prefix reaching either the level's compressed-byte
+target or its 32-segment cap; L3 is terminal. Partitioned table specs still form
+one independent stream per exact partition. Each cycle executes at most one
+object compaction and resumes after 100 ms while progress remains, returning to
+the 30-second cadence at quiescence. Publication atomically replaces exact input
+paths under the table's writer fence, so concurrent flushes can rebase and a
+failed commit leaves all inputs live.
 
 `telemetry_v1` exposes stable resource dimensions as nullable columns:
 `run_id`, `job_id`, `execution_uid`, `region`, `node_name`, and `process_index`.
@@ -227,7 +215,7 @@ retirement; a retired or fresh store does not recreate that table.
 Semantic namespaces have independent limits: typed Levanter metrics and
 Levanter automated telemetry each have 32 GiB, node-agent telemetry has 15 GiB,
 Iris RPC has 1 GiB, vLLM has 2 GiB, and other telemetry services have 2 GiB.
-Hidden run partitions share the `levanter.metrics` retention budget.
+All `levanter.metrics` objects share its retention budget.
 
 ### Migrate the root telemetry hot set
 
