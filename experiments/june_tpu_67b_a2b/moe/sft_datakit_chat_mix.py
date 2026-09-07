@@ -251,7 +251,6 @@ def build() -> StepSpec:
                 context_parallel=4,
                 per_device_parallelism=1,
                 save_interval_minutes=30,
-                checkpoint_keep=[{"every": 250}],
                 grug_trainer=GrugTrainerConfig(
                     z_loss_weight=1e-4,
                     ema_beta=None,
