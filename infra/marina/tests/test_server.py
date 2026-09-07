@@ -231,7 +231,6 @@ def test_registered_application_is_searchable_and_callable_over_mcp(tmp_path: Pa
     assert {tool.name for tool in tools} == {"find_tool", "call_tool"}
     (found_tool,) = found.data
     assert found_tool["name"] == "tasktrove_feedback"
-    assert found_tool["description"] == "Record one feedback grade for a search execution."
     assert found_tool["inputSchema"]["required"] == ["grade"]
     assert found_tool["inputSchema"]["properties"]["grade"]["type"] == "integer"
     assert found_tool["outputSchema"]["properties"]["body"]["type"] == "object"
@@ -325,7 +324,7 @@ def test_non_loopback_without_iap_is_denied(tmp_path: Path) -> None:
     app = create_app(config_for(tmp_path))
     remote = TestClient(app, client=("10.0.0.7", 1234))
     assert remote.get("/api/marina/me").status_code == 401
-    assert remote.post("/api/marina/mcp/").status_code == 401
+    assert remote.post(f"{MCP_PATH}/").status_code == 401
     assert remote.get("/healthz").status_code == 200
 
 

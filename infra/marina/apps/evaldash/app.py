@@ -1348,7 +1348,7 @@ def _analysis_router(store: RecordStore) -> APIRouter:
         return HistoryResponse(model=model, task=task, points=points)
 
     @router.get("/meta")
-    async def api_meta(_request: Request) -> JSONResponse:
+    async def api_meta() -> JSONResponse:
         meta = store.meta()
         meta["current_user"] = _current_user()
         meta["store"] = store.backend
@@ -1373,11 +1373,11 @@ def _control_router(
         return JSONResponse({"model_name": model_name, "archived": archived})
 
     @router.get("/status")
-    async def api_status(_request: Request) -> JSONResponse:
+    async def api_status() -> JSONResponse:
         return JSONResponse(_status_payload(store, ingestor))
 
     @router.post("/refresh")
-    async def api_refresh(_request: Request) -> JSONResponse:
+    async def api_refresh() -> JSONResponse:
         if isinstance(store, PgRecordStore):
             await asyncio.to_thread(store.reload_if_changed)
             if trigger_ingest is None:
