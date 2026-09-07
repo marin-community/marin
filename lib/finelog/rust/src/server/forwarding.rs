@@ -43,9 +43,9 @@
 //!   queue. The forwarder drains it without an age or row-count cap. It also skips a
 //!   batch the hub identifies as permanently invalid, so one poison row cannot wedge
 //!   every later row in that namespace.
-//! - Graceful shutdown flushes every namespace, stops the periodic loop, and drains to
-//!   the captured high-water marks. If the hub remains unavailable, the published
-//!   object state and cursor let the replacement resume the unsettled tail.
+//! - Node-local deployments acknowledge writes after object-state publication. A
+//!   replacement resumes the periodic loop from that state and the durable cursor;
+//!   shutdown does not run a separate forwarding drain.
 //!
 //! A retryable push failure leaves the cursor in place and yields to the next namespace;
 //! nothing here can take the store down.

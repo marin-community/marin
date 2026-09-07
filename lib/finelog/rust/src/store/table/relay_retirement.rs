@@ -11,16 +11,20 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::errors::StatsError;
+use crate::store::table::maintenance::WorkOutcome;
 use crate::store::table::runtime::TableRuntime;
 use crate::store::table_state::CommitError;
 
 const RETIREMENT_GRACE: Duration = Duration::from_secs(15 * 60);
 const SEGMENTS_PER_TICK: usize = 64;
 
-/// Retire one bounded batch and return whether another immediate cycle is due.
-pub async fn maintain(runtime: &Arc<TableRuntime>, target: &str) -> Result<bool, StatsError> {
+/// Retire one bounded batch and report whether another immediate cycle is due.
+pub async fn maintain(
+    runtime: &Arc<TableRuntime>,
+    target: &str,
+) -> Result<WorkOutcome, StatsError> {
     let Some(cursor) = runtime.catalog.forward_cursor(target, runtime.name())? else {
-        return Ok(false);
+        return Ok(WorkOutcome::Complete);
     };
     let cutoff_ms = crate::store::table::now_ms()
         .saturating_sub(i64::try_from(RETIREMENT_GRACE.as_millis()).unwrap_or(i64::MAX));
@@ -50,7 +54,7 @@ pub async fn maintain(runtime: &Arc<TableRuntime>, target: &str) -> Result<bool,
     let pending = eligible.len() > SEGMENTS_PER_TICK;
     eligible.truncate(SEGMENTS_PER_TICK);
     if eligible.is_empty() {
-        return Ok(false);
+        return Ok(WorkOutcome::Complete);
     }
 
     let paths = eligible
@@ -89,7 +93,7 @@ pub async fn maintain(runtime: &Arc<TableRuntime>, target: &str) -> Result<bool,
                 bytes,
                 "retired downstream-settled relay segments"
             );
-            Ok(pending)
+            Ok(WorkOutcome::from_pending(pending))
         }
         Err(CommitError::NotCommitted(StatsError::SchemaConflict(error))) => {
             tracing::info!(
@@ -98,7 +102,7 @@ pub async fn maintain(runtime: &Arc<TableRuntime>, target: &str) -> Result<bool,
                 %error,
                 "relay retirement lost a concurrent table-state change"
             );
-            Ok(true)
+            Ok(WorkOutcome::MoreWork)
         }
         Err(error) => Err(error.into()),
     }

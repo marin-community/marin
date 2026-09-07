@@ -100,7 +100,7 @@ impl WorkOutcome {
         self == Self::MoreWork
     }
 
-    fn from_pending(pending: bool) -> Self {
+    pub(super) fn from_pending(pending: bool) -> Self {
         if pending {
             Self::MoreWork
         } else {
@@ -267,10 +267,10 @@ async fn cycle(
     if runtime.policy().object_backed() {
         runtime.controller.publish_owed().await?;
         if let Some(target) = runtime.maintenance_profile().relay_target() {
-            let retirement_pending = relay_retirement::maintain(runtime, target).await?;
+            let retirement = relay_retirement::maintain(runtime, target).await?;
             runtime.controller.gc_objects().await?;
             run_one(runtime, TableWork::ObjectCollection).await?;
-            if retirement_pending {
+            if retirement.has_more_work() {
                 return Ok(WorkOutcome::MoreWork);
             }
             let compacted = run_one(runtime, TableWork::Compaction { force_compact_l0 })

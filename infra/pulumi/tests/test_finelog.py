@@ -107,7 +107,7 @@ def test_finelog_node_local_cache_uses_bounded_ephemeral_storage() -> None:
     assert container.resources.limits["ephemeral-storage"] == "250Gi"
 
 
-def test_finelog_persistent_cache_acknowledges_local_disk() -> None:
+def test_finelog_persistent_cache_selects_local_disk_acknowledgement() -> None:
     resources = finelog_resource_args(_args(K8sCacheStorage.PERSISTENT_VOLUME), "image@sha256:digest")
     assert resources.deployment.spec is not None
     pod_spec = resources.deployment.spec.template.spec
