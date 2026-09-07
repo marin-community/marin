@@ -4,17 +4,14 @@
 """Cold-start SFT over the structured Datakit chat registry on v4-2048."""
 
 import dataclasses
-import json
 import logging
 from dataclasses import dataclass
 
-import fsspec
 from fray.cluster import ResourceConfig
 from levanter.data.text.datasets import (
     ConcatDatasetComponent,
     DatasetComponent,
     LmDataConfig,
-    count_corpus_sizes,
 )
 from levanter.data.text.formats import TextLmDatasetFormat
 from levanter.tracker.wandb import WandbConfig
@@ -42,11 +39,11 @@ _BASE_CHECKPOINT = (
     "checkpoints/step-157000/"
 )
 _PRETRAIN_STORE = "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24"
-_RUN_NAME = "grug/moe_67b_a2b_step157k_sft_datakit80_pretrain20_ctx262k_v2"
+_RUN_NAME = "grug/moe_67b_a2b_step157k_sft_datakit80_pretrain20_ctx262k_2026.09.07"
 _TOKENIZER = marin_tokenizer
 _SEQ_LEN = 262_144
 _BATCH_SIZE = 256
-_TRAIN_STEPS = 1_888
+_TRAIN_STEPS = 2_000
 _MIXTURE_BLOCK_SIZE = 49_152
 _SFT_FRACTION = 0.8
 _PRETRAIN_FRACTION = 0.2
@@ -55,7 +52,6 @@ _TOKENIZE_MAX_WORKERS = 64
 _TAIL_BUCKETS_WITHOUT_LONG = frozenset({"c07q3", "c38q1", "c38q3", "c38q4", "c39q0", "c39q1", "c39q2", "c39q3", "c39q4"})
 _SFT_LR = 5e-5
 _MIN_SAMPLES_PER_MIXTURE_BLOCK = 1.000001
-_MAX_OVERLONG_TOKEN_FRACTION = 0.05
 _TRAIN_REGION = "us-central2"
 _TRAIN_ZONE = "us-central2-b"
 
@@ -144,7 +140,6 @@ def _sft_mixture() -> _SftMixture:
             format=TextLmDatasetFormat(),
             tags=["sft", name],
             pack=True,
-            packing_slice_strategy="drop",
         )
         components[f"sft/{name}"] = component
         weights[f"sft/{name}"] = _SFT_FRACTION * source.rough_token_count_b / total_tokens
@@ -164,7 +159,6 @@ def _pretrain_child(bucket: str, length: str) -> DatasetComponent:
         tags=[bucket, length],
         flat_cache=True,
         pack=True,
-        packing_slice_strategy="drop",
     )
 
 
@@ -193,39 +187,6 @@ def _pretrain_components() -> tuple[dict[str, ConcatDatasetComponent], dict[str,
     return components, _floor_component_weights(weights, _PRETRAIN_FRACTION)
 
 
-def _sft_packing_validation(sft: _SftMixture) -> StepSpec:
-    data = LmDataConfig(
-        tokenizer=_TOKENIZER,
-        cache_dir=None,
-        components=sft.components,
-        train_weights=sft.weights,
-        auto_build_caches=False,
-        block_cross_document_attention=True,
-    )
-
-    def validate(output_path: str) -> None:
-        stats = count_corpus_sizes(data, prefix="sft/packing/", seq_len=_SEQ_LEN)
-        empty = [name for name in sft.components if stats[f"sft/packing/train/{name}/total_seqs"] == 0]
-        if empty:
-            raise ValueError(f"SFT components have no examples after drop packing: {empty}")
-        excessive_overlong = {
-            name: stats[f"sft/packing/train/{name}/overlong_token_fraction"]
-            for name in sft.components
-            if stats[f"sft/packing/train/{name}/overlong_token_fraction"] > _MAX_OVERLONG_TOKEN_FRACTION
-        }
-        if excessive_overlong:
-            raise ValueError(f"SFT components drop too many overlong tokens: {excessive_overlong}")
-        with fsspec.open(prefix_join(output_path, "stats.json"), "w") as handle:
-            json.dump(stats, handle, indent=2, sort_keys=True)
-
-    return StepSpec(
-        name="sft/chat-packing-validation",
-        deps=sft.deps,
-        fn=validate,
-        hash_attrs={"seq_len": _SEQ_LEN, "packing_slice_strategy": "drop"},
-    )
-
-
 def _model_config():
     model = MoeMuonHHeuristic(min_lr_ratio=0.05).build_model_config(2560, seq_len=_SEQ_LEN)
     return dataclasses.replace(
@@ -250,7 +211,6 @@ def build() -> StepSpec:
         raise ValueError(f"SFT storage must be in {_TRAIN_REGION}: {misplaced}")
 
     sft = _sft_mixture()
-    sft_packing_validation = _sft_packing_validation(sft)
     pretrain_components, pretrain_weights = _pretrain_components()
     weights = {**sft.weights, **pretrain_weights}
     assert abs(sum(weights.values()) - 1.0) < 1e-9
@@ -305,7 +265,7 @@ def build() -> StepSpec:
 
     return StepSpec(
         name=_RUN_NAME,
-        deps=[sft_packing_validation],
+        deps=sft.deps,
         fn=train,
         hash_attrs={
             "base_checkpoint": _BASE_CHECKPOINT,
@@ -316,7 +276,6 @@ def build() -> StepSpec:
             "sft_fraction": _SFT_FRACTION,
             "pretrain_fraction": _PRETRAIN_FRACTION,
             "long_context_skew": _LONG_CONTEXT_SKEW,
-            "packing_slice_strategy": "drop",
         },
     )
 

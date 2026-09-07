@@ -335,8 +335,6 @@ class DatasetComponent(DatasetComponentBase):
     cache_dir: str | None = None
     format: LmDatasetFormatBase = field(default_factory=TextLmDatasetFormat)
     pack: bool | int | None = None
-    packing_slice_strategy: Literal["left", "right", "raise", "drop"] = "left"
-    """How packed datasets handle a document longer than the target sequence length."""
     tags: list[str] | None = None
     split: str = "validation"
     flat_cache: bool = False
@@ -375,8 +373,8 @@ def _effective_pack(component: DatasetComponent) -> bool | int:
 def _resolve_pack_config(
     pack: bool | int,
     *,
-    packed_slice_strategy: Literal["left", "right", "raise", "drop"] = "left",
-) -> tuple[int, Literal["left", "right", "raise", "drop"]]:
+    packed_slice_strategy: Literal["left", "right", "raise"] = "left",
+) -> tuple[int, Literal["left", "right", "raise"]]:
     """Resolve a ``pack`` value to ``(max_segments_per_example, slice_strategy)``.
 
     A falsy value (``False``/``0``) selects one document per example, padded to
@@ -400,7 +398,7 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
         cache: TreeCache[dict],
         Pos: Axis,
         max_segments_per_example: int = 64,
-        slice_strategy: Literal["left", "right", "raise", "drop"] = "left",
+        slice_strategy: Literal["left", "right", "raise"] = "left",
         loss_weights_key: str | None = None,
         block_cross_document_attention: bool = True,
     ):
@@ -465,7 +463,7 @@ class ChatDataset(MappedAsyncDataset[tuple[ProcessedChatDict, ProcessedChatDict]
         cache: TreeCache[ProcessedChatDict],
         Pos: Axis,
         max_segments_per_example: int = 64,
-        slice_strategy: Literal["left", "right", "raise", "drop"] = "left",
+        slice_strategy: Literal["left", "right", "raise"] = "left",
         mask_user_turns: bool = True,
         block_cross_document_attention: bool = True,
     ):
@@ -520,9 +518,7 @@ def dataset_for_component(
     fmt = component.format
     if isinstance(fmt, TextLmDatasetFormat):
         if pack:
-            max_segments, slice_strategy = _resolve_pack_config(
-                pack, packed_slice_strategy=component.packing_slice_strategy
-            )
+            max_segments, slice_strategy = _resolve_pack_config(pack)
             return PackedTokenDataset(
                 cache,
                 Pos,
@@ -538,9 +534,7 @@ def dataset_for_component(
         )
     elif isinstance(fmt, ChatLmDatasetFormat):
         # Chat has no continuous-stream mode: a falsy pack means one conversation per example.
-        max_segments, slice_strategy = _resolve_pack_config(
-            pack, packed_slice_strategy=component.packing_slice_strategy
-        )
+        max_segments, slice_strategy = _resolve_pack_config(pack)
         return ChatDataset(
             cache,
             Pos,
@@ -1086,15 +1080,6 @@ def _get_token_key_for_component(component: DatasetComponentBase) -> str:
     return "input_ids"
 
 
-def _document_lengths(cache: TreeCache, token_key: str) -> np.ndarray:
-    token_store = cache.jagged_array_tree()
-    for part in token_key.split("/"):
-        token_store = token_store[part]
-    offsets = np.asarray(token_store.offsets[0 : token_store.num_rows + 1].read().result()).copy()
-    offsets[0] = 0
-    return offsets[1:] - offsets[:-1]
-
-
 def count_corpus_sizes(
     config: LmDataConfig,
     prefix: str = "data/stats/",
@@ -1118,17 +1103,8 @@ def count_corpus_sizes(
         component = config.components[name]
         token_key = _get_token_key_for_component(component)
         total_tokens = cache.flat_field_length(token_key)
-        total_docs = cache.flat_field_num_rows(token_key)
         stats[f"{metric_prefix}total_tokens"] = total_tokens
-        stats[f"{metric_prefix}total_docs"] = total_docs
-        document_lengths = _document_lengths(cache, token_key) if total_docs else np.array([], dtype=np.int64)
-        overlong = document_lengths > seq_len
-        overlong_docs = int(np.count_nonzero(overlong))
-        overlong_tokens = int(document_lengths[overlong].sum())
-        stats[f"{metric_prefix}overlong_docs"] = overlong_docs
-        stats[f"{metric_prefix}overlong_tokens"] = overlong_tokens
-        stats[f"{metric_prefix}overlong_doc_fraction"] = overlong_docs / total_docs if total_docs else 0.0
-        stats[f"{metric_prefix}overlong_token_fraction"] = overlong_tokens / total_tokens if total_tokens else 0.0
+        stats[f"{metric_prefix}total_docs"] = cache.flat_field_num_rows(token_key)
         train_set = dataset_for_component(
             component,
             Pos,

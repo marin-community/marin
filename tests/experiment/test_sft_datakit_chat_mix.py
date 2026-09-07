@@ -28,11 +28,7 @@ def test_every_pretrain_bucket_gets_samples_in_each_mixture_block() -> None:
     assert set(components) == set(weights)
     assert sum(weights.values()) == pytest.approx(_PRETRAIN_FRACTION)
     assert all(int(weight * _MIXTURE_BLOCK_SIZE) >= 1 for weight in weights.values())
-    assert all(
-        child.pack and child.packing_slice_strategy == "drop"
-        for component in components.values()
-        for child in component.children.values()
-    )
+    assert all(child.pack for component in components.values() for child in component.children.values())
 
 
 def test_recipe_rejects_cross_region_output_prefix(monkeypatch: pytest.MonkeyPatch) -> None:

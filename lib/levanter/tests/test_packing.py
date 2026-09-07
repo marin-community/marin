@@ -704,12 +704,47 @@ def test_slicing_strategies():
         ):
             GreedyPrepackedDataset(dataset, max_length, slice_strategy="raise")
 
-        tester_drop = GreedyPrepackedDataset(dataset, max_length, slice_strategy="drop")
-        assert len(tester_drop._pack_indices) == 0
-
         # Test invalid strategy
         with pytest.raises(ValueError, match="slice_strategy must be one of 'left', 'right', 'raise', or 'drop'"):
             GreedyPrepackedDataset(dataset, max_length, slice_strategy="invalid")
+
+
+def test_greedy_packing_preserves_complete_documents_except_overlength_singleton(tmp_path):
+    bos_id = 1
+    eos_id = 2
+    pad_id = 0
+    max_length = 10
+    documents = [
+        np.array([bos_id, 10, 11, eos_id]),
+        np.array([bos_id, 20, 21, 22, eos_id]),
+        np.array([bos_id, 30, eos_id]),
+        np.array([bos_id, *range(40, 50), eos_id]),
+    ]
+    store = JaggedArrayStore.open(tmp_path / "tokens", item_rank=1, dtype=jnp.int64)
+    store.extend(documents)
+
+    dataset = GreedyPrepackedDataset(
+        {"input_ids": store},
+        {"input_ids": max_length},
+        slice_strategy="left",
+    ).as_sync_dataset()
+
+    first, first_segments = dataset[0]
+    second, second_segments = dataset[1]
+    overlength, overlength_segments = dataset[2]
+
+    np.testing.assert_array_equal(
+        first["input_ids"],
+        [bos_id, 10, 11, eos_id, bos_id, 20, 21, 22, eos_id, pad_id],
+    )
+    np.testing.assert_array_equal(first_segments["input_ids"], [0, 0, 0, 0, 1, 1, 1, 1, 1, -1])
+    np.testing.assert_array_equal(
+        second["input_ids"],
+        [bos_id, 30, eos_id, pad_id, pad_id, pad_id, pad_id, pad_id, pad_id, pad_id],
+    )
+    np.testing.assert_array_equal(second_segments["input_ids"], [2, 2, 2, -1, -1, -1, -1, -1, -1, -1])
+    np.testing.assert_array_equal(overlength["input_ids"], [bos_id, *range(40, 49)])
+    np.testing.assert_array_equal(overlength_segments["input_ids"], [3] * max_length)
 
 
 def test_invalid_max_segments():
