@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 from marina.apps import RegisteredApi
 
 MARINA_EXTENSION = "x-marina"
+JSON_MEDIA_TYPE = "application/json"
 HTTP_METHODS = frozenset({"delete", "get", "head", "options", "patch", "post", "put", "trace"})
 OPERATION_ID_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 
@@ -141,9 +142,9 @@ def _input_schema(
     if request_body is not None:
         body = _object(request_body, "OpenAPI request body")
         content = _object(body.get("content"), "OpenAPI request body content")
-        media = _object(content.get("application/json"), "OpenAPI application/json request body")
+        media = _object(content.get(JSON_MEDIA_TYPE), f"OpenAPI {JSON_MEDIA_TYPE} request body")
         expanded = _expanded_schema(media.get("schema"), schemas)
-        body_schema = _object(expanded, "OpenAPI application/json request schema")
+        body_schema = _object(expanded, f"OpenAPI {JSON_MEDIA_TYPE} request schema")
         body_properties = body_schema.get("properties")
         if body_schema.get("type") != "object" or not isinstance(body_properties, dict):
             raise ValueError("agent-visible JSON request bodies must be objects with named properties")
@@ -169,10 +170,10 @@ def _output_schema(operation: Mapping[str, object], schemas: Mapping[str, object
             continue
         response = _object(value, f"OpenAPI response {status}")
         content = _object(response.get("content"), f"OpenAPI response {status} content")
-        media = _object(content.get("application/json"), f"OpenAPI response {status} application/json")
+        media = _object(content.get(JSON_MEDIA_TYPE), f"OpenAPI response {status} {JSON_MEDIA_TYPE}")
         expanded = _expanded_schema(media.get("schema"), schemas)
         return dict(_object(expanded, f"OpenAPI response {status} schema"))
-    raise ValueError("agent-visible operations must declare an application/json success response")
+    raise ValueError(f"agent-visible operations must declare a {JSON_MEDIA_TYPE} success response")
 
 
 def operation_catalog(apis: Mapping[str, RegisteredApi]) -> tuple[OperationDescriptor, ...]:
