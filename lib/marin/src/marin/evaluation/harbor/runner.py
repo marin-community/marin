@@ -66,6 +66,7 @@ DEFAULT_MIN_COMPLETION_RATE = 0.9
 # Error labels for ungraded trials that carry no exception of their own.
 _UNKNOWN_ERROR = "unknown"
 _MISSING_RESULT_ERROR = "no_result_written"
+_SCORE_BEARING_EXCEPTIONS = frozenset({"AgentTimeoutError"})
 
 _CANONICAL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
@@ -74,10 +75,10 @@ _CANONICAL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 class HarborTrial:
     """One finished Harbor trial, normalized off its ``result.json``.
 
-    ``scored`` is whether the trial is a usable measurement: a verifier graded it and the trial raised
-    no exception. A trial whose agent timed out part-way is often still verified, and scores zero
-    because it was cut short rather than because the model was wrong -- counting that as a wrong
-    answer is the imputation the coverage accounting exists to avoid, so it is an ungraded item.
+    ``scored`` is whether the trial is a usable measurement: a verifier graded it and it either
+    completed normally or ended with a score-bearing exception. Agent timeouts are passthrough
+    outcomes when Harbor still invokes the verifier; a timeout without a verifier result remains
+    ungraded.
     """
 
     task_id: str
@@ -187,14 +188,16 @@ def _read_trial(result_file: StoragePath) -> HarborTrial:
     reward = rewards.get("reward", 0.0)
     reward = float(reward) if isinstance(reward, int | float) else 0.0
     exc = data.get("exception_info")
-    error = {"type": exc.get("exception_type"), "message": exc.get("exception_message")} if exc else None
+    exception_type = exc.get("exception_type") if exc else None
+    error = {"type": exception_type, "message": exc.get("exception_message")} if exc else None
+    scored = verifier_result is not None and (error is None or exception_type in _SCORE_BEARING_EXCEPTIONS)
     trajectory_file = trial_dir / "agent" / "trajectory.json"
     trajectory_path = str(trajectory_file) if trajectory_file.exists() else None
     return HarborTrial(
         task_id=task_id,
         trial_id=trial_dir.name,
         reward=reward,
-        scored=verifier_result is not None and error is None,
+        scored=scored,
         status="failed" if exc else "completed",
         trajectory_path=trajectory_path,
         error=error,
@@ -407,8 +410,9 @@ def _evaluation_outcome(
 
     A run clearing the gate keeps its aggregate and its per-trial error distribution, so a downstream
     reader can tell the model's score apart from the infrastructure quality behind it. A run below the
-    gate fails as an infrastructure failure -- agent and verifier timeouts are not evaluation outcomes
-    -- and still records its coverage so the rejection is legible as counts rather than as prose.
+    gate fails as an infrastructure failure and still records its coverage so the rejection is legible
+    as counts rather than as prose. A verified agent timeout is a score-bearing outcome; verifier
+    timeouts and agent timeouts without a verifier result remain ungraded.
 
     A run whose attempted-trial count is unknown has no rate to gate on. It is admitted with its
     coverage left unreported, which downstream widens to "completeness unknown" rather than treating
