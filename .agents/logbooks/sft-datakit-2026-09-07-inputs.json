@@ -1,0 +1,644 @@
+{
+  "output": "gs://marin-us-central2/grug/moe_67b_a2b_step157k_sft_datakit80_pretrain20_ctx262k_v2_c8284c64",
+  "temporary_checkpoints": "gs://marin-us-central2/tmp/ttl=14d/checkpoints-temp/marin-us-central2/grug/moe_67b_a2b_step157k_sft_datakit80_pretrain20_ctx262k_v2_c8284c64/checkpoints",
+  "final_step": 159000,
+  "initialization": "full_state",
+  "sources": [
+    {
+      "name": "tokenized-rendered-chat/agenttrove",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/agenttrove_d9c89762/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/coderforge",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/coderforge_c06bf144/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/davinci-dev/env-native",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/davinci-dev/env-native_a566cbb3/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/glm-5.2-kernelgym-rollouts",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/glm-5.2-kernelgym-rollouts_a35c6de3/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/gpt-oss-rollouts",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/gpt-oss-rollouts_9ee003a0/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/massive_function_calling",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/massive_function_calling_15c24209/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/nemotron-terminal",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/nemotron-terminal_e1c4527f/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/numinamath-1.5",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/numinamath-1.5_462e8073/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/numinamath-tir",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/numinamath-tir_789b14be/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/openthoughts4-code-glm-5.2-n4",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/openthoughts4-code-glm-5.2-n4_2a68f84b/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/superior-reasoning",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/superior-reasoning_8fd0dce5/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/swe-rebench-openhands",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/swe-rebench-openhands_340575b3/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/swe-zero-12m",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/swe-zero-12m_519eb85e/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/synthetic-1",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/synthetic-1_164e0e6f/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/glm52-terminus2/exp_rpt_crosscodeeval-csharp-v4",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/glm52-terminus2/exp_rpt_crosscodeeval-csharp-v4_8ba001d9/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/glm52-terminus2/exp_rpt_curriculum-easy",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/glm52-terminus2/exp_rpt_curriculum-easy_36b9807b/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/glm52-terminus2/exp_rpt_curriculum-medium",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/glm52-terminus2/exp_rpt_curriculum-medium_92b31363/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/glm52-terminus2/exp_rpt_e2egit-large",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/glm52-terminus2/exp_rpt_e2egit-large_2c489ee2/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/glm52-terminus2/exp_rpt_e2egit-v2",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/glm52-terminus2/exp_rpt_e2egit-v2_43518125/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/glm52-terminus2/exp_rpt_nemotron-cpp-v2",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/glm52-terminus2/exp_rpt_nemotron-cpp-v2_61523f0e/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/glm52-terminus2/exp_rpt_stack-pytest-large-v2",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/glm52-terminus2/exp_rpt_stack-pytest-large-v2_53c7a082/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/glm52-terminus2/exp_rpt_stack-pytest-v2",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/glm52-terminus2/exp_rpt_stack-pytest-v2_f48cf340/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/glm52-terminus2/exp_rpt_unitsyn-python-v3",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/glm52-terminus2/exp_rpt_unitsyn-python-v3_f3f8a95d/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/glm52-terminus2/nemotron-gym-agent-calendar",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/glm52-terminus2/nemotron-gym-agent-calendar_b15043a1/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/glm52-terminus2/nemotron-gym-instruction-following-structured",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/glm52-terminus2/nemotron-gym-instruction-following-structured_e7b6b3d9/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/glm52-terminus2/nemotron-gym-knowledge-web-search-mcqa",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/glm52-terminus2/nemotron-gym-knowledge-web-search-mcqa_8be48f2f/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/glm52-terminus2/nl2bash-tasks-cleaned-oracle",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/glm52-terminus2/nl2bash-tasks-cleaned-oracle_276d98a0/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/minimax-m27-131k/code-contests-noblock",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/minimax-m27-131k/code-contests-noblock_b82d13be/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/minimax-m27-131k/exp_rle_minimal_instructions-v3",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/minimax-m27-131k/exp_rle_minimal_instructions-v3_2423edef/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/minimax-m27-131k/exp_rpt_codenet-python-v2",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/minimax-m27-131k/exp_rpt_codenet-python-v2_ae77e9b1/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/minimax-m27-131k/exp_rpt_crosscodeeval-csharp-v4",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/minimax-m27-131k/exp_rpt_crosscodeeval-csharp-v4_b1ab9182/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/minimax-m27-131k/exp_rpt_curriculum-easy",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/minimax-m27-131k/exp_rpt_curriculum-easy_0ebc3a3c/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/minimax-m27-131k/exp_rpt_curriculum-medium",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/minimax-m27-131k/exp_rpt_curriculum-medium_0d72e09d/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/minimax-m27-131k/exp_rpt_e2egit-large",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/minimax-m27-131k/exp_rpt_e2egit-large_f10d4730/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/minimax-m27-131k/exp_rpt_e2egit-v2",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/minimax-m27-131k/exp_rpt_e2egit-v2_35313061/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/minimax-m27-131k/exp_rpt_ghactions-v3",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/minimax-m27-131k/exp_rpt_ghactions-v3_10976038/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/minimax-m27-131k/exp_rpt_methods2test-large-v2",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/minimax-m27-131k/exp_rpt_methods2test-large-v2_1aaf0d18/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/minimax-m27-131k/exp_rpt_methods2test-large-v3",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/minimax-m27-131k/exp_rpt_methods2test-large-v3_76a71ec8/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/minimax-m27-131k/exp_rpt_nemotron-cpp",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/minimax-m27-131k/exp_rpt_nemotron-cpp_34216d18/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/minimax-m27-131k/exp_rpt_nemotron-junit",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/minimax-m27-131k/exp_rpt_nemotron-junit_2d399fe0/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/minimax-m27-131k/exp_rpt_pr",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/minimax-m27-131k/exp_rpt_pr_4aa832f3/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/minimax-m27-131k/exp_rpt_pymethods2test-large",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/minimax-m27-131k/exp_rpt_pymethods2test-large_b3782c1b/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/minimax-m27-131k/exp_rpt_pymethods2test-v3",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/minimax-m27-131k/exp_rpt_pymethods2test-v3_83f0bef9/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/minimax-m27-131k/exp_rpt_stack-bash-v3",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/minimax-m27-131k/exp_rpt_stack-bash-v3_c3c6753d/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/minimax-m27-131k/exp_rpt_stack-junit-v6",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/minimax-m27-131k/exp_rpt_stack-junit-v6_744db94f/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/minimax-m27-131k/exp_rpt_stack-pytest-large",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/minimax-m27-131k/exp_rpt_stack-pytest-large_dd7fb077/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/minimax-m27-131k/exp_rpt_stack-pytest-v2",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/minimax-m27-131k/exp_rpt_stack-pytest-v2_df2cd8cc/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/minimax-m27-131k/exp_rpt_unitsyn-python-large",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/minimax-m27-131k/exp_rpt_unitsyn-python-large_96263633/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/minimax-m27-131k/exp_rpt_unitsyn-python-v3",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/minimax-m27-131k/exp_rpt_unitsyn-python-v3_d6e4fd65/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/minimax-m27-131k/inferredbugs-sandboxes-verifier",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/minimax-m27-131k/inferredbugs-sandboxes-verifier_d456b759/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/minimax-m27-131k/llm-verifier-freelancer",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/minimax-m27-131k/llm-verifier-freelancer_333d745a/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/minimax-m27-131k/mix_h10_reward_binary-v2",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/minimax-m27-131k/mix_h10_reward_binary-v2_da6f6e18/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/minimax-m27-131k/mix_h10_reward_proportional-v2",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/minimax-m27-131k/mix_h10_reward_proportional-v2_14216b9b/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/minimax-m27-131k/mix_h10_reward_staged-v2",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/minimax-m27-131k/mix_h10_reward_staged-v2_fc1dcfa7/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/minimax-m27-131k/mix_h11_single_skill_only-v2",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/minimax-m27-131k/mix_h11_single_skill_only-v2_e434c654/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/minimax-m27-131k/mix_h1_struggle_zone-v2",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/minimax-m27-131k/mix_h1_struggle_zone-v2_3659d866/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/minimax-m27-131k/mix_h2_language_balanced-v2",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/minimax-m27-131k/mix_h2_language_balanced-v2_102f3d97/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/minimax-m27-131k/mix_h2_language_proportional",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/minimax-m27-131k/mix_h2_language_proportional_6b5656c9/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/minimax-m27-131k/mix_h4_binary_easy",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/minimax-m27-131k/mix_h4_binary_easy_bee0d76b/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/minimax-m27-131k/mix_h8_original_tests-v2",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/minimax-m27-131k/mix_h8_original_tests-v2_d8b27e01/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/minimax-m27-131k/nemotron-code-oracle-filtered",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/minimax-m27-131k/nemotron-code-oracle-filtered_925e4f20/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/minimax-m27-131k/nemotron-gym-agent-calendar",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/minimax-m27-131k/nemotron-gym-agent-calendar_a299ad1b/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/minimax-m27-131k/nemotron-gym-agent-workplace-v2",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/minimax-m27-131k/nemotron-gym-agent-workplace-v2_2836e769/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/minimax-m27-131k/nemotron-gym-competitive-coding",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/minimax-m27-131k/nemotron-gym-competitive-coding_e811cf4d/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/minimax-m27-131k/nemotron-gym-identity-following-v2",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/minimax-m27-131k/nemotron-gym-identity-following-v2_7b539d8e/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/minimax-m27-131k/nemotron-gym-instruction-following-calendar",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/minimax-m27-131k/nemotron-gym-instruction-following-calendar_70842384/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/minimax-m27-131k/nemotron-gym-instruction-following-structured",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/minimax-m27-131k/nemotron-gym-instruction-following-structured_81c5e4eb/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/minimax-m27-131k/nemotron-gym-knowledge-web-search-mcqa",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/minimax-m27-131k/nemotron-gym-knowledge-web-search-mcqa_88e278e3/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/minimax-m27-131k/nemotron-gym-math-advanced-calculations-v3",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/minimax-m27-131k/nemotron-gym-math-advanced-calculations-v3_16977615/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/minimax-m27-131k/nl2bash-tasks-cleaned-oracle",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/minimax-m27-131k/nl2bash-tasks-cleaned-oracle_b204c490/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/minimax-m27-131k/selfinstruct-naive-sandboxes-2-verified",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/minimax-m27-131k/selfinstruct-naive-sandboxes-2-verified_f44119d5/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/minimax-m27-131k/swegym-tasks-patched-validated-v5",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/minimax-m27-131k/swegym-tasks-patched-validated-v5_c29f6406/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/code-contests-noblock",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/code-contests-noblock_50fde067/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/exp_rle_adversarial",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/exp_rle_adversarial_789ac982/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_crosscodeeval-csharp-v4",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_crosscodeeval-csharp-v4_dd29e19f/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_crosscodeeval-java",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_crosscodeeval-java_475c2cec/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_curriculum-easy",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_curriculum-easy_dd4d14d7/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_curriculum-hard",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_curriculum-hard_f8a93183/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_curriculum-medium",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_curriculum-medium_e7334c82/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_e2egit-large",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_e2egit-large_e655811c/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_e2egit-v2",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_e2egit-v2_b66261ce/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_ghactions-v3",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_ghactions-v3_afa22c9f/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_issue",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_issue_69de13f3/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_methods2test-large-v3",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_methods2test-large-v3_f5c19faf/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_multifile",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_multifile_aa826d48/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_nemotron-cpp-v2",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_nemotron-cpp-v2_ae062616/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_nemotron-junit",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_nemotron-junit_98a74c70/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_pr",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_pr_abf7abd5/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_pymethods2test-large",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_pymethods2test-large_5559af4d/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_pymethods2test-v3",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_pymethods2test-v3_52799388/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_stack-junit-v6",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_stack-junit-v6_dbbf996a/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_stack-pytest-large",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_stack-pytest-large_f31587f0/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_stack-pytest-v2",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_stack-pytest-v2_5365e0b7/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_unitsyn-python-large",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_unitsyn-python-large_b5485222/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_unitsyn-python-v3",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_unitsyn-python-v3_30cb213c/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/inferredbugs-sandboxes-verifier",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/inferredbugs-sandboxes-verifier_8d3b291b/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/llm-verifier-freelancer",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/llm-verifier-freelancer_85f8bcab/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/mix_h4_binary_easy",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/mix_h4_binary_easy_ac1063ef/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/nemotron-code-oracle-filtered",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/nemotron-code-oracle-filtered_2325ad28/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/nemotron-gym-agent-calendar",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/nemotron-gym-agent-calendar_ee535a87/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/nemotron-gym-agent-workplace-v2",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/nemotron-gym-agent-workplace-v2_8405d288/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/nemotron-gym-identity-following-v2",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/nemotron-gym-identity-following-v2_6712536b/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/nemotron-gym-instruction-following-structured",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/nemotron-gym-instruction-following-structured_6bcfc004/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/nemotron-gym-knowledge-web-search-mcqa",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/nemotron-gym-knowledge-web-search-mcqa_a0a9fe33/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/nemotron-gym-math-advanced-calculations-v3",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/nemotron-gym-math-advanced-calculations-v3_7c4045d9/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/nl2bash-tasks-cleaned-oracle",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/nl2bash-tasks-cleaned-oracle_fcea1b2d/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/selfinstruct-naive-sandboxes-2-verified",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-131k-opencode/selfinstruct-naive-sandboxes-2-verified_7a62488a/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/code-contests-noblock",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/code-contests-noblock_f48ecbc4/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/exp_rle_minimal_instructions-v3",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/exp_rle_minimal_instructions-v3_6c95a03f/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/exp_rpt_codenet-python-v2",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/exp_rpt_codenet-python-v2_2ca36238/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/exp_rpt_crosscodeeval-csharp-v4",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/exp_rpt_crosscodeeval-csharp-v4_f0d744ca/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/exp_rpt_curriculum-easy",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/exp_rpt_curriculum-easy_f8070b04/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/exp_rpt_curriculum-medium",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/exp_rpt_curriculum-medium_d1ec81c3/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/exp_rpt_e2egit-large",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/exp_rpt_e2egit-large_8227e868/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/exp_rpt_e2egit-v2",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/exp_rpt_e2egit-v2_05faa924/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/exp_rpt_ghactions-v3",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/exp_rpt_ghactions-v3_67fb8b14/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/exp_rpt_methods2test-large-v2",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/exp_rpt_methods2test-large-v2_5c3ab9ea/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/exp_rpt_methods2test-large-v3",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/exp_rpt_methods2test-large-v3_8582d3ba/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/exp_rpt_nemotron-junit",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/exp_rpt_nemotron-junit_fa042d03/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/exp_rpt_pr",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/exp_rpt_pr_6644f871/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/exp_rpt_pymethods2test-large",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/exp_rpt_pymethods2test-large_edb56405/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/exp_rpt_pymethods2test-v3",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/exp_rpt_pymethods2test-v3_4376adaf/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/exp_rpt_stack-bash-v3",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/exp_rpt_stack-bash-v3_a4cabe25/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/exp_rpt_stack-junit-v6",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/exp_rpt_stack-junit-v6_addcb446/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/exp_rpt_stack-pytest-large",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/exp_rpt_stack-pytest-large_0cc4d327/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/exp_rpt_stack-pytest-v2",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/exp_rpt_stack-pytest-v2_f275fac2/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/exp_rpt_unitsyn-python-large",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/exp_rpt_unitsyn-python-large_a386ac2b/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/exp_rpt_unitsyn-python-v3",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/exp_rpt_unitsyn-python-v3_bdf36ebb/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/inferredbugs-sandboxes-verifier",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/inferredbugs-sandboxes-verifier_8e0b3c2a/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/llm-verifier-freelancer",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/llm-verifier-freelancer_2d651b09/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/mix_h10_reward_binary-v2",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/mix_h10_reward_binary-v2_374bbdeb/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/mix_h10_reward_proportional-v2",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/mix_h10_reward_proportional-v2_c2878f89/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/mix_h10_reward_staged-v2",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/mix_h10_reward_staged-v2_8ef2aca4/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/mix_h11_single_skill_only-v2",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/mix_h11_single_skill_only-v2_9bbfd342/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/mix_h1_struggle_zone-v2",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/mix_h1_struggle_zone-v2_821ac665/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/mix_h2_language_balanced-v2",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/mix_h2_language_balanced-v2_ce13d356/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/mix_h2_language_proportional",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/mix_h2_language_proportional_12af7de8/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/mix_h4_binary_easy",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/mix_h4_binary_easy_21c59e8e/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/mix_h8_original_tests-v2",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/mix_h8_original_tests-v2_eefc3f03/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/nemotron-code-oracle-filtered",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/nemotron-code-oracle-filtered_afebd5d4/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/nemotron-gym-agent-calendar",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/nemotron-gym-agent-calendar_c9e68b23/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/nemotron-gym-agent-workplace-v2",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/nemotron-gym-agent-workplace-v2_914dda82/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/nemotron-gym-competitive-coding",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/nemotron-gym-competitive-coding_e9166b27/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/nemotron-gym-identity-following-v2",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/nemotron-gym-identity-following-v2_9583b90f/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/nemotron-gym-instruction-following-calendar",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/nemotron-gym-instruction-following-calendar_dc5269f7/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/nemotron-gym-instruction-following-structured",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/nemotron-gym-instruction-following-structured_e57d076c/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/nemotron-gym-instruction-following-v2",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/nemotron-gym-instruction-following-v2_e7613742/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/nemotron-gym-knowledge-mcqa",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/nemotron-gym-knowledge-mcqa_45117ae7/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/nemotron-gym-knowledge-openqa-v2",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/nemotron-gym-knowledge-openqa-v2_0525f98c/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/nemotron-gym-knowledge-web-search-mcqa",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/nemotron-gym-knowledge-web-search-mcqa_134fed6e/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/nemotron-gym-math-advanced-calculations-v3",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/nemotron-gym-math-advanced-calculations-v3_d0aa02e2/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/nemotron-gym-safety-v2",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/nemotron-gym-safety-v2_b850be40/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/nemotron-math-oracle-filtered",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/nemotron-math-oracle-filtered_842e0c3e/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/nl2bash-tasks-cleaned-oracle",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/nl2bash-tasks-cleaned-oracle_e2047ef6/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/selfinstruct-naive-sandboxes-2-verified",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/selfinstruct-naive-sandboxes-2-verified_2d7268fd/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/penfever-traces/qwen35-122b-32k/swesmith-oracle-filtered",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/penfever-traces/qwen35-122b-32k/swesmith-oracle-filtered_82924bab/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/nemotron_sft/sft_code",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/nemotron_sft/sft_code_cb6dd8a7/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/nemotron_sft/sft_general",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/nemotron_sft/sft_general_d633ba31/levanter-cache"
+    },
+    {
+      "name": "tokenized-rendered-chat/nemotron_sft/sft_math",
+      "path": "gs://marin-us-central2/normalized-rendered-chat/nemotron_sft/sft_math_1b69747c/levanter-cache"
+    }
+  ]
+}
