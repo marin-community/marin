@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import threading
 from dataclasses import asdict, dataclass
+from enum import StrEnum
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -52,14 +53,23 @@ DEFAULT_DATA_ROOT = Path(__file__).resolve().parents[2] / ".data"
 DEFAULT_PORT = 8080
 
 
+class _AppletValidationCheck(StrEnum):
+    PACKAGE = "package"
+    INLINE_SCRIPTS = "inline_scripts"
+    BACKEND_IMPORT = "backend_import"
+    BACKEND_FACTORY_EXECUTION = "backend_factory_execution"
+    MIGRATION_EXECUTION = "migration_execution"
+    BROWSER = "browser"
+
+
 @dataclass(frozen=True)
 class _AppletValidationReport:
     files: tuple[str, ...]
     file_count: int
     byte_size: int
     digest: str
-    checks: tuple[str, ...]
-    not_checked: tuple[str, ...]
+    checks: tuple[_AppletValidationCheck, ...]
+    not_checked: tuple[_AppletValidationCheck, ...]
 
 
 @click.group()
@@ -201,14 +211,18 @@ def _publish_package(app_dir: Path, *, build: bool) -> tuple[bytes, AppletPackag
 
 def _validation_report(package: AppletPackage, *, backend_import_checked: bool) -> _AppletValidationReport:
     files = tuple(sorted(package.files))
-    checks = ["package", "inline_scripts"]
-    not_checked = ["browser"]
+    checks = [_AppletValidationCheck.PACKAGE, _AppletValidationCheck.INLINE_SCRIPTS]
+    not_checked = [_AppletValidationCheck.BROWSER]
     if package.manifest.python_entrypoint is not None:
-        not_checked = ["backend_factory", "migration", *not_checked]
+        not_checked = [
+            _AppletValidationCheck.BACKEND_FACTORY_EXECUTION,
+            _AppletValidationCheck.MIGRATION_EXECUTION,
+            *not_checked,
+        ]
         if backend_import_checked:
-            checks.append("backend_import")
+            checks.append(_AppletValidationCheck.BACKEND_IMPORT)
         else:
-            not_checked.insert(0, "backend_import")
+            not_checked.insert(0, _AppletValidationCheck.BACKEND_IMPORT)
     return _AppletValidationReport(
         files=files,
         file_count=len(files),

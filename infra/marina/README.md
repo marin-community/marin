@@ -268,8 +268,9 @@ uv run marina validate infra/marina/examples/problem-set-applet
 size limits, rejects executable inline scripts blocked by the frontend content
 security policy, then imports a declared Python backend with the isolated
 module layout used by Marina. It reports the completed checks and the backend
-factory, migration, and browser checks it did not run. It does not execute
-`create_api`, connect to Postgres, run a migration, or start a browser.
+factory execution, migration execution, and browser checks it did not run. It
+does not execute `create_api`, connect to Postgres, run a migration, or start a
+browser.
 
 The production target defaults to `https://marina.oa.dev`. The client uses the
 same cached `iris login` credentials or ambient Google service-account
