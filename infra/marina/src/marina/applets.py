@@ -57,11 +57,23 @@ EXECUTABLE_INLINE_SCRIPT_TYPES = frozenset(
     {
         "application/ecmascript",
         "application/javascript",
+        "application/x-ecmascript",
+        "application/x-javascript",
         "importmap",
         "module",
         "speculationrules",
         "text/ecmascript",
         "text/javascript",
+        "text/javascript1.0",
+        "text/javascript1.1",
+        "text/javascript1.2",
+        "text/javascript1.3",
+        "text/javascript1.4",
+        "text/javascript1.5",
+        "text/jscript",
+        "text/livescript",
+        "text/x-ecmascript",
+        "text/x-javascript",
     }
 )
 
@@ -165,7 +177,7 @@ class _InlineScriptParser(HTMLParser):
         attributes = {name.casefold(): value for name, value in attrs}
         if attributes.get("src"):
             return
-        script_type = (attributes.get("type") or "text/javascript").casefold().split(";", 1)[0].strip()
+        script_type = (attributes.get("type") or "text/javascript").strip().casefold()
         if script_type in EXECUTABLE_INLINE_SCRIPT_TYPES:
             self.inline_script_line = self.getpos()[0]
 

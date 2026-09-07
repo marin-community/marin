@@ -499,10 +499,32 @@ def test_package_rejects_executable_inline_script(tmp_path: Path) -> None:
         package_applet(package_dir)
 
 
+def test_package_rejects_legacy_javascript_mime_alias(tmp_path: Path) -> None:
+    package_dir = tmp_path / "legacy-inline-script"
+    shutil.copytree(DEMO_APPLET, package_dir)
+    (package_dir / "dist" / "index.html").write_text(
+        '<!doctype html><html><body><script type="application/x-javascript">alert(1)</script></body></html>'
+    )
+
+    with pytest.raises(ValueError):
+        package_applet(package_dir)
+
+
 def test_package_allows_non_executable_inline_script_data(tmp_path: Path) -> None:
     package_dir = tmp_path / "inline-data"
     shutil.copytree(DEMO_APPLET, package_dir)
     html = '<!doctype html><html><body><script type="application/json">{"page": 1}</script></body></html>'
+    (package_dir / "dist" / "index.html").write_text(html)
+
+    package = read_applet_package(package_applet(package_dir))
+
+    assert package.files["dist/index.html"] == html.encode()
+
+
+def test_package_allows_script_type_with_parameters_as_data(tmp_path: Path) -> None:
+    package_dir = tmp_path / "inline-typed-data"
+    shutil.copytree(DEMO_APPLET, package_dir)
+    html = '<!doctype html><html><body><script type="text/javascript; charset=utf-8">data</script></body></html>'
     (package_dir / "dist" / "index.html").write_text(html)
 
     package = read_applet_package(package_applet(package_dir))
