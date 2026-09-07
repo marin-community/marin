@@ -84,3 +84,11 @@ This entry supersedes the unsubmitted 16:37 plan. The user requested carrying th
 - Completed checks: source metadata and scalar optimizer counters all report step 157,000; all 72 array shapes/dtypes match; resolved launcher uses full-state initialization, final step 159,000, and the specified checkpoint policy. Repository-wide lint and type checking passed. The checkpoint, Grug contract, and recipe tests passed (38 passed, 1 skipped), including numerical WSD updates and recovery with preserved optimizer buffers.
 - Test limitation: the affected-test runner selected 69 paths but could not install `torchcodec==0.10.0` on Linux aarch64. The focused tests ran successfully in the existing environment. The combined run exposed duplicate optimizer registration names; the June TPU names are now distinct.
 - Next action: publish the record, submit once, then verify the startup contract. Do not treat successful submission as successful training.
+
+### 2026-09-07 16:58 - Coordinator submitted; preprocessing active
+
+- Submitted at 16:55:39 PDT: `/held/sft-datakit-20260907-prod-2000`, using the recorded command with the W&B key forwarded. Source SHA: `360142508301b1e54e147762f3e8692ce781b1d3`; clean working tree; workspace bundle 10.7 MB, ID `a253e1113ae2a6db3ffc19832e09405a06c9eb1f76a8cffb8bcebe8e386db6fb`.
+- Result at 16:58: coordinator running, zero failures and preemptions. Twelve Zephyr transform/normalization coordinators were running and worker jobs were being scheduled. Raw inputs were reused, but this revision's processed-chat artifacts were not all cached. No TPU training child had been submitted.
+- Interpretation: launch environment setup passed; the data graph must finish preprocessing and packing validation before TPU dispatch. W&B training state and model initialization remain unverified.
+- Dashboard: https://iris.oa.dev/#/job/%2Fheld%2Fsft-datakit-20260907-prod-2000
+- Next action: monitor preprocessing, then verify TPU dispatch and the WSD/full-state startup contract. Monitoring state is in the session's ignored `scratch/20260907_sft_datakit_monitoring_state.json`.
