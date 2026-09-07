@@ -3,6 +3,7 @@
 //! Parse the CLI flags, open the `Store`, and serve `/health` plus the
 //! StatsService RPCs.
 
+use std::future::IntoFuture;
 use std::net::SocketAddr;
 use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::PathBuf;
@@ -22,7 +23,8 @@ use finelog::store::object_store::is_remote_object_store;
 use finelog::store::{ServeMode, Store, TelemetryRootWriteMode};
 use tokio::sync::Notify;
 
-const FORWARDER_STOP_TIMEOUT: Duration = Duration::from_secs(10);
+const FORWARDER_STOP_TIMEOUT: Duration = Duration::from_secs(5);
+const RELAY_FLUSH_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Bound process RSS. DataFusion frees its query buffers promptly (the pool
 /// returns to ~0 between queries), but the default glibc allocator retains the
@@ -119,6 +121,16 @@ struct Args {
         default_value_t = NonZeroU64::new(30).unwrap()
     )]
     relay_drain_timeout_seconds: NonZeroU64,
+
+    /// Total time allowed from SIGTERM through process shutdown. Kubernetes
+    /// sets this below the pod termination grace so the runtime can still exit
+    /// before SIGKILL.
+    #[arg(
+        long,
+        env = "FINELOG_SHUTDOWN_TIMEOUT_SECONDS",
+        default_value_t = NonZeroU64::new(55).unwrap()
+    )]
+    shutdown_timeout_seconds: NonZeroU64,
 
     /// This server's Ed25519 private key (PKCS#8 PEM, env `FINELOG_SIGNING_KEY`),
     /// which signs the `aud="finelog"` bearer the hub verifies against the matching
@@ -264,56 +276,109 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // first SIGTERM/SIGINT, then shut the store's background tasks down.
     // `into_make_service_with_connect_info` records each connection's peer
     // address so the auth CIDR rule can read it.
-    axum::serve(
+    let (shutdown_started_tx, mut shutdown_started_rx) = tokio::sync::oneshot::channel();
+    let server = axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
-    .with_graceful_shutdown(shutdown_signal())
-    .await?;
-    tracing::info!("finelog-server draining background tasks");
+    .with_graceful_shutdown(async move {
+        shutdown_signal().await;
+        let _ = shutdown_started_tx.send(tokio::time::Instant::now());
+    })
+    .into_future();
+    tokio::pin!(server);
 
-    // Once the listener has drained, seal every in-RAM tail and stop the ordinary
-    // loop. Then forward through that closed high-water boundary before table
-    // shutdown. A failed bounded drain leaves the cursor and local objects intact.
-    if forwarder.is_some() {
-        if let Err(error) = store.flush_for_relay_shutdown().await {
-            tracing::error!(%error, "finelog relay: shutdown flush failed");
-        }
-    }
-    if let (Some(stop), Some(mut task)) = (forward_stop, forward_task) {
-        let _ = stop.send(true);
-        if tokio::time::timeout(FORWARDER_STOP_TIMEOUT, &mut task)
+    // Start the process-wide budget when SIGTERM/SIGINT arrives, including the
+    // HTTP graceful drain. This keeps every subsequent cleanup stage inside the
+    // pod termination grace rather than giving each stage an additive timeout.
+    let (shutdown_started, server_stopped) = tokio::select! {
+        biased;
+        started = &mut shutdown_started_rx => (
+            started.unwrap_or_else(|_| tokio::time::Instant::now()),
+            false,
+        ),
+        result = &mut server => {
+            result?;
+            (
+                shutdown_started_rx
+                    .try_recv()
+                    .unwrap_or_else(|_| tokio::time::Instant::now()),
+                true,
+            )
+        },
+    };
+    let shutdown_timeout = Duration::from_secs(args.shutdown_timeout_seconds.get());
+    let shutdown_deadline = shutdown_started + shutdown_timeout;
+    if !server_stopped
+        && tokio::time::timeout_at(shutdown_deadline, &mut server)
             .await
             .is_err()
-        {
-            tracing::warn!("finelog forwarder: ordinary loop did not stop; aborting before drain");
-            task.abort();
-            let _ = task.await;
-        }
+    {
+        tracing::error!(
+            timeout_seconds = shutdown_timeout.as_secs(),
+            "finelog-server: graceful HTTP drain exhausted the process shutdown budget"
+        );
+        return Ok(());
     }
-    if let Some(forwarder) = forwarder {
-        let timeout = Duration::from_secs(args.relay_drain_timeout_seconds.get());
-        if let Err(error) = forwarder.drain(timeout).await {
-            tracing::error!(%error, "finelog relay: shutdown forwarding drain incomplete");
-        }
-    }
+    tracing::info!("finelog-server draining background tasks");
 
-    // Stop the diagnostics task, then cooperatively cancel + join the
-    // per-namespace flush/maintenance tasks. The per-namespace join is bounded;
-    // an OUTER timeout here guarantees the process still exits promptly even if
-    // a namespace shutdown is somehow slow (defense in depth; durability is
-    // already preserved because writes ack only after L0 persist).
-    diag_stop.store(true, Ordering::SeqCst);
-    diag_shutdown.notify_waiters();
-    // Bound the diagnostics join too: even with the latch the task does no
-    // durable work, so it must never delay the store drain.
-    let _ = tokio::time::timeout(Duration::from_secs(2), diag).await;
-    let _ = tokio::time::timeout(
-        Duration::from_secs(10),
-        store.shutdown(Duration::from_secs(5)),
-    )
-    .await;
-    tracing::info!("finelog-server stopped");
+    let shutdown = async {
+        // Once the listener has drained, seal every in-RAM tail and stop the ordinary
+        // loop. Then forward through that closed high-water boundary before table
+        // shutdown. A failed bounded drain leaves the cursor and local objects intact.
+        if forwarder.is_some() {
+            match tokio::time::timeout(RELAY_FLUSH_TIMEOUT, store.flush_for_relay_shutdown()).await
+            {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    tracing::error!(%error, "finelog relay: shutdown flush failed")
+                }
+                Err(_) => tracing::error!(
+                    timeout_seconds = RELAY_FLUSH_TIMEOUT.as_secs(),
+                    "finelog relay: shutdown flush timed out; continuing to forwarding drain"
+                ),
+            }
+        }
+        if let (Some(stop), Some(mut task)) = (forward_stop, forward_task) {
+            let _ = stop.send(true);
+            if tokio::time::timeout(FORWARDER_STOP_TIMEOUT, &mut task)
+                .await
+                .is_err()
+            {
+                tracing::warn!(
+                    "finelog forwarder: ordinary loop did not stop; aborting before drain"
+                );
+                task.abort();
+                let _ = task.await;
+            }
+        }
+        if let Some(forwarder) = forwarder {
+            let timeout = Duration::from_secs(args.relay_drain_timeout_seconds.get());
+            if let Err(error) = forwarder.drain(timeout).await {
+                tracing::error!(%error, "finelog relay: shutdown forwarding drain incomplete");
+            }
+        }
+
+        // Stop the diagnostics task, then cooperatively cancel + join the
+        // per-namespace flush/maintenance tasks. The per-namespace join is bounded;
+        // the process-wide deadline guarantees the process still exits promptly even
+        // if a namespace shutdown is somehow slow.
+        diag_stop.store(true, Ordering::SeqCst);
+        diag_shutdown.notify_waiters();
+        let _ = tokio::time::timeout(Duration::from_secs(2), diag).await;
+        let _ = tokio::time::timeout(
+            Duration::from_secs(10),
+            store.shutdown(Duration::from_secs(5)),
+        )
+        .await;
+    };
+    match tokio::time::timeout_at(shutdown_deadline, shutdown).await {
+        Ok(()) => tracing::info!("finelog-server stopped"),
+        Err(_) => tracing::error!(
+            timeout_seconds = shutdown_timeout.as_secs(),
+            "finelog-server: background drain exhausted the process shutdown budget"
+        ),
+    }
     Ok(())
 }
 

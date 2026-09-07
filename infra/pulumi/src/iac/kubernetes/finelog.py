@@ -41,8 +41,8 @@ PROBE_FAILURE_THRESHOLD = 3
 PROBE_TIMEOUT = 15
 REVISION_HISTORY_LIMIT = 10
 TERMINATION_GRACE_PERIOD_SECONDS = 60
-SHUTDOWN_CLEANUP_RESERVE_SECONDS = 30
-RELAY_DRAIN_TIMEOUT_SECONDS = TERMINATION_GRACE_PERIOD_SECONDS - SHUTDOWN_CLEANUP_RESERVE_SECONDS
+SERVER_SHUTDOWN_TIMEOUT_SECONDS = TERMINATION_GRACE_PERIOD_SECONDS - 5
+RELAY_DRAIN_TIMEOUT_SECONDS = 30
 VERIFY_COMMAND = "uv run --frozen --package marin-finelog finelog deploy verify"
 
 
@@ -82,6 +82,10 @@ def _container_env(config: FinelogConfig) -> list[k8s.core.v1.EnvVarArgs]:
     env = [
         k8s.core.v1.EnvVarArgs(name="FINELOG_PORT", value=str(config.port)),
         k8s.core.v1.EnvVarArgs(name="FINELOG_REMOTE_DIR", value=config.remote_log_dir),
+        k8s.core.v1.EnvVarArgs(
+            name="FINELOG_SHUTDOWN_TIMEOUT_SECONDS",
+            value=str(SERVER_SHUTDOWN_TIMEOUT_SECONDS),
+        ),
     ]
     if config.query_metadata_cache_mb is not None:
         env.append(

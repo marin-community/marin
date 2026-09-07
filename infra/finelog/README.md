@@ -68,9 +68,11 @@ the immutable object, and the ordinary orphan grace delays physical deletion.
 
 On SIGTERM, the server stops accepting requests, flushes and publishes every
 table's object state, stops the periodic forwarder, and forwards through the
-captured high-water marks. The pod has a 60-second termination grace period for
-this drain. If the hub stays unavailable, the replacement recovers the
-published objects and cursor and resumes the unsettled tail.
+captured high-water marks. The flush is bounded so an unavailable object store
+cannot consume the forwarding window. One process-wide shutdown deadline covers
+the HTTP drain and every cleanup stage, and ends before the pod's 60-second
+termination grace period. If the hub stays unavailable, the replacement
+recovers the published objects and cursor and resumes the unsettled tail.
 
 The first transition from a version-0 node-local store needs an operator drain
 because the old binary does not have that shutdown sequence. Before replacing
