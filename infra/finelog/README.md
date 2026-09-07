@@ -48,8 +48,39 @@ intended checkout; there is no rollout counter in Pulumi configuration.
   requests and limits ephemeral storage to `storage_gb`, and normally creates
   no PVC.
   It survives container restarts but not pod replacement. All bundled regional
-  senders use this mode because forwarding is best-effort and the hub becomes
-  the read source for rows it accepts.
+  senders use this mode because object storage is their durable spool and the
+  hub becomes the read source for rows it settles.
+
+## Forwarding relay lifecycle
+
+A deployment with `forwarding` configured runs relay maintenance. It preserves
+the table schema sent to the hub, but does not build local query indexes,
+projections, placement rewrites, or encoding rewrites. It still compacts when
+needed to bound file count while forwarding is unavailable.
+
+The downstream cursor is the deletion boundary. Object-native maintenance may
+retire a whole segment only when its maximum sequence is at or below that
+cursor and the segment is at least 15 minutes old. A retryable forwarding
+failure does not advance the cursor, so elapsed time alone never deletes an
+unforwarded segment. Retiring a segment removes it from the relay's current
+table state; retained snapshots and the rollback window continue to reference
+the immutable object, and the ordinary orphan grace delays physical deletion.
+
+On SIGTERM, the server stops accepting requests, flushes and publishes every
+table's object state, stops the periodic forwarder, and forwards through the
+captured high-water marks. The pod has a 60-second termination grace period for
+this drain. If the hub stays unavailable, the replacement recovers the
+published objects and cursor and resumes the unsettled tail.
+
+The first transition from a version-0 node-local store needs an operator drain
+because the old binary does not have that shutdown sequence. Before replacing
+it, confirm every namespace's forwarding cursor has reached its persisted high
+water. Then shorten local retention and let legacy archive maintenance upload
+`LOCAL` segments and evict only `BOTH` segments. Register the version-1 table
+specifications after the archive-only history is evicted: migration excludes
+`REMOTE` rows and rewrites only the small local tail. Wait for every table to
+reach `RETIRED` before treating object state as the recovery authority. The old
+flat archive objects may remain until a separate inventory-backed cleanup.
 
 With `persistent-volume`, set `deployment.k8s.cache_pvc_name` to adopt and mount
 an existing replacement claim. Enable the stack's `import` option when Pulumi

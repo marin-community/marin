@@ -28,8 +28,33 @@ use crate::store::legacy::layout::{self, LocalLayout};
 use crate::store::state_store::object::StateGcPolicy;
 use crate::store::table::index_artifacts::{self, IndexBackfill, INDEX_BUNDLES_PER_TICK};
 use crate::store::table::key_bounds;
+use crate::store::table::relay_retirement;
 use crate::store::table::runtime::TableRuntime;
 use crate::store::table::spec_migration::{self, SpecMigration};
+
+/// Physical maintenance appropriate to the process hosting a table.
+///
+/// A relay is a durable forwarding spool, not a query-serving replica. It
+/// keeps the logical table specification intact while omitting derived query
+/// artifacts and retiring data only after its configured downstream settles
+/// the corresponding sequence range.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub enum MaintenanceProfile {
+    #[default]
+    QueryServing,
+    Relay {
+        target: String,
+    },
+}
+
+impl MaintenanceProfile {
+    pub fn relay_target(&self) -> Option<&str> {
+        match self {
+            Self::QueryServing => None,
+            Self::Relay { target } => Some(target),
+        }
+    }
+}
 
 /// One unit of table maintenance, each owned by exactly one module.
 #[derive(Clone, Copy, Debug)]
@@ -202,10 +227,13 @@ async fn run_one(runtime: &Arc<TableRuntime>, work: TableWork) -> Result<WorkOut
 
 /// Run one full maintenance cycle, serialized against other cycles.
 ///
-/// An object-backed table publishes pending state, compacts immutable objects,
-/// collects, and maintains indexes. A legacy table converges its physical
-/// placement, compacts local segments, synchronizes the archive, evicts, and
-/// performs index and encoding maintenance.
+/// A query-serving object table publishes pending state, compacts immutable
+/// objects, collects, and maintains indexes. A query-serving legacy table also
+/// converges placement, synchronizes its archive, evicts, and rewrites stale
+/// encodings. A relay instead omits query artifacts and layout rewrites; an
+/// object-native relay first retires downstream-settled segments, while a
+/// legacy relay keeps archive synchronization and local eviction during its
+/// transition.
 async fn cycle(
     runtime: &Arc<TableRuntime>,
     force_compact_l0: bool,
@@ -238,6 +266,18 @@ async fn cycle(
     }
     if runtime.policy().object_backed() {
         runtime.controller.publish_owed().await?;
+        if let Some(target) = runtime.maintenance_profile().relay_target() {
+            let retirement_pending = relay_retirement::maintain(runtime, target).await?;
+            runtime.controller.gc_objects().await?;
+            run_one(runtime, TableWork::ObjectCollection).await?;
+            if retirement_pending {
+                return Ok(WorkOutcome::MoreWork);
+            }
+            let compacted = run_one(runtime, TableWork::Compaction { force_compact_l0 })
+                .await?
+                .has_more_work();
+            return Ok(WorkOutcome::from_pending(compacted));
+        }
         // Report pending while compaction keeps finding runs: an L0 backlog
         // then drains at the fast re-poll cadence through the dedicated slot
         // instead of one run per shared-queue visit, mirroring how a legacy
@@ -252,6 +292,13 @@ async fn cycle(
         run_one(runtime, TableWork::ObjectCollection).await?;
         run_one(runtime, TableWork::IndexArtifacts).await?;
         return Ok(WorkOutcome::from_pending(bounds_pending || compacted));
+    }
+
+    if runtime.maintenance_profile().relay_target().is_some() {
+        run_one(runtime, TableWork::Compaction { force_compact_l0 }).await?;
+        run_one(runtime, TableWork::LegacyArchive).await?;
+        run_one(runtime, TableWork::Eviction).await?;
+        return Ok(WorkOutcome::Complete);
     }
 
     let placement_pending = run_one(runtime, TableWork::Placement)
@@ -415,6 +462,12 @@ fn table_dir(runtime: &TableRuntime) -> &std::path::Path {
 }
 
 fn index_config(runtime: &TableRuntime) -> SegmentIndexConfig {
+    if runtime.maintenance_profile().relay_target().is_some() {
+        return SegmentIndexConfig {
+            indexes: Vec::new(),
+            key_column: Some(runtime.key_column().to_string()),
+        };
+    }
     runtime.format.index_config(runtime.name())
 }
 
@@ -431,7 +484,8 @@ pub(crate) fn index_backfill<'a>(
         registry: &runtime.indices,
         limits: &runtime.limits,
         config: index_config(runtime),
-        indexes_enabled: segment_indexes_enabled_for(runtime.name()),
+        indexes_enabled: runtime.maintenance_profile().relay_target().is_none()
+            && segment_indexes_enabled_for(runtime.name()),
         layout_is_current,
         skips: &runtime.index_skips,
     }
@@ -447,7 +501,11 @@ pub(crate) fn local_compaction(runtime: &TableRuntime) -> LocalCompaction<'_> {
         segments: &runtime.segments,
         query_visibility: &runtime.query_visibility,
         config: &runtime.compaction_config,
-        partition_policy: physical_partition_policy_for(runtime.name()),
+        partition_policy: if runtime.maintenance_profile().relay_target().is_some() {
+            None
+        } else {
+            physical_partition_policy_for(runtime.name())
+        },
     }
 }
 

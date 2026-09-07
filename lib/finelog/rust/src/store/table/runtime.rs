@@ -35,6 +35,7 @@ use crate::store::table::controller::TableController;
 use crate::store::table::flush;
 use crate::store::table::index_artifacts::BackfillSkips;
 use crate::store::table::ingest::{FlushDemand, IngestBuffer};
+use crate::store::table::maintenance::MaintenanceProfile;
 use crate::store::table::query_view::{plan_visible_segments, SegmentObjectMap};
 use crate::store::table::segment_format::SegmentFormat;
 use crate::store::table::segment_view::{visible_segments, SegmentSnapshot, SegmentView};
@@ -72,6 +73,9 @@ pub struct TableRuntime {
     /// Leveled-compaction tuning: the scheduler reads `check_interval`, the
     /// planner reads `level_targets`/`max_segments_per_level`.
     pub(super) compaction_config: CompactionConfig,
+    /// Host-specific physical work. Relays retain the logical table spec but
+    /// do not build query artifacts and may retire downstream-settled objects.
+    pub(super) maintenance_profile: Mutex<MaintenanceProfile>,
     /// Serializes the whole local flush (seal → write → catalog → commit).
     /// Without it two concurrent flushers race: the second seal would overwrite
     /// the first's in-flight buffer, and the high-water mark could advance before
@@ -212,6 +216,7 @@ impl TableRuntime {
             policy: Mutex::new(policy),
             storage_policy: Mutex::new(storage_policy),
             compaction_config,
+            maintenance_profile: Mutex::new(MaintenanceProfile::default()),
             flush_lock: Mutex::new(()),
             object_flush_lock: tokio::sync::Mutex::new(()),
             maint_lock: tokio::sync::Mutex::new(()),
@@ -306,6 +311,14 @@ impl TableRuntime {
     /// Swap in the operating policy a new specification resolves to.
     pub fn update_table_spec(&self, status: &SpecLifecycle) {
         *self.policy.lock().unwrap() = TablePolicy::resolve(status.operative());
+    }
+
+    pub fn update_maintenance_profile(&self, profile: MaintenanceProfile) {
+        *self.maintenance_profile.lock().unwrap() = profile;
+    }
+
+    pub(super) fn maintenance_profile(&self) -> MaintenanceProfile {
+        self.maintenance_profile.lock().unwrap().clone()
     }
 
     /// Rebuild the query view from the segments visible at definition version

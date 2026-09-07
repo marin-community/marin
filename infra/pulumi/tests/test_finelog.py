@@ -71,6 +71,7 @@ def test_finelog_resource_args_reference_secret_without_secret_values() -> None:
         "FINELOG_INDEX_CACHE_MB",
         "FINELOG_OBJECT_CACHE_GB",
         "FINELOG_PORT",
+        "FINELOG_RELAY_DRAIN_TIMEOUT_SECONDS",
         "FINELOG_REMOTE_DIR",
     }
     assert "gcp-secret://" not in str(resources.deployment)
@@ -81,6 +82,19 @@ def test_finelog_retains_deployment_history_for_rollback() -> None:
     assert resources.deployment.spec is not None
 
     assert resources.deployment.spec.revision_history_limit == 10
+
+
+def test_finelog_allows_relay_shutdown_to_flush_and_forward() -> None:
+    resources = finelog_resource_args(_args(), "image@sha256:digest")
+    assert resources.deployment.spec is not None
+    pod_spec = resources.deployment.spec.template.spec
+    assert pod_spec is not None
+
+    assert pod_spec.termination_grace_period_seconds == 60
+    container = pod_spec.containers[0]
+    assert container.env is not None
+    drain_timeout = next(entry.value for entry in container.env if entry.name == "FINELOG_RELAY_DRAIN_TIMEOUT_SECONDS")
+    assert 0 < int(drain_timeout) < pod_spec.termination_grace_period_seconds
 
 
 def test_finelog_node_local_cache_uses_bounded_ephemeral_storage() -> None:

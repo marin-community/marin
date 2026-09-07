@@ -50,7 +50,7 @@ use crate::store::schema::{
 };
 use crate::store::state_store::object::ObjectTableStateStore;
 use crate::store::table::query_view::SegmentObjectMap;
-use crate::store::table::{TableManager, TABLE_LIFECYCLE_SHUTDOWN_TIMEOUT};
+use crate::store::table::{MaintenanceProfile, TableManager, TABLE_LIFECYCLE_SHUTDOWN_TIMEOUT};
 use crate::store::table_spec::ValidatedTableSpec;
 use crate::store::table_state::{ArtifactReferences, TableRevision, TableSnapshot, WriterFence};
 use crate::store::types::NamespaceStats;
@@ -1394,6 +1394,29 @@ impl Store {
     /// The seq in `namespace` below which this store will never send to `target` again.
     pub fn forward_cursor(&self, target: &str, namespace: &str) -> Result<Option<i64>, StatsError> {
         self.catalog.forward_cursor(target, namespace)
+    }
+
+    /// Configure this process as a forwarding relay before maintenance starts.
+    /// Logical table specifications are unchanged; only host-local physical
+    /// maintenance follows the relay policy.
+    pub fn configure_relay(&self, target: String) {
+        self.tables
+            .set_maintenance_profile(MaintenanceProfile::Relay { target });
+    }
+
+    /// Whether `namespace` has durable object-backed table state.
+    pub fn namespace_uses_object_state(&self, namespace: &str) -> Result<bool, StatsError> {
+        Ok(self
+            .tables
+            .require(namespace)?
+            .controller()
+            .is_object_backed())
+    }
+
+    /// Seal every table so a relay can capture a complete shutdown forwarding
+    /// boundary after its listener stops accepting writes.
+    pub async fn flush_for_relay_shutdown(&self) -> Result<(), StatsError> {
+        self.tables.flush_all().await
     }
 
     /// Record `cursor` as settled for `(target, namespace)`.

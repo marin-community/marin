@@ -21,6 +21,7 @@ pub mod ingest;
 mod key_bounds;
 pub mod maintenance;
 pub mod query_view;
+mod relay_retirement;
 pub mod runtime;
 pub mod segment_format;
 pub mod segment_view;
@@ -50,7 +51,7 @@ use crate::store::store::{ServeMode, LOG_NAMESPACE_NAME};
 use crate::store::table_state::{TableSnapshot, WriterFence};
 
 pub use controller::{MaintenanceLease, ObjectPersistence, TableController, WrittenObject};
-pub use maintenance::{TableWork, WorkOutcome};
+pub use maintenance::{MaintenanceProfile, TableWork, WorkOutcome};
 pub use runtime::TableRuntime;
 pub use segment_view::SegmentSnapshot;
 
@@ -125,6 +126,7 @@ pub struct TableManager {
     /// Compaction tuning copied into each runtime as it opens. Tests shrink
     /// these budgets before registering tables to force multi-batch backfills.
     compaction: Mutex<CompactionConfig>,
+    maintenance_profile: Mutex<MaintenanceProfile>,
     /// The maintenance scheduler's wake signal. Held here because runtimes are
     /// built before the scheduler starts and must already carry it.
     maintenance_wake: Arc<tokio::sync::Notify>,
@@ -160,6 +162,7 @@ impl TableManager {
             )))),
             limits: MaintenanceLimits::new(),
             compaction: Mutex::new(CompactionConfig::default()),
+            maintenance_profile: Mutex::new(MaintenanceProfile::default()),
             maintenance_wake: Arc::new(tokio::sync::Notify::new()),
         })
     }
@@ -168,6 +171,15 @@ impl TableManager {
     /// call; already-open runtimes keep their configuration.
     pub fn set_compaction_config(&self, config: CompactionConfig) {
         *self.compaction.lock().unwrap() = config;
+    }
+
+    /// Apply one host maintenance role to current and future tables. Called
+    /// before the scheduler starts, after forwarding configuration is parsed.
+    pub fn set_maintenance_profile(&self, profile: MaintenanceProfile) {
+        *self.maintenance_profile.lock().unwrap() = profile.clone();
+        for runtime in self.runtimes() {
+            runtime.update_maintenance_profile(profile.clone());
+        }
     }
 
     pub fn query_visibility(&self) -> &Arc<RwLock<()>> {
@@ -331,6 +343,7 @@ impl TableManager {
             policy,
             self.compaction.lock().unwrap().clone(),
         )?;
+        runtime.update_maintenance_profile(self.maintenance_profile.lock().unwrap().clone());
         self.runtimes
             .lock()
             .unwrap()
@@ -400,6 +413,21 @@ impl TableManager {
         work: TableWork,
     ) -> Result<WorkOutcome, StatsError> {
         maintenance::run(runtime, work).await
+    }
+
+    /// Seal every table concurrently before a relay captures its shutdown
+    /// forwarding boundary.
+    pub async fn flush_all(&self) -> Result<(), StatsError> {
+        let runtimes = self.runtimes();
+        futures::future::try_join_all(runtimes.iter().map(|runtime| async move {
+            self.run_work(runtime, TableWork::Flush).await?;
+            if runtime.controller.publication_owed() {
+                runtime.controller.publish_state().await?;
+            }
+            Ok::<(), StatsError>(())
+        }))
+        .await?;
+        Ok(())
     }
 
     /// Remove `name`'s runtime and controller from the registry.

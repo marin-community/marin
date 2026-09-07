@@ -73,6 +73,20 @@ struct Fixture {
     target_requests: Arc<RequestStats>,
 }
 
+fn test_forwarder(
+    source: Arc<Store>,
+    target_url: String,
+    target_addr: SocketAddr,
+    private_pem: &str,
+) -> Forwarder<TestTransport> {
+    let config = ForwardingConfig {
+        target: target_url,
+        cluster: SOURCE_CLUSTER.to_string(),
+    };
+    let minter = TokenMinter::new(private_pem, config.cluster.clone()).unwrap();
+    Forwarder::with_client(source, config, minter, stats_client(target_addr))
+}
+
 impl Fixture {
     /// A hub that trusts [`SOURCE_CLUSTER`]'s public key, and a source that writes under
     /// it. Each namespace's watermark is unset: a forwarder started now seeds at the tip.
@@ -129,16 +143,11 @@ impl Fixture {
 
     /// A forwarder from this source to this hub, signing with `private_pem`.
     fn forwarder(&self, private_pem: &str) -> Forwarder<TestTransport> {
-        let config = ForwardingConfig {
-            target: self.target_url.clone(),
-            cluster: SOURCE_CLUSTER.to_string(),
-        };
-        let minter = TokenMinter::new(private_pem, config.cluster.clone()).unwrap();
-        Forwarder::with_client(
+        test_forwarder(
             Arc::clone(&self.source),
-            config,
-            minter,
-            stats_client(self.target_addr),
+            self.target_url.clone(),
+            self.target_addr,
+            private_pem,
         )
     }
 
@@ -425,7 +434,7 @@ impl RunningForwarder {
         let (stop, stop_rx) = watch::channel(false);
         Self {
             stop,
-            task: spawn(forwarder, stop_rx),
+            task: spawn(Arc::new(forwarder), stop_rx),
         }
     }
 
@@ -1316,6 +1325,22 @@ async fn a_hub_outage_holds_the_cursor_and_recovery_delivers_every_row_once() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_shutdown_drain_is_bounded_and_preserves_an_unreachable_hub_cursor() {
+    let fx = Fixture::with_unavailable_hub("shutdown_drain_timeout").await;
+    push(&fx.source_client, "/user/job/t", &["still-local"]).await;
+    fx.forward_from_start(LOG_NAMESPACE_NAME).await;
+
+    let result = fx.forwarder(PRIV_A).drain(Duration::from_millis(50)).await;
+
+    assert!(result.is_err());
+    assert_eq!(fx.cursor(LOG_NAMESPACE_NAME), Some(0));
+    assert_eq!(
+        fx.source.list_segments(LOG_NAMESPACE_NAME).unwrap().len(),
+        1
+    );
+}
+
 /// The [`write_id_rows`] schema as a version-1 object-backed spec, for a source
 /// that migrates a forwarded table mid-stream.
 fn id_object_spec() -> crate::store::table_spec::ValidatedTableSpec {
@@ -1352,6 +1377,22 @@ fn id_object_spec() -> crate::store::table_spec::ValidatedTableSpec {
     .unwrap()
 }
 
+async fn drive_object_activation(store: &Store, namespace: &str, rounds: usize) {
+    for _ in 0..rounds {
+        if store.spec_lifecycle(namespace).unwrap().active_version() == 1 {
+            break;
+        }
+        store.maintain_namespace(namespace, false).await.unwrap();
+    }
+    let lifecycle = store.spec_lifecycle(namespace).unwrap();
+    assert_eq!(
+        lifecycle.active_version(),
+        1,
+        "object migration never activated (phase: {:?})",
+        lifecycle.phase
+    );
+}
+
 /// As [`write_id_rows`], but for a store with no background maintenance: one
 /// explicit round makes the rows durable. Returns the last written seq.
 async fn durable_id_rows(store: &Store, namespace: &str, ids: std::ops::Range<usize>) -> i64 {
@@ -1375,6 +1416,122 @@ async fn durable_id_rows(store: &Store, namespace: &str, ids: std::ops::Range<us
         .await
         .unwrap();
     last_seq
+}
+
+/// An object-native relay keeps a durable local copy while the hub is behind,
+/// then retires only whole segments covered by the hub's settled cursor. The
+/// object remains recoverable through retained table states until ordinary
+/// object GC's rollback and orphan windows expire.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_object_native_relay_retires_only_hub_settled_segments() {
+    const EVENTS: &str = "events";
+    let target = disk_store("relay_retirement_target");
+    let (target_addr, _target_requests) =
+        serve(Arc::clone(&target), hub_policy(SOURCE_CLUSTER)).await;
+    let target_url = format!("http://{target_addr}");
+    let source_data = crate::test_support::unique_dir("relay_retirement_source_data");
+    let source_remote = crate::test_support::unique_dir("relay_retirement_source_remote");
+    let source = Arc::new(
+        Store::new(
+            Some(source_data.clone()),
+            source_remote.to_string_lossy().into_owned(),
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            crate::store::ServeMode::Shadow,
+        )
+        .unwrap(),
+    );
+
+    source
+        .register_table(
+            EVENTS,
+            Schema::new(
+                vec![Column::new("id", ColumnType::COLUMN_TYPE_STRING, false)],
+                "id",
+            ),
+            StoragePolicy::default(),
+        )
+        .unwrap();
+    source
+        .register_versioned_table(EVENTS, id_object_spec())
+        .unwrap();
+    source.publish_object_catalog(EVENTS).await.unwrap();
+    drive_object_activation(&source, EVENTS, 8).await;
+    source.configure_relay(target_url.clone());
+
+    let first_tip = durable_id_rows(&source, EVENTS, 0..20).await;
+    let first_segment = source.list_segments(EVENTS).unwrap().pop().unwrap();
+    source
+        .backdate_segment(
+            EVENTS,
+            &crate::store::types::basename(&first_segment.path),
+            1,
+        )
+        .unwrap();
+
+    source.maintain_namespace(EVENTS, false).await.unwrap();
+    assert_eq!(
+        source.list_segments(EVENTS).unwrap().len(),
+        1,
+        "an unacknowledged segment must survive relay maintenance"
+    );
+
+    let forwarder = test_forwarder(source.clone(), target_url.clone(), target_addr, PRIV_A);
+    forwarder.drain(Duration::from_secs(5)).await.unwrap();
+    assert_eq!(
+        source.forward_cursor(&target_url, EVENTS).unwrap(),
+        Some(first_tip)
+    );
+
+    let tip = durable_id_rows(&source, EVENTS, 20..40).await;
+    let remaining = source.list_segments(EVENTS).unwrap();
+    assert_eq!(
+        remaining.len(),
+        1,
+        "maintenance should retire only the first cursor-covered segment"
+    );
+    source
+        .backdate_segment(
+            EVENTS,
+            &crate::store::types::basename(&remaining[0].path),
+            1,
+        )
+        .unwrap();
+    source.maintain_namespace(EVENTS, false).await.unwrap();
+    assert_eq!(
+        source.list_segments(EVENTS).unwrap().len(),
+        1,
+        "the second segment must remain until its own sequences settle"
+    );
+
+    forwarder.drain(Duration::from_secs(5)).await.unwrap();
+    assert_eq!(
+        source.forward_cursor(&target_url, EVENTS).unwrap(),
+        Some(tip)
+    );
+    source.maintain_namespace(EVENTS, false).await.unwrap();
+
+    assert!(
+        source.list_segments(EVENTS).unwrap().is_empty(),
+        "the relay should remove a whole segment once the hub settled it"
+    );
+    wait_for_scalar(&target, &format!("SELECT count(*) FROM \"{EVENTS}\""), 40).await;
+
+    drop(forwarder);
+    source.shutdown(Duration::from_secs(1)).await;
+    drop(source);
+    let reopened = Store::new(
+        Some(source_data),
+        source_remote.to_string_lossy().into_owned(),
+        crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+        crate::store::ServeMode::Shadow,
+    )
+    .unwrap();
+    reopened.recover_tables().await.unwrap();
+    assert_eq!(
+        reopened.forward_cursor(&target_url, EVENTS).unwrap(),
+        Some(tip)
+    );
+    assert!(reopened.list_segments(EVENTS).unwrap().is_empty());
 }
 
 /// Restarting the forwarding node mid-migration loses nothing: the forward
@@ -1406,17 +1563,7 @@ async fn a_restart_mid_migration_resumes_forwarding_from_the_durable_cursor() {
         )
     };
     let forwarder_for = |source: &Arc<Store>| {
-        let config = ForwardingConfig {
-            target: target_url.clone(),
-            cluster: SOURCE_CLUSTER.to_string(),
-        };
-        let minter = TokenMinter::new(PRIV_A, config.cluster.clone()).unwrap();
-        Forwarder::with_client(
-            Arc::clone(source),
-            config,
-            minter,
-            stats_client(target_addr),
-        )
+        test_forwarder(Arc::clone(source), target_url.clone(), target_addr, PRIV_A)
     };
 
     // First life: ship forty rows, land twenty more, then start the object
@@ -1467,13 +1614,7 @@ async fn a_restart_mid_migration_resumes_forwarding_from_the_durable_cursor() {
         source.forward_cursor(&target_url, EVENTS).unwrap(),
         Some(shipped_tip)
     );
-    for _ in 0..8 {
-        if source.spec_lifecycle(EVENTS).unwrap().active_version() == 1 {
-            break;
-        }
-        source.maintain_namespace(EVENTS, false).await.unwrap();
-    }
-    assert_eq!(source.spec_lifecycle(EVENTS).unwrap().active_version(), 1);
+    drive_object_activation(&source, EVENTS, 8).await;
     forward_until(
         forwarder_for(&source),
         &source,
@@ -1546,18 +1687,7 @@ async fn a_hub_migration_under_live_forwarding_loses_nothing() {
     fx.drain(PRIV_A, EVENTS).await;
     // Drive maintenance rather than waiting out the scheduler cadence; the
     // forwarded traffic above keeps landing between rounds either way.
-    for _ in 0..40 {
-        if hub.spec_lifecycle(EVENTS).unwrap().active_version() == 1 {
-            break;
-        }
-        hub.maintain_namespace(EVENTS, false).await.unwrap();
-    }
-    assert_eq!(
-        hub.spec_lifecycle(EVENTS).unwrap().active_version(),
-        1,
-        "the hub migration never activated (phase: {:?})",
-        hub.spec_lifecycle(EVENTS).unwrap().phase
-    );
+    drive_object_activation(&hub, EVENTS, 40).await;
 
     // Post-activation traffic lands in the object-backed table.
     write_string_rows(&fx.source, EVENTS, ids(200..250)).await;

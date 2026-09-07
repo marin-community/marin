@@ -24,23 +24,28 @@
 //! That key is distinct from the iris controller's signing key: a compromise of the
 //! log-ingest path grants log-plane authority only.
 //!
-//! # Best effort by design
+//! # Relay durability
 //!
-//! The local store is the system of record — every row stays queryable here whether or
-//! not the hub ever receives it. The forwarder therefore never fails the server and
-//! never grows without bound:
+//! A forwarding deployment is a durable relay spool. Retryable hub failures never
+//! advance its cursor, and object-native maintenance retains every unsettled segment.
+//! Once the hub settles a whole segment, maintenance may retire it from the current
+//! state; normal snapshot, rollback, and orphan windows delay physical collection.
 //!
-//! - Each namespace seeds at its current tip, so enabling forwarding ships new rows
-//!   rather than backfilling a retention window.
+//! - A new legacy cursor seeds at its current tip, preserving the historical behavior
+//!   used when a node-local version-0 store is rebuilt from its archive. A new
+//!   object-native cursor starts at the beginning of the live object state.
 //! - It materializes at most [`FORWARD_BATCH_ROWS`] rows per read, and packs them into
 //!   requests of at most [`FORWARD_BATCH_BYTES`] unless one row alone exceeds the limit.
 //! - It advances a namespace's cursor after the hub acks the batch or permanently
 //!   rejects malformed content. A crash or retryable rejection re-forwards it
 //!   (at-least-once; tolerable for logs and append-only stats).
-//! - A backlog is only a cursor into the source's already-bounded local retention, not a
-//!   separate in-memory queue. The forwarder drains it without an age or row-count cap.
-//!   It also skips a batch the hub identifies as permanently invalid, so one poison row
-//!   cannot wedge every later row in that namespace.
+//! - A backlog is only a cursor into durable table segments, not a separate in-memory
+//!   queue. The forwarder drains it without an age or row-count cap. It also skips a
+//!   batch the hub identifies as permanently invalid, so one poison row cannot wedge
+//!   every later row in that namespace.
+//! - Graceful shutdown flushes every namespace, stops the periodic loop, and drains to
+//!   the captured high-water marks. If the hub remains unavailable, the published
+//!   object state and cursor let the replacement resume the unsettled tail.
 //!
 //! A retryable push failure leaves the cursor in place and yields to the next namespace;
 //! nothing here can take the store down.
@@ -317,6 +322,10 @@ where
     T: connectrpc::client::ClientTransport,
     <T::ResponseBody as http_body::Body>::Error: std::fmt::Display,
 {
+    pub fn target(&self) -> &str {
+        &self.config.target
+    }
+
     fn with_client(
         store: Arc<Store>,
         config: ForwardingConfig,
@@ -368,6 +377,49 @@ where
             }
         }
         tracing::info!("finelog forwarder: stopped");
+    }
+
+    /// Forward every row sealed before this call, bounded by `timeout`.
+    ///
+    /// The listener must already be stopped and the store flushed, making the
+    /// captured per-table high-water marks a closed shutdown boundary. Failure
+    /// is returned to the caller instead of changing a cursor or discarding the
+    /// unforwarded local tail.
+    pub async fn drain(&self, timeout: Duration) -> Result<(), StatsError> {
+        let namespace_high_waters = self
+            .store
+            .list_namespaces_with_stats()?
+            .into_iter()
+            .map(|(name, _, _, _)| {
+                let persisted = self.store.namespace_persisted_seq(&name)?;
+                Ok((name, persisted))
+            })
+            .collect::<Result<Vec<_>, StatsError>>()?;
+        let (_stop_tx, mut stop) = watch::channel(false);
+        let mut progress = Progress::new();
+        let drain = async {
+            loop {
+                if pending_namespaces(&self.store, &self.config.target, &namespace_high_waters)
+                    .is_empty()
+                {
+                    tracing::info!(
+                        tables = namespace_high_waters.len(),
+                        "finelog forwarder: shutdown drain complete"
+                    );
+                    return;
+                }
+                if self.forward_round(&mut progress, &mut stop).await == ForwardTurn::Wait {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            }
+        };
+        if tokio::time::timeout(timeout, drain).await.is_ok() {
+            return Ok(());
+        }
+        Err(StatsError::Internal(format!(
+            "forwarding shutdown drain timed out with {}",
+            pending_namespaces(&self.store, &self.config.target, &namespace_high_waters).join(", ")
+        )))
     }
 
     /// Give every live namespace one batch-sized turn. [`ForwardTurn::MoreRows`] means
@@ -578,6 +630,22 @@ where
                 Ok(persisted)
             }
             None => {
+                if self.store.namespace_uses_object_state(name)? {
+                    let cursor = self
+                        .store
+                        .query_snapshot(name)?
+                        .min_seq
+                        .map(|minimum| minimum.saturating_sub(1))
+                        .unwrap_or(persisted);
+                    tracing::info!(
+                        namespace = name,
+                        persisted,
+                        cursor,
+                        "finelog forwarder: no watermark for object-native relay; starting at the beginning"
+                    );
+                    self.persist(name, cursor).await?;
+                    return Ok(cursor);
+                }
                 tracing::info!(
                     namespace = name,
                     persisted,
@@ -898,6 +966,26 @@ enum ForwardTurn {
     MoreRows,
 }
 
+fn pending_namespaces(
+    store: &Store,
+    hub_target: &str,
+    namespace_high_waters: &[(String, i64)],
+) -> Vec<String> {
+    namespace_high_waters
+        .iter()
+        .filter_map(|(name, high_water)| {
+            if *high_water < 0 {
+                return None;
+            }
+            match store.forward_cursor(hub_target, name) {
+                Ok(Some(cursor)) if cursor >= *high_water => None,
+                Ok(cursor) => Some(format!("{name}={cursor:?}/{high_water}")),
+                Err(error) => Some(format!("{name}=error({error})/{high_water}")),
+            }
+        })
+        .collect()
+}
+
 /// Why a push gave up.
 #[derive(Debug)]
 enum PushError {
@@ -1137,7 +1225,7 @@ fn forwarding_attributes(namespace: &str, outcome: &str) -> BTreeMap<String, Str
 
 /// Start the forward loop on the runtime, returning its handle. The caller latches
 /// `stop` and awaits the handle at shutdown.
-pub fn spawn<T>(forwarder: Forwarder<T>, stop: watch::Receiver<bool>) -> JoinHandle<()>
+pub fn spawn<T>(forwarder: Arc<Forwarder<T>>, stop: watch::Receiver<bool>) -> JoinHandle<()>
 where
     T: connectrpc::client::ClientTransport + Send + Sync + 'static,
     <T::ResponseBody as http_body::Body>::Error: std::fmt::Display,

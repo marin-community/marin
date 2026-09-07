@@ -72,18 +72,27 @@ drops that column from forwarded batches, and appends the compatible fields. Req
 unknown columns and shared-column type changes remain errors. Other namespaces retain
 ordinary additive registration.
 
-Forwarding is **best-effort by construction**: the sending store holds the record,
-the hub a convenience copy. A backlog is a durable cursor into the sender's bounded
-local retention rather than a separate queue, so the forwarder drains it without an
-age or row-count cap. Non-log chunks from one read turn may wait for hub durability
-concurrently; log chunks stay serial to preserve line order. Rows are skipped after
-local eviction makes them unreadable or after the hub returns `invalid_argument` for
-permanently invalid content. A `failed_precondition` write preserves its cursor and
-invalidates the cached hub registration; the next sweep re-registers the current source
-schema and retries while other namespaces continue forwarding. Transient failures get
-three attempts before the namespace yields for the sweep, without advancing its cursor.
-A hub outage therefore cannot consume extra sender memory, but a long enough outage can
-still outlive local retention.
+Forwarding deployments are durable relays after their tables migrate to object-native
+state. A backlog is a cursor into immutable source objects rather than a separate queue.
+Maintenance cannot retire a segment until its maximum sequence is at or below the
+downstream cursor. It also waits 15 minutes from segment creation; retained table states
+and the rollback window keep the object referenced after retirement. Relays compact to
+bound file count, but omit local indexes, projections, partition placement, and encoding
+rewrites.
+
+Non-log chunks from one read turn may wait for hub durability concurrently; log chunks
+stay serial to preserve line order. Rows are skipped only after the hub returns
+`invalid_argument` for permanently invalid content. A `failed_precondition` write
+preserves its cursor and invalidates the cached hub registration; the next sweep
+re-registers the current source schema and retries while other namespaces continue
+forwarding. Transient failures get three attempts before the namespace yields for the
+sweep, without advancing its cursor.
+
+SIGTERM stops ingress, flushes and publishes every table, and drains through the captured
+persisted high-water marks. A replacement recovers an incomplete drain from object state.
+Version-0 node-local stores retain their historical eviction semantics until migration,
+so their first object-native rollout needs a cursor preflight and archive sync as described
+in `infra/finelog/README.md`.
 
 Every five minutes the sender writes delta counters to `telemetry_v1.finelog`. A later
 successful forwarding sweep can copy them to the hub. `forwarding_batches` labels accepted,
