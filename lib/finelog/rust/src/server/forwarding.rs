@@ -379,49 +379,6 @@ where
         tracing::info!("finelog forwarder: stopped");
     }
 
-    /// Forward every row sealed before this call, bounded by `timeout`.
-    ///
-    /// The listener must already be stopped and the store flushed, making the
-    /// captured per-table high-water marks a closed shutdown boundary. Failure
-    /// is returned to the caller instead of changing a cursor or discarding the
-    /// unforwarded local tail.
-    pub async fn drain(&self, timeout: Duration) -> Result<(), StatsError> {
-        let namespace_high_waters = self
-            .store
-            .list_namespaces_with_stats()?
-            .into_iter()
-            .map(|(name, _, _, _)| {
-                let persisted = self.store.namespace_persisted_seq(&name)?;
-                Ok((name, persisted))
-            })
-            .collect::<Result<Vec<_>, StatsError>>()?;
-        let (_stop_tx, mut stop) = watch::channel(false);
-        let mut progress = Progress::new();
-        let drain = async {
-            loop {
-                if pending_namespaces(&self.store, &self.config.target, &namespace_high_waters)
-                    .is_empty()
-                {
-                    tracing::info!(
-                        tables = namespace_high_waters.len(),
-                        "finelog forwarder: shutdown drain complete"
-                    );
-                    return;
-                }
-                if self.forward_round(&mut progress, &mut stop).await == ForwardTurn::Wait {
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                }
-            }
-        };
-        if tokio::time::timeout(timeout, drain).await.is_ok() {
-            return Ok(());
-        }
-        Err(StatsError::Internal(format!(
-            "forwarding shutdown drain timed out with {}",
-            pending_namespaces(&self.store, &self.config.target, &namespace_high_waters).join(", ")
-        )))
-    }
-
     /// Give every live namespace one batch-sized turn. [`ForwardTurn::MoreRows`] means
     /// at least one namespace advanced successfully but remains behind its captured
     /// watermark; caught-up, failed, or interrupted rounds return [`ForwardTurn::Wait`].
@@ -964,26 +921,6 @@ enum ForwardTurn {
     Wait,
     /// Start another round immediately after every other namespace receives a turn.
     MoreRows,
-}
-
-fn pending_namespaces(
-    store: &Store,
-    hub_target: &str,
-    namespace_high_waters: &[(String, i64)],
-) -> Vec<String> {
-    namespace_high_waters
-        .iter()
-        .filter_map(|(name, high_water)| {
-            if *high_water < 0 {
-                return None;
-            }
-            match store.forward_cursor(hub_target, name) {
-                Ok(Some(cursor)) if cursor >= *high_water => None,
-                Ok(cursor) => Some(format!("{name}={cursor:?}/{high_water}")),
-                Err(error) => Some(format!("{name}=error({error})/{high_water}")),
-            }
-        })
-        .collect()
 }
 
 /// Why a push gave up.

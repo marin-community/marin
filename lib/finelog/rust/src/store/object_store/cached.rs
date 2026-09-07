@@ -31,6 +31,11 @@ use super::local_file::atomic_write;
 /// Concurrent cache-miss downloads across every caller of this store.
 const MAX_PARALLEL_FETCHES: usize = 8;
 
+/// Concurrent staged-object uploads. Uploads use async network I/O and run
+/// outside the flush permits, so object-store latency does not occupy Parquet
+/// encoding capacity or an OS worker thread.
+const MAX_PARALLEL_UPLOADS: usize = 8;
+
 /// Minimum gap between eviction sweeps. `gc` runs once per table per
 /// maintenance cycle; the sweep is store-wide, so most calls return
 /// immediately.
@@ -111,6 +116,8 @@ pub struct CachedObjectStore {
     cache: FileCache,
     /// Bounds concurrent cache-miss downloads.
     fetches: Arc<Semaphore>,
+    /// Bounds write-through uploads independently of reads and flush encoding.
+    uploads: Arc<Semaphore>,
     /// Total cache bytes to retain; `None` retains everything.
     capacity_bytes: Option<u64>,
     /// Store-wide scan lock. Eviction unlinks only behind its write side, so a
@@ -133,6 +140,7 @@ impl CachedObjectStore {
             source,
             cache: FileCache::new(root)?,
             fetches: Arc::new(Semaphore::new(MAX_PARALLEL_FETCHES)),
+            uploads: Arc::new(Semaphore::new(MAX_PARALLEL_UPLOADS)),
             capacity_bytes,
             query_visibility,
             last_gc: Arc::new(Mutex::new(None)),
@@ -274,6 +282,9 @@ impl ObjectStore for CachedObjectStore {
     }
 
     async fn upload_staged(&self, reference: &ObjectReference) -> Result<(), StatsError> {
+        let _permit = self.uploads.acquire().await.map_err(|error| {
+            StatsError::Internal(format!("object cache upload semaphore: {error}"))
+        })?;
         let Some(path) = self.lookup(reference).await? else {
             return Err(StatsError::Internal(format!(
                 "staged object {:?} has no local bytes to upload",

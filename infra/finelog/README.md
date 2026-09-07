@@ -66,22 +66,23 @@ unforwarded segment. Retiring a segment removes it from the relay's current
 table state; retained snapshots and the rollback window continue to reference
 the immutable object, and the ordinary orphan grace delays physical deletion.
 
-On SIGTERM, the server stops accepting requests, flushes and publishes every
-table's object state, stops the periodic forwarder, and forwards through the
-captured high-water marks. The flush is bounded so an unavailable object store
-cannot consume the forwarding window. One process-wide shutdown deadline covers
-the HTTP drain and every cleanup stage, and ends before the pod's 60-second
-termination grace period. If the hub stays unavailable, the replacement
-recovers the published objects and cursor and resumes the unsettled tail.
+The cache storage selects write acknowledgement durability. A node-local cache
+acknowledges object-backed rows only after their objects and table-state HEAD are
+published remotely, so deleting the pod cannot lose an acknowledged tail. A
+persistent-volume cache acknowledges after the local commit and publishes the
+same state asynchronously. Object uploads use a separate bounded async pool and
+do not occupy Parquet flush capacity. SIGTERM does no special forwarding drain;
+the replacement resumes from the published state and downstream cursor.
 
 The first transition from a version-0 node-local store needs an operator drain
-because the old binary does not have that shutdown sequence. Before replacing
-it, confirm every namespace's forwarding cursor has reached its persisted high
-water. Then shorten local retention and let legacy archive maintenance upload
-`LOCAL` segments and evict only `BOTH` segments. Register the version-1 table
-specifications after the archive-only history is evicted: migration excludes
-`REMOTE` rows and rewrites only the small local tail. Wait for every table to
-reach `RETIRED` before treating object state as the recovery authority. The old
+because version-0 tables have no object-state acknowledgement boundary. Before
+replacing it, confirm every namespace's forwarding cursor has reached its
+persisted high water. Then shorten local retention and let legacy archive
+maintenance upload `LOCAL` segments and evict only `BOTH` segments. Register
+the version-1 table specifications after the archive-only history is evicted:
+migration excludes `REMOTE` rows and rewrites only the small local tail. Wait
+for every table to reach `RETIRED` before treating object state as the recovery
+authority. The old
 flat archive objects may remain until a separate inventory-backed cleanup.
 
 With `persistent-volume`, set `deployment.k8s.cache_pvc_name` to adopt and mount

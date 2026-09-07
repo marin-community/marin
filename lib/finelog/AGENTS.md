@@ -88,11 +88,13 @@ re-registers the current source schema and retries while other namespaces contin
 forwarding. Transient failures get three attempts before the namespace yields for the
 sweep, without advancing its cursor.
 
-SIGTERM stops ingress, flushes and publishes every table, and drains through the captured
-persisted high-water marks. A replacement recovers an incomplete drain from object state.
-Version-0 node-local stores retain their historical eviction semantics until migration,
-so their first object-native rollout needs a cursor preflight and archive sync as described
-in `infra/finelog/README.md`.
+Node-local deployments acknowledge object-backed rows only after the immutable objects,
+state document, and HEAD pointer are remotely durable. Persistent-volume deployments may
+acknowledge the same flush after its local commit while publication continues asynchronously.
+SIGTERM performs no special forwarding drain; a replacement resumes from object state and
+the durable downstream cursor. Version-0 node-local stores retain their historical eviction
+semantics until migration, so their first object-native rollout needs a cursor preflight and
+archive sync as described in `infra/finelog/README.md`.
 
 Every five minutes the sender writes delta counters to `telemetry_v1.finelog`. A later
 successful forwarding sweep can copy them to the hub. `forwarding_batches` labels accepted,

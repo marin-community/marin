@@ -40,9 +40,6 @@ NODE_ARCH = "amd64"
 PROBE_FAILURE_THRESHOLD = 3
 PROBE_TIMEOUT = 15
 REVISION_HISTORY_LIMIT = 10
-TERMINATION_GRACE_PERIOD_SECONDS = 60
-SERVER_SHUTDOWN_TIMEOUT_SECONDS = TERMINATION_GRACE_PERIOD_SECONDS - 5
-RELAY_DRAIN_TIMEOUT_SECONDS = 30
 VERIFY_COMMAND = "uv run --frozen --package marin-finelog finelog deploy verify"
 
 
@@ -79,13 +76,14 @@ class FinelogResourceArgs:
 
 
 def _container_env(config: FinelogConfig) -> list[k8s.core.v1.EnvVarArgs]:
+    assert config.deployment.k8s is not None
+    ack_durability = (
+        "object-store" if config.deployment.k8s.cache_storage is K8sCacheStorage.NODE_LOCAL else "local-disk"
+    )
     env = [
+        k8s.core.v1.EnvVarArgs(name="FINELOG_ACK_DURABILITY", value=ack_durability),
         k8s.core.v1.EnvVarArgs(name="FINELOG_PORT", value=str(config.port)),
         k8s.core.v1.EnvVarArgs(name="FINELOG_REMOTE_DIR", value=config.remote_log_dir),
-        k8s.core.v1.EnvVarArgs(
-            name="FINELOG_SHUTDOWN_TIMEOUT_SECONDS",
-            value=str(SERVER_SHUTDOWN_TIMEOUT_SECONDS),
-        ),
     ]
     if config.query_metadata_cache_mb is not None:
         env.append(
@@ -112,12 +110,6 @@ def _container_env(config: FinelogConfig) -> list[k8s.core.v1.EnvVarArgs]:
         env.append(k8s.core.v1.EnvVarArgs(name="FINELOG_AUTH_POLICY", value=auth_policy_json(config.auth)))
     if config.forwarding:
         env.append(k8s.core.v1.EnvVarArgs(name="FINELOG_FORWARDING", value=config.forwarding.to_env_json()))
-        env.append(
-            k8s.core.v1.EnvVarArgs(
-                name="FINELOG_RELAY_DRAIN_TIMEOUT_SECONDS",
-                value=str(RELAY_DRAIN_TIMEOUT_SECONDS),
-            )
-        )
     return env
 
 
@@ -220,7 +212,6 @@ def finelog_resource_args(args: FinelogServerArgs, image_ref: pulumi.Input[str])
         # The image runs as UID/GID 1000; fsGroup makes the mounted cache writable.
         security_context=k8s.core.v1.PodSecurityContextArgs(fs_group=FINELOG_USER_ID),
         priority_class_name=deployment.priority_class_name,
-        termination_grace_period_seconds=TERMINATION_GRACE_PERIOD_SECONDS,
         containers=[container],
         volumes=[cache_volume],
     )

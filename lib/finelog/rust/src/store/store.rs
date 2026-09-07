@@ -50,7 +50,9 @@ use crate::store::schema::{
 };
 use crate::store::state_store::object::ObjectTableStateStore;
 use crate::store::table::query_view::SegmentObjectMap;
-use crate::store::table::{MaintenanceProfile, TableManager, TABLE_LIFECYCLE_SHUTDOWN_TIMEOUT};
+use crate::store::table::{
+    AckDurability, MaintenanceProfile, TableManager, TABLE_LIFECYCLE_SHUTDOWN_TIMEOUT,
+};
 use crate::store::table_spec::ValidatedTableSpec;
 use crate::store::table_state::{ArtifactReferences, TableRevision, TableSnapshot, WriterFence};
 use crate::store::types::NamespaceStats;
@@ -1388,7 +1390,7 @@ impl Store {
     /// `name`'s durability high-water mark: every row with `seq <= value` has been sealed
     /// into a segment, so it is visible to a scan unless it has since been evicted.
     pub fn namespace_persisted_seq(&self, name: &str) -> Result<i64, StatsError> {
-        Ok(*self.tables.require(name)?.watch_persisted_seq().borrow())
+        Ok(self.tables.require(name)?.persisted_seq())
     }
 
     /// The seq in `namespace` below which this store will never send to `target` again.
@@ -1404,6 +1406,17 @@ impl Store {
             .set_maintenance_profile(MaintenanceProfile::Relay { target });
     }
 
+    /// Select the recovery authority an ingest acknowledgement must reach.
+    pub fn configure_ack_durability(&self, durability: AckDurability) -> Result<(), StatsError> {
+        if durability == AckDurability::ObjectStore && self.object_store.is_none() {
+            return Err(StatsError::SchemaValidation(
+                "object-store acknowledgement requires --remote-log-dir".to_string(),
+            ));
+        }
+        self.tables.set_ack_durability(durability);
+        Ok(())
+    }
+
     /// Whether `namespace` has durable object-backed table state.
     pub fn namespace_uses_object_state(&self, namespace: &str) -> Result<bool, StatsError> {
         Ok(self
@@ -1411,12 +1424,6 @@ impl Store {
             .require(namespace)?
             .controller()
             .is_object_backed())
-    }
-
-    /// Seal every table so a relay can capture a complete shutdown forwarding
-    /// boundary after its listener stops accepting writes.
-    pub async fn flush_for_relay_shutdown(&self) -> Result<(), StatsError> {
-        self.tables.flush_all().await
     }
 
     /// Record `cursor` as settled for `(target, namespace)`.

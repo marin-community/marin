@@ -66,14 +66,13 @@ def test_finelog_resource_args_reference_secret_without_secret_values() -> None:
     assert container.env_from[0].secret_ref.name == "finelog-cw-env"
     assert container.env is not None
     assert {entry.name for entry in container.env} == {
+        "FINELOG_ACK_DURABILITY",
         "FINELOG_AUTH_POLICY",
         "FINELOG_FORWARDING",
         "FINELOG_INDEX_CACHE_MB",
         "FINELOG_OBJECT_CACHE_GB",
         "FINELOG_PORT",
-        "FINELOG_RELAY_DRAIN_TIMEOUT_SECONDS",
         "FINELOG_REMOTE_DIR",
-        "FINELOG_SHUTDOWN_TIMEOUT_SECONDS",
     }
     assert "gcp-secret://" not in str(resources.deployment)
 
@@ -83,21 +82,6 @@ def test_finelog_retains_deployment_history_for_rollback() -> None:
     assert resources.deployment.spec is not None
 
     assert resources.deployment.spec.revision_history_limit == 10
-
-
-def test_finelog_allows_relay_shutdown_to_flush_and_forward() -> None:
-    resources = finelog_resource_args(_args(), "image@sha256:digest")
-    assert resources.deployment.spec is not None
-    pod_spec = resources.deployment.spec.template.spec
-    assert pod_spec is not None
-
-    assert pod_spec.termination_grace_period_seconds == 60
-    container = pod_spec.containers[0]
-    assert container.env is not None
-    env = {entry.name: entry.value for entry in container.env}
-    drain_timeout = int(env["FINELOG_RELAY_DRAIN_TIMEOUT_SECONDS"])
-    shutdown_timeout = int(env["FINELOG_SHUTDOWN_TIMEOUT_SECONDS"])
-    assert 0 < drain_timeout < shutdown_timeout < pod_spec.termination_grace_period_seconds
 
 
 def test_finelog_node_local_cache_uses_bounded_ephemeral_storage() -> None:
@@ -113,8 +97,23 @@ def test_finelog_node_local_cache_uses_bounded_ephemeral_storage() -> None:
     assert volume.persistent_volume_claim is None
 
     container = pod_spec.containers[0]
+    assert container.env is not None
+    env = {entry.name: entry.value for entry in container.env}
+    assert env["FINELOG_ACK_DURABILITY"] == "object-store"
     assert container.resources is not None
     assert container.resources.requests is not None
     assert container.resources.limits is not None
     assert container.resources.requests["ephemeral-storage"] == "250Gi"
     assert container.resources.limits["ephemeral-storage"] == "250Gi"
+
+
+def test_finelog_persistent_cache_acknowledges_local_disk() -> None:
+    resources = finelog_resource_args(_args(K8sCacheStorage.PERSISTENT_VOLUME), "image@sha256:digest")
+    assert resources.deployment.spec is not None
+    pod_spec = resources.deployment.spec.template.spec
+    assert pod_spec is not None
+    container = pod_spec.containers[0]
+    assert container.env is not None
+    env = {entry.name: entry.value for entry in container.env}
+
+    assert env["FINELOG_ACK_DURABILITY"] == "local-disk"

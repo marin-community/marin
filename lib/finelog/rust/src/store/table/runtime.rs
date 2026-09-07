@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use arrow::array::ArrayRef;
 use arrow::datatypes::SchemaRef;
-use tokio::sync::{watch, Notify, RwLock};
+use tokio::sync::{Notify, RwLock};
 
 use crate::errors::StatsError;
 use crate::indices::IndexRegistry;
@@ -43,6 +43,8 @@ use crate::store::table::spec_migration::MigrationBlock;
 use crate::store::table_spec::TablePolicy;
 use crate::store::table_state::TableSnapshot;
 use crate::store::types::{segment_to_row, NamespaceStats, SegmentRow};
+
+use super::AckDurability;
 
 /// A single table's live runtime, disk-backed or in-memory.
 ///
@@ -76,6 +78,8 @@ pub struct TableRuntime {
     /// Host-specific physical work. Relays retain the logical table spec but
     /// do not build query artifacts and may retire downstream-settled objects.
     pub(super) maintenance_profile: Mutex<MaintenanceProfile>,
+    /// Which recovery authority an ingest acknowledgement must reach.
+    pub(super) ack_durability: Mutex<AckDurability>,
     /// Serializes the whole local flush (seal → write → catalog → commit).
     /// Without it two concurrent flushers race: the second seal would overwrite
     /// the first's in-flight buffer, and the high-water mark could advance before
@@ -217,6 +221,7 @@ impl TableRuntime {
             storage_policy: Mutex::new(storage_policy),
             compaction_config,
             maintenance_profile: Mutex::new(MaintenanceProfile::default()),
+            ack_durability: Mutex::new(AckDurability::default()),
             flush_lock: Mutex::new(()),
             object_flush_lock: tokio::sync::Mutex::new(()),
             maint_lock: tokio::sync::Mutex::new(()),
@@ -317,6 +322,15 @@ impl TableRuntime {
         *self.maintenance_profile.lock().unwrap() = profile;
     }
 
+    pub fn update_ack_durability(&self, durability: AckDurability) {
+        *self.ack_durability.lock().unwrap() = durability;
+    }
+
+    fn requires_object_ack(&self) -> bool {
+        *self.ack_durability.lock().unwrap() == AckDurability::ObjectStore
+            && self.controller.is_object_backed()
+    }
+
     pub(super) fn maintenance_profile(&self) -> MaintenanceProfile {
         self.maintenance_profile.lock().unwrap().clone()
     }
@@ -364,12 +378,22 @@ impl TableRuntime {
 
     /// Block until `target` is durable, bounded by `timeout`.
     pub async fn await_persisted(&self, target: i64, timeout: Duration) -> Result<(), StatsError> {
+        if self.requires_object_ack() {
+            self.buffer.request_flush(false);
+            return self
+                .controller
+                .await_published_high_water(target, timeout)
+                .await;
+        }
         self.buffer.await_persisted(target, timeout).await
     }
 
-    /// Subscribe to the durability high-water mark.
-    pub fn watch_persisted_seq(&self) -> watch::Receiver<i64> {
-        self.buffer.watch_persisted()
+    /// The high-water mark acknowledged under this host's durability policy.
+    pub fn persisted_seq(&self) -> i64 {
+        if self.requires_object_ack() {
+            return self.controller.published_high_water();
+        }
+        *self.buffer.watch_persisted().borrow()
     }
 
     /// The table's readable segments as one consistent observation.
@@ -515,20 +539,36 @@ impl TableRuntime {
             .await
             .map_err(|error| StatsError::Internal(format!("flush task panicked: {error}")))?;
         }
-        {
+        let flushed_seq = {
             let _flush_guard = self.object_flush_lock.lock().await;
-            flush::flush_to_objects(self.flush_target(), &policy).await?;
+            flush::flush_to_objects(self.flush_target(), &policy).await?
+        };
+        if let Some(seq) = flushed_seq {
+            if !self.requires_object_ack() {
+                self.buffer.publish_persisted(seq);
+            }
         }
         // Publication leaves the flush entirely: a flush occupies one of the
         // process's few flush permits, every object-backed table flushes on
         // the same cadence, and a network publication inside that window
         // oversubscribes the pool until every table's acks queue behind it.
         // The committed revision is owed from the moment it is locally
-        // durable; publications serialize in the per-table controller mailbox
-        // where bursts coalesce, and a failure stays owed to maintenance.
+        // durable. Publications serialize in the per-table controller mailbox;
+        // local acknowledgements may coalesce there, while object-store
+        // acknowledgements publish immediately. A failure stays owed to
+        // maintenance.
         let runtime = Arc::clone(self);
         Arc::clone(self).spawn_tracked(async move {
-            if let Err(error) = runtime.controller.publish_owed().await {
+            let publication = if runtime.requires_object_ack() {
+                runtime.controller.publish_state().await.map(|_| ())
+            } else {
+                runtime
+                    .controller
+                    .publish_owed()
+                    .await
+                    .map_err(crate::store::table_state::CommitError::PublicationDeferred)
+            };
+            if let Err(error) = publication {
                 tracing::warn!(
                     namespace = %runtime.name,
                     %error,

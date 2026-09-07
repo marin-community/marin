@@ -117,9 +117,9 @@ const COMMAND_QUEUE_DEPTH: usize = 32;
 /// Floor between owed publications of one table. Every flush and compaction
 /// commit marks HEAD owed, and each publication PUTs a full catalog snapshot
 /// and rewrites the same `HEAD.json` object — which object stores rate-limit
-/// per object. Acknowledgement is local, so deferring publication batches the
-/// staged-object uploads and snapshot churn without touching write latency;
-/// the revision stays owed and the next maintenance cycle publishes it.
+/// per object. Local-disk acknowledgement can defer publication to batch staged
+/// uploads and snapshot churn. Object-store acknowledgement uses an explicit
+/// publication command and bypasses this throttle.
 const MIN_PUBLISH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
 
 pub struct TableController {
@@ -168,6 +168,8 @@ pub struct TableController {
     degraded: Mutex<Option<String>>,
     /// The latest committed state, republished after every transition.
     snapshot: watch::Sender<Option<Arc<TableSnapshot>>>,
+    /// Highest sequence selected by a remotely committed HEAD.
+    published_high_water: watch::Sender<i64>,
     commands: Option<mpsc::Sender<ControllerCommand>>,
 }
 
@@ -184,6 +186,7 @@ impl TableController {
         fence: WriterFence,
     ) -> Arc<Self> {
         let (snapshot, _) = watch::channel(None);
+        let (published_high_water, _) = watch::channel(0);
         let object_persistence = objects.is_some();
         let (sender, receiver) = mpsc::channel(COMMAND_QUEUE_DEPTH);
         let controller = Arc::new(Self {
@@ -203,6 +206,7 @@ impl TableController {
             boot_reconciled: AtomicBool::new(false),
             degraded: Mutex::new(None),
             snapshot,
+            published_high_water,
             commands: object_persistence.then(|| sender.clone()),
         });
         if let Err(error) = controller.refresh_object_backing() {
@@ -312,6 +316,44 @@ impl TableController {
     /// Follow this table's published state.
     pub fn watch_snapshot(&self) -> watch::Receiver<Option<Arc<TableSnapshot>>> {
         self.snapshot.subscribe()
+    }
+
+    /// Highest sequence recoverable from the object state HEAD.
+    pub fn published_high_water(&self) -> i64 {
+        *self.published_high_water.borrow()
+    }
+
+    /// Wait for object state HEAD to cover `target`.
+    pub async fn await_published_high_water(
+        &self,
+        target: i64,
+        timeout: std::time::Duration,
+    ) -> Result<(), StatsError> {
+        if target < 0 {
+            return Ok(());
+        }
+        let mut receiver = self.published_high_water.subscribe();
+        if *receiver.borrow() >= target {
+            return Ok(());
+        }
+        let wait = async {
+            while *receiver.borrow() < target {
+                if receiver.changed().await.is_err() {
+                    return;
+                }
+            }
+        };
+        match tokio::time::timeout(timeout, wait).await {
+            Ok(()) if *self.published_high_water.borrow() >= target => Ok(()),
+            Ok(()) => Err(StatsError::Internal(format!(
+                "table {:?} published-high-water channel closed before seq>={target}",
+                self.table
+            ))),
+            Err(_) => Err(StatsError::DeadlineExceeded(format!(
+                "timed out waiting for table {:?} object state to publish seq>={target}",
+                self.table
+            ))),
+        }
     }
 
     /// The object store holding this table's immutable data and artifacts.
@@ -781,6 +823,7 @@ impl TableController {
                 .await?;
             self.snapshot
                 .send_replace(Some(Arc::new(TableSnapshot::from_stored(&claimed))));
+            self.record_published_high_water(claimed.catalog.persisted_high_water.unwrap_or(0));
             *self.selected.lock().unwrap() = Some(claimed);
             self.head_published.store(true, Ordering::SeqCst);
         }
@@ -827,8 +870,7 @@ impl TableController {
             )));
         }
         // HEAD must never name a state whose data objects are not remotely
-        // durable: acknowledgement is local, so the upload happens here, on
-        // the publication path, before the swap.
+        // durable, so the upload happens here before the swap.
         self.sync_referenced_objects(&catalog)
             .await
             .map_err(CommitError::PublicationDeferred)?;
@@ -875,8 +917,22 @@ impl TableController {
         *self.last_published.lock().unwrap() = Some(tokio::time::Instant::now());
         *self.degraded.lock().unwrap() = None;
         let published = Arc::new(published);
+        self.record_published_high_water(
+            published
+                .state()
+                .catalog()
+                .persisted_high_water
+                .unwrap_or(0),
+        );
         self.snapshot.send_replace(Some(Arc::clone(&published)));
         Ok(published)
+    }
+
+    fn record_published_high_water(&self, high_water: i64) {
+        let current = *self.published_high_water.borrow();
+        if high_water > current {
+            self.published_high_water.send_replace(high_water);
+        }
     }
 
     /// Whether an owed publication is past the per-table throttle.

@@ -1325,22 +1325,6 @@ async fn a_hub_outage_holds_the_cursor_and_recovery_delivers_every_row_once() {
     );
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_shutdown_drain_is_bounded_and_preserves_an_unreachable_hub_cursor() {
-    let fx = Fixture::with_unavailable_hub("shutdown_drain_timeout").await;
-    push(&fx.source_client, "/user/job/t", &["still-local"]).await;
-    fx.forward_from_start(LOG_NAMESPACE_NAME).await;
-
-    let result = fx.forwarder(PRIV_A).drain(Duration::from_millis(50)).await;
-
-    assert!(result.is_err());
-    assert_eq!(fx.cursor(LOG_NAMESPACE_NAME), Some(0));
-    assert_eq!(
-        fx.source.list_segments(LOG_NAMESPACE_NAME).unwrap().len(),
-        1
-    );
-}
-
 /// The [`write_id_rows`] schema as a version-1 object-backed spec, for a source
 /// that migrates a forwarded table mid-stream.
 fn id_object_spec() -> crate::store::table_spec::ValidatedTableSpec {
@@ -1475,8 +1459,14 @@ async fn an_object_native_relay_retires_only_hub_settled_segments() {
         "an unacknowledged segment must survive relay maintenance"
     );
 
-    let forwarder = test_forwarder(source.clone(), target_url.clone(), target_addr, PRIV_A);
-    forwarder.drain(Duration::from_secs(5)).await.unwrap();
+    forward_until(
+        test_forwarder(source.clone(), target_url.clone(), target_addr, PRIV_A),
+        &source,
+        &target_url,
+        EVENTS,
+        first_tip,
+    )
+    .await;
     assert_eq!(
         source.forward_cursor(&target_url, EVENTS).unwrap(),
         Some(first_tip)
@@ -1503,7 +1493,14 @@ async fn an_object_native_relay_retires_only_hub_settled_segments() {
         "the second segment must remain until its own sequences settle"
     );
 
-    forwarder.drain(Duration::from_secs(5)).await.unwrap();
+    forward_until(
+        test_forwarder(source.clone(), target_url.clone(), target_addr, PRIV_A),
+        &source,
+        &target_url,
+        EVENTS,
+        tip,
+    )
+    .await;
     assert_eq!(
         source.forward_cursor(&target_url, EVENTS).unwrap(),
         Some(tip)
@@ -1516,7 +1513,6 @@ async fn an_object_native_relay_retires_only_hub_settled_segments() {
     );
     wait_for_scalar(&target, &format!("SELECT count(*) FROM \"{EVENTS}\""), 40).await;
 
-    drop(forwarder);
     source.shutdown(Duration::from_secs(1)).await;
     drop(source);
     let reopened = Store::new(
