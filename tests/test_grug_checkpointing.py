@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import json
 from dataclasses import dataclass
 from datetime import timedelta
@@ -8,11 +9,96 @@ from pathlib import Path
 
 import jax
 import jax.numpy as jnp
+import numpy as np
+import optax
 import pytest
 from jax.tree_util import register_dataclass
-from levanter.checkpoint import Checkpointer, CheckpointInterval, latest_checkpoint_path
+from levanter.checkpoint import Checkpointer, CheckpointInterval, latest_checkpoint_path, save_checkpoint
 
 from experiments.grug.checkpointing import init_weights_only_from_checkpoint, restore_grug_state_from_checkpoint
+from experiments.june_tpu_67b_a2b.checkpointing import restore_grug_state_from_checkpoint as restore_june_state
+from experiments.june_tpu_67b_a2b.moe.optimizer import GrugMoeMuonHConfig
+
+
+@pytest.mark.parametrize("recovery_step", [None, 8])
+def test_muonh_full_state_resume_uses_new_wsd_schedule(tmp_path: Path, recovery_step: int | None):
+    params = {
+        "matrix": jnp.array([[1.0, 0.2], [0.3, 0.8]]),
+        "output_proj": jnp.array([[0.4, 1.0], [0.7, 0.1]]),
+        "token_embed": jnp.array([[0.2, 0.6], [0.9, 0.5]]),
+    }
+    source_config = GrugMoeMuonHConfig(learning_rate=0.01, adam_lr=0.002, warmup=0, lr_schedule="constant")
+    source_optimizer = source_config.build(100)
+    opt_state = source_optimizer.init(params)
+    for step in range(4):
+        grads = jax.tree.map(lambda param, step=step: param * (step + 1) + 0.25, params)
+        updates, opt_state = source_optimizer.update(grads, opt_state, params)
+        params = optax.apply_updates(params, updates)
+
+    source = {"step": jnp.array(4), "params": params, "opt_state": opt_state}
+    source_path = tmp_path / "source" / "step-4"
+    save_checkpoint(source, 4, source_path)
+    shape = jax.tree.map(lambda leaf: jax.ShapeDtypeStruct(leaf.shape, leaf.dtype, sharding=leaf.sharding), source)
+    own_root = tmp_path / "sft"
+    state = restore_june_state(
+        shape,
+        checkpoint_search_paths=[str(own_root)],
+        initialize_from=str(source_path),
+        load_checkpoint_setting=None,
+        mesh=None,
+        allow_partial=False,
+    )
+    for actual, expected in zip(jax.tree.leaves(state), jax.tree.leaves(source), strict=True):
+        np.testing.assert_array_equal(actual, expected)
+
+    config = dataclasses.replace(
+        source_config,
+        learning_rate=0.004,
+        adam_lr=0.001,
+        schedule_start_step=4,
+        warmup=2,
+        decay=2,
+        min_lr_ratio=0.1,
+        lr_schedule="linear",
+    )
+    optimizer = config.build(12)
+    reference_params, reference_opt_state = params, opt_state
+    # Two warmup updates, four stable updates, and two linear-decay updates.
+    for step, lr_factor in enumerate([0.0, 0.5, 1.0, 1.0, 1.0, 1.0, 1.0, 0.55], start=4):
+        if step == recovery_step:
+            save_checkpoint(state, step, own_root / f"step-{step}")
+            state = restore_june_state(
+                shape,
+                checkpoint_search_paths=[str(own_root)],
+                initialize_from=str(source_path),
+                load_checkpoint_setting=None,
+                mesh=None,
+                allow_partial=False,
+            )
+            assert int(state["step"]) == step
+
+        grads = jax.tree.map(lambda param: param * 0.3 + 0.1, reference_params)
+        reference_optimizer = dataclasses.replace(
+            source_config, learning_rate=config.learning_rate * lr_factor, adam_lr=config.adam_lr * lr_factor
+        ).build(100)
+        expected_updates, reference_opt_state = reference_optimizer.update(grads, reference_opt_state, reference_params)
+        reference_params = optax.apply_updates(reference_params, expected_updates)
+        updates, new_opt_state = optimizer.update(grads, state["opt_state"], state["params"])
+        state = {
+            "step": state["step"] + 1,
+            "params": optax.apply_updates(state["params"], updates),
+            "opt_state": new_opt_state,
+        }
+        assert float(new_opt_state.hyperparams["learning_rate"]) == pytest.approx(config.learning_rate * lr_factor)
+        assert float(new_opt_state.hyperparams["adam_lr"]) == pytest.approx(config.adam_lr * lr_factor)
+        for actual, expected in zip(jax.tree.leaves(updates), jax.tree.leaves(expected_updates), strict=True):
+            np.testing.assert_allclose(actual, expected, rtol=1e-6, atol=1e-8)
+        for actual, expected in zip(
+            jax.tree.leaves(new_opt_state.inner_state), jax.tree.leaves(reference_opt_state.inner_state), strict=True
+        ):
+            np.testing.assert_allclose(actual, expected, rtol=1e-6, atol=1e-8)
+
+    assert int(state["step"]) == 12
 
 
 @register_dataclass

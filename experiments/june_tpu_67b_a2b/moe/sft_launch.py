@@ -56,7 +56,7 @@ from experiments.sft.launcher import SFTSpec
 
 @dataclass(frozen=True)
 class GrugMoeSFTConfig:
-    """Launch config for a Grug MoE SFT run (weights-only init + chat data)."""
+    """Launch config for a Grug MoE SFT run with chat data."""
 
     model: GrugModelConfig
     data: LmDataConfig
@@ -64,18 +64,20 @@ class GrugMoeSFTConfig:
     run_id: str
     resources: ResourceConfig
     steps: int
+    """Absolute final training step, including any steps restored from the source."""
     batch_size: int
     seed: int
     mp: str
     tracker: TrackerConfig
     optimizer: OptimizerConfig
     init_from_path: str
-    """Base checkpoint to initialise weights from (parent dir or a concrete ``step-N`` dir;
-    the latest under it is loaded). Optimizer state and step are not taken from it -- SFT
-    starts a fresh schedule. Loaded only on the first launch; iris restarts auto-resume from
-    this run's own output checkpoints instead."""
+    """Source checkpoint, loaded only when this run has no checkpoint of its own.
+
+    ``grug_trainer.sft_weights_only_init`` selects fresh optimizer state and step zero;
+    disabling it restores the source optimizer and step as well as the weights.
+    """
     profiler: ProfilerConfig = field(default_factory=ProfilerConfig)
-    grug_trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
+    grug_trainer: GrugTrainerConfig = field(default_factory=lambda: GrugTrainerConfig(sft_weights_only_init=True))
     eval: GrugEvalConfig | None = None
     expert_parallel: int = 1
     context_parallel: int = 1
@@ -88,9 +90,8 @@ class GrugMoeSFTConfig:
 def run_grug_moe_sft_trial(config: GrugMoeSFTConfig) -> None:
     """Map SFT launch knobs onto a Levanter trainer and dispatch the run.
 
-    Resolves the latest checkpoint under ``init_from_path`` and hands it to the weights-only
-    init path (``sft_weights_only_init=True``): only the base weights load, the optimizer state
-    and step counter start fresh, so SFT runs a new LR schedule from step 0.
+    Resolves the latest checkpoint under ``init_from_path`` and uses the initialization
+    policy in ``grug_trainer``. This run's own checkpoints take precedence on recovery.
     """
     if config.model.num_experts <= 1:
         # marin #6252: the single-expert training path is buggy; SFT of an MoE must keep >1.
@@ -140,8 +141,7 @@ def run_grug_moe_sft_trial(config: GrugMoeSFTConfig) -> None:
             save_interval=timedelta(minutes=config.save_interval_minutes),
             keep=config.checkpoint_keep,
         ),
-        # First launch: output dir empty -> weights-only init from initialize_from. Once this
-        # run saves its own checkpoints, every restart auto-resumes from those (full SFT state).
+        # Own-run checkpoints take precedence over initialize_from on recovery.
         load_checkpoint=None,
         load_checkpoint_path=None,
         initialize_from=initialize_from,
@@ -152,7 +152,6 @@ def run_grug_moe_sft_trial(config: GrugMoeSFTConfig) -> None:
         trainer=trainer,
         expert_axis_size=config.expert_parallel,
         context_axis_size=config.context_parallel,
-        sft_weights_only_init=True,
     )
 
     run_grug(
@@ -255,6 +254,7 @@ class GrugModel:
             save_interval_minutes=self.save_interval_minutes,
             checkpoint_keep=self.checkpoint_keep,
             grug_trainer=GrugTrainerConfig(
+                sft_weights_only_init=True,
                 z_loss_weight=self.z_loss_weight,
                 ema_beta=self.ema_beta,
                 log_every=self.log_every,

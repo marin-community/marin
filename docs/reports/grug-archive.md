@@ -51,6 +51,14 @@ goes stale on the next commit.
 - Purpose: one-rack GB200 EP64 throughput and MFU baseline.
 - Issue: https://github.com/marin-community/marin/issues/7279
 
+### june-tpu-datakit-sft
+- Path: `experiments/june_tpu_67b_a2b/moe/sft_datakit_chat_mix.py`
+- Origin: `experiments/june_tpu_67b_a2b/moe/`
+- Introduced: 8c0982371bc3db976b39e66fbcc984bb38c98a7f
+- Status: active
+- Purpose: 2,000 steps of Datakit SFT with 20% pretraining replay, restoring the step-157000 long-context optimizer state and applying a new warmup-stable-linear-decay schedule through step 159000.
+- Issue: https://github.com/marin-community/marin/issues/8954
+
 ### grugformer-vs-hackable-125m
 - Path: `experiments/speedrun/grugformer_vs_hackable_125m/grugformer_vs_hackable_125m.py`
 - Introduced: 5efe76834
