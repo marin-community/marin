@@ -20,6 +20,7 @@ import tomllib
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
+from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath
 from typing import cast
 
@@ -52,6 +53,17 @@ KNOWN_MANIFEST_KEYS = frozenset({"title", "description", "connect_src", "build_c
 ENTRYPOINT_PATTERN = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*:[A-Za-z_]\w*$")
 BACKEND_CACHE_ROOT = Path(tempfile.gettempdir()) / "marina-applet-backends"
 APPLET_LOCK_SQL = "SELECT pg_advisory_xact_lock(hashtextextended(:id, 0))"
+EXECUTABLE_INLINE_SCRIPT_TYPES = frozenset(
+    {
+        "application/ecmascript",
+        "application/javascript",
+        "importmap",
+        "module",
+        "speculationrules",
+        "text/ecmascript",
+        "text/javascript",
+    }
+)
 
 
 class AppletNotFound(Exception):
@@ -142,6 +154,36 @@ class PublishResult:
         return f"/a/{self.applet_id}/v/{self.version}/"
 
 
+class _InlineScriptParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.inline_script_line: int | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if self.inline_script_line is not None or tag.casefold() != "script":
+            return
+        attributes = {name.casefold(): value for name, value in attrs}
+        if attributes.get("src"):
+            return
+        script_type = (attributes.get("type") or "text/javascript").casefold().split(";", 1)[0].strip()
+        if script_type in EXECUTABLE_INLINE_SCRIPT_TYPES:
+            self.inline_script_line = self.getpos()[0]
+
+
+def _validate_inline_scripts(files: dict[str, bytes]) -> None:
+    for path, body in files.items():
+        if not path.startswith(DIST_PREFIX) or not path.casefold().endswith((".htm", ".html")):
+            continue
+        parser = _InlineScriptParser()
+        parser.feed(body.decode(errors="replace"))
+        parser.close()
+        if parser.inline_script_line is not None:
+            raise ValueError(
+                f"{path}:{parser.inline_script_line}: inline <script> conflicts with Marina's script-src 'self'; "
+                "move the code to a packaged JavaScript file"
+            )
+
+
 def parse_applet_manifest(content: bytes) -> AppletManifest:
     """Parse an applet manifest and reject fields the publisher would otherwise ignore."""
     try:
@@ -194,6 +236,7 @@ def _validate_package_files(files: dict[str, bytes]) -> AppletPackage:
         if path.startswith(SERVER_PREFIX) and path.endswith(".py"):
             continue
         raise ValueError(f"package entry {path!r} is outside applet.toml, dist/, or Python files under server/")
+    _validate_inline_scripts(files)
     if manifest.python_entrypoint is not None:
         module, _factory = manifest.python_entrypoint.split(":", 1)
         module_file = module.replace(".", "/") + ".py"
@@ -248,7 +291,13 @@ def package_applet(app_dir: Path) -> bytes:
     paths = [app_dir / APPLET_MANIFEST]
     for directory in (app_dir / "dist", app_dir / "server"):
         if directory.exists():
-            paths.extend(path for path in sorted(directory.rglob("*")) if not path.is_dir())
+            paths.extend(
+                path
+                for path in sorted(directory.rglob("*"))
+                if not path.is_dir()
+                and "__pycache__" not in path.relative_to(app_dir).parts
+                and path.suffix not in {".pyc", ".pyo"}
+            )
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
         for path in paths:
@@ -844,7 +893,7 @@ def _materialize_package(module_root: Path, package: AppletPackage) -> None:
 
 
 def validate_backend_import(package: AppletPackage) -> None:
-    """Import a Python backend without Marina's environment credentials before publishing it."""
+    """Import a Python backend with Marina's module layout and without environment credentials."""
     if package.manifest.python_entrypoint is None:
         return
     with tempfile.TemporaryDirectory(prefix="marina-applet-validate-") as directory:
