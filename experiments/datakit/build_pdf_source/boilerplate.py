@@ -1,0 +1,168 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Strip running headers and footers from a paginated document."""
+
+import logging
+from collections.abc import Sequence
+from dataclasses import dataclass
+
+import dupekit
+
+logger = logging.getLogger(__name__)
+
+# Convert all digits to zeroes so e.g. "Page 3 of 40" and "Page 4 of 40" are recognized as the same
+# boilerplate.
+_DIGIT_FOLD = str.maketrans("0123456789", "0000000000")
+# PDF extraction is inconsistent about how much whitespace it puts between a header's parts, and
+# none of it distinguishes one page's header from another's.
+_DROPPED_WHITESPACE = str.maketrans("", "", " \t\r ")  # noqa: RUF001 -- the last entry is U+00A0, which PDFs emit
+# A line belonging to a table, which is content even when it repeats.
+_TABLE_MARKERS = ("<table", "</table>", "<tr", "<td", "<th")
+
+
+@dataclass(frozen=True)
+class BoilerplateOptions:
+    """When a repeated edge pattern counts as boilerplate.
+
+    The defaults are FinePDFs'. ``min_pages`` is the guard that matters most: without it, a
+    two-page document whose pages happen to start alike loses both first lines.
+    """
+
+    min_pages: int = 5
+    min_page_fraction: float = 0.25
+    # Below 1.0 this would spare documents whose every page shares a header -- which is precisely
+    # the case this exists for -- so the ceiling is off by default.
+    max_page_fraction: float = 1.0
+    # How deep an edge can be. Headers run to a few lines; a larger bound mostly buys the chance to
+    # eat a page's opening paragraph when many pages happen to begin the same way.
+    max_edge_lines: int = 5
+
+
+@dataclass(frozen=True)
+class BoilerplateResult:
+    """Pages with their chrome removed, and what was removed."""
+
+    pages: list[str]
+    top_lines: int
+    bottom_lines: int
+    pages_stripped: int
+    lines_removed: int
+
+
+def split_pages(text: str, page_offsets: Sequence[int]) -> list[str]:
+    """Split extracted text back into pages using the cumulative offsets recorded with it."""
+    pages: list[str] = []
+    start = 0
+    for offset in page_offsets:
+        pages.append(text[start:offset])
+        start = offset
+    if start < len(text):
+        pages.append(text[start:])
+    return pages
+
+
+def _line_key(line: str, page_index: int) -> int:
+    """Hash a line into the form patterns are compared on.
+
+    Digits fold to zero and whitespace is dropped, so a page number does not make two copies of one
+    header look different. Table rows are keyed by page index as well, which makes them unique and
+    therefore never part of a repeated pattern.
+    """
+    normalized = line.translate(_DIGIT_FOLD).translate(_DROPPED_WHITESPACE)
+    if any(marker in line for marker in _TABLE_MARKERS) or (normalized.startswith("|") and normalized.endswith("|")):
+        normalized = f"{page_index}\x00{normalized}"
+    return dupekit.hash_xxh3_128(normalized.encode("utf-8"))
+
+
+def _longest_repeated_edge(
+    page_keys: list[list[int]],
+    *,
+    from_top: bool,
+    options: BoilerplateOptions,
+) -> tuple[int, frozenset[int]]:
+    """Find the longest edge pattern shared by enough pages.
+
+    Returns the pattern's length in lines and the pages carrying it.
+    """
+    num_pages = len(page_keys)
+    best_length = 0
+    best_pages: frozenset[int] = frozenset()
+
+    for length in range(1, options.max_edge_lines + 1):
+        counts: dict[tuple[int, ...], list[int]] = {}
+        for index, keys in enumerate(page_keys):
+            if len(keys) < length:
+                continue
+            pattern = tuple(keys[:length]) if from_top else tuple(keys[-length:])
+            counts.setdefault(pattern, []).append(index)
+
+        if not counts:
+            break
+
+        pattern, pages = max(counts.items(), key=lambda item: len(item[1]))
+        support = len(pages)
+        if not (
+            support >= options.min_pages
+            and options.min_page_fraction <= support / num_pages <= options.max_page_fraction
+        ):
+            break
+
+        best_length = length
+        best_pages = frozenset(pages)
+
+    return best_length, best_pages
+
+
+def strip_boilerplate(pages: Sequence[str], options: BoilerplateOptions | None = None) -> BoilerplateResult:
+    """Remove running headers and footers from ``pages``.
+
+    A page keeps its content untouched unless it actually carries the detected pattern, and a page
+    that is entirely boilerplate becomes empty rather than being dropped, so page offsets stay
+    aligned with the page count.
+    """
+    options = options or BoilerplateOptions()
+    pages = list(pages)
+
+    # Nothing to compare against, and the support threshold could never be met anyway.
+    if len(pages) < options.min_pages:
+        return BoilerplateResult(pages=pages, top_lines=0, bottom_lines=0, pages_stripped=0, lines_removed=0)
+
+    page_lines = [page.split("\n") for page in pages]
+    page_keys = [[_line_key(line, index) for line in lines] for index, lines in enumerate(page_lines)]
+
+    top_lines, top_pages = _longest_repeated_edge(page_keys, from_top=True, options=options)
+    bottom_lines, bottom_pages = _longest_repeated_edge(page_keys, from_top=False, options=options)
+
+    if not top_lines and not bottom_lines:
+        return BoilerplateResult(pages=pages, top_lines=0, bottom_lines=0, pages_stripped=0, lines_removed=0)
+
+    stripped_pages: list[str] = []
+    pages_stripped = 0
+    lines_removed = 0
+    for index, lines in enumerate(page_lines):
+        start = top_lines if index in top_pages else 0
+        end = len(lines) - (bottom_lines if index in bottom_pages else 0)
+        if end <= start:
+            # The page is nothing but chrome. Emptying it rather than dropping it keeps the page
+            # count, and therefore the offsets, honest.
+            start, end = 0, 0
+        if start or end != len(lines):
+            pages_stripped += 1
+            lines_removed += start + (len(lines) - end)
+        stripped_pages.append("\n".join(lines[start:end]))
+
+    logger.debug(
+        "Stripped %d top and %d bottom lines from %d of %d pages",
+        top_lines,
+        bottom_lines,
+        pages_stripped,
+        len(pages),
+    )
+    return BoilerplateResult(
+        pages=stripped_pages,
+        top_lines=top_lines,
+        bottom_lines=bottom_lines,
+        pages_stripped=pages_stripped,
+        lines_removed=lines_removed,
+    )
