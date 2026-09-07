@@ -31,3 +31,12 @@ author: William Held
 - Result: Preflight confirmed the source checkpoint metadata records step 157,000 and the durable output root is unused. The source checkpoint is 1.005 TiB. Periodic resume checkpoints use the 14-day regional temporary bucket with one retained; only the forced final checkpoint is durable.
 - Interpretation: Source lineage, output identity, data region, and checkpoint retention are suitable for submission.
 - Next action: Commit and push the launch record, submit once, then verify scheduling, W&B identity, initialization, and early training health.
+
+### 2026-09-07 14:22 - Coordinator stopped before TPU dispatch
+
+- Hypothesis: The pushed production recipe will dispatch the requested training child after pruning completed data dependencies.
+- Commit Hash: `77308d1a9fc61afd226f5cf98a6dabc14f1be39f`
+- Job: `/held/sft-datakit-20260907-prod`
+- Result: The coordinator pruned all completed tokenized chat dependencies and resolved the intended 2,000-step training configuration and step-157000 checkpoint. Dispatch then failed because `WANDB_API_KEY` was absent from the coordinator environment. No TPU child was created and training did not start.
+- Interpretation: The data graph and training configuration reached dispatch intact. The failure is isolated to launch-time secret forwarding and did not consume TPU capacity or write model state.
+- Next action: Supply `WANDB_API_KEY` through Iris's standard `-e` environment forwarding, use a fresh coordinator job name, and repeat the initial health gate.
