@@ -66,6 +66,8 @@ DEFAULT_MIN_COMPLETION_RATE = 0.9
 # Error labels for ungraded trials that carry no exception of their own.
 _UNKNOWN_ERROR = "unknown"
 _MISSING_RESULT_ERROR = "no_result_written"
+
+# Exceptions that remain score-bearing when the verifier produced a result.
 _SCORE_BEARING_EXCEPTIONS = frozenset({"AgentTimeoutError"})
 
 _CANONICAL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
