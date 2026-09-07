@@ -6,10 +6,10 @@
 
 [vllm]
 repository = "https://github.com/marin-community/vllm.git"
-commit = "3d26773be1d7aa7361a542943e3ef14f023d6f3a"
-upstream_base = "0ba2aa35a81dcc3246b26291368b53fa2389c7d7"
+commit = "8e7e42aae3af8433e08012a2b6b0b141530e1e26"
+upstream_base = "d626108b1841888ec90aced33367149a6bbc7e4b"
 
 [tpu-inference]
 repository = "https://github.com/marin-community/tpu-inference.git"
-commit = "c63712cb74eb8183999b9bec1a75a810edb4abab"
-upstream_base = "c90cece0be50fc3ce653c055c921017df81b1ff4"
+commit = "d3f2a26835e970c81399d8f286e57c670c517073"
+upstream_base = "9eca2a5a7edae158456cbae2b28ea77ea7c05da9"

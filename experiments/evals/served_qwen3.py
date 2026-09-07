@@ -38,6 +38,8 @@ _VLLM_TIMEOUT = 1800
 _TPU_VLLM_WORKER_ENV_VARS = (
     ("VLLM_ENABLE_V1_MULTIPROCESSING", "0"),
     ("VLLM_ALLOW_LONG_MAX_MODEL_LEN", "1"),
+    # HumanEval sends five stop strings; the selected vLLM LKG defaults this input bound to four.
+    ("VLLM_MAX_STOP_STRINGS", "5"),
     ("VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION", "1"),
     ("VLLM_TPU_SKIP_PRECOMPILE", "1"),
 )
