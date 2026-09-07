@@ -14,6 +14,8 @@ import pytest
 from evaldash import app as evaldash_app
 from evaldash import fixtures, metrics, samples
 from marin.evaluation.records import list_records, write_record
+from marina.apps import RegisteredApi
+from marina.operations import operation_catalog
 from starlette.testclient import TestClient
 
 
@@ -26,12 +28,16 @@ def store(tmp_path) -> evaldash_app.MemoryRecordStore:
 
 
 @pytest.fixture
-def client(store) -> Iterator[TestClient]:
+def registered_api(store) -> RegisteredApi:
     # No prefixes, so no background ingest: the store is already populated from fixtures, and this
     # keeps the test hermetic (it never scans the remote gs://+s3:// defaults).
     config = evaldash_app.EvaldashConfig.from_env({"EVALDASH_STORE": "local", "RECORDS_PREFIXES": " "})
-    api = evaldash_app.build_api(store, evaldash_app.NullClusterGateway(), config)
-    with TestClient(api.app) as client:
+    return evaldash_app.build_api(store, evaldash_app.NullClusterGateway(), config)
+
+
+@pytest.fixture
+def client(registered_api: RegisteredApi) -> Iterator[TestClient]:
+    with TestClient(registered_api.app) as client:
         yield client
 
 
@@ -151,6 +157,14 @@ def test_api_surface_over_fixtures(client):
     samples_page = client.get("/runs/snowball-2026.07.20-mmlu/samples", params={"task": "mmlu"}).json()
     assert samples_page["total"] == 5
     assert samples_page["primary_metric"] == "acc,none"
+
+
+def test_agent_operation_schema_requires_executable_inputs(registered_api: RegisteredApi):
+    operations = {operation.id: operation for operation in operation_catalog({"evaldash": registered_api})}
+
+    assert operations["evaldash.read_logs"].input_schema["required"] == ["run_id", "role"]
+    assert operations["evaldash.read_samples"].input_schema["required"] == ["run_id", "task"]
+    assert operations["evaldash.read_history"].input_schema["required"] == ["model", "task"]
 
 
 def test_run_detail_headline_is_null_for_a_failed_run(client):

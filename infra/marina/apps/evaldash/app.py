@@ -1125,7 +1125,7 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
     )
     async def api_run_logs(
         run_id: str,
-        role: str | None = None,
+        role: str,
         tail: str | None = None,
         substring: str | None = None,
     ) -> LogsResponse | JSONResponse:
@@ -1160,7 +1160,7 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
     )
     async def api_run_samples(
         run_id: str,
-        task: str | None = None,
+        task: str,
         offset: str | None = None,
         limit: str | None = None,
         correct: str | None = None,
@@ -1341,7 +1341,7 @@ def _analysis_router(store: RecordStore) -> APIRouter:
         response_model=HistoryResponse,
         openapi_extra=operation_extension(OperationRisk.READ),
     )
-    async def api_history(model: str | None = None, task: str | None = None) -> HistoryResponse | JSONResponse:
+    async def api_history(model: str, task: str) -> HistoryResponse | JSONResponse:
         if not model or not task:
             return JSONResponse({"error": "model and task are required"}, status_code=400)
         points = await asyncio.to_thread(store.history, model, task)
