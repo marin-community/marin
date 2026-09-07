@@ -46,7 +46,7 @@ _RUN_NAME = "grug/moe_67b_a2b_step157k_sft_datakit80_pretrain20_ctx262k_v2"
 _TOKENIZER = marin_tokenizer
 _SEQ_LEN = 262_144
 _BATCH_SIZE = 256
-_TRAIN_STEPS = 1_888
+_TRAIN_STEPS = 2_000
 _MIXTURE_BLOCK_SIZE = 49_152
 _SFT_FRACTION = 0.8
 _PRETRAIN_FRACTION = 0.2
@@ -283,7 +283,7 @@ def build() -> StepSpec:
                 context_parallel=4,
                 per_device_parallelism=1,
                 save_interval_minutes=30,
-                checkpoint_keep=[{"every": 250}],
+                checkpoint_keep=None,
                 grug_trainer=GrugTrainerConfig(
                     z_loss_weight=1e-4,
                     ema_beta=None,
