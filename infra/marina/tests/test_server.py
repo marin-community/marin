@@ -1,13 +1,20 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import gzip
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from fastmcp import Client
+from marina.apps import create_api as create_registered_api
+from marina.apps import services_for
 from marina.manifest import discover_apps, job_runners, load_manifest
-from marina.server import CANONICAL_ORIGIN_ENV, MarinaConfig, create_app, serve_app_file
+from marina.mcp import marina_mcp
+from marina.server import CANONICAL_ORIGIN_ENV, MCP_PATH, MarinaConfig, create_app, serve_app_file
+from mcp_types import LATEST_PROTOCOL_VERSION
+from rigging.server_auth import ANONYMOUS_ADMIN, identity_scope
 from starlette.testclient import TestClient
 
 TASKTROVE_MANIFEST = """
@@ -37,7 +44,9 @@ def write_api_app(apps_dir: Path, name: str) -> Path:
     (root / "app.py").write_text(
         """from fastapi import FastAPI, Request
 from marina.apps import RegisteredApi, Services, registered_api
+from marina.mcp import OperationRisk, operation_extension
 from pydantic import BaseModel
+from rigging.server_auth import get_verified_identity
 
 
 class FeedbackRequest(BaseModel):
@@ -50,6 +59,10 @@ class FeedbackResponse(BaseModel):
     request_id: str | None
 
 
+class IdentityResponse(BaseModel):
+    user: str
+
+
 def create_api(_services: Services) -> RegisteredApi:
     api = FastAPI()
 
@@ -58,10 +71,28 @@ def create_api(_services: Services) -> RegisteredApi:
         operation_id="feedback",
         description="Record one feedback grade for a search execution.",
         response_model=FeedbackResponse,
-        openapi_extra={"x-marina": {"agent": True, "risk": "write"}},
+        openapi_extra=operation_extension(OperationRisk.WRITE),
     )
     async def feedback(body: FeedbackRequest, request: Request, execution: str | None = None) -> FeedbackResponse:
         return FeedbackResponse(body=body.model_dump(), query=execution, request_id=request.headers.get("x-request-id"))
+
+    @api.get(
+        "/whoami",
+        operation_id="whoami",
+        description="Return the verified Marina caller.",
+        response_model=IdentityResponse,
+        openapi_extra=operation_extension(OperationRisk.READ),
+    )
+    async def whoami() -> IdentityResponse:
+        return IdentityResponse(user=get_verified_identity().user_id)
+
+    @api.get(
+        "/internal",
+        operation_id="internal_secret",
+        description="An ordinary HTTP route that agents must not discover.",
+    )
+    async def internal() -> dict[str, bool]:
+        return {"secret": True}
 
     return registered_api(api)
 """
@@ -177,38 +208,79 @@ def test_app_directory_and_identity(client: TestClient) -> None:
     assert me == {"user": "anonymous", "role": "admin"}
 
 
-def test_registered_application_operations_are_machine_readable(tmp_path: Path) -> None:
-    client = aliased_client(tmp_path)
+def test_registered_application_is_searchable_and_callable_over_mcp(tmp_path: Path) -> None:
+    manifest = load_manifest(write_api_app(tmp_path / "apps", "tasktrove"))
+    registered = create_registered_api(manifest, services_for(manifest, str(tmp_path / "data"), None))
+    server = marina_mcp({"tasktrove": registered.mcp})
 
-    response = client.get("/api/marina/operations", params={"app": "tasktrove"})
+    async def exercise_mcp():
+        async with Client(server) as client:
+            tools = await client.list_tools()
+            found = await client.call_tool("find_tool", {"query": "record a feedback grade"})
+            hidden = await client.call_tool("find_tool", {"query": "internal secret"})
+            called = await client.call_tool(
+                "call_tool",
+                {"name": "tasktrove_feedback", "arguments": {"grade": 10, "execution": "17"}},
+            )
+            identity = await client.call_tool("call_tool", {"name": "tasktrove_whoami", "arguments": {}})
+            return tools, found, hidden, called, identity
+
+    with identity_scope(ANONYMOUS_ADMIN):
+        tools, found, hidden, called, identity = asyncio.run(exercise_mcp())
+
+    assert {tool.name for tool in tools} == {"find_tool", "call_tool"}
+    (found_tool,) = found.data
+    assert found_tool["name"] == "tasktrove_feedback"
+    assert found_tool["description"] == "Record one feedback grade for a search execution."
+    assert found_tool["inputSchema"]["required"] == ["grade"]
+    assert found_tool["inputSchema"]["properties"]["grade"]["type"] == "integer"
+    assert found_tool["outputSchema"]["properties"]["body"]["type"] == "object"
+    assert found_tool["annotations"] == {
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "openWorldHint": False,
+    }
+    assert found_tool["_meta"]["marina"] == {"risk": "write"}
+    assert hidden.data == []
+    assert called.data == {"body": {"grade": 10}, "query": "17", "request_id": None}
+    assert identity.data == {"user": "anonymous"}
+
+
+def test_mcp_is_served_over_authenticated_streamable_http(tmp_path: Path) -> None:
+    write_api_app(tmp_path / "apps", "tasktrove")
+    with TestClient(create_app(config_for(tmp_path)), client=("127.0.0.1", 40000)) as client:
+        response = client.post(
+            f"{MCP_PATH}/",
+            headers={"accept": "application/json, text/event-stream"},
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": LATEST_PROTOCOL_VERSION,
+                    "capabilities": {},
+                    "clientInfo": {"name": "test", "version": "1"},
+                },
+            },
+        )
+        called = client.post(
+            f"{MCP_PATH}/",
+            headers={"accept": "application/json, text/event-stream"},
+            json={
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": "call_tool",
+                    "arguments": {"name": "tasktrove_whoami", "arguments": {}},
+                },
+            },
+        )
 
     assert response.status_code == 200
-    (operation,) = response.json()["operations"]
-    assert operation["id"] == "tasktrove.feedback"
-    assert operation["app"] == "tasktrove"
-    assert operation["method"] == "POST"
-    assert operation["path"] == "/feedback"
-    assert operation["risk"] == "write"
-    assert operation["input_schema"] == {
-        "type": "object",
-        "properties": {
-            "execution": {
-                "anyOf": [{"type": "string"}, {"type": "null"}],
-                "title": "Execution",
-            },
-            "grade": {"title": "Grade", "type": "integer"},
-        },
-        "required": ["grade"],
-    }
-    assert operation["output_schema"]["properties"] == {
-        "body": {
-            "additionalProperties": {"type": "integer"},
-            "title": "Body",
-            "type": "object",
-        },
-        "query": {"anyOf": [{"type": "string"}, {"type": "null"}], "title": "Query"},
-        "request_id": {"anyOf": [{"type": "string"}, {"type": "null"}], "title": "Request Id"},
-    }
+    assert response.json()["result"]["serverInfo"]["name"] == "Marina"
+    assert called.status_code == 200
+    assert called.json()["result"]["structuredContent"] == {"user": "anonymous"}
 
 
 def test_static_file_and_spa_fallback(client: TestClient) -> None:
@@ -253,6 +325,7 @@ def test_non_loopback_without_iap_is_denied(tmp_path: Path) -> None:
     app = create_app(config_for(tmp_path))
     remote = TestClient(app, client=("10.0.0.7", 1234))
     assert remote.get("/api/marina/me").status_code == 401
+    assert remote.post("/api/marina/mcp/").status_code == 401
     assert remote.get("/healthz").status_code == 200
 
 

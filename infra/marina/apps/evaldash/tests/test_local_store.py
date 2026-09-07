@@ -15,7 +15,6 @@ from evaldash import app as evaldash_app
 from evaldash import fixtures, metrics, samples
 from marin.evaluation.records import list_records, write_record
 from marina.apps import RegisteredApi
-from marina.operations import operation_catalog
 from starlette.testclient import TestClient
 
 
@@ -160,11 +159,11 @@ def test_api_surface_over_fixtures(client):
 
 
 def test_agent_operation_schema_requires_executable_inputs(registered_api: RegisteredApi):
-    operations = {operation.id: operation for operation in operation_catalog({"evaldash": registered_api})}
+    operations = {operation.name: operation for operation in asyncio.run(registered_api.mcp.list_tools())}
 
-    assert operations["evaldash.read_logs"].input_schema["required"] == ["run_id", "role"]
-    assert operations["evaldash.read_samples"].input_schema["required"] == ["run_id", "task"]
-    assert operations["evaldash.read_history"].input_schema["required"] == ["model", "task"]
+    assert operations["read_logs"].parameters["required"] == ["run_id", "role"]
+    assert operations["read_samples"].parameters["required"] == ["run_id", "task"]
+    assert operations["read_history"].parameters["required"] == ["model", "task"]
 
 
 def test_run_detail_headline_is_null_for_a_failed_run(client):

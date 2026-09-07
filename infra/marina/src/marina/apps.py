@@ -5,24 +5,26 @@
 
 A Python app is a package at ``apps/<name>/`` (it has an ``__init__.py``). Its ``app``
 module defines ``create_api(services) -> RegisteredApi``. The kernel mounts its ASGI app
-at ``/<name>/api/`` behind the same authentication as every other route and reads its
-OpenAPI document into the shared operation registry. The module may also define
+at ``/<name>/api/`` behind the same authentication as every other route and generates
+MCP tools from its explicitly marked OpenAPI operations. The module may also define
 ``migrate(engine)``, which ``marina migrate`` runs against the app's schema before a
 deploy serves traffic. A static app has no package and only a ``dist``.
 """
 
 import importlib
 import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from fastapi import FastAPI
+from fastmcp import FastMCP
 from rigging.filesystem.storage_path import prefix_join
 from sqlalchemy.engine import Engine
 from starlette.types import ASGIApp
 
 from marina.db import DatabaseSpec, engine_for
 from marina.manifest import AppManifest
+from marina.mcp import mcp_for_api
 
 APP_MODULE = "app"
 CREATE_API = "create_api"
@@ -48,15 +50,16 @@ class Services:
 
 @dataclass(frozen=True)
 class RegisteredApi:
-    """A checked-in app's mounted service and generated OpenAPI document."""
+    """A checked-in app's mounted HTTP service and generated MCP server."""
 
     app: ASGIApp
-    openapi: Mapping[str, object]
+    mcp: FastMCP
 
 
 def registered_api(api: FastAPI, *, mounted_app: ASGIApp | None = None) -> RegisteredApi:
-    """Register a FastAPI schema while optionally mounting a lifecycle wrapper around it."""
-    return RegisteredApi(app=api if mounted_app is None else mounted_app, openapi=api.openapi())
+    """Generate MCP tools while optionally mounting a lifecycle wrapper around the API."""
+    app = api if mounted_app is None else mounted_app
+    return RegisteredApi(app=app, mcp=mcp_for_api(api, app))
 
 
 def is_python_app(manifest: AppManifest) -> bool:

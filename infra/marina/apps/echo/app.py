@@ -25,7 +25,7 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, 
 from fastembed import TextEmbedding
 from fastembed.rerank.cross_encoder import TextCrossEncoder
 from marina.apps import RegisteredApi, Services, registered_api
-from marina.operations import OperationRisk, operation_extension
+from marina.mcp import OperationRisk, operation_extension
 from pydantic import BaseModel, Field, field_validator
 from rigging.server_auth import get_verified_identity
 

@@ -52,7 +52,7 @@ from marin.evaluation.records import (
     scan_records,
 )
 from marina.apps import RegisteredApi, Services, registered_api
-from marina.operations import OperationRisk, operation_extension
+from marina.mcp import OperationRisk, operation_extension
 from pydantic import BaseModel
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.server_auth import get_verified_identity

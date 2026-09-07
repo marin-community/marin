@@ -5,7 +5,7 @@
 
 from fastapi import FastAPI
 from marina.apps import RegisteredApi, Services, registered_api
-from marina.operations import OperationRisk, operation_extension
+from marina.mcp import OperationRisk, operation_extension
 from pydantic import BaseModel, RootModel
 from rigging.server_auth import get_verified_identity
 from sqlalchemy import Engine, text

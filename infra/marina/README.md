@@ -35,9 +35,9 @@ infra/marina/
   (`search_path = <name>, public`). `migrate(engine)` runs at deploy, before
   the new image takes traffic, and must be idempotent.
 - `/api/marina/apps` and `/api/marina/me`: the directory and the caller, which
-  the Shell uses for its app switcher and identity chip. `/api/marina/operations`
-  returns the checked-in apps' explicitly registered operations; pass `app=<name>`
-  to restrict the result. `/healthz` is public.
+  the Shell uses for its app switcher and identity chip. `/api/marina/mcp/` is
+  the authenticated Streamable HTTP MCP endpoint for checked-in application
+  APIs. `/healthz` is public.
 
 ## Adding an app
 
@@ -77,7 +77,7 @@ infra/marina/
    ```python
    from fastapi import FastAPI
    from marina.apps import RegisteredApi, Services, registered_api
-   from marina.operations import OperationRisk, operation_extension
+   from marina.mcp import OperationRisk, operation_extension
    from pydantic import BaseModel
 
 
@@ -105,11 +105,21 @@ infra/marina/
        return registered_api(api)
    ```
 
-   Routes without `operation_extension(...)` remain ordinary authenticated HTTP
-   routes and do not appear in the operation registry. A lifecycle wrapper can be
-   mounted with `registered_api(api, mounted_app=wrapper)` while `api` remains the
-   OpenAPI source. Dynamic applet APIs are outside this registry. Copy `apps/echo`
-   for a complete service.
+   FastMCP derives the MCP input and output schemas from FastAPI's OpenAPI
+   document and executes tools against the mounted ASGI application. Routes
+   without `operation_extension(...)` remain ordinary authenticated HTTP routes
+   and are excluded from MCP. A lifecycle wrapper can be mounted with
+   `registered_api(api, mounted_app=wrapper)` while `api` remains the OpenAPI
+   source. Dynamic applet APIs are not exposed through MCP. Copy `apps/echo` for
+   a complete service.
+
+   An MCP client initially sees only `find_tool` and `call_tool`. `find_tool`
+   searches registered operations across applications. The returned tool names
+   use `<app>_<operation_id>`, for example `evaldash_read_logs`; pass that name
+   and its arguments to `call_tool`. The declared risk is translated to MCP's
+   standard `readOnlyHint`, `destructiveHint`, and `openWorldHint` annotations.
+   The exact `read`, `write`, `external_write`, or `destructive` value is also
+   available at `_meta.marina.risk`.
 4. Write a journey in `apps/<name>/journeys/test_*.py` (below).
 5. Run it locally:
 

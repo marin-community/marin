@@ -62,7 +62,7 @@ from marina.apps import create_api, data_url_for, is_python_app, services_for
 from marina.auth import build_policy, identity_for
 from marina.db import DatabaseSpec, database_from_env
 from marina.manifest import AppManifest, discover_apps
-from marina.operations import OperationList, operation_catalog
+from marina.mcp import marina_mcp
 
 INDEX_FILE = "index.html"
 # A file committed as `x.gz` is served at `x` with a Content-Encoding header, so a large
@@ -83,6 +83,7 @@ APPLET_ORIGIN_ENV = "MARINA_APPLET_ORIGIN"
 APPLET_OPERATORS_ENV = "MARINA_APPLET_OPERATORS"
 DATA_PREFIX = "data/"
 API_PREFIX = "/api"
+MCP_PATH = "/api/marina/mcp"
 # The first path segment the kernel answers itself. An app named for one of these would
 # register the same route and lose it: FastAPI keeps the first match, and the kernel's
 # routes are installed before any app's.
@@ -427,14 +428,14 @@ def create_app(config: MarinaConfig) -> RouteAuthMiddleware:
     if shadowed:
         raise ValueError(f"app {shadowed[0]!r} is named for a kernel route; rename it")
     policy = build_policy(config.iap_audience)
-    app_names = {app.name for app in apps}
     registered_apis = {
         app.name: create_api(app, services_for(app, config.data_root, config.database))
         for app in apps
         if is_python_app(app)
     }
-    operations = operation_catalog(registered_apis)
-    api = FastAPI(title="Marina", docs_url=None, redoc_url=None)
+    mcp = marina_mcp({name: registered.mcp for name, registered in registered_apis.items()})
+    mcp_app = mcp.http_app(path="/", json_response=True, stateless_http=True)
+    api = FastAPI(title="Marina", docs_url=None, redoc_url=None, lifespan=mcp_app.lifespan)
     applet_store = AppletStore(config.database) if config.database is not None else None
     applet_runtime = AppletRuntime(applet_store) if applet_store is not None else None
 
@@ -447,14 +448,6 @@ def create_app(config: MarinaConfig) -> RouteAuthMiddleware:
     @requires_auth
     def list_apps() -> JSONResponse:
         return JSONResponse({"apps": [*app_directory(apps), *applet_directory(applet_store, config.applet_origin)]})
-
-    @api.get("/api/marina/operations", response_model=OperationList)
-    @requires_auth
-    def list_operations(app: str | None = None) -> OperationList:
-        if app is not None and app not in app_names:
-            raise HTTPException(status_code=404, detail="unknown app")
-        selected = operations if app is None else (operation for operation in operations if operation.app == app)
-        return OperationList(operations=list(selected))
 
     @api.get("/api/marina/applets")
     @requires_auth
@@ -774,6 +767,8 @@ def create_app(config: MarinaConfig) -> RouteAuthMiddleware:
             # 307, not 308: a permanent redirect is cached hard, and a browser that kept an
             # earlier target would keep following it after this mapping changes.
             return RedirectResponse(target + query, status_code=307, headers={"Cache-Control": "no-store"})
+
+    api.mount(MCP_PATH, AuthenticatedMount(mcp_app, policy))
 
     for app in apps:
         if is_python_app(app):
