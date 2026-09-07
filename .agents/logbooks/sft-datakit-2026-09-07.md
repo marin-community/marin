@@ -28,6 +28,6 @@ author: William Held
 - Commit Hash: pending retention and logbook commit
 - Command: `uv run python experiments/june_tpu_67b_a2b/moe/sft_datakit_chat_mix.py`
 - Config: v4-2048; batch 256; sequence length 262,144; 80% SFT; 20% replay; 2,000 steps; MuonH at 5e-5; 3% warmup; cosine decay; weights-only initialization from step 157,000.
-- Result: Preflight confirmed the source checkpoint metadata records step 157,000 and the durable output root is unused. The source checkpoint is 1.005 TiB. Periodic resume checkpoints use the 30-day regional temporary bucket with one retained; only the forced final checkpoint is durable.
+- Result: Preflight confirmed the source checkpoint metadata records step 157,000 and the durable output root is unused. The source checkpoint is 1.005 TiB. Periodic resume checkpoints use the 14-day regional temporary bucket with one retained; only the forced final checkpoint is durable.
 - Interpretation: Source lineage, output identity, data region, and checkpoint retention are suitable for submission.
 - Next action: Commit and push the launch record, submit once, then verify scheduling, W&B identity, initialization, and early training health.
