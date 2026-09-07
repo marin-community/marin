@@ -607,15 +607,18 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     cast("jax.Array", loaded["pending_qb_betas"]),
                 )
         else:
-            state = jax.jit(_init_state, out_shardings=state_shardings)(model_key)
             state = restore_grug_state_from_checkpoint(
-                state,
+                state_shape,
                 checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
                 load_checkpoint_setting=trainer.load_checkpoint,
                 mesh=mesh,
                 allow_partial=trainer.allow_partial_checkpoint,
                 initialize_from=trainer.initialize_from,
             )
+            if any(isinstance(leaf, jax.ShapeDtypeStruct) for leaf in jax.tree.leaves(state)):
+                fresh_state = jax.jit(_init_state, out_shardings=state_shardings)(model_key)
+                restored = eqx.filter(state, lambda leaf: not isinstance(leaf, jax.ShapeDtypeStruct))
+                state = eqx.combine(restored, fresh_state)
 
         levanter.tracker.log_summary({"parameter_count": parameter_count(state.params)})
 

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Cold-start SFT over the structured Datakit chat registry on v4-2048."""
+"""Continue the long-context checkpoint on Datakit chat data with a new WSD schedule."""
 
 import dataclasses
 import json
@@ -47,6 +47,9 @@ _TOKENIZER = marin_tokenizer
 _SEQ_LEN = 262_144
 _BATCH_SIZE = 256
 _TRAIN_STEPS = 2_000
+_RESUME_STEP = 157_000
+_WARMUP_STEPS = 60
+_DECAY_STEPS = 200
 _MIXTURE_BLOCK_SIZE = 49_152
 _SFT_FRACTION = 0.8
 _PRETRAIN_FRACTION = 0.2
@@ -71,8 +74,10 @@ _OPTIMIZER = GrugMoeMuonHConfig(
     max_grad_norm=None,
     weight_decay=0.0,
     min_lr_ratio=0.1,
-    warmup=0.03,
-    lr_schedule="cosine",
+    warmup=_WARMUP_STEPS,
+    decay=_DECAY_STEPS,
+    lr_schedule="linear",
+    schedule_start_step=_RESUME_STEP,
     rmsnorm_to_adam=True,
 )
 
@@ -268,7 +273,7 @@ def build() -> StepSpec:
                 output_path=output_path,
                 run_id=_RUN_NAME.removeprefix("grug/"),
                 resources=ResourceConfig.with_tpu("v4-2048", zone=_TRAIN_ZONE, preemptible=False),
-                steps=_TRAIN_STEPS,
+                steps=_RESUME_STEP + _TRAIN_STEPS,
                 batch_size=_BATCH_SIZE,
                 seed=0,
                 mp="params=float32,compute=bfloat16,output=bfloat16",
@@ -285,6 +290,7 @@ def build() -> StepSpec:
                 save_interval_minutes=30,
                 checkpoint_keep=None,
                 grug_trainer=GrugTrainerConfig(
+                    sft_weights_only_init=False,
                     z_loss_weight=1e-4,
                     ema_beta=None,
                     log_every=1,
@@ -305,6 +311,11 @@ def build() -> StepSpec:
             "seq_len": _SEQ_LEN,
             "batch_size": _BATCH_SIZE,
             "steps": _TRAIN_STEPS,
+            "resume_step": _RESUME_STEP,
+            "initialization": "full_state",
+            "lr_schedule": "linear",
+            "warmup_steps": _WARMUP_STEPS,
+            "decay_steps": _DECAY_STEPS,
             "sft_fraction": _SFT_FRACTION,
             "pretrain_fraction": _PRETRAIN_FRACTION,
             "long_context_skew": _LONG_CONTEXT_SKEW,

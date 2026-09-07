@@ -125,7 +125,7 @@ def scale_with_grug_muonh(
     return optax.GradientTransformation(init_fn, update_fn)
 
 
-@OptimizerConfig.register_subclass("grug_moe_adamh_v2")
+@OptimizerConfig.register_subclass("june_tpu_grug_moe_adamh")
 @dataclass(frozen=True)
 class GrugMoeAdamHConfig(OptimizerConfig):
     """AdamH for Grug MoE. Four optimizer groups, no flags.
@@ -206,7 +206,7 @@ class GrugMoeAdamHConfig(OptimizerConfig):
         return jax.tree.map(mask_fn, params, paths)
 
 
-@OptimizerConfig.register_subclass("grug_moe_muonh_v1")
+@OptimizerConfig.register_subclass("june_tpu_grug_moe_muonh")
 @dataclass(frozen=True)
 class GrugMoeMuonHConfig(OptimizerConfig):
     """May Recipe MuonH optimizer: 3 LR groups (muonh / adamh / adam).
@@ -246,9 +246,13 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     (trainer's num_train_steps) while still following the original full
     schedule's LR trajectory up to the stop step. ``None`` preserves the
     default behavior (schedule tracks trainer)."""
+    schedule_start_step: int = 0
+    """Absolute step where the new LR schedule begins, preserving optimizer counters."""
 
     def build(self, num_train_steps):
-        n = self.schedule_num_train_steps_override or num_train_steps
+        if not 0 <= self.schedule_start_step < num_train_steps:
+            raise ValueError("schedule_start_step must precede the final training step")
+        n = self.schedule_num_train_steps_override or (num_train_steps - self.schedule_start_step)
         learning_rate_schedule = self.lr_scheduler(n)
         adam_lr_schedule = self.lr_scheduler(n, override_lr=self.adam_lr)
 
@@ -293,8 +297,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             return optax.multi_transform(transforms, self.create_mask)
 
         return optax.inject_hyperparams(optimizer)(
-            learning_rate=learning_rate_schedule,
-            adam_lr=adam_lr_schedule,
+            learning_rate=lambda step: learning_rate_schedule(step - self.schedule_start_step),
+            adam_lr=lambda step: adam_lr_schedule(step - self.schedule_start_step),
         )
 
     def create_mask(self, params):
