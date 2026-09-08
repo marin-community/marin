@@ -230,6 +230,8 @@ def training_config(
     dataloader_workers: int | None = None,
     optimizer_precision: OptimizerPrecision = OptimizerPrecision.NATIVE,
     optimizer_state_metrics: bool = False,
+    eval_on_installed_weights: bool = False,
+    eval_mode: str = "blocking",
 ) -> str:
     """Keep optimizer and inference settings identical across scheduler controls."""
     schedule = SCHEDULES[scale]
@@ -328,6 +330,14 @@ def training_config(
     apply_observation_options(
         config, initial_eval_repeat_count=initial_eval_repeat_count, weight_change_probe=weight_change_probe
     )
+    if type(eval_on_installed_weights) is not bool or eval_mode not in ("blocking", "background"):
+        raise ValueError("Evaluation scheduling requires a boolean installed flag and blocking/background mode")
+    if eval_on_installed_weights or eval_mode != "blocking":
+        if runner is not Runner.ASYNC:
+            raise ValueError("Installed/background evaluation is supported only by the async runner")
+        if eval_mode == "background" and not eval_on_installed_weights:
+            raise ValueError("Background evaluation requires installed weights")
+        trainer["fully_async"].update(eval_on_installed_weights=eval_on_installed_weights, eval_mode=eval_mode)
     if dataloader_workers is not None:
         if type(dataloader_workers) is not int or dataloader_workers < 0:
             raise ValueError("dataloader_workers must be a nonnegative integer")
@@ -491,6 +501,8 @@ def build_experiment(
     dataloader_workers: int | None = None,
     optimizer_precision: OptimizerPrecision = OptimizerPrecision.NATIVE,
     optimizer_state_metrics: bool = False,
+    eval_on_installed_weights: bool = False,
+    eval_mode: str = "blocking",
     pool_artifact: str | None = None,
     allow_cross_region_io: bool = False,
 ) -> tuple[ArtifactStep[SkyRLModel] | ArtifactStep[SkyRLTrainingResult], ArtifactStep[EvaluationResult] | None]:
@@ -527,6 +539,8 @@ def build_experiment(
         weight_change_probe=weight_change_probe,
         epoch_seeded_shuffle=epoch_seeded_shuffle,
         dataloader_workers=dataloader_workers,
+        eval_on_installed_weights=eval_on_installed_weights,
+        eval_mode=eval_mode,
         optimizer_precision=optimizer_precision,
         optimizer_state_metrics=optimizer_state_metrics,
     )
@@ -719,6 +733,10 @@ def build_experiment(
 @click.option("--validation-rows", type=click.IntRange(min=1), default=VALIDATION_ROWS, show_default=True)
 @click.option("--timeout-seconds", type=click.IntRange(min=1), default=1800, show_default=True)
 @click.option("--run/--dry-run", "execute", default=False, show_default=True)
+@click.option(
+    "--eval-on-installed-weights", is_flag=True, help="Evaluate the installed async policy without off-grid sync."
+)
+@click.option("--eval-mode", type=click.Choice(["blocking", "background"]), default="blocking", show_default=True)
 @click.option("--pool-artifact", default=None, help="Use a frozen audited math pool by name@version.")
 def main(
     version: str,
@@ -751,6 +769,8 @@ def main(
     timeout_seconds: int,
     execute: bool,
     pool_artifact: str | None,
+    eval_on_installed_weights: bool,
+    eval_mode: str,
 ) -> None:
     if allow_cross_region_io and (
         cluster != "cw-rno2a" or scale != Scale.SCREENING.value or stage != "rl" or completion != "metrics"
@@ -787,6 +807,8 @@ def main(
         weight_change_probe=weight_change_probe,
         epoch_seeded_shuffle=epoch_seeded_shuffle,
         dataloader_workers=dataloader_workers,
+        eval_on_installed_weights=eval_on_installed_weights,
+        eval_mode=eval_mode,
     )
     prefix = marin_prefix()
     if allow_cross_region_io:
