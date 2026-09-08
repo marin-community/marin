@@ -178,8 +178,8 @@ def _generation_protocol(receipt, generation_audit, expected_sha256):
     """Bind an existing terminal audit to these exact responses and its startup model.
 
     The accepted digest is the canonical JSON SHA of a single audit_run result.
-    A trained-step or inference-only checkpoint requires another audited adapter;
-    neither is certified by this startup-only implementation. The engine/global
+    Native training dumps support startup checkpoints; inference-only dumps use
+    a separate terminal and raw-token serving adapter. The engine/global
     seed initializes engines, and is not claimed as a per-request sampling seed.
     """
     if generation_audit is None:
@@ -188,6 +188,10 @@ def _generation_protocol(receipt, generation_audit, expected_sha256):
         return None
     if hashlib.sha256(canonical_json(generation_audit).encode()).hexdigest() != expected_sha256:
         raise ValueError("Generation audit differs from its immutable digest")
+    if generation_audit.get("schema") == "math_eval_serving_audit_v1":
+        from experiments.post_training.math_eval.serving_audit import protocol_from_serving_audit  # noqa: PLC0415
+
+        return protocol_from_serving_audit(receipt, generation_audit)
     if not generation_audit.get("training_evidence_pass") or not generation_audit.get("clean_end_to_end"):
         raise ValueError("Generation requires a successful terminal audit")
     endpoint = receipt["audit"]

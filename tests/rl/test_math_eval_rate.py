@@ -257,3 +257,46 @@ def test_snowball_profile_binds_its_own_checkpoint_tokenizer_template_and_caps()
     assert result["metadata"]["generation_provenance"]["model_label"] == "snowball"
     assert result["metadata"]["generation_provenance"]["max_prompt_tokens"] == 4096
     assert result["metadata"]["generation_provenance"]["tokenizer_sha256"] == receipt["tokenizer_sha256"]
+
+
+@pytest.mark.parametrize(
+    "poison", [None, "records_sha256", "ordered_response_sha256", "model_label", "engine_global_seed"]
+)
+def test_inference_only_ratings_bind_the_same_audited_parquet_and_sampling_protocol(poison):
+    _manifest, records, receipt, kwargs = fixture()
+    receipt["metric_reference"] = "serving_score_receipt"
+    protocol = {
+        "model_label": kwargs["model"],
+        "checkpoint": kwargs["checkpoint"],
+        "samples": kwargs["samples"],
+        "engine_global_seed": kwargs["engine_global_seed"],
+        "temperature": kwargs["temperature"],
+        "max_response_tokens": kwargs["max_response_tokens"],
+        "tokenizer_sha256": receipt["tokenizer_sha256"],
+        "prompt_template_id": receipt["prompt_template_id"],
+    }
+    proven = {
+        "schema": "math_eval_serving_audit_v1",
+        "inference_evidence_pass": True,
+        "clean_end_to_end": True,
+        "eval_dump": deepcopy(receipt["audit"]),
+        "protocol": protocol,
+        "records_sha256": receipt["records_sha256"],
+        "expected_ids_sha256": receipt["expected_ids_sha256"],
+    }
+    if poison == "records_sha256":
+        proven[poison] = "wrong"
+    elif poison == "ordered_response_sha256":
+        proven["eval_dump"][poison] = "wrong"
+    elif poison is not None:
+        protocol[poison] = "wrong"
+    kwargs.update(
+        generation_audit=proven, generation_audit_sha256=hashlib.sha256(canonical_json(proven).encode()).hexdigest()
+    )
+    if poison is None:
+        result = rate_from_records(records, receipt, **kwargs)
+        assert result["metadata"]["generation_protocol_verified"]
+        assert [row["pass_rate_k"] for row in result["ratings"]] == [0.5, 0.0]
+    else:
+        with pytest.raises(ValueError):
+            rate_from_records(records, receipt, **kwargs)
