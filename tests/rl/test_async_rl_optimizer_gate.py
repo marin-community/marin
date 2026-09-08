@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 from copy import deepcopy
 
 import pytest
@@ -8,8 +9,10 @@ import pytest
 from experiments.post_training.async_rl_optimizer_gate import (
     GRADIENT_STATISTICS,
     RATIO_STATISTICS,
+    audit_consumed_age_events,
     audit_optimizer_history,
     audit_policy_update_events,
+    audit_source_order_events,
 )
 
 
@@ -132,3 +135,55 @@ def test_native_event_requires_complete_coverage_and_exact_metric_parity():
     events[1]["body"]["raw_grad_norm"] += 1
     with pytest.raises(ValueError, match="differs"):
         audit_policy_update_events(rows, events)
+
+
+def test_native_source_order_matches_across_batch_geometry_and_rejects_duplicates():
+    def events(minibatches):
+        return [
+            {
+                "step": 1 + block // minibatches,
+                "body": {
+                    "prompt_offset": 64 * block,
+                    "uids_json": json.dumps([str(index) for index in range(64 * block, 64 * (block + 1))]),
+                },
+            }
+            for block in range(8)
+        ]
+
+    single = audit_source_order_events(events(1), minibatches=1, rollout_batches=8)
+    multiple = audit_source_order_events(list(reversed(events(4))), minibatches=4, rollout_batches=2)
+    assert single["ordered_uids"] == multiple["ordered_uids"] == [str(index) for index in range(512)]
+    duplicate = events(4)
+    duplicate[1]["body"]["uids_json"] = duplicate[0]["body"]["uids_json"]
+    with pytest.raises(ValueError, match="unique"):
+        audit_source_order_events(duplicate, minibatches=4, rollout_batches=2)
+    with pytest.raises(ValueError, match="coverage"):
+        audit_source_order_events(events(1)[:-1], minibatches=1, rollout_batches=8)
+
+
+def test_native_consumed_age_uses_token_weights_and_excludes_padding():
+    bodies = [{"age": age, "groups": 64, "sequences": 256, "response_tokens": 100 * (age + 1)} for age in range(4)]
+    events = [{"step": 1, "body": body} for body in bodies]
+    work = {1: {"sequences": 1024, "response_tokens": 1000}}
+    receipt = audit_consumed_age_events(events, work, minibatches=4, synchronous=True)
+    assert receipt["by_step"][1]["token_weighted_age_mean"] == 2
+    assert receipt["by_step"][1]["groups"] == 256
+    work[1]["response_tokens"] += 7
+    with pytest.raises(ValueError, match="unpadded"):
+        audit_consumed_age_events(events, work, minibatches=4, synchronous=True)
+
+
+def test_native_async_age_requires_the_full_group_count():
+    events = [
+        {"step": 1, "body": {"age": index % 4, "groups": 1, "sequences": 4, "response_tokens": 10}}
+        for index in range(64)
+    ]
+    work = {1: {"sequences": 256, "response_tokens": 640}}
+    assert (
+        audit_consumed_age_events(events, work, minibatches=1, synchronous=False)["by_step"][1][
+            "token_weighted_age_mean"
+        ]
+        == 1.5
+    )
+    with pytest.raises(ValueError, match="geometry"):
+        audit_consumed_age_events(events + events[:1], work, minibatches=1, synchronous=False)
