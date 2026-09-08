@@ -78,8 +78,12 @@ import ast
 from types import SimpleNamespace
 from transformers import AutoTokenizer
 native=Path('skyrl-train/tests/gpu/gpu_ci/test_pause_and_continue_generation.py')
-function=next(n for n in ast.parse(native.read_text()).body if isinstance(n,ast.FunctionDef) and n.name=='test_continue_generation_vllm_engine_chat_completion')
-assignment=next(n for n in ast.walk(function) if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='prompt_tokens' for t in n.targets))
+test_name='test_continue_generation_vllm_engine_chat_completion'
+function=next(n for n in ast.parse(native.read_text()).body if isinstance(n,ast.FunctionDef) and n.name==test_name)
+assignment=next(
+    n for n in ast.walk(function) if isinstance(n,ast.Assign)
+    and any(isinstance(t,ast.Name) and t.id=='prompt_tokens' for t in n.targets)
+)
 tokenizer=AutoTokenizer.from_pretrained(MODEL)
 actual=eval(compile(ast.Expression(assignment.value),str(native),'eval'),{'client':SimpleNamespace(tokenizer=tokenizer),'messages':prompts[0]})
 mapping=tokenizer.apply_chat_template(prompts[0],add_generation_prompt=True,tokenize=True,return_dict=True)
