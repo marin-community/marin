@@ -4413,7 +4413,7 @@
       "id": 53,
       "type": "state-timeline",
       "title": "Weight-sync stages",
-      "description": "Recorded training and weight-sync intervals, separated by execution. Sync completion markers have a 1 ms display width, not a measured duration. Gaps remain unknown; spans can overlap. Receiver CUDA stage timings are audited separately.",
+      "description": "Recorded training and weight-sync intervals, separated by execution. Sync completion markers have a 1 ms display width, not a measured duration. Gaps remain unknown; spans can overlap. Receiver CUDA stage timings are audited separately. Start precedes end explicitly because the datasource sorts returned fields by name.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -4426,14 +4426,35 @@
       },
       "fieldConfig": {
         "defaults": {
-          "noValue": "No recorded intervals",
           "custom": {
             "lineWidth": 0,
             "fillOpacity": 70
           },
           "color": {
             "mode": "palette-classic"
-          }
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "training": {
+                  "text": "training",
+                  "color": "#5794F2",
+                  "index": 0
+                },
+                "weight sync": {
+                  "text": "weight sync",
+                  "color": "#B877D9",
+                  "index": 1
+                },
+                "weights synced": {
+                  "text": "weights synced",
+                  "color": "#FADE2A",
+                  "index": 2
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },
@@ -4501,6 +4522,17 @@
       ],
       "interval": "1m",
       "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "indexByName": {
+              "start": 0,
+              "finish": 1,
+              "execution": 2,
+              "state": 3
+            }
+          }
+        },
         {
           "id": "partitionByValues",
           "options": {
