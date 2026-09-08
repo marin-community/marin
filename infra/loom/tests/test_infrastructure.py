@@ -10,12 +10,14 @@ import pulumi
 import pytest
 import yaml
 from pulumi.runtime import MockCallArgs, MockResourceArgs, Mocks
+from rigging.auth import MARIN_DESKTOP_OAUTH_CLIENT
 
 from infra.loom.infrastructure import (
     ROOT,
     DeploymentConfig,
     GitHubFederationConfig,
     ProfileConfig,
+    RemoteMcpConfig,
     WorkloadIdentityConfig,
     _deployment_manifest,
     _deployment_profiles,
@@ -72,6 +74,17 @@ def deployment_config() -> DeploymentConfig:
         boot_disk_snapshot="loom-pre-c4d-hyperdisk-20260816",
         dotenv_secret_version=3,
         prune_deployment=True,
+        remote_mcps=(
+            RemoteMcpConfig.parse(
+                {
+                    "identity": "/marina/api",
+                    "label": "Marina API",
+                    "url": "https://marina.example.com/api/marina/mcp/",
+                    "auth": {"type": "gcpIdentityToken", "audience": "iap-client-id"},
+                    "tools": ["find_tool", "call_tool"],
+                }
+            ),
+        ),
         profiles=(
             ProfileConfig.parse(
                 "ops",
@@ -116,7 +129,7 @@ def field(inputs: dict, snake: str, camel: str):
 def test_empty_runtime_policy_cannot_prune_existing_profiles() -> None:
     base = deployment_config()
     with pytest.raises(ValueError, match="non-empty runtime policy"):
-        replace(base, prune_deployment=True, profiles=(), workloads=(), github_federations=())
+        replace(base, prune_deployment=True, remote_mcps=(), profiles=(), workloads=(), github_federations=())
 
 
 def test_domain_is_a_canonical_hostname() -> None:
@@ -278,6 +291,40 @@ def test_profile_mcp_access_rejects_invalid_selections(mcp_access: dict[str, obj
         ProfileConfig.parse("ops", {"agent": "codex", "mcpAccess": mcp_access})
 
 
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"url": "http://marina.example.com/mcp"},
+        {"auth": {"type": "gcpIdentityToken"}},
+        {"tools": ["find_tool", "find_tool"]},
+    ],
+)
+def test_remote_mcp_rejects_unsafe_or_ambiguous_configuration(override: dict[str, object]) -> None:
+    value: dict[str, object] = {
+        "identity": "/marina/api",
+        "label": "Marina API",
+        "url": "https://marina.example.com/mcp",
+        "auth": {"type": "none"},
+        "tools": ["find_tool", "call_tool"],
+    }
+    value.update(override)
+
+    with pytest.raises(ValueError, match="remote MCP"):
+        RemoteMcpConfig.parse(value)
+
+
+def test_production_marina_profile_alone_receives_the_remote_mcp() -> None:
+    stack = yaml.safe_load((ROOT / "Pulumi.marin-loom.yaml").read_text())["config"]
+    remote = RemoteMcpConfig.parse(stack["marin-loom:remoteMcps"][0])
+    profiles = stack["marin-loom:profiles"]
+
+    assert remote.auth.manifest() == {
+        "type": "gcp_identity_token",
+        "audience": MARIN_DESKTOP_OAUTH_CLIENT.client_id,
+    }
+    assert {name for name, profile in profiles.items() if remote.group in profile["mcpAccess"]["groups"]} == {"marina"}
+
+
 @pulumi.runtime.test
 def test_deployment_models_durable_resources_without_secret_payloads():
     infrastructure, mocks = infrastructure_and_mocks()
@@ -401,6 +448,17 @@ def test_profiles_and_workloads_render_to_vm_metadata():
         manifest = json.loads(by_name(mocks, "loom").inputs["metadata"]["loom-deployment"])
         assert manifest["prune"] is True
         assert manifest["settings"] == {"slack.profile": "ops"}
+        assert manifest["remote_mcps"] == [
+            {
+                "identity": "/marina/api",
+                "label": "Marina API",
+                "description": "",
+                "url": "https://marina.example.com/api/marina/mcp/",
+                "auth": {"type": "gcp_identity_token", "audience": "iap-client-id"},
+                "tools": ["find_tool", "call_tool"],
+                "enabled": True,
+            }
+        ]
         assert manifest["profiles"][0]["profile"]["name"] == "ops"
         assert manifest["profiles"][0]["profile"]["instructions"] == (
             (ROOT / "profiles/ops/AGENTS.md").read_text().strip()

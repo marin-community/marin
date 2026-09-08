@@ -11,6 +11,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import pulumi
 import pulumi_cloudflare as cloudflare
@@ -57,6 +58,7 @@ MCP_ACCESS_NONE = "none"
 MCP_ACCESS_ALL = "all"
 MCP_ACCESS_GROUPS = "groups"
 MCP_ACCESS_MODES = frozenset({MCP_ACCESS_NONE, MCP_ACCESS_ALL, MCP_ACCESS_GROUPS})
+REMOTE_MCP_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
 def _positive_config_int(value: int, name: str) -> int:
@@ -136,6 +138,131 @@ class ProfileSecretConfig:
 
 
 type ProfileEnvConfig = ProfileLiteralEnvConfig | ProfileSecretConfig
+
+
+@dataclass(frozen=True)
+class RemoteMcpNoAuthConfig:
+    def manifest(self) -> dict[str, str]:
+        return {"type": "none"}
+
+
+@dataclass(frozen=True)
+class RemoteMcpEnvironmentAuthConfig:
+    header: str
+    environment: str
+    prefix: str
+
+    def manifest(self) -> dict[str, str]:
+        return {
+            "type": "environment",
+            "header": self.header,
+            "environment": self.environment,
+            "prefix": self.prefix,
+        }
+
+
+@dataclass(frozen=True)
+class RemoteMcpGcpIdentityTokenAuthConfig:
+    audience: str
+
+    def manifest(self) -> dict[str, str]:
+        return {"type": "gcp_identity_token", "audience": self.audience}
+
+
+type RemoteMcpAuthConfig = (RemoteMcpNoAuthConfig | RemoteMcpEnvironmentAuthConfig | RemoteMcpGcpIdentityTokenAuthConfig)
+
+
+def _parse_remote_mcp_auth(value: object, identity: str) -> RemoteMcpAuthConfig:
+    if not isinstance(value, dict):
+        raise ValueError(f"remote MCP {identity!r} auth must be an object")
+    auth_type = str(value.get("type", "none")).strip()
+    if auth_type == "none":
+        return RemoteMcpNoAuthConfig()
+    if auth_type == "environment":
+        header = str(value.get("header", "")).strip()
+        environment = str(value.get("environment", "")).strip()
+        prefix = str(value.get("prefix", ""))
+        if not REMOTE_MCP_NAME.fullmatch(header) or not REMOTE_MCP_NAME.fullmatch(environment):
+            raise ValueError(f"remote MCP {identity!r} environment auth requires valid header and environment names")
+        if "\n" in prefix or "\r" in prefix:
+            raise ValueError(f"remote MCP {identity!r} auth prefix must be a single line")
+        return RemoteMcpEnvironmentAuthConfig(header, environment, prefix)
+    if auth_type == "gcpIdentityToken":
+        audience = str(value.get("audience", "")).strip()
+        if not audience:
+            raise ValueError(f"remote MCP {identity!r} GCP identity-token auth requires audience")
+        return RemoteMcpGcpIdentityTokenAuthConfig(audience)
+    raise ValueError(f"remote MCP {identity!r} auth.type must be none, environment, or gcpIdentityToken")
+
+
+@dataclass(frozen=True)
+class RemoteMcpConfig:
+    identity: str
+    label: str
+    description: str
+    url: str
+    auth: RemoteMcpAuthConfig
+    tools: tuple[str, ...]
+    enabled: bool
+
+    @classmethod
+    def parse(cls, value: Mapping[str, object]) -> RemoteMcpConfig:
+        identity = str(value.get("identity", "")).strip()
+        parts = identity.removeprefix("/").split("/")
+        if not identity.startswith("/") or len(identity) > 160 or len(parts) < 2:
+            raise ValueError("remote MCP identity must be /group/name[/name...]")
+        if any(not REMOTE_MCP_NAME.fullmatch(part) for part in parts):
+            raise ValueError(f"remote MCP {identity!r} identity segments are invalid")
+        label = str(value.get("label", "")).strip()
+        if not label:
+            raise ValueError(f"remote MCP {identity!r} requires label")
+        url = str(value.get("url", "")).strip()
+        parsed_url = urlsplit(url)
+        if (
+            parsed_url.scheme != "https"
+            or not parsed_url.hostname
+            or parsed_url.username
+            or parsed_url.password
+            or parsed_url.fragment
+        ):
+            raise ValueError(f"remote MCP {identity!r} requires an HTTPS URL without credentials or a fragment")
+        tools_value = value.get("tools", [])
+        if (
+            not isinstance(tools_value, list)
+            or not tools_value
+            or not all(isinstance(tool, str) for tool in tools_value)
+        ):
+            raise ValueError(f"remote MCP {identity!r} tools must be a non-empty list of strings")
+        tools = tuple(tools_value)
+        if len(set(tools)) != len(tools) or any(not REMOTE_MCP_NAME.fullmatch(tool) for tool in tools):
+            raise ValueError(f"remote MCP {identity!r} tool names must be valid and unique")
+        enabled = value.get("enabled", True)
+        if not isinstance(enabled, bool):
+            raise ValueError(f"remote MCP {identity!r} enabled must be a boolean")
+        return cls(
+            identity=identity,
+            label=label,
+            description=str(value.get("description", "")).strip(),
+            url=url,
+            auth=_parse_remote_mcp_auth(value.get("auth", {}), identity),
+            tools=tools,
+            enabled=enabled,
+        )
+
+    @property
+    def group(self) -> str:
+        return self.identity.split("/", 2)[1]
+
+    def manifest(self) -> dict[str, object]:
+        return {
+            "identity": self.identity,
+            "label": self.label,
+            "description": self.description,
+            "url": self.url,
+            "auth": self.auth.manifest(),
+            "tools": list(self.tools),
+            "enabled": self.enabled,
+        }
 
 
 def _parse_profile_env(name: str, value: object, profile: str) -> ProfileEnvConfig:
@@ -392,6 +519,7 @@ class DeploymentConfig:
     dotenv_secret_version: int
     prune_deployment: bool = False
     settings: tuple[tuple[str, str | int | bool], ...] = ()
+    remote_mcps: tuple[RemoteMcpConfig, ...] = ()
     profiles: tuple[ProfileConfig, ...] = ()
     workloads: tuple[WorkloadIdentityConfig, ...] = ()
     github_federations: tuple[GitHubFederationConfig, ...] = ()
@@ -412,6 +540,11 @@ class DeploymentConfig:
                     f"projects/{self.project}/"
                 ):
                     raise ValueError(f"profile {profile.name!r} secretRef must use project {self.project!r}")
+        remote_identities: set[str] = set()
+        for remote in self.remote_mcps:
+            if remote.identity in remote_identities:
+                raise ValueError(f"duplicate remote MCP identity {remote.identity!r}")
+            remote_identities.add(remote.identity)
         profile_names = {profile.name for profile in self.profiles}
         workload_names: set[str] = set()
         for workload in self.workloads:
@@ -421,7 +554,9 @@ class DeploymentConfig:
             _validate_profile_reference(
                 "GitHub federation", federation.name, federation.profile, federation_names, profile_names
             )
-        if self.prune_deployment and not (self.settings or self.profiles or self.workloads or self.github_federations):
+        if self.prune_deployment and not (
+            self.settings or self.remote_mcps or self.profiles or self.workloads or self.github_federations
+        ):
             raise ValueError("pruneDeployment requires a non-empty runtime policy")
 
     @property
@@ -452,6 +587,9 @@ class DeploymentConfig:
             if not isinstance(key, str) or not key.strip() or not isinstance(value, (str, int, bool)):
                 raise ValueError("settings must map non-empty string keys to string, integer, or boolean values")
             settings.append((key, value))
+        raw_remote_mcps = config.get_object("remoteMcps") or []
+        if not isinstance(raw_remote_mcps, list):
+            raise ValueError("remoteMcps must be a list")
         raw_workloads = config.get_object("workloads") or []
         if not isinstance(raw_workloads, list):
             raise ValueError("workloads must be a list")
@@ -463,6 +601,11 @@ class DeploymentConfig:
             if not isinstance(value, dict):
                 raise ValueError(f"profile {name!r} must be an object")
             profiles.append(ProfileConfig.parse(str(name), value))
+        remote_mcps = []
+        for value in raw_remote_mcps:
+            if not isinstance(value, dict):
+                raise ValueError("each remote MCP must be an object")
+            remote_mcps.append(RemoteMcpConfig.parse(value))
         workloads = []
         for value in raw_workloads:
             if not isinstance(value, dict):
@@ -494,6 +637,7 @@ class DeploymentConfig:
             dotenv_secret_version=config.require_int("dotenvSecretVersion"),
             prune_deployment=config.get_bool("pruneDeployment") or False,
             settings=tuple(settings),
+            remote_mcps=tuple(remote_mcps),
             profiles=tuple(profiles),
             workloads=tuple(workloads),
             github_federations=tuple(github_federations),
@@ -705,6 +849,7 @@ def _deployment_manifest(
     return json.dumps(
         {
             "settings": dict(config.settings),
+            "remote_mcps": [remote.manifest() for remote in config.remote_mcps],
             "profiles": profiles,
             "federations": (
                 [mapping.manifest(config.public_url) for mapping in config.github_federations] + workload_values

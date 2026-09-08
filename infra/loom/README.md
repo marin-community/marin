@@ -114,6 +114,22 @@ ordinary sessions use the deployment-managed `default` profile, while workload
 and future GitHub Actions callers select the automation profile authorized by
 their federation mapping.
 
+The `remoteMcps` declaration registers Marina's authenticated Streamable HTTP
+endpoint as the `/marina/api` capability. Loom passes it directly to compatible
+ACP agents and mints an IAP ID token for the shared Marin desktop OAuth client
+from the VM workload identity when the agent process starts. No Marina token is
+stored in Pulumi state or a profile environment. Deploy a Loom revision with
+remote HTTP MCP support before applying this declaration.
+
+Only the interactive `marina` profile selects the `marina` capability group.
+Its instructions treat page and API content as untrusted data and require an
+explicit user request before a mutating operation. All other production
+profiles enumerate Loom's built-in groups rather than using `mcpAccess: all`,
+so registering another remote endpoint cannot silently widen them. The profile
+archives after 50 idle minutes; an active process that outlives its IAP token
+must recover before its next Marina call because ACP does not refresh HTTP MCP
+headers in place.
+
 A profile's `env` block declares the environment every session of that profile
 receives. Each entry sets either an inline `value` for non-secret configuration
 or a same-project `secretRef` that the host resolves from Secret Manager at launch. Declare
@@ -139,14 +155,14 @@ concrete repositories to mint the cross-repository token its workflow depends
 on.
 
 The Pulumi declaration is authoritative at activation time. An unchanged
-profile keeps its database revision; a changed declaration overwrites the
-current row and advances the revision. UI or API edits persist only until the
-next activation. Deployment pruning is enabled, so a deployment-managed
-setting, profile, or federation removed from `Pulumi.marin-loom.yaml` is removed
-from its deployment layer on the next activation. Stock profiles omitted from
-the declaration remain unmanaged and are not pruned; production intentionally
-manages `default` so interactive instruction and runtime policy are reviewed in
-this repository.
+profile or remote MCP keeps its database revision; a changed declaration
+overwrites the current row and advances the revision. UI or API edits persist
+only until the next activation. Deployment pruning is enabled, so a
+deployment-managed setting, remote MCP, profile, or federation removed from
+`Pulumi.marin-loom.yaml` is removed from its deployment layer on the next
+activation. Stock profiles omitted from the declaration remain unmanaged and
+are not pruned; production intentionally manages `default` so interactive
+instruction and runtime policy are reviewed in this repository.
 
 At runtime, the Grafana bridge gets a Google-signed ID token from the Cloud Run
 metadata server, exchanges it at `/api/auth/federate`, and uses the resulting

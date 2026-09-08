@@ -21,6 +21,18 @@ config:
     github.profile: github
     slack.effort: agent-default
     slack.profile: slack
+  marin-loom:remoteMcps:
+    - identity: /marina/api
+      label: Marina API
+      description: Search and call checked-in Marina application APIs
+      url: https://marina.oa.dev/api/marina/mcp/
+      auth:
+        type: gcpIdentityToken
+        audience: 748532799086-qf8m6mvovtdmd71npm07gk1ohijsr3q5.apps.googleusercontent.com
+      tools:
+        - find_tool
+        - call_tool
+      enabled: true
   marin-loom:profiles:
     default:
       agent: codex
@@ -38,9 +50,42 @@ config:
       githubRepositories: &interactiveGithubRepositories
         - Open-Athena/*
         - marin-community/*
+      mcpAccess: &builtinMcpAccess
+        mode: groups
+        groups:
+          - artifact
+          - channel
+          - context
+          - github
+          - issue
+          - messaging
+          - permissions
+          - session
+    marina:
+      agent: codex
+      description: Interactive questions and actions over Marina application APIs
+      model: gpt-5.6-sol
+      effort: xhigh
+      protocol: acp
+      mode: auto
+      class: interactive
+      idleArchiveSeconds: 3000
+      prelude: weaver
+      instructionsFile: profiles/marina/AGENTS.md
+      env: *loomIrisUser
+      githubRepositories: *interactiveGithubRepositories
       mcpAccess:
-        mode: all
-        groups: []
+        mode: groups
+        groups:
+          - artifact
+          - channel
+          - context
+          - github
+          - issue
+          - marina
+          - messaging
+          - permissions
+          - session
     github:
       agent: codex
       description: GitHub-triggered Marin issue and pull-request sessions
@@ -53,9 +98,7 @@ config:
       instructionsFile: profiles/github/AGENTS.md
       env: *loomIrisUser
       githubRepositories: *interactiveGithubRepositories
-      mcpAccess:
-        mode: all
-        groups: []
+      mcpAccess: *builtinMcpAccess
     fork-ferry:
       agent: codex
       description: Refresh Marin forks and validate their pinned revisions
@@ -82,9 +125,7 @@ config:
         - marin-community/vllm
         - marin-community/xla
       allowedTools: []
-      mcpAccess:
-        mode: all
-        groups: []
+      mcpAccess: *builtinMcpAccess
     pr-review:
       agent: codex
       description: Review trusted Marin pull requests from immutable head commits
@@ -106,9 +147,7 @@ config:
       githubRepositories:
         - marin-community/marin
       allowedTools: []
-      mcpAccess:
-        mode: all
-        groups: []
+      mcpAccess: *builtinMcpAccess
     codehealth-refinement:
       agent: codex
       description: Refine agentic-lint from persisted review and lint activity
@@ -136,9 +175,7 @@ config:
       githubRepositories:
         - marin-community/marin
       allowedTools: []
-      mcpAccess:
-        mode: all
-        groups: []
+      mcpAccess: *builtinMcpAccess
     ops:
       agent: codex
       description: Coordinate Grafana alerts and delegate incident triage for Marin
@@ -160,9 +197,7 @@ config:
       githubRepositories:
         - marin-community/marin
       allowedTools: []
-      mcpAccess:
-        mode: all
-        groups: []
+      mcpAccess: *builtinMcpAccess
     slack:
       agent: codex
       description: Slack-triggered Marin conversations and repository work
@@ -175,9 +210,7 @@ config:
       instructionsFile: profiles/slack/AGENTS.md
       env: *loomIrisUser
       githubRepositories: *interactiveGithubRepositories
-      mcpAccess:
-        mode: all
-        groups: []
+      mcpAccess: *builtinMcpAccess
   marin-loom:workloads:
     - name: grafana-alerts
       profile: ops
