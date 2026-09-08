@@ -3,6 +3,7 @@
 
 """Preserve native rewards while scoring exact correctness and completed answers."""
 
+import hashlib
 import importlib.metadata
 import json
 import math
@@ -38,6 +39,8 @@ class ScoredRow:
     score_contract: float
     native_reward_tokens: tuple[float, ...] | None
     native_reward_reduction: str
+    contract_response_sha256: str
+    contract_response_rendering: str
     contract_correct: bool
     score_contract_completed: float
     contract_rule: str
@@ -88,7 +91,9 @@ def score_row(row: dict[str, Any], decoder: Tokenizer, *, model: str, thinking: 
     gold = extras["reward_model"]["ground_truth"]
     if gold != extras["reward_spec"]["ground_truth"]:
         raise ValueError("Ground-truth channels disagree")
-    response = row["output_response"]
+    # The inference engine sends special-token-stripped text to env.step. The
+    # dump's output_response is a forensic decode retaining EOS and role tokens.
+    response = decoder.decode(row["response_ids"], skip_special_tokens=True)
     correct = get_data_contract(env).is_correct(response, gold)
     native = score_response(response, gold) if env == "reasoning_gym" else float(correct)
     if env == "reasoning_gym":
@@ -119,6 +124,8 @@ def score_row(row: dict[str, Any], decoder: Tokenizer, *, model: str, thinking: 
         score_contract=raw,
         native_reward_tokens=tuple(rewards) if isinstance(rewards, list) else None,
         native_reward_reduction="token_reward_sum" if isinstance(rewards, list) else "scalar_identity",
+        contract_response_sha256=hashlib.sha256(response.encode()).hexdigest(),
+        contract_response_rendering="decode_skip_special_tokens",
         contract_correct=correct,
         score_contract_completed=completed,
         contract_rule=CONTRACT_RULES[env],

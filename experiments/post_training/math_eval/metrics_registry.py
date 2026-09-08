@@ -193,6 +193,12 @@ METRICS = (
                 "Binary correctness times accepted stop; ranking/MDE/CI primary.",
             ),
             ("native_reward_tokens", "one response", "Original reward list preserved verbatim; null for scalar dumps."),
+            ("contract_response_sha256", "one response", "SHA of the native verifier input text."),
+            (
+                "contract_response_rendering",
+                "one response",
+                "decode_skip_special_tokens matches inference env.step text.",
+            ),
             ("native_reward_reduction", "one response", "token_reward_sum or scalar_identity, matching the auditor."),
             (
                 "score_semantic",
