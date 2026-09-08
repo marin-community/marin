@@ -59,6 +59,10 @@ MCP_ACCESS_ALL = "all"
 MCP_ACCESS_GROUPS = "groups"
 MCP_ACCESS_MODES = frozenset({MCP_ACCESS_NONE, MCP_ACCESS_ALL, MCP_ACCESS_GROUPS})
 REMOTE_MCP_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+REMOTE_MCP_AUTH_NONE = "none"
+REMOTE_MCP_AUTH_ENVIRONMENT = "environment"
+REMOTE_MCP_AUTH_GCP_IDENTITY_TOKEN_CONFIG = "gcpIdentityToken"
+REMOTE_MCP_AUTH_GCP_IDENTITY_TOKEN_WIRE = "gcp_identity_token"
 
 
 def _positive_config_int(value: int, name: str) -> int:
@@ -143,7 +147,7 @@ type ProfileEnvConfig = ProfileLiteralEnvConfig | ProfileSecretConfig
 @dataclass(frozen=True)
 class RemoteMcpNoAuthConfig:
     def manifest(self) -> dict[str, str]:
-        return {"type": "none"}
+        return {"type": REMOTE_MCP_AUTH_NONE}
 
 
 @dataclass(frozen=True)
@@ -154,7 +158,7 @@ class RemoteMcpEnvironmentAuthConfig:
 
     def manifest(self) -> dict[str, str]:
         return {
-            "type": "environment",
+            "type": REMOTE_MCP_AUTH_ENVIRONMENT,
             "header": self.header,
             "environment": self.environment,
             "prefix": self.prefix,
@@ -166,7 +170,7 @@ class RemoteMcpGcpIdentityTokenAuthConfig:
     audience: str
 
     def manifest(self) -> dict[str, str]:
-        return {"type": "gcp_identity_token", "audience": self.audience}
+        return {"type": REMOTE_MCP_AUTH_GCP_IDENTITY_TOKEN_WIRE, "audience": self.audience}
 
 
 type RemoteMcpAuthConfig = (RemoteMcpNoAuthConfig | RemoteMcpEnvironmentAuthConfig | RemoteMcpGcpIdentityTokenAuthConfig)
@@ -175,10 +179,10 @@ type RemoteMcpAuthConfig = (RemoteMcpNoAuthConfig | RemoteMcpEnvironmentAuthConf
 def _parse_remote_mcp_auth(value: object, identity: str) -> RemoteMcpAuthConfig:
     if not isinstance(value, dict):
         raise ValueError(f"remote MCP {identity!r} auth must be an object")
-    auth_type = str(value.get("type", "none")).strip()
-    if auth_type == "none":
+    auth_type = str(value.get("type", REMOTE_MCP_AUTH_NONE)).strip()
+    if auth_type == REMOTE_MCP_AUTH_NONE:
         return RemoteMcpNoAuthConfig()
-    if auth_type == "environment":
+    if auth_type == REMOTE_MCP_AUTH_ENVIRONMENT:
         header = str(value.get("header", "")).strip()
         environment = str(value.get("environment", "")).strip()
         prefix = str(value.get("prefix", ""))
@@ -187,7 +191,7 @@ def _parse_remote_mcp_auth(value: object, identity: str) -> RemoteMcpAuthConfig:
         if "\n" in prefix or "\r" in prefix:
             raise ValueError(f"remote MCP {identity!r} auth prefix must be a single line")
         return RemoteMcpEnvironmentAuthConfig(header, environment, prefix)
-    if auth_type == "gcpIdentityToken":
+    if auth_type == REMOTE_MCP_AUTH_GCP_IDENTITY_TOKEN_CONFIG:
         audience = str(value.get("audience", "")).strip()
         if not audience:
             raise ValueError(f"remote MCP {identity!r} GCP identity-token auth requires audience")

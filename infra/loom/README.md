@@ -118,8 +118,9 @@ The `remoteMcps` declaration registers Marina's authenticated Streamable HTTP
 endpoint as the `/marina/api` capability. Loom passes it directly to compatible
 ACP agents and mints an IAP ID token for the shared Marin desktop OAuth client
 from the VM workload identity when the agent process starts. No Marina token is
-stored in Pulumi state or a profile environment. Deploy a Loom revision with
-remote HTTP MCP support before applying this declaration.
+stored in Pulumi state or a profile environment. Activation requires a Loom
+binary that accepts remote MCP deployment entries and ACP HTTP server
+descriptors; older binaries reject this manifest.
 
 Only the interactive `marina` profile selects the `marina` capability group.
 Its instructions treat page and API content as untrusted data and require an
