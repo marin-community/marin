@@ -16,7 +16,14 @@ def test_all_native_dump_eval_keys_have_named_meanings():
     fixture = {
         f"eval/{dataset}/{key}": 0
         for dataset in ("all", "g03-gsm8k", "aime")
-        for key in (*EVAL_RESPONSE_METRICS, "avg_score", "pass_at_1", "pass_at_8")
+        for key in (
+            *EVAL_RESPONSE_METRICS,
+            "avg_score",
+            "pass_at_1",
+            "pass_at_8",
+            "contract_correct",
+            "contract_completed",
+        )
     }
     for key in fixture:
         metric = lookup(key)

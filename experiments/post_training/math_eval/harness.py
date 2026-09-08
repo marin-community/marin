@@ -154,6 +154,19 @@ def build_records(
     )
     if seen != Counter({digest: samples for digest in expected_ids}):
         raise ValueError("Frozen question sample coverage differs")
+    aggregate = audit.read_json(
+        posixpath.join(root, "dumped_evals", f"global_step_{step}_evals", "aggregated_results.jsonl")
+    )
+    for source, metrics in receipt["summary"].items():
+        for name, column in (
+            ("contract_correct", "contract_correct"),
+            ("contract_completed", "score_contract_completed"),
+        ):
+            key = f"eval/{source.replace('/', '_')}/{name}"
+            for label, values in (("dump", aggregate), ("W&B", wandb_metrics)):
+                if key not in values or not math.isclose(values[key], metrics[column], rel_tol=0, abs_tol=1e-7):
+                    raise ValueError(f"Frozen contract metric missing or differs in {label}: {key}")
+    receipt["contract_metric_parity_verified"] = True
     receipt.update(
         {
             "manifest_sha256": selection["manifest_sha256"],
