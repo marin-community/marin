@@ -28,7 +28,7 @@ def test_pinned_datasource_fingerprint_performs_no_storage_reads(monkeypatch):
         launcher.pool_inputs("math-eval-pool@mutable")
 
 
-@pytest.mark.parametrize("alteration", ["prompt", "gold", "acceptance", "order"])
+@pytest.mark.parametrize("alteration", ["prompt", "gold", "acceptance", "order", "missing_contract", "changed_contract"])
 def test_dataset_boundary_rejects_changed_content_after_a_valid_view(monkeypatch, alteration):
     records = [
         _pool_record(question=f"Compute {i} plus {i * i}.", answer="5", pool_bin=GSM8K_BIN, split="train", index=i)
@@ -59,6 +59,11 @@ def test_dataset_boundary_rejects_changed_content_after_a_valid_view(monkeypatch
         rows[0]["reward_model"]["ground_truth"] = "6"
     elif alteration == "acceptance":
         overlay["statuses"][rows[0]["extra_info"]["prompt_sha256"]] = "reject"
+    elif alteration == "missing_contract":
+        for row in rows:
+            row["extra_info"].pop("contract")
+    elif alteration == "changed_contract":
+        rows[0]["extra_info"]["contract"] = "unknown-contract"
     else:
         rows.reverse()
     with pytest.raises(ValueError, match=r"changed|membership"):
