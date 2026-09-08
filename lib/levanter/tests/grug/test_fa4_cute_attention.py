@@ -311,6 +311,7 @@ def test_real_gpu_fa4_cute_attention_matches_reference_for_simple_sliding_mask()
 
 
 @pytest.mark.parametrize("sliding_window", [None, 31])
+@pytest.mark.slow
 @pytest.mark.timeout(180)
 def test_real_gpu_fa4_cute_zeroes_padding_tiles_before_reusing_query_storage(sliding_window):
     if jax.default_backend() != "gpu":
