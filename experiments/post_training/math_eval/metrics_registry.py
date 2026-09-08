@@ -30,6 +30,19 @@ SCORER = "experiments/post_training/math_eval/scoring.py:34"
 CURRICULUM = "MarinSkyRL/skyrl-train/skyrl_train/curriculum.py:593"
 
 METRICS = (
+    *(
+        _metric(
+            f"eval/{{ds}}/{name}",
+            "wandb|dump_aggregate",
+            "MarinSkyRL/skyrl-train/skyrl_train/evaluation_contract.py:19",
+            "all evaluated response sequences",
+            notes,
+        )
+        for name, notes in (
+            ("contract_correct", "Exact task correctness: GSM1, AIME+1, RG>=1."),
+            ("contract_completed", "Exact correctness times accepted stop; primary completion metric."),
+        )
+    ),
     _metric(
         "eval/{ds}/avg_score",
         "wandb|dump_aggregate",

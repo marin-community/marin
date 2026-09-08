@@ -81,7 +81,12 @@ def fixture(tmp_path):
     metrics = {
         f"eval/{name}/{metric}": value
         for name in ("all", GSM8K_BIN.name)
-        for metric, value in (("avg_score", 0.5), ("pass_at_2", 1.0))
+        for metric, value in (
+            ("avg_score", 0.5),
+            ("pass_at_2", 1.0),
+            ("contract_correct", 0.5),
+            ("contract_completed", 0.5),
+        )
     }
     path = tmp_path / "dumped_evals/global_step_0_evals"
     path.mkdir(parents=True)
@@ -142,4 +147,14 @@ def test_harness_refuses_auditable_but_wrong_contract_rows(fixture, field):
         kwargs["overlay"]["statuses"][kwargs["expected_ids"][0]] = "reject"
     raw.write_text("".join(json.dumps(row) + "\n" for row in rows))
     with pytest.raises(ValueError, match=r"frozen|decode|accepted"):
+        harness.build_records(**kwargs)
+
+
+def test_harness_checks_new_contract_metric_parity_independently_of_legacy_scores(fixture):
+    kwargs, raw, _rows = fixture
+    aggregate = raw.parent / "aggregated_results.jsonl"
+    metrics = json.loads(aggregate.read_text())
+    metrics["eval/all/contract_completed"] = 1.0
+    aggregate.write_text(json.dumps(metrics))
+    with pytest.raises(ValueError, match="Frozen contract metric"):
         harness.build_records(**kwargs)
