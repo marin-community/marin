@@ -24,6 +24,7 @@ Source publication/pinning and current capacity checks precede submission.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict, dataclass, field, replace
 from enum import StrEnum
 from typing import cast
@@ -43,6 +44,7 @@ from marin.rl.skyrl import (
     ArtifactHfModel,
     IrisSkyRLExecution,
     SkyRLEvaluationModel,
+    SkyRLLaunchRequest,
     SkyRLModel,
     SkyRLRetentionPolicy,
     SkyRLRuntime,
@@ -396,11 +398,13 @@ def apply_observation_options(config: dict, *, initial_eval_repeat_count: int, w
         trainer["weight_change_probe"] = True
 
 
-def validate_regional_storage(prefix: str, cluster: str) -> None:
-    """Require the artifact prefix to use the configured bucket for the target CoreWeave region."""
+def validate_regional_storage(prefix: str, cluster: str, *, allow_cross_region_io: bool = False) -> None:
+    """Require local storage, with the explicit Qwen screening RNO/east exception."""
     region = cluster.removeprefix("cw-")
     expected = load_cluster_config("coreweave").region_buckets.get(region)
     path = StoragePath(prefix)
+    if allow_cross_region_io and cluster == "cw-rno2a" and path.scheme == "s3" and path.bucket == "marin-us-east-02a":
+        return
     if (
         expected is None
         or expected.store is not StoreType.COREWEAVE
@@ -410,6 +414,33 @@ def validate_regional_storage(prefix: str, cluster: str) -> None:
         raise click.ClickException(
             f"Artifact prefix {prefix!r} is not local to {cluster}; " "use its configured CoreWeave regional bucket"
         )
+
+
+def validate_qwen_cross_region_request(request: SkyRLLaunchRequest) -> None:
+    """Check all resolved artifact roots before the RNO exception can submit."""
+    model = request.model
+    expected_name = user_owned_name("models/async-rl-qwen3-0.6b")
+    if (
+        model.tokenizer_uri != "Qwen/Qwen3-0.6B"
+        or model.tokenizer_revision != "c1899de289a04d12100db370d81485cdf75e47ca"
+        or not model.identity.startswith(expected_name + "@")
+        or not model.identity.endswith(":8a30d2b5")
+    ):
+        raise ValueError("Cross-region I/O requires the pinned Qwen3-0.6B model artifact")
+    paths = [model.uri, *(item.uri for item in request.train_data), *(item.uri for item in request.validation_data)]
+    paths.extend(asdict(request.output).values())
+    for path in paths:
+        storage = StoragePath(path)
+        if storage.scheme != "s3" or storage.bucket != "marin-us-east-02a":
+            raise ValueError(f"Cross-region I/O requires east S3 artifact paths: {path}")
+    # Config and overrides can add OOD inputs or dump destinations outside the
+    # typed locator fields. Check every explicit remote URI in those surfaces.
+    for uri in re.findall(
+        r"(?:s3|gs|https?|hf)://[^\s'\"\],}]+", request.config_yaml + "\n" + "\n".join(request.overrides)
+    ):
+        storage = StoragePath(uri)
+        if storage.scheme != "s3" or storage.bucket != "marin-us-east-02a":
+            raise ValueError(f"Cross-region I/O requires east S3 config paths: {uri}")
 
 
 def build_experiment(
@@ -440,6 +471,7 @@ def build_experiment(
     optimizer_precision: OptimizerPrecision = OptimizerPrecision.NATIVE,
     optimizer_state_metrics: bool = False,
     pool_artifact: str | None = None,
+    allow_cross_region_io: bool = False,
 ) -> tuple[ArtifactStep[SkyRLModel] | ArtifactStep[SkyRLTrainingResult], ArtifactStep[EvaluationResult] | None]:
     """Construct versioned dependencies and a bounded, namespaced training attempt."""
     validate_version(version)
@@ -451,6 +483,8 @@ def build_experiment(
         raise ValueError("A positive training deadline and nonnegative staleness are required")
     if completion not in ("model", "metrics"):
         raise ValueError(f"Unknown completion mode: {completion}")
+    if allow_cross_region_io and (cluster != "cw-rno2a" or scale is not Scale.SCREENING or completion != "metrics"):
+        raise ValueError("Cross-region I/O is restricted to Qwen screening metrics jobs on cw-rno2a")
     if not 0 <= seed < 2**32:
         raise ValueError("Seed must be between 0 and 2**32 - 1")
     validate_validation_window(validation_offset, validation_rows)
@@ -555,7 +589,18 @@ def build_experiment(
         timeout_seconds=timeout_seconds,
     )
     if completion == "metrics":
-        return skyrl_metrics_step(spec, execution), None
+        step = skyrl_metrics_step(spec, execution)
+        if allow_cross_region_io:
+            original_build_config = step.build_config
+
+            def checked_build_config(ctx):
+                config = original_build_config(ctx)
+                if not ctx.is_fingerprint:
+                    validate_qwen_cross_region_request(config.request)
+                return config
+
+            step = replace(step, build_config=checked_build_config)
+        return step, None
     training = skyrl_step(spec, execution)
     evaluation = eval_step(
         SkyRLEvaluationModel(
@@ -590,6 +635,11 @@ def build_experiment(
 @click.option("--runner", type=click.Choice([r.value for r in Runner]), default="async", show_default=True)
 @click.option("--scale", type=click.Choice([s.value for s in Scale]), default="smoke", show_default=True)
 @click.option("--cluster", type=click.Choice(H100_CLUSTERS), default="cw-us-east-02a", show_default=True)
+@click.option(
+    "--allow-cross-region-io",
+    is_flag=True,
+    help="Allow Qwen screening on RNO to read pool/model artifacts and write results in the east bucket.",
+)
 @click.option("--stage", type=click.Choice(["rl", "evaluation"]), default="evaluation", show_default=True)
 @click.option("--completion", type=click.Choice(["metrics", "model"]), default="model", show_default=True)
 @click.option("--spans/--no-spans", default=True, show_default=True)
@@ -650,6 +700,7 @@ def main(
     runner: str,
     scale: str,
     cluster: str,
+    allow_cross_region_io: bool,
     stage: str,
     completion: str,
     spans: bool,
@@ -675,10 +726,15 @@ def main(
     execute: bool,
     pool_artifact: str | None,
 ) -> None:
+    if allow_cross_region_io and (
+        cluster != "cw-rno2a" or scale != Scale.SCREENING.value or stage != "rl" or completion != "metrics"
+    ):
+        raise click.UsageError("Cross-region I/O is restricted to Qwen screening RL jobs on cw-rno2a")
     if completion == "metrics" and stage == "evaluation":
         raise click.UsageError("Metrics completion requires --stage rl; external evaluation requires a model export")
     training, evaluation = build_experiment(
         pool_artifact=pool_artifact,
+        allow_cross_region_io=allow_cross_region_io,
         version=version,
         cluster=cluster,
         runner=Runner(runner),
@@ -706,7 +762,9 @@ def main(
         epoch_seeded_shuffle=epoch_seeded_shuffle,
     )
     prefix = marin_prefix()
-    if execute:
+    if allow_cross_region_io:
+        validate_regional_storage(prefix, cluster, allow_cross_region_io=True)
+    elif execute:
         validate_regional_storage(prefix, cluster)
     if completion == "model":
         checkpoint = training.deps[0]

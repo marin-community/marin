@@ -1001,3 +1001,147 @@ def test_pool_flag_preserves_default_preview_and_selects_verified_fixed_views():
 def test_pool_flag_rejects_legacy_window_or_insufficient_prompt_budget(changes):
     with pytest.raises(ValueError, match=r"frozen pool|Context budget"):
         qwen_metrics_request(pool_artifact=POOL_ARGUMENT, **changes)
+
+
+def test_qwen_rno_exception_is_explicit_and_preserves_recipe(monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin")
+    args = [
+        "--version",
+        "2026.09.08.1",
+        "--cluster",
+        "cw-rno2a",
+        "--scale",
+        "screening",
+        "--stage",
+        "rl",
+        "--completion",
+        "metrics",
+    ]
+    before = CliRunner().invoke(async_rl.main, args)
+    allowed = CliRunner().invoke(async_rl.main, [*args, "--allow-cross-region-io"])
+    assert before.exit_code == allowed.exit_code == 0, allowed.output
+    before_request = json.loads(before.output)["request"]
+    allowed_request = json.loads(allowed.output)["request"]
+    before_request.pop("attempt_id")
+    allowed_request.pop("attempt_id")
+    assert before_request == allowed_request
+    blocked = CliRunner().invoke(async_rl.main, [*args, "--run"])
+    assert blocked.exit_code != 0
+    assert "not local to cw-rno2a" in blocked.output
+    submitted = []
+    monkeypatch.setattr(async_rl, "run", lambda *args, **kwargs: submitted.append((args, kwargs)))
+    executed = CliRunner().invoke(async_rl.main, [*args, "--allow-cross-region-io", "--run"])
+    assert executed.exit_code == 0, executed.output
+    assert len(submitted) == 1
+
+
+@pytest.mark.parametrize(
+    "change", [["--scale", "qualification"], ["--cluster", "cw-us-east-02a"], ["--stage", "evaluation"]]
+)
+def test_qwen_rno_exception_rejects_other_scopes(change):
+    result = CliRunner().invoke(
+        async_rl.main,
+        [
+            "--version",
+            "2026.09.08.1",
+            "--cluster",
+            "cw-rno2a",
+            "--scale",
+            "screening",
+            "--stage",
+            "rl",
+            "--allow-cross-region-io",
+            "--completion",
+            "metrics",
+            *change,
+        ],
+    )
+    assert result.exit_code != 0
+    assert "restricted to Qwen screening" in result.output
+
+
+def test_rno_exception_rejects_other_buckets_and_snowball(monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-west-04a/marin")
+    result = CliRunner().invoke(
+        async_rl.main,
+        [
+            "--version",
+            "2026.09.08.1",
+            "--cluster",
+            "cw-rno2a",
+            "--scale",
+            "screening",
+            "--stage",
+            "rl",
+            "--allow-cross-region-io",
+            "--completion",
+            "metrics",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "not local to cw-rno2a" in result.output
+    snowball = CliRunner().invoke(async_snowball.main, ["--version", "2026.09.08.1", "--allow-cross-region-io"])
+    assert snowball.exit_code != 0
+    assert "No such option" in snowball.output
+
+
+@pytest.mark.parametrize(
+    "changed", ["model", "train", "dev", "output", "ood", "dump", "tokenizer", "revision", "identity"]
+)
+def test_rno_resolved_request_guard_checks_model_and_every_io_surface(changed):
+    request = qwen_metrics_request()
+    prefix = "s3://marin-us-east-02a/marin"
+    request = replace(
+        request,
+        model=replace(request.model, uri=prefix + "/model"),
+        train_data=tuple(replace(item, uri=prefix + "/train") for item in request.train_data),
+        validation_data=tuple(replace(item, uri=prefix + "/dev") for item in request.validation_data),
+        output=replace(request.output, **{key: prefix + "/" + key for key in asdict(request.output)}),
+    )
+    async_rl.validate_qwen_cross_region_request(request)
+    foreign = "s3://marin-us-west-04a/changed"
+    if changed == "model":
+        request = replace(request, model=replace(request.model, uri=foreign))
+    elif changed in {"train", "dev"}:
+        field = "train_data" if changed == "train" else "validation_data"
+        request = replace(request, **{field: (replace(getattr(request, field)[0], uri=foreign),)})
+    elif changed == "output":
+        request = replace(request, output=replace(request.output, terminal_manifest_uri=foreign))
+    elif changed == "ood":
+        request = replace(request, config_yaml=request.config_yaml + "\nood_input: " + foreign)
+    elif changed == "dump":
+        request = replace(request, overrides=(*request.overrides, "++dump_path=" + foreign))
+    elif changed == "tokenizer":
+        request = replace(request, model=replace(request.model, tokenizer_uri="Qwen/Qwen3-30B-A3B"))
+    elif changed == "revision":
+        request = replace(request, model=replace(request.model, tokenizer_revision="main"))
+    else:
+        request = replace(request, model=replace(request.model, identity="another/model@1.0:8a30d2b5"))
+    with pytest.raises(ValueError, match="Cross-region I/O requires"):
+        async_rl.validate_qwen_cross_region_request(request)
+
+
+def test_rno_guard_executes_when_actual_training_configuration_resolves():
+    step, _ = async_rl.build_experiment(
+        version="2026.09.06.16",
+        cluster="cw-rno2a",
+        runner=async_rl.Runner.ASYNC,
+        scale=async_rl.Scale.SCREENING,
+        completion="metrics",
+        allow_cross_region_io=True,
+    )
+    prefix = "s3://marin-us-east-02a/marin"
+    ctx = StepContext(
+        output_path=prefix + "/output",
+        prefix=prefix,
+        region="us-east-02a",
+        is_fingerprint=False,
+        _dep_ref=lambda dependency: prefix + "/" + dependency.name,
+        _runtime_args=step.runtime_args,
+        _deps=step.deps,
+    )
+    request = step.build_config(ctx).request
+    assert request.model.tokenizer_uri == "Qwen/Qwen3-0.6B"
+    foreign = replace(ctx, _dep_ref=lambda _dependency: "s3://marin-us-west-04a/changed")
+    with pytest.raises(ValueError, match="east S3 artifact paths"):
+        step.build_config(foreign)
