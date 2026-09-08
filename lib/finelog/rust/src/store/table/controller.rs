@@ -101,7 +101,10 @@ impl LeaseLifecycle {
 
 /// Work only the controller task performs.
 enum ControllerCommand {
-    Publish(oneshot::Sender<Result<Arc<TableSnapshot>, CommitError>>),
+    Publish {
+        required: TableRevision,
+        reply: oneshot::Sender<Result<Arc<TableSnapshot>, CommitError>>,
+    },
     PublishOwed(oneshot::Sender<Result<(), StatsError>>),
     Claim(oneshot::Sender<Result<(), StatsError>>),
     Tombstone(oneshot::Sender<Result<(), StatsError>>),
@@ -572,7 +575,13 @@ impl TableController {
     /// committed revision.
     pub async fn publish_state(&self) -> Result<Arc<TableSnapshot>, CommitError> {
         self.mark_publication_owed();
-        match self.dispatch(ControllerCommand::Publish).await {
+        let required = self
+            .local_revision()
+            .map_err(CommitError::PublicationDeferred)?;
+        match self
+            .dispatch(|reply| ControllerCommand::Publish { required, reply })
+            .await
+        {
             Ok(result) => result,
             Err(error) => Err(CommitError::PublicationDeferred(error)),
         }
@@ -914,10 +923,27 @@ impl TableController {
         // HEAD now names a state for this table, and keeps doing so however
         // its specification later moves.
         self.head_published.store(true, Ordering::SeqCst);
-        self.publication_owed.store(false, Ordering::SeqCst);
         *self.last_published.lock().unwrap() = Some(tokio::time::Instant::now());
         *self.degraded.lock().unwrap() = None;
         let published = Arc::new(published);
+        // A local mutation may commit while the remote swap is in flight. Make
+        // the owed decision under the same short gate as mutation allocation,
+        // so an older publication cannot clear a newer revision's obligation.
+        {
+            let _gate = self.mutation_gate.lock().unwrap();
+            let still_owed = match self.local_revision() {
+                Ok(local) => local > published.revision(),
+                Err(error) => {
+                    tracing::warn!(
+                        table = %self.table,
+                        %error,
+                        "published table state but could not compare the local revision"
+                    );
+                    true
+                }
+            };
+            self.publication_owed.store(still_owed, Ordering::SeqCst);
+        }
         self.record_published_high_water(
             published
                 .state()
@@ -1131,8 +1157,28 @@ async fn run_controller(
             return;
         };
         match command {
-            ControllerCommand::Publish(reply) => {
-                let _ = reply.send(controller.run_publish().await);
+            ControllerCommand::Publish { required, reply } => {
+                // One publication reads the latest local catalog, so it may
+                // cover several requests queued while its remote swap was in
+                // flight. Avoid another HEAD read for every already-covered
+                // request; a later caller re-arms `publication_owed` before it
+                // enters the queue and therefore still validates its state.
+                let covered = (!controller.publication_owed()).then(|| {
+                    controller
+                        .selected
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .filter(|selected| selected.revision() >= required)
+                        .map(TableSnapshot::from_stored)
+                        .map(Arc::new)
+                });
+                let result = if let Some(snapshot) = covered.flatten() {
+                    Ok(snapshot)
+                } else {
+                    controller.run_publish().await
+                };
+                let _ = reply.send(result);
             }
             ControllerCommand::PublishOwed(reply) => {
                 // Within the throttle the revision simply stays owed; a later
@@ -1599,6 +1645,100 @@ mod tests {
         let second = watcher.borrow_and_update().clone().unwrap();
         assert!(second.revision() > published.revision());
         assert_eq!(second.state().catalog().forward_cursors[0].cursor, Some(9));
+    }
+
+    #[tokio::test]
+    async fn queued_publications_skip_revisions_an_earlier_request_already_published() {
+        let (controller, states, faults) = faulted_controller("controller_publish_coalesce", 11);
+        let gate = crate::test_support::FaultGate::new();
+        let (op, pattern) = head_swap();
+        faults.arm(ObjectFault::new(
+            op,
+            pattern,
+            FaultAction::Park(gate.clone()),
+        ));
+
+        let first = {
+            let controller = Arc::clone(&controller);
+            tokio::spawn(async move { controller.publish_state().await.unwrap() })
+        };
+        gate.entered().await;
+
+        controller
+            .catalog
+            .set_forward_cursor("hub", TABLE, 5)
+            .unwrap();
+        let second = {
+            let controller = Arc::clone(&controller);
+            tokio::spawn(async move { controller.publish_state().await.unwrap() })
+        };
+        tokio::task::yield_now().await;
+        controller
+            .catalog
+            .set_forward_cursor("hub", TABLE, 9)
+            .unwrap();
+        let third = {
+            let controller = Arc::clone(&controller);
+            tokio::spawn(async move { controller.publish_state().await.unwrap() })
+        };
+        tokio::task::yield_now().await;
+
+        gate.release();
+        let first = first.await.unwrap();
+        let second = second.await.unwrap();
+        let third = third.await.unwrap();
+
+        assert_eq!(first.revision().get(), 1);
+        assert_eq!(second.revision().get(), 3);
+        assert_eq!(third.revision().get(), 3);
+        let head_reads = faults
+            .keys_for(ObjectOp::Read)
+            .into_iter()
+            .filter(|key| key.ends_with("HEAD.json"))
+            .count();
+        assert_eq!(head_reads, 3);
+        assert_eq!(faults.keys_for(ObjectOp::CompareAndSwap).len(), 2);
+        assert_eq!(
+            states.load(TABLE).await.unwrap().unwrap().revision().get(),
+            3
+        );
+        assert!(!controller.publication_owed());
+    }
+
+    #[tokio::test]
+    async fn a_commit_during_publication_stays_owed_after_the_older_revision_lands() {
+        let (controller, states, faults) = faulted_controller("controller_publish_race", 11);
+        let gate = crate::test_support::FaultGate::new();
+        let (op, pattern) = head_swap();
+        faults.arm(ObjectFault::new(
+            op,
+            pattern,
+            FaultAction::Park(gate.clone()),
+        ));
+
+        let first = {
+            let controller = Arc::clone(&controller);
+            tokio::spawn(async move { controller.publish_state().await.unwrap() })
+        };
+        gate.entered().await;
+        controller
+            .commit_owing_publication(|| {
+                let revision = controller.catalog.set_forward_cursor("hub", TABLE, 5)?;
+                Ok((revision, ()))
+            })
+            .unwrap();
+        gate.release();
+
+        assert_eq!(first.await.unwrap().revision().get(), 1);
+        assert!(controller.publication_owed());
+        assert_eq!(
+            states.load(TABLE).await.unwrap().unwrap().revision().get(),
+            1
+        );
+
+        let second = controller.publish_state().await.unwrap();
+        assert_eq!(second.revision().get(), 2);
+        assert!(!controller.publication_owed());
     }
 
     #[tokio::test(start_paused = true)]

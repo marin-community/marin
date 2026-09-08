@@ -69,6 +69,10 @@ pub struct TableRuntime {
     /// The operating policy the table's specification resolves to. Replaced on
     /// re-registration and on migration activation.
     pub(super) policy: Mutex<TablePolicy>,
+    /// Whether the query-visible definition is object-native. A migration's
+    /// desired definition controls new L0 placement before it is active, but it
+    /// must not replace the legacy durability watermark during that interval.
+    object_state_active: AtomicBool,
     /// Per-table retention overrides; `None` fields inherit the cluster-wide
     /// [`CompactionConfig`] caps.
     pub(super) storage_policy: Mutex<StoragePolicy>,
@@ -201,7 +205,9 @@ impl TableRuntime {
             };
         let local_recovery_ms = local_recovery_started.elapsed().as_millis() as u64;
 
-        let policy = TablePolicy::resolve(catalog.spec_lifecycle(name)?.operative());
+        let lifecycle = catalog.spec_lifecycle(name)?;
+        let policy = TablePolicy::resolve(lifecycle.operative());
+        let object_state_active = TablePolicy::resolve(lifecycle.active.as_ref()).object_backed();
         let runtime = Arc::new(TableRuntime {
             name: name.to_string(),
             buffer: IngestBuffer::new(
@@ -218,6 +224,7 @@ impl TableRuntime {
             catalog: Arc::clone(&catalog),
             controller,
             policy: Mutex::new(policy),
+            object_state_active: AtomicBool::new(object_state_active),
             storage_policy: Mutex::new(storage_policy),
             compaction_config,
             maintenance_profile: Mutex::new(MaintenanceProfile::default()),
@@ -316,6 +323,10 @@ impl TableRuntime {
     /// Swap in the operating policy a new specification resolves to.
     pub fn update_table_spec(&self, status: &SpecLifecycle) {
         *self.policy.lock().unwrap() = TablePolicy::resolve(status.operative());
+        self.object_state_active.store(
+            TablePolicy::resolve(status.active.as_ref()).object_backed(),
+            Ordering::SeqCst,
+        );
     }
 
     pub fn update_maintenance_profile(&self, profile: MaintenanceProfile) {
@@ -328,7 +339,12 @@ impl TableRuntime {
 
     fn requires_object_ack(&self) -> bool {
         *self.ack_durability.lock().unwrap() == AckDurability::ObjectStore
-            && self.controller.is_object_backed()
+            && self.uses_object_state()
+    }
+
+    /// Whether published object state is the active recovery authority.
+    pub fn uses_object_state(&self) -> bool {
+        self.object_state_active.load(Ordering::SeqCst)
     }
 
     pub(super) fn maintenance_profile(&self) -> MaintenanceProfile {

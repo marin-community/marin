@@ -1433,11 +1433,7 @@ impl Store {
     }
 
     pub fn namespace_uses_object_state(&self, namespace: &str) -> Result<bool, StatsError> {
-        Ok(self
-            .tables
-            .require(namespace)?
-            .controller()
-            .is_object_backed())
+        Ok(self.tables.require(namespace)?.uses_object_state())
     }
 
     /// Record `cursor` as settled for `(target, namespace)`.
@@ -3256,17 +3252,29 @@ mod tests {
             .register_table("iris.worker", worker_schema(), StoragePolicy::default())
             .unwrap();
 
-        let _ = write_worker_rows(&store, &[("legacy", 128, 1)]).await;
+        let (_, legacy_seq) =
+            write_worker_rows(&store, &[("legacy-a", 128, 1), ("legacy-b", 256, 2)]).await;
         let legacy_paths = store.query_snapshot("iris.worker").unwrap().paths;
         assert_eq!(legacy_paths.len(), 1);
+        assert_eq!(
+            store.namespace_persisted_seq("iris.worker").unwrap(),
+            legacy_seq
+        );
 
         store
             .register_versioned_table("iris.worker", object_backed_spec(1))
             .unwrap();
+        assert_eq!(
+            store.namespace_persisted_seq("iris.worker").unwrap(),
+            legacy_seq,
+            "registering an object target must not replace the active legacy watermark"
+        );
+        assert!(!store.namespace_uses_object_state("iris.worker").unwrap());
         store
             .maintain_namespace("iris.worker", false)
             .await
             .unwrap();
+        assert!(store.namespace_uses_object_state("iris.worker").unwrap());
         assert!(!store
             .catalog
             .filesystem_adoption_disabled("iris.worker")
@@ -3305,7 +3313,7 @@ mod tests {
             .map(|row| row.path)
             .collect();
         assert_eq!(after_rescan, imported);
-        assert_eq!(scan_table(&store, "iris.worker").await, 1);
+        assert_eq!(scan_table(&store, "iris.worker").await, 2);
 
         store.shutdown(Duration::from_secs(1)).await;
         std::fs::remove_dir_all(data_dir).ok();
