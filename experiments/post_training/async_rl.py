@@ -226,6 +226,8 @@ def training_config(
     minibatches: int = 1,
     updates: int | None = None,
     eval_updates: int | None = None,
+    grad_cosine: bool | None = None,
+    grad_cosine_store: str = "gpu_fp32",
     eval_interval: int | None = None,
     initial_eval_repeat_count: int = 1,
     weight_change_probe: bool = False,
@@ -299,6 +301,14 @@ def training_config(
         ckpt_interval=schedule.checkpoint_interval,
     )
     config = yaml.safe_load(rl_config_yaml(preset))
+    if grad_cosine is not None and type(grad_cosine) is not bool:
+        raise ValueError("grad_cosine must be a boolean or None")
+    if grad_cosine_store not in {"gpu_fp32", "cpu_bf16", "off"}:
+        raise ValueError("Unsupported gradient history store")
+    if grad_cosine is None and grad_cosine_store != "gpu_fp32":
+        raise ValueError("Explicit gradient history storage requires an enabled/disabled override")
+    if grad_cosine is not None:
+        config["trainer"]["algorithm"]["grad_cosine"] = {"enabled": grad_cosine, "store": grad_cosine_store}
     config["entrypoint"] = "standard" if runner is Runner.SYNC else "fully_async"
     trainer = config["trainer"]
     trainer.update(
@@ -522,6 +532,8 @@ def build_experiment(
     minibatches: int = 1,
     updates: int | None = None,
     eval_updates: int | None = None,
+    grad_cosine: bool | None = None,
+    grad_cosine_store: str = "gpu_fp32",
     eval_interval: int | None = None,
     validation_offset: int = 0,
     validation_rows: int = VALIDATION_ROWS,
@@ -567,6 +579,8 @@ def build_experiment(
         minibatches=minibatches,
         updates=updates,
         eval_updates=eval_updates,
+        grad_cosine=grad_cosine,
+        grad_cosine_store=grad_cosine_store,
         eval_interval=eval_interval,
         initial_eval_repeat_count=initial_eval_repeat_count,
         weight_change_probe=weight_change_probe,
@@ -769,6 +783,8 @@ def build_experiment(
     "--updates", type=click.IntRange(min=1), help="Total optimizer updates; explicit with multiple minibatches."
 )
 @click.option("--eval-updates", type=click.IntRange(min=1), help="Evaluation cadence in optimizer updates.")
+@click.option("--grad-cosine/--no-grad-cosine", default=None, help="Override runtime gradient monitoring.")
+@click.option("--grad-cosine-store", type=click.Choice(["gpu_fp32", "cpu_bf16", "off"]), default="gpu_fp32")
 @click.option("--screening-steps", type=click.IntRange(min=1), help="Screening-only update count; defaults to 25.")
 @click.option("--eval-interval", type=click.IntRange(min=1), help="Evaluation cadence; must divide the update count.")
 @click.option("--validation-offset", type=click.IntRange(min=0), default=0, show_default=True)
@@ -804,6 +820,8 @@ def main(
     minibatches: int,
     updates: int | None,
     eval_updates: int | None,
+    grad_cosine: bool | None,
+    grad_cosine_store: str,
     eval_interval: int | None,
     validation_offset: int,
     validation_rows: int,
@@ -848,6 +866,8 @@ def main(
         minibatches=minibatches,
         updates=updates,
         eval_updates=eval_updates,
+        grad_cosine=grad_cosine,
+        grad_cosine_store=grad_cosine_store,
         eval_interval=eval_interval,
         validation_offset=validation_offset,
         validation_rows=validation_rows,
