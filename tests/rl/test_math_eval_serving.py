@@ -275,3 +275,16 @@ def test_cost_and_region_require_actual_controller_allocation(poison):
         tasks["tasks"][0]["attempts"][0]["started_at"] = {"epoch_ms": "2000"}
     with pytest.raises(ValueError):
         validate_serving_generation(cfg, generation, tasks, native_job)
+
+
+def test_producer_interval_is_separate_from_allocation_and_rejects_impossible_duration():
+    cfg, generation, tasks, native_job = generation_fixture()
+    start = int(tasks["tasks"][0]["started_at"]["epoch_ms"])
+    timing = {"started_at_ms": start + 100, "finished_at_ms": start + 1100, "monotonic_seconds": 1.0}
+    generation["generation_and_native_scoring"] = timing
+    protocol = validate_serving_generation(cfg, generation, tasks, native_job)
+    assert protocol["generation_and_native_scoring"] == timing
+    assert protocol["task_gpu_hours"] > timing["monotonic_seconds"] / 3600
+    generation["generation_and_native_scoring"]["monotonic_seconds"] = 99999
+    with pytest.raises(ValueError, match="Producer generation interval"):
+        validate_serving_generation(cfg, generation, tasks, native_job)

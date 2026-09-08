@@ -7,6 +7,7 @@ import hashlib
 import importlib.metadata
 import json
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 
@@ -222,6 +223,8 @@ def run_rating_serving(config):
 
         # Only HTTP runs in worker threads. Keep scoring on the main thread,
         # where the semantic verifier stack can safely use POSIX timeouts.
+        generation_start_ms = time.time_ns() // 1_000_000
+        generation_start_ns = time.monotonic_ns()
         with ThreadPoolExecutor(max_workers=config.concurrency) as executor:
             rows = []
             for index, response in enumerate(executor.map(generate, range(len(items)))):
@@ -235,6 +238,8 @@ def run_rating_serving(config):
                         question_index=index,
                     )
                 )
+        generation_seconds = (time.monotonic_ns() - generation_start_ns) / 1_000_000_000
+        generation_finish_ms = time.time_ns() // 1_000_000
         session.check_alive()
     metrics = serving_metrics(rows, samples=config.samples)
     dump = output / "dumped_evals" / "global_step_0_evals"
@@ -248,6 +253,11 @@ def run_rating_serving(config):
         "specification_sha256": audit.canonical_sha(specification),
         "runtime": runtime,
         "score_dependency_versions": score_versions,
+        "generation_and_native_scoring": {
+            "started_at_ms": generation_start_ms,
+            "finished_at_ms": generation_finish_ms,
+            "monotonic_seconds": generation_seconds,
+        },
         "native_command": native_command,
         "task_id": str(job.task_id),
         "attempt_id": job.attempt_id,

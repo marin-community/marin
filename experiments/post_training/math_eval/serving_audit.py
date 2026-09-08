@@ -5,6 +5,7 @@
 
 import hashlib
 import json
+import math
 from datetime import UTC, datetime
 
 import pyarrow as pa
@@ -102,6 +103,16 @@ def validate_serving_generation(config, generation, native_tasks, native_job):
         )
     ):
         raise ValueError("Serving allocation lacks a matching native attempt identity and terminal interval")
+    timing = generation.get("generation_and_native_scoring")
+    if timing is not None and (
+        not isinstance(timing, dict)
+        or not start <= timing.get("started_at_ms", 0) < timing.get("finished_at_ms", 0) <= finish
+        or not isinstance(timing.get("monotonic_seconds"), (int, float))
+        or not math.isfinite(timing["monotonic_seconds"])
+        or not 0 < timing["monotonic_seconds"] <= (finish - start) / 1000
+        or abs(timing["monotonic_seconds"] - (timing["finished_at_ms"] - timing["started_at_ms"]) / 1000) > 1
+    ):
+        raise ValueError("Producer generation interval is not consistent with the native task lifetime")
     if generation.get("score_dependency_versions") != (SEMANTIC_DEPENDENCIES | {"reasoning-gym": "0.1.25"}):
         raise ValueError("Native scorer dependency versions differ from the frozen verifier")
     profile = MODEL_PROFILES[config.model]
@@ -138,6 +149,7 @@ def validate_serving_generation(config, generation, native_tasks, native_job):
         ):
             raise ValueError(f"Native engine command does not prove {flag}")
     return {
+        "producer_source_commit": config.source_commit,
         "model_label": config.model,
         "checkpoint": generation["model_identity"],
         "engine_global_seed": 17,
@@ -159,6 +171,7 @@ def validate_serving_generation(config, generation, native_tasks, native_job):
         "execution_cluster": controller["cluster"],
         "gpu_variant": gpu["variant"],
         "gpu_count": gpu["count"],
+        "generation_and_native_scoring": timing,
         "task_gpu_hours": (finish - start) * gpu["count"] / 3_600_000,
     }
 
