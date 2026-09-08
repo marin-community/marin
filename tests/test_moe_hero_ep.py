@@ -72,7 +72,7 @@ def test_diagnostic_run_without_shape_overrides_uses_the_selected_model():
         1.15,
         1.15,
         3,
-        "ragged_all_to_all",
+        "fixed_pooled_wave_all_to_all",
         model.QbEstimator.HIST,
         10_000,
         1024,
@@ -80,9 +80,9 @@ def test_diagnostic_run_without_shape_overrides_uses_the_selected_model():
         4,
         10,
         1_000_000_000,
-        jnp.float32,
         jnp.bfloat16,
-        train.MasterParamMode.DEVICE,
+        jnp.bfloat16,
+        train.MasterParamMode.FP32_PINNED_HOST,
     )
 
 

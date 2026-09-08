@@ -173,8 +173,11 @@ Jobs in this directory are submitted to **Iris** on a **v5p-8**.
 Swap the module path (`experiments.grug.moe.launch`) for whichever launch
 script in this directory you are running. Every launch script takes the shared
 experiment CLI (`marin.experiment.cli`): `--version` sets the checkpoint version
-(required; `dev` to iterate, a calendar `YYYY.MM.DD` to keep), and `--run` builds
-the trial — without it the lowered plan is printed and nothing runs.
+(required), and `--run` builds the trial — without it the lowered plan is printed
+and nothing runs. Use `--version dev` for normal experiments. It rebuilds on each
+invocation and stores checkpoints under `users/<username>/grug/...`. Reserve a
+calendar version such as `YYYY.MM.DD` for coordinated major production runs,
+which use the shared `grug/...` namespace.
 
 `--reserve v5p-8` is a hard zone constraint (confines the job to a zone where a
 v5p-8 has actually been obtained, waiting otherwise), not a capacity reservation

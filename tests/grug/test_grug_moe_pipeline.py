@@ -15,6 +15,7 @@ from experiments.grug.moe_pipeline.model import GrugModelConfig, Transformer
 from experiments.grug.moe_pipeline.pipeline import (
     AutomaticPipelineSchedule,
     GrugMoePipelineConfig,
+    _apply_qb_betas,
     automatic_stage_to_mpmd_indices,
     split_automatic_stages,
     split_transformer,
@@ -135,6 +136,16 @@ def test_automatic_pipeline_excludes_qb_bias_from_differentiated_parameters():
     for trainable_stage in trainable_stages:
         for trainable_block in trainable_stage.blocks:
             assert trainable_block.mlp.router_bias is None
+
+
+def test_automatic_pipeline_installs_pending_qb_bias():
+    _, model = _tiny_model()
+    trainable_stages, _ = split_automatic_stages(model, num_stages=2)
+    pending_bias = jnp.array([[2.0, -1.0]], dtype=jnp.float32)
+
+    stage = _apply_qb_betas(trainable_stages[0], pending_bias)
+
+    np.testing.assert_allclose(stage.blocks[0].mlp.router_bias, jnp.array([-1.5, 1.5]))
 
 
 def test_pipeline_mesh_validation_uses_full_stage_shard_count():

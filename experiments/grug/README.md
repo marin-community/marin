@@ -34,8 +34,11 @@ Variant-specific guidance lives in `experiments/grug/variants.md`.
 
 The launcher takes the shared experiment CLI (`marin.experiment.cli`): `--version` sets the
 checkpoint version and is required, and `--run` builds the trial (without it the lowered plan is
-printed and nothing runs). The checkpoint version is deferred to `--version`, so pass `--version dev`
-to iterate (per-user namespace, rebuilds each run) or a calendar version `YYYY.MM.DD` to keep a run.
+printed and nothing runs). Use `--version dev` for normal experiments, diagnostics, ablations, and
+sweeps. A `dev` version rebuilds on each invocation and prefixes the artifact name with
+`users/<username>/`, so Grug checkpoints land under `users/<username>/grug/...`. Use a calendar
+version such as `YYYY.MM.DD` only for a coordinated major production run that needs a shared,
+citable checkpoint path. Calendar-versioned Grug runs use the shared `grug/...` namespace.
 
 Print the plan (no run):
 

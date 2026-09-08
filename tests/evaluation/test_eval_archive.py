@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""End-to-end tests for the finestore eval archive: contract round-trip, evaldash read, migration."""
+"""End-to-end tests for the finestore eval archive: contract round-trip and migration."""
 
 from __future__ import annotations
 
@@ -16,7 +16,6 @@ from finestore.admin import set_table_metadata
 from finestore.reader import ReadView
 from fsspec.core import url_to_fs
 from marin.evaluation.archive import (
-    SAMPLES_MERGE_KEY,
     Choice,
     EvalSample,
     EvaluationStore,
@@ -47,7 +46,6 @@ from experiments.evaluation.migrations.migrate_archive import (
 from experiments.evaluation.migrations.migrate_archive import (
     main as migrate_archive_cli,
 )
-from infra.evaldash.src.samples import fetch_artifact, fetch_samples, list_sample_tasks
 
 
 def _mcq(doc_id: str, *, correct: bool) -> EvalSample:
@@ -82,46 +80,6 @@ def test_archive_row_round_trips_each_sample_kind():
         row = sample_to_archive_row(sample, trial_id="t")
         assert row["trial_id"] == "t"
         assert sample_from_archive_row(row) == sample
-
-
-def test_evaldash_reads_the_archive(tmp_path):
-    root = str(tmp_path / "run" / "results")
-    store = EvaluationStore.open(root, writer_id="evalchemy")
-    store.add_sample(_mcq("1", correct=True))
-    store.add_sample(_mcq("2", correct=False))
-    store.seal()
-    store.close()
-
-    tasks = list_sample_tasks(root)
-    assert tasks.available
-    assert [task.task for task in tasks.tasks] == ["arc"]
-
-    page = fetch_samples(root, "arc", offset=0, limit=10, correct="all")
-    assert page.available
-    assert page.counts == page.counts.model_copy(update={"all": 2, "correct": 1, "incorrect": 1, "ungraded": 0})
-    assert {row.doc_id for row in page.rows} == {"1", "2"}
-    assert page.primary_metric == "acc"
-
-    incorrect = fetch_samples(root, "arc", offset=0, limit=10, correct="incorrect")
-    assert [row.doc_id for row in incorrect.rows] == ["2"]
-
-
-def test_ungraded_sample_reads_back_with_empty_metrics(tmp_path):
-    # metrics is a pinned map<string,double>. A batch that writes no metrics leaves that column null on
-    # disk (the write path drops an all-empty dict column); the reader must normalize the null back to
-    # an empty dict, not fail validation nor invent a zero.
-    root = str(tmp_path / "run" / "results")
-    store = EvaluationStore.open(root, writer_id="evalchemy")
-    store.add_sample(EvalSample(task="gsm8k", doc_id="1", kind=SampleKind.GENERATION, output="4"))
-    store.seal()
-    store.close()
-
-    page = fetch_samples(root, "gsm8k", offset=0, limit=10, correct="all")
-    assert page.available
-    assert page.counts.ungraded == 1
-    assert page.primary_metric is None
-    assert page.rows[0].metrics == {}
-    assert page.rows[0].correct is None
 
 
 def test_export_lm_eval_samples_preserves_unicode_line_separator(tmp_path):
@@ -495,32 +453,6 @@ def test_upgrade_format_prefix_migrates_only_sealed_archives(tmp_path, monkeypat
     assert selection["missing_archive"] == 1
 
 
-def test_evaldash_serves_one_extraction_filter_at_a_time(tmp_path):
-    # Two rows per document would list every question twice and make the correctness counts
-    # disagree with the headline score, so the browser picks one filter and names the alternatives.
-    results = tmp_path / "run" / "results"
-    _write_jsonl(
-        results,
-        [
-            _lm_eval_row(0, "strict-match", 0.0, "[invalid]"),
-            _lm_eval_row(0, "flexible-extract", 1.0, "4"),
-        ],
-    )
-    export_lm_eval_samples(str(results))
-
-    page = fetch_samples(str(results), "gsm8k", offset=0, limit=10, correct="all")
-    assert page.extraction_filters == ("flexible-extract", "strict-match")
-    # FILTER_PRIORITY ranks flexible-extract first, matching the headline metric's filter.
-    assert page.extraction_filter == "flexible-extract"
-    assert page.counts.all == 1
-    assert page.rows[0].correct is True
-
-    strict = fetch_samples(str(results), "gsm8k", offset=0, limit=10, correct="all", extraction_filter="strict-match")
-    assert strict.extraction_filter == "strict-match"
-    assert strict.counts.all == 1
-    assert strict.rows[0].correct is False
-
-
 def test_migrate_legacy_run_into_archive(tmp_path):
     results = str(tmp_path / "run" / "results")
     fs, _ = url_to_fs(results)
@@ -560,13 +492,7 @@ def test_migrate_legacy_run_into_archive(tmp_path):
     assert agentic_row is not None
     uri = agentic_row["trajectory_uri"]
     assert uri.startswith("finestore://blobs/")
-
-    artifact = fetch_artifact(results, uri)
-    assert artifact.available
-    assert json.loads(artifact.text)["steps"][0]["step_id"] == 1
-
-    # evaldash surfaces both migrated tasks.
-    assert {task.task for task in list_sample_tasks(results).tasks} == {"arc", "aime"}
+    assert json.loads(reader.read_blob(uri.removeprefix("finestore://blobs/")))["steps"][0]["step_id"] == 1
 
 
 def test_migration_cli_reads_archived_legacy_shards(tmp_path):
@@ -617,62 +543,6 @@ def _write_v1_smoke_archive(source) -> None:
         pa.Table.from_pylist([{"name": "trajectory.json", "data": b"payload", "_seq": 0, "_writer": "legacy"}]),
         source / "blobs" / "w=legacy" / "g=0" / "0000000000000000-blob.parquet",
     )
-
-
-def _write_live_v1_eval_archive(source) -> None:
-    samples_root = source / "samples"
-    blobs_root = source / "blobs"
-    for table_root in (samples_root, blobs_root):
-        (table_root / "w=legacy" / "g=0").mkdir(parents=True)
-    (samples_root / "w=legacy" / "g=1").mkdir(parents=True)
-    (source / "_archive.json").write_text('{"format_version": 1}')
-    (samples_root / "_schema.json").write_text(
-        json.dumps({"primary_key": SAMPLES_MERGE_KEY, "schema_version": 4, "on_conflict": "supersede"})
-    )
-    (blobs_root / "_schema.json").write_text('{"primary_key": ["name"], "schema_version": 1, "on_conflict": "error"}')
-
-    first = sample_to_archive_row(_mcq("1", correct=False), trial_id="")
-    second = sample_to_archive_row(_mcq("2", correct=False), trial_id="")
-    pq.write_table(
-        pa.Table.from_pylist(
-            [
-                {**first, "_seq": 0, "_writer": "legacy"},
-                {**second, "_seq": 1, "_writer": "legacy"},
-            ]
-        ),
-        samples_root / "w=legacy" / "g=0" / "0000000000000000-samples.parquet",
-    )
-    replacement = sample_to_archive_row(_mcq("1", correct=True), trial_id="")
-    pq.write_table(
-        pa.Table.from_pylist([{**replacement, "_seq": 2, "_writer": "legacy"}]),
-        samples_root / "w=legacy" / "g=1" / "0000000000000002-samples.parquet",
-    )
-    pq.write_table(
-        pa.Table.from_pylist(
-            [{"name": "trajectory.json", "data": b'{"steps":[{"step_id":1}]}', "_seq": 0, "_writer": "legacy"}]
-        ),
-        blobs_root / "w=legacy" / "g=0" / "0000000000000000-blob.parquet",
-    )
-
-
-def test_evaldash_reads_an_unsealed_v1_finestore_archive(tmp_path):
-    results = tmp_path / "run" / "results"
-    _write_live_v1_eval_archive(results)
-
-    tasks = list_sample_tasks(str(results))
-    assert tasks.available
-    assert [(task.task, task.files) for task in tasks.tasks] == [("arc", 2)]
-
-    page = fetch_samples(str(results), "arc", offset=0, limit=10, correct="all")
-    assert page.available
-    assert page.counts == page.counts.model_copy(update={"all": 2, "correct": 1, "incorrect": 1, "ungraded": 0})
-    assert {sample.doc_id: sample.correct for sample in page.rows} == {"1": True, "2": False}
-
-    artifact = fetch_artifact(str(results), "finestore://blobs/trajectory.json")
-    assert artifact.available
-    assert json.loads(artifact.text) == {"steps": [{"step_id": 1}]}
-    assert json.loads((results / "_archive.json").read_text()) == {"format_version": 1}
-    assert not (results / "HEAD").exists()
 
 
 def test_format_smoke_migrates_a_clone_and_preserves_source_and_rows(tmp_path):
@@ -735,23 +605,3 @@ def test_fleet_smoke_preserves_partial_results_when_validation_fails(tmp_path):
 
     assert destination.exists()
     assert (destination / "_fleet.json").exists()
-
-
-def test_fetch_artifact_keys_cache_by_run(tmp_path):
-    # A finestore:// URI is archive-relative, so two runs can share one. Resolving it for run A then
-    # run B must return each run's own bytes, not A's cached response for both.
-    uri = "finestore://blobs/trial-1/trajectory.json"
-    run_a = str(tmp_path / "a" / "results")
-    run_b = str(tmp_path / "b" / "results")
-    for root, tag in ((run_a, "a"), (run_b, "b")):
-        store = EvaluationStore.open(root, writer_id="w")
-        stored = store.add_trajectory(json.dumps({"run": tag}).encode(), task="t", doc_id="d", trial_id="trial-1")
-        assert stored.uri == uri
-        store.seal()
-        store.close()
-
-    first = fetch_artifact(run_a, uri)
-    second = fetch_artifact(run_b, uri)
-    assert first.available and second.available
-    assert json.loads(first.text)["run"] == "a"
-    assert json.loads(second.text)["run"] == "b"

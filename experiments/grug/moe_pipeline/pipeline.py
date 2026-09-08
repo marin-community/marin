@@ -415,7 +415,12 @@ def _apply_qb_betas(stage: GrugMoePipelineStage, qb_betas: jax.Array) -> GrugMoe
     for index, block in enumerate(blocks):
         new_bias = -qb_betas[index]
         new_bias = new_bias - jnp.mean(new_bias)
-        new_mlp = eqx.tree_at(lambda mlp: mlp.router_bias, block.mlp, new_bias)
+        new_mlp = eqx.tree_at(
+            lambda mlp: mlp.router_bias,
+            block.mlp,
+            new_bias,
+            is_leaf=lambda value: value is None,
+        )
         blocks[index] = eqx.tree_at(lambda current: current.mlp, block, new_mlp)
     return eqx.tree_at(lambda current: current.blocks, stage, tuple(blocks))
 

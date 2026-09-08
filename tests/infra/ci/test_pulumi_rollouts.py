@@ -17,7 +17,7 @@ from scripts.ci.pulumi_rollouts import (
 @pytest.mark.parametrize(
     "changed_path",
     [
-        "infra/evaldash/src/samples.py",
+        "infra/marina/apps/evaldash/samples.py",
         "lib/finestore/src/finestore/reader.py",
         "lib/marin/src/marin/evaluation/archive.py",
         "lib/iris/src/iris/rpc/controller_connect.py",
@@ -25,14 +25,12 @@ from scripts.ci.pulumi_rollouts import (
         "lib/rigging/src/rigging/filesystem/factory.py",
     ],
 )
-def test_evaldash_rollout_tracks_image_inputs(changed_path: str) -> None:
-    assert "evaldash" in {rollout.name for rollout in rollouts_for_paths([changed_path])}
+def test_marina_rollout_tracks_image_inputs(changed_path: str) -> None:
+    assert "marina" in {rollout.name for rollout in rollouts_for_paths([changed_path])}
 
 
-def test_evaldash_rollout_ignores_marin_modules_outside_the_image() -> None:
-    assert "evaldash" not in {
-        rollout.name for rollout in rollouts_for_paths(["lib/marin/src/marin/training/training.py"])
-    }
+def test_marina_rollout_ignores_marin_modules_outside_the_image() -> None:
+    assert "marina" not in {rollout.name for rollout in rollouts_for_paths(["lib/marin/src/marin/training/training.py"])}
 
 
 def test_rollout_payload_passes_deploy_cli_config() -> None:
@@ -47,4 +45,4 @@ def test_rollout_payload_passes_deploy_cli_config() -> None:
 def test_cloud_run_change_triggers_all_service_rollouts() -> None:
     selected = {rollout.name for rollout in rollouts_for_paths(["infra/pulumi/src/iac/gcp/cloud_run.py"])}
 
-    assert {"echo", "evaldash", "grafana"} <= selected
+    assert {"marina", "grafana"} <= selected

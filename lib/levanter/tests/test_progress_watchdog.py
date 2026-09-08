@@ -7,7 +7,8 @@ from threading import Event
 import pytest
 
 from levanter.callbacks import ProgressEvent, progress_watchdog as progress_watchdog_module
-from levanter.callbacks.progress_watchdog import ProgressWatchdog, ProgressWatchdogConfig, STALLED_TRAINING_EXIT_CODE
+from levanter.callbacks.progress_watchdog import ProgressWatchdog, ProgressWatchdogConfig
+from levanter.recovery.types import EXIT_STALL
 
 
 def test_watchdog_ignores_first_compile_then_times_out_a_steady_state_step(monkeypatch):
@@ -34,7 +35,7 @@ def test_watchdog_ignores_first_compile_then_times_out_a_steady_state_step(monke
 
     assert terminated.wait(timeout=1)
     watchdog.stop()
-    assert exit_codes == [STALLED_TRAINING_EXIT_CODE]
+    assert exit_codes == [EXIT_STALL]
 
 
 def test_watchdog_waits_for_startup_grace_period_before_terminating(monkeypatch):
@@ -105,7 +106,7 @@ def test_watchdog_terminates_an_evaluation_that_stops_progress(monkeypatch):
 
     assert terminated.wait(timeout=1)
     watchdog.stop()
-    assert exit_codes == [STALLED_TRAINING_EXIT_CODE]
+    assert exit_codes == [EXIT_STALL]
 
 
 def test_watchdog_runs_diagnostic_before_exit(monkeypatch):
