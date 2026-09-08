@@ -28,7 +28,7 @@ from experiments.june_tpu_67b_a2b.moe.heuristic_muonh import MoeMuonHHeuristic
 from experiments.june_tpu_67b_a2b.moe.launch_datakit_moe_mix import _TAIL_BUCKETS, _phase_weights
 from experiments.june_tpu_67b_a2b.moe.optimizer import GrugMoeMuonHConfig
 from experiments.june_tpu_67b_a2b.moe.sft_launch import GrugMoeSFTConfig, run_grug_moe_sft_trial
-from experiments.june_tpu_67b_a2b.moe.train import GrugTrainerConfig
+from experiments.june_tpu_67b_a2b.moe.train import GrugTrainerConfig, ReplayDataConfig
 from experiments.marin_tokenizer import MARIN_CHAT_TEMPLATE, marin_tokenizer
 
 logger = logging.getLogger(__name__)
@@ -39,7 +39,7 @@ _BASE_CHECKPOINT = (
     "checkpoints/step-157000/"
 )
 _PRETRAIN_STORE = "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24"
-_RUN_NAME = "grug/moe_67b_a2b_step157k_sft_datakit80_pretrain20_ctx262k_2026.09.07_replay_continuous"
+_RUN_NAME = "grug/moe_67b_a2b_step157k_sft_datakit80_pretrain20_ctx262k_2026.09.07_lcr_replay"
 _TOKENIZER = marin_tokenizer
 _SEQ_LEN = 262_144
 _BATCH_SIZE = 256
@@ -181,14 +181,9 @@ def _pretrain_component(bucket: str) -> ConcatDatasetComponent:
 
 def _pretrain_components() -> tuple[dict[str, ConcatDatasetComponent], dict[str, float]]:
     phase_weights = _phase_weights(1)
-    tail_weight = phase_weights["tail"] / len(_TAIL_BUCKETS)
-    bucket_weights = {
-        **{bucket: weight for bucket, weight in phase_weights.items() if bucket != "tail"},
-        **dict.fromkeys(_TAIL_BUCKETS, tail_weight),
-    }
-    components = {f"pretrain/{bucket}": _pretrain_component(bucket) for bucket in bucket_weights}
-    weights = {f"pretrain/{bucket}": _PRETRAIN_FRACTION * weight for bucket, weight in bucket_weights.items()}
-    return components, _floor_component_weights(weights, _PRETRAIN_FRACTION)
+    components = {f"pretrain/{bucket}": _pretrain_component(bucket) for bucket in phase_weights}
+    weights = {f"pretrain/{bucket}": weight for bucket, weight in phase_weights.items()}
+    return components, weights
 
 
 def _model_config():
@@ -216,7 +211,7 @@ def build() -> StepSpec:
 
     sft = _sft_mixture()
     pretrain_components, pretrain_weights = _pretrain_components()
-    weights = {**sft.weights, **pretrain_weights}
+    weights = {**sft.weights, "replay": _PRETRAIN_FRACTION}
     assert abs(sum(weights.values()) - 1.0) < 1e-9
     zero_count_components = [name for name, weight in weights.items() if int(weight * _MIXTURE_BLOCK_SIZE) == 0]
     if zero_count_components:
@@ -225,11 +220,24 @@ def build() -> StepSpec:
     data = LmDataConfig(
         tokenizer=_TOKENIZER,
         cache_dir=None,
-        components={**sft.components, **pretrain_components},
-        train_weights=weights,
+        components=sft.components,
+        train_weights=sft.weights,
         auto_build_caches=False,
         mixture_block_size=_MIXTURE_BLOCK_SIZE,
         block_cross_document_attention=True,
+    )
+
+    replay = ReplayDataConfig(
+        data=LmDataConfig(
+            tokenizer=_TOKENIZER,
+            cache_dir=None,
+            components=pretrain_components,
+            train_weights=pretrain_weights,
+            auto_build_caches=False,
+            mixture_block_size=_MIXTURE_BLOCK_SIZE,
+            block_cross_document_attention=True,
+        ),
+        fraction=_PRETRAIN_FRACTION,
     )
 
     def train(output_path: str) -> None:
@@ -237,6 +245,7 @@ def build() -> StepSpec:
             GrugMoeSFTConfig(
                 model=_model_config(),
                 data=data,
+                replay=replay,
                 output_path=output_path,
                 run_id=_RUN_NAME.removeprefix("grug/"),
                 resources=ResourceConfig.with_tpu("v4-2048", zone=_TRAIN_ZONE, preemptible=False),
@@ -285,6 +294,7 @@ def build() -> StepSpec:
             "sft_fraction": _SFT_FRACTION,
             "pretrain_fraction": _PRETRAIN_FRACTION,
             "pretrain_packing": "continuous",
+            "pretrain_mixture": "lcr_phase1_grouped_tail",
             "long_context_skew": _LONG_CONTEXT_SKEW,
         },
     )

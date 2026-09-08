@@ -50,7 +50,13 @@ from marin.training.training import temporary_checkpoint_base_path
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig
-from experiments.june_tpu_67b_a2b.moe.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
+from experiments.june_tpu_67b_a2b.moe.train import (
+    GrugEvalConfig,
+    GrugRunConfig,
+    GrugTrainerConfig,
+    ReplayDataConfig,
+    run_grug,
+)
 from experiments.sft.launcher import SFTSpec
 
 
@@ -76,6 +82,7 @@ class GrugMoeSFTConfig:
     ``grug_trainer.sft_weights_only_init`` selects fresh optimizer state and step zero;
     disabling it restores the source optimizer and step as well as the weights.
     """
+    replay: ReplayDataConfig | None = None
     profiler: ProfilerConfig = field(default_factory=ProfilerConfig)
     grug_trainer: GrugTrainerConfig = field(default_factory=lambda: GrugTrainerConfig(sft_weights_only_init=True))
     eval: GrugEvalConfig | None = None
@@ -158,6 +165,7 @@ def run_grug_moe_sft_trial(config: GrugMoeSFTConfig) -> None:
         GrugRunConfig(
             model=config.model,
             data=config.data,
+            replay=config.replay,
             resources=config.resources,
             optimizer=config.optimizer,
             trainer=grug_trainer,

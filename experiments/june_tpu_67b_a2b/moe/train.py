@@ -104,12 +104,25 @@ class GrugEvalConfig:
 
 
 @dataclass(frozen=True)
+class ReplayDataConfig:
+    """Keep replay sampling weights and block rounding independent of the main mixture."""
+
+    data: LmDataConfig
+    fraction: float
+
+    def __post_init__(self):
+        if not 0 < self.fraction < 1:
+            raise ValueError("Replay fraction must be between zero and one")
+
+
+@dataclass(frozen=True)
 class GrugRunConfig:
     """Top-level config for grug training."""
 
     model: GrugModelConfig
     data: LmDataConfig
     resources: ResourceConfig
+    replay: ReplayDataConfig | None = None
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
     trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
@@ -121,6 +134,7 @@ def build_train_dataset(
     max_seq_len: int,
     batch_schedule: BatchSchedule,
     key: PRNGKeyArray,
+    replay: ReplayDataConfig | None = None,
 ) -> MixtureDataset[GrugLmExample]:
     pos = Axis("position", max_seq_len)
     mix_key, shuffle_key = jax.random.split(key)
@@ -134,6 +148,20 @@ def build_train_dataset(
     # continuous token datasets do not, so retaining it makes a mixed TPU dataset have
     # inconsistent pytree structures and DataLoader cannot batch across components.
     datasets = {name: dataset.map(_without_thd_segment_metadata) for name, dataset in datasets.items()}
+    if replay is not None:
+        if not isinstance(weights, dict):
+            raise ValueError("Replay requires fixed main-data mixture weights")
+        if "replay" in datasets:
+            raise ValueError("Main-data component name 'replay' is reserved")
+        total_weight = sum(weights.values())
+        weights = {name: (1 - replay.fraction) * weight / total_weight for name, weight in weights.items()}
+        weights["replay"] = replay.fraction
+        datasets["replay"] = build_train_dataset(
+            replay.data,
+            max_seq_len=max_seq_len,
+            batch_schedule=batch_schedule,
+            key=jax.random.fold_in(key, 1),
+        )
     return MixtureDataset(
         datasets=datasets,
         weights=weights,
@@ -545,6 +573,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             max_seq_len=config.model.max_seq_len,
             batch_schedule=batch_schedule,
             key=data_key,
+            replay=config.replay,
         )
         train_loader = build_train_loader(
             train_dataset,
