@@ -38,3 +38,59 @@ def test_snowball_row_and_worker_defaults_are_cli_equivalent():
 def test_snowball_rejects_invalid_loader_workers(value):
     with pytest.raises(ValueError, match="nonnegative integer"):
         async_snowball.training_config(async_snowball.Scale.CADENCE_GATE, dataloader_workers=value)
+
+
+@pytest.mark.parametrize("mode", ["blocking", "background"])
+def test_snowball_eval_scheduling_is_opt_in_and_fingerprinted(mode):
+    args = dict(
+        version="2026.09.08.35", scale=async_snowball.Scale.CADENCE_GATE, completion="metrics", timeout_seconds=1350
+    )
+
+    def request(**extra):
+        step = async_snowball.build_experiment(**args, **extra)
+        return step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps)).request
+
+    baseline = request()
+    explicit = request(eval_on_installed_weights=False, eval_mode="blocking")
+    selected = request(eval_on_installed_weights=True, eval_mode=mode)
+    assert baseline.run_id == explicit.run_id and baseline.config_yaml == explicit.config_yaml
+    assert selected.run_id != baseline.run_id
+    config = yaml.safe_load(selected.config_yaml)
+    assert config["trainer"]["fully_async"].pop("eval_on_installed_weights") is True
+    assert config["trainer"]["fully_async"].pop("eval_mode") == mode
+    assert config == yaml.safe_load(baseline.config_yaml)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"runner": async_snowball.Runner.SYNC, "eval_on_installed_weights": True},
+        {"eval_mode": "background"},
+        {"eval_mode": "invalid"},
+        {"eval_on_installed_weights": 1},
+    ],
+)
+def test_snowball_eval_scheduling_rejects_unsupported_modes(changes):
+    with pytest.raises(ValueError, match="Evaluation|evaluation"):
+        async_snowball.training_config(async_snowball.Scale.CADENCE_GATE, **changes)
+
+
+def test_snowball_background_eval_cli_reaches_native_recipe():
+    result = CliRunner().invoke(
+        async_snowball.main,
+        [
+            "--version",
+            "2026.09.08.35",
+            "--scale",
+            "cadence-gate",
+            "--completion",
+            "metrics",
+            "--eval-on-installed-weights",
+            "--eval-mode",
+            "background",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    config = yaml.safe_load(json.loads(result.output)["request"]["config_yaml"])
+    assert config["trainer"]["fully_async"]["eval_on_installed_weights"] is True
+    assert config["trainer"]["fully_async"]["eval_mode"] == "background"
