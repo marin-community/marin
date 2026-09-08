@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Frozen wire prompts must retain their answer instructions and thinking prefix."""
 
 import hashlib

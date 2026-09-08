@@ -1,6 +1,10 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Frozen answer instructions and model prompt templates for pool version 1."""
 
 import hashlib
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -21,7 +25,7 @@ class PromptTemplate:
 
 QWEN = PromptTemplate(
     "qwen3-c1899de-nothink-antibox-v1",
-    "qwen3.jinja",
+    "qwen3.json",
     "a55ee1b1660128b7098723e0abcd92caa0788061051c62d51cbe87d9cf1974d8",
     "",
     False,
@@ -29,7 +33,7 @@ QWEN = PromptTemplate(
 )
 SNOWBALL = PromptTemplate(
     "snowball-step630-think-antibox-v1",
-    "snowball.jinja",
+    "snowball.json",
     "60180a4fc2ca07134930136b2957c6ff48078cfdb3bb015d3df4aa9d079275e4",
     "<|begin_of_text|>",
     True,
@@ -52,7 +56,7 @@ def prompt_messages(question: str, env_class: str) -> list[dict[str, str]]:
 
 def template_source(template: PromptTemplate) -> str:
     """Load the pinned template and refuse a changed source."""
-    content = Path(__file__).with_name(template.filename).read_bytes()
+    content = json.loads(Path(__file__).with_name(template.filename).read_text())["template"].encode()
     if hashlib.sha256(content).hexdigest() != template.sha256:
         raise ValueError(f"Template content changed: {template.template_id}")
     return content.decode()
