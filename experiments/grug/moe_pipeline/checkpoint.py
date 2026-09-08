@@ -72,6 +72,8 @@ def save_checkpoint(root: str, state: GrugMoeAutomaticPipelineState, *, step: in
     def commit():
         with atomic_rename(prefix_join(path, "metadata.json")) as temporary_path:
             StoragePath(temporary_path).write_text(json.dumps(metadata, sort_keys=True))
+        with atomic_rename(prefix_join(root, "latest.json")) as temporary_path:
+            StoragePath(temporary_path).write_text(json.dumps({"checkpoint": StoragePath(path).name, "step": step}))
 
     tree_serialize_leaves_tensorstore(path, arrays, commit_callback=commit)
     return path
@@ -89,19 +91,36 @@ def restore_checkpoint(
     The compiled step supplies the exact MPMD placement. Model configuration,
     schedule, and process topology must match the saved checkpoint.
     """
-    checkpoints = StoragePath(prefix_join(root, "step-*/metadata.json")).glob()
-    if not checkpoints:
-        return state, 0
-    metadata_path = max(checkpoints, key=str)
+    latest_path = StoragePath(prefix_join(root, "latest.json"))
+    latest = None
+    if latest_path.exists():
+        latest = json.loads(latest_path.read_text())
+        metadata_path = StoragePath(root) / latest["checkpoint"] / "metadata.json"
+    else:
+        # Recover a fully written first checkpoint if publication of latest.json
+        # was interrupted. Normal resumes need no checkpoint-directory listing.
+        checkpoints = StoragePath(prefix_join(root, "step-*/metadata.json")).glob()
+        if not checkpoints:
+            return state, 0
+        metadata_path = max(checkpoints, key=str)
     metadata = json.loads(metadata_path.read_text())
+    if latest is not None and latest["step"] != metadata["step"]:
+        raise ValueError(f"Checkpoint step disagrees with latest.json: {metadata_path}")
     arrays = checkpoint_arrays(state)
     expected = json.loads(json.dumps({"contract": contract, "arrays": _array_layout(arrays)}))
     if metadata["version"] != _FORMAT_VERSION or any(metadata[key] != value for key, value in expected.items()):
         raise ValueError(f"Checkpoint configuration or topology does not match: {metadata_path}")
-    path = str(metadata_path).rsplit("/", 1)[0]
+    path = str(metadata_path.parent)
     # Levanter's reader expects at least one addressable shard per input array.
     # Other stages remain empty descriptors and never enter the read plan.
-    local_arrays = jax.tree.map(lambda value: value if value.addressable_shards else None, arrays)
+    local_arrays = jax.tree.map(
+        lambda value: (
+            jax.ShapeDtypeStruct(value.shape, value.dtype, sharding=value.sharding)
+            if value.sharding.addressable_devices
+            else None
+        ),
+        arrays,
+    )
     restored = tree_deserialize_leaves_tensorstore(
         path,
         local_arrays,

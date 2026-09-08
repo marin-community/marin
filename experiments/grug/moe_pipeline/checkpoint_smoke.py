@@ -32,8 +32,18 @@ from experiments.grug.moe_pipeline.pipeline import (
     prepare_automatic_mpmd_step,
 )
 
+_RELATIVE_L2_TOLERANCE = 0.002
+
+
+def _assert_optimizer_counts(state, completed_steps: int) -> None:
+    for stage_optimizer in state.opt_state:
+        count = stage_optimizer[0].count.to_mpmd_local_array
+        if count is not None:
+            assert int(count) == completed_steps, (int(count), completed_steps)
+
 
 def _compare(actual, expected) -> float:
+    """Assert continuation parity and return the largest floating-leaf relative L2 error."""
     actual_leaves, actual_tree = jax.tree.flatten(checkpoint_arrays(actual))
     expected_leaves, expected_tree = jax.tree.flatten(checkpoint_arrays(expected))
     assert actual_tree == expected_tree
@@ -53,7 +63,7 @@ def _compare(actual, expected) -> float:
     totals = np.asarray(multihost_utils.process_allgather(np.asarray(errors))).reshape(-1, len(errors), 3).sum(axis=0)
     assert np.all(totals[:, 2] == 0), "integer checkpoint state differs"
     relative = np.sqrt(totals[:, 0] / np.maximum(totals[:, 1], np.finfo(np.float64).tiny))
-    assert np.all(relative <= 0.002), f"per-leaf relative L2 errors: {relative.tolist()}"
+    assert np.all(relative <= _RELATIVE_L2_TOLERANCE), f"per-leaf relative L2 errors: {relative.tolist()}"
     return float(relative.max())
 
 
@@ -125,8 +135,10 @@ def main() -> None:
     loss_path = StoragePath(prefix_join(args.checkpoint_root, f"loss-{jax.process_index()}.json"))
     if args.phase == "save":
         state, _ = step(state, prepared.batches, prepared.loss_denominator)
+        _assert_optimizer_counts(state, 1)
         save_checkpoint(resume_root, state, step=1, contract=contract)
         state, metrics = step(state, prepared.batches, prepared.loss_denominator)
+        _assert_optimizer_counts(state, 2)
         save_checkpoint(expected_root, state, step=2, contract=contract)
         loss = metrics[TRAIN_LOSS_KEY].to_mpmd_local_array
         if loss is not None:
@@ -135,15 +147,18 @@ def main() -> None:
         return
     state, completed = restore_checkpoint(resume_root, state, shardings, contract=contract)
     assert completed == 1, f"expected checkpoint step 1, got {completed}"
+    _assert_optimizer_counts(state, completed)
     state, metrics = step(state, prepared.batches, prepared.loss_denominator)
     expected, expected_step = restore_checkpoint(expected_root, state, shardings, contract=contract)
     assert completed + 1 == expected_step == 2
+    _assert_optimizer_counts(state, expected_step)
+    _assert_optimizer_counts(expected, expected_step)
     maximum_error = _compare(state, expected)
     loss = metrics[TRAIN_LOSS_KEY].to_mpmd_local_array
     if loss is not None:
         expected_loss = json.loads(loss_path.read_text())
         loss_error = abs(float(loss) - expected_loss) / max(abs(expected_loss), np.finfo(float).tiny)
-        assert loss_error <= 0.002, (float(loss), expected_loss, loss_error)
+        assert loss_error <= _RELATIVE_L2_TOLERANCE, (float(loss), expected_loss, loss_error)
     print(f"CHECKPOINT_SMOKE_PASSED schedule={args.schedule} max_relative_l2={maximum_error}", flush=True)
 
 

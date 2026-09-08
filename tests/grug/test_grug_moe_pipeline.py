@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 from dataclasses import replace
 
 import jax
@@ -208,14 +209,29 @@ def test_checkpoint_restores_optimizer_and_pending_router_updates(tmp_path):
             opt_state=tuple(item[1] for item in updated),
         )
         root = str(tmp_path)
-        save_checkpoint(root, state, step=7, contract={"schedule": "zero_bubble"})
+        checkpoint = save_checkpoint(root, state, step=1, contract={"schedule": "zero_bubble"})
+        assert json.loads((tmp_path / "latest.json").read_text()) == {
+            "checkpoint": checkpoint.rsplit("/", 1)[-1],
+            "step": 1,
+        }
         # An interrupted newer save must not hide the committed checkpoint.
-        (tmp_path / "step-000000000008-incomplete").mkdir()
+        (tmp_path / "step-000000000002-incomplete").mkdir()
         empty = jax.tree.map(jnp.zeros_like, state)
         shardings = jax.tree.map(lambda value: value.sharding, empty)
         restored, step = restore_checkpoint(root, empty, shardings, contract={"schedule": "zero_bubble"})
-        assert step == 7
+        assert step == 1
         for actual, expected in zip(jax.tree.leaves(restored), jax.tree.leaves(state), strict=True):
             np.testing.assert_array_equal(actual, expected)
+        for stage_optimizer in restored.opt_state:
+            np.testing.assert_array_equal(stage_optimizer[0].count, step)
+        latest = json.loads((tmp_path / "latest.json").read_text())
+        (tmp_path / "latest.json").write_text(json.dumps({**latest, "step": 2}))
+        with pytest.raises(ValueError, match="step disagrees"):
+            restore_checkpoint(root, empty, shardings, contract={"schedule": "zero_bubble"})
+        # Recover committed data even if the first latest-pointer write failed.
+        (tmp_path / "latest.json").unlink()
+        recovered, recovered_step = restore_checkpoint(root, empty, shardings, contract={"schedule": "zero_bubble"})
+        assert recovered_step == step
+        _assert_trees_close(recovered, state)
         with pytest.raises(ValueError, match="configuration or topology"):
             restore_checkpoint(root, empty, shardings, contract={"schedule": "dualpipe_v"})
