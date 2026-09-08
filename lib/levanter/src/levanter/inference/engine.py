@@ -1291,7 +1291,7 @@ class InferenceEngine:
         else:
             logger.info(f"Written trace info to {path}")
 
-    def _extract_outputs(self, pending_outputs) -> int:
+    def _extract_outputs(self, pending_outputs: _DecodeOutputs | None) -> int:
         """Append newly available tokens into outputs per (request_id, child_id).
 
         Returns number of new tokens appended.
