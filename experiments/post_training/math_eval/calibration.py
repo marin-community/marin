@@ -5,6 +5,7 @@
 
 import math
 import statistics
+from itertools import product
 
 
 def _panel(panel, samples):
@@ -134,4 +135,115 @@ def assumed_mde(
         "power": power,
         "method": "normal approximation, assumed disjoint variances/covariances, Bonferroni planning",
         "power_certified": False,
+    }
+
+
+COMPONENTS = ("seed", "question", "interaction", "draw")
+CORRELATION_GRID = (-1.0, 0.0, 0.5, 0.9)
+
+
+def crossed_variance_components(panel, samples):
+    """Estimate disjoint second moments in a balanced seed/question/draw model.
+
+    Seed, question, interaction and draw terms are mutually uncorrelated working
+    components. Draw residuals are conditionally uncorrelated, not merely
+    exchangeable. Binary outcomes need not be Gaussian. These moment estimates
+    and their nonnegative planning truncations are not variance upper bounds.
+    """
+    if type(samples) is not int or samples < 1:
+        raise ValueError("Positive integer K required")
+    seeds, questions = _panel(panel, samples)
+    ns, nq, k = len(seeds), len(questions), samples
+    cells = {seed: {q: statistics.mean(panel[seed][q]) for q in questions} for seed in seeds}
+    seed_means = {seed: statistics.mean(cells[seed].values()) for seed in seeds}
+    question_means = {q: statistics.mean(cells[seed][q] for seed in seeds) for q in questions}
+    grand = statistics.mean(seed_means.values())
+    ss = {
+        "seed": nq * k * sum((value - grand) ** 2 for value in seed_means.values()),
+        "question": ns * k * sum((value - grand) ** 2 for value in question_means.values()),
+        "interaction": (
+            k
+            * sum(
+                (cells[seed][q] - seed_means[seed] - question_means[q] + grand) ** 2 for seed in seeds for q in questions
+            )
+        ),
+        "draw": sum((value - cells[seed][q]) ** 2 for seed in seeds for q in questions for value in panel[seed][q]),
+    }
+    dfs = {"seed": ns - 1, "question": nq - 1, "interaction": (ns - 1) * (nq - 1), "draw": ns * nq * (k - 1)}
+    ms = {key: ss[key] / dfs[key] if dfs[key] else None for key in COMPONENTS}
+    raw = {
+        "seed": (ms["seed"] - ms["interaction"]) / (nq * k),
+        "question": (ms["question"] - ms["interaction"]) / (ns * k),
+        "interaction": None if k == 1 else (ms["interaction"] - ms["draw"]) / k,
+        "draw": ms["draw"],
+    }
+    return {
+        "questions": nq,
+        "training_seeds": seeds,
+        "samples": k,
+        "mean": grand,
+        "sums_of_squares": ss,
+        "degrees_of_freedom": dfs,
+        "mean_squares": ms,
+        "raw_moments": raw,
+        "planning_nonnegative_moments": {key: None if value is None else max(0.0, value) for key, value in raw.items()},
+        "interaction_plus_draw_when_k1": ms["interaction"] if k == 1 else None,
+        "assumptions": "mutually uncorrelated crossed components; conditionally uncorrelated draw residuals",
+        "native_engine_shared_seed_uncertainty_estimated": False,
+        "future_seed_variance_certified": False,
+        "truncation_is_conservative": False,
+    }
+
+
+def crossed_mde_sensitivity(
+    *, component_pairs, questions, training_seeds, samples, family_size, familywise_alpha=0.05, power=0.8
+):
+    """Persist all 256 assumed component-covariance scenarios for one contrast.
+
+    Caller supplies explicitly identified nonnegative marginal moments for both
+    future arms. Their applicability is a planning assumption. The contrast family
+    size must be prespecified; this function never derives it from the panel size.
+    """
+    if set(component_pairs) != set(COMPONENTS):
+        raise ValueError("All four identified component pairs are required")
+    if any(type(value) is not int or value < 1 for value in (questions, training_seeds, samples, family_size)):
+        raise ValueError("Positive integer design and prespecified family sizes required")
+    if not 0 < familywise_alpha < 1 or not 0.5 < power < 1:
+        raise ValueError("Invalid alpha or power")
+    for pair in component_pairs.values():
+        if len(pair) != 2 or any(value is None or not math.isfinite(value) or value < 0 for value in pair):
+            raise ValueError("Finite identified nonnegative component pairs required")
+    divisors = {
+        "seed": training_seeds,
+        "question": questions,
+        "interaction": training_seeds * questions,
+        "draw": training_seeds * questions * samples,
+    }
+    alpha = familywise_alpha / family_size
+    multiplier = statistics.NormalDist().inv_cdf(1 - alpha / 2) + statistics.NormalDist().inv_cdf(power)
+    rows = []
+    for correlations in product(CORRELATION_GRID, repeat=4):
+        rhos = dict(zip(COMPONENTS, correlations, strict=True))
+        parts = {}
+        for key, (a, b) in component_pairs.items():
+            parts[key] = max(0.0, a + b - 2 * rhos[key] * math.sqrt(a * b)) / divisors[key]
+        variance = sum(parts.values())
+        rows.append(
+            {
+                "assumed_correlations": rhos,
+                "variance_of_mean_components": parts,
+                "mde": multiplier * math.sqrt(variance) if variance > 0 else None,
+                "zero_variance_uninformative": variance == 0,
+                "power_certified": False,
+            }
+        )
+    return {
+        "family_size": family_size,
+        "planning_alpha": alpha,
+        "power": power,
+        "primary_rho0_assumption": next(row for row in rows if set(row["assumed_correlations"].values()) == {0.0}),
+        "shared_rho_scenarios": [row for row in rows if len(set(row["assumed_correlations"].values())) == 1],
+        "all_component_scenarios": rows,
+        "component_divisors": divisors,
+        "scope": "normal planning approximation; no covariance, power or future-seed certification",
     }
