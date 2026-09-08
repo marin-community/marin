@@ -58,7 +58,10 @@ def fixture():
         "clean_end_to_end": True,
         "run_id": "fixture",
         "attempt_id": "attempt",
-        "storage": {"request_fingerprint": "4" * 64},
+        "storage": {
+            "request_fingerprint": "4" * 64,
+            "runtime": {"commit": "d840cd29665a12c9459911b2f8cbc2245f176d6f"},
+        },
         "resolved_config": {
             "trainer.seed": 17,
             "trainer.eval_before_train": True,
@@ -197,6 +200,7 @@ def test_temperature_one_claim_cannot_certify_a_greedy_generation_receipt():
         "renderer",
         "prompt_cap",
         "top_p",
+        "runtime",
     ],
 )
 def test_qualified_model_profile_refuses_joint_mislabeling_and_foreign_renderer(alteration):
@@ -221,6 +225,8 @@ def test_qualified_model_profile_refuses_joint_mislabeling_and_foreign_renderer(
             row["contract_response_rendering"] = "forensic-default"
     elif alteration == "prompt_cap":
         audited["resolved_config"]["generator.max_input_length"] = 512
+    elif alteration == "runtime":
+        audited["storage"]["runtime"]["commit"] = "f" * 40
     else:
         audited["resolved_config"]["generator.eval_sampling_params"]["top_p"] = 0.95
     kwargs["generation_audit_sha256"] = hashlib.sha256(canonical_json(audited).encode()).hexdigest()

@@ -25,6 +25,7 @@ MODEL_PROFILES = {
         "tokenizer_sha256": "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4",
         "prompt_template_id": QWEN.template_id,
         "renderer_qualification_sha256": "7992b6a8defc71150a6efaf617122bd5fb6cb57f528b253893d4136a7724d545",
+        "native_runtime_commit": "d840cd29665a12c9459911b2f8cbc2245f176d6f",
         "max_prompt_tokens": 1024,
         "max_response_tokens": 2048,
     },
@@ -35,6 +36,7 @@ MODEL_PROFILES = {
         "tokenizer_sha256": "881c9c36c359e1617afef6f7583403567931b7b4f43f6552d2b2155a131650a2",
         "prompt_template_id": SNOWBALL.template_id,
         "renderer_qualification_sha256": "2a4b5edb5ca3f1c0a2b1a9e5370576bc344b56e1989e5225b4bfffdf9454551c",
+        "native_runtime_commit": "d840cd29665a12c9459911b2f8cbc2245f176d6f",
         "max_prompt_tokens": 4096,
         "max_response_tokens": 8192,
     },
@@ -221,6 +223,7 @@ def _generation_protocol(receipt, generation_audit, expected_sha256):
     label, profile = matches[0]
     if (
         any(audited_model.get(key) != profile[key] for key in ("tokenizer_uri", "tokenizer_revision"))
+        or generation_audit["storage"].get("runtime", {}).get("commit") != profile["native_runtime_commit"]
         or any(receipt.get(key) != profile[key] for key in ("tokenizer_sha256", "prompt_template_id"))
         or sampling["max_generate_length"] != profile["max_response_tokens"]
         or cfg.get("generator.max_input_length") != profile["max_prompt_tokens"]
