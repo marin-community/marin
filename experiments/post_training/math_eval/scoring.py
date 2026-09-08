@@ -78,7 +78,7 @@ def semantic_answer(segment: str | None, boundary: str, gold: str) -> tuple[floa
     return float(verify(reference, prediction)), "parsed", f"math-verify=={MATH_VERIFY_VERSION}"
 
 
-def score_row(row: dict[str, Any], decoder: Tokenizer, *, model: str, thinking: bool) -> ScoredRow:
+def score_row(row: dict[str, Any], decoder: Tokenizer, *, model: str, thinking: bool, semantic_worker=None) -> ScoredRow:
     """Score a proven dump row; reject reward channels inconsistent with its verifier.
 
     The harness verifies token hashes and frozen prompt identity before this call.
@@ -119,7 +119,19 @@ def score_row(row: dict[str, Any], decoder: Tokenizer, *, model: str, thinking: 
         decoder, tokens, thinking=thinking, prompt_tokens=row["prompt_token_ids"]
     )
     semantic_gold = json.loads(gold)["entry"]["answer"] if env == "reasoning_gym" else gold
-    semantic, status, engine = semantic_answer(segment, boundary, semantic_gold)
+    if semantic_worker is None:
+        semantic, status, engine = semantic_answer(segment, boundary, semantic_gold)
+    else:
+        semantic, status, engine = semantic_worker.score(
+            segment,
+            boundary,
+            semantic_gold,
+            identity={
+                "uid": str(row["uid"]),
+                "prompt_sha256": extras["extra_info"]["prompt_sha256"],
+                "response_sha256": hashlib.sha256(json.dumps(tokens, separators=(",", ":")).encode()).hexdigest(),
+            },
+        )
     stop = row["stop_reason"]
     completed = float(correct and stop in ACCEPTED_STOPS)
     strict, flexible = lm_eval_scores(response, gold) if env == "gsm8k" else (None, None)

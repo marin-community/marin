@@ -202,7 +202,7 @@ def validate_serving_generation(config, generation, native_tasks, native_job):
     }
 
 
-def audit_serving_outputs(config, *, native_tasks, native_job, output_uri):
+def audit_serving_outputs(config, *, native_tasks, native_job, output_uri, semantic_worker=None):
     """Read back raw artifacts, validate all requests and score frozen membership."""
     root = StoragePath(config.output_uri)
     generation = json.loads((root / "generation.json").read_bytes())
@@ -240,6 +240,7 @@ def audit_serving_outputs(config, *, native_tasks, native_job, output_uri):
     receipt = build_records(
         config.output_uri,
         0,
+        semantic_worker=semantic_worker,
         manifest=pq.read_table(pa.BufferReader((pool / "manifest.parquet").read_bytes())).to_pylist(),
         selection=json.loads((pool / "selection.json").read_bytes()),
         overlay=json.loads(StoragePath(config.overlay_uri).read_bytes()),

@@ -4,7 +4,9 @@
 """Real dump proof plus frozen membership, repeated samples, and scorer integration."""
 
 import hashlib
+import inspect
 import json
+from pathlib import Path
 
 import pyarrow.parquet as pq
 import pytest
@@ -19,6 +21,8 @@ from experiments.post_training.math_eval import harness
 from experiments.post_training.math_eval.audit_overlay import VERIFIER_REVISION, VERIFIER_SOURCES_SHA256
 from experiments.post_training.math_eval.contract import QWEN, render_prompt
 from experiments.post_training.math_eval.pool import SourceRows, build_pool
+from experiments.post_training.math_eval.scoring import semantic_answer
+from experiments.post_training.math_eval.semantic_worker import SemanticWorker
 
 
 def Decoder():
@@ -124,6 +128,26 @@ def test_harness_proves_and_materializes_repeated_samples(fixture):
     assert all(row["native_reward_reduction"] == "token_reward_sum" for row in table)
     with open(kwargs["output_uri"] + "/records.parquet", "rb") as stream:
         assert hashlib.sha256(stream.read()).hexdigest() == receipt["records_sha256"]
+
+
+def test_harness_semantic_process_preserves_scores_and_binds_execution_receipt(fixture):
+    kwargs, _raw, _rows = fixture
+    original = harness.build_records(**kwargs)
+    original_rows = pq.read_table(kwargs["output_uri"] + "/records.parquet").to_pylist()
+    kwargs["output_uri"] += "-isolated"
+    with SemanticWorker(
+        source_sha256=hashlib.sha256(inspect.getsource(semantic_answer).encode()).hexdigest(),
+        startup_timeout=60,
+        row_timeout=30,
+        cleanup_timeout=1,
+    ) as worker:
+        receipt = harness.build_records(**kwargs, semantic_worker=worker)
+    assert receipt["summary"] == original["summary"]
+    assert pq.read_table(kwargs["output_uri"] + "/records.parquet").to_pylist() == original_rows
+    execution = json.loads(Path(kwargs["output_uri"] + "/semantic-execution.json").read_text())
+    assert audit.canonical_sha(execution) == receipt["semantic_execution_sha256"]
+    assert len(execution["rows"]) == 4
+    assert [row["status"] for row in execution["rows"]] == [row["semantic_status"] for row in original_rows]
 
 
 @pytest.mark.parametrize("field", ["gold", "template", "prompt", "text", "membership", "reject"])

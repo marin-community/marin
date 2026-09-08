@@ -50,6 +50,7 @@ def _read_and_score(
     wandb_metrics,
     bind_row,
     metric_reference="wandb",
+    semantic_worker=None,
 ):
     provenance = {"wandb": "finalized_trajectory", "serving_score_receipt": "raw_engine_response"}
     if metric_reference not in provenance:
@@ -91,7 +92,7 @@ def _read_and_score(
         if decoder.decode(row["response_ids"], skip_special_tokens=False) != row["output_response"]:
             raise ValueError("Dump response text does not decode from its proven tokens")
         binding = bind_row(row)
-        scored = asdict(score_row(row, decoder, model=model, thinking=thinking))
+        scored = asdict(score_row(row, decoder, model=model, thinking=thinking, semantic_worker=semantic_worker))
         outcome = (row["score"][-1] if row["score"] else 0) if isinstance(row["score"], list) else score
         records.append(
             scored
@@ -129,6 +130,7 @@ def build_records(
     wandb_metrics,
     output_uri,
     metric_reference="wandb",
+    semantic_worker=None,
 ):
     """Bind every response to accepted immutable pool membership and the frozen template.
 
@@ -177,6 +179,7 @@ def build_records(
         wandb_metrics=wandb_metrics,
         bind_row=bind,
         metric_reference=metric_reference,
+        semantic_worker=semantic_worker,
     )
     if seen != Counter({digest: samples for digest in expected_ids}):
         raise ValueError("Frozen question sample coverage differs")
@@ -195,6 +198,23 @@ def build_records(
     if metric_reference != "wandb":
         receipt["metric_reference"] = metric_reference
     receipt["contract_metric_parity_verified"] = True
+    if semantic_worker is not None:
+        execution = {
+            "schema": "math_eval_semantic_execution_v1",
+            "source_sha256": semantic_worker.source_sha256,
+            "startup_timeout_seconds": semantic_worker.startup_timeout,
+            "row_timeout_seconds": semantic_worker.row_timeout,
+            "rows": semantic_worker.receipts,
+            "scope": "successful rows preserve scorer output; wall-time expiry is newly unresolved",
+        }
+        if len(execution["rows"]) != len(records) or any(
+            [item["uid"], item["prompt_sha256"], item["response_sha256"], item["status"]]
+            != [row["uid"], row["prompt_sha256"], row["response_ids_sha256"], row["semantic_status"]]
+            for item, row in zip(execution["rows"], records, strict=True)
+        ):
+            raise ValueError("Semantic worker coverage differs from proven record coverage")
+        receipt["semantic_execution_sha256"] = audit.canonical_sha(execution)
+        StoragePath(output_uri + "/semantic-execution.json").write_text(json.dumps(execution, sort_keys=True))
     receipt.update(
         {
             "manifest_sha256": selection["manifest_sha256"],
