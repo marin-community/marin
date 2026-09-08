@@ -241,6 +241,8 @@ def training_config(
         micro_forward_batch_size_per_gpu=1,
     )
     config = yaml.safe_load(rl_config_yaml(preset))
+    # Snowball history allocation awaits the EP and memory qualification gates.
+    config["trainer"]["algorithm"]["grad_cosine"] = {"enabled": False, "store": "cpu_bf16"}
     config["entrypoint"] = "standard" if runner is Runner.SYNC else "fully_async"
     trainer = config["trainer"]
     trainer.update(
