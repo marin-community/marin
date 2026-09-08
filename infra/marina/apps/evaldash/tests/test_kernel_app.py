@@ -59,7 +59,7 @@ def test_the_mounted_api_serves_what_the_reconciler_committed(engine, records, d
     services = Services(name=APP, data_url="memory://evaldash", database=UrlDatabase(url=database_url))
 
     api = evaldash_app.create_api(services)
-    with TestClient(api) as client:
+    with TestClient(api.app) as client:
         assert client.get("/runs").json() == []
         config = evaldash_app.EvaldashConfig.from_env({"RECORDS_PREFIXES": records})
         writer = evaldash_app.PgRecordStore(engine)

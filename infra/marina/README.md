@@ -27,14 +27,17 @@ infra/marina/
   routes survive a reload. A `x.json.gz` beside `x.json` is served compressed.
 - `/<name>/data/<path>`: files from `<data root>/<name>/`. Large or changing
   data lives there rather than in the image or the repository.
-- `/<name>/api/`: the ASGI app a Python app's `create_api(services)` returns,
-  mounted behind the same authentication. Handlers read the caller with
+- `/<name>/api/`: the ASGI app in the `RegisteredApi` returned by a checked-in
+  Python app's `create_api(services)`, mounted behind the same authentication.
+  Handlers read the caller with
   `rigging.server_auth.get_verified_identity()`.
 - `services.engine()`: a SQLAlchemy engine on the app's own Postgres schema
   (`search_path = <name>, public`). `migrate(engine)` runs at deploy, before
   the new image takes traffic, and must be idempotent.
 - `/api/marina/apps` and `/api/marina/me`: the directory and the caller, which
-  the Shell uses for its app switcher and identity chip. `/healthz` is public.
+  the Shell uses for its app switcher and identity chip. `/api/marina/mcp/` is
+  the authenticated Streamable HTTP MCP endpoint for checked-in application
+  APIs. `/healthz` is public.
 
 ## Adding an app
 
@@ -66,8 +69,57 @@ infra/marina/
    rendering inside `<Shell app="<name>">`. Copy `apps/tasktrove/web` as the
    starting point.
 3. For an API, add `apps/<name>/__init__.py` and `app.py` with
-   `create_api(services)` and, if it has tables, `migrate(engine)`. Copy
-   `apps/echo` for the shape.
+   `create_api(services)` and, if it has tables, `migrate(engine)`. The factory
+   returns `registered_api(api)`. Define request and response bodies with Pydantic,
+   and give each operation exposed to agents a stable `operation_id`, description,
+   response model, and risk:
+
+   ```python
+   from fastapi import FastAPI
+   from marina.apps import RegisteredApi, Services, registered_api
+   from marina.mcp import OperationRisk, operation_extension
+   from pydantic import BaseModel
+
+
+   class NoteCreate(BaseModel):
+       body: str
+
+
+   class NoteCreated(BaseModel):
+       id: int
+
+
+   def create_api(services: Services) -> RegisteredApi:
+       api = FastAPI(title=services.name)
+
+       @api.post(
+           "/notes",
+           operation_id="create_note",
+           description="Create one note in this application's database schema.",
+           response_model=NoteCreated,
+           openapi_extra=operation_extension(OperationRisk.WRITE),
+       )
+       def create_note(body: NoteCreate) -> NoteCreated:
+           ...
+
+       return registered_api(api)
+   ```
+
+   FastMCP derives the MCP input and output schemas from FastAPI's OpenAPI
+   document and executes tools against the mounted ASGI application. Routes
+   without `operation_extension(...)` remain ordinary authenticated HTTP routes
+   and are excluded from MCP. A lifecycle wrapper can be mounted with
+   `registered_api(api, mounted_app=wrapper)` while `api` remains the OpenAPI
+   source. Dynamic applet APIs are not exposed through MCP. Copy `apps/echo` for
+   a complete service.
+
+   An MCP client initially sees only `find_tool` and `call_tool`. `find_tool`
+   searches registered operations across applications. The returned tool names
+   use `<app>_<operation_id>`, for example `evaldash_read_logs`; pass that name
+   and its arguments to `call_tool`. The declared risk is translated to MCP's
+   standard `readOnlyHint`, `destructiveHint`, and `openWorldHint` annotations.
+   The exact `read`, `write`, `external_write`, or `destructive` value is also
+   available at `_meta.marina.risk`.
 4. Write a journey in `apps/<name>/journeys/test_*.py` (below).
 5. Run it locally:
 
