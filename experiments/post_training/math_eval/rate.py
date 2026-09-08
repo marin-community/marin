@@ -14,6 +14,7 @@ from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.math_eval.contract import QWEN, SNOWBALL
 from experiments.post_training.math_eval.pool import canonical_json
+from experiments.post_training.math_eval.rendering import INCREMENTAL_RENDERING
 
 # Startup-only profiles qualified in contract-v1.md; changing model content,
 # tokenizer, template or renderer requires another reviewed profile.
@@ -133,10 +134,12 @@ def rate_from_records(
         }.items()
     ):
         raise ValueError("Claimed sampling protocol differs from the audited generation configuration")
-    if protocol is not None and any(
-        row.get("contract_response_rendering") != "decode_skip_special_tokens" for row in records
-    ):
-        raise ValueError("Rating rows lack qualified native response rendering")
+    if protocol is not None:
+        rendering = protocol.get("contract_response_rendering", "decode_skip_special_tokens")
+        if rendering not in {"decode_skip_special_tokens", INCREMENTAL_RENDERING} or any(
+            row.get("contract_response_rendering") != rendering for row in records
+        ):
+            raise ValueError("Rating rows lack qualified native response rendering")
     metadata = {
         "model": model,
         "checkpoint": checkpoint,

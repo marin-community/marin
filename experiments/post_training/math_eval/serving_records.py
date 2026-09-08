@@ -14,6 +14,7 @@ from experiments.post_training import async_rl_audit as audit
 from experiments.post_training.math_eval.contract import CONTRACT_IDS, render_prompt
 from experiments.post_training.math_eval.pool import MODEL_TEMPLATES, prompt_hash
 from experiments.post_training.math_eval.rate import MODEL_PROFILES
+from experiments.post_training.math_eval.rendering import INCREMENTAL_RENDERING, render_serving_response
 
 
 def completion_request(item, decoder, *, model, samples, api_model):
@@ -104,7 +105,7 @@ def completion_rows(item, request, response, decoder, *, model, question_index):
             or choice.get("finish_reason") not in {"stop", "length"}
         ):
             raise ValueError("Serving token identity, count or termination is invalid")
-        native_text = decoder.decode(tokens, skip_special_tokens=True)
+        native_text = render_serving_response(decoder, request["prompt"], tokens)
         if choice.get("text") != native_text:
             raise ValueError("Serving text differs from the qualified token renderer")
         score, correct = _native_score(native_text, item["env_class"], item["gold"])
@@ -139,6 +140,8 @@ def completion_rows(item, request, response, decoder, *, model, question_index):
                 "generation_request_sha256": audit.canonical_sha(request),
                 "generation_response_id": response["id"],
                 "engine_output_text_sha256": hashlib.sha256(native_text.encode()).hexdigest(),
+                "engine_output_text": native_text,
+                "contract_response_rendering": INCREMENTAL_RENDERING,
             }
         )
     usage = response.get("usage", {})

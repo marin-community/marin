@@ -27,6 +27,7 @@ from experiments.post_training.math_eval.audit_overlay import validated_statuses
 from experiments.post_training.math_eval.pool import MODEL_TEMPLATES, canonical_json
 from experiments.post_training.math_eval.pool_audit import verify_verifier_sources
 from experiments.post_training.math_eval.rate import MODEL_PROFILES
+from experiments.post_training.math_eval.rendering import renderer_provenance
 from experiments.post_training.math_eval.scoring import SEMANTIC_DEPENDENCIES
 from experiments.post_training.math_eval.serving_records import completion_request, completion_rows, serving_metrics
 
@@ -239,6 +240,7 @@ def run_rating_serving(config):
     ]
     # Standard serving handles the immutable object-store model path directly.
     specification = serving_specification(config)
+    rendering = renderer_provenance()
     with local_inference(model, engine, num_chips=config.tensor_parallel_size) as session:
         endpoint = session.model.endpoint.base_url
         version_reply = requests.get(endpoint.removesuffix("/v1") + "/version", timeout=30)
@@ -268,6 +270,7 @@ def run_rating_serving(config):
             "tokenizers_version": importlib.metadata.version("tokenizers"),
             "prompt_template_id": MODEL_TEMPLATES[config.model].template_id,
             "generation_started_at_ms": generation_start_ms,
+            "renderer": rendering,
         }
         with ThreadPoolExecutor(max_workers=config.concurrency) as executor:
             rows = []
@@ -298,6 +301,7 @@ def run_rating_serving(config):
         "specification": specification,
         "specification_sha256": audit.canonical_sha(specification),
         "runtime": runtime,
+        "renderer": rendering,
         "score_dependency_versions": score_versions,
         "generation_and_native_scoring": {
             "started_at_ms": generation_start_ms,

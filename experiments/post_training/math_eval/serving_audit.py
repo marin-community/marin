@@ -17,6 +17,11 @@ from experiments.post_training import async_rl_audit as audit
 from experiments.post_training.math_eval.harness import build_records
 from experiments.post_training.math_eval.pool import MODEL_TEMPLATES
 from experiments.post_training.math_eval.rate import MODEL_PROFILES
+from experiments.post_training.math_eval.rendering import (
+    INCREMENTAL_RENDERING,
+    render_serving_response,
+    renderer_provenance,
+)
 from experiments.post_training.math_eval.scoring import SEMANTIC_DEPENDENCIES
 from experiments.post_training.math_eval.serving import (
     SERVING_MODELS,
@@ -129,6 +134,8 @@ def validate_serving_generation(config, generation, native_tasks, native_job):
         if key not in generation or generation[key] != expected_value:
             raise ValueError(f"Serving generation has incompatible {key}")
     runtime = generation["runtime"]
+    if "renderer" in generation and generation["renderer"] != renderer_provenance():
+        raise ValueError("Serving renderer differs from the pinned replay implementation")
     verify_wheel_receipt("MARIN_VLLM_WHEEL_VERIFIED=" + json.dumps(runtime), runtime["api_version"])
     command = generation.get("native_command", [])
     flags = {
@@ -150,6 +157,9 @@ def validate_serving_generation(config, generation, native_tasks, native_job):
             raise ValueError(f"Native engine command does not prove {flag}")
     return {
         "producer_source_commit": config.source_commit,
+        "contract_response_rendering": INCREMENTAL_RENDERING,
+        "renderer": renderer_provenance(),
+        "producer_renderer": generation.get("renderer", {"method": "decode_skip_special_tokens"}),
         "model_label": config.model,
         "checkpoint": generation["model_identity"],
         "engine_global_seed": 17,
@@ -205,9 +215,11 @@ def audit_serving_outputs(config, *, native_tasks, native_job, output_uri):
         request = requests[ordinal // config.samples]
         if row["row_ordinal"] != ordinal or row["generation_request_sha256"] != audit.canonical_sha(request):
             raise ValueError("Serving response has a different request identity or order")
-        text = decoder.decode(row["response_ids"], skip_special_tokens=True)
+        text = render_serving_response(decoder, row["prompt_token_ids"], row["response_ids"])
         if hashlib.sha256(text.encode()).hexdigest() != row["engine_output_text_sha256"]:
             raise ValueError("Serving response differs from native verifier text")
+        if "engine_output_text" in row and row["engine_output_text"] != text:
+            raise ValueError("Preserved API text differs from the pinned incremental renderer")
     pool = StoragePath(config.pool_uri)
     receipt = build_records(
         config.output_uri,

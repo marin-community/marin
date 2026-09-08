@@ -5,10 +5,13 @@
 
 import hashlib
 import json
-from types import SimpleNamespace
 
 import pyarrow.parquet as pq
 import pytest
+from tokenizers import Regex, Tokenizer
+from tokenizers.decoders import Fuse
+from tokenizers.models import WordLevel
+from tokenizers.pre_tokenizers import Split
 
 from experiments.post_training import async_rl_audit as audit
 from experiments.post_training.curriculum_rl.pool import GSM8K_BIN, _pool_record
@@ -18,18 +21,12 @@ from experiments.post_training.math_eval.contract import QWEN, render_prompt
 from experiments.post_training.math_eval.pool import SourceRows, build_pool
 
 
-class Decoder:
-    def encode(self, text, add_special_tokens=False):
-        return SimpleNamespace(ids=list(map(ord, text)))
-
-    def decode(self, tokens, skip_special_tokens=False):
-        return "".join(map(chr, tokens))
-
-    def id_to_token(self, token):
-        return chr(token)
-
-    def token_to_id(self, _text):
-        return None
+def Decoder():
+    vocab = {chr(index): index for index in range(128)}
+    decoder = Tokenizer(WordLevel(vocab, unk_token="?"))
+    decoder.pre_tokenizer = Split(Regex(""), behavior="isolated")
+    decoder.decoder = Fuse()
+    return decoder
 
 
 @pytest.fixture

@@ -3,10 +3,13 @@
 
 import json
 from copy import deepcopy
-from types import SimpleNamespace
 
 import pytest
 import reasoning_gym
+from tokenizers import AddedToken, Regex, Tokenizer
+from tokenizers.decoders import Fuse
+from tokenizers.models import WordLevel
+from tokenizers.pre_tokenizers import Split
 
 from experiments.post_training.math_eval.contract import QWEN
 from experiments.post_training.math_eval.pool import prompt_hash
@@ -14,12 +17,15 @@ from experiments.post_training.math_eval.serving import MAX_FAILURE_RECEIPT_BYTE
 from experiments.post_training.math_eval.serving_records import completion_request, completion_rows, serving_metrics
 
 
-class Decoder:
-    def encode(self, text, **kwargs):
-        return SimpleNamespace(ids=[ord(char) for char in text])
-
-    def decode(self, tokens, *, skip_special_tokens):
-        return "".join(chr(token) if token else ("" if skip_special_tokens else "<eos>") for token in tokens)
+def Decoder():
+    vocab = {chr(index): index for index in range(128)}
+    vocab.pop(chr(0))
+    vocab["<eos>"] = 0
+    decoder = Tokenizer(WordLevel(vocab, unk_token="?"))
+    decoder.pre_tokenizer = Split(Regex(""), behavior="isolated")
+    decoder.decoder = Fuse()
+    decoder.add_special_tokens([AddedToken("<eos>", special=True)])
+    return decoder
 
 
 def fixture(env="aime"):
