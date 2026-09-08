@@ -74,6 +74,14 @@ RECEIPT
 exit "$cap8_status"
 """
     )
+    bootstrap = (
+        'UV_PROJECT_ENVIRONMENT=/tmp/oa-cap8-env uv sync --quiet --frozen --project "$cap8_root" '
+        "--python python3.12 --no-python-downloads --link-mode symlink "
+        "--extra cpu --extra telemetry --group dev --group harbor-test"
+        if args.cpu_only
+        else 'bash "$cap8_root/cloud/iris/bootstrap_runtime.sh" "$cap8_root" '
+        "/tmp/oa-cap8-env /tmp/oa-cap8-runtime megatron development\nsource /tmp/oa-cap8-runtime"
+    )
     body = f"""set -euo pipefail
 cap8_root="$PWD"
 export PYTHONPATH="$cap8_root/skyrl-train:$cap8_root/skyrl-gym:$cap8_root"
@@ -88,8 +96,7 @@ expected={hashes!r}
 for path,digest in expected.items():assert hashlib.sha256(Path(path).read_bytes()).hexdigest()==digest,path
 print('CAP8_SOURCE_PASS '+json.dumps(dict(msr={msr!r},marin={args.marin_commit!r},sha256=expected)),flush=True)
 VERIFY
-bash "$cap8_root/cloud/iris/bootstrap_runtime.sh" "$cap8_root" /tmp/oa-cap8-env /tmp/oa-cap8-runtime megatron development
-source /tmp/oa-cap8-runtime
+{bootstrap}
 export PUBLICATION_CAP_SPEC="$(python3 - <<'SPEC'
 import base64
 print(base64.b64decode({encoded!r}).decode())
@@ -145,7 +152,9 @@ SPEC
                 "timeout_seconds": timeout,
                 "task_gpu_hour_ceiling": 0 if args.cpu_only else timeout / 3600,
                 "max_retries": 0,
-                "runtime": "frozen megatron/vllm development",
+                "runtime": (
+                    "frozen cpu/telemetry dev/harbor-test" if args.cpu_only else "frozen megatron/vllm development"
+                ),
                 "storage": "pod cache and durable Iris log receipts; read family48 east data, no bucket writes",
                 "command": command,
             },
