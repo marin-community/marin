@@ -60,7 +60,7 @@ def main():
     )
     hashes = {name: hashlib.sha256(Path(name).read_bytes()).hexdigest() for name in sources}
     nodeid = CHAT_NODEID if args.native_chat else NODEID
-    timeout = 700 if args.native_chat and not args.native_chat_prerequisite else 1800
+    timeout = 450 if args.native_chat and not args.native_chat_prerequisite else 1800
     prepare_chat = (
         """
 /tmp/oa-publication-env/bin/python "$publication_root/skyrl-train/examples/gsm8k/gsm8k_dataset.py"
