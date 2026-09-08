@@ -1232,3 +1232,115 @@ def test_background_eval_cli_reaches_native_recipe():
     config = yaml.safe_load(json.loads(result.output)["request"]["config_yaml"])
     assert config["trainer"]["fully_async"]["eval_mode"] == "background"
     assert config["trainer"]["fully_async"]["eval_on_installed_weights"] is True
+
+
+@pytest.mark.parametrize("runner", list(async_rl.Runner))
+def test_seeded_control_cli_and_builder_bind_identical_requests(runner):
+    options = dict(
+        version="2026.09.08.92",
+        cluster="cw-us-east-02a",
+        runner=runner,
+        completion="metrics",
+        scale=async_rl.Scale.SCREENING,
+        epoch_seeded_shuffle=True,
+        staleness=0,
+        seeded_sampling_control=True,
+    )
+    built, _ = async_rl.build_experiment(**options)
+    expected = built.build_config(StepContext.for_fingerprint(built.runtime_args, built.deps)).request
+    result = CliRunner().invoke(
+        async_rl.main,
+        [
+            "--version",
+            options["version"],
+            "--runner",
+            runner.value,
+            "--completion",
+            "metrics",
+            "--scale",
+            "screening",
+            "--stage",
+            "rl",
+            "--epoch-seeded-shuffle",
+            "--staleness",
+            "0",
+            "--seeded-sampling-control",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    actual = json.loads(result.output)["request"]
+    assert actual["config_yaml"] == expected.config_yaml and actual["run_id"] == expected.run_id
+    config = yaml.safe_load(actual["config_yaml"])
+    assert config["generator"]["seed_by_trajectory"] is True
+    assert config["generator"]["enable_prefix_caching"] is False
+    assert config["extra_env"]["VLLM_BATCH_INVARIANT"] == "1"
+    baseline, _ = async_rl.build_experiment(**(options | {"seeded_sampling_control": False}))
+    baseline_config = yaml.safe_load(
+        baseline.build_config(StepContext.for_fingerprint(baseline.runtime_args, baseline.deps)).request.config_yaml
+    )
+    del config["generator"]["seed_by_trajectory"]
+    del config["generator"]["enable_prefix_caching"]
+    del config["extra_env"]
+    assert config == baseline_config
+
+
+@pytest.mark.parametrize("runner", list(async_rl.Runner))
+def test_symmetric_environment_control_changes_only_paired_worker_settings(runner):
+    options = dict(
+        version="2026.09.08.96",
+        cluster="cw-us-east-02a",
+        runner=runner,
+        completion="metrics",
+        scale=async_rl.Scale.SCREENING,
+        epoch_seeded_shuffle=True,
+        staleness=0,
+        seeded_sampling_control=True,
+    )
+    baseline, _ = async_rl.build_experiment(**options)
+    candidate, _ = async_rl.build_experiment(**options, symmetric_weight_sync_environment=True)
+    old = baseline.build_config(StepContext.for_fingerprint(baseline.runtime_args, baseline.deps)).request
+    new = candidate.build_config(StepContext.for_fingerprint(candidate.runtime_args, candidate.deps)).request
+    config = yaml.safe_load(new.config_yaml)
+    assert config["extra_env"].pop("RAY_DEDUP_LOGS_ALLOW_REGEX") == "WEIGHT_SYNC_ENVIRONMENT_PRE_PG"
+    assert config["trainer"]["algorithm"].pop("weight_sync_invariant_env") is True
+    assert config["generator"]["engine_init_kwargs"].pop("worker_cls") == (
+        "skyrl_train.inference_engines.vllm.invariant_worker.InvariantWeightSyncWorker"
+    )
+    if not config["generator"]["engine_init_kwargs"]:
+        del config["generator"]["engine_init_kwargs"]
+    assert config == yaml.safe_load(old.config_yaml)
+    assert old.run_id != new.run_id
+    result = CliRunner().invoke(
+        async_rl.main,
+        [
+            "--version",
+            options["version"],
+            "--runner",
+            runner.value,
+            "--completion",
+            "metrics",
+            "--scale",
+            "screening",
+            "--stage",
+            "rl",
+            "--epoch-seeded-shuffle",
+            "--staleness",
+            "0",
+            "--seeded-sampling-control",
+            "--symmetric-weight-sync-environment",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["request"]["config_yaml"] == new.config_yaml
+
+
+@pytest.mark.parametrize("value", [True, "true", 1])
+def test_symmetric_environment_rejects_unpaired_or_nonboolean_control(value):
+    with pytest.raises(ValueError):
+        async_rl.build_experiment(
+            version="2026.09.08.96",
+            cluster="cw-us-east-02a",
+            runner=async_rl.Runner.SYNC,
+            scale=async_rl.Scale.SCREENING,
+            symmetric_weight_sync_environment=value,
+        )
