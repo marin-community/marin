@@ -68,6 +68,7 @@ from experiments.post_training.async_rl import (
     VALIDATION_ROWS,
     Correction,
     Runner,
+    apply_correction,
     apply_observation_options,
     validate_eval_interval,
     validate_regional_storage,
@@ -270,12 +271,7 @@ def training_config(
     trainer["algorithm"].update(
         use_kl_loss=False, use_kl_in_reward=False, policy_loss_type="behavior_clip", use_tis=False
     )
-    if correction == Correction.REGULAR_TIS:
-        trainer["algorithm"].update(
-            policy_loss_type="regular", use_tis=True, tis_imp_ratio_cap=2.0, require_rollout_logprobs=True
-        )
-    elif correction == Correction.REGULAR_NO_TIS:
-        trainer["algorithm"].update(policy_loss_type="regular", require_rollout_logprobs=True)
+    apply_correction(trainer["algorithm"], correction)
     trainer["fully_async"] = {
         "max_staleness_steps": max_staleness_steps,
         "weight_sync_interval": weight_sync_interval,
