@@ -1,0 +1,36 @@
+# Custom lm-eval-harness task for DCLM CORE's `winograd` (Winograd Schema 273).
+#
+# Why custom: lm-eval-harness's stock `wsc273` task pulls from a
+# `cs.nyu.edu/faculty/davise/.../WSCollection.xml` URL whose dataset script
+# doesn't follow a 302 redirect, so the load deterministically fails.
+# We vendor WSCollection.xml + a JSONL converter under this directory; the
+# task here reads the local JSONL.
+#
+# Format mirrors MosaicML's gauntlet "schema" task type: per example we
+# have `prefix` (context before the pronoun) and `choices` (full continuations
+# with each candidate noun phrase substituted in). Scoring picks the
+# highest log-likelihood continuation.
+#
+# DCLM eval_meta_data row: winograd,language understanding,schema,0,273,50
+# Note row count: WSCollection.xml ships 285 schemas; the original Levesque
+# 273 is often cited but the canonical XML has expanded over time.
+task: winograd
+dataset_path: json
+dataset_kwargs:
+  data_files: wsc273.jsonl
+test_split: train
+output_type: multiple_choice
+doc_to_text: "{{prefix}}"
+doc_to_target: "{{gold}}"
+doc_to_choice: "{{choices}}"
+metric_list:
+  - metric: acc
+    aggregation: mean
+    higher_is_better: true
+  - metric: acc_norm
+    aggregation: mean
+    higher_is_better: true
+metadata:
+  version: 1.0
+  source: cs.nyu.edu/faculty/davise/papers/WinogradSchemas/WSCollection.xml (mirrored)
+  dclm_meta_row: "winograd,language understanding,schema,0,273,50"

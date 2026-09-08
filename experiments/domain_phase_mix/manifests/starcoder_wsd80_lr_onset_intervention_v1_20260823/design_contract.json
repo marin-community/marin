@@ -1,0 +1,137 @@
+{
+  "arms": [
+    {
+      "arm": "decay_0p60",
+      "decay_onset_fraction": 0.6,
+      "description": "Cosine LR decay begins at 0.60T and reaches zero at T."
+    },
+    {
+      "arm": "decay_0p80",
+      "decay_onset_fraction": 0.8,
+      "description": "Cosine LR decay begins at 0.80T and reaches zero at T."
+    },
+    {
+      "arm": "decay_0p90",
+      "decay_onset_fraction": 0.9,
+      "description": "Cosine LR decay begins at 0.90T and reaches zero at T."
+    },
+    {
+      "arm": "no_decay",
+      "decay_onset_fraction": null,
+      "description": "Use the historical 0.80T schedule boundary but hold peak LR constant through T."
+    }
+  ],
+  "checkpoint_steps": [
+    382,
+    955,
+    1528,
+    2101,
+    2228,
+    2292,
+    2356,
+    2483,
+    2674,
+    2865,
+    2992,
+    3056,
+    3120,
+    3247,
+    3312,
+    3374,
+    3438,
+    3502,
+    3629,
+    3819
+  ],
+  "endpoint_metrics_read_by_probe_or_onset_analysis": false,
+  "historical_comparator": {
+    "arm": "decay_0p80_historical",
+    "cell_id": "r0_shared_h0640_s03820",
+    "policy_role": "common_tied_035",
+    "support_id": "full",
+    "training_seeds": [
+      2026081000,
+      2026081001,
+      2026081002,
+      2026081003,
+      2026081004,
+      2026081005,
+      2026081006,
+      2026081007
+    ]
+  },
+  "model": {
+    "hidden_size": 640,
+    "non_embedding_parameters": 45884800,
+    "total_parameters": 210052480
+  },
+  "paper_motivation": "Wen et al., River Valley Loss Landscape, arXiv:2410.05192",
+  "placement": {
+    "marin_prefix": "gs://marin-us-central1",
+    "region": "us-central1",
+    "tpu_type": "v5p-8",
+    "zone": "us-central1-a"
+  },
+  "question": "Does StarCoder-Nemotron gradient-cosine decline follow LR-decay onset?",
+  "schedule_values": {
+    "decay_0p60": {
+      "0": 0.0,
+      "2101": 0.019999999552965164,
+      "2292": 0.019999999552965164,
+      "2674": 0.017071068286895752,
+      "3056": 0.010000000707805157,
+      "3438": 0.0029289305675774813,
+      "3819": 2.086162531611535e-08
+    },
+    "decay_0p80": {
+      "0": 0.0,
+      "2101": 0.019999999552965164,
+      "2292": 0.019999999552965164,
+      "2674": 0.019999999552965164,
+      "3056": 0.019999999552965164,
+      "3438": 0.010000000707805157,
+      "3819": 8.463859302310084e-08
+    },
+    "decay_0p90": {
+      "0": 0.0,
+      "2101": 0.019999999552965164,
+      "2292": 0.019999999552965164,
+      "2674": 0.019999999552965164,
+      "3056": 0.019999999552965164,
+      "3438": 0.019999999552965164,
+      "3819": 3.3795834042393835e-07
+    },
+    "no_decay": {
+      "0": 0.0,
+      "2101": 0.019999999552965164,
+      "2292": 0.019999999552965164,
+      "2674": 0.019999999552965164,
+      "3056": 0.019999999552965164,
+      "3438": 0.019999999552965164,
+      "3819": 0.019999999552965164
+    }
+  },
+  "schema_version": "2026-08-23-starcoder-wsd80-lr-onset-v1",
+  "training": {
+    "batch_size": 128,
+    "data_policy": "tied_static_full_source",
+    "holdout_partition": "random_sparse_swap",
+    "holdout_seed": 2026081102,
+    "holdout_sequences_per_component": 4096,
+    "materialized_tokens": 1001390080,
+    "sequence_length": 2048,
+    "starcoder_weight": 0.35,
+    "total_steps": 3820
+  },
+  "training_seeds": [
+    2026081000,
+    2026081001,
+    2026081002,
+    2026081003,
+    2026081004,
+    2026081005,
+    2026081006,
+    2026081007
+  ],
+  "trajectory_count": 32
+}

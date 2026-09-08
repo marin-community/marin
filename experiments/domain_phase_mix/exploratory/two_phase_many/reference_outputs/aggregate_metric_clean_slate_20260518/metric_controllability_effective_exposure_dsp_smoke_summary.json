@@ -1,0 +1,14 @@
+{
+  "basin_hopping_iters": 0,
+  "coarse_top_k": 1,
+  "elapsed_seconds": 3.9755571669666097,
+  "maxiter": 4,
+  "median_dsp_spearman": 0.8631285401057814,
+  "median_ridge_spearman": 0.7560397977850513,
+  "metric_source": "best_by_item",
+  "rows": 4,
+  "status_counts": {
+    "ok": 4
+  },
+  "workers": 4
+}

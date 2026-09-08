@@ -1,0 +1,12 @@
+__pycache__/
+.DS_Store
+/coverage.csv
+/eval_artifacts.csv
+/fit_datasets/
+/metric_conflicts.csv.gz
+/metrics_all_sources_long.csv.gz
+/metrics_long.csv.gz
+/metrics_wide.csv
+/runs.csv
+/summary.json
+!/grp_no_l2_metric_objective_fits/*.csv

@@ -1,0 +1,44 @@
+# Custom lm-eval-harness task for DCLM CORE's `jeopardy`.
+#
+# Source: MosaicML llm-foundry eval gauntlet — jeopardy_all.jsonl
+# (https://github.com/mosaicml/llm-foundry/tree/v0.9.0/scripts/eval/local_data/world_knowledge/jeopardy_all.jsonl).
+# n=2117, matches the row count in DCLM's eval_meta_data.csv exactly.
+#
+# DCLM's eval_meta_data.csv specifies 10-shot, random baseline=0 (treated
+# as a generation task). MosaicML's original gauntlet config used 3-shot;
+# DCLM overrides to 10. We honor DCLM here.
+#
+# Scoring: MosaicML's "language_modeling" task type compares the model's
+# greedy continuation to the gold continuation. We approximate with
+# lm-eval's `generate_until` + `exact_match` (with light normalization).
+# This is the closest stock metric; small numeric drift vs DCLM-published
+# is expected on this specific task.
+task: jeopardy
+dataset_path: json
+dataset_kwargs:
+  data_files: jeopardy_all.jsonl
+test_split: train
+output_type: generate_until
+doc_to_text: "{{context}}\nAnswer: "
+doc_to_target: "{{continuation}}"
+generation_kwargs:
+  until:
+    - "\n"
+    - "\n\n"
+  do_sample: false
+  temperature: 0.0
+filter_list:
+  - name: "strip-then-match"
+    filter:
+      - function: "remove_whitespace"
+      - function: "take_first"
+metric_list:
+  - metric: exact_match
+    aggregation: mean
+    higher_is_better: true
+    ignore_case: true
+    ignore_punctuation: true
+metadata:
+  version: 1.0
+  source: mosaicml/llm-foundry@v0.9.0
+  dclm_meta_row: "jeopardy,world knowledge,language modeling,10,2117,0"

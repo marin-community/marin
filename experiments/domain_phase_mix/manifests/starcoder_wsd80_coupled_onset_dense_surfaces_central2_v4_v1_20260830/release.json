@@ -1,0 +1,33 @@
+{
+  "confirmation": "I_AUTHORIZE_THE_STARCODER_WSD80_COUPLED_ONSET_DENSE_SURFACES",
+  "deployment": {
+    "allow_empty_starcoder_finished_shards": true,
+    "deployment_id": "central2-v4-coupled",
+    "marin_prefix": "gs://marin-us-central2",
+    "name": "pinlin_calvin_xu/data_mixture/starcoder_wsd80_coupled_onset_dense_surfaces_central2_v4_20260830",
+    "panel_tag": "starcoder_wsd80_coupled_onset_dense_surfaces_central2_v4",
+    "run_id_prefix": "c2v4c_",
+    "tpu_region": "us-central2",
+    "tpu_type": "v4-8",
+    "tpu_zone": "us-central2-b",
+    "version": "2026.08.30.1",
+    "wandb_group": "starcoder_wsd80_coupled_onset_dense_surfaces_central2_v4_20260830"
+  },
+  "design_file_sha256": "1e721b202797a4aea8b2cce8795a485bbd1d44220acfed46ceca686517c585ea",
+  "design_generator_path": "experiments/domain_phase_mix/exploratory/two_phase_many/design_starcoder_wsd80_coupled_onset_dense_surfaces_20260830.py",
+  "design_generator_sha256": "a547e0ce9c8665f30b08286b4a9a106239188a14504222625f73f3fde3b3aa16",
+  "design_path": "experiments/domain_phase_mix/starcoder_wsd80_coupled_onset_dense_surface_design_20260830.json.gz",
+  "design_sha256": "423bfb51e546181f78c04863b6298d57a32a38b33b25eae6a1d1464a737010eb",
+  "launcher_path": "experiments/domain_phase_mix/launch_starcoder_wsd80_coupled_onset_dense_surfaces.py",
+  "launcher_sha256": "ed3d793229acb7b8d74961e9f2c4a5bd1d50fbc73a154c1ee3a6dc7186b691de",
+  "maximum_concurrent": 128,
+  "release_sha256": "760b974e034da20cf411ed68745c676f47f6374c949413475edf2e55f08514be",
+  "schema_version": "2026-08-30-starcoder-wsd80-coupled-onset-v1",
+  "training_environment": {
+    "jax_default_prng_impl": "threefry2x32",
+    "jax_enable_x64": false,
+    "jax_version": "0.11.0",
+    "numpy_version": "2.3.5",
+    "uv_lock_sha256": "5edf2440895451ed317d6a1c219b5ce266b10c31c0e486c9ea38bbe25f827566"
+  }
+}

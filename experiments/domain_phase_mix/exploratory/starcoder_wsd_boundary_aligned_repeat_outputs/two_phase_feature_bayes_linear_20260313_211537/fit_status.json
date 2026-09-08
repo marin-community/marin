@@ -1,0 +1,33 @@
+{
+  "contiguous_prefix_length": 96,
+  "dataset": "two_phase_starcoder",
+  "pending_subset_sizes": [],
+  "policy": "feature_bayes_linear_wsd_boundary_aligned",
+  "proxy_successful_rows": 96,
+  "ready_subset_sizes": [
+    4,
+    6,
+    8,
+    10,
+    12,
+    16,
+    24,
+    32,
+    48,
+    64,
+    96
+  ],
+  "requested_subset_sizes": [
+    4,
+    6,
+    8,
+    10,
+    12,
+    16,
+    24,
+    32,
+    48,
+    64,
+    96
+  ]
+}

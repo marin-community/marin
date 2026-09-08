@@ -1,0 +1,62 @@
+{
+  "curve_points_csv": "/Users/calvinxu/Downloads/chatgpt_pro_grp_recovery_packet_updated/reference_outputs/deployment_variant_curve_points_observed_only.csv",
+  "plot": "/Users/calvinxu/Downloads/chatgpt_pro_grp_recovery_packet_updated/reference_outputs/deployment_variant_comparison_observed_only.png",
+  "summary_rows": [
+    {
+      "variant": "all_observed_hull",
+      "mean_predicted_bpb_after80": 1.0524243074902424,
+      "mean_move_after80": 0.18239140437094664,
+      "mean_regret_after80": 0.0014452189207077026,
+      "mean_cv_foldmean_regret_after80": 0.001633238792419439,
+      "mean_phase1_tech_after80": 0.1860309445847463
+    },
+    {
+      "variant": "top16actual_hull",
+      "mean_predicted_bpb_after80": 1.0530530366863753,
+      "mean_move_after80": 0.13549820607825014,
+      "mean_regret_after80": 0.0014452189207077026,
+      "mean_cv_foldmean_regret_after80": 0.001633238792419439,
+      "mean_phase1_tech_after80": 0.186136976853845
+    },
+    {
+      "variant": "top4actual_hull",
+      "mean_predicted_bpb_after80": 1.0583267760445607,
+      "mean_move_after80": 0.14509486909529046,
+      "mean_regret_after80": 0.0014452189207077026,
+      "mean_cv_foldmean_regret_after80": 0.001633238792419439,
+      "mean_phase1_tech_after80": 0.23716194189472792
+    },
+    {
+      "variant": "top8actual_hull",
+      "mean_predicted_bpb_after80": 1.0535773924127487,
+      "mean_move_after80": 0.1511416144406374,
+      "mean_regret_after80": 0.0014452189207077026,
+      "mean_cv_foldmean_regret_after80": 0.001633238792419439,
+      "mean_phase1_tech_after80": 0.19529312753277125
+    },
+    {
+      "variant": "trustblend_top16actual_cap",
+      "mean_predicted_bpb_after80": 1.0417620105836338,
+      "mean_move_after80": 0.14435423705039774,
+      "mean_regret_after80": 0.0014452189207077026,
+      "mean_cv_foldmean_regret_after80": 0.001633238792419439,
+      "mean_phase1_tech_after80": 0.220160405186944
+    },
+    {
+      "variant": "trustblend_top4actual_cap",
+      "mean_predicted_bpb_after80": 1.0470820356753605,
+      "mean_move_after80": 0.15304654475444157,
+      "mean_regret_after80": 0.0014452189207077026,
+      "mean_cv_foldmean_regret_after80": 0.001633238792419439,
+      "mean_phase1_tech_after80": 0.2656465984592762
+    },
+    {
+      "variant": "trustblend_top8actual_cap",
+      "mean_predicted_bpb_after80": 1.0423560439507682,
+      "mean_move_after80": 0.1562544576287495,
+      "mean_regret_after80": 0.0014452189207077026,
+      "mean_cv_foldmean_regret_after80": 0.001633238792419439,
+      "mean_phase1_tech_after80": 0.22826564450153305
+    }
+  ]
+}

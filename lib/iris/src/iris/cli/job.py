@@ -573,6 +573,7 @@ def run_iris_job(
     job_name: str | None = None,
     replicas: int | None = None,
     max_retries: int = 0,
+    max_preemption_retries: int = 1000,
     timeout: int = 0,
     extras: list[str] | None = None,
     setup_scripts: list[str] | None = None,
@@ -590,6 +591,7 @@ def run_iris_job(
     submit_argv: list[str] | None = None,
     dashboard_url: str | None = None,
     target_cluster: str | None = None,
+    extra_bundle_includes: tuple[str, ...] = (),
     bundle_exclude: re.Pattern[str] | None = None,
 ) -> int:
     """Core job submission logic.
@@ -611,6 +613,8 @@ def run_iris_job(
             ``--cluster`` option, which only selects which controller the CLI talks to.
         task_image: Optional task container image override. When None, workers use
             their cluster-configured default task image.
+        extra_bundle_includes: Glob patterns, relative to the workspace, for
+            gitignored files that must be present in the task bundle.
         bundle_exclude: Regex matched against each candidate bundle path (POSIX,
             relative to the workspace); matching paths are dropped from the bundle
             so a job can trim otherwise-tracked files it does not need.
@@ -693,6 +697,7 @@ def run_iris_job(
         env_vars=env_vars,
         replicas=replicas,
         max_retries=max_retries,
+        max_preemption_retries=max_preemption_retries,
         timeout=timeout,
         wait=wait,
         extras=extras,
@@ -708,6 +713,7 @@ def run_iris_job(
         submit_argv=submit_argv,
         dashboard_url=dashboard_url,
         task_image=task_image,
+        extra_bundle_includes=extra_bundle_includes,
         bundle_exclude=bundle_exclude,
     )
 
@@ -720,6 +726,7 @@ def _submit_and_wait_job(
     env_vars: dict[str, str],
     replicas: int,
     max_retries: int,
+    max_preemption_retries: int,
     timeout: int,
     wait: bool,
     extras: list[str] | None = None,
@@ -735,6 +742,7 @@ def _submit_and_wait_job(
     submit_argv: list[str] | None = None,
     dashboard_url: str | None = None,
     task_image: str | None = None,
+    extra_bundle_includes: tuple[str, ...] = (),
     bundle_exclude: re.Pattern[str] | None = None,
 ) -> int:
     """Submit job and optionally wait for completion.
@@ -743,7 +751,11 @@ def _submit_and_wait_job(
     are logged and re-raised without killing the job.
     """
     client = IrisClient.remote(
-        controller_url, workspace=Path.cwd(), credentials=credentials, bundle_exclude=bundle_exclude
+        controller_url,
+        workspace=Path.cwd(),
+        credentials=credentials,
+        extra_bundle_includes=extra_bundle_includes,
+        bundle_exclude=bundle_exclude,
     )
     entrypoint = Entrypoint.from_command(*command)
 
@@ -761,6 +773,7 @@ def _submit_and_wait_job(
         coscheduling=coscheduling,
         replicas=replicas,
         max_retries_failure=max_retries,
+        max_retries_preemption=max_preemption_retries,
         max_task_failures=max_retries,
         timeout=Duration.from_seconds(timeout) if timeout else None,
         user=user,
@@ -889,6 +902,13 @@ Examples:
     "--replicas", type=int, default=None, help="Number of tasks for gang scheduling (auto-detected for multinode TPUs)"
 )
 @click.option("--max-retries", type=int, default=0, help="Max retries on failure (default: 0)")
+@click.option(
+    "--max-preemption-retries",
+    type=int,
+    default=1000,
+    show_default=True,
+    help="Max retries on preemption.",
+)
 @click.option("--timeout", type=int, default=0, show_default=True, help="Job timeout in seconds (0 = no timeout)")
 @click.option("--region", multiple=True, help="Restrict to region(s) (e.g., --region us-central2). Can be repeated.")
 @click.option("--zone", type=str, help="Restrict to zone (e.g., --zone us-central2-b).")
@@ -974,6 +994,16 @@ Examples:
     help="Cancel the Job on Ctrl+C. Tunnel failures leave it running.",
 )
 @click.option(
+    "--bundle-include",
+    multiple=True,
+    metavar="GLOB",
+    help=(
+        "Glob, relative to the workspace, for gitignored files that must be "
+        "included in the task bundle. Repeat to add patterns. Exclusion rules "
+        "still take precedence."
+    ),
+)
+@click.option(
     "--exclude",
     multiple=True,
     help=(
@@ -999,6 +1029,7 @@ def run(
     user: str | None,
     replicas: int | None,
     max_retries: int,
+    max_preemption_retries: int,
     timeout: int,
     region: tuple[str, ...],
     zone: str | None,
@@ -1013,6 +1044,7 @@ def run(
     task_image: str | None,
     container_profile: str | None,
     cancel_on_exit: bool,
+    bundle_include: tuple[str, ...],
     exclude: tuple[str, ...],
     cmd: tuple[str, ...],
 ):
@@ -1044,6 +1076,11 @@ def run(
         )
 
     env_vars_dict = load_env_vars(env_vars)
+    for pattern in bundle_include:
+        if Path(pattern).is_absolute():
+            raise click.UsageError(f"--bundle-include must be relative to the workspace: {pattern!r}")
+        if not any(path.is_file() for path in Path.cwd().glob(pattern)):
+            raise click.UsageError(f"--bundle-include matched no files in the workspace: {pattern!r}")
     bundle_exclude = re.compile("|".join(f"(?:{pattern})" for pattern in exclude)) if exclude else None
 
     try:
@@ -1061,6 +1098,7 @@ def run(
             user=user,
             replicas=replicas,
             max_retries=max_retries,
+            max_preemption_retries=max_preemption_retries,
             timeout=timeout,
             extras=list(extra),
             setup_scripts=[] if no_sync else None,
@@ -1077,6 +1115,7 @@ def run(
             credentials=ctx.obj.get("credentials"),
             submit_argv=submit_argv,
             dashboard_url=dashboard_url or None,
+            extra_bundle_includes=bundle_include,
             bundle_exclude=bundle_exclude,
         )
     except Exception:

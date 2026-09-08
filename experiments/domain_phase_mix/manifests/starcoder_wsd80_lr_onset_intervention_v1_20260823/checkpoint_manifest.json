@@ -1,0 +1,3842 @@
+[
+  {
+    "checkpoint_step": 382,
+    "normalized_time": 0.1,
+    "steps_from_decay_onset": -1910,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 955,
+    "normalized_time": 0.25,
+    "steps_from_decay_onset": -1337,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 1528,
+    "normalized_time": 0.4,
+    "steps_from_decay_onset": -764,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 2101,
+    "normalized_time": 0.55,
+    "steps_from_decay_onset": -191,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 2228,
+    "normalized_time": 0.5832460732984294,
+    "steps_from_decay_onset": -64,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 2292,
+    "normalized_time": 0.6,
+    "steps_from_decay_onset": 0,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 2356,
+    "normalized_time": 0.6167539267015707,
+    "steps_from_decay_onset": 64,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 2483,
+    "normalized_time": 0.65,
+    "steps_from_decay_onset": 191,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 2674,
+    "normalized_time": 0.7,
+    "steps_from_decay_onset": 382,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 2865,
+    "normalized_time": 0.75,
+    "steps_from_decay_onset": 573,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 2992,
+    "normalized_time": 0.7832460732984293,
+    "steps_from_decay_onset": 700,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 3056,
+    "normalized_time": 0.8,
+    "steps_from_decay_onset": 764,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 3120,
+    "normalized_time": 0.8167539267015707,
+    "steps_from_decay_onset": 828,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 3247,
+    "normalized_time": 0.85,
+    "steps_from_decay_onset": 955,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 3312,
+    "normalized_time": 0.8670157068062827,
+    "steps_from_decay_onset": 1020,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 3374,
+    "normalized_time": 0.8832460732984293,
+    "steps_from_decay_onset": 1082,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 3438,
+    "normalized_time": 0.9,
+    "steps_from_decay_onset": 1146,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 3502,
+    "normalized_time": 0.9167539267015706,
+    "steps_from_decay_onset": 1210,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 3629,
+    "normalized_time": 0.95,
+    "steps_from_decay_onset": 1337,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 3819,
+    "normalized_time": 0.999738219895288,
+    "steps_from_decay_onset": 1527,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 382,
+    "normalized_time": 0.1,
+    "steps_from_decay_onset": -1910,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 955,
+    "normalized_time": 0.25,
+    "steps_from_decay_onset": -1337,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 1528,
+    "normalized_time": 0.4,
+    "steps_from_decay_onset": -764,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 2101,
+    "normalized_time": 0.55,
+    "steps_from_decay_onset": -191,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 2228,
+    "normalized_time": 0.5832460732984294,
+    "steps_from_decay_onset": -64,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 2292,
+    "normalized_time": 0.6,
+    "steps_from_decay_onset": 0,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 2356,
+    "normalized_time": 0.6167539267015707,
+    "steps_from_decay_onset": 64,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 2483,
+    "normalized_time": 0.65,
+    "steps_from_decay_onset": 191,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 2674,
+    "normalized_time": 0.7,
+    "steps_from_decay_onset": 382,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 2865,
+    "normalized_time": 0.75,
+    "steps_from_decay_onset": 573,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 2992,
+    "normalized_time": 0.7832460732984293,
+    "steps_from_decay_onset": 700,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 3056,
+    "normalized_time": 0.8,
+    "steps_from_decay_onset": 764,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 3120,
+    "normalized_time": 0.8167539267015707,
+    "steps_from_decay_onset": 828,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 3247,
+    "normalized_time": 0.85,
+    "steps_from_decay_onset": 955,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 3312,
+    "normalized_time": 0.8670157068062827,
+    "steps_from_decay_onset": 1020,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 3374,
+    "normalized_time": 0.8832460732984293,
+    "steps_from_decay_onset": 1082,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 3438,
+    "normalized_time": 0.9,
+    "steps_from_decay_onset": 1146,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 3502,
+    "normalized_time": 0.9167539267015706,
+    "steps_from_decay_onset": 1210,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 3629,
+    "normalized_time": 0.95,
+    "steps_from_decay_onset": 1337,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 3819,
+    "normalized_time": 0.999738219895288,
+    "steps_from_decay_onset": 1527,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 382,
+    "normalized_time": 0.1,
+    "steps_from_decay_onset": -1910,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 955,
+    "normalized_time": 0.25,
+    "steps_from_decay_onset": -1337,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 1528,
+    "normalized_time": 0.4,
+    "steps_from_decay_onset": -764,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 2101,
+    "normalized_time": 0.55,
+    "steps_from_decay_onset": -191,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 2228,
+    "normalized_time": 0.5832460732984294,
+    "steps_from_decay_onset": -64,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 2292,
+    "normalized_time": 0.6,
+    "steps_from_decay_onset": 0,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 2356,
+    "normalized_time": 0.6167539267015707,
+    "steps_from_decay_onset": 64,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 2483,
+    "normalized_time": 0.65,
+    "steps_from_decay_onset": 191,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 2674,
+    "normalized_time": 0.7,
+    "steps_from_decay_onset": 382,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 2865,
+    "normalized_time": 0.75,
+    "steps_from_decay_onset": 573,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 2992,
+    "normalized_time": 0.7832460732984293,
+    "steps_from_decay_onset": 700,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 3056,
+    "normalized_time": 0.8,
+    "steps_from_decay_onset": 764,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 3120,
+    "normalized_time": 0.8167539267015707,
+    "steps_from_decay_onset": 828,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 3247,
+    "normalized_time": 0.85,
+    "steps_from_decay_onset": 955,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 3312,
+    "normalized_time": 0.8670157068062827,
+    "steps_from_decay_onset": 1020,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 3374,
+    "normalized_time": 0.8832460732984293,
+    "steps_from_decay_onset": 1082,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 3438,
+    "normalized_time": 0.9,
+    "steps_from_decay_onset": 1146,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 3502,
+    "normalized_time": 0.9167539267015706,
+    "steps_from_decay_onset": 1210,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 3629,
+    "normalized_time": 0.95,
+    "steps_from_decay_onset": 1337,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 3819,
+    "normalized_time": 0.999738219895288,
+    "steps_from_decay_onset": 1527,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 382,
+    "normalized_time": 0.1,
+    "steps_from_decay_onset": -1910,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 955,
+    "normalized_time": 0.25,
+    "steps_from_decay_onset": -1337,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 1528,
+    "normalized_time": 0.4,
+    "steps_from_decay_onset": -764,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 2101,
+    "normalized_time": 0.55,
+    "steps_from_decay_onset": -191,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 2228,
+    "normalized_time": 0.5832460732984294,
+    "steps_from_decay_onset": -64,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 2292,
+    "normalized_time": 0.6,
+    "steps_from_decay_onset": 0,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 2356,
+    "normalized_time": 0.6167539267015707,
+    "steps_from_decay_onset": 64,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 2483,
+    "normalized_time": 0.65,
+    "steps_from_decay_onset": 191,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 2674,
+    "normalized_time": 0.7,
+    "steps_from_decay_onset": 382,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 2865,
+    "normalized_time": 0.75,
+    "steps_from_decay_onset": 573,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 2992,
+    "normalized_time": 0.7832460732984293,
+    "steps_from_decay_onset": 700,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 3056,
+    "normalized_time": 0.8,
+    "steps_from_decay_onset": 764,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 3120,
+    "normalized_time": 0.8167539267015707,
+    "steps_from_decay_onset": 828,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 3247,
+    "normalized_time": 0.85,
+    "steps_from_decay_onset": 955,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 3312,
+    "normalized_time": 0.8670157068062827,
+    "steps_from_decay_onset": 1020,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 3374,
+    "normalized_time": 0.8832460732984293,
+    "steps_from_decay_onset": 1082,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 3438,
+    "normalized_time": 0.9,
+    "steps_from_decay_onset": 1146,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 3502,
+    "normalized_time": 0.9167539267015706,
+    "steps_from_decay_onset": 1210,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 3629,
+    "normalized_time": 0.95,
+    "steps_from_decay_onset": 1337,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 3819,
+    "normalized_time": 0.999738219895288,
+    "steps_from_decay_onset": 1527,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 382,
+    "normalized_time": 0.1,
+    "steps_from_decay_onset": -1910,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 955,
+    "normalized_time": 0.25,
+    "steps_from_decay_onset": -1337,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 1528,
+    "normalized_time": 0.4,
+    "steps_from_decay_onset": -764,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 2101,
+    "normalized_time": 0.55,
+    "steps_from_decay_onset": -191,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 2228,
+    "normalized_time": 0.5832460732984294,
+    "steps_from_decay_onset": -64,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 2292,
+    "normalized_time": 0.6,
+    "steps_from_decay_onset": 0,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 2356,
+    "normalized_time": 0.6167539267015707,
+    "steps_from_decay_onset": 64,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 2483,
+    "normalized_time": 0.65,
+    "steps_from_decay_onset": 191,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 2674,
+    "normalized_time": 0.7,
+    "steps_from_decay_onset": 382,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 2865,
+    "normalized_time": 0.75,
+    "steps_from_decay_onset": 573,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 2992,
+    "normalized_time": 0.7832460732984293,
+    "steps_from_decay_onset": 700,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 3056,
+    "normalized_time": 0.8,
+    "steps_from_decay_onset": 764,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 3120,
+    "normalized_time": 0.8167539267015707,
+    "steps_from_decay_onset": 828,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 3247,
+    "normalized_time": 0.85,
+    "steps_from_decay_onset": 955,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 3312,
+    "normalized_time": 0.8670157068062827,
+    "steps_from_decay_onset": 1020,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 3374,
+    "normalized_time": 0.8832460732984293,
+    "steps_from_decay_onset": 1082,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 3438,
+    "normalized_time": 0.9,
+    "steps_from_decay_onset": 1146,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 3502,
+    "normalized_time": 0.9167539267015706,
+    "steps_from_decay_onset": 1210,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 3629,
+    "normalized_time": 0.95,
+    "steps_from_decay_onset": 1337,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 3819,
+    "normalized_time": 0.999738219895288,
+    "steps_from_decay_onset": 1527,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 382,
+    "normalized_time": 0.1,
+    "steps_from_decay_onset": -1910,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 955,
+    "normalized_time": 0.25,
+    "steps_from_decay_onset": -1337,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 1528,
+    "normalized_time": 0.4,
+    "steps_from_decay_onset": -764,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 2101,
+    "normalized_time": 0.55,
+    "steps_from_decay_onset": -191,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 2228,
+    "normalized_time": 0.5832460732984294,
+    "steps_from_decay_onset": -64,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 2292,
+    "normalized_time": 0.6,
+    "steps_from_decay_onset": 0,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 2356,
+    "normalized_time": 0.6167539267015707,
+    "steps_from_decay_onset": 64,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 2483,
+    "normalized_time": 0.65,
+    "steps_from_decay_onset": 191,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 2674,
+    "normalized_time": 0.7,
+    "steps_from_decay_onset": 382,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 2865,
+    "normalized_time": 0.75,
+    "steps_from_decay_onset": 573,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 2992,
+    "normalized_time": 0.7832460732984293,
+    "steps_from_decay_onset": 700,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 3056,
+    "normalized_time": 0.8,
+    "steps_from_decay_onset": 764,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 3120,
+    "normalized_time": 0.8167539267015707,
+    "steps_from_decay_onset": 828,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 3247,
+    "normalized_time": 0.85,
+    "steps_from_decay_onset": 955,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 3312,
+    "normalized_time": 0.8670157068062827,
+    "steps_from_decay_onset": 1020,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 3374,
+    "normalized_time": 0.8832460732984293,
+    "steps_from_decay_onset": 1082,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 3438,
+    "normalized_time": 0.9,
+    "steps_from_decay_onset": 1146,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 3502,
+    "normalized_time": 0.9167539267015706,
+    "steps_from_decay_onset": 1210,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 3629,
+    "normalized_time": 0.95,
+    "steps_from_decay_onset": 1337,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 3819,
+    "normalized_time": 0.999738219895288,
+    "steps_from_decay_onset": 1527,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 382,
+    "normalized_time": 0.1,
+    "steps_from_decay_onset": -1910,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 955,
+    "normalized_time": 0.25,
+    "steps_from_decay_onset": -1337,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 1528,
+    "normalized_time": 0.4,
+    "steps_from_decay_onset": -764,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 2101,
+    "normalized_time": 0.55,
+    "steps_from_decay_onset": -191,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 2228,
+    "normalized_time": 0.5832460732984294,
+    "steps_from_decay_onset": -64,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 2292,
+    "normalized_time": 0.6,
+    "steps_from_decay_onset": 0,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 2356,
+    "normalized_time": 0.6167539267015707,
+    "steps_from_decay_onset": 64,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 2483,
+    "normalized_time": 0.65,
+    "steps_from_decay_onset": 191,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 2674,
+    "normalized_time": 0.7,
+    "steps_from_decay_onset": 382,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 2865,
+    "normalized_time": 0.75,
+    "steps_from_decay_onset": 573,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 2992,
+    "normalized_time": 0.7832460732984293,
+    "steps_from_decay_onset": 700,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 3056,
+    "normalized_time": 0.8,
+    "steps_from_decay_onset": 764,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 3120,
+    "normalized_time": 0.8167539267015707,
+    "steps_from_decay_onset": 828,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 3247,
+    "normalized_time": 0.85,
+    "steps_from_decay_onset": 955,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 3312,
+    "normalized_time": 0.8670157068062827,
+    "steps_from_decay_onset": 1020,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 3374,
+    "normalized_time": 0.8832460732984293,
+    "steps_from_decay_onset": 1082,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 3438,
+    "normalized_time": 0.9,
+    "steps_from_decay_onset": 1146,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 3502,
+    "normalized_time": 0.9167539267015706,
+    "steps_from_decay_onset": 1210,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 3629,
+    "normalized_time": 0.95,
+    "steps_from_decay_onset": 1337,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 3819,
+    "normalized_time": 0.999738219895288,
+    "steps_from_decay_onset": 1527,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 382,
+    "normalized_time": 0.1,
+    "steps_from_decay_onset": -1910,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 955,
+    "normalized_time": 0.25,
+    "steps_from_decay_onset": -1337,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 1528,
+    "normalized_time": 0.4,
+    "steps_from_decay_onset": -764,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 2101,
+    "normalized_time": 0.55,
+    "steps_from_decay_onset": -191,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 2228,
+    "normalized_time": 0.5832460732984294,
+    "steps_from_decay_onset": -64,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 2292,
+    "normalized_time": 0.6,
+    "steps_from_decay_onset": 0,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 2356,
+    "normalized_time": 0.6167539267015707,
+    "steps_from_decay_onset": 64,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 2483,
+    "normalized_time": 0.65,
+    "steps_from_decay_onset": 191,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 2674,
+    "normalized_time": 0.7,
+    "steps_from_decay_onset": 382,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 2865,
+    "normalized_time": 0.75,
+    "steps_from_decay_onset": 573,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 2992,
+    "normalized_time": 0.7832460732984293,
+    "steps_from_decay_onset": 700,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 3056,
+    "normalized_time": 0.8,
+    "steps_from_decay_onset": 764,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 3120,
+    "normalized_time": 0.8167539267015707,
+    "steps_from_decay_onset": 828,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 3247,
+    "normalized_time": 0.85,
+    "steps_from_decay_onset": 955,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 3312,
+    "normalized_time": 0.8670157068062827,
+    "steps_from_decay_onset": 1020,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 3374,
+    "normalized_time": 0.8832460732984293,
+    "steps_from_decay_onset": 1082,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 3438,
+    "normalized_time": 0.9,
+    "steps_from_decay_onset": 1146,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 3502,
+    "normalized_time": 0.9167539267015706,
+    "steps_from_decay_onset": 1210,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 3629,
+    "normalized_time": 0.95,
+    "steps_from_decay_onset": 1337,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 3819,
+    "normalized_time": 0.999738219895288,
+    "steps_from_decay_onset": 1527,
+    "trajectory_id": "lr_onset_decay_0p60_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 382,
+    "normalized_time": 0.1,
+    "steps_from_decay_onset": -2674,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 955,
+    "normalized_time": 0.25,
+    "steps_from_decay_onset": -2101,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 1528,
+    "normalized_time": 0.4,
+    "steps_from_decay_onset": -1528,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 2101,
+    "normalized_time": 0.55,
+    "steps_from_decay_onset": -955,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 2228,
+    "normalized_time": 0.5832460732984294,
+    "steps_from_decay_onset": -828,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 2292,
+    "normalized_time": 0.6,
+    "steps_from_decay_onset": -764,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 2356,
+    "normalized_time": 0.6167539267015707,
+    "steps_from_decay_onset": -700,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 2483,
+    "normalized_time": 0.65,
+    "steps_from_decay_onset": -573,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 2674,
+    "normalized_time": 0.7,
+    "steps_from_decay_onset": -382,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 2865,
+    "normalized_time": 0.75,
+    "steps_from_decay_onset": -191,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 2992,
+    "normalized_time": 0.7832460732984293,
+    "steps_from_decay_onset": -64,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 3056,
+    "normalized_time": 0.8,
+    "steps_from_decay_onset": 0,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 3120,
+    "normalized_time": 0.8167539267015707,
+    "steps_from_decay_onset": 64,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 3247,
+    "normalized_time": 0.85,
+    "steps_from_decay_onset": 191,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 3312,
+    "normalized_time": 0.8670157068062827,
+    "steps_from_decay_onset": 256,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 3374,
+    "normalized_time": 0.8832460732984293,
+    "steps_from_decay_onset": 318,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 3438,
+    "normalized_time": 0.9,
+    "steps_from_decay_onset": 382,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 3502,
+    "normalized_time": 0.9167539267015706,
+    "steps_from_decay_onset": 446,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 3629,
+    "normalized_time": 0.95,
+    "steps_from_decay_onset": 573,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 3819,
+    "normalized_time": 0.999738219895288,
+    "steps_from_decay_onset": 763,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 382,
+    "normalized_time": 0.1,
+    "steps_from_decay_onset": -2674,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 955,
+    "normalized_time": 0.25,
+    "steps_from_decay_onset": -2101,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 1528,
+    "normalized_time": 0.4,
+    "steps_from_decay_onset": -1528,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 2101,
+    "normalized_time": 0.55,
+    "steps_from_decay_onset": -955,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 2228,
+    "normalized_time": 0.5832460732984294,
+    "steps_from_decay_onset": -828,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 2292,
+    "normalized_time": 0.6,
+    "steps_from_decay_onset": -764,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 2356,
+    "normalized_time": 0.6167539267015707,
+    "steps_from_decay_onset": -700,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 2483,
+    "normalized_time": 0.65,
+    "steps_from_decay_onset": -573,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 2674,
+    "normalized_time": 0.7,
+    "steps_from_decay_onset": -382,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 2865,
+    "normalized_time": 0.75,
+    "steps_from_decay_onset": -191,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 2992,
+    "normalized_time": 0.7832460732984293,
+    "steps_from_decay_onset": -64,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 3056,
+    "normalized_time": 0.8,
+    "steps_from_decay_onset": 0,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 3120,
+    "normalized_time": 0.8167539267015707,
+    "steps_from_decay_onset": 64,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 3247,
+    "normalized_time": 0.85,
+    "steps_from_decay_onset": 191,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 3312,
+    "normalized_time": 0.8670157068062827,
+    "steps_from_decay_onset": 256,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 3374,
+    "normalized_time": 0.8832460732984293,
+    "steps_from_decay_onset": 318,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 3438,
+    "normalized_time": 0.9,
+    "steps_from_decay_onset": 382,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 3502,
+    "normalized_time": 0.9167539267015706,
+    "steps_from_decay_onset": 446,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 3629,
+    "normalized_time": 0.95,
+    "steps_from_decay_onset": 573,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 3819,
+    "normalized_time": 0.999738219895288,
+    "steps_from_decay_onset": 763,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 382,
+    "normalized_time": 0.1,
+    "steps_from_decay_onset": -2674,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 955,
+    "normalized_time": 0.25,
+    "steps_from_decay_onset": -2101,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 1528,
+    "normalized_time": 0.4,
+    "steps_from_decay_onset": -1528,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 2101,
+    "normalized_time": 0.55,
+    "steps_from_decay_onset": -955,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 2228,
+    "normalized_time": 0.5832460732984294,
+    "steps_from_decay_onset": -828,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 2292,
+    "normalized_time": 0.6,
+    "steps_from_decay_onset": -764,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 2356,
+    "normalized_time": 0.6167539267015707,
+    "steps_from_decay_onset": -700,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 2483,
+    "normalized_time": 0.65,
+    "steps_from_decay_onset": -573,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 2674,
+    "normalized_time": 0.7,
+    "steps_from_decay_onset": -382,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 2865,
+    "normalized_time": 0.75,
+    "steps_from_decay_onset": -191,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 2992,
+    "normalized_time": 0.7832460732984293,
+    "steps_from_decay_onset": -64,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 3056,
+    "normalized_time": 0.8,
+    "steps_from_decay_onset": 0,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 3120,
+    "normalized_time": 0.8167539267015707,
+    "steps_from_decay_onset": 64,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 3247,
+    "normalized_time": 0.85,
+    "steps_from_decay_onset": 191,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 3312,
+    "normalized_time": 0.8670157068062827,
+    "steps_from_decay_onset": 256,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 3374,
+    "normalized_time": 0.8832460732984293,
+    "steps_from_decay_onset": 318,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 3438,
+    "normalized_time": 0.9,
+    "steps_from_decay_onset": 382,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 3502,
+    "normalized_time": 0.9167539267015706,
+    "steps_from_decay_onset": 446,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 3629,
+    "normalized_time": 0.95,
+    "steps_from_decay_onset": 573,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 3819,
+    "normalized_time": 0.999738219895288,
+    "steps_from_decay_onset": 763,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 382,
+    "normalized_time": 0.1,
+    "steps_from_decay_onset": -2674,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 955,
+    "normalized_time": 0.25,
+    "steps_from_decay_onset": -2101,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 1528,
+    "normalized_time": 0.4,
+    "steps_from_decay_onset": -1528,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 2101,
+    "normalized_time": 0.55,
+    "steps_from_decay_onset": -955,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 2228,
+    "normalized_time": 0.5832460732984294,
+    "steps_from_decay_onset": -828,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 2292,
+    "normalized_time": 0.6,
+    "steps_from_decay_onset": -764,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 2356,
+    "normalized_time": 0.6167539267015707,
+    "steps_from_decay_onset": -700,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 2483,
+    "normalized_time": 0.65,
+    "steps_from_decay_onset": -573,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 2674,
+    "normalized_time": 0.7,
+    "steps_from_decay_onset": -382,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 2865,
+    "normalized_time": 0.75,
+    "steps_from_decay_onset": -191,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 2992,
+    "normalized_time": 0.7832460732984293,
+    "steps_from_decay_onset": -64,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 3056,
+    "normalized_time": 0.8,
+    "steps_from_decay_onset": 0,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 3120,
+    "normalized_time": 0.8167539267015707,
+    "steps_from_decay_onset": 64,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 3247,
+    "normalized_time": 0.85,
+    "steps_from_decay_onset": 191,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 3312,
+    "normalized_time": 0.8670157068062827,
+    "steps_from_decay_onset": 256,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 3374,
+    "normalized_time": 0.8832460732984293,
+    "steps_from_decay_onset": 318,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 3438,
+    "normalized_time": 0.9,
+    "steps_from_decay_onset": 382,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 3502,
+    "normalized_time": 0.9167539267015706,
+    "steps_from_decay_onset": 446,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 3629,
+    "normalized_time": 0.95,
+    "steps_from_decay_onset": 573,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 3819,
+    "normalized_time": 0.999738219895288,
+    "steps_from_decay_onset": 763,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 382,
+    "normalized_time": 0.1,
+    "steps_from_decay_onset": -2674,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 955,
+    "normalized_time": 0.25,
+    "steps_from_decay_onset": -2101,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 1528,
+    "normalized_time": 0.4,
+    "steps_from_decay_onset": -1528,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 2101,
+    "normalized_time": 0.55,
+    "steps_from_decay_onset": -955,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 2228,
+    "normalized_time": 0.5832460732984294,
+    "steps_from_decay_onset": -828,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 2292,
+    "normalized_time": 0.6,
+    "steps_from_decay_onset": -764,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 2356,
+    "normalized_time": 0.6167539267015707,
+    "steps_from_decay_onset": -700,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 2483,
+    "normalized_time": 0.65,
+    "steps_from_decay_onset": -573,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 2674,
+    "normalized_time": 0.7,
+    "steps_from_decay_onset": -382,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 2865,
+    "normalized_time": 0.75,
+    "steps_from_decay_onset": -191,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 2992,
+    "normalized_time": 0.7832460732984293,
+    "steps_from_decay_onset": -64,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 3056,
+    "normalized_time": 0.8,
+    "steps_from_decay_onset": 0,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 3120,
+    "normalized_time": 0.8167539267015707,
+    "steps_from_decay_onset": 64,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 3247,
+    "normalized_time": 0.85,
+    "steps_from_decay_onset": 191,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 3312,
+    "normalized_time": 0.8670157068062827,
+    "steps_from_decay_onset": 256,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 3374,
+    "normalized_time": 0.8832460732984293,
+    "steps_from_decay_onset": 318,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 3438,
+    "normalized_time": 0.9,
+    "steps_from_decay_onset": 382,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 3502,
+    "normalized_time": 0.9167539267015706,
+    "steps_from_decay_onset": 446,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 3629,
+    "normalized_time": 0.95,
+    "steps_from_decay_onset": 573,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 3819,
+    "normalized_time": 0.999738219895288,
+    "steps_from_decay_onset": 763,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 382,
+    "normalized_time": 0.1,
+    "steps_from_decay_onset": -2674,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 955,
+    "normalized_time": 0.25,
+    "steps_from_decay_onset": -2101,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 1528,
+    "normalized_time": 0.4,
+    "steps_from_decay_onset": -1528,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 2101,
+    "normalized_time": 0.55,
+    "steps_from_decay_onset": -955,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 2228,
+    "normalized_time": 0.5832460732984294,
+    "steps_from_decay_onset": -828,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 2292,
+    "normalized_time": 0.6,
+    "steps_from_decay_onset": -764,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 2356,
+    "normalized_time": 0.6167539267015707,
+    "steps_from_decay_onset": -700,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 2483,
+    "normalized_time": 0.65,
+    "steps_from_decay_onset": -573,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 2674,
+    "normalized_time": 0.7,
+    "steps_from_decay_onset": -382,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 2865,
+    "normalized_time": 0.75,
+    "steps_from_decay_onset": -191,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 2992,
+    "normalized_time": 0.7832460732984293,
+    "steps_from_decay_onset": -64,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 3056,
+    "normalized_time": 0.8,
+    "steps_from_decay_onset": 0,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 3120,
+    "normalized_time": 0.8167539267015707,
+    "steps_from_decay_onset": 64,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 3247,
+    "normalized_time": 0.85,
+    "steps_from_decay_onset": 191,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 3312,
+    "normalized_time": 0.8670157068062827,
+    "steps_from_decay_onset": 256,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 3374,
+    "normalized_time": 0.8832460732984293,
+    "steps_from_decay_onset": 318,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 3438,
+    "normalized_time": 0.9,
+    "steps_from_decay_onset": 382,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 3502,
+    "normalized_time": 0.9167539267015706,
+    "steps_from_decay_onset": 446,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 3629,
+    "normalized_time": 0.95,
+    "steps_from_decay_onset": 573,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 3819,
+    "normalized_time": 0.999738219895288,
+    "steps_from_decay_onset": 763,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 382,
+    "normalized_time": 0.1,
+    "steps_from_decay_onset": -2674,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 955,
+    "normalized_time": 0.25,
+    "steps_from_decay_onset": -2101,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 1528,
+    "normalized_time": 0.4,
+    "steps_from_decay_onset": -1528,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 2101,
+    "normalized_time": 0.55,
+    "steps_from_decay_onset": -955,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 2228,
+    "normalized_time": 0.5832460732984294,
+    "steps_from_decay_onset": -828,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 2292,
+    "normalized_time": 0.6,
+    "steps_from_decay_onset": -764,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 2356,
+    "normalized_time": 0.6167539267015707,
+    "steps_from_decay_onset": -700,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 2483,
+    "normalized_time": 0.65,
+    "steps_from_decay_onset": -573,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 2674,
+    "normalized_time": 0.7,
+    "steps_from_decay_onset": -382,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 2865,
+    "normalized_time": 0.75,
+    "steps_from_decay_onset": -191,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 2992,
+    "normalized_time": 0.7832460732984293,
+    "steps_from_decay_onset": -64,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 3056,
+    "normalized_time": 0.8,
+    "steps_from_decay_onset": 0,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 3120,
+    "normalized_time": 0.8167539267015707,
+    "steps_from_decay_onset": 64,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 3247,
+    "normalized_time": 0.85,
+    "steps_from_decay_onset": 191,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 3312,
+    "normalized_time": 0.8670157068062827,
+    "steps_from_decay_onset": 256,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 3374,
+    "normalized_time": 0.8832460732984293,
+    "steps_from_decay_onset": 318,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 3438,
+    "normalized_time": 0.9,
+    "steps_from_decay_onset": 382,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 3502,
+    "normalized_time": 0.9167539267015706,
+    "steps_from_decay_onset": 446,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 3629,
+    "normalized_time": 0.95,
+    "steps_from_decay_onset": 573,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 3819,
+    "normalized_time": 0.999738219895288,
+    "steps_from_decay_onset": 763,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 382,
+    "normalized_time": 0.1,
+    "steps_from_decay_onset": -2674,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 955,
+    "normalized_time": 0.25,
+    "steps_from_decay_onset": -2101,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 1528,
+    "normalized_time": 0.4,
+    "steps_from_decay_onset": -1528,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 2101,
+    "normalized_time": 0.55,
+    "steps_from_decay_onset": -955,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 2228,
+    "normalized_time": 0.5832460732984294,
+    "steps_from_decay_onset": -828,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 2292,
+    "normalized_time": 0.6,
+    "steps_from_decay_onset": -764,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 2356,
+    "normalized_time": 0.6167539267015707,
+    "steps_from_decay_onset": -700,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 2483,
+    "normalized_time": 0.65,
+    "steps_from_decay_onset": -573,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 2674,
+    "normalized_time": 0.7,
+    "steps_from_decay_onset": -382,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 2865,
+    "normalized_time": 0.75,
+    "steps_from_decay_onset": -191,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 2992,
+    "normalized_time": 0.7832460732984293,
+    "steps_from_decay_onset": -64,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 3056,
+    "normalized_time": 0.8,
+    "steps_from_decay_onset": 0,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 3120,
+    "normalized_time": 0.8167539267015707,
+    "steps_from_decay_onset": 64,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 3247,
+    "normalized_time": 0.85,
+    "steps_from_decay_onset": 191,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 3312,
+    "normalized_time": 0.8670157068062827,
+    "steps_from_decay_onset": 256,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 3374,
+    "normalized_time": 0.8832460732984293,
+    "steps_from_decay_onset": 318,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 3438,
+    "normalized_time": 0.9,
+    "steps_from_decay_onset": 382,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 3502,
+    "normalized_time": 0.9167539267015706,
+    "steps_from_decay_onset": 446,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 3629,
+    "normalized_time": 0.95,
+    "steps_from_decay_onset": 573,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 3819,
+    "normalized_time": 0.999738219895288,
+    "steps_from_decay_onset": 763,
+    "trajectory_id": "lr_onset_decay_0p80_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 382,
+    "normalized_time": 0.1,
+    "steps_from_decay_onset": -3056,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 955,
+    "normalized_time": 0.25,
+    "steps_from_decay_onset": -2483,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 1528,
+    "normalized_time": 0.4,
+    "steps_from_decay_onset": -1910,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 2101,
+    "normalized_time": 0.55,
+    "steps_from_decay_onset": -1337,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 2228,
+    "normalized_time": 0.5832460732984294,
+    "steps_from_decay_onset": -1210,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 2292,
+    "normalized_time": 0.6,
+    "steps_from_decay_onset": -1146,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 2356,
+    "normalized_time": 0.6167539267015707,
+    "steps_from_decay_onset": -1082,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 2483,
+    "normalized_time": 0.65,
+    "steps_from_decay_onset": -955,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 2674,
+    "normalized_time": 0.7,
+    "steps_from_decay_onset": -764,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 2865,
+    "normalized_time": 0.75,
+    "steps_from_decay_onset": -573,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 2992,
+    "normalized_time": 0.7832460732984293,
+    "steps_from_decay_onset": -446,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 3056,
+    "normalized_time": 0.8,
+    "steps_from_decay_onset": -382,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 3120,
+    "normalized_time": 0.8167539267015707,
+    "steps_from_decay_onset": -318,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 3247,
+    "normalized_time": 0.85,
+    "steps_from_decay_onset": -191,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 3312,
+    "normalized_time": 0.8670157068062827,
+    "steps_from_decay_onset": -126,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 3374,
+    "normalized_time": 0.8832460732984293,
+    "steps_from_decay_onset": -64,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 3438,
+    "normalized_time": 0.9,
+    "steps_from_decay_onset": 0,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 3502,
+    "normalized_time": 0.9167539267015706,
+    "steps_from_decay_onset": 64,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 3629,
+    "normalized_time": 0.95,
+    "steps_from_decay_onset": 191,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 3819,
+    "normalized_time": 0.999738219895288,
+    "steps_from_decay_onset": 381,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 382,
+    "normalized_time": 0.1,
+    "steps_from_decay_onset": -3056,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 955,
+    "normalized_time": 0.25,
+    "steps_from_decay_onset": -2483,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 1528,
+    "normalized_time": 0.4,
+    "steps_from_decay_onset": -1910,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 2101,
+    "normalized_time": 0.55,
+    "steps_from_decay_onset": -1337,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 2228,
+    "normalized_time": 0.5832460732984294,
+    "steps_from_decay_onset": -1210,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 2292,
+    "normalized_time": 0.6,
+    "steps_from_decay_onset": -1146,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 2356,
+    "normalized_time": 0.6167539267015707,
+    "steps_from_decay_onset": -1082,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 2483,
+    "normalized_time": 0.65,
+    "steps_from_decay_onset": -955,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 2674,
+    "normalized_time": 0.7,
+    "steps_from_decay_onset": -764,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 2865,
+    "normalized_time": 0.75,
+    "steps_from_decay_onset": -573,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 2992,
+    "normalized_time": 0.7832460732984293,
+    "steps_from_decay_onset": -446,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 3056,
+    "normalized_time": 0.8,
+    "steps_from_decay_onset": -382,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 3120,
+    "normalized_time": 0.8167539267015707,
+    "steps_from_decay_onset": -318,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 3247,
+    "normalized_time": 0.85,
+    "steps_from_decay_onset": -191,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 3312,
+    "normalized_time": 0.8670157068062827,
+    "steps_from_decay_onset": -126,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 3374,
+    "normalized_time": 0.8832460732984293,
+    "steps_from_decay_onset": -64,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 3438,
+    "normalized_time": 0.9,
+    "steps_from_decay_onset": 0,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 3502,
+    "normalized_time": 0.9167539267015706,
+    "steps_from_decay_onset": 64,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 3629,
+    "normalized_time": 0.95,
+    "steps_from_decay_onset": 191,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 3819,
+    "normalized_time": 0.999738219895288,
+    "steps_from_decay_onset": 381,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 382,
+    "normalized_time": 0.1,
+    "steps_from_decay_onset": -3056,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 955,
+    "normalized_time": 0.25,
+    "steps_from_decay_onset": -2483,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 1528,
+    "normalized_time": 0.4,
+    "steps_from_decay_onset": -1910,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 2101,
+    "normalized_time": 0.55,
+    "steps_from_decay_onset": -1337,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 2228,
+    "normalized_time": 0.5832460732984294,
+    "steps_from_decay_onset": -1210,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 2292,
+    "normalized_time": 0.6,
+    "steps_from_decay_onset": -1146,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 2356,
+    "normalized_time": 0.6167539267015707,
+    "steps_from_decay_onset": -1082,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 2483,
+    "normalized_time": 0.65,
+    "steps_from_decay_onset": -955,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 2674,
+    "normalized_time": 0.7,
+    "steps_from_decay_onset": -764,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 2865,
+    "normalized_time": 0.75,
+    "steps_from_decay_onset": -573,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 2992,
+    "normalized_time": 0.7832460732984293,
+    "steps_from_decay_onset": -446,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 3056,
+    "normalized_time": 0.8,
+    "steps_from_decay_onset": -382,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 3120,
+    "normalized_time": 0.8167539267015707,
+    "steps_from_decay_onset": -318,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 3247,
+    "normalized_time": 0.85,
+    "steps_from_decay_onset": -191,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 3312,
+    "normalized_time": 0.8670157068062827,
+    "steps_from_decay_onset": -126,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 3374,
+    "normalized_time": 0.8832460732984293,
+    "steps_from_decay_onset": -64,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 3438,
+    "normalized_time": 0.9,
+    "steps_from_decay_onset": 0,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 3502,
+    "normalized_time": 0.9167539267015706,
+    "steps_from_decay_onset": 64,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 3629,
+    "normalized_time": 0.95,
+    "steps_from_decay_onset": 191,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 3819,
+    "normalized_time": 0.999738219895288,
+    "steps_from_decay_onset": 381,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 382,
+    "normalized_time": 0.1,
+    "steps_from_decay_onset": -3056,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 955,
+    "normalized_time": 0.25,
+    "steps_from_decay_onset": -2483,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 1528,
+    "normalized_time": 0.4,
+    "steps_from_decay_onset": -1910,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 2101,
+    "normalized_time": 0.55,
+    "steps_from_decay_onset": -1337,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 2228,
+    "normalized_time": 0.5832460732984294,
+    "steps_from_decay_onset": -1210,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 2292,
+    "normalized_time": 0.6,
+    "steps_from_decay_onset": -1146,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 2356,
+    "normalized_time": 0.6167539267015707,
+    "steps_from_decay_onset": -1082,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 2483,
+    "normalized_time": 0.65,
+    "steps_from_decay_onset": -955,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 2674,
+    "normalized_time": 0.7,
+    "steps_from_decay_onset": -764,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 2865,
+    "normalized_time": 0.75,
+    "steps_from_decay_onset": -573,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 2992,
+    "normalized_time": 0.7832460732984293,
+    "steps_from_decay_onset": -446,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 3056,
+    "normalized_time": 0.8,
+    "steps_from_decay_onset": -382,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 3120,
+    "normalized_time": 0.8167539267015707,
+    "steps_from_decay_onset": -318,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 3247,
+    "normalized_time": 0.85,
+    "steps_from_decay_onset": -191,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 3312,
+    "normalized_time": 0.8670157068062827,
+    "steps_from_decay_onset": -126,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 3374,
+    "normalized_time": 0.8832460732984293,
+    "steps_from_decay_onset": -64,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 3438,
+    "normalized_time": 0.9,
+    "steps_from_decay_onset": 0,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 3502,
+    "normalized_time": 0.9167539267015706,
+    "steps_from_decay_onset": 64,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 3629,
+    "normalized_time": 0.95,
+    "steps_from_decay_onset": 191,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 3819,
+    "normalized_time": 0.999738219895288,
+    "steps_from_decay_onset": 381,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 382,
+    "normalized_time": 0.1,
+    "steps_from_decay_onset": -3056,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 955,
+    "normalized_time": 0.25,
+    "steps_from_decay_onset": -2483,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 1528,
+    "normalized_time": 0.4,
+    "steps_from_decay_onset": -1910,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 2101,
+    "normalized_time": 0.55,
+    "steps_from_decay_onset": -1337,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 2228,
+    "normalized_time": 0.5832460732984294,
+    "steps_from_decay_onset": -1210,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 2292,
+    "normalized_time": 0.6,
+    "steps_from_decay_onset": -1146,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 2356,
+    "normalized_time": 0.6167539267015707,
+    "steps_from_decay_onset": -1082,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 2483,
+    "normalized_time": 0.65,
+    "steps_from_decay_onset": -955,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 2674,
+    "normalized_time": 0.7,
+    "steps_from_decay_onset": -764,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 2865,
+    "normalized_time": 0.75,
+    "steps_from_decay_onset": -573,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 2992,
+    "normalized_time": 0.7832460732984293,
+    "steps_from_decay_onset": -446,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 3056,
+    "normalized_time": 0.8,
+    "steps_from_decay_onset": -382,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 3120,
+    "normalized_time": 0.8167539267015707,
+    "steps_from_decay_onset": -318,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 3247,
+    "normalized_time": 0.85,
+    "steps_from_decay_onset": -191,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 3312,
+    "normalized_time": 0.8670157068062827,
+    "steps_from_decay_onset": -126,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 3374,
+    "normalized_time": 0.8832460732984293,
+    "steps_from_decay_onset": -64,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 3438,
+    "normalized_time": 0.9,
+    "steps_from_decay_onset": 0,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 3502,
+    "normalized_time": 0.9167539267015706,
+    "steps_from_decay_onset": 64,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 3629,
+    "normalized_time": 0.95,
+    "steps_from_decay_onset": 191,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 3819,
+    "normalized_time": 0.999738219895288,
+    "steps_from_decay_onset": 381,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 382,
+    "normalized_time": 0.1,
+    "steps_from_decay_onset": -3056,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 955,
+    "normalized_time": 0.25,
+    "steps_from_decay_onset": -2483,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 1528,
+    "normalized_time": 0.4,
+    "steps_from_decay_onset": -1910,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 2101,
+    "normalized_time": 0.55,
+    "steps_from_decay_onset": -1337,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 2228,
+    "normalized_time": 0.5832460732984294,
+    "steps_from_decay_onset": -1210,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 2292,
+    "normalized_time": 0.6,
+    "steps_from_decay_onset": -1146,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 2356,
+    "normalized_time": 0.6167539267015707,
+    "steps_from_decay_onset": -1082,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 2483,
+    "normalized_time": 0.65,
+    "steps_from_decay_onset": -955,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 2674,
+    "normalized_time": 0.7,
+    "steps_from_decay_onset": -764,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 2865,
+    "normalized_time": 0.75,
+    "steps_from_decay_onset": -573,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 2992,
+    "normalized_time": 0.7832460732984293,
+    "steps_from_decay_onset": -446,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 3056,
+    "normalized_time": 0.8,
+    "steps_from_decay_onset": -382,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 3120,
+    "normalized_time": 0.8167539267015707,
+    "steps_from_decay_onset": -318,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 3247,
+    "normalized_time": 0.85,
+    "steps_from_decay_onset": -191,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 3312,
+    "normalized_time": 0.8670157068062827,
+    "steps_from_decay_onset": -126,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 3374,
+    "normalized_time": 0.8832460732984293,
+    "steps_from_decay_onset": -64,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 3438,
+    "normalized_time": 0.9,
+    "steps_from_decay_onset": 0,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 3502,
+    "normalized_time": 0.9167539267015706,
+    "steps_from_decay_onset": 64,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 3629,
+    "normalized_time": 0.95,
+    "steps_from_decay_onset": 191,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 3819,
+    "normalized_time": 0.999738219895288,
+    "steps_from_decay_onset": 381,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 382,
+    "normalized_time": 0.1,
+    "steps_from_decay_onset": -3056,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 955,
+    "normalized_time": 0.25,
+    "steps_from_decay_onset": -2483,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 1528,
+    "normalized_time": 0.4,
+    "steps_from_decay_onset": -1910,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 2101,
+    "normalized_time": 0.55,
+    "steps_from_decay_onset": -1337,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 2228,
+    "normalized_time": 0.5832460732984294,
+    "steps_from_decay_onset": -1210,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 2292,
+    "normalized_time": 0.6,
+    "steps_from_decay_onset": -1146,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 2356,
+    "normalized_time": 0.6167539267015707,
+    "steps_from_decay_onset": -1082,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 2483,
+    "normalized_time": 0.65,
+    "steps_from_decay_onset": -955,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 2674,
+    "normalized_time": 0.7,
+    "steps_from_decay_onset": -764,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 2865,
+    "normalized_time": 0.75,
+    "steps_from_decay_onset": -573,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 2992,
+    "normalized_time": 0.7832460732984293,
+    "steps_from_decay_onset": -446,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 3056,
+    "normalized_time": 0.8,
+    "steps_from_decay_onset": -382,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 3120,
+    "normalized_time": 0.8167539267015707,
+    "steps_from_decay_onset": -318,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 3247,
+    "normalized_time": 0.85,
+    "steps_from_decay_onset": -191,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 3312,
+    "normalized_time": 0.8670157068062827,
+    "steps_from_decay_onset": -126,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 3374,
+    "normalized_time": 0.8832460732984293,
+    "steps_from_decay_onset": -64,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 3438,
+    "normalized_time": 0.9,
+    "steps_from_decay_onset": 0,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 3502,
+    "normalized_time": 0.9167539267015706,
+    "steps_from_decay_onset": 64,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 3629,
+    "normalized_time": 0.95,
+    "steps_from_decay_onset": 191,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 3819,
+    "normalized_time": 0.999738219895288,
+    "steps_from_decay_onset": 381,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 382,
+    "normalized_time": 0.1,
+    "steps_from_decay_onset": -3056,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 955,
+    "normalized_time": 0.25,
+    "steps_from_decay_onset": -2483,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 1528,
+    "normalized_time": 0.4,
+    "steps_from_decay_onset": -1910,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 2101,
+    "normalized_time": 0.55,
+    "steps_from_decay_onset": -1337,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 2228,
+    "normalized_time": 0.5832460732984294,
+    "steps_from_decay_onset": -1210,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 2292,
+    "normalized_time": 0.6,
+    "steps_from_decay_onset": -1146,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 2356,
+    "normalized_time": 0.6167539267015707,
+    "steps_from_decay_onset": -1082,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 2483,
+    "normalized_time": 0.65,
+    "steps_from_decay_onset": -955,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 2674,
+    "normalized_time": 0.7,
+    "steps_from_decay_onset": -764,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 2865,
+    "normalized_time": 0.75,
+    "steps_from_decay_onset": -573,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 2992,
+    "normalized_time": 0.7832460732984293,
+    "steps_from_decay_onset": -446,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 3056,
+    "normalized_time": 0.8,
+    "steps_from_decay_onset": -382,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 3120,
+    "normalized_time": 0.8167539267015707,
+    "steps_from_decay_onset": -318,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 3247,
+    "normalized_time": 0.85,
+    "steps_from_decay_onset": -191,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 3312,
+    "normalized_time": 0.8670157068062827,
+    "steps_from_decay_onset": -126,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 3374,
+    "normalized_time": 0.8832460732984293,
+    "steps_from_decay_onset": -64,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 3438,
+    "normalized_time": 0.9,
+    "steps_from_decay_onset": 0,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 3502,
+    "normalized_time": 0.9167539267015706,
+    "steps_from_decay_onset": 64,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 3629,
+    "normalized_time": 0.95,
+    "steps_from_decay_onset": 191,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 3819,
+    "normalized_time": 0.999738219895288,
+    "steps_from_decay_onset": 381,
+    "trajectory_id": "lr_onset_decay_0p90_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 382,
+    "normalized_time": 0.1,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 955,
+    "normalized_time": 0.25,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 1528,
+    "normalized_time": 0.4,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 2101,
+    "normalized_time": 0.55,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 2228,
+    "normalized_time": 0.5832460732984294,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 2292,
+    "normalized_time": 0.6,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 2356,
+    "normalized_time": 0.6167539267015707,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 2483,
+    "normalized_time": 0.65,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 2674,
+    "normalized_time": 0.7,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 2865,
+    "normalized_time": 0.75,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 2992,
+    "normalized_time": 0.7832460732984293,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 3056,
+    "normalized_time": 0.8,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 3120,
+    "normalized_time": 0.8167539267015707,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 3247,
+    "normalized_time": 0.85,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 3312,
+    "normalized_time": 0.8670157068062827,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 3374,
+    "normalized_time": 0.8832460732984293,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 3438,
+    "normalized_time": 0.9,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 3502,
+    "normalized_time": 0.9167539267015706,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 3629,
+    "normalized_time": 0.95,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 3819,
+    "normalized_time": 0.999738219895288,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081000"
+  },
+  {
+    "checkpoint_step": 382,
+    "normalized_time": 0.1,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 955,
+    "normalized_time": 0.25,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 1528,
+    "normalized_time": 0.4,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 2101,
+    "normalized_time": 0.55,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 2228,
+    "normalized_time": 0.5832460732984294,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 2292,
+    "normalized_time": 0.6,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 2356,
+    "normalized_time": 0.6167539267015707,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 2483,
+    "normalized_time": 0.65,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 2674,
+    "normalized_time": 0.7,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 2865,
+    "normalized_time": 0.75,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 2992,
+    "normalized_time": 0.7832460732984293,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 3056,
+    "normalized_time": 0.8,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 3120,
+    "normalized_time": 0.8167539267015707,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 3247,
+    "normalized_time": 0.85,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 3312,
+    "normalized_time": 0.8670157068062827,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 3374,
+    "normalized_time": 0.8832460732984293,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 3438,
+    "normalized_time": 0.9,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 3502,
+    "normalized_time": 0.9167539267015706,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 3629,
+    "normalized_time": 0.95,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 3819,
+    "normalized_time": 0.999738219895288,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081001"
+  },
+  {
+    "checkpoint_step": 382,
+    "normalized_time": 0.1,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 955,
+    "normalized_time": 0.25,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 1528,
+    "normalized_time": 0.4,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 2101,
+    "normalized_time": 0.55,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 2228,
+    "normalized_time": 0.5832460732984294,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 2292,
+    "normalized_time": 0.6,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 2356,
+    "normalized_time": 0.6167539267015707,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 2483,
+    "normalized_time": 0.65,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 2674,
+    "normalized_time": 0.7,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 2865,
+    "normalized_time": 0.75,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 2992,
+    "normalized_time": 0.7832460732984293,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 3056,
+    "normalized_time": 0.8,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 3120,
+    "normalized_time": 0.8167539267015707,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 3247,
+    "normalized_time": 0.85,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 3312,
+    "normalized_time": 0.8670157068062827,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 3374,
+    "normalized_time": 0.8832460732984293,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 3438,
+    "normalized_time": 0.9,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 3502,
+    "normalized_time": 0.9167539267015706,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 3629,
+    "normalized_time": 0.95,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 3819,
+    "normalized_time": 0.999738219895288,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081002"
+  },
+  {
+    "checkpoint_step": 382,
+    "normalized_time": 0.1,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 955,
+    "normalized_time": 0.25,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 1528,
+    "normalized_time": 0.4,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 2101,
+    "normalized_time": 0.55,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 2228,
+    "normalized_time": 0.5832460732984294,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 2292,
+    "normalized_time": 0.6,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 2356,
+    "normalized_time": 0.6167539267015707,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 2483,
+    "normalized_time": 0.65,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 2674,
+    "normalized_time": 0.7,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 2865,
+    "normalized_time": 0.75,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 2992,
+    "normalized_time": 0.7832460732984293,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 3056,
+    "normalized_time": 0.8,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 3120,
+    "normalized_time": 0.8167539267015707,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 3247,
+    "normalized_time": 0.85,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 3312,
+    "normalized_time": 0.8670157068062827,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 3374,
+    "normalized_time": 0.8832460732984293,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 3438,
+    "normalized_time": 0.9,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 3502,
+    "normalized_time": 0.9167539267015706,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 3629,
+    "normalized_time": 0.95,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 3819,
+    "normalized_time": 0.999738219895288,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081003"
+  },
+  {
+    "checkpoint_step": 382,
+    "normalized_time": 0.1,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 955,
+    "normalized_time": 0.25,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 1528,
+    "normalized_time": 0.4,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 2101,
+    "normalized_time": 0.55,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 2228,
+    "normalized_time": 0.5832460732984294,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 2292,
+    "normalized_time": 0.6,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 2356,
+    "normalized_time": 0.6167539267015707,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 2483,
+    "normalized_time": 0.65,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 2674,
+    "normalized_time": 0.7,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 2865,
+    "normalized_time": 0.75,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 2992,
+    "normalized_time": 0.7832460732984293,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 3056,
+    "normalized_time": 0.8,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 3120,
+    "normalized_time": 0.8167539267015707,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 3247,
+    "normalized_time": 0.85,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 3312,
+    "normalized_time": 0.8670157068062827,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 3374,
+    "normalized_time": 0.8832460732984293,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 3438,
+    "normalized_time": 0.9,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 3502,
+    "normalized_time": 0.9167539267015706,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 3629,
+    "normalized_time": 0.95,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 3819,
+    "normalized_time": 0.999738219895288,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081004"
+  },
+  {
+    "checkpoint_step": 382,
+    "normalized_time": 0.1,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 955,
+    "normalized_time": 0.25,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 1528,
+    "normalized_time": 0.4,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 2101,
+    "normalized_time": 0.55,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 2228,
+    "normalized_time": 0.5832460732984294,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 2292,
+    "normalized_time": 0.6,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 2356,
+    "normalized_time": 0.6167539267015707,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 2483,
+    "normalized_time": 0.65,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 2674,
+    "normalized_time": 0.7,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 2865,
+    "normalized_time": 0.75,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 2992,
+    "normalized_time": 0.7832460732984293,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 3056,
+    "normalized_time": 0.8,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 3120,
+    "normalized_time": 0.8167539267015707,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 3247,
+    "normalized_time": 0.85,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 3312,
+    "normalized_time": 0.8670157068062827,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 3374,
+    "normalized_time": 0.8832460732984293,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 3438,
+    "normalized_time": 0.9,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 3502,
+    "normalized_time": 0.9167539267015706,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 3629,
+    "normalized_time": 0.95,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 3819,
+    "normalized_time": 0.999738219895288,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081005"
+  },
+  {
+    "checkpoint_step": 382,
+    "normalized_time": 0.1,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 955,
+    "normalized_time": 0.25,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 1528,
+    "normalized_time": 0.4,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 2101,
+    "normalized_time": 0.55,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 2228,
+    "normalized_time": 0.5832460732984294,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 2292,
+    "normalized_time": 0.6,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 2356,
+    "normalized_time": 0.6167539267015707,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 2483,
+    "normalized_time": 0.65,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 2674,
+    "normalized_time": 0.7,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 2865,
+    "normalized_time": 0.75,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 2992,
+    "normalized_time": 0.7832460732984293,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 3056,
+    "normalized_time": 0.8,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 3120,
+    "normalized_time": 0.8167539267015707,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 3247,
+    "normalized_time": 0.85,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 3312,
+    "normalized_time": 0.8670157068062827,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 3374,
+    "normalized_time": 0.8832460732984293,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 3438,
+    "normalized_time": 0.9,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 3502,
+    "normalized_time": 0.9167539267015706,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 3629,
+    "normalized_time": 0.95,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 3819,
+    "normalized_time": 0.999738219895288,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081006"
+  },
+  {
+    "checkpoint_step": 382,
+    "normalized_time": 0.1,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 955,
+    "normalized_time": 0.25,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 1528,
+    "normalized_time": 0.4,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 2101,
+    "normalized_time": 0.55,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 2228,
+    "normalized_time": 0.5832460732984294,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 2292,
+    "normalized_time": 0.6,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 2356,
+    "normalized_time": 0.6167539267015707,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 2483,
+    "normalized_time": 0.65,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 2674,
+    "normalized_time": 0.7,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 2865,
+    "normalized_time": 0.75,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 2992,
+    "normalized_time": 0.7832460732984293,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 3056,
+    "normalized_time": 0.8,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 3120,
+    "normalized_time": 0.8167539267015707,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 3247,
+    "normalized_time": 0.85,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 3312,
+    "normalized_time": 0.8670157068062827,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 3374,
+    "normalized_time": 0.8832460732984293,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 3438,
+    "normalized_time": 0.9,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 3502,
+    "normalized_time": 0.9167539267015706,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 3629,
+    "normalized_time": 0.95,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081007"
+  },
+  {
+    "checkpoint_step": 3819,
+    "normalized_time": 0.999738219895288,
+    "steps_from_decay_onset": "",
+    "trajectory_id": "lr_onset_no_decay_h0640_s03820_s2026081007"
+  }
+]

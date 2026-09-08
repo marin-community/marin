@@ -1,0 +1,7 @@
+Your assignment is robust decision-making under partial identification. Build on your commutator model and amplitude/direction non-identification theorems. Do not hide uncertainty with an ensemble average or an arbitrary uncertainty penalty.
+
+Assume the available design may identify aggregate response and only a bounded projection of phase benefit. Derive a scientifically interpretable identified set for \(G(a)\), phase improvement, or the optimal policy. Then formulate a frozen robust selection rule over two-phase policies, such as minimax regret or a lower-confidence improvement criterion, whose uncertainty set is derived from fit geometry and finite-sample evidence rather than tuned on heldout outcomes.
+
+The rule must include the one-phase policy as a feasible fallback and state conditions under which it selects a genuinely asymmetric policy. Evaluate whether it can improve post-selection regret and avoid catastrophic optimism on both targets. Keep the response surrogate and decision uncertainty separate, and report how the result changes with confidence level using a preregistered sensitivity analysis.
+
+If no robust two-phase policy can be certified, quantify the tightest attainable bound and identify the exact phase contrasts that would shrink it most. A rigorous result that the present data support only local or set-valued conclusions is acceptable if it materially sharpens the next experimental design.

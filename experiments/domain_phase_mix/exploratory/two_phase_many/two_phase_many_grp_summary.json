@@ -1,0 +1,195 @@
+{
+  "best_observed_bpb": 1.0571987628936768,
+  "curve_points_csv": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/two_phase_many_grp_vs_olmix_curve_points.csv",
+  "grp_plot": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/two_phase_many_grp_convergence_tracks.png",
+  "models": {
+    "GRP": [
+      {
+        "n_params": 31,
+        "optimum_move_mean_phase_tv": null,
+        "predicted_bpb": 0.7883376847018458,
+        "regret_at_1": 0.035402774810791016,
+        "subset_size": 20
+      },
+      {
+        "n_params": 31,
+        "optimum_move_mean_phase_tv": 0.6903674027898536,
+        "predicted_bpb": 1.005345548243164,
+        "regret_at_1": 0.035402774810791016,
+        "subset_size": 40
+      },
+      {
+        "n_params": 31,
+        "optimum_move_mean_phase_tv": 0.3714099248593623,
+        "predicted_bpb": 1.0186523601916013,
+        "regret_at_1": 0.0,
+        "subset_size": 60
+      },
+      {
+        "n_params": 31,
+        "optimum_move_mean_phase_tv": 0.3513796544967803,
+        "predicted_bpb": 1.0290239978889095,
+        "regret_at_1": 0.0,
+        "subset_size": 80
+      },
+      {
+        "n_params": 31,
+        "optimum_move_mean_phase_tv": 0.13079486744402835,
+        "predicted_bpb": 1.0284499580742816,
+        "regret_at_1": 0.0,
+        "subset_size": 100
+      },
+      {
+        "n_params": 31,
+        "optimum_move_mean_phase_tv": 0.3787617040013321,
+        "predicted_bpb": 1.0314409843970027,
+        "regret_at_1": 0.0,
+        "subset_size": 120
+      },
+      {
+        "n_params": 31,
+        "optimum_move_mean_phase_tv": 0.1009541327329542,
+        "predicted_bpb": 1.0325790178425402,
+        "regret_at_1": 0.0,
+        "subset_size": 140
+      },
+      {
+        "n_params": 31,
+        "optimum_move_mean_phase_tv": 0.3673268626510495,
+        "predicted_bpb": 1.0332756875655558,
+        "regret_at_1": 0.0,
+        "subset_size": 160
+      },
+      {
+        "n_params": 31,
+        "optimum_move_mean_phase_tv": 0.3684526569338296,
+        "predicted_bpb": 1.0318109386662029,
+        "regret_at_1": 0.0,
+        "subset_size": 180
+      },
+      {
+        "n_params": 31,
+        "optimum_move_mean_phase_tv": 0.5097461829217864,
+        "predicted_bpb": 1.0319608353138365,
+        "regret_at_1": 0.0,
+        "subset_size": 200
+      },
+      {
+        "n_params": 31,
+        "optimum_move_mean_phase_tv": 0.46584415124776624,
+        "predicted_bpb": 1.0302127339283358,
+        "regret_at_1": 0.0,
+        "subset_size": 220
+      },
+      {
+        "n_params": 31,
+        "optimum_move_mean_phase_tv": 0.08090893698131175,
+        "predicted_bpb": 1.0321843708474547,
+        "regret_at_1": 0.0,
+        "subset_size": 240
+      }
+    ],
+    "Olmix loglinear": [
+      {
+        "n_params": 79,
+        "optimum_move_mean_phase_tv": null,
+        "predicted_bpb": 0.24534596709874876,
+        "regret_at_1": 0.06646275520324707,
+        "subset_size": 20
+      },
+      {
+        "n_params": 79,
+        "optimum_move_mean_phase_tv": 1.0,
+        "predicted_bpb": 0.8839757508469758,
+        "regret_at_1": 0.011561751365661621,
+        "subset_size": 40
+      },
+      {
+        "n_params": 79,
+        "optimum_move_mean_phase_tv": 1.0,
+        "predicted_bpb": 0.7977376128708438,
+        "regret_at_1": 0.011561751365661621,
+        "subset_size": 60
+      },
+      {
+        "n_params": 79,
+        "optimum_move_mean_phase_tv": 0.0,
+        "predicted_bpb": 0.6490021429553108,
+        "regret_at_1": 0.09037184715270996,
+        "subset_size": 80
+      },
+      {
+        "n_params": 79,
+        "optimum_move_mean_phase_tv": 0.5,
+        "predicted_bpb": 0.7371186513311192,
+        "regret_at_1": 0.017728328704833984,
+        "subset_size": 100
+      },
+      {
+        "n_params": 79,
+        "optimum_move_mean_phase_tv": 0.0,
+        "predicted_bpb": 1.065947688626743,
+        "regret_at_1": 0.011561751365661621,
+        "subset_size": 120
+      },
+      {
+        "n_params": 79,
+        "optimum_move_mean_phase_tv": 0.0,
+        "predicted_bpb": 1.0754845034384188,
+        "regret_at_1": 0.05067527294158913,
+        "subset_size": 140
+      },
+      {
+        "n_params": 79,
+        "optimum_move_mean_phase_tv": 0.0,
+        "predicted_bpb": 1.079912431614176,
+        "regret_at_1": 0.011561751365661621,
+        "subset_size": 160
+      },
+      {
+        "n_params": 79,
+        "optimum_move_mean_phase_tv": 0.0,
+        "predicted_bpb": 1.0351163474627343,
+        "regret_at_1": 0.011561751365661621,
+        "subset_size": 180
+      },
+      {
+        "n_params": 79,
+        "optimum_move_mean_phase_tv": 0.0,
+        "predicted_bpb": 0.8278701855532241,
+        "regret_at_1": 0.011561751365661621,
+        "subset_size": 200
+      },
+      {
+        "n_params": 79,
+        "optimum_move_mean_phase_tv": 0.0,
+        "predicted_bpb": 1.070133481442525,
+        "regret_at_1": 0.011561751365661621,
+        "subset_size": 220
+      },
+      {
+        "n_params": 79,
+        "optimum_move_mean_phase_tv": 0.0,
+        "predicted_bpb": 1.0828308282737593,
+        "regret_at_1": 0.011561751365661621,
+        "subset_size": 240
+      }
+    ]
+  },
+  "objective_metric": "eval/uncheatable_eval/bpb",
+  "olmix_plot": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/two_phase_many_olmix_convergence_tracks.png",
+  "subset_sizes": [
+    20,
+    40,
+    60,
+    80,
+    100,
+    120,
+    140,
+    160,
+    180,
+    200,
+    220,
+    240
+  ]
+}

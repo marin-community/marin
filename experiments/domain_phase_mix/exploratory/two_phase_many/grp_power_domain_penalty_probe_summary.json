@@ -1,0 +1,411 @@
+{
+  "source_variant": "power_family_penalty",
+  "target_variant": "power_domain_penalty",
+  "family_counts": {
+    "signal_feature_count": 29,
+    "penalty_feature_count": 3,
+    "linear_coefficient_count": 32,
+    "intercept_count": 1,
+    "linear_head_param_count": 33,
+    "nonlinear_param_count": 10,
+    "total_param_count": 43
+  },
+  "domain_counts": {
+    "signal_feature_count": 29,
+    "penalty_feature_count": 3,
+    "linear_coefficient_count": 32,
+    "intercept_count": 1,
+    "linear_head_param_count": 33,
+    "nonlinear_param_count": 46,
+    "total_param_count": 79
+  },
+  "family_best": {
+    "variant": "power_family_penalty",
+    "stage": "refine",
+    "chosen_rank": 0,
+    "start_id": 3,
+    "success": true,
+    "message": "Optimization terminated successfully.",
+    "eta": 6.627794351309641,
+    "lam": 6.14421235332821e-06,
+    "reg": 0.2163675982364968,
+    "beta": 0.2629059619755788,
+    "a_broad_text": 0.6462737477673589,
+    "a_tech_code": 0.1657586322714625,
+    "a_reasoning": 0.2076641777781618,
+    "tau_broad_text": 3.193090495213877,
+    "tau_tech_code": 6.2042610686315145,
+    "tau_reasoning": 5.136810831800622,
+    "cv_rmse": 0.0095221150443555,
+    "cv_regret_at_1": 0.0,
+    "cv_foldmean_regret_at_1": 0.0028093338012695,
+    "lower_tail_optimism": 0.0025588961641979,
+    "cv_depopt_best8": 0.0457087169538863,
+    "cv_rawopt_nearest_tv": 0.5055017245968771,
+    "objective": 0.0205679187578754,
+    "train_rmse": 0.008298273013841,
+    "raw_predicted_optimum_value": 1.024795324758074,
+    "raw_nearest_observed_tv": 0.4829625008087683,
+    "raw_nearest_observed_run_name": "baseline_unimax",
+    "raw_nearest_observed_value": 1.0834295749664309,
+    "raw_phase0_lt_1e4": 13,
+    "raw_phase1_lt_1e4": 14,
+    "anchor_mae": 0.0092669185468623,
+    "anchor_rmse": 0.0092898818123809,
+    "anchor_rank_correct": true,
+    "pred_validated_global": 1.0351958637551533,
+    "pred_validated_pair": 1.038020299151122,
+    "signal_feature_count": 29,
+    "penalty_feature_count": 3,
+    "linear_coefficient_count": 32,
+    "intercept_count": 1,
+    "linear_head_param_count": 33,
+    "nonlinear_param_count": 10,
+    "total_param_count": 43,
+    "tau": NaN,
+    "pair_rho": NaN,
+    "alpha": NaN
+  },
+  "family_deploy": {
+    "variant": "power_family_penalty",
+    "predicted_optimum_value": 1.0453479992928914,
+    "raw_predicted_optimum_value": 1.024795324758074,
+    "hull_predicted_optimum_value": 1.0572836821841538,
+    "gain_budget": 0.0123314488456251,
+    "delta": 0.2375,
+    "phase0_lt_1e4": 0,
+    "phase1_lt_1e4": 0,
+    "phase0_max_weight": 0.0696646977821502,
+    "phase1_max_weight": 0.0986720024924198,
+    "nearest_observed_run_name": "run_00125",
+    "nearest_observed_value": 1.0571987628936768,
+    "nearest_observed_tv_distance": 0.2272606848142217,
+    "signal_feature_count": 29,
+    "penalty_feature_count": 3,
+    "linear_coefficient_count": 32,
+    "intercept_count": 1,
+    "linear_head_param_count": 33,
+    "nonlinear_param_count": 10,
+    "total_param_count": 43
+  },
+  "domain_tuned_metrics": {
+    "cv_rmse": 0.00869529083636075,
+    "cv_regret_at_1": 0.0,
+    "cv_foldmean_regret_at_1": 0.0,
+    "lower_tail_optimism": 0.004147782905298636,
+    "cv_depopt_best8": 0.1273951188205455,
+    "cv_rawopt_nearest_tv": 0.7674503578917256,
+    "objective": 0.03118319774998187,
+    "train_rmse": 0.0074928388402857905,
+    "raw_predicted_optimum_value": 0.9433063013224426,
+    "raw_nearest_observed_tv": 0.7643614867610743,
+    "raw_nearest_observed_run_name": "run_00152",
+    "raw_nearest_observed_value": 1.0874489545822144,
+    "raw_phase0_lt_1e4": 22,
+    "raw_phase1_lt_1e4": 29,
+    "anchor_mae": 0.03409176118147961,
+    "anchor_rmse": 0.034296931756766805,
+    "anchor_rank_correct": false,
+    "pred_validated_global": 1.0134640828453425,
+    "pred_validated_pair": 1.0101023947916983
+  },
+  "domain_tuned_deploy": {
+    "predicted_optimum_value": 1.0444349366340502,
+    "raw_predicted_optimum_value": 0.9433063013224426,
+    "gain_budget": 0.00869529083636075,
+    "delta": 0.08750000000000001
+  },
+  "domain_tuned_params": {
+    "eta": 6.627794351309641,
+    "lam": 6.14421235332821e-06,
+    "reg": 0.2163675982364968,
+    "beta": 0.2629059619755788,
+    "tau_broad_text": 3.193090495213877,
+    "tau_tech_code": 6.2042610686315145,
+    "tau_reasoning": 5.136810831800622,
+    "a_domain_00": 0.5134964145011097,
+    "a_domain_01": 1.0111580634482058,
+    "a_domain_02": 1.0111580634482058,
+    "a_domain_03": 0.7424837575749273,
+    "a_domain_04": 0.7424837575749273,
+    "a_domain_05": 1.7028504401141757,
+    "a_domain_06": 1.7028504401141757,
+    "a_domain_07": 0.8019835609165353,
+    "a_domain_08": 0.8019835609165353,
+    "a_domain_09": 1.3467030992599855,
+    "a_domain_10": 1.3467030992599855,
+    "a_domain_11": 0.5176946179118183,
+    "a_domain_12": 0.5176946179118183,
+    "a_domain_13": 1.2067698864787668,
+    "a_domain_14": 1.2067698864787668,
+    "a_domain_15": 1.2091700277619426,
+    "a_domain_16": 1.2091700277619426,
+    "a_domain_17": 1.4563910173605934,
+    "a_domain_18": 1.4563910173605934,
+    "a_domain_19": 1.2422681458294849,
+    "a_domain_20": 1.2422681458294849,
+    "a_domain_21": 0.29646085005647665,
+    "a_domain_22": 0.29646085005647665,
+    "a_domain_23": 0.7515138490704677,
+    "a_domain_24": 0.7515138490704677,
+    "a_domain_25": 0.47414073889262054,
+    "a_domain_26": 0.47414073889262054,
+    "a_domain_27": 0.46411947919997465,
+    "a_domain_28": 0.2913049620926332,
+    "a_domain_29": 2.0,
+    "a_domain_30": 0.8971614594468574,
+    "a_domain_31": 1.0821490230289397,
+    "a_domain_32": 0.45307031603093545,
+    "a_domain_33": 0.37443301991216577,
+    "a_domain_34": 0.08115505656163943,
+    "a_domain_35": 0.08930121388463122,
+    "a_domain_36": 0.3734639363352255,
+    "a_domain_37": 0.6418404368369602,
+    "a_domain_38": 0.7277062520507501,
+    "optimizer_success": true,
+    "optimizer_message": "CONVERGENCE: NORM OF PROJECTED GRADIENT <= PGTOL",
+    "optimizer_fun": 0.0074928388402857905
+  },
+  "domain_exponent_summary": {
+    "min_a": 0.08115505656163943,
+    "max_a": 2.0,
+    "mean_a": 0.8591891712624056,
+    "std_a": 0.4670594540146712,
+    "domains": [
+      {
+        "domain_idx": 0,
+        "domain_name": "dolma3_arxiv",
+        "family": "tech_code",
+        "a_domain": 0.5134964145011097
+      },
+      {
+        "domain_idx": 1,
+        "domain_name": "dolma3_cc/art_and_design_high",
+        "family": "broad_text",
+        "a_domain": 1.0111580634482058
+      },
+      {
+        "domain_idx": 2,
+        "domain_name": "dolma3_cc/art_and_design_low",
+        "family": "broad_text",
+        "a_domain": 1.0111580634482058
+      },
+      {
+        "domain_idx": 3,
+        "domain_name": "dolma3_cc/crime_and_law_high",
+        "family": "broad_text",
+        "a_domain": 0.7424837575749273
+      },
+      {
+        "domain_idx": 4,
+        "domain_name": "dolma3_cc/crime_and_law_low",
+        "family": "broad_text",
+        "a_domain": 0.7424837575749273
+      },
+      {
+        "domain_idx": 5,
+        "domain_name": "dolma3_cc/education_and_jobs_high",
+        "family": "broad_text",
+        "a_domain": 1.7028504401141757
+      },
+      {
+        "domain_idx": 6,
+        "domain_name": "dolma3_cc/education_and_jobs_low",
+        "family": "broad_text",
+        "a_domain": 1.7028504401141757
+      },
+      {
+        "domain_idx": 7,
+        "domain_name": "dolma3_cc/electronics_and_hardware_high",
+        "family": "broad_text",
+        "a_domain": 0.8019835609165353
+      },
+      {
+        "domain_idx": 8,
+        "domain_name": "dolma3_cc/electronics_and_hardware_low",
+        "family": "broad_text",
+        "a_domain": 0.8019835609165353
+      },
+      {
+        "domain_idx": 9,
+        "domain_name": "dolma3_cc/entertainment_high",
+        "family": "broad_text",
+        "a_domain": 1.3467030992599855
+      },
+      {
+        "domain_idx": 10,
+        "domain_name": "dolma3_cc/entertainment_low",
+        "family": "broad_text",
+        "a_domain": 1.3467030992599855
+      },
+      {
+        "domain_idx": 11,
+        "domain_name": "dolma3_cc/finance_and_business_high",
+        "family": "broad_text",
+        "a_domain": 0.5176946179118183
+      },
+      {
+        "domain_idx": 12,
+        "domain_name": "dolma3_cc/finance_and_business_low",
+        "family": "broad_text",
+        "a_domain": 0.5176946179118183
+      },
+      {
+        "domain_idx": 13,
+        "domain_name": "dolma3_cc/food_and_dining_high",
+        "family": "broad_text",
+        "a_domain": 1.2067698864787668
+      },
+      {
+        "domain_idx": 14,
+        "domain_name": "dolma3_cc/food_and_dining_low",
+        "family": "broad_text",
+        "a_domain": 1.2067698864787668
+      },
+      {
+        "domain_idx": 15,
+        "domain_name": "dolma3_cc/games_high",
+        "family": "broad_text",
+        "a_domain": 1.2091700277619426
+      },
+      {
+        "domain_idx": 16,
+        "domain_name": "dolma3_cc/games_low",
+        "family": "broad_text",
+        "a_domain": 1.2091700277619426
+      },
+      {
+        "domain_idx": 17,
+        "domain_name": "dolma3_cc/health_high",
+        "family": "broad_text",
+        "a_domain": 1.4563910173605934
+      },
+      {
+        "domain_idx": 18,
+        "domain_name": "dolma3_cc/health_low",
+        "family": "broad_text",
+        "a_domain": 1.4563910173605934
+      },
+      {
+        "domain_idx": 19,
+        "domain_name": "dolma3_cc/history_and_geography_high",
+        "family": "broad_text",
+        "a_domain": 1.2422681458294849
+      },
+      {
+        "domain_idx": 20,
+        "domain_name": "dolma3_cc/history_and_geography_low",
+        "family": "broad_text",
+        "a_domain": 1.2422681458294849
+      },
+      {
+        "domain_idx": 21,
+        "domain_name": "dolma3_cc/industrial_high",
+        "family": "broad_text",
+        "a_domain": 0.29646085005647665
+      },
+      {
+        "domain_idx": 22,
+        "domain_name": "dolma3_cc/industrial_low",
+        "family": "broad_text",
+        "a_domain": 0.29646085005647665
+      },
+      {
+        "domain_idx": 23,
+        "domain_name": "dolma3_cc/literature_high",
+        "family": "broad_text",
+        "a_domain": 0.7515138490704677
+      },
+      {
+        "domain_idx": 24,
+        "domain_name": "dolma3_cc/literature_low",
+        "family": "broad_text",
+        "a_domain": 0.7515138490704677
+      },
+      {
+        "domain_idx": 25,
+        "domain_name": "dolma3_cc/science_math_and_technology_high",
+        "family": "broad_text",
+        "a_domain": 0.47414073889262054
+      },
+      {
+        "domain_idx": 26,
+        "domain_name": "dolma3_cc/science_math_and_technology_low",
+        "family": "broad_text",
+        "a_domain": 0.47414073889262054
+      },
+      {
+        "domain_idx": 27,
+        "domain_name": "dolma3_finemath_3plus",
+        "family": "tech_code",
+        "a_domain": 0.46411947919997465
+      },
+      {
+        "domain_idx": 28,
+        "domain_name": "dolma3_stack_edu",
+        "family": "tech_code",
+        "a_domain": 0.2913049620926332
+      },
+      {
+        "domain_idx": 29,
+        "domain_name": "dolma3_wikipedia",
+        "family": "broad_text",
+        "a_domain": 2.0
+      },
+      {
+        "domain_idx": 30,
+        "domain_name": "dolmino_common_crawl_hq",
+        "family": "broad_text",
+        "a_domain": 0.8971614594468574
+      },
+      {
+        "domain_idx": 31,
+        "domain_name": "dolmino_olmocr_pdfs_hq",
+        "family": "broad_text",
+        "a_domain": 1.0821490230289397
+      },
+      {
+        "domain_idx": 32,
+        "domain_name": "dolmino_stack_edu_fim",
+        "family": "tech_code",
+        "a_domain": 0.45307031603093545
+      },
+      {
+        "domain_idx": 33,
+        "domain_name": "dolmino_stem_heavy_crawl",
+        "family": "broad_text",
+        "a_domain": 0.37443301991216577
+      },
+      {
+        "domain_idx": 34,
+        "domain_name": "dolmino_synth_code",
+        "family": "tech_code",
+        "a_domain": 0.08115505656163943
+      },
+      {
+        "domain_idx": 35,
+        "domain_name": "dolmino_synth_instruction",
+        "family": "reasoning",
+        "a_domain": 0.08930121388463122
+      },
+      {
+        "domain_idx": 36,
+        "domain_name": "dolmino_synth_math",
+        "family": "tech_code",
+        "a_domain": 0.3734639363352255
+      },
+      {
+        "domain_idx": 37,
+        "domain_name": "dolmino_synth_qa",
+        "family": "broad_text",
+        "a_domain": 0.6418404368369602
+      },
+      {
+        "domain_idx": 38,
+        "domain_name": "dolmino_synth_thinking",
+        "family": "reasoning",
+        "a_domain": 0.7277062520507501
+      }
+    ]
+  }
+}

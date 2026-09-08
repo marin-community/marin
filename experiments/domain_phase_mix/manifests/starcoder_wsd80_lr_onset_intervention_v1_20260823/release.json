@@ -1,0 +1,21 @@
+{
+  "cc_review_path": ".agents/handoffs/starcoder_wsd80_lr_onset_intervention_cc_review_20260823.md",
+  "cc_review_sha256": "83a2e4aca38d604c5e8a889afb280ed6901b26bbbf92c89678fa81ee877940a3",
+  "cc_review_verdict": "PASS",
+  "checkpoint_manifest_path": "experiments/domain_phase_mix/manifests/starcoder_wsd80_lr_onset_intervention_v1_20260823/checkpoint_manifest.json",
+  "checkpoint_manifest_sha256": "adfe80e20b1aba8cba0fc5ab118c12b202cbf0408fc0be71ffcdbb1d1347f087",
+  "confirmation": "I_AUTHORIZE_THE_STARCODER_WSD80_LR_ONSET_INTERVENTION",
+  "design_contract_path": "experiments/domain_phase_mix/manifests/starcoder_wsd80_lr_onset_intervention_v1_20260823/design_contract.json",
+  "design_contract_sha256": "fa983bfff53fd06100039b041424532e2226e361937639f6c799624378af7036",
+  "maximum_concurrent_trajectories": 32,
+  "release_sha256": "c9d034f319b9f891f28ba7757ef7a6fda27640a2be274760f1c4a3c51f01381b",
+  "release_version": "2026.08.23.1",
+  "runtime_path": "experiments/domain_phase_mix/launch_starcoder_wsd80_lr_onset_intervention.py",
+  "runtime_sha256": "78c8a0a3302ae2065ef396ba1462c53f2114512b7bcfa448cec4e900344756c8",
+  "stage_concurrency": {
+    "0": 4,
+    "1": 28
+  },
+  "trajectory_manifest_path": "experiments/domain_phase_mix/manifests/starcoder_wsd80_lr_onset_intervention_v1_20260823/trajectory_manifest.json",
+  "trajectory_manifest_sha256": "f2bbbc6677a9ff1972b2f4733087aa0df9dd481e4d9a154ccea35200c5a1b4dd"
+}

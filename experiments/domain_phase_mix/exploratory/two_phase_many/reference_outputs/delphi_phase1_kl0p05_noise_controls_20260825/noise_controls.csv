@@ -1,0 +1,9 @@
+prefix_candidate_id,continuation_id,repeat_index,data_seed
+shared_bounded_ensemble_kl0p05,control_proportional,1,962000
+shared_bounded_ensemble_kl0p05,control_proportional,2,962001
+shared_bounded_ensemble_kl0p05,control_proportional,3,962002
+shared_bounded_ensemble_kl0p05,control_proportional,4,962003
+shared_bounded_ensemble_kl0p05,fit_maximin_26,1,962004
+shared_bounded_ensemble_kl0p05,fit_maximin_26,2,962005
+shared_bounded_ensemble_kl0p05,fit_maximin_26,3,962006
+shared_bounded_ensemble_kl0p05,fit_maximin_26,4,962007

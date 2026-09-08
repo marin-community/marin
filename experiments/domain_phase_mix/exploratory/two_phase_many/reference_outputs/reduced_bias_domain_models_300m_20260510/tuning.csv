@@ -1,0 +1,48 @@
+variant,stage,start_id,objective,chosen_rank,success,message
+domain_no_phase_penalty_157,coarse,0,0.016134468768404384,,,
+domain_no_phase_penalty_157,coarse,1,0.016074059396051506,,,
+domain_no_phase_penalty_157,coarse,2,0.015993096851142002,,,
+domain_no_phase_penalty_157,coarse,3,0.01608671532847845,,,
+domain_no_phase_penalty_157,coarse,4,0.01637684081590573,,,
+domain_no_phase_penalty_157,coarse,5,0.016059837820837607,,,
+domain_no_phase_penalty_157,coarse,6,0.01622392997398933,,,
+domain_no_phase_penalty_157,coarse,7,0.01616572361612199,,,
+domain_no_phase_penalty_157,refine,2,0.015993068260935644,0.0,True,CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH
+domain_no_phase_penalty_157,refine,5,0.016059798829975987,1.0,True,CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH
+domain_no_phase_penalty_157,refine,1,0.016074026331150713,2.0,True,CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH
+domain_phase_benefit_penalty_158,coarse,0,0.013811856184952767,,,
+domain_phase_benefit_penalty_158,coarse,1,0.012845456547889008,,,
+domain_phase_benefit_penalty_158,coarse,2,0.011631332715643245,,,
+domain_phase_benefit_penalty_158,coarse,3,0.011928235315003166,,,
+domain_phase_benefit_penalty_158,coarse,4,0.00872705216271231,,,
+domain_phase_benefit_penalty_158,coarse,5,0.011363725111742528,,,
+domain_phase_benefit_penalty_158,coarse,6,0.01157557045327727,,,
+domain_phase_benefit_penalty_158,coarse,7,0.014708169109876355,,,
+domain_phase_benefit_penalty_158,refine,4,0.006777323578801861,0.0,False,STOP: TOTAL NO. OF ITERATIONS REACHED LIMIT
+domain_phase_benefit_penalty_158,refine,5,0.0069417472885877065,1.0,True,CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH
+domain_phase_benefit_penalty_158,refine,6,0.0067222901555917475,2.0,False,STOP: TOTAL NO. OF ITERATIONS REACHED LIMIT
+domain_phase_benefit_penalty_158,basin_hopping_diagnostic,-1,0.006651414851762024,-1.0,True,['requested number of basinhopping iterations completed successfully']
+domain_effective_exposure_penalty_158,coarse,0,0.01706777064137764,,,
+domain_effective_exposure_penalty_158,coarse,1,0.016074059396051506,,,
+domain_effective_exposure_penalty_158,coarse,2,0.014081312704272085,,,
+domain_effective_exposure_penalty_158,coarse,3,0.011647495391981089,,,
+domain_effective_exposure_penalty_158,coarse,4,0.007780708607995455,,,
+domain_effective_exposure_penalty_158,coarse,5,0.013711450836046716,,,
+domain_effective_exposure_penalty_158,coarse,6,0.014648906051070274,,,
+domain_effective_exposure_penalty_158,coarse,7,0.01734477942964931,,,
+domain_effective_exposure_penalty_158,refine,4,0.0060104800854305675,0.0,True,CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH
+domain_effective_exposure_penalty_158,refine,3,0.006151224003414085,1.0,False,STOP: TOTAL NO. OF ITERATIONS REACHED LIMIT
+domain_effective_exposure_penalty_158,refine,5,0.006381987011116698,2.0,True,CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH
+domain_effective_exposure_penalty_158,basin_hopping_diagnostic,-1,0.006010479896260383,-1.0,True,['requested number of basinhopping iterations completed successfully']
+domain_phase_benefit_penalty_premium_159,coarse,0,0.015192724809246026,,,
+domain_phase_benefit_penalty_premium_159,coarse,1,0.013856429067301928,,,
+domain_phase_benefit_penalty_premium_159,coarse,2,0.011526775992216874,,,
+domain_phase_benefit_penalty_premium_159,coarse,3,0.01141479782388142,,,
+domain_phase_benefit_penalty_premium_159,coarse,4,0.011150361105399045,,,
+domain_phase_benefit_penalty_premium_159,coarse,5,0.009993240062553118,,,
+domain_phase_benefit_penalty_premium_159,coarse,6,0.013971433521076776,,,
+domain_phase_benefit_penalty_premium_159,coarse,7,0.015486280605278489,,,
+domain_phase_benefit_penalty_premium_159,refine,5,0.009016280518746093,0.0,True,CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH
+domain_phase_benefit_penalty_premium_159,refine,4,0.009093468730351741,1.0,False,ABNORMAL:
+domain_phase_benefit_penalty_premium_159,refine,3,0.009146695054934144,2.0,True,CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH
+domain_phase_benefit_penalty_premium_159,basin_hopping_diagnostic,-1,0.008680540976525746,-1.0,True,['requested number of basinhopping iterations completed successfully']

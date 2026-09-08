@@ -1,0 +1,22 @@
+{
+  "model_id": "identity_anchor_global_scale",
+  "formula": "E_identity(mixture_id) + a*uN + b*uD + c*uND; fallback identity anchor for unseen/custom mixtures",
+  "mixture_dependence": "identity lookup, no learned smooth mixture features",
+  "identity_anchor_count": 219,
+  "fallback_anchor": 0.9965332447121676,
+  "scale_coef": [
+    0.4528253371863539,
+    0.09258057964964514,
+    0.007786235385414926
+  ],
+  "exponents": [
+    0.148968,
+    0.209383,
+    0.009859,
+    1.043436
+  ],
+  "pair_weight": 4.0,
+  "ridge_scale": 1e-05,
+  "fitted_param_count_counting_exponents": 227,
+  "total_constant_count": 227
+}

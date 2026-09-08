@@ -850,6 +850,30 @@ def test_checkpointer_force_save_uses_permanent_path_even_when_time_policy_elaps
         assert list(pathlib.Path(temporary_dir).iterdir()) == []
 
 
+def test_checkpointer_force_does_not_repeat_same_step_permanent_save():
+    with tempfile.TemporaryDirectory(prefix="checkpoints") as permanent_dir:
+        checkpointer = Checkpointer(
+            permanent_dir,
+            None,
+            [CheckpointInterval(every=1)],
+        )
+        save_count = 0
+        original_save = checkpointer.save_checkpoint
+
+        def counted_save(*args, **kwargs):
+            nonlocal save_count
+            save_count += 1
+            return original_save(*args, **kwargs)
+
+        checkpointer.save_checkpoint = counted_save  # type: ignore[method-assign]
+        _on_step(checkpointer, 1)
+        _on_step(checkpointer, 1, force=True)
+        checkpointer.wait_until_finished()
+
+        assert save_count == 1
+        assert _get_checkpoint_steps(permanent_dir) == [1]
+
+
 def test_checkpointer_coalesces_requests_into_one_temporary_checkpoint(tmp_path):
     permanent_path = tmp_path / "checkpoints"
     temporary_path = tmp_path / "temporary"

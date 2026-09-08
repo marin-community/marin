@@ -27,7 +27,12 @@ from haliax import Axis
 from haliax.partitioning import ResourceMapping
 
 from levanter.checkpoint import discover_latest_checkpoint, load_checkpoint
-from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
+from levanter.compat.hf_checkpoints import (
+    HFCheckpointConverter,
+    HFCompatConfig,
+    RepoRef,
+    converter_from_hf_compat_config,
+)
 from levanter.model_cache import resolve_cached_model_path
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.utils.jax_utils import use_cpu_device
@@ -95,13 +100,15 @@ def load_hf_checkpoint(
             disables mirroring (the repo loads directly from HuggingFace). Ignored for
             ``hf://`` and object-store paths.
     """
-    if not hasattr(model_config, "hf_checkpoint_converter"):
+    if not isinstance(model_config, HFCompatConfig):
         raise ValueError("Model config does not have an HF checkpoint converter. Can't load HF checkpoint.")
 
     resolved = resolve_cached_model_path(checkpoint, cache_ttl_days=cache_ttl_days, cache_prefix=_HF_CACHE_PREFIX)
     ref = RepoRef.from_string(resolved)
-    converter: HFCheckpointConverter = model_config.hf_checkpoint_converter().replaced(
-        reference_checkpoint=ref, tokenizer=tokenizer
+    converter: HFCheckpointConverter = converter_from_hf_compat_config(
+        model_config,
+        reference_checkpoint=ref,
+        tokenizer=tokenizer,
     )
     model = converter.load_pretrained(model_config.model_type, ref=ref, axis_mapping=axis_mapping, dtype=compute_dtype)
     # `load_pretrained` is typed as the broad `ModelWithHfSerializationMixin`, but loading a

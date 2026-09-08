@@ -3,8 +3,8 @@
 
 import abc
 import logging
+from collections import OrderedDict
 from dataclasses import dataclass
-from functools import lru_cache
 from typing import Callable, Generic, Optional, Sequence, TypeAlias, TypeVar
 
 import jax.random
@@ -16,6 +16,8 @@ from levanter.utils import thread_utils
 from levanter.utils.jax_utils import local_cpu_mesh
 
 logger = logging.getLogger(__name__)
+
+_WINDOW_CACHE_SIZE = 4
 
 
 T_co = TypeVar("T_co", covariant=True)
@@ -117,6 +119,30 @@ class AsyncDataset(DatasetBase[T_co]):
             key=key,
             perm_type=perm_type,
         )
+
+    def random_holdout_split(
+        self,
+        num_holdout: int,
+        *,
+        key: PRNGKeyArray,
+        perm_type: PermType = "feistel",
+    ) -> tuple["AsyncDataset[T_co]", "AsyncDataset[T_co]"]:
+        """Split off a deterministic random holdout while preserving retained-view locality.
+
+        The first ``num_holdout`` outputs of a seeded pseudorandom permutation
+        select the holdout. The retained view is the exact complement: selected
+        indices below its logical boundary are paired in rank order with
+        non-selected indices in the excluded tail. All other retained indices
+        map to themselves.
+
+        This sparse swap keeps contiguous reads contiguous except for at most
+        ``num_holdout`` replacement positions. For an I/O block size ``b``, the
+        replacement sources occupy at most ``ceil(num_holdout / b) + 1`` tail
+        blocks. Membership checks cost ``O(k log num_holdout)`` for a batch of
+        ``k`` logical indices, so this split is intended for modest holdouts.
+        """
+        partition = _RandomHoldoutPartition(self, num_holdout, key=key, perm_type=perm_type)
+        return _RandomHoldoutRetainedDataset(partition), _RandomHoldoutSelectedDataset(partition)
 
 
 class SyncDataset(DatasetBase[T_co]):
@@ -395,14 +421,152 @@ class PermutationDataset(AsyncDataset[T_co]):
 
     async def get_batch(self, indices: Sequence[int]) -> Sequence[T_co]:
         permutation = await self._get_permutation()
-        return await self.dataset.get_batch(
-            [int(permutation(i)) for i in indices]
-        )  # cast to int to be sure it's python int
+        permuted_indices = permutation(np.asarray(indices, dtype=np.uint64))
+        return await self.dataset.get_batch([int(index) for index in permuted_indices])
 
     async def _get_permutation(self):
         if self._permutation is None:
             self._permutation = Permutation.make(self._perm_type, await self.async_len(), self.key)
         return self._permutation
+
+
+@dataclass(frozen=True)
+class _RandomHoldoutState:
+    dataset_len: int
+    holdout_indices: np.ndarray
+    sorted_holdout_indices: np.ndarray
+    retained_replacement_indices: np.ndarray
+    retained_replacement_sources: np.ndarray
+
+
+class _RandomHoldoutPartition(Generic[T_co]):
+    """Shared state for deterministic random retained/holdout dataset views."""
+
+    def __init__(
+        self,
+        dataset: AsyncDataset[T_co],
+        num_holdout: int,
+        *,
+        key: PRNGKeyArray,
+        perm_type: PermType,
+    ):
+        if num_holdout <= 0:
+            raise ValueError(f"num_holdout must be positive, got {num_holdout}")
+        self.dataset = dataset
+        self.num_holdout = num_holdout
+        self.key = _key_on_local_cpu(key)
+        self.perm_type = perm_type
+        self._state: _RandomHoldoutState | None = None
+
+    async def state(self) -> _RandomHoldoutState:
+        if self._state is not None:
+            return self._state
+        if not self.dataset.is_finite():
+            raise ValueError("Random holdout partition requires a finite dataset")
+
+        dataset_len = await self.dataset.async_len()
+        if self.num_holdout >= dataset_len:
+            raise ValueError(f"num_holdout ({self.num_holdout}) must be smaller than dataset length ({dataset_len})")
+        permutation = Permutation.make(self.perm_type, dataset_len, self.key)
+        holdout_indices = np.asarray(
+            permutation(np.arange(self.num_holdout, dtype=np.uint64)),
+            dtype=np.int64,
+        )
+        sorted_holdout_indices = np.sort(holdout_indices)
+        if len(np.unique(sorted_holdout_indices)) != self.num_holdout:
+            raise RuntimeError("Random holdout permutation produced duplicate indices")
+        retained_len = dataset_len - self.num_holdout
+        retained_replacement_indices = sorted_holdout_indices[sorted_holdout_indices < retained_len]
+        tail_indices = np.arange(retained_len, dataset_len, dtype=np.int64)
+        retained_replacement_sources = np.setdiff1d(
+            tail_indices,
+            sorted_holdout_indices,
+            assume_unique=True,
+        )
+        if len(retained_replacement_indices) != len(retained_replacement_sources):
+            raise RuntimeError("Random holdout swap map is not bijective")
+        self._state = _RandomHoldoutState(
+            dataset_len=dataset_len,
+            holdout_indices=holdout_indices,
+            sorted_holdout_indices=sorted_holdout_indices,
+            retained_replacement_indices=retained_replacement_indices,
+            retained_replacement_sources=retained_replacement_sources,
+        )
+        return self._state
+
+
+async def _read_mapped_batch(dataset: AsyncDataset[T_co], mapped: np.ndarray) -> Sequence[T_co]:
+    read_order = np.argsort(mapped, kind="stable")
+    sorted_items = await dataset.get_batch([int(index) for index in mapped[read_order]])
+    restore_order = np.empty_like(read_order)
+    restore_order[read_order] = np.arange(len(read_order))
+    return [sorted_items[int(index)] for index in restore_order]
+
+
+class _RandomHoldoutRetainedDataset(AsyncDataset[T_co]):
+    def __init__(self, partition: _RandomHoldoutPartition[T_co]):
+        self.partition = partition
+
+    async def async_len(self) -> int:
+        state = await self.partition.state()
+        return state.dataset_len - self.partition.num_holdout
+
+    def is_finite(self) -> bool:
+        return True
+
+    async def get_batch(self, indices: Sequence[int]) -> Sequence[T_co]:
+        if not indices:
+            return []
+        state = await self.partition.state()
+        logical = np.asarray(indices, dtype=np.int64)
+        retained_len = state.dataset_len - self.partition.num_holdout
+        invalid = (logical < 0) | (logical >= retained_len)
+        if np.any(invalid):
+            invalid_index = int(logical[invalid][0])
+            raise IndexError(f"Index {invalid_index} out of bounds for retained dataset length {retained_len}")
+
+        # Swap each selected index below the retained boundary with a non-selected
+        # tail index. The resulting view is the exact complement of the holdout,
+        # while almost every logical index remains physically adjacent.
+        mapped = logical.copy()
+        if len(state.retained_replacement_indices) > 0:
+            replacement_positions = np.searchsorted(state.retained_replacement_indices, logical)
+            has_replacement = replacement_positions < len(state.retained_replacement_indices)
+            candidate_positions = np.minimum(
+                replacement_positions,
+                len(state.retained_replacement_indices) - 1,
+            )
+            has_replacement &= state.retained_replacement_indices[candidate_positions] == logical
+            mapped[has_replacement] = state.retained_replacement_sources[replacement_positions[has_replacement]]
+
+        if np.any(np.isin(mapped, state.sorted_holdout_indices)):
+            raise RuntimeError("Retained dataset mapping selected a holdout index")
+        return await _read_mapped_batch(self.partition.dataset, mapped)
+
+
+class _RandomHoldoutSelectedDataset(AsyncDataset[T_co]):
+    def __init__(self, partition: _RandomHoldoutPartition[T_co]):
+        self.partition = partition
+
+    async def async_len(self) -> int:
+        await self.partition.state()
+        return self.partition.num_holdout
+
+    def is_finite(self) -> bool:
+        return True
+
+    async def get_batch(self, indices: Sequence[int]) -> Sequence[T_co]:
+        if not indices:
+            return []
+        state = await self.partition.state()
+        logical = np.asarray(indices, dtype=np.int64)
+        invalid = (logical < 0) | (logical >= self.partition.num_holdout)
+        if np.any(invalid):
+            invalid_index = int(logical[invalid][0])
+            raise IndexError(
+                f"Index {invalid_index} out of bounds for holdout dataset length {self.partition.num_holdout}"
+            )
+        return await _read_mapped_batch(self.partition.dataset, state.holdout_indices[logical])
 
 
 @dataclass(frozen=True)
@@ -479,6 +643,11 @@ class BlockShufflingDataset(AsyncDataset[T_co]):
 
         self._state: _BlockShuffleState | None = None
         self._full_block_permutation: Optional[Permutation] = None
+        # Keep these caches per dataset. A method-level lru_cache keys on self,
+        # so many mixture components otherwise evict one another every batch.
+        self._window_layout_cache: OrderedDict[int, _WindowLayout] = OrderedDict()
+        self._window_full_region_permutation_cache: OrderedDict[int, Optional[Permutation]] = OrderedDict()
+        self._window_tail_region_permutation_cache: OrderedDict[int, Optional[Permutation]] = OrderedDict()
 
     def is_finite(self) -> bool:
         return self.dataset.is_finite()
@@ -494,8 +663,64 @@ class BlockShufflingDataset(AsyncDataset[T_co]):
     async def get_batch(self, indices: Sequence[int]) -> Sequence[T_co]:
         if not indices:
             return []
-        mapped = [await self._map_index(i) for i in indices]
-        return await self.dataset.get_batch(mapped)
+
+        state = await self._ensure_initialized()
+        logical_indices = np.asarray(indices, dtype=np.int64)
+        if np.any(logical_indices < 0):
+            raise ValueError("Negative indices are not supported")
+        if np.any(logical_indices >= state.dataset_len):
+            invalid_index = int(logical_indices[logical_indices >= state.dataset_len][0])
+            raise IndexError(f"Index {invalid_index} out of bounds for dataset length {state.dataset_len}")
+
+        if state.num_windows == 1:
+            window_ids = np.zeros_like(logical_indices)
+            offsets = logical_indices
+        else:
+            in_full_window = logical_indices < state.length_before_last_window
+            window_ids = np.where(
+                in_full_window,
+                logical_indices // state.full_window_size,
+                state.last_window_id,
+            )
+            offsets = np.where(
+                in_full_window,
+                logical_indices % state.full_window_size,
+                logical_indices - state.length_before_last_window,
+            )
+
+        mapped = np.empty_like(logical_indices)
+        for window_id in np.unique(window_ids):
+            positions = np.flatnonzero(window_ids == window_id)
+            window_offsets = offsets[positions]
+            layout = self._window_layout(int(window_id))
+            if np.any(window_offsets >= layout.window_size):
+                invalid_offset = int(window_offsets[window_offsets >= layout.window_size][0])
+                raise IndexError(
+                    f"Offset {invalid_offset} out of bounds for window {window_id} with length {layout.window_size}"
+                )
+
+            full_mask = window_offsets < layout.full_region_size
+            if np.any(full_mask):
+                full_positions = positions[full_mask]
+                full_offsets = window_offsets[full_mask]
+                permutation = self._window_full_region_permutation(int(window_id))
+                permuted_offsets = full_offsets if permutation is None else permutation(full_offsets)
+                block_offsets, offsets_in_block = np.divmod(permuted_offsets, self.io_block_size)
+                physical_blocks = np.asarray(layout.full_blocks, dtype=np.int64)[block_offsets]
+                mapped[full_positions] = physical_blocks * self.io_block_size + offsets_in_block
+
+            if np.any(~full_mask):
+                tail_positions = positions[~full_mask]
+                tail_offsets = window_offsets[~full_mask] - layout.full_region_size
+                permutation = self._window_tail_region_permutation(int(window_id))
+                permuted_offsets = tail_offsets if permutation is None else permutation(tail_offsets)
+                mapped[tail_positions] = state.num_full_blocks * self.io_block_size + permuted_offsets
+
+        read_order = np.argsort(mapped, kind="stable")
+        sorted_items = await self.dataset.get_batch([int(index) for index in mapped[read_order]])
+        restore_order = np.empty_like(read_order)
+        restore_order[read_order] = np.arange(len(read_order))
+        return [sorted_items[int(index)] for index in restore_order]
 
     async def _ensure_initialized(self) -> _BlockShuffleState:
         if self._state is not None:
@@ -536,8 +761,11 @@ class BlockShufflingDataset(AsyncDataset[T_co]):
             raise RuntimeError("BlockShufflingDataset is not initialized")
         return self._state
 
-    @lru_cache(maxsize=4)
     def _window_layout(self, window_id: int) -> _WindowLayout:
+        if window_id in self._window_layout_cache:
+            self._window_layout_cache.move_to_end(window_id)
+            return self._window_layout_cache[window_id]
+
         state = self._state_or_error()
         if window_id < 0 or window_id >= state.num_windows:
             raise IndexError(f"Window id {window_id} out of bounds for {state.num_windows} windows")
@@ -549,35 +777,53 @@ class BlockShufflingDataset(AsyncDataset[T_co]):
         has_tail_in_window = state.tail_size > 0 and (block_start + blocks_in_window == state.total_blocks)
         full_blocks_in_window = blocks_in_window - int(has_tail_in_window)
 
-        physical_full_blocks: list[int] = []
-        for block_position in range(block_start, block_start + full_blocks_in_window):
-            if self._full_block_permutation is None:
-                # Identity for 0 or 1 full blocks.
-                physical_full_blocks.append(block_position)
-            else:
-                physical_full_blocks.append(int(self._full_block_permutation(block_position)))
+        block_positions = np.arange(block_start, block_start + full_blocks_in_window, dtype=np.uint64)
+        if self._full_block_permutation is None:
+            physical_full_blocks = block_positions
+        else:
+            physical_full_blocks = self._full_block_permutation(block_positions)
 
         tail_size = state.tail_size if has_tail_in_window else 0
         full_region_size = len(physical_full_blocks) * self.io_block_size
-        return _WindowLayout(
-            full_blocks=tuple(physical_full_blocks), full_region_size=full_region_size, tail_size=tail_size
+        layout = _WindowLayout(
+            full_blocks=tuple(int(block) for block in physical_full_blocks),
+            full_region_size=full_region_size,
+            tail_size=tail_size,
         )
+        self._window_layout_cache[window_id] = layout
+        if len(self._window_layout_cache) > _WINDOW_CACHE_SIZE:
+            self._window_layout_cache.popitem(last=False)
+        return layout
 
-    @lru_cache(maxsize=4)
     def _window_full_region_permutation(self, window_id: int) -> Optional[Permutation]:
-        layout = self._window_layout(window_id)
-        if layout.full_region_size <= 1:
-            return None
-        key = _fold_in_on_local_cpu(self._window_full_key, window_id)
-        return Permutation.make(self._perm_type, layout.full_region_size, key)
+        if window_id in self._window_full_region_permutation_cache:
+            self._window_full_region_permutation_cache.move_to_end(window_id)
+            return self._window_full_region_permutation_cache[window_id]
 
-    @lru_cache(maxsize=4)
-    def _window_tail_region_permutation(self, window_id: int) -> Optional[Permutation]:
         layout = self._window_layout(window_id)
-        if layout.tail_size <= 1:
-            return None
-        key = _fold_in_on_local_cpu(self._window_tail_key, window_id)
-        return Permutation.make(self._perm_type, layout.tail_size, key)
+        permutation = None
+        if layout.full_region_size > 1:
+            key = _fold_in_on_local_cpu(self._window_full_key, window_id)
+            permutation = Permutation.make(self._perm_type, layout.full_region_size, key)
+        self._window_full_region_permutation_cache[window_id] = permutation
+        if len(self._window_full_region_permutation_cache) > _WINDOW_CACHE_SIZE:
+            self._window_full_region_permutation_cache.popitem(last=False)
+        return permutation
+
+    def _window_tail_region_permutation(self, window_id: int) -> Optional[Permutation]:
+        if window_id in self._window_tail_region_permutation_cache:
+            self._window_tail_region_permutation_cache.move_to_end(window_id)
+            return self._window_tail_region_permutation_cache[window_id]
+
+        layout = self._window_layout(window_id)
+        permutation = None
+        if layout.tail_size > 1:
+            key = _fold_in_on_local_cpu(self._window_tail_key, window_id)
+            permutation = Permutation.make(self._perm_type, layout.tail_size, key)
+        self._window_tail_region_permutation_cache[window_id] = permutation
+        if len(self._window_tail_region_permutation_cache) > _WINDOW_CACHE_SIZE:
+            self._window_tail_region_permutation_cache.popitem(last=False)
+        return permutation
 
     async def _map_index(self, index: int) -> int:
         if index < 0:

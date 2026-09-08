@@ -1,0 +1,21 @@
+{
+  "model_id": "scale_only_global",
+  "formula": "b0 + a*((N/N0)^(-alpha)-1) + b*((D/D0)^(-beta)-1) + c*((N/N0)^(-gamma)*(D/D0)^(-delta)-1)",
+  "mixture_dependence": "none",
+  "intercept": 1.060741660155748,
+  "scale_coef": [
+    0.12795090845750776,
+    0.10647820300355224,
+    1.4441644883691365e-13
+  ],
+  "exponents": [
+    0.148968,
+    0.209383,
+    0.009859,
+    1.043436
+  ],
+  "pair_weight": 4.0,
+  "ridge_scale": 1e-05,
+  "fitted_param_count_counting_exponents": 8,
+  "total_constant_count": 8
+}

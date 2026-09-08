@@ -36,6 +36,8 @@ dependencies = [
     # `uv run marina dev` serves the apps from this checkout.
     "marin-marina",
     # top level deps. try to keep these small.
+    "joblib",
+    "scikit-learn",
     "watchdog",
     # Codehealth's weekly review workbench persists into the shared metadata database.
     "cloud-sql-python-connector[pg8000]>=1.9",
@@ -71,6 +73,9 @@ constraint-dependencies = [
     "opentelemetry-instrumentation>=0.41b0",
     "opentelemetry-instrumentation-grpc>=0.41b0",
     "opentelemetry-semantic-conventions>=0.1b0",
+]
+find-links = [
+    "third_party/wheels",
 ]
 override-dependencies = [
     "omegaconf>=2.4.0.dev4",

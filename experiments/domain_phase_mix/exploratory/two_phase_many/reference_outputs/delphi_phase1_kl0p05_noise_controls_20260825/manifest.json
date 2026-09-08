@@ -1,0 +1,20 @@
+{
+  "actions": [
+    "control_proportional",
+    "fit_maximin_26"
+  ],
+  "continuation_summary_sha256": "0b5f31b587d3af4a6adfb6763d4896f9fd9f8fb7a27598c00bcc700d85be5ee4",
+  "control_rows": 8,
+  "data_seed_base": 962000,
+  "design_stage": "kl0p05_exact_prefix_branch_noise",
+  "endpoint_metric_values_used_for_selection": false,
+  "fit_budget_rows": 0,
+  "high_exposure_action_max_phase_1_materialized_epoch": 53.69349492823572,
+  "high_exposure_action_selection": "the runtime-exact fit continuation with maximum phase-1 materialized exposure in the frozen outcome-blind Wave 1A design",
+  "interpretation": "Together with each action's existing data-seed-930000 Wave 1 endpoint, these four fresh data seeds provide five observations per action at one exact KL0.05 boundary checkpoint. They estimate branch sampling variation and remain outside the 180-row fit budget.",
+  "noise_controls_sha256": "554bf4372327a0ab539ab82da6c93c4013a1f587ff78fda353f65ba5a1226c35",
+  "prefix_candidate_id": "shared_bounded_ensemble_kl0p05",
+  "prefix_repeat_seed": 0,
+  "repeats_per_action": 4,
+  "trainer_seed": 0
+}

@@ -1,0 +1,111 @@
+{
+  "protocol_version": 1,
+  "frozen_at": "2026-07-23T00:00:00-07:00",
+  "scope": "Local development evaluation on the 39-bucket Delphi 3e18 one-phase/two-phase paired fit swarms and the exposed append-only 3e18 development archive.",
+  "data_use": {
+    "fit": [
+      "delphi_3e18_one_phase_fit.csv",
+      "delphi_3e18_two_phase_fit.csv"
+    ],
+    "development_heldout": "reference_outputs/delphi_3e18_append_only_heldouts_20260714/heldout_current.csv",
+    "untouched_confirmation": "none; every heldout result in this batch is development evidence"
+  },
+  "decomposition": {
+    "aggregate_response": "SFOS39 fitted only to independently trained one-phase rows",
+    "phase_response": "two-phase minus aggregate-matched one-phase BPB fitted only to the exact 280 paired policies",
+    "phase_fraction_source": "c0 / (c0 + c1), checked constant across buckets",
+    "tied_requirement": "Every chronological feature is exactly zero when phase_0_weight equals phase_1_weight."
+  },
+  "candidate_batch": [
+    {
+      "candidate_id": "zero_transition",
+      "mechanism": "No chronological effect; aggregate response only."
+    },
+    {
+      "candidate_id": "han39",
+      "mechanism": "Bounded occupancy abandonment and late novelty relative to the aggregate-matched tied trajectory."
+    },
+    {
+      "candidate_id": "fpt_total_global",
+      "mechanism": "One signed secant and one Jensen coefficient for the complete fitted aggregate potential."
+    },
+    {
+      "candidate_id": "fpt_total_family",
+      "mechanism": "Family-specific signed secant and Jensen coefficients for the complete fitted aggregate potential."
+    },
+    {
+      "candidate_id": "fpt_shortage_family",
+      "mechanism": "Family-specific signed secant and Jensen coefficients for diminishing-benefit shortage potential only."
+    },
+    {
+      "candidate_id": "fpt_decomposed_family",
+      "mechanism": "Family-specific shortage and replay secant/Jensen channels, preserving their distinct mechanisms."
+    }
+  ],
+  "fixed_aggregate_shape": {
+    "delta": 1.0,
+    "shortage_power": 0.35,
+    "replay_log_threshold": 2.0,
+    "smooth_positive_epsilon": 0.01,
+    "soft_extreme_gamma": 1.0,
+    "ridge": 10.0,
+    "hierarchy": 10.0,
+    "ablation": "no_bucket_hotspot"
+  },
+  "phase_fit": {
+    "ridge_grid": [
+      0.0,
+      0.1,
+      1.0,
+      3.0,
+      10.0,
+      30.0,
+      100.0,
+      300.0
+    ],
+    "selection": "Nested inner CV within every outer fold; final ridge selected by full-fit CV.",
+    "odd_coefficients": "signed",
+    "jensen_coefficients": "nonnegative",
+    "intercept": false
+  },
+  "evaluation": {
+    "random_outer_seeds": [
+      20260723,
+      20260724,
+      20260725,
+      20260726,
+      20260727
+    ],
+    "fold_count": 5,
+    "direction_holdout": true,
+    "primary_fit_response": "paired two-phase minus one-phase BPB",
+    "heldout_slices": [
+      "all coordinate-disjoint observations",
+      "policy class",
+      "proposal-target matched",
+      "panel/candidate series",
+      "exact aggregate fibers with observed tied controls"
+    ],
+    "metrics": [
+      "RMSE",
+      "bias",
+      "Spearman",
+      "observed-on-predicted slope",
+      "Regret@1",
+      "Regret@3",
+      "Regret@5",
+      "optimism count above 0.05 BPB",
+      "worst optimism",
+      "low-predicted-tail RMSE"
+    ]
+  },
+  "development_gate": {
+    "fit_delta": "Improve mean paired-delta OOF RMSE by at least 5% on one target versus HAN39 and worsen the other by no more than 5%.",
+    "heldout": "Improve a primary heldout diagnostic materially on one target without more than 3% target-matched RMSE regression on the other.",
+    "regret": "Do not worsen policy-matched heldout Regret@1 by more than 0.002 BPB.",
+    "optimism": "Do not increase the count of target-matched optimism errors above 0.05 BPB on either target.",
+    "calibration": "Move observed-on-predicted calibration toward one on at least one target without moving materially away on the other.",
+    "complexity": "Any retained mechanism must survive its nested restriction and have stable coefficient signs across outer folds.",
+    "optimization": "A promoted model must have a plausible and bootstrap-stable raw optimum; deployment regularization cannot satisfy this gate."
+  }
+}

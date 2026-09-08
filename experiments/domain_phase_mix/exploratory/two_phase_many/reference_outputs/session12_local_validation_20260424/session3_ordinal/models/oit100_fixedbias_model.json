@@ -1,0 +1,46 @@
+{
+  "kind": "pcf98_ordinal_isotonic_token_potential",
+  "name": "oit100_fixedbias",
+  "base_model": "pcf_compact98_p1fam6_powbeta_a3_gap025",
+  "param_count": 100,
+  "law": "L = L_pcf98(w,N,D,mu) + kappa * (psi(D/mu) - psi(D_bar)) + lambda_tv * relu(nearest_train_TV(w)-r_tv)^2",
+  "psi": {
+    "type": "piecewise_linear_in_log_D",
+    "D_grid": [
+      1199994000.0,
+      2599991000.0,
+      5999980000.0,
+      10399979000.0,
+      23999957000.0
+    ],
+    "values": [
+      4.0,
+      3.0,
+      2.0,
+      1.0,
+      0.0
+    ],
+    "clipped_outside_grid": true
+  },
+  "D0": 5999951872.0,
+  "D340": 10399776768.0,
+  "D_bar": NaN,
+  "psi_bar": 1.4372298761102087,
+  "D_pivot_ablation": 7899250602.908083,
+  "psi_pivot_ablation": 1.5000219377716741,
+  "center_note": "fixed-340M bias-neutral calibration",
+  "kappa": 0.004928360863450573,
+  "kappa_safety_factor": 1.005,
+  "certified_margin_on_D_grid": 2.4519208275872867e-05,
+  "support_barrier": {
+    "radius_tv": 0.15,
+    "lambda_tv": 0.25
+  },
+  "notes": [
+    "Same-mixture multiplier drops cancel exactly when D/mu is constant.",
+    "The center is the fixed canonical-token barycenter, not a fitted loss parameter.",
+    "The token potential is constant over mixtures at fixed N,D,mu; unbarriered mixture argmins match base pcf98.",
+    "The support barrier is zero on observed train and seed7 holdout mixtures."
+  ],
+  "psi_center": 1.4372298761102087
+}

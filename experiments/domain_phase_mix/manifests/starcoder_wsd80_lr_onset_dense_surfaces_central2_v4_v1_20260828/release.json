@@ -1,0 +1,46 @@
+{
+  "cc_review_path": ".agents/handoffs/starcoder_wsd80_lr_onset_dense_surfaces_central2_v4_cc_review_20260828.md",
+  "cc_review_sha256": "8c2cae398fdd61471c284e3b5dace1e4c56af400116ae09cb96b1df507a43bad",
+  "central2_starcoder_input_ids_contract": {
+    "metadata_sha256": "fa8d0341b94ce701e8cf115ae695e522a8cb13d99a1ec5d42d49080a514a870c",
+    "object_count": 1618,
+    "total_bytes": 344101194077
+  },
+  "confirmation": "I_AUTHORIZE_THE_STARCODER_WSD80_LR_ONSET_DENSE_SURFACES",
+  "deployment": {
+    "allow_empty_starcoder_finished_shards": true,
+    "deployment_id": "central2-v4",
+    "marin_prefix": "gs://marin-us-central2",
+    "name": "pinlin_calvin_xu/data_mixture/starcoder_wsd80_lr_onset_dense_surfaces_central2_v4_20260828",
+    "panel_tag": "starcoder_wsd80_lr_onset_dense_surfaces_central2_v4",
+    "run_id_prefix": "c2v4_",
+    "tpu_region": "us-central2",
+    "tpu_type": "v4-8",
+    "tpu_zone": "us-central2-b",
+    "version": "2026.08.28.1",
+    "wandb_group": "starcoder_wsd80_lr_onset_dense_surfaces_central2_v4_20260828"
+  },
+  "design_file_sha256": "070664276dd4ed3edb30c964031d543152b6863e9dd2ca43c9db92ef82fc71ad",
+  "design_generator_path": "experiments/domain_phase_mix/exploratory/two_phase_many/design_starcoder_wsd80_lr_onset_dense_surfaces_20260825.py",
+  "design_generator_sha256": "a72850a7d154cf7c21cb3ad12ffd47a3b41d30dc450e1c3df261e2322d4b720c",
+  "design_path": "experiments/domain_phase_mix/starcoder_wsd80_lr_onset_dense_surface_design_20260825.json.gz",
+  "design_sha256": "99d3af5aff1f62e679c200219e92914df1f12a407e9afe08cd365c0a8079d889",
+  "launcher_path": "experiments/domain_phase_mix/launch_starcoder_wsd80_lr_onset_dense_surfaces.py",
+  "launcher_sha256": "2ae75a79e873775c97505c0be1e6a4ce3927f2de28238302417d6184d82a9556",
+  "maximum_concurrent": 128,
+  "release_sha256": "568f50c44a874f5c64b88c0dec1a856019ce3a03d0ecf3921eb1b59c7e78a8e4",
+  "schema_version": "2026-08-28-starcoder-wsd80-lr-onset-dense-deployment-v2",
+  "source_design_placement": {
+    "marin_prefix": "gs://marin-us-central1",
+    "region": "us-central1",
+    "tpu_type": "v5p-8",
+    "zone": "us-central1-a"
+  },
+  "training_environment": {
+    "jax_default_prng_impl": "threefry2x32",
+    "jax_enable_x64": false,
+    "jax_version": "0.11.0",
+    "numpy_version": "2.3.5",
+    "uv_lock_sha256": "5edf2440895451ed317d6a1c219b5ce266b10c31c0e486c9ea38bbe25f827566"
+  }
+}

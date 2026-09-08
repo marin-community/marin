@@ -1,0 +1,54 @@
+{
+  "cv": {
+    "best_candidate": "run_00125",
+    "best_value": 1.0571987628936768,
+    "chosen_candidate": "run_00125",
+    "chosen_value": 1.0571987628936768,
+    "fold_choices": "[\"run_00155\", \"run_00213\", \"run_00125\", \"baseline_unimax\", \"run_00200\"]",
+    "foldmax_regret_at_1": 0.014046669006347878,
+    "foldmean_regret_at_1": 0.00377960205078125,
+    "foldmedian_regret_at_1": 0.0,
+    "r2": 0.7617938423502401,
+    "regret_at_1": 0.0,
+    "rmse": 0.009349967636720422,
+    "spearman": 0.8647637255238161
+  },
+  "nearest_observed_run_name": "baseline_unimax",
+  "nearest_observed_tv_distance": 0.45411673092136945,
+  "params": {
+    "alpha": 5.693767311270728,
+    "diversity_mode": "none",
+    "eta": 6.323564464532408,
+    "group_signal_kind": "log_after_sum",
+    "lam": 0.004606280004722357,
+    "pen_kind": "group_log_threshold",
+    "premium_mode": "global",
+    "reg": 2.1562923313580246e-06,
+    "signal_kind": "retained_total",
+    "tau": 1.3976070420563145
+  },
+  "predicted_optimum_value": 1.0125046862932436,
+  "selected_model": "CCPairTotal-RetainedTotal",
+  "support": {
+    "phase0_below_1e4": 6,
+    "phase0_below_1e6": 0,
+    "phase0_effn": 14.852894337945878,
+    "phase0_entropy": 2.6981947511693942,
+    "phase0_max": 0.246894786893366,
+    "phase1_below_1e4": 7,
+    "phase1_below_1e6": 0,
+    "phase1_effn": 19.37727725174112,
+    "phase1_entropy": 2.9641011039063816,
+    "phase1_max": 0.17616211468793747
+  },
+  "train": {
+    "best_candidate": "run_00125",
+    "best_value": 1.0571987628936768,
+    "chosen_candidate": "run_00125",
+    "chosen_value": 1.0571987628936768,
+    "r2": 0.8156566204029498,
+    "regret_at_1": 0.0,
+    "rmse": 0.008225217452190273,
+    "spearman": 0.8954562600733857
+  }
+}

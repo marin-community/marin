@@ -1,0 +1,152 @@
+{
+  "preregistration_version": "2026-08-12-c06-cohort-recovery-gate-v5",
+  "generation": 11,
+  "analysis_scope": "operational_only_no_endpoint_metrics",
+  "endpoint_metrics_read": false,
+  "scientific_inference_allowed": false,
+  "historical_operational_evidence_used": {
+    "generation": 10,
+    "scope": "runtime telemetry only; no endpoint outcomes",
+    "use": "identify independent-row invalidation after five infrastructure preemptions and freeze cohort-level recovery without changing rows or thresholds"
+  },
+  "implementation_sha256": {
+    "stress_launcher": "5a28f29f33c27a878cf510cba2118fa15cfd86288b6fbadedff5f47394581148",
+    "runtime_gate": "a43641ff56cd369d59e7e0461f76f4bda54cc2c72560626195415f7031ace8d6",
+    "tests": "7842591f0e2f89a0d49d4e77c6d9f4ec183d9966fec9d3bdb028ca174748e982",
+    "history_audit": "7cc54a296040e903b011793b72fb421e341429c3b2b96573a8a88265c8565b2c"
+  },
+  "design": {
+    "stage": 6,
+    "total_steps": 3328,
+    "terminal_step": 3327,
+    "data_switch_step": 1536,
+    "optimizer_decay_steps": [
+      2048,
+      2176,
+      2560,
+      2688,
+      2304,
+      2432
+    ],
+    "support_ids": [
+      "m100a",
+      "m100a",
+      "m100a",
+      "m100a",
+      "full",
+      "m100b"
+    ],
+    "training_seeds": [
+      2026089600,
+      2026089601,
+      2026089602,
+      2026089603,
+      2026089604,
+      2026089605
+    ],
+    "rendezvous_ready_spread_seconds_max": 450.0,
+    "cohort": {
+      "replicas": 6,
+      "coscheduling_group_by": "tpu-topology",
+      "parent_managed_whole_cohort_retries": 20,
+      "per_attempt_wait_timeout_seconds": 14400,
+      "max_retries_failure": 0,
+      "max_retries_preemption": 0,
+      "max_task_failures": 0,
+      "initialize_jax_distributed": false,
+      "start_and_completion_barriers_required": true,
+      "assignment_time_iris_redispatch_allowed": true,
+      "barriers_scoped_by_parent_and_iris_attempt": true,
+      "finished_child_history_preserved_on_parent_restart": true
+    }
+  },
+  "release_gate": {
+    "unchanged_row_checks": {
+      "loading_p99_seconds_max": 0.01,
+      "loading_over_one_second_fraction_max": 0.0002837281883955171,
+      "loading_seconds_max": 60.0,
+      "duty_fraction_min": 0.99,
+      "tokens_per_second_p50_min": 690000.0,
+      "mfu_percent_p50_min": 33.0,
+      "rolling_window_steps": 1000,
+      "rolling_tokens_per_second_p50_min": 660000.0,
+      "history_coverage_fraction_min": 0.95,
+      "event_tokens_per_second_p50_min": 660000.0,
+      "event_loading_p99_seconds_max": 0.025,
+      "event_history_coverage_fraction_min": 0.95,
+      "runtime_accounting_ratio_min": 0.95,
+      "runtime_accounting_ratio_max": 1.25
+    },
+    "short_window": {
+      "window_steps": 32,
+      "tokens_per_second_min": 660000.0,
+      "max_consecutive_positions": 96,
+      "max_exceeding_rows": 1
+    },
+    "synchronized_depression": {
+      "quorum_fraction": 0.8333333333333334,
+      "depression_fraction": 0.95,
+      "bin_seconds": 12.0,
+      "grid_anchor": "all-row host-time overlap start",
+      "checkpoint_exclusion_rule": "Exclude any fixed grid bin intersecting the union of declared checkpoint-pause intervals; retain all rows on the shared host clock.",
+      "max_seconds": 36.0
+    },
+    "pause_accounting": {
+      "pause_detection_rule": "A consecutive host-time gap is a pause when delta exceeds the right step's recorded duration plus loading time plus the fixed slack.",
+      "accounting_slack_seconds": 1.0,
+      "declared_checkpoint_steps": [
+        1536,
+        3327
+      ],
+      "unexplained_pause_longest_seconds_max": 5.0,
+      "unexplained_pause_total_seconds_max": 15.0,
+      "checkpoint_pause_seconds_max": 60.0,
+      "checkpoint_pause_cross_row_spread_seconds_max": 30.0
+    },
+    "concurrency_and_integrity": {
+      "concurrent_overlap_seconds_min": 120.0,
+      "concurrent_overlap_fraction_min": 0.95,
+      "runtime_start_skew_seconds_max": 180.0,
+      "rendezvous_ready_spread_seconds_max": 450.0,
+      "finite_to_full_loading_p99_ratio_max": 1.5,
+      "permanent_checkpoint_bytes_max": 2350000000,
+      "clean_iris_completion_required": true,
+      "historical_infrastructure_preemptions_allowed": true,
+      "application_failures_allowed": false,
+      "cohort_coscheduling_required": true,
+      "latest_released_attempt_required": true,
+      "one_complete_attempt_membership_required": true,
+      "one_shared_iris_attempt_per_barrier_required": true,
+      "parent_managed_whole_cohort_replacement_required": true,
+      "preempted_child_attempts_must_have_zero_application_failures": true,
+      "completion_barrier_required": true,
+      "fresh_checkpoint_namespace_per_attempt_required": true,
+      "fresh_wandb_namespace_per_attempt_required": true,
+      "cross_replica_jax_forbidden": true,
+      "checkpoint_inventory_required": true,
+      "all_event_windows_inside_all_row_overlap_required": true,
+      "unique_rendezvous_worker_claims_required": true,
+      "remote_preregistration_hash_required": true
+    }
+  },
+  "diagnostic_only": {
+    "event_recovery": true,
+    "decay_alignment": {
+      "c06_classification": "underpowered",
+      "primary_support_id": "m100a",
+      "c12_identification_requirement": "Eight same-support rows in four replicated onset cohorts; exact onset-assignment permutation inference at alpha 0.01 with fixed pretrend and placebo falsifications."
+    },
+    "decision_rule": "C6 event-relative summaries never override an operational gate. Causal attribution is deferred to the separately preregistered C12 design."
+  },
+  "predecessor": {
+    "generation": 10,
+    "preregistration_sha256": "a987fd32a2867dab92f85209b210fc4dd14284a8cf479473d896650c99bcbc46",
+    "runtime_gate_status": "fail",
+    "failure": "five of six independently scheduled rows were preempted after the phase boundary, so the frozen zero-preemption, attempt-zero gate could not certify one synchronized cohort",
+    "integrity_rule": "Generation 10 remains failed and cannot release C12."
+  },
+  "next_stage": {
+    "on_pass": "C12 only after this exact report passes and its SHA-256 is pinned; C12 requires a separately reviewed generation-12 preregistration",
+    "on_fail": "Do not launch C12; diagnose without changing this generation's thresholds"
+  }
+}
