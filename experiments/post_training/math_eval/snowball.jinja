@@ -1,0 +1,82 @@
+{#- ===================================================================== -#}
+{#- Delphi v0 THINKING-ALWAYS-ON chat template  (Llama-3 tokenizer)        -#}
+{#- ----------------------------------------------------------------------- -#}
+{#- IDENTICAL to delphi_v0.jinja2 EXCEPT the generation-prompt tail: the    -#}
+{#- `enable_thinking is false` empty-block branch is REMOVED, so thinking   -#}
+{#- is UNCONDITIONALLY ON and does NOT depend on any chat_template_kwargs.  -#}
+{#-                                                                         -#}
+{#- WHY: in SkyRL `generator.batched=true` (the fast rollout path) the      -#}
+{#- inference engine does the templating and `chat_template_kwargs` are     -#}
+{#- refused (skyrl_gym_generator.py:111). So `enable_thinking=true` cannot  -#}
+{#- be threaded in batched mode. Serving THIS template to the vLLM engine   -#}
+{#- (engine_init_kwargs.custom_chat_template_chat_completion_path) gives    -#}
+{#- real thinking with batched=true (fast) — no kwarg needed, and an        -#}
+{#- accidental enable_thinking=false default cannot suppress it.            -#}
+{#-                                                                         -#}
+{#- Assistant-turn RENDERING (training data) is byte-identical to v0 (the   -#}
+{#- message loop is unchanged) — only the inference generation prompt       -#}
+{#- differs — so it stays consistent with how the SFT data was rendered.    -#}
+{#- Use delphi_v0.jinja2 when you need the suppressible/thinking-off path.  -#}
+{#- ===================================================================== -#}
+{{- bos_token }}
+{%- if messages[0].role == 'system' %}
+    {%- set system_message = messages[0].content %}
+    {%- set loop_messages = messages[1:] %}
+{%- else %}
+    {%- set system_message = '' %}
+    {%- set loop_messages = messages %}
+{%- endif %}
+{{- '<|start_header_id|>system<|end_header_id|>\n\n' }}
+{%- if system_message %}
+    {{- system_message }}
+{%- endif %}
+{%- if tools %}
+    {%- if system_message %}{{- '\n\n' }}{%- endif %}
+    {{- '# Tools\n\nYou may call one or more of the following functions. Emit each call as a JSON object {"name": ..., "arguments": ...} between <|tool_call|> and <|tool_call_end|>:\n' }}
+    {%- for tool in tools %}
+        {{- '\n' }}{{- tool | tojson }}
+    {%- endfor %}
+{%- endif %}
+{{- '<|eot_id|>' }}
+{%- for message in loop_messages %}
+    {%- set content = message.content if message.content is string else '' %}
+    {%- if message.role == 'user' %}
+        {{- '<|start_header_id|>user<|end_header_id|>\n\n' + content + '<|eot_id|>' }}
+    {%- elif message.role == 'assistant' %}
+        {%- set reasoning = '' %}
+        {%- if message.reasoning_content is string %}
+            {%- set reasoning = message.reasoning_content %}
+        {%- elif '</think>' in content %}
+            {%- set reasoning = content.split('</think>')[0].rstrip('\n').split('<think>')[-1].lstrip('\n') %}
+            {%- set content = content.split('</think>')[-1].lstrip('\n') %}
+        {%- endif %}
+        {{- '<|start_header_id|>assistant<|end_header_id|>\n\n' }}
+        {%- if reasoning %}
+            {{- '<|start_think|>\n' + reasoning.strip('\n') + '\n<|end_think|>\n\n' }}
+        {%- endif %}
+        {{- content }}
+        {%- if message.tool_calls %}
+            {%- for tc in message.tool_calls %}
+                {%- set fn = tc.function if tc.function is defined else tc %}
+                {{- '\n<|tool_call|>\n{"name": "' + fn.name + '", "arguments": ' }}
+                {%- if fn.arguments is string %}{{- fn.arguments }}{%- else %}{{- fn.arguments | tojson }}{%- endif %}
+                {{- '}\n<|tool_call_end|>' }}
+            {%- endfor %}
+        {%- endif %}
+        {{- '<|eot_id|>' }}
+    {%- elif message.role == 'tool' %}
+        {{- '<|start_header_id|>tool<|end_header_id|>\n\n<|tool_result|>\n' + content + '\n<|tool_result_end|><|eot_id|>' }}
+    {%- endif %}
+{%- endfor %}
+{%- if add_generation_prompt %}
+    {#- FORCE the model into the think region by prefilling the opener (R1 /     -#}
+    {#- Qwen3-thinking pattern). Smoke 47525016 showed that with a FREE turn     -#}
+    {#- (no prefill) this SFT ckpt emits an EMPTY <|start_think|><|end_think|>   -#}
+    {#- and reasons in the answer channel — so "don't suppress" is not enough;   -#}
+    {#- we prefill <|start_think|>\n so the response MUST begin inside the think -#}
+    {#- region (matches the SFT assistant rendering, which is                    -#}
+    {#- <|start_think|>\n<reasoning>\n<|end_think|>...). The response then is     -#}
+    {#- <reasoning>\n<|end_think|>\n\n<answer>; the aime reward reads the final  -#}
+    {#- boxed answer from the tail, unaffected.                                  -#}
+    {{- '<|start_header_id|>assistant<|end_header_id|>\n\n<|start_think|>\n' }}
+{%- endif %}
