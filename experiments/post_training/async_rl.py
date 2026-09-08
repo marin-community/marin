@@ -227,6 +227,7 @@ def training_config(
     initial_eval_repeat_count: int = 1,
     weight_change_probe: bool = False,
     epoch_seeded_shuffle: bool = False,
+    dataloader_workers: int | None = None,
     optimizer_precision: OptimizerPrecision = OptimizerPrecision.NATIVE,
     optimizer_state_metrics: bool = False,
 ) -> str:
@@ -327,6 +328,10 @@ def training_config(
     apply_observation_options(
         config, initial_eval_repeat_count=initial_eval_repeat_count, weight_change_probe=weight_change_probe
     )
+    if dataloader_workers is not None:
+        if type(dataloader_workers) is not int or dataloader_workers < 0:
+            raise ValueError("dataloader_workers must be a nonnegative integer")
+        config.setdefault("data", {})["num_workers"] = dataloader_workers
     if epoch_seeded_shuffle:
         config.setdefault("data", {})["epoch_seeded_shuffle"] = True
     return yaml.safe_dump(config, sort_keys=False)
@@ -483,6 +488,7 @@ def build_experiment(
     initial_eval_repeat_count: int = 1,
     weight_change_probe: bool = False,
     epoch_seeded_shuffle: bool = False,
+    dataloader_workers: int | None = None,
     optimizer_precision: OptimizerPrecision = OptimizerPrecision.NATIVE,
     optimizer_state_metrics: bool = False,
     pool_artifact: str | None = None,
@@ -520,6 +526,7 @@ def build_experiment(
         initial_eval_repeat_count=initial_eval_repeat_count,
         weight_change_probe=weight_change_probe,
         epoch_seeded_shuffle=epoch_seeded_shuffle,
+        dataloader_workers=dataloader_workers,
         optimizer_precision=optimizer_precision,
         optimizer_state_metrics=optimizer_state_metrics,
     )
@@ -679,6 +686,9 @@ def build_experiment(
     show_default=True,
     help="Use a shared seed+epoch prompt permutation; off preserves each runner's historical ordering.",
 )
+@click.option(
+    "--dataloader-workers", type=click.IntRange(min=0), help="Override loader workers; zero avoids spawn stalls."
+)
 @click.option("--inference-replicas", type=click.Choice(["8", "16"]), default="8", show_default=True)
 @click.option("--seed", type=click.IntRange(min=0, max=2**32 - 1), default=SEED, show_default=True)
 @click.option("--kl-loss/--no-kl-loss", default=True, show_default=True)
@@ -737,6 +747,7 @@ def main(
     initial_eval_repeat_count: int,
     weight_change_probe: bool,
     epoch_seeded_shuffle: bool,
+    dataloader_workers: int | None,
     timeout_seconds: int,
     execute: bool,
     pool_artifact: str | None,
@@ -775,6 +786,7 @@ def main(
         initial_eval_repeat_count=initial_eval_repeat_count,
         weight_change_probe=weight_change_probe,
         epoch_seeded_shuffle=epoch_seeded_shuffle,
+        dataloader_workers=dataloader_workers,
     )
     prefix = marin_prefix()
     if allow_cross_region_io:

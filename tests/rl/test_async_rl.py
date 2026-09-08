@@ -1165,3 +1165,19 @@ def test_rno_guard_executes_when_actual_training_configuration_resolves():
     foreign = replace(ctx, _dep_ref=lambda _dependency: "s3://marin-us-west-04a/changed")
     with pytest.raises(ValueError, match=r"pinned Qwen3-0.6B model path"):
         step.build_config(foreign)
+
+
+@pytest.mark.parametrize("runner", ["sync", "async"])
+def test_dataloader_worker_override_reaches_fingerprinted_recipe(runner):
+    args = ["--version", "2026.09.08.1", "--runner", runner, "--stage", "rl", "--completion", "metrics"]
+    legacy = CliRunner().invoke(async_rl.main, args)
+    explicit = CliRunner().invoke(async_rl.main, [*args, "--dataloader-workers", "0"])
+    assert legacy.exit_code == explicit.exit_code == 0
+    before = json.loads(legacy.output)["request"]
+    after = json.loads(explicit.output)["request"]
+    assert before["run_id"] != after["run_id"]
+    config = yaml.safe_load(after["config_yaml"])
+    assert config["data"].pop("num_workers") == 0
+    if not config["data"]:
+        config.pop("data")
+    assert config == yaml.safe_load(before["config_yaml"])
