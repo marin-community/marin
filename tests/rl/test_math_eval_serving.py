@@ -122,7 +122,7 @@ def generation_fixture():
         "specification_sha256": audit.canonical_sha(specification),
         "task_id": "/atqamar/fixture/0",
         "attempt_id": 0,
-        "worker_region": "cw-us-east-02a",
+        "worker_region_hint": None,
         "model_identity": "users/ahmad/models/async-rl-qwen3-0.6b@2026.09.08.83:8a30d2b5",
         "model_config_sha256": "660db3b73d788119c04535e48cf9be5f55bc3100841a718637ae695b442f27dd",
         "tokenizer_sha256": "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4",
@@ -165,7 +165,7 @@ def generation_fixture():
     }
     generation["attempt_uid"] = "fixture-uid"
     generation["controller_allocation"] = {
-        "cluster": "cw-us-east-02a",
+        "controller_scope": "local",
         "resources": {"device": {"kind": "gpu", "variant": "H100", "count": 1}},
         "attempt_uid": "fixture-uid",
         "started_at_ms": 1000,

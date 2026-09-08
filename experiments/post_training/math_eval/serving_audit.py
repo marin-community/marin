@@ -61,7 +61,7 @@ def validate_serving_generation(config, generation, native_tasks, native_job):
         or controller.get("exit_code") != 0
         or controller.get("cluster") != "cw-us-east-02a"
         or task.get("cluster") != "cw-us-east-02a"
-        or allocation.get("cluster") != "cw-us-east-02a"
+        or allocation.get("controller_scope") not in {"local", "cw-us-east-02a"}
         or controller.get("task_count") != 1
         or controller.get("completed_count") != 1
         or gpu.get("variant") != "H100"
@@ -82,7 +82,7 @@ def validate_serving_generation(config, generation, native_tasks, native_job):
         or attempts[0].get("state") != "TASK_STATE_SUCCEEDED"
         or attempts[0].get("exit_code") != 0
         or generation.get("attempt_id") != 0
-        or generation.get("worker_region") != "cw-us-east-02a"
+        or generation.get("worker_region_hint") not in {None, "cw-us-east-02a"}
     ):
         raise ValueError("Serving task did not finish once successfully in the permitted region")
     start = int(task["started_at"]["epoch_ms"])
@@ -156,6 +156,9 @@ def validate_serving_generation(config, generation, native_tasks, native_job):
         "generated_at_utc": datetime.fromtimestamp(finish / 1000, UTC).isoformat(),
         "dump_uri": config.output_uri + "/dumped_evals/global_step_0_evals",
         "runtime": runtime,
+        "execution_cluster": controller["cluster"],
+        "gpu_variant": gpu["variant"],
+        "gpu_count": gpu["count"],
         "task_gpu_hours": (finish - start) * gpu["count"] / 3_600_000,
     }
 

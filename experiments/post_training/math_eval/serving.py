@@ -166,7 +166,7 @@ def run_rating_serving(config):
     status, resources = description.status, description.resources
     device = resources.device
     if (
-        status.execution_cluster_id != "cw-us-east-02a"
+        status.execution_cluster_id not in {"local", "cw-us-east-02a"}
         or str(status.task_id) != str(job.task_id)
         or status.current_attempt_number != 0
         or len(status.attempts) != 1
@@ -175,12 +175,12 @@ def run_rating_serving(config):
         or device.variant != "H100"
         or device.count != config.tensor_parallel_size
     ):
-        raise ValueError("Controller allocation differs from the reviewed east H100 task")
+        raise ValueError("Controller allocation differs from the reviewed H100 task")
     allocation = {
-        "cluster": status.execution_cluster_id,
+        "controller_scope": status.execution_cluster_id,
         "resources": asdict(resources),
         "attempt_uid": status.attempts[0].attempt_uid,
-        "started_at_ms": None if status.attempts[0].started_at is None else status.attempts[0].started_at.epoch_ms,
+        "started_at_ms": None if status.attempts[0].started_at is None else status.attempts[0].started_at.epoch_ms(),
     }
     output = StoragePath(config.output_uri)
     if output.exists():
@@ -252,7 +252,7 @@ def run_rating_serving(config):
         "task_id": str(job.task_id),
         "attempt_id": job.attempt_id,
         "attempt_uid": allocation["attempt_uid"],
-        "worker_region": allocation["cluster"],
+        "worker_region_hint": job.worker_region,
         "controller_allocation": allocation,
         "bundle_id": job.bundle_id,
         "model_identity": SERVING_MODELS[config.model]["identity"],
