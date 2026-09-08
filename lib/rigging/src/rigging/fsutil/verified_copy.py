@@ -30,6 +30,7 @@ from rigging.fsutil.transfer import (
 DEFAULT_VERIFIED_COPY_WORKERS = 4
 S3_UPLOAD_PART_BYTES = 50 * 1024 * 1024
 COMPLETION_MANIFEST = ".verified-copy-manifest.json"
+STAGING_SUFFIX = ".verified-copy-staging"
 MANIFEST_SCHEMA_VERSION = 1
 SHA256_IDENTITY_PREFIX = "sha256="
 ETAG_IDENTITY_PREFIX = "etag="
@@ -97,7 +98,7 @@ class _ResumeMarker:
     path: str
     size: int
     sha256: str
-    destination_identity: str
+    staging_identity: str
 
 
 @dataclass(frozen=True)
@@ -158,14 +159,17 @@ def verified_copy_prefix(
 
     source = _resolved_location(source_url, S3UploadPolicy.STANDARD)
     destination = _resolved_location(destination_url, S3UploadPolicy.FIXED_PARTS)
-    status = _resolved_location(
-        status_url or f"{destination.url}.verified-copy-status",
-        S3UploadPolicy.FIXED_PARTS,
+    status = (
+        _resolved_location(status_url, S3UploadPolicy.FIXED_PARTS)
+        if status_url is not None
+        else _sibling_location(destination, ".verified-copy-status")
     )
-    _validate_disjoint_locations(source, destination, status)
+    staging = _sibling_location(destination, STAGING_SUFFIX)
+    _validate_disjoint_locations(source, destination, status, staging)
 
     source_url, source_fs, source_root = source.url, source.filesystem, source.path
     destination_url, destination_fs, destination_root = destination.url, destination.filesystem, destination.path
+    staging_root = staging.path
     status_fs, status_root = status.filesystem, status.path
     sources = _source_files(source_fs, source_root)
     if not sources:
@@ -182,11 +186,16 @@ def verified_copy_prefix(
         return _result(manifest_url, verified, copied_files=0, resumed_files=len(verified))
 
     destination_files = _destination_files(destination_fs, destination_root)
+    staging_files = _destination_files(destination_fs, staging_root)
     expected_paths = {source.path for source in sources}
     extras = sorted(destination_files.keys() - expected_paths)
     if extras:
         sample = ", ".join(extras[:3])
         raise VerifiedCopyError(f"destination contains {len(extras)} unexpected file(s): {sample}")
+    staging_extras = sorted(staging_files.keys() - expected_paths)
+    if staging_extras:
+        sample = ", ".join(staging_extras[:3])
+        raise VerifiedCopyError(f"staging prefix contains {len(staging_extras)} unexpected file(s): {sample}")
 
     copied_files = 0
     resumed_files = 0
@@ -198,10 +207,12 @@ def verified_copy_prefix(
                 source,
                 source_fs=source_fs,
                 destination_fs=destination_fs,
+                staging_root=staging_root,
                 destination_root=destination_root,
                 status_fs=status_fs,
                 status_root=status_root,
-                destination=destination_files.get(source.path),
+                staged=staging_files.get(source.path),
+                published=destination_files.get(source.path),
             ): source.path
             for source in sources
         }
@@ -220,6 +231,26 @@ def verified_copy_prefix(
         total_bytes=sum(file.size for file in verified_files),
         files=verified_files,
     )
+    staging_files = _destination_files(destination_fs, staging_root)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            pool.submit(
+                _promote,
+                file,
+                filesystem=destination_fs,
+                staging_root=staging_root,
+                destination_root=destination_root,
+                status_fs=status_fs,
+                status_root=status_root,
+                staged=staging_files.get(file.path),
+                published=destination_files.get(file.path),
+            ): file.path
+            for file in verified_files
+        }
+        for future in as_completed(futures):
+            future.result()
+    if destination_fs.exists(staging_root):
+        destination_fs.rm(staging_root, recursive=True)
     _write_json_atomic(destination_fs, manifest_path, asdict(manifest))
     return _result(manifest_url, verified_files, copied_files=copied_files, resumed_files=resumed_files)
 
@@ -262,50 +293,54 @@ def _copy_or_resume(
     *,
     source_fs: AbstractFileSystem,
     destination_fs: AbstractFileSystem,
+    staging_root: str,
     destination_root: str,
     status_fs: AbstractFileSystem,
     status_root: str,
-    destination: _DestinationFile | None,
+    staged: _DestinationFile | None,
+    published: _DestinationFile | None,
 ) -> _CopyOutcome:
+    staging_path = _join_path(staging_root, source.path)
     destination_path = _join_path(destination_root, source.path)
     marker_path = _join_path(status_root, f"{hashlib.sha256(source.path.encode()).hexdigest()}.json")
     marker = _resume_marker(status_fs, marker_path)
-    if (
-        destination is not None
-        and destination.size == source.size
-        and source.identity is not None
-        and marker is not None
-    ):
+    if source.identity is not None and marker is not None:
         expected = VerifiedFile(source.path, source.size, marker.sha256, source.identity)
         if (
             marker.source_path == source.source_path
             and marker.source_identity == source.identity
             and marker.path == source.path
             and marker.size == source.size
-            and _destination_matches_marker(destination_fs, destination_path, destination, marker)
         ):
-            return _CopyOutcome(expected, _CopyDisposition.RESUMED)
+            candidates = ((staging_path, staged), (destination_path, published))
+            if any(
+                file is not None
+                and file.size == source.size
+                and _destination_matches_marker(destination_fs, path, file, marker)
+                for path, file in candidates
+            ):
+                return _CopyOutcome(expected, _CopyDisposition.RESUMED)
 
-    copied = _copy_with_hash(source_fs, source.source_path, destination_fs, destination_path)
+    copied = _copy_with_hash(source_fs, source.source_path, destination_fs, staging_path)
     if copied.size != source.size:
-        destination_fs.rm(destination_path)
+        destination_fs.rm(staging_path)
         raise VerifiedCopyError(f"source size changed while copying {source.path}")
     current_info = source_fs.info(source.source_path)
     current_size = int(current_info.get("size") or 0)
     current_identity = _source_identity(current_info)
     if current_size != source.size or current_identity != source.identity:
-        destination_fs.rm(destination_path)
+        destination_fs.rm(staging_path)
         raise VerifiedCopyError(f"source identity changed while copying {source.path}")
     try:
-        destination_identity = _verify_destination(
+        staging_identity = _verify_destination(
             destination_fs,
-            destination_path,
+            staging_path,
             expected_size=source.size,
             expected_sha256=copied.sha256,
             expected_etag=copied.expected_etag,
         )
     except VerifiedCopyError:
-        destination_fs.rm(destination_path)
+        destination_fs.rm(staging_path)
         raise
     verified = VerifiedFile(source.path, source.size, copied.sha256, source.identity)
     _write_json_atomic(
@@ -318,11 +353,65 @@ def _copy_or_resume(
                 source.path,
                 source.size,
                 copied.sha256,
-                destination_identity,
+                staging_identity,
             )
         ),
     )
     return _CopyOutcome(verified, _CopyDisposition.COPIED)
+
+
+def _promote(
+    verified: VerifiedFile,
+    *,
+    filesystem: AbstractFileSystem,
+    staging_root: str,
+    destination_root: str,
+    status_fs: AbstractFileSystem,
+    status_root: str,
+    staged: _DestinationFile | None,
+    published: _DestinationFile | None,
+) -> None:
+    staging_path = _join_path(staging_root, verified.path)
+    destination_path = _join_path(destination_root, verified.path)
+    marker_path = _join_path(status_root, f"{hashlib.sha256(verified.path.encode()).hexdigest()}.json")
+    marker = _resume_marker(status_fs, marker_path)
+    if marker is None or (
+        marker.path != verified.path
+        or marker.size != verified.size
+        or marker.sha256 != verified.sha256
+        or marker.source_identity != verified.source_identity
+    ):
+        raise VerifiedCopyError(f"verified staging record is missing or stale: {verified.path}")
+
+    if (
+        published is not None
+        and published.size == verified.size
+        and _destination_matches_marker(filesystem, destination_path, published, marker)
+    ):
+        if filesystem.exists(staging_path):
+            filesystem.rm(staging_path)
+        return
+    if (
+        staged is None
+        or staged.size != verified.size
+        or not _destination_matches_marker(filesystem, staging_path, staged, marker)
+    ):
+        raise VerifiedCopyError(f"verified staged object is missing or stale: {verified.path}")
+
+    parent, separator, _ = destination_path.rpartition("/")
+    if separator:
+        filesystem.makedirs(parent, exist_ok=True)
+    copy_options = {"preserve_etag": True} if _is_s3(filesystem) else {}
+    filesystem.cp_file(staging_path, destination_path, **copy_options)
+    filesystem.invalidate_cache(destination_path)
+    promoted = _DestinationFile(
+        size=int((info := filesystem.info(destination_path)).get("size") or 0),
+        identity=_destination_identity(info),
+    )
+    if promoted.size != verified.size or not _destination_matches_marker(filesystem, destination_path, promoted, marker):
+        filesystem.rm(destination_path)
+        raise VerifiedCopyError(f"promoted object does not match verified staging object: {verified.path}")
+    filesystem.rm(staging_path)
 
 
 def _copy_with_hash(
@@ -381,9 +470,9 @@ def _destination_matches_marker(
     destination: _DestinationFile,
     marker: _ResumeMarker,
 ) -> bool:
-    if marker.destination_identity.startswith(SHA256_IDENTITY_PREFIX):
-        return _sha256(filesystem, path) == marker.destination_identity.removeprefix(SHA256_IDENTITY_PREFIX)
-    return destination.identity == marker.destination_identity
+    if marker.staging_identity.startswith(SHA256_IDENTITY_PREFIX):
+        return _sha256(filesystem, path) == marker.staging_identity.removeprefix(SHA256_IDENTITY_PREFIX)
+    return destination.identity == marker.staging_identity
 
 
 def _sha256(filesystem: AbstractFileSystem, path: str) -> str:
@@ -405,7 +494,7 @@ def _resume_marker(filesystem: AbstractFileSystem, path: str) -> _ResumeMarker |
             path=str(data["path"]),
             size=int(data["size"]),
             sha256=str(data["sha256"]),
-            destination_identity=str(data["destination_identity"]),
+            staging_identity=str(data["staging_identity"]),
         )
     except (KeyError, TypeError, ValueError, VerifiedCopyError) as error:
         logger.warning("Ignoring invalid verified-copy resume marker %s: %s", path, error)
@@ -421,12 +510,23 @@ def _resolved_location(url: str, upload_policy: S3UploadPolicy) -> TransferLocat
     return location
 
 
+def _sibling_location(location: TransferLocation, suffix: str) -> TransferLocation:
+    if _backend(location) != "file" and "/" not in location.path.rstrip("/"):
+        raise VerifiedCopyError("destination must name a prefix inside an object-store bucket")
+    return TransferLocation(
+        f"{location.url.rstrip('/')}{suffix}",
+        location.filesystem,
+        f"{location.path.rstrip('/')}{suffix}",
+    )
+
+
 def _validate_disjoint_locations(
     source: TransferLocation,
     destination: TransferLocation,
     status: TransferLocation,
+    staging: TransferLocation,
 ) -> None:
-    locations = (("source", source), ("destination", destination), ("status", status))
+    locations = (("source", source), ("destination", destination), ("status", status), ("staging", staging))
     for index, (left_name, left) in enumerate(locations):
         for right_name, right in locations[index + 1 :]:
             if _same_location(left, right) or _strictly_contains(left, right) or _strictly_contains(right, left):
@@ -541,12 +641,14 @@ def _etag(info: dict[str, Any]) -> str | None:
 
 
 def _has_fixed_s3_uploads(filesystem: AbstractFileSystem) -> bool:
+    return _is_s3(filesystem) and bool(getattr(filesystem, "fixed_upload_size", False))
+
+
+def _is_s3(filesystem: AbstractFileSystem) -> bool:
     protocol = filesystem.protocol
     if isinstance(protocol, str):
-        is_s3 = protocol == "s3"
-    else:
-        is_s3 = "s3" in protocol
-    return is_s3 and bool(getattr(filesystem, "fixed_upload_size", False))
+        return protocol == "s3"
+    return "s3" in protocol
 
 
 def _result(

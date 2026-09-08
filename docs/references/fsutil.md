@@ -92,22 +92,23 @@ cross-backend artifacts such as checkpoint exports where the transfer may be int
 `cp -r` for ordinary recursive copies where partial destination contents are acceptable, or
 `rsync` when the destination should track later source changes.
 
-`verified-copy` leaves objects at their final names and writes the completion manifest last.
-Object stores cannot atomically rename a prefix: promoting a temporary prefix would copy its
-objects into the final prefix one at a time, expose another partial prefix during promotion, and
-add a second object-copy pass. Consumers must check for `<DST>/.verified-copy-manifest.json`
-before using the destination.
+`verified-copy` uploads objects under a sibling `<DST>.verified-copy-staging` prefix. After every
+object has been verified, it promotes them to `<DST>` with within-store copies, removes the staged
+objects, and writes `<DST>/.verified-copy-manifest.json` last. Promotion adds an internal object-copy
+pass and briefly stores two copies, but it does not send the data through the client or back to the
+source store. Object stores cannot atomically rename a prefix, so consumers may still see final
+objects appear one at a time and must check for the manifest before using the destination.
 
 The command hashes each source object while uploading it. For configured S3-compatible
 destinations such as R2, it uses fixed-size multipart parts, calculates the corresponding
 content-derived ETag, and compares that value with destination metadata after the upload. Other
 destinations are read back and checked against the source SHA-256. The command records the SHA-256
-and source and destination identities under a sibling `<DST>.verified-copy-status` prefix. A retry
-skips both object reads when those identities, the destination path and size, and the verified record
-still match. Sources without stable generation, version, checksum, ETag, or modification metadata
-are read again. An existing completion manifest makes the destination immutable: the command
-returns immediately when source paths and sizes still match and fails if they changed. Use a fresh
-destination prefix for a changed export.
+and source and staging identities under a sibling `<DST>.verified-copy-status` prefix. A retry skips
+both object reads when those identities, the path and size of either the staged or already promoted
+object, and the verified record still match. Sources without stable generation, version, checksum,
+ETag, or modification metadata are read again. An existing completion manifest makes the
+destination immutable: the command returns immediately when source paths and sizes still match and
+fails if they changed. Use a fresh destination prefix for a changed export.
 
 `hash` reads each complete object. Its columns are `url` and `md5`; digests use base64
 by default. `--hex` selects hexadecimal output.

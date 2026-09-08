@@ -37,7 +37,7 @@ from rigging.fsutil.usage import (
     scan_usage,
     threshold_prefix_groups,
 )
-from rigging.fsutil.verified_copy import COMPLETION_MANIFEST, VerifiedCopyError, verified_copy_prefix
+from rigging.fsutil.verified_copy import COMPLETION_MANIFEST, STAGING_SUFFIX, VerifiedCopyError, verified_copy_prefix
 
 
 @pytest.fixture
@@ -249,7 +249,8 @@ def test_verified_copy_interruption_leaves_no_completion_and_retry_resumes(tmp_p
     with pytest.raises(OSError, match="injected source failure"):
         verified_copy_prefix(str(source), str(destination), workers=1)
     assert not (destination / COMPLETION_MANIFEST).exists()
-    assert (destination / "a.bin").read_bytes() == b"first"
+    assert not destination.exists()
+    assert Path(f"{destination}{STAGING_SUFFIX}").joinpath("a.bin").read_bytes() == b"first"
 
     monkeypatch.setattr(verified_copy_module, "filesystem_for", original_filesystem_for)
     result = verified_copy_prefix(str(source), str(destination), workers=1)
@@ -258,6 +259,65 @@ def test_verified_copy_interruption_leaves_no_completion_and_retry_resumes(tmp_p
     assert result.resumed_files == 1
     assert (destination / "b.bin").read_bytes() == b"second"
     assert (destination / COMPLETION_MANIFEST).exists()
+    assert not Path(f"{destination}{STAGING_SUFFIX}").exists()
+
+
+def test_verified_copy_interrupted_promotion_resumes_from_staging(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    (source / "a.bin").write_bytes(b"first")
+    (source / "b.bin").write_bytes(b"second")
+
+    source_filesystem, source_path = verified_copy_module.filesystem_for(str(source))
+    destination_filesystem, destination_path = verified_copy_module.filesystem_for(str(destination))
+    original_filesystem_for = verified_copy_module.filesystem_for
+
+    class FailingPromotion:
+        def __getattr__(self, name):
+            return getattr(destination_filesystem, name)
+
+        def cp_file(self, source_path, destination_path, **kwargs):
+            if destination_path.endswith("b.bin"):
+                raise OSError("injected promotion failure")
+            return destination_filesystem.cp_file(source_path, destination_path, **kwargs)
+
+    def failing_route(url, *, s3_upload_policy=S3UploadPolicy.STANDARD):
+        if url == str(destination):
+            return FailingPromotion(), destination_path
+        return original_filesystem_for(url, s3_upload_policy=s3_upload_policy)
+
+    monkeypatch.setattr(verified_copy_module, "filesystem_for", failing_route)
+    with pytest.raises(OSError, match="injected promotion failure"):
+        verified_copy_prefix(str(source), str(destination), workers=1)
+
+    staging = Path(f"{destination}{STAGING_SUFFIX}")
+    assert (destination / "a.bin").read_bytes() == b"first"
+    assert not (destination / "b.bin").exists()
+    assert not (staging / "a.bin").exists()
+    assert (staging / "b.bin").read_bytes() == b"second"
+    assert not (destination / COMPLETION_MANIFEST).exists()
+
+    class UnreadableSource:
+        def __getattr__(self, name):
+            return getattr(source_filesystem, name)
+
+        def open(self, _path, _mode):
+            raise AssertionError("promotion retry must reuse verified staged or published objects")
+
+    def retry_route(url, *, s3_upload_policy=S3UploadPolicy.STANDARD):
+        if url == str(source):
+            return UnreadableSource(), source_path
+        return original_filesystem_for(url, s3_upload_policy=s3_upload_policy)
+
+    monkeypatch.setattr(verified_copy_module, "filesystem_for", retry_route)
+    result = verified_copy_prefix(str(source), str(destination), workers=1)
+
+    assert result.copied_files == 0
+    assert result.resumed_files == 2
+    assert (destination / "b.bin").read_bytes() == b"second"
+    assert (destination / COMPLETION_MANIFEST).exists()
+    assert not staging.exists()
 
 
 def test_verified_copy_does_not_reuse_status_from_another_source(tmp_path):

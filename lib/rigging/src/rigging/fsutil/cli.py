@@ -383,7 +383,7 @@ def rsync(source: str, destination: str, delete: bool, dry_run: bool, checksum: 
     type=click.IntRange(min=1, max=64),
 )
 def verified_copy(source: str, destination: str, status_prefix: str | None, workers: int) -> None:
-    """Copy and verify a prefix, publishing its completion manifest last."""
+    """Stage and verify a prefix, then publish its completion manifest last."""
     try:
         result = verified_copy_prefix(source, destination, status_url=status_prefix, workers=workers)
     except VerifiedCopyError as error:
