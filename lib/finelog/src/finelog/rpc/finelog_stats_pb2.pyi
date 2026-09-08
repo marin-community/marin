@@ -231,18 +231,16 @@ class TableSpec(_message.Message):
     def __init__(self, version: _Optional[int] = ..., logical_schema: _Optional[_Union[Schema, _Mapping]] = ..., source_layout: _Optional[_Union[SourceLayout, _Mapping]] = ..., artifact_policy: _Optional[_Union[ArtifactPolicy, _Mapping]] = ..., operating_policy: _Optional[_Union[OperatingPolicy, _Mapping]] = ...) -> None: ...
 
 class ObjectRef(_message.Message):
-    __slots__ = ("object_id", "provider_version", "etag", "byte_size", "sha256")
+    __slots__ = ("object_id", "provider_version", "etag", "byte_size")
     OBJECT_ID_FIELD_NUMBER: _ClassVar[int]
     PROVIDER_VERSION_FIELD_NUMBER: _ClassVar[int]
     ETAG_FIELD_NUMBER: _ClassVar[int]
     BYTE_SIZE_FIELD_NUMBER: _ClassVar[int]
-    SHA256_FIELD_NUMBER: _ClassVar[int]
     object_id: str
     provider_version: str
     etag: str
     byte_size: int
-    sha256: bytes
-    def __init__(self, object_id: _Optional[str] = ..., provider_version: _Optional[str] = ..., etag: _Optional[str] = ..., byte_size: _Optional[int] = ..., sha256: _Optional[bytes] = ...) -> None: ...
+    def __init__(self, object_id: _Optional[str] = ..., provider_version: _Optional[str] = ..., etag: _Optional[str] = ..., byte_size: _Optional[int] = ...) -> None: ...
 
 class CatalogSegment(_message.Message):
     __slots__ = ("segment_id", "source", "level", "min_seq", "max_seq", "row_count", "created_at_ms", "min_key_value", "max_key_value", "partition_json", "table_spec_version", "retired_at_ms", "delete_after_ms", "migration_source_id", "migration_source_rows", "migration_backfill", "index_bundle", "projections", "source_segment_uuid")

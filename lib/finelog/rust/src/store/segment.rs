@@ -450,7 +450,7 @@ pub fn read_segment_footer(path: &Path, key_column: Option<&str>) -> Option<Segm
     read_segment_footer_at(path, level, filename_min_seq, key_column)
 }
 
-/// Read footer metadata for a content-addressed object whose filename does not
+/// Read footer metadata for an opaque object whose filename does not
 /// encode its level or sequence origin.
 pub fn read_segment_footer_at(
     path: &Path,

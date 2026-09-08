@@ -45,6 +45,7 @@ mod table_specs;
 mod tests;
 
 pub use namespaces::RegisteredNamespace;
+pub(crate) use object_segments::MIGRATION_SOURCE_ID_SEPARATOR;
 pub use object_segments::{ObjectSegmentRecord, PublishedObjectSegment};
 pub use table_specs::SpecLifecycle;
 

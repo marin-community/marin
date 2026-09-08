@@ -24,7 +24,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use bytes::Bytes;
-use sha2::{Digest, Sha256};
 use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::errors::StatsError;
@@ -634,14 +633,13 @@ impl TableController {
         self.commit(mutation).await
     }
 
-    /// Stage an immutable content-addressed Parquet object locally.
+    /// Stage an immutable Parquet object locally.
     ///
     /// The bytes are durable on local disk when this returns; publication
     /// uploads them before HEAD names the revision that references them.
     pub async fn stage_parquet(&self, bytes: Bytes) -> Result<WrittenObject, StatsError> {
         let objects = self.require_objects()?;
-        let sha256: [u8; 32] = Sha256::digest(&bytes).into();
-        let key = format!("{OBJECTS_PREFIX}/{}.parquet", crate::hex::encode(&sha256));
+        let key = format!("{OBJECTS_PREFIX}/{}.parquet", uuid::Uuid::new_v4());
         let id = ObjectId::table(&self.table, &key)?;
         let version = objects.store.stage(&id, bytes).await?;
         let reference = ObjectReference {
@@ -660,7 +658,7 @@ impl TableController {
         })
     }
 
-    /// Upload a staged local file as an immutable content-addressed object.
+    /// Upload a staged local file as an immutable object.
     ///
     /// `kind` selects the object prefix (`objects`, `indices`, `projections`)
     /// and `extension` its suffix.
@@ -673,12 +671,11 @@ impl TableController {
         let bytes = Bytes::from(tokio::fs::read(staged).await.map_err(|error| {
             StatsError::Internal(format!("read staged object {}: {error}", staged.display()))
         })?);
-        let sha256: [u8; 32] = Sha256::digest(&bytes).into();
-        let key = format!("{kind}/{}.{extension}", crate::hex::encode(&sha256));
-        self.write_content_addressed(&key, bytes).await
+        let key = format!("{kind}/{}.{extension}", uuid::Uuid::new_v4());
+        self.write_immutable(&key, bytes).await
     }
 
-    async fn write_content_addressed(
+    async fn write_immutable(
         &self,
         relative_key: &str,
         bytes: Bytes,
@@ -698,7 +695,7 @@ impl TableController {
         })
     }
 
-    /// Return the verified local file for one immutable object this table
+    /// Return the local file for one immutable object this table
     /// references. The reference, not adjacency to any other file, decides which
     /// bytes the caller reads.
     pub async fn localize(&self, reference: &ObjectRef) -> Result<PathBuf, StatsError> {
@@ -1118,19 +1115,8 @@ fn object_ref(id: &ObjectId, version: &ObjectVersion) -> ObjectRef {
         provider_version: version.provider_version.clone(),
         etag: version.e_tag.clone(),
         byte_size: Some(version.byte_size),
-        sha256: Some(version.content_sha256.to_vec()),
         ..Default::default()
     }
-}
-
-pub fn file_sha256(path: &Path) -> Result<[u8; 32], StatsError> {
-    let mut file = std::fs::File::open(path).map_err(|error| {
-        StatsError::Internal(format!("open {} for hashing: {error}", path.display()))
-    })?;
-    let mut hasher = Sha256::new();
-    std::io::copy(&mut file, &mut hasher)
-        .map_err(|error| StatsError::Internal(format!("hash {}: {error}", path.display())))?;
-    Ok(hasher.finalize().into())
 }
 
 #[cfg(test)]
@@ -1138,6 +1124,7 @@ mod tests {
     use super::*;
 
     use buffa::MessageField;
+    use sha2::{Digest, Sha256};
 
     use crate::proto::finelog::stats::{
         CatalogSegment, ColumnType, L0Mode, OperatingPolicy, SourceLayout,
@@ -1276,7 +1263,6 @@ mod tests {
                     source: MessageField::some(ObjectRef {
                         object_id: Some("not/a/canonical/object".to_string()),
                         byte_size: Some(1),
-                        sha256: Some(vec![0; 32]),
                         ..Default::default()
                     }),
                     ..Default::default()

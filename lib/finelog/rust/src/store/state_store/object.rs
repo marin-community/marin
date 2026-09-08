@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use sha2::{Digest, Sha256};
+use uuid::Uuid;
 
 use crate::errors::StatsError;
 use crate::proto::finelog::stats::{CatalogHead, NamespaceCatalog, ObjectRef};
@@ -81,11 +81,6 @@ impl ObjectTableStateStore {
                 "table HEAD for {table:?} references missing state {state_object_id:?}"
             ))
         })?;
-        if state_ref.sha256.as_deref() != Some(state_object.version.content_sha256.as_slice()) {
-            return Err(StatsError::Internal(format!(
-                "table state {state_object_id:?} for {table:?} failed SHA-256 validation"
-            )));
-        }
         let catalog: NamespaceCatalog =
             serde_json::from_slice(&state_object.bytes).map_err(|error| {
                 StatsError::Internal(format!(
@@ -193,11 +188,7 @@ impl ObjectTableStateStore {
         let state_bytes = serde_json::to_vec(&catalog).map_err(|error| {
             StatsError::Internal(format!("encode table state for {table:?}: {error}"))
         })?;
-        let state_sha256: [u8; 32] = Sha256::digest(&state_bytes).into();
-        let state_key = format!(
-            "{STATES_PREFIX}/{revision:020}-{}.json",
-            short_hex(&state_sha256)
-        );
+        let state_key = format!("{STATES_PREFIX}/{revision:020}-{}.json", Uuid::new_v4());
         let state_id = ObjectId::table(table, &state_key)?;
         let state_version = self
             .storage
@@ -215,7 +206,6 @@ impl ObjectTableStateStore {
                 provider_version: state_version.provider_version.clone(),
                 etag: state_version.e_tag.clone(),
                 byte_size: Some(state_bytes.len() as u64),
-                sha256: Some(state_sha256.to_vec()),
                 ..Default::default()
             }),
             ..Default::default()
@@ -573,10 +563,6 @@ fn validate_state(
     Ok(())
 }
 
-fn short_hex(bytes: &[u8; 32]) -> String {
-    crate::hex::encode(&bytes[..8])
-}
-
 fn state_revision_from_key(key: &str) -> Option<u64> {
     key.strip_prefix(STATES_PREFIX)?
         .strip_prefix('/')?
@@ -610,6 +596,15 @@ mod tests {
             .unwrap()
             .unwrap();
         (ObjectTableStateStore::new(Arc::new(remote)), remote_dir)
+    }
+
+    #[test]
+    fn state_decoder_ignores_removed_sha_field() {
+        let catalog: NamespaceCatalog =
+            serde_json::from_str(r#"{"directQuerySegments":[{"source":{"sha256":"bGVnYWN5"}}]}"#)
+                .unwrap();
+
+        assert_eq!(catalog.direct_query_segments.len(), 1);
     }
 
     #[tokio::test]

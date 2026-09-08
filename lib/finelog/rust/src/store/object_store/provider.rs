@@ -9,7 +9,6 @@ use object_store::path::Path as OsPath;
 use object_store::{
     ObjectStore as BackendObjectStore, ObjectStoreExt, PutMode, PutOptions, UpdateVersion,
 };
-use sha2::{Digest, Sha256};
 
 use crate::errors::StatsError;
 use crate::store::object_store::{ObjectId, ObjectVersion, StoredObject};
@@ -143,8 +142,8 @@ impl Provider {
             version: ObjectVersion {
                 e_tag,
                 provider_version,
-                content_sha256: Sha256::digest(&bytes).into(),
                 byte_size: bytes.len() as u64,
+                local_value: self.local_root().is_some().then(|| bytes.clone()),
             },
             bytes,
         }))
@@ -153,8 +152,8 @@ impl Provider {
     /// Swap the pointer at `path` from `expected` to `bytes`.
     ///
     /// `local_path` is the filesystem path backing `path` when the provider is a
-    /// local directory, in which case the swap goes through the content-hash
-    /// comparison in [`local_compare_and_swap`].
+    /// local directory, in which case the swap compares the exact pointer bytes
+    /// under the local file lock in [`local_compare_and_swap`].
     ///
     /// A precondition failure is the one outcome the backend states
     /// definitively: the swap did not apply, reported as `SchemaConflict`. Every
@@ -169,9 +168,9 @@ impl Provider {
         description: &str,
     ) -> Result<ObjectVersion, StatsError> {
         if let Some(local_path) = local_path {
-            let expected_hash = expected.map(|version| version.content_sha256);
+            let expected_value = expected.and_then(|version| version.local_value.clone());
             return tokio::task::spawn_blocking(move || {
-                local_compare_and_swap(&local_path, expected_hash, &bytes)
+                local_compare_and_swap(&local_path, expected_value.as_deref(), &bytes)
             })
             .await
             .map_err(|error| StatsError::Internal(format!("{description} CAS task: {error}")))?;
@@ -183,7 +182,6 @@ impl Provider {
                 version: version.provider_version.clone(),
             }),
         };
-        let content_sha256 = Sha256::digest(&bytes).into();
         let byte_size = bytes.len() as u64;
         match self
             .backend
@@ -200,8 +198,8 @@ impl Provider {
             Ok(result) => Ok(ObjectVersion {
                 e_tag: result.e_tag,
                 provider_version: result.version,
-                content_sha256,
                 byte_size,
+                local_value: None,
             }),
             Err(object_store::Error::AlreadyExists { .. })
             | Err(object_store::Error::Precondition { .. }) => Err(StatsError::SchemaConflict(

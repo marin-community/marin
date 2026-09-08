@@ -27,6 +27,24 @@ so both `/a/<uuid>/` and `/a/<uuid>/v/<revision>/` work.
 The source directory may omit `dist/index.html` only when `applet.toml` has a
 `build_command` that creates it before packaging.
 
+Use plain HTML and JavaScript for a small single-view applet. Use Vue with Vite
+when the applet needs multiple views, reusable components, or substantial
+client state. For Vue applets:
+
+- Set Vite's `base` to `"./"` so built asset URLs remain relative.
+- Use `createWebHashHistory()` when the app has client-side routes. This avoids
+  hard-coding an applet UUID or revision into the router base.
+- Use relative backend calls such as `fetch("api/results")` and
+  `fetch("query", ...)`; do not start applet-owned URLs with `/`.
+- Bundle dependencies into `dist/`. Marina's content security policy does not
+  allow scripts loaded from a third-party CDN.
+
+Keep the source `index.html`, `package.json`, the Vite configuration, and `src/`
+beside `applet.toml`. They are local build inputs and are not uploaded. A
+typical manifest uses `build_command = "npm ci && npm run build"`. Marina runs
+that command before every publish by default. Use `--no-build` only when the
+existing `dist/` has already been built and validated.
+
 Use the applet's implicit Postgres schema for mutable or queryable data. Do not
 create or attach a separate database. Load simple scalar tables with the CLI,
 or add `server/` when the applet needs parameterized business logic, custom
@@ -56,7 +74,8 @@ revisions.
 
 Use `get_verified_identity()` from `rigging.server_auth` when a backend needs
 the authenticated caller. Import only packages already declared in
-`infra/marina/pyproject.toml`.
+`infra/marina/pyproject.toml`. Shared Marin helpers must come from installed
+packages under `lib/*`; do not import checked-in apps under `infra/marina/apps`.
 
 Treat Python applets as trusted plugins. They run inside Marina with its
 filesystem, network, credentials, and process identity. Do not publish code
@@ -67,14 +86,28 @@ local filesystem persistence.
 
 Inspect existing Marina and repository helpers before introducing a framework
 or dependency. Build frontend output locally; Marina does not install applet
-dependencies. A manifest `build_command` may create `dist/index.html` when
-`marina publish` runs with its default `--build` behavior.
+dependencies. `marina publish` runs a declared `build_command` before packaging
+by default, and the command may create `dist/index.html`. Pass `--no-build` to
+reuse an existing validated `dist/`.
 
-Validate the exact package without changing server state:
+Validate the package and import a declared backend from the current Marina
+environment without changing server state:
+
+```bash
+uv run marina validate my-applet
+```
+
+The report names its completed checks and omissions. It does not execute the
+backend factory, run its migration, connect to Postgres, or start a browser.
+Use package-only validation when only the upload archive matters:
 
 ```bash
 uv run marina publish my-applet --dry-run
 ```
+
+Dry-run reports backend imports as unchecked. Both commands reject executable
+inline scripts under Marina's `script-src 'self'` policy. Load JavaScript from
+relative packaged files.
 
 Respect the current package limits: 25 MiB total, 8 MiB per file, and 2,000
 regular files. Keep large data out of the package until Marina gains an object
@@ -94,6 +127,15 @@ IAP authentication. It stays in the foreground. After validation, send Ctrl-C
 and verify that both Marina and the container stop. If `uv` cannot write its
 cache in a restricted checkout, use the current checkout's `.venv/bin/marina`
 executable instead of installing or synchronizing dependencies.
+
+To preserve the disposable Postgres stack across edits, leave the first
+`publish --local --json` process running. From a second terminal, publish the
+edit with this command, using each returned revision as the next base version:
+
+```bash
+uv run marina publish my-applet --url <printed-origin> \
+  --update <printed-id> --base-version <current-version>
+```
 
 Open the printed immutable revision URL. Exercise the frontend, every backend
 route, caller identity when used, and at least one schema read/write path. For

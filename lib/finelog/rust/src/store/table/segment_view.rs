@@ -33,6 +33,9 @@ pub struct SegmentSnapshot {
     /// Exact per-segment `seq` bounds, so a `seq`-bounded scan selects only the
     /// segments whose disjoint ranges it overlaps.
     pub seq_bounds: BTreeMap<String, (i64, i64)>,
+    /// Exact row counts used to bound unfiltered LIMIT scans to a sufficient
+    /// prefix of the ordered segment snapshot.
+    pub row_counts: BTreeMap<String, u64>,
     pub partitions: BTreeMap<String, SegmentPartition>,
     pub min_seq: Option<i64>,
     /// What each snapshotted segment advertises, so a scan opens artifacts by
@@ -206,6 +209,14 @@ impl SegmentView {
             seq_bounds: segments
                 .iter()
                 .map(|segment| (segment.path.clone(), (segment.min_seq, segment.max_seq)))
+                .collect(),
+            row_counts: segments
+                .iter()
+                .filter_map(|segment| {
+                    u64::try_from(segment.row_count)
+                        .ok()
+                        .map(|rows| (segment.path.clone(), rows))
+                })
                 .collect(),
             partitions: segments
                 .iter()

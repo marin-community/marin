@@ -5,8 +5,6 @@ use std::os::fd::AsRawFd;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use sha2::{Digest, Sha256};
-
 use super::ObjectVersion;
 use crate::errors::StatsError;
 
@@ -80,7 +78,7 @@ pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), StatsError> 
 
 pub(crate) fn compare_and_swap(
     path: &Path,
-    expected_hash: Option<[u8; 32]>,
+    expected_value: Option<&[u8]>,
     bytes: &[u8],
 ) -> Result<ObjectVersion, StatsError> {
     let parent = path.parent().ok_or_else(|| {
@@ -124,8 +122,7 @@ pub(crate) fn compare_and_swap(
             )))
         }
     };
-    let current_hash = current.as_deref().map(|value| Sha256::digest(value).into());
-    if current_hash != expected_hash {
+    if current.as_deref() != expected_value {
         return Err(StatsError::SchemaConflict(format!(
             "object pointer {} changed concurrently",
             path.display()
@@ -136,8 +133,8 @@ pub(crate) fn compare_and_swap(
     Ok(ObjectVersion {
         e_tag: None,
         provider_version: None,
-        content_sha256: Sha256::digest(bytes).into(),
         byte_size: bytes.len() as u64,
+        local_value: Some(bytes::Bytes::copy_from_slice(bytes)),
     })
 }
 

@@ -27,14 +27,17 @@ infra/marina/
   routes survive a reload. A `x.json.gz` beside `x.json` is served compressed.
 - `/<name>/data/<path>`: files from `<data root>/<name>/`. Large or changing
   data lives there rather than in the image or the repository.
-- `/<name>/api/`: the ASGI app a Python app's `create_api(services)` returns,
-  mounted behind the same authentication. Handlers read the caller with
+- `/<name>/api/`: the ASGI app in the `RegisteredApi` returned by a checked-in
+  Python app's `create_api(services)`, mounted behind the same authentication.
+  Handlers read the caller with
   `rigging.server_auth.get_verified_identity()`.
 - `services.engine()`: a SQLAlchemy engine on the app's own Postgres schema
   (`search_path = <name>, public`). `migrate(engine)` runs at deploy, before
   the new image takes traffic, and must be idempotent.
 - `/api/marina/apps` and `/api/marina/me`: the directory and the caller, which
-  the Shell uses for its app switcher and identity chip. `/healthz` is public.
+  the Shell uses for its app switcher and identity chip. `/api/marina/mcp/` is
+  the authenticated Streamable HTTP MCP endpoint for checked-in application
+  APIs. `/healthz` is public.
 
 ## Adding an app
 
@@ -66,8 +69,57 @@ infra/marina/
    rendering inside `<Shell app="<name>">`. Copy `apps/tasktrove/web` as the
    starting point.
 3. For an API, add `apps/<name>/__init__.py` and `app.py` with
-   `create_api(services)` and, if it has tables, `migrate(engine)`. Copy
-   `apps/echo` for the shape.
+   `create_api(services)` and, if it has tables, `migrate(engine)`. The factory
+   returns `registered_api(api)`. Define request and response bodies with Pydantic,
+   and give each operation exposed to agents a stable `operation_id`, description,
+   response model, and risk:
+
+   ```python
+   from fastapi import FastAPI
+   from marina.apps import RegisteredApi, Services, registered_api
+   from marina.mcp import OperationRisk, operation_extension
+   from pydantic import BaseModel
+
+
+   class NoteCreate(BaseModel):
+       body: str
+
+
+   class NoteCreated(BaseModel):
+       id: int
+
+
+   def create_api(services: Services) -> RegisteredApi:
+       api = FastAPI(title=services.name)
+
+       @api.post(
+           "/notes",
+           operation_id="create_note",
+           description="Create one note in this application's database schema.",
+           response_model=NoteCreated,
+           openapi_extra=operation_extension(OperationRisk.WRITE),
+       )
+       def create_note(body: NoteCreate) -> NoteCreated:
+           ...
+
+       return registered_api(api)
+   ```
+
+   FastMCP derives the MCP input and output schemas from FastAPI's OpenAPI
+   document and executes tools against the mounted ASGI application. Routes
+   without `operation_extension(...)` remain ordinary authenticated HTTP routes
+   and are excluded from MCP. A lifecycle wrapper can be mounted with
+   `registered_api(api, mounted_app=wrapper)` while `api` remains the OpenAPI
+   source. Dynamic applet APIs are not exposed through MCP. Copy `apps/echo` for
+   a complete service.
+
+   An MCP client initially sees only `find_tool` and `call_tool`. `find_tool`
+   searches registered operations across applications. The returned tool names
+   use `<app>_<operation_id>`, for example `evaldash_read_logs`; pass that name
+   and its arguments to `call_tool`. The declared risk is translated to MCP's
+   standard `readOnlyHint`, `destructiveHint`, and `openWorldHint` annotations.
+   The exact `read`, `write`, `external_write`, or `destructive` value is also
+   available at `_meta.marina.risk`.
 4. Write a journey in `apps/<name>/journeys/test_*.py` (below).
 5. Run it locally:
 
@@ -170,9 +222,10 @@ gsutil -m rsync -r infra/marina/.data/tasktrove gs://marin-marina/tasktrove
 
 An applet is a small application uploaded without rebuilding Marina. Its UUID
 is stable; each publish creates a numbered revision. Every applet gets a
-Postgres schema and role named `applet_<uuid>` on its first publish. Production
-URLs use `https://applets.marina.oa.dev/a/<uuid>/` so uploaded JavaScript does
-not share an origin with checked-in apps or Marina's control API.
+Postgres schema and role named `applet_<uuid-without-hyphens>` on its first
+publish. Production URLs use `https://applets.marina.oa.dev/a/<uuid>/` so
+uploaded JavaScript does not share an origin with checked-in apps or Marina's
+control API.
 
 ```text
 my-applet/
@@ -190,11 +243,86 @@ description = "Browse generated math problem sets."
 python_entrypoint = "server.app:create_api"
 ```
 
+The packages under `examples/` cover three starting points:
+
+- `static-html-applet/` checks in a one-off HTML page and JavaScript file.
+- `vue-applet/` builds a Vue app with Vite.
+- `problem-set-applet/` serves a Python API backed by the applet Postgres schema.
+
+### Vue and other built frontends
+
+Marina serves any frontend that builds into `dist/`. Plain HTML and JavaScript
+fit a small single-view applet. Vue with Vite fits applets with multiple views,
+reusable components, or substantial client state. Keep frontend sources beside
+the files Marina packages:
+
+```text
+my-applet/
+  applet.toml
+  package.json
+  package-lock.json
+  index.html                # Vite source entry
+  vite.config.ts
+  src/
+  dist/                     # generated and uploaded
+  server/                   # optional and uploaded
+```
+
+Configure Vite to emit relative asset URLs:
+
+```ts
+import vue from "@vitejs/plugin-vue";
+import { defineConfig } from "vite";
+
+export default defineConfig({
+  base: "./",
+  plugins: [vue()],
+});
+```
+
+Use `createWebHashHistory()` from `vue-router` for client-side routes. Hash
+routes keep the server path at the applet revision root and avoid a router base
+that contains the generated UUID and revision. Use relative backend URLs such
+as `fetch("api/results")` and `fetch("query", ...)`; a leading `/` escapes the
+applet prefix. Bundle dependencies into `dist/` because the applet content
+security policy permits scripts from the applet origin only. Put JavaScript in
+external files: executable inline `<script>` elements fail package validation
+because the browser rejects them under `script-src 'self'`.
+
+The manifest may define its local build:
+
+```toml
+build_command = "npm ci && npm run build"
+```
+
+`marina publish` runs a declared `build_command` before every publish by
+default, including when `dist/index.html` already exists. Pass `--no-build`
+only to reuse an existing bundle that has already been built and validated:
+
+```bash
+uv run marina publish .
+uv run marina publish . --no-build
+```
+
 Publish a built directory:
 
 ```bash
 uv run marina publish infra/marina/examples/problem-set-applet
 ```
+
+Validate locally before publishing:
+
+```bash
+uv run marina validate infra/marina/examples/problem-set-applet
+```
+
+`marina validate` builds and packages the applet, checks the package layout and
+size limits, rejects executable inline scripts blocked by the frontend content
+security policy, then imports a declared Python backend with the isolated
+module layout used by Marina. It reports the completed checks and the backend
+factory execution, migration execution, and browser checks it did not run. It
+does not execute `create_api`, connect to Postgres, run a migration, or start a
+browser.
 
 The production target defaults to `https://marina.oa.dev`. The client uses the
 same cached `iris login` credentials or ambient Google service-account
@@ -213,17 +341,31 @@ applet, pass both the UUID and the current revision:
 uv run marina publish my-applet --update <uuid> --base-version 1
 ```
 
-`--dry-run` validates and lists the package without sending it. Packages are
-limited to 25 MiB, 8 MiB per file, and 2,000 regular files. Web files and Python
-source are stored as inline blobs in Postgres and deduplicated by digest and
-media type. Marina retains the current revision plus four other recent
-revisions and removes blobs that no retained revision references.
+`--dry-run` validates and lists only the package that would be sent. Its report
+lists `backend_import` under `not_checked` for a Python applet. Use the separate
+`marina validate` command when the current Marina environment has the same
+installed packages as the target deployment. Packages are limited to 25 MiB,
+8 MiB per file, and 2,000 regular files. Generated Python bytecode and
+`__pycache__` directories are omitted. Web files and Python source are stored
+as inline blobs in Postgres and deduplicated by digest and media type. Marina
+retains the current revision plus four other recent revisions and removes blobs
+that no retained revision references.
 
 Frontend assets must use relative URLs so they work below both the stable and
 revision prefixes. From a revision page, `fetch("api/problems")` calls that
-revision's Python backend and `fetch("query", {method: "POST", ...})` runs a
-query for the applet. Marina falls back to `index.html` only for paths accepted
-as HTML; missing asset paths remain 404.
+revision's Python backend. Post a query with this request shape:
+
+```javascript
+fetch("query", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ sql: "SELECT id FROM problems", parameters: {} }),
+});
+```
+
+A successful query returns `columns`, `rows`, and `row_count`. Marina falls
+back to `index.html` only for paths accepted as HTML; missing asset paths remain
+404.
 
 Every applet has `POST /a/<uuid>/query`, which accepts one SQLAlchemy text
 statement and an optional parameter object. Statements run as the applet's
@@ -267,6 +409,28 @@ A worker caches a failed runtime load and returns 503 for that revision. Publish
 a corrected revision or roll back to a retained revision to bypass that cache;
 retrying the same broken revision requires replacing or restarting the worker.
 
+Applet backends may import modules from the Python standard library, their own
+packaged `server/` modules with relative imports, and packages installed by
+`infra/marina/pyproject.toml`. Reusable Marin code must live in an installed
+package under `lib/*`; imports from `infra/marina/apps/*` are unsupported. For
+example, an eval applet can use the shared FineStore row contract without
+copying EvalDash code:
+
+```python
+from finestore.reader import ReadView
+from marin.evaluation.archive import ARCHIVE_SAMPLES_TABLE, sample_from_archive_row
+
+def read_samples(results_path: str):
+    table = ReadView(results_path).scan(ARCHIVE_SAMPLES_TABLE)
+    return [] if table is None else [
+        sample_from_archive_row(row) for row in table.to_pylist(maps_as_pydicts="strict")
+    ]
+```
+
+Add new reusable code to the appropriate `lib/*` package. If that package is
+not installed by Marina, declare it in `infra/marina/pyproject.toml`. The
+validation command fails when an import is absent from the Marina environment.
+
 `services.engine()` assumes the applet role and schema. Python applets still run
 inside the Marina process with its installed dependencies, service credentials,
 filesystem, and network access. They are trusted plugins. They must not require
@@ -294,6 +458,30 @@ backend. Use `marina publish ... --url http://127.0.0.1:8080` instead when
 attaching to a separately managed local Marina server. Run
 `marina applets versions <uuid> --url http://127.0.0.1:8080` before choosing a
 rollback target on that persistent server.
+
+The disposable `--local` stack also accepts updates while its first terminal
+remains running. Start it with structured output and record the origin, applet
+ID, and revision from the printed URL and JSON:
+
+```bash
+# Terminal 1
+uv run marina publish my-applet --local --json
+```
+
+Rebuild and publish edits from another terminal. Replace the example origin,
+ID, and base version with the values from the running stack:
+
+```bash
+# Terminal 2
+uv run marina publish my-applet \
+  --url http://127.0.0.1:49152 \
+  --update 01234567-89ab-cdef-0123-456789abcdef \
+  --base-version 1
+```
+
+Use the returned revision as the next `--base-version`. The Marina process and
+Postgres container in terminal 1 stay alive, so schema and applet data survive
+frontend rebuilds. Ctrl-C in terminal 1 removes both after development.
 
 On local Postgres, `marina migrate` installs the provisioning function when the
 configured database user has `CREATEROLE`. In production the Marina Pulumi

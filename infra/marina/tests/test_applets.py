@@ -448,12 +448,101 @@ def create_api(_services):
         assert schemas_after == schemas_before
 
 
-def test_publish_dry_run_reports_validated_package() -> None:
+def test_publish_dry_run_reports_package_checks_and_runtime_omissions() -> None:
     result = CliRunner().invoke(cli, ["publish", str(DEMO_APPLET), "--dry-run", "--json"])
     assert result.exit_code == 0, result.output
     report = json.loads(result.output)
     assert report["file_count"] == 5
     assert report["files"] == [
+        "applet.toml",
+        "dist/app.js",
+        "dist/index.html",
+        "server/__init__.py",
+        "server/app.py",
+    ]
+    assert report["checks"] == ["package", "inline_scripts"]
+    assert report["not_checked"] == [
+        "backend_import",
+        "backend_factory_execution",
+        "migration_execution",
+        "browser",
+    ]
+
+
+def test_validate_reports_backend_import_check() -> None:
+    result = CliRunner().invoke(cli, ["validate", str(DEMO_APPLET), "--json"])
+    assert result.exit_code == 0, result.output
+    report = json.loads(result.output)
+    assert report["checks"] == ["package", "inline_scripts", "backend_import"]
+    assert report["not_checked"] == ["backend_factory_execution", "migration_execution", "browser"]
+
+
+def test_validate_rejects_import_outside_runtime_module_path(tmp_path: Path) -> None:
+    broken = tmp_path / "broken-runtime-import"
+    shutil.copytree(DEMO_APPLET, broken)
+    (broken / "local_helper.py").write_text("VALUE = 1\n")
+    (broken / "server" / "app.py").write_text("from local_helper import VALUE\n")
+
+    result = CliRunner().invoke(cli, ["validate", str(broken), "--json"])
+
+    assert result.exit_code == 2
+
+
+def test_package_rejects_executable_inline_script(tmp_path: Path) -> None:
+    package_dir = tmp_path / "inline-script"
+    shutil.copytree(DEMO_APPLET, package_dir)
+    (package_dir / "dist" / "index.html").write_text(
+        "<!doctype html><html><body><script>document.body.textContent = 'blocked'</script></body></html>"
+    )
+
+    with pytest.raises(ValueError):
+        package_applet(package_dir)
+
+
+def test_package_rejects_legacy_javascript_mime_alias(tmp_path: Path) -> None:
+    package_dir = tmp_path / "legacy-inline-script"
+    shutil.copytree(DEMO_APPLET, package_dir)
+    (package_dir / "dist" / "index.html").write_text(
+        '<!doctype html><html><body><script type="application/x-javascript">alert(1)</script></body></html>'
+    )
+
+    with pytest.raises(ValueError):
+        package_applet(package_dir)
+
+
+def test_package_allows_non_executable_inline_script_data(tmp_path: Path) -> None:
+    package_dir = tmp_path / "inline-data"
+    shutil.copytree(DEMO_APPLET, package_dir)
+    html = '<!doctype html><html><body><script type="application/json">{"page": 1}</script></body></html>'
+    (package_dir / "dist" / "index.html").write_text(html)
+
+    package = read_applet_package(package_applet(package_dir))
+
+    assert package.files["dist/index.html"] == html.encode()
+
+
+def test_package_allows_script_type_with_parameters_as_data(tmp_path: Path) -> None:
+    package_dir = tmp_path / "inline-typed-data"
+    shutil.copytree(DEMO_APPLET, package_dir)
+    html = '<!doctype html><html><body><script type="text/javascript; charset=utf-8">data</script></body></html>'
+    (package_dir / "dist" / "index.html").write_text(html)
+
+    package = read_applet_package(package_applet(package_dir))
+
+    assert package.files["dist/index.html"] == html.encode()
+
+
+def test_package_ignores_generated_python_bytecode(tmp_path: Path) -> None:
+    package_dir = tmp_path / "generated-bytecode"
+    shutil.copytree(DEMO_APPLET, package_dir)
+    cache_dir = package_dir / "server" / "__pycache__"
+    cache_dir.mkdir()
+    (cache_dir / "app.cpython-312.pyc").write_bytes(b"generated")
+    (package_dir / "server" / "helper.pyc").write_bytes(b"generated")
+
+    package = read_applet_package(package_applet(package_dir))
+
+    assert sorted(package.files) == [
         "applet.toml",
         "dist/app.js",
         "dist/index.html",

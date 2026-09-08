@@ -43,8 +43,14 @@ pub struct StoredObject {
 pub struct ObjectVersion {
     pub e_tag: Option<String>,
     pub provider_version: Option<String>,
-    pub content_sha256: [u8; 32],
     pub byte_size: u64,
+    /// Exact bytes for a mutable pointer read from a local provider.
+    ///
+    /// Remote providers compare their opaque version or ETag. The local
+    /// provider has neither, so its locked compare-and-swap compares this
+    /// value directly. It shares the read buffer and lives only as long as the
+    /// returned object version; durable references never retain it.
+    pub(crate) local_value: Option<bytes::Bytes>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,23 +66,15 @@ impl TryFrom<&ProtoObjectRef> for ObjectReference {
         let id = ObjectId::parse(reference.object_id.as_deref().ok_or_else(|| {
             StatsError::Internal("object reference has no object ID".to_string())
         })?)?;
-        let content_sha256: [u8; 32] = reference
-            .sha256
-            .as_deref()
-            .ok_or_else(|| StatsError::Internal("object reference has no SHA-256".to_string()))?
-            .try_into()
-            .map_err(|_| {
-                StatsError::Internal("object reference SHA-256 is not 32 bytes".to_string())
-            })?;
         Ok(Self {
             id,
             version: ObjectVersion {
                 e_tag: reference.etag.clone(),
                 provider_version: reference.provider_version.clone(),
-                content_sha256,
                 byte_size: reference.byte_size.ok_or_else(|| {
                     StatsError::Internal("object reference has no byte size".to_string())
                 })?,
+                local_value: None,
             },
         })
     }
@@ -196,7 +194,7 @@ pub trait ObjectStore: Send + Sync {
         Ok(())
     }
 
-    /// Return a verified local file usable by DataFusion.
+    /// Return a local file usable by DataFusion.
     async fn local_path(&self, reference: &ObjectReference) -> Result<PathBuf, StatsError> {
         Err(StatsError::Internal(format!(
             "object store has no local file for {:?}",
@@ -221,7 +219,7 @@ pub trait ObjectStore: Send + Sync {
         None
     }
 
-    /// The verified local cache file for `reference` when one is already
+    /// The local cache file for `reference` when one is already
     /// present, without fetching anything.
     async fn cached_path(
         &self,

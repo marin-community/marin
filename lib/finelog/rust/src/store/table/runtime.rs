@@ -97,11 +97,6 @@ pub struct TableRuntime {
     /// How this table's specification transition is failing, carried across
     /// maintenance ticks.
     pub(super) migration_block: Mutex<MigrationBlock>,
-    /// Source identities the running migration already computed, keyed by path
-    /// with the byte size the hash covered. Legacy identities hash the whole
-    /// file, and every backfill tick revisits every source, so an uncached
-    /// migration would re-hash the covered prefix of the table each tick.
-    pub(super) migration_identities: Mutex<std::collections::HashMap<String, (i64, String)>>,
     pub(super) last_object_gc: Mutex<Option<Instant>>,
     pub(super) last_orphan_sweep: Mutex<Option<Instant>>,
     /// Latched stop flag the dispatched work checks at the top of each loop
@@ -226,7 +221,6 @@ impl TableRuntime {
             layout_tracker: LayoutTracker::default(),
             index_skips: Mutex::new(BackfillSkips::default()),
             migration_block: Mutex::new(MigrationBlock::default()),
-            migration_identities: Mutex::new(std::collections::HashMap::new()),
             last_object_gc: Mutex::new(None),
             last_orphan_sweep: Mutex::new(None),
             stopped: AtomicBool::new(false),
@@ -406,6 +400,7 @@ impl TableRuntime {
             paths: Vec::with_capacity(planned.len()),
             key_bounds: Default::default(),
             seq_bounds: Default::default(),
+            row_counts: Default::default(),
             partitions: Default::default(),
             min_seq: planned.iter().map(|segment| segment.min_seq).min(),
             artifacts: Default::default(),
@@ -417,6 +412,9 @@ impl TableRuntime {
             }
             view.seq_bounds
                 .insert(segment.path.clone(), (segment.min_seq, segment.max_seq));
+            if let Some(row_count) = segment.row_count {
+                view.row_counts.insert(segment.path.clone(), row_count);
+            }
             if let Some(partition) = segment.partition {
                 view.partitions.insert(segment.path.clone(), partition);
             }

@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import base64
-import hashlib
 import json
 import threading
 from collections.abc import Callable
@@ -99,7 +97,6 @@ def _write_catalog(
         "activeTableSpecVersion": str(active_version),
         "catalog": {
             "objectId": catalog_id,
-            "sha256": base64.b64encode(hashlib.sha256(catalog_bytes).digest()).decode(),
         },
     }
     (table_root / "HEAD.json").write_text(json.dumps(head))
@@ -123,9 +120,20 @@ def test_object_query_reads_the_stable_catalog_projection(tmp_path: Path) -> Non
     assert pin.high_water == 2
 
 
-def test_object_query_rejects_catalog_bytes_that_do_not_match_head(tmp_path: Path) -> None:
+def test_object_query_reads_catalog_written_before_sha_field_removal(tmp_path: Path) -> None:
     catalog_path = _write_catalog(tmp_path)
-    catalog_path.write_bytes(b"{}")
+    catalog = json.loads(catalog_path.read_text())
+    catalog["directQuerySegments"][0]["source"]["sha256"] = "bGVnYWN5"
+    catalog_path.write_text(json.dumps(catalog))
+
+    pin = ObjectQueryClient(str(tmp_path)).pin_catalog("iris.worker")
+
+    assert len(pin.object_uris) == 1
+
+
+def test_object_query_rejects_malformed_catalog_json(tmp_path: Path) -> None:
+    catalog_path = _write_catalog(tmp_path)
+    catalog_path.write_bytes(b"{")
 
     with pytest.raises(StatsError):
         ObjectQueryClient(str(tmp_path)).query(

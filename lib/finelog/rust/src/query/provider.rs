@@ -68,6 +68,9 @@ pub struct NamespaceProvider {
     segment_partitions: BTreeMap<String, SegmentPartition>,
     /// Exact per-segment `seq` bounds, captured with the path snapshot.
     segment_seq_bounds: BTreeMap<String, (i64, i64)>,
+    /// Exact per-segment row counts. These let an unfiltered LIMIT scan avoid
+    /// opening segments after a prefix that already contains enough rows.
+    segment_row_counts: BTreeMap<String, u64>,
     indices: Arc<IndexRegistry>,
     /// The artifacts each snapshotted segment advertises, captured with the
     /// path snapshot. A scan opens exactly these references and never derives a
@@ -100,7 +103,7 @@ impl ObjectSources {
     /// segments advertise.
     ///
     /// Resolve the segments `paths` names into what this scan reads: the
-    /// verified cache file when one exists, otherwise the object's remote URL —
+    /// cache file when one exists, otherwise the object's remote URL —
     /// the query proceeds against the remote while a background fill (bounded
     /// by the store's fetch semaphore) materializes the cache for the next
     /// scan. A store whose provider cannot serve remote scans localizes
@@ -203,8 +206,8 @@ impl ObjectSources {
     }
 }
 
-/// The file sets one scan reads: verified local cache files, and remote URLs
-/// for the objects the cache does not hold yet.
+/// The file sets one scan reads: local cache files, and remote URLs for the
+/// objects the cache does not hold yet.
 #[derive(Default)]
 struct ResolvedScan {
     local: Vec<String>,
@@ -381,6 +384,32 @@ impl NamespaceProvider {
         paths
     }
 
+    fn segment_paths_for_scan(&self, filters: &[Expr], limit: Option<usize>) -> Vec<String> {
+        let paths = self.segment_paths_for_filters(filters);
+        let Some(limit) = limit else {
+            return paths;
+        };
+        if !filters.is_empty() {
+            return paths;
+        }
+        if limit == 0 {
+            return Vec::new();
+        }
+
+        let mut rows = 0_u64;
+        for (index, path) in paths.iter().enumerate() {
+            let Some(&segment_rows) = self.segment_row_counts.get(path) else {
+                // A missing count cannot prove any prefix satisfies the LIMIT.
+                return paths;
+            };
+            rows = rows.saturating_add(segment_rows);
+            if rows >= limit as u64 {
+                return paths[..=index].to_vec();
+            }
+        }
+        paths
+    }
+
     /// Build a provider from the registered arrow `schema` and a snapshot of
     /// sealed segment file paths.
     ///
@@ -405,6 +434,7 @@ impl NamespaceProvider {
                 partition_policy: None,
                 segment_partitions: BTreeMap::new(),
                 segment_seq_bounds: BTreeMap::new(),
+                segment_row_counts: BTreeMap::new(),
                 indices,
                 segment_artifacts: Arc::new(SegmentArtifacts::new()),
                 exact_postings_policy: None,
@@ -423,6 +453,7 @@ impl NamespaceProvider {
             partition_policy: None,
             segment_partitions: BTreeMap::new(),
             segment_seq_bounds: BTreeMap::new(),
+            segment_row_counts: BTreeMap::new(),
             indices,
             segment_artifacts: Arc::new(SegmentArtifacts::new()),
             exact_postings_policy: None,
@@ -468,6 +499,12 @@ impl NamespaceProvider {
     /// table.
     pub fn with_segment_seq_bounds(mut self, bounds: BTreeMap<String, (i64, i64)>) -> Self {
         self.segment_seq_bounds = bounds;
+        self
+    }
+
+    /// Attach exact row counts captured with the segment path snapshot.
+    pub fn with_segment_row_counts(mut self, row_counts: BTreeMap<String, u64>) -> Self {
+        self.segment_row_counts = row_counts;
         self
     }
 
@@ -560,7 +597,7 @@ impl TableProvider for NamespaceProvider {
                 // excluded. Object-backed segments then split by cache state:
                 // cached files scan locally, the rest scan the remote directly
                 // while a background fill warms the cache for the next query.
-                let mut segment_paths = self.segment_paths_for_filters(filters);
+                let mut segment_paths = self.segment_paths_for_scan(filters, limit);
                 let needles = crate::query::trigram_prune::substring_needles_by_column(filters);
                 let key_ranges = crate::query::trigram_prune::string_column_ranges(filters);
                 if self.segment_indexes_enabled && !needles.is_empty() {
@@ -791,6 +828,43 @@ mod tests {
             vec![paths[0].clone(), paths[2].clone(), paths[3].clone()]
         );
         assert_eq!(provider.segment_paths_for_filters(&[]), paths);
+    }
+
+    #[test]
+    fn unfiltered_limit_selects_the_smallest_sufficient_segment_prefix() {
+        let paths: Vec<String> = (0..3)
+            .map(|index| format!("/planned/seg_{index}.parquet"))
+            .collect();
+        let provider = NamespaceProvider::build_with_local_artifacts(worker_arrow(), &paths)
+            .unwrap()
+            .with_segment_row_counts(BTreeMap::from([
+                (paths[0].clone(), 40),
+                (paths[1].clone(), 70),
+                (paths[2].clone(), 100),
+            ]));
+
+        assert!(provider.segment_paths_for_scan(&[], Some(0)).is_empty());
+        assert_eq!(provider.segment_paths_for_scan(&[], Some(100)), paths[..2]);
+        assert_eq!(provider.segment_paths_for_scan(&[], None), paths);
+    }
+
+    #[test]
+    fn limit_pruning_is_conservative_with_filters_or_missing_counts() {
+        let paths: Vec<String> = (0..3)
+            .map(|index| format!("/planned/seg_{index}.parquet"))
+            .collect();
+        let provider = NamespaceProvider::build_with_local_artifacts(worker_arrow(), &paths)
+            .unwrap()
+            .with_segment_row_counts(BTreeMap::from([
+                (paths[0].clone(), 100),
+                (paths[2].clone(), 100),
+            ]));
+
+        assert_eq!(provider.segment_paths_for_scan(&[], Some(101)), paths);
+        assert_eq!(
+            provider.segment_paths_for_scan(&[col("mem_bytes").gt(lit(0_i64))], Some(1)),
+            paths
+        );
     }
 
     /// A `seq`-bounded predicate selects only the segments whose disjoint seq

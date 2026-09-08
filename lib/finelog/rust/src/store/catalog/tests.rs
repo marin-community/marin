@@ -479,7 +479,6 @@ fn published_snapshot_rebuild_preserves_segment_artifacts() {
         source: ObjectRef {
             object_id: Some("_finelog/tables/a/objects/abc.parquet".to_string()),
             byte_size: Some(64),
-            sha256: Some(vec![7u8; 32]),
             ..Default::default()
         },
         artifacts: artifacts.clone(),

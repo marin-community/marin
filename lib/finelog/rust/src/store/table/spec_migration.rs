@@ -22,13 +22,16 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use arrow::array::RecordBatch;
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tokio::sync::RwLock;
 
 use crate::errors::StatsError;
 use crate::partition_policy::{PartitionedBatches, PhysicalPartitionPolicy, SegmentPartition};
 use crate::proto::finelog::stats::{MigrationPhase, SourceLayout, TableMigrationStatus};
-use crate::store::catalog::{Catalog, ObjectSegmentRecord, SpecLifecycle};
+use crate::store::catalog::{
+    Catalog, ObjectSegmentRecord, SpecLifecycle, MIGRATION_SOURCE_ID_SEPARATOR,
+};
 use crate::store::compaction::config::CompactionJob;
 use crate::store::compaction::executor::{
     run_job_with_partition_policy, run_merge_thread, CompactionExecution, CompactionLayout,
@@ -36,7 +39,7 @@ use crate::store::compaction::executor::{
 };
 use crate::store::compaction::staging::StagingDir;
 use crate::store::object_store::OBJECTS_PREFIX;
-use crate::store::table::controller::{file_sha256, TableController};
+use crate::store::table::controller::TableController;
 use crate::store::table::flush::partition_object_batch;
 use crate::store::table::index_artifacts::publish_segment_artifacts;
 use crate::store::table::segment_format::SegmentFormat;
@@ -46,14 +49,11 @@ use crate::store::types::{segment_to_row, LocalSegment, SegmentLocation, Segment
 
 /// Floor for the batch's compressed-input byte cap; the working cap is the
 /// larger of this and a quarter of the merge's decoded-bytes budget, so batch
-/// assembly does not localize and hash far more than one job can consume.
+/// assembly does not localize far more than one job can consume.
 const MIN_BATCH_SOURCE_BYTES: i64 = 64 << 20;
 
-/// Separator between the source identities one checkpointed output covers.
-const SOURCE_ID_SEPARATOR: char = '\n';
-
 /// Directory fan-out for a rewrite's staged partition outputs. The uploaded
-/// objects are content-addressed, so this only keeps one source's staged files
+/// objects use opaque names, so this keeps one source's staged files
 /// from colliding.
 const PARTITION_DIRECTORIES: u32 = 64;
 
@@ -136,10 +136,6 @@ pub struct SpecMigration<'a> {
     /// How this table's transition is failing, carried across ticks so a
     /// permanently stuck transition becomes visible.
     pub blocked: &'a std::sync::Mutex<MigrationBlock>,
-    /// Already-computed source identities, keyed by path with the byte size
-    /// each hash covered, carried across ticks so covered sources are not
-    /// re-hashed every tick.
-    pub identities: &'a std::sync::Mutex<HashMap<String, (i64, String)>>,
     /// Applied when an activation moves the table to a new version, so the
     /// runtime's cached policy and query view follow the commit.
     pub on_activated: &'a (dyn Fn(&SpecLifecycle) -> Result<(), StatsError> + Send + Sync),
@@ -252,9 +248,6 @@ async fn activate(migration: &SpecMigration<'_>) -> Result<SpecLifecycle, StatsE
         .output;
     let _visibility_guard = migration.query_visibility.write().await;
     (migration.on_activated)(&status)?;
-    // No further backfill tick runs after activation, so the identity cache
-    // has nothing left to serve.
-    migration.identities.lock().unwrap().clear();
     tracing::info!(
         namespace = %migration.table,
         table_spec_version = status.active_version(),
@@ -301,7 +294,7 @@ async fn backfill(
     let batch_byte_cap = MIN_BATCH_SOURCE_BYTES.max(migration.max_merge_arrow_bytes / 4);
     // Only the catalog snapshot holds the flush gate, so the tick reads one
     // consistent view of segments and checkpoints. Everything after — identity
-    // hashing, the rewrite, the commit — runs outside it: every candidate
+    // assembly, the rewrite, the commit — runs outside it: every candidate
     // source is fence-frozen and immutable, a concurrent flush commits only
     // post-fence rows at the target version, and both commits serialize in the
     // controller. A WriteRows ack waits on this very gate, so any expensive
@@ -320,7 +313,7 @@ async fn backfill(
             .values()
             .filter(|record| record.table_spec_version == to_version && record.migration_backfill)
             .filter_map(|record| record.migration_source_id.as_deref())
-            .flat_map(|ids| ids.split(SOURCE_ID_SEPARATOR).map(str::to_string))
+            .flat_map(|ids| ids.split(MIGRATION_SOURCE_ID_SEPARATOR).map(str::to_string))
             .collect();
         let sources: Vec<_> = rows
             .iter()
@@ -333,6 +326,17 @@ async fn backfill(
             .collect();
         (object_records, sources, covered)
     };
+    // TODO(#8909): Remove after 2026-09-18 once every deployed table is
+    // RETIRED and no older server can publish the pre-metadata checkpoint
+    // format. Without it, a mixed-version migration could rewrite an already
+    // checkpointed source.
+    if covered.iter().any(|identity| {
+        identity.len() == 64 && identity.bytes().all(|byte| byte.is_ascii_hexdigit())
+    }) {
+        return Err(StatsError::SchemaConflict(format!(
+            "migration for {table:?} has SHA-based checkpoints; complete or abort it with the prior server version before upgrading"
+        )));
+    }
     let partitioned_target = target_layout
         .as_ref()
         .and_then(|layout| layout.partition.as_option())
@@ -353,6 +357,10 @@ async fn backfill(
                 break 'groups;
             }
             let record = object_records.get(&row.path);
+            let source_id = source_identity(row, record)?;
+            if covered.contains(&source_id) {
+                continue;
+            }
             let Some(localized) = migration.controller.localize_source(row, record).await? else {
                 // The row's bytes exist neither locally nor in the archive: no
                 // reader can serve them and no source can supply them. Drop the
@@ -366,10 +374,6 @@ async fn backfill(
                 migration.catalog.remove_segment(table, &row.path)?;
                 continue;
             };
-            let source_id = cached_source_identity(migration, row, record, &localized).await?;
-            if covered.contains(&source_id) {
-                continue;
-            }
             batch_bytes += row.byte_size;
             batch.push(BatchSource {
                 row: row.clone(),
@@ -435,7 +439,7 @@ async fn backfill(
     Ok(true)
 }
 
-/// One localized, identity-hashed, uncovered source awaiting rewrite.
+/// One localized, metadata-identified, uncovered source awaiting rewrite.
 struct BatchSource {
     row: SegmentRow,
     localized: PathBuf,
@@ -631,7 +635,7 @@ async fn rewrite_batch(
         .iter()
         .map(|source| source.source_id.clone())
         .collect();
-    let joined_ids = source_ids.join(&SOURCE_ID_SEPARATOR.to_string());
+    let joined_ids = source_ids.join(&MIGRATION_SOURCE_ID_SEPARATOR.to_string());
     let commit_started = Instant::now();
     let outputs = migrated.len();
     migration
@@ -673,70 +677,39 @@ fn validate_output_partition_count(outputs: &[LocalSegment]) -> Result<(), Stats
     Ok(())
 }
 
-/// Stable identity of one migration source, so a rewrite interrupted after its
-/// objects upload but before its checkpoint commits is recognized and not
-/// applied twice.
-///
-/// It binds the source's content to the exact rows it covers: an object-backed
-/// source is already named by its content SHA-256, and a version-0 file is hashed
-/// where it lies.
-/// [`source_identity`] through the migration's cross-tick cache. A legacy
-/// identity hashes the whole file and every tick revisits every source, so
-/// the cache is what keeps later ticks from re-hashing the covered prefix of
-/// the table.
-async fn cached_source_identity(
-    migration: &SpecMigration<'_>,
-    row: &SegmentRow,
-    object_record: Option<&ObjectSegmentRecord>,
-    localized: &Path,
-) -> Result<String, StatsError> {
-    if let Some((size, id)) = migration.identities.lock().unwrap().get(&row.path) {
-        if *size == row.byte_size {
-            return Ok(id.clone());
-        }
-    }
-    let id = source_identity(row, object_record, localized).await?;
-    migration
-        .identities
-        .lock()
-        .unwrap()
-        .insert(row.path.clone(), (row.byte_size, id.clone()));
-    Ok(id)
+/// Stable metadata identity of one immutable migration source. This lets a
+/// restart recognize a committed rewrite without reading the source bytes.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MigrationSourceIdentity<'a> {
+    format: &'static str,
+    object_id: &'a str,
+    provider_version: Option<&'a str>,
+    etag: Option<&'a str>,
+    byte_size: i64,
+    min_seq: i64,
+    max_seq: i64,
+    row_count: i64,
 }
 
-async fn source_identity(
+fn source_identity(
     row: &SegmentRow,
     object_record: Option<&ObjectSegmentRecord>,
-    localized: &Path,
 ) -> Result<String, StatsError> {
-    let mut digest = Sha256::new();
-    match object_record {
-        Some(record) => {
-            digest.update(
-                record
-                    .source
-                    .object_id
-                    .as_deref()
-                    .unwrap_or(&row.path)
-                    .as_bytes(),
-            );
-            digest.update(record.source.sha256.as_deref().unwrap_or_default());
-        }
-        None => {
-            digest.update(row.path.as_bytes());
-            let path = localized.to_path_buf();
-            let content: [u8; 32] = tokio::task::spawn_blocking(move || file_sha256(&path))
-                .await
-                .map_err(|error| {
-                    StatsError::Internal(format!("migration source hash task panicked: {error}"))
-                })??;
-            digest.update(content);
-        }
-    }
-    digest.update(row.min_seq.to_be_bytes());
-    digest.update(row.max_seq.to_be_bytes());
-    digest.update(row.row_count.to_be_bytes());
-    Ok(crate::hex::encode(&digest.finalize()))
+    let source = object_record.map(|record| &record.source);
+    serde_json::to_string(&MigrationSourceIdentity {
+        format: "metadata-v1",
+        object_id: source
+            .and_then(|source| source.object_id.as_deref())
+            .unwrap_or(&row.path),
+        provider_version: source.and_then(|source| source.provider_version.as_deref()),
+        etag: source.and_then(|source| source.etag.as_deref()),
+        byte_size: row.byte_size,
+        min_seq: row.min_seq,
+        max_seq: row.max_seq,
+        row_count: row.row_count,
+    })
+    .map_err(|error| StatsError::Internal(format!("encode migration source identity: {error}")))
 }
 
 /// The physical partitioning a target source layout declares.
