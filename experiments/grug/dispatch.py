@@ -65,8 +65,7 @@ def dispatch_grug_training_run(
     cumulative one. The job fails when either is exhausted, so raise the two together: a large
     per-task budget under a small cumulative one still ends the job at the cumulative limit.
 
-    ``extras`` overrides the dependency extras inferred from the accelerator type. This is used
-    by training variants whose locked runtime replaces the standard accelerator environment.
+    ``extras`` overrides the dependency extras inferred from the accelerator type.
     """
     safe_run_id = _safe_job_suffix(run_id)
     env_vars = resolve_training_env(base_env=_forwarded_env_vars(), resources=resources)

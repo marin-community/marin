@@ -17,7 +17,6 @@ import jax.numpy as jnp
 from haliax import Axis
 from haliax.jax_utils import named_call
 from jax import random
-from jax.sharding import PartitionSpec as P
 from jax.sharding import reshard
 from jaxtyping import Array, Float, Int, PRNGKeyArray
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
@@ -37,7 +36,7 @@ from levanter.grug.sharding import Pembed_vocab, Plm_head
 from levanter.tracker.histogram import SummaryStats
 from transformers import PretrainedConfig as HfConfig
 
-from experiments.grug.moe.model import _BATCH_AXES as BATCH_AXES
+from experiments.grug.moe.model import _BATCH_AXES as BATCH_AXES  # noqa: F401
 from experiments.grug.moe.model import GRUG_MOE_ARCHITECTURE as GRUG_MOE_ARCHITECTURE
 from experiments.grug.moe.model import GRUG_MOE_ARTIFACT_SCHEMA_VERSION as GRUG_MOE_ARTIFACT_SCHEMA_VERSION
 from experiments.grug.moe.model import (
@@ -51,6 +50,7 @@ from experiments.grug.moe.model import GatedNorm as GatedNorm
 from experiments.grug.moe.model import GrugMoeHfConfig as GrugMoeHfConfig
 from experiments.grug.moe.model import MoEMLP as MoEMLP
 from experiments.grug.moe.model import RMSNorm as RMSNorm
+from experiments.grug.moe.model import _batch_spec as _batch_spec
 from experiments.grug.moe.model import _hf_config_attr as _hf_config_attr
 from experiments.grug.moe.model import _init_weight as _init_weight
 from experiments.grug.moe.model import _summarize_router_metrics as _summarize_router_metrics
@@ -58,14 +58,6 @@ from experiments.grug.moe.model import debug_mesh_and_token_pspec as debug_mesh_
 from experiments.grug.moe.model import grugmoe_inference_state_dict as grugmoe_inference_state_dict
 
 RematMode = Literal["recompute_all", "save_moe"]
-
-
-def _batch_spec() -> P:
-    return P(BATCH_AXES)
-
-
-def _layer_attention_masks(mask: AttentionMask, *, sliding_window: int) -> tuple[AttentionMask, AttentionMask]:
-    return mask.with_sliding_window(sliding_window // 2), mask.with_sliding_window(sliding_window)
 
 
 @dataclass(frozen=True)
