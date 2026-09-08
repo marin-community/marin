@@ -149,7 +149,7 @@ to zoom into any run.
 
 Evaldash treats these records as the source of truth. Its background ingestor scans every configured
 object-store prefix and upserts the `eval_runs` and `eval_metrics` tables implemented in
-`infra/evaldash/src/results_db.py`. Evaluation launchers do not read DB config or connect to Postgres.
+`infra/marina/apps/evaldash/results_db.py`. Evaluation launchers do not read DB config or connect to Postgres.
 
 ## Evals in pipelines
 

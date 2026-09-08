@@ -209,8 +209,8 @@ def test_source_files_map_to_dotted_modules(tmp_path: Path) -> None:
 
 
 def test_evaldash_source_maps_to_dotted_module(tmp_path: Path) -> None:
-    write(tmp_path, "infra/evaldash/src/metrics.py")
-    assert classify(["infra/evaldash/src/metrics.py"], tmp_path).src_modules == {"infra.evaldash.src.metrics"}
+    write(tmp_path, "infra/marina/apps/evaldash/metrics.py")
+    assert classify(["infra/marina/apps/evaldash/metrics.py"], tmp_path).src_modules == {"evaldash.metrics"}
 
 
 def test_deploy_change_selects_deploy_test(tmp_path: Path) -> None:

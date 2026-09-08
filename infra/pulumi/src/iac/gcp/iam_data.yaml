@@ -88,7 +88,6 @@ principals:
   human-067: CiQAKk3j6f7bPt89q/U5xIKOoxM2W34TYIhGzlMNk7JTR7LtY/ISRACdtF6iqMMcsny+mDhWfperz2IBHQoD+omWGiA08UO2Fz0CO+3XqIRs19wV7brcdDyssBkn3wxmzlltKDg/KxsKgy5q
   human-068: CiQAKk3j6fESA88C+xRWoe8LAv9OCNAepDhmfDlfIqc1J4QFCWcSPACdtF6iPH8Op2kYyy4oecwgl8Pj3b6VJwK3y4vS04A4AIr1gLAUjzcE7h8UZy9TdmV7Q2QfGXIWkzs28Q==
   human-069: CiQAKk3j6fZzTtHYIlJ9bvnupvzX042gQyAyC1VrsgIdfU9YMaASPQCdtF6iaHzI0Go083JD8qDnOWtdQ2IpJJa/jB1/BzJbQNIZxIdUpIlCcPmTbiY60SMC2v1rNnO9PCTZNUs=
-  human-070: CiQAKk3j6fgMf61FVEtp0V9YlyIoV1cTlbQfsX3SUjkVvhqAlp8SOQCdtF6iWgYGtbPiXHphalp6BT4zzVcGCml7SGl/0WrrOv4xvqyA/cWaE4XCV9ShI1mROr681jsQEg==
   human-071: CiQAKk3j6cD5Sn3yMtL/TWv5wzcr/lNOmiC5fJKYNkU6t3ovHcUSTgCdtF6i2hQWfJcp+NOEds/fZ7CgpqViU7mgNXSd9TgLlzLJTO3eQO+gddA9WkKSbpFY++pbI0MfTUcoA4H/0Z0SL1IyltZRilV6h0mcuQ==
   human-072: CiQAKk3j6ZQLD7r1vaRwiSHTnivaFUvKNXMMqXYuKdc5Js6e41ISQgCdtF6iUVQYgRvAP6ktihBwriBkTiNYuHkN8N8n0gulAVVONh2eQROrZyLGaXpHLm6LZtzXdBRKa45h17J8c7brDw==
   human-073: CiQAKk3j6XhHG0zB0wc8wvTpRg+a917RHbGNiKEfMOjUg5U7wooSNgCdtF6ixFHhqzu9HE/B1BG+tZfnvFdja1vsa5ENcA6A9Ct91HlL1KEVF0TRQWLh335BYvlk3A==
@@ -817,13 +816,9 @@ project_grants:
   members:
   - serviceAccount:1056288039276-compute@developer.gserviceaccount.com
   - serviceAccount:933985808263-compute@developer.gserviceaccount.com
-- role: projects/hai-gcp-models/roles/marinCustomRoleManager
-  members:
-  - principal: human-070
 - role: projects/hai-gcp-models/roles/marinGcpResourcePreviewer
   members:
   - serviceAccount:pulumi-ci@hai-gcp-models.iam.gserviceaccount.com
-  - principal: human-070
 - role: projects/hai-gcp-models/roles/marinIapIamManager
   members:
   - serviceAccount:marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
@@ -879,7 +874,6 @@ project_grants:
   - principal: human-051
   - principal: human-022
   - principal: human-021
-  - principal: human-070
   - principal: human-006
   - principal: human-026
   - principal: human-072
@@ -900,9 +894,6 @@ project_grants:
 - role: roles/aiplatform.serviceAgent
   members:
   - serviceAccount:service-748532799086@gcp-sa-aiplatform.iam.gserviceaccount.com
-- role: roles/artifactregistry.admin
-  members:
-  - principal: human-070
 - role: roles/artifactregistry.createOnPushWriter
   members:
   - serviceAccount:github-artifact-repository@hai-gcp-models.iam.gserviceaccount.com
@@ -927,9 +918,6 @@ project_grants:
 - role: roles/bigquerydatatransfer.serviceAgent
   members:
   - serviceAccount:service-748532799086@gcp-sa-bigquerydatatransfer.iam.gserviceaccount.com
-- role: roles/browser
-  members:
-  - principal: human-070
 - role: roles/cloudaicompanion.serviceAgent
   members:
   - serviceAccount:service-748532799086@gcp-sa-cloudaicompanion.iam.gserviceaccount.com
@@ -955,9 +943,6 @@ project_grants:
 - role: roles/cloudjobdiscovery.admin
   members:
   - principal: human-057
-- role: roles/cloudkms.admin
-  members:
-  - principal: human-070
 - role: roles/cloudquotas.admin
   members:
   - principal: human-037
@@ -1048,13 +1033,9 @@ project_grants:
   - principal: human-022
   - principal: human-050
   - principal: human-021
-  - principal: human-070
   - principal: human-006
   - principal: human-060
   - principal: human-026
-- role: roles/compute.networkAdmin
-  members:
-  - principal: human-070
 - role: roles/compute.networkViewer
   members:
   - serviceAccount:loom-dev@hai-gcp-models.iam.gserviceaccount.com
@@ -1177,12 +1158,10 @@ project_grants:
   - principal: human-037
 - role: roles/iam.serviceAccountAdmin
   members:
-  - principal: human-070
   - principal: human-007
 - role: roles/iam.serviceAccountCreator
   members:
   - principal: human-019
-  - principal: human-070
 - role: roles/iam.serviceAccountTokenCreator
   members:
   - serviceAccount:ravwojdyla@rav-openathena.iam.gserviceaccount.com
@@ -1215,7 +1194,6 @@ project_grants:
   - serviceAccount:iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com
   - principal: human-037
   - principal: human-044
-  - principal: human-070
 - role: roles/ml.serviceAgent
   members:
   - serviceAccount:service-748532799086@cloud-ml.google.com.iam.gserviceaccount.com
@@ -1232,7 +1210,6 @@ project_grants:
   - serviceAccount:748532799086-compute@developer.gserviceaccount.com
   - principal: human-037
   - principal: human-044
-  - principal: human-070
 - role: roles/networkmanagement.serviceAgent
   members:
   - serviceAccount:service-748532799086@gcp-sa-networkmanagement.iam.gserviceaccount.com
@@ -1317,7 +1294,6 @@ project_grants:
 - role: roles/serviceusage.serviceUsageAdmin
   members:
   - principal: human-037
-  - principal: human-070
 - role: roles/serviceusage.serviceUsageConsumer
   members:
   - principal://iam.googleapis.com/projects/748532799086/locations/global/workloadIdentityPools/github-pool/subject/repo:marin-community/marin:ref:refs/heads/main
@@ -1353,7 +1329,6 @@ project_grants:
 - role: roles/storage.objectUser
   members:
   - principal: human-039
-  - principal: human-070
 - role: roles/storage.objectViewer
   members:
   - serviceAccount:checkpoint-download@hai-gcp-models.iam.gserviceaccount.com
@@ -1409,7 +1384,6 @@ kms_grants:
   - serviceAccount:ravwojdyla@rav-openathena.iam.gserviceaccount.com
   - principal: human-032
   - principal: human-064
-  - principal: human-070
 secrets:
 - secret: EGRESS_ALERT_SLACK_WEBHOOK
   grants:
@@ -1470,9 +1444,6 @@ secrets:
 buckets:
 - bucket: marin-iac-state
   grants:
-  - role: projects/hai-gcp-models/roles/marinStorageBucketIamManager
-    members:
-    - principal: human-070
   - role: roles/storage.legacyBucketOwner
     members:
     - projectEditor:hai-gcp-models
@@ -1636,9 +1607,6 @@ service_accounts:
     - principalSet://iam.googleapis.com/projects/748532799086/locations/global/workloadIdentityPools/github-pool/attribute.repository/marin-community/xla
 - email: iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com
   grants:
-  - role: projects/hai-gcp-models/roles/marinServiceAccountIamManager
-    members:
-    - principal: human-070
   - role: roles/iam.serviceAccountTokenCreator
     members:
     - principal://iam.googleapis.com/projects/748532799086/locations/global/workloadIdentityPools/github-pool/subject/repo:marin-community/marin:ref:refs/heads/main
@@ -1706,7 +1674,6 @@ service_accounts:
     - principal: human-022
     - principal: human-050
     - principal: human-021
-    - principal: human-070
     - principal: human-006
     - principal: human-060
     - principal: human-026
@@ -1770,7 +1737,6 @@ service_accounts:
     - principal: human-022
     - principal: human-050
     - principal: human-021
-    - principal: human-070
     - principal: human-006
     - principal: human-060
     - principal: human-026
@@ -1837,7 +1803,6 @@ service_accounts:
     - principal: human-022
     - principal: human-050
     - principal: human-021
-    - principal: human-070
     - principal: human-006
     - principal: human-060
     - principal: human-026
@@ -1902,16 +1867,12 @@ service_accounts:
     - principal: human-022
     - principal: human-050
     - principal: human-021
-    - principal: human-070
     - principal: human-006
     - principal: human-060
     - principal: human-026
     - principal: human-003
 - email: marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
   grants:
-  - role: projects/hai-gcp-models/roles/marinServiceAccountIamManager
-    members:
-    - principal: human-070
   - role: roles/iam.workloadIdentityUser
     members:
     - principal://iam.googleapis.com/projects/748532799086/locations/global/workloadIdentityPools/github-pool/subject/repo:marin-community/marin:ref:refs/heads/main
@@ -1925,9 +1886,6 @@ service_accounts:
     - principal: human-010
 - email: pulumi-ci@hai-gcp-models.iam.gserviceaccount.com
   grants:
-  - role: projects/hai-gcp-models/roles/marinServiceAccountIamManager
-    members:
-    - principal: human-070
   - role: roles/iam.workloadIdentityUser
     members:
     - principal://iam.googleapis.com/projects/748532799086/locations/global/workloadIdentityPools/github-pool/subject/repo:marin-community/marin:pull_request

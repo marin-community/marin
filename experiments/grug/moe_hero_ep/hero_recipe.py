@@ -38,8 +38,12 @@ HERO_NODE_CPU = 120
 HERO_NODE_RAM = "890g"
 HERO_NODE_DISK = "1t"
 HERO_MIXED_PRECISION = "params=bfloat16,compute=bfloat16,output=bfloat16"
-# The hero keeps fp32 weights on device; the diagnostics, soak, and benchmarks follow it.
-HERO_MASTER_PARAM_MODE = MasterParamMode.DEVICE
+# The pooled-wave transport peaks at 149.9 GiB of device memory with fp32 weights on device
+# (#8549), above the 138.2 GiB `cuda_async` release threshold, so this fallback keeps the fp32
+# master on pinned host and leaves the device copy in bf16. The mode is part of the checkpoint
+# layout: a master-less checkpoint cannot restore into it, because synthesizing a master is
+# refused. The diagnostics, soak, and benchmarks follow the hero.
+HERO_MASTER_PARAM_MODE = MasterParamMode.FP32_PINNED_HOST
 # An fp32 master keeps the device copy in bf16; without one the device weights are the fp32 copy.
 HERO_MIXED_PRECISION_BY_MASTER_PARAM_MODE = {
     MasterParamMode.FP32_PINNED_HOST: HERO_MIXED_PRECISION,

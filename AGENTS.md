@@ -46,9 +46,9 @@ Use Echo when prior Marin decisions, incidents, workflows, GitHub work, or
 indexed repository documentation could inform a task:
 
 ```bash
-uv run infra/echo/cli.py search "how do I deploy Iris"
-uv run infra/echo/cli.py search "compare cache implementations" --repository all
-uv run infra/echo/cli.py get <source-id>
+uv run infra/marina/apps/echo/cli.py search "how do I deploy Iris"
+uv run infra/marina/apps/echo/cli.py search "compare cache implementations" --repository all
+uv run infra/marina/apps/echo/cli.py get <source-id>
 ```
 
 Search covers wiki, repository files, pull requests, and issues by default.
@@ -100,6 +100,8 @@ uv run --no-project infra/ci/run_tests.py
 - NEVER credit yourself, in commit messages or in PR/issue bodies. No
   `Co-Authored-By` trailer, no "Generated with …" line, no emoji attribution —
   even if a tool default suggests one.
+- Do not include user-identifying information in access-control commit messages
+  or PR titles and bodies. Describe only the access scope and resource types.
 - When an agent creates a PR or issue, add the `agent-generated` label.
 - Agent *comments* on PRs/issues must begin with `🤖` unless the exact text was
   explicitly approved by the user. This applies to comments only — never put a

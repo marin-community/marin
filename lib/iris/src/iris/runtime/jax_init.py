@@ -169,7 +169,14 @@ def _enable_xla_autotune_cache() -> None:
     if any(flag.partition("=")[0] == _XLA_AUTOTUNE_CACHE_DIR_FLAG for flag in xla_flags.split()):
         return
 
+    # A multigpu task runs one Python process per GPU on the same node-local mount. XLA moves
+    # temporary entries into the cache as it autotunes, so concurrent writers in one directory can
+    # race and leave another process with NOT_FOUND for its temporary file. Isolate the writers;
+    # repeating autotuning per process is cheaper than losing the distributed job.
     autotune_dir = f"{SCRATCH_CACHE_PATH}/{_XLA_AUTOTUNE_CACHE_SUBDIR}"
+    process_index = os.environ.get(IRIS_MULTIGPU_PROCESS_INDEX_ENV)
+    if process_index is not None:
+        autotune_dir = f"{autotune_dir}/process-{process_index}"
     try:
         os.makedirs(autotune_dir, exist_ok=True)
     except OSError as exc:

@@ -23,6 +23,7 @@ from .review_store import (
     MAX_ACTIVITY_RESULTS,
     ReviewContext,
     catalog_snapshot_shas,
+    create_schema,
     database_config_from_environment,
     database_engine,
     latest_sync_status,
@@ -98,6 +99,13 @@ def ensure_source_context(engine: Engine, context: ReviewContext, *, refresh: bo
 @click.group()
 def cli() -> None:
     """Explore review data, inspect rules, run probes, and publish reports."""
+
+
+@cli.command("init-schema")
+def init_schema() -> None:
+    """Create the workbench tables that do not exist yet."""
+    with database_engine(database_config_from_environment()) as engine:
+        create_schema(engine)
 
 
 @cli.command("sync-status")

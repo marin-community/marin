@@ -352,7 +352,7 @@ class ZephyrWorker:
                 work.execution_id,
                 task.shard_idx,
                 work.attempt,
-                "".join(traceback.format_exc()),
+                traceback.format_exc(),
                 work.stage_generation,
             ).result()
         finally:
@@ -370,7 +370,6 @@ class ZephyrWorker:
         with self._resources_lock:
             if not counters:
                 counters = active_shard.last_counters
-            active_shard.last_counters = dict(counters)
             self._stats_writer.emit_worker_stat(
                 active_shard.task.stage_name,
                 active_shard.task.shard_idx,
