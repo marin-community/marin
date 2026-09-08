@@ -93,7 +93,10 @@ def score_row(row: dict[str, Any], decoder: Tokenizer, *, model: str, thinking: 
         correct = native >= 1.0
     if env == "aime":
         native = 1.0 if correct else -1.0
-    raw = float(row["score"])
+    rewards = row["score"]
+    # Finalized trajectory dumps use token rewards; preserve the same sequence
+    # reduction as audit_eval_dump / W&B avg_score, without binarizing it.
+    raw = float(sum(rewards) if isinstance(rewards, list) else rewards)
     if not math.isfinite(raw) or not math.isclose(raw, native, rel_tol=0, abs_tol=1e-12):
         raise ValueError("Dump reward does not match the frozen native verifier mapping")
     tokens = row["response_ids"]
