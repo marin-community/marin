@@ -11,6 +11,10 @@ import subprocess
 from pathlib import Path
 
 NODEID = "skyrl-train/tests/gpu/test_megatron_worker.py::test_megatron_policy_weight_sync[publication_stages_two_gpu]"
+CHAT_NODEID = (
+    "skyrl-train/tests/gpu/gpu_ci/test_pause_and_continue_generation.py"
+    "::test_continue_generation_vllm_engine_chat_completion"
+)
 SOURCES = (
     "uv.lock",
     "pyproject.toml",
@@ -29,6 +33,7 @@ def main():
     parser.add_argument("--job-name", required=True)
     parser.add_argument("--marin-commit", required=True)
     parser.add_argument("--execute", action="store_true")
+    parser.add_argument("--native-chat", action="store_true", help="Run the exact native HTTP pause/continue gate")
     args = parser.parse_args()
     assert len(args.marin_commit) == 40 and all(c in "0123456789abcdef" for c in args.marin_commit)
     assert args.job_name.startswith("async-rl-v2-publication-stage-")
@@ -40,7 +45,19 @@ def main():
     assert not subprocess.check_output(["git", "-C", str(marin_root), "status", "--porcelain"], text=True)
     assert not subprocess.check_output(["git", "status", "--porcelain"], text=True)
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-    hashes = {name: hashlib.sha256(Path(name).read_bytes()).hexdigest() for name in SOURCES}
+    sources = SOURCES + (
+        (
+            "skyrl-train/tests/gpu/gpu_ci/test_pause_and_continue_generation.py",
+            "skyrl-train/tests/gpu/gpu_ci/test_inference_engine_client_http_endpoint.py",
+            "skyrl-train/tests/gpu/utils.py",
+            "skyrl-train/skyrl_train/inference_engines/inference_engine_client_http_endpoint.py",
+        )
+        if args.native_chat
+        else ()
+    )
+    hashes = {name: hashlib.sha256(Path(name).read_bytes()).hexdigest() for name in sources}
+    nodeid = CHAT_NODEID if args.native_chat else NODEID
+    timeout = 900 if args.native_chat else 1800
     assert "publication_stage_walls" in Path(SOURCES[-1]).read_text(), "driver trace hook must be present"
     body = f"""set -euo pipefail
 publication_root="$PWD"
@@ -67,7 +84,7 @@ assert torch.cuda.device_count()==2
 assert all('H100' in torch.cuda.get_device_name(i) for i in range(2))
 print('PUBLICATION_TWO_H100_PREFLIGHT_PASS',flush=True)
 GPU
-exec /tmp/oa-publication-env/bin/python -m pytest -s -q '{NODEID}'
+exec /tmp/oa-publication-env/bin/python -m pytest -s -q '{nodeid}'
 """
     command = [
         os.environ["IRIS"],
@@ -95,7 +112,7 @@ exec /tmp/oa-publication-env/bin/python -m pytest -s -q '{NODEID}'
         "--max-retries",
         "0",
         "--timeout",
-        "1800",
+        str(timeout),
         "--no-sync",
         "--no-wait",
         "--",
@@ -107,11 +124,12 @@ exec /tmp/oa-publication-env/bin/python -m pytest -s -q '{NODEID}'
         "msr": commit,
         "marin": args.marin_commit,
         "sha256": hashes,
-        "nodeid": NODEID,
-        "model_revision": "c1899de289a04d12100db370d81485cdf75e47ca",
+        "nodeid": nodeid,
+        "model_revision": None if args.native_chat else "c1899de289a04d12100db370d81485cdf75e47ca",
+        "model": "Qwen/Qwen2.5-0.5B-Instruct" if args.native_chat else "Qwen/Qwen3-0.6B",
         "profile": "megatron/vllm/telemetry + frozen dev group",
-        "max_task_gpu_hours": 1.0,
-        "storage": "pinned public Qwen model to pod cache; no dataset or bucket I/O; durable Iris logs",
+        "max_task_gpu_hours": 2 * timeout / 3600,
+        "storage": "public Qwen model to pod cache; no dataset or bucket I/O; durable Iris logs",
         "command": command,
     }
     print(json.dumps(preview, indent=2), flush=True)
