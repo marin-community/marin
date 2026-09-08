@@ -226,6 +226,7 @@ def training_config(
     epoch_seeded_shuffle: bool = False,
     dataloader_workers: int | None = None,
     publication_stage_timing: bool = False,
+    serial_engine_startup: bool = False,
     optimizer_precision: OptimizerPrecision = OptimizerPrecision.NATIVE,
     optimizer_state_metrics: bool = False,
 ) -> str:
@@ -326,6 +327,10 @@ def training_config(
     apply_observation_options(
         config, initial_eval_repeat_count=initial_eval_repeat_count, weight_change_probe=weight_change_probe
     )
+    if type(serial_engine_startup) is not bool:
+        raise ValueError("serial_engine_startup must be a boolean")
+    if serial_engine_startup:
+        config.setdefault("generator", {})["inference_engine_serial_startup"] = True
     if type(publication_stage_timing) is not bool:
         raise ValueError("publication_stage_timing must be a boolean")
     if publication_stage_timing:
@@ -448,6 +453,7 @@ def build_experiment(
     epoch_seeded_shuffle: bool = False,
     dataloader_workers: int | None = None,
     publication_stage_timing: bool = False,
+    serial_engine_startup: bool = False,
     optimizer_precision: OptimizerPrecision = OptimizerPrecision.NATIVE,
     optimizer_state_metrics: bool = False,
 ) -> tuple[ArtifactStep[SkyRLModel] | ArtifactStep[SkyRLTrainingResult], ArtifactStep[EvaluationResult] | None]:
@@ -483,6 +489,7 @@ def build_experiment(
         epoch_seeded_shuffle=epoch_seeded_shuffle,
         dataloader_workers=dataloader_workers,
         publication_stage_timing=publication_stage_timing,
+        serial_engine_startup=serial_engine_startup,
         optimizer_precision=optimizer_precision,
         optimizer_state_metrics=optimizer_state_metrics,
     )
@@ -617,6 +624,7 @@ def build_experiment(
     "--dataloader-workers", type=click.IntRange(min=0), help="Override loader workers; zero avoids spawn stalls."
 )
 @click.option("--publication-stage-timing/--no-publication-stage-timing", default=False, show_default=True)
+@click.option("--serial-engine-startup/--no-serial-engine-startup", default=False, show_default=True)
 @click.option("--inference-replicas", type=click.Choice(["8", "16"]), default="8", show_default=True)
 @click.option("--seed", type=click.IntRange(min=0, max=2**32 - 1), default=SEED, show_default=True)
 @click.option("--kl-loss/--no-kl-loss", default=True, show_default=True)
@@ -675,6 +683,7 @@ def main(
     epoch_seeded_shuffle: bool,
     dataloader_workers: int | None,
     publication_stage_timing: bool,
+    serial_engine_startup: bool,
     timeout_seconds: int,
     execute: bool,
 ) -> None:
@@ -708,6 +717,7 @@ def main(
         epoch_seeded_shuffle=epoch_seeded_shuffle,
         dataloader_workers=dataloader_workers,
         publication_stage_timing=publication_stage_timing,
+        serial_engine_startup=serial_engine_startup,
     )
     prefix = marin_prefix()
     if execute:

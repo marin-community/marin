@@ -1011,3 +1011,24 @@ def test_qwen_weight_sync_trace_is_opt_in_and_changes_request_identity():
 def test_qwen_weight_sync_trace_requires_boolean(value):
     with pytest.raises(ValueError, match="publication_stage_timing must be a boolean"):
         qwen_metrics_request(publication_stage_timing=value)
+
+
+def test_qwen_serial_engine_startup_is_opt_in_and_changes_request_identity():
+    args = ["--version", "2026.09.08.1", "--stage", "rl", "--completion", "metrics"]
+    requests = []
+    for extra in [[], ["--no-serial-engine-startup"], ["--serial-engine-startup"]]:
+        result = CliRunner().invoke(async_rl.main, [*args, *extra])
+        assert result.exit_code == 0, result.output
+        requests.append(json.loads(result.output)["request"])
+    before, off, after = requests
+    assert before["run_id"] == off["run_id"] != after["run_id"]
+    assert before["config_yaml"] == off["config_yaml"]
+    config = yaml.safe_load(after["config_yaml"])
+    assert config["generator"].pop("inference_engine_serial_startup") is True
+    assert config == yaml.safe_load(before["config_yaml"])
+
+
+@pytest.mark.parametrize("value", [1, None, "true"])
+def test_qwen_serial_startup_requires_boolean(value):
+    with pytest.raises(ValueError, match="serial_engine_startup must be a boolean"):
+        qwen_metrics_request(serial_engine_startup=value)
