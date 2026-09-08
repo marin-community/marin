@@ -35,6 +35,7 @@ use crate::proto::finelog::stats::{
 };
 use crate::query::provider::NamespaceProvider;
 use crate::query::RegisteredProvider;
+use crate::store::catalog::projection::namespace_catalog;
 use crate::store::catalog::{Catalog, PublishedObjectSegment, RegisteredNamespace, SpecLifecycle};
 use crate::store::ipc::decode_one_record_batch;
 use crate::store::namespace_name::validate_namespace_name;
@@ -478,10 +479,13 @@ impl Store {
             };
             let state = claimed.catalog.clone();
             let high_water = state.persisted_high_water.unwrap_or(0);
-            self.tables.adopt_claimed_state(&namespace, claimed);
             if self.recover_claimed_table(&namespace, state).await? {
                 loaded_count += 1;
             }
+            // Projection recovery can replace the runtime and its controller.
+            // Install the claim only after that replacement so the surviving
+            // controller owns HEAD and exposes its durability watermark.
+            self.tables.adopt_claimed_state(&namespace, claimed);
             // The durable state's high-water mark can exceed the max seq in its
             // published segments (a legacy import excludes archive-only rows;
             // retirement deletes legacy rows). Seed the allocator past it so a
@@ -561,7 +565,18 @@ impl Store {
             return Ok(false);
         }
         if local_revision == remote_revision {
-            return Ok(false);
+            let local_matches = self.namespace_dir(namespace)?.is_some_and(|table_dir| {
+                namespace_catalog(&self.catalog, namespace, &table_dir)
+                    .is_ok_and(|local| local == state)
+            });
+            if local_matches {
+                return Ok(false);
+            }
+            tracing::warn!(
+                namespace,
+                remote_revision,
+                "rebuilding a same-revision local projection that differs from durable state"
+            );
         }
         if state.active_table_spec_version.unwrap_or(0) == 0
             && state.desired_table_spec_version.unwrap_or(0) == 0
@@ -2441,6 +2456,7 @@ mod tests {
             data_dir,
             remote_dir,
             batch_schema,
+            last_seq,
             ..
         } = published_object_table("empty_store_recovery").await;
         store.shutdown(Duration::from_secs(1)).await;
@@ -2453,8 +2469,18 @@ mod tests {
             ServeMode::Shadow,
         )
         .unwrap();
+        recovered_store
+            .configure_ack_durability(AckDurability::ObjectStore)
+            .unwrap();
         recovered_store.bootstrap_maintenance();
         assert_eq!(recovered_store.recover_tables().await.unwrap(), 1);
+        assert_eq!(
+            recovered_store
+                .namespace_persisted_seq("iris.worker")
+                .unwrap(),
+            last_seq,
+            "a claimed HEAD immediately restores the remote durability watermark"
+        );
         assert_eq!(
             recovered_store
                 .spec_lifecycle("iris.worker")
@@ -2491,6 +2517,71 @@ mod tests {
         recovered_store.shutdown(Duration::from_secs(1)).await;
         std::fs::remove_dir_all(data_dir).ok();
         std::fs::remove_dir_all(empty_data_dir).ok();
+        std::fs::remove_dir_all(remote_dir).ok();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn remote_head_replaces_a_same_revision_divergent_local_projection() {
+        let PublishedObjectTableFixture {
+            store,
+            data_dir,
+            remote_dir,
+            ..
+        } = published_object_table("same_revision_recovery").await;
+        store.shutdown(Duration::from_secs(1)).await;
+
+        let selected_store = ObjectTableStateStore::new(Arc::new(
+            build_remote_object_store(remote_dir.to_str().unwrap())
+                .unwrap()
+                .unwrap(),
+        ));
+        let selected = selected_store.load("iris.worker").await.unwrap().unwrap();
+        let local_revision = store
+            .catalog
+            .set_forward_cursor("local-only", "iris.worker", 41)
+            .unwrap();
+        let mut remote_catalog = selected.catalog.clone();
+        remote_catalog.catalog_generation = Some(local_revision.get());
+        remote_catalog.forward_cursors = vec![crate::proto::finelog::stats::ForwardCursor {
+            target: Some("remote-only".to_string()),
+            cursor: Some(42),
+            ..Default::default()
+        }];
+        selected_store
+            .commit(
+                "iris.worker",
+                selected.fence(),
+                Some(&selected),
+                remote_catalog,
+            )
+            .await
+            .unwrap();
+        drop(store);
+
+        let reopened = Store::new(
+            Some(data_dir.clone()),
+            remote_dir.to_string_lossy().into_owned(),
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Shadow,
+        )
+        .unwrap();
+        reopened.bootstrap_maintenance();
+        assert_eq!(reopened.recover_tables().await.unwrap(), 1);
+        assert_eq!(
+            reopened
+                .forward_cursor("remote-only", "iris.worker")
+                .unwrap(),
+            Some(42)
+        );
+        assert_eq!(
+            reopened
+                .forward_cursor("local-only", "iris.worker")
+                .unwrap(),
+            None
+        );
+
+        reopened.shutdown(Duration::from_secs(1)).await;
+        std::fs::remove_dir_all(data_dir).ok();
         std::fs::remove_dir_all(remote_dir).ok();
     }
 

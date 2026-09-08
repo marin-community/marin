@@ -424,6 +424,7 @@ impl TableController {
     /// snapshot without a second round trip to the state store.
     pub fn adopt_claimed(&self, claimed: StoredTableState) {
         let snapshot = TableSnapshot::from_stored(&claimed);
+        self.record_published_high_water(claimed.catalog.persisted_high_water.unwrap_or(0));
         *self.selected.lock().unwrap() = Some(claimed);
         self.claimed.store(true, Ordering::SeqCst);
         self.head_published.store(true, Ordering::SeqCst);

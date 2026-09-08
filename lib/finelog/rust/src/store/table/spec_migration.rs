@@ -417,7 +417,13 @@ async fn backfill(
         }
     }
 
-    migration.catalog.refresh_migration_rows_total(table)?;
+    migration
+        .controller
+        .commit(|| {
+            let revision = migration.catalog.refresh_migration_rows_total(table)?;
+            Ok((revision, ()))
+        })
+        .await?;
     if unexamined {
         return Ok(true);
     }

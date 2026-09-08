@@ -197,19 +197,6 @@ impl Catalog {
             )));
         }
         let mut inner = self.inner.lock().unwrap();
-        let local_generation: Option<i64> = inner
-            .conn
-            .query_row(
-                "SELECT catalog_generation FROM table_heads WHERE namespace = ?1",
-                [namespace],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(sqlite_err)?;
-        if local_generation == Some(remote_generation as i64) {
-            return Ok(());
-        }
-
         inner.upsert_locked(namespace, &schema)?;
         inner.upsert_policy_locked(namespace, &policy)?;
         let transaction = inner.conn.transaction().map_err(sqlite_err)?;

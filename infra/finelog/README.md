@@ -34,6 +34,15 @@ writes. If the update or verification fails after changing the Deployment, the
 wrapper restores the captured ReplicaSet, verifies it, and refreshes Pulumi
 state to match the restored workload. Pass `--yes` to skip Pulumi's confirmation.
 
+ReplicaSet rollback assumes the prior binary can read every remote table state
+the candidate published. It cannot cross an object-state format change. In
+particular, current object references omit the former `sha256` field; a binary
+that requires that field fails recovery after the current server publishes a
+table revision. Before registering the first object-native table on a cluster,
+treat the candidate as roll-forward-only. If verification later fails, deploy a
+corrected descendant against the same remote root. Do not use
+`finelog rollback` to restore a SHA-validating image.
+
 The Deployment uses `Recreate` because the Finelog store permits only one
 writer. It retains ten ReplicaSets for rollback. The stack derives its rollout
 identity from the checkout's content-addressed Git tree SHA and stamps the tree
