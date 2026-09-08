@@ -27,11 +27,13 @@ from rigging.timing import Duration
 
 from experiments.post_training import async_snowball as recipe
 
-MSR_COMMIT = "cf4b0d8cf92d97f9354bd374a2df765555a9dd31"
+MSR_COMMIT = "ed11efe8ea81e10e90c8a1f75478234588618311"
 PREFIX = "s3://marin-us-east-02a/marin"
-JOB_NAME = "async-rl-v2-snowball-k6-e3-v1"
+JOB_NAME = "async-rl-v2-snowball-k6-e3-repair-v1"
 SOURCES = (
     "uv.lock",
+    "config/external/MarinSkyRL/pyproject.toml",
+    "config/external/MarinSkyRL/uv.lock",
     "pyproject.toml",
     "experiments/post_training/async_snowball.py",
     "experiments/post_training/async_rl.py",
@@ -50,7 +52,7 @@ def resolved():
     assert os.environ["MARIN_PREFIX"] == PREFIX
     recipe.validate_regional_storage(PREFIX, recipe.CLUSTER)
     training = recipe.build_experiment(
-        version="2026.09.08.34",
+        version="2026.09.08.35",
         scale=recipe.Scale.CADENCE_GATE,
         completion="metrics",
         timeout_seconds=1350,
