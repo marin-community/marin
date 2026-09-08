@@ -306,3 +306,40 @@ def test_positive_timestamp_on_zero_token_abort_is_not_sampled_coverage():
     result = audit_requests(rows, steps=1, engines=2)
     assert result["requests"] == result["terminal_abort"] == 2
     assert result["requests_with_first_token"] == 1
+
+
+@pytest.mark.parametrize("kind", ["prepared", "failed", "malformed", "unexpected_state"])
+def test_coordinator_dry_run_never_reprints_native_output(monkeypatch, capsys, kind):
+    from subprocess import CompletedProcess
+
+    from experiments.post_training import launch_qwen_weight_sync_gate as coordinator
+
+    secret_marker = "native-output-must-remain-private"
+    stdout = json.dumps({"state": "prepared", "environment": secret_marker})
+    code = 0
+    if kind == "failed":
+        code = 1
+    elif kind == "malformed":
+        stdout = secret_marker
+    elif kind == "unexpected_state":
+        stdout = json.dumps({"state": secret_marker})
+
+    def run(command, **kwargs):
+        assert command[-1] == "--dry-run"
+        assert kwargs == {"capture_output": True, "text": True, "check": False}
+        return CompletedProcess(command, code, stdout, secret_marker)
+
+    monkeypatch.setattr(coordinator.subprocess, "run", run)
+    monkeypatch.setattr(coordinator, "_launcher_command", lambda *args: ["native-launcher"])
+    if kind == "prepared":
+        coordinator.native_launcher_dry_run("pinned-runtime", "request.json")
+    else:
+        with pytest.raises(RuntimeError, match="bounded exit/hash receipt") as error:
+            coordinator.native_launcher_dry_run("pinned-runtime", "request.json")
+        assert secret_marker not in str(error.value)
+    output = capsys.readouterr()
+    assert secret_marker not in output.out + output.err
+    receipt = json.loads(output.out.split("QWEN_WEIGHT_SYNC_NATIVE_DRY_RUN_RECEIPT ", 1)[1])
+    assert receipt["stdout_sha256"] == hashlib.sha256(stdout.encode()).hexdigest()
+    assert receipt["stderr_sha256"] == hashlib.sha256(secret_marker.encode()).hexdigest()
+    assert receipt["returncode"] == code
