@@ -1181,3 +1181,54 @@ def test_dataloader_worker_override_reaches_fingerprinted_recipe(runner):
     if not config["data"]:
         config.pop("data")
     assert config == yaml.safe_load(before["config_yaml"])
+
+
+@pytest.mark.parametrize("mode", ["blocking", "background"])
+def test_eval_scheduling_flags_are_opt_in_and_fingerprinted(mode):
+    baseline = qwen_metrics_request(runner=async_rl.Runner.ASYNC)
+    explicit = qwen_metrics_request(runner=async_rl.Runner.ASYNC, eval_on_installed_weights=False, eval_mode="blocking")
+    selected = qwen_metrics_request(runner=async_rl.Runner.ASYNC, eval_on_installed_weights=True, eval_mode=mode)
+    assert baseline.run_id == explicit.run_id
+    assert baseline.config_yaml == explicit.config_yaml
+    assert selected.run_id != baseline.run_id
+    config = yaml.safe_load(selected.config_yaml)
+    assert config["trainer"]["fully_async"].pop("eval_on_installed_weights") is True
+    assert config["trainer"]["fully_async"].pop("eval_mode") == mode
+    assert config == yaml.safe_load(baseline.config_yaml)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"runner": async_rl.Runner.SYNC, "eval_on_installed_weights": True},
+        {"eval_mode": "background"},
+        {"eval_mode": "invalid"},
+        {"eval_on_installed_weights": 1},
+    ],
+)
+def test_eval_scheduling_rejects_unsupported_modes(changes):
+    with pytest.raises(ValueError, match=r"Evaluation|evaluation"):
+        qwen_metrics_request(**changes)
+
+
+def test_background_eval_cli_reaches_native_recipe():
+    result = CliRunner().invoke(
+        async_rl.main,
+        [
+            "--version",
+            "2026.09.08.73",
+            "--runner",
+            "async",
+            "--stage",
+            "rl",
+            "--completion",
+            "metrics",
+            "--eval-on-installed-weights",
+            "--eval-mode",
+            "background",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    config = yaml.safe_load(json.loads(result.output)["request"]["config_yaml"])
+    assert config["trainer"]["fully_async"]["eval_mode"] == "background"
+    assert config["trainer"]["fully_async"]["eval_on_installed_weights"] is True
