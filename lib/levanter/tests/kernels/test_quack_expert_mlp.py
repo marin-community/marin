@@ -23,9 +23,12 @@ def _assert_bfloat16_close(actual, expected):
     actual = np.asarray(actual, dtype=np.float32)
     expected = np.asarray(expected, dtype=np.float32)
     scale = max(float(np.max(np.abs(expected))), 1e-6)
-    # Independent GEMMs round bf16 intermediates differently; normalize by the reference
-    # magnitude, as in the grouped-wgrad tests, while checking every output element.
-    np.testing.assert_allclose(actual / scale, expected / scale, atol=2e-2, rtol=1e-4)
+    normalized_absolute_error = np.abs(actual - expected) / scale
+    max_error = float(np.max(normalized_absolute_error))
+    mean_error = float(np.mean(normalized_absolute_error))
+    assert max_error <= 2e-2, f"max normalized absolute error: {max_error}"
+    # Half a bfloat16 ULP at unit scale is about 4e-3; leave a small margin for chained operations.
+    assert mean_error <= 5e-3, f"mean normalized absolute error: {mean_error}"
 
 
 @pytest.mark.parametrize("use_clc", [False, True])
