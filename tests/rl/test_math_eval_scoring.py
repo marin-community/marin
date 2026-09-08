@@ -3,6 +3,7 @@
 
 """Native reward mappings, answer extraction and token boundary regressions."""
 
+import hashlib
 import json
 from typing import ClassVar
 
@@ -170,3 +171,25 @@ def test_production_token_reward_arrays_retain_native_sequence_score(reward):
 def test_shaped_token_reward_sum_cannot_impersonate_native_contract_score():
     with pytest.raises(ValueError, match="native verifier mapping"):
         score_row(row("Answer: 5", raw=[0.25, 1.0]), Decoder(), model="qwen", thinking=False)
+
+
+def test_contract_uses_engine_text_while_retaining_forensic_eos_tokens():
+    entry = reasoning_gym.create_dataset("chain_sum", size=1, seed=101)[0]
+    text = "Answer: " + entry["answer"]
+    gold = json.dumps({"task": "chain_sum", "entry": entry})
+
+    class EosDecoder(Decoder):
+        def decode(self, tokens, skip_special_tokens=False):
+            return "".join(
+                "<|im_end|>" if token == 151645 else chr(token)
+                for token in tokens
+                if not (skip_special_tokens and token == 151645)
+            )
+
+    tokens = [*map(ord, text), 151645]
+    native = row(text + "<|im_end|>", env="reasoning_gym", gold=gold, raw=1.0, tokens=tokens)
+    result = score_row(native, EosDecoder(), model="qwen", thinking=False)
+    assert result.score_contract == result.contract_correct == result.score_contract_completed == 1
+    assert result.contract_response_sha256 == hashlib.sha256(text.encode()).hexdigest()
+    assert result.contract_response_rendering == "decode_skip_special_tokens"
+    assert native["output_response"].endswith("<|im_end|>") and native["response_ids"][-1] == 151645
