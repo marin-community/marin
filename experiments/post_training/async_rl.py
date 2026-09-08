@@ -70,6 +70,7 @@ from experiments.post_training.curriculum_rl.pool import (
     _drop_over_length_records,
     _gsm8k_records,
 )
+from experiments.post_training.math_eval.launcher import pool_inputs
 
 # Full revisions resolved from the curriculum experiment's c1899de/e53f048 pins.
 MODEL_REVISION = "c1899de289a04d12100db370d81485cdf75e47ca"
@@ -438,6 +439,7 @@ def build_experiment(
     epoch_seeded_shuffle: bool = False,
     optimizer_precision: OptimizerPrecision = OptimizerPrecision.NATIVE,
     optimizer_state_metrics: bool = False,
+    pool_artifact: str | None = None,
 ) -> tuple[ArtifactStep[SkyRLModel] | ArtifactStep[SkyRLTrainingResult], ArtifactStep[EvaluationResult] | None]:
     """Construct versioned dependencies and a bounded, namespaced training attempt."""
     validate_version(version)
@@ -486,24 +488,37 @@ def build_experiment(
         run=remote(mirror_hf_model, resources=cpu),
         build_config=lambda ctx: HfSnapshotConfig(output_path=ctx.output_path, revision=MODEL_REVISION),
     )
-    data = ArtifactStep(
-        name=user_owned_name(
-            "documents/async-rl-gsm8k" + (f"-test{validation_offset}-{validation_rows}" if validation_offset else "")
-        ),
-        version=version,
-        artifact_type=Artifact,
-        run=remote(write_gsm8k_window if validation_offset else write_gsm8k_subset, resources=cpu),
-        build_config=lambda ctx: (
-            Gsm8kWindowConfig(
-                Gsm8kSubsetConfig(
-                    ctx.output_path, train_rows=SCHEDULES[scale].train_rows, validation_rows=validation_rows
-                ),
-                validation_offset,
-            )
-            if validation_offset
-            else Gsm8kSubsetConfig(ctx.output_path, train_rows=SCHEDULES[scale].train_rows)
-        ),
-    )
+    if pool_artifact is None:
+        data = ArtifactStep(
+            name=user_owned_name(
+                "documents/async-rl-gsm8k" + (f"-test{validation_offset}-{validation_rows}" if validation_offset else "")
+            ),
+            version=version,
+            artifact_type=Artifact,
+            run=remote(write_gsm8k_window if validation_offset else write_gsm8k_subset, resources=cpu),
+            build_config=lambda ctx: (
+                Gsm8kWindowConfig(
+                    Gsm8kSubsetConfig(
+                        ctx.output_path, train_rows=SCHEDULES[scale].train_rows, validation_rows=validation_rows
+                    ),
+                    validation_offset,
+                )
+                if validation_offset
+                else Gsm8kSubsetConfig(ctx.output_path, train_rows=SCHEDULES[scale].train_rows)
+            ),
+        )
+        train_source = ArtifactDataSource(data, relative_path=TRAIN_FILENAME)
+        validation_source = ArtifactDataSource(data, relative_path=VALIDATION_FILENAME)
+    else:
+        if validation_offset != 0 or validation_rows != VALIDATION_ROWS:
+            raise ValueError("A frozen pool selects its own development rows")
+        pool_config = yaml.safe_load(config)
+        budget = pool_config["context_budget"]
+        generation = max(budget["max_new_tokens_per_turn"], eval_response_tokens or 0)
+        if budget["request_window_tokens"] - generation < 1024:
+            raise ValueError("The frozen pool requires a 1024-token prompt budget")
+        train_source, validation_source = pool_inputs(pool_artifact)
+        data = train_source.step
     identity = fingerprint_hash(
         canonical_json(
             {
@@ -522,8 +537,8 @@ def build_experiment(
         config_yaml=config,
         runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
         model=ArtifactHfModel(model, QWEN3_MODEL, MODEL_REVISION, relative_path="hf"),
-        train_data=(ArtifactDataSource(data, relative_path=TRAIN_FILENAME),),
-        validation_data=(ArtifactDataSource(data, relative_path=VALIDATION_FILENAME),),
+        train_data=(train_source,),
+        validation_data=(validation_source,),
         topology=topology,
         retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
         seed=seed,
@@ -629,6 +644,7 @@ def build_experiment(
 @click.option("--validation-rows", type=click.IntRange(min=1), default=VALIDATION_ROWS, show_default=True)
 @click.option("--timeout-seconds", type=click.IntRange(min=1), default=1800, show_default=True)
 @click.option("--run/--dry-run", "execute", default=False, show_default=True)
+@click.option("--pool-artifact", default=None, help="Use a frozen audited math pool by name@version.")
 def main(
     version: str,
     runner: str,
@@ -657,10 +673,12 @@ def main(
     epoch_seeded_shuffle: bool,
     timeout_seconds: int,
     execute: bool,
+    pool_artifact: str | None,
 ) -> None:
     if completion == "metrics" and stage == "evaluation":
         raise click.UsageError("Metrics completion requires --stage rl; external evaluation requires a model export")
     training, evaluation = build_experiment(
+        pool_artifact=pool_artifact,
         version=version,
         cluster=cluster,
         runner=Runner(runner),
