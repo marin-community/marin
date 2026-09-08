@@ -103,6 +103,15 @@ GPU
 exec /tmp/oa-publication-env/bin/python -m pytest -s -q '{nodeid}'
 """
     )
+    bootstrap = (
+        "UV_PROJECT_ENVIRONMENT=/tmp/oa-publication-env uv sync --quiet --frozen "
+        '--project "$publication_root" --python python3.12 --no-python-downloads '
+        "--link-mode symlink --extra cpu --extra telemetry --group dev --group harbor-test"
+        if args.native_chat_prerequisite
+        else 'bash "$publication_root/cloud/iris/bootstrap_runtime.sh" "$publication_root" '
+        "/tmp/oa-publication-env /tmp/oa-publication-runtime megatron development\n"
+        "source /tmp/oa-publication-runtime"
+    )
     assert "publication_stage_walls" in Path(SOURCES[-1]).read_text(), "driver trace hook must be present"
     body = f"""set -euo pipefail
 publication_root="$PWD"
@@ -120,9 +129,7 @@ for name,digest in expected.items():
     assert hashlib.sha256(Path(name).read_bytes()).hexdigest()==digest,name
 print('PUBLICATION_SOURCE_VERIFIED',json.dumps({{'msr':{commit!r},'marin':{args.marin_commit!r},'sha256':expected}}),flush=True)
 VERIFY
-bash "$publication_root/cloud/iris/bootstrap_runtime.sh" "$publication_root" \\
-  /tmp/oa-publication-env /tmp/oa-publication-runtime megatron development
-source /tmp/oa-publication-runtime
+{bootstrap}
 {prepare_chat}
 {finish}
 """
@@ -166,7 +173,11 @@ source /tmp/oa-publication-runtime
         "nodeid": nodeid,
         "model_revision": None if args.native_chat else "c1899de289a04d12100db370d81485cdf75e47ca",
         "model": "Qwen/Qwen2.5-0.5B-Instruct" if args.native_chat else "Qwen/Qwen3-0.6B",
-        "profile": "megatron/vllm/telemetry + frozen dev group",
+        "profile": (
+            "cpu/telemetry + frozen dev/harbor-test groups"
+            if args.native_chat_prerequisite
+            else "megatron/vllm/telemetry + frozen dev group"
+        ),
         "max_task_gpu_hours": 0 if args.native_chat_prerequisite else 2 * timeout / 3600,
         "prerequisite_only": args.native_chat_prerequisite,
         "storage": "Qwen model and canonical GSM8K fixture in pod cache; no bucket writes; durable Iris logs",
