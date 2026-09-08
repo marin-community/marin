@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 import os
 from functools import partial
 from typing import Optional, cast
@@ -12,7 +13,6 @@ from jaxtyping import Array, Float, Int
 from .config import BlockSizes
 from .reference import linear_softmax_cross_entropy_loss_reference, linear_softmax_cross_entropy_loss_streaming
 from .tuned_block_sizes import (
-    _largest_divisor_at_most,
     infer_block_sizes_with_tuned_match,
     infer_xla_b_block_size,
     infer_xla_v_block_size,
@@ -113,13 +113,9 @@ def _resolve_xla_batch_block_size(
             )
         requested = max_b_block_size
 
-    if requested <= b_dim and b_dim % requested == 0:
-        return requested
-
-    # Default/tuned block sizes often encode a preferred upper bound like 1024.
-    # Preserve that intent by shrinking to the largest valid divisor of B instead
-    # of rejecting smaller local batches outright.
-    return _largest_divisor_at_most(b_dim, min(requested, inferred))
+    # Preserve the requested tile for irregular batches. The public wrapper
+    # pads rows and slices results, avoiding tiny divisor-sized GEMMs.
+    return min(b_dim, requested)
 
 
 def _infer_tuned_xla_batch_block_size(
@@ -691,6 +687,9 @@ def linear_softmax_cross_entropy_loss_xla(
 ) -> tuple[Float[Array, "B"], Float[Array, "B"]] | tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:
     """Streaming linear-softmax cross-entropy on plain XLA.
 
+    Partial batch tiles are padded internally; returned values and gradients
+    contain only the original rows.
+
     Args:
         fast_backward: Use the scan/one-hot/tensor-core backward. ``None`` means
             "no call-site preference" and falls back to the library default (off).
@@ -735,8 +734,19 @@ def linear_softmax_cross_entropy_loss_xla(
             return_argmax=return_argmax,
         )
 
+    original_rows = x.shape[0]
+    row_alignment = b_block_size
+    if fast_backward and bwd_batch_block_size is not None:
+        if bwd_batch_block_size <= 0:
+            raise ValueError(f"batch_block_size must be positive, got {bwd_batch_block_size}.")
+        row_alignment = math.lcm(row_alignment, bwd_batch_block_size)
+    padding_rows = (-original_rows) % row_alignment
+    if padding_rows:
+        x = jnp.pad(x, ((0, padding_rows), (0, 0)))
+        labels = jnp.pad(labels, ((0, padding_rows),))
+
     if return_argmax:
-        return _linear_softmax_cross_entropy_loss_streaming_fwd_with_argmax(
+        loss, lse, argmax = _linear_softmax_cross_entropy_loss_streaming_fwd_with_argmax(
             x,
             labels,
             w,
@@ -747,7 +757,9 @@ def linear_softmax_cross_entropy_loss_xla(
             precision=precision,
         )
 
-    return _linear_softmax_cross_entropy_loss_streaming_custom_vjp(
+        return loss[:original_rows], lse[:original_rows], argmax[:original_rows]
+
+    loss, lse = _linear_softmax_cross_entropy_loss_streaming_custom_vjp(
         v_block_size,
         b_block_size,
         dtype,
@@ -760,6 +772,7 @@ def linear_softmax_cross_entropy_loss_xla(
         labels,
         w,
     )
+    return loss[:original_rows], lse[:original_rows]
 
 
 __all__ = ["linear_softmax_cross_entropy_loss_xla"]
