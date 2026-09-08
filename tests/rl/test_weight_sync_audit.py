@@ -145,7 +145,8 @@ def test_stale_fraction_requires_identity_and_token_coverage(corruption):
 
 
 @pytest.mark.parametrize("corruption", [None, "slow", "stale", "missing_pause", "failure", "budget", "recipe"])
-def test_matched_thresholds_reject_incomplete_or_worse_candidate(monkeypatch, corruption):
+@pytest.mark.parametrize("ceiling", [4.0, 16 * 1050 / 3600])
+def test_matched_thresholds_reject_incomplete_or_worse_candidate(monkeypatch, corruption, ceiling):
     calls, outcomes = token_receipts()
     baseline: dict[str, Any] = {
         "config_identity": {"batch": 64, "seed": 17},
@@ -155,7 +156,7 @@ def test_matched_thresholds_reject_incomplete_or_worse_candidate(monkeypatch, co
         "preemptions": 0,
         "retries": 0,
         "pause_seconds": [5.1] * 20,
-        "task_gpu_hours": 2.0,
+        "task_gpu_hours": ceiling,
         "calls": calls,
         "outcomes": outcomes,
     }
@@ -174,14 +175,15 @@ def test_matched_thresholds_reject_incomplete_or_worse_candidate(monkeypatch, co
     elif corruption == "failure":
         candidate["failed_tasks"] = 1
     elif corruption == "budget":
-        candidate["task_gpu_hours"] = 4.01
+        candidate["task_gpu_hours"] = ceiling + 0.01
     elif corruption == "recipe":
         candidate["config_identity"]["seed"] = 18
     if corruption is None:
-        assert audit_module.audit_matched_gate(baseline, candidate)["candidate"]["pause_p50"] == 0.1
+        result = audit_module.audit_matched_gate(baseline, candidate, task_gpu_hours_ceiling=ceiling)
+        assert result["candidate"]["pause_p50"] == 0.1
     else:
         with pytest.raises(AssertionError):
-            audit_module.audit_matched_gate(baseline, candidate)
+            audit_module.audit_matched_gate(baseline, candidate, task_gpu_hours_ceiling=ceiling)
 
 
 def test_completed_generation_canceled_at_enqueue_still_counts_in_denominator():

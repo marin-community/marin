@@ -149,8 +149,9 @@ def audit_stale_tokens(calls, outcomes):
     }
 
 
-def audit_matched_gate(baseline, candidate):
+def audit_matched_gate(baseline, candidate, *, task_gpu_hours_ceiling: float):
     """Apply the frozen pause and stale-token thresholds without window exclusions."""
+    assert math.isfinite(task_gpu_hours_ceiling) and task_gpu_hours_ceiling > 0, "invalid allocation ceiling"
     assert baseline["config_identity"] == candidate["config_identity"], "unmatched recipe"
     results: dict[str, Any] = {}
     for name, arm in (("baseline", baseline), ("candidate", candidate)):
@@ -159,7 +160,7 @@ def audit_matched_gate(baseline, candidate):
         assert len(arm["pause_seconds"]) == 20 and all(
             math.isfinite(value) and value >= 0 for value in arm["pause_seconds"]
         ), "pause coverage"
-        assert 0 < arm["task_gpu_hours"] <= 4, "arm budget"
+        assert 0 < arm["task_gpu_hours"] <= task_gpu_hours_ceiling, "arm budget"
         results[name] = {"pause_p50": median(arm["pause_seconds"]), **audit_stale_tokens(arm["calls"], arm["outcomes"])}
     assert min(baseline["pause_seconds"]) >= 5.0, "baseline grace absent"
     assert results["candidate"]["pause_p50"] < 0.3, "pause threshold"
