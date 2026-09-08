@@ -112,7 +112,12 @@ class _CompletionManifest:
 
 
 class _MultipartEtag:
-    """Hash a byte stream using the content-derived S3/R2 multipart ETag rules."""
+    """Hash a byte stream using the documented S3/R2 multipart ETag rules.
+
+    This deliberately implements the small streaming calculation locally: none
+    of our S3 dependencies exposes it, and adding a dependency solely for this
+    calculation would not improve correctness.
+    """
 
     def __init__(self, part_size: int):
         self.part_size = part_size
