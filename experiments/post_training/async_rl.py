@@ -225,6 +225,7 @@ def training_config(
     weight_change_probe: bool = False,
     epoch_seeded_shuffle: bool = False,
     dataloader_workers: int | None = None,
+    publication_stage_timing: bool = False,
     optimizer_precision: OptimizerPrecision = OptimizerPrecision.NATIVE,
     optimizer_state_metrics: bool = False,
 ) -> str:
@@ -325,6 +326,10 @@ def training_config(
     apply_observation_options(
         config, initial_eval_repeat_count=initial_eval_repeat_count, weight_change_probe=weight_change_probe
     )
+    if type(publication_stage_timing) is not bool:
+        raise ValueError("publication_stage_timing must be a boolean")
+    if publication_stage_timing:
+        config.setdefault("generator", {}).update(publication_stage_timing=True, inference_stats_poll_seconds=1.0)
     if dataloader_workers is not None:
         if type(dataloader_workers) is not int or dataloader_workers < 0:
             raise ValueError("dataloader_workers must be a nonnegative integer")
@@ -442,6 +447,7 @@ def build_experiment(
     weight_change_probe: bool = False,
     epoch_seeded_shuffle: bool = False,
     dataloader_workers: int | None = None,
+    publication_stage_timing: bool = False,
     optimizer_precision: OptimizerPrecision = OptimizerPrecision.NATIVE,
     optimizer_state_metrics: bool = False,
 ) -> tuple[ArtifactStep[SkyRLModel] | ArtifactStep[SkyRLTrainingResult], ArtifactStep[EvaluationResult] | None]:
@@ -476,6 +482,7 @@ def build_experiment(
         weight_change_probe=weight_change_probe,
         epoch_seeded_shuffle=epoch_seeded_shuffle,
         dataloader_workers=dataloader_workers,
+        publication_stage_timing=publication_stage_timing,
         optimizer_precision=optimizer_precision,
         optimizer_state_metrics=optimizer_state_metrics,
     )
@@ -609,6 +616,7 @@ def build_experiment(
 @click.option(
     "--dataloader-workers", type=click.IntRange(min=0), help="Override loader workers; zero avoids spawn stalls."
 )
+@click.option("--publication-stage-timing/--no-publication-stage-timing", default=False, show_default=True)
 @click.option("--inference-replicas", type=click.Choice(["8", "16"]), default="8", show_default=True)
 @click.option("--seed", type=click.IntRange(min=0, max=2**32 - 1), default=SEED, show_default=True)
 @click.option("--kl-loss/--no-kl-loss", default=True, show_default=True)
@@ -666,6 +674,7 @@ def main(
     weight_change_probe: bool,
     epoch_seeded_shuffle: bool,
     dataloader_workers: int | None,
+    publication_stage_timing: bool,
     timeout_seconds: int,
     execute: bool,
 ) -> None:
@@ -698,6 +707,7 @@ def main(
         weight_change_probe=weight_change_probe,
         epoch_seeded_shuffle=epoch_seeded_shuffle,
         dataloader_workers=dataloader_workers,
+        publication_stage_timing=publication_stage_timing,
     )
     prefix = marin_prefix()
     if execute:

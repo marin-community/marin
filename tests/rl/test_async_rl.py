@@ -988,3 +988,26 @@ def test_dataloader_worker_override_reaches_fingerprinted_recipe(runner):
     if not config["data"]:
         config.pop("data")
     assert config == yaml.safe_load(before["config_yaml"])
+
+
+def test_qwen_weight_sync_trace_is_opt_in_and_changes_request_identity():
+    args = ["--version", "2026.09.08.1", "--stage", "rl", "--completion", "metrics"]
+    default = CliRunner().invoke(async_rl.main, args)
+    disabled = CliRunner().invoke(async_rl.main, [*args, "--no-publication-stage-timing"])
+    enabled = CliRunner().invoke(async_rl.main, [*args, "--publication-stage-timing"])
+    assert default.exit_code == disabled.exit_code == enabled.exit_code == 0
+    before = json.loads(default.output)["request"]
+    off = json.loads(disabled.output)["request"]
+    after = json.loads(enabled.output)["request"]
+    assert before["run_id"] == off["run_id"] != after["run_id"]
+    assert before["config_yaml"] == off["config_yaml"]
+    config = yaml.safe_load(after["config_yaml"])
+    assert config["generator"].pop("publication_stage_timing") is True
+    assert config["generator"].pop("inference_stats_poll_seconds") == 1.0
+    assert config == yaml.safe_load(before["config_yaml"])
+
+
+@pytest.mark.parametrize("value", [1, None, "true"])
+def test_qwen_weight_sync_trace_requires_boolean(value):
+    with pytest.raises(ValueError, match="publication_stage_timing must be a boolean"):
+        qwen_metrics_request(publication_stage_timing=value)
