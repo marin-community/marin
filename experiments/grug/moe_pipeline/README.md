@@ -16,6 +16,11 @@ each physical rank in JaxPP's V-shaped placement. DualPipeV requires at least `2
 microbatches. `PIPELINE_LAYERS_PER_STAGE` contains one positive layer count per logical
 stage.
 
+The canonical loop initializes fresh parameters, uses a fixed AdamW optimizer, and
+trains on synthetic token rows. It does not save or restore checkpoints. A model-specific
+training variant should replace those parts while retaining the stage split and JaxPP
+orchestration that it needs.
+
 The best validated Snowball 67B-A2B throughput point uses eight H100x8 replicas,
 sixteen logical stages, batch 256, 32 microbatches, sequence length 8192, and layer
 counts `1,2,2,2,2,2,2,2,1,1,1,1,2,2,2,1`:
