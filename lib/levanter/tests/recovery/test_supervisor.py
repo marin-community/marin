@@ -46,7 +46,7 @@ def test_clean_run_no_faults(tmp_path):
 @pytest.mark.parametrize(
     "behavior,expected_class,deadman_timeout",
     [
-        # CI may deschedule the child after its heartbeat. Only a deliberate hang should race a short deadman.
+        # Only hang exercises the deadman. Other faults get enough time to exit under CI scheduling delays.
         pytest.param("sticky", FaultClass.STICKY, 30.0, id="sticky-sticky"),
         pytest.param("crash", FaultClass.CRASH, 30.0, id="crash-crash"),
         pytest.param("hang", FaultClass.STALL, 3.0, id="hang-stall"),
