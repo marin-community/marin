@@ -223,6 +223,9 @@ def training_config(
     eval_response_tokens: int | None = None,
     context_tokens: int | None = None,
     screening_steps: int | None = None,
+    minibatches: int = 1,
+    updates: int | None = None,
+    eval_updates: int | None = None,
     eval_interval: int | None = None,
     initial_eval_repeat_count: int = 1,
     weight_change_probe: bool = False,
@@ -243,6 +246,26 @@ def training_config(
         schedule = replace(
             schedule, max_steps=screening_steps, checkpoint_interval=screening_steps, eval_interval=screening_steps
         )
+    if type(minibatches) is not int or not 1 <= minibatches <= 16:
+        raise ValueError("minibatches must be an integer in [1,16]")
+    if minibatches != 1 and (runner is not Runner.SYNC or updates is None):
+        raise ValueError("Multiple minibatches require the synchronous runner and explicit total updates")
+    if updates is not None:
+        if type(updates) is not int or updates <= 0 or updates % minibatches:
+            raise ValueError("Total updates must be positive and divisible by minibatches")
+        if screening_steps is not None or eval_interval is not None:
+            raise ValueError("Use updates/eval_updates without batch-count screening_steps/eval_interval")
+        cadence = updates if eval_updates is None else eval_updates
+        if type(cadence) is not int or cadence <= 0 or updates % cadence or cadence % minibatches:
+            raise ValueError("eval_updates must divide total updates and be divisible by minibatches")
+        schedule = replace(
+            schedule,
+            max_steps=updates // minibatches,
+            checkpoint_interval=updates // minibatches,
+            eval_interval=cadence // minibatches,
+        )
+    elif eval_updates is not None:
+        raise ValueError("eval_updates requires explicit total updates")
     validate_eval_interval(eval_interval, schedule.max_steps, enabled=schedule.eval_interval > 0)
     if eval_interval is not None:
         schedule = replace(schedule, eval_interval=eval_interval)
@@ -263,7 +286,11 @@ def training_config(
         raise ValueError("Context budget must fit the validated prompt limit plus either response budget")
     preset = replace(
         SMOKE,
-        role_plan=replace(ROLE_PLAN, num_inference_engines=inference_replicas),
+        role_plan=replace(
+            ROLE_PLAN,
+            num_inference_engines=inference_replicas,
+            train_batch_size=ROLE_PLAN.train_batch_size * minibatches,
+        ),
         num_nodes=1 + inference_replicas // POLICY_GPUS,
         request_window_tokens=context_tokens,
         max_new_tokens=response_tokens,
@@ -492,6 +519,9 @@ def build_experiment(
     eval_response_tokens: int | None = None,
     context_tokens: int | None = None,
     screening_steps: int | None = None,
+    minibatches: int = 1,
+    updates: int | None = None,
+    eval_updates: int | None = None,
     eval_interval: int | None = None,
     validation_offset: int = 0,
     validation_rows: int = VALIDATION_ROWS,
@@ -534,6 +564,9 @@ def build_experiment(
         eval_response_tokens=eval_response_tokens,
         context_tokens=context_tokens,
         screening_steps=screening_steps,
+        minibatches=minibatches,
+        updates=updates,
+        eval_updates=eval_updates,
         eval_interval=eval_interval,
         initial_eval_repeat_count=initial_eval_repeat_count,
         weight_change_probe=weight_change_probe,
@@ -549,7 +582,11 @@ def build_experiment(
         1 + inference_replicas // POLICY_GPUS,
         POLICY_GPUS,
         "H100",
-        replace(ROLE_PLAN, num_inference_engines=inference_replicas),
+        replace(
+            ROLE_PLAN,
+            num_inference_engines=inference_replicas,
+            train_batch_size=ROLE_PLAN.train_batch_size * minibatches,
+        ),
     )
     model = ArtifactStep(
         name=user_owned_name("models/async-rl-qwen3-0.6b"),
@@ -727,6 +764,11 @@ def build_experiment(
     "--eval-response-tokens", type=click.IntRange(min=1), help="Internal evaluation cap; defaults to training."
 )
 @click.option("--context-tokens", type=click.IntRange(min=1), help="Engine context window; defaults to 2048.")
+@click.option("--minibatches", type=click.IntRange(min=1, max=16), default=1, show_default=True)
+@click.option(
+    "--updates", type=click.IntRange(min=1), help="Total optimizer updates; explicit with multiple minibatches."
+)
+@click.option("--eval-updates", type=click.IntRange(min=1), help="Evaluation cadence in optimizer updates.")
 @click.option("--screening-steps", type=click.IntRange(min=1), help="Screening-only update count; defaults to 25.")
 @click.option("--eval-interval", type=click.IntRange(min=1), help="Evaluation cadence; must divide the update count.")
 @click.option("--validation-offset", type=click.IntRange(min=0), default=0, show_default=True)
@@ -759,6 +801,9 @@ def main(
     eval_response_tokens: int | None,
     context_tokens: int | None,
     screening_steps: int | None,
+    minibatches: int,
+    updates: int | None,
+    eval_updates: int | None,
     eval_interval: int | None,
     validation_offset: int,
     validation_rows: int,
@@ -800,6 +845,9 @@ def main(
         eval_response_tokens=eval_response_tokens,
         context_tokens=context_tokens,
         screening_steps=screening_steps,
+        minibatches=minibatches,
+        updates=updates,
+        eval_updates=eval_updates,
         eval_interval=eval_interval,
         validation_offset=validation_offset,
         validation_rows=validation_rows,
