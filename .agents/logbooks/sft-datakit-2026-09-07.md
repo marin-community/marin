@@ -66,3 +66,10 @@ author: William Held
 - Preserve the prior launch's step-157000 full-state source checkpoint, 2,000 updates, 60/1,740/200 WSD schedule, batch 256, context 262,144, 80% SFT/20% replay, non-preemptible v4-2048 in us-central2-b, and 256-worker topology. Dataset roots are unchanged. DRI: William Held. Startup monitoring remains owned by this assistant session; the background Iris status monitor alone cannot detect stalled training progress.
 - Command: `uv run iris --cluster=marin job run --no-wait --job-name sft-datakit-20260907-prod-wsd-continuous --priority production --cpu 1 --memory 2GB --disk 5GB --region us-central2 -e UV_LOCK_TIMEOUT 900 -e MARIN_PREFIX gs://marin-us-central2 -e WANDB_API_KEY "$WANDB_API_KEY" -- uv run python experiments/june_tpu_67b_a2b/moe/sft_datakit_chat_mix.py`
 - Next action: submit once, verify cached dependencies are skipped, and inspect startup progress beyond replay dataset construction.
+
+
+### 2026-09-07 19:53 PDT - Continuous-token replay submitted
+
+- Submitted `/held/sft-datakit-20260907-prod-wsd-continuous` at 19:51:22 PDT from clean, pushed source `a77786f182d4aa58cee051236624138ebdff59ec`, bundle `67a428ea21b7bba780c471d16edc77c12da17b9182ef652fe79ea470fc8d6f6c` (11.1 MB). The coordinator received the W&B credential.
+- The coordinator dispatched the training child at 19:52:25 PDT. At 19:52:57 PDT both coordinator and training child were RUNNING. There are no preprocessing children. Dataset startup and the first training updates remain to be verified.
+- [Iris job](https://iris.oa.dev/#/job/%2Fheld%2Fsft-datakit-20260907-prod-wsd-continuous). Next action: verify progress beyond dataset construction and checkpoint restoration.
