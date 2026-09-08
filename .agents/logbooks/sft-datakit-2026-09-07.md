@@ -86,3 +86,11 @@ author: William Held
 - Preserve 2,000 updates, the 60/1,740/200 WSD schedule at peak LR 5e-5 and floor 5e-6, batch 256, context 262,144, context parallelism 4, expert parallelism 1, and non-preemptible v4-2048 in us-central2-b with 256 workers. Replay receives 20% of the outer mixture; SFT receives 80%. Existing log, compilation-cache, and temporary-output destinations remain unchanged. DRI: William Held; startup monitoring owner: this active assistant session.
 - Command: `uv run iris --cluster=marin job run --no-wait --job-name sft-datakit-20260907-prod-wsd-lcr-replay --priority production --cpu 1 --memory 2GB --disk 5GB --region us-central2 -e UV_LOCK_TIMEOUT 900 -e MARIN_PREFIX gs://marin-us-central2 -e WANDB_API_KEY "$WANDB_API_KEY" -- uv run python experiments/june_tpu_67b_a2b/moe/sft_datakit_chat_mix.py`
 - Next action: submit once and verify cache reuse, dataset startup, checkpoint restoration, and training progress.
+
+
+### 2026-09-07 20:48 PDT - LCR-equivalent replay submitted
+
+- Submitted `/held/sft-datakit-20260907-prod-wsd-lcr-replay` at 20:44:56 PDT from clean, pushed source `09989c43010e9fef0a5520cdc4af8bae90252a06`; bundle `2642451fa02acba32b2248d1ac68ce49bbcb45dee943f7128e6135b412dc305f` (11.1 MB).
+- All 158 cached SFT dependencies were skipped. The training child was dispatched at 20:45:48 PDT and is running; JAX initialized on attempt 0. Checkpoint restoration and the first batch remain unverified.
+- [Iris job](https://iris.oa.dev/#/job/%2Fheld%2Fsft-datakit-20260907-prod-wsd-lcr-replay) · [Replay grouping incident](https://marina.oa.dev/echo/wiki/361).
+- Next action: monitor dataset construction, the active attempt, full-state restoration, and actual training steps.
