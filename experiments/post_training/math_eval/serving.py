@@ -22,7 +22,7 @@ from tokenizers import Tokenizer
 
 from experiments.post_training import async_rl_audit as audit
 from experiments.post_training.math_eval.audit_overlay import validated_statuses
-from experiments.post_training.math_eval.pool import MODEL_TEMPLATES
+from experiments.post_training.math_eval.pool import MODEL_TEMPLATES, canonical_json
 from experiments.post_training.math_eval.pool_audit import verify_verifier_sources
 from experiments.post_training.math_eval.rate import MODEL_PROFILES
 from experiments.post_training.math_eval.scoring import SEMANTIC_DEPENDENCIES
@@ -138,7 +138,10 @@ def load_rating_inputs(config):
     selection = json.loads((prefix / "selection.json").read_bytes())
     overlay = json.loads(StoragePath(config.overlay_uri).read_bytes())
     statuses, overlay_sha = validated_statuses(manifest, selection, overlay)
-    if audit.canonical_sha(manifest) != config.manifest_sha256 or selection["manifest_sha256"] != config.manifest_sha256:
+    if (
+        hashlib.sha256(canonical_json(manifest).encode()).hexdigest() != config.manifest_sha256
+        or selection["manifest_sha256"] != config.manifest_sha256
+    ):
         raise ValueError("Rating manifest changed")
     if overlay_sha != config.overlay_sha256:
         raise ValueError("Rating acceptance overlay changed")

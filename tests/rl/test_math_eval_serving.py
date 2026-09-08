@@ -1,17 +1,23 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
 import json
 from copy import deepcopy
 from dataclasses import asdict, replace
+from types import SimpleNamespace
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 from experiments.post_training import async_rl_audit as audit
+from experiments.post_training.math_eval.audit_overlay import VERIFIER_REVISION, VERIFIER_SOURCES_SHA256
 from experiments.post_training.math_eval.scoring import SEMANTIC_DEPENDENCIES
 from experiments.post_training.math_eval.serving import (
     EAST_PREFIX,
     RatingServingConfig,
+    load_rating_inputs,
     serving_configuration,
     verify_wheel_receipt,
 )
@@ -201,3 +207,33 @@ def test_generation_audit_refuses_caller_labels_that_disagree_with_native_eviden
         generation["specification"]["engine"]["extra_args"] = ["--seed", "29"]
     with pytest.raises(ValueError):
         validate_serving_generation(cfg, generation, tasks)
+
+
+def test_unicode_manifest_readback_uses_the_existing_pool_hash_representation(tmp_path):
+    manifest = [{"prompt_sha256": "a" * 64, "problem": "How many café tables?"}]
+    pool_hash = hashlib.sha256(
+        json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    pq.write_table(pa.Table.from_pylist(manifest), tmp_path / "manifest.parquet")
+    (tmp_path / "selection.json").write_text(json.dumps({"manifest_sha256": pool_hash}))
+    overlay = {
+        "manifest_sha256": pool_hash,
+        "verifier_revision": VERIFIER_REVISION,
+        "verifier_sources_sha256": VERIFIER_SOURCES_SHA256,
+        "audit_source_sha256": "c" * 64,
+        "statuses": {"a" * 64: "accept"},
+    }
+    overlay_path = tmp_path / "overlay.json"
+    overlay_path.write_text(json.dumps(overlay))
+    cfg = SimpleNamespace(
+        pool_uri=str(tmp_path),
+        overlay_uri=str(overlay_path),
+        manifest_sha256=pool_hash,
+        overlay_sha256=audit.canonical_sha(overlay),
+        expected_ids=("a" * 64,),
+    )
+    assert load_rating_inputs(cfg) == manifest
+    cfg.manifest_sha256 = audit.canonical_sha(manifest)
+    assert cfg.manifest_sha256 != pool_hash
+    with pytest.raises(ValueError, match="manifest changed"):
+        load_rating_inputs(cfg)
