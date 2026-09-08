@@ -7,6 +7,7 @@ import hashlib
 import importlib.metadata
 import json
 import math
+from contextlib import contextmanager
 from dataclasses import asdict
 
 from rigging.filesystem.storage_path import StoragePath
@@ -31,6 +32,25 @@ from experiments.post_training.math_eval.scoring import SEMANTIC_DEPENDENCIES
 from experiments.post_training.math_eval.semantic_worker import SemanticWorker
 from experiments.post_training.math_eval.serving import verify_wheel_receipt
 from experiments.post_training.math_eval.serving_audit import validate_native_serving_task
+
+CALIBRATION_MAX_EVAL_BYTES = 512 * 1024**2
+
+
+@contextmanager
+def calibration_evaluation_bound():
+    """Scope a finite larger object bound to this serial CPU calibration audit.
+
+    K8 heldout has 16,072 rows, each with up to 1,024 prompt and response
+    tokens plus forensic text. 512 MiB allows about 33 KiB per row; it is
+    a finite implementation budget, not a guarantee for arbitrary output.
+    The 1 MiB line limit and all token/scorer/membership checks are unchanged.
+    """
+    previous = audit.MAX_EVAL_BYTES
+    try:
+        audit.MAX_EVAL_BYTES = CALIBRATION_MAX_EVAL_BYTES
+        yield
+    finally:
+        audit.MAX_EVAL_BYTES = previous
 
 
 def validate_calibration_generation(generation, native_tasks, native_job, *, binding_sha256, source_commit, output_uri):
@@ -217,19 +237,22 @@ def audit_checkpoint_calibration(output_uri, *, audit_uri, native_tasks, native_
             )
             for item in items
         ]
-        raw = bounded_bytes(panel_uri + "/dumped_evals/global_step_0_evals/rows.jsonl", limit=audit.MAX_EVAL_BYTES)
+        raw = bounded_bytes(panel_uri + "/dumped_evals/global_step_0_evals/rows.jsonl", limit=CALIBRATION_MAX_EVAL_BYTES)
         validate_panel_rows(
             raw, panel, requests, decoder, protocol=protocol, items=items, seen_response_ids=seen_response_ids
         )
         target = audit_uri.rstrip("/") + "/" + protocol.identity
         # A distinct receipt collection per panel binds every semantic result to
         # that panel's records. Worker startup has its own deadline.
-        with SemanticWorker(
-            source_sha256="b23dcab6a38211631a5a3b51938842ca34b958db6df01de2a5117f763c66b6da",
-            startup_timeout=60,
-            row_timeout=30,
-            cleanup_timeout=1,
-        ) as worker:
+        with (
+            calibration_evaluation_bound(),
+            SemanticWorker(
+                source_sha256="b23dcab6a38211631a5a3b51938842ca34b958db6df01de2a5117f763c66b6da",
+                startup_timeout=60,
+                row_timeout=30,
+                cleanup_timeout=1,
+            ) as worker,
+        ):
             receipt = build_records(
                 panel_uri,
                 0,
@@ -267,6 +290,10 @@ def audit_checkpoint_calibration(output_uri, *, audit_uri, native_tasks, native_
         rows=29406,
         unique_native_requests=len(seen_response_ids),
         byte_token_and_harness_audit_pass=True,
+        byte_bounds={
+            "maximum_object_bytes": CALIBRATION_MAX_EVAL_BYTES,
+            "maximum_line_bytes": audit.MAX_EVAL_LINE_BYTES,
+        },
         requires_byte_token_and_harness_audit=False,
         semantic_execution={
             "source_sha256": "b23dcab6a38211631a5a3b51938842ca34b958db6df01de2a5117f763c66b6da",

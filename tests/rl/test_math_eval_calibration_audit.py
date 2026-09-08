@@ -8,7 +8,11 @@ from dataclasses import asdict
 import pytest
 
 from experiments.post_training import async_rl_audit as audit
-from experiments.post_training.math_eval.calibration_audit import validate_calibration_generation, validate_panel_rows
+from experiments.post_training.math_eval.calibration_audit import (
+    calibration_evaluation_bound,
+    validate_calibration_generation,
+    validate_panel_rows,
+)
 from experiments.post_training.math_eval.calibration_protocol import (
     BATTERIES,
     CalibrationProtocol,
@@ -201,3 +205,14 @@ def test_calibration_raw_replay_binds_every_row_field(tmp_path, monkeypatch, poi
     else:
         with pytest.raises(ValueError):
             validate_panel_rows(raw, panel, requests, decoder, protocol=protocol, items=items, seen_response_ids=seen)
+
+
+def test_calibration_object_bound_is_finite_scoped_and_restored_on_failure():
+    before = audit.MAX_EVAL_BYTES
+    line_before = audit.MAX_EVAL_LINE_BYTES
+    with pytest.raises(RuntimeError):
+        with calibration_evaluation_bound():
+            assert audit.MAX_EVAL_BYTES == 512 * 1024**2
+            assert audit.MAX_EVAL_LINE_BYTES == line_before == 1024**2
+            raise RuntimeError("fixture audit failed")
+    assert audit.MAX_EVAL_BYTES == before
