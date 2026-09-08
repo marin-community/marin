@@ -115,6 +115,24 @@ def audit_stale_tokens(calls, outcomes):
     assert {row["call_id"] for row in outcomes} == set(completed), "completed group coverage"
     stale = total = 0
     for row in outcomes:
+        # Frozen producer vocabulary: explicit terminals in fully_async_trainer,
+        # AdmissionRejection values, and rejected GroupSelectionResult values.
+        assert row["outcome"] in {
+            "consumed",
+            "epoch_discarded",
+            "stale_enqueue",
+            "shutdown_pending",
+            "cancelled_before_enqueue",
+            "failed_before_enqueue",
+            "duplicate",
+            "stale",
+            "fully_masked",
+            "physical_group_size",
+            "below_minimum_group_size",
+            "missing_rollout_logprobs",
+            "duplicate_uid",
+            "dynamic_insufficient_reward_spread",
+        }, "unknown group outcome"
         tokens = row["tokens"]
         assert type(tokens) is int and tokens >= 0, "token count"
         assert tokens == completed[row["call_id"]]["response_tokens"], "call/group token disagreement"

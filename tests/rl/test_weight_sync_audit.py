@@ -190,3 +190,10 @@ def test_completed_generation_canceled_at_enqueue_still_counts_in_denominator():
     result = audit_stale_tokens(calls, outcomes)
     assert result["completed_group_tokens"] == 60
     assert result["outcome_groups"]["cancelled_before_enqueue"] == 1
+
+
+def test_unknown_group_outcome_is_rejected():
+    calls, outcomes = token_receipts()
+    outcomes[0]["outcome"] = "stale_typo"
+    with pytest.raises(AssertionError, match="unknown group outcome"):
+        audit_stale_tokens(calls, outcomes)
