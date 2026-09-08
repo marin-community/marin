@@ -105,6 +105,20 @@ def test_job_run_accepts_unconstrained_placement_with_cluster_metadata(recorded_
     assert len(recorded_job_submissions) == 1
 
 
+@pytest.mark.parametrize(("flag", "value"), [("--region", "us-central2"), ("--zone", "us-central2-b")])
+def test_job_run_rejects_placement_with_target_cluster(flag, value):
+    result = _run_cli([flag, value, "--target-cluster", "cw-rno2a"])
+    assert result.exit_code != 0
+    assert flag in result.output
+    assert "--target-cluster" in result.output
+
+
+def test_job_run_accepts_target_cluster_alone(recorded_job_submissions):
+    result = _run_cli(["--target-cluster", "cw-rno2a"])
+    assert result.exit_code == 0, result.output
+    assert len(recorded_job_submissions) == 1
+
+
 @pytest.fixture
 def recorded_bundle_exclude(monkeypatch):
     """Capture the ``bundle_exclude`` passed to ``IrisClient.remote`` by ``iris job run``."""

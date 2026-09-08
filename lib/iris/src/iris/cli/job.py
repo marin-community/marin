@@ -252,6 +252,28 @@ def _known_regions_and_zones(config) -> tuple[set[str], set[str]]:
     return regions, zones
 
 
+_PLACEMENT_CONFLICT_HINT = (
+    "{flag} cannot be combined with --target-cluster. --region and --zone pin a job to GCP "
+    "locations on this cluster; --target-cluster sends the whole job to a peer cluster whose "
+    "workers advertise their own location labels, so a GCP region or zone matches no worker "
+    "there and the job never schedules. Pass one or the other."
+)
+
+
+def validate_placement_selector(
+    regions: tuple[str, ...] | None,
+    zone: str | None,
+    target_cluster: str | None,
+) -> None:
+    """Reject ``--target-cluster`` combined with ``--region`` or ``--zone``."""
+    if not target_cluster:
+        return
+    if regions:
+        raise click.UsageError(_PLACEMENT_CONFLICT_HINT.format(flag="--region"))
+    if zone:
+        raise click.UsageError(_PLACEMENT_CONFLICT_HINT.format(flag="--zone"))
+
+
 def validate_region_zone(
     regions: tuple[str, ...] | None,
     zone: str | None,
@@ -1021,6 +1043,7 @@ def run(
     config = ctx.obj.get("config") if ctx.obj else None
     dashboard_url = config.dashboard_url if config else None
     validate_extra_resources(tpu, gpu, memory, disk, enable_extra_resources)
+    validate_placement_selector(region or None, zone, target_cluster)
     validate_region_zone(region or None, zone, ctx.obj.get("config"))
     if no_sync and sync_package:
         raise click.UsageError("--no-sync skips setup entirely; it cannot be combined with --sync-package.")

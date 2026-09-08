@@ -257,13 +257,19 @@ For machine-readable job data, use the Iris Python client (`IrisClient`) directl
 ### `job run` gotchas
 
 - **Remote jobs only see env vars you put in the job spec.** The submitter's
-  shell env is not copied into the container. Pass required values explicitly:
-  `iris job run -e HF_TOKEN "$HF_TOKEN" -e WANDB_API_KEY "$WANDB_API_KEY" -- python train.py`.
+  shell env is not copied into the container, with two exceptions: the CLI
+  forwards `HF_TOKEN` and `WANDB_API_KEY` from the shell when they are set. Pass
+  anything else explicitly (`-e KEY "$VALUE"`) or list it under `env:` in a
+  gitignored `.marin.yaml` at the checkout root.
 - **`--memory` not `--ram`** — unrecognized flags silently pass through to the command string.
 - **`-e KEY VALUE`** uses two positional args. If `$VALUE` is unset, the parser eats the next token. Always quote: `-e KEY "${VALUE}"`.
 - **`--gpu` requests hardware; `--extra gpu` requests the Python dependency extra.** Need both for GPU JAX jobs.
 - **A job that dies in BUILDING with a `uv sync` error is failing setup before your command starts.** The default is `uv sync --all-packages --no-dev`. Scope it with CLI `--sync-package <member>` or SDK `EnvironmentSpec(sync_packages=[...])`; skip setup entirely with CLI `--no-sync` or SDK `EnvironmentSpec(setup_scripts=[])` for a bring-your-own image. The build log labels each step (`[iris setup] step N/M`) so you can tell which script failed. See "Task Setup" in `AGENTS.md`.
 - **Use `--gpu` or `--tpu` to request accelerators, instead of `--region` or `--zone`.** Let Iris handle scaling group constraints. Use `--region` or `--zone` when you are trying to pin data to a particular location.
+- **`--region`/`--zone` and `--target-cluster` are exclusive.** The first two pin a
+  job to GCP locations on the hub; the third sends the whole job to a CoreWeave
+  peer, whose workers carry their own location labels. The CLI rejects the
+  combination; use one or the other, or neither.
 - **`--reserve`** is a hard zone constraint: it confines the job to a zone where the named accelerator has actually been obtained (empirically — a live, non-erroring slice in the region), and the job waits if none exists yet (an availability probe meanwhile scales the accelerator up). It does not hold capacity and does not attach accelerator devices. Use `--tpu`/`--gpu` on the task that needs hardware.
 - **`executor_main` parent jobs** (e.g., canary ferries) submit GPU sub-tasks via Fray. The parent must be CPU-only (`--cpu 1 --memory 2g`), otherwise it hogs the GPU node and deadlocks. Memory at or above 4 GB requires `--enable-extra-resources` (see "Validator opt-in" below).
 
