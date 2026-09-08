@@ -1034,7 +1034,7 @@ dependencies = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "marinskyrl", git = "https://github.com/marin-community/MarinSkyRL.git?rev=e355f3255656ceea777ab81f8ce2d90dce2cf456" }]
+requires-dist = [{ name = "marinskyrl", git = "https://github.com/marin-community/MarinSkyRL.git?rev=e71ec9b23cb2db143a1ac402151596438e88b5ce" }]
 
 [[package]]
 name = "marin-finelog"
@@ -1144,7 +1144,7 @@ wheels = [
 [[package]]
 name = "marinskyrl"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/MarinSkyRL.git?rev=e355f3255656ceea777ab81f8ce2d90dce2cf456#e355f3255656ceea777ab81f8ce2d90dce2cf456" }
+source = { git = "https://github.com/marin-community/MarinSkyRL.git?rev=e71ec9b23cb2db143a1ac402151596438e88b5ce#e71ec9b23cb2db143a1ac402151596438e88b5ce" }
 dependencies = [
     { name = "boto3" },
     { name = "datasets" },
