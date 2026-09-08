@@ -162,6 +162,8 @@ def test_closed_thinking_remains_closed_when_later_role_tokens_invalidate_semant
 def test_production_token_reward_arrays_retain_native_sequence_score(reward):
     result = score_row(row("Answer: 5", raw=reward), Decoder(), model="qwen", thinking=False)
     assert result.score_contract == 1.0
+    assert result.native_reward_tokens == tuple(reward)
+    assert result.native_reward_reduction == "token_reward_sum"
     assert result.contract_correct and result.score_contract_completed == 1.0
 
 

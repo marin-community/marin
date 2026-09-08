@@ -36,6 +36,8 @@ class ScoredRow:
     uid: str
     model: str
     score_contract: float
+    native_reward_tokens: tuple[float, ...] | None
+    native_reward_reduction: str
     contract_correct: bool
     score_contract_completed: float
     contract_rule: str
@@ -115,6 +117,8 @@ def score_row(row: dict[str, Any], decoder: Tokenizer, *, model: str, thinking: 
         uid=str(row["uid"]),
         model=model,
         score_contract=raw,
+        native_reward_tokens=tuple(rewards) if isinstance(rewards, list) else None,
+        native_reward_reduction="token_reward_sum" if isinstance(rewards, list) else "scalar_identity",
         contract_correct=correct,
         score_contract_completed=completed,
         contract_rule=CONTRACT_RULES[env],
