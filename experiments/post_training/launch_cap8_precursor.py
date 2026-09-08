@@ -76,17 +76,6 @@ if /tmp/oa-cap8-env/bin/python -m pytest -s -q -m vllm {NODEID}; then cap8_statu
 /tmp/oa-cap8-env/bin/python - <<'RECEIPT'
 import hashlib,json
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import patch
-
-from iris.cli.connect import open_iris_client
-from iris.cli.job import build_resources
-from iris.client.client import IrisClient
-from iris.cluster.client.remote_client import RemoteClusterClient
-from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
-from iris.cluster.types import Entrypoint, EnvironmentSpec
-from iris.rpc import job_pb2
-from rigging.timing import Duration
 path=Path('/tmp/oa-cap8-receipt.json')
 if path.exists():
  data=path.read_bytes();digest=hashlib.sha256(data).hexdigest()
@@ -115,17 +104,6 @@ export RAY_ENABLE_UV_RUN_RUNTIME_ENV=0
 python3 - <<'VERIFY'
 import hashlib,json
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import patch
-
-from iris.cli.connect import open_iris_client
-from iris.cli.job import build_resources
-from iris.client.client import IrisClient
-from iris.cluster.client.remote_client import RemoteClusterClient
-from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
-from iris.cluster.types import Entrypoint, EnvironmentSpec
-from iris.rpc import job_pb2
-from rigging.timing import Duration
 expected={hashes!r}
 for path,digest in expected.items():assert hashlib.sha256(Path(path).read_bytes()).hexdigest()==digest,path
 print('CAP8_SOURCE_PASS '+json.dumps(dict(msr={msr!r},marin={args.marin_commit!r},sha256=expected)),flush=True)
