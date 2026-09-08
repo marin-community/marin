@@ -39,7 +39,7 @@ _BASE_CHECKPOINT = (
     "checkpoints/step-157000/"
 )
 _PRETRAIN_STORE = "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24"
-_RUN_NAME = "grug/moe_67b_a2b_step157k_sft_datakit80_pretrain20_ctx262k_2026.09.07"
+_RUN_NAME = "grug/moe_67b_a2b_step157k_sft_datakit80_pretrain20_ctx262k_2026.09.07_replay_continuous"
 _TOKENIZER = marin_tokenizer
 _SEQ_LEN = 262_144
 _BATCH_SIZE = 256
@@ -163,7 +163,6 @@ def _pretrain_child(bucket: str, length: str) -> DatasetComponent:
         format=TextLmDatasetFormat(),
         tags=[bucket, length],
         flat_cache=True,
-        pack=True,
     )
 
 
@@ -285,6 +284,7 @@ def build() -> StepSpec:
             "decay_steps": _DECAY_STEPS,
             "sft_fraction": _SFT_FRACTION,
             "pretrain_fraction": _PRETRAIN_FRACTION,
+            "pretrain_packing": "continuous",
             "long_context_skew": _LONG_CONTEXT_SKEW,
         },
     )
