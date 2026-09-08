@@ -5,12 +5,14 @@ import json
 from types import SimpleNamespace
 
 import jax
+import pytest
 
 import levanter.tracker.tracker_fns as tracker_fns
 from levanter.distributed import DistributedConfig
 from levanter.tracker.json_file import JsonFileTrackerConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.hardware_topology import nvidia_topology_matrix_summary, tpu_topology_shape
+from levanter.utils.mesh import MeshConfig
 
 
 def test_trainer_initialize_logs_hardware_topology_to_tracker(tmp_path, monkeypatch):
@@ -42,6 +44,19 @@ def test_trainer_initialize_logs_hardware_topology_to_tracker(tmp_path, monkeypa
     assert "hardware_topology/process_index" not in summary
     assert "hardware_topology/mesh_axis_shapes" not in summary
     assert "hardware_topology/compute_axis_mapping" not in summary
+
+
+def test_trainer_initialize_reports_missing_accelerator_before_invalid_mesh(monkeypatch):
+    monkeypatch.setattr(jax, "default_backend", lambda: "cpu")
+    config = TrainerConfig(
+        train_batch_size=len(jax.devices()),
+        mesh=MeshConfig(axes={"model": len(jax.devices()) + 1}),
+        require_accelerator=True,
+        distributed=DistributedConfig(initialize_jax_distributed=False),
+    )
+
+    with pytest.raises(RuntimeError, match="No accelerator found"):
+        config.initialize()
 
 
 def test_tpu_topology_shape_uses_device_coordinate_extents():
