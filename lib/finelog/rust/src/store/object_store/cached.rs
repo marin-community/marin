@@ -31,9 +31,6 @@ use super::local_file::atomic_write;
 /// Concurrent cache-miss downloads across every caller of this store.
 const MAX_PARALLEL_FETCHES: usize = 8;
 
-/// Concurrent staged-object uploads. Uploads use async network I/O and run
-/// outside the flush permits, so object-store latency does not occupy Parquet
-/// encoding capacity or an OS worker thread.
 const MAX_PARALLEL_UPLOADS: usize = 8;
 
 /// Minimum gap between eviction sweeps. `gc` runs once per table per

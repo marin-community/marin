@@ -23,8 +23,6 @@ use finelog::store::table::AckDurability;
 use finelog::store::{ServeMode, Store, TelemetryRootWriteMode};
 use tokio::sync::Notify;
 
-const FORWARDER_STOP_TIMEOUT: Duration = Duration::from_secs(5);
-
 /// Bound process RSS. DataFusion frees its query buffers promptly (the pool
 /// returns to ~0 between queries), but the default glibc allocator retains the
 /// freed pages in its per-CPU arenas rather than returning them to the OS, so
@@ -42,22 +40,6 @@ enum TelemetryMigrationMode {
     #[default]
     Normal,
     DualWrite,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
-enum AckDurabilityMode {
-    #[default]
-    LocalDisk,
-    ObjectStore,
-}
-
-impl From<AckDurabilityMode> for AckDurability {
-    fn from(mode: AckDurabilityMode) -> Self {
-        match mode {
-            AckDurabilityMode::LocalDisk => Self::LocalDisk,
-            AckDurabilityMode::ObjectStore => Self::ObjectStore,
-        }
-    }
 }
 
 #[derive(Parser, Debug)]
@@ -134,9 +116,9 @@ struct Args {
         long,
         env = "FINELOG_ACK_DURABILITY",
         value_enum,
-        default_value_t = AckDurabilityMode::LocalDisk
+        default_value_t = AckDurability::LocalDisk
     )]
-    ack_durability: AckDurabilityMode,
+    ack_durability: AckDurability,
 
     /// This server's Ed25519 private key (PKCS#8 PEM, env `FINELOG_SIGNING_KEY`),
     /// which signs the `aud="finelog"` bearer the hub verifies against the matching
@@ -224,7 +206,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
     store
-        .configure_ack_durability(args.ack_durability.into())
+        .configure_ack_durability(args.ack_durability)
         .map_err(|e| format!("invalid acknowledgement durability: {e}"))?;
     // Resolve the host role before maintenance starts. A forwarding deployment
     // is a relay: it keeps its schema contract but omits query-serving physical
@@ -259,7 +241,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Cross-cluster forwarding, when configured. Spawned before the listener binds
     // so a store with a backlog starts draining immediately, and latched off in the
     // shutdown block below.
-    let (forward_stop, forward_task) = match &forwarder {
+    let (_forward_stop, forward_task) = match &forwarder {
         Some(forwarder) => {
             let (tx, rx) = tokio::sync::watch::channel(false);
             (Some(tx), Some(spawn_forwarder(Arc::clone(forwarder), rx)))
@@ -293,16 +275,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?;
     tracing::info!("finelog-server draining background tasks");
 
-    if let (Some(stop), Some(mut task)) = (forward_stop, forward_task) {
-        let _ = stop.send(true);
-        if tokio::time::timeout(FORWARDER_STOP_TIMEOUT, &mut task)
-            .await
-            .is_err()
-        {
-            tracing::warn!("finelog forwarder: ordinary loop did not stop; aborting");
-            task.abort();
-            let _ = task.await;
-        }
+    if let Some(task) = forward_task {
+        task.abort();
+        let _ = task.await;
     }
 
     diag_stop.store(true, Ordering::SeqCst);

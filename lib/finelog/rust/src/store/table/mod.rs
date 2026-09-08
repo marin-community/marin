@@ -34,6 +34,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use clap::ValueEnum;
 use tokio::sync::RwLock;
 
 use crate::errors::StatsError;
@@ -56,7 +57,7 @@ pub use runtime::TableRuntime;
 pub use segment_view::SegmentSnapshot;
 
 /// The off-process durability boundary an ingest acknowledgement waits for.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
 pub enum AckDurability {
     /// A persistent local filesystem survives process and pod replacement.
     #[default]

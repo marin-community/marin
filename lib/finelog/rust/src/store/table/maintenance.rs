@@ -225,15 +225,6 @@ async fn run_one(runtime: &Arc<TableRuntime>, work: TableWork) -> Result<WorkOut
     }
 }
 
-/// Run one full maintenance cycle, serialized against other cycles.
-///
-/// A query-serving object table publishes pending state, compacts immutable
-/// objects, collects, and maintains indexes. A query-serving legacy table also
-/// converges placement, synchronizes its archive, evicts, and rewrites stale
-/// encodings. A relay instead omits query artifacts and layout rewrites; an
-/// object-native relay first retires downstream-settled segments, while a
-/// legacy relay keeps archive synchronization and local eviction during its
-/// transition.
 async fn cycle(
     runtime: &Arc<TableRuntime>,
     force_compact_l0: bool,

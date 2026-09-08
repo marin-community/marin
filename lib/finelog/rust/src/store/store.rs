@@ -1432,7 +1432,6 @@ impl Store {
         Ok(())
     }
 
-    /// Whether `namespace` has durable object-backed table state.
     pub fn namespace_uses_object_state(&self, namespace: &str) -> Result<bool, StatsError> {
         Ok(self
             .tables

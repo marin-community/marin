@@ -81,20 +81,9 @@ pub async fn maintain(
         })
         .await;
 
-    match committed {
-        Ok(_) | Err(CommitError::PublicationDeferred(_)) => {
-            runtime.segments.replace(&paths, Vec::new());
-            tracing::info!(
-                namespace = %runtime.name(),
-                target,
-                cursor,
-                segments = paths.len(),
-                rows,
-                bytes,
-                "retired downstream-settled relay segments"
-            );
-            Ok(WorkOutcome::from_pending(pending))
-        }
+    let publication_error = match committed {
+        Ok(_) => None,
+        Err(CommitError::PublicationDeferred(error)) => Some(error),
         Err(CommitError::NotCommitted(StatsError::SchemaConflict(error))) => {
             tracing::info!(
                 namespace = %runtime.name(),
@@ -102,8 +91,32 @@ pub async fn maintain(
                 %error,
                 "relay retirement lost a concurrent table-state change"
             );
-            Ok(WorkOutcome::MoreWork)
+            return Ok(WorkOutcome::MoreWork);
         }
-        Err(error) => Err(error.into()),
+        Err(error) => return Err(error.into()),
+    };
+    runtime.segments.replace(&paths, Vec::new());
+    if let Some(error) = publication_error {
+        tracing::warn!(
+            namespace = %runtime.name(),
+            target,
+            cursor,
+            segments = paths.len(),
+            rows,
+            bytes,
+            %error,
+            "relay retirement committed locally and awaits publication"
+        );
+        return Err(error);
     }
+    tracing::info!(
+        namespace = %runtime.name(),
+        target,
+        cursor,
+        segments = paths.len(),
+        rows,
+        bytes,
+        "retired downstream-settled relay segments"
+    );
+    Ok(WorkOutcome::from_pending(pending))
 }
