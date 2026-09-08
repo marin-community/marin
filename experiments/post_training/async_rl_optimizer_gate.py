@@ -3,6 +3,7 @@
 
 """Audit complete optimizer telemetry schemas before qualifying native runs."""
 
+import json
 import math
 from collections.abc import Mapping, Sequence
 
@@ -168,3 +169,80 @@ def audit_policy_update_events(rows: Sequence[Mapping], events: Sequence[Mapping
     if observed != set(expected):
         raise ValueError("Native optimizer event coverage is incomplete")
     return {"status": "OPTIMIZER_EVENTS_PASS", "events": len(observed), "scalar_comparisons": comparisons}
+
+
+def audit_source_order_events(events: Sequence[Mapping], *, minibatches: int, rollout_batches: int) -> dict:
+    """Recover all synchronous prompt identities in source order, independent of arrival order."""
+    expected = {(step, block) for step in range(1, rollout_batches + 1) for block in range(minibatches)}
+    blocks = {}
+    for event in events:
+        step = _number(event, "step")
+        if step != int(step):
+            raise ValueError("Source-order step must be an integer")
+        offset = _number(event["body"], "prompt_offset")
+        block = (offset - (step - 1) * minibatches * 64) / 64
+        identity = (step, block)
+        if block != int(block) or identity not in expected or identity in blocks:
+            raise ValueError("Duplicate or unexpected source-order block")
+        uids = json.loads(event["body"]["uids_json"])
+        if not isinstance(uids, list) or len(uids) != 64 or any(not isinstance(uid, str) for uid in uids):
+            raise ValueError("Source-order block must retain 64 string prompt identities")
+        blocks[identity] = uids
+    if set(blocks) != expected:
+        raise ValueError("Source-order event coverage is incomplete")
+    ordered = []
+    for step in range(1, rollout_batches + 1):
+        uids = [uid for block in range(minibatches) for uid in blocks[(step, block)]]
+        if len(set(uids)) != minibatches * 64:
+            raise ValueError("Qualification requires unique prompt identities in each batch")
+        ordered.extend(uids)
+    return {"status": "SOURCE_ORDER_EVENTS_PASS", "prompts": len(ordered), "ordered_uids": ordered}
+
+
+def audit_consumed_age_events(
+    events: Sequence[Mapping], consumed_work: Mapping[int, Mapping], *, minibatches: int, synchronous: bool
+) -> dict:
+    """Check native age populations against separately emitted unpadded consumed-work counters."""
+    if not consumed_work:
+        raise ValueError("Consumed-work coverage cannot be empty")
+    grouped = {}
+    for event in events:
+        step = _number(event, "step")
+        if step != int(step) or step not in consumed_work:
+            raise ValueError("Unexpected consumed-age step")
+        body = event["body"]
+        for key in ("age", "groups", "sequences", "response_tokens"):
+            value = _number(body, key)
+            if value != int(value) or value < 0:
+                raise ValueError("Consumed-age counts must be nonnegative integers")
+        grouped.setdefault(step, []).append(body)
+    if set(grouped) != set(consumed_work):
+        raise ValueError("Consumed-age event coverage is incomplete")
+    summaries = {}
+    for step, bodies in sorted(grouped.items()):
+        expected_events = minibatches if synchronous else 64
+        groups_per_event = 64 if synchronous else 1
+        if len(bodies) != expected_events or any(
+            body["groups"] != groups_per_event or body["sequences"] != 4 * groups_per_event for body in bodies
+        ):
+            raise ValueError("Consumed-age group geometry differs")
+        if synchronous and sorted(body["age"] for body in bodies) != list(range(minibatches)):
+            raise ValueError("Synchronous consumed ages differ from optimizer update indices")
+        if not synchronous and any(body["age"] > 3 for body in bodies):
+            raise ValueError("Asynchronous consumed age exceeds the qualification limit")
+        tokens = sum(body["response_tokens"] for body in bodies)
+        sequences = sum(body["sequences"] for body in bodies)
+        if (
+            tokens <= 0
+            or tokens != _number(consumed_work[step], "response_tokens")
+            or sequences != _number(consumed_work[step], "sequences")
+        ):
+            raise ValueError("Consumed-age totals differ from unpadded consumed work")
+        summaries[step] = {
+            "response_tokens": tokens,
+            "groups": sum(body["groups"] for body in bodies),
+            "age_min": min(body["age"] for body in bodies),
+            "age_max": max(body["age"] for body in bodies),
+            "token_weighted_age_mean": sum(body["age"] * body["response_tokens"] for body in bodies) / tokens,
+        }
+    return {"status": "CONSUMED_AGE_EVENTS_PASS", "by_step": summaries}
