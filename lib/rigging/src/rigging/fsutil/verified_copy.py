@@ -116,7 +116,8 @@ class _MultipartEtag:
 
     This deliberately implements the small streaming calculation locally: none
     of our S3 dependencies exposes it, and adding a dependency solely for this
-    calculation would not improve correctness.
+    calculation would not improve correctness. The algorithm is specified at
+    https://developers.cloudflare.com/r2/objects/upload-objects/#etags.
     """
 
     def __init__(self, part_size: int):
