@@ -43,6 +43,19 @@ MODEL_PROFILES = {
 }
 
 
+def empirical_difficulty(passes, samples):
+    """Label measured completed correctness; this is not a latent probability estimate."""
+    if type(passes) is not int or type(samples) is not int or samples <= 0 or not 0 <= passes <= samples:
+        raise ValueError("Invalid completed-correctness count")
+    rate = passes / samples
+    if rate == 0:
+        return "beyond"
+    for upper, label in ((0.1, "frontier"), (0.3, "hard"), (0.6, "mid"), (0.9, "easy")):
+        if rate <= upper:
+            return label
+    return "mastered"
+
+
 def rate_from_dump(harness_output_uri, *, generation_audit_uri, generation_audit_sha256, **kwargs):
     """Read a proven record parquet, checking its exact receipt hash before reducing."""
     receipt = json.loads(StoragePath(harness_output_uri + "/summary.json").read_bytes())
@@ -131,6 +144,9 @@ def rate_from_records(
         "generation_protocol_verified": protocol is not None,
         "generation_audit_sha256": generation_audit_sha256,
         "generation_provenance": protocol,
+        "generated_at_utc": None if protocol is None else protocol.get("generated_at_utc"),
+        "dump_uri": None if protocol is None else protocol.get("dump_uri"),
+        "difficulty_category_basis": "empirical_completed_correctness",
         "temperature": temperature,
         "max_response_tokens": max_response_tokens,
         "samples": samples,
@@ -145,6 +161,11 @@ def rate_from_records(
         {
             "prompt_sha256": digest,
             "samples": samples,
+            "passes": sum(int(row["score_contract_completed"]) for row in rows),
+            "mean_response_tokens": sum(row["response_tokens"] for row in rows) / samples,
+            "empirical_difficulty": empirical_difficulty(
+                sum(int(row["score_contract_completed"]) for row in rows), samples
+            ),
             "pass_rate_k": sum(row["score_contract_completed"] for row in rows) / samples,
             "contract_correct_rate": sum(row["contract_correct"] for row in rows) / samples,
             "native_score_mean": sum(row["score_contract"] for row in rows) / samples,

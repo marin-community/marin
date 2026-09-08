@@ -163,12 +163,33 @@ def generation_fixture():
             }
         ]
     }
-    return cfg, generation, tasks
+    generation["attempt_uid"] = "fixture-uid"
+    generation["controller_allocation"] = {
+        "cluster": "cw-us-east-02a",
+        "resources": {"device": {"kind": "gpu", "variant": "H100", "count": 1}},
+        "attempt_uid": "fixture-uid",
+        "started_at_ms": 1000,
+    }
+    task = tasks["tasks"][0]
+    task["cluster"] = "cw-us-east-02a"
+    task["attempts"][0].update(started_at=task["started_at"], finished_at=task["finished_at"], attempt_uid="fixture-uid")
+    native_job = {
+        "job": {
+            "job_id": "/atqamar/fixture",
+            "state": "JOB_STATE_SUCCEEDED",
+            "exit_code": 0,
+            "cluster": "cw-us-east-02a",
+            "task_count": 1,
+            "completed_count": 1,
+            "resources": {"device": {"gpu": {"variant": "H100", "count": 1}}},
+        }
+    }
+    return cfg, generation, tasks, native_job
 
 
 def test_generation_audit_binds_actual_terminal_task_and_native_command():
-    cfg, generation, tasks = generation_fixture()
-    protocol = validate_serving_generation(cfg, generation, tasks)
+    cfg, generation, tasks, native_job = generation_fixture()
+    protocol = validate_serving_generation(cfg, generation, tasks, native_job)
     assert protocol["task_gpu_hours"] == 1
     assert protocol["model_label"] == "qwen" and protocol["samples"] == 8
 
@@ -190,7 +211,7 @@ def test_generation_audit_binds_actual_terminal_task_and_native_command():
     ],
 )
 def test_generation_audit_refuses_caller_labels_that_disagree_with_native_evidence(poison):
-    cfg, generation, tasks = generation_fixture()
+    cfg, generation, tasks, native_job = generation_fixture()
     if poison in generation:
         generation[poison] = "wrong"
     elif poison == "native_seed":
@@ -206,7 +227,7 @@ def test_generation_audit_refuses_caller_labels_that_disagree_with_native_eviden
     else:
         generation["specification"]["engine"]["extra_args"] = ["--seed", "29"]
     with pytest.raises(ValueError):
-        validate_serving_generation(cfg, generation, tasks)
+        validate_serving_generation(cfg, generation, tasks, native_job)
 
 
 def test_unicode_manifest_readback_uses_the_existing_pool_hash_representation(tmp_path):
@@ -237,3 +258,20 @@ def test_unicode_manifest_readback_uses_the_existing_pool_hash_representation(tm
     assert cfg.manifest_sha256 != pool_hash
     with pytest.raises(ValueError, match="manifest changed"):
         load_rating_inputs(cfg)
+
+
+@pytest.mark.parametrize("poison", ["gpu_count", "gpu_variant", "region", "attempt_uid", "attempt_timestamps"])
+def test_cost_and_region_require_actual_controller_allocation(poison):
+    cfg, generation, tasks, native_job = generation_fixture()
+    if poison == "gpu_count":
+        native_job["job"]["resources"]["device"]["gpu"]["count"] = 8
+    elif poison == "gpu_variant":
+        native_job["job"]["resources"]["device"]["gpu"]["variant"] = "B200"
+    elif poison == "region":
+        tasks["tasks"][0]["cluster"] = "foreign-region"
+    elif poison == "attempt_uid":
+        tasks["tasks"][0]["attempts"][0]["attempt_uid"] = "other-attempt"
+    else:
+        tasks["tasks"][0]["attempts"][0]["started_at"] = {"epoch_ms": "2000"}
+    with pytest.raises(ValueError):
+        validate_serving_generation(cfg, generation, tasks, native_job)

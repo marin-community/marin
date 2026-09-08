@@ -13,6 +13,7 @@ from dataclasses import asdict, dataclass
 import pyarrow as pa
 import pyarrow.parquet as pq
 import requests
+from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from marin.external_dependencies import VLLM_GPU_RELEASE
 from marin.inference.config import ServedModelConfig, VllmEngineConfig, VllmLauncherType, VllmSource
@@ -159,8 +160,28 @@ def run_rating_serving(config):
     execute within the same task lifetime.
     """
     job = get_job_info()
-    if job is None or job.worker_region != "cw-us-east-02a" or job.attempt_id != 0:
-        raise ValueError("Ratings require a first-attempt east Iris task")
+    if job is None or job.attempt_id != 0:
+        raise ValueError("Ratings require a first-attempt Iris task")
+    description = iris_ctx().client.describe_task(job.task_id)
+    status, resources = description.status, description.resources
+    device = resources.device
+    if (
+        status.execution_cluster_id != "cw-us-east-02a"
+        or str(status.task_id) != str(job.task_id)
+        or status.current_attempt_number != 0
+        or len(status.attempts) != 1
+        or device is None
+        or device.kind != "gpu"
+        or device.variant != "H100"
+        or device.count != config.tensor_parallel_size
+    ):
+        raise ValueError("Controller allocation differs from the reviewed east H100 task")
+    allocation = {
+        "cluster": status.execution_cluster_id,
+        "resources": asdict(resources),
+        "attempt_uid": status.attempts[0].attempt_uid,
+        "started_at_ms": None if status.attempts[0].started_at is None else status.attempts[0].started_at.epoch_ms,
+    }
     output = StoragePath(config.output_uri)
     if output.exists():
         raise ValueError("Refusing to overwrite any previous rating attempt")
@@ -230,8 +251,9 @@ def run_rating_serving(config):
         "native_command": native_command,
         "task_id": str(job.task_id),
         "attempt_id": job.attempt_id,
-        "attempt_uid": job.attempt_uid,
-        "worker_region": job.worker_region,
+        "attempt_uid": allocation["attempt_uid"],
+        "worker_region": allocation["cluster"],
+        "controller_allocation": allocation,
         "bundle_id": job.bundle_id,
         "model_identity": SERVING_MODELS[config.model]["identity"],
         "model_config_sha256": hashlib.sha256(model_config).hexdigest(),

@@ -5,6 +5,7 @@
 
 import hashlib
 import json
+from datetime import UTC, datetime
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -36,7 +37,7 @@ DUMP_IDENTITY_KEYS = (
 )
 
 
-def validate_serving_generation(config, generation, native_tasks):
+def validate_serving_generation(config, generation, native_tasks, native_job):
     """Use controller task evidence and emitted runtime configuration, not caller labels."""
     model, _engine = serving_configuration(config)
     expected = serving_specification(config)
@@ -50,6 +51,26 @@ def validate_serving_generation(config, generation, native_tasks):
     if len(tasks) != 1:
         raise ValueError("Serving audit requires exactly one native task")
     task = tasks[0]
+    controller = native_job["job"]
+    gpu = controller.get("resources", {}).get("device", {}).get("gpu", {})
+    allocation = generation.get("controller_allocation", {})
+    allocated_gpu = allocation.get("resources", {}).get("device", {})
+    if (
+        controller.get("job_id", "") + "/0" != task["task_id"]
+        or controller.get("state") != "JOB_STATE_SUCCEEDED"
+        or controller.get("exit_code") != 0
+        or controller.get("cluster") != "cw-us-east-02a"
+        or task.get("cluster") != "cw-us-east-02a"
+        or allocation.get("cluster") != "cw-us-east-02a"
+        or controller.get("task_count") != 1
+        or controller.get("completed_count") != 1
+        or gpu.get("variant") != "H100"
+        or gpu.get("count") != config.tensor_parallel_size
+        or allocated_gpu.get("kind") != "gpu"
+        or allocated_gpu.get("variant") != gpu.get("variant")
+        or allocated_gpu.get("count") != gpu.get("count")
+    ):
+        raise ValueError("Controller allocation does not prove the expected GPU resources and region")
     attempts = task.get("attempts", [])
     if (
         task.get("task_id") != generation.get("task_id")
@@ -66,8 +87,21 @@ def validate_serving_generation(config, generation, native_tasks):
         raise ValueError("Serving task did not finish once successfully in the permitted region")
     start = int(task["started_at"]["epoch_ms"])
     finish = int(task["finished_at"]["epoch_ms"])
-    if start <= 0 or finish <= start:
-        raise ValueError("Serving allocation lacks a valid terminal interval")
+    if (
+        start <= 0
+        or finish <= start
+        or int(attempts[0]["started_at"]["epoch_ms"]) != start
+        or int(attempts[0]["finished_at"]["epoch_ms"]) != finish
+        or allocation.get("started_at_ms") != start
+        or (
+            attempts[0].get("attempt_uid")
+            and any(
+                value != attempts[0]["attempt_uid"]
+                for value in (generation.get("attempt_uid"), allocation.get("attempt_uid"))
+            )
+        )
+    ):
+        raise ValueError("Serving allocation lacks a matching native attempt identity and terminal interval")
     if generation.get("score_dependency_versions") != (SEMANTIC_DEPENDENCIES | {"reasoning-gym": "0.1.25"}):
         raise ValueError("Native scorer dependency versions differ from the frozen verifier")
     profile = MODEL_PROFILES[config.model]
@@ -119,16 +153,18 @@ def validate_serving_generation(config, generation, native_tasks):
         "attempt_id": 0,
         "request_fingerprint": generation["specification_sha256"],
         "step": 0,
+        "generated_at_utc": datetime.fromtimestamp(finish / 1000, UTC).isoformat(),
+        "dump_uri": config.output_uri + "/dumped_evals/global_step_0_evals",
         "runtime": runtime,
-        "task_gpu_hours": (finish - start) * config.tensor_parallel_size / 3_600_000,
+        "task_gpu_hours": (finish - start) * gpu["count"] / 3_600_000,
     }
 
 
-def audit_serving_outputs(config, *, native_tasks, output_uri):
+def audit_serving_outputs(config, *, native_tasks, native_job, output_uri):
     """Read back raw artifacts, validate all requests and score frozen membership."""
     root = StoragePath(config.output_uri)
     generation = json.loads((root / "generation.json").read_bytes())
-    protocol = validate_serving_generation(config, generation, native_tasks)
+    protocol = validate_serving_generation(config, generation, native_tasks, native_job)
     items = load_rating_inputs(config)
     tokenizer_bytes = (StoragePath(SERVING_MODELS[config.model]["weights"]) / "tokenizer.json").read_bytes()
     if hashlib.sha256(tokenizer_bytes).hexdigest() != protocol["tokenizer_sha256"]:
@@ -179,6 +215,7 @@ def audit_serving_outputs(config, *, native_tasks, output_uri):
         "clean_end_to_end": True,
         "generation_sha256": audit.canonical_sha(generation),
         "native_tasks_sha256": audit.canonical_sha(native_tasks),
+        "native_job_sha256": audit.canonical_sha(native_job),
         "protocol": protocol,
         "eval_dump": receipt["audit"],
         "expected_ids_sha256": receipt["expected_ids_sha256"],

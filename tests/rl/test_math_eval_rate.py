@@ -11,7 +11,12 @@ import pytest
 
 from experiments.post_training.math_eval.contract import QWEN, SNOWBALL
 from experiments.post_training.math_eval.pool import canonical_json
-from experiments.post_training.math_eval.rate import attach_ratings, rate_from_dump, rate_from_records
+from experiments.post_training.math_eval.rate import (
+    attach_ratings,
+    empirical_difficulty,
+    rate_from_dump,
+    rate_from_records,
+)
 
 
 def fixture():
@@ -300,3 +305,22 @@ def test_inference_only_ratings_bind_the_same_audited_parquet_and_sampling_proto
     else:
         with pytest.raises(ValueError):
             rate_from_records(records, receipt, **kwargs)
+
+
+@pytest.mark.parametrize(
+    "passes,samples,expected",
+    [(0, 20, "beyond"), (2, 20, "frontier"), (6, 20, "hard"), (12, 20, "mid"), (18, 20, "easy"), (19, 20, "mastered")],
+)
+def test_empirical_difficulty_boundaries_use_completed_counts(passes, samples, expected):
+    assert empirical_difficulty(passes, samples) == expected
+
+
+def test_k4_and_k8_cannot_resolve_a_positive_frontier_category():
+    for samples in (4, 8):
+        assert "frontier" not in {empirical_difficulty(passes, samples) for passes in range(samples + 1)}
+    _manifest, records, receipt, kwargs = fixture()
+    result = rate_from_records(records, receipt, **kwargs)
+    assert result["metadata"]["difficulty_category_basis"] == "empirical_completed_correctness"
+    assert [row["passes"] for row in result["ratings"]] == [1, 0]
+    assert [row["empirical_difficulty"] for row in result["ratings"]] == ["mid", "beyond"]
+    assert all(row["mean_response_tokens"] == 100 for row in result["ratings"])
