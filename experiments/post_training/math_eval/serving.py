@@ -121,6 +121,8 @@ def serving_configuration(config):
             "0.9",
             "--kv-cache-dtype",
             "auto",
+            "--model-loader-extra-config",
+            '{"concurrency":4,"distributed":false,"memory_limit":8589934592}',
         )
     engine = VllmEngineConfig(
         launcher=VllmLauncherType.CUDA,

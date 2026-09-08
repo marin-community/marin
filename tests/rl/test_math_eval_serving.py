@@ -327,7 +327,13 @@ def test_snowball_audit_counts_physical_gpus_and_binds_native_expert_parallel_fl
     protocol = validate_serving_generation(cfg, generation, tasks, native_job)
     assert protocol["task_gpu_hours"] == 4
     assert cfg.allocated_gpus == 4 and model.tensor_parallel_size == 1
-    for flag in ("--enable-expert-parallel", "--data-parallel-size", "--max-num-seqs", "--kv-cache-dtype"):
+    for flag in (
+        "--enable-expert-parallel",
+        "--data-parallel-size",
+        "--max-num-seqs",
+        "--kv-cache-dtype",
+        "--model-loader-extra-config",
+    ):
         poisoned = deepcopy(generation)
         poisoned["native_command"].remove(flag)
         with pytest.raises(ValueError, match="Native"):

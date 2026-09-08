@@ -156,6 +156,7 @@ def validate_serving_generation(config, generation, native_tasks, native_job):
                 "--all2all-backend": "allgather_reducescatter",
                 "--gpu-memory-utilization": "0.9",
                 "--kv-cache-dtype": "auto",
+                "--model-loader-extra-config": '{"concurrency":4,"distributed":false,"memory_limit":8589934592}',
                 "--max-num-seqs": str(_engine.max_num_seqs),
             }
         )
