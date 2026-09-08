@@ -105,3 +105,47 @@ def test_snowball_native_recipe_disables_unqualified_gradient_history(scale, run
     request = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps)).request
     config = yaml.safe_load(request.config_yaml)
     assert config["trainer"]["algorithm"]["grad_cosine"] == {"enabled": False, "store": "cpu_bf16"}
+
+
+@pytest.mark.parametrize("preset", ["regular_mask", "bc_mask", "regular_m2", "bc_m2"])
+@pytest.mark.parametrize("backend", list(async_snowball.Backend))
+@pytest.mark.parametrize("runner", list(async_snowball.Runner))
+def test_snowball_corrections_reach_native_recipe_without_other_changes(preset, backend, runner):
+    def config(correction):
+        step = async_snowball.build_experiment(
+            version="2026.09.08.35",
+            scale=async_snowball.Scale.CADENCE_GATE,
+            backend=backend,
+            runner=runner,
+            correction=correction,
+            completion="metrics",
+            timeout_seconds=900,
+        )
+        request = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps)).request
+        return yaml.safe_load(request.config_yaml)
+
+    baseline = config(async_snowball.Correction.BEHAVIOR_CLIP)
+    actual = config(async_snowball.Correction(preset))
+    algorithm = actual["trainer"]["algorithm"]
+    assert algorithm["use_tis"] is False
+    assert algorithm.pop("require_rollout_logprobs") is True
+    assert algorithm["policy_loss_type"] == ("regular" if preset.startswith("regular") else "behavior_clip")
+    algorithm["policy_loss_type"] = "behavior_clip"
+    if preset.endswith("mask"):
+        assert algorithm.pop("offpolicy_mask") == {
+            "enabled": True,
+            "ratio": "mismatch",
+            "low": 0.5,
+            "high": 5.0,
+            "veto_ratio": 1e-5,
+            "renormalize": False,
+        }
+    else:
+        assert algorithm.pop("m2_mask") == {
+            "enabled": True,
+            "ratio": "stale",
+            "tau": 0.04,
+            "mode": "mask",
+            "renormalize": False,
+        }
+    assert actual == baseline
