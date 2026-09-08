@@ -51,3 +51,23 @@ def test_async_multiple_minibatches_are_rejected():
         recipe.training_config(
             recipe.Runner.ASYNC, recipe.Scale.SCREENING, spans=True, staleness=0, minibatches=4, updates=8
         )
+
+
+@pytest.mark.parametrize("enabled,store", [(True, "gpu_fp32"), (False, "cpu_bf16"), (False, "off")])
+def test_explicit_gradient_monitoring_reaches_native_config(enabled, store):
+    step, _ = recipe.build_experiment(
+        version="2026.09.08.90",
+        cluster="cw-us-east-02a",
+        runner=recipe.Runner.SYNC,
+        scale=recipe.Scale.SCREENING,
+        completion="metrics",
+        grad_cosine=enabled,
+        grad_cosine_store=store,
+    )
+    cfg = yaml.safe_load(materialized_config(step, "s3://marin-us-east-02a/marin").request.config_yaml)
+    assert cfg["trainer"]["algorithm"]["grad_cosine"] == {"enabled": enabled, "store": store}
+
+
+def test_gradient_override_absence_preserves_runtime_default():
+    cfg = yaml.safe_load(recipe.training_config(recipe.Runner.SYNC, recipe.Scale.SCREENING, spans=True, staleness=0))
+    assert "grad_cosine" not in cfg["trainer"]["algorithm"]
