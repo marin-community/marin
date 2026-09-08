@@ -10,7 +10,13 @@ import pyarrow.parquet as pq
 import pytest
 
 from experiments.post_training.curriculum_rl.pool import GSM8K_BIN, _pool_record
-from experiments.post_training.math_eval.pool import SourceRows, build_pool, prompt_hash, write_pool
+from experiments.post_training.math_eval.pool import (
+    SourceRows,
+    build_pool,
+    prompt_hash,
+    prompt_length_report,
+    write_pool,
+)
 from experiments.post_training.math_eval.sample import sample
 
 
@@ -114,3 +120,15 @@ def test_sampler_never_borrows_a_benchmark_bin_from_another_split():
     pool = build([source(["A unique benchmark question"], split="heldout")])
     with pytest.raises(ValueError, match="no eligible rows"):
         sample(pool.manifest, pool.selection, [GSM8K_BIN.name], 1, 17, model="qwen", split="train")
+
+
+def test_length_audit_reports_all_rows_without_dropping_evaluation_overflows():
+    long_question = "A long problem: " + "x" * 1000
+    inputs = [source(["What is 2 + 3?", long_question], split="heldout")]
+    report = prompt_length_report(
+        inputs, {"qwen": lambda text: list(text.encode()), "snowball": lambda text: list(text.encode())}, cap=700
+    )
+    assert len(report["overflows"]) == 1
+    assert report["overflows"][0]["prompt_sha256"] == prompt_hash(long_question)
+    assert all(row["rows"] == 2 and row["over_cap"] == 1 for row in report["sources"].values())
+    assert "x" * 1000 not in json.dumps(report)

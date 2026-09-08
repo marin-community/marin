@@ -252,3 +252,43 @@ def write_pool(build: PoolBuild, output: Path) -> None:
         for split, rows in splits.items():
             pq.write_table(pa.Table.from_pylist(rows), directory / f"{split}.parquet")
     (output / "selection.json").write_text(canonical_json(build.selection) + "\n")
+
+
+def prompt_length_report(
+    sources: Sequence[SourceRows], tokenizers: Mapping[str, Callable[[str], list[int]]], *, cap: int
+) -> dict[str, Any]:
+    """Audit every source row before membership is frozen; report no question text."""
+    grouped = defaultdict(list)
+    overflows = []
+    for source in sources:
+        for record in source.records:
+            question = _question(record)
+            digest = prompt_hash(question)
+            split = assign_split(digest) if source.split == "hash" else source.split
+            counts = {
+                model: len(tokenizers[model](render_prompt(question, record["env_class"], template)))
+                for model, template in MODEL_TEMPLATES.items()
+            }
+            for model, count in counts.items():
+                grouped[f"{source.source}/{model}/{split}/{record['data_source']}"].append(count)
+            if max(counts.values()) > cap:
+                overflows.append(
+                    {
+                        "prompt_sha256": digest,
+                        "source": source.source,
+                        "split": split,
+                        "bin": record["data_source"],
+                        "tokens": counts,
+                    }
+                )
+    summary = {
+        name: {
+            "rows": len(values),
+            "min": min(values),
+            "max": max(values),
+            "p95_nearest_rank": sorted(values)[math.ceil(len(values) * 0.95) - 1],
+            "over_cap": sum(value > cap for value in values),
+        }
+        for name, values in grouped.items()
+    }
+    return {"cap": cap, "sources": summary, "overflows": overflows}
