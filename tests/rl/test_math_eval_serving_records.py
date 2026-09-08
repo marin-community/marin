@@ -10,6 +10,7 @@ import reasoning_gym
 
 from experiments.post_training.math_eval.contract import QWEN
 from experiments.post_training.math_eval.pool import prompt_hash
+from experiments.post_training.math_eval.serving import MAX_FAILURE_RECEIPT_BYTES, completion_rows_with_failure_receipt
 from experiments.post_training.math_eval.serving_records import completion_request, completion_rows, serving_metrics
 
 
@@ -58,6 +59,78 @@ def fixture(env="aime"):
         },
     }
     return decoder, item, request, response
+
+
+def test_renderer_mismatch_preserves_exact_failed_response_and_still_raises(tmp_path):
+    decoder, item, request, response = fixture()
+    response["choices"][3]["text"] += "\ufffd"
+    original = deepcopy(response)
+    path = tmp_path / "validation-failure.json"
+    with pytest.raises(ValueError, match="qualified token renderer"):
+        completion_rows_with_failure_receipt(
+            item,
+            request,
+            response,
+            decoder,
+            model="qwen",
+            question_index=13,
+            failure_uri=str(path),
+            provenance={"source_commit": "reviewed", "attempt_uid": "native-attempt"},
+        )
+    receipt = json.loads(path.read_text())
+    assert receipt["rating_valid"] is False
+    assert receipt["response"] == original
+    assert receipt["request"] == request and receipt["item"] == item
+    assert receipt["question_index"] == 13
+    assert receipt["provenance"]["attempt_uid"] == "native-attempt"
+    assert not (tmp_path / "dumped_evals").exists()
+    with pytest.raises(RuntimeError, match="overwrite"):
+        completion_rows_with_failure_receipt(
+            item,
+            request,
+            response,
+            decoder,
+            model="qwen",
+            question_index=13,
+            failure_uri=str(path),
+            provenance={},
+        )
+    assert json.loads(path.read_text()) == receipt
+
+
+def test_valid_responses_keep_scores_without_writing_failure_receipt(tmp_path):
+    decoder, item, request, response = fixture()
+    path = tmp_path / "validation-failure.json"
+    rows = completion_rows_with_failure_receipt(
+        item,
+        request,
+        response,
+        decoder,
+        model="qwen",
+        question_index=2,
+        failure_uri=str(path),
+        provenance={},
+    )
+    assert rows == completion_rows(item, request, response, decoder, model="qwen", question_index=2)
+    assert not path.exists()
+
+
+def test_oversized_failure_is_not_truncated_or_written_as_a_complete_receipt(tmp_path):
+    decoder, item, request, response = fixture()
+    response["choices"][0]["text"] = "x" * (MAX_FAILURE_RECEIPT_BYTES + 1)
+    path = tmp_path / "validation-failure.json"
+    with pytest.raises(RuntimeError, match="diagnostic bound"):
+        completion_rows_with_failure_receipt(
+            item,
+            request,
+            response,
+            decoder,
+            model="qwen",
+            question_index=0,
+            failure_uri=str(path),
+            provenance={},
+        )
+    assert not path.exists()
 
 
 @pytest.mark.parametrize("env", ["gsm8k", "aime"])

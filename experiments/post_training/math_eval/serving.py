@@ -31,6 +31,7 @@ from experiments.post_training.math_eval.scoring import SEMANTIC_DEPENDENCIES
 from experiments.post_training.math_eval.serving_records import completion_request, completion_rows, serving_metrics
 
 EAST_PREFIX = "s3://marin-us-east-02a/marin/"
+MAX_FAILURE_RECEIPT_BYTES = 8 * 1024 * 1024
 SERVING_MODELS = {
     "qwen": {
         "weights": EAST_PREFIX + "users/ahmad/models/async-rl-qwen3-0.6b/2026.09.08.83/hf",
@@ -153,6 +154,38 @@ def load_rating_inputs(config):
     return [lookup[digest] for digest in config.expected_ids]
 
 
+def completion_rows_with_failure_receipt(
+    item, request, response, decoder, *, model, question_index, failure_uri, provenance
+):
+    """Preserve one rejected response for diagnosis, then propagate its failure.
+
+    A failure receipt is not an evaluation dump and never authorizes a rating.
+    Successful responses use the original validator and scorer unchanged.
+    """
+    try:
+        return completion_rows(item, request, response, decoder, model=model, question_index=question_index)
+    except ValueError as error:
+        receipt = {
+            "schema": "math_eval_serving_validation_failure_v1",
+            "rating_valid": False,
+            "error_type": type(error).__name__,
+            "error": str(error),
+            "question_index": question_index,
+            "item": item,
+            "request": request,
+            "response": response,
+            "provenance": provenance,
+        }
+        path = StoragePath(failure_uri)
+        if path.exists():
+            raise RuntimeError("Refusing to overwrite a serving failure receipt") from error
+        payload = canonical_json(receipt).encode()
+        if len(payload) > MAX_FAILURE_RECEIPT_BYTES:
+            raise RuntimeError("Serving failure receipt exceeds the 8 MiB diagnostic bound") from error
+        path.write_bytes(payload)
+        raise
+
+
 def run_rating_serving(config):
     """Produce raw-token dumps; independent terminal/harness audit is still required.
 
@@ -225,17 +258,30 @@ def run_rating_serving(config):
         # where the semantic verifier stack can safely use POSIX timeouts.
         generation_start_ms = time.time_ns() // 1_000_000
         generation_start_ns = time.monotonic_ns()
+        failure_provenance = {
+            "specification": specification,
+            "runtime": runtime,
+            "native_command": native_command,
+            "controller_allocation": allocation,
+            "model_config_sha256": hashlib.sha256(model_config).hexdigest(),
+            "tokenizer_sha256": hashlib.sha256(tokenizer_bytes).hexdigest(),
+            "tokenizers_version": importlib.metadata.version("tokenizers"),
+            "prompt_template_id": MODEL_TEMPLATES[config.model].template_id,
+            "generation_started_at_ms": generation_start_ms,
+        }
         with ThreadPoolExecutor(max_workers=config.concurrency) as executor:
             rows = []
             for index, response in enumerate(executor.map(generate, range(len(items)))):
                 rows.extend(
-                    completion_rows(
+                    completion_rows_with_failure_receipt(
                         items[index],
                         requests_by_question[index],
                         response,
                         decoder,
                         model=config.model,
                         question_index=index,
+                        failure_uri=str(output / "validation-failure.json"),
+                        provenance=failure_provenance,
                     )
                 )
         generation_seconds = (time.monotonic_ns() - generation_start_ns) / 1_000_000_000
