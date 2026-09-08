@@ -207,6 +207,8 @@ def training_config(
     eval_interval: int | None = None,
 ) -> str:
     backend = Backend(backend)
+    if publication_stage_timing and backend is not Backend.MEGATRON:
+        raise ValueError("Publication stage tracing currently requires the Megatron backend")
     gate = scale is Scale.GATE
     if not isinstance(epoch_seeded_shuffle, bool):
         raise ValueError("epoch_seeded_shuffle must be a boolean")
