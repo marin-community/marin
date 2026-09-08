@@ -139,3 +139,31 @@ def audit_completed_noise_band(baseline: Sequence[float], repeat: Sequence[float
     noise = abs(sum(repeat) - sum(baseline)) / 128
     difference = abs(sum(candidate) - sum(baseline)) / 128
     return {"within_noise_band": difference <= noise, "absolute_difference": difference, "noise_band": noise}
+
+
+def audit_source_control(reference: Mapping[int, Sequence[str]], candidate: Mapping[int, Sequence[str]]) -> dict:
+    """Compare native UID vectors recovered from complete consumed_source_order events.
+
+    N1 requires the same set at every rollout batch. The N8 diagnostic compares its
+    one 512-group batch with the union of the eight N1 batches. Sequence order is not
+    part of this gate; the caller retains the original vectors for inspection.
+    """
+    for batches in (reference, candidate):
+        if set(batches) not in (set(range(1, 9)), {1}):
+            raise ValueError("Incomplete source batch coverage")
+        width = 512 // len(batches)
+        flattened = []
+        for values in batches.values():
+            if len(values) != width or any(not isinstance(value, str) or not value for value in values):
+                raise ValueError("Incomplete source UID vector")
+            flattened.extend(values)
+        if len(flattened) != 512 or len(set(flattened)) != 512:
+            raise ValueError("The qualification requires 512 distinct source groups")
+    if len(reference) != 8:
+        raise ValueError("The source reference must be N1")
+    if len(candidate) == 8:
+        if any(set(reference[step]) != set(candidate[step]) for step in reference):
+            raise ValueError("Per-batch consumed UID sets differ")
+    elif set(candidate[1]) != {uid for values in reference.values() for uid in values}:
+        raise ValueError("N8 consumed UID set differs from the N1 union")
+    return {"source_groups": 512, "matched_batches": len(candidate), "sequence_order_claim": False}
