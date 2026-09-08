@@ -46,3 +46,11 @@ author: William Held
 - Coordinator: `/held/sft-datakit-20260907-prod-wsd`; cluster `marin`; 1 CPU, 2 GB memory, 5 GB disk in us-central2; production priority; no timeout. DRI: William Held. This assistant session owns startup checks and subsequent 15-minute monitoring. Iris/Finelog retain runtime logs; Zephyr scratch, if needed, uses the regional lifecycle-managed temporary prefix. Ray spill is not applicable to this JAX/Fray run.
 - Command: `uv run iris --cluster=marin job run --no-wait --job-name sft-datakit-20260907-prod-wsd --priority production --cpu 1 --memory 2GB --disk 5GB --region us-central2 -e UV_LOCK_TIMEOUT 900 -e MARIN_PREFIX gs://marin-us-central2 -e WANDB_API_KEY "$WANDB_API_KEY" -- uv run python experiments/june_tpu_67b_a2b/moe/sft_datakit_chat_mix.py`
 - Next action: submit once, confirm the cached data dependencies are skipped, and verify TPU dispatch and full-state initialization.
+
+
+### 2026-09-07 17:28 PDT - Cached inputs reused and TPU training dispatched
+
+- Submitted `/held/sft-datakit-20260907-prod-wsd` at 17:26:18 PDT from clean, pushed source `d033b52537755baf458dfbfafaae6e84f7aa70c0`; bundle `a843178ff0e84c71a03d0adf41fccc74fd298431fee39b0d861a6af5d9db2559` (11.1 MB). The coordinator received the W&B credential.
+- The coordinator reused completed dependencies and dispatched `grug-train-moe_67b_a2b_step157k_sft_datakit80_pretrain20_ctx262k_2026.09.07` at 17:27:23 PDT. The job tree contains only the coordinator and training child, with no preprocessing jobs. Training is pending matching TPU workers; full-state initialization and training metrics are not yet observed.
+- [Iris job](https://iris.oa.dev/#/job/%2Fheld%2Fsft-datakit-20260907-prod-wsd) · [Stale-checkout incident record](https://marina.oa.dev/echo/wiki/359).
+- Next action: monitor allocation, then checkpoint restoration and the first training updates.
