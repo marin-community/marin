@@ -53,9 +53,10 @@ def resolved(version, expected_msr_commit):
         scale=recipe.Scale.SCREENING,
         cluster="cw-us-east-02a",
         completion="metrics",
-        timeout_seconds=900,
+        timeout_seconds=1050,
         inference_replicas=8,
         publication_stage_timing=True,
+        serial_engine_startup=True,
         dataloader_workers=0,
         validation_rows=128,
         response_tokens=1024,
@@ -88,6 +89,7 @@ def resolved(version, expected_msr_commit):
     assert settings["trainer"]["fully_async"].get("weight_sync_interval", 1) == 1
     assert settings["trainer"]["fully_async"]["max_staleness_steps"] == 1
     assert settings["generator"]["publication_stage_timing"]
+    assert settings["generator"]["inference_engine_serial_startup"]
     assert settings["generator"]["inference_stats_poll_seconds"] == 1.0
     assert settings["generator"]["num_inference_engines"] == 8
     assert settings["generator"]["n_samples_per_prompt"] == 4
@@ -101,7 +103,7 @@ def resolved(version, expected_msr_commit):
     assert settings["generator"]["eval_sampling_params"]["max_generate_length"] == 1024
     assert request.topology.num_nodes == 2 and request.topology.gpus_per_node == 8
     assert request.topology.role_plan.policy_num_nodes == 1 and not request.topology.role_plan.colocate_all
-    assert config.execution.timeout_seconds == 900 and config.execution.max_retries == 0
+    assert config.execution.timeout_seconds == 1050 and config.execution.max_retries == 0
     assert config.execution.priority == "batch" and config.execution.cluster == "cw-us-east-02a"
     canonical = asdict(request)
     canonical.pop("attempt_id")
