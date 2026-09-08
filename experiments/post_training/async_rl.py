@@ -227,10 +227,16 @@ def training_config(
     dataloader_workers: int | None = None,
     publication_stage_timing: bool = False,
     serial_engine_startup: bool = False,
+    generation_workers: int | None = None,
+    training_ignore_eos: bool = False,
     optimizer_precision: OptimizerPrecision = OptimizerPrecision.NATIVE,
     optimizer_state_metrics: bool = False,
 ) -> str:
     """Keep optimizer and inference settings identical across scheduler controls."""
+    if generation_workers is not None and (type(generation_workers) is not int or generation_workers <= 0):
+        raise ValueError("generation_workers must be a positive integer")
+    if not isinstance(training_ignore_eos, bool):
+        raise ValueError("training_ignore_eos must be a boolean")
     schedule = SCHEDULES[scale]
     if not isinstance(epoch_seeded_shuffle, bool):
         raise ValueError("epoch_seeded_shuffle must be a boolean")
@@ -297,7 +303,7 @@ def training_config(
         )
     trainer["fully_async"] = {
         "max_staleness_steps": staleness,
-        "num_parallel_generation_workers": 64,
+        "num_parallel_generation_workers": 64 if generation_workers is None else generation_workers,
         "admission_stall_timeout": 300,
     }
     # Omit the default to preserve historical configuration fingerprints.
@@ -314,6 +320,8 @@ def training_config(
     trainer["ref"] = {"megatron_config": dict(megatron)}
     apply_optimizer_precision(trainer, scale=scale, precision=optimizer_precision, state_metrics=optimizer_state_metrics)
     config["generator"]["sampling_params"]["logprobs"] = 0
+    if training_ignore_eos:
+        config["generator"]["sampling_params"]["ignore_eos"] = True
     if eval_response_tokens is not None:
         config["generator"]["eval_sampling_params"] = {"max_generate_length": eval_response_tokens}
     config["generator"]["trajectory_retention"] = {
@@ -454,6 +462,8 @@ def build_experiment(
     dataloader_workers: int | None = None,
     publication_stage_timing: bool = False,
     serial_engine_startup: bool = False,
+    generation_workers: int | None = None,
+    training_ignore_eos: bool = False,
     optimizer_precision: OptimizerPrecision = OptimizerPrecision.NATIVE,
     optimizer_state_metrics: bool = False,
 ) -> tuple[ArtifactStep[SkyRLModel] | ArtifactStep[SkyRLTrainingResult], ArtifactStep[EvaluationResult] | None]:
@@ -490,6 +500,8 @@ def build_experiment(
         dataloader_workers=dataloader_workers,
         publication_stage_timing=publication_stage_timing,
         serial_engine_startup=serial_engine_startup,
+        generation_workers=generation_workers,
+        training_ignore_eos=training_ignore_eos,
         optimizer_precision=optimizer_precision,
         optimizer_state_metrics=optimizer_state_metrics,
     )
@@ -644,6 +656,8 @@ def build_experiment(
 @click.option(
     "--correction", type=click.Choice([c.value for c in Correction]), default="behavior_clip", show_default=True
 )
+@click.option("--generation-workers", type=click.IntRange(min=1), help="Concurrent rollout groups; defaults to 64.")
+@click.option("--training-ignore-eos/--no-training-ignore-eos", default=False, show_default=True)
 @click.option("--response-tokens", type=click.IntRange(min=1), help="Training output cap; defaults to 1024.")
 @click.option(
     "--eval-response-tokens", type=click.IntRange(min=1), help="Internal evaluation cap; defaults to training."
@@ -684,6 +698,8 @@ def main(
     dataloader_workers: int | None,
     publication_stage_timing: bool,
     serial_engine_startup: bool,
+    generation_workers: int | None,
+    training_ignore_eos: bool,
     timeout_seconds: int,
     execute: bool,
 ) -> None:
@@ -718,6 +734,8 @@ def main(
         dataloader_workers=dataloader_workers,
         publication_stage_timing=publication_stage_timing,
         serial_engine_startup=serial_engine_startup,
+        generation_workers=generation_workers,
+        training_ignore_eos=training_ignore_eos,
     )
     prefix = marin_prefix()
     if execute:
