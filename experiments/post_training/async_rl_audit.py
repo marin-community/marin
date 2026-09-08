@@ -517,7 +517,16 @@ def audit_eval_dump(
     require_engine_indices: bool = False,
     expected_engine_count: int | None = None,
     require_eval_response_metrics: bool = False,
+    *,
+    expected_token_provenance: str = "finalized_trajectory",
+    metric_reference: str = "wandb",
 ) -> tuple[JSONDict, EvalRecords]:
+    check(
+        (expected_token_provenance, metric_reference)
+        in {("finalized_trajectory", "wandb"), ("raw_engine_response", "serving_score_receipt")},
+        "Unsupported evaluation token/metric provenance pair",
+    )
+    metric_label = "W&B" if metric_reference == "wandb" else "serving score receipt"
     check(type(require_eval_response_metrics) is bool, "require_eval_response_metrics must be boolean")
     uri = posixpath.join(root, "dumped_evals", f"global_step_{step}_evals")
     if dump_namespace is not None:
@@ -556,7 +565,7 @@ def audit_eval_dump(
                 check(
                     type(ordinal) is int and ordinal not in ordinal_records, "Duplicate/invalid evaluation row ordinal"
                 )
-                check(row["token_provenance"] == "finalized_trajectory", "Unexpected token provenance")
+                check(row["token_provenance"] == expected_token_provenance, "Unexpected token provenance")
                 for tokens_key, digest_key in (
                     ("prompt_token_ids", "prompt_token_ids_sha256"),
                     ("response_ids", "response_ids_sha256"),
@@ -620,7 +629,7 @@ def audit_eval_dump(
             any(score > 0 for score in scores) for scores in source_uids[dataset].values()
         ) / len(source_uids[dataset])
     for key, value in reconstructed.items():
-        for label, metrics in (("dump aggregate", aggregate), ("W&B", wandb_metrics)):
+        for label, metrics in (("dump aggregate", aggregate), (metric_label, wandb_metrics)):
             check(
                 key in metrics and math.isclose(value, metrics[key], abs_tol=1e-7, rel_tol=1e-7),
                 f"Evaluation {label} differs at step {step}: {key}",
@@ -631,7 +640,7 @@ def audit_eval_dump(
         supplemental.update(
             {f"eval/{dataset}/{name}": value for name, value in evaluation_response_metrics(responses).items()}
         )
-    for label, metrics in (("dump aggregate", aggregate), ("W&B", wandb_metrics)):
+    for label, metrics in (("dump aggregate", aggregate), (metric_label, wandb_metrics)):
         if require_eval_response_metrics:
             check(
                 supplemental.keys() <= metrics.keys(),
@@ -650,6 +659,11 @@ def audit_eval_dump(
     reconstructed.update(supplemental)
     ordered = [ordinal_records[i] for i in range(expected_rows)]
     return {
+        **(
+            {"token_provenance": expected_token_provenance, "metric_reference": metric_reference}
+            if metric_reference != "wandb"
+            else {}
+        ),
         "step": step,
         "dump_namespace": dump_namespace,
         "present": True,
@@ -670,14 +684,15 @@ def audit_eval_dump(
         "reward_reduction": "mean of token-reward sums; pass@n from final reward (checked against aggregate)",
         "unshaped_reward_channel_in_dump": False,
         "response_metric_scope": (
-            "finalized trajectory token lengths; stop labels do not certify answer completeness or balanced thinking"
+            ("finalized trajectory" if expected_token_provenance == "finalized_trajectory" else "raw engine")
+            + " token lengths; stop labels do not certify answer completeness or balanced thinking"
         ),
         "stop_score_contribution_denominator": (
             "all evaluation sequences in the reported dataset; optimization-score sums, not conditional accuracy"
         ),
         "response_metrics_required": require_eval_response_metrics,
         "supplemental_metric_verification": (
-            "each advertised dump/W&B supplemental metric checked; absent legacy metrics allowed"
+            f"each advertised dump/{metric_label} supplemental metric checked; absent legacy metrics allowed"
         ),
     }, ordered
 
