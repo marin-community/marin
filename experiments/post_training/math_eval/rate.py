@@ -14,24 +14,40 @@ from rigging.filesystem.storage_path import StoragePath
 from experiments.post_training.math_eval.pool import canonical_json
 
 
-def rate_from_dump(harness_output_uri, **kwargs):
+def rate_from_dump(harness_output_uri, *, generation_audit_uri, generation_audit_sha256, **kwargs):
     """Read a proven record parquet, checking its exact receipt hash before reducing."""
     receipt = json.loads(StoragePath(harness_output_uri + "/summary.json").read_bytes())
     content = StoragePath(harness_output_uri + "/records.parquet").read_bytes()
     if hashlib.sha256(content).hexdigest() != receipt["records_sha256"]:
         raise ValueError("Rating record parquet differs from its audited receipt")
     records = pq.read_table(pa.BufferReader(content)).to_pylist()
-    return rate_from_records(records, receipt, **kwargs)
+    generation_audit = json.loads(StoragePath(generation_audit_uri).read_bytes())
+    return rate_from_records(
+        records, receipt, generation_audit=generation_audit, generation_audit_sha256=generation_audit_sha256, **kwargs
+    )
 
 
 def rate_from_records(
-    records, receipt, *, expected_ids, samples, model, checkpoint, generation_seed, temperature, max_response_tokens
+    records,
+    receipt,
+    *,
+    expected_ids,
+    samples,
+    model,
+    checkpoint,
+    engine_global_seed,
+    temperature,
+    max_response_tokens,
+    generation_audit=None,
+    generation_audit_sha256=None,
 ):
     """Rate every sampled question from exactly K completed-correctness observations.
 
     The harness receipt must certify frozen-pool identity and aggregate parity. Raw
     optimization rewards and exact correctness remain separate diagnostic means.
     Returning a ratings overlay leaves the candidate pool's immutable hash intact.
+    Without a hash-pinned generation audit this is only a trusted-input reduction;
+    its unverified overlay cannot be attached to a pool for selection.
     """
     if (
         receipt.get("scope") != "frozen_pool"
@@ -62,10 +78,25 @@ def rate_from_records(
         grouped[row["prompt_sha256"]].append(row)
     if set(grouped) != set(expected_ids) or any(len(rows) != samples for rows in grouped.values()):
         raise ValueError("Ratings question membership or per-question K differs")
+    protocol = _generation_protocol(receipt, generation_audit, generation_audit_sha256)
+    if protocol is not None and any(
+        protocol[key] != value
+        for key, value in {
+            "checkpoint": checkpoint,
+            "engine_global_seed": engine_global_seed,
+            "temperature": temperature,
+            "max_response_tokens": max_response_tokens,
+            "samples": samples,
+        }.items()
+    ):
+        raise ValueError("Claimed sampling protocol differs from the audited generation configuration")
     metadata = {
         "model": model,
         "checkpoint": checkpoint,
-        "generation_seed": generation_seed,
+        "engine_global_seed": engine_global_seed,
+        "generation_protocol_verified": protocol is not None,
+        "generation_audit_sha256": generation_audit_sha256,
+        "generation_provenance": protocol,
         "temperature": temperature,
         "max_response_tokens": max_response_tokens,
         "samples": samples,
@@ -93,6 +124,8 @@ def rate_from_records(
 
 def attach_ratings(manifest, ratings_overlay):
     """Return a derived join view; never alter frozen source rows or split assignments."""
+    if not ratings_overlay["metadata"].get("generation_protocol_verified"):
+        raise ValueError("Unverified generation protocol cannot select pool membership")
     manifest_hash = hashlib.sha256(
         canonical_json(sorted(manifest, key=lambda row: row["prompt_sha256"])).encode()
     ).hexdigest()
@@ -105,3 +138,56 @@ def attach_ratings(manifest, ratings_overlay):
     if len(lookup) != len(ratings_overlay["ratings"]) or not lookup.keys() <= {row["prompt_sha256"] for row in manifest}:
         raise ValueError("Ratings membership is duplicated or foreign")
     return [row | {"rating": lookup.get(row["prompt_sha256"])} for row in manifest]
+
+
+def _generation_protocol(receipt, generation_audit, expected_sha256):
+    """Bind an existing terminal audit to these exact responses and its startup model.
+
+    The accepted digest is the canonical JSON SHA of a single audit_run result.
+    A trained-step or inference-only checkpoint requires another audited adapter;
+    neither is certified by this startup-only implementation. The engine/global
+    seed initializes engines, and is not claimed as a per-request sampling seed.
+    """
+    if generation_audit is None:
+        if expected_sha256 is not None:
+            raise ValueError("Generation audit is missing")
+        return None
+    if hashlib.sha256(canonical_json(generation_audit).encode()).hexdigest() != expected_sha256:
+        raise ValueError("Generation audit differs from its immutable digest")
+    if not generation_audit.get("training_evidence_pass") or not generation_audit.get("clean_end_to_end"):
+        raise ValueError("Generation requires a successful terminal audit")
+    endpoint = receipt["audit"]
+    keys = (
+        "step",
+        "dump_namespace",
+        "rows",
+        "unique_uids",
+        "ordered_prompt_sha256",
+        "ordered_response_sha256",
+        "ordered_result_sha256",
+    )
+    matching = [dump for dump in generation_audit["eval_dumps"] if all(dump[key] == endpoint[key] for key in keys)]
+    if len(matching) != 1 or not endpoint["present"] or not endpoint["aggregate_verified"]:
+        raise ValueError("Generation audit does not certify these exact response records")
+    if endpoint["step"] != 0:
+        raise ValueError("Only startup model checkpoint provenance is supported")
+    cfg = generation_audit["resolved_config"]
+    sampling = cfg["generator.eval_sampling_params"]
+    if not cfg["trainer.eval_before_train"] or cfg["trainer.seed"] != generation_audit["provenance"]["seed"]:
+        raise ValueError("Startup generation seed or checkpoint phase differs")
+    rows, questions = endpoint["rows"], endpoint["unique_uids"]
+    if questions <= 0 or rows % questions:
+        raise ValueError("Audited per-question sample count is invalid")
+    return {
+        "checkpoint": generation_audit["provenance"]["model"]["identity"],
+        "model": generation_audit["provenance"]["model"],
+        "engine_global_seed": cfg["trainer.seed"],
+        "request_sampling_seed": sampling.get("seed"),
+        "temperature": sampling["temperature"],
+        "max_response_tokens": sampling["max_generate_length"],
+        "samples": rows // questions,
+        "run_id": generation_audit["run_id"],
+        "attempt_id": generation_audit["attempt_id"],
+        "request_fingerprint": generation_audit["storage"]["request_fingerprint"],
+        "step": 0,
+    }

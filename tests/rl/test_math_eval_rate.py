@@ -40,14 +40,41 @@ def fixture():
         "tokenizer_sha256": "c" * 64,
         "prompt_template_id": "template",
     }
+    receipt["audit"] = {
+        "step": 0,
+        "dump_namespace": None,
+        "rows": 4,
+        "unique_uids": 2,
+        "present": True,
+        "aggregate_verified": True,
+        "ordered_prompt_sha256": "1" * 64,
+        "ordered_response_sha256": "2" * 64,
+        "ordered_result_sha256": "3" * 64,
+    }
+    generation_audit = {
+        "training_evidence_pass": True,
+        "clean_end_to_end": True,
+        "run_id": "fixture",
+        "attempt_id": "attempt",
+        "storage": {"request_fingerprint": "4" * 64},
+        "resolved_config": {
+            "trainer.seed": 17,
+            "trainer.eval_before_train": True,
+            "generator.eval_sampling_params": {"temperature": 1.0, "max_generate_length": 2048},
+        },
+        "provenance": {"seed": 17, "model": {"identity": "initial"}},
+        "eval_dumps": [deepcopy(receipt["audit"])],
+    }
     kwargs = dict(
         expected_ids=["a", "b"],
         samples=2,
         model="qwen",
         checkpoint="initial",
-        generation_seed=17,
+        engine_global_seed=17,
         temperature=1.0,
         max_response_tokens=2048,
+        generation_audit=generation_audit,
+        generation_audit_sha256=hashlib.sha256(canonical_json(generation_audit).encode()).hexdigest(),
     )
     return manifest, records, receipt, kwargs
 
@@ -86,7 +113,64 @@ def test_rating_parquet_roundtrip_checks_exact_audited_bytes(tmp_path):
     pq.write_table(pa.Table.from_pylist(records), path)
     receipt["records_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
     (tmp_path / "summary.json").write_text(json.dumps(receipt))
+    audit = kwargs.pop("generation_audit")
+    audit_path = tmp_path / "generation-audit.json"
+    audit_path.write_text(json.dumps(audit))
+    kwargs["generation_audit_uri"] = str(audit_path)
     assert rate_from_dump(str(tmp_path), **kwargs)["ratings"][0]["pass_rate_k"] == 0.5
     path.write_bytes(path.read_bytes() + b"changed")
     with pytest.raises(ValueError, match="audited receipt"):
         rate_from_dump(str(tmp_path), **kwargs)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("engine_global_seed", 18),
+        ("temperature", 0.5),
+        ("checkpoint", "other-checkpoint"),
+        ("max_response_tokens", 4096),
+    ],
+)
+def test_claimed_generation_values_cannot_override_audited_configuration(field, value):
+    _manifest, records, receipt, kwargs = fixture()
+    kwargs[field] = value
+    with pytest.raises(ValueError):
+        rate_from_records(records, receipt, **kwargs)
+
+
+@pytest.mark.parametrize("alteration", ["digest", "response", "phase", "failed"])
+def test_generation_audit_must_match_exact_response_receipt(alteration):
+    _manifest, records, receipt, kwargs = fixture()
+    audit = kwargs["generation_audit"]
+    if alteration == "response":
+        audit["eval_dumps"][0]["ordered_response_sha256"] = "f" * 64
+    elif alteration == "phase":
+        audit["eval_dumps"][0]["step"] = receipt["audit"]["step"] = 50
+    elif alteration == "failed":
+        audit["clean_end_to_end"] = False
+    if alteration != "digest":
+        kwargs["generation_audit_sha256"] = hashlib.sha256(canonical_json(audit).encode()).hexdigest()
+    else:
+        kwargs["generation_audit_sha256"] = "0" * 64
+    with pytest.raises(ValueError):
+        rate_from_records(records, receipt, **kwargs)
+
+
+def test_trusted_reduction_cannot_certify_ratings_for_selection():
+    manifest, records, receipt, kwargs = fixture()
+    kwargs.pop("generation_audit")
+    kwargs.pop("generation_audit_sha256")
+    result = rate_from_records(records, receipt, **kwargs)
+    assert result["metadata"]["generation_protocol_verified"] is False
+    with pytest.raises(ValueError, match="Unverified"):
+        attach_ratings(manifest, result)
+
+
+def test_temperature_one_claim_cannot_certify_a_greedy_generation_receipt():
+    _manifest, records, receipt, kwargs = fixture()
+    audit = kwargs["generation_audit"]
+    audit["resolved_config"]["generator.eval_sampling_params"]["temperature"] = 0.0
+    kwargs["generation_audit_sha256"] = hashlib.sha256(canonical_json(audit).encode()).hexdigest()
+    with pytest.raises(ValueError, match="Claimed sampling protocol"):
+        rate_from_records(records, receipt, **kwargs)
