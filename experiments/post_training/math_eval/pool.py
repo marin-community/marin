@@ -112,6 +112,7 @@ def build_pool(
     code_sha: str,
     tokenizer_hashes: Mapping[str, str],
     max_prompt_tokens: int = 1024,
+    length_eligibility: Sequence[Mapping[str, Any]] = (),
 ) -> PoolBuild:
     """Build both model views, keeping benchmark membership outside training.
 
@@ -120,6 +121,10 @@ def build_pool(
     """
     if set(tokenizers) != set(MODEL_TEMPLATES) or set(tokenizer_hashes) != set(MODEL_TEMPLATES):
         raise ValueError("Both pinned model tokenizers are required")
+    exclusions = {item["prompt_sha256"]: dict(item) for item in length_eligibility}
+    if len(exclusions) != len(length_eligibility):
+        raise ValueError("Duplicate pre-freeze eligibility receipt")
+    applied_exclusions = []
     candidates = []
     for source in sources:
         if source.split not in {*SPLIT_PRIORITY, "hash"} or not source.revision or not source.license:
@@ -133,7 +138,24 @@ def build_pool(
             gold = record["reward_spec"]["ground_truth"]
             if gold != record["reward_model"]["ground_truth"]:
                 raise ValueError("Ground-truth channels disagree")
+            if digest in exclusions:
+                expected = exclusions[digest]
+                counts = {
+                    model: len(tokenizers[model](render_prompt(question, record["env_class"], template)))
+                    for model, template in MODEL_TEMPLATES.items()
+                }
+                if (
+                    source.source != expected["source"]
+                    or source.revision != expected["revision"]
+                    or counts != expected["tokens"]
+                    or max(counts.values()) <= max_prompt_tokens
+                ):
+                    raise ValueError(f"Pre-freeze eligibility receipt changed for {digest}")
+                applied_exclusions.append({**expected, "prospective_split": split, "reason": "pre_freeze_length"})
+                continue
             candidates.append((split, source, record, question, digest, gold))
+    if {item["prompt_sha256"] for item in applied_exclusions} != set(exclusions):
+        raise ValueError("Pre-freeze eligibility receipt references absent rows")
     candidates.sort(key=lambda row: (-SPLIT_PRIORITY[row[0]], row[4], row[1].source, row[1].revision))
     source_signatures = {row[4]: _shingles(row[3]) for row in candidates}
     frequencies = Counter(shingle for signature in source_signatures.values() for shingle in signature)
@@ -237,6 +259,7 @@ def build_pool(
         "rows": locks,
         "heldout_lock_sha256": hashlib.sha256(canonical_json(locks).encode()).hexdigest(),
         "manifest_sha256": hashlib.sha256(canonical_json(manifest).encode()).hexdigest(),
+        "pre_freeze_length_eligibility": sorted(applied_exclusions, key=canonical_json),
         "dropped": dropped,
     }
     return PoolBuild(manifest, records, selection)

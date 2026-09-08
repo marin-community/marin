@@ -155,6 +155,7 @@ def write_math_pool(config: MathPoolConfig) -> None:
             code_sha=config.code_sha,
             tokenizer_hashes=hashes,
             max_prompt_tokens=config.max_prompt_tokens,
+            length_eligibility=json.loads(Path(__file__).with_name("length_eligibility.json").read_text()),
         )
         output = directory / "pool"
         write_pool(built, output)
