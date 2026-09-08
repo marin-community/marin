@@ -319,12 +319,16 @@ def test_real_gpu_fa4_cute_zeroes_padding_tiles_before_reusing_query_storage(sli
     pytest.importorskip("cutlass.cute")
     pytest.importorskip("flash_attn.cute.flash_bwd_preprocess")
     keys = jax.random.split(jax.random.PRNGKey(73), 4)
-    q = jax.random.normal(keys[0], (2, 8520, 20, 128), dtype=jnp.bfloat16)
-    k = jax.random.normal(keys[1], (2, 8520, 5, 128), dtype=jnp.bfloat16)
-    v = jax.random.normal(keys[2], (2, 8520, 5, 128), dtype=jnp.bfloat16)
+    sequence_length = 8520
+    q = jax.random.normal(keys[0], (2, sequence_length, 20, 128), dtype=jnp.bfloat16)
+    k = jax.random.normal(keys[1], (2, sequence_length, 5, 128), dtype=jnp.bfloat16)
+    v = jax.random.normal(keys[2], (2, sequence_length, 5, 128), dtype=jnp.bfloat16)
     # The full query grid reproduces the asynchronous copy race; small grids may
     # finish their copies before O overwrites shared storage even without a wait.
-    ids = jnp.array([[37] * 17 + [42] * 23 + [-1] * 8480, [-1] * 8520], dtype=jnp.int32)
+    valid_prefix = [37] * 17 + [42] * 23
+    ids = jnp.array(
+        [valid_prefix + [-1] * (sequence_length - len(valid_prefix)), [-1] * sequence_length], dtype=jnp.int32
+    )
     mask = AttentionMask.causal(sliding_window=sliding_window).with_segment_ids(ids)
     valid = ids >= 0
 
