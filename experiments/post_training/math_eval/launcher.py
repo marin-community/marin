@@ -97,7 +97,12 @@ class VerifiedPoolDataSource(ArtifactDataSource):
 
 
 def pool_inputs(argument: str):
-    """Only the audited MVP is selectable; None remains the launcher's legacy path."""
+    """Select audited immutable pool views; the launcher retains its legacy default."""
+    if argument == "math-eval-pool@1.0.0-qwen-bucket-s1":
+        # The derived source reuses this module's frozen base-pool validator.
+        from experiments.post_training.math_eval.bucket_launcher import bucket_inputs  # noqa: PLC0415
+
+        return bucket_inputs()
     if argument != POOL_ARGUMENT:
         raise ValueError(f"Unknown frozen pool; expected {POOL_ARGUMENT}")
     artifact = ArtifactStep.adopt(
