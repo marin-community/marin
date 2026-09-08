@@ -985,7 +985,7 @@ def test_inline_watch_computes_stats_on_every_train_step(monkeypatch):
     np.testing.assert_allclose(step_one_stats["grad/norm/total"], 3.2)
 
 
-def test_offloaded_optimizer_scalar_state_uses_the_active_mesh():
+def test_scalar_state_uses_the_active_mesh():
     mesh = AbstractMesh(
         axis_sizes=(1, 1, 1, 1),
         axis_names=("replica_dcn", "data", "expert", "model"),
@@ -1003,6 +1003,11 @@ def test_offloaded_optimizer_scalar_state_uses_the_active_mesh():
                 offload_opt_state=True,
             )
         )
+
+    step_sharding = state.step.sharding
+    assert isinstance(step_sharding, NamedSharding)
+    assert step_sharding.mesh == mesh
+    assert step_sharding.spec == P()
 
     count_sharding = state.opt_state[0].count.sharding
     assert isinstance(count_sharding, NamedSharding)
