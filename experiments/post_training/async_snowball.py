@@ -201,6 +201,7 @@ def training_config(
     correction: Correction = Correction.BEHAVIOR_CLIP,
     initial_eval_repeat_count: int = 1,
     weight_change_probe: bool = False,
+    publication_stage_timing: bool = False,
     epoch_seeded_shuffle: bool = False,
     study_steps: int | None = None,
     eval_interval: int | None = None,
@@ -320,6 +321,8 @@ def training_config(
     apply_observation_options(
         config, initial_eval_repeat_count=initial_eval_repeat_count, weight_change_probe=weight_change_probe
     )
+    if publication_stage_timing:
+        config.setdefault("generator", {}).update(publication_stage_timing=True, inference_stats_poll_seconds=1.0)
     if epoch_seeded_shuffle:
         config.setdefault("data", {})["epoch_seeded_shuffle"] = True
     return yaml.safe_dump(config, sort_keys=False)
@@ -342,6 +345,7 @@ def build_experiment(
     correction: Correction = Correction.BEHAVIOR_CLIP,
     initial_eval_repeat_count: int = 1,
     weight_change_probe: bool = False,
+    publication_stage_timing: bool = False,
     epoch_seeded_shuffle: bool = False,
     study_steps: int | None = None,
     eval_interval: int | None = None,
@@ -391,6 +395,7 @@ def build_experiment(
         correction=correction,
         initial_eval_repeat_count=initial_eval_repeat_count,
         weight_change_probe=weight_change_probe,
+        publication_stage_timing=publication_stage_timing,
         epoch_seeded_shuffle=epoch_seeded_shuffle,
         study_steps=study_steps,
         eval_interval=eval_interval,
@@ -470,6 +475,7 @@ def build_experiment(
     show_default=True,
     help="Sample actual wire weights during publication; adds diagnostic overhead.",
 )
+@click.option("--publication-stage-timing/--no-publication-stage-timing", default=False, show_default=True)
 @click.option("--weight-sync-interval", type=click.IntRange(min=1), default=1, show_default=True)
 @click.option("--max-staleness-steps", type=click.IntRange(min=0), default=1, show_default=True)
 @click.option(
@@ -503,6 +509,7 @@ def main(
     correction: str,
     initial_eval_repeat_count: int,
     weight_change_probe: bool,
+    publication_stage_timing: bool,
     epoch_seeded_shuffle: bool,
     study_steps: int | None,
     eval_interval: int | None,
@@ -527,6 +534,7 @@ def main(
         correction=Correction(correction),
         initial_eval_repeat_count=initial_eval_repeat_count,
         weight_change_probe=weight_change_probe,
+        publication_stage_timing=publication_stage_timing,
         epoch_seeded_shuffle=epoch_seeded_shuffle,
         study_steps=study_steps,
         eval_interval=eval_interval,
