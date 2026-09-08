@@ -79,6 +79,30 @@ def test_full_bin_can_pass_while_actual_eligible_view_fails():
     assert completed_group_statistics([])["questions"] == 0
 
 
+def test_bootstrap_clusters_eight_responses_and_preserves_perfect_dependence():
+    # Two opposite question clusters have exact 2-question bootstrap support
+    # {0, .5, 1}; an incorrect 16-response bootstrap has much narrower tails.
+    stats = completed_group_statistics([0, 8])
+    intervals = stats["pointwise95_question_bootstrap_ci"]
+    assert intervals["completed_pass1"] == [0.0, 1.0]
+    assert intervals["observed_k8_mixed_fraction"] == [0.0, 0.0]
+    assert intervals["k4_subset_informative"] == [0.0, 0.0]
+    assert completed_group_statistics([8, 0]) == stats
+
+
+def test_bootstrap_reports_full_eligible_and_combined_intervals_without_reselection():
+    result = select(fixture())
+    full = result["all_source_bins"]["fixture"]["full_source"]
+    eligible = result["all_source_bins"]["fixture"]["eligible_subset"]
+    assert full["pointwise95_question_bootstrap_ci"]["completed_pass1"] == pytest.approx([0.2, 0.8])
+    assert eligible["pointwise95_question_bootstrap_ci"]["completed_pass1"] == pytest.approx([0.25, 0.75])
+    assert eligible == result["combined"]
+    # All eligible questions are empirically mixed, so membership-conditional
+    # bootstrap has zero mixed-indicator variance. This is not certainty about
+    # new generations, nor a post-selection confidence guarantee.
+    assert eligible["pointwise95_question_bootstrap_ci"]["observed_k8_mixed_fraction"] == [1.0, 1.0]
+
+
 @pytest.mark.parametrize("poison", ["audit", "missing", "hash", "manifest", "reject"])
 def test_selection_refuses_unproven_or_incomplete_rating_membership(poison):
     args = list(fixture())

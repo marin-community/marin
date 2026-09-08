@@ -7,6 +7,8 @@ import hashlib
 from collections import defaultdict
 from math import comb
 
+import numpy as np
+
 from experiments.post_training.math_eval.audit_overlay import validated_statuses
 from experiments.post_training.math_eval.pool import canonical_json
 from experiments.post_training.math_eval.rate import attach_ratings
@@ -18,19 +20,44 @@ def _sha(value):
 
 
 def completed_group_statistics(passes):
-    """Report empirical K8 and exchangeable K4-subset statistics, without a CI."""
+    """Report pointwise question-bootstrap intervals, clustering all K8 responses.
+
+    Multinomial resampling of the nine completed-count categories is exactly
+    question resampling for these statistics. Intervals condition on the fixed
+    selected membership; they do not account for adaptive selection or certify
+    latent probabilities, including when empirical variance is zero.
+    """
     if any(type(k) is not int or not 0 <= k <= 8 for k in passes):
         raise ValueError("Expected integer completed counts out of eight")
     if not passes:
-        return {"questions": 0, "meets_thresholds": False}
+        return {"questions": 0, "meets_thresholds": False, "pointwise95_question_bootstrap_ci": None}
     total = sum(passes)
     informative_numerator = sum(70 - comb(k, 4) - comb(8 - k, 4) for k in passes)
     n = len(passes)
+    categories = np.arange(9)
+    metrics = np.array(
+        [
+            categories / 8,
+            (categories > 0) & (categories < 8),
+            [(70 - comb(k, 4) - comb(8 - k, 4)) / 70 for k in range(9)],
+        ]
+    ).T
+    draws = np.random.default_rng(17).multinomial(n, np.bincount(passes, minlength=9) / n, size=10000)
+    intervals = np.quantile(draws @ metrics / n, [0.025, 0.975], axis=0)
+    names = ("completed_pass1", "observed_k8_mixed_fraction", "k4_subset_informative")
     return {
         "questions": n,
         "completed_pass1": total / (8 * n),
         "k4_subset_informative": informative_numerator / (70 * n),
         "observed_k8_mixed_fraction": sum(0 < k < 8 for k in passes) / n,
+        "pointwise95_question_bootstrap_ci": {name: intervals[:, index].tolist() for index, name in enumerate(names)},
+        "bootstrap": {
+            "draws": 10000,
+            "seed": 17,
+            "unit": "question; all eight responses clustered",
+            "method": "multinomial question-category percentile; linear quantiles",
+            "scope": "descriptive same-data membership; no selection or engine-seed uncertainty",
+        },
         "meets_thresholds": 3 * 8 * n <= 10 * total <= 6 * 8 * n and 5 * informative_numerator > 2 * 70 * n,
     }
 
