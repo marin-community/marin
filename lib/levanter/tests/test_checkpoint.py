@@ -40,6 +40,7 @@ from levanter.checkpoint import (
     _load_metadata,
     discover_checkpoint_candidates,
     discover_latest_checkpoint,
+    is_checkpoint_path,
     latest_checkpoint_path,
     load_checkpoint,
     load_checkpoint_or_initialize,
@@ -354,6 +355,20 @@ def test_checkpoint_candidate_discovery_can_exclude_rejected_lineage_and_max_ste
         assert latest_checkpoint_path(good_dir, rejected_dir, exclude_paths=[rejected_dir], max_step=110) == (
             f"{good_dir}/step-100"
         )
+
+
+def test_is_checkpoint_path_accepts_roots_and_leaves_but_not_incomplete_dirs():
+    with tempfile.TemporaryDirectory() as tempdir:
+        root = pathlib.Path(tempdir)
+        _write_checkpoint_metadata(root / "run" / "step-10", step=10, timestamp="2021-01-01T00:00:00")
+        (root / "run" / "step-10" / "model").mkdir()
+        (root / "run" / "step-10" / "model" / "chunk.0").write_text("x")
+        (root / "not-a-run" / "leftovers").mkdir(parents=True)
+
+        assert is_checkpoint_path(f"{tempdir}/run")
+        assert is_checkpoint_path(f"{tempdir}/run/step-10")
+        assert not is_checkpoint_path(f"{tempdir}/not-a-run")
+        assert not is_checkpoint_path(f"{tempdir}/never-written")
 
 
 def test_checkpointer_temporary_base_path_routes_temp_checkpoints():
