@@ -1885,6 +1885,7 @@ dependencies = [
  "datafusion",
  "datafusion-datasource",
  "datafusion-datasource-parquet",
+ "finelog",
  "futures",
  "http",
  "http-body",

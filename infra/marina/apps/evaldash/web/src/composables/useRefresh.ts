@@ -6,9 +6,9 @@
  * view is currently mounted. The timer polls every 60s and pauses while the tab is hidden,
  * refetching once on the transition back to visible.
  *
- * `useServerRefresh` exposes one shared in-flight state for the "ingest now" action behind
+ * `useServerRefresh` exposes one shared in-flight state for the "rescan now" action behind
  * both the header and status-page refresh buttons: a POST /api/refresh with spinner/disabled
- * state, an "updated HH:MM:SS" confirmation, and a visible error. State is module-level so the
+ * state, a "queued HH:MM:SS" confirmation, and a visible error. State is module-level so the
  * two buttons stay in lockstep — starting one disables the other.
  */
 import { onMounted, onUnmounted, readonly, ref, type DeepReadonly, type Ref } from 'vue'
@@ -33,7 +33,7 @@ export interface ServerRefresh {
   refreshNow: () => Promise<void>
 }
 
-/** Run one server-side ingest pass, then refetch the mounted view. Shared across all callers. */
+/** Queue one server-side ingest pass, then refetch the mounted view. Shared across all callers. */
 async function refreshNow(): Promise<void> {
   if (refreshing.value) return
   refreshing.value = true

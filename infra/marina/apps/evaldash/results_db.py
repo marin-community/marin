@@ -4,7 +4,7 @@
 """PostgreSQL serving state and object-source inventory for EvalDash.
 
 The dashboard boots entirely from ``eval_catalog_runs``. Object storage remains the durable recovery
-source: the background reconciler records every discovered object in ``eval_record_sources`` and
+source: the scheduled reconciler records every discovered object in ``eval_record_sources`` and
 materializes the highest-priority valid source for each run into the serving tables.
 
 Every table here is unqualified: the Marina kernel hands the app an engine whose connections search

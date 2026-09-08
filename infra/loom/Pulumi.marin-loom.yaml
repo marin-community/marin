@@ -96,7 +96,7 @@ config:
       strict: true
       envClear: true
       ambientAllowlist: []
-      idleArchiveSeconds: 3600
+      idleArchiveSeconds: 900
       maxConcurrent: 4
       turnBudget: 200
       prelude: weaver

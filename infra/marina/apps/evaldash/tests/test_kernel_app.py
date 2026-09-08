@@ -49,12 +49,28 @@ def test_the_mounted_api_serves_what_the_reconciler_committed(engine, records, d
     evaldash_app.migrate(engine)
     monkeypatch.setenv("RECORDS_PREFIXES", records)
     monkeypatch.delenv("EVALDASH_STORE", raising=False)
+    monkeypatch.setenv("EVALDASH_INGEST_JOB", "projects/hai-gcp-models/locations/us-central1/jobs/marina-evaldash")
+    triggered = []
+    monkeypatch.setattr(
+        evaldash_app,
+        "trigger_cloud_run_job",
+        lambda job: triggered.append(job) or "operations/evaldash-ingest",
+    )
     services = Services(name=APP, data_url="memory://evaldash", database=UrlDatabase(url=database_url))
 
     api = evaldash_app.create_api(services)
     with TestClient(api) as client:
         assert client.get("/runs").json() == []
-        assert client.post("/refresh").json()["store"]["backend"] == "postgres"
+        config = evaldash_app.EvaldashConfig.from_env({"RECORDS_PREFIXES": records})
+        writer = evaldash_app.PgRecordStore(engine)
+        ingestor = evaldash_app.PostgresIngestor(
+            writer, config.prefixes, config.ingest_interval, config.revalidate_after
+        )
+        assert asyncio.run(ingestor.run_once()) == ()
+        response = client.post("/refresh")
+        assert response.status_code == 202
+        assert response.json()["store"]["backend"] == "postgres"
+        assert triggered == ["projects/hai-gcp-models/locations/us-central1/jobs/marina-evaldash"]
 
         runs = client.get("/runs?limit=100").json()
         assert len(runs) == 15
@@ -66,14 +82,17 @@ def test_a_second_instance_serves_the_generation_the_first_committed(engine, rec
     evaldash_app.migrate(engine)
     config = evaldash_app.EvaldashConfig.from_env({"RECORDS_PREFIXES": records})
     writer = evaldash_app.PgRecordStore(engine)
-    reader = evaldash_app.PgRecordStore(engine)
+    now = [0.0]
+    reader = evaldash_app.PgRecordStore(engine, now=lambda: now[0])
     ingestor = evaldash_app.PostgresIngestor(writer, config.prefixes, config.ingest_interval, config.revalidate_after)
+    assert reader.store_info().record_count == 0
 
     asyncio.run(ingestor.run_once())
 
-    # The reader booted before the ingest and only advances when it sees the newer generation.
+    # The reader keeps its snapshot until the short generation-check interval expires.
     assert reader.store_info().record_count == 0
-    assert reader.reload_if_changed()
+    now[0] = evaldash_app.CATALOG_CHECK_INTERVAL
+    assert reader.get_record("snowball-2026.07.20-mmlu") is not None
     assert reader.store_info().record_count == writer.store_info().record_count
 
     added = writer.get_record("snowball-2026.07.20-mmlu")
@@ -82,5 +101,34 @@ def test_a_second_instance_serves_the_generation_the_first_committed(engine, rec
         records,
     )
     asyncio.run(ingestor.run_once())
-    assert reader.reload_if_changed()
+    now[0] += evaldash_app.CATALOG_CHECK_INTERVAL
     assert reader.get_record("added-run") is not None
+
+
+def test_catalog_check_failure_serves_cached_snapshot_until_retry(engine, records, monkeypatch):
+    evaldash_app.migrate(engine)
+    config = evaldash_app.EvaldashConfig.from_env({"RECORDS_PREFIXES": records})
+    writer = evaldash_app.PgRecordStore(engine)
+    asyncio.run(
+        evaldash_app.PostgresIngestor(
+            writer, config.prefixes, config.ingest_interval, config.revalidate_after
+        ).run_once()
+    )
+    now = [0.0]
+    reader = evaldash_app.PgRecordStore(engine, now=lambda: now[0])
+    cached = reader.get_record("snowball-2026.07.20-mmlu")
+    real_catalog_generation = evaldash_app.catalog_generation
+    monkeypatch.setattr(
+        evaldash_app,
+        "catalog_generation",
+        lambda _engine: (_ for _ in ()).throw(RuntimeError("database unavailable")),
+    )
+
+    now[0] += evaldash_app.CATALOG_CHECK_INTERVAL
+    assert reader.get_record("snowball-2026.07.20-mmlu") == cached
+    assert reader.store_info().catalog_error is not None
+
+    monkeypatch.setattr(evaldash_app, "catalog_generation", real_catalog_generation)
+    now[0] += evaldash_app.CATALOG_CHECK_INTERVAL
+    assert reader.get_record("snowball-2026.07.20-mmlu") == cached
+    assert reader.store_info().catalog_error is None
