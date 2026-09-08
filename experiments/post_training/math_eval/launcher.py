@@ -55,6 +55,7 @@ def validate_view(rows, manifest, selection, overlay, *, split, expected_ids):
             or row["reward_model"]["ground_truth"] != item["gold"]
             or row["reward_spec"]["ground_truth"] != item["gold"]
             or row["extra_info"]["prompt_template_id"] != QWEN.template_id
+            or row["extra_info"].get("contract") != item["contract"]
         ):
             raise ValueError(f"Dataset row changed or lacks acceptance: {digest}")
 
