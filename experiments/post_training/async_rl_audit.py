@@ -83,7 +83,7 @@ REQUIRED = (
     "policy/behavior_drift/missing_behavior",
     "consumed/sequences",
 )
-PREFIXES = ("policy/", "reward/", "consumed/", "async/", "timing/", "tis/")
+PREFIXES = ("policy/", "reward/", "consumed/", "sync/", "async/", "timing/", "tis/")
 
 
 def check(condition: bool, message: str) -> None:
@@ -254,7 +254,23 @@ def summarize_history(
     ):
         if all(key in row for row in updates.values()):
             sums[key] = sum(row[key] for row in updates.values())
-    return {"history_rows": row_count, "steps": sorted(updates), "ranges": ranges, "sums": sums}, evaluations
+    digests = {
+        str(step): row["consumed/uid_digest_u52"] for step, row in updates.items() if "consumed/uid_digest_u52" in row
+    }
+    check(
+        all(type(value) in (int, float) and int(value) == value and 0 <= value < 2**52 for value in digests.values()),
+        "Invalid consumed UID digest",
+    )
+    return {
+        "history_rows": row_count,
+        "steps": sorted(updates),
+        "ranges": ranges,
+        "sums": sums,
+        "consumed_uid_digests": digests,
+        "consumed_raw_rewards": {
+            str(step): row["reward/avg_raw_reward"] for step, row in updates.items() if "reward/avg_raw_reward" in row
+        },
+    }, evaluations
 
 
 def verify_no_model_files(export_root: str) -> int:
@@ -779,6 +795,47 @@ def percentile(values: list[float], fraction: float) -> float:
     return values[lower] + (values[upper] - values[lower]) * (position - lower)
 
 
+def consumed_order_comparison(left: JSONDict, right: JSONDict, expected_steps: int) -> JSONDict:
+    """Verify per-update consumed prompt-set digests and explicit zero-rejection coverage."""
+    expected = {str(step) for step in range(1, expected_steps + 1)}
+    digests = [result.get("history", {}).get("consumed_uid_digests", {}) for result in (left, right)]
+    complete = all(set(series) == expected for series in digests)
+    matched = [
+        step
+        for step in range(1, expected_steps + 1)
+        if str(step) in digests[0] and str(step) in digests[1] and digests[0][str(step)] == digests[1][str(step)]
+    ]
+    rejections = []
+    for result in (left, right):
+        ranges = result.get("history", {}).get("ranges", {})
+        counters = [ranges[key] for key in ("sync/admission/rejected_count", "async/rejected_count") if key in ranges]
+        rejections.append(bool(counters) and all(row["count"] == expected_steps and row["max"] == 0 for row in counters))
+    return {
+        "verified": complete and len(matched) == expected_steps and all(rejections),
+        "expected_steps": expected_steps,
+        "matched_steps": matched,
+        "digest_coverage_complete": complete,
+        "zero_rejection_coverage": rejections,
+        "scope": "52-bit consumed prompt-set digests; within-update order is not compared.",
+    }
+
+
+def validate_sync_in_async_controls(controls: JSONDict) -> None:
+    """Permit the runner difference only for the predeclared C1/A0 control."""
+    check(
+        {row.get("entrypoint") for row in controls.values()} == {"standard", "fully_async"},
+        "Runner comparison requires one standard and one fully_async arm",
+    )
+    check(
+        all(
+            row.get("trainer.fully_async.weight_sync_interval", 1) == 1
+            and row.get("trainer.fully_async.max_staleness_steps") == 0
+            for row in controls.values()
+        ),
+        "Runner comparison requires C1/A0 in both arms",
+    )
+
+
 def paired_evaluation_study(study: JSONDict, results: JSONDict, snapshots: JSONDict) -> JSONDict:
     """Bootstrap paired questions, conditional on the predeclared observed training seeds.
 
@@ -816,6 +873,7 @@ def paired_evaluation_study(study: JSONDict, results: JSONDict, snapshots: JSOND
     # Paths are exact leaves, never subtree wildcards. Changes outside the
     # predeclared cadence, age and loss package invalidate the comparison.
     permitted = {
+        "entrypoint",
         "trainer.fully_async.weight_sync_interval",
         "trainer.fully_async.max_staleness_steps",
         "trainer.algorithm.policy_loss_type",
@@ -881,6 +939,8 @@ def paired_evaluation_study(study: JSONDict, results: JSONDict, snapshots: JSOND
                 check(identity == question_identity, "Paired question UID/prompt identity or order differs")
                 check(order == response_order, "Paired evaluation response UID/prompt order differs")
                 scores[arm, step] = list(means.values())
+        if "entrypoint" in allowed:
+            validate_sync_in_async_controls(controls)
         keys = controls["reference"].keys() | controls["candidate"].keys()
         differences = {
             key
@@ -936,6 +996,9 @@ def paired_evaluation_study(study: JSONDict, results: JSONDict, snapshots: JSOND
     if all(window is not None and window.get("source_indices_verified") for window in locked_windows):
         if all(window == locked_windows[0] for window in locked_windows):
             evaluation_scope = {"classification": "verified_locked_holdout", "validation": locked_windows[0]}
+    consumed_order = [
+        consumed_order_comparison(results[pair["reference"]], results[pair["candidate"]], final) for pair in pairs
+    ]
     result = {
         "label": study["label"],
         "evaluation_scope": evaluation_scope,
@@ -967,7 +1030,8 @@ def paired_evaluation_study(study: JSONDict, results: JSONDict, snapshots: JSOND
         "source_order": {
             "epoch_seeded_shuffle": True,
             "same_seed_within_pairs": True,
-            "actual_consumed_order_verified": False,
+            "actual_consumed_order_verified": all(row["verified"] for row in consumed_order),
+            "consumed_order": consumed_order,
             "scope": (
                 "Shared seeded source order; asynchronous completion and consumed order may differ. "
                 "Evaluation UID/prompt order is verified separately."
