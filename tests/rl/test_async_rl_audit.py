@@ -372,6 +372,24 @@ class AuditTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Missing metrics"):
             audit.summarize_history(self.run, 2, "skyrl_train.entrypoints.fully_async", [])
 
+    def test_background_evaluations_keep_requested_steps_and_training_step(self):
+        self.history.append({"global_step": 2, "eval/requested_at_step": 1, "eval/all/avg_score": 0.25})
+        history, evaluations = audit.summarize_history(self.run, 2, "fully_async", [])
+        self.assertEqual(sorted(evaluations), [0, 1, 2])
+        self.assertEqual(evaluations[1]["eval/all/avg_score"], 0.25)
+        self.assertEqual(history["steps"], [1, 2])
+        self.history.append({"global_step": 2, "eval/requested_at_step": 1, "eval/all/avg_score": 0.5})
+        with self.assertRaisesRegex(ValueError, "Duplicate evaluation"):
+            audit.summarize_history(self.run, 2, "fully_async", [])
+
+    def test_background_requested_evaluation_step_must_be_valid(self):
+        for invalid in (-1, 1.5, 3):
+            with self.subTest(invalid=invalid):
+                self.history.append({"global_step": 2, "eval/requested_at_step": invalid, "eval/all/avg_score": 0.25})
+                with self.assertRaisesRegex(ValueError, "Invalid requested evaluation step"):
+                    audit.summarize_history(self.run, 2, "fully_async", [])
+                self.history.pop()
+
     def test_entrypoint_disagreement_is_rejected(self):
         path = self.root / "resolved.json"
         resolved = json.loads(path.read_text())
