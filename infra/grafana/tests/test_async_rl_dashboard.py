@@ -234,6 +234,39 @@ def store():
                 "compare_commit_seconds": 0.03,
             },
         )
+        # Two optimizer steps, both within one display bucket: do not pool their ages.
+        for step, age, tokens in [(2, 0, 10), (2, 1, 30), (2, 1, 50), (3, 0, 20), (3, 1, 70)]:
+            add("rollout_staleness_steps", age, attributes={"step": str(step)})
+            # consumed_age is the declared K12 schema; historical emitters lack this event.
+            add("consumed_age", attributes={"step": str(step)}, body={"age": age, "response_tokens": tokens})
+        for step, scale in [(2, 1), (3, 2)]:
+            for metric, value in [
+                ("policy/mismatch/age0/abs_log_ratio_mean", 0.1),
+                ("policy/mismatch/age1/abs_log_ratio_mean", 0.3),
+                ("policy/mismatch/age0/abs_log_ratio_p999", 0.7),
+                ("policy/mismatch/age0/ess_fraction", 0.8),
+                ("policy/by_update/0/stale/abs_log_ratio_mean", 0.02),
+                ("policy/by_update/1/stale/abs_log_ratio_mean", 0.05),
+                ("policy/stale/ess_fraction", 0.9),
+                ("policy/mismatch/pooled/pos_first256/abs_log_ratio_mean", 0.12),
+                ("policy/mismatch/pooled/pos_last256/abs_log_ratio_mean", 0.23),
+                ("policy/stale/pos_first256/abs_log_ratio_mean", 0.01),
+                ("policy/stale/pos_last256/abs_log_ratio_mean", 0.04),
+                ("policy/grad_cosine", 0.2),
+                ("policy/grad_cosine_min", -0.3),
+                ("policy/grad_cosine_max", 0.4),
+                ("policy/grad_norm_reduced", 3),
+                ("policy/offpolicy_mask/masked_fraction", 0.05),
+                ("policy/offpolicy_mask/vetoed_sequence_fraction", 0.02),
+                ("policy/m2_mask/m2_before", 0.03),
+                ("policy/m2_mask/masked_fraction", 0.07),
+                ("policy/ppo_clip_ratio", 0.08),
+            ]:
+                add(
+                    "training_metric_value",
+                    value * scale,
+                    attributes={"metric": metric, "phase": "train", "step": str(step)},
+                )
         add("telemetry_lost_records", 0)
         add("telemetry_rejected_records", 0)
         # Same run/step but another job, another execution, or no execution must not contaminate panels.
@@ -621,3 +654,74 @@ def test_periodic_evaluation_metrics_logged_in_train_phase_are_visible(store):
     )
     assert len(query(store, "Evaluation response length and stop coverage")) == 5
     assert len(query(store, "Evaluation score contributions by stop class")) == 3
+
+
+def test_realised_age_panels_count_groups_and_sum_tokens_per_age(store):
+    groups = query(store, "Realised age — groups per step")
+    tokens = query(store, "Realised age — tokens per step")
+    assert [row["value"] for row in groups if row["series"].startswith("age 0 ·")] == [1, 1]
+    assert [row["value"] for row in groups if row["series"].startswith("age 1 ·")] == [1, 2, 1]
+    assert [row["value"] for row in tokens if row["series"].startswith("age 1 ·")] == [80, 70]
+    assert [row["value"] for row in tokens if row["series"].startswith("age 0 ·")] == [10, 20]
+    assert tokens[0]["t"] == tokens[1]["t"] and tokens[2]["t"] == tokens[3]["t"]
+    store.execute(
+        'DELETE FROM "telemetry_v1.marinskyrl" WHERE '
+        "(name='rollout_staleness_steps' AND value=1) OR "
+        "(name='consumed_age' AND json_get(body_json,'age')='1')"
+    )
+    for title in ("Realised age — groups per step", "Realised age — tokens per step"):
+        assert all(row["series"].startswith("age 0 ·") for row in query(store, title))
+    store.execute("DELETE FROM \"telemetry_v1.marinskyrl\" WHERE name='consumed_age'")
+    assert query(store, "Realised age — tokens per step") == []
+
+
+def test_publication_stage_timeline_orders_training_and_publication_windows(store):
+    rows = query(store, "Weight-sync stages")
+    assert {row["execution"] for row in rows} == {"driver"}
+    spans = {row["state"]: row for row in rows}
+    assert set(spans) == {"training", "weight sync", "weights synced"}
+    assert spans["training"]["finish"] == spans["weight sync"]["start"]
+    assert (spans["training"]["finish"] - spans["training"]["start"]).total_seconds() == 10
+    assert (spans["weight sync"]["finish"] - spans["weight sync"]["start"]).total_seconds() == 4
+    assert (spans["weights synced"]["finish"] - spans["weights synced"]["start"]).total_seconds() == 0.001
+    assert [row["start"] for row in rows] == sorted(row["start"] for row in rows)
+
+
+def test_two_ratio_panels_read_mismatch_and_stale_families_separately(store):
+    mismatch = query(store, "Engine mismatch \u03c1 (age-0)")
+    age = query(store, "Mismatch by realised age")
+    stale = query(store, "Staleness ratio r_stale by update index")
+    assert [row["value"] for row in mismatch if "/abs_log_ratio_mean ·" in row["series"]] == [0.1, 0.2]
+    assert [row["value"] for row in age if "/age1/" in row["series"]] == [0.3, 0.6]
+    assert [row["value"] for row in stale if "/1/stale/" in row["series"]] == [0.05, 0.1]
+    assert not any("mismatch" in row["series"] for row in stale)
+    store.execute(
+        'DELETE FROM "telemetry_v1.marinskyrl" WHERE ' "json_get(attributes_json,'metric') LIKE 'policy/mismatch/age1/%'"
+    )
+    assert not any("/age1/" in row["series"] for row in query(store, "Mismatch by realised age"))
+
+
+def test_position_panel_keeps_ratio_families_and_positions_separate(store):
+    rows = query(store, "Position dependence of |log \u03c1|")
+    assert [row["value"] for row in rows if "mismatch/pooled/pos_last256" in row["series"]] == [0.23, 0.46]
+    assert [row["value"] for row in rows if "stale/pos_last256" in row["series"]] == [0.04, 0.08]
+    assert not any("pos_middle" in row["series"] for row in rows)
+
+
+def test_gradient_direction_panel_reports_band_and_reduced_norm(store):
+    rows = query(store, "Gradient direction persistence")
+    assert [row["value"] for row in rows if "grad_cosine_min" in row["series"]] == [-0.3, -0.6]
+    assert [row["value"] for row in rows if "grad_cosine_max" in row["series"]] == [0.4, 0.8]
+    assert [row["value"] for row in rows if "grad_norm_reduced" in row["series"]] == [3, 6]
+    assert [row["value"] for row in rows if "raw_grad_norm" in row["series"]] == [4]
+
+
+def test_correction_panel_distinguishes_populations_and_bounds_reference_coverage(store):
+    rows = query(store, "Correction activity")
+    assert [row["value"] for row in rows if "vetoed_sequence_fraction" in row["series"]] == [0.02, 0.04]
+    assert [row["value"] for row in rows if "offpolicy_mask/masked_fraction" in row["series"]] == [0.05, 0.1]
+    assert [row["value"] for row in rows if row["series"].startswith("M2 reference")] == [0.04, 0.04]
+    store.execute(
+        'DELETE FROM "telemetry_v1.marinskyrl" WHERE ' "json_get(attributes_json,'metric')='policy/m2_mask/m2_before'"
+    )
+    assert not any(row["series"].startswith("M2 reference") for row in query(store, "Correction activity"))
