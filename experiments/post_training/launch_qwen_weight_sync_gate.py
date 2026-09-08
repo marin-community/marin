@@ -127,6 +127,26 @@ def resolved(version, expected_msr_commit):
     return training, config, report
 
 
+def native_launcher_dry_run(requirement, request_path):
+    completed = subprocess.run(
+        [*_launcher_command(requirement, request_path), "--dry-run"], capture_output=True, text=True, check=False
+    )
+    receipt = {
+        "returncode": completed.returncode,
+        "stdout_sha256": hashlib.sha256(completed.stdout.encode()).hexdigest(),
+        "stderr_sha256": hashlib.sha256(completed.stderr.encode()).hexdigest(),
+    }
+    try:
+        response = json.loads(completed.stdout)
+        prepared = isinstance(response, dict) and response.get("state") == "prepared"
+    except json.JSONDecodeError:
+        prepared = False
+    receipt["prepared"] = prepared
+    print("QWEN_WEIGHT_SYNC_NATIVE_DRY_RUN_RECEIPT", json.dumps(receipt, sort_keys=True), flush=True)
+    if completed.returncode != 0 or not prepared:
+        raise RuntimeError("Native dry-run failed; see the bounded exit/hash receipt")
+
+
 def guard_absent(terminal_uri, receipt_glob, selection_uri):
     assert not StoragePath(terminal_uri).exists(), "Existing terminal result blocks duplicate gate"
     assert not StoragePath(receipt_glob).glob(), "Existing training receipts block duplicate gate"
@@ -156,7 +176,7 @@ def coordinate():
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json") as stream:
         json.dump(envelope, stream)
         stream.flush()
-        subprocess.run([*_launcher_command(config.launcher_requirement, stream.name), "--dry-run"], check=True)
+        native_launcher_dry_run(config.launcher_requirement, stream.name)
     print("QWEN_WEIGHT_SYNC_NATIVE_LAUNCHER_DRY_RUN_PASS", flush=True)
     run(*training.deps, max_concurrent=2)
     selection = json.loads(StoragePath(selection_path).read_text())
@@ -237,7 +257,7 @@ def main():
             max_retries_failure=0,
             max_retries_preemption=0,
             max_task_failures=0,
-            timeout=Duration.from_seconds(1800),
+            timeout=Duration.from_seconds(2400),
             scheduling_timeout=Duration.from_seconds(300),
             priority_band=job_pb2.PRIORITY_BAND_BATCH,
         )
