@@ -71,7 +71,7 @@ def test_snowball_eval_scheduling_is_opt_in_and_fingerprinted(mode):
     ],
 )
 def test_snowball_eval_scheduling_rejects_unsupported_modes(changes):
-    with pytest.raises(ValueError, match="Evaluation|evaluation"):
+    with pytest.raises(ValueError, match=r"Evaluation|evaluation"):
         async_snowball.training_config(async_snowball.Scale.CADENCE_GATE, **changes)
 
 
