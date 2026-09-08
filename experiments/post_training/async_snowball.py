@@ -203,6 +203,7 @@ def training_config(
     weight_change_probe: bool = False,
     publication_stage_timing: bool = False,
     epoch_seeded_shuffle: bool = False,
+    dataloader_workers: int | None = None,
     study_steps: int | None = None,
     eval_interval: int | None = None,
 ) -> str:
@@ -325,6 +326,10 @@ def training_config(
     )
     if publication_stage_timing:
         config.setdefault("generator", {}).update(publication_stage_timing=True, inference_stats_poll_seconds=1.0)
+    if dataloader_workers is not None:
+        if type(dataloader_workers) is not int or dataloader_workers < 0:
+            raise ValueError("dataloader_workers must be a nonnegative integer")
+        config.setdefault("data", {})["num_workers"] = dataloader_workers
     if epoch_seeded_shuffle:
         config.setdefault("data", {})["epoch_seeded_shuffle"] = True
     return yaml.safe_dump(config, sort_keys=False)
@@ -349,11 +354,13 @@ def build_experiment(
     weight_change_probe: bool = False,
     publication_stage_timing: bool = False,
     epoch_seeded_shuffle: bool = False,
+    dataloader_workers: int | None = None,
     study_steps: int | None = None,
     eval_interval: int | None = None,
     seed: int = SEED,
     validation_offset: int = 0,
     validation_rows: int = VALIDATION_ROWS,
+    train_rows: int = 1024,
 ) -> ArtifactStep[SkyRLModel] | ArtifactStep[SkyRLCheckpoint] | ArtifactStep[SkyRLTrainingResult]:
     """Build Snowball training with the requested terminal artifact."""
     backend = Backend(backend)
@@ -363,6 +370,8 @@ def build_experiment(
     if type(seed) is not int or not 0 <= seed < 2**32:
         raise ValueError("Seed must be between 0 and 2**32 - 1")
     validate_validation_window(validation_offset, validation_rows)
+    if type(train_rows) is not int or not 1 <= train_rows <= 7473:
+        raise ValueError("train_rows must be an integer between 1 and 7473")
     data = ArtifactStep(
         name=user_owned_name(
             "documents/async-rl-snowball-gsm8k"
@@ -377,11 +386,20 @@ def build_experiment(
         ),
         build_config=lambda ctx: (
             SnowballWindowConfig(
-                SnowballDataConfig(ctx.output_path, ctx.artifact_path(SNOWBALL_MODEL), validation_rows=validation_rows),
+                SnowballDataConfig(
+                    ctx.output_path,
+                    ctx.artifact_path(SNOWBALL_MODEL),
+                    train_rows=train_rows,
+                    validation_rows=validation_rows,
+                ),
                 validation_offset,
             )
             if validation_offset
-            else SnowballDataConfig(output_path=ctx.output_path, model_path=ctx.artifact_path(SNOWBALL_MODEL))
+            else SnowballDataConfig(
+                output_path=ctx.output_path,
+                model_path=ctx.artifact_path(SNOWBALL_MODEL),
+                train_rows=train_rows,
+            )
         ),
     )
     config = training_config(
@@ -399,6 +417,7 @@ def build_experiment(
         weight_change_probe=weight_change_probe,
         publication_stage_timing=publication_stage_timing,
         epoch_seeded_shuffle=epoch_seeded_shuffle,
+        dataloader_workers=dataloader_workers,
         study_steps=study_steps,
         eval_interval=eval_interval,
     )
@@ -489,6 +508,10 @@ def build_experiment(
     show_default=True,
     help="Use a shared seed+epoch prompt permutation; off preserves each runner's historical ordering.",
 )
+@click.option(
+    "--dataloader-workers", type=click.IntRange(min=0), help="Override loader workers; zero avoids spawn stalls."
+)
+@click.option("--train-rows", type=click.IntRange(min=1, max=7473), default=1024, show_default=True)
 @click.option("--study-steps", type=click.IntRange(min=1), help="Qualification-only update count; defaults to 25.")
 @click.option("--eval-interval", type=click.IntRange(min=1), help="Evaluation cadence; must divide the update count.")
 @click.option("--seed", type=click.IntRange(min=0, max=2**32 - 1), default=SEED, show_default=True)
@@ -513,6 +536,8 @@ def main(
     weight_change_probe: bool,
     publication_stage_timing: bool,
     epoch_seeded_shuffle: bool,
+    dataloader_workers: int | None,
+    train_rows: int,
     study_steps: int | None,
     eval_interval: int | None,
     seed: int,
@@ -538,11 +563,13 @@ def main(
         weight_change_probe=weight_change_probe,
         publication_stage_timing=publication_stage_timing,
         epoch_seeded_shuffle=epoch_seeded_shuffle,
+        dataloader_workers=dataloader_workers,
         study_steps=study_steps,
         eval_interval=eval_interval,
         seed=seed,
         validation_offset=validation_offset,
         validation_rows=validation_rows,
+        train_rows=train_rows,
     )
     prefix = marin_prefix()
     if execute:
