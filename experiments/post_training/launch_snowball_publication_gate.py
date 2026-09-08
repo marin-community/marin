@@ -27,9 +27,9 @@ from rigging.timing import Duration
 
 from experiments.post_training import async_snowball as recipe
 
-MSR_COMMIT = "ed11efe8ea81e10e90c8a1f75478234588618311"
+MSR_COMMIT = "a03a2fdae20852b1cc0c9f5b6b989508a5401327"
 PREFIX = "s3://marin-us-east-02a/marin"
-JOB_NAME = "async-rl-v2-snowball-k6-e3-repair-v1"
+JOB_NAME = "async-rl-v2-snowball-k7-e3-v1"
 SOURCES = (
     "uv.lock",
     "config/external/MarinSkyRL/pyproject.toml",
@@ -52,12 +52,13 @@ def resolved():
     assert os.environ["MARIN_PREFIX"] == PREFIX
     recipe.validate_regional_storage(PREFIX, recipe.CLUSTER)
     training = recipe.build_experiment(
-        version="2026.09.08.35",
+        version="2026.09.08.42",
         scale=recipe.Scale.CADENCE_GATE,
         completion="metrics",
         timeout_seconds=1350,
         inference_replicas=1,
         publication_stage_timing=True,
+        publication_receiver_state=True,
         dataloader_workers=0,
         train_rows=128,
         validation_rows=128,
@@ -86,6 +87,9 @@ def resolved():
     assert settings["trainer"]["fully_async"]["weight_sync_interval"] == 1
     assert settings["trainer"]["fully_async"]["max_staleness_steps"] == 1
     assert settings["generator"]["publication_stage_timing"]
+    assert settings["generator"]["publication_receiver_state"]
+    assert not settings["trainer"]["fully_async"].get("eval_on_installed_weights", False)
+    assert settings["trainer"]["fully_async"].get("eval_mode", "blocking") == "blocking"
     assert settings["context_budget"]["max_new_tokens_per_turn"] == 4096
     assert settings["context_budget"]["request_window_tokens"] == 8192
     assert settings["generator"]["eval_sampling_params"]["max_generate_length"] == 4096

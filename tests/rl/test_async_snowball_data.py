@@ -38,3 +38,25 @@ def test_snowball_row_and_worker_defaults_are_cli_equivalent():
 def test_snowball_rejects_invalid_loader_workers(value):
     with pytest.raises(ValueError, match="nonnegative integer"):
         async_snowball.training_config(async_snowball.Scale.CADENCE_GATE, dataloader_workers=value)
+
+
+def test_snowball_receiver_readback_requires_trace_and_preserves_other_recipe_values():
+    scale = async_snowball.Scale.CADENCE_GATE
+    before = yaml.safe_load(async_snowball.training_config(scale, publication_stage_timing=True))
+    after = yaml.safe_load(
+        async_snowball.training_config(scale, publication_stage_timing=True, publication_receiver_state=True)
+    )
+    assert after["generator"].pop("publication_receiver_state") is True
+    assert after == before
+    with pytest.raises(ValueError, match="requires weight-sync stage timing"):
+        async_snowball.training_config(scale, publication_receiver_state=True)
+
+
+def test_snowball_receiver_readback_cli_reaches_native_request():
+    args = ["--version", "2026.09.08.42", "--scale", "cadence-gate", "--completion", "metrics"]
+    result = CliRunner().invoke(
+        async_snowball.main, [*args, "--publication-stage-timing", "--publication-receiver-state"]
+    )
+    assert result.exit_code == 0, result.output
+    config = yaml.safe_load(json.loads(result.output)["request"]["config_yaml"])
+    assert config["generator"]["publication_receiver_state"] is True

@@ -202,12 +202,17 @@ def training_config(
     initial_eval_repeat_count: int = 1,
     weight_change_probe: bool = False,
     publication_stage_timing: bool = False,
+    publication_receiver_state: bool = False,
     epoch_seeded_shuffle: bool = False,
     dataloader_workers: int | None = None,
     study_steps: int | None = None,
     eval_interval: int | None = None,
 ) -> str:
     backend = Backend(backend)
+    if type(publication_receiver_state) is not bool:
+        raise ValueError("publication_receiver_state must be boolean")
+    if publication_receiver_state and not publication_stage_timing:
+        raise ValueError("Receiver readback requires weight-sync stage timing")
     if publication_stage_timing and backend is not Backend.MEGATRON:
         raise ValueError("Publication stage tracing currently requires the Megatron backend")
     gate = scale is Scale.GATE
@@ -324,6 +329,8 @@ def training_config(
     apply_observation_options(
         config, initial_eval_repeat_count=initial_eval_repeat_count, weight_change_probe=weight_change_probe
     )
+    if publication_receiver_state:
+        config.setdefault("generator", {})["publication_receiver_state"] = True
     if publication_stage_timing:
         config.setdefault("generator", {}).update(publication_stage_timing=True, inference_stats_poll_seconds=1.0)
     if dataloader_workers is not None:
@@ -353,6 +360,7 @@ def build_experiment(
     initial_eval_repeat_count: int = 1,
     weight_change_probe: bool = False,
     publication_stage_timing: bool = False,
+    publication_receiver_state: bool = False,
     epoch_seeded_shuffle: bool = False,
     dataloader_workers: int | None = None,
     study_steps: int | None = None,
@@ -416,6 +424,7 @@ def build_experiment(
         initial_eval_repeat_count=initial_eval_repeat_count,
         weight_change_probe=weight_change_probe,
         publication_stage_timing=publication_stage_timing,
+        publication_receiver_state=publication_receiver_state,
         epoch_seeded_shuffle=epoch_seeded_shuffle,
         dataloader_workers=dataloader_workers,
         study_steps=study_steps,
@@ -497,6 +506,7 @@ def build_experiment(
     help="Sample actual wire weights during publication; adds diagnostic overhead.",
 )
 @click.option("--publication-stage-timing/--no-publication-stage-timing", default=False, show_default=True)
+@click.option("--publication-receiver-state/--no-publication-receiver-state", default=False, show_default=True)
 @click.option("--weight-sync-interval", type=click.IntRange(min=1), default=1, show_default=True)
 @click.option("--max-staleness-steps", type=click.IntRange(min=0), default=1, show_default=True)
 @click.option(
@@ -535,6 +545,7 @@ def main(
     initial_eval_repeat_count: int,
     weight_change_probe: bool,
     publication_stage_timing: bool,
+    publication_receiver_state: bool,
     epoch_seeded_shuffle: bool,
     dataloader_workers: int | None,
     train_rows: int,
@@ -562,6 +573,7 @@ def main(
         initial_eval_repeat_count=initial_eval_repeat_count,
         weight_change_probe=weight_change_probe,
         publication_stage_timing=publication_stage_timing,
+        publication_receiver_state=publication_receiver_state,
         epoch_seeded_shuffle=epoch_seeded_shuffle,
         dataloader_workers=dataloader_workers,
         study_steps=study_steps,
