@@ -17,6 +17,7 @@ from transformers import PreTrainedTokenizerFast
 
 from experiments.post_training import async_rl, async_snowball
 from experiments.post_training.curriculum_rl import pool
+from experiments.post_training.math_eval.launcher import BATTERY_PATH, POOL_ARGUMENT
 
 
 def test_optimizer_precision_cli_keeps_controls_distinct_and_reproducible():
@@ -988,3 +989,31 @@ def test_dataloader_worker_override_reaches_fingerprinted_recipe(runner):
     if not config["data"]:
         config.pop("data")
     assert config == yaml.safe_load(before["config_yaml"])
+
+
+def test_pool_flag_preserves_default_preview_and_selects_verified_fixed_views():
+    baseline = qwen_metrics_request()
+    explicit_default = qwen_metrics_request(pool_artifact=None)
+    selected = qwen_metrics_request(pool_artifact=POOL_ARGUMENT)
+    assert baseline.run_id == explicit_default.run_id
+    assert baseline.config_yaml == explicit_default.config_yaml
+    assert baseline.train_data == explicit_default.train_data
+    assert baseline.validation_data == explicit_default.validation_data
+    assert selected.run_id != baseline.run_id
+    assert selected.config_yaml == baseline.config_yaml
+    assert selected.train_data[0].relative_path == "qwen/train.parquet"
+    assert selected.validation_data[0].relative_path == BATTERY_PATH + "/qwen/dev.parquet"
+    result = CliRunner().invoke(
+        async_rl.main,
+        ["--version", "2026.09.06.10", "--stage", "rl", "--completion", "metrics", "--pool-artifact", POOL_ARGUMENT],
+    )
+    assert result.exit_code == 0, result.output
+    cli = json.loads(result.output)["request"]
+    assert cli["train_data"][0]["relative_path"] == "qwen/train.parquet"
+    assert cli["validation_data"][0]["relative_path"] == BATTERY_PATH + "/qwen/dev.parquet"
+
+
+@pytest.mark.parametrize("changes", [{"validation_offset": 128}, {"context_tokens": 1536}])
+def test_pool_flag_rejects_legacy_window_or_insufficient_prompt_budget(changes):
+    with pytest.raises(ValueError, match=r"frozen pool|Context budget"):
+        qwen_metrics_request(pool_artifact=POOL_ARGUMENT, **changes)
