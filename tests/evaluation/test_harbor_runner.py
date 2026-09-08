@@ -569,6 +569,34 @@ def test_harbor_executor_admits_a_batch_that_clears_the_completion_gate(tmp_path
     assert coverage.errors == {"AgentTimeoutError": 1}
 
 
+def test_harbor_executor_counts_verified_agent_timeouts_as_scored(tmp_path, monkeypatch):
+    def run_driver(_config, overlay, _driver_env, _backend_state) -> None:
+        job_dir = Path(overlay.jobs_dir) / overlay.job_name
+        _write_job_record(job_dir, 10)
+        for index in range(10):
+            trial_dir = job_dir / f"trial-{index}"
+            trial_dir.mkdir(parents=True, exist_ok=True)
+            result = {
+                "task_name": f"task-{index}",
+                "verifier_result": {"rewards": {"reward": 1.0 if index >= 7 else 0.0}},
+            }
+            if index < 4:
+                result["exception_info"] = {"exception_type": "AgentTimeoutError"}
+            trial_dir.joinpath("result.json").write_text(json.dumps(result))
+
+    monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
+    executor = _harbor_executor(f"timeout-{tmp_path.name}")
+
+    outcome = executor(_inference_session(), str(tmp_path), {})
+
+    dataset = executor.config.record_dataset
+    assert outcome.metrics[dataset]["total"] == 10.0
+    assert outcome.metrics[dataset]["accuracy"] == pytest.approx(0.3)
+    coverage = outcome.coverage[dataset]
+    assert (coverage.n_attempted, coverage.n_scored) == (10, 10)
+    assert coverage.errors == {}
+
+
 def test_an_unreadable_job_record_reports_unknown_coverage_rather_than_complete(tmp_path, monkeypatch):
     """Without Harbor's job record there is no denominator. Falling back to the number of results
     found would certify exactly the interrupted runs as complete, so coverage stays unreported and
