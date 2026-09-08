@@ -7,11 +7,41 @@ Inputs are exact-run normalized native events, not summaries inferred from plots
 The collector retains its SQL, source identity, task receipts and unmodified rows.
 """
 
+import hashlib
+import json
 import math
-from collections import Counter
+from collections import Counter, defaultdict
 from itertools import pairwise
 from statistics import median
 from typing import Any
+
+
+def reassemble_request_receipts(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Recover exact byte-bounded states, rejecting incomplete or conflicting parts."""
+    groups = defaultdict(list)
+    moments = {"initial": -1, "before_pause": 0, "after_pause": 1, "after_resume": 2, "final": 3}
+    for event in events:
+        assert event["moment"] in moments, "unknown receipt moment"
+        groups[event["engine_index"], event["step"], event["moment"]].append(event)
+    receipts = []
+    for (engine, step, moment), parts in groups.items():
+        first = parts[0]
+        count, size = first["part_count"], first["receipt_bytes"]
+        assert type(count) is int and type(size) is int and 0 < size <= 1 << 20, "receipt bound"
+        assert count == (size + 3071) // 3072 and len(parts) == count, "receipt part coverage"
+        assert {part["part_index"] for part in parts} == set(range(count)), "duplicate or missing receipt part"
+        assert all(type(part["part_index"]) is int for part in parts), "receipt part index"
+        assert all(
+            (part["part_count"], part["receipt_bytes"], part["receipt_sha256"]) == (count, size, first["receipt_sha256"])
+            for part in parts
+        ), "conflicting receipt metadata"
+        ordered = sorted(parts, key=lambda part: part["part_index"])
+        chunks = [part["receipt_json"].encode("ascii") for part in ordered]
+        assert all(len(chunk) == 3072 for chunk in chunks[:-1]) and 0 < len(chunks[-1]) <= 3072, "chunk bound"
+        payload = b"".join(chunks)
+        assert len(payload) == size and hashlib.sha256(payload).hexdigest() == first["receipt_sha256"], "receipt digest"
+        receipts.append({"engine_index": engine, "step": step, "moment": moment, "state": json.loads(payload)})
+    return sorted(receipts, key=lambda receipt: (receipt["engine_index"], receipt["step"], moments[receipt["moment"]]))
 
 
 def audit_requests(receipts: list[dict[str, Any]], *, steps=20, engines=8):

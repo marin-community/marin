@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
+import json
 from copy import deepcopy
 from typing import Any
 
@@ -8,6 +10,56 @@ import pytest
 
 from experiments.post_training import async_rl_weight_sync_audit as audit_module
 from experiments.post_training.async_rl_weight_sync_audit import audit_requests, audit_stale_tokens
+
+
+def multipart_receipt():
+    state = {"requests": [f"{index:032x}" for index in range(256)]}
+    payload = json.dumps(state, sort_keys=True, separators=(",", ":")).encode("ascii")
+    chunks = [payload[offset : offset + 3072] for offset in range(0, len(payload), 3072)]
+    parts = [
+        {
+            "engine_index": 0,
+            "step": 1,
+            "moment": "before_pause",
+            "receipt_json": chunk.decode("ascii"),
+            "receipt_sha256": hashlib.sha256(payload).hexdigest(),
+            "receipt_bytes": len(payload),
+            "part_count": len(chunks),
+            "part_index": index,
+        }
+        for index, chunk in enumerate(chunks)
+    ]
+    return state, parts
+
+
+def test_reassembles_shuffled_receipt_parts_exactly():
+    state, parts = multipart_receipt()
+    assert audit_module.reassemble_request_receipts(list(reversed(parts))) == [
+        {"engine_index": 0, "step": 1, "moment": "before_pause", "state": state}
+    ]
+
+
+@pytest.mark.parametrize("corruption", ["missing", "duplicate", "digest", "metadata", "payload", "bound", "moment"])
+def test_rejects_missing_or_corrupt_receipt_parts(corruption):
+    _, parts = multipart_receipt()
+    if corruption == "missing":
+        parts.pop()
+    elif corruption == "duplicate":
+        parts[-1] = deepcopy(parts[0])
+    elif corruption == "digest":
+        for part in parts:
+            part["receipt_sha256"] = "0" * 64
+    elif corruption == "metadata":
+        parts[0]["receipt_bytes"] += 1
+    elif corruption == "payload":
+        parts[0]["receipt_json"] = "x" + parts[0]["receipt_json"][1:]
+    elif corruption == "bound":
+        for part in parts:
+            part["receipt_bytes"] = (1 << 20) + 1
+    elif corruption == "moment":
+        parts[0]["moment"] = "unknown"
+    with pytest.raises(AssertionError):
+        audit_module.reassemble_request_receipts(parts)
 
 
 def receipts() -> list[dict[str, Any]]:
