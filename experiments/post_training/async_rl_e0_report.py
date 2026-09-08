@@ -129,11 +129,16 @@ def main() -> None:
         )
         steps = [row["step"] for row in run["eval_dumps"]]
         scores = [100 * row["metrics"]["eval/all/completed_stop_score_contribution"] for row in run["eval_dumps"]]
-        xvalues = [steps, cumulative["async/performance/consumed_response_tokens"][steps] / 1e6,
-                   cumulative["async/performance/core_seconds"][steps]]
+        xvalues = [
+            steps,
+            cumulative["async/performance/consumed_response_tokens"][steps] / 1e6,
+            cumulative["async/performance/core_seconds"][steps],
+        ]
         for ax, x in zip(axes, xvalues, strict=True):
             ax.plot(x, scores, marker=".", label=label)
-    for ax, label in zip(axes, ["Learner updates", "Consumed response tokens (millions)", "Core RL seconds"], strict=True):
+    for ax, label in zip(
+        axes, ["Learner updates", "Consumed response tokens (millions)", "Core RL seconds"], strict=True
+    ):
         ax.set_xlabel(label)
         ax.grid(alpha=0.25)
     axes[0].set_ylabel("Legacy contract_completed (%)")
@@ -141,12 +146,18 @@ def main() -> None:
     fig.suptitle("Qwen3-0.6B: legacy 128-question development set, seed 17")
     args.output.mkdir(parents=True, exist_ok=True)
     fig.savefig(args.output / "e0-quality-curves.png", dpi=150)
+    fig.savefig(args.output / "e0-quality-curves.svg")
     summary = {
-        "status": "PASS", "arms": arms, "contrasts": paired_contrasts(audit["vectors"]),
-        "bootstrap_repetitions": REPETITIONS, "bootstrap_seed": BOOTSTRAP_SEED,
+        "status": "PASS",
+        "arms": arms,
+        "contrasts": paired_contrasts(audit["vectors"]),
+        "bootstrap_repetitions": REPETITIONS,
+        "bootstrap_seed": BOOTSTRAP_SEED,
         "inference_scope": "Paired questions, fixed observed training seed; four primary final-endpoint contrasts.",
-        "inputs_sha256": {str(path): hashlib.sha256(path.read_bytes()).hexdigest()
-                          for path in (args.audit, args.finelog_checks, args.historical_final, args.native_history)},
+        "inputs_sha256": {
+            str(path): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in (args.audit, args.finelog_checks, args.historical_final, args.native_history)
+        },
     }
     (args.output / "e0-report.json").write_text(json.dumps(summary, indent=2, allow_nan=False))
     print("E0_REPORT_PASS: six arms, four paired contrasts, three quality curves; familywise95% convention")
