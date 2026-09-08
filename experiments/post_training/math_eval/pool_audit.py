@@ -36,6 +36,9 @@ class MechanicalAudit:
     passed: bool
     normalized_gold: str | None
     failure: str | None
+    gold_original: str
+    positive_probes: list[str]
+    negative_probe: str
 
 
 def verify_verifier_sources() -> None:
@@ -53,16 +56,31 @@ def audit_row(row: dict[str, Any]) -> MechanicalAudit:
     env = row["env_class"]
     contract = get_data_contract(env)
     gold = row["gold"]
+    marker = "#### " if env == "gsm8k" else "Answer: "
+    negative = marker + "[INVALID]"
+    probes = []
+    error_message = None
     try:
         answer = json.loads(gold)["entry"]["answer"] if env == "reasoning_gym" else gold
-        marker = "#### " if env == "gsm8k" else "Answer: "
-        normalized = contract.validate_example(gold, marker + answer, marker + "[INVALID]")
+        answers = [answer]
+        # The parser requires one answer line. Alter only the positive probe's
+        # whitespace, never the frozen reference, parser, or model response.
+        if env == "aime" and " ".join(answer.split()) != answer:
+            answers.append(" ".join(answer.split()))
+        for answer in answers:
+            probes.append(marker + answer)
+            try:
+                normalized = contract.validate_example(gold, probes[-1], negative)
+            except ValueError as error:
+                error_message = str(error)
+                continue
+            return MechanicalAudit(row["prompt_sha256"], row["split"], True, normalized, None, gold, probes, negative)
     except (ValueError, TypeError, KeyError) as error:
-        return MechanicalAudit(row["prompt_sha256"], row["split"], False, None, str(error))
-    return MechanicalAudit(row["prompt_sha256"], row["split"], True, normalized, None)
+        error_message = str(error)
+    return MechanicalAudit(row["prompt_sha256"], row["split"], False, None, error_message, gold, probes, negative)
 
 
-def audit_manifest(manifest_uri: str, output_uri: str) -> dict[str, Any]:
+def audit_manifest(manifest_uri: str, output_uri: str, *, fail_on_evaluation: bool = True) -> dict[str, Any]:
     """Write row-level proofs and fail the gate on any evaluation parse failure."""
     if not all(uri.startswith("s3://marin-us-east-02a/") for uri in (manifest_uri, output_uri)):
         raise ValueError("Mechanical pool audits stay in east-02a")
@@ -86,7 +104,7 @@ def audit_manifest(manifest_uri: str, output_uri: str) -> dict[str, Any]:
         "verifier_revision": VERIFIER_REVISION,
     }
     print("KE2_MECHANICAL_AUDIT " + json.dumps(summary))
-    if summary["evaluation_failed"]:
+    if fail_on_evaluation and summary["evaluation_failed"]:
         raise ValueError("Evaluation pool contains mechanical verifier failures")
     return summary
 
