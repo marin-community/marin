@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Preview or submit the exact two-H100 E3.0 publication instrumentation gate."""
+"""Preview or submit bounded native weight-sync and pause/continue gates."""
 
 import argparse
 import hashlib
@@ -34,7 +34,9 @@ def main():
     parser.add_argument("--marin-commit", required=True)
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--native-chat", action="store_true", help="Run the exact native HTTP pause/continue gate")
+    parser.add_argument("--native-chat-prerequisite", action="store_true", help="Qualify native chat inputs on CPU only")
     args = parser.parse_args()
+    assert not args.native_chat_prerequisite or args.native_chat
     assert len(args.marin_commit) == 40 and all(c in "0123456789abcdef" for c in args.marin_commit)
     assert args.job_name.startswith("async-rl-v2-publication-stage-")
     marin_root = Path(__file__).resolve().parents[2]
@@ -51,13 +53,56 @@ def main():
             "skyrl-train/tests/gpu/gpu_ci/test_inference_engine_client_http_endpoint.py",
             "skyrl-train/tests/gpu/utils.py",
             "skyrl-train/skyrl_train/inference_engines/inference_engine_client_http_endpoint.py",
+            "skyrl-train/examples/gsm8k/gsm8k_dataset.py",
         )
         if args.native_chat
         else ()
     )
     hashes = {name: hashlib.sha256(Path(name).read_bytes()).hexdigest() for name in sources}
     nodeid = CHAT_NODEID if args.native_chat else NODEID
-    timeout = 900 if args.native_chat else 1800
+    timeout = 700 if args.native_chat and not args.native_chat_prerequisite else 1800
+    prepare_chat = (
+        """
+/tmp/oa-publication-env/bin/python "$publication_root/skyrl-train/examples/gsm8k/gsm8k_dataset.py"
+/tmp/oa-publication-env/bin/python - <<'PROMPTS'
+import hashlib,json
+from pathlib import Path
+from huggingface_hub import try_to_load_from_cache
+from tests.gpu.utils import get_test_prompts,TEST_DATA_PATH
+from tests.gpu.gpu_ci.test_pause_and_continue_generation import MODEL
+from tests.gpu.gpu_ci.test_inference_engine_client_http_endpoint import get_test_actor_config
+prompts=get_test_prompts(MODEL,num_samples=1)
+assert len(prompts)==1 and prompts[0] and all(m['content'] for m in prompts[0])
+cfg=get_test_actor_config(num_inference_engines=2,model=MODEL)
+assert cfg.generator.num_inference_engines==2 and cfg.generator.inference_engine_tensor_parallel_size==1
+path=Path(TEST_DATA_PATH)
+cached=try_to_load_from_cache(MODEL,'tokenizer_config.json')
+snapshot=Path(cached).parent.name if isinstance(cached,str) else None
+print('NATIVE_CHAT_PREREQUISITE_PASS',json.dumps({'path':str(path),'parquet_sha256':hashlib.sha256(path.read_bytes()).hexdigest(),'prompt_count':len(prompts),'model':MODEL,'tokenizer_snapshot':snapshot}),flush=True)
+PROMPTS
+"""
+        if args.native_chat
+        else ""
+    )
+    finish = (
+        """
+/tmp/oa-publication-env/bin/python - <<'CPU'
+import torch
+assert torch.cuda.device_count()==0
+print('NATIVE_CHAT_CPU_ONLY_QUALIFICATION_PASS',flush=True)
+CPU
+"""
+        if args.native_chat_prerequisite
+        else f"""
+/tmp/oa-publication-env/bin/python - <<'GPU'
+import torch
+assert torch.cuda.device_count()==2
+assert all('H100' in torch.cuda.get_device_name(i) for i in range(2))
+print('PUBLICATION_TWO_H100_PREFLIGHT_PASS',flush=True)
+GPU
+exec /tmp/oa-publication-env/bin/python -m pytest -s -q '{nodeid}'
+"""
+    )
     assert "publication_stage_walls" in Path(SOURCES[-1]).read_text(), "driver trace hook must be present"
     body = f"""set -euo pipefail
 publication_root="$PWD"
@@ -78,13 +123,8 @@ VERIFY
 bash "$publication_root/cloud/iris/bootstrap_runtime.sh" "$publication_root" \\
   /tmp/oa-publication-env /tmp/oa-publication-runtime megatron development
 source /tmp/oa-publication-runtime
-/tmp/oa-publication-env/bin/python - <<'GPU'
-import torch
-assert torch.cuda.device_count()==2
-assert all('H100' in torch.cuda.get_device_name(i) for i in range(2))
-print('PUBLICATION_TWO_H100_PREFLIGHT_PASS',flush=True)
-GPU
-exec /tmp/oa-publication-env/bin/python -m pytest -s -q '{nodeid}'
+{prepare_chat}
+{finish}
 """
     command = [
         os.environ["IRIS"],
@@ -98,8 +138,7 @@ exec /tmp/oa-publication-env/bin/python -m pytest -s -q '{nodeid}'
         "cw-us-east-02a",
         "--priority",
         "batch",
-        "--gpu",
-        "H100x2",
+        *([] if args.native_chat_prerequisite else ["--gpu", "H100x2"]),
         "--replicas",
         "1",
         "--cpu",
@@ -128,8 +167,9 @@ exec /tmp/oa-publication-env/bin/python -m pytest -s -q '{nodeid}'
         "model_revision": None if args.native_chat else "c1899de289a04d12100db370d81485cdf75e47ca",
         "model": "Qwen/Qwen2.5-0.5B-Instruct" if args.native_chat else "Qwen/Qwen3-0.6B",
         "profile": "megatron/vllm/telemetry + frozen dev group",
-        "max_task_gpu_hours": 2 * timeout / 3600,
-        "storage": "public Qwen model to pod cache; no dataset or bucket I/O; durable Iris logs",
+        "max_task_gpu_hours": 0 if args.native_chat_prerequisite else 2 * timeout / 3600,
+        "prerequisite_only": args.native_chat_prerequisite,
+        "storage": "Qwen model and canonical GSM8K fixture in pod cache; no bucket writes; durable Iris logs",
         "command": command,
     }
     print(json.dumps(preview, indent=2), flush=True)
