@@ -1,0 +1,92 @@
+[
+  {
+    "prompt_sha256": "202da1a8c1c9607c5a018292f0d73180ae059491da1d921993e2d29b29b60e37",
+    "source": "EleutherAI/hendrycks_math",
+    "revision": "21a5633873b6a120296cce3e2df9d5550074f4a3",
+    "tokens": {
+      "qwen": 1262,
+      "snowball": 957
+    }
+  },
+  {
+    "prompt_sha256": "3a2cec1e0b95f7f84d10ca6365f941f2a2b58a7882f86b0d7434eca9960a1a79",
+    "source": "EleutherAI/hendrycks_math",
+    "revision": "21a5633873b6a120296cce3e2df9d5550074f4a3",
+    "tokens": {
+      "qwen": 1119,
+      "snowball": 1008
+    }
+  },
+  {
+    "prompt_sha256": "3ed18361c9b1a0e1b27159c965846fd4c430d4ae6d3e68717ddb95ca381f06bd",
+    "source": "EleutherAI/hendrycks_math/test",
+    "revision": "21a5633873b6a120296cce3e2df9d5550074f4a3",
+    "tokens": {
+      "qwen": 1147,
+      "snowball": 1147
+    }
+  },
+  {
+    "prompt_sha256": "452c3ea3b01d5d81a42df060bdbc5095a88045fa80c25d3cb220e04b46f311c0",
+    "source": "EleutherAI/hendrycks_math",
+    "revision": "21a5633873b6a120296cce3e2df9d5550074f4a3",
+    "tokens": {
+      "qwen": 1384,
+      "snowball": 1339
+    }
+  },
+  {
+    "prompt_sha256": "5cc0473fbb40af716dfe43458b0436df1fbc37b6abfc4b2ba7d82967a096ad14",
+    "source": "EleutherAI/hendrycks_math",
+    "revision": "21a5633873b6a120296cce3e2df9d5550074f4a3",
+    "tokens": {
+      "qwen": 1052,
+      "snowball": 1034
+    }
+  },
+  {
+    "prompt_sha256": "6da2854d41e8e45fd0aa0ca4a480d5f8ab1577db8c725d17be0263b7a865705f",
+    "source": "EleutherAI/hendrycks_math/test",
+    "revision": "21a5633873b6a120296cce3e2df9d5550074f4a3",
+    "tokens": {
+      "qwen": 1428,
+      "snowball": 1365
+    }
+  },
+  {
+    "prompt_sha256": "7ce6eb2935bf6a4d25d01e87b4cb5000668e37c43f3a34e6edad0c0fafe62116",
+    "source": "EleutherAI/hendrycks_math",
+    "revision": "21a5633873b6a120296cce3e2df9d5550074f4a3",
+    "tokens": {
+      "qwen": 1136,
+      "snowball": 1058
+    }
+  },
+  {
+    "prompt_sha256": "874e170eeb53f6ea8b0a0d97ac8cfbfbb6f03fdb644dae96b9246475897aed9a",
+    "source": "EleutherAI/hendrycks_math",
+    "revision": "21a5633873b6a120296cce3e2df9d5550074f4a3",
+    "tokens": {
+      "qwen": 1746,
+      "snowball": 1646
+    }
+  },
+  {
+    "prompt_sha256": "9947a34e297853138a238fedf3795d58b6171b0d02260bef0aa9b242f2883614",
+    "source": "EleutherAI/hendrycks_math",
+    "revision": "21a5633873b6a120296cce3e2df9d5550074f4a3",
+    "tokens": {
+      "qwen": 1600,
+      "snowball": 1519
+    }
+  },
+  {
+    "prompt_sha256": "a1a44ada58743b6c79ebf7fef11a4cbb13b8ca33de477237b79818b52715eb10",
+    "source": "EleutherAI/hendrycks_math",
+    "revision": "21a5633873b6a120296cce3e2df9d5550074f4a3",
+    "tokens": {
+      "qwen": 1127,
+      "snowball": 1127
+    }
+  }
+]

@@ -28,7 +28,7 @@ def source(questions, *, name="fixture", split="hash"):
     return SourceRows(name, "a" * 40, "MIT", records, split)
 
 
-def build(sources, *, cap=1024):
+def build(sources, *, cap=1024, eligibility=()):
     # A byte tokenizer is a deterministic I/O-boundary stand-in; real template rendering runs.
     return build_pool(
         sources,
@@ -37,6 +37,7 @@ def build(sources, *, cap=1024):
         code_sha="b" * 40,
         tokenizer_hashes={"qwen": "c" * 64, "snowball": "d" * 64},
         max_prompt_tokens=cap,
+        length_eligibility=eligibility,
     )
 
 
@@ -132,3 +133,23 @@ def test_length_audit_reports_all_rows_without_dropping_evaluation_overflows():
     assert report["overflows"][0]["prompt_sha256"] == prompt_hash(long_question)
     assert all(row["rows"] == 2 and row["over_cap"] == 1 for row in report["sources"].values())
     assert "x" * 1000 not in json.dumps(report)
+
+
+def test_prefreeze_eligibility_requires_exact_audited_lengths_and_membership():
+    inputs = [source(["A long problem: " + "x" * 1000], split="heldout")]
+    report = prompt_length_report(
+        inputs, {"qwen": lambda text: list(text.encode()), "snowball": lambda text: list(text.encode())}, cap=700
+    )
+    row = report["overflows"][0]
+    eligibility = [{key: row[key] for key in ("prompt_sha256", "source", "tokens")}]
+    eligibility[0]["revision"] = inputs[0].revision
+    result = build(inputs, cap=700, eligibility=eligibility)
+    assert not result.manifest
+    assert result.selection["pre_freeze_length_eligibility"][0]["tokens"] == row["tokens"]
+    assert result.selection["pre_freeze_length_eligibility"][0]["prospective_split"] == "heldout"
+    changed = deepcopy(eligibility)
+    changed[0]["tokens"]["qwen"] += 1
+    with pytest.raises(ValueError, match="eligibility receipt changed"):
+        build(inputs, cap=700, eligibility=changed)
+    with pytest.raises(ValueError, match="absent rows"):
+        build([], cap=700, eligibility=eligibility)
