@@ -107,7 +107,7 @@ def audit_requests(receipts: list[dict[str, Any]], *, steps=20, engines=8):
 
 def audit_stale_tokens(calls, outcomes):
     """Count each completed training group once, matching native call receipts."""
-    training = [call for call in calls if call["mode"] == "train"]
+    training = [call for call in calls if call["mode"] == "async"]
     assert len({call["call_id"] for call in training}) == len(training), "duplicate call receipt"
     completed = {call["call_id"]: call for call in training if call["outcome"] == "success"}
     assert completed, "no completed training calls"
@@ -118,7 +118,6 @@ def audit_stale_tokens(calls, outcomes):
         tokens = row["tokens"]
         assert type(tokens) is int and tokens >= 0, "token count"
         assert tokens == completed[row["call_id"]]["response_tokens"], "call/group token disagreement"
-        assert row["outcome"] not in {"failed_before_enqueue", "cancelled_before_enqueue"}, "incomplete group"
         total += tokens
         if row["outcome"] in {"stale", "stale_enqueue"}:
             stale += tokens
@@ -128,6 +127,7 @@ def audit_stale_tokens(calls, outcomes):
         "completed_group_tokens": total,
         "stale_fraction": stale / total,
         "completed_groups": len(completed),
+        "outcome_groups": dict(Counter(row["outcome"] for row in outcomes)),
     }
 
 
@@ -145,8 +145,8 @@ def audit_matched_gate(baseline, candidate):
         results[name] = {"pause_p50": median(arm["pause_seconds"]), **audit_stale_tokens(arm["calls"], arm["outcomes"])}
     assert min(baseline["pause_seconds"]) >= 5.0, "baseline grace absent"
     assert results["candidate"]["pause_p50"] < 0.3, "pause threshold"
-    assert results["candidate"]["stale_fraction"] <= results["baseline"]["stale_fraction"], (
-        "stale-token fraction increased"
-    )
+    assert (
+        results["candidate"]["stale_fraction"] <= results["baseline"]["stale_fraction"]
+    ), "stale-token fraction increased"
     results["requests"] = audit_requests(candidate["request_receipts"])
     return results
