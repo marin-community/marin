@@ -19,6 +19,7 @@ from fsspec.implementations.local import LocalFileSystem
 from fsspec.spec import AbstractBufferedFile
 
 from experiments.post_training import async_rl_audit as audit
+from experiments.post_training.math_eval.paired import SeedInference, bootstrap
 
 
 class BufferedLocalFileSystem(LocalFileSystem):
@@ -867,6 +868,28 @@ def test_paired_study_point_estimate_and_initial_adjustment(paired_study_inputs)
     assert result["evaluation_scope"] == {"classification": "development_or_unspecified"}
     assert len(json.dumps(result)) < 8192
     assert "response-hash" not in json.dumps(result)
+
+
+def test_pool_bootstrap_reproduces_existing_seed_averaged_auditor(paired_study_inputs):
+    study, results, snapshots = paired_study_inputs
+    legacy = audit.paired_evaluation_study(study, results, snapshots)
+    arms = {"reference": {}, "candidate": {}}
+    for pair in study["pairs"]:
+        for arm in arms:
+            scores = {}
+            for _, question_hash, _, value, *_ in snapshots[pair[arm]]["evaluations"][study["final_step"]]:
+                scores.setdefault(question_hash, []).append(value)
+            arms[arm][pair["seed"]] = scores
+    actual = bootstrap(
+        arms["reference"],
+        arms["candidate"],
+        seed=study["bootstrap_seed"],
+        repetitions=study["bootstrap_repetitions"],
+        inference=SeedInference.FIXED,
+    )
+    assert actual.delta == pytest.approx(legacy["mean_final_reward_delta"], abs=1e-12)
+    assert actual.interval == pytest.approx(legacy["bootstrap"]["percentile_intervals"]["final_reward_delta"], abs=1e-12)
+    assert actual.seed_deltas == pytest.approx([row["final_reward_delta"] for row in legacy["seed_results"]], abs=1e-12)
 
 
 def test_paired_study_duplicate_responses_do_not_inflate_questions_or_precision(paired_study_inputs):
