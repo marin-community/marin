@@ -43,16 +43,8 @@ DUMP_IDENTITY_KEYS = (
 )
 
 
-def validate_serving_generation(config, generation, native_tasks, native_job):
-    """Use controller task evidence and emitted runtime configuration, not caller labels."""
-    model, _engine = serving_configuration(config)
-    expected = serving_specification(config)
-    if (
-        generation.get("schema") != "math_eval_serving_generation_v1"
-        or audit.canonical_sha(expected) != generation.get("specification_sha256")
-        or audit.canonical_sha(generation.get("specification")) != generation.get("specification_sha256")
-    ):
-        raise ValueError("Serving generation differs from the frozen specification")
+def validate_native_serving_task(generation, native_tasks, native_job, *, allocated_gpus):
+    """Bind one successful native GPU allocation independently of its evaluation panels."""
     tasks = native_tasks.get("tasks", [])
     if len(tasks) != 1:
         raise ValueError("Serving audit requires exactly one native task")
@@ -71,7 +63,7 @@ def validate_serving_generation(config, generation, native_tasks, native_job):
         or controller.get("task_count") != 1
         or controller.get("completed_count") != 1
         or gpu.get("variant") != "H100"
-        or gpu.get("count") != config.allocated_gpus
+        or gpu.get("count") != allocated_gpus
         or allocated_gpu.get("kind") != "gpu"
         or allocated_gpu.get("variant") != gpu.get("variant")
         or allocated_gpu.get("count") != gpu.get("count")
@@ -118,6 +110,22 @@ def validate_serving_generation(config, generation, native_tasks, native_job):
         or abs(timing["monotonic_seconds"] - (timing["finished_at_ms"] - timing["started_at_ms"]) / 1000) > 1
     ):
         raise ValueError("Producer generation interval is not consistent with the native task lifetime")
+    return {"start": start, "finish": finish, "gpu": gpu, "controller": controller, "timing": timing}
+
+
+def validate_serving_generation(config, generation, native_tasks, native_job):
+    """Use controller task evidence and emitted runtime configuration, not caller labels."""
+    model, _engine = serving_configuration(config)
+    expected = serving_specification(config)
+    if (
+        generation.get("schema") != "math_eval_serving_generation_v1"
+        or audit.canonical_sha(expected) != generation.get("specification_sha256")
+        or audit.canonical_sha(generation.get("specification")) != generation.get("specification_sha256")
+    ):
+        raise ValueError("Serving generation differs from the frozen specification")
+    task_proof = validate_native_serving_task(generation, native_tasks, native_job, allocated_gpus=config.allocated_gpus)
+    start, finish = task_proof["start"], task_proof["finish"]
+    gpu, controller, timing = task_proof["gpu"], task_proof["controller"], task_proof["timing"]
     if generation.get("score_dependency_versions") != (SEMANTIC_DEPENDENCIES | {"reasoning-gym": "0.1.25"}):
         raise ValueError("Native scorer dependency versions differ from the frozen verifier")
     profile = MODEL_PROFILES[config.model]

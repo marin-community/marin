@@ -81,9 +81,16 @@ def completion_rows(item, request, response, decoder, *, model, question_index):
     These are raw engine tokens, with no trajectory padding or appended EOS.
     Original stop-token details and request/response identities are retained.
     """
+    expected = completion_request(item, decoder, model=model, samples=request["n"], api_model=request["model"])
+    return _completion_rows(
+        item, request, response, decoder, model=model, question_index=question_index, expected=expected
+    )
+
+
+def _completion_rows(item, request, response, decoder, *, model, question_index, expected):
+    """Validate tokens and scores against a request built by a frozen protocol adapter."""
     if type(question_index) is not int or question_index < 0:
         raise ValueError("Invalid global question ordinal")
-    expected = completion_request(item, decoder, model=model, samples=request["n"], api_model=request["model"])
     if request != expected:
         raise ValueError("Issued request differs from the frozen rating protocol")
     if response.get("model") != request["model"] or not isinstance(response.get("id"), str) or not response["id"]:

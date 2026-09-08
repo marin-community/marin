@@ -11,6 +11,11 @@ from tokenizers.decoders import Fuse
 from tokenizers.models import WordLevel
 from tokenizers.pre_tokenizers import Split
 
+from experiments.post_training.math_eval.calibration_protocol import (
+    CalibrationProtocol,
+    calibration_request,
+    calibration_rows,
+)
 from experiments.post_training.math_eval.contract import QWEN
 from experiments.post_training.math_eval.pool import prompt_hash
 from experiments.post_training.math_eval.serving import MAX_FAILURE_RECEIPT_BYTES, completion_rows_with_failure_receipt
@@ -239,3 +244,20 @@ def test_prompt_overflow_fails_before_requesting_generation():
     item["prompt_sha256"] = prompt_hash(item["problem"])
     with pytest.raises(ValueError, match="eligibility cap"):
         completion_request(item, decoder, model="qwen", samples=8, api_model="frozen-rating-model")
+
+
+def test_calibration_protocol_keeps_native_renderer_and_scores_with_separate_request_identity():
+    decoder, item, original, response = fixture()
+    protocol = CalibrationProtocol("heldout_stochastic", 8)
+    issued = calibration_request(item, decoder, protocol=protocol, api_model=original["model"])
+    assert issued["temperature"] == 0.6 and issued["top_p"] == 0.95 and issued["max_tokens"] == 1024
+    assert original["temperature"] == 1.0 and original["max_tokens"] == 2048
+    before = completion_rows(item, original, response, decoder, model="qwen", question_index=0)
+    after = calibration_rows(item, issued, response, decoder, protocol=protocol, question_index=0)
+    assert [row["generation_request_sha256"] for row in before] != [row["generation_request_sha256"] for row in after]
+    assert [{k: v for k, v in row.items() if k != "generation_request_sha256"} for row in before] == [
+        {k: v for k, v in row.items() if k != "generation_request_sha256"} for row in after
+    ]
+    issued["max_tokens"] = 2048
+    with pytest.raises(ValueError, match="frozen"):
+        calibration_rows(item, issued, response, decoder, protocol=protocol, question_index=0)
