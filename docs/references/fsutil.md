@@ -65,7 +65,7 @@ that touch its buckets; the rest keep working.
 | `cp SRC ... DST [-r] [-n]` | Copy one or more sources between any backends. `-r` includes directories; `-n` preserves existing destination files |
 | `mv SRC ... DST [-r]` | Move or rename one or more sources. Sources are removed after every copy succeeds |
 | `rsync SRC DST [--delete] [--dry-run] [--checksum]` | Synchronize the files beneath two directories or prefixes |
-| `verified-copy SRC DST [--workers N] [--status-prefix URL]` | Resume and verify a cross-backend prefix copy, then publish a completion manifest |
+| `verified-copy SRC DST [--workers N] [--status-prefix URL]` | Publish a verified, restartable prefix with an explicit readiness marker |
 | `hash URL ... [--hex]` | Stream complete files and print MD5 digests in base64 or hexadecimal |
 | `rm URL ... [-r] [--workers N]` | Remove one or more objects. `-r` or `-R` recursively removes every prefix; remote prefixes delete while they list and show progress |
 | `browse [URL]` | The interactive browser |
@@ -87,17 +87,27 @@ Extra destination files remain by default. `--delete` removes them after all cop
 `--dry-run` prints the same copy and delete plan without changing the destination. Source and
 destination directories may not overlap.
 
-`verified-copy` hashes each source object while uploading it. For configured S3-compatible
+Use `verified-copy` when consumers require a complete, verified prefix, especially for large
+cross-backend artifacts such as checkpoint exports where the transfer may be interrupted. Use
+`cp -r` for ordinary recursive copies where partial destination contents are acceptable, or
+`rsync` when the destination should track later source changes.
+
+`verified-copy` leaves objects at their final names and writes the completion manifest last.
+Object stores cannot atomically rename a prefix: promoting a temporary prefix would copy its
+objects into the final prefix one at a time, expose another partial prefix during promotion, and
+add a second object-copy pass. Consumers must check for `<DST>/.verified-copy-manifest.json`
+before using the destination.
+
+The command hashes each source object while uploading it. For configured S3-compatible
 destinations such as R2, it uses fixed-size multipart parts, calculates the corresponding
 content-derived ETag, and compares that value with destination metadata after the upload. Other
 destinations are read back and checked against the source SHA-256. The command records the SHA-256
 and source and destination identities under a sibling `<DST>.verified-copy-status` prefix. A retry
 skips both object reads when those identities, the destination path and size, and the verified record
 still match. Sources without stable generation, version, checksum, ETag, or modification metadata
-are read again. The command writes `<DST>/.verified-copy-manifest.json` after every object verifies;
-consumers should treat that manifest as the prefix's readiness marker. An existing completion
-manifest makes the destination immutable: the command returns immediately when source paths and
-sizes still match and fails if they changed. Use a fresh destination prefix for a changed export.
+are read again. An existing completion manifest makes the destination immutable: the command
+returns immediately when source paths and sizes still match and fails if they changed. Use a fresh
+destination prefix for a changed export.
 
 `hash` reads each complete object. Its columns are `url` and `md5`; digests use base64
 by default. `--hex` selects hexadecimal output.
