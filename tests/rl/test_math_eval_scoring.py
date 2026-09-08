@@ -156,3 +156,15 @@ def test_closed_thinking_remains_closed_when_later_role_tokens_invalidate_semant
     assert result.thinking_closed
     assert result.score_semantic is None
     assert result.semantic_status == "role_or_thinking_continuation"
+
+
+@pytest.mark.parametrize("reward", [[0.0, 0.0, 1.0], [1.0]])
+def test_production_token_reward_arrays_retain_native_sequence_score(reward):
+    result = score_row(row("Answer: 5", raw=reward), Decoder(), model="qwen", thinking=False)
+    assert result.score_contract == 1.0
+    assert result.contract_correct and result.score_contract_completed == 1.0
+
+
+def test_shaped_token_reward_sum_cannot_impersonate_native_contract_score():
+    with pytest.raises(ValueError, match="native verifier mapping"):
+        score_row(row("Answer: 5", raw=[0.25, 1.0]), Decoder(), model="qwen", thinking=False)
