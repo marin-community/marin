@@ -73,6 +73,19 @@ from tests.gpu.gpu_ci.test_pause_and_continue_generation import MODEL
 from tests.gpu.gpu_ci.test_inference_engine_client_http_endpoint import get_test_actor_config
 prompts=get_test_prompts(MODEL,num_samples=1)
 assert len(prompts)==1 and prompts[0] and all(m['content'] for m in prompts[0])
+# Execute the actual native test's prompt-token expression with the real tokenizer.
+import ast
+from types import SimpleNamespace
+from transformers import AutoTokenizer
+native=Path('skyrl-train/tests/gpu/gpu_ci/test_pause_and_continue_generation.py')
+function=next(n for n in ast.parse(native.read_text()).body if isinstance(n,ast.FunctionDef) and n.name=='test_continue_generation_vllm_engine_chat_completion')
+assignment=next(n for n in ast.walk(function) if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='prompt_tokens' for t in n.targets))
+tokenizer=AutoTokenizer.from_pretrained(MODEL)
+actual=eval(compile(ast.Expression(assignment.value),str(native),'eval'),{'client':SimpleNamespace(tokenizer=tokenizer),'messages':prompts[0]})
+mapping=tokenizer.apply_chat_template(prompts[0],add_generation_prompt=True,tokenize=True,return_dict=True)
+assert isinstance(actual,list) and actual==mapping['input_ids'] and len(actual)>2
+print('NATIVE_CHAT_TOKENIZER_EXPRESSION_PASS',json.dumps({'mapping_fields':len(mapping),'prompt_token_ids':len(actual),'native_test_sha256':hashlib.sha256(native.read_bytes()).hexdigest()}),flush=True)
+
 cfg=get_test_actor_config(num_inference_engines=2,model=MODEL)
 assert cfg.generator.num_inference_engines==2 and cfg.generator.inference_engine_tensor_parallel_size==1
 path=Path(TEST_DATA_PATH)
