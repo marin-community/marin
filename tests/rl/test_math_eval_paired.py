@@ -3,7 +3,13 @@
 
 import pytest
 
-from experiments.post_training.math_eval.paired import SeedInference, bootstrap, holm_adjust, required_questions
+from experiments.post_training.math_eval.paired import (
+    SeedInference,
+    bootstrap,
+    bootstrap_records,
+    holm_adjust,
+    required_questions,
+)
 
 
 def test_joint_seed_bootstrap_retains_seed_spread_when_question_means_cancel():
@@ -46,3 +52,21 @@ def test_holm_stepdown_matches_four_hypothesis_worked_example():
 
 def test_miller_power_example_requires_about_969_questions():
     assert required_questions(delta=0.03, difference_variance=1 / 9, alpha=0.05, power=0.8) == 969
+
+
+@pytest.mark.parametrize("variance", [0, float("nan"), float("inf"), -1])
+def test_degenerate_variance_does_not_certify_power(variance):
+    with pytest.raises(ValueError, match="positive variance"):
+        required_questions(delta=0.02, difference_variance=variance, alpha=0.05, power=0.8)
+
+
+def test_record_tables_default_to_completion_and_keep_repeats_clustered():
+    reference = {
+        17: [
+            {"prompt_sha256": q, "row_ordinal": i, "score_contract_completed": 0, "score_contract": 1}
+            for i, q in enumerate(["a", "a", "b", "b"])
+        ]
+    }
+    candidate = {17: [dict(row, score_contract_completed=1) for row in reference[17]]}
+    result = bootstrap_records(reference, candidate, seed=17, repetitions=100, inference=SeedInference.FIXED)
+    assert result.questions == 2 and result.delta == 1 and result.interval == (1, 1)

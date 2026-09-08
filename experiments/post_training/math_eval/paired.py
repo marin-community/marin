@@ -120,8 +120,38 @@ def holm_adjust(p_values: Mapping[str, float]) -> dict[str, float]:
 
 def required_questions(*, delta: float, difference_variance: float, alpha: float, power: float) -> int:
     """Normal approximation for paired-question power (variance includes sampling noise)."""
-    if delta <= 0 or difference_variance < 0 or not 0 < alpha < 1 or not 0.5 < power < 1:
-        raise ValueError("Invalid power-design inputs")
+    if (
+        not all(math.isfinite(value) for value in (delta, difference_variance, alpha, power))
+        or delta <= 0
+        or difference_variance <= 0
+        or not 0 < alpha < 1
+        or not 0.5 < power < 1
+    ):
+        raise ValueError(
+            "Power requires finite inputs and positive variance; zero empirical variance cannot certify power"
+        )
     normal = statistics.NormalDist()
     value = (normal.inv_cdf(1 - alpha / 2) + normal.inv_cdf(power)) ** 2 * difference_variance / delta**2
-    return math.ceil(value)
+    return max(2, math.ceil(value))
+
+
+def bootstrap_records(reference, candidate, *, metric="score_contract_completed", **kwargs):
+    """Convert per-seed record tables to equal-weight question clusters, without dropping rows."""
+    if metric not in {"score_contract_completed", "contract_correct", "score_contract", "score_semantic"}:
+        raise ValueError("Unknown paired score column")
+
+    def group(arms):
+        grouped = {}
+        for run_seed, records in arms.items():
+            questions = {}
+            seen = set()
+            for row in records:
+                identity = (row["prompt_sha256"], row["row_ordinal"])
+                if identity in seen or row[metric] is None:
+                    raise ValueError("Duplicate response or unresolved selected metric; no silent row dropping")
+                seen.add(identity)
+                questions.setdefault(row["prompt_sha256"], []).append(row[metric])
+            grouped[run_seed] = questions
+        return grouped
+
+    return bootstrap(group(reference), group(candidate), **kwargs)
