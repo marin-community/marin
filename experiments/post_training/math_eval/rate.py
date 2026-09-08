@@ -5,13 +5,40 @@
 
 import hashlib
 import json
+import re
 from collections import defaultdict
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 from rigging.filesystem.storage_path import StoragePath
 
+from experiments.post_training.math_eval.contract import QWEN, SNOWBALL
 from experiments.post_training.math_eval.pool import canonical_json
+
+# Startup-only profiles qualified in contract-v1.md; changing model content,
+# tokenizer, template or renderer requires another reviewed profile.
+MODEL_PROFILES = {
+    "qwen": {
+        "identity_pattern": r"users/ahmad/models/async-rl-qwen3-0\.6b@[^:]+:8a30d2b5",
+        "tokenizer_uri": "Qwen/Qwen3-0.6B",
+        "tokenizer_revision": "c1899de289a04d12100db370d81485cdf75e47ca",
+        "tokenizer_sha256": "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4",
+        "prompt_template_id": QWEN.template_id,
+        "renderer_qualification_sha256": "7992b6a8defc71150a6efaf617122bd5fb6cb57f528b253893d4136a7724d545",
+        "max_prompt_tokens": 1024,
+        "max_response_tokens": 2048,
+    },
+    "snowball": {
+        "identity_pattern": r"models/snowball-67b-a2b-sft-s2-thinking@2026\.08\.30:c6168770",
+        "tokenizer_uri": "marin-community/marin-tokenizer",
+        "tokenizer_revision": "a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2",
+        "tokenizer_sha256": "881c9c36c359e1617afef6f7583403567931b7b4f43f6552d2b2155a131650a2",
+        "prompt_template_id": SNOWBALL.template_id,
+        "renderer_qualification_sha256": "2a4b5edb5ca3f1c0a2b1a9e5370576bc344b56e1989e5225b4bfffdf9454551c",
+        "max_prompt_tokens": 4096,
+        "max_response_tokens": 8192,
+    },
+}
 
 
 def rate_from_dump(harness_output_uri, *, generation_audit_uri, generation_audit_sha256, **kwargs):
@@ -83,6 +110,7 @@ def rate_from_records(
         protocol[key] != value
         for key, value in {
             "checkpoint": checkpoint,
+            "model_label": model,
             "engine_global_seed": engine_global_seed,
             "temperature": temperature,
             "max_response_tokens": max_response_tokens,
@@ -90,6 +118,10 @@ def rate_from_records(
         }.items()
     ):
         raise ValueError("Claimed sampling protocol differs from the audited generation configuration")
+    if protocol is not None and any(
+        row.get("contract_response_rendering") != "decode_skip_special_tokens" for row in records
+    ):
+        raise ValueError("Rating rows lack qualified native response rendering")
     metadata = {
         "model": model,
         "checkpoint": checkpoint,
@@ -178,7 +210,30 @@ def _generation_protocol(receipt, generation_audit, expected_sha256):
     rows, questions = endpoint["rows"], endpoint["unique_uids"]
     if questions <= 0 or rows % questions:
         raise ValueError("Audited per-question sample count is invalid")
+    audited_model = generation_audit["provenance"]["model"]
+    matches = [
+        (label, profile)
+        for label, profile in MODEL_PROFILES.items()
+        if re.fullmatch(profile["identity_pattern"], audited_model["identity"])
+    ]
+    if len(matches) != 1:
+        raise ValueError("Audited model identity has no qualified rating profile")
+    label, profile = matches[0]
+    if (
+        any(audited_model.get(key) != profile[key] for key in ("tokenizer_uri", "tokenizer_revision"))
+        or any(receipt.get(key) != profile[key] for key in ("tokenizer_sha256", "prompt_template_id"))
+        or sampling["max_generate_length"] != profile["max_response_tokens"]
+        or cfg.get("generator.max_input_length") != profile["max_prompt_tokens"]
+        or sampling.get("top_p") != 1.0
+    ):
+        raise ValueError("Rating model/tokenizer/template or token protocol differs from its qualified profile")
     return {
+        "model_label": label,
+        "qualified_profile_sha256": hashlib.sha256(canonical_json(profile).encode()).hexdigest(),
+        "renderer_qualification_sha256": profile["renderer_qualification_sha256"],
+        "tokenizer_sha256": profile["tokenizer_sha256"],
+        "max_prompt_tokens": profile["max_prompt_tokens"],
+        "top_p": sampling["top_p"],
         "checkpoint": generation_audit["provenance"]["model"]["identity"],
         "model": generation_audit["provenance"]["model"],
         "engine_global_seed": cfg["trainer.seed"],

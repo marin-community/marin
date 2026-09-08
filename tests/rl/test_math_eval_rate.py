@@ -9,6 +9,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+from experiments.post_training.math_eval.contract import QWEN, SNOWBALL
 from experiments.post_training.math_eval.pool import canonical_json
 from experiments.post_training.math_eval.rate import attach_ratings, rate_from_dump, rate_from_records
 
@@ -19,9 +20,10 @@ def fixture():
         {
             "prompt_sha256": q,
             "model": "qwen",
-            "prompt_template_id": "template",
+            "prompt_template_id": QWEN.template_id,
             "row_ordinal": i,
             "response_tokens": 100,
+            "contract_response_rendering": "decode_skip_special_tokens",
             "score_contract_completed": int(i == 1),
             "contract_correct": True,
             "score_contract": 1.0,
@@ -37,8 +39,8 @@ def fixture():
         "manifest_sha256": hashlib.sha256(canonical_json(manifest).encode()).hexdigest(),
         "records_sha256": "e" * 64,
         "audit_overlay_sha256": "d" * 64,
-        "tokenizer_sha256": "c" * 64,
-        "prompt_template_id": "template",
+        "tokenizer_sha256": "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4",
+        "prompt_template_id": QWEN.template_id,
     }
     receipt["audit"] = {
         "step": 0,
@@ -60,16 +62,24 @@ def fixture():
         "resolved_config": {
             "trainer.seed": 17,
             "trainer.eval_before_train": True,
-            "generator.eval_sampling_params": {"temperature": 1.0, "max_generate_length": 2048},
+            "generator.eval_sampling_params": {"temperature": 1.0, "max_generate_length": 2048, "top_p": 1.0},
+            "generator.max_input_length": 1024,
         },
-        "provenance": {"seed": 17, "model": {"identity": "initial"}},
+        "provenance": {
+            "seed": 17,
+            "model": {
+                "identity": "users/ahmad/models/async-rl-qwen3-0.6b@2026.09.08.83:8a30d2b5",
+                "tokenizer_uri": "Qwen/Qwen3-0.6B",
+                "tokenizer_revision": "c1899de289a04d12100db370d81485cdf75e47ca",
+            },
+        },
         "eval_dumps": [deepcopy(receipt["audit"])],
     }
     kwargs = dict(
         expected_ids=["a", "b"],
         samples=2,
         model="qwen",
-        checkpoint="initial",
+        checkpoint="users/ahmad/models/async-rl-qwen3-0.6b@2026.09.08.83:8a30d2b5",
         engine_global_seed=17,
         temperature=1.0,
         max_response_tokens=2048,
@@ -174,3 +184,70 @@ def test_temperature_one_claim_cannot_certify_a_greedy_generation_receipt():
     kwargs["generation_audit_sha256"] = hashlib.sha256(canonical_json(audit).encode()).hexdigest()
     with pytest.raises(ValueError, match="Claimed sampling protocol"):
         rate_from_records(records, receipt, **kwargs)
+
+
+@pytest.mark.parametrize(
+    "alteration",
+    [
+        "joint_model",
+        "identity",
+        "tokenizer_revision",
+        "tokenizer_hash",
+        "joint_template",
+        "renderer",
+        "prompt_cap",
+        "top_p",
+    ],
+)
+def test_qualified_model_profile_refuses_joint_mislabeling_and_foreign_renderer(alteration):
+    _manifest, records, receipt, kwargs = fixture()
+    audited = kwargs["generation_audit"]
+    if alteration == "joint_model":
+        kwargs["model"] = "snowball"
+        for row in records:
+            row["model"] = "snowball"
+    elif alteration == "identity":
+        audited["provenance"]["model"]["identity"] = kwargs["checkpoint"] = "foreign-qwen:8a30d2b5"
+    elif alteration == "tokenizer_revision":
+        audited["provenance"]["model"]["tokenizer_revision"] = "f" * 40
+    elif alteration == "tokenizer_hash":
+        receipt["tokenizer_sha256"] = "f" * 64
+    elif alteration == "joint_template":
+        receipt["prompt_template_id"] = "foreign-template"
+        for row in records:
+            row["prompt_template_id"] = "foreign-template"
+    elif alteration == "renderer":
+        for row in records:
+            row["contract_response_rendering"] = "forensic-default"
+    elif alteration == "prompt_cap":
+        audited["resolved_config"]["generator.max_input_length"] = 512
+    else:
+        audited["resolved_config"]["generator.eval_sampling_params"]["top_p"] = 0.95
+    kwargs["generation_audit_sha256"] = hashlib.sha256(canonical_json(audited).encode()).hexdigest()
+    with pytest.raises(ValueError):
+        rate_from_records(records, receipt, **kwargs)
+
+
+def test_snowball_profile_binds_its_own_checkpoint_tokenizer_template_and_caps():
+    _manifest, records, receipt, kwargs = fixture()
+    model = {
+        "identity": "models/snowball-67b-a2b-sft-s2-thinking@2026.08.30:c6168770",
+        "tokenizer_uri": "marin-community/marin-tokenizer",
+        "tokenizer_revision": "a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2",
+    }
+    kwargs.update(model="snowball", checkpoint=model["identity"], max_response_tokens=8192)
+    receipt.update(
+        prompt_template_id=SNOWBALL.template_id,
+        tokenizer_sha256="881c9c36c359e1617afef6f7583403567931b7b4f43f6552d2b2155a131650a2",
+    )
+    for row in records:
+        row.update(model="snowball", prompt_template_id=SNOWBALL.template_id)
+    audited = kwargs["generation_audit"]
+    audited["provenance"]["model"] = model
+    audited["resolved_config"]["generator.max_input_length"] = 4096
+    audited["resolved_config"]["generator.eval_sampling_params"]["max_generate_length"] = 8192
+    kwargs["generation_audit_sha256"] = hashlib.sha256(canonical_json(audited).encode()).hexdigest()
+    result = rate_from_records(records, receipt, **kwargs)
+    assert result["metadata"]["generation_provenance"]["model_label"] == "snowball"
+    assert result["metadata"]["generation_provenance"]["max_prompt_tokens"] == 4096
+    assert result["metadata"]["generation_provenance"]["tokenizer_sha256"] == receipt["tokenizer_sha256"]
