@@ -2004,7 +2004,6 @@ mod tests {
                     .clear_object_segment_key_bounds("iris.worker", &path)?;
                 Ok((revision, ()))
             })
-            .await
             .unwrap();
         assert!(store
             .query_snapshot("iris.worker")

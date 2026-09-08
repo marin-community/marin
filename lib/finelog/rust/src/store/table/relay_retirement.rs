@@ -8,14 +8,13 @@
 
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::time::Duration;
 
 use crate::errors::StatsError;
 use crate::store::table::maintenance::WorkOutcome;
 use crate::store::table::runtime::TableRuntime;
 use crate::store::table_state::CommitError;
 
-const RETIREMENT_GRACE: Duration = Duration::from_secs(15 * 60);
+const RETIREMENT_GRACE_MS: i64 = 15 * 60 * 1_000;
 const SEGMENTS_PER_TICK: usize = 64;
 
 /// Retire one bounded batch and report whether another immediate cycle is due.
@@ -26,8 +25,7 @@ pub async fn maintain(
     let Some(cursor) = runtime.catalog.forward_cursor(target, runtime.name())? else {
         return Ok(WorkOutcome::Complete);
     };
-    let cutoff_ms = crate::store::table::now_ms()
-        .saturating_sub(i64::try_from(RETIREMENT_GRACE.as_millis()).unwrap_or(i64::MAX));
+    let cutoff_ms = crate::store::table::now_ms().saturating_sub(RETIREMENT_GRACE_MS);
     let object_paths: HashSet<String> = runtime
         .catalog
         .object_segments(runtime.name())?
@@ -71,19 +69,15 @@ pub async fn maintain(
         .sum::<i64>();
     let lifecycle = runtime.catalog.spec_lifecycle(runtime.name())?;
     let lease = runtime.controller.begin_compaction_for(&lifecycle)?;
-    let committed = runtime
-        .controller
-        .commit_maintenance(&lease, || {
-            let revision = runtime
-                .catalog
-                .retire_object_segments(runtime.name(), &paths)?;
-            Ok((revision, ()))
-        })
-        .await;
+    let committed = runtime.controller.commit_maintenance(&lease, || {
+        let revision = runtime
+            .catalog
+            .retire_object_segments(runtime.name(), &paths)?;
+        Ok((revision, ()))
+    });
 
-    let publication_error = match committed {
-        Ok(_) => None,
-        Err(CommitError::PublicationDeferred(error)) => Some(error),
+    match committed {
+        Ok(_) => {}
         Err(CommitError::NotCommitted(StatsError::SchemaConflict(error))) => {
             tracing::info!(
                 namespace = %runtime.name(),
@@ -94,21 +88,8 @@ pub async fn maintain(
             return Ok(WorkOutcome::MoreWork);
         }
         Err(error) => return Err(error.into()),
-    };
-    runtime.segments.replace(&paths, Vec::new());
-    if let Some(error) = publication_error {
-        tracing::warn!(
-            namespace = %runtime.name(),
-            target,
-            cursor,
-            segments = paths.len(),
-            rows,
-            bytes,
-            %error,
-            "relay retirement committed locally and awaits publication"
-        );
-        return Err(error);
     }
+    runtime.segments.replace(&paths, Vec::new());
     tracing::info!(
         namespace = %runtime.name(),
         target,

@@ -250,13 +250,6 @@ pub enum CommitError {
     Fenced(StatsError),
 }
 
-impl CommitError {
-    /// Whether durable local state advanced despite the failure.
-    pub fn is_committed(&self) -> bool {
-        !matches!(self, CommitError::NotCommitted(_))
-    }
-}
-
 impl From<CommitError> for StatsError {
     fn from(error: CommitError) -> StatsError {
         match error {
@@ -387,7 +380,6 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(error, CommitError::PublicationDeferred(_)));
-        assert!(error.is_committed());
     }
 
     #[test]
@@ -430,7 +422,6 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(error, CommitError::Fenced(_)));
-        assert!(error.is_committed());
     }
 
     #[test]

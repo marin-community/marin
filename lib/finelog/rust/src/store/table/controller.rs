@@ -10,9 +10,11 @@
 //! - `mutation_gate` serializes the short synchronous transaction that allocates
 //!   the next [`TableRevision`]. It is a plain lock because that transaction
 //!   never awaits.
-//! - the controller task is the only code that publishes state. Callers request
-//!   publication over a mailbox and await the outcome, so concurrent flushes,
-//!   compactions, migrations, and cursor advances never race for HEAD.
+//! - the controller task is the only code that publishes state. Durability
+//!   callers request publication over a mailbox and await the outcome, while
+//!   replayable maintenance leaves its revision owed. Concurrent flushes,
+//!   compactions, migrations, and cursor advances therefore never race for
+//!   HEAD.
 //!
 //! Heavy work — Parquet encoding, index building, compaction merges — stays with
 //! its caller. The controller serializes lease creation and the short commit
@@ -649,13 +651,19 @@ impl TableController {
         Ok(lease)
     }
 
-    /// Commit a compaction result, rebasing it onto the current state.
+    /// Commit replayable maintenance locally, rebasing it onto the current state.
     ///
     /// The lease is rejected when this writer was fenced or the table's active
     /// definition version moved while the work ran. Input liveness is checked by
     /// `mutation`, which runs inside the same gated transaction that replaces
     /// them.
-    pub async fn commit_maintenance<T, F>(
+    ///
+    /// Maintenance does not wait for HEAD publication. Its immutable outputs
+    /// are already remotely durable, and the previously published inputs stay
+    /// live until a later client write or maintenance tick publishes the new
+    /// revision. A crash can therefore lose maintenance progress but cannot
+    /// lose acknowledged rows.
+    pub fn commit_maintenance<T, F>(
         &self,
         lease: &MaintenanceLease,
         mutation: F,
@@ -682,7 +690,7 @@ impl TableController {
                 ),
             )));
         }
-        self.commit(mutation).await
+        self.commit_owing_publication(mutation)
     }
 
     /// Stage an immutable Parquet object locally.
@@ -1399,7 +1407,6 @@ mod tests {
         let error = controller.publish_state().await.unwrap_err();
 
         assert!(matches!(error, CommitError::PublicationDeferred(_)));
-        assert!(error.is_committed());
         assert!(controller.publication_owed());
         assert!(controller.writes_ready());
         assert_eq!(
@@ -1507,7 +1514,6 @@ mod tests {
         assert!(!stale.writes_ready());
         let rejected = stale
             .commit_maintenance(&lease, || Ok((TableRevision::new(99), ())))
-            .await
             .map(|committed| committed.token.revision());
         assert!(matches!(rejected, Err(CommitError::Fenced(_))));
         assert!(stale.begin_compaction().is_err());
@@ -1561,12 +1567,10 @@ mod tests {
             )
             .unwrap();
         let mut invoked = false;
-        let rejected = controller
-            .commit_maintenance(&lease, || {
-                invoked = true;
-                Ok((TableRevision::new(99), ()))
-            })
-            .await;
+        let rejected = controller.commit_maintenance(&lease, || {
+            invoked = true;
+            Ok((TableRevision::new(99), ()))
+        });
         assert!(matches!(
             rejected,
             Err(CommitError::NotCommitted(StatsError::SchemaConflict(_)))
@@ -1735,6 +1739,43 @@ mod tests {
             states.load(TABLE).await.unwrap().unwrap().revision().get(),
             1
         );
+
+        let second = controller.publish_state().await.unwrap();
+        assert_eq!(second.revision().get(), 2);
+        assert!(!controller.publication_owed());
+    }
+
+    #[tokio::test]
+    async fn maintenance_commits_while_an_older_publication_is_in_flight() {
+        let (controller, states, faults) = faulted_controller("controller_maintenance_publish", 11);
+        let gate = crate::test_support::FaultGate::new();
+        let (op, pattern) = head_swap();
+        faults.arm(ObjectFault::new(
+            op,
+            pattern,
+            FaultAction::Park(gate.clone()),
+        ));
+        let lease = controller.begin_compaction().unwrap();
+
+        let first = {
+            let controller = Arc::clone(&controller);
+            tokio::spawn(async move { controller.publish_state().await.unwrap() })
+        };
+        gate.entered().await;
+
+        let committed = controller
+            .commit_maintenance(&lease, || {
+                let revision = controller.catalog.set_forward_cursor("hub", TABLE, 5)?;
+                Ok((revision, ()))
+            })
+            .unwrap();
+        assert_eq!(committed.token.revision().get(), 2);
+        assert!(controller.publication_owed());
+        assert!(states.load(TABLE).await.unwrap().is_none());
+
+        gate.release();
+        assert_eq!(first.await.unwrap().revision().get(), 1);
+        assert!(controller.publication_owed());
 
         let second = controller.publish_state().await.unwrap();
         assert_eq!(second.revision().get(), 2);
