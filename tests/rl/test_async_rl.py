@@ -1086,14 +1086,28 @@ def test_rno_exception_rejects_other_buckets_and_snowball(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "changed", ["model", "train", "dev", "output", "ood", "dump", "tokenizer", "revision", "identity"]
+    "changed",
+    [
+        "model",
+        "same_east_model",
+        "train",
+        "dev",
+        "output",
+        "ood",
+        "dump",
+        "hub",
+        "save",
+        "tokenizer",
+        "revision",
+        "identity",
+    ],
 )
 def test_rno_resolved_request_guard_checks_model_and_every_io_surface(changed):
     request = qwen_metrics_request()
     prefix = "s3://marin-us-east-02a/marin"
     request = replace(
         request,
-        model=replace(request.model, uri=prefix + "/model"),
+        model=replace(request.model, uri=prefix + "/users/ahmad/models/async-rl-qwen3-0.6b/2026.09.06.10/hf"),
         train_data=tuple(replace(item, uri=prefix + "/train") for item in request.train_data),
         validation_data=tuple(replace(item, uri=prefix + "/dev") for item in request.validation_data),
         output=replace(request.output, **{key: prefix + "/" + key for key in asdict(request.output)}),
@@ -1102,6 +1116,8 @@ def test_rno_resolved_request_guard_checks_model_and_every_io_surface(changed):
     foreign = "s3://marin-us-west-04a/changed"
     if changed == "model":
         request = replace(request, model=replace(request.model, uri=foreign))
+    elif changed == "same_east_model":
+        request = replace(request, model=replace(request.model, uri=prefix + "/models/snowball/hf"))
     elif changed in {"train", "dev"}:
         field = "train_data" if changed == "train" else "validation_data"
         request = replace(request, **{field: (replace(getattr(request, field)[0], uri=foreign),)})
@@ -1111,6 +1127,10 @@ def test_rno_resolved_request_guard_checks_model_and_every_io_surface(changed):
         request = replace(request, config_yaml=request.config_yaml + "\nood_input: " + foreign)
     elif changed == "dump":
         request = replace(request, overrides=(*request.overrides, "++dump_path=" + foreign))
+    elif changed == "hub":
+        request = replace(request, overrides=(*request.overrides, "++trainer.hf_hub_repo_id=some/repository"))
+    elif changed == "save":
+        request = replace(request, overrides=(*request.overrides, "++trainer.hf_save_interval=1"))
     elif changed == "tokenizer":
         request = replace(request, model=replace(request.model, tokenizer_uri="Qwen/Qwen3-30B-A3B"))
     elif changed == "revision":
@@ -1136,12 +1156,12 @@ def test_rno_guard_executes_when_actual_training_configuration_resolves():
         prefix=prefix,
         region="us-east-02a",
         is_fingerprint=False,
-        _dep_ref=lambda dependency: prefix + "/" + dependency.name,
+        _dep_ref=lambda dependency: prefix + "/" + dependency.name + "/" + dependency.version,
         _runtime_args=step.runtime_args,
         _deps=step.deps,
     )
     request = step.build_config(ctx).request
     assert request.model.tokenizer_uri == "Qwen/Qwen3-0.6B"
     foreign = replace(ctx, _dep_ref=lambda _dependency: "s3://marin-us-west-04a/changed")
-    with pytest.raises(ValueError, match="east S3 artifact paths"):
+    with pytest.raises(ValueError, match=r"pinned Qwen3-0.6B model path"):
         step.build_config(foreign)

@@ -427,6 +427,21 @@ def validate_qwen_cross_region_request(request: SkyRLLaunchRequest) -> None:
         or not model.identity.endswith(":8a30d2b5")
     ):
         raise ValueError("Cross-region I/O requires the pinned Qwen3-0.6B model artifact")
+    version = model.identity.removeprefix(expected_name + "@").removesuffix(":8a30d2b5")
+    validate_version(version)
+    if model.uri != f"s3://marin-us-east-02a/marin/{expected_name}/{version}/hf":
+        raise ValueError("Cross-region I/O requires the pinned Qwen3-0.6B model path")
+    trainer_config = yaml.safe_load(request.config_yaml).get("trainer", {})
+    hub_repo = trainer_config.get("hf_hub_repo_id")
+    save_interval = trainer_config.get("hf_save_interval", -1)
+    for override in request.overrides:
+        key, separator, value = override.lstrip("+").partition("=")
+        if separator and key == "trainer.hf_hub_repo_id":
+            hub_repo = yaml.safe_load(value)
+        if separator and key == "trainer.hf_save_interval":
+            save_interval = yaml.safe_load(value)
+    if request.completion_mode != "metrics" or hub_repo is not None or save_interval is None or save_interval > 0:
+        raise ValueError("Cross-region I/O requires metrics completion with HF export disabled")
     paths = [model.uri, *(item.uri for item in request.train_data), *(item.uri for item in request.validation_data)]
     paths.extend(asdict(request.output).values())
     for path in paths:
