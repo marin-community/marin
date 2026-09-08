@@ -308,3 +308,52 @@ def test_real_gpu_fa4_cute_attention_matches_reference_for_simple_sliding_mask()
     cotangent = jax.random.normal(cotangent_key, q.shape, dtype=jnp.bfloat16)
 
     _assert_real_gpu_fa4_cute_matches_reference(q, k, v, mask, cotangent)
+
+
+@pytest.mark.parametrize("sliding_window", [None, 31])
+@pytest.mark.timeout(180)
+def test_real_gpu_fa4_cute_zeroes_padding_tiles_before_reusing_query_storage(sliding_window):
+    if jax.default_backend() != "gpu":
+        pytest.skip("FA4/CuTe correctness requires a GPU backend.")
+    pytest.importorskip("cutlass")
+    pytest.importorskip("cutlass.cute")
+    pytest.importorskip("flash_attn.cute.flash_bwd_preprocess")
+    keys = jax.random.split(jax.random.PRNGKey(73), 4)
+    q = jax.random.normal(keys[0], (2, 8520, 20, 128), dtype=jnp.bfloat16)
+    k = jax.random.normal(keys[1], (2, 8520, 5, 128), dtype=jnp.bfloat16)
+    v = jax.random.normal(keys[2], (2, 8520, 5, 128), dtype=jnp.bfloat16)
+    # The full query grid reproduces the asynchronous copy race; small grids may
+    # finish their copies before O overwrites shared storage even without a wait.
+    ids = jnp.array([[37] * 17 + [42] * 23 + [-1] * 8480, [-1] * 8520], dtype=jnp.int32)
+    mask = AttentionMask.causal(sliding_window=sliding_window).with_segment_ids(ids)
+    valid = ids >= 0
+
+    def forward(q, k, v):
+        return attention(q, k, v, mask, implementation="gpu_fa4_cute")
+
+    compiled = jax.jit(forward)
+    first = compiled(q, k, v)
+    np.testing.assert_array_equal(np.asarray(first)[~np.asarray(valid)], 0)
+    for _ in range(10):
+        repeated = compiled(q, k, v)
+        np.testing.assert_array_equal(repeated, first)
+    cotangent = jax.random.normal(keys[3], q.shape, dtype=jnp.bfloat16)
+    gradients = jax.jit(
+        jax.grad(lambda q, k, v: jnp.sum(forward(q, k, v).astype(jnp.float32) * cotangent), argnums=(0, 1, 2))
+    )(q, k, v)
+    for gradient in gradients:
+        np.testing.assert_array_equal(np.asarray(gradient)[~np.asarray(valid)], 0)
+    # Only the first 40 tokens are valid. A bounded dense reference covers every
+    # active output and gradient without constructing an 8520-squared score map.
+    reference_mask = AttentionMask.causal(sliding_window=sliding_window).with_segment_ids(ids[:1, :40])
+    short_qkv = (q[:1, :40], k[:1, :40], v[:1, :40])
+    expected = reference_attention(*short_qkv, reference_mask, logits_dtype=jnp.float32)
+    np.testing.assert_allclose(first[:1, :40], expected, atol=7e-2, rtol=7e-2)
+
+    def reference_loss(q, k, v):
+        output = reference_attention(q, k, v, reference_mask, logits_dtype=jnp.float32)
+        return jnp.sum(output.astype(jnp.float32) * cotangent[:1, :40])
+
+    expected_gradients = jax.jit(jax.grad(reference_loss, argnums=(0, 1, 2)))(*short_qkv)
+    for actual, expected in zip(gradients, expected_gradients, strict=True):
+        np.testing.assert_allclose(actual[:1, :40], expected, atol=7e-2, rtol=7e-2)
