@@ -75,7 +75,7 @@ MARIN_SKYRL = ExternalDependency(
     distribution="marinskyrl",
     repository="https://github.com/marin-community/MarinSkyRL.git",
     version="0.1.0",
-    commit="b376bf333e3f594a23e536ae90a2a28295a0bf4b",
+    commit="5901a6dfc8a4a392d2f442e85a2a2e6341f3784a",
     runtime_requirements=(),
 )
 
