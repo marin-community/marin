@@ -7,6 +7,7 @@ from experiments.post_training.math_eval.paired import (
     SeedInference,
     bootstrap,
     bootstrap_records,
+    family_bootstrap,
     holm_adjust,
     required_questions,
 )
@@ -70,3 +71,32 @@ def test_record_tables_default_to_completion_and_keep_repeats_clustered():
     candidate = {17: [dict(row, score_contract_completed=1) for row in reference[17]]}
     result = bootstrap_records(reference, candidate, seed=17, repetitions=100, inference=SeedInference.FIXED)
     assert result.questions == 2 and result.delta == 1 and result.interval == (1, 1)
+
+
+def test_family_resamples_common_seed_question_indices_and_labels_adjustments():
+    arms = {
+        "reference": {17: {"a": [0], "b": [0]}, 29: {"a": [0], "b": [0]}},
+        "small": {17: {"a": [0], "b": [0.25]}, 29: {"a": [0.25], "b": [0.5]}},
+    }
+    arms["large"] = {s: {q: [2 * v[0]] for q, v in rows.items()} for s, rows in arms["small"].items()}
+    result = family_bootstrap(arms, reference="reference", seed=17, repetitions=2000, inference=SeedInference.POPULATION)
+    small = result["results"]["small"]
+    large = result["results"]["large"]
+    assert large["delta"] == 2 * small["delta"]
+    assert large["simultaneous_interval"] == pytest.approx([2 * v for v in small["simultaneous_interval"]])
+    assert result["joint_covariance"]["large"]["small"] == pytest.approx(
+        2 * result["joint_covariance"]["small"]["small"], abs=1e-12
+    )
+    assert large["p_value"] == small["p_value"]
+    assert large["holm_adjusted_p_value"] >= large["p_value"]
+    assert result["interval_method"].startswith("Bonferroni")
+
+
+def test_family_population_inference_retains_seed_noise_with_constant_questions():
+    arms = {
+        "ref": {17: {"a": [0], "b": [0]}, 29: {"a": [0], "b": [0]}},
+        "candidate": {17: {"a": [0], "b": [0]}, 29: {"a": [1], "b": [1]}},
+    }
+    result = family_bootstrap(arms, reference="ref", seed=17, repetitions=1000, inference=SeedInference.POPULATION)
+    assert result["results"]["candidate"]["simultaneous_interval"] == (0, 1)
+    assert result["joint_covariance"]["candidate"]["candidate"] > 0

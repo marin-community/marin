@@ -49,6 +49,8 @@ def bootstrap(
     fixed inference reproduces the predecessor's conditional-seed estimand.
     The displayed question SE is conditional on observed seeds in both modes.
     """
+    if inference not in (SeedInference.FIXED, SeedInference.POPULATION):
+        raise ValueError("Specify fixed-seed or seed-population inference")
     seeds = tuple(sorted(reference))
     if not seeds or set(seeds) != set(candidate):
         raise ValueError("Arms require the same nonempty training seed set")
@@ -155,3 +157,83 @@ def bootstrap_records(reference, candidate, *, metric="score_contract_completed"
         return grouped
 
     return bootstrap(group(reference), group(candidate), **kwargs)
+
+
+def family_bootstrap(arms, *, reference, seed, repetitions, inference, alpha=0.05):
+    """Joint resamples across all arms, with Holm p-values and Bonferroni intervals.
+
+    Inputs are per-arm, per-seed, per-question response scores (normally completed
+    correctness). Two-sided p-values use a centered bootstrap null approximation;
+    neither these nor percentile intervals are finite-sample exact. The same seed
+    and question indices are drawn for every contrast in a replicate.
+    """
+    names = sorted(set(arms) - {reference})
+    if reference not in arms or not names:
+        raise ValueError("A family requires one reference and at least one candidate")
+    estimates = {
+        name: bootstrap(
+            arms[reference],
+            arms[name],
+            seed=seed,
+            repetitions=repetitions,
+            inference=inference,
+            alpha=alpha / len(names),
+        )
+        for name in names
+    }
+    seeds = sorted(arms[reference])
+    questions = sorted(arms[reference][seeds[0]])
+    diffs = {
+        name: [
+            [
+                statistics.mean(arms[name][run_seed][question]) - statistics.mean(arms[reference][run_seed][question])
+                for question in questions
+            ]
+            for run_seed in seeds
+        ]
+        for name in names
+    }
+    rng = random.Random(seed)
+    draws = {name: [] for name in names}
+    for _ in range(repetitions):
+        q_indices = rng.choices(range(len(questions)), k=len(questions))
+        s_indices = (
+            rng.choices(range(len(seeds)), k=len(seeds))
+            if inference == SeedInference.POPULATION
+            else list(range(len(seeds)))
+        )
+        for name in names:
+            draws[name].append(statistics.mean(diffs[name][s][q] for s in s_indices for q in q_indices))
+    p_values = {
+        name: (
+            (1 + sum(abs(value - estimates[name].delta) >= abs(estimates[name].delta) for value in draws[name]))
+            / (repetitions + 1)
+        )
+        for name in names
+    }
+    adjusted = holm_adjust(p_values)
+    tail = alpha / (2 * len(names))
+    return {
+        "reference": reference,
+        "comparisons": tuple(names),
+        "inference": inference,
+        "joint_covariance": {a: {b: statistics.covariance(draws[a], draws[b]) for b in names} for a in names},
+        "family_confidence": 1 - alpha,
+        "repetitions": repetitions,
+        "p_value_method": "two-sided centered joint bootstrap null approximation",
+        "interval_method": "Bonferroni simultaneous percentile intervals; not Holm intervals",
+        "results": {
+            name: {
+                "delta": estimates[name].delta,
+                "p_value": p_values[name],
+                "holm_adjusted_p_value": adjusted[name],
+                "simultaneous_interval": (
+                    percentile(sorted(draws[name]), tail),
+                    percentile(sorted(draws[name]), 1 - tail),
+                ),
+                "questions": len(questions),
+                "seeds": tuple(seeds),
+            }
+            for name in names
+        },
+    }
