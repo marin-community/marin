@@ -251,3 +251,47 @@ def test_unknown_group_outcome_is_rejected():
     outcomes[0]["outcome"] = "stale_typo"
     with pytest.raises(AssertionError, match="unknown group outcome"):
         audit_stale_tokens(calls, outcomes)
+
+
+@pytest.mark.parametrize(
+    "corruption", [None, "sequences", "mask", "stop", "group", "lost", "queued", "missing", "abnormal"]
+)
+def test_stress_work_requires_forced_tokens_and_clean_exporter(corruption):
+    arm = {
+        "consumed_sequences": 5120,
+        "consumed_response_tokens": 5120 * 1024,
+        "consumed_loss_tokens": 5120 * 1024,
+        "consumed_length_stops": 5120,
+        "outcomes": [{"outcome": "consumed", "tokens": 4096} for _ in range(1280)],
+        "exporter_terminals": [
+            {
+                "role": role,
+                "export_lost_records": 0,
+                "export_queued_records": 0,
+                "reason": "normal_exit",
+                "status": "completed",
+            }
+            for role in ("trainer", "driver", "controller", "worker")
+        ],
+    }
+    if corruption == "sequences":
+        arm["consumed_sequences"] -= 1
+    elif corruption == "mask":
+        arm["consumed_loss_tokens"] -= 1
+    elif corruption == "stop":
+        arm["consumed_length_stops"] -= 1
+    elif corruption == "group":
+        arm["outcomes"][0]["tokens"] -= 1
+    elif corruption == "lost":
+        arm["exporter_terminals"][0]["export_lost_records"] = 1
+    elif corruption == "queued":
+        arm["exporter_terminals"][0]["export_queued_records"] = 1
+    elif corruption == "missing":
+        arm["exporter_terminals"] = []
+    elif corruption == "abnormal":
+        arm["exporter_terminals"][0]["reason"] = "exception"
+    if corruption is None:
+        audit_module.audit_stress_work(arm)
+    else:
+        with pytest.raises(AssertionError):
+            audit_module.audit_stress_work(arm)

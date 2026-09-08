@@ -199,3 +199,32 @@ def audit_matched_gate(baseline, candidate, *, task_gpu_hours_ceiling: float):
     ), "stale-token fraction increased"
     results["requests"] = audit_requests(candidate["request_receipts"])
     return results
+
+
+def audit_stress_work(arm):
+    """Reject forced-length mask collapse and incomplete native exporter accounting."""
+    assert arm["consumed_sequences"] == 5120, "stress sequence coverage"
+    assert arm["consumed_response_tokens"] == arm["consumed_loss_tokens"] == 5120 * 1024, "stress loss-mask coverage"
+    assert arm["consumed_length_stops"] == 5120, "stress forced-length coverage"
+    consumed = [row for row in arm["outcomes"] if row["outcome"] == "consumed"]
+    assert len(consumed) == 1280 and all(row["tokens"] == 4 * 1024 for row in consumed), "stress group coverage"
+    terminals = arm["exporter_terminals"]
+    assert Counter(row["role"] for row in terminals) == Counter(
+        {"trainer": 1, "driver": 1, "controller": 1, "worker": 1}
+    ), "missing or duplicate exporter terminal"
+    assert all(
+        row["export_lost_records"] == row["export_queued_records"] == 0
+        and row["reason"] == "normal_exit"
+        and row["status"] == "completed"
+        for row in terminals
+    ), "exporter loss or incomplete drain"
+
+
+def audit_matched_stress_gate(baseline, candidate, *, task_gpu_hours_ceiling: float):
+    """Apply the prospectively matched active-load protocol without weakening the original gate."""
+    for arm in (baseline, candidate):
+        audit_stress_work(arm)
+    results = audit_matched_gate(baseline, candidate, task_gpu_hours_ceiling=task_gpu_hours_ceiling)
+    results["baseline_requests"] = audit_requests(baseline["request_receipts"])
+    assert results["requests"]["pause_cohort_requests"] >= 64, "insufficient active stress cohort"
+    return results
