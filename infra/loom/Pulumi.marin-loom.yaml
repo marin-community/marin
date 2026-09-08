@@ -56,6 +56,30 @@ config:
       mcpAccess:
         mode: all
         groups: []
+    agent-moe-report:
+      agent: codex
+      description: Refresh the Agent MoE experiment digest from reviewed evidence
+      model: gpt-5.6-sol
+      effort: xhigh
+      protocol: acp
+      mode: auto
+      class: automation
+      strict: true
+      envClear: true
+      ambientAllowlist: []
+      idleArchiveSeconds: 3600
+      maxConcurrent: 1
+      turnBudget: 300
+      prelude: weaver
+      instructionsFile: profiles/agent-moe-report/AGENTS.md
+      env: *loomIrisUser
+      restricted: false
+      githubRepositories:
+        - marin-community/marin
+      allowedTools: []
+      mcpAccess:
+        mode: all
+        groups: []
     fork-ferry:
       agent: codex
       description: Refresh Marin forks and validate their pinned revisions
@@ -185,8 +209,14 @@ config:
       serviceAccountId: marin-grafana
       createServiceAccount: false
   marin-loom:githubFederations:
-    - name: fork-ferry
+    - name: agent-moe-report
       repositoryId: &marinRepositoryId "775839592"
+      workflowRef: marin-community/marin/.github/workflows/ops-agent-moe-report.yaml@refs/heads/main
+      profile: agent-moe-report
+      serviceTag: agent-moe-report
+      ref: refs/heads/main
+    - name: fork-ferry
+      repositoryId: *marinRepositoryId
       workflowRef: marin-community/marin/.github/workflows/ops-fork-ferry.yaml@refs/heads/main
       profile: fork-ferry
       serviceTag: fork-ferry

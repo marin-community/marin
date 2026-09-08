@@ -21,6 +21,7 @@ from iac.github.dependency_updater import (
 from iac.github.resources import credential_resource_plans, register_credentials, repository_name
 
 LOOM_STACK = "organization/marin-loom/marin-loom"
+AGENT_MOE_REPORT_FEDERATION = "agent-moe-report"
 CODEHEALTH_REFINEMENT_FEDERATION = "codehealth-refinement"
 FORK_FERRY_FEDERATION = "fork-ferry"
 PR_REVIEW_FEDERATION = "pr-review"
@@ -47,6 +48,10 @@ def main() -> None:
     loom = pulumi.StackReference(LOOM_STACK)
     federation_profiles = loom.require_output("githubFederationProfiles")
     profile_variables = {
+        "agent-moe-report-profile": (
+            "LOOM_AGENT_MOE_REPORT_PROFILE",
+            AGENT_MOE_REPORT_FEDERATION,
+        ),
         "codehealth-refinement-profile": (
             "LOOM_CODEHEALTH_REFINEMENT_PROFILE",
             CODEHEALTH_REFINEMENT_FEDERATION,
@@ -73,6 +78,10 @@ def main() -> None:
         updater.repository,
     )
     register_dependency_updater(updater, deployment_policy)
+    pulumi.export(
+        "agent_moe_report_profile",
+        resolved_profiles[AGENT_MOE_REPORT_FEDERATION],
+    )
     pulumi.export("credential_count", len(plans))
     pulumi.export(
         "codehealth_refinement_profile",

@@ -104,6 +104,13 @@ does not store a GitHub token or grant Actions access. The GitHub Pulumi stack
 reads the mapping's profile from this stack's `githubFederationProfiles` output
 and publishes it as the workflow's `LOOM_FORK_FERRY_PROFILE` repository variable.
 
+The `agent-moe-report` mapping similarly accepts only the main-branch
+`ops-agent-moe-report.yaml` workflow. Its single-concurrency automation profile
+reviews the digest's GitHub drift once a week and can open a Marin pull request
+when reviewed evidence changes the report. The GitHub stack publishes the
+authorized profile as `LOOM_AGENT_MOE_REPORT_PROFILE`; the workflow holds no
+long-lived credential.
+
 Organization prompt policy lives beside the runtime profiles in
 `profiles/<name>/AGENTS.md`. A profile's `instructionsFile` is resolved below
 `infra/loom`, read by Pulumi, and reconciled into Loom's visible profile
