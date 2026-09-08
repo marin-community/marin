@@ -98,7 +98,8 @@ def select_qwen_bucket_s(manifest, selection, mechanical_overlay, ratings, gener
         "combined": combined,
         "adoptable": combined["meets_thresholds"],
         "scope": (
-            "same-data empirical selection; K4 subset exchangeability assumption, no independent latent-probability guarantee"
+            "same-data empirical selection; K4 subset exchangeability assumption, "
+            "no independent latent-probability guarantee"
         ),
     }
     return result | {"selection_sha256": _sha(result)}
