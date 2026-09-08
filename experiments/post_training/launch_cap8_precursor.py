@@ -10,6 +10,17 @@ import json
 import os
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from iris.cli.connect import open_iris_client
+from iris.cli.job import build_resources
+from iris.client.client import IrisClient
+from iris.cluster.client.remote_client import RemoteClusterClient
+from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
+from iris.cluster.types import Entrypoint, EnvironmentSpec
+from iris.rpc import job_pb2
+from rigging.timing import Duration
 
 NODEID = (
     "skyrl-train/tests/gpu/test_publication_cap_precursor.py::test_cap8_preserves_queued_requests_across_original_pause"
@@ -21,6 +32,7 @@ SOURCES = (
     "skyrl-train/tests/gpu/test_publication_cap_precursor.py",
     "skyrl-train/tests/gpu/publication_cap_protocol.py",
     "skyrl-train/tests/gpu/prepare_publication_cap_precursor.py",
+    "skyrl-train/tests/gpu/stage_publication_cap_model.py",
     "skyrl-train/skyrl_train/config/ppo_base_config.yaml",
     "skyrl-train/skyrl_train/entrypoints/main_base.py",
     "skyrl-train/skyrl_train/inference_engines/ray_wrapped_inference_engine.py",
@@ -64,6 +76,17 @@ if /tmp/oa-cap8-env/bin/python -m pytest -s -q -m vllm {NODEID}; then cap8_statu
 /tmp/oa-cap8-env/bin/python - <<'RECEIPT'
 import hashlib,json
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from iris.cli.connect import open_iris_client
+from iris.cli.job import build_resources
+from iris.client.client import IrisClient
+from iris.cluster.client.remote_client import RemoteClusterClient
+from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
+from iris.cluster.types import Entrypoint, EnvironmentSpec
+from iris.rpc import job_pb2
+from rigging.timing import Duration
 path=Path('/tmp/oa-cap8-receipt.json')
 if path.exists():
  data=path.read_bytes();digest=hashlib.sha256(data).hexdigest()
@@ -92,6 +115,17 @@ export RAY_ENABLE_UV_RUN_RUNTIME_ENV=0
 python3 - <<'VERIFY'
 import hashlib,json
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from iris.cli.connect import open_iris_client
+from iris.cli.job import build_resources
+from iris.client.client import IrisClient
+from iris.cluster.client.remote_client import RemoteClusterClient
+from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
+from iris.cluster.types import Entrypoint, EnvironmentSpec
+from iris.rpc import job_pb2
+from rigging.timing import Duration
 expected={hashes!r}
 for path,digest in expected.items():assert hashlib.sha256(Path(path).read_bytes()).hexdigest()==digest,path
 print('CAP8_SOURCE_PASS '+json.dumps(dict(msr={msr!r},marin={args.marin_commit!r},sha256=expected)),flush=True)
@@ -102,42 +136,66 @@ import base64
 print(base64.b64decode({encoded!r}).decode())
 SPEC
 )"
+export PUBLICATION_CAP_MODEL=/tmp/oa-cap8-model
+/tmp/oa-cap8-env/bin/python -m tests.gpu.stage_publication_cap_model --output "$PUBLICATION_CAP_MODEL"
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
 {stage}
 """
     timeout = 900 if args.cpu_only else 600
-    command = [
-        os.environ["IRIS"],
-        "--cluster",
-        "marin",
-        "job",
-        "run",
-        "--job-name",
-        args.job_name,
-        "--target-cluster",
-        "cw-us-east-02a",
-        "--priority",
-        "batch",
-        *([] if args.cpu_only else ["--gpu", "H100x1"]),
-        "--replicas",
-        "1",
-        "--cpu",
-        "8",
-        "--memory",
-        "64GB",
-        "--disk",
-        "100GB",
-        "--enable-extra-resources",
-        "--max-retries",
-        "0",
-        "--timeout",
-        str(timeout),
-        "--no-sync",
-        "--no-wait",
-        "--",
-        "bash",
-        "-c",
-        body,
-    ]
+    kwargs = dict(
+        entrypoint=Entrypoint.from_command("bash", "-c", body),
+        name=args.job_name,
+        resources=build_resources(None, None if args.cpu_only else "H100x1", cpu=8, memory="64GB", disk="100GB"),
+        environment=EnvironmentSpec(env_vars={"WANDB_MODE": "disabled"}, extras=[], setup_scripts=[]),
+        constraints=[Constraint.create(key=CLUSTER_CONSTRAINT_KEY, op=ConstraintOp.EQ, value="cw-us-east-02a")],
+        replicas=1,
+        max_retries_failure=0,
+        max_retries_preemption=0,
+        max_task_failures=0,
+        timeout=Duration.from_seconds(timeout),
+        scheduling_timeout=Duration.from_seconds(300),
+        priority_band=job_pb2.PRIORITY_BAND_BATCH,
+    )
+    native = {}
+
+    class Capture:
+        def launch_job(self, request, **unused):
+            assert request.max_retries_failure == request.max_retries_preemption == request.max_task_failures == 0
+            assert request.timeout.milliseconds == timeout * 1000
+            assert request.scheduling_timeout.milliseconds == 300000
+            native.update(
+                {
+                    "max_retries_failure": request.max_retries_failure,
+                    "max_retries_preemption": request.max_retries_preemption,
+                    "max_task_failures": request.max_task_failures,
+                    "timeout_milliseconds": request.timeout.milliseconds,
+                    "scheduling_timeout_milliseconds": request.scheduling_timeout.milliseconds,
+                    "gpu_count": request.resources.device.gpu.count,
+                    "gpu_variant": request.resources.device.gpu.variant,
+                    "cpu_millicores": request.resources.cpu_millicores,
+                    "memory_bytes": request.resources.memory_bytes,
+                    "disk_bytes": request.resources.disk_bytes,
+                    "priority_band": request.priority_band,
+                }
+            )
+            assert native["gpu_count"] == (0 if args.cpu_only else 1)
+            return SimpleNamespace(job_id=request.name)
+
+    # Preview the real serialization boundary without recording any environment
+    # values; task pods supply their own east-object credentials.
+    forbidden = {
+        "WANDB_API_KEY",
+        "HF_TOKEN",
+        "HUGGING_FACE_HUB_TOKEN",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+    }
+    with patch.dict(os.environ, {key: value for key, value in os.environ.items() if key not in forbidden}, clear=True):
+        remote = RemoteClusterClient("http://127.0.0.1:1")
+        remote._client = Capture()
+        IrisClient(remote).submit(**kwargs)
     print(
         json.dumps(
             {
@@ -156,7 +214,8 @@ SPEC
                     "frozen cpu/telemetry dev/harbor-test" if args.cpu_only else "frozen megatron/vllm development"
                 ),
                 "storage": "pod cache and durable Iris log receipts; read family48 east data, no bucket writes",
-                "command": command,
+                "entrypoint": ["bash", "-c", body],
+                "native_request": native,
             },
             indent=2,
         ),
@@ -164,7 +223,17 @@ SPEC
     )
     if args.execute:
         assert os.environ["IRIS_USER"] == "atqamar"
-        subprocess.run(command, check=True)
+        with patch.dict(
+            os.environ, {key: value for key, value in os.environ.items() if key not in forbidden}, clear=True
+        ):
+            with open_iris_client(
+                config_file=marin / "lib/iris/config/marin.yaml", cluster_name="marin", workspace=Path.cwd()
+            ) as client:
+                job = client.submit(**kwargs)
+                print(
+                    "CAP8_SUBMITTED " + json.dumps({"job_id": str(job.job_id), "marin": args.marin_commit, "msr": msr}),
+                    flush=True,
+                )
 
 
 if __name__ == "__main__":
