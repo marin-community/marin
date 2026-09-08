@@ -59,6 +59,7 @@ class RatingServingConfig:
     output_uri: str
     source_commit: str
     tensor_parallel_size: int
+    data_parallel_size: int = 1
     concurrency: int = 8
     startup_timeout_seconds: int = 600
     request_timeout_seconds: int = 600
@@ -79,10 +80,15 @@ class RatingServingConfig:
             raise ValueError("Rating membership and artifact hashes must be explicit")
         if not re.fullmatch(r"[a-f0-9]{40}", self.source_commit):
             raise ValueError("Rating source must be a full commit")
-        if self.tensor_parallel_size not in (1, 8) or (self.model == "snowball" and self.tensor_parallel_size != 8):
-            raise ValueError("Rating tensor parallelism is outside the reviewed single-host profile")
+        expected_dp = 4 if self.model == "snowball" else 1
+        if self.tensor_parallel_size != 1 or self.data_parallel_size != expected_dp:
+            raise ValueError("Rating parallelism is outside the reviewed TP1 single-host profile")
         if not 1 <= self.concurrency <= 32 or min(self.startup_timeout_seconds, self.request_timeout_seconds) <= 0:
             raise ValueError("Rating concurrency and timeouts must be bounded")
+
+    @property
+    def allocated_gpus(self):
+        return self.tensor_parallel_size * self.data_parallel_size
 
 
 def serving_configuration(config):
@@ -97,12 +103,31 @@ def serving_configuration(config):
         max_model_len=profile["max_prompt_tokens"] + profile["max_response_tokens"],
         tensor_parallel_size=config.tensor_parallel_size,
     )
+    extra_args = ("--seed", "17", "--generation-config", "vllm")
+    if config.model == "snowball":
+        extra_args += (
+            "--data-parallel-size",
+            "4",
+            "--data-parallel-size-local",
+            "4",
+            "--data-parallel-backend",
+            "mp",
+            "--distributed-executor-backend",
+            "mp",
+            "--enable-expert-parallel",
+            "--all2all-backend",
+            "allgather_reducescatter",
+            "--gpu-memory-utilization",
+            "0.9",
+            "--kv-cache-dtype",
+            "auto",
+        )
     engine = VllmEngineConfig(
         launcher=VllmLauncherType.CUDA,
         source=VllmSource.MARIN_FORK,
         startup_timeout_seconds=config.startup_timeout_seconds,
         max_num_seqs=config.concurrency * config.samples,
-        extra_args=("--seed", "17", "--generation-config", "vllm"),
+        extra_args=extra_args,
     )
     return model, engine
 
@@ -110,7 +135,11 @@ def serving_configuration(config):
 def serving_specification(config):
     model, engine = serving_configuration(config)
     engine_record = asdict(engine) | {"extra_metric_families": sorted(engine.extra_metric_families)}
-    return json.loads(json.dumps({"config": asdict(config), "model": asdict(model), "engine": engine_record}))
+    config_record = asdict(config)
+    # Preserve the already frozen Qwen wire specification byte for byte.
+    if config.data_parallel_size == 1:
+        del config_record["data_parallel_size"]
+    return json.loads(json.dumps({"config": config_record, "model": asdict(model), "engine": engine_record}))
 
 
 def verify_wheel_receipt(log_text, version):
@@ -208,7 +237,7 @@ def run_rating_serving(config):
         or device is None
         or device.kind != "gpu"
         or device.variant != "H100"
-        or device.count != config.tensor_parallel_size
+        or device.count != config.allocated_gpus
     ):
         raise ValueError("Controller allocation differs from the reviewed H100 task")
     allocation = {
@@ -241,7 +270,7 @@ def run_rating_serving(config):
     # Standard serving handles the immutable object-store model path directly.
     specification = serving_specification(config)
     rendering = renderer_provenance()
-    with local_inference(model, engine, num_chips=config.tensor_parallel_size) as session:
+    with local_inference(model, engine, num_chips=config.allocated_gpus) as session:
         endpoint = session.model.endpoint.base_url
         version_reply = requests.get(endpoint.removesuffix("/v1") + "/version", timeout=30)
         version_reply.raise_for_status()

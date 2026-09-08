@@ -13,12 +13,15 @@ import pytest
 
 from experiments.post_training import async_rl_audit as audit
 from experiments.post_training.math_eval.audit_overlay import VERIFIER_REVISION, VERIFIER_SOURCES_SHA256
+from experiments.post_training.math_eval.rate import MODEL_PROFILES
 from experiments.post_training.math_eval.scoring import SEMANTIC_DEPENDENCIES
 from experiments.post_training.math_eval.serving import (
     EAST_PREFIX,
+    SERVING_MODELS,
     RatingServingConfig,
     load_rating_inputs,
     serving_configuration,
+    serving_specification,
     verify_wheel_receipt,
 )
 from experiments.post_training.math_eval.serving_audit import validate_serving_generation
@@ -46,7 +49,7 @@ def test_rating_configuration_is_roundtrip_stable_and_has_no_request_seed():
     assert model.max_model_len == 3072
     assert engine.max_num_seqs == 64
     assert engine.extra_args == ("--seed", "17", "--generation-config", "vllm")
-    snowball = replace(specification, model="snowball", samples=4, tensor_parallel_size=8)
+    snowball = replace(specification, model="snowball", samples=4, data_parallel_size=4)
     assert serving_configuration(snowball)[0].max_model_len == 12288
 
 
@@ -62,6 +65,9 @@ def test_rating_configuration_is_roundtrip_stable_and_has_no_request_seed():
         {"concurrency": 0},
         {"request_timeout_seconds": 0},
         {"model": "snowball", "tensor_parallel_size": 1},
+        {"model": "snowball", "tensor_parallel_size": 4, "data_parallel_size": 4},
+        {"model": "snowball", "tensor_parallel_size": 8, "data_parallel_size": 4},
+        {"data_parallel_size": 4},
     ],
 )
 def test_rating_configuration_rejects_changed_membership_region_or_unbounded_protocol(changes):
@@ -108,12 +114,8 @@ def test_native_runtime_requires_installed_wheel_proof_and_matching_api_version(
 
 def generation_fixture():
     cfg = config()
-    model, engine = serving_configuration(cfg)
-    specification = {
-        "config": asdict(cfg),
-        "model": asdict(model),
-        "engine": asdict(engine) | {"extra_metric_families": []},
-    }
+    model, _engine = serving_configuration(cfg)
+    specification = serving_specification(cfg)
     runtime = wheel_evidence()
     generation = {
         "schema": "math_eval_serving_generation_v1",
@@ -288,3 +290,58 @@ def test_producer_interval_is_separate_from_allocation_and_rejects_impossible_du
     generation["generation_and_native_scoring"]["monotonic_seconds"] = 99999
     with pytest.raises(ValueError, match="Producer generation interval"):
         validate_serving_generation(cfg, generation, tasks, native_job)
+
+
+def test_snowball_audit_counts_physical_gpus_and_binds_native_expert_parallel_flags():
+    cfg, generation, tasks, native_job = generation_fixture()
+    cfg = replace(cfg, model="snowball", samples=4, data_parallel_size=4)
+    model, engine = serving_configuration(cfg)
+    profile = MODEL_PROFILES["snowball"]
+    generation.update(
+        specification=serving_specification(cfg),
+        model_identity=SERVING_MODELS["snowball"]["identity"],
+        model_config_sha256=SERVING_MODELS["snowball"]["config_sha256"],
+        tokenizer_sha256=profile["tokenizer_sha256"],
+        prompt_template_id=profile["prompt_template_id"],
+        rows=4,
+        native_command=[
+            "vllm",
+            "serve",
+            model.weights,
+            "--max-model-len",
+            "12288",
+            "--tensor-parallel-size",
+            "1",
+            "--served-model-name",
+            model.model_id,
+            "--dtype",
+            "bfloat16",
+            "--max-num-seqs",
+            "32",
+            *engine.extra_args,
+        ],
+    )
+    generation["specification_sha256"] = audit.canonical_sha(generation["specification"])
+    native_job["job"]["resources"]["device"]["gpu"]["count"] = 4
+    generation["controller_allocation"]["resources"]["device"]["count"] = 4
+    protocol = validate_serving_generation(cfg, generation, tasks, native_job)
+    assert protocol["task_gpu_hours"] == 4
+    assert cfg.allocated_gpus == 4 and model.tensor_parallel_size == 1
+    for flag in ("--enable-expert-parallel", "--data-parallel-size", "--max-num-seqs", "--kv-cache-dtype"):
+        poisoned = deepcopy(generation)
+        poisoned["native_command"].remove(flag)
+        with pytest.raises(ValueError, match="Native"):
+            validate_serving_generation(cfg, poisoned, tasks, native_job)
+    native_job["job"]["resources"]["device"]["gpu"]["count"] = 1
+    with pytest.raises(ValueError):
+        validate_serving_generation(cfg, generation, tasks, native_job)
+
+
+def test_qwen_specification_preserves_frozen_single_gpu_wire_shape():
+    cfg = config()
+    specification = serving_specification(cfg)
+    legacy = asdict(cfg)
+    del legacy["data_parallel_size"]
+    assert specification["config"] == json.loads(json.dumps(legacy))
+    assert specification["engine"]["extra_args"] == ["--seed", "17", "--generation-config", "vllm"]
+    assert cfg.allocated_gpus == 1

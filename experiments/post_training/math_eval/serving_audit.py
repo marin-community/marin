@@ -71,7 +71,7 @@ def validate_serving_generation(config, generation, native_tasks, native_job):
         or controller.get("task_count") != 1
         or controller.get("completed_count") != 1
         or gpu.get("variant") != "H100"
-        or gpu.get("count") != config.tensor_parallel_size
+        or gpu.get("count") != config.allocated_gpus
         or allocated_gpu.get("kind") != "gpu"
         or allocated_gpu.get("variant") != gpu.get("variant")
         or allocated_gpu.get("count") != gpu.get("count")
@@ -146,6 +146,21 @@ def validate_serving_generation(config, generation, native_tasks, native_job):
         "--served-model-name": model.model_id,
         "--dtype": "bfloat16",
     }
+    if config.model == "snowball":
+        flags.update(
+            {
+                "--data-parallel-size": "4",
+                "--data-parallel-size-local": "4",
+                "--data-parallel-backend": "mp",
+                "--distributed-executor-backend": "mp",
+                "--all2all-backend": "allgather_reducescatter",
+                "--gpu-memory-utilization": "0.9",
+                "--kv-cache-dtype": "auto",
+                "--max-num-seqs": str(_engine.max_num_seqs),
+            }
+        )
+        if command.count("--enable-expert-parallel") != 1:
+            raise ValueError("Native Snowball command does not prove expert parallelism")
     if command.count("serve") != 1 or command[command.index("serve") + 1] != model.weights:
         raise ValueError("Native serving command uses a different model artifact")
     for flag, value in flags.items():
