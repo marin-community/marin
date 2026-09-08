@@ -427,13 +427,23 @@ impl TableController {
     /// Recovery loads and claims each head before any table accepts writes; this
     /// seeds the controller with that outcome and publishes the table's initial
     /// snapshot without a second round trip to the state store.
-    pub fn adopt_claimed(&self, claimed: StoredTableState) {
+    pub fn adopt_claimed(&self, claimed: StoredTableState) -> Result<(), StatsError> {
+        // Recovery has already reconciled the local projection with this HEAD.
+        // When HEAD covers the local revision, every referenced object was
+        // necessarily durable before HEAD selected it, so the first new write
+        // need only upload objects staged by this process. A projection ahead
+        // of HEAD may contain a pre-crash local commit whose object upload did
+        // not finish, and therefore retains the once-per-boot remote scan.
+        let selected_covers_local = claimed.revision() >= self.local_revision()?;
         let snapshot = TableSnapshot::from_stored(&claimed);
         self.record_published_high_water(claimed.catalog.persisted_high_water.unwrap_or(0));
         *self.selected.lock().unwrap() = Some(claimed);
         self.claimed.store(true, Ordering::SeqCst);
         self.head_published.store(true, Ordering::SeqCst);
+        self.boot_reconciled
+            .store(selected_covers_local, Ordering::SeqCst);
         self.snapshot.send_replace(Some(Arc::new(snapshot)));
+        Ok(())
     }
 
     /// Apply one durable state transition and publish the resulting state.
@@ -1477,6 +1487,43 @@ mod tests {
         let selected = states.load(TABLE).await.unwrap().unwrap();
         assert_eq!(selected.fence(), WriterFence::new(12));
         assert_eq!(selected.revision().get(), 1);
+    }
+
+    #[tokio::test]
+    async fn adopting_a_claimed_head_only_reconciles_an_ahead_local_projection() {
+        let remote_dir = crate::test_support::unique_dir("controller_adopt_reconcile");
+        let remote = Arc::new(
+            build_remote_object_store(remote_dir.to_str().unwrap())
+                .unwrap()
+                .unwrap(),
+        );
+        let states = Arc::new(ObjectTableStateStore::new(remote.clone()));
+        let published_catalog = registered_catalog();
+        let publisher = object_controller(
+            remote_dir.clone(),
+            Arc::clone(&published_catalog),
+            remote.clone(),
+            states.clone(),
+            11,
+        );
+        publisher.publish_state().await.unwrap();
+        let selected = states.load(TABLE).await.unwrap().unwrap();
+
+        let matching = object_controller(
+            remote_dir.clone(),
+            registered_catalog(),
+            remote.clone(),
+            states.clone(),
+            11,
+        );
+        matching.adopt_claimed(selected.clone()).unwrap();
+        assert!(matching.boot_reconciled.load(Ordering::SeqCst));
+
+        let ahead_catalog = registered_catalog();
+        ahead_catalog.set_forward_cursor("hub", TABLE, 5).unwrap();
+        let ahead = object_controller(remote_dir, ahead_catalog, remote, states, 11);
+        ahead.adopt_claimed(selected).unwrap();
+        assert!(!ahead.boot_reconciled.load(Ordering::SeqCst));
     }
 
     /// A fenced controller refuses to lease maintenance work.

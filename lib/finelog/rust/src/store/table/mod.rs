@@ -281,8 +281,12 @@ impl TableManager {
     }
 
     /// Seed `name`'s controller with the state a bootstrap claim selected.
-    pub fn adopt_claimed_state(&self, name: &str, claimed: StoredTableState) {
-        self.controller(name).adopt_claimed(claimed);
+    pub fn adopt_claimed_state(
+        &self,
+        name: &str,
+        claimed: StoredTableState,
+    ) -> Result<(), StatsError> {
+        self.controller(name).adopt_claimed(claimed)
     }
 
     /// Stop accepting writes for `name` until a restart recovers it.

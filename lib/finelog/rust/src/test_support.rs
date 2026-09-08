@@ -35,6 +35,7 @@ pub enum ObjectOp {
     Write,
     Read,
     LocalPath,
+    List,
     CompareAndSwap,
 }
 
@@ -346,7 +347,8 @@ impl ObjectStore for FaultInjectingObjectStore {
     }
 
     async fn list(&self, prefix: &ObjectPrefix) -> Result<Vec<ObjectMetadata>, StatsError> {
-        self.inner.list(prefix).await
+        self.execute(ObjectOp::List, prefix.as_str(), || self.inner.list(prefix))
+            .await
     }
 
     async fn list_tables(&self) -> Result<Vec<String>, StatsError> {

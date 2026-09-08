@@ -485,7 +485,7 @@ impl Store {
             // Projection recovery can replace the runtime and its controller.
             // Install the claim only after that replacement so the surviving
             // controller owns HEAD and exposes its durability watermark.
-            self.tables.adopt_claimed_state(&namespace, claimed);
+            self.tables.adopt_claimed_state(&namespace, claimed)?;
             // The durable state's high-water mark can exceed the max seq in its
             // published segments (a legacy import excludes archive-only rows;
             // retirement deletes legacy rows). Seed the allocator past it so a

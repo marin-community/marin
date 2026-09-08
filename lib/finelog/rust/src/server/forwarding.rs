@@ -570,9 +570,12 @@ where
         }
     }
 
-    /// The cursor to start `name` from: its stored watermark, or the current tip when
-    /// there is none, or when the watermark sits beyond `persisted` and so names a seq
-    /// space this store no longer has (a recreated volume).
+    /// The cursor to start `name` from.
+    ///
+    /// A stored watermark wins when it remains in range. A watermark beyond
+    /// `persisted` resets to the current tip. Without a watermark, an
+    /// object-native relay starts immediately before its oldest live sequence;
+    /// a legacy table starts at the current tip.
     async fn seed(&self, name: &str, persisted: i64) -> Result<i64, StatsError> {
         match self.store.forward_cursor(&self.config.target, name)? {
             Some(cursor) if cursor <= persisted => Ok(cursor),
@@ -1160,10 +1163,7 @@ fn forwarding_attributes(namespace: &str, outcome: &str) -> BTreeMap<String, Str
     ])
 }
 
-/// Start the forward loop on the runtime, returning its handle.
-///
-/// Tests and embedders may request a cooperative stop through `stop`; the server
-/// process aborts the handle during shutdown.
+/// Start the forward loop, which runs until `stop` changes or closes.
 pub fn spawn<T>(forwarder: Arc<Forwarder<T>>, stop: watch::Receiver<bool>) -> JoinHandle<()>
 where
     T: connectrpc::client::ClientTransport + Send + Sync + 'static,
