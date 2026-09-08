@@ -23,7 +23,7 @@ from iris.rpc import job_pb2
 from rigging.timing import Duration
 
 NODEID = (
-    "skyrl-train/tests/gpu/test_publication_cap_precursor.py::test_cap8_preserves_queued_requests_across_original_pause"
+    "skyrl-train/tests/gpu/test_publication_cap_precursor.py::test_cap4_preserves_queued_requests_across_original_pause"
 )
 SOURCES = (
     "uv.lock",
@@ -60,7 +60,7 @@ def main():
     assert not subprocess.check_output(["git", "-C", str(marin), "status", "--porcelain"], text=True)
     assert not subprocess.check_output(["git", "status", "--porcelain"], text=True)
     msr = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-    assert args.job_name.startswith("async-rl-v2-cap8-native-")
+    assert args.job_name.startswith("async-rl-v2-cap4-native-")
     spec = json.loads(args.input_spec.read_text())
     assert spec["revision"] == "c1899de289a04d12100db370d81485cdf75e47ca"
     if not args.cpu_only:
@@ -68,35 +68,37 @@ def main():
     encoded = base64.b64encode(json.dumps(spec, sort_keys=True).encode()).decode()
     hashes = {name: hashlib.sha256(Path(name).read_bytes()).hexdigest() for name in SOURCES}
     stage = (
-        "/tmp/oa-cap8-env/bin/python -m tests.gpu.prepare_publication_cap_precursor"
+        "/tmp/oa-cap4-env/bin/python -m tests.gpu.prepare_publication_cap_precursor"
         if args.cpu_only
         else f"""
-export PUBLICATION_CAP_RECEIPT=/tmp/oa-cap8-receipt.json
-if /tmp/oa-cap8-env/bin/python -m pytest -s -q -m vllm {NODEID}; then cap8_status=0; else cap8_status=$?; fi
-/tmp/oa-cap8-env/bin/python - <<'RECEIPT'
+export PUBLICATION_CAP_RECEIPT=/tmp/oa-cap4-receipt.json
+if /tmp/oa-cap4-env/bin/python -m pytest -s -q -m vllm {NODEID}; then cap4_status=0; else cap4_status=$?; fi
+/tmp/oa-cap4-env/bin/python - <<'RECEIPT'
 import hashlib,json
 from pathlib import Path
-path=Path('/tmp/oa-cap8-receipt.json')
+path=Path('/tmp/oa-cap4-receipt.json')
 if path.exists():
  data=path.read_bytes();digest=hashlib.sha256(data).hexdigest()
  parts=[data[i:i+3072].decode() for i in range(0,len(data),3072)]
- for i,part in enumerate(parts):print('CAP8_RECEIPT_PART '+json.dumps(dict(sha256=digest,part=i,parts=len(parts),payload=part)),flush=True)
-else:print('CAP8_RECEIPT_ABSENT before_native_test_receipt',flush=True)
+ for i,part in enumerate(parts):
+  row=dict(sha256=digest,part=i,parts=len(parts),payload=part)
+  print('CAP4_RECEIPT_PART '+json.dumps(row),flush=True)
+else:print('CAP4_RECEIPT_ABSENT before_native_test_receipt',flush=True)
 RECEIPT
-exit "$cap8_status"
+exit "$cap4_status"
 """
     )
     bootstrap = (
-        'UV_PROJECT_ENVIRONMENT=/tmp/oa-cap8-env uv sync --quiet --frozen --project "$cap8_root" '
+        'UV_PROJECT_ENVIRONMENT=/tmp/oa-cap4-env uv sync --quiet --frozen --project "$cap4_root" '
         "--python python3.12 --no-python-downloads --link-mode symlink "
         "--extra cpu --extra telemetry --group dev --group harbor-test"
         if args.cpu_only
-        else 'bash "$cap8_root/cloud/iris/bootstrap_runtime.sh" "$cap8_root" '
-        "/tmp/oa-cap8-env /tmp/oa-cap8-runtime megatron development\nsource /tmp/oa-cap8-runtime"
+        else 'bash "$cap4_root/cloud/iris/bootstrap_runtime.sh" "$cap4_root" '
+        "/tmp/oa-cap4-env /tmp/oa-cap4-runtime megatron development\nsource /tmp/oa-cap4-runtime"
     )
     body = f"""set -euo pipefail
-cap8_root="$PWD"
-export PYTHONPATH="$cap8_root/skyrl-train:$cap8_root/skyrl-gym:$cap8_root"
+cap4_root="$PWD"
+export PYTHONPATH="$cap4_root/skyrl-train:$cap4_root/skyrl-gym:$cap4_root"
 export HF_HOME=/tmp/oa-cache/huggingface
 export UV_CACHE_DIR=/tmp/oa-cache/uv
 export WANDB_MODE=disabled
@@ -106,7 +108,7 @@ import hashlib,json
 from pathlib import Path
 expected={hashes!r}
 for path,digest in expected.items():assert hashlib.sha256(Path(path).read_bytes()).hexdigest()==digest,path
-print('CAP8_SOURCE_PASS '+json.dumps(dict(msr={msr!r},marin={args.marin_commit!r},sha256=expected)),flush=True)
+print('CAP4_SOURCE_PASS '+json.dumps(dict(msr={msr!r},marin={args.marin_commit!r},sha256=expected)),flush=True)
 VERIFY
 {bootstrap}
 export PUBLICATION_CAP_SPEC="$(python3 - <<'SPEC'
@@ -114,8 +116,8 @@ import base64
 print(base64.b64decode({encoded!r}).decode())
 SPEC
 )"
-export PUBLICATION_CAP_MODEL=/tmp/oa-cap8-model
-/tmp/oa-cap8-env/bin/python -m tests.gpu.stage_publication_cap_model --output "$PUBLICATION_CAP_MODEL"
+export PUBLICATION_CAP_MODEL=/tmp/oa-cap4-model
+/tmp/oa-cap4-env/bin/python -m tests.gpu.stage_publication_cap_model --output "$PUBLICATION_CAP_MODEL"
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 {stage}
@@ -209,7 +211,7 @@ export TRANSFORMERS_OFFLINE=1
             ) as client:
                 job = client.submit(**kwargs)
                 print(
-                    "CAP8_SUBMITTED " + json.dumps({"job_id": str(job.job_id), "marin": args.marin_commit, "msr": msr}),
+                    "CAP4_SUBMITTED " + json.dumps({"job_id": str(job.job_id), "marin": args.marin_commit, "msr": msr}),
                     flush=True,
                 )
 
