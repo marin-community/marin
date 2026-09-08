@@ -66,6 +66,8 @@ def resolved(version, expected_msr_commit):
         weight_sync_interval=1,
         staleness=8,
         generation_workers=512,
+        max_num_seqs=4,
+        train_rows=2048,
         training_ignore_eos=True,
         eval_interval=20,
         screening_steps=20,
@@ -82,7 +84,7 @@ def resolved(version, expected_msr_commit):
     settings = yaml.safe_load(request.config_yaml)
     assert request.runtime.commit == expected_msr_commit and request.runtime.profile == "megatron"
     assert request.completion_mode == "metrics" and request.seed == 17
-    assert data_config.train_rows == 1024 and data_config.validation_rows == 128
+    assert data_config.train_rows == 2048 and data_config.validation_rows == 128
     assert settings["data"]["num_workers"] == 0 and settings["data"]["epoch_seeded_shuffle"]
     assert settings["trainer"]["max_steps"] == settings["trainer"]["eval_interval"] == 20
     assert settings["trainer"]["eval_before_train"]
@@ -95,6 +97,7 @@ def resolved(version, expected_msr_commit):
     assert settings["generator"]["publication_stage_timing"]
     assert settings["generator"]["inference_engine_serial_startup"]
     assert settings["generator"]["inference_stats_poll_seconds"] == 1.0
+    assert settings["generator"]["max_num_seqs"] == 4
     assert settings["generator"]["num_inference_engines"] == 8
     assert settings["generator"]["n_samples_per_prompt"] == 4
     assert settings["trainer"]["fully_async"]["num_parallel_generation_workers"] == 512
@@ -156,7 +159,7 @@ def coordinate():
     print("QWEN_WEIGHT_SYNC_NATIVE_LAUNCHER_DRY_RUN_PASS", flush=True)
     run(*training.deps, max_concurrent=2)
     selection = json.loads(StoragePath(selection_path).read_text())
-    assert selection["rows"]["train"] == [f"train/{i}" for i in range(1024)]
+    assert selection["rows"]["train"] == [f"train/{i}" for i in range(2048)]
     assert selection["rows"]["test"] == [f"test/{i}" for i in range(128)]
     print("QWEN_WEIGHT_SYNC_DATA_SELECTION_PASS", flush=True)
     with wandb.init(
