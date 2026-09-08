@@ -10,6 +10,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from experiments.post_training.curriculum_rl.pool import GSM8K_BIN, _pool_record
+from experiments.post_training.math_eval.audit_overlay import VERIFIER_REVISION, VERIFIER_SOURCES_SHA256
 from experiments.post_training.math_eval.pool import (
     SourceRows,
     build_pool,
@@ -17,7 +18,22 @@ from experiments.post_training.math_eval.pool import (
     prompt_length_report,
     write_pool,
 )
-from experiments.post_training.math_eval.sample import sample
+from experiments.post_training.math_eval.sample import sample as sample_pool
+
+
+def accepted_overlay(manifest, selection):
+    return {
+        "manifest_sha256": selection["manifest_sha256"],
+        "verifier_revision": VERIFIER_REVISION,
+        "verifier_sources_sha256": VERIFIER_SOURCES_SHA256,
+        "audit_source_sha256": "e" * 64,
+        "statuses": {row["prompt_sha256"]: "accept" for row in manifest},
+    }
+
+
+def sample(manifest, selection, *args, **kwargs):
+    overlay = kwargs.pop("audit_overlay", accepted_overlay(manifest, selection))
+    return sample_pool(manifest, selection, *args, audit_overlay=overlay, **kwargs)
 
 
 def source(questions, *, name="fixture", split="hash"):
@@ -153,3 +169,38 @@ def test_prefreeze_eligibility_requires_exact_audited_lengths_and_membership():
         build(inputs, cap=700, eligibility=changed)
     with pytest.raises(ValueError, match="absent rows"):
         build([], cap=700, eligibility=eligibility)
+
+
+@pytest.mark.parametrize("status", ["pending", "flag", "reject"])
+def test_sampler_requires_explicit_audit_acceptance(status):
+    pool = build([source(["A unique benchmark question"], split="heldout")])
+    overlay = accepted_overlay(pool.manifest, pool.selection)
+    overlay["statuses"][pool.manifest[0]["prompt_sha256"]] = status
+    with pytest.raises(ValueError, match="no eligible rows"):
+        sample(
+            pool.manifest, pool.selection, [GSM8K_BIN.name], 1, 17, model="qwen", split="heldout", audit_overlay=overlay
+        )
+
+
+@pytest.mark.parametrize(
+    "field", ["manifest_sha256", "verifier_revision", "verifier_sources_sha256", "audit_source_sha256"]
+)
+def test_sampler_rejects_audit_proofs_with_foreign_identity(field):
+    pool = build([source(["A unique benchmark question"], split="heldout")])
+    overlay = accepted_overlay(pool.manifest, pool.selection)
+    overlay[field] = "foreign"
+    with pytest.raises(ValueError, match="not bound"):
+        sample(
+            pool.manifest, pool.selection, [GSM8K_BIN.name], 1, 17, model="qwen", split="heldout", audit_overlay=overlay
+        )
+
+
+@pytest.mark.parametrize("value", [{}, {"unknown": "accept"}, None])
+def test_sampler_rejects_missing_or_unknown_audit_verdicts(value):
+    pool = build([source(["A unique benchmark question"], split="heldout")])
+    overlay = accepted_overlay(pool.manifest, pool.selection)
+    overlay["statuses"] = value if value is not None else {pool.manifest[0]["prompt_sha256"]: "unknown"}
+    with pytest.raises(ValueError, match=r"exactly|Unknown"):
+        sample(
+            pool.manifest, pool.selection, [GSM8K_BIN.name], 1, 17, model="qwen", split="heldout", audit_overlay=overlay
+        )

@@ -9,6 +9,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from experiments.post_training.math_eval.audit_overlay import validated_statuses
 from experiments.post_training.math_eval.pool import SPLIT_PRIORITY, canonical_json
 
 
@@ -27,6 +28,7 @@ def sample(
     *,
     model: str,
     split: str,
+    audit_overlay: Mapping[str, Any],
     exclude: frozenset[str] = frozenset(),
 ) -> Sample:
     """Return a deterministic selection and its call/result hashes.
@@ -48,13 +50,14 @@ def sample(
         raise ValueError("Split membership does not match the frozen selection")
     if hashlib.sha256(canonical_json(locks).encode()).hexdigest() != selection["heldout_lock_sha256"]:
         raise ValueError("Heldout lock hash changed")
+    statuses, overlay_sha256 = validated_statuses(manifest, selection, audit_overlay)
     rows = [
         row
         for row in ordered
         if row["split"] == split
         and row["bin"] in bins
         and row["prompt_sha256"] not in exclude
-        and row["audit_status"] != "reject"
+        and statuses[row["prompt_sha256"]] == "accept"
     ]
     if set(bins) != {row["bin"] for row in rows}:
         raise ValueError("Requested bin has no eligible rows in this split")
@@ -62,6 +65,7 @@ def sample(
         raise ValueError(f"Requested {n} rows but only {len(rows)} remain in {split}")
     chosen = random.Random(seed).sample(rows, n)
     call = {
+        "audit_overlay_sha256": overlay_sha256,
         "pool_version": selection["pool_version"],
         "manifest_sha256": manifest_hash,
         "bins": sorted(bins),
