@@ -654,7 +654,7 @@ class TaggedEvaluator(Generic[Ex, M]):
             this_weights_per_tag = jnp.einsum("bt,bk->k", weights, tags, out_sharding=per_tag_out_sharding)
             this_loss_per_tag = jnp.einsum("bt,bk->k", weighted_loss, tags, out_sharding=per_tag_out_sharding)
 
-            mean = state.token_avg_loss.add(this_loss / jnp.maximum(this_weights, 1.0), this_weights)
+            mean = state.token_avg_loss.add(this_loss / jnp.where(this_weights > 0, this_weights, 1.0), this_weights)
             state = dataclasses.replace(state, token_avg_loss=mean)
 
             if len(self.dataset.tag_to_index) > 0:

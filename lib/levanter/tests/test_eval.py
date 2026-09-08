@@ -406,11 +406,11 @@ def test_document_losses_preserve_segments_weights_and_identity(tmp_path, shuffl
     EvalBatch = Axis("batch", max(2, len(jax.devices())))
     examples = [
         LmExample.causal(
-            hax.named(jnp.array([1, 2, 3, 4, 5, 6]), Pos),
+            hax.named(jnp.array([1, 2, 3, 4, 5, 6]) + index, Pos),
             loss_weight=hax.named(jnp.array([1.0, 0.0, 0.5, 1.0, 0.0, 0.0]), Pos),
             segment_ids=hax.named(jnp.array([0, 0, 0, 1, 1, 1]), Pos),
         )
-        for _ in range(3)
+        for index in range(3)
     ]
     datasets = [(ListAsyncDataset(examples[:2]), ["a"]), (ListAsyncDataset(examples[2:]), ["b"])]
 
@@ -433,45 +433,58 @@ def test_document_losses_preserve_segments_weights_and_identity(tmp_path, shuffl
     records = [json.loads(line) for line in output.read_text().splitlines()]
     records.sort(key=lambda r: (r["dataset_index"], r["example_index"], r["segment_index"]))
     assert len(records) == 6
-    for offset, (dataset_index, example_index, tag) in enumerate([(0, 0, "a"), (0, 1, "a"), (1, 0, "b")]):
+    for offset, (dataset_index, example_index, tag, first_loss, second_loss) in enumerate(
+        [(0, 0, "a", 1.0, 5.5), (0, 1, "a", 2.0, 7.0), (1, 0, "b", 3.0, 8.5)]
+    ):
         first, second = records[2 * offset : 2 * offset + 2]
         assert first == dict(
             dataset_index=dataset_index,
             dataset_tags=[tag],
             example_index=example_index,
             segment_index=0,
-            loss_sum=1.0,
+            loss_sum=first_loss,
             token_count=1,
             token_weight=1.0,
-            mean_loss=1.0,
+            mean_loss=first_loss,
         )
         assert second == dict(
             dataset_index=dataset_index,
             dataset_tags=[tag],
             example_index=example_index,
             segment_index=1,
-            loss_sum=5.5,
+            loss_sum=second_loss,
             token_count=2,
             token_weight=1.5,
-            mean_loss=5.5 / 1.5,
+            mean_loss=second_loss / 1.5,
         )
     reconstructed = sum(r["loss_sum"] for r in records) / sum(r["token_weight"] for r in records)
-    np.testing.assert_allclose(result.micro_avg_loss, 2.6, rtol=1e-5)
+    np.testing.assert_allclose(result.micro_avg_loss, 3.6, rtol=1e-5)
     np.testing.assert_allclose(reconstructed, result.micro_avg_loss, rtol=1e-5)
     assert baseline.micro_avg_loss == result.micro_avg_loss
     assert baseline.tag_micro_losses == result.tag_micro_losses
 
 
-def test_document_losses_include_masked_grug_examples_and_skip_padding(tmp_path):
+@pytest.mark.parametrize("weight", [0.0, 0.5])
+def test_document_losses_include_masked_grug_examples_and_skip_padding(tmp_path, weight):
     EvalBatch = Axis("batch", max(2, len(jax.devices())))
-    examples = [GrugLmExample.causal(jnp.array([3], dtype=jnp.int32))]
+    examples = [
+        (
+            GrugLmExample.causal(jnp.array([3], dtype=jnp.int32))
+            if weight == 0
+            else GrugLmExample.causal(
+                jnp.array([3, 4, 0, 0]),
+                segment_ids=jnp.array([0, 0, -1, -1]),
+                loss_weight=jnp.array([weight, 0.0, 0.0, 0.0]),
+            )
+        )
+    ]
 
     def loss_fn(_model, batch):
-        return jnp.ones_like(batch.loss_weight), batch.loss_weight, batch.tokens
+        return 2 * jnp.ones_like(batch.loss_weight), batch.loss_weight, batch.tokens
 
     output = tmp_path / "masked.jsonl"
     with use_test_mesh(tensor_parallelism=1) as mesh:
-        TaggedEvaluator(
+        result = TaggedEvaluator(
             EvalBatch=EvalBatch,
             tagged_eval_sets=[(ListAsyncDataset(examples), ["masked"])],
             loss_fn=loss_fn,
@@ -485,9 +498,11 @@ def test_document_losses_include_masked_grug_examples_and_skip_padding(tmp_path)
             dataset_tags=["masked"],
             example_index=0,
             segment_index=0,
-            loss_sum=0.0,
-            token_count=0,
-            token_weight=0.0,
-            mean_loss=None,
+            loss_sum=2 * weight,
+            token_count=int(weight > 0),
+            token_weight=weight,
+            mean_loss=2.0 if weight else None,
         )
     ]
+
+    assert result.micro_avg_loss == (2.0 if weight else 0.0)
