@@ -48,6 +48,7 @@ export PYTHONPATH="$publication_root/skyrl-train:$publication_root/skyrl-gym:$pu
 export HF_HOME=/tmp/oa-cache/huggingface
 export UV_CACHE_DIR=/tmp/oa-cache/uv
 export WANDB_MODE=disabled
+export LOGURU_LEVEL=INFO
 export RAY_ENABLE_UV_RUN_RUNTIME_ENV=0
 python3 - <<'VERIFY'
 import hashlib,json
