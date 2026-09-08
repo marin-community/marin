@@ -1160,8 +1160,10 @@ fn forwarding_attributes(namespace: &str, outcome: &str) -> BTreeMap<String, Str
     ])
 }
 
-/// Start the forward loop on the runtime, returning its handle. The caller latches
-/// `stop` and awaits the handle at shutdown.
+/// Start the forward loop on the runtime, returning its handle.
+///
+/// Tests and embedders may request a cooperative stop through `stop`; the server
+/// process aborts the handle during shutdown.
 pub fn spawn<T>(forwarder: Arc<Forwarder<T>>, stop: watch::Receiver<bool>) -> JoinHandle<()>
 where
     T: connectrpc::client::ClientTransport + Send + Sync + 'static,

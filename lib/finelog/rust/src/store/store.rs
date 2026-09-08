@@ -565,10 +565,12 @@ impl Store {
             return Ok(false);
         }
         if local_revision == remote_revision {
-            let local_matches = self.namespace_dir(namespace)?.is_some_and(|table_dir| {
-                namespace_catalog(&self.catalog, namespace, &table_dir)
-                    .is_ok_and(|local| local == state)
-            });
+            let local_matches = match self.namespace_dir(namespace)? {
+                Some(table_dir) => {
+                    namespace_catalog(&self.catalog, namespace, &table_dir)? == state
+                }
+                None => false,
+            };
             if local_matches {
                 return Ok(false);
             }

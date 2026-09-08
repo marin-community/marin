@@ -238,9 +238,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = ServerConfig::with_debug_admin(args.debug_admin).with_auth(auth);
     let app = build_app_with_config(Arc::clone(&store), config);
 
-    // Cross-cluster forwarding, when configured. Spawned before the listener binds
-    // so a store with a backlog starts draining immediately, and latched off in the
-    // shutdown block below.
+    // Cross-cluster forwarding starts before the listener binds so an existing
+    // backlog drains immediately. Keep the sender alive while serving; shutdown
+    // aborts the task after the listener stops.
     let (_forward_stop, forward_task) = match &forwarder {
         Some(forwarder) => {
             let (tx, rx) = tokio::sync::watch::channel(false);
