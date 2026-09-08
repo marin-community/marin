@@ -204,6 +204,8 @@ def training_config(
     publication_stage_timing: bool = False,
     epoch_seeded_shuffle: bool = False,
     dataloader_workers: int | None = None,
+    eval_on_installed_weights: bool = False,
+    eval_mode: str = "blocking",
     study_steps: int | None = None,
     eval_interval: int | None = None,
 ) -> str:
@@ -324,6 +326,14 @@ def training_config(
     apply_observation_options(
         config, initial_eval_repeat_count=initial_eval_repeat_count, weight_change_probe=weight_change_probe
     )
+    if type(eval_on_installed_weights) is not bool or eval_mode not in ("blocking", "background"):
+        raise ValueError("Evaluation scheduling requires a boolean installed flag and blocking/background mode")
+    if eval_on_installed_weights or eval_mode != "blocking":
+        if runner is not Runner.ASYNC:
+            raise ValueError("Installed/background evaluation is supported only by the async runner")
+        if eval_mode == "background" and not eval_on_installed_weights:
+            raise ValueError("Background evaluation requires installed weights")
+        config["trainer"]["fully_async"].update(eval_on_installed_weights=eval_on_installed_weights, eval_mode=eval_mode)
     if publication_stage_timing:
         config.setdefault("generator", {}).update(publication_stage_timing=True, inference_stats_poll_seconds=1.0)
     if dataloader_workers is not None:
@@ -355,6 +365,8 @@ def build_experiment(
     publication_stage_timing: bool = False,
     epoch_seeded_shuffle: bool = False,
     dataloader_workers: int | None = None,
+    eval_on_installed_weights: bool = False,
+    eval_mode: str = "blocking",
     study_steps: int | None = None,
     eval_interval: int | None = None,
     seed: int = SEED,
@@ -418,6 +430,8 @@ def build_experiment(
         publication_stage_timing=publication_stage_timing,
         epoch_seeded_shuffle=epoch_seeded_shuffle,
         dataloader_workers=dataloader_workers,
+        eval_on_installed_weights=eval_on_installed_weights,
+        eval_mode=eval_mode,
         study_steps=study_steps,
         eval_interval=eval_interval,
     )
@@ -511,6 +525,10 @@ def build_experiment(
 @click.option(
     "--dataloader-workers", type=click.IntRange(min=0), help="Override loader workers; zero avoids spawn stalls."
 )
+@click.option(
+    "--eval-on-installed-weights", is_flag=True, help="Evaluate the installed async policy without off-grid sync."
+)
+@click.option("--eval-mode", type=click.Choice(["blocking", "background"]), default="blocking", show_default=True)
 @click.option("--train-rows", type=click.IntRange(min=1, max=7473), default=1024, show_default=True)
 @click.option("--study-steps", type=click.IntRange(min=1), help="Qualification-only update count; defaults to 25.")
 @click.option("--eval-interval", type=click.IntRange(min=1), help="Evaluation cadence; must divide the update count.")
@@ -537,6 +555,8 @@ def main(
     publication_stage_timing: bool,
     epoch_seeded_shuffle: bool,
     dataloader_workers: int | None,
+    eval_on_installed_weights: bool,
+    eval_mode: str,
     train_rows: int,
     study_steps: int | None,
     eval_interval: int | None,
@@ -564,6 +584,8 @@ def main(
         publication_stage_timing=publication_stage_timing,
         epoch_seeded_shuffle=epoch_seeded_shuffle,
         dataloader_workers=dataloader_workers,
+        eval_on_installed_weights=eval_on_installed_weights,
+        eval_mode=eval_mode,
         study_steps=study_steps,
         eval_interval=eval_interval,
         seed=seed,
