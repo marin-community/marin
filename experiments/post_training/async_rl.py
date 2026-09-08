@@ -235,6 +235,8 @@ def training_config(
     seeded_sampling_control: bool = False,
     symmetric_weight_sync_environment: bool = False,
     dataloader_workers: int | None = None,
+    publication_stage_timing: bool = False,
+    serial_engine_startup: bool = False,
     optimizer_precision: OptimizerPrecision = OptimizerPrecision.NATIVE,
     optimizer_state_metrics: bool = False,
     eval_on_installed_weights: bool = False,
@@ -377,6 +379,14 @@ def training_config(
         if eval_mode == "background" and not eval_on_installed_weights:
             raise ValueError("Background evaluation requires installed weights")
         trainer["fully_async"].update(eval_on_installed_weights=eval_on_installed_weights, eval_mode=eval_mode)
+    if type(serial_engine_startup) is not bool:
+        raise ValueError("serial_engine_startup must be a boolean")
+    if serial_engine_startup:
+        config.setdefault("generator", {})["inference_engine_serial_startup"] = True
+    if type(publication_stage_timing) is not bool:
+        raise ValueError("publication_stage_timing must be a boolean")
+    if publication_stage_timing:
+        config.setdefault("generator", {}).update(publication_stage_timing=True, inference_stats_poll_seconds=1.0)
     if dataloader_workers is not None:
         if type(dataloader_workers) is not int or dataloader_workers < 0:
             raise ValueError("dataloader_workers must be a nonnegative integer")
@@ -561,6 +571,8 @@ def build_experiment(
     seeded_sampling_control: bool = False,
     symmetric_weight_sync_environment: bool = False,
     dataloader_workers: int | None = None,
+    publication_stage_timing: bool = False,
+    serial_engine_startup: bool = False,
     optimizer_precision: OptimizerPrecision = OptimizerPrecision.NATIVE,
     optimizer_state_metrics: bool = False,
     eval_on_installed_weights: bool = False,
@@ -610,6 +622,8 @@ def build_experiment(
         dataloader_workers=dataloader_workers,
         eval_on_installed_weights=eval_on_installed_weights,
         eval_mode=eval_mode,
+        publication_stage_timing=publication_stage_timing,
+        serial_engine_startup=serial_engine_startup,
         optimizer_precision=optimizer_precision,
         optimizer_state_metrics=optimizer_state_metrics,
     )
@@ -776,6 +790,8 @@ def build_experiment(
 @click.option(
     "--dataloader-workers", type=click.IntRange(min=0), help="Override loader workers; zero avoids spawn stalls."
 )
+@click.option("--publication-stage-timing/--no-publication-stage-timing", default=False, show_default=True)
+@click.option("--serial-engine-startup/--no-serial-engine-startup", default=False, show_default=True)
 @click.option("--inference-replicas", type=click.Choice(["8", "16"]), default="8", show_default=True)
 @click.option("--seed", type=click.IntRange(min=0, max=2**32 - 1), default=SEED, show_default=True)
 @click.option("--kl-loss/--no-kl-loss", default=True, show_default=True)
@@ -863,6 +879,8 @@ def main(
     seeded_sampling_control: bool,
     symmetric_weight_sync_environment: bool,
     dataloader_workers: int | None,
+    publication_stage_timing: bool,
+    serial_engine_startup: bool,
     timeout_seconds: int,
     execute: bool,
     pool_artifact: str | None,
@@ -913,6 +931,8 @@ def main(
         dataloader_workers=dataloader_workers,
         eval_on_installed_weights=eval_on_installed_weights,
         eval_mode=eval_mode,
+        publication_stage_timing=publication_stage_timing,
+        serial_engine_startup=serial_engine_startup,
     )
     prefix = marin_prefix()
     if allow_cross_region_io:
