@@ -7,11 +7,41 @@ Inputs are exact-run normalized native events, not summaries inferred from plots
 The collector retains its SQL, source identity, task receipts and unmodified rows.
 """
 
+import hashlib
+import json
 import math
-from collections import Counter
+from collections import Counter, defaultdict
 from itertools import pairwise
 from statistics import median
 from typing import Any
+
+
+def reassemble_request_receipts(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Recover exact byte-bounded states, rejecting incomplete or conflicting parts."""
+    groups = defaultdict(list)
+    moments = {"initial": -1, "before_pause": 0, "after_pause": 1, "after_resume": 2, "final": 3}
+    for event in events:
+        assert event["moment"] in moments, "unknown receipt moment"
+        groups[event["engine_index"], event["step"], event["moment"]].append(event)
+    receipts = []
+    for (engine, step, moment), parts in groups.items():
+        first = parts[0]
+        count, size = first["part_count"], first["receipt_bytes"]
+        assert type(count) is int and type(size) is int and 0 < size <= 1 << 20, "receipt bound"
+        assert count == (size + 3071) // 3072 and len(parts) == count, "receipt part coverage"
+        assert {part["part_index"] for part in parts} == set(range(count)), "duplicate or missing receipt part"
+        assert all(type(part["part_index"]) is int for part in parts), "receipt part index"
+        assert all(
+            (part["part_count"], part["receipt_bytes"], part["receipt_sha256"]) == (count, size, first["receipt_sha256"])
+            for part in parts
+        ), "conflicting receipt metadata"
+        ordered = sorted(parts, key=lambda part: part["part_index"])
+        chunks = [part["receipt_json"].encode("ascii") for part in ordered]
+        assert all(len(chunk) == 3072 for chunk in chunks[:-1]) and 0 < len(chunks[-1]) <= 3072, "chunk bound"
+        payload = b"".join(chunks)
+        assert len(payload) == size and hashlib.sha256(payload).hexdigest() == first["receipt_sha256"], "receipt digest"
+        receipts.append({"engine_index": engine, "step": step, "moment": moment, "state": json.loads(payload)})
+    return sorted(receipts, key=lambda receipt: (receipt["engine_index"], receipt["step"], moments[receipt["moment"]]))
 
 
 def audit_requests(receipts: list[dict[str, Any]], *, steps=20, engines=8):
@@ -115,6 +145,24 @@ def audit_stale_tokens(calls, outcomes):
     assert {row["call_id"] for row in outcomes} == set(completed), "completed group coverage"
     stale = total = 0
     for row in outcomes:
+        # Frozen producer vocabulary: explicit terminals in fully_async_trainer,
+        # AdmissionRejection values, and rejected GroupSelectionResult values.
+        assert row["outcome"] in {
+            "consumed",
+            "epoch_discarded",
+            "stale_enqueue",
+            "shutdown_pending",
+            "cancelled_before_enqueue",
+            "failed_before_enqueue",
+            "duplicate",
+            "stale",
+            "fully_masked",
+            "physical_group_size",
+            "below_minimum_group_size",
+            "missing_rollout_logprobs",
+            "duplicate_uid",
+            "dynamic_insufficient_reward_spread",
+        }, "unknown group outcome"
         tokens = row["tokens"]
         assert type(tokens) is int and tokens >= 0, "token count"
         assert tokens == completed[row["call_id"]]["response_tokens"], "call/group token disagreement"
@@ -131,8 +179,9 @@ def audit_stale_tokens(calls, outcomes):
     }
 
 
-def audit_matched_gate(baseline, candidate):
+def audit_matched_gate(baseline, candidate, *, task_gpu_hours_ceiling: float):
     """Apply the frozen pause and stale-token thresholds without window exclusions."""
+    assert math.isfinite(task_gpu_hours_ceiling) and task_gpu_hours_ceiling > 0, "invalid allocation ceiling"
     assert baseline["config_identity"] == candidate["config_identity"], "unmatched recipe"
     results: dict[str, Any] = {}
     for name, arm in (("baseline", baseline), ("candidate", candidate)):
@@ -141,7 +190,7 @@ def audit_matched_gate(baseline, candidate):
         assert len(arm["pause_seconds"]) == 20 and all(
             math.isfinite(value) and value >= 0 for value in arm["pause_seconds"]
         ), "pause coverage"
-        assert 0 < arm["task_gpu_hours"] <= 4, "arm budget"
+        assert 0 < arm["task_gpu_hours"] <= task_gpu_hours_ceiling, "arm budget"
         results[name] = {"pause_p50": median(arm["pause_seconds"]), **audit_stale_tokens(arm["calls"], arm["outcomes"])}
     assert min(baseline["pause_seconds"]) >= 5.0, "baseline grace absent"
     assert results["candidate"]["pause_p50"] < 0.3, "pause threshold"
@@ -149,4 +198,33 @@ def audit_matched_gate(baseline, candidate):
         results["candidate"]["stale_fraction"] <= results["baseline"]["stale_fraction"]
     ), "stale-token fraction increased"
     results["requests"] = audit_requests(candidate["request_receipts"])
+    return results
+
+
+def audit_stress_work(arm):
+    """Reject forced-length mask collapse and incomplete native exporter accounting."""
+    assert arm["consumed_sequences"] == 5120, "stress sequence coverage"
+    assert arm["consumed_response_tokens"] == arm["consumed_loss_tokens"] == 5120 * 1024, "stress loss-mask coverage"
+    assert arm["consumed_length_stops"] == 5120, "stress forced-length coverage"
+    consumed = [row for row in arm["outcomes"] if row["outcome"] == "consumed"]
+    assert len(consumed) == 1280 and all(row["tokens"] == 4 * 1024 for row in consumed), "stress group coverage"
+    terminals = arm["exporter_terminals"]
+    assert Counter(row["role"] for row in terminals) == Counter(
+        {"trainer": 1, "driver": 1, "controller": 1, "worker": 1}
+    ), "missing or duplicate exporter terminal"
+    assert all(
+        row["export_lost_records"] == row["export_queued_records"] == 0
+        and row["reason"] == "normal_exit"
+        and row["status"] == "completed"
+        for row in terminals
+    ), "exporter loss or incomplete drain"
+
+
+def audit_matched_stress_gate(baseline, candidate, *, task_gpu_hours_ceiling: float):
+    """Apply the prospectively matched active-load protocol without weakening the original gate."""
+    for arm in (baseline, candidate):
+        audit_stress_work(arm)
+    results = audit_matched_gate(baseline, candidate, task_gpu_hours_ceiling=task_gpu_hours_ceiling)
+    results["baseline_requests"] = audit_requests(baseline["request_receipts"])
+    assert results["requests"]["pause_cohort_requests"] >= 64, "insufficient active stress cohort"
     return results

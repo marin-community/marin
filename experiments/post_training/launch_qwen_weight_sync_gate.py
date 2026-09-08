@@ -34,6 +34,7 @@ SOURCES = (
     "config/external/MarinSkyRL/pyproject.toml",
     "config/external/MarinSkyRL/uv.lock",
     "experiments/post_training/async_rl.py",
+    "experiments/post_training/async_rl_weight_sync_audit.py",
     "experiments/post_training/launch_qwen_weight_sync_gate.py",
     "lib/marin/src/marin/external_dependencies.py",
     "lib/marin/src/marin/rl/skyrl.py",
