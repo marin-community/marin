@@ -9,6 +9,7 @@ from experiments.post_training.async_rl_correction_audit import (
     CORRECTION_FIELDS,
     audit_completed_noise_band,
     audit_correction_history,
+    audit_source_control,
 )
 
 
@@ -127,3 +128,17 @@ def test_noise_band_uses_completed_scores_and_equality_boundary():
     assert audit_completed_noise_band(baseline, repeat, candidate)["within_noise_band"]
     candidate[7] = 0
     assert not audit_completed_noise_band(baseline, repeat, candidate)["within_noise_band"]
+
+
+def test_source_control_checks_batches_before_their_union():
+    reference = {step: [str(index) for index in range((step - 1) * 64, step * 64)] for step in range(1, 9)}
+    reordered = {step: list(reversed(values)) for step, values in reference.items()}
+    assert audit_source_control(reference, reordered)["matched_batches"] == 8
+    combined = {1: [uid for values in reference.values() for uid in values]}
+    assert audit_source_control(reference, combined)["source_groups"] == 512
+    reordered[1][0], reordered[2][0] = reordered[2][0], reordered[1][0]
+    with pytest.raises(ValueError, match="Per-batch"):
+        audit_source_control(reference, reordered)
+    combined[1][-1] = combined[1][0]
+    with pytest.raises(ValueError, match="distinct"):
+        audit_source_control(reference, combined)
