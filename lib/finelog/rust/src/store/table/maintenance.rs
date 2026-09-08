@@ -261,13 +261,7 @@ async fn cycle(
             let retirement = relay_retirement::maintain(runtime, target).await?;
             runtime.controller.gc_objects().await?;
             run_one(runtime, TableWork::ObjectCollection).await?;
-            if retirement.has_more_work() {
-                return Ok(WorkOutcome::MoreWork);
-            }
-            let compacted = run_one(runtime, TableWork::Compaction { force_compact_l0 })
-                .await?
-                .has_more_work();
-            return Ok(WorkOutcome::from_pending(compacted));
+            return Ok(retirement);
         }
         // Report pending while compaction keeps finding runs: an L0 backlog
         // then drains at the fast re-poll cadence through the dedicated slot

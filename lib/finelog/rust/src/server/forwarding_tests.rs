@@ -1530,6 +1530,50 @@ async fn an_object_native_relay_retires_only_hub_settled_segments() {
     assert!(reopened.list_segments(EVENTS).unwrap().is_empty());
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_object_native_relay_never_compacts_its_unsettled_spool() {
+    const EVENTS: &str = "events";
+    let source_data = crate::test_support::unique_dir("relay_no_compaction_data");
+    let source_remote = crate::test_support::unique_dir("relay_no_compaction_remote");
+    let source = Arc::new(
+        Store::new(
+            Some(source_data.clone()),
+            source_remote.to_string_lossy().into_owned(),
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            crate::store::ServeMode::Shadow,
+        )
+        .unwrap(),
+    );
+    source
+        .register_table(
+            EVENTS,
+            Schema::new(
+                vec![Column::new("id", ColumnType::COLUMN_TYPE_STRING, false)],
+                "id",
+            ),
+            StoragePolicy::default(),
+        )
+        .unwrap();
+    source
+        .register_versioned_table(EVENTS, id_object_spec())
+        .unwrap();
+    source.publish_object_catalog(EVENTS).await.unwrap();
+    drive_object_activation(&source, EVENTS, 8).await;
+    source.configure_relay("http://127.0.0.1:1".to_string());
+
+    durable_id_rows(&source, EVENTS, 0..10).await;
+    durable_id_rows(&source, EVENTS, 10..20).await;
+    source.maintain_namespace(EVENTS, true).await.unwrap();
+
+    let segments = source.list_segments(EVENTS).unwrap();
+    assert_eq!(segments.len(), 2);
+    assert!(segments.iter().all(|segment| segment.level == 0));
+
+    source.shutdown(Duration::from_secs(1)).await;
+    std::fs::remove_dir_all(source_data).ok();
+    std::fs::remove_dir_all(source_remote).ok();
+}
+
 /// Restarting the forwarding node mid-migration loses nothing: the forward
 /// watermark and the migration checkpoint are both durable, so the reopened
 /// store finishes the migration and resumes shipping from where it stopped,

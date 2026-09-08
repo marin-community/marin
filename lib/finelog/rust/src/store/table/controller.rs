@@ -110,11 +110,6 @@ enum ControllerCommand {
     PublishOwed(oneshot::Sender<Result<(), StatsError>>),
     Claim(oneshot::Sender<Result<(), StatsError>>),
     Tombstone(oneshot::Sender<Result<(), StatsError>>),
-    GcStates {
-        now_ms: i64,
-        policy: StateGcPolicy,
-        reply: oneshot::Sender<Result<usize, StatsError>>,
-    },
 }
 
 const COMMAND_QUEUE_DEPTH: usize = 32;
@@ -613,17 +608,21 @@ impl TableController {
     }
 
     /// Remove superseded state documents and unreferenced objects.
+    ///
+    /// Collection runs outside the publication mailbox: state pin retention
+    /// protects a newly written document until long after its HEAD swap, and
+    /// orphan grace similarly protects newly written data objects. The state
+    /// store also verifies this writer's fence before deleting anything. A
+    /// slow listing or deletion therefore cannot delay a durability commit.
     pub(crate) async fn gc_published(
         &self,
         now_ms: i64,
         policy: StateGcPolicy,
     ) -> Result<usize, StatsError> {
-        self.dispatch(|reply| ControllerCommand::GcStates {
-            now_ms,
-            policy,
-            reply,
-        })
-        .await?
+        self.require_objects()?
+            .state_store
+            .gc_obsolete_states(&self.table, now_ms, policy, self.fence)
+            .await
     }
 
     /// Take a lease for one compaction.
@@ -1152,14 +1151,6 @@ impl TableController {
             .send_replace(Some(Arc::new(TableSnapshot::from_stored(&tombstoned))));
         Ok(())
     }
-
-    async fn run_gc_states(&self, now_ms: i64, policy: StateGcPolicy) -> Result<usize, StatsError> {
-        let objects = self.require_objects()?;
-        objects
-            .state_store
-            .gc_obsolete_states(&self.table, now_ms, policy, self.fence)
-            .await
-    }
 }
 
 /// The controller task: the only publisher of one table's durable state.
@@ -1218,13 +1209,6 @@ async fn run_controller(
             }
             ControllerCommand::Tombstone(reply) => {
                 let _ = reply.send(controller.run_tombstone().await);
-            }
-            ControllerCommand::GcStates {
-                now_ms,
-                policy,
-                reply,
-            } => {
-                let _ = reply.send(controller.run_gc_states(now_ms, policy).await);
             }
         }
     }
@@ -1827,6 +1811,52 @@ mod tests {
         let second = controller.publish_state().await.unwrap();
         assert_eq!(second.revision().get(), 2);
         assert!(!controller.publication_owed());
+    }
+
+    #[tokio::test]
+    async fn object_collection_does_not_block_a_durability_publication() {
+        let (controller, _states, faults) = faulted_controller("controller_gc_publish", 11);
+        controller.publish_state().await.unwrap();
+        let gate = crate::test_support::FaultGate::new();
+        faults.arm(ObjectFault::new(
+            ObjectOp::List,
+            ObjectPattern::Contains("/catalogs".to_string()),
+            FaultAction::Park(gate.clone()),
+        ));
+        let collection = {
+            let controller = Arc::clone(&controller);
+            tokio::spawn(async move {
+                controller
+                    .gc_published(
+                        crate::store::table::now_ms(),
+                        StateGcPolicy {
+                            pin_retention_ms: 600_000,
+                            state_retention_ms: 600_000,
+                            orphan_grace_ms: 86_400_000,
+                            sweep_orphans: false,
+                        },
+                    )
+                    .await
+                    .unwrap()
+            })
+        };
+        gate.entered().await;
+
+        controller
+            .catalog
+            .set_forward_cursor("hub", TABLE, 5)
+            .unwrap();
+        let published = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            controller.publish_state(),
+        )
+        .await
+        .expect("publication must not wait for object collection")
+        .unwrap();
+        assert_eq!(published.revision().get(), 2);
+
+        gate.release();
+        collection.await.unwrap();
     }
 
     #[tokio::test(start_paused = true)]
