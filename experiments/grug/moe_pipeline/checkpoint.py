@@ -22,6 +22,8 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from experiments.grug.moe_pipeline.pipeline import GrugMoeAutomaticPipelineState, _jaxpp_modules, jaxpp
 
 _FORMAT_VERSION = 1
+_METADATA_FILE = "metadata.json"
+_LATEST_FILE = "latest.json"
 
 
 def checkpoint_arrays(state: GrugMoeAutomaticPipelineState) -> GrugMoeAutomaticPipelineState:
@@ -70,9 +72,9 @@ def save_checkpoint(root: str, state: GrugMoeAutomaticPipelineState, *, step: in
     }
 
     def commit():
-        with atomic_rename(prefix_join(path, "metadata.json")) as temporary_path:
+        with atomic_rename(prefix_join(path, _METADATA_FILE)) as temporary_path:
             StoragePath(temporary_path).write_text(json.dumps(metadata, sort_keys=True))
-        with atomic_rename(prefix_join(root, "latest.json")) as temporary_path:
+        with atomic_rename(prefix_join(root, _LATEST_FILE)) as temporary_path:
             StoragePath(temporary_path).write_text(json.dumps({"checkpoint": StoragePath(path).name, "step": step}))
 
     tree_serialize_leaves_tensorstore(path, arrays, commit_callback=commit)
@@ -91,15 +93,15 @@ def restore_checkpoint(
     The compiled step supplies the exact MPMD placement. Model configuration,
     schedule, and process topology must match the saved checkpoint.
     """
-    latest_path = StoragePath(prefix_join(root, "latest.json"))
+    latest_path = StoragePath(prefix_join(root, _LATEST_FILE))
     latest = None
     if latest_path.exists():
         latest = json.loads(latest_path.read_text())
-        metadata_path = StoragePath(root) / latest["checkpoint"] / "metadata.json"
+        metadata_path = StoragePath(root) / latest["checkpoint"] / _METADATA_FILE
     else:
         # Recover a fully written first checkpoint if publication of latest.json
         # was interrupted. Normal resumes need no checkpoint-directory listing.
-        checkpoints = StoragePath(prefix_join(root, "step-*/metadata.json")).glob()
+        checkpoints = (StoragePath(root) / "step-*" / _METADATA_FILE).glob()
         if not checkpoints:
             return state, 0
         metadata_path = max(checkpoints, key=str)
