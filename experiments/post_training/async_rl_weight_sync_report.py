@@ -59,6 +59,7 @@ def build_report(inputs: Path, output: Path) -> dict:
         fontsize=9,
     )
     fig.savefig(output / "whole-sync.png", dpi=180)
+    fig.savefig(output / "whole-sync.svg")
     plt.close(fig)
 
     stages = ["export", "nccl_send", "rpc_wait", "barrier", "reload_finalize", "recv", "load", "finalize"]
@@ -102,6 +103,7 @@ def build_report(inputs: Path, output: Path) -> dict:
         fontsize=9,
     )
     fig.savefig(output / "sync-stages.png", dpi=180)
+    fig.savefig(output / "sync-stages.svg")
     plt.close(fig)
 
     intervals = token["intervals"]
@@ -148,6 +150,7 @@ def build_report(inputs: Path, output: Path) -> dict:
         fontsize=9,
     )
     fig.savefig(output / "token-windows.png", dpi=180)
+    fig.savefig(output / "token-windows.svg")
     plt.close(fig)
     report = {
         "task_cost": source["snowball-task-cost.json"],
