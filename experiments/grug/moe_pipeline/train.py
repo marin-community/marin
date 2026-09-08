@@ -321,11 +321,13 @@ def _run_grug_local(config: GrugPipelineTrainConfig) -> None:
     )
 
     profiler_callback = None
-    if config.profile_steps > 0:
+    profile_start_step = max(config.profile_start_step, start_step)
+    profile_end_step = min(config.profile_start_step + config.profile_steps, config.steps)
+    if config.profile_steps > 0 and profile_start_step < profile_end_step:
         profiler_callback = ProfilerConfig(
             enabled=True,
-            start_step=config.profile_start_step,
-            num_steps=config.profile_steps,
+            start_step=profile_start_step,
+            num_steps=profile_end_step - profile_start_step,
             perfetto_link=False,
             profile_options=ProfileOptionsConfig(
                 host_tracer_level=1,
@@ -336,7 +338,7 @@ def _run_grug_local(config: GrugPipelineTrainConfig) -> None:
             "/tmp/grug-moe-pipeline-profiler",
             run_id=config.profile_run_id,
         )
-        profiler_callback(SimpleNamespace(step=-1))
+        profiler_callback(SimpleNamespace(step=start_step - 1))
 
     step_times = []
     loss = None
