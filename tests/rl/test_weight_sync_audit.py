@@ -110,7 +110,7 @@ def test_shutdown_cancellation_is_reported_as_cancellation_not_completion():
 
 def token_receipts():
     calls = [
-        {"call_id": str(i), "mode": "train", "outcome": "success", "response_tokens": tokens}
+        {"call_id": str(i), "mode": "async", "outcome": "success", "response_tokens": tokens}
         for i, tokens in enumerate([10, 20, 30])
     ]
     outcomes = [
@@ -122,7 +122,13 @@ def token_receipts():
 
 def test_stale_fraction_uses_all_completed_group_tokens_once():
     result = audit_stale_tokens(*token_receipts())
-    assert result == {"stale_tokens": 20, "completed_group_tokens": 60, "stale_fraction": 1 / 3, "completed_groups": 3}
+    assert result == {
+        "stale_tokens": 20,
+        "completed_group_tokens": 60,
+        "stale_fraction": 1 / 3,
+        "completed_groups": 3,
+        "outcome_groups": {"consumed": 1, "stale_enqueue": 1, "epoch_discarded": 1},
+    }
 
 
 @pytest.mark.parametrize("corruption", ["missing", "duplicate", "tokens"])
@@ -176,3 +182,11 @@ def test_matched_thresholds_reject_incomplete_or_worse_candidate(monkeypatch, co
     else:
         with pytest.raises(AssertionError):
             audit_module.audit_matched_gate(baseline, candidate)
+
+
+def test_completed_generation_canceled_at_enqueue_still_counts_in_denominator():
+    calls, outcomes = token_receipts()
+    outcomes[0]["outcome"] = "cancelled_before_enqueue"
+    result = audit_stale_tokens(calls, outcomes)
+    assert result["completed_group_tokens"] == 60
+    assert result["outcome_groups"]["cancelled_before_enqueue"] == 1
