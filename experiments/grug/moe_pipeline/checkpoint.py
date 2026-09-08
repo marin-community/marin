@@ -1,0 +1,137 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Shard-local TensorStore checkpoints for the automatic pipeline trainer."""
+
+import json
+import uuid
+
+import jax
+import numpy as np
+from jax.experimental import multihost_utils
+from jax.sharding import NamedSharding
+from levanter.tensorstore_serialization import (
+    ReplicaRestoreMode,
+    TensorStoreReadConfig,
+    tree_deserialize_leaves_tensorstore,
+    tree_serialize_leaves_tensorstore,
+)
+from rigging.filesystem.atomic import atomic_rename
+from rigging.filesystem.storage_path import StoragePath, prefix_join
+
+from experiments.grug.moe_pipeline.pipeline import GrugMoeAutomaticPipelineState, _jaxpp_modules, jaxpp
+
+_FORMAT_VERSION = 1
+
+
+def checkpoint_arrays(state: GrugMoeAutomaticPipelineState) -> GrugMoeAutomaticPipelineState:
+    """Expose existing device buffers as JAX arrays without moving any shards."""
+
+    def unwrap(value):
+        if jaxpp is None or not isinstance(value, jaxpp.MpmdArray):
+            return value
+        local = value.to_mpmd_local_array
+        arrays = [] if local is None else local if isinstance(local, list) else [local]
+        buffers = {shard.device: shard.data for array in arrays for shard in array.addressable_shards}
+        return jax.make_array_from_single_device_arrays(
+            value.shape,
+            value.sharding,
+            [buffers[device] for device in value.sharding.mesh.devices.flat if device in buffers],
+            dtype=value.dtype,
+        )
+
+    return jax.tree.map(unwrap, state)
+
+
+def _array_layout(state) -> list[dict]:
+    return [
+        {
+            "path": jax.tree_util.keystr(path),
+            "shape": list(value.shape),
+            "dtype": str(value.dtype),
+            "spec": list(value.sharding.spec),
+            "mesh": dict(value.sharding.mesh.shape),
+            "processes": [device.process_index for device in value.sharding.mesh.devices.flat],
+        }
+        for path, value in jax.tree_util.tree_flatten_with_path(state)[0]
+    ]
+
+
+def save_checkpoint(root: str, state: GrugMoeAutomaticPipelineState, *, step: int, contract: dict) -> str:
+    """Commit a completed training step after every process finishes its shard writes."""
+    identifier = multihost_utils.broadcast_one_to_all(np.frombuffer(uuid.uuid4().bytes, dtype=np.uint8))
+    path = prefix_join(root, f"step-{step:012d}-{bytes(identifier).hex()}")
+    arrays = checkpoint_arrays(state)
+    metadata = {
+        "version": _FORMAT_VERSION,
+        "step": step,
+        "contract": contract,
+        "arrays": _array_layout(arrays),
+    }
+
+    def commit():
+        with atomic_rename(prefix_join(path, "metadata.json")) as temporary_path:
+            StoragePath(temporary_path).write_text(json.dumps(metadata, sort_keys=True))
+
+    tree_serialize_leaves_tensorstore(path, arrays, commit_callback=commit)
+    return path
+
+
+def restore_checkpoint(
+    root: str,
+    state: GrugMoeAutomaticPipelineState,
+    shardings,
+    *,
+    contract: dict,
+) -> tuple[GrugMoeAutomaticPipelineState, int]:
+    """Restore the newest committed step, or return fresh state for an empty root.
+
+    The compiled step supplies the exact MPMD placement. Model configuration,
+    schedule, and process topology must match the saved checkpoint.
+    """
+    checkpoints = StoragePath(prefix_join(root, "step-*/metadata.json")).glob()
+    if not checkpoints:
+        return state, 0
+    metadata_path = max(checkpoints, key=str)
+    metadata = json.loads(metadata_path.read_text())
+    arrays = checkpoint_arrays(state)
+    expected = json.loads(json.dumps({"contract": contract, "arrays": _array_layout(arrays)}))
+    if metadata["version"] != _FORMAT_VERSION or any(metadata[key] != value for key, value in expected.items()):
+        raise ValueError(f"Checkpoint configuration or topology does not match: {metadata_path}")
+    path = str(metadata_path).rsplit("/", 1)[0]
+    # Levanter's reader expects at least one addressable shard per input array.
+    # Other stages remain empty descriptors and never enter the read plan.
+    local_arrays = jax.tree.map(lambda value: value if value.addressable_shards else None, arrays)
+    restored = tree_deserialize_leaves_tensorstore(
+        path,
+        local_arrays,
+        # Avoid restore collectives across processes that do not own this stage.
+        read_config=TensorStoreReadConfig(replica_mode=ReplicaRestoreMode.EVERY_REPLICA),
+    )
+    restored = jax.tree.map(
+        lambda original, loaded: original if loaded is None else loaded,
+        arrays,
+        restored,
+        is_leaf=lambda value: value is None,
+    )
+
+    def wrap(value, target):
+        if isinstance(target, NamedSharding):
+            return value
+        pp, _ = _jaxpp_modules()
+        buffers = {shard.device: shard.data for shard in value.addressable_shards}
+        local_arrays = []
+        for mesh_id in sorted(target.mesh_ids):
+            sharding = NamedSharding(target.mpmd_mesh.unstack[mesh_id], target.spec)
+            if sharding.addressable_devices:
+                local_arrays.append(
+                    jax.make_array_from_single_device_arrays(
+                        value.shape,
+                        sharding,
+                        [buffers[device] for device in sharding.mesh.devices.flat if device in buffers],
+                        dtype=value.dtype,
+                    )
+                )
+        return pp.MpmdArray(local_arrays, target, shape=value.shape, dtype=value.dtype)
+
+    return jax.tree.map(wrap, restored, shardings), int(metadata["step"])

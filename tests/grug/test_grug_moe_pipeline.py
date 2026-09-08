@@ -6,14 +6,17 @@ from dataclasses import replace
 import jax
 import jax.numpy as jnp
 import numpy as np
+import optax
 import pytest
 from jax.sharding import AxisType, Mesh
 from levanter.data.text.examples import GrugLmExample
 
 from experiments.grug.moe_pipeline.benchmark import _resolve_benchmark_config
+from experiments.grug.moe_pipeline.checkpoint import restore_checkpoint, save_checkpoint
 from experiments.grug.moe_pipeline.model import GrugModelConfig, Transformer
 from experiments.grug.moe_pipeline.pipeline import (
     AutomaticPipelineSchedule,
+    GrugMoeAutomaticPipelineState,
     GrugMoePipelineConfig,
     _apply_qb_betas,
     automatic_stage_to_mpmd_indices,
@@ -179,3 +182,40 @@ def test_dualpipe_v_train_config_rejects_too_few_microbatches():
             microbatches=3,
             schedule=PipelineSchedule.DUALPIPE_V,
         )
+
+
+def test_checkpoint_restores_optimizer_and_pending_router_updates(tmp_path):
+    mesh, model = _tiny_model()
+    params, _ = split_automatic_stages(model, num_stages=2)
+    optimizer = optax.adamw(1e-4)
+    with jax.set_mesh(mesh):
+        state = GrugMoeAutomaticPipelineState(
+            params,
+            tuple(optimizer.init(stage) for stage in params),
+            (jnp.array([[2.0, -1.0]]), jnp.array([[-3.0, 1.0]])),
+        )
+        # Populate Adam moments and counts; a fresh optimizer must differ.
+        gradients = jax.tree.map(jnp.ones_like, params)
+        updated = [
+            optimizer.update(grad, opt, param)
+            for grad, opt, param in zip(gradients, state.opt_state, params, strict=True)
+        ]
+        state = replace(
+            state,
+            trainable_params=tuple(
+                optax.apply_updates(param, item[0]) for param, item in zip(params, updated, strict=True)
+            ),
+            opt_state=tuple(item[1] for item in updated),
+        )
+        root = str(tmp_path)
+        save_checkpoint(root, state, step=7, contract={"schedule": "zero_bubble"})
+        # An interrupted newer save must not hide the committed checkpoint.
+        (tmp_path / "step-000000000008-incomplete").mkdir()
+        empty = jax.tree.map(jnp.zeros_like, state)
+        shardings = jax.tree.map(lambda value: value.sharding, empty)
+        restored, step = restore_checkpoint(root, empty, shardings, contract={"schedule": "zero_bubble"})
+        assert step == 7
+        for actual, expected in zip(jax.tree.leaves(restored), jax.tree.leaves(state), strict=True):
+            np.testing.assert_array_equal(actual, expected)
+        with pytest.raises(ValueError, match="configuration or topology"):
+            restore_checkpoint(root, empty, shardings, contract={"schedule": "dualpipe_v"})

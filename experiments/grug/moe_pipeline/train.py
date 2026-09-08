@@ -9,7 +9,7 @@ import json
 import os
 import statistics
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from enum import StrEnum
 from types import SimpleNamespace
 from typing import cast
@@ -30,6 +30,7 @@ from levanter.pipeline import reshape_batch_into_microbatches
 from levanter.utils.flop_utils import lm_flops_per_token
 
 from experiments.grug.dispatch import dispatch_grug_training_run
+from experiments.grug.moe_pipeline.checkpoint import restore_checkpoint, save_checkpoint
 from experiments.grug.moe_pipeline.model import BATCH_AXES, GrugModelConfig, Transformer
 from experiments.grug.moe_pipeline.pipeline import (
     TRAIN_LOSS_KEY,
@@ -89,8 +90,14 @@ class GrugPipelineTrainConfig:
     attention_implementation: str
     moe_implementation: str
     schedule: PipelineSchedule
+    checkpoint_root: str | None
+    checkpoint_every_steps: int
 
     def __post_init__(self) -> None:
+        if self.checkpoint_every_steps < 0:
+            raise ValueError("checkpoint_every_steps must be nonnegative")
+        if self.checkpoint_every_steps and not self.checkpoint_root:
+            raise ValueError("checkpoint_root is required for checkpoint saves")
         if not isinstance(self.schedule, PipelineSchedule):
             raise ValueError(f"unknown pipeline schedule: {self.schedule!r}")
         if self.schedule == PipelineSchedule.ZERO_BUBBLE and self.stages != self.physical_stages:
@@ -292,6 +299,21 @@ def _run_grug_local(config: GrugPipelineTrainConfig) -> None:
     state = prepared.state
     batches = prepared.batches
     loss_denominator = prepared.loss_denominator
+    checkpoint_contract = {
+        "model": asdict(model_config),
+        "pipeline": asdict(pipeline_config),
+        "schedule": config.schedule,
+        "layer_counts": config.layer_counts,
+        "mp_policy": config.mp_policy_string,
+        "batch_size": config.batch_size,
+        "optimizer": "adamw-lr1e-4-b1-0.9-b2-0.95-wd0.1",
+    }
+    start_step = 0
+    if config.checkpoint_root:
+        state, start_step = restore_checkpoint(
+            config.checkpoint_root, state, step.in_shardings[0][0], contract=checkpoint_contract
+        )
+        _log("PIPELINE_RESTORE", step=start_step, checkpoint_root=config.checkpoint_root)
     _log(
         "PIPELINE_LOWER",
         process_index=jax.process_index(),
@@ -318,7 +340,7 @@ def _run_grug_local(config: GrugPipelineTrainConfig) -> None:
 
     step_times = []
     loss = None
-    for step_index in range(config.steps):
+    for step_index in range(start_step, config.steps):
         started = time.monotonic()
         state, metrics = step(state, batches, loss_denominator)
         jax.block_until_ready((state, metrics))
@@ -327,6 +349,13 @@ def _run_grug_local(config: GrugPipelineTrainConfig) -> None:
         metric_loss = metrics[TRAIN_LOSS_KEY]
         if profiler_callback is not None:
             profiler_callback(SimpleNamespace(step=step_index))
+        completed_steps = step_index + 1
+        if config.checkpoint_root and config.checkpoint_every_steps:
+            if completed_steps % config.checkpoint_every_steps == 0 or completed_steps == config.steps:
+                checkpoint_path = save_checkpoint(
+                    config.checkpoint_root, state, step=completed_steps, contract=checkpoint_contract
+                )
+                _log("PIPELINE_CHECKPOINT", step=completed_steps, path=checkpoint_path)
         if isinstance(metric_loss, MpmdArray):
             if not metric_loss.is_partially_addressable:
                 continue
@@ -344,6 +373,9 @@ def _run_grug_local(config: GrugPipelineTrainConfig) -> None:
             loss=loss,
         )
 
+    if not step_times:
+        _log("PIPELINE_COMPLETE", step=start_step)
+        return
     measured = step_times[config.warmup_steps :]
     if not measured:
         measured = step_times
