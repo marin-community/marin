@@ -20,7 +20,7 @@ from transformers import AutoTokenizer
 
 from experiments.post_training.curriculum_rl import pool as curriculum
 from experiments.post_training.math_eval.contract import QWEN, SNOWBALL, template_source
-from experiments.post_training.math_eval.pool import SourceRows, build_pool, write_pool
+from experiments.post_training.math_eval.pool import SourceRows, build_pool, prompt_length_report, write_pool
 
 GSM8K_REVISION = "e53f048856ff4f594e959d75785d2c2d37b678ee"
 MATH_REVISION = "21a5633873b6a120296cce3e2df9d5550074f4a3"
@@ -101,14 +101,17 @@ class MathPoolConfig:
     max_prompt_tokens: int = 1024
 
 
-def write_math_pool(config: MathPoolConfig) -> None:
-    """Materialize both model views without copying model weights."""
-    if not config.output_path.startswith("s3://marin-us-east-02a/"):
-        raise ValueError("The math pool is built in east-02a")
-    if not config.snowball_model_path.startswith("s3://marin-us-east-02a/"):
+def audit_prompt_lengths(config: MathPoolConfig) -> None:
+    """Print a source length audit without emitting or changing a pool artifact."""
+    tokenizers, hashes = model_tokenizers(config.snowball_model_path)
+    report = prompt_length_report(mvp_sources(), tokenizers, cap=config.max_prompt_tokens)
+    print("KE1_LENGTH_AUDIT " + json.dumps({"tokenizer_hashes": hashes, **report}))
+
+
+def model_tokenizers(snowball_model_path: str):
+    """Load pinned tokenizer metadata and freeze both source templates."""
+    if not snowball_model_path.startswith("s3://marin-us-east-02a/"):
         raise ValueError("Snowball tokenizer metadata must stay in east-02a")
-    if StoragePath(prefix_join(config.output_path, "selection.json")).exists():
-        raise ValueError("A completed pool artifact is immutable; choose a new version")
     qwen = AutoTokenizer.from_pretrained("Qwen/Qwen3-0.6B", revision=QWEN_REVISION)
     if qwen.chat_template != template_source(QWEN):
         raise ValueError("Pinned Qwen template does not match KE0")
@@ -117,7 +120,7 @@ def write_math_pool(config: MathPoolConfig) -> None:
         tokenizer_dir = directory / "tokenizer"
         tokenizer_dir.mkdir()
         for filename in ("tokenizer.json", "tokenizer_config.json", "chat_template.jinja"):
-            content = StoragePath(prefix_join(config.snowball_model_path, filename)).read_bytes()
+            content = StoragePath(prefix_join(snowball_model_path, filename)).read_bytes()
             (tokenizer_dir / filename).write_bytes(content)
         if hashlib.sha256((tokenizer_dir / "tokenizer.json").read_bytes()).hexdigest() != SNOWBALL_TOKENIZER_SHA256:
             raise ValueError("Snowball tokenizer changed")
@@ -128,12 +131,26 @@ def write_math_pool(config: MathPoolConfig) -> None:
             "qwen": hashlib.sha256(qwen.backend_tokenizer.to_str().encode()).hexdigest(),
             "snowball": SNOWBALL_TOKENIZER_SHA256,
         }
+        return {
+            "qwen": lambda text: qwen.encode(text, add_special_tokens=False),
+            "snowball": lambda text: snowball.encode(text, add_special_tokens=False),
+        }, hashes
+
+
+def write_math_pool(config: MathPoolConfig) -> None:
+    """Materialize both model views without copying model weights."""
+    if not config.output_path.startswith("s3://marin-us-east-02a/"):
+        raise ValueError("The math pool is built in east-02a")
+    if not config.snowball_model_path.startswith("s3://marin-us-east-02a/"):
+        raise ValueError("Snowball tokenizer metadata must stay in east-02a")
+    if StoragePath(prefix_join(config.output_path, "selection.json")).exists():
+        raise ValueError("A completed pool artifact is immutable; choose a new version")
+    tokenizers, hashes = model_tokenizers(config.snowball_model_path)
+    with tempfile.TemporaryDirectory() as temporary:
+        directory = Path(temporary)
         built = build_pool(
             mvp_sources(),
-            {
-                "qwen": lambda text: qwen.encode(text, add_special_tokens=False),
-                "snowball": lambda text: snowball.encode(text, add_special_tokens=False),
-            },
+            tokenizers,
             version=config.version,
             code_sha=config.code_sha,
             tokenizer_hashes=hashes,
@@ -178,5 +195,11 @@ if __name__ == "__main__":
     parser.add_argument("--snowball-model-path", required=True)
     parser.add_argument("--version", required=True)
     parser.add_argument("--code-sha", required=True)
-    arguments = parser.parse_args()
-    write_math_pool(MathPoolConfig(**vars(arguments)))
+    parser.add_argument("--length-audit", action="store_true")
+    arguments = vars(parser.parse_args())
+    length_audit = arguments.pop("length_audit")
+    config = MathPoolConfig(**arguments)
+    if length_audit:
+        audit_prompt_lengths(config)
+    else:
+        write_math_pool(config)
