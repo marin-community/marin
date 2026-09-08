@@ -1181,3 +1181,53 @@ def test_dataloader_worker_override_reaches_fingerprinted_recipe(runner):
     if not config["data"]:
         config.pop("data")
     assert config == yaml.safe_load(before["config_yaml"])
+
+
+@pytest.mark.parametrize("runner", list(async_rl.Runner))
+def test_seeded_control_cli_and_builder_bind_identical_requests(runner):
+    options = dict(
+        version="2026.09.08.92",
+        cluster="cw-us-east-02a",
+        runner=runner,
+        completion="metrics",
+        scale=async_rl.Scale.SCREENING,
+        epoch_seeded_shuffle=True,
+        staleness=0,
+        seeded_sampling_control=True,
+    )
+    built, _ = async_rl.build_experiment(**options)
+    expected = built.build_config(StepContext.for_fingerprint(built.runtime_args, built.deps)).request
+    result = CliRunner().invoke(
+        async_rl.main,
+        [
+            "--version",
+            options["version"],
+            "--runner",
+            runner.value,
+            "--completion",
+            "metrics",
+            "--scale",
+            "screening",
+            "--stage",
+            "rl",
+            "--epoch-seeded-shuffle",
+            "--staleness",
+            "0",
+            "--seeded-sampling-control",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    actual = json.loads(result.output)["request"]
+    assert actual["config_yaml"] == expected.config_yaml and actual["run_id"] == expected.run_id
+    config = yaml.safe_load(actual["config_yaml"])
+    assert config["generator"]["seed_by_trajectory"] is True
+    assert config["generator"]["enable_prefix_caching"] is False
+    assert config["extra_env"]["VLLM_BATCH_INVARIANT"] == "1"
+    baseline, _ = async_rl.build_experiment(**(options | {"seeded_sampling_control": False}))
+    baseline_config = yaml.safe_load(
+        baseline.build_config(StepContext.for_fingerprint(baseline.runtime_args, baseline.deps)).request.config_yaml
+    )
+    del config["generator"]["seed_by_trajectory"]
+    del config["generator"]["enable_prefix_caching"]
+    del config["extra_env"]
+    assert config == baseline_config

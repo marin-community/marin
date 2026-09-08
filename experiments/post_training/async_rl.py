@@ -227,6 +227,7 @@ def training_config(
     initial_eval_repeat_count: int = 1,
     weight_change_probe: bool = False,
     epoch_seeded_shuffle: bool = False,
+    seeded_sampling_control: bool = False,
     dataloader_workers: int | None = None,
     optimizer_precision: OptimizerPrecision = OptimizerPrecision.NATIVE,
     optimizer_state_metrics: bool = False,
@@ -334,6 +335,12 @@ def training_config(
         config.setdefault("data", {})["num_workers"] = dataloader_workers
     if epoch_seeded_shuffle:
         config.setdefault("data", {})["epoch_seeded_shuffle"] = True
+    if seeded_sampling_control:
+        if weight_sync_interval != 1 or staleness != 0 or not epoch_seeded_shuffle:
+            raise ValueError("Seeded sampling control requires C1/A0 and shared source order")
+        config["generator"]["seed_by_trajectory"] = True
+        config["generator"]["enable_prefix_caching"] = False
+        config.setdefault("extra_env", {})["VLLM_BATCH_INVARIANT"] = "1"
     return yaml.safe_dump(config, sort_keys=False)
 
 
@@ -488,6 +495,7 @@ def build_experiment(
     initial_eval_repeat_count: int = 1,
     weight_change_probe: bool = False,
     epoch_seeded_shuffle: bool = False,
+    seeded_sampling_control: bool = False,
     dataloader_workers: int | None = None,
     optimizer_precision: OptimizerPrecision = OptimizerPrecision.NATIVE,
     optimizer_state_metrics: bool = False,
@@ -526,6 +534,7 @@ def build_experiment(
         initial_eval_repeat_count=initial_eval_repeat_count,
         weight_change_probe=weight_change_probe,
         epoch_seeded_shuffle=epoch_seeded_shuffle,
+        seeded_sampling_control=seeded_sampling_control,
         dataloader_workers=dataloader_workers,
         optimizer_precision=optimizer_precision,
         optimizer_state_metrics=optimizer_state_metrics,
@@ -717,6 +726,11 @@ def build_experiment(
 @click.option("--eval-interval", type=click.IntRange(min=1), help="Evaluation cadence; must divide the update count.")
 @click.option("--validation-offset", type=click.IntRange(min=0), default=0, show_default=True)
 @click.option("--validation-rows", type=click.IntRange(min=1), default=VALIDATION_ROWS, show_default=True)
+@click.option(
+    "--seeded-sampling-control/--no-seeded-sampling-control",
+    default=False,
+    help="C1/A0 control with trajectory seeds and batch-invariant inference without prefix caching.",
+)
 @click.option("--timeout-seconds", type=click.IntRange(min=1), default=1800, show_default=True)
 @click.option("--run/--dry-run", "execute", default=False, show_default=True)
 @click.option("--pool-artifact", default=None, help="Use a frozen audited math pool by name@version.")
@@ -747,6 +761,7 @@ def main(
     initial_eval_repeat_count: int,
     weight_change_probe: bool,
     epoch_seeded_shuffle: bool,
+    seeded_sampling_control: bool,
     dataloader_workers: int | None,
     timeout_seconds: int,
     execute: bool,
@@ -786,6 +801,7 @@ def main(
         initial_eval_repeat_count=initial_eval_repeat_count,
         weight_change_probe=weight_change_probe,
         epoch_seeded_shuffle=epoch_seeded_shuffle,
+        seeded_sampling_control=seeded_sampling_control,
         dataloader_workers=dataloader_workers,
     )
     prefix = marin_prefix()
