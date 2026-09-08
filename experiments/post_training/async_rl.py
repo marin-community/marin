@@ -342,6 +342,7 @@ def training_config(
         raise ValueError("Symmetric weight sync environment requires the seeded sampling control")
     if symmetric_weight_sync_environment:
         config["trainer"]["algorithm"]["weight_sync_invariant_env"] = True
+        config.setdefault("extra_env", {})["RAY_DEDUP_LOGS_ALLOW_REGEX"] = "WEIGHT_SYNC_ENVIRONMENT_PRE_PG"
         config["generator"].setdefault("engine_init_kwargs", {})[
             "worker_cls"
         ] = "skyrl_train.inference_engines.vllm.invariant_worker.InvariantWeightSyncWorker"

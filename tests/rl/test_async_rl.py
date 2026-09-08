@@ -1250,6 +1250,7 @@ def test_symmetric_environment_control_changes_only_paired_worker_settings(runne
     old = baseline.build_config(StepContext.for_fingerprint(baseline.runtime_args, baseline.deps)).request
     new = candidate.build_config(StepContext.for_fingerprint(candidate.runtime_args, candidate.deps)).request
     config = yaml.safe_load(new.config_yaml)
+    assert config["extra_env"].pop("RAY_DEDUP_LOGS_ALLOW_REGEX") == "WEIGHT_SYNC_ENVIRONMENT_PRE_PG"
     assert config["trainer"]["algorithm"].pop("weight_sync_invariant_env") is True
     assert config["generator"]["engine_init_kwargs"].pop("worker_cls") == (
         "skyrl_train.inference_engines.vllm.invariant_worker.InvariantWeightSyncWorker"
