@@ -41,6 +41,7 @@ from enum import StrEnum
 from typing import Protocol
 
 import google.auth
+from fastapi import APIRouter, FastAPI
 from google.auth.transport.requests import AuthorizedSession
 from marin.evaluation.eval_stats import DEFAULT_MIN_COVERAGE, Completeness, MissingPolicy, SelectionRequest
 from marin.evaluation.records import (
@@ -50,14 +51,14 @@ from marin.evaluation.records import (
     list_record_paths,
     scan_records,
 )
-from marina.apps import Services
+from marina.apps import RegisteredApi, Services, registered_api
+from marina.mcp import OperationRisk, operation_extension
+from pydantic import BaseModel
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.server_auth import get_verified_identity
 from sqlalchemy.engine import Engine
-from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
-from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from . import review, samples
@@ -117,6 +118,104 @@ REVIEW_MODEL_ENV = "EVALDASH_REVIEW_MODEL"
 INGEST_JOB_ENV = "EVALDASH_INGEST_JOB"
 CLOUD_PLATFORM_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
 CLOUD_RUN_JOB_PATTERN = re.compile(r"^projects/[a-z][a-z0-9-]+/locations/[a-z0-9-]+/jobs/[a-z][a-z0-9-]+$")
+
+
+class PanelCellResponse(BaseModel):
+    value: float
+    low: float
+    high: float
+    interval_kind: str
+    metric: str
+    metric_kind: str
+    n_scored: int
+    n_attempted: int | None
+    coverage: float | None
+    errors: dict[str, int]
+    item_cap: int | None
+    flags: list[str]
+    run_id: str
+    created_at: str
+    version: str | None
+    git_sha: str
+    eval_runtime: str
+
+
+class MissingCellResponse(BaseModel):
+    reason: str
+    run_id: str
+    status: str
+    created_at: str
+
+
+class PanelAggregateResponse(BaseModel):
+    value: float
+    low: float
+    high: float
+    interval_kind: str
+    covered: int
+    total: int
+    panel: list[str]
+    missing_policy: str
+    metrics: list[str]
+    runtimes: list[str]
+
+
+class PanelRowResponse(BaseModel):
+    model: str
+    archived: bool
+    cells: dict[str, PanelCellResponse]
+    missing: dict[str, MissingCellResponse]
+    aggregate: PanelAggregateResponse | None
+    covered: int
+
+
+class PanelRequestResponse(BaseModel):
+    min_coverage: float
+    cohort: str
+    cohort_version: str | None
+    completeness: str
+    filters: dict[str, str]
+    model_query: str | None
+    statuses: list[str]
+
+
+class PanelResponse(BaseModel):
+    benchmarks: list[str]
+    panel: list[str]
+    rows: list[PanelRowResponse]
+    request: PanelRequestResponse
+
+
+class RunDetailResponse(EvalRunRecord):
+    headline: PanelCellResponse | None
+
+
+class LogEntryResponse(BaseModel):
+    timestamp: dict[str, object] | None = None
+    source: str
+    data: str
+    attempt_id: int
+    level: str
+    key: str
+    seq: str | int
+
+
+class LogsResponse(BaseModel):
+    reachable: bool
+    error: str | None
+    source: str
+    role: str | None
+    entries: list[LogEntryResponse]
+
+
+class HistoryPointResponse(PanelCellResponse):
+    status: str
+
+
+class HistoryResponse(BaseModel):
+    model: str
+    task: str
+    points: list[HistoryPointResponse]
 
 
 class StoreMode(StrEnum):
@@ -966,27 +1065,21 @@ class NullClusterGateway:
         return {"reachable": False, "error": "local mode: cluster unavailable", "source": "", "entries": []}
 
 
-def build_api(
-    store: RecordStore,
-    gateway: ClusterGatewayLike,
-    config: EvaldashConfig,
-    trigger_ingest: Callable[[], str] | None = None,
-) -> ASGIApp:
-    """Build the JSON API over a store, the cluster gateway, and the resolved configuration.
-
-    ``config.prefixes`` are the record roots local ingest or the PostgreSQL job scans. An empty tuple
-    disables ingestion entirely for a store populated out of band, as some tests do.
-    """
+def _ingestor_and_loop(
+    store: RecordStore, config: EvaldashConfig
+) -> tuple[IngestorLike, Callable[[], Awaitable[None]] | None]:
     ingestor: IngestorLike
-    local_loop: Callable[[], Awaitable[None]] | None
     if isinstance(store, PgRecordStore):
         ingestor = PostgresIngestor(store, config.prefixes, config.ingest_interval, config.revalidate_after)
-        local_loop = None
-    else:
-        local_ingestor = Ingestor(store, config.prefixes, config.ingest_interval)
-        ingestor = local_ingestor
-        local_loop = local_ingestor.run_loop
+        return ingestor, None
+    local_ingestor = Ingestor(store, config.prefixes, config.ingest_interval)
+    return local_ingestor, local_ingestor.run_loop
 
+
+def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: EvaldashConfig) -> APIRouter:
+    router = APIRouter()
+
+    @router.get("/runs")
     async def api_runs(request: Request) -> JSONResponse:
         params = request.query_params
         rows = await asyncio.to_thread(
@@ -1000,12 +1093,21 @@ def build_api(
         )
         return JSONResponse(rows)
 
-    async def api_run_detail(request: Request) -> JSONResponse:
-        record = await asyncio.to_thread(store.get_record, request.path_params["run_id"])
+    @router.get(
+        "/runs/{run_id}",
+        operation_id="read_run",
+        summary="Read an evaluation run",
+        description="Read one evaluation record together with its rolled-up headline result.",
+        response_model=RunDetailResponse,
+        openapi_extra=operation_extension(OperationRisk.READ),
+    )
+    async def api_run_detail(run_id: str) -> RunDetailResponse | JSONResponse:
+        record = await asyncio.to_thread(store.get_record, run_id)
         if record is None:
             return JSONResponse({"error": "unknown run_id"}, status_code=404)
-        return JSONResponse({**record, "headline": _run_headline(record)})
+        return RunDetailResponse.model_validate({**record, "headline": _run_headline(record)})
 
+    @router.get("/runs/{run_id}/jobs")
     async def api_run_jobs(request: Request) -> JSONResponse:
         record = await asyncio.to_thread(store.get_record, request.path_params["run_id"])
         if record is None:
@@ -1013,22 +1115,34 @@ def build_api(
         roles = await asyncio.to_thread(_collect_job_status, gateway, record.get("jobs") or {})
         return JSONResponse({"roles": roles})
 
-    async def api_run_logs(request: Request) -> JSONResponse:
-        params = request.query_params
-        record = await asyncio.to_thread(store.get_record, request.path_params["run_id"])
+    @router.get(
+        "/runs/{run_id}/logs",
+        operation_id="read_logs",
+        summary="Read run logs",
+        description="Read a bounded tail of Finelog entries for one role in an evaluation run.",
+        response_model=LogsResponse,
+        openapi_extra=operation_extension(OperationRisk.READ),
+    )
+    async def api_run_logs(
+        run_id: str,
+        role: str,
+        tail: str | None = None,
+        substring: str | None = None,
+    ) -> LogsResponse | JSONResponse:
+        record = await asyncio.to_thread(store.get_record, run_id)
         if record is None:
             return JSONResponse({"error": "unknown run_id"}, status_code=404)
-        role = params.get("role")
         jobs = record.get("jobs") or {}
         if role not in jobs:
             return JSONResponse({"error": f"run has no {role!r} job"}, status_code=404)
-        tail = _parse_int(params.get("tail"), default=DEFAULT_LOG_TAIL, low=1, high=MAX_LOG_TAIL)
+        max_lines = _parse_int(tail, default=DEFAULT_LOG_TAIL, low=1, high=MAX_LOG_TAIL)
         payload = await asyncio.to_thread(
-            gateway.fetch_logs, jobs[role], max_lines=tail, substring=params.get("substring") or None
+            gateway.fetch_logs, jobs[role], max_lines=max_lines, substring=substring or None
         )
         payload["role"] = role
-        return JSONResponse(payload)
+        return LogsResponse.model_validate(payload)
 
+    @router.get("/runs/{run_id}/samples/tasks")
     async def api_run_samples_tasks(request: Request) -> JSONResponse:
         record = await asyncio.to_thread(store.get_record, request.path_params["run_id"])
         if record is None:
@@ -1036,25 +1150,39 @@ def build_api(
         payload = await asyncio.to_thread(samples.list_sample_tasks, record.get("results_path"))
         return JSONResponse(payload.model_dump(mode="json"))
 
-    async def api_run_samples(request: Request) -> JSONResponse:
-        params = request.query_params
-        record = await asyncio.to_thread(store.get_record, request.path_params["run_id"])
+    @router.get(
+        "/runs/{run_id}/samples",
+        operation_id="read_samples",
+        summary="Read evaluation samples",
+        description="Read one bounded page of samples and grading results for a task in an evaluation run.",
+        response_model=samples.SamplesResponse,
+        openapi_extra=operation_extension(OperationRisk.READ),
+    )
+    async def api_run_samples(
+        run_id: str,
+        task: str,
+        offset: str | None = None,
+        limit: str | None = None,
+        correct: str | None = None,
+        extraction_filter: str | None = None,
+    ) -> samples.SamplesResponse | JSONResponse:
+        record = await asyncio.to_thread(store.get_record, run_id)
         if record is None:
             return JSONResponse({"error": "unknown run_id"}, status_code=404)
-        task = params.get("task")
         if not task:
             return JSONResponse({"error": "task is required"}, status_code=400)
         payload = await asyncio.to_thread(
             samples.fetch_samples,
             record.get("results_path"),
             task,
-            offset=_parse_int(params.get("offset"), default=0, low=0, high=10_000_000),
-            limit=_parse_int(params.get("limit"), default=DEFAULT_SAMPLE_LIMIT, low=1, high=MAX_SAMPLE_LIMIT),
-            correct=params.get("correct") or "all",
-            extraction_filter=params.get("extraction_filter") or None,
+            offset=_parse_int(offset, default=0, low=0, high=10_000_000),
+            limit=_parse_int(limit, default=DEFAULT_SAMPLE_LIMIT, low=1, high=MAX_SAMPLE_LIMIT),
+            correct=correct or "all",
+            extraction_filter=extraction_filter or None,
         )
-        return JSONResponse(payload.model_dump(mode="json"))
+        return payload
 
+    @router.get("/runs/{run_id}/samples/artifact")
     async def api_run_samples_artifact(request: Request) -> JSONResponse:
         params = request.query_params
         record = await asyncio.to_thread(store.get_record, request.path_params["run_id"])
@@ -1066,6 +1194,7 @@ def build_api(
         payload = await asyncio.to_thread(samples.fetch_artifact, record.get("results_path"), uri)
         return JSONResponse(payload.model_dump(mode="json"))
 
+    @router.post("/runs/{run_id}/samples/review")
     async def api_run_samples_review(request: Request) -> JSONResponse:
         record = await asyncio.to_thread(store.get_record, request.path_params["run_id"])
         if record is None:
@@ -1088,6 +1217,7 @@ def build_api(
         )
         return JSONResponse(payload.model_dump(mode="json"))
 
+    @router.get("/runs/{run_id}/group")
     async def api_run_group(request: Request) -> JSONResponse:
         run_id = request.path_params["run_id"]
         record = await asyncio.to_thread(store.get_record, run_id)
@@ -1097,43 +1227,98 @@ def build_api(
         siblings = await asyncio.to_thread(store.group_siblings, group_id, run_id) if group_id else []
         return JSONResponse({"group_id": group_id, "siblings": siblings})
 
-    async def api_history(request: Request) -> JSONResponse:
+    @router.get("/groups")
+    async def api_groups(request: Request) -> JSONResponse:
         params = request.query_params
-        model = params.get("model")
-        task = params.get("task")
-        if not model or not task:
-            return JSONResponse({"error": "model and task are required"}, status_code=400)
-        points = await asyncio.to_thread(store.history, model, task)
-        return JSONResponse({"model": model, "task": task, "points": points})
+        groups = await asyncio.to_thread(
+            store.groups,
+            model=params.get("model") or None,
+            user=params.get("user") or None,
+            limit=_parse_limit(params.get("limit")),
+        )
+        return JSONResponse(groups)
 
+    return router
+
+
+def _selection(params: Mapping[str, str]) -> SelectionRequest:
+    """Return the panel selection requested by panel or comparison query parameters."""
+    return panel_request(
+        benchmarks=_parse_names(params.get("benchmarks")),
+        cohort_version=params.get("cohort") or None,
+        completeness=Completeness.COMPLETE_PANEL if _parse_flag(params.get("complete")) else Completeness.ANY,
+        min_coverage=_parse_coverage(params.get("min_coverage")),
+        filters={facet: value for facet in RUN_FACETS if (value := params.get(facet))},
+        model_query=params.get("model") or None,
+        include_flagged=_parse_flag(params.get("include_flagged")),
+    )
+
+
+def _analysis_router(store: RecordStore) -> APIRouter:
+    router = APIRouter()
+
+    @router.get("/models/{model_name}")
     async def api_model_detail(request: Request) -> JSONResponse:
         detail = await asyncio.to_thread(store.model_detail, request.path_params["model_name"])
         if detail is None:
             return JSONResponse({"error": "unknown model"}, status_code=404)
         return JSONResponse(detail)
 
-    def _selection(params: Mapping[str, str]) -> SelectionRequest:
-        """The panel selection a query string asks for, shared by the panel and compare endpoints."""
-        return panel_request(
-            benchmarks=_parse_names(params.get("benchmarks")),
-            cohort_version=params.get("cohort") or None,
-            completeness=Completeness.COMPLETE_PANEL if _parse_flag(params.get("complete")) else Completeness.ANY,
-            min_coverage=_parse_coverage(params.get("min_coverage")),
-            filters={facet: value for facet in RUN_FACETS if (value := params.get(facet))},
-            model_query=params.get("model") or None,
-            include_flagged=_parse_flag(params.get("include_flagged")),
-        )
-
-    async def api_panel(request: Request) -> JSONResponse:
-        params = request.query_params
+    @router.get(
+        "/panel",
+        operation_id="read_panel",
+        summary="Read the evaluation panel",
+        description=(
+            "Read benchmark results for the selected cohort, filters, coverage threshold, and aggregation policy."
+        ),
+        response_model=PanelResponse,
+        openapi_extra=operation_extension(OperationRisk.READ),
+    )
+    async def api_panel(
+        benchmarks: str | None = None,
+        cohort: str | None = None,
+        complete: str | None = None,
+        min_coverage: str | None = None,
+        accelerator: str | None = None,
+        platform: str | None = None,
+        backend: str | None = None,
+        mechanism: str | None = None,
+        user: str | None = None,
+        model: str | None = None,
+        include_flagged: str | None = None,
+        aggregate: str | None = None,
+        include_archived: str | None = None,
+    ) -> PanelResponse | JSONResponse:
+        params = {
+            name: value
+            for name, value in {
+                "benchmarks": benchmarks,
+                "cohort": cohort,
+                "complete": complete,
+                "min_coverage": min_coverage,
+                "accelerator": accelerator,
+                "platform": platform,
+                "backend": backend,
+                "mechanism": mechanism,
+                "user": user,
+                "model": model,
+                "include_flagged": include_flagged,
+                "aggregate": aggregate,
+                "include_archived": include_archived,
+            }.items()
+            if value is not None
+        }
         try:
             selection = _selection(params)
-            aggregate = _parse_aggregate(params.get("aggregate"))
+            aggregate_policy = _parse_aggregate(params.get("aggregate"))
         except BadRequest as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
-        payload = await asyncio.to_thread(store.panel, selection, aggregate, _parse_flag(params.get("include_archived")))
-        return JSONResponse(payload)
+        payload = await asyncio.to_thread(
+            store.panel, selection, aggregate_policy, _parse_flag(params.get("include_archived"))
+        )
+        return PanelResponse.model_validate(payload)
 
+    @router.get("/compare")
     async def api_compare(request: Request) -> JSONResponse:
         params = request.query_params
         models = _parse_names(params.get("models"))
@@ -1148,16 +1333,38 @@ def build_api(
         payload = await asyncio.to_thread(store.comparison, selection, models)
         return JSONResponse(payload)
 
-    async def api_groups(request: Request) -> JSONResponse:
-        params = request.query_params
-        groups = await asyncio.to_thread(
-            store.groups,
-            model=params.get("model") or None,
-            user=params.get("user") or None,
-            limit=_parse_limit(params.get("limit")),
-        )
-        return JSONResponse(groups)
+    @router.get(
+        "/history",
+        operation_id="read_history",
+        summary="Read evaluation history",
+        description="Read the score history for one model and evaluation task.",
+        response_model=HistoryResponse,
+        openapi_extra=operation_extension(OperationRisk.READ),
+    )
+    async def api_history(model: str, task: str) -> HistoryResponse | JSONResponse:
+        if not model or not task:
+            return JSONResponse({"error": "model and task are required"}, status_code=400)
+        points = await asyncio.to_thread(store.history, model, task)
+        return HistoryResponse(model=model, task=task, points=points)
 
+    @router.get("/meta")
+    async def api_meta() -> JSONResponse:
+        meta = store.meta()
+        meta["current_user"] = _current_user()
+        meta["store"] = store.backend
+        return JSONResponse(meta)
+
+    return router
+
+
+def _control_router(
+    store: RecordStore,
+    ingestor: IngestorLike,
+    trigger_ingest: Callable[[], str] | None,
+) -> APIRouter:
+    router = APIRouter()
+
+    @router.post("/models/{model_name}/archive")
     async def api_model_archive(request: Request) -> JSONResponse:
         model_name = request.path_params["model_name"]
         body = await request.json()
@@ -1165,16 +1372,12 @@ def build_api(
         await asyncio.to_thread(store.set_model_archived, model_name, archived, _current_user())
         return JSONResponse({"model_name": model_name, "archived": archived})
 
-    async def api_meta(_request: Request) -> JSONResponse:
-        meta = store.meta()
-        meta["current_user"] = _current_user()
-        meta["store"] = store.backend
-        return JSONResponse(meta)
-
-    async def api_status(_request: Request) -> JSONResponse:
+    @router.get("/status")
+    async def api_status() -> JSONResponse:
         return JSONResponse(_status_payload(store, ingestor))
 
-    async def api_refresh(_request: Request) -> JSONResponse:
+    @router.post("/refresh")
+    async def api_refresh() -> JSONResponse:
         if isinstance(store, PgRecordStore):
             await asyncio.to_thread(store.reload_if_changed)
             if trigger_ingest is None:
@@ -1184,34 +1387,31 @@ def build_api(
         await ingestor.run_once()
         return JSONResponse(_status_payload(store, ingestor))
 
-    routes = [
-        Route("/runs", api_runs),
-        Route("/groups", api_groups),
-        Route("/models/{model_name:str}/archive", api_model_archive, methods=["POST"]),
-        Route("/models/{model_name:str}", api_model_detail),
-        Route("/runs/{run_id:str}/jobs", api_run_jobs),
-        Route("/runs/{run_id:str}/logs", api_run_logs),
-        Route("/runs/{run_id:str}/samples/tasks", api_run_samples_tasks),
-        Route("/runs/{run_id:str}/samples/artifact", api_run_samples_artifact),
-        Route("/runs/{run_id:str}/samples/review", api_run_samples_review, methods=["POST"]),
-        Route("/runs/{run_id:str}/samples", api_run_samples),
-        Route("/runs/{run_id:str}/group", api_run_group),
-        Route("/runs/{run_id:str}", api_run_detail),
-        Route("/panel", api_panel),
-        Route("/compare", api_compare),
-        Route("/history", api_history),
-        Route("/meta", api_meta),
-        Route("/status", api_status),
-        Route("/refresh", api_refresh, methods=["POST"]),
-    ]
-    api = Starlette(routes=routes)
-    if local_loop is None:
-        return api
-    return ApiWithBackgroundLoops(api, (local_loop,))
+    return router
 
 
-def create_api(services: Services) -> ASGIApp:
-    """The kernel's entry point: the JSON API mounted at ``/evaldash/api/``.
+def build_api(
+    store: RecordStore,
+    gateway: ClusterGatewayLike,
+    config: EvaldashConfig,
+    trigger_ingest: Callable[[], str] | None = None,
+) -> RegisteredApi:
+    """Build the JSON API over a store, the cluster gateway, and the resolved configuration.
+
+    ``config.prefixes`` are the record roots local ingest or the PostgreSQL job scans. An empty tuple
+    disables ingestion entirely for a store populated out of band, as some tests do.
+    """
+    ingestor, local_loop = _ingestor_and_loop(store, config)
+    api = FastAPI(title="evaldash", docs_url=None, redoc_url=None, openapi_url=None)
+    api.include_router(_run_router(store, gateway, config))
+    api.include_router(_analysis_router(store))
+    api.include_router(_control_router(store, ingestor, trigger_ingest))
+    mounted_api: ASGIApp = api if local_loop is None else ApiWithBackgroundLoops(api, (local_loop,))
+    return registered_api(api, mounted_app=mounted_api)
+
+
+def create_api(services: Services) -> RegisteredApi:
+    """The kernel's entry point for the JSON API mounted at ``/evaldash/api/``.
 
     Configuration is resolved from the environment once, here. Nothing in this path writes to the
     database: ``marina migrate`` has already applied the schema when the deploy reaches this point.
