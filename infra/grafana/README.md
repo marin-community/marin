@@ -302,7 +302,7 @@ request-completion histograms exclude unfinished requests. Quantiles are bucket
 upper bounds, not interpolated percentiles. Missing observations stay missing,
 and freshness covers only producers that emitted records. Use RL phase timing
 and the accelerator dashboards for context before diagnosing starvation or GPU
-inefficiency. Older runs may lack engine-resolved histograms or publication health.
+inefficiency. Older runs may lack engine-resolved histograms or weight-sync health.
 
 `home.json` is provisioned as the default home dashboard
 (`GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/etc/grafana/dashboards/home.json`,
@@ -790,6 +790,21 @@ Install the app on `marin-community` with access to the main repo and every
 nightly lane repo (`evalchemy`, `harbor`, `MarinSkyRL`, `vllm`, `tpu-inference`),
 read-only on Contents, Metadata, Commit statuses, Checks, and Actions. The minted
 token is attenuated to that subset even if the app holds broader grants.
+
+### Async RL diagnostic panels
+
+The nine panels beginning with “Realised age” add per-step age distributions,
+training/weight-sync intervals, separate ratio families, gradient persistence,
+and correction activity. Bars share each optimizer step's final observation time.
+The timeline uses explicit interval ends; its sync completion markers have a
+1 ms display width, not measured duration. The M2 reference is visible only
+alongside an M2 observation and is not a validated quality boundary.
+
+Availability follows the run's instrumentation. `consumed_age` is the planned
+per-group token event (`body.age`, `body.response_tokens`, role/step attributes);
+runs without it have no token-age series. New ratio, gradient, and correction
+series likewise remain absent until their emitters are qualified. Legacy drift
+panels remain available and describe the consume-time learner/vLLM ratio.
 
 ## Adding a dashboard
 
