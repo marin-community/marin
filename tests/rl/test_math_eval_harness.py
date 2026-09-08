@@ -158,3 +158,20 @@ def test_harness_checks_new_contract_metric_parity_independently_of_legacy_score
     aggregate.write_text(json.dumps(metrics))
     with pytest.raises(ValueError, match="Frozen contract metric"):
         harness.build_records(**kwargs)
+
+
+def test_raw_serving_dump_requires_explicit_reference_and_preserves_forensic_provenance(fixture):
+    kwargs, raw, rows = fixture
+    for row in rows:
+        row["token_provenance"] = "raw_engine_response"
+        row["generator_engine_index"] = None
+        row["score"] = sum(row["score"])
+    raw.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    with pytest.raises(ValueError, match="provenance"):
+        harness.build_records(**kwargs)
+    receipt = harness.build_records(**kwargs, metric_reference="serving_score_receipt")
+    assert receipt["metric_reference"] == "serving_score_receipt"
+    assert receipt["audit"]["token_provenance"] == "raw_engine_response"
+    assert receipt["summary"]["all"]["contract_correct"] == 0.5
+    table = pq.read_table(kwargs["output_uri"] + "/records.parquet").to_pylist()
+    assert all(row["native_reward_reduction"] == "scalar_identity" for row in table)

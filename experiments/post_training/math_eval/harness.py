@@ -38,8 +38,32 @@ def summarize(records):
     return dict(result)
 
 
-def _read_and_score(root, step, *, decoder, model, thinking, expected_rows, samples, wandb_metrics, bind_row):
-    proof, audited = audit.audit_eval_dump(root, step, expected_rows, samples, wandb_metrics, True)
+def _read_and_score(
+    root,
+    step,
+    *,
+    decoder,
+    model,
+    thinking,
+    expected_rows,
+    samples,
+    wandb_metrics,
+    bind_row,
+    metric_reference="wandb",
+):
+    provenance = {"wandb": "finalized_trajectory", "serving_score_receipt": "raw_engine_response"}
+    if metric_reference not in provenance:
+        raise ValueError("Unknown generation metric reference")
+    proof, audited = audit.audit_eval_dump(
+        root,
+        step,
+        expected_rows,
+        samples,
+        wandb_metrics,
+        True,
+        expected_token_provenance=provenance[metric_reference],
+        metric_reference=metric_reference,
+    )
     uri = posixpath.join(root, "dumped_evals", f"global_step_{step}_evals")
     raw_rows = []
     for entry in audit.list_entries(uri):
@@ -104,6 +128,7 @@ def build_records(
     samples,
     wandb_metrics,
     output_uri,
+    metric_reference="wandb",
 ):
     """Bind every response to accepted immutable pool membership and the frozen template.
 
@@ -151,6 +176,7 @@ def build_records(
         samples=samples,
         wandb_metrics=wandb_metrics,
         bind_row=bind,
+        metric_reference=metric_reference,
     )
     if seen != Counter({digest: samples for digest in expected_ids}):
         raise ValueError("Frozen question sample coverage differs")
@@ -163,9 +189,11 @@ def build_records(
             ("contract_completed", "score_contract_completed"),
         ):
             key = f"eval/{source.replace('/', '_')}/{name}"
-            for label, values in (("dump", aggregate), ("W&B", wandb_metrics)):
+            for label, values in (("dump", aggregate), (metric_reference, wandb_metrics)):
                 if key not in values or not math.isclose(values[key], metrics[column], rel_tol=0, abs_tol=1e-7):
                     raise ValueError(f"Frozen contract metric missing or differs in {label}: {key}")
+    if metric_reference != "wandb":
+        receipt["metric_reference"] = metric_reference
     receipt["contract_metric_parity_verified"] = True
     receipt.update(
         {
