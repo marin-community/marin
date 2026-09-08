@@ -228,6 +228,7 @@ def training_config(
     weight_change_probe: bool = False,
     epoch_seeded_shuffle: bool = False,
     seeded_sampling_control: bool = False,
+    symmetric_weight_sync_environment: bool = False,
     dataloader_workers: int | None = None,
     optimizer_precision: OptimizerPrecision = OptimizerPrecision.NATIVE,
     optimizer_state_metrics: bool = False,
@@ -335,6 +336,15 @@ def training_config(
         config.setdefault("data", {})["num_workers"] = dataloader_workers
     if epoch_seeded_shuffle:
         config.setdefault("data", {})["epoch_seeded_shuffle"] = True
+    if type(symmetric_weight_sync_environment) is not bool:
+        raise ValueError("symmetric_weight_sync_environment must be a boolean")
+    if symmetric_weight_sync_environment and not seeded_sampling_control:
+        raise ValueError("Symmetric weight sync environment requires the seeded sampling control")
+    if symmetric_weight_sync_environment:
+        config["trainer"]["algorithm"]["weight_sync_invariant_env"] = True
+        config["generator"].setdefault("engine_init_kwargs", {})[
+            "worker_cls"
+        ] = "skyrl_train.inference_engines.vllm.invariant_worker.InvariantWeightSyncWorker"
     if seeded_sampling_control:
         if weight_sync_interval != 1 or staleness != 0 or not epoch_seeded_shuffle:
             raise ValueError("Seeded sampling control requires C1/A0 and shared source order")
@@ -496,6 +506,7 @@ def build_experiment(
     weight_change_probe: bool = False,
     epoch_seeded_shuffle: bool = False,
     seeded_sampling_control: bool = False,
+    symmetric_weight_sync_environment: bool = False,
     dataloader_workers: int | None = None,
     optimizer_precision: OptimizerPrecision = OptimizerPrecision.NATIVE,
     optimizer_state_metrics: bool = False,
@@ -535,6 +546,7 @@ def build_experiment(
         weight_change_probe=weight_change_probe,
         epoch_seeded_shuffle=epoch_seeded_shuffle,
         seeded_sampling_control=seeded_sampling_control,
+        symmetric_weight_sync_environment=symmetric_weight_sync_environment,
         dataloader_workers=dataloader_workers,
         optimizer_precision=optimizer_precision,
         optimizer_state_metrics=optimizer_state_metrics,
@@ -731,6 +743,11 @@ def build_experiment(
     default=False,
     help="C1/A0 control with trajectory seeds and batch-invariant inference without prefix caching.",
 )
+@click.option(
+    "--symmetric-weight-sync-environment/--no-symmetric-weight-sync-environment",
+    default=False,
+    help="Apply the pinned invariant environment before trainer and receiver process groups; seeded control only.",
+)
 @click.option("--timeout-seconds", type=click.IntRange(min=1), default=1800, show_default=True)
 @click.option("--run/--dry-run", "execute", default=False, show_default=True)
 @click.option("--pool-artifact", default=None, help="Use a frozen audited math pool by name@version.")
@@ -762,6 +779,7 @@ def main(
     weight_change_probe: bool,
     epoch_seeded_shuffle: bool,
     seeded_sampling_control: bool,
+    symmetric_weight_sync_environment: bool,
     dataloader_workers: int | None,
     timeout_seconds: int,
     execute: bool,
@@ -802,6 +820,7 @@ def main(
         weight_change_probe=weight_change_probe,
         epoch_seeded_shuffle=epoch_seeded_shuffle,
         seeded_sampling_control=seeded_sampling_control,
+        symmetric_weight_sync_environment=symmetric_weight_sync_environment,
         dataloader_workers=dataloader_workers,
     )
     prefix = marin_prefix()
