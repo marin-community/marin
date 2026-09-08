@@ -38,3 +38,14 @@ def test_snowball_row_and_worker_defaults_are_cli_equivalent():
 def test_snowball_rejects_invalid_loader_workers(value):
     with pytest.raises(ValueError, match="nonnegative integer"):
         async_snowball.training_config(async_snowball.Scale.CADENCE_GATE, dataloader_workers=value)
+
+
+@pytest.mark.parametrize("scale", list(async_snowball.Scale))
+@pytest.mark.parametrize("runner", list(async_snowball.Runner))
+def test_snowball_native_recipe_disables_unqualified_gradient_history(scale, runner):
+    step = async_snowball.build_experiment(
+        version="2026.09.08.35", scale=scale, runner=runner, completion="metrics", timeout_seconds=900
+    )
+    request = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps)).request
+    config = yaml.safe_load(request.config_yaml)
+    assert config["trainer"]["algorithm"]["grad_cosine"] == {"enabled": False, "store": "cpu_bf16"}
