@@ -85,7 +85,6 @@ def quack_symmetric_gemm(
     """Batched symmetric GEMM: ``X[L, M, K] -> X @ X^T [L, M, M]`` (full symmetric, bit-exact).
 
     ``X`` must be device-local (no cross-device sharding on any axis) — call inside a shard_map.
-    The kernel computes ``A @ B^T``, so both operands are ``X``, k-major ([L, M, K]).
     """
     L, M, K = X.shape
     arch_family, default_mma_tiler = _symmetric_gemm_config(gpu_compute_capability())
