@@ -80,7 +80,7 @@ def deployment_config() -> DeploymentConfig:
                     "identity": "/marina/api",
                     "label": "Marina API",
                     "url": "https://marina.example.com/api/marina/mcp/",
-                    "auth": {"type": "gcpIdentityToken", "audience": "iap-client-id"},
+                    "auth": {"type": "iap", "audience": "iap-client-id"},
                     "tools": ["find_tool", "call_tool"],
                 }
             ),
@@ -295,7 +295,7 @@ def test_profile_mcp_access_rejects_invalid_selections(mcp_access: dict[str, obj
     "override",
     [
         {"url": "http://marina.example.com/mcp"},
-        {"auth": {"type": "gcpIdentityToken"}},
+        {"auth": {"type": "iap"}},
         {"tools": ["find_tool", "find_tool"]},
     ],
 )
@@ -319,7 +319,7 @@ def test_production_marina_profile_alone_receives_the_remote_mcp() -> None:
     profiles = stack["marin-loom:profiles"]
 
     assert remote.auth.manifest() == {
-        "type": "gcp_identity_token",
+        "type": "iap",
         "audience": MARIN_DESKTOP_OAUTH_CLIENT.client_id,
     }
     assert {name for name, profile in profiles.items() if remote.group in profile["mcpAccess"]["groups"]} == {"marina"}
@@ -454,7 +454,7 @@ def test_profiles_and_workloads_render_to_vm_metadata():
                 "label": "Marina API",
                 "description": "",
                 "url": "https://marina.example.com/api/marina/mcp/",
-                "auth": {"type": "gcp_identity_token", "audience": "iap-client-id"},
+                "auth": {"type": "iap", "audience": "iap-client-id"},
                 "tools": ["find_tool", "call_tool"],
                 "enabled": True,
             }
