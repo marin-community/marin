@@ -33,6 +33,7 @@ from levanter.distributed import DistributedConfig
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.grug.sharding import _compact_grug_mesh_shape
 from levanter.schedule import BatchSchedule
+from levanter.tracker import NoopConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
 from marin.execution.artifact import ArtifactRecord, write_record
@@ -433,6 +434,67 @@ def test_grug_variant_initial_state_only_stores_ema_when_enabled(variant: str):
 
     with_ema_state_shape = init_state_shape(ema_beta=0.999)
     assert with_ema_state_shape.ema_params is not None
+
+
+def test_grug_moe_nonfinite_loss_fails_without_publishing_checkpoint(tmp_path: Path):
+    train_module = importlib.import_module("experiments.grug.moe.train")
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    vocab_size = 32
+    seq_len = 4
+    examples = [GrugLmExample.causal(jnp.arange(seq_len, dtype=jnp.int32)) for _ in range(2)]
+    data_config = LmDataConfig(
+        components={
+            "direct": DirectDatasetComponent(datasets={"train": ListAsyncDataset(examples), "validation": None})
+        },
+        vocab_size=vocab_size,
+        tokenizer="passthrough",
+    )
+    checkpoint_root = tmp_path / "checkpoints"
+    trainer = TrainerConfig(
+        id=f"test-nonfinite-{uuid.uuid4().hex}",
+        num_train_steps=1,
+        train_batch_size=max(1, len(jax.devices())),
+        tracker=NoopConfig(),
+        require_accelerator=False,
+        use_explicit_mesh_axes=True,
+        distributed=DistributedConfig(initialize_jax_distributed=False),
+        log_dir=tmp_path / "logs",
+        checkpointer=CheckpointerConfig(base_path=str(checkpoint_root)),
+    )
+    model_config = dataclasses.replace(
+        _small_model_config(model_module.GrugModelConfig, vocab_size=vocab_size, seq_len=seq_len),
+        initializer_std=float("nan"),
+    )
+    run_config = train_module.GrugRunConfig(
+        model=model_config,
+        data=data_config,
+        resources=ResourceConfig.with_cpu(),
+        trainer=train_module.GrugTrainerConfig(trainer=trainer, log_every=1),
+        eval=None,
+    )
+
+    with pytest.raises(FloatingPointError, match="Non-finite loss"):
+        train_module._run_grug_local(run_config)
+
+    assert not list(checkpoint_root.rglob("metadata.json"))
+
+
+@pytest.mark.parametrize(
+    "module_name",
+    ["experiments.grug.moe.adamh", "experiments.june_tpu_67b_a2b.moe.adamh"],
+    ids=["current", "historical"],
+)
+@pytest.mark.parametrize("shape", [(2, 2), (2, 2, 2)], ids=["matrix", "stacked-matrix"])
+def test_grug_adamh_keeps_zero_norm_parameters_finite(module_name: str, shape: tuple[int, ...]):
+    scale_by_adamh = importlib.import_module(module_name).scale_by_adamh
+    params = jnp.zeros(shape, dtype=jnp.float32)
+    gradients = jnp.ones_like(params)
+    optimizer = scale_by_adamh(learning_rate=0.0)
+
+    updates, _ = optimizer.update(gradients, optimizer.init(params), params)
+
+    assert jnp.all(jnp.isfinite(updates))
+    assert jnp.array_equal(updates, jnp.zeros_like(updates))
 
 
 def test_grug_base_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):

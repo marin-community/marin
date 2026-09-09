@@ -56,6 +56,7 @@ from experiments.sft.launcher import DatasetSpec, SFTSpec, sft_step
 
 _SEQ = 32_768
 _BATCH = 64
+_SMOKE_STEPS = 2
 _NODES = 8
 _EXPERT_PARALLEL = 8
 _WANDB_PROJECT = "marin_moe_sft_snowball_final"
@@ -64,7 +65,7 @@ _PREBUILT_TRAIN_RESOURCES = "prebuilt_train_resources"
 _OPENCODE_DATASET_REVISION = "a9805934c9c98908c611236bbfc87799f1ff6fe5"
 _NEMOTRON_DATASET_REVISION = "a1667c4ffdadea02a89bffe4f1bb7ca2ff19f8d9"
 _TOKENIZER_REF = "marin-community/marin-tokenizer@a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2"
-_CONVERSION_VERSION = "2026.09.09.3"
+_CONVERSION_VERSION = "2026.09.09.4"
 
 # These immutable tags were created only after the uploader validated all 44 source files. Never
 # train from a moving ``main`` revision.
@@ -240,6 +241,11 @@ def _base_model(
     return _converted_model(conversion), conversion
 
 
+def build_conversion(base: str) -> ArtifactStep[LevanterCheckpoint]:
+    """Materialize and validate only the pinned HF-to-native training checkpoint."""
+    return _base_model(base)[1].step
+
+
 def _native_model(
     parent: ArtifactStep[LevanterCheckpoint], conversion: SnowballHfToGrugCheckpoint
 ) -> ConvertedSnowballGrugModel:
@@ -280,7 +286,14 @@ def _spec(
 def build_smoke(base: str, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
     model, _ = _base_model(base)
     return sft_step(
-        _spec(base=base, stage="hf-smoke", version=version, model=model, dataset=_CHAT_DATASET, steps=1),
+        _spec(
+            base=base,
+            stage="hf-smoke",
+            version=version,
+            model=model,
+            dataset=_CHAT_DATASET,
+            steps=_SMOKE_STEPS,
+        ),
         _resources(),
     )
 
@@ -654,11 +667,15 @@ def build_all(base: str, version: str | None = None) -> ArtifactStep[Artifact]:
 @click.option("--base", type=click.Choice(tuple(_BASE_REVISIONS)), required=True)
 @click.option(
     "--stage",
-    type=click.Choice(("smoke", "smoke-reload", "data", "chat", "thinking", "opencode", "nemotron-terminal", "all")),
+    type=click.Choice(
+        ("conversion", "smoke", "smoke-reload", "data", "chat", "thinking", "opencode", "nemotron-terminal", "all")
+    ),
     required=True,
 )
 @build_options
 def main(base: str, stage: str) -> ArtifactStep[LevanterCheckpoint]:
+    if stage == "conversion":
+        return build_conversion(base)
     if stage == "smoke":
         return build_smoke(base)
     if stage == "smoke-reload":

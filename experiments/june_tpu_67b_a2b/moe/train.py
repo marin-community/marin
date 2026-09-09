@@ -651,9 +651,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
                 jax.block_until_ready(metrics["train/loss"])
 
-                if jnp.isnan(metrics["train/loss"]):
-                    logger.error(f"NaN loss at step {int(state.step)}. Stopping training.")
-                    break
+                if not bool(jnp.isfinite(metrics["train/loss"])):
+                    raise FloatingPointError(f"Non-finite loss at step {int(state.step)}")
                 duration = time.perf_counter() - step_start
                 hook_start = time.perf_counter()
                 with jax.profiler.TraceAnnotation("callbacks"):

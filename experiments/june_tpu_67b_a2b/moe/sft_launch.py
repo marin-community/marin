@@ -31,6 +31,7 @@ the training sequence length cannot drift apart.
 """
 
 import dataclasses
+import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -52,6 +53,11 @@ from rigging.filesystem.storage_path import prefix_join
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig
 from experiments.june_tpu_67b_a2b.moe.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
 from experiments.sft.launcher import SFTSpec
+
+
+def _sft_run_id(spec: SFTSpec) -> str:
+    identity = f"{spec.name}-{spec.version}"
+    return re.sub(r"[^A-Za-z0-9_.-]+", "-", identity).strip("-")
 
 
 @dataclass(frozen=True)
@@ -224,7 +230,7 @@ class GrugModel:
             init_from_path = prefix_join(ctx.artifact_path(self.init_from), "checkpoints")
         else:
             init_from_path = self.init_from
-        run_id = spec.name.split("/")[-1]
+        run_id = _sft_run_id(spec)
         tracker = WandbConfig(
             project=spec.wandb_project,
             tags=list(self.wandb_tags),

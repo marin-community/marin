@@ -84,6 +84,21 @@ def test_training_topology_matches_historical_grug_recipe(local_base):
     assert len(tokenizer_revision) == 40
 
 
+def test_training_run_identity_is_unique_per_base_stage_and_version():
+    qk157 = materialized_config(snowball_lce_final.build_smoke("qk157", _VERSION), _PREFIX)
+    qk175 = materialized_config(snowball_lce_final.build_smoke("qk175", _VERSION), _PREFIX)
+
+    assert qk157.run_id == "snowball-final-qk157-hf-smoke-2026.09.08.99"
+    assert qk175.run_id == "snowball-final-qk175-hf-smoke-2026.09.08.99"
+    assert qk157.run_id != qk175.run_id
+
+
+def test_qualification_smoke_runs_long_enough_to_observe_first_update_corruption():
+    train = materialized_config(snowball_lce_final.build_smoke("qk157", _VERSION), _PREFIX)
+
+    assert train.steps == 2
+
+
 def test_all_five_base_revisions_are_immutable():
     assert len(snowball_lce_final._BASE_REVISIONS) == 5
     for repository, revision in snowball_lce_final._BASE_REVISIONS.values():

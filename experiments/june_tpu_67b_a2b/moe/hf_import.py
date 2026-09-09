@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import dataclasses
+import gc
 import os
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
@@ -16,11 +17,12 @@ import draccus
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import numpy as np
 from fray.types import ResourceConfig
 from haliax.nn import ArrayStacked
 from haliax.partitioning import set_mesh
 from jax.experimental.array_serialization.serialization import GlobalAsyncCheckpointManager
-from levanter.checkpoint import save_checkpoint
+from levanter.checkpoint import load_checkpoint, save_checkpoint
 from levanter.compat.hf_checkpoints import RepoRef, load_tokenizer
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.snowball import SnowballConfig, snowball_from_state_dict
@@ -36,6 +38,7 @@ from experiments.june_tpu_67b_a2b.moe.sft_launch import GrugModel
 from experiments.sft.launcher import SFTSpec
 
 _CHECKPOINT_STEP = 0
+_EXPERT_SAMPLE_WIDTH = 16
 
 
 def _conversion_checkpoint_path(output_path: str) -> str:
@@ -62,6 +65,50 @@ def _stack_blocks(blocks: Sequence[Block], template: ArrayStacked[Block]) -> Arr
 
     stacked_block = jax.tree.unflatten(template_treedef, stacked_leaves)
     return eqx.tree_at(lambda value: value.stacked, template, stacked_block)
+
+
+def _hf_expert_samples(state_dict: Mapping[str, Any], num_layers: int) -> dict[str, np.ndarray]:
+    samples = {}
+    for layer in range(num_layers):
+        for projection in ("gate", "up", "down"):
+            name = f"model.layers.{layer}.mlp.experts.{projection}_proj.weight"
+            weights = state_dict[name]
+            expert_indices = (0, weights.shape[0] // 2, weights.shape[0] - 1)
+            samples[name] = np.concatenate(
+                [np.asarray(weights[index, :_EXPERT_SAMPLE_WIDTH, 0], dtype=np.float32) for index in expert_indices]
+            )
+    return samples
+
+
+def _grug_expert_samples(model: Transformer) -> dict[str, np.ndarray]:
+    if model.stacked_blocks is None:
+        raise ValueError("Expected stacked blocks while validating converted expert weights")
+    experts = model.stacked_blocks.stacked.mlp.expert_mlp
+    samples = {}
+    for layer in range(model.config.num_layers):
+        for projection, weights in (("gate", experts.w_gate), ("up", experts.w_up), ("down", experts.w_down)):
+            name = f"model.layers.{layer}.mlp.experts.{projection}_proj.weight"
+            expert_indices = (0, weights.shape[1] // 2, weights.shape[1] - 1)
+            samples[name] = np.concatenate(
+                [
+                    np.asarray(weights[layer, index, 0, :_EXPERT_SAMPLE_WIDTH], dtype=np.float32)
+                    for index in expert_indices
+                ]
+            )
+    return samples
+
+
+def _validate_expert_samples(
+    expected: Mapping[str, np.ndarray], actual: Mapping[str, np.ndarray], *, boundary: str
+) -> None:
+    if expected.keys() != actual.keys():
+        raise ValueError(f"Expert sample keys differ at {boundary}")
+    for name, expected_sample in expected.items():
+        actual_sample = actual[name]
+        if not np.all(np.isfinite(expected_sample)) or not np.any(expected_sample):
+            raise ValueError(f"Pinned HF source has an invalid expert sample for {name}")
+        if not np.array_equal(actual_sample, expected_sample):
+            raise ValueError(f"Expert weights changed at {boundary}: {name}")
 
 
 def import_snowball_hf_weights(
@@ -164,22 +211,41 @@ def _run_snowball_hf_to_grug(config: SnowballHfToGrugConfig) -> None:
             f"Training max_seq_len={model_config.max_seq_len} exceeds HF max_seq_len={source_config.max_seq_len}"
         )
 
-    with use_cpu_device(), set_mesh(compact_grug_mesh(expert_axis_size=1)):
+    mesh = compact_grug_mesh(expert_axis_size=1)
+    with use_cpu_device(), set_mesh(mesh):
         state_dict = converter.load_state_dict(ref, dtype=jnp.bfloat16)
+        hf_expert_samples = _hf_expert_samples(state_dict, model_config.num_layers)
         model, pending_qb_betas = import_snowball_hf_weights(
             model_config,
             state_dict,
             key=jax.random.key(0),
         )
+        converted_expert_samples = _grug_expert_samples(model)
+        _validate_expert_samples(hf_expert_samples, converted_expert_samples, boundary="HF import and block stacking")
+
+        checkpoint_path = _conversion_checkpoint_path(config.output_path)
         manager = GlobalAsyncCheckpointManager()
         save_checkpoint(
             {"params": model, "pending_qb_betas": pending_qb_betas},
             step=_CHECKPOINT_STEP,
-            checkpoint_path=_conversion_checkpoint_path(config.output_path),
+            checkpoint_path=checkpoint_path,
             manager=manager,
             is_temporary=False,
         )
         manager.wait_until_finished()
+
+        reload_template = {
+            "params": eqx.filter_eval_shape(Transformer.init, model_config, key=jax.random.key(0)),
+            "pending_qb_betas": eqx.filter_eval_shape(jnp.zeros_like, pending_qb_betas),
+        }
+        del state_dict, model, pending_qb_betas
+        gc.collect()
+        reloaded = load_checkpoint(reload_template, checkpoint_path, mesh=mesh)
+        _validate_expert_samples(
+            hf_expert_samples,
+            _grug_expert_samples(reloaded["params"]),
+            boundary="native checkpoint save and reload",
+        )
 
     tokenizer = load_tokenizer(config.hf_id, revision=config.hf_revision)
     with tempfile.TemporaryDirectory(prefix="snowball-grug-tokenizer-") as tokenizer_dir:

@@ -6,6 +6,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from haliax.partitioning import set_mesh
+from levanter.checkpoint import load_checkpoint, save_checkpoint
 from levanter.grug.sharding import compact_grug_mesh
 
 from experiments.grug.moe.model import GrugModelConfig as ExportConfig
@@ -105,3 +106,24 @@ def test_hf_import_preserves_effective_weights_and_logits_in_stacked_trainer():
         actual_logits = np.asarray(jax.jit(lambda model, value: model.logits(value))(effective, tokens))
 
     assert np.allclose(expected_logits, actual_logits, atol=1e-5, rtol=1e-5)
+
+
+def test_hf_imported_expert_weights_survive_native_checkpoint_round_trip(tmp_path):
+    mesh = compact_grug_mesh(expert_axis_size=1)
+    with set_mesh(mesh):
+        exported = ExportTransformer.init(_export_config(), key=jax.random.key(7))
+        imported, pending_qb_betas = import_snowball_hf_weights(
+            _training_config(),
+            exported.to_state_dict(),
+            key=jax.random.key(11),
+        )
+        checkpoint = tmp_path / "step-0"
+        state = {"params": imported, "pending_qb_betas": pending_qb_betas}
+        save_checkpoint(state, step=0, checkpoint_path=checkpoint, is_temporary=False)
+        restored = load_checkpoint(state, checkpoint, mesh=mesh)
+
+    expected_experts = imported.stacked_blocks.stacked.mlp.expert_mlp
+    actual_experts = restored["params"].stacked_blocks.stacked.mlp.expert_mlp
+    assert np.array_equal(np.asarray(actual_experts.w_gate), np.asarray(expected_experts.w_gate))
+    assert np.array_equal(np.asarray(actual_experts.w_up), np.asarray(expected_experts.w_up))
+    assert np.array_equal(np.asarray(actual_experts.w_down), np.asarray(expected_experts.w_down))
