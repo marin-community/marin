@@ -29,6 +29,7 @@ import re
 from dataclasses import asdict, dataclass, field, replace
 from enum import StrEnum
 from typing import cast
+from urllib.parse import urlsplit
 
 import click
 import yaml
@@ -273,6 +274,7 @@ def training_config(
     publication_stage_timing: bool = False,
     serial_engine_startup: bool = False,
     first_token_admission: bool = False,
+    measurement_guard_uri: str | None = None,
     generation_workers: int | None = None,
     lr: float | None = None,
     max_num_seqs: int | None = None,
@@ -428,6 +430,18 @@ def training_config(
         if eval_mode == "background" and not eval_on_installed_weights:
             raise ValueError("Background evaluation requires installed weights")
         trainer["fully_async"].update(eval_on_installed_weights=eval_on_installed_weights, eval_mode=eval_mode)
+    if measurement_guard_uri is not None:
+        parsed = urlsplit(measurement_guard_uri) if isinstance(measurement_guard_uri, str) else None
+        if (
+            parsed is None
+            or parsed.scheme != "s3"
+            or not parsed.netloc
+            or not parsed.path.strip("/")
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("measurement_guard_uri must be an explicit S3 object URI")
+        config["trainer"]["measurement_guard_uri"] = measurement_guard_uri
     if type(first_token_admission) is not bool:
         raise ValueError("first_token_admission must be boolean")
     if first_token_admission:
@@ -602,6 +616,7 @@ def build_experiment(
     spans: bool = True,
     staleness: int = 1,
     timeout_seconds: int = 1800,
+    max_retries: int = 0,
     completion: str = "model",
     weight_sync_interval: int = 1,
     inference_replicas: int = 8,
@@ -630,6 +645,7 @@ def build_experiment(
     publication_stage_timing: bool = False,
     serial_engine_startup: bool = False,
     first_token_admission: bool = False,
+    measurement_guard_uri: str | None = None,
     generation_workers: int | None = None,
     lr: float | None = None,
     max_num_seqs: int | None = None,
@@ -647,6 +663,8 @@ def build_experiment(
         raise ValueError("Use an immutable artifact version for the matched experiment")
     if cluster not in H100_CLUSTERS:
         raise ValueError("The development preset requires an H100 cluster")
+    if type(max_retries) is not int or max_retries < 0:
+        raise ValueError("max_retries must be a nonnegative integer")
     if timeout_seconds <= 0 or staleness < 0:
         raise ValueError("A positive training deadline and nonnegative staleness are required")
     if completion not in ("model", "metrics"):
@@ -689,6 +707,7 @@ def build_experiment(
         publication_stage_timing=publication_stage_timing,
         serial_engine_startup=serial_engine_startup,
         first_token_admission=first_token_admission,
+        measurement_guard_uri=measurement_guard_uri,
         generation_workers=generation_workers,
         lr=lr,
         max_num_seqs=max_num_seqs,
@@ -775,8 +794,8 @@ def build_experiment(
         memory="128GB",
         disk="2TB",
         priority="batch",
-        max_retries=0,
         timeout_seconds=timeout_seconds,
+        max_retries=max_retries,
     )
     if completion == "metrics":
         step = skyrl_metrics_step(spec, execution)
@@ -909,6 +928,8 @@ def build_experiment(
     default=False,
     help="Apply the pinned invariant environment before trainer and receiver process groups; seeded control only.",
 )
+@click.option("--measurement-guard-uri", default=None, help="Atomic S3 claim before initial evaluation or rollout.")
+@click.option("--max-retries", type=click.IntRange(min=0), default=0, show_default=True)
 @click.option("--timeout-seconds", type=click.IntRange(min=1), default=1800, show_default=True)
 @click.option("--run/--dry-run", "execute", default=False, show_default=True)
 @click.option(
@@ -955,12 +976,14 @@ def main(
     publication_stage_timing: bool,
     serial_engine_startup: bool,
     first_token_admission: bool,
+    measurement_guard_uri: str | None,
     generation_workers: int | None,
     lr: float | None,
     max_num_seqs: int | None,
     train_rows: int | None,
     training_ignore_eos: bool,
     timeout_seconds: int,
+    max_retries: int,
     execute: bool,
     pool_artifact: str | None,
     eval_on_installed_weights: bool,
@@ -982,6 +1005,7 @@ def main(
         spans=spans,
         staleness=staleness,
         timeout_seconds=timeout_seconds,
+        max_retries=max_retries,
         completion=completion,
         weight_sync_interval=weight_sync_interval,
         inference_replicas=int(inference_replicas),
@@ -1014,6 +1038,7 @@ def main(
         publication_stage_timing=publication_stage_timing,
         serial_engine_startup=serial_engine_startup,
         first_token_admission=first_token_admission,
+        measurement_guard_uri=measurement_guard_uri,
         generation_workers=generation_workers,
         lr=lr,
         max_num_seqs=max_num_seqs,
