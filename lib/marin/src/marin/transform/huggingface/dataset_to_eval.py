@@ -18,11 +18,12 @@ from typing import Any
 
 import draccus
 from datasets import get_dataset_config_names, load_dataset
-from marin.core.data import QAExample, QAExampleMetadata
-from marin.utilities.dataclass_utils import asdict_without_nones
 from rigging.filesystem.factory import filesystem as marin_filesystem
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
+
+from marin.core.data import QAExample, QAExampleMetadata
+from marin.utilities.dataclass_utils import asdict_without_nones
 
 logger = logging.getLogger(__name__)
 

@@ -226,3 +226,10 @@ exclude = [
   "src/marin/inference/dashboard/dist",
   "src/marin/inference/dashboard/.rsbuild",
 ]
+
+[tool.ruff]
+extend = "../../pyproject.toml"
+
+[tool.ruff.lint.isort]
+known-first-party = ["marin"]
+known-local-folder = []

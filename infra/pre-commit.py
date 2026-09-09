@@ -45,6 +45,7 @@ HALIAX_LICENSE = ROOT_DIR / "lib/haliax/etc/license_header.txt"
 MARIN_LICENSE = ROOT_DIR / "etc/license_header.txt"
 LEVANTER_BLACK_CONFIG = ROOT_DIR / "lib/levanter/pyproject.toml"
 HALIAX_BLACK_CONFIG = ROOT_DIR / "lib/haliax/pyproject.toml"
+MARIN_RUFF_CONFIG = ROOT_DIR / "lib/marin/pyproject.toml"
 
 EXCLUDE_PATTERNS = [
     ".git/**",
@@ -190,11 +191,13 @@ def _record(name: str, exit_code: int, output: str = "") -> int:
     return exit_code
 
 
-def check_ruff(files: list[pathlib.Path], fix: bool) -> int:
+def check_ruff(files: list[pathlib.Path], fix: bool, config: pathlib.Path | None = None) -> int:
     if not files:
         return 0
 
     args = ["uvx", "ruff@0.14.3", "check"]
+    if config is not None:
+        args.extend(["--config", str(config)])
     if fix:
         args.extend(["--fix", "--exit-non-zero-on-fix"])
 
@@ -845,8 +848,14 @@ PRECOMMIT_CONFIGS = [
         ],
     ),
     PrecommitConfig(
+        patterns=["lib/marin/src/**/*.py"],
+        checks=[
+            partial(check_ruff, config=MARIN_RUFF_CONFIG),
+        ],
+    ),
+    PrecommitConfig(
         patterns=["**/*.py"],
-        exclude_patterns=["lib/levanter/**", "lib/haliax/**", "lib/**/vendor/**"],
+        exclude_patterns=["lib/levanter/**", "lib/haliax/**", "lib/marin/**", "lib/**/vendor/**"],
         checks=[
             check_ruff,
             check_black,
