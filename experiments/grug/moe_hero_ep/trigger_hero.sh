@@ -11,10 +11,11 @@ fi
 
 : "${WANDB_API_KEY:?Set WANDB_API_KEY before you start the hero.}"
 
-# Gate/router weight-decay continuation: forks the hero's full state from its step-58014 checkpoint
-# under its own run id and tree, and trains with the decay on by default (0.02, annealed).
-RUN_ID=hero-wd-gate-router-p02-step58k
-HANDOFF_CHECKPOINT=s3://hero-checkpoints/tmp/ttl=14d/checkpoints-temp/marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-58014
+# Ragged all-to-all continuation: forks the hero's full state from the checkpoint forced on the
+# pooled-wave run at step 81716 (its metadata is marked non-temporary so the hourly save keeps it)
+# under its own run id and tree.
+RUN_ID=hero-ragged_a2a-ep-step81k
+HANDOFF_CHECKPOINT=s3://hero-checkpoints/tmp/ttl=14d/checkpoints-temp/marin-us-east-02a/marin/grug/hero-wd-gate-router-p02-step58k/2026.08.19.2/checkpoints/step-81716
 HERO_ISSUE=https://github.com/marin-community/marin/issues/8506
 TARGET_CLUSTER=cw-us-east-08a
 TARGET_DESCRIPTION='11 x NVL72'
