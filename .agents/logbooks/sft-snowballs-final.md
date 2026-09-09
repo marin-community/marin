@@ -221,3 +221,21 @@ author: benfeuer
 - Result: the training adapter now hands each device only its local flattened token batch to the bounded fused kernel and matches a full-logits cross-entropy oracle. The focused suite passed 53 tests, the affected runner passed 1,429 tests with 172 platform skips, and pre-commit passed. Canary 3 successfully normalized the cached URI and initialized the Grug architecture, then vLLM rejected `{"distributed": true}` because the staged HF directory uses load format `auto`; that option belongs only to the RunAI streaming loader.
 - Interpretation: keep non-default reductions on the generic model API, but use the explicit raw-array shard map for the default SFT mean. Remove the RunAI-only loader option only from the staged final-campaign models; retain it for direct object-store Snowball exports.
 - Next action: commit and push both corrections, launch smoke 5 with a fresh job identity/port, and repeat only the qk157 Base/NLP seed-42 canary.
+
+### 2026-09-08 23:51 EDT - Smoke 5 and evaluation canary 4 launched
+
+- Hypothesis: commit `d08ef276c5` keeps the full-shape training loss device-local and allows the staged HF base to start vLLM without changing direct object-store streaming behavior.
+- Commit Hash: `d08ef276c5`.
+- Command: submit `/benfeuer/snowball-final-qk157-smoke5-coord` on RNO2A with JAX port 19406 and version `2026.09.08.5`; launch qk157 Base/NLP seed 42 as evaluation group `20260909-035119-snowball-final-qk157-base-4835`.
+- Result: both bounded gates were accepted at interactive priority. Smoke 5 owns 64 H100s only after its child materializes; canary 4 contains the same 14 NLP tasks and one shared H100x8 serve.
+- Interpretation: do not fan out either campaign until the corresponding gate has durable success evidence.
+- Next action: monitor smoke 5 through load/compile/update/save and canary 4 through endpoint registration plus result persistence.
+
+### 2026-09-09 00:14 EDT - Eval canary 4 exposed insufficient runtime HBM headroom
+
+- Hypothesis: successful endpoint registration means the default vLLM memory reservation is safe for the actual NLP workload.
+- Commit Hash: canary ran `d08ef276c5`; fix uncommitted.
+- Command: inspect inference child `/benfeuer/eval-20260909-035119-snowball-final-qk157-base-4835/inference-d160db4fa02d494cb30860acbbea64fa` through startup, cache sizing, and its first MMLU requests.
+- Result: falsified after serving began. All eight ranks loaded and registered, and `/v1/models` returned 200. vLLM's 0.92 utilization target allocated a 51.2 GiB KV cache per 79.18 GiB GPU; during the workload, ranks had only 510 MiB free and failed a 1.46 GiB allocation. The benchmark's subsequent 404s were consequences of the dead inference endpoint, not an endpoint-name transport bug. The owned group was cancelled to stop futile retries. The campaign catalog now sets utilization to 0.85, retaining about 5.5 GiB more headroom per GPU, and the exact catalog invariant is covered by the existing 25-model regression test (29 tests passed).
+- Interpretation: staging, local URI normalization, architecture resolution, weight loading, endpoint registration, and request routing are all validated. One fresh canary must demonstrate that the lower KV reservation survives real requests and persists results before fan-out.
+- Next action: run repository gates, commit and push the headroom correction, then launch only qk157 Base/NLP seed 42 as canary 5.

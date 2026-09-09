@@ -28,7 +28,9 @@ SNOWBALL_SFT_EXPORT_URI = "s3://marin-us-east-02a/marin/exports/grug/june-67b-a2
 # The 256-expert Grug MoE fork serves data-parallel + expert-parallel with tensor_parallel_size=1; the
 # per-head TP heuristic cannot infer this, and the loader streams shards distributed across the ranks.
 SNOWBALL_VLLM_ARGS = ("--enable-expert-parallel", "--model-loader-extra-config", '{"distributed":true}')
-SNOWBALL_FINAL_VLLM_ARGS = ("--enable-expert-parallel",)
+# vLLM's 92% default left only ~0.5 GiB free after allocating the Snowball KV cache.
+# Real eval batches need more activation headroom than vLLM's startup profile observed.
+SNOWBALL_FINAL_VLLM_ARGS = ("--enable-expert-parallel", "--gpu-memory-utilization", "0.85")
 SNOWBALL_FINAL_VERSION = "2026.09.08.6"
 SNOWBALL_FINAL_GENERATION = GenerationConfig(
     max_gen_toks=32768,
