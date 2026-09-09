@@ -18,7 +18,8 @@ from playwright.sync_api import Browser, sync_playwright
 
 from marina.db import database_from_env
 from marina.journeys import Journey, Kernel, running_kernel
-from marina.server import MarinaConfig
+from marina.scripted_loom import ScriptedLoom, ScriptedLoomServer
+from marina.server import AgentPanelService, MarinaConfig
 
 JOURNEYS_DIR = "journeys"
 DEFAULT_SHOTS_DIR = Path(__file__).resolve().parents[2] / "journeys-out"
@@ -59,12 +60,32 @@ def apps_dir_of(path: Path) -> Path:
 
 
 @pytest.fixture(scope="session")
-def marina_kernel(request: pytest.FixtureRequest) -> Iterator[Kernel]:
+def scripted_loom_server() -> Iterator[ScriptedLoomServer]:
+    server = ScriptedLoomServer()
+    server.start()
+    try:
+        yield server
+    finally:
+        server.stop()
+
+
+@pytest.fixture
+def scripted_loom(scripted_loom_server: ScriptedLoomServer) -> Iterator[ScriptedLoom]:
+    scripted_loom_server.controller.reset()
+    yield scripted_loom_server.controller
+
+
+@pytest.fixture(scope="session")
+def marina_kernel(request: pytest.FixtureRequest, scripted_loom_server: ScriptedLoomServer) -> Iterator[Kernel]:
     first = Path(str(request.session.items[0].path)) if request.session.items else Path.cwd()
     apps_dir = Path(request.config.getoption(APPS_DIR_OPTION) or apps_dir_of(first))
     data_root = request.config.getoption(DATA_ROOT_OPTION) or str(apps_dir.parent / ".data")
     config = MarinaConfig(
-        apps_dir=apps_dir, data_root=data_root, iap_audience=None, database=database_from_env(os.environ)
+        apps_dir=apps_dir,
+        data_root=data_root,
+        iap_audience=None,
+        database=database_from_env(os.environ),
+        agent_panel=AgentPanelService(scripted_loom_server.origin),
     )
     with running_kernel(config) as kernel:
         yield kernel
@@ -86,13 +107,20 @@ def journey(request: pytest.FixtureRequest) -> Iterator[Journey]:
         pytest.skip(f"journeys run through `marina journey` or pytest {ENABLE_OPTION}")
     marina_kernel: Kernel = request.getfixturevalue("marina_kernel")
     marina_browser: Browser = request.getfixturevalue("marina_browser")
+    scripted_loom_server: ScriptedLoomServer = request.getfixturevalue("scripted_loom_server")
     app = app_of(Path(str(request.path)))
     shots_root = Path(request.config.getoption(SHOTS_OPTION) or DEFAULT_SHOTS_DIR)
     shots = shots_root / app
     record_video_dir = str(shots / "video") if request.config.getoption(VIDEO_OPTION) else None
     context = marina_browser.new_context(viewport=VIEWPORT, record_video_dir=record_video_dir)
     page = context.new_page()
-    walk = Journey(page=page, origin=marina_kernel.origin, app=app, shots=shots)
+    walk = Journey(
+        page=page,
+        origin=marina_kernel.origin,
+        app=app,
+        shots=shots,
+        external_origins=(scripted_loom_server.origin,),
+    )
     try:
         yield walk
         walk.finish()

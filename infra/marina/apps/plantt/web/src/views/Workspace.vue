@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
+import { useAgentContext } from "@marina/agentContext";
 import { chartApi } from "../api.js";
 import ChartLibrary from "../components/ChartLibrary.vue";
 import GanttChart from "../components/GanttChart.vue";
@@ -50,6 +51,23 @@ const statusText = computed(() => {
   if (record.value) return `Saved · revision ${record.value.revision}`;
   return "";
 });
+const agentContext = computed(() => {
+  if (!record.value || !plan.value) return null;
+  return {
+    version: 1,
+    contextKey: `chart:${record.value.id}`,
+    label: `${plan.value.title} · revision ${record.value.revision}`,
+    state: {
+      chart_id: record.value.id,
+      revision: record.value.revision,
+      selected_item: selected.value || null,
+      dirty: dirty.value,
+      saving: saving.value,
+      conflict: conflict.value,
+    },
+  };
+});
+useAgentContext(agentContext);
 
 async function refreshCharts() {
   charts.value = await chartApi.list();

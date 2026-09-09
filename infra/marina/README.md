@@ -120,8 +120,23 @@ infra/marina/
    standard `readOnlyHint`, `destructiveHint`, and `openWorldHint` annotations.
    The exact `read`, `write`, `external_write`, or `destructive` value is also
    available at `_meta.marina.risk`.
-4. Write a journey in `apps/<name>/journeys/test_*.py` (below).
-5. Run it locally:
+4. To expose the shared page-agent panel, declare the Loom launch coordinates
+   and up to three empty-state prompts:
+
+   ```toml
+   [agent]
+   profile = "marina"
+   repository = "marin-community/marin"
+   starters = ["What is on the critical path?"]
+   ```
+
+   The active view publishes bounded, versioned page context with
+   `useAgentContext()` from `@marina/agentContext`. The context supplies stable
+   identifiers and UI state; it does not contain a document or select tools.
+   The deployment supplies `MARINA_AGENT_ORIGIN`, so applications do not embed
+   an environment-specific Loom URL.
+5. Write a journey in `apps/<name>/journeys/test_*.py` (below).
+6. Run it locally:
 
    ```bash
    uv run marina check                 # parse manifests, report build state
@@ -177,6 +192,11 @@ clients keep their authorization header; page requests redirect into the app's
 prefix on the canonical origin. The auth chain is IAP's signed assertion header
 when an audience is configured, then loopback; on Cloud Run a missing audience
 is a startup error rather than an open service.
+
+`MARINA_AGENT_ORIGIN` is the Loom origin used by opted-in checked-in apps. It
+must be HTTPS in an IAP deployment; a loopback development kernel may use HTTP.
+Marina adds it to `connect-src` only for apps with an `[agent]` manifest. Loom
+must list Marina's exact origin in its `browser.allowed_origins` setting.
 
 `MARINA_APPLET_ORIGIN` names the separate origin that serves `/a/*`. Requests
 for applet pages on Marina's main host redirect there. The applet host returns

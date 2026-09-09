@@ -18,8 +18,9 @@ from pathlib import Path
 MANIFEST_FILE = "app.toml"
 DIST_DIR = "dist"
 APP_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9-]*$")
-KNOWN_KEYS = frozenset({"title", "description", "connect_src", "build_command", "jobs"})
+KNOWN_KEYS = frozenset({"title", "description", "connect_src", "build_command", "jobs", "agent"})
 JOB_KEYS = frozenset({"name", "runner", "schedule", "command", "timeout", "cpu", "memory_gib", "secrets"})
+AGENT_KEYS = frozenset({"profile", "repository", "starters"})
 ENV_NAME_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*$")
 RUNNER_OVERHEAD = 300
 
@@ -39,6 +40,15 @@ class AppJob:
 
 
 @dataclass(frozen=True)
+class AgentPanelManifest:
+    """The Loom launch coordinates and empty-state prompts for one app."""
+
+    profile: str
+    repository: str
+    starters: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class AppManifest:
     name: str
     title: str
@@ -47,6 +57,7 @@ class AppManifest:
     connect_src: tuple[str, ...] = ()
     build_command: str | None = None
     jobs: tuple[AppJob, ...] = ()
+    agent: AgentPanelManifest | None = None
 
     @property
     def path(self) -> str:
@@ -99,7 +110,7 @@ class JobRunner:
 
 def _string(raw: object, field: str, manifest_path: Path) -> str:
     if not isinstance(raw, str) or not raw.strip():
-        raise ValueError(f"{manifest_path}: job {field!r} must be a non-empty string")
+        raise ValueError(f"{manifest_path}: {field!r} must be a non-empty string")
     return raw
 
 
@@ -151,6 +162,27 @@ def _job(raw: object, manifest_path: Path) -> AppJob:
     )
 
 
+def _agent(raw: object, manifest_path: Path) -> AgentPanelManifest:
+    if not isinstance(raw, dict):
+        raise ValueError(f"{manifest_path}: agent must be a table")
+    unknown = set(raw) - AGENT_KEYS
+    if unknown:
+        raise ValueError(f"{manifest_path}: agent has unknown keys {sorted(unknown)}")
+    missing = {"profile", "repository"} - set(raw)
+    if missing:
+        raise ValueError(f"{manifest_path}: agent is missing required keys {sorted(missing)}")
+    profile = _string(raw["profile"], "profile", manifest_path)
+    repository = _string(raw["repository"], "repository", manifest_path)
+    starters = raw.get("starters", [])
+    if (
+        not isinstance(starters, list)
+        or len(starters) > 3
+        or any(not isinstance(starter, str) or not starter.strip() or len(starter) > 160 for starter in starters)
+    ):
+        raise ValueError(f"{manifest_path}: agent starters must contain at most three strings of 1 to 160 characters")
+    return AgentPanelManifest(profile=profile, repository=repository, starters=tuple(starters))
+
+
 def load_manifest(app_dir: Path) -> AppManifest:
     """Parse ``app_dir/app.toml``; raise ValueError on a missing, unknown, or malformed key."""
     name = app_dir.name
@@ -181,6 +213,7 @@ def load_manifest(app_dir: Path) -> AppManifest:
         connect_src=tuple(raw.get("connect_src", [])),
         build_command=raw.get("build_command"),
         jobs=jobs,
+        agent=_agent(raw["agent"], manifest_path) if "agent" in raw else None,
     )
 
 
