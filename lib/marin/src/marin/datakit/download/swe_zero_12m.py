@@ -22,8 +22,8 @@ from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import (
     CHAT_CONTROL_TOKEN,
     REASONING_TOKEN,
+    checked_openai_chat_document,
     load_parquet_batched,
-    openai_chat_document,
     render_role_message,
     text_document,
 )
@@ -150,13 +150,12 @@ def row_to_chat_doc(row: dict) -> list[dict]:
     if not canonical or canonical[-1]["role"] != "assistant":
         counters.pipeline.update_counter("swe_zero_12m/chat_incomplete_filtered", 1)
         return []
-    return [
-        openai_chat_document(
-            canonical,
-            HF_DATASET_ID,
-            chat_template_kwargs={"tools": [BASH_TOOL]},
-        )
-    ]
+    return checked_openai_chat_document(
+        canonical,
+        HF_DATASET_ID,
+        counter_prefix="swe_zero_12m/chat",
+        chat_template_kwargs={"tools": [BASH_TOOL]},
+    )
 
 
 def transform(input_path: str, output_path: str) -> None:
@@ -216,7 +215,7 @@ def swe_zero_12m_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/swe-zero-12m-trajectories",
         deps=[dl],
         fn=lambda output_path: transform_chat(dl.output_path, output_path),
-        hash_attrs={"version": "2026.09.05.harmony-arrow"},
+        hash_attrs={"version": "2026.09.09.quarantine"},
     )
     return processed, normalize_chat_step(
         output_schema=CHAT_SCHEMA, name="normalized-chat/swe-zero-12m", download=processed

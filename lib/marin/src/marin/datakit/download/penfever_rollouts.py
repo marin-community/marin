@@ -29,7 +29,9 @@ from marin.datakit.download.rollout_transforms import (
     TRAJECTORY_FAILED_TAG,
     TRAJECTORY_SOLVED_TAG,
     TRAJECTORY_UNVERIFIED_TAG,
+    checked_openai_chat_document,
     load_parquet_batched,
+    merge_adjacent_user_messages,
     openai_chat_document,
     render_role_message,
     text_document,
@@ -41,6 +43,10 @@ from marin.execution.step_spec import StepSpec
 # The dataset README identifies the tokenizer used to record these literal IDs.
 OPENCODE_TOKENIZER = "Qwen/Qwen3.5-122B-A10B-FP8"
 OPENCODE_TOKENIZER_REVISION = "a099dee70ccfcd8d5dda56aaa0b60cb8ecadabc9"
+CHAT_QUARANTINE_COUNTER_PREFIXES = {
+    "minimax-m27-131k": "penfever_rollouts/minimax/chat",
+    "qwen35-122b-32k": "penfever_rollouts/qwen32k/chat",
+}
 
 
 SOURCE_CHAT_SCHEMA = pa.schema(
@@ -1120,10 +1126,11 @@ def _opencode_tokenizer() -> Tokenizer:
     return Tokenizer.from_file(path)
 
 
-def _opencode_conversation(row: dict) -> tuple[list[dict], list[dict]]:
+def _opencode_conversation(row: dict) -> tuple[list[dict], list[dict]] | None:
     prompts = row.get("prompt_token_ids")
     if not prompts or not prompts[0]:
-        raise ValueError("OpenCode record is missing the literal prompt containing its tool schemas")
+        counters.pipeline.update_counter("penfever_rollouts/opencode/missing_prompt_filtered", 1)
+        return None
     prompt = _opencode_tokenizer().decode(prompts[0], skip_special_tokens=False)
     return opencode_conversation(row["conversations"], prompt)
 
@@ -1136,7 +1143,10 @@ def row_to_chat_doc(dataset: PenfeverRollout) -> Callable[[dict], list[dict]]:
         if not conversations:
             return []
         if dataset.cohort_name == "qwen35-122b-131k-opencode":
-            conversations, tools = _opencode_conversation(row)
+            recovered = _opencode_conversation(row)
+            if recovered is None:
+                return []
+            conversations, tools = recovered
             converted = opencode_protocol_messages(conversations, tools)
         else:
             first = conversations[0]
@@ -1150,7 +1160,23 @@ def row_to_chat_doc(dataset: PenfeverRollout) -> Callable[[dict], list[dict]]:
         if converted is None:
             return []
         messages, metadata = converted
+        if dataset.cohort_name == "qwen35-122b-32k":
+            merged = merge_adjacent_user_messages(messages)
+            counters.pipeline.update_counter(
+                "penfever_rollouts/qwen32k/chat/adjacent_user_merged", len(messages) - len(merged)
+            )
+            messages = merged
         tag = outcome_tag(row.get("verifier_output"), row.get("result"))
+        if dataset.cohort_name in CHAT_QUARANTINE_COUNTER_PREFIXES:
+            return checked_openai_chat_document(
+                messages,
+                dataset.hf_dataset_id,
+                counter_prefix=CHAT_QUARANTINE_COUNTER_PREFIXES[dataset.cohort_name],
+                teacher=dataset.teacher,
+                task_source=dataset.task_source,
+                outcome=tag or "",
+                **metadata,
+            )
         return [
             openai_chat_document(
                 messages,
@@ -1231,7 +1257,13 @@ def _rollout_chat_steps(dataset: PenfeverRollout) -> tuple[StepSpec, StepSpec]:
         deps=[download],
         fn=lambda output_path: transform_chat(dataset, download.output_path, output_path),
         hash_attrs={
-            "version": "2026.09.05.4.explicit-tools",
+            "version": (
+                {
+                    "qwen35-122b-131k-opencode": "2026.09.09.continuations",
+                    "qwen35-122b-32k": "2026.09.09.adjacent-users",
+                    "minimax-m27-131k": "2026.09.09.quarantine",
+                }.get(dataset.cohort_name, "2026.09.05.4.explicit-tools")
+            ),
             "schema_tokenizer": (OPENCODE_TOKENIZER, OPENCODE_TOKENIZER_REVISION),
             "teacher": dataset.teacher,
             "task_source": dataset.task_source,

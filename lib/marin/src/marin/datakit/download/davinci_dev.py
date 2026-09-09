@@ -37,9 +37,8 @@ from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import (
     TRAJECTORY_FAILED_TAG,
     TRAJECTORY_SOLVED_TAG,
-    ReasoningFormatError,
+    checked_openai_chat_document,
     load_parquet_batched,
-    openai_chat_document,
     render_tool_message,
     text_document,
 )
@@ -259,15 +258,13 @@ def env_row_to_chat_doc(row: dict) -> list[dict]:
         counters.pipeline.update_counter("davinci_dev/env/chat_incomplete_filtered", 1)
         return []
     success = row.get("success") if "success" in row else None
-    try:
-        return [
-            openai_chat_document(
-                messages, "GAIR/daVinci-Dev/env-native", success=success, chat_template_kwargs={"tools": ENV_TOOLS}
-            )
-        ]
-    except ReasoningFormatError:
-        counters.pipeline.update_counter("davinci_dev/env/chat_malformed_reasoning_filtered", 1)
-        return []
+    return checked_openai_chat_document(
+        messages,
+        "GAIR/daVinci-Dev/env-native",
+        counter_prefix="davinci_dev/env/chat",
+        success=success,
+        chat_template_kwargs={"tools": ENV_TOOLS},
+    )
 
 
 def transform_env_native(input_path: str, output_path: str) -> None:
@@ -335,7 +332,7 @@ def davinci_dev_env_native_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/davinci-dev-env-native",
         deps=[dl],
         fn=lambda output_path: transform_env_native_chat(dl.output_path, output_path),
-        hash_attrs={"version": "2026.09.05.1.explicit-tools"},
+        hash_attrs={"version": "2026.09.09.quarantine"},
     )
     return processed, normalize_chat_step(
         output_schema=SOURCE_CHAT_SCHEMA,

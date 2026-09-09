@@ -23,8 +23,9 @@ from marin.datakit.download.opencode import INLINE_TOOL_CALL
 from marin.datakit.download.rollout_transforms import (
     TRAJECTORY_FAILED_TAG,
     TRAJECTORY_SOLVED_TAG,
+    checked_openai_chat_document,
     load_parquet_batched,
-    openai_chat_document,
+    merge_adjacent_user_messages,
     render_role_message,
     text_document,
 )
@@ -93,23 +94,17 @@ def row_to_chat_doc(row: dict) -> list[dict]:
     ):
         counters.pipeline.update_counter("swe_rebench_openhands/chat_inline_tool_syntax_filtered", 1)
         return []
-    merged_trajectory: list[dict] = []
-    for message in trajectory:
-        if merged_trajectory and message.get("role") == "user" and merged_trajectory[-1].get("role") == "user":
-            previous = merged_trajectory[-1]
-            previous["content"] = f"{previous.get('content') or ''}\n\n{message.get('content') or ''}".strip()
-            counters.pipeline.update_counter("swe_rebench_openhands/chat_adjacent_user_merged", 1)
-            continue
-        merged_trajectory.append(dict(message))
+    merged_trajectory = merge_adjacent_user_messages(trajectory)
+    if merged_count := len(trajectory) - len(merged_trajectory):
+        counters.pipeline.update_counter("swe_rebench_openhands/chat_adjacent_user_merged", merged_count)
     trajectory = merged_trajectory
-    return [
-        openai_chat_document(
-            trajectory,
-            HF_DATASET_ID,
-            resolved=resolved,
-            chat_template_kwargs={"tools": _restore_tool_schema(row.get("tools") or [])},
-        )
-    ]
+    return checked_openai_chat_document(
+        trajectory,
+        HF_DATASET_ID,
+        counter_prefix="swe_rebench_openhands/chat",
+        resolved=resolved,
+        chat_template_kwargs={"tools": _restore_tool_schema(row.get("tools") or [])},
+    )
 
 
 def transform(input_path: str, output_path: str) -> None:
@@ -171,7 +166,7 @@ def swe_rebench_openhands_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/swe-rebench-openhands-trajectories",
         deps=[dl],
         fn=lambda output_path: transform_chat(dl.output_path, output_path),
-        hash_attrs={"version": "2026.09.05.1.explicit-tools"},
+        hash_attrs={"version": "2026.09.09.quarantine"},
     )
     return processed, normalize_chat_step(
         output_schema=SOURCE_CHAT_SCHEMA, name="normalized-chat/swe-rebench-openhands", download=processed

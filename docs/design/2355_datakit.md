@@ -87,6 +87,26 @@ and `instruction` field do not reliably preserve those inputs. The parsers retur
 dictionaries and tool definitions for the source helper; they do not define
 the shared Harmony contract or run the normalization pipeline.
 
+Penfever OpenCode rows without a recorded initial prompt are filtered by the source
+adapter and counted as `penfever_rollouts/opencode/missing_prompt_filtered`.
+Their original request and tool definitions cannot be recovered from the displayed
+conversation. Other prompt-parsing failures still raise errors.
+AgentTrove and Nemotron-Terminal also filter inline-call conversations when their
+prompt lacks tool definitions. OpenCode adapters remove an exported `(tool use)`
+placeholder when another assistant turn follows, preserving any preceding
+reasoning and the continuation instead of producing a premature final answer.
+AgentTrove and Penfever Qwen32k merge adjacent user prompts after protocol parsing, retaining
+completion-confirmation and handoff requests without merging tool observations
+into user turns. They share the adjacent-user merge operation with OpenHands.
+Nemotron SFT-General joins adjacent non-empty segments from the same speaker.
+Empty segments remain explicit, so a missing prompt is not mistaken for an
+assistant continuation.
+daVinci, CoderForge, SWE-Zero, SWE-Rebench
+OpenHands, and the Penfever Minimax and Qwen 32k cohorts quarantine rows rejected by the shared source parser, including
+unexpected control tokens, protocol-wrapped tool observations, and malformed
+inline tool calls. These source-side filters do not change the normalizer's
+validation or rejection limit.
+
 The Parquet normalizer accepts only serialized Harmony messages. It validates
 conversation structure, channels, and function handoffs, then hashes and deduplicates
 records. It does not interpret reasoning delimiters or inline tool-call syntax.

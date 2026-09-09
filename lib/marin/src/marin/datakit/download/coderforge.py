@@ -23,7 +23,7 @@ from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import (
     TRAJECTORY_FAILED_TAG,
     TRAJECTORY_SOLVED_TAG,
-    openai_chat_document,
+    checked_openai_chat_document,
     render_tool_message,
     text_document,
 )
@@ -94,9 +94,13 @@ def row_to_chat_doc(row: dict) -> list[dict]:
     tools = row.get("tools") or []
     if isinstance(tools, str):
         tools = json.loads(tools)
-    return [
-        openai_chat_document(messages, HF_DATASET_ID, reward=row.get("reward"), chat_template_kwargs={"tools": tools})
-    ]
+    return checked_openai_chat_document(
+        messages,
+        HF_DATASET_ID,
+        counter_prefix="coderforge/chat",
+        reward=row.get("reward"),
+        chat_template_kwargs={"tools": tools},
+    )
 
 
 def transform(input_path: str, output_path: str) -> None:
@@ -163,7 +167,7 @@ def coderforge_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/coderforge-preview",
         deps=[dl],
         fn=lambda output_path: transform_chat(dl.output_path, output_path),
-        hash_attrs={"version": "2026.09.06.explicit-tools"},
+        hash_attrs={"version": "2026.09.09.quarantine"},
     )
     return processed, normalize_chat_step(
         output_schema=SOURCE_CHAT_SCHEMA, name="normalized-chat/coderforge", download=processed

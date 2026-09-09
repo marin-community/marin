@@ -261,6 +261,18 @@ def checked_openai_chat_document(
         return []
 
 
+def merge_adjacent_user_messages(messages: list[dict]) -> list[dict]:
+    """Combine adjacent source user turns without crossing assistant or tool turns."""
+    merged: list[dict] = []
+    for message in messages:
+        if merged and message.get("role") == "user" and merged[-1].get("role") == "user":
+            previous = merged[-1]
+            previous["content"] = f"{previous.get('content') or ''}\n\n{message.get('content') or ''}".strip()
+            continue
+        merged.append(dict(message))
+    return merged
+
+
 def render_role_message(msg: dict) -> str:
     """Render a single chat message as ``<role>\\ncontent\\n</role>``.
 

@@ -6,14 +6,17 @@
 import json
 import re
 
+from zephyr import counters
+
 INLINE_TOOL_CALL = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
+TOOL_USE_PLACEHOLDER = "(tool use)"
 
 
-def prompt_tool_definitions(prompt: str) -> list[dict]:
+def prompt_tool_definitions(prompt: str) -> list[dict] | None:
     """Read the definitions actually presented in a Qwen tool prompt."""
     match = re.search(r"<tools>\s*(.*?)\s*</tools>", prompt, re.DOTALL)
     if match is None:
-        raise ValueError("OpenCode source is missing explicit tool definitions")
+        return None
     tools = [json.loads(line) for line in match.group(1).splitlines() if line.strip()]
     if not tools or not all(isinstance(tool, dict) for tool in tools):
         raise ValueError("OpenCode prompt must contain function definitions")
@@ -23,6 +26,8 @@ def prompt_tool_definitions(prompt: str) -> list[dict]:
 def opencode_conversation(conversations: list[dict], prompt: str) -> tuple[list[dict], list[dict]]:
     """Recover the initial turns and tool definitions from the served literal prompt."""
     tools = prompt_tool_definitions(prompt)
+    if tools is None:
+        raise ValueError("OpenCode source is missing explicit tool definitions")
     leading = re.findall(r"<\|im_start\|>(\w+)\n(.*?)<\|im_end\|>", prompt, re.DOTALL)
     if len(leading) != 2 or [role for role, _ in leading] != ["system", "user"]:
         raise ValueError("OpenCode first prompt must contain system and user turns")
@@ -77,6 +82,16 @@ def opencode_protocol_messages(conversations: list[dict], tools: list[dict]) -> 
 
         encoded_calls = INLINE_TOOL_CALL.findall(content)
         if not encoded_calls:
+            # Exports can split a placeholder from the assistant's actual continuation.
+            if (
+                content.rstrip().endswith(TOOL_USE_PLACEHOLDER)
+                and index + 1 < len(conversations)
+                and conversations[index + 1].get("role") == "assistant"
+            ):
+                content = content.rstrip().removesuffix(TOOL_USE_PLACEHOLDER).rstrip()
+                counters.pipeline.update_counter("opencode/continuation_placeholder_removed", 1)
+                if not content:
+                    continue
             messages.append({"role": "assistant", "content": content})
             continue
         tool_calls = []

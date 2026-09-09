@@ -210,7 +210,13 @@ def _nemotron_sft_messages(text: str, subset: str) -> list[dict] | None:
         messages = []
         for index, match in enumerate(matches):
             end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
-            messages.append({"role": match.group(1).lower(), "content": text[match.end() : end].strip()})
+            role = match.group(1).lower()
+            content = text[match.end() : end].strip()
+            if messages and messages[-1]["role"] == role and messages[-1]["content"] and content:
+                messages[-1]["content"] += f"\n\n{content}"
+                counters.pipeline.update_counter("nemotron_sft/sft_general/adjacent_speaker_merged", 1)
+            else:
+                messages.append({"role": role, "content": content})
         return messages
     if subset == "sft_math":
         if not text.startswith("input: ") or " output: " not in text:
@@ -325,7 +331,10 @@ def nemotron_sft_chat_normalize_steps() -> dict[str, tuple[StepSpec, ...]]:
             fn=lambda output_path, source_subset=subset, source_dir=subset_dir: _transform_nemotron_sft_chat(
                 prefix_join(download.output_path, source_dir), output_path, source_subset
             ),
-            hash_attrs={"version": "2026.09.05.2.harmony-arrow", "subset": subset},
+            hash_attrs={
+                "version": "2026.09.09.adjacent-speakers" if subset == "sft_general" else "2026.09.05.2.harmony-arrow",
+                "subset": subset,
+            },
         )
         normalized = normalize_chat_step(
             output_schema=CHAT_SCHEMA,

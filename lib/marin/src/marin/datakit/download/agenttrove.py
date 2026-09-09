@@ -42,6 +42,7 @@ from marin.datakit.download.rollout_transforms import (
     TRAJECTORY_UNVERIFIED_TAG,
     checked_openai_chat_document,
     load_parquet_batched,
+    merge_adjacent_user_messages,
     render_role_message,
     text_document,
 )
@@ -132,6 +133,9 @@ def row_to_chat_doc(row: dict) -> list[dict]:
         return []
     if any(INLINE_TOOL_CALL.search(message.get("content") or "") for message in conversations):
         tools = prompt_tool_definitions("\n".join(message.get("content") or "" for message in conversations[:2]))
+        if tools is None:
+            counters.pipeline.update_counter("agenttrove/chat/missing_tool_definitions_filtered", 1)
+            return []
         converted = opencode_protocol_messages(conversations, tools)
     else:
         first = conversations[0]
@@ -142,8 +146,11 @@ def row_to_chat_doc(row: dict) -> list[dict]:
     if converted is None:
         return []
     messages, metadata = converted
+    merged_messages = merge_adjacent_user_messages(messages)
+    if merged_count := len(messages) - len(merged_messages):
+        counters.pipeline.update_counter("agenttrove/chat/adjacent_user_merged", merged_count)
     return checked_openai_chat_document(
-        messages,
+        merged_messages,
         HF_DATASET_ID,
         counter_prefix="agenttrove/chat",
         teacher=row.get("original_teacher") or "",
@@ -213,7 +220,7 @@ def agenttrove_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/agenttrove",
         deps=[download],
         fn=lambda output_path: transform_chat(download.output_path, output_path),
-        hash_attrs={"version": "2026.09.05.4.explicit-tools"},
+        hash_attrs={"version": "2026.09.09.adjacent-users"},
     )
     return processed, normalize_chat_step(
         output_schema=SOURCE_CHAT_SCHEMA, name="normalized-chat/agenttrove", download=processed

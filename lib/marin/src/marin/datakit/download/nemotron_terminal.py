@@ -49,6 +49,9 @@ def row_to_chat_doc(row: dict) -> list[dict]:
         return []
     if any(INLINE_TOOL_CALL.search(message.get("content") or "") for message in conversations):
         tools = prompt_tool_definitions("\n".join(message.get("content") or "" for message in conversations[:2]))
+        if tools is None:
+            counters.pipeline.update_counter("nemotron_terminal/chat/missing_tool_definitions_filtered", 1)
+            return []
         converted = opencode_protocol_messages(conversations, tools)
     else:
         first = conversations[0]
@@ -121,7 +124,7 @@ def nemotron_terminal_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/nemotron-terminal-corpus",
         deps=[download],
         fn=lambda output_path: transform_chat(download.output_path, output_path),
-        hash_attrs={"version": "2026.09.04.1.explicit-tools"},
+        hash_attrs={"version": "2026.09.09.continuations"},
     )
     return processed, normalize_chat_step(
         output_schema=CHAT_SCHEMA, name="normalized-chat/nemotron-terminal", download=processed

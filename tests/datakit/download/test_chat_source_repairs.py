@@ -3,12 +3,95 @@
 
 import json
 
+import pytest
+from marin.datakit.chat_normalize import _normalize_chat_record
+from marin.datakit.download.agenttrove import row_to_chat_doc as agenttrove_row_to_chat_doc
 from marin.datakit.download.coderforge import row_to_chat_doc as coderforge_row_to_chat_doc
 from marin.datakit.download.davinci_dev import env_row_to_chat_doc as davinci_row_to_chat_doc
 from marin.datakit.download.gpt_oss_rollouts import row_to_chat_doc as gpt_oss_row_to_chat_doc
+from marin.datakit.download.nemotron_terminal import row_to_chat_doc as nemotron_terminal_row_to_chat_doc
 from marin.datakit.download.numinamath_tir import row_to_chat_doc as numinamath_row_to_chat_doc
 from marin.datakit.download.swe_rebench_openhands import row_to_chat_doc as openhands_row_to_chat_doc
 from marin.datakit.download.swe_zero_12m import row_to_chat_doc as swe_zero_row_to_chat_doc
+
+
+@pytest.mark.parametrize("adapter", [agenttrove_row_to_chat_doc, nemotron_terminal_row_to_chat_doc])
+def test_terminal_source_filters_inline_calls_without_tool_definitions(adapter) -> None:
+    row = {
+        "conversations": [
+            {"role": "user", "content": "Read the repository."},
+            {"role": "assistant", "content": '<tool_call>{"name":"read","arguments":{}}</tool_call>'},
+        ],
+    }
+    assert adapter(row) == []
+
+
+def test_agenttrove_merges_completion_and_handoff_prompts() -> None:
+    row = {
+        "conversations": [
+            {"role": "user", "content": "Task Description:\nFix the task."},
+            {"role": "assistant", "content": '{"commands":[],"task_complete":true}'},
+            {"role": "user", "content": "Confirm task completion."},
+            {"role": "user", "content": "Summarize the work for the next agent."},
+            {"role": "assistant", "content": '{"analysis":"Work summary.","commands":[],"task_complete":true}'},
+        ]
+    }
+    [document] = agenttrove_row_to_chat_doc(row)
+    normalized = _normalize_chat_record(document, "messages", "id")
+    user_turns = [message for message in normalized["messages"] if message["role"] == "user"]
+    assert user_turns[-1]["content"] == [
+        {"type": "text", "text": "Confirm task completion.\n\nSummarize the work for the next agent."}
+    ]
+
+
+def test_agenttrove_preserves_tool_observation_before_user_followup() -> None:
+    row = {
+        "conversations": [
+            {"role": "user", "content": "Task Description:\nInspect the repository."},
+            {"role": "assistant", "content": '{"commands":[{"keystrokes":"ls\\n"}]}'},
+            {"role": "user", "content": "New Terminal Output:\nREADME.md"},
+            {"role": "user", "content": "Summarize the work for the next agent."},
+            {"role": "assistant", "content": '{"analysis":"README found.","commands":[],"task_complete":true}'},
+        ]
+    }
+    [document] = agenttrove_row_to_chat_doc(row)
+    normalized = _normalize_chat_record(document, "messages", "id")
+    turns = [
+        (message["role"], message["content"][0]["text"])
+        for message in normalized["messages"]
+        if message["role"] in {"user", "tool"}
+    ]
+    assert turns == [
+        ("user", "Task Description:\nInspect the repository."),
+        ("tool", "New Terminal Output:\nREADME.md"),
+        ("user", "Summarize the work for the next agent."),
+    ]
+
+
+def test_davinci_filters_source_control_tokens() -> None:
+    row = {
+        "messages": [
+            {"role": "user", "content": "Explain <|eot_id|>."},
+            {"role": "assistant", "content": "It ends a turn."},
+        ],
+    }
+    assert davinci_row_to_chat_doc(row) == []
+
+
+def test_coderforge_filters_protocol_wrapped_tool_observations() -> None:
+    row = {
+        "messages": [
+            {"role": "user", "content": "Read the repository."},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"id": "call_1", "function": {"name": "read", "arguments": {}}}],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "<tool_response>contents</tool_response>"},
+            {"role": "assistant", "content": "Done."},
+        ],
+    }
+    assert coderforge_row_to_chat_doc(row) == []
 
 
 def test_coderforge_keeps_unsuccessful_trajectory_without_visible_outcome() -> None:
@@ -127,6 +210,31 @@ def test_openhands_merges_adjacent_user_context() -> None:
         "properties": {"command": {"type": "string"}},
         "required": ["command"],
     }
+
+
+def test_openhands_filters_unclosed_inline_tool_calls() -> None:
+    row = {
+        "trajectory": [
+            {"role": "user", "content": "Inspect the repository."},
+            {"role": "assistant", "content": '<tool_call>{"name":"execute_bash"'},
+        ],
+    }
+    assert openhands_row_to_chat_doc(row) == []
+
+
+def test_swe_zero_filters_protocol_wrapped_observations() -> None:
+    row = {
+        "messages": [
+            {"role": "user", "content": "Inspect the repository."},
+            {"role": "assistant", "content": "THOUGHT: Read it.\n```bash\ncat README.md\n```"},
+            {"role": "user", "content": "Observation: <tool_response>contents</tool_response>"},
+            {
+                "role": "assistant",
+                "content": "THOUGHT: Done.\n```bash\necho COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\n```",
+            },
+        ],
+    }
+    assert swe_zero_row_to_chat_doc(row) == []
 
 
 def test_swe_zero_converts_reasoning_bash_and_observation() -> None:
