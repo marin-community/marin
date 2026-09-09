@@ -80,6 +80,9 @@ def _layer_attention_masks(mask: AttentionMask, *, sliding_window: int) -> tuple
     return mask.with_sliding_window(sliding_window // 2), mask.with_sliding_window(sliding_window)
 
 
+LONG_ATTENTION_INTERVAL = 4
+
+
 @dataclass(frozen=True)
 class GrugModelConfig:
     """Hyperparameters for the grug MoE transformer.
@@ -689,7 +692,7 @@ class Block(eqx.Module):
 def _long_layer_schedule(num_layers: int) -> jax.Array:
     """Bool[num_layers] = True for every 4th layer and the last layer."""
     idx = jnp.arange(num_layers)
-    return ((idx % 4) == 3) | (idx == num_layers - 1)
+    return ((idx % LONG_ATTENTION_INTERVAL) == LONG_ATTENTION_INTERVAL - 1) | (idx == num_layers - 1)
 
 
 class Transformer(eqx.Module):
@@ -778,7 +781,7 @@ class Transformer(eqx.Module):
             moe_router_stats: list[dict[str, jax.Array]] = []
             for i, block in enumerate(self.blocks):
                 is_last = i == num_blocks - 1
-                is_long = i % 4 == 3 or is_last
+                is_long = i % LONG_ATTENTION_INTERVAL == LONG_ATTENTION_INTERVAL - 1 or is_last
                 use_pko = is_long and not cfg.disable_pko
                 hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(
                     hidden, short_mask, long_mask, is_long, use_pko, cfg.disable_long_rope, position_ids

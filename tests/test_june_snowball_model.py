@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+from typing import NamedTuple
 
 import equinox as eqx
 import haliax as hax
@@ -58,12 +59,18 @@ def _config():
     )
 
 
-def _inputs():
+class ModelInputs(NamedTuple):
+    tokens: hax.NamedArray
+    segments: hax.NamedArray
+    positions: hax.NamedArray
+
+
+def _inputs() -> ModelInputs:
     Batch, Position = hax.Axis("batch", jax.device_count()), hax.Axis("position", 6)
     tokens = hax.named(jnp.broadcast_to(jnp.array([0, 0, 2, 3, 4, 5]), (Batch.size, 6)), (Batch, Position))
     segments = hax.named(jnp.broadcast_to(jnp.array([0, 0, 1, 1, 1, 1]), (Batch.size, 6)), (Batch, Position))
     positions = hax.named(jnp.broadcast_to(jnp.array([0, 0, 0, 2, 4, 6]), (Batch.size, 6)), (Batch, Position))
-    return tokens, segments, positions
+    return ModelInputs(tokens, segments, positions)
 
 
 def _arrays(tree):

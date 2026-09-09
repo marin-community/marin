@@ -33,7 +33,14 @@ from levanter.models.snowball import (
 )
 from levanter.pipeline import evenly_partition_layers
 
-from experiments.june_tpu_67b_a2b.moe.model import Block, GatedNorm, GrugModelConfig, RMSNorm, Transformer
+from experiments.june_tpu_67b_a2b.moe.model import (
+    LONG_ATTENTION_INTERVAL,
+    Block,
+    GatedNorm,
+    GrugModelConfig,
+    RMSNorm,
+    Transformer,
+)
 
 
 @LmConfig.register_subclass("june_snowball")
@@ -176,7 +183,9 @@ class JunePipelineStage(eqx.Module):
         short_mask = GrugAttentionMask(is_causal=True, sliding_window=self.config.sliding_window, segment_ids=segments)
         long_mask = GrugAttentionMask(is_causal=True, segment_ids=segments)
         for index, block in enumerate(self.blocks, start=self.layer_offset):
-            is_long = index % 4 == 3 or index == self.config.num_layers - 1
+            is_long = (
+                index % LONG_ATTENTION_INTERVAL == LONG_ATTENTION_INTERVAL - 1 or index == self.config.num_layers - 1
+            )
             hidden, layer_stats = eqx.filter_checkpoint(block)(
                 hidden,
                 short_mask,
