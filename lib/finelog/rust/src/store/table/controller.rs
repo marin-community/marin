@@ -609,13 +609,7 @@ impl TableController {
         self.dispatch(ControllerCommand::Tombstone).await?
     }
 
-    /// Remove superseded state documents and unreferenced objects.
-    ///
-    /// Collection runs outside the publication mailbox: state pin retention
-    /// protects a newly written document until long after its HEAD swap, and
-    /// orphan grace similarly protects newly written data objects. The state
-    /// store also verifies this writer's fence before deleting anything. A
-    /// slow listing or deletion therefore cannot delay a durability commit.
+    /// Collect catalog and data objects that exceeded their retention periods.
     pub(crate) async fn gc_published(
         &self,
         now_ms: i64,

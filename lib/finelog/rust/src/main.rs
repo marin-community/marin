@@ -212,9 +212,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // is a relay: it keeps its schema contract but omits query-serving physical
     // work and retires only downstream-settled objects.
     let forwarder = build_forwarder(&args, Arc::clone(&store))?.map(Arc::new);
-    if let Some(forwarder) = &forwarder {
-        store.configure_relay(forwarder.target().to_string());
-    }
 
     // Start each namespace's maintenance task. Each task runs its boot remote
     // reconcile (adopt unknown remote parquet, redundancy-drop covered segments)
@@ -277,7 +274,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if let Some(task) = forward_task {
         task.abort();
-        let _ = task.await;
+        match task.await {
+            Ok(()) => {}
+            Err(error) if error.is_cancelled() => {}
+            Err(error) => return Err(error.into()),
+        }
     }
 
     diag_stop.store(true, Ordering::SeqCst);
@@ -353,6 +354,7 @@ fn build_forwarder(args: &Args, store: Arc<Store>) -> Result<Option<Forwarder>, 
         cluster = %config.cluster,
         "finelog-server: forwarding configured"
     );
+    store.configure_relay(config.target.clone());
     Ok(Some(Forwarder::new(store, config, &args.signing_key)?))
 }
 

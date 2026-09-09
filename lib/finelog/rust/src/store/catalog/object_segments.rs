@@ -181,12 +181,7 @@ fn advance_generation_in(
 }
 
 impl Catalog {
-    /// Give a changed rebuildable projection a fresh durable-state revision.
-    ///
-    /// Recovery can replace local projection rows without allocating a new
-    /// revision. If those rows subsequently differ from the state selected at
-    /// that same revision, the controller calls this before publishing so it
-    /// never assigns two meanings to one revision.
+    /// Allocate a fresh generation for a changed object-state projection.
     pub fn advance_object_state_revision(
         &self,
         namespace: &str,

@@ -8,7 +8,6 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
 use uuid::Uuid;
@@ -21,9 +20,10 @@ use crate::store::object_store::{
 };
 use crate::store::state_store::tree::{
     apply as apply_delta, canonical_catalog, catalogs_equal, delta as catalog_delta,
-    logical_reference, released_objects,
+    logical_reference, referenced_objects, released_objects,
 };
 use crate::store::state_store::{fenced_error, StoredTableState, TableHead};
+use crate::store::table::now_ms;
 use crate::store::table_state::{TableRevision, WriterFence};
 
 pub const TABLE_STATE_FORMAT_VERSION: u64 = 2;
@@ -45,6 +45,13 @@ pub(crate) struct StateGcPolicy {
     pub state_retention_ms: u64,
     pub orphan_grace_ms: u64,
     pub sweep_orphans: bool,
+}
+
+struct LoadedCatalogTree {
+    catalog: NamespaceCatalog,
+    chain: Vec<String>,
+    delta_depth: u32,
+    delta_bytes_since_checkpoint: u64,
 }
 
 impl ObjectTableStateStore {
@@ -77,7 +84,7 @@ impl ObjectTableStateStore {
         })?;
         let state_object_id = state_object_id(table, &head)?;
         let format = head.format_version.unwrap_or(0);
-        let (catalog, catalog_chain, delta_depth, delta_bytes_since_checkpoint) = match format {
+        let loaded = match format {
             LEGACY_TABLE_STATE_FORMAT_VERSION => {
                 let state_object = self
                     .read_table_object(table, &state_object_id, state_reference.byte_size)
@@ -89,7 +96,12 @@ impl ObjectTableStateStore {
                         ))
                     })?;
                 validate_state(table, &head, &catalog)?;
-                (catalog, vec![state_object_id], 0, 0)
+                LoadedCatalogTree {
+                    catalog,
+                    chain: vec![state_object_id],
+                    delta_depth: 0,
+                    delta_bytes_since_checkpoint: 0,
+                }
             }
             TABLE_STATE_FORMAT_VERSION => {
                 let byte_size = catalog_reference_size(table, state_reference)?;
@@ -104,11 +116,11 @@ impl ObjectTableStateStore {
         };
         Ok(Some(StoredTableState {
             head,
-            catalog,
+            catalog: loaded.catalog,
             head_version,
-            catalog_chain,
-            delta_depth,
-            delta_bytes_since_checkpoint,
+            catalog_chain: loaded.chain,
+            delta_depth: loaded.delta_depth,
+            delta_bytes_since_checkpoint: loaded.delta_bytes_since_checkpoint,
         }))
     }
 
@@ -143,7 +155,7 @@ impl ObjectTableStateStore {
         head: &CatalogHead,
         mut object_id: String,
         mut expected_size: Option<u64>,
-    ) -> Result<(NamespaceCatalog, Vec<String>, u32, u64), StatsError> {
+    ) -> Result<LoadedCatalogTree, StatsError> {
         let mut chain = Vec::new();
         let mut deltas = Vec::new();
         let mut recovered_delta_bytes = 0_u64;
@@ -234,7 +246,12 @@ impl ObjectTableStateStore {
             catalog = apply_delta(&catalog, &delta)?;
         }
         validate_state(table, head, &catalog)?;
-        Ok((catalog, chain, tip_depth, tip_bytes))
+        Ok(LoadedCatalogTree {
+            catalog,
+            chain,
+            delta_depth: tip_depth,
+            delta_bytes_since_checkpoint: tip_bytes,
+        })
     }
 
     pub async fn list(&self) -> Result<Vec<TableHead>, StatsError> {
@@ -362,7 +379,7 @@ impl ObjectTableStateStore {
             .unwrap_or(0)
             .max(catalog.max_query_time_ms.unwrap_or(0));
         let delete_after_ms =
-            unix_time_ms().saturating_add(i64::try_from(release_grace_ms).unwrap_or(i64::MAX));
+            now_ms().saturating_add(i64::try_from(release_grace_ms).unwrap_or(i64::MAX));
         let released_objects = expected
             .map(|previous| released_objects(&previous.catalog, &catalog, delete_after_ms))
             .unwrap_or_default();
@@ -805,11 +822,10 @@ impl ObjectTableStateStore {
         let mut referenced = referenced_object_keys(&selected.catalog);
         for key in &keep {
             if let Some(node) = nodes.get(key) {
-                referenced.extend(node_referenced_object_keys(
-                    node,
-                    now_ms,
-                    !current_chain.contains(key),
-                ));
+                referenced.extend(released_object_keys(node, now_ms));
+                if !current_chain.contains(key) {
+                    referenced.extend(node_payload_object_keys(node));
+                }
                 continue;
             }
             if let Some(catalog) = legacy_catalogs.get(key) {
@@ -882,52 +898,44 @@ fn segment_object_keys(
 }
 
 fn referenced_object_keys(catalog: &NamespaceCatalog) -> std::collections::HashSet<String> {
-    catalog
-        .version_segments
-        .iter()
-        .flat_map(|version| {
-            version
-                .live_segments
-                .iter()
-                .chain(version.retired_segments.iter())
-        })
-        .chain(catalog.direct_query_segments.iter())
-        .flat_map(segment_object_keys)
+    referenced_objects(catalog)
+        .into_iter()
+        .filter_map(|reference| reference.object_id)
         .collect()
 }
 
-fn node_referenced_object_keys(
-    node: &CatalogNode,
-    now_ms: i64,
-    include_payload: bool,
-) -> HashSet<String> {
+fn node_payload_object_keys(node: &CatalogNode) -> HashSet<String> {
     let mut referenced = HashSet::new();
-    if include_payload {
-        if let Some(checkpoint) = node.checkpoint.as_option() {
-            referenced.extend(referenced_object_keys(checkpoint));
-        }
-        if let Some(delta) = node.delta.as_option() {
-            referenced.extend(
-                delta
-                    .segment_additions
-                    .iter()
-                    .filter_map(|addition| addition.segment.as_option())
-                    .chain(delta.direct_query_additions.iter())
-                    .flat_map(segment_object_keys),
-            );
-        }
+    if let Some(checkpoint) = node.checkpoint.as_option() {
+        referenced.extend(referenced_object_keys(checkpoint));
     }
-    referenced.extend(node.released_objects.iter().filter_map(|released| {
-        (released.delete_after_ms.unwrap_or(0) > now_ms)
-            .then(|| {
-                released
-                    .object
-                    .as_option()
-                    .and_then(|object| object.object_id.clone())
-            })
-            .flatten()
-    }));
+    if let Some(delta) = node.delta.as_option() {
+        referenced.extend(
+            delta
+                .segment_additions
+                .iter()
+                .filter_map(|addition| addition.segment.as_option())
+                .chain(delta.direct_query_additions.iter())
+                .flat_map(segment_object_keys),
+        );
+    }
     referenced
+}
+
+fn released_object_keys(node: &CatalogNode, now_ms: i64) -> HashSet<String> {
+    node.released_objects
+        .iter()
+        .filter_map(|released| {
+            (released.delete_after_ms.unwrap_or(0) > now_ms)
+                .then(|| {
+                    released
+                        .object
+                        .as_option()
+                        .and_then(|object| object.object_id.clone())
+                })
+                .flatten()
+        })
+        .collect()
 }
 
 fn validate_head(table: &str, head: &CatalogHead) -> Result<(), StatsError> {
@@ -997,13 +1005,6 @@ fn catalog_reference_size(table: &str, reference: &ObjectRef) -> Result<u64, Sta
             "catalog reference for table {table:?} has no byte size"
         ))
     })
-}
-
-fn unix_time_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))
-        .unwrap_or(0)
 }
 
 fn state_revision_from_key(key: &str) -> Option<u64> {
@@ -1229,7 +1230,7 @@ mod tests {
             .unwrap();
         let mut next = state_with_segments(2, vec![]);
         next.max_query_time_ms = Some(1);
-        let started = unix_time_ms();
+        let started = now_ms();
         let second = states
             .commit(TABLE, WriterFence::new(4), Some(&first), next)
             .await
@@ -1289,7 +1290,7 @@ mod tests {
         };
 
         states
-            .gc_obsolete_states(TABLE, unix_time_ms() + 1, policy, WriterFence::new(4))
+            .gc_obsolete_states(TABLE, now_ms() + 1, policy, WriterFence::new(4))
             .await
             .unwrap();
         assert!(remote.read(&source_id).await.unwrap().is_some());
@@ -1392,8 +1393,10 @@ mod tests {
             .await
             .unwrap();
 
-        let error = states.load(TABLE).await.unwrap_err();
-        assert!(error.to_string().contains("references missing state"));
+        states
+            .load(TABLE)
+            .await
+            .expect_err("missing parent must fail recovery");
         std::fs::remove_dir_all(remote_dir).ok();
     }
 

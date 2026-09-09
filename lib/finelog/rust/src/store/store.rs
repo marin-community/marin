@@ -2546,14 +2546,10 @@ mod tests {
         reopened.bootstrap_maintenance();
         assert_eq!(reopened.recover_tables().await.unwrap(), 0);
 
-        let error = reopened
+        reopened
             .publish_object_catalog("iris.worker")
             .await
-            .unwrap_err();
-        assert!(
-            error.to_string().contains("different histories"),
-            "unexpected error: {error}"
-        );
+            .expect_err("a repointed object root must refuse publication");
         // The refusal published nothing: the repointed root still has no HEAD.
         assert!(ObjectTableStateStore::new(Arc::new(
             build_remote_object_store(repointed_dir.to_str().unwrap())

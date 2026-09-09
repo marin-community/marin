@@ -186,8 +186,7 @@ impl TableManager {
         *self.compaction.lock().unwrap() = config;
     }
 
-    /// Apply one host maintenance role to current and future tables. Called
-    /// before the scheduler starts, after forwarding configuration is parsed.
+    /// Apply one host maintenance role to current and future tables.
     pub fn set_maintenance_profile(&self, profile: MaintenanceProfile) {
         *self.maintenance_profile.lock().unwrap() = profile.clone();
         for runtime in self.runtimes() {

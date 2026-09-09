@@ -322,10 +322,6 @@ where
     T: connectrpc::client::ClientTransport,
     <T::ResponseBody as http_body::Body>::Error: std::fmt::Display,
 {
-    pub fn target(&self) -> &str {
-        &self.config.target
-    }
-
     fn with_client(
         store: Arc<Store>,
         config: ForwardingConfig,
