@@ -23,13 +23,11 @@ from marin.experiment.cli import build_options
 from marin.experiment.data import hf_download
 
 from experiments.post_training.tasktrove.convert import convert_tasks
-from experiments.post_training.tasktrove.fingerprint import build_template_index, fingerprint_tasks
+from experiments.post_training.tasktrove.fingerprint import TASKS_GLOB, build_template_index, fingerprint_tasks
 from experiments.post_training.tasktrove.sources import TASKTROVE_HF_ID, TASKTROVE_REVISION
 from experiments.post_training.tasktrove.validate import validate_converted
 
 STAGES = ("raw", "fingerprints", "templates", "converted", "validated")
-ACTIVE_PARQUETS = ("*/tasks.parquet",)
-"""The default config; ``deprecated/*`` is excluded."""
 
 
 @dataclass(frozen=True)
@@ -43,7 +41,7 @@ class TaskTroveWorkflow:
 
 def build_workflow() -> TaskTroveWorkflow:
     coordinator = ResourceConfig.with_cpu(cpu=4, ram="16g")
-    raw = hf_download("raw/tasktrove", hf_id=TASKTROVE_HF_ID, revision=TASKTROVE_REVISION, urls_glob=ACTIVE_PARQUETS)
+    raw = hf_download("raw/tasktrove", hf_id=TASKTROVE_HF_ID, revision=TASKTROVE_REVISION, urls_glob=(TASKS_GLOB,))
     fingerprints = apply(
         "tasktrove/fingerprints",
         remote(fingerprint_tasks, resources=coordinator),

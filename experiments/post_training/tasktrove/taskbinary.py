@@ -16,6 +16,7 @@ import io
 import re
 import tarfile
 from dataclasses import dataclass, field
+from enum import StrEnum
 
 INSTRUCTION = "instruction.md"
 TASK_TOML = "task.toml"
@@ -101,7 +102,8 @@ class TemplateFingerprint:
     """Identity of the template a task was stamped from."""
 
     template_id: str
-    """Hash of test.sh plus every template-code file under tests/ and environment/."""
+    """Hash of the normalized template-code files under tests/ and environment/ (Dockerfile
+    excluded) together with the shapes of the per-task data file names."""
     dockerfile_id: str
     """Hash of the Dockerfile with commit hashes blanked, so per-repo SWE images still group."""
     test_sh_id: str
@@ -139,19 +141,23 @@ def _strip_root(name: str) -> str:
     return name[2:] if name.startswith("./") else name
 
 
-def normalize_template_text(text: str, shell: bool = False) -> str:
-    """Blank the per-task literals a template script embeds (test ids, commits, counts).
+class TemplateText(StrEnum):
+    CODE = "code"
+    SHELL = "shell"
+    """Shell scripts and Dockerfiles reduce to their command skeleton: each line keeps only its
+    first token, so a per-task ``pytest <paths>`` or ``pip install <pkgs>`` line does not fork
+    the template."""
 
-    Shell scripts reduce to their command skeleton: each line keeps only its first token, so a
-    per-task ``pytest <paths>`` or ``pip install <pkgs>`` line does not fork the template.
-    """
+
+def normalize_template_text(text: str, kind: TemplateText = TemplateText.CODE) -> str:
+    """Blank the per-task literals a template script embeds (test ids, commits, counts)."""
     lines = [line.strip() for line in text.splitlines()]
     text = "\n".join(line for line in lines if line)
     text = _QUOTED_RE.sub('""', text)
     text = _SHA_RE.sub("<sha>", text)
     text = _PATH_TOKEN_RE.sub("<path>", text)
     text = _DIGITS_RE.sub("#", text)
-    if shell:
+    if kind == TemplateText.SHELL:
         heads = [line.split(None, 1)[0] for line in text.splitlines() if line and line != '""']
         text = "\n".join(heads)
     return text
@@ -183,13 +189,17 @@ def template_fingerprint(task: TaskFiles) -> TemplateFingerprint:
     for path in code:
         digest.update(path.encode())
         digest.update(b"\0")
-        digest.update(normalize_template_text(task.text(path), shell=path.endswith(".sh")).encode())
+        digest.update(
+            normalize_template_text(
+                task.text(path), TemplateText.SHELL if path.endswith(".sh") else TemplateText.CODE
+            ).encode()
+        )
         digest.update(b"\0")
     # Data file *names* are part of the template even though their contents are not.
     data_shape = sorted({data_file_shape(path) for path in data})
     digest.update("|".join(data_shape).encode())
     dockerfile = task.get_text(DOCKERFILE) or ""
-    normalized_dockerfile = normalize_template_text(dockerfile, shell=True)
+    normalized_dockerfile = normalize_template_text(dockerfile, TemplateText.SHELL)
     return TemplateFingerprint(
         template_id=digest.hexdigest()[:12],
         dockerfile_id=hashlib.sha256(normalized_dockerfile.encode()).hexdigest()[:12],

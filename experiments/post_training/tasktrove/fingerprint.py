@@ -12,13 +12,12 @@ converters: each template gets one converter, not each task.
 
 import json
 import logging
-import os
 from collections import Counter, defaultdict
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass
 
-import fsspec
 import pyarrow.parquet as pq
+from rigging.filesystem.storage_path import StoragePath
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
@@ -39,6 +38,17 @@ long tail is per-repository SWE setup scripts, handled per repository rather tha
 
 
 @dataclass(frozen=True)
+class TaskRow:
+    """One TaskTrove row and where it sits in its source parquet."""
+
+    source: str
+    path: str
+    row_group: int
+    row_in_group: int
+    task_binary: bytes
+
+
+@dataclass(frozen=True)
 class TaskFingerprintRecord:
     source: str
     path: str
@@ -56,46 +66,52 @@ class TaskFingerprintRecord:
 
 
 def source_name(parquet_path: str) -> str:
-    return parquet_path.rstrip("/").split("/")[-2]
+    return StoragePath(parquet_path).parent.name
 
 
-def fingerprint_parquet(parquet_path: str) -> Iterator[dict]:
-    """Yield one fingerprint record per task in one source parquet, row group by row group."""
+def iter_task_rows(parquet_path: str) -> Iterator[TaskRow]:
+    """Yield every task in one source parquet, one row group in memory at a time."""
     source = source_name(parquet_path)
-    with fsspec.open(parquet_path, "rb") as handle:
+    with StoragePath(parquet_path).open("rb") as handle:
         pf = pq.ParquetFile(handle)
         for rg in range(pf.num_row_groups):
             table = pf.read_row_group(rg, columns=["path", "task_binary"])
-            for i, (path, blob) in enumerate(
-                zip(table.column("path").to_pylist(), table.column("task_binary").to_pylist(), strict=True)
-            ):
-                task = read_task_binary(blob)
-                fp = template_fingerprint(task)
-                dockerfile = task.get_text(DOCKERFILE) or ""
-                base_image = next((line.split()[1] for line in dockerfile.splitlines() if line.startswith("FROM ")), "")
-                yield asdict(
-                    TaskFingerprintRecord(
-                        source=source,
-                        path=path,
-                        row_group=rg,
-                        row_in_group=i,
-                        template_id=fp.template_id,
-                        dockerfile_id=fp.dockerfile_id,
-                        test_sh_id=fp.test_sh_id,
-                        base_image=base_image,
-                        code_files=list(fp.code_files),
-                        data_files=list(fp.data_files),
-                        instruction_chars=len(task.files.get(INSTRUCTION, b"")),
-                        has_solution=task.has_solution,
-                        task_bytes=len(blob),
-                    )
-                )
+            paths = table.column("path").to_pylist()
+            blobs = table.column("task_binary").to_pylist()
+            for i, (path, blob) in enumerate(zip(paths, blobs, strict=True)):
+                yield TaskRow(source, path, rg, i, blob)
+
+
+def fingerprint_parquet(parquet_path: str) -> Iterator[dict]:
+    for row in iter_task_rows(parquet_path):
+        task = read_task_binary(row.task_binary)
+        fp = template_fingerprint(task)
+        dockerfile = task.get_text(DOCKERFILE) or ""
+        base_image = next((line.split()[1] for line in dockerfile.splitlines() if line.startswith("FROM ")), "")
+        yield asdict(
+            TaskFingerprintRecord(
+                source=row.source,
+                path=row.path,
+                row_group=row.row_group,
+                row_in_group=row.row_in_group,
+                template_id=fp.template_id,
+                dockerfile_id=fp.dockerfile_id,
+                test_sh_id=fp.test_sh_id,
+                base_image=base_image,
+                code_files=list(fp.code_files),
+                data_files=list(fp.data_files),
+                instruction_chars=len(task.files.get(INSTRUCTION, b"")),
+                has_solution=task.has_solution,
+                task_bytes=len(row.task_binary),
+            )
+        )
 
 
 def fingerprint_tasks(input_path: str, output_path: str) -> None:
     """Zephyr stage: one parquet shard of fingerprint records per source parquet."""
-    ds = Dataset.from_files(f"{input_path}/{TASKS_GLOB}").flat_map(fingerprint_parquet)
-    ds = ds.write_parquet(f"{output_path}/fingerprints/part-{{shard:05d}}.parquet")
+    pattern = str(StoragePath(input_path) / TASKS_GLOB)
+    ds = Dataset.from_files(pattern).flat_map(fingerprint_parquet)
+    ds = ds.write_parquet(str(StoragePath(output_path) / "fingerprints/part-{shard:05d}.parquet"))
     ZephyrContext(name="tasktrove-fingerprint").execute(ds)
 
 
@@ -117,13 +133,12 @@ class TemplateSummary:
 
 def build_template_index(input_path: str, fingerprints_path: str, output_path: str) -> None:
     """Group fingerprints by template, extract one exemplar per template, write the index."""
-    fs, _ = fsspec.core.url_to_fs(fingerprints_path)
-    files = sorted(fs.glob(f"{fingerprints_path}/fingerprints/*.parquet"))
+    shards = (StoragePath(fingerprints_path) / "fingerprints/*.parquet").glob()
     rows: list[dict] = []
-    for f in files:
-        with fs.open(f, "rb") as handle:
+    for shard in sorted(shards, key=str):
+        with shard.open("rb") as handle:
             rows.extend(pq.read_table(handle).to_pylist())
-    logger.info("loaded %d fingerprint rows from %d shards", len(rows), len(files))
+    logger.info("loaded %d fingerprint rows from %d shards", len(rows), len(shards))
 
     by_template: dict[str, list[dict]] = defaultdict(list)
     for r in rows:
@@ -151,32 +166,28 @@ def build_template_index(input_path: str, fingerprints_path: str, output_path: s
                 exemplar_row_in_group=exemplar["row_in_group"],
             )
         )
-    _extract_exemplars(input_path, exemplars, f"{output_path}/templates")
-
-    out_fs, _ = fsspec.core.url_to_fs(output_path)
-    with out_fs.open(f"{output_path}/templates.json", "w") as handle:
-        json.dump([asdict(s) for s in summaries], handle, indent=1)
-    with out_fs.open(f"{output_path}/templates.md", "w") as handle:
-        handle.write(_render_summary(summaries, len(rows)))
+    out = StoragePath(output_path)
+    _extract_exemplars(input_path, exemplars, out / "templates")
+    (out / "templates.json").write_text(json.dumps([asdict(s) for s in summaries], indent=1))
+    (out / "templates.md").write_text(_render_summary(summaries, len(rows)))
     logger.info("wrote %d templates covering %d tasks to %s", len(summaries), len(rows), output_path)
 
 
-def _extract_exemplars(input_path: str, exemplars: list[tuple[str, dict]], dest_root: str) -> None:
+def _extract_exemplars(input_path: str, exemplars: list[tuple[str, dict]], dest_root: StoragePath) -> None:
     """Extract exemplar tasks, reading each parquet row group once for every exemplar it holds."""
     by_group: dict[tuple[str, int], list[tuple[str, dict]]] = defaultdict(list)
     for template_id, record in exemplars:
         by_group[(record["source"], record["row_group"])].append((template_id, record))
-    fs, _ = fsspec.core.url_to_fs(dest_root)
     for (source, row_group), wanted in sorted(by_group.items()):
-        with fsspec.open(f"{input_path}/{source}/tasks.parquet", "rb") as handle:
+        parquet = StoragePath(input_path) / source / "tasks.parquet"
+        with parquet.open("rb") as handle:
             column = pq.ParquetFile(handle).read_row_group(row_group, columns=["task_binary"]).column("task_binary")
             for template_id, record in wanted:
                 task = read_task_binary(column[record["row_in_group"]].as_py())
                 for path, data in task.files.items():
-                    full = f"{dest_root}/{template_id}/exemplar/{path}"
-                    fs.makedirs(os.path.dirname(full), exist_ok=True)
-                    with fs.open(full, "wb") as out:
-                        out.write(data)
+                    target = dest_root / template_id / "exemplar" / path
+                    target.parent.mkdirs()
+                    target.write_bytes(data)
 
 
 def _render_summary(summaries: list[TemplateSummary], total: int) -> str:

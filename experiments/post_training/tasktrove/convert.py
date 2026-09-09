@@ -15,14 +15,13 @@ from collections.abc import Iterator
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 
-import fsspec
-import pyarrow.parquet as pq
+from rigging.filesystem.storage_path import StoragePath
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
 from experiments.post_training.tasktrove.converters.converted_task import ConvertedTask
 from experiments.post_training.tasktrove.converters.registry import CONVERTERS
-from experiments.post_training.tasktrove.fingerprint import TASKS_GLOB, source_name
+from experiments.post_training.tasktrove.fingerprint import TASKS_GLOB, iter_task_rows, source_name
 from experiments.post_training.tasktrove.sources import SourceVerdict, load_source_verdicts
 from experiments.post_training.tasktrove.taskbinary import (
     DOCKERFILE,
@@ -75,20 +74,13 @@ def build_task_files(converted: ConvertedTask, source: str, path: str, template_
 
 
 def convert_parquet(parquet_path: str) -> Iterator[dict]:
-    source = source_name(parquet_path)
-    verdict = load_source_verdicts()[source].verdict
+    verdict = load_source_verdicts()[source_name(parquet_path)].verdict
     skip_status = {
         SourceVerdict.DROP: ConvertStatus.DROPPED_SOURCE,
         SourceVerdict.REWRITE: ConvertStatus.REWRITE_SOURCE,
     }.get(verdict)
-    with fsspec.open(parquet_path, "rb") as handle:
-        pf = pq.ParquetFile(handle)
-        for rg in range(pf.num_row_groups):
-            table = pf.read_row_group(rg, columns=["path", "task_binary"])
-            for path, blob in zip(
-                table.column("path").to_pylist(), table.column("task_binary").to_pylist(), strict=True
-            ):
-                yield asdict(_convert_one(source, path, blob, skip_status))
+    for row in iter_task_rows(parquet_path):
+        yield asdict(_convert_one(row.source, row.path, row.task_binary, skip_status))
 
 
 def _convert_one(source: str, path: str, blob: bytes, skip_status: ConvertStatus | None) -> ConvertedRecord:
@@ -111,6 +103,6 @@ def _convert_one(source: str, path: str, blob: bytes, skip_status: ConvertStatus
 
 def convert_tasks(input_path: str, output_path: str) -> None:
     """Zephyr stage: one output parquet per source parquet, every row tagged with its status."""
-    ds = Dataset.from_files(f"{input_path}/{TASKS_GLOB}").flat_map(convert_parquet)
-    ds = ds.write_parquet(f"{output_path}/converted/part-{{shard:05d}}.parquet")
+    ds = Dataset.from_files(str(StoragePath(input_path) / TASKS_GLOB)).flat_map(convert_parquet)
+    ds = ds.write_parquet(str(StoragePath(output_path) / "converted/part-{shard:05d}.parquet"))
     ZephyrContext(name="tasktrove-convert").execute(ds)

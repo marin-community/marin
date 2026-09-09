@@ -12,7 +12,4 @@ fingerprint step; a task whose template has no converter is reported, never gues
 from experiments.post_training.tasktrove.converters import nemotron_gym
 from experiments.post_training.tasktrove.converters.converted_task import Converter
 
-CONVERTERS: dict[str, Converter] = {
-    # template ids from templates.json -> converter
-    **nemotron_gym.CONVERTERS,
-}
+CONVERTERS: dict[str, Converter] = {**nemotron_gym.CONVERTERS}

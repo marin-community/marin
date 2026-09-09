@@ -72,25 +72,6 @@ def convert_math_boxed(task: TaskFiles) -> ConvertedTask:
     )
 
 
-def convert_numeric(task: TaskFiles) -> ConvertedTask:
-    """Numeric answers with tolerance: ``{"expected_value": 3.14, "tolerance_abs": ..., "tolerance_rel": ...}``."""
-    data = _verifier_data(task)
-    return ConvertedTask(
-        instruction=task.text(INSTRUCTION),
-        verifier=VerifierSpec(
-            kind=VerifierKind.ANSWER,
-            answer=AnswerSpec(
-                type=AnswerType.NUMERIC,
-                expected=repr(float(data["expected_value"])),
-                tolerance_abs=float(data.get("tolerance_abs", 1e-6)),
-                tolerance_rel=float(data.get("tolerance_rel", 1e-6)),
-            ),
-        ),
-        tier=ImageTier.ANSWER,
-        metadata=_metadata(task),
-    )
-
-
 # Template ids from templates.json (fingerprint run over the v4.15 tree, 2026-09-09).
 CONVERTERS = {
     "c814af4f124d": convert_mcqa,  # laion__nemotron-gym-knowledge-mcqa-v2 (616,888)

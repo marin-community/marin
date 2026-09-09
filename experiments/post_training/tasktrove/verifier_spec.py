@@ -23,6 +23,7 @@ exec tasktrove-verify /task/task.toml
 """
 
 VERIFY_TOOL_REF = "git+https://github.com/marin-community/marin@main#subdirectory=lib/tasktrove-verify"
+UV_IMAGE = "ghcr.io/astral-sh/uv:0.8"
 
 
 class VerifierKind(StrEnum):
@@ -163,13 +164,30 @@ def render_task_toml(agent_timeout: float, verifier_timeout: float, verifier: Ve
     return tomlkit.dumps(doc)
 
 
-def parse_verifier_table(task_toml: str) -> dict:
-    doc = tomllib.loads(task_toml)
-    table = doc["verifier"]
+_BODY_TYPES = {
+    VerifierKind.ANSWER: AnswerSpec,
+    VerifierKind.JUDGE: JudgeSpec,
+    VerifierKind.SCHEMA: SchemaSpec,
+    VerifierKind.CHECKER: CheckerSpec,
+    VerifierKind.STDIO: StdioSpec,
+    VerifierKind.TESTS: TestsSpec,
+    VerifierKind.SCRIPT: ScriptSpec,
+}
+
+
+def parse_verifier_spec(task_toml: str) -> VerifierSpec:
+    """Reconstruct the typed spec from a converted task.toml; raises on a malformed table."""
+    table = tomllib.loads(task_toml)["verifier"]
     kind = VerifierKind(table["kind"])
     if kind.value not in table:
         raise ValueError(f"[verifier] kind={kind} but no [verifier.{kind}] table")
-    return table
+    body = {k: tuple(v) if isinstance(v, list) else v for k, v in table[kind.value].items()}
+    return VerifierSpec(
+        kind=kind,
+        output=table["output"],
+        network=table["network"],
+        **{kind.value: _BODY_TYPES[kind](**body)},
+    )
 
 
 _TIER_DOCKERFILES = {
@@ -177,7 +195,7 @@ _TIER_DOCKERFILES = {
         f"""FROM python:3.11-slim-bookworm
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 UV_OFFLINE=1
 RUN mkdir -p /app /tests /logs/verifier && chmod 755 /app /tests
-COPY --from=ghcr.io/astral-sh/uv:0.8 /uv /usr/local/bin/uv
+COPY --from={UV_IMAGE} /uv /usr/local/bin/uv
 RUN UV_OFFLINE=0 uv tool install "tasktrove-verify[answer] @ {VERIFY_TOOL_REF}"
 WORKDIR /app
 """
@@ -188,7 +206,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 UV_OFFLINE=1
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential git && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /app /tests /logs/verifier && chmod 755 /app /tests
 RUN pip install --no-cache-dir pytest pytest-timeout pytest-json-report numpy scipy sympy networkx pandas requests
-COPY --from=ghcr.io/astral-sh/uv:0.8 /uv /usr/local/bin/uv
+COPY --from={UV_IMAGE} /uv /usr/local/bin/uv
 RUN UV_OFFLINE=0 uv tool install "tasktrove-verify[tests] @ {VERIFY_TOOL_REF}"
 WORKDIR /app
 """
@@ -202,7 +220,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \\
     nodejs npm ruby-full php-cli composer rustc cargo \\
     && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /app /tests /logs/verifier && chmod 755 /app /tests
-COPY --from=ghcr.io/astral-sh/uv:0.8 /uv /usr/local/bin/uv
+COPY --from={UV_IMAGE} /uv /usr/local/bin/uv
 RUN UV_OFFLINE=0 uv tool install "tasktrove-verify[tests] @ {VERIFY_TOOL_REF}"
 WORKDIR /app
 """
@@ -214,7 +232,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \\
     git curl wget jq build-essential libffi-dev libssl-dev libtiff-dev locales locales-all tzdata pkg-config \\
     && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /logs/verifier /testbed /output && chmod 777 /output
-COPY --from=ghcr.io/astral-sh/uv:0.8 /uv /usr/local/bin/uv
+COPY --from={UV_IMAGE} /uv /usr/local/bin/uv
 RUN UV_OFFLINE=0 uv tool install "tasktrove-verify[tests] @ {VERIFY_TOOL_REF}"
 WORKDIR /testbed
 """

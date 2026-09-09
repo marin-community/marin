@@ -37,7 +37,3 @@ class SourceInfo:
 def load_source_verdicts() -> dict[str, SourceInfo]:
     raw = json.loads(_VERDICTS_PATH.read_text())
     return {s: SourceInfo(s, SourceVerdict(v["verdict"]), v["family"], v["reason"]) for s, v in raw.items()}
-
-
-def sources_with_verdict(*verdicts: SourceVerdict) -> list[str]:
-    return sorted(s for s, info in load_source_verdicts().items() if info.verdict in verdicts)
