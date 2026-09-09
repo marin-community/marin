@@ -17,7 +17,7 @@ from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.readers import load_file
 
-from marin.datakit.chat import CHAT_SCHEMA, inferred_tool_definitions, validate_chat_messages, validate_tool_definitions
+from marin.datakit.chat import CHAT_SCHEMA, validate_chat_messages, validate_tool_definitions
 from marin.datakit.normalize import (
     DEFAULT_MAX_WORKERS,
     DedupMode,
@@ -29,7 +29,7 @@ from marin.datakit.normalize import (
 )
 from marin.execution.step_spec import StepSpec
 
-CHAT_NORMALIZE_VERSION = "2026.09.09.harmony-arrow"
+CHAT_NORMALIZE_VERSION = "2026.09.09.explicit-tools"
 MAX_REJECTED_RECORD_FRACTION = 0.05
 
 
@@ -64,9 +64,7 @@ def _normalize_chat_record(record: dict[str, Any], messages_field: str, id_field
     tools = kwargs.get("tools", [])
     if not isinstance(tools, list):
         raise ValueError("tools must be a list of function definitions")
-    validate_tool_definitions(tools)
-    existing_names = {tool.get("function", tool)["name"] for tool in tools}
-    tools = [*tools, *(tool for tool in inferred_tool_definitions(messages) if tool["name"] not in existing_names)]
+    validate_tool_definitions(tools, messages)
     if tools:
         kwargs["tools"] = tools
     messages = [message.to_dict() for message in messages]

@@ -11,9 +11,12 @@ outcome and provenance metadata.
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import cache
 
 import pyarrow as pa
 from fray.types import ResourceConfig
+from huggingface_hub import hf_hub_download
+from tokenizers import Tokenizer
 from zephyr import counters
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
@@ -21,7 +24,7 @@ from zephyr.dataset import Dataset
 from marin.datakit.chat import CHAT_SCHEMA
 from marin.datakit.chat_normalize import normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
-from marin.datakit.download.opencode import opencode_protocol_messages
+from marin.datakit.download.opencode import opencode_conversation, opencode_protocol_messages
 from marin.datakit.download.rollout_transforms import (
     TRAJECTORY_FAILED_TAG,
     TRAJECTORY_SOLVED_TAG,
@@ -34,6 +37,11 @@ from marin.datakit.download.rollout_transforms import (
 from marin.datakit.download.terminus import TASK_DESCRIPTION_MARKER, terminus_protocol_messages
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
+
+# The dataset README identifies the tokenizer used to record these literal IDs.
+OPENCODE_TOKENIZER = "Qwen/Qwen3.5-122B-A10B-FP8"
+OPENCODE_TOKENIZER_REVISION = "a099dee70ccfcd8d5dda56aaa0b60cb8ecadabc9"
+
 
 SOURCE_CHAT_SCHEMA = pa.schema(
     [
@@ -1106,6 +1114,20 @@ def row_to_doc(dataset: PenfeverRollout) -> Callable[[dict], list[dict]]:
     return transform_row
 
 
+@cache
+def _opencode_tokenizer() -> Tokenizer:
+    path = hf_hub_download(OPENCODE_TOKENIZER, "tokenizer.json", revision=OPENCODE_TOKENIZER_REVISION)
+    return Tokenizer.from_file(path)
+
+
+def _opencode_conversation(row: dict) -> tuple[list[dict], list[dict]]:
+    prompts = row.get("prompt_token_ids")
+    if not prompts or not prompts[0]:
+        raise ValueError("OpenCode record is missing the literal prompt containing its tool schemas")
+    prompt = _opencode_tokenizer().decode(prompts[0], skip_special_tokens=False)
+    return opencode_conversation(row["conversations"], prompt)
+
+
 def row_to_chat_doc(dataset: PenfeverRollout) -> Callable[[dict], list[dict]]:
     """Build a row-to-structured-chat transform for one repository."""
 
@@ -1114,17 +1136,8 @@ def row_to_chat_doc(dataset: PenfeverRollout) -> Callable[[dict], list[dict]]:
         if not conversations:
             return []
         if dataset.cohort_name == "qwen35-122b-131k-opencode":
-            instruction = row.get("instruction")
-            first = conversations[0]
-            content = first.get("content")
-            if (
-                first.get("role") == "user"
-                and isinstance(content, str)
-                and not content.strip()
-                and isinstance(instruction, str)
-            ):
-                conversations = [{**first, "content": instruction}, *conversations[1:]]
-            converted = opencode_protocol_messages(conversations)
+            conversations, tools = _opencode_conversation(row)
+            converted = opencode_protocol_messages(conversations, tools)
         else:
             first = conversations[0]
             content = first.get("content")
@@ -1218,7 +1231,8 @@ def _rollout_chat_steps(dataset: PenfeverRollout) -> tuple[StepSpec, StepSpec]:
         deps=[download],
         fn=lambda output_path: transform_chat(dataset, download.output_path, output_path),
         hash_attrs={
-            "version": "2026.09.05.4.harmony-arrow",
+            "version": "2026.09.05.4.explicit-tools",
+            "schema_tokenizer": (OPENCODE_TOKENIZER, OPENCODE_TOKENIZER_REVISION),
             "teacher": dataset.teacher,
             "task_source": dataset.task_source,
         },

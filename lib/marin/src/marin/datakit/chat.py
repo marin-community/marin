@@ -136,39 +136,8 @@ def validate_chat_messages(messages: list[Message]) -> None:
         raise ValueError("A chat training record must end with an assistant response")
 
 
-def inferred_tool_definitions(messages: list[Message]) -> list[dict]:
-    """Build minimal function schemas from Harmony call arguments."""
-    definitions: dict[str, dict] = {}
-    for message in messages:
-        if message.author.role != Role.ASSISTANT or message.recipient is None:
-            continue
-        name = message.recipient.removeprefix("functions.")
-        properties = definitions.setdefault(name, {})
-        for key, value in json.loads(message_text(message)).items():
-            if isinstance(value, bool):
-                json_type = "boolean"
-            elif isinstance(value, (int, float)):
-                json_type = "number"
-            elif isinstance(value, list):
-                json_type = "array"
-            elif isinstance(value, dict):
-                json_type = "object"
-            else:
-                json_type = "string"
-            properties[key] = {"type": json_type}
-    return [
-        {
-            "type": "function",
-            "name": name,
-            "description": f"Execute the {name} tool.",
-            "parameters": {"type": "object", "properties": properties},
-        }
-        for name, properties in definitions.items()
-    ]
-
-
-def validate_tool_definitions(tools: list[dict]) -> None:
-    """Check function definition names and parameter object structure."""
+def validate_tool_definitions(tools: list[dict], messages: list[Message]) -> None:
+    """Require explicit definitions for calls without rewriting their arguments."""
     names: set[str] = set()
     for tool in tools:
         if not isinstance(tool, dict):
@@ -183,5 +152,10 @@ def validate_tool_definitions(tools: list[dict]) -> None:
             raise ValueError(f"Tool definition names must be unique: {name!r}")
         names.add(name)
         parameters = function.get("parameters")
-        if parameters is not None and not isinstance(parameters, dict):
+        if not isinstance(parameters, dict):
             raise ValueError(f"Tool definition {name!r} parameters must be a JSON object")
+    for message in messages:
+        if message.author.role == Role.ASSISTANT and message.recipient is not None:
+            name = message.recipient.removeprefix("functions.")
+            if name not in names:
+                raise ValueError(f"Tool call {name!r} has no explicit definition")

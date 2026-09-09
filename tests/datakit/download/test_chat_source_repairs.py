@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+
 from marin.datakit.download.coderforge import row_to_chat_doc as coderforge_row_to_chat_doc
 from marin.datakit.download.davinci_dev import env_row_to_chat_doc as davinci_row_to_chat_doc
 from marin.datakit.download.gpt_oss_rollouts import row_to_chat_doc as gpt_oss_row_to_chat_doc
@@ -89,11 +91,28 @@ def test_gpt_oss_drops_embedded_tokenizer_control_tokens() -> None:
 
 def test_openhands_merges_adjacent_user_context() -> None:
     row = {
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "execute_bash",
+                    "parameters": {
+                        "type": "object",
+                        "additionalProperties": None,
+                        "properties": {
+                            "command": {"type": "string", "enum": None},
+                            "unused_arrow_field": None,
+                        },
+                        "required": ["command"],
+                    },
+                },
+            }
+        ],
         "trajectory": [
             {"role": "user", "content": "Fix the bug."},
             {"role": "user", "content": "Repository: example/project"},
             {"role": "assistant", "content": "I fixed it."},
-        ]
+        ],
     }
 
     [document] = openhands_row_to_chat_doc(row)
@@ -101,6 +120,13 @@ def test_openhands_merges_adjacent_user_context() -> None:
     assert document["messages"][0]["content"] == [
         {"type": "text", "text": "Fix the bug.\n\nRepository: example/project"}
     ]
+
+    [tool] = json.loads(document["chat_template_kwargs"])["tools"]
+    assert tool["function"]["parameters"] == {
+        "type": "object",
+        "properties": {"command": {"type": "string"}},
+        "required": ["command"],
+    }
 
 
 def test_swe_zero_converts_reasoning_bash_and_observation() -> None:

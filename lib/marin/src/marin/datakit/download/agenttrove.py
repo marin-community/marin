@@ -35,7 +35,7 @@ from zephyr.dataset import Dataset
 from marin.datakit.chat import CHAT_SCHEMA
 from marin.datakit.chat_normalize import normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
-from marin.datakit.download.opencode import INLINE_TOOL_CALL, opencode_protocol_messages
+from marin.datakit.download.opencode import INLINE_TOOL_CALL, opencode_protocol_messages, prompt_tool_definitions
 from marin.datakit.download.rollout_transforms import (
     TRAJECTORY_FAILED_TAG,
     TRAJECTORY_SOLVED_TAG,
@@ -131,7 +131,8 @@ def row_to_chat_doc(row: dict) -> list[dict]:
     if not conversations:
         return []
     if any(INLINE_TOOL_CALL.search(message.get("content") or "") for message in conversations):
-        converted = opencode_protocol_messages(conversations)
+        tools = prompt_tool_definitions("\n".join(message.get("content") or "" for message in conversations[:2]))
+        converted = opencode_protocol_messages(conversations, tools)
     else:
         first = conversations[0]
         content = first.get("content")
@@ -212,7 +213,7 @@ def agenttrove_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/agenttrove",
         deps=[download],
         fn=lambda output_path: transform_chat(download.output_path, output_path),
-        hash_attrs={"version": "2026.09.05.4.harmony-arrow"},
+        hash_attrs={"version": "2026.09.05.4.explicit-tools"},
     )
     return processed, normalize_chat_step(
         output_schema=SOURCE_CHAT_SCHEMA, name="normalized-chat/agenttrove", download=processed

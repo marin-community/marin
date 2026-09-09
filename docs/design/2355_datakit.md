@@ -80,8 +80,10 @@ OpenAI-message artifact.
 
 Protocol parsers live in `download/terminus.py` (JSON command batches) and
 `download/opencode.py` (inline tool calls). Source adapters choose the parser
-and handle dataset-specific prompt fields, such as recovering an empty first
-user message from an `instruction` field. The parsers return OpenAI-style message
+and handle dataset-specific prompt fields. Penfever OpenCode recovers the served
+system prompt, actual user request, and tool definitions from the first recorded
+`prompt_token_ids` using its pinned Qwen tokenizer. The displayed conversation
+and `instruction` field do not reliably preserve those inputs. The parsers return OpenAI-style message
 dictionaries and tool definitions for the source helper; they do not define
 the shared Harmony contract or run the normalization pipeline.
 
@@ -99,10 +101,25 @@ which are reordered to the same call order, including repeated calls to the
 same function.
 
 The entire `chat_template_kwargs` column is a JSON string. Tool definitions are
-available as `json.loads(row["chat_template_kwargs"])["tools"]`; normalization
-fills in missing definitions from observed Harmony calls. Consumers supply these
-definitions when rendering. Definition names must be unique and parameter schemas
-must be JSON objects; normalization does not validate arguments against JSON Schema.
+available as `json.loads(row["chat_template_kwargs"])["tools"]`. Every function
+call must reference an explicitly declared tool; normalization never infers a
+definition from observed arguments. Consumers supply these definitions when
+rendering. Definition names must be unique, and each definition must contain an
+object-valued `parameters` field. Argument conformance is not a filtering rule: source trajectories can
+include failed calls and subsequent corrections, which remain part of the data.
+
+CoderForge and SWE-rebench preserve the definitions supplied in each source row.
+SWE-rebench removes null struct padding introduced by Parquet. SWE-ZERO,
+NuminaMath-TIR, MASSIVE, Terminus, and daVinci use explicit source contracts.
+Penfever OpenCode reads the definitions from its served prompt, including tools
+not invoked in that conversation. Missing definitions fail validation; they are
+not replaced with a guessed schema.
+
+The OpenCode `selfinstruct-naive-sandboxes-2-verified` export at revision
+`f0b9138` is excluded from SFT: its 47 shards (9,146 rows) lack tool-definition
+and literal-token columns. Sampled `instruction` values are assistant
+responses, so that field cannot recover the original user request. Restoring
+this source requires an export with the original prompts and tool definitions.
 
 Conversations start with an optional system/developer prefix, then a nonempty
 user message, and end with an assistant message. Consecutive user messages are

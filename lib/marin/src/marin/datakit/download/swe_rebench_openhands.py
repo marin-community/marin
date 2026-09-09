@@ -65,6 +65,19 @@ def row_to_doc(row: dict) -> list[dict]:
     return [text_document(text, "nebius/SWE-rebench-openhands-trajectories")]
 
 
+def _restore_tool_schema(value: object) -> object:
+    """Remove absent struct fields added by Parquet while preserving JSON literals."""
+    if isinstance(value, list):
+        return [_restore_tool_schema(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    return {
+        key: item if key in {"default", "const", "enum", "examples"} else _restore_tool_schema(item)
+        for key, item in value.items()
+        if item is not None or key in {"default", "const"}
+    }
+
+
 def row_to_chat_doc(row: dict) -> list[dict]:
     trajectory = row.get("trajectory")
     if not trajectory:
@@ -89,7 +102,14 @@ def row_to_chat_doc(row: dict) -> list[dict]:
             continue
         merged_trajectory.append(dict(message))
     trajectory = merged_trajectory
-    return [openai_chat_document(trajectory, HF_DATASET_ID, resolved=resolved)]
+    return [
+        openai_chat_document(
+            trajectory,
+            HF_DATASET_ID,
+            resolved=resolved,
+            chat_template_kwargs={"tools": _restore_tool_schema(row.get("tools") or [])},
+        )
+    ]
 
 
 def transform(input_path: str, output_path: str) -> None:
@@ -151,7 +171,7 @@ def swe_rebench_openhands_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/swe-rebench-openhands-trajectories",
         deps=[dl],
         fn=lambda output_path: transform_chat(dl.output_path, output_path),
-        hash_attrs={"version": "2026.09.05.1.harmony-arrow"},
+        hash_attrs={"version": "2026.09.05.1.explicit-tools"},
     )
     return processed, normalize_chat_step(
         output_schema=SOURCE_CHAT_SCHEMA, name="normalized-chat/swe-rebench-openhands", download=processed

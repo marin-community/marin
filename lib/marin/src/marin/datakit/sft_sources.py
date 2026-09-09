@@ -28,9 +28,10 @@ from marin.execution.step_spec import StepSpec
 
 _EXCLUDED_CHAT_SOURCES = frozenset(
     {
-        # These OpenCode traces omit the user request from every conversation, so
-        # they cannot form valid training examples without inventing prompt text.
+        # These exports omit the original user request and the literal prompts
+        # needed to recover it and the served tool definitions.
         "penfever-traces/qwen35-122b-131k-opencode/nemotron-gym-agent-workplace-v2",
+        "penfever-traces/qwen35-122b-131k-opencode/selfinstruct-naive-sandboxes-2-verified",
     }
 )
 _ChatSourceRow = tuple[str, Callable[[], tuple[StepSpec, ...]]]

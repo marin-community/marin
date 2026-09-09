@@ -91,7 +91,12 @@ def row_to_chat_doc(row: dict) -> list[dict]:
     if _contains_tool_call_end(messages):
         counters.pipeline.update_counter("coderforge/tool_call_end_filtered", 1)
         return []
-    return [openai_chat_document(messages, HF_DATASET_ID, reward=row.get("reward"))]
+    tools = row.get("tools") or []
+    if isinstance(tools, str):
+        tools = json.loads(tools)
+    return [
+        openai_chat_document(messages, HF_DATASET_ID, reward=row.get("reward"), chat_template_kwargs={"tools": tools})
+    ]
 
 
 def transform(input_path: str, output_path: str) -> None:
@@ -158,7 +163,7 @@ def coderforge_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/coderforge-preview",
         deps=[dl],
         fn=lambda output_path: transform_chat(dl.output_path, output_path),
-        hash_attrs={"version": "2026.09.06.harmony-arrow"},
+        hash_attrs={"version": "2026.09.06.explicit-tools"},
     )
     return processed, normalize_chat_step(
         output_schema=SOURCE_CHAT_SCHEMA, name="normalized-chat/coderforge", download=processed

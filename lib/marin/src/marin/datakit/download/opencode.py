@@ -9,38 +9,39 @@ import re
 INLINE_TOOL_CALL = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
 
 
-def _tool_schema(name: str, invocations: list[dict]) -> dict:
-    properties = {}
-    required = set(invocations[0])
-    observed_types: dict[str, set[str]] = {}
-    for arguments in invocations:
-        required.intersection_update(arguments)
-        for key, value in arguments.items():
-            if isinstance(value, bool):
-                json_type = "boolean"
-            elif isinstance(value, (int, float)):
-                json_type = "number"
-            elif isinstance(value, list):
-                json_type = "array"
-            elif isinstance(value, dict):
-                json_type = "object"
-            else:
-                json_type = "string"
-            observed_types.setdefault(key, set()).add(json_type)
-    for key, json_types in observed_types.items():
-        properties[key] = {"type": sorted(json_types) if len(json_types) > 1 else next(iter(json_types))}
-    return {
-        "type": "function",
-        "name": name,
-        "description": f"Execute the {name} tool.",
-        "parameters": {"type": "object", "properties": properties, "required": sorted(required)},
-    }
+def prompt_tool_definitions(prompt: str) -> list[dict]:
+    """Read the definitions actually presented in a Qwen tool prompt."""
+    match = re.search(r"<tools>\s*(.*?)\s*</tools>", prompt, re.DOTALL)
+    if match is None:
+        raise ValueError("OpenCode source is missing explicit tool definitions")
+    tools = [json.loads(line) for line in match.group(1).splitlines() if line.strip()]
+    if not tools or not all(isinstance(tool, dict) for tool in tools):
+        raise ValueError("OpenCode prompt must contain function definitions")
+    return tools
 
 
-def opencode_protocol_messages(conversations: list[dict]) -> tuple[list[dict], dict] | None:
+def opencode_conversation(conversations: list[dict], prompt: str) -> tuple[list[dict], list[dict]]:
+    """Recover the initial turns and tool definitions from the served literal prompt."""
+    tools = prompt_tool_definitions(prompt)
+    leading = re.findall(r"<\|im_start\|>(\w+)\n(.*?)<\|im_end\|>", prompt, re.DOTALL)
+    if len(leading) != 2 or [role for role, _ in leading] != ["system", "user"]:
+        raise ValueError("OpenCode first prompt must contain system and user turns")
+    system = leading[0][1]
+    _, separator, system_instructions = system.partition("</IMPORTANT>")
+    if not separator or not system_instructions.strip():
+        raise ValueError("OpenCode prompt is missing the harness system instructions after its tool preamble")
+    if not conversations or conversations[0].get("role") != "user":
+        raise ValueError("OpenCode conversation is missing its initial user turn")
+    return [
+        {"role": "system", "content": system_instructions.lstrip()},
+        {"role": "user", "content": leading[1][1]},
+        *conversations[1:],
+    ], tools
+
+
+def opencode_protocol_messages(conversations: list[dict], tools: list[dict]) -> tuple[list[dict], dict] | None:
     """Parse OpenCode tool tags into source turns and tool definitions."""
     messages: list[dict] = []
-    tool_invocations: dict[str, list[dict]] = {}
     pending_calls: list[tuple[str, str]] = []
     for index, message in enumerate(conversations):
         role = message.get("role")
@@ -98,7 +99,6 @@ def opencode_protocol_messages(conversations: list[dict]) -> tuple[list[dict], d
                     "function": {"name": call["name"], "arguments": call["arguments"]},
                 }
             )
-            tool_invocations.setdefault(call["name"], []).append(call["arguments"])
             pending_calls.append((call_id, call["name"]))
         assistant_content = INLINE_TOOL_CALL.sub("", content).strip()
         messages.append(
@@ -110,5 +110,4 @@ def opencode_protocol_messages(conversations: list[dict]) -> tuple[list[dict], d
         )
     if not messages or messages[-1]["role"] != "assistant":
         return None
-    tools = [_tool_schema(name, invocations) for name, invocations in tool_invocations.items()]
     return messages, {"chat_template_kwargs": {"tools": tools}}

@@ -59,7 +59,9 @@ def test_chat_identity_includes_tool_definitions():
         _normalize_chat_record(
             {
                 "messages": [message.to_dict() for message in messages],
-                "chat_template_kwargs": {"tools": [{"name": "run", "description": description}]},
+                "chat_template_kwargs": {
+                    "tools": [{"name": "run", "description": description, "parameters": {"type": "object"}}]
+                },
             },
             "messages",
             "id",
@@ -83,6 +85,11 @@ def test_harmony_tool_handoff_requires_matching_observations_before_continuation
     )
     final = Message.from_role_and_content(Role.ASSISTANT, "Done.").with_channel(ChatChannel.FINAL)
     record = {"messages": [message.to_dict() for message in [user, call, observation, final]]}
+    with pytest.raises(ValueError, match="no explicit definition"):
+        _normalize_chat_record(record, "messages", "id")
+    record["chat_template_kwargs"] = {
+        "tools": [{"name": "read", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}}}]
+    }
     normalized = _normalize_chat_record(record, "messages", "id")
     assert normalized["messages"] == record["messages"]
     assert json.loads(normalized["chat_template_kwargs"])["tools"][0]["name"] == "read"
@@ -130,7 +137,12 @@ def test_normalize_chat_to_parquet_keeps_varying_tool_schemas_arrow_stable(tmp_p
             .with_channel(ChatChannel.COMMENTARY)
             .with_recipient(f"functions.{name}"),
         ]
-        records.append({"messages": [message.to_dict() for message in messages]})
+        records.append(
+            {
+                "messages": [message.to_dict() for message in messages],
+                "chat_template_kwargs": {"tools": [{"name": name, "parameters": {"type": "object"}}]},
+            }
+        )
     (input_dir / "data.jsonl").write_text("".join(json.dumps(record) + "\n" for record in records))
     normalize_chat_to_parquet(input_path=str(input_dir), output_path=str(output_dir))
     normalized = [
@@ -198,6 +210,21 @@ def test_source_writer_preserves_tool_fields_first_seen_after_plain_conversation
                     ]
                 ),
                 "reward": 0.75,
+                "tools": json.dumps(
+                    [
+                        {
+                            "type": "function",
+                            "function": {
+                                "name": "run",
+                                "parameters": {
+                                    "type": "object",
+                                    "properties": {"command": {"type": "string"}, "timeout": {"type": "number"}},
+                                    "required": ["command"],
+                                },
+                            },
+                        }
+                    ]
+                ),
             }
         )
     pq.write_table(pa.Table.from_pylist(records), input_dir / "data.parquet")
@@ -217,3 +244,6 @@ def test_source_writer_preserves_tool_fields_first_seen_after_plain_conversation
     normalized_call = next(row for row in normalized if row["messages"][0]["content"][0]["text"] == "Question 8")
     assert normalized_call["messages"][-1]["recipient"] == "functions.run"
     assert normalized_call["reward"] == 0.75
+    [tool] = json.loads(normalized_call["chat_template_kwargs"])["tools"]
+    assert tool["function"]["parameters"]["properties"]["timeout"] == {"type": "number"}
+    assert tool["function"]["parameters"]["required"] == ["command"]

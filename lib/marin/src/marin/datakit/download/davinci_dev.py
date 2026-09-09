@@ -172,6 +172,45 @@ def davinci_dev_ctx_native_normalize_steps() -> tuple[StepSpec, ...]:
 # ---------------------------------------------------------------------------
 
 ENV_GLOBS = ["env-native.jsonl"]
+# Tool contract published with the pinned env-native trajectories:
+# https://github.com/GAIR-NLP/daVinci-Dev/blob/81968c804fe59aa3991b30e6f67ce9998334529e/env_traj_utils/convert_trajectories.py
+ENV_TOOLS = [
+    {
+        "type": "function",
+        "name": "bash",
+        "description": "Execute a shell command. Use an empty command to poll output or ctrl+c to interrupt.",
+        "parameters": {
+            "type": "object",
+            "properties": {"command": {"type": "string"}},
+            "required": ["command"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "submit",
+        "description": "Finish the interaction when the task is complete or cannot be continued.",
+        "parameters": {"type": "object", "properties": {}},
+    },
+    {
+        "type": "function",
+        "name": "str_replace_editor",
+        "description": "View, create, or edit files. Replacement text must uniquely match the original file.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "command": {"type": "string", "enum": ["view", "create", "str_replace", "insert", "undo_edit"]},
+                "path": {"type": "string", "description": "Absolute file or directory path."},
+                "file_text": {"type": "string"},
+                "old_str": {"type": "string"},
+                "new_str": {"type": "string"},
+                "insert_line": {"type": "integer"},
+                "view_range": {"type": "array", "items": {"type": "integer"}},
+            },
+            "required": ["command", "path"],
+        },
+    },
+]
+
 TERMINAL_SUBMISSION_TOOLS = frozenset({"finish", "submit"})
 
 
@@ -221,7 +260,11 @@ def env_row_to_chat_doc(row: dict) -> list[dict]:
         return []
     success = row.get("success") if "success" in row else None
     try:
-        return [openai_chat_document(messages, "GAIR/daVinci-Dev/env-native", success=success)]
+        return [
+            openai_chat_document(
+                messages, "GAIR/daVinci-Dev/env-native", success=success, chat_template_kwargs={"tools": ENV_TOOLS}
+            )
+        ]
     except ReasoningFormatError:
         counters.pipeline.update_counter("davinci_dev/env/chat_malformed_reasoning_filtered", 1)
         return []
@@ -292,7 +335,7 @@ def davinci_dev_env_native_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/davinci-dev-env-native",
         deps=[dl],
         fn=lambda output_path: transform_env_native_chat(dl.output_path, output_path),
-        hash_attrs={"version": "2026.09.05.1.harmony-arrow"},
+        hash_attrs={"version": "2026.09.05.1.explicit-tools"},
     )
     return processed, normalize_chat_step(
         output_schema=SOURCE_CHAT_SCHEMA,

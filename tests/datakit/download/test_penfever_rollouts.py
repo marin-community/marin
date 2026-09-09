@@ -3,7 +3,9 @@
 
 import json
 
+from marin.datakit.download.opencode import opencode_conversation, opencode_protocol_messages
 from marin.datakit.download.penfever_rollouts import PenfeverRollout, row_to_chat_doc
+from marin.datakit.download.rollout_transforms import openai_chat_document
 
 
 def _dataset(cohort: str) -> PenfeverRollout:
@@ -58,24 +60,35 @@ def test_terminal_protocol_becomes_reasoning_call_and_observation():
 
 
 def test_opencode_protocol_matches_parallel_calls_to_separate_observations():
-    transform = row_to_chat_doc(_dataset("qwen35-122b-131k-opencode"))
-    [document] = transform(
+    tools = [
         {
-            "conversations": [
-                {"role": "user", "content": "Inspect both files."},
-                {
-                    "role": "assistant",
-                    "content": (
-                        '<tool_call>{"name":"read","arguments":{"path":"a.py","offset":10}}</tool_call>'
-                        '<tool_call>{"name":"read","arguments":{"path":"b.py"}}</tool_call>'
-                    ),
-                },
-                {"role": "user", "content": "contents of a.py"},
-                {"role": "user", "content": "contents of b.py"},
-                {"role": "assistant", "content": "Both files are valid."},
-            ]
+            "type": "function",
+            "name": "read",
+            "parameters": {
+                "type": "object",
+                "properties": {"path": {"type": "string"}, "offset": {"type": "number"}},
+                "required": ["path"],
+            },
         }
+    ]
+    converted = opencode_protocol_messages(
+        [
+            {"role": "user", "content": "Inspect both files."},
+            {
+                "role": "assistant",
+                "content": (
+                    '<tool_call>{"name":"read","arguments":{"path":"a.py","offset":10}}</tool_call>'
+                    '<tool_call>{"name":"read","arguments":{"path":"b.py"}}</tool_call>'
+                ),
+            },
+            {"role": "user", "content": "contents of a.py"},
+            {"role": "user", "content": "contents of b.py"},
+            {"role": "assistant", "content": "Both files are valid."},
+        ],
+        tools,
     )
+    messages, metadata = converted
+    document = openai_chat_document(messages, "test", **metadata)
 
     messages = document["messages"]
     assert [m["recipient"] for m in messages[1:3]] == ["functions.read", "functions.read"]
@@ -87,24 +100,35 @@ def test_opencode_protocol_matches_parallel_calls_to_separate_observations():
 
 
 def test_opencode_protocol_links_bundled_parallel_call_observation_to_each_call():
-    transform = row_to_chat_doc(_dataset("qwen35-122b-131k-opencode"))
-
-    [document] = transform(
+    tools = [
         {
-            "conversations": [
-                {"role": "user", "content": "Inspect both files."},
-                {
-                    "role": "assistant",
-                    "content": (
-                        '<tool_call>{"name":"read","arguments":{"path":"a.py"}}</tool_call>'
-                        '<tool_call>{"name":"read","arguments":{"path":"b.py"}}</tool_call>'
-                    ),
-                },
-                {"role": "user", "content": "combined output"},
-                {"role": "assistant", "content": "Both files are valid."},
-            ]
+            "type": "function",
+            "name": "read",
+            "parameters": {
+                "type": "object",
+                "properties": {"path": {"type": "string"}, "offset": {"type": "number"}},
+                "required": ["path"],
+            },
         }
+    ]
+
+    converted = opencode_protocol_messages(
+        [
+            {"role": "user", "content": "Inspect both files."},
+            {
+                "role": "assistant",
+                "content": (
+                    '<tool_call>{"name":"read","arguments":{"path":"a.py"}}</tool_call>'
+                    '<tool_call>{"name":"read","arguments":{"path":"b.py"}}</tool_call>'
+                ),
+            },
+            {"role": "user", "content": "combined output"},
+            {"role": "assistant", "content": "Both files are valid."},
+        ],
+        tools,
     )
+    messages, metadata = converted
+    document = openai_chat_document(messages, "test", **metadata)
 
     calls = document["messages"][1:3]
     observations = document["messages"][3:5]
@@ -113,24 +137,33 @@ def test_opencode_protocol_links_bundled_parallel_call_observation_to_each_call(
     assert [m["content"][0]["text"] for m in observations] == ["combined output", "combined output"]
 
 
-def test_opencode_protocol_recovers_prompt_from_instruction():
-    transform = row_to_chat_doc(_dataset("qwen35-122b-131k-opencode"))
-
-    [document] = transform(
+def test_opencode_recovers_task_and_declared_tools_from_served_prompt():
+    tools = [
         {
-            "instruction": "Fix the code.",
-            "conversations": [{"role": "user", "content": ""}, {"role": "assistant", "content": "Done."}],
+            "type": "function",
+            "function": {
+                "name": "read",
+                "description": "Read a file.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"filePath": {"type": "string"}},
+                    "required": ["filePath"],
+                },
+            },
         }
+    ]
+    prompt = (
+        "<|im_start|>system\n<tools>\n"
+        + json.dumps(tools[0])
+        + "\n</tools>\n<IMPORTANT>Source tool syntax.</IMPORTANT>\n"
+        "You are opencode. Follow the task.\n<|im_end|>\n"
+        "<|im_start|>user\nFix the real task.<|im_end|>\n<|im_start|>assistant\n<think>\n"
     )
-
-    assert document["messages"][0] == {
-        "role": "user",
-        "name": None,
-        "content": [{"type": "text", "text": "Fix the code."}],
-    }
-
-
-def test_opencode_protocol_drops_conversation_without_a_recoverable_prompt():
-    transform = row_to_chat_doc(_dataset("qwen35-122b-131k-opencode"))
-
-    assert transform({"conversations": [{"role": "user", "content": ""}, {"role": "assistant", "content": "x"}]}) == []
+    messages, recovered_tools = opencode_conversation(
+        [{"role": "user", "content": ""}, {"role": "assistant", "content": "Done."}], prompt
+    )
+    assert messages[:2] == [
+        {"role": "system", "content": "You are opencode. Follow the task.\n"},
+        {"role": "user", "content": "Fix the real task."},
+    ]
+    assert recovered_tools == tools
