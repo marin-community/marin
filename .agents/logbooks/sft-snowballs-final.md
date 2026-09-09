@@ -86,3 +86,12 @@ author: benfeuer
 - Result: the OpenCode stage adopts the corrected consolidated `2026.08.05` fixed-EOT cache, right-slices overlength records, shifts the assistant mask for next-token loss, and clears loss at packed segment boundaries. Nemotron adopts the exact `2026.07.17` chat cache and left-slices. Both are independent 1,888-step children of Thinking. The qk157 and current Marin `tokenizer.json` files have identical SHA-256 `881c9c36...`.
 - Interpretation: cache token IDs are compatible with the base tokenizer; the base repository's thinner tokenizer metadata does not imply a different vocabulary. The exact caches still need an RNO2A read/accounting check before full training.
 - Next action: run the complete safe test suite, commit and push, then launch smoke attempt 3 with a new root identity and port.
+
+### 2026-09-08 21:34 EDT - Five uploads validated and smoke attempt 3 launched
+
+- Hypothesis: each remaining uploader completed the same local-to-Hub hash validation and immutable tagging as qk157 and qk175.
+- Commit Hash: `8fc736c4dd` for smoke attempt 3; revision-pin follow-up uncommitted.
+- Command: inspect `/held/snowball-8977-athena-{skew2,skew4,skew8}` terminal state and filtered `44/44`/`VERIFIED` logs; submit `/benfeuer/snowball-final-qk157-smoke3-coord` with JAX port 19403.
+- Result: all three upload jobs succeeded with 44/44 files and tags `ce41c24df0afc10079210521ea7e231115ad5a92`, `5052e68c4d88c9e0de87f7595a25ee4005aef1cf`, and `058ecaf27b9e4f37219df221a51e7d490d58ec3d`. All five base uploads now pass the publication gate, so the external `TRACKER.md` was created. Smoke attempt 3 is active with zero coordinator failures at submission.
+- Interpretation: every training base can now be referenced immutably; no training job will resolve a moving Hub `main`.
+- Next action: observe smoke 3 through load/update/save/reload, then materialize all five configs and fan out the dependency-ordered chains.

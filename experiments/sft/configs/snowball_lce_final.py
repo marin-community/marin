@@ -62,9 +62,18 @@ _NEMOTRON_DATASET_REVISION = "a1667c4ffdadea02a89bffe4f1bb7ca2ff19f8d9"
 _BASE_REVISIONS: dict[str, tuple[str, str | None]] = {
     "qk157": ("open-athena/snowball-67b-a2b-base-262k-qk157", "2b1f526273b8968b307a0098c08fb4321bb91e35"),
     "qk175": ("open-athena/snowball-67b-a2b-base-262k-qk175", "1934e71f2bb0fbeb19e5ce82372136e5297bf0a4"),
-    "qk175-skew2": ("open-athena/snowball-67b-a2b-base-262k-qk175-skew2", None),
-    "qk175-skew4": ("open-athena/snowball-67b-a2b-base-262k-qk175-skew4", None),
-    "qk175-skew8": ("open-athena/snowball-67b-a2b-base-262k-qk175-skew8", None),
+    "qk175-skew2": (
+        "open-athena/snowball-67b-a2b-base-262k-qk175-skew2",
+        "ce41c24df0afc10079210521ea7e231115ad5a92",
+    ),
+    "qk175-skew4": (
+        "open-athena/snowball-67b-a2b-base-262k-qk175-skew4",
+        "5052e68c4d88c9e0de87f7595a25ee4005aef1cf",
+    ),
+    "qk175-skew8": (
+        "open-athena/snowball-67b-a2b-base-262k-qk175-skew8",
+        "058ecaf27b9e4f37219df221a51e7d490d58ec3d",
+    ),
 }
 
 _CHAT_DATASET = DatasetSpec(

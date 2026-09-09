@@ -13,12 +13,9 @@ GRUG_A2B_AGENTIC_SFT_FORMAT = PrebuiltLmDatasetFormat(
     loss_weights_key="assistant_mask",
     loss_weight_transform=LossWeightTransform.SHIFT_LEFT,
 )
-_CACHE_SOURCE = (
-    "s3://marin-us-east-02a/marin/tokenized/grug-a2b-agentic-sft-eot/2026.08.05"
-)
+_CACHE_SOURCE = "s3://marin-us-east-02a/marin/tokenized/grug-a2b-agentic-sft-eot/2026.08.05"
 _RENDERED_SOURCE = (
-    "s3://marin-us-east-02a/marin/users/held/datasets/grug-67b-a2b-agentic-sft-eot-20260805/"
-    "processed/harbor-sft-eot"
+    "s3://marin-us-east-02a/marin/users/held/datasets/grug-67b-a2b-agentic-sft-eot-20260805/" "processed/harbor-sft-eot"
 )
 
 

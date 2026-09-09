@@ -84,3 +84,11 @@ def test_nemotron_file_selection_is_frozen():
 
 def test_campaign_uses_canonical_optimizer_registration():
     assert snowball_lce_final.GrugMoeAdamHConfig.__module__ == "experiments.grug.moe.optimizer"
+
+
+def test_all_five_base_revisions_are_immutable():
+    assert len(snowball_lce_final._BASE_REVISIONS) == 5
+    for repository, revision in snowball_lce_final._BASE_REVISIONS.values():
+        assert repository.startswith("open-athena/snowball-67b-a2b-base-")
+        assert revision is not None
+        assert len(revision) == 40
