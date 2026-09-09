@@ -133,6 +133,21 @@ def test_data_stage_builds_and_gates_both_shared_prefix_caches(local_base):
         )
 
 
+def test_smoke_reload_strictly_initializes_from_native_smoke(local_base):
+    model_config, tokenizer = local_base
+    step = snowball_lce_final.build_smoke_reload("qk157", _VERSION)
+
+    assert step.name.endswith("/qk157/hf-smoke-reload")
+    assert any(dep.name.endswith("/qk157/hf-smoke") for dep in step.deps)
+    pod = materialized_config(step, _PREFIX)
+    train = pod.train_config
+    assert train.trainer.num_train_steps == 1
+    assert train.initialize_from_hf is False
+    assert train.initialize_model_from_checkpoint_path.endswith("/qk157/hf-smoke/2026.09.08.99/checkpoints")
+    assert train.model == model_config
+    assert train.data.tokenizer == tokenizer
+
+
 def test_cache_preflight_matches_frozen_opencode_length():
     assert _OPENCODE_EPOCHS == 5
     assert _EXPECTED_OPENCODE_STEPS == 1_888

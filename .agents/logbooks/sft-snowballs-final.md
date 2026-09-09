@@ -158,3 +158,12 @@ author: benfeuer
 - Result: 29 default-marker tests passed, the explicit integration test passed, and the dry run resolved the interactive RNO2A accelerator. The catalog contains all five bases across Base/Chat/Thinking/OpenCode/Nemotron-Terminal, and the launcher records seed overrides only for Evalchemy definitions.
 - Interpretation: non-agentic launches can be split by suite and seed while preserving task-local limits and few-shot settings; OpenCode and Nemotron-Terminal retain distinct harnesses.
 - Next action: review, commit, and push the evaluation surface while smoke 4 continues loading.
+
+### 2026-09-08 22:39 EDT - Native reload gate made executable
+
+- Hypothesis: materializing the smoke artifact is insufficient unless the exact native checkpoint initialization used by Chat -> Thinking -> final branches also succeeds on the target topology.
+- Commit Hash: uncommitted follow-up on `1c01bff36d`.
+- Command: add a `smoke-reload` stage that depends on the one-update HF smoke, initializes weights strictly from its native checkpoint with a fresh optimizer, and performs one further update and HF/native save.
+- Result: the campaign wiring test confirms native rather than HF initialization, the exact parent checkpoint path, the pinned Snowball config/tokenizer, and a one-update run. All 11 campaign tests and the full pre-commit gate pass.
+- Interpretation: after smoke 4 succeeds, a second RNO2A job can validate the same native boundary every downstream stage uses without starting the five-model campaign.
+- Next action: push this gate, then launch it against smoke version `2026.09.08.5` after the parent finishes.

@@ -260,6 +260,23 @@ def build_smoke(base: str, version: str | None = None) -> ArtifactStep[LevanterC
     )
 
 
+def build_smoke_reload(base: str, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
+    """Reload the HF smoke's native checkpoint and run one update before campaign fan-out."""
+    smoke = build_smoke(base, version)
+    _, config, tokenizer = _base_model(base)
+    return sft_step(
+        _spec(
+            base=base,
+            stage="hf-smoke-reload",
+            version=version,
+            model=_native_model(smoke, config, tokenizer),
+            dataset=_CHAT_DATASET,
+            steps=1,
+        ),
+        _resources(),
+    )
+
+
 def build_chat(base: str, version: str | None = None) -> tuple[ArtifactStep[LevanterCheckpoint], SnowballConfig, str]:
     model, config, tokenizer = _base_model(base)
     chat = sft_step(
@@ -617,13 +634,15 @@ def build_all(base: str, version: str | None = None) -> ArtifactStep[Artifact]:
 @click.option("--base", type=click.Choice(tuple(_BASE_REVISIONS)), required=True)
 @click.option(
     "--stage",
-    type=click.Choice(("smoke", "data", "chat", "thinking", "opencode", "nemotron-terminal", "all")),
+    type=click.Choice(("smoke", "smoke-reload", "data", "chat", "thinking", "opencode", "nemotron-terminal", "all")),
     required=True,
 )
 @build_options
 def main(base: str, stage: str) -> ArtifactStep[LevanterCheckpoint]:
     if stage == "smoke":
         return build_smoke(base)
+    if stage == "smoke-reload":
+        return build_smoke_reload(base)
     if stage == "data":
         return build_prefix_caches(base)
     if stage == "chat":
