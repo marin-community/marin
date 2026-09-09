@@ -7,7 +7,11 @@ import pytest
 import yaml
 
 from experiments.post_training import async_rl_audit as audit
-from experiments.post_training.math_eval.type_c_audit import validate_checkpoint_receipts, validate_saved_source
+from experiments.post_training.math_eval.type_c_audit import (
+    audit_native_history,
+    validate_checkpoint_receipts,
+    validate_saved_source,
+)
 
 
 def fixture(minibatches=1):
@@ -138,3 +142,36 @@ def test_saved_source_uses_real_batch_geometry_and_successful_updates(minibatche
     state["successful_policy_updates"] = 95
     with pytest.raises(ValueError):
         validate_saved_source(state, seed=17, minibatches=minibatches, dataset_sha256="a" * 64)
+
+
+def test_native_history_keeps_integer_hashes_outside_float_tolerance():
+    selected, scalars = [], []
+    for step in range(1, 97):
+        metrics = {
+            "policy/by_update/0/" + key: 1.0
+            for key in (
+                "optimizer_step_succeeded",
+                "grad_norm_valid",
+                "stale/statistics_valid",
+                "stale/finite_fraction",
+                "stale/quantiles_valid",
+                "stale/p999_valid",
+                "raw_grad_norm",
+                "grad_norm_reduced",
+            )
+        }
+        metrics.update(
+            {
+                "policy/by_update/0/stale/quantiles_overflow": 0,
+                "policy/by_update/0/grad_cosine_valid": int(step > 1),
+                "consumed/uid_digest_u52": 3970228113034015,
+            }
+        )
+        selected.append({"global_step": step, **metrics})
+        scalars.extend({"step": step, "metric": key, "value": value} for key, value in metrics.items())
+    capture = {"results": {"scalars": scalars, "events": []}}
+    assert audit_native_history(capture, selected, minibatches=1)["exact_integer_digest_joins"] == 96
+    # This historical transport error is tiny relatively, but a hash is never approximate.
+    selected[0]["consumed/uid_digest_u52"] = 3970228113034014.5
+    with pytest.raises(ValueError, match="exact integers"):
+        audit_native_history(capture, selected, minibatches=1)

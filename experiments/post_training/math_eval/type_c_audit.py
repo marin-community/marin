@@ -293,3 +293,81 @@ def validate_saved_source(trainer_state, *, seed, minibatches, dataset_sha256):
     if trainer_state["source_order"] != expected or trainer_state["successful_policy_updates"] != 96:
         raise ValueError("Actual saved source contract or successful progress differs")
     return expected
+
+
+def audit_native_history(capture, selected_history, *, minibatches):
+    """Cross-check the retained native update series against independently read W&B rows."""
+    steps = 96 // minibatches
+    combined = {}
+    for row in selected_history:
+        step = row.get("global_step", row.get("trainer/global_step"))
+        if step is None:
+            continue
+        target = combined.setdefault(int(step), {})
+        for key, value in row.items():
+            if key in target and target[key] != value:
+                raise ValueError("Conflicting selected W&B rows")
+            target[key] = value
+    scalars = {(row["step"], row["metric"]): row["value"] for row in capture["results"]["scalars"]}
+    comparisons = 0
+    for (step, metric), value in scalars.items():
+        if not metric.startswith("policy/by_update/") and metric != "consumed/uid_digest_u52":
+            continue
+        reference = combined[step][metric]
+        if metric == "consumed/uid_digest_u52":
+            if type(reference) not in (int, float) or reference != int(reference) or reference != value:
+                raise ValueError("W&B and native UID digests must match as exact integers")
+        elif not math.isfinite(reference) or not math.isclose(value, reference, rel_tol=1e-9, abs_tol=1e-12):
+            raise ValueError("Native scalar differs from its actual W&B update")
+        comparisons += 1
+    maximum_norm_error = 0.0
+    for step in range(1, steps + 1):
+        for index in range(minibatches):
+            prefix = f"policy/by_update/{index}/"
+            for key in (
+                "optimizer_step_succeeded",
+                "grad_norm_valid",
+                "stale/statistics_valid",
+                "stale/finite_fraction",
+                "stale/quantiles_valid",
+                "stale/p999_valid",
+            ):
+                if scalars[step, prefix + key] != 1:
+                    raise ValueError("Invalid successful-update or numerical coverage flag")
+            if scalars[step, prefix + "stale/quantiles_overflow"] != 0:
+                raise ValueError("Exact quantiles overflowed")
+            if scalars[step, prefix + "grad_cosine_valid"] != int(step > 1 or index > 0):
+                raise ValueError("Gradient cosine validity differs from consecutive successful updates")
+            raw, norm = (scalars[step, prefix + key] for key in ("raw_grad_norm", "grad_norm_reduced"))
+            target = min(raw, 1.0)
+            if target <= 0:
+                raise ValueError("Observed run cannot qualify nonzero gradient coverage")
+            error = abs(norm - target) / target
+            if error >= 1e-3:
+                raise ValueError("Post-clip gradient coverage differs")
+            maximum_norm_error = max(maximum_norm_error, error)
+    tokens = 0
+    for row in capture["results"]["events"]:
+        if row["name"] != "consumed_age":
+            continue
+        body, attrs = json.loads(row["body_json"]), json.loads(row["attributes_json"])
+        step = int(attrs["step"])
+        if body["response_tokens"] != scalars[step, f"policy/by_update/{body['age']}/stale/selected_tokens"]:
+            raise ValueError("Update age token count differs from its actual selected mask population")
+        tokens += body["response_tokens"]
+    training = [combined[step] for step in range(1, steps + 1)]
+    step_walls = [row.get("timing/step") for row in training]
+    has_step_walls = all(isinstance(value, (int, float)) and math.isfinite(value) and value > 0 for value in step_walls)
+    return {
+        "native_wandb_scalar_joins": comparisons,
+        "optimizer_updates": 96,
+        "maximum_postclip_relative_norm_error": maximum_norm_error,
+        "response_mask_tokens": tokens,
+        "exact_integer_digest_joins": steps,
+        "summed_training_step_wall_seconds": sum(step_walls) if has_step_walls else None,
+        "step_wall_scope": (
+            "Generation through weight sync; excludes startup, evaluation, checkpoint callbacks and loader iteration."
+        ),
+        "dedicated_core_seconds_available": any(any(key.endswith("core_seconds") for key in row) for row in training),
+        "selected_history_sha256": audit.canonical_sha(selected_history),
+    }
