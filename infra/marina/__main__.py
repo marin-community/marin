@@ -255,6 +255,7 @@ def main() -> None:
                 "MARINA_CANONICAL_ORIGIN": f"https://{MARINA_HOST}",
                 "MARINA_APPLET_ORIGIN": f"https://{APPLET_HOST}",
                 "MARINA_APPLET_OPERATORS": ",".join(applet_operators),
+                "MARINA_AGENT_ORIGIN": "https://loom.oa.dev",
                 **DATABASE_ENV,
                 **runner_env,
             },

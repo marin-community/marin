@@ -18,6 +18,7 @@ config:
   marin-loom:dotenvSecretVersion: "4"
   marin-loom:pruneDeployment: "true"
   marin-loom:settings:
+    browser.allowed_origins: https://marina.oa.dev
     github.profile: github
     slack.effort: agent-default
     slack.profile: slack
@@ -26,6 +27,15 @@ config:
       label: Marina API
       description: Search and call checked-in Marina application APIs
       url: https://marina.oa.dev/api/marina/mcp/
+      auth:
+        type: iap
+        # Public client ID for rigging.auth.MARIN_DESKTOP_OAUTH_CLIENT in hai-gcp-models.
+        audience: 748532799086-qf8m6mvovtdmd71npm07gk1ohijsr3q5.apps.googleusercontent.com
+      enabled: true
+    - identity: /marina-read/api
+      label: Marina read-only API
+      description: Search and call read-only checked-in Marina application APIs
+      url: https://marina.oa.dev/api/marina/mcp/read/
       auth:
         type: iap
         # Public client ID for rigging.auth.MARIN_DESKTOP_OAUTH_CLIENT in hai-gcp-models.
@@ -61,7 +71,7 @@ config:
           - session
     marina:
       agent: codex
-      description: Interactive questions and actions over Marina application APIs
+      description: Interactive questions over read-only Marina application APIs
       model: gpt-5.6-sol
       effort: xhigh
       protocol: acp
@@ -75,15 +85,7 @@ config:
       mcpAccess:
         mode: groups
         groups:
-          - artifact
-          - channel
-          - context
-          - github
-          - issue
-          - marina
-          - messaging
-          - permissions
-          - session
+          - marina-read
     github:
       agent: codex
       description: GitHub-triggered Marin issue and pull-request sessions

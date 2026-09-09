@@ -1,3 +1,11 @@
 title = "Plantt"
 description = "Build and share project and compute plans."
 build_command = "cd web && npm ci && npm run build"
+
+[agent]
+profile = "marina"
+repository = "marin-community/marin"
+starters = [
+  "What is on the critical path?",
+  "Where does this plan exceed available compute?",
+]
