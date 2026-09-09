@@ -388,7 +388,7 @@ def test_snowball_multidevice_fused_loss_keeps_head_replicated_and_batch_local()
         Batch = Axis("batch", 8)
         Pos = Axis("position", 8)
         Vocab = Axis("vocab", cfg.vocab_size)
-        mesh = compact_grug_mesh(expert_axis_size=2, replica_axis_size=2)
+        mesh = compact_grug_mesh(expert_axis_size=1)
         input_sharding = NamedSharding(mesh, P(("replica_dcn", "data", "expert"), None))
         tokens = jax.device_put(
             jnp.arange(Batch.size * Pos.size, dtype=jnp.int32).reshape(Batch.size, Pos.size) % Vocab.size,

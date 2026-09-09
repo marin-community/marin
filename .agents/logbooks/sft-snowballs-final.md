@@ -278,3 +278,9 @@ author: benfeuer
 - Result: the initial probe coordinators rejected `topology1`/`topology2` as invalid immutable version labels before allocating GPUs.
 - Interpretation: this was a launch-only validation error and yielded no topology evidence.
 - Next action: monitor `/benfeuer/snowball-final-qk157-topology1b-coord` (`2026.09.09.1`) and `/benfeuer/snowball-final-qk157-topology2b-coord` (`2026.09.09.2`).
+
+### 2026-09-09 01:44 EDT - Full batch-axis shard map rejected on GPU
+
+- Result: smoke 7 from `d68ae9d104` failed before model loading. XLA GPU rejected the canonical `data × expert` shard map because its device assignment was non-IOTA (`0,8,16,…,1,9,…`). The owned retry was cancelled.
+- Interpretation: the existing one-axis shard map is a GPU layout constraint, not an accidental loss of `expert`. The speculative code and test change are reverted while this evidence remains in the log.
+- Next action: use the prior-commit one- and two-node controls to determine whether the 268.69 GiB transpose requires cross-node `data`; inspect a device-local loss boundary that does not introduce a nested global shard map.
