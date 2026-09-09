@@ -785,7 +785,10 @@ def build_experiment(
         topology=topology,
         retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
         seed=seed,
-        overrides=("++trainer.hf_hub_repo_id=null", "++generator.chat_template_kwargs.enable_thinking=false"),
+        overrides=("++trainer.hf_hub_repo_id=null", "++generator.chat_template_kwargs.enable_thinking=false")
+        # The native launcher defaults to latest after reading YAML. Guarded
+        # measurements require a final override that disables checkpoint resumption.
+        + (("++trainer.resume_mode=none",) if measurement_guard_uri is not None else ()),
     )
     execution = IrisSkyRLExecution(
         cluster=cluster,
