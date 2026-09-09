@@ -355,7 +355,7 @@ impl ObjectTableStateStore {
             .transpose()?;
         let delta_bytes = delta
             .as_ref()
-            .map(|delta| serde_json::to_vec(delta))
+            .map(serde_json::to_vec)
             .transpose()
             .map_err(|error| {
                 StatsError::Internal(format!("encode catalog delta for {table:?}: {error}"))
@@ -829,7 +829,7 @@ impl ObjectTableStateStore {
                 continue;
             }
             if let Some(catalog) = legacy_catalogs.get(key) {
-                referenced.extend(referenced_object_keys(&catalog));
+                referenced.extend(referenced_object_keys(catalog));
             }
         }
         for prefix in [OBJECTS_PREFIX, INDICES_PREFIX, PROJECTIONS_PREFIX] {

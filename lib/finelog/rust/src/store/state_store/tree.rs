@@ -22,16 +22,10 @@ pub(crate) fn canonical_catalog(mut catalog: NamespaceCatalog) -> NamespaceCatal
         .version_segments
         .sort_by_key(|segments| segments.table_spec_version.unwrap_or(0));
     for segments in &mut catalog.version_segments {
-        segments
-            .live_segments
-            .sort_by(|left, right| segment_id(left).cmp(&segment_id(right)));
-        segments
-            .retired_segments
-            .sort_by(|left, right| segment_id(left).cmp(&segment_id(right)));
+        segments.live_segments.sort_by_key(segment_id);
+        segments.retired_segments.sort_by_key(segment_id);
     }
-    catalog
-        .direct_query_segments
-        .sort_by(|left, right| segment_id(left).cmp(&segment_id(right)));
+    catalog.direct_query_segments.sort_by_key(segment_id);
     catalog
 }
 
