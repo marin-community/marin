@@ -16,7 +16,7 @@ author: benfeuer
 
 ## Current TL;DR
 
-- Fixed policy written. Five native sources identified. Two base HF uploads owned by `/held` are running but not yet validated. RNO2A launch is gated on a Snowball HF-loader smoke test and accessible pinned SFT data.
+- Fixed policy written. Five native sources identified. Two base HF uploads are validated and three `/held` uploaders remain active. Two RNO2A smoke attempts failed before model load; fixes and exact agentic-stage cache wiring are locally validated. WIP implementation commit `dfd8a1518f` is pushed and its full safe test suite is green.
 
 ## Entry Log
 
@@ -49,3 +49,40 @@ author: benfeuer
 - Result: falsified before model loading. `snapshot_download` rejected the `@revision` suffix as an invalid repo ID on all eight ranks. No update ran and no checkpoint was written.
 - Interpretation: model checkpoint loading supports `RepoRef` strings; tokenizer staging does not. For the next smoke, use the validated repository's current tokenizer path while retaining the immutable model revision. Add revision-aware tokenizer staging before full training.
 - Next action: relaunch with a new artifact version and job handle; retain this failed attempt in the record.
+
+### 2026-09-08 21:05 EDT - Smoke attempt 2 initialized on RNO2A
+
+- Hypothesis: the pinned qk157 HF weights can be loaded into the first-class Snowball model and trained at the target 64-H100 topology when the tokenizer is read from the already-validated repository root.
+- Commit Hash: submitted bundle based on the changes later committed as `dfd8a1518f`; the bundle predates the tokenizer-revision patch included in that commit.
+- Command: `/benfeuer/snowball-final-qk157-smoke2-coord`, version `2026.09.08.2`, JAX port `19302`.
+- Config: immutable model revision `2b1f526273b8968b307a0098c08fb4321bb91e35`; repository-root tokenizer; one update; seq 32768; batch 64; 8 nodes x 8 H100; RNO2A interactive.
+- Result: active replacement child `/benfeuer/snowball-final-qk157-smoke2-coord/run_levanter_train_lm-5a295d2a` staged the tokenizer and joined all eight JAX ranks. The coordinator retains one failure from an earlier child attempt. Weight-load/update/save evidence is pending.
+- Interpretation: scheduling and multi-host bootstrap are healthy. Do not infer success until a finite optimizer update and reloadable checkpoint are observed.
+- Next action: continue polling this exact handle, then run a third smoke from committed code with both model and tokenizer revisions pinned.
+
+### 2026-09-08 21:05 EDT - OpenCode cache lineage check
+
+- Hypothesis: the token caches in the pinned `open-athena/grug-67b-a2b-agentic-sft-training-data` release are the exact input to the 1,888-step Stage 3 run.
+- Commit Hash: `dfd8a1518f`.
+- Command: inspect Hub revision `a9805934c9c98908c611236bbfc87799f1ff6fe5` manifest and compare it with issue #8225's final record.
+- Result: falsified. The release has 29 components and 797,783,562 raw cached tokens, yielding 1,903 naïve five-epoch steps at seq32768/batch64. Issue #8225 explicitly identifies these as the original 1,903-step lineage and says the 1,888-step model used a corrected consolidated cache.
+- Interpretation: use the immutable release for provenance and converted source data, but use the corrected consolidated fixed-EOT cache for the reproduction. Hard-coding 1,888 over the superseded cache would not reproduce the run.
+- Next action: port the corrected-cache dependency from the historical launcher, validate its token accounting and RNO2A accessibility, and keep Nemotron Terminal as an independent sibling of the Thinking checkpoint.
+
+### 2026-09-08 21:20 EDT - Smoke attempt 2 cancelled after stale coordinator endpoint
+
+- Hypothesis: the replacement child was quietly downloading or loading the large HF checkpoint after all ranks entered JAX initialization.
+- Commit Hash: submitted bundle based on changes later committed as `dfd8a1518f`.
+- Command: inspect both child handles and their task-level logs, then cancel `/benfeuer/snowball-final-qk157-smoke2-coord`.
+- Result: falsified. First child task 0 failed binding `[::]:19302` because the address was already in use. In the replacement child, nonzero ranks connected to the stale first-child endpoint at `10.168.195.25:19302`, while replacement task 0 started its coordinator at `10.168.194.209:19302`. All eight replacement tasks stayed blocked for 23 minutes with no post-connect log. The owned smoke was cancelled to release 64 H100s; no model load or update ran.
+- Interpretation: this was an Iris child-retry endpoint collision, not a Snowball or HF-loader result. A distinct root job identity and port avoids reusing the stale endpoint name.
+- Next action: complete local validation, commit the exact bundle, and launch attempt 3 under a fresh root job and JAX port.
+
+### 2026-09-08 21:25 EDT - Exact agentic caches and tokenizer compatibility
+
+- Hypothesis: the corrected OpenCode and historical Nemotron-Terminal caches can be consumed without rebuilding them, while preserving their original packing and loss-mask semantics.
+- Commit Hash: uncommitted follow-up on `dfd8a1518f`.
+- Command: inspect historical cache declarations; add materialized-config and behavioral dataset tests; compare the qk157 base `tokenizer.json` with the current pinned Marin tokenizer artifact.
+- Result: the OpenCode stage adopts the corrected consolidated `2026.08.05` fixed-EOT cache, right-slices overlength records, shifts the assistant mask for next-token loss, and clears loss at packed segment boundaries. Nemotron adopts the exact `2026.07.17` chat cache and left-slices. Both are independent 1,888-step children of Thinking. The qk157 and current Marin `tokenizer.json` files have identical SHA-256 `881c9c36...`.
+- Interpretation: cache token IDs are compatible with the base tokenizer; the base repository's thinner tokenizer metadata does not imply a different vocabulary. The exact caches still need an RNO2A read/accounting check before full training.
+- Next action: run the complete safe test suite, commit and push, then launch smoke attempt 3 with a new root identity and port.

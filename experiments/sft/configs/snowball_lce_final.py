@@ -12,29 +12,38 @@ Launch a one-update full-shape smoke on RNO2A before the campaign fan-out::
 
     source ../secrets.env
     uv run iris --config lib/iris/config/marin.yaml job run \
-      --target-cluster cw-rno2a --job-name snowball-final-qk157-smoke-coord \
+      --target-cluster cw-rno2a --job-name snowball-final-qk157-smoke3-coord \
       --cpu 2 --memory 2G --extra cpu --priority interactive --max-retries 10 --no-wait \
       -e MARIN_PREFIX s3://marin-us-east-02a/marin \
       -e HF_TOKEN "$HF_TOKEN" -e WANDB_API_KEY "$WANDB_API_KEY" \
-      -e IRIS_PORT_JAX 19302 -- \
+      -e IRIS_PORT_JAX 19403 -- \
       python -m experiments.sft.configs.snowball_lce_final \
-      --base qk157 --stage smoke --version 2026.09.08.2 --run
+      --base qk157 --stage smoke --version 2026.09.08.3 --run
 """
 
 import dataclasses
+from typing import Literal
 
 import click
 from fray.cluster import ResourceConfig
+from levanter.data.text.datasets import DatasetComponent, LmDataConfig, UrlDatasetSourceConfig
+from levanter.data.text.formats import ChatLmDatasetFormat, LmDatasetFormatBase
 from levanter.models.snowball import SnowballConfig
 from levanter.utils.mesh import MeshConfig
 from marin.execution.build_context import resolve_version
-from marin.execution.lazy import ArtifactStep
+from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.checkpoints import resolve_lm_config
 from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_namespaced_name
+from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.training.training import LevanterCheckpoint
 
-from experiments.june_tpu_67b_a2b.moe.optimizer import GrugMoeAdamHConfig
+from experiments.datasets.grug_a2b_agentic_sft_eot import (
+    GRUG_A2B_AGENTIC_SFT_FORMAT,
+    grug_a2b_agentic_sft_eot_dataset,
+)
+from experiments.grug.moe.optimizer import GrugMoeAdamHConfig
+from experiments.marin_tokenizer import MARIN_CHAT_TEMPLATE
 from experiments.sft.delphi_chat_template import DELPHI_V0_CHAT_TEMPLATE
 from experiments.sft.launcher import DatasetSpec, HFModel, LevanterCheckpointModel, SFTSpec, sft_step
 
@@ -43,6 +52,10 @@ _BATCH = 64
 _NODES = 8
 _EXPERT_PARALLEL = 8
 _WANDB_PROJECT = "marin_moe_sft_snowball_final"
+_AGENTIC_STEPS = 1_888
+_PREBUILT_TRAIN_RESOURCES = "prebuilt_train_resources"
+_OPENCODE_DATASET_REVISION = "a9805934c9c98908c611236bbfc87799f1ff6fe5"
+_NEMOTRON_DATASET_REVISION = "a1667c4ffdadea02a89bffe4f1bb7ca2ff19f8d9"
 
 # These are immutable tags created only after the uploader validated all 44 source files. Add the
 # three skew revisions after their export/upload jobs finish; never train from a moving ``main``.
@@ -68,6 +81,55 @@ _THINKING_DATASET = DatasetSpec(
     adapter_kwargs={},
     weight=1.0,
 )
+_OPENCODE_DATASET = DatasetSpec(
+    slug="grug_a2b_agentic_sft_eot",
+    hf_dataset_id="open-athena/grug-67b-a2b-agentic-sft-training-data",
+    revision=_OPENCODE_DATASET_REVISION,
+    adapter_kwargs={},
+    weight=1.0,
+)
+_NEMOTRON_DATASET = DatasetSpec(
+    slug="nemotron_terminal_full",
+    hf_dataset_id="nvidia/Nemotron-Terminal-Corpus",
+    revision=_NEMOTRON_DATASET_REVISION,
+    adapter_kwargs={"conversation_column": "conversations"},
+    weight=1.0,
+)
+
+# The existing immutable cache below was built from precisely these 29 files. Retain the selection
+# beside the adopted cache so an audit or future rebuild cannot silently expand to the full corpus.
+_NEMOTRON_PARQUET_FILES: tuple[str, ...] = (
+    "dataset_adapters/code.parquet",
+    "dataset_adapters/math.parquet",
+    "dataset_adapters/swe.parquet",
+    "synthetic_tasks/skill_based/easy/data_processing/data_filtered.parquet",
+    "synthetic_tasks/skill_based/easy/data_querying/data_filtered.parquet",
+    "synthetic_tasks/skill_based/easy/data_science/data_filtered.parquet",
+    "synthetic_tasks/skill_based/easy/debugging/data_filtered.parquet",
+    "synthetic_tasks/skill_based/easy/dependency_management/data_filtered.parquet",
+    "synthetic_tasks/skill_based/easy/file_operations/data_filtered.parquet",
+    "synthetic_tasks/skill_based/easy/scientific_computing/data_filtered.parquet",
+    "synthetic_tasks/skill_based/easy/security/data_filtered.parquet",
+    "synthetic_tasks/skill_based/easy/software_engineering/data_filtered.parquet",
+    "synthetic_tasks/skill_based/medium/data_processing/data_filtered.parquet",
+    "synthetic_tasks/skill_based/medium/data_querying/data_filtered.parquet",
+    "synthetic_tasks/skill_based/medium/data_science/data_filtered.parquet",
+    "synthetic_tasks/skill_based/medium/debugging/data_filtered.parquet",
+    "synthetic_tasks/skill_based/medium/dependency_management/data_filtered.parquet",
+    "synthetic_tasks/skill_based/medium/file_operations/data_filtered.parquet",
+    "synthetic_tasks/skill_based/medium/model_training/data_filtered.parquet",
+    "synthetic_tasks/skill_based/medium/scientific_computing/data_filtered.parquet",
+    "synthetic_tasks/skill_based/medium/security/data_filtered.parquet",
+    "synthetic_tasks/skill_based/medium/software_engineering/data_filtered.parquet",
+    "synthetic_tasks/skill_based/medium/system_administration/data_filtered.parquet",
+    "synthetic_tasks/skill_based/mixed/data_processing/data_filtered.parquet",
+    "synthetic_tasks/skill_based/mixed/data_science/data_filtered.parquet",
+    "synthetic_tasks/skill_based/mixed/debugging/data_filtered.parquet",
+    "synthetic_tasks/skill_based/mixed/file_operations/data_filtered.parquet",
+    "synthetic_tasks/skill_based/mixed/scientific_computing/data_filtered.parquet",
+    "synthetic_tasks/skill_based/mixed/security/data_filtered.parquet",
+)
+_NEMOTRON_CACHE_SOURCE = "s3://marin-us-east-02a/marin/tokenized/nemotron_terminal_full-chat-7adc64/2026.07.17"
 
 _TRAIN_MESH = MeshConfig(
     axes={"expert": _EXPERT_PARALLEL},
@@ -151,6 +213,8 @@ def _spec(
     dataset: DatasetSpec,
     steps: int | None = None,
     epochs: int | None = None,
+    learning_rate: float = 5e-5,
+    chat_template: str = DELPHI_V0_CHAT_TEMPLATE,
 ) -> SFTSpec:
     step_name = f"snowball-final/{base}/{stage}"
     resolved_version = resolve_version(step_name, version)
@@ -158,9 +222,9 @@ def _spec(
         name=user_namespaced_name(step_name, resolved_version),
         version=resolved_version,
         model=model,
-        chat_template=DELPHI_V0_CHAT_TEMPLATE,
+        chat_template=chat_template,
         datasets=[dataset],
-        optimizer=_optimizer(5e-5),
+        optimizer=_optimizer(learning_rate),
         seq_len=_SEQ,
         batch_size=_BATCH,
         num_train_steps=steps,
@@ -177,9 +241,7 @@ def build_smoke(base: str, version: str | None = None) -> ArtifactStep[LevanterC
     )
 
 
-def build_chat(
-    base: str, version: str | None = None
-) -> tuple[ArtifactStep[LevanterCheckpoint], SnowballConfig, str]:
+def build_chat(base: str, version: str | None = None) -> tuple[ArtifactStep[LevanterCheckpoint], SnowballConfig, str]:
     model, config, tokenizer = _base_model(base)
     chat = sft_step(
         _spec(base=base, stage="chat", version=version, model=model, dataset=_CHAT_DATASET, epochs=1),
@@ -204,16 +266,171 @@ def build_thinking(base: str, version: str | None = None) -> ArtifactStep[Levant
     )
 
 
+def _adopt_nemotron_cache() -> ArtifactStep[TokenizedCache]:
+    return ArtifactStep.adopt(
+        name="tokenized/nemotron_terminal_full-chat-7adc64",
+        version="2026.07.17",
+        source=_NEMOTRON_CACHE_SOURCE,
+        kind=TokenizedCache,
+    )
+
+
+def _prebuilt_data_config(
+    *,
+    tokenizer: str,
+    cache_path: str,
+    slug: str,
+    data_format: LmDatasetFormatBase,
+    packed_slice_strategy: Literal["left", "right", "raise"] = "left",
+) -> LmDataConfig:
+    source = UrlDatasetSourceConfig(
+        train_urls=[],
+        validation_urls=[],
+        cache_dir=cache_path,
+        format=data_format,
+    )
+    return LmDataConfig(
+        tokenizer=tokenizer,
+        auto_build_caches=False,
+        components={
+            slug: DatasetComponent(
+                source=source,
+                cache_dir=cache_path,
+                format=data_format,
+                pack=True,
+                packed_slice_strategy=packed_slice_strategy,
+                split="train",
+            )
+        },
+        train_weights={slug: 1.0},
+    )
+
+
+def _build_prebuilt_stage(
+    *,
+    base: str,
+    stage: str,
+    version: str | None,
+    parent: ArtifactStep[LevanterCheckpoint],
+    config: SnowballConfig,
+    tokenizer: str,
+    cache: ArtifactStep[TokenizedCache],
+    dataset: DatasetSpec,
+    data_format: LmDatasetFormatBase,
+    chat_template: str,
+    packed_slice_strategy: Literal["left", "right", "raise"] = "left",
+) -> ArtifactStep[LevanterCheckpoint]:
+    model = _native_model(parent, config, tokenizer)
+    spec = _spec(
+        base=base,
+        stage=stage,
+        version=version,
+        model=model,
+        dataset=dataset,
+        steps=_AGENTIC_STEPS,
+        learning_rate=5e-6,
+        chat_template=chat_template,
+    )
+
+    def build_config(ctx: StepContext):
+        data = _prebuilt_data_config(
+            tokenizer=model.resolve_tokenizer(ctx),
+            cache_path=ctx.artifact_path(cache),
+            slug=dataset.slug,
+            data_format=data_format,
+            packed_slice_strategy=packed_slice_strategy,
+        )
+        return model.build_train_config(
+            ctx,
+            spec,
+            data,
+            ctx.runtime_arg(_PREBUILT_TRAIN_RESOURCES),
+            _AGENTIC_STEPS,
+        )
+
+    return ArtifactStep(
+        name=spec.name,
+        version=spec.version,
+        artifact_type=LevanterCheckpoint,
+        run=model.run,
+        build_config=build_config,
+        deps=(cache, *model.init_deps()),
+        runtime_args={_PREBUILT_TRAIN_RESOURCES: _resources()},
+    )
+
+
+def _build_prefix(base: str, version: str | None = None) -> tuple[ArtifactStep[LevanterCheckpoint], SnowballConfig, str]:
+    chat, config, tokenizer = build_chat(base, version)
+    thinking = sft_step(
+        _spec(
+            base=base,
+            stage="thinking",
+            version=version,
+            model=_native_model(chat, config, tokenizer),
+            dataset=_THINKING_DATASET,
+            epochs=1,
+        ),
+        _resources(),
+    )
+    return thinking, config, tokenizer
+
+
+def build_opencode(base: str, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
+    thinking, config, tokenizer = _build_prefix(base, version)
+    return _build_prebuilt_stage(
+        base=base,
+        stage="opencode",
+        version=version,
+        parent=thinking,
+        config=config,
+        tokenizer=tokenizer,
+        cache=grug_a2b_agentic_sft_eot_dataset(),
+        dataset=_OPENCODE_DATASET,
+        data_format=GRUG_A2B_AGENTIC_SFT_FORMAT,
+        chat_template=DELPHI_V0_CHAT_TEMPLATE,
+        packed_slice_strategy="right",
+    )
+
+
+def build_nemotron_terminal(base: str, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
+    thinking, config, tokenizer = _build_prefix(base, version)
+    return _build_prebuilt_stage(
+        base=base,
+        stage="nemotron-terminal",
+        version=version,
+        parent=thinking,
+        config=config,
+        tokenizer=tokenizer,
+        cache=_adopt_nemotron_cache(),
+        dataset=_NEMOTRON_DATASET,
+        data_format=ChatLmDatasetFormat(
+            messages_field="messages",
+            chat_template=MARIN_CHAT_TEMPLATE,
+            mask_user_turns=True,
+            pack=None,
+        ),
+        chat_template=MARIN_CHAT_TEMPLATE,
+    )
+
+
 @click.command()
 @click.option("--base", type=click.Choice(tuple(_BASE_REVISIONS)), required=True)
-@click.option("--stage", type=click.Choice(("smoke", "chat", "thinking")), required=True)
+@click.option(
+    "--stage",
+    type=click.Choice(("smoke", "chat", "thinking", "opencode", "nemotron-terminal")),
+    required=True,
+)
 @build_options
 def main(base: str, stage: str) -> ArtifactStep[LevanterCheckpoint]:
     if stage == "smoke":
         return build_smoke(base)
     if stage == "chat":
         return build_chat(base)[0]
-    return build_thinking(base)
+    if stage == "thinking":
+        return build_thinking(base)
+    if stage == "opencode":
+        return build_opencode(base)
+    return build_nemotron_terminal(base)
 
 
 if __name__ == "__main__":
