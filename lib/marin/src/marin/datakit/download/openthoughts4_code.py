@@ -10,8 +10,9 @@ from zephyr.dataset import Dataset
 from marin.datakit.chat_normalize import normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import (
-    checked_chat_document,
+    checked_openai_chat_document,
     load_parquet_batched,
+    normalize_reasoning_tokens,
     render_role_message,
     text_document,
 )
@@ -40,7 +41,7 @@ def row_to_chat_doc(row: dict) -> list[dict]:
     messages = row.get("messages")
     if not isinstance(messages, list) or not messages:
         return []
-    return checked_chat_document(
+    return checked_openai_chat_document(
         [_repair_reasoning_delimiters(message) for message in messages],
         HF_DATASET_ID,
         counter_prefix="openthoughts4_code/chat",
@@ -55,7 +56,11 @@ def row_to_doc(row: dict) -> list[dict]:
     documents = row_to_chat_doc(row)
     if not documents:
         return []
-    text = "\n\n".join(render_role_message(message) for message in documents[0]["messages"])
+    messages = [_repair_reasoning_delimiters(message) for message in row["messages"]]
+    for message in messages:
+        if message["role"] == "assistant":
+            message["content"] = normalize_reasoning_tokens(message["content"])
+    text = "\n\n".join(render_role_message(message) for message in messages)
     return [text_document(text, HF_DATASET_ID)]
 
 
@@ -98,6 +103,6 @@ def openthoughts4_code_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/openthoughts4-code-glm-5.2-n4",
         deps=[download],
         fn=lambda output_path: _transform(download.output_path, output_path, chat=True),
-        hash_attrs={"version": "2026.09.05.2.harmony"},
+        hash_attrs={"version": "2026.09.05.2.harmony-direct"},
     )
     return processed, normalize_chat_step(name="normalized-chat/openthoughts4-code-glm-5.2-n4", download=processed)

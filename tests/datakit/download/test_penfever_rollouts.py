@@ -40,17 +40,20 @@ def test_terminal_protocol_becomes_reasoning_call_and_observation():
     )
 
     messages = document["messages"]
-    assert messages[0]["content"].startswith("Task Description:")
-    assert messages[1]["content"] == "<|start_think|>Inspect first.<|end_think|>"
-    call = messages[1]["tool_calls"][0]
-    assert json.loads(call["function"]["arguments"])["commands"][0]["keystrokes"] == "ls\n"
-    assert messages[2] == {
+    assert messages[0]["content"][0]["text"].startswith("Task Description:")
+    assert messages[1]["channel"] == "analysis"
+    assert messages[1]["content"] == [{"type": "text", "text": "Inspect first."}]
+    assert messages[2]["recipient"] == "functions.terminal"
+    assert json.loads(messages[2]["content"][0]["text"])["commands"][0]["keystrokes"] == "ls\n"
+    assert messages[3] == {
         "role": "tool",
-        "content": "New Terminal Output:\nfile.py",
-        "name": "terminal",
-        "tool_call_id": call["id"],
+        "name": "functions.terminal",
+        "channel": "commentary",
+        "recipient": "assistant",
+        "content": [{"type": "text", "text": "New Terminal Output:\nfile.py"}],
     }
-    assert messages[3]["content"].endswith("Task complete.")
+    assert messages[-1]["channel"] == "final"
+    assert messages[-1]["content"] == [{"type": "text", "text": "Task complete."}]
     assert json.loads(document["chat_template_kwargs"])["tools"][0]["name"] == "terminal"
 
 
@@ -73,11 +76,13 @@ def test_opencode_protocol_becomes_structured_call_and_observation():
         }
     )
 
-    call = document["messages"][1]["tool_calls"][0]
-    assert document["messages"][1]["content"] == "<|start_think|>Inspect.<|end_think|>"
-    assert json.loads(call["function"]["arguments"]) == {"command": "ls"}
-    assert document["messages"][2]["role"] == "tool"
-    assert document["messages"][2]["tool_call_id"] == call["id"]
+    messages = document["messages"]
+    assert messages[1]["channel"] == "analysis"
+    assert messages[1]["content"] == [{"type": "text", "text": "Inspect."}]
+    assert messages[2]["recipient"] == "functions.bash"
+    assert json.loads(messages[2]["content"][0]["text"]) == {"command": "ls"}
+    assert messages[3]["role"] == "tool"
+    assert messages[3]["name"] == "functions.bash"
     assert json.loads(document["chat_template_kwargs"])["tools"][0]["name"] == "bash"
 
 
@@ -101,11 +106,10 @@ def test_opencode_protocol_matches_parallel_calls_to_separate_observations():
         }
     )
 
-    calls = document["messages"][1]["tool_calls"]
-    assert [message["tool_call_id"] for message in document["messages"][2:4]] == [
-        calls[0]["id"],
-        calls[1]["id"],
-    ]
+    messages = document["messages"]
+    assert [m["recipient"] for m in messages[1:3]] == ["functions.read", "functions.read"]
+    assert [json.loads(m["content"][0]["text"])["path"] for m in messages[1:3]] == ["a.py", "b.py"]
+    assert [m["content"][0]["text"] for m in messages[3:5]] == ["contents of a.py", "contents of b.py"]
     [tool] = json.loads(document["chat_template_kwargs"])["tools"]
     assert tool["parameters"]["properties"] == {"offset": {"type": "number"}, "path": {"type": "string"}}
     assert tool["parameters"]["required"] == ["path"]
@@ -131,10 +135,11 @@ def test_opencode_protocol_links_bundled_parallel_call_observation_to_each_call(
         }
     )
 
-    calls = document["messages"][1]["tool_calls"]
-    observations = document["messages"][2:4]
-    assert [message["tool_call_id"] for message in observations] == [call["id"] for call in calls]
-    assert [message["content"] for message in observations] == ["combined output", "combined output"]
+    calls = document["messages"][1:3]
+    observations = document["messages"][3:5]
+    assert [call["recipient"] for call in calls] == ["functions.read", "functions.read"]
+    assert [m["name"] for m in observations] == ["functions.read", "functions.read"]
+    assert [m["content"][0]["text"] for m in observations] == ["combined output", "combined output"]
 
 
 def test_opencode_protocol_recovers_prompt_from_instruction():
@@ -147,7 +152,11 @@ def test_opencode_protocol_recovers_prompt_from_instruction():
         }
     )
 
-    assert document["messages"][0] == {"role": "user", "content": "Fix the code."}
+    assert document["messages"][0] == {
+        "role": "user",
+        "name": None,
+        "content": [{"type": "text", "text": "Fix the code."}],
+    }
 
 
 def test_opencode_protocol_drops_conversation_without_a_recoverable_prompt():

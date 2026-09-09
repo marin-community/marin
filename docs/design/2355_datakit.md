@@ -60,34 +60,42 @@ Each item in `row["messages"]` can be loaded with
 `openai_harmony.Message.from_dict`. There is no
 conversation-level `content` column.
 
-Source adapters interpret dataset-specific action and reasoning protocols.
-Normalization extracts reasoning into assistant `analysis` messages, preserving
-answers as `final` and tool-call preambles as `commentary`. Balanced `<think>`
-and `<|start_think|>…<|end_think|>` delimiters are removed during extraction. SWE-ZERO's
-`THOUGHT:` prefix and GLM's missing opening delimiter are repaired by their source adapters.
-Assistant `reasoning_content` is also accepted as plain source reasoning text.
+Source adapters construct `openai_harmony.Message` objects directly. The shared
+OpenAI-style source helper, `openai_chat_messages`, handles role aliases,
+`reasoning_content`, tagged reasoning, and function-call dictionaries. It emits
+`analysis` for reasoning, `commentary` for tool calls and their text preambles,
+and `final` for other assistant text, using `ChatChannel`. Dataset-specific
+adapters repair protocols such as SWE-ZERO's `THOUGHT:` and GLM's missing opening
+reasoning delimiter before calling that helper. `chat_document` serializes Harmony
+messages into the processed source artifact; there is no intermediate canonical
+OpenAI-message artifact.
 
-A function call becomes an assistant `commentary` message addressed to
+The Parquet normalizer accepts only serialized Harmony messages. It validates
+conversation structure, channels, and function handoffs, then hashes and deduplicates
+records. It does not interpret reasoning delimiters or inline tool-call syntax.
+Literal text such as `<think>` in a Harmony final answer stays literal text.
+
+A function call is an assistant `commentary` message addressed to
 `functions.<name>`, with JSON-object arguments in its text content. Its response
-is a `tool` message named `functions.<name>` and addressed to `assistant`.
-Source call IDs establish linkage before conversion. Parallel calls retain
-source call order; observations are ordered by the corresponding call IDs so
-repeated calls to the same function stay associated. Source call IDs do not
-appear in Harmony messages. The entire `chat_template_kwargs` column is a JSON string. Tool definitions
-are available as `json.loads(row["chat_template_kwargs"])["tools"]`; normalization
-fills in missing definitions from observed calls. Consumers must supply these
-definitions when rendering.
+is a `tool` message named `functions.<name>`, on `commentary`, addressed to
+`assistant`. The source helper resolves call IDs before discarding them. Parallel
+calls retain source call order. All calls in a batch precede its observations,
+which are reordered to the same call order, including repeated calls to the
+same function.
 
-A source turn is one message produced by a source adapter before Harmony
-conversion. Source conversations start with an optional system/developer prefix,
-then a user turn, and end with assistant text or calls. Adjacent source user
-turns or adjacent source assistant turns must be merged by the adapter.
-Outstanding calls must be answered before another source assistant/user turn.
-A final assistant call, including an entire parallel call batch, may remain
-unanswered. Adjacent assistant *Harmony messages*
-are expected: analysis, commentary, calls, and final answers are separate
-messages within a turn. `final` denotes completion and a routed assistant
-message denotes tool handoff; token-level endings are the renderer's concern.
+The entire `chat_template_kwargs` column is a JSON string. Tool definitions are
+available as `json.loads(row["chat_template_kwargs"])["tools"]`; normalization
+fills in missing definitions from observed Harmony calls. Consumers supply these
+definitions when rendering. Definition names must be unique and parameter schemas
+must be JSON objects; normalization does not validate arguments against JSON Schema.
+
+Conversations start with an optional system/developer prefix, then a nonempty
+user message, and end with an assistant message. Consecutive user messages are
+rejected. Adjacent assistant messages are expected: analysis, commentary, calls,
+and final answers are separate messages within a turn. After `final`, the next
+message must be a user message. Outstanding calls must receive observations
+before conversation continues, but an entire final call batch may remain
+unanswered. A reasoning-only assistant ending is also allowed.
 
 The row ID hashes the normalized Harmony messages and template kwargs. Exact
 deduplication is enabled by default. Metadata stays outside the conversation.

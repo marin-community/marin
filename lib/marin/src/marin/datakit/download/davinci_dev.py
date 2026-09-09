@@ -36,8 +36,8 @@ from marin.datakit.download.rollout_transforms import (
     TRAJECTORY_FAILED_TAG,
     TRAJECTORY_SOLVED_TAG,
     ReasoningFormatError,
-    chat_document,
     load_parquet_batched,
+    openai_chat_document,
     render_tool_message,
     text_document,
 )
@@ -212,7 +212,7 @@ def env_row_to_chat_doc(row: dict) -> list[dict]:
         return []
     success = row.get("success") if "success" in row else None
     try:
-        return [chat_document(messages, "GAIR/daVinci-Dev/env-native", success=success)]
+        return [openai_chat_document(messages, "GAIR/daVinci-Dev/env-native", success=success)]
     except ReasoningFormatError:
         counters.pipeline.update_counter("davinci_dev/env/chat_malformed_reasoning_filtered", 1)
         return []
@@ -281,7 +281,7 @@ def davinci_dev_env_native_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/davinci-dev-env-native",
         deps=[dl],
         fn=lambda output_path: transform_env_native_chat(dl.output_path, output_path),
-        hash_attrs={"version": "2026.09.05.1.harmony"},
+        hash_attrs={"version": "2026.09.05.1.harmony-direct"},
     )
     return processed, normalize_chat_step(
         name="normalized-chat/davinci-dev-env-native",

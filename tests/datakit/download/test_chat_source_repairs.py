@@ -25,7 +25,9 @@ def test_coderforge_keeps_reward_out_of_model_visible_messages() -> None:
     }
 
     [document] = coderforge_row_to_chat_doc(row)
-    assert document["messages"] == row["messages"]
+    assert [(m["role"], m["content"][0]["text"]) for m in document["messages"]] == [
+        (m["role"], m["content"]) for m in row["messages"]
+    ]
     assert document["reward"] == 1.0
 
 
@@ -39,7 +41,9 @@ def test_coderforge_keeps_unsuccessful_trajectory_without_visible_outcome() -> N
     }
 
     [document] = coderforge_row_to_chat_doc(row)
-    assert document["messages"] == row["messages"]
+    assert [(m["role"], m["content"][0]["text"]) for m in document["messages"]] == [
+        (m["role"], m["content"]) for m in row["messages"]
+    ]
     assert document["reward"] == 0.0
 
 
@@ -104,9 +108,9 @@ def test_davinci_drops_terminal_submit_observation() -> None:
     }
 
     [document] = davinci_row_to_chat_doc(row)
-    assert [message["role"] for message in document["messages"]] == ["user", "assistant"]
+    assert [message["role"] for message in document["messages"]] == ["user", "assistant", "assistant"]
     assert document["success"] is True
-    assert document["messages"][-1]["tool_calls"][0]["function"]["name"] == "submit"
+    assert document["messages"][-1]["recipient"] == "functions.submit"
 
 
 def test_davinci_keeps_unsuccessful_trajectory_without_visible_outcome() -> None:
@@ -119,7 +123,9 @@ def test_davinci_keeps_unsuccessful_trajectory_without_visible_outcome() -> None
     }
 
     [document] = davinci_row_to_chat_doc(row)
-    assert document["messages"] == row["messages"]
+    assert [(m["role"], m["content"][0]["text"]) for m in document["messages"]] == [
+        (m["role"], m["content"]) for m in row["messages"]
+    ]
     assert document["success"] is False
 
 
@@ -191,7 +197,9 @@ def test_openhands_merges_adjacent_user_context() -> None:
 
     [document] = openhands_row_to_chat_doc(row)
     assert [message["role"] for message in document["messages"]] == ["user", "assistant"]
-    assert document["messages"][0]["content"] == "Fix the bug.\n\nRepository: example/project"
+    assert document["messages"][0]["content"] == [
+        {"type": "text", "text": "Fix the bug.\n\nRepository: example/project"}
+    ]
 
 
 def test_openhands_keeps_unsuccessful_trajectory_without_visible_outcome() -> None:
@@ -204,7 +212,9 @@ def test_openhands_keeps_unsuccessful_trajectory_without_visible_outcome() -> No
     }
 
     [document] = openhands_row_to_chat_doc(row)
-    assert document["messages"] == row["trajectory"]
+    assert [(m["role"], m["content"][0]["text"]) for m in document["messages"]] == [
+        (m["role"], m["content"]) for m in row["trajectory"]
+    ]
     assert document["resolved"] == 0
 
 
@@ -231,8 +241,13 @@ def test_synthetic1_keeps_incorrect_solution_without_visible_outcome() -> None:
 
     [document] = synthetic1_row_to_chat_doc(row)
     assert document["messages"] == [
-        {"role": "user", "content": "Solve it."},
-        {"role": "assistant", "content": "A wrong answer."},
+        {"role": "user", "name": None, "content": [{"type": "text", "text": "Solve it."}]},
+        {
+            "role": "assistant",
+            "name": None,
+            "channel": "final",
+            "content": [{"type": "text", "text": "A wrong answer."}],
+        },
     ]
     assert document["score"] == 0.2
 
@@ -257,14 +272,24 @@ def test_swe_zero_converts_reasoning_bash_and_observation() -> None:
 
     [document] = swe_zero_row_to_chat_doc(row)
     messages = document["messages"]
-    assert [message["role"] for message in messages] == ["system", "user", "assistant", "tool", "assistant"]
-    assert messages[2]["content"] == "<|start_think|>Inspect the file.<|end_think|>"
-    assert messages[2]["tool_calls"][0]["function"] == {
-        "name": "bash",
-        "arguments": '{"command":"sed -n \'1,80p\' app.py"}',
-    }
-    assert messages[3]["content"] == "file contents"
-    assert messages[-1]["content"] == "<|start_think|>The edit is complete.<|end_think|>\n\nTask complete."
+    assert [message["role"] for message in messages] == [
+        "system",
+        "user",
+        "assistant",
+        "assistant",
+        "tool",
+        "assistant",
+        "assistant",
+    ]
+    assert messages[2]["channel"] == "analysis"
+    assert messages[2]["content"] == [{"type": "text", "text": "Inspect the file."}]
+    assert messages[3]["recipient"] == "functions.bash"
+    assert messages[3]["content"] == [{"type": "text", "text": '{"command":"sed -n \'1,80p\' app.py"}'}]
+    assert messages[4]["content"] == [{"type": "text", "text": "file contents"}]
+    assert messages[5]["channel"] == "analysis"
+    assert messages[5]["content"] == [{"type": "text", "text": "The edit is complete."}]
+    assert messages[-1]["channel"] == "final"
+    assert messages[-1]["content"] == [{"type": "text", "text": "Task complete."}]
 
 
 def test_swe_zero_drops_trajectory_ending_with_observation() -> None:
@@ -299,12 +324,10 @@ def test_swe_zero_does_not_treat_inspecting_completion_marker_as_completion() ->
     }
 
     [document] = swe_zero_row_to_chat_doc(row)
-    assert [message["role"] for message in document["messages"]] == [
-        "user",
-        "assistant",
-        "tool",
-        "assistant",
-    ]
+    messages = document["messages"]
+    assert [m["role"] for m in messages] == ["user", "assistant", "assistant", "tool", "assistant", "assistant"]
+    assert messages[2]["recipient"] == "functions.bash"
+    assert "grep COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT" in messages[2]["content"][0]["text"]
 
 
 def test_swe_zero_drops_control_tokens_in_commands() -> None:
@@ -335,11 +358,12 @@ def test_numinamath_splits_reasoning_python_and_output() -> None:
     }
 
     [document] = numinamath_row_to_chat_doc(row)
-    assert [message["role"] for message in document["messages"]] == ["user", "assistant", "tool", "assistant"]
-    assert document["messages"][1]["content"] == "<|start_think|>I should calculate it.<|end_think|>"
-    assert document["messages"][1]["tool_calls"][0]["function"] == {
-        "name": "python",
-        "arguments": '{"code":"print(6 * 7)"}',
-    }
-    assert document["messages"][2]["content"] == "42"
-    assert document["messages"][3]["content"] == "Therefore, the answer is 42."
+    messages = document["messages"]
+    assert [m["role"] for m in messages] == ["user", "assistant", "assistant", "tool", "assistant"]
+    assert messages[1]["channel"] == "analysis"
+    assert messages[1]["content"] == [{"type": "text", "text": "I should calculate it."}]
+    assert messages[2]["recipient"] == "functions.python"
+    assert messages[2]["content"] == [{"type": "text", "text": '{"code":"print(6 * 7)"}'}]
+    assert messages[3]["content"] == [{"type": "text", "text": "42"}]
+    assert messages[4]["channel"] == "final"
+    assert messages[4]["content"] == [{"type": "text", "text": "Therefore, the answer is 42."}]

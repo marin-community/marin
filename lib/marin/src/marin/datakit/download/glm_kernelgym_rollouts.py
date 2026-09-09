@@ -37,8 +37,8 @@ from marin.datakit.chat_normalize import normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import (
     ReasoningFormatError,
-    chat_document,
     normalize_reasoning_tokens,
+    openai_chat_document,
     render_role_message,
     text_document,
 )
@@ -193,7 +193,7 @@ def row_to_chat_doc(row: dict, truncation_filter: TruncationFilter) -> list[dict
     except ReasoningFormatError:
         counters.pipeline.update_counter("glm_kernelgym_rollouts/dropped_malformed_reasoning", 1)
         return []
-    return [chat_document(kept, HF_DATASET_ID)] if kept else []
+    return [openai_chat_document(kept, HF_DATASET_ID)] if kept else []
 
 
 def transform(input_path: str, output_path: str, truncation_filter: TruncationFilter) -> None:
@@ -266,6 +266,6 @@ def glm_kernelgym_rollouts_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/glm-5.2-kernelgym-rollouts",
         deps=[download],
         fn=lambda output_path: transform_chat(download.output_path, output_path, truncation_filter),
-        hash_attrs={"version": "2026.09.04.2.harmony", "truncation_filter": truncation_filter.value},
+        hash_attrs={"version": "2026.09.04.2.harmony-direct", "truncation_filter": truncation_filter.value},
     )
     return processed, normalize_chat_step(name="normalized-chat/glm-5.2-kernelgym-rollouts", download=processed)

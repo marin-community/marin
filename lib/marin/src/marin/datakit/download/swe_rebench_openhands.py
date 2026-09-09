@@ -20,8 +20,8 @@ from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import (
     TRAJECTORY_FAILED_TAG,
     TRAJECTORY_SOLVED_TAG,
-    chat_document,
     load_parquet_batched,
+    openai_chat_document,
     render_role_message,
     text_document,
 )
@@ -80,7 +80,7 @@ def row_to_chat_doc(row: dict) -> list[dict]:
             continue
         merged_trajectory.append(dict(message))
     trajectory = merged_trajectory
-    return [chat_document(trajectory, HF_DATASET_ID, resolved=resolved)]
+    return [openai_chat_document(trajectory, HF_DATASET_ID, resolved=resolved)]
 
 
 def transform(input_path: str, output_path: str) -> None:
@@ -140,6 +140,6 @@ def swe_rebench_openhands_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/swe-rebench-openhands-trajectories",
         deps=[dl],
         fn=lambda output_path: transform_chat(dl.output_path, output_path),
-        hash_attrs={"version": "2026.09.05.1.harmony"},
+        hash_attrs={"version": "2026.09.05.1.harmony-direct"},
     )
     return processed, normalize_chat_step(name="normalized-chat/swe-rebench-openhands", download=processed)

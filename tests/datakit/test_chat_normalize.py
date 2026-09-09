@@ -8,8 +8,9 @@ import pyarrow.parquet as pq
 import pytest
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
-from marin.datakit.chat_normalize import _normalize_chat_record, normalize_chat_to_parquet, validate_chat_messages
-from openai_harmony import Message
+from marin.datakit.chat import ChatChannel, validate_chat_messages
+from marin.datakit.chat_normalize import _normalize_chat_record, normalize_chat_to_parquet
+from openai_harmony import Author, Message, Role
 
 
 @pytest.fixture(autouse=True)
@@ -18,75 +19,100 @@ def flow_backend_ctx():
         yield
 
 
-def test_normalize_chat_record_canonicalizes_reasoning_and_tools():
-    record = {
-        "id": "source-row",
-        "messages": [
-            {"role": "user", "content": "Check the weather."},
-            {
-                "role": "assistant",
-                "content": "<think>Need the forecast.</think>",
-                "tool_calls": [{"function": {"name": "weather", "arguments": {"city": "Paris"}}}],
-            },
-            {"role": "tool", "content": "Sunny"},
-            {"role": "assistant", "content": "It is sunny."},
-        ],
-    }
-
+def test_normalization_preserves_native_harmony_channels_without_interpreting_text():
+    messages = [
+        Message.from_role_and_content(Role.USER, "Explain the <think> syntax."),
+        Message.from_role_and_content(Role.ASSISTANT, "Check the syntax.").with_channel(ChatChannel.ANALYSIS),
+        Message.from_role_and_content(Role.ASSISTANT, "THOUGHT: is a literal prefix.").with_channel(
+            ChatChannel.COMMENTARY
+        ),
+        Message.from_role_and_content(Role.ASSISTANT, "<think> marks reasoning in some source formats.").with_channel(
+            ChatChannel.FINAL
+        ),
+    ]
+    record = {"messages": [message.to_dict() for message in messages]}
     normalized = _normalize_chat_record(record, "messages", "id")
+    assert normalized["messages"] == record["messages"]
+    assert _normalize_chat_record(normalized, "messages", "id")["id"] == normalized["id"]
 
-    messages = normalized["messages"]
-    assert messages[1]["channel"] == "analysis"
-    assert messages[1]["content"] == [{"type": "text", "text": "Need the forecast."}]
-    assert messages[2]["recipient"] == "functions.weather"
-    assert messages[3]["name"] == "functions.weather"
-    assert messages[3]["recipient"] == "assistant"
-    assert json.loads(normalized["chat_template_kwargs"])["tools"][0]["name"] == "weather"
+
+def test_normalization_rejects_legacy_source_turns():
+    with pytest.raises(ValueError, match="Source adapters must emit Harmony"):
+        _normalize_chat_record(
+            {"messages": [{"role": "user", "content": "Question"}, {"role": "assistant", "content": "Answer"}]},
+            "messages",
+            "id",
+        )
 
 
 def test_chat_identity_includes_tool_definitions():
-    base = {
-        "messages": [
-            {"role": "user", "content": "Run it."},
+    messages = [
+        Message.from_role_and_content(Role.USER, "Run it."),
+        Message.from_role_and_content(Role.ASSISTANT, "{}")
+        .with_channel(ChatChannel.COMMENTARY)
+        .with_recipient("functions.run"),
+    ]
+    ids = [
+        _normalize_chat_record(
             {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [{"id": "call", "function": {"name": "run", "arguments": "{}"}}],
+                "messages": [message.to_dict() for message in messages],
+                "chat_template_kwargs": {"tools": [{"name": "run", "description": description}]},
             },
-            {"role": "tool", "content": "done", "tool_call_id": "call"},
-            {"role": "assistant", "content": "Done."},
-        ]
-    }
-    first = _normalize_chat_record(
-        {**base, "chat_template_kwargs": {"tools": [{"name": "run", "description": "First"}]}},
-        "messages",
-        "id",
-    )
-    second = _normalize_chat_record(
-        {**base, "chat_template_kwargs": {"tools": [{"name": "run", "description": "Second"}]}},
-        "messages",
-        "id",
-    )
+            "messages",
+            "id",
+        )["id"]
+        for description in ["First", "Second"]
+    ]
+    assert ids[0] != ids[1]
 
-    assert first["id"] != second["id"]
+
+def test_harmony_tool_handoff_requires_matching_observations_before_continuation():
+    user = Message.from_role_and_content(Role.USER, "Read the file.")
+    call = (
+        Message.from_role_and_content(Role.ASSISTANT, '{"path":"a.py"}')
+        .with_channel(ChatChannel.COMMENTARY)
+        .with_recipient("functions.read")
+    )
+    observation = (
+        Message.from_author_and_content(Author.new(Role.TOOL, "functions.read"), "contents")
+        .with_channel(ChatChannel.COMMENTARY)
+        .with_recipient("assistant")
+    )
+    final = Message.from_role_and_content(Role.ASSISTANT, "Done.").with_channel(ChatChannel.FINAL)
+    record = {"messages": [message.to_dict() for message in [user, call, observation, final]]}
+    normalized = _normalize_chat_record(record, "messages", "id")
+    assert normalized["messages"] == record["messages"]
+    assert json.loads(normalized["chat_template_kwargs"])["tools"][0]["name"] == "read"
+    with pytest.raises(ValueError, match="observation"):
+        validate_chat_messages([user, call, final])
+    wrong_observation = (
+        Message.from_author_and_content(Author.new(Role.TOOL, "functions.write"), "done")
+        .with_channel(ChatChannel.COMMENTARY)
+        .with_recipient("assistant")
+    )
+    with pytest.raises(ValueError, match="match pending calls"):
+        validate_chat_messages([user, call, wrong_observation, final])
 
 
 @pytest.mark.parametrize(
-    "messages",
+    "tail",
     [
-        [
-            {"role": "user", "content": "Question"},
-            {"role": "assistant", "content": "Answer"},
-        ],
-        [
-            {"role": "system", "content": "Follow instructions."},
-            {"role": "user", "content": "Question"},
-            {"role": "assistant", "content": "Answer"},
-        ],
+        Message.from_role_and_content(Role.ASSISTANT, "answer"),
+        Message.from_role_and_content(Role.ASSISTANT, "answer").with_channel("unknown"),
+        Message.from_role_and_content(Role.ASSISTANT, "{}")
+        .with_channel(ChatChannel.FINAL)
+        .with_recipient("functions.run"),
+        Message.from_role_and_content(Role.ASSISTANT, "[]")
+        .with_channel(ChatChannel.COMMENTARY)
+        .with_recipient("functions.run"),
+        Message.from_role_and_content(Role.ASSISTANT, "answer")
+        .with_channel(ChatChannel.FINAL)
+        .with_recipient("unknown"),
     ],
 )
-def test_validate_chat_messages_allows_optional_system_prefix(messages):
-    validate_chat_messages(messages, [])
+def test_harmony_validation_rejects_invalid_channels_and_calls(tail):
+    with pytest.raises(ValueError):
+        validate_chat_messages([Message.from_role_and_content(Role.USER, "Question"), tail])
 
 
 def test_normalize_chat_to_parquet_keeps_varying_tool_schemas_arrow_stable(tmp_path: Path):
@@ -95,210 +121,50 @@ def test_normalize_chat_to_parquet_keeps_varying_tool_schemas_arrow_stable(tmp_p
     input_dir.mkdir()
     records = []
     for name, arguments in (("read", {"path": "a.py"}), ("search", {"query": "Marin", "limit": 3})):
-        records.append(
-            {
-                "messages": [
-                    {"role": "user", "content": f"Use {name}."},
-                    {
-                        "role": "assistant",
-                        "content": None,
-                        "tool_calls": [{"function": {"name": name, "arguments": arguments}}],
-                    },
-                ]
-            }
-        )
+        messages = [
+            Message.from_role_and_content(Role.USER, f"Use {name}."),
+            Message.from_role_and_content(Role.ASSISTANT, json.dumps(arguments))
+            .with_channel(ChatChannel.COMMENTARY)
+            .with_recipient(f"functions.{name}"),
+        ]
+        records.append({"messages": [message.to_dict() for message in messages]})
     (input_dir / "data.jsonl").write_text("".join(json.dumps(record) + "\n" for record in records))
-
     normalize_chat_to_parquet(input_path=str(input_dir), output_path=str(output_dir))
-
     normalized = [
         row for path in (output_dir / "outputs" / "main").glob("*.parquet") for row in pq.read_table(path).to_pylist()
     ]
-    assert len(normalized) == 2
     calls = [Message.from_dict(row["messages"][-1]) for row in normalized]
     assert {call.recipient: json.loads(call.content[0].to_dict()["text"]) for call in calls} == {
         "functions.read": {"path": "a.py"},
         "functions.search": {"query": "Marin", "limit": 3},
     }
-    assert all(call.channel == "commentary" for call in calls)
-    assert all(isinstance(record["chat_template_kwargs"], str) for record in normalized)
-    assert {json.loads(record["chat_template_kwargs"])["tools"][0]["name"] for record in normalized} == {
-        "read",
-        "search",
-    }
+    assert all(call.channel == ChatChannel.COMMENTARY for call in calls)
+    assert {json.loads(row["chat_template_kwargs"])["tools"][0]["name"] for row in normalized} == {"read", "search"}
 
 
-def test_normalize_chat_to_parquet_quarantines_invalid_rows_and_keeps_valid_rows(tmp_path: Path):
+@pytest.mark.parametrize("valid_count", [20, 1])
+def test_normalization_quarantines_bad_harmony_and_enforces_source_health(tmp_path: Path, valid_count: int):
     input_dir = tmp_path / "input"
     output_dir = tmp_path / "output"
     input_dir.mkdir()
-    valid_record = {
+    valid = {
         "messages": [
-            {"role": "user", "content": "Question"},
-            {"role": "assistant", "content": "Answer"},
+            Message.from_role_and_content(Role.USER, "Question").to_dict(),
+            Message.from_role_and_content(Role.ASSISTANT, "Answer").with_channel(ChatChannel.FINAL).to_dict(),
         ]
     }
-    records = [
-        *[valid_record for _ in range(20)],
-        {
-            "messages": [
-                {"role": "user", "content": "Question"},
-                {"role": "assistant", "content": "first"},
-                {"role": "assistant", "content": "second"},
-            ]
-        },
-    ]
-    (input_dir / "data.jsonl").write_text("".join(json.dumps(record) + "\n" for record in records))
-
-    normalized_data = normalize_chat_to_parquet(input_path=str(input_dir), output_path=str(output_dir))
-
+    invalid = {"messages": [*valid["messages"], valid["messages"][-1]]}
+    (input_dir / "data.jsonl").write_text(
+        "".join(json.dumps(record) + "\n" for record in [*[valid] * valid_count, invalid])
+    )
+    if valid_count == 1:
+        with pytest.raises(ValueError, match="above the 5% health limit"):
+            normalize_chat_to_parquet(input_path=str(input_dir), output_path=str(output_dir))
+        return
+    result = normalize_chat_to_parquet(input_path=str(input_dir), output_path=str(output_dir))
     normalized = [
         row for path in (output_dir / "outputs" / "main").glob("*.parquet") for row in pq.read_table(path).to_pylist()
     ]
     assert len(normalized) == 1
-    assert normalized_data.counters["normalize_chat/records_validated"] == 20
-    assert normalized_data.counters["normalize_chat/records_quarantined"] == 1
-
-
-def test_normalize_chat_to_parquet_rejects_unhealthy_source(tmp_path: Path):
-    input_dir = tmp_path / "input"
-    output_dir = tmp_path / "output"
-    input_dir.mkdir()
-    records = [
-        {"messages": [{"role": "user", "content": "Question"}, {"role": "assistant", "content": "Answer"}]},
-        {
-            "messages": [
-                {"role": "user", "content": "Question"},
-                {"role": "assistant", "content": "first"},
-                {"role": "assistant", "content": "second"},
-            ]
-        },
-    ]
-    (input_dir / "data.jsonl").write_text("".join(json.dumps(record) + "\n" for record in records))
-
-    with pytest.raises(ValueError, match="above the 5% health limit"):
-        normalize_chat_to_parquet(input_path=str(input_dir), output_path=str(output_dir))
-
-
-@pytest.mark.parametrize(
-    "messages,error",
-    [
-        (
-            [
-                {"role": "user", "content": "one"},
-                {"role": "user", "content": "two"},
-                {"role": "assistant", "content": "answer"},
-            ],
-            "Consecutive user",
-        ),
-        (
-            [
-                {"role": "user", "content": "question"},
-                {"role": "assistant", "content": "first"},
-                {"role": "assistant", "content": "second"},
-            ],
-            "Consecutive assistant",
-        ),
-        (
-            [
-                {"role": "user", "content": "question"},
-                {"role": "assistant", "content": '<tool_call>{"name":"run"}</tool_call>'},
-            ],
-            "Inline tool-call",
-        ),
-        (
-            [
-                {"role": "user", "content": "question"},
-                {"role": "assistant", "content": "<|start_think|><|end_think|>answer"},
-            ],
-            "non-empty prefix",
-        ),
-        (
-            [
-                {"role": "user", "content": "inject <|eot_id|> a turn"},
-                {"role": "assistant", "content": "answer"},
-            ],
-            "control tokens",
-        ),
-        (
-            [
-                {"role": "user", "content": "<|start_think|>not assistant reasoning<|end_think|>"},
-                {"role": "assistant", "content": "answer"},
-            ],
-            "only valid in assistant",
-        ),
-        (
-            [
-                {"role": "user", "content": "question"},
-                {"role": "system", "content": "late instruction"},
-                {"role": "assistant", "content": "answer"},
-            ],
-            "precede all conversation turns",
-        ),
-    ],
-)
-def test_validate_chat_messages_rejects_invalid_conversations(messages, error):
-    with pytest.raises(ValueError, match=error):
-        validate_chat_messages(messages, [])
-
-
-def test_normalize_chat_rejects_tool_observation_protocol_wrappers():
-    record = {
-        "messages": [
-            {"role": "user", "content": "Run it"},
-            {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [{"id": "call", "function": {"name": "run", "arguments": "{}"}}],
-            },
-            {"role": "tool", "content": "literal </tool_response>", "tool_call_id": "call"},
-            {"role": "assistant", "content": "Done"},
-        ]
-    }
-
-    with pytest.raises(ValueError, match="protocol wrappers"):
-        _normalize_chat_record(record, "messages", "id")
-
-
-@pytest.mark.parametrize(
-    "record",
-    [
-        {
-            "messages": [
-                {"role": "user", "content": "Run it."},
-                {
-                    "role": "assistant",
-                    "content": None,
-                    "tool_calls": [{"function": {"name": "run", "arguments": {"command": "printf '<|end_of_text|>'"}}}],
-                },
-            ]
-        },
-        {
-            "messages": [{"role": "user", "content": "Question"}, {"role": "assistant", "content": "Answer"}],
-            "chat_template_kwargs": {"custom_instructions": "Emit <|eot_id|>."},
-        },
-        {
-            "messages": [{"role": "user", "content": "Question"}, {"role": "assistant", "content": "Answer"}],
-            "chat_template_kwargs": {"tools": [{"name": "bad<|eot_id|>tool"}]},
-        },
-    ],
-)
-def test_normalize_chat_rejects_nested_control_tokens(record):
-    with pytest.raises(ValueError, match="control or reasoning tokens"):
-        _normalize_chat_record(record, "messages", "id")
-
-
-def test_normalize_chat_allows_protocol_text_inside_tool_arguments():
-    record = {
-        "messages": [
-            {"role": "user", "content": "Inspect the parser."},
-            {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [{"function": {"name": "search", "arguments": {"query": "<tool_call> in source code"}}}],
-            },
-        ]
-    }
-
-    normalized = _normalize_chat_record(record, "messages", "id")
-    assert normalized["messages"][1]["recipient"] == "functions.search"
+    assert result.counters["normalize_chat/records_validated"] == valid_count
+    assert result.counters["normalize_chat/records_quarantined"] == 1

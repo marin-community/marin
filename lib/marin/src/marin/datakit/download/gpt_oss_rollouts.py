@@ -21,7 +21,7 @@ from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import (
     CHAT_CONTROL_TOKEN,
     ReasoningFormatError,
-    chat_document,
+    openai_chat_document,
     text_document,
 )
 from marin.datakit.normalize import normalize_step
@@ -77,7 +77,7 @@ def row_to_chat_doc(row: dict) -> list[dict]:
         return []
     messages = [{"role": "user", "content": user}, {"role": "assistant", "content": assistant}]
     try:
-        return [chat_document(messages, HF_DATASET_ID)]
+        return [openai_chat_document(messages, HF_DATASET_ID)]
     except ReasoningFormatError:
         counters.pipeline.update_counter("gpt_oss_rollouts/chat_malformed_reasoning_filtered", 1)
         return []
@@ -148,6 +148,6 @@ def gpt_oss_rollouts_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/gpt-oss-20b-rollouts",
         deps=[download],
         fn=lambda output_path: transform_chat(download.output_path, output_path),
-        hash_attrs={"version": "2026.09.04.3.harmony"},
+        hash_attrs={"version": "2026.09.04.3.harmony-direct"},
     )
     return processed, normalize_chat_step(name="normalized-chat/gpt-oss-rollouts", download=processed)

@@ -19,10 +19,13 @@ def test_row_to_chat_doc_preserves_code_reasoning_conversation():
 
     assert document["source"] == HF_DATASET_ID
     assert document["messages"] == [
-        {"role": "user", "content": "Solve this."},
+        {"role": "user", "name": None, "content": [{"type": "text", "text": "Solve this."}]},
+        {"role": "assistant", "name": None, "channel": "analysis", "content": [{"type": "text", "text": "Plan it."}]},
         {
             "role": "assistant",
-            "content": "<|start_think|>Plan it.<|end_think|>\n```python\nprint(1)\n```",
+            "name": None,
+            "channel": "final",
+            "content": [{"type": "text", "text": "```python\nprint(1)\n```"}],
         },
     ]
     assert document["prompt_index"] == 7
@@ -39,7 +42,7 @@ def test_row_to_chat_doc_leaves_delimiter_free_response_as_final_answer():
         }
     )
 
-    assert document["messages"][1]["content"] == "Here is the answer."
+    assert document["messages"][1]["content"] == [{"type": "text", "text": "Here is the answer."}]
 
 
 def test_row_to_doc_renders_the_complete_transcript():

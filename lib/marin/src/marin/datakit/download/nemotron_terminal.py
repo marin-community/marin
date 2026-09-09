@@ -16,8 +16,8 @@ from zephyr.dataset import Dataset
 from marin.datakit.chat_normalize import normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import (
-    chat_document,
     load_parquet_batched,
+    openai_chat_document,
     render_role_message,
     text_document,
 )
@@ -49,7 +49,7 @@ def row_to_chat_doc(row: dict) -> list[dict]:
     if converted is None:
         return []
     messages, metadata = converted
-    return [chat_document(messages, HF_DATASET_ID, **metadata)]
+    return [openai_chat_document(messages, HF_DATASET_ID, **metadata)]
 
 
 def transform(input_path: str, output_path: str) -> None:
@@ -109,6 +109,6 @@ def nemotron_terminal_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/nemotron-terminal-corpus",
         deps=[download],
         fn=lambda output_path: transform_chat(download.output_path, output_path),
-        hash_attrs={"version": "2026.09.04.1.harmony"},
+        hash_attrs={"version": "2026.09.04.1.harmony-direct"},
     )
     return processed, normalize_chat_step(name="normalized-chat/nemotron-terminal", download=processed)

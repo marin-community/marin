@@ -4,26 +4,19 @@
 """Normalize structured conversations into Datakit's canonical chat artifact."""
 
 import json
-import re
 from collections.abc import Callable, Iterator
 from typing import Any
 
 import dupekit
 from fray.types import ResourceConfig
-from openai_harmony import Role
+from openai_harmony import Message
 from rigging.filesystem.storage_path import prefix_join
 from zephyr import counters
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.readers import load_file
 
-from marin.datakit.chat import to_harmony_messages
-from marin.datakit.download.rollout_transforms import (
-    CHAT_CONTROL_TOKEN,
-    REASONING_TOKEN,
-    canonical_chat_messages,
-    inferred_tool_definitions,
-)
+from marin.datakit.chat import inferred_tool_definitions, validate_chat_messages, validate_tool_definitions
 from marin.datakit.normalize import (
     DEFAULT_MAX_WORKERS,
     DedupMode,
@@ -35,172 +28,31 @@ from marin.datakit.normalize import (
 )
 from marin.execution.step_spec import StepSpec
 
-CHAT_NORMALIZE_VERSION = "2026.09.08.harmony"
+CHAT_NORMALIZE_VERSION = "2026.09.09.harmony-direct"
 MAX_REJECTED_RECORD_FRACTION = 0.05
-_INLINE_TOOL_SYNTAX = re.compile(r"<tool_call(?::[^>]*)?>", re.IGNORECASE)
-_TOOL_RESPONSE_SYNTAX = re.compile(r"</?tool_response(?:\s|>)", re.IGNORECASE)
-_RAW_REASONING_TOKEN = re.compile(r"</?think>", re.IGNORECASE)
-_SAFE_TOOL_IDENTIFIER = re.compile(r"[A-Za-z0-9_.:-]+")
-
-
-def _contains_unsafe_markup(value: object) -> bool:
-    if isinstance(value, str):
-        return bool(
-            CHAT_CONTROL_TOKEN.search(value) or REASONING_TOKEN.search(value) or _RAW_REASONING_TOKEN.search(value)
-        )
-    if isinstance(value, dict):
-        return any(_contains_unsafe_markup(key) or _contains_unsafe_markup(item) for key, item in value.items())
-    if isinstance(value, list):
-        return any(_contains_unsafe_markup(item) for item in value)
-    return False
-
-
-def _tool_name(tool: dict) -> str | None:
-    name = tool.get("name")
-    if isinstance(name, str):
-        return name
-    function = tool.get("function")
-    return function.get("name") if isinstance(function, dict) and isinstance(function.get("name"), str) else None
-
-
-def _validate_tools(tools: list[dict]) -> set[str]:
-    names: set[str] = set()
-    for tool in tools:
-        if not isinstance(tool, dict):
-            raise ValueError("Tool definitions must be JSON objects")
-        if _contains_unsafe_markup(tool):
-            raise ValueError("Tool definitions must not contain chat control or reasoning tokens")
-        name = _tool_name(tool)
-        if not name:
-            raise ValueError("Every tool definition must have a non-empty name")
-        if _SAFE_TOOL_IDENTIFIER.fullmatch(name) is None:
-            raise ValueError(f"Tool definition names contain unsafe characters: {name!r}")
-        if name in names:
-            raise ValueError(f"Tool definition names must be unique: {name!r}")
-        names.add(name)
-        parameters = tool.get("parameters")
-        if parameters is None and isinstance(tool.get("function"), dict):
-            parameters = tool["function"].get("parameters")
-        if parameters is not None and not isinstance(parameters, dict):
-            raise ValueError(f"Tool definition {name!r} parameters must be a JSON object")
-    return names
-
-
-def _validate_reasoning(content: str) -> None:
-    start = "<|start_think|>"
-    end = "<|end_think|>"
-    if start not in content and end not in content:
-        return
-    if content.count(start) != 1 or content.count(end) != 1:
-        raise ValueError("Assistant reasoning must contain exactly one balanced delimiter pair")
-    if not content.startswith(start) or content.index(end) <= len(start):
-        raise ValueError("Assistant reasoning must be a non-empty prefix of the reply")
-
-
-def validate_chat_messages(messages: list[dict], tools: list[dict]) -> None:
-    """Validate turn order, reasoning spans, and tool-call linkage."""
-    if not messages:
-        raise ValueError("A chat record must contain messages")
-
-    tool_names = _validate_tools(tools)
-    pending_calls: dict[str, str] = {}
-    seen_call_ids: set[str] = set()
-    seen_non_system = False
-    previous_role: Role | None = None
-    for message in messages:
-        role = Role(message["role"])
-        content = message.get("content")
-        if isinstance(content, str) and CHAT_CONTROL_TOKEN.search(content):
-            raise ValueError("Message content must not contain tokenizer control tokens")
-        if isinstance(content, str) and _RAW_REASONING_TOKEN.search(content):
-            raise ValueError("Raw reasoning tags must be normalized before chat validation")
-        if role != Role.ASSISTANT and isinstance(content, str) and REASONING_TOKEN.search(content):
-            raise ValueError("Reasoning delimiters are only valid in assistant messages")
-        reasoning = message.get("reasoning_content")
-        if reasoning is not None:
-            if role != Role.ASSISTANT or not isinstance(reasoning, str):
-                raise ValueError("reasoning_content is only valid as assistant text")
-            if _contains_unsafe_markup(reasoning):
-                raise ValueError("reasoning_content must contain plain text without control or reasoning tokens")
-        if role in {Role.SYSTEM, Role.DEVELOPER}:
-            if seen_non_system:
-                raise ValueError("System and developer messages must precede all conversation turns")
-            continue
-        if not seen_non_system:
-            if role != Role.USER:
-                raise ValueError("The first non-system message must be a user message")
-            seen_non_system = True
-
-        if role == Role.USER:
-            if not isinstance(content, str) or not content.strip():
-                raise ValueError("User messages must contain non-empty text")
-            if pending_calls:
-                raise ValueError("A user turn cannot replace a pending tool observation")
-            if previous_role == Role.USER:
-                raise ValueError("Consecutive user turns must be merged by the source adapter")
-        elif role == Role.ASSISTANT:
-            if pending_calls:
-                raise ValueError("Every tool call must be followed by its observations before another assistant turn")
-            if previous_role == Role.ASSISTANT:
-                raise ValueError("Consecutive assistant turns must be merged by the source adapter")
-            if not isinstance(content, str) and content is not None:
-                raise ValueError("Assistant content must be text or null")
-            if isinstance(content, str):
-                _validate_reasoning(content)
-                if _INLINE_TOOL_SYNTAX.search(content):
-                    raise ValueError("Inline tool-call syntax must be split out by the source adapter")
-            calls = message.get("tool_calls") or []
-            if _contains_unsafe_markup(calls):
-                raise ValueError("Tool calls must not contain chat control or reasoning tokens")
-            if (
-                not calls
-                and not (reasoning and reasoning.strip())
-                and (not isinstance(content, str) or not content.strip())
-            ):
-                raise ValueError("Assistant turns must contain text, reasoning, or a tool call")
-            for call in calls:
-                call_id = call.get("id")
-                function = call.get("function") or {}
-                name = function.get("name")
-                if not isinstance(call_id, str) or call_id in seen_call_ids:
-                    raise ValueError("Tool-call IDs must be present and unique")
-                if _SAFE_TOOL_IDENTIFIER.fullmatch(call_id) is None:
-                    raise ValueError("Tool-call IDs contain unsafe characters")
-                seen_call_ids.add(call_id)
-                arguments = function.get("arguments")
-                if isinstance(arguments, str):
-                    arguments = json.loads(arguments)
-                if not isinstance(arguments, dict):
-                    raise ValueError("Tool-call arguments must encode a JSON object")
-                if not isinstance(name, str):
-                    raise ValueError("Tool calls must name a function")
-                if _SAFE_TOOL_IDENTIFIER.fullmatch(name) is None:
-                    raise ValueError("Tool-call names contain unsafe characters")
-                if name not in tool_names:
-                    raise ValueError(f"Tool call {name!r} has no matching tool definition")
-                pending_calls[call_id] = name
-        elif role == Role.TOOL:
-            if not isinstance(content, str):
-                raise ValueError("Tool observations must contain text")
-            if _INLINE_TOOL_SYNTAX.search(content) or _TOOL_RESPONSE_SYNTAX.search(content):
-                raise ValueError("Tool observations must not contain chat protocol wrappers")
-            call_id = message.get("tool_call_id")
-            if call_id not in pending_calls:
-                raise ValueError("Tool observations must reference a pending call")
-            if message.get("name") not in (None, pending_calls[call_id]):
-                raise ValueError("Tool observation name must match its call")
-            del pending_calls[call_id]
-        previous_role = role
-
-    if not seen_non_system or messages[-1]["role"] != Role.ASSISTANT:
-        raise ValueError("A chat training record must end with an assistant response")
 
 
 def _normalize_chat_record(record: dict[str, Any], messages_field: str, id_field: str) -> dict[str, Any]:
     messages_value = record[messages_field]
     if not isinstance(messages_value, list):
         raise ValueError(f"{messages_field!r} must be a list")
-    messages = canonical_chat_messages(messages_value)
+    # Require the canonical serialized shape, rather than Harmony's string-content shorthand.
+    if any(not isinstance(message, dict) or not isinstance(message.get("content"), list) for message in messages_value):
+        raise ValueError("Source adapters must emit Harmony messages with text content parts")
+    for message in messages_value:
+        if "role" not in message or any(
+            not isinstance(part, dict) or part.get("type") != "text" or not isinstance(part.get("text"), str)
+            for part in message["content"]
+        ):
+            raise ValueError("Harmony messages require a role and text content parts")
+        if any(
+            message.get(field) is not None and not isinstance(message[field], str) for field in ("channel", "recipient")
+        ):
+            raise ValueError("Harmony channels and recipients must be strings")
+        if {"tool_calls", "tool_call_id", "reasoning_content", "function_call"} & message.keys():
+            raise ValueError("Source adapters must emit Harmony channels and recipients")
+    messages = [Message.from_dict(message) for message in messages_value]
+    validate_chat_messages(messages)
 
     raw_kwargs = record.get("chat_template_kwargs") or {}
     if isinstance(raw_kwargs, str):
@@ -208,16 +60,15 @@ def _normalize_chat_record(record: dict[str, Any], messages_field: str, id_field
     if not isinstance(raw_kwargs, dict):
         raise ValueError("chat_template_kwargs must be a JSON object")
     kwargs = dict(raw_kwargs)
-    if _contains_unsafe_markup({key: value for key, value in kwargs.items() if key != "tools"}):
-        raise ValueError("Chat template arguments must not contain chat control or reasoning tokens")
-    tools = list(kwargs.get("tools") or [])
-    existing_names = {_tool_name(tool) for tool in tools if isinstance(tool, dict)}
-    tools.extend(tool for tool in inferred_tool_definitions(messages) if tool["name"] not in existing_names)
+    tools = kwargs.get("tools", [])
+    if not isinstance(tools, list):
+        raise ValueError("tools must be a list of function definitions")
+    validate_tool_definitions(tools)
+    existing_names = {tool.get("function", tool)["name"] for tool in tools}
+    tools = [*tools, *(tool for tool in inferred_tool_definitions(messages) if tool["name"] not in existing_names)]
     if tools:
         kwargs["tools"] = tools
-    validate_chat_messages(messages, tools)
-
-    messages = to_harmony_messages(messages)
+    messages = [message.to_dict() for message in messages]
 
     source_id = record.get(id_field)
     out = {key: value for key, value in record.items() if key not in {id_field, messages_field, "chat_template_kwargs"}}

@@ -23,8 +23,8 @@ from marin.datakit.download.rollout_transforms import (
     TRAJECTORY_FAILED_TAG,
     TRAJECTORY_SOLVED_TAG,
     TRAJECTORY_UNVERIFIED_TAG,
-    chat_document,
     load_parquet_batched,
+    openai_chat_document,
     render_role_message,
     text_document,
 )
@@ -1113,7 +1113,7 @@ def row_to_chat_doc(dataset: PenfeverRollout) -> Callable[[dict], list[dict]]:
         messages, metadata = converted
         tag = outcome_tag(row.get("verifier_output"), row.get("result"))
         return [
-            chat_document(
+            openai_chat_document(
                 messages,
                 dataset.hf_dataset_id,
                 teacher=dataset.teacher,
@@ -1189,7 +1189,11 @@ def _rollout_chat_steps(dataset: PenfeverRollout) -> tuple[StepSpec, StepSpec]:
         name=f"processed-chat/{dataset.marin_name}",
         deps=[download],
         fn=lambda output_path: transform_chat(dataset, download.output_path, output_path),
-        hash_attrs={"version": "2026.09.05.4.harmony", "teacher": dataset.teacher, "task_source": dataset.task_source},
+        hash_attrs={
+            "version": "2026.09.05.4.harmony-direct",
+            "teacher": dataset.teacher,
+            "task_source": dataset.task_source,
+        },
     )
     return processed, normalize_chat_step(name=f"normalized-chat/{dataset.marin_name}", download=processed)
 

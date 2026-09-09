@@ -1,90 +1,38 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import pyarrow as pa
+import json
+
 import pytest
 from marin.datakit.download.rollout_transforms import (
-    canonical_chat_messages,
-    chat_document,
+    openai_chat_messages,
     render_tool_call,
     render_tool_message,
 )
+from openai_harmony import Role
 
 
-def test_canonical_chat_messages_normalizes_role_aliases_and_preserves_tools():
-    tool_calls = [{"id": "call_1", "function": {"name": "bash", "arguments": {"cmd": "pwd"}}}]
-    messages = canonical_chat_messages(
+def test_source_aliases_and_tool_results_become_harmony_messages():
+    messages = openai_chat_messages(
         [
             {"from": "human", "value": "Inspect the repository."},
-            {"from": "gpt", "value": None, "tool_calls": tool_calls},
+            {
+                "from": "gpt",
+                "value": None,
+                "tool_calls": [{"id": "call_1", "function": {"name": "bash", "arguments": {"cmd": "pwd"}}}],
+            },
             {"role": "function", "content": "/workspace", "tool_call_id": "call_1"},
         ]
     )
-
-    assert messages == [
-        {"role": "user", "content": "Inspect the repository."},
-        {
-            "tool_calls": [{"id": "call_1", "function": {"name": "bash", "arguments": '{"cmd":"pwd"}'}}],
-            "role": "assistant",
-            "content": None,
-        },
-        {"role": "tool", "content": "/workspace", "tool_call_id": "call_1", "name": "bash"},
-    ]
+    assert [message.author.role for message in messages] == [Role.USER, Role.ASSISTANT, Role.TOOL]
+    assert messages[1].recipient == "functions.bash"
+    assert json.loads(messages[1].content[0].to_dict()["text"]) == {"cmd": "pwd"}
+    assert messages[2].author.name == "functions.bash"
+    assert messages[2].content[0].to_dict()["text"] == "/workspace"
 
 
-def test_chat_document_tool_arguments_have_stable_arrow_schema():
-    documents = [
-        chat_document(
-            [
-                {
-                    "role": "assistant",
-                    "content": None,
-                    "tool_calls": [{"function": {"name": "edit", "arguments": arguments}}],
-                }
-            ],
-            "test",
-        )
-        for arguments in ({"path": "a.py", "lines": [1, 2]}, {"path": ["a.py"], "lines": "all"})
-    ]
-
-    table = pa.Table.from_pylist(documents)
-
-    assert table.num_rows == 2
-    assert documents[0]["messages"][0]["tool_calls"][0]["function"]["arguments"] == ('{"lines":[1,2],"path":"a.py"}')
-
-
-def test_canonical_chat_messages_serializes_parallel_tool_calls():
-    messages = canonical_chat_messages(
-        [
-            {
-                "role": "assistant",
-                "content": "I will inspect both files.",
-                "tool_calls": [
-                    {"id": "call_1", "function": {"name": "read", "arguments": {"path": "a.py"}}},
-                    {"id": "call_2", "function": {"name": "read", "arguments": {"path": "b.py"}}},
-                ],
-            },
-            {"role": "tool", "content": "a", "tool_call_id": "call_1"},
-            {"role": "tool", "content": "b", "tool_call_id": "call_2"},
-        ]
-    )
-
-    assert messages == [
-        {
-            "role": "assistant",
-            "content": "I will inspect both files.",
-            "tool_calls": [
-                {"id": "call_1", "function": {"name": "read", "arguments": '{"path":"a.py"}'}},
-                {"id": "call_2", "function": {"name": "read", "arguments": '{"path":"b.py"}'}},
-            ],
-        },
-        {"role": "tool", "content": "a", "tool_call_id": "call_1", "name": "read"},
-        {"role": "tool", "content": "b", "tool_call_id": "call_2", "name": "read"},
-    ]
-
-
-def test_canonical_chat_messages_converts_legacy_function_call_and_drops_unknown_fields():
-    messages = canonical_chat_messages(
+def test_legacy_function_call_becomes_harmony_recipient_and_arguments():
+    [message] = openai_chat_messages(
         [
             {
                 "role": "assistant",
@@ -94,36 +42,35 @@ def test_canonical_chat_messages_converts_legacy_function_call_and_drops_unknown
             }
         ]
     )
+    assert message.to_dict() == {
+        "role": "assistant",
+        "name": None,
+        "channel": "commentary",
+        "recipient": "functions.search",
+        "content": [{"type": "text", "text": '{"query":"marin"}'}],
+    }
 
-    assert messages == [
-        {
-            "role": "assistant",
-            "content": None,
-            "tool_calls": [{"id": "call_0_0", "function": {"name": "search", "arguments": '{"query":"marin"}'}}],
-        }
-    ]
 
-
-def test_canonical_chat_messages_rejects_unknown_roles():
+@pytest.mark.parametrize("content", ["<think>unfinished", "<think>a</think>answer<think>b</think>"])
+def test_source_adapter_rejects_malformed_reasoning(content):
     with pytest.raises(ValueError):
-        canonical_chat_messages([{"role": "critic", "content": "No."}])
+        openai_chat_messages([{"role": "assistant", "content": content}])
 
 
-def test_canonical_chat_messages_uses_atomic_reasoning_tokens_for_assistant():
-    messages = canonical_chat_messages([{"role": "assistant", "content": "<think>plan</think>answer"}])
-
-    assert messages[0]["content"] == "<|start_think|>plan<|end_think|>answer"
-
-
-def test_canonical_chat_messages_normalizes_case_and_outer_whitespace_in_reasoning():
-    messages = canonical_chat_messages([{"role": "assistant", "content": "  \n<THINK>plan</Think>answer\n  "}])
-
-    assert messages[0]["content"] == "<|start_think|>plan<|end_think|>answer"
-
-
-def test_canonical_chat_messages_rejects_unbalanced_reasoning_tokens():
-    with pytest.raises(ValueError, match="reasoning delimiters must be balanced"):
-        canonical_chat_messages([{"role": "assistant", "content": "<think>unfinished"}])
+def test_source_adapter_rejects_repeated_call_ids_before_discarding_them():
+    with pytest.raises(ValueError, match="unique"):
+        openai_chat_messages(
+            [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {"id": "same", "function": {"name": "read", "arguments": {"path": "a"}}},
+                        {"id": "same", "function": {"name": "read", "arguments": {"path": "b"}}},
+                    ],
+                }
+            ]
+        )
 
 
 def test_render_tool_call_dict_arguments():
