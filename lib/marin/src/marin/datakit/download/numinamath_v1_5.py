@@ -162,6 +162,6 @@ def numinamath_v1_5_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/numinamath-1.5",
         deps=[download],
         fn=lambda output_path: transform_chat(download.output_path, output_path),
-        hash_attrs={"version": "2026.09.04"},
+        hash_attrs={"version": "2026.09.04.harmony"},
     )
     return processed, normalize_chat_step(name="normalized-chat/numinamath-1.5", download=processed)

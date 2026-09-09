@@ -1,7 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import json
 from dataclasses import dataclass
 from itertools import pairwise
 
@@ -217,64 +216,9 @@ def test_chat_processor_renders_tool_calls(marin_chat_tokenizer: MarinTokenizer)
     )[0]
 
     rendered = _decode(marin_chat_tokenizer, result["input_ids"])
-    assert (
-        '<tool_call>{"id": "call_abc", "name": "check_valid_vin", '
-        '"arguments": {"vin": "1FMXK92W8YPA12345"}}</tool_call>' in rendered
-    )
-    assert '"id": "call_abc", "name": "check_valid_vin"' in rendered
+    assert '{"name": "check_valid_vin", "arguments": {"vin": "1FMXK92W8YPA12345"}}' in rendered
     assert '<tool_response name="check_valid_vin" id="call_abc">' in rendered
     assert result["assistant_masks"].sum() > 0
-
-
-def test_chat_template_renders_parallel_tool_calls_in_one_assistant_turn(marin_chat_tokenizer: MarinTokenizer):
-    rendered = marin_chat_tokenizer.apply_chat_template(
-        [
-            {"role": "user", "content": "Read both files."},
-            {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [
-                    {"function": {"name": "read", "arguments": {"path": "a.py"}}},
-                    {"function": {"name": "read", "arguments": {"path": "b.py"}}},
-                ],
-            },
-        ],
-        tokenize=False,
-    )
-
-    assert rendered.count("<|start_header_id|>assistant<|end_header_id|>") == 1
-    assert rendered.count("<tool_call>") == 2
-    assert '"path": "a.py"' in rendered
-    assert '"path": "b.py"' in rendered
-
-
-def test_chat_template_preserves_reasoning_before_tool_call(marin_chat_tokenizer: MarinTokenizer):
-    reasoning = "<|start_think|>Inspect both paths.<|end_think|>"
-    rendered = marin_chat_tokenizer.apply_chat_template(
-        [
-            {"role": "user", "content": "Read both files."},
-            {
-                "role": "assistant",
-                "content": reasoning,
-                "tool_calls": [{"function": {"name": "read", "arguments": {"path": "a.py"}}}],
-            },
-        ],
-        tokenize=False,
-    )
-
-    assert reasoning in rendered
-    assert rendered.index(reasoning) < rendered.index("<tool_call>")
-
-
-def test_tool_definitions_are_json(marin_chat_tokenizer: MarinTokenizer):
-    tools = [
-        {"type": "function", "name": "weather", "parameters": {"type": "object"}},
-        {"type": "function", "name": "search", "parameters": {"type": "object"}},
-    ]
-    rendered = marin_chat_tokenizer.apply_chat_template(QUESTION, tokenize=False, tools=tools)
-    serialized = rendered.split("<tools>\n", 1)[1].split("</tools>", 1)[0]
-
-    assert json.loads(serialized) == tools
 
 
 def test_chat_processor_renders_ipython_output(marin_chat_tokenizer: MarinTokenizer):
@@ -303,7 +247,7 @@ def test_chat_processor_renders_ipython_output(marin_chat_tokenizer: MarinTokeni
     )[0]
 
     rendered = _decode(marin_chat_tokenizer, result["input_ids"])
-    assert '{"id": "call_output", "name": "python_exec", "arguments": {"code": "print(1+1)"}}' in rendered
+    assert '{"name": "python_exec", "arguments": {"code": "print(1+1)"}}' in rendered
     assert "<|start_header_id|>ipython<|end_header_id|>" in rendered
     assert '{"output": "4\\n"}' in rendered
     assert result["assistant_masks"].sum() > 0

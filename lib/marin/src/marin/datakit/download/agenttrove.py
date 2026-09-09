@@ -191,6 +191,6 @@ def agenttrove_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/agenttrove",
         deps=[download],
         fn=lambda output_path: transform_chat(download.output_path, output_path),
-        hash_attrs={"version": "2026.09.05.4"},
+        hash_attrs={"version": "2026.09.05.4.harmony"},
     )
     return processed, normalize_chat_step(name="normalized-chat/agenttrove", download=processed)

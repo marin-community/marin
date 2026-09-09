@@ -38,6 +38,65 @@ Convert raw data into the **datakit standard format**:
 
 This is the "intake" step \- all downstream stages operate on normalized Parquet datasets.
 
+### Structured chat normalization
+
+SFT sources registered by `marin.datakit.sft_sources.all_sft_sources()` normalize
+into Parquet with one conversation per row. Their `messages` column follows the
+text subset of [OpenAI Harmony's message schema](https://github.com/openai/harmony):
+
+```json
+{
+  "messages": [
+    {"role": "user", "name": null, "content": [{"type": "text", "text": "What is 2 + 2?"}]},
+    {"role": "assistant", "name": null, "channel": "analysis", "content": [{"type": "text", "text": "Add the numbers."}]},
+    {"role": "assistant", "name": null, "channel": "final", "content": [{"type": "text", "text": "4"}]}
+  ]
+}
+```
+
+`messages` is a nested Parquet list of structs. Each message has `role`, optional
+`name`, a list of text content parts, and optional `channel` and `recipient`.
+Each item in `row["messages"]` can be loaded with
+`openai_harmony.Message.from_dict`. There is no
+conversation-level `content` column.
+
+Source adapters interpret dataset-specific action and reasoning protocols.
+Normalization extracts reasoning into assistant `analysis` messages, preserving
+answers as `final` and tool-call preambles as `commentary`. Balanced `<think>`
+and `<|start_think|>…<|end_think|>` delimiters are removed during extraction. SWE-ZERO's
+`THOUGHT:` prefix and GLM's missing opening delimiter are repaired by their source adapters.
+Assistant `reasoning_content` is also accepted as plain source reasoning text.
+
+A function call becomes an assistant `commentary` message addressed to
+`functions.<name>`, with JSON-object arguments in its text content. Its response
+is a `tool` message named `functions.<name>` and addressed to `assistant`.
+Source call IDs establish linkage before conversion. Parallel calls retain
+source call order; observations are ordered by the corresponding call IDs so
+repeated calls to the same function stay associated. Source call IDs do not
+appear in Harmony messages. The entire `chat_template_kwargs` column is a JSON string. Tool definitions
+are available as `json.loads(row["chat_template_kwargs"])["tools"]`; normalization
+fills in missing definitions from observed calls. Consumers must supply these
+definitions when rendering.
+
+A source turn is one message produced by a source adapter before Harmony
+conversion. Source conversations start with an optional system/developer prefix,
+then a user turn, and end with assistant text or calls. Adjacent source user
+turns or adjacent source assistant turns must be merged by the adapter.
+Outstanding calls must be answered before another source assistant/user turn.
+A final assistant call, including an entire parallel call batch, may remain
+unanswered. Adjacent assistant *Harmony messages*
+are expected: analysis, commentary, calls, and final answers are separate
+messages within a turn. `final` denotes completion and a routed assistant
+message denotes tool handoff; token-level endings are the renderer's concern.
+
+The row ID hashes the normalized Harmony messages and template kwargs. Exact
+deduplication is enabled by default. Metadata stays outside the conversation.
+The normalization version changes with this schema so old SFT caches are not
+reused as Harmony data. Rendering, tokenization, packing, and loss masks are
+separate stages; this path does not change the existing Marin chat template.
+When rendering SFT data with Harmony, explicitly disable automatic analysis
+removal (`RenderConversationConfig(auto_drop_analysis=False)`).
+
 ## 3\. Embed
 
 Produce vector embeddings for each document. Output is an **attributes dataset** (see [Attributes Datasets](#attributes-datasets)) with embedding vectors keyed by `id`.

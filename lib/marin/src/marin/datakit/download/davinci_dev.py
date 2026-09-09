@@ -281,7 +281,7 @@ def davinci_dev_env_native_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/davinci-dev-env-native",
         deps=[dl],
         fn=lambda output_path: transform_env_native_chat(dl.output_path, output_path),
-        hash_attrs={"version": "2026.09.05.1"},
+        hash_attrs={"version": "2026.09.05.1.harmony"},
     )
     return processed, normalize_chat_step(
         name="normalized-chat/davinci-dev-env-native",

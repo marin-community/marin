@@ -8,8 +8,7 @@ import json
 import tarfile
 
 import pyarrow.parquet as pq
-from levanter.tokenizers import load_tokenizer
-from marin.datakit.chat import _messages_for_template, validate_rendered_chat
+from marin.datakit.chat_normalize import _normalize_chat_record
 from marin.datakit.download import massive
 from marin.datakit.download.massive import (
     parse_annot_utt,
@@ -17,8 +16,6 @@ from marin.datakit.download.massive import (
     row_to_doc,
     transform_staged_massive,
 )
-
-from experiments.marin_tokenizer import MARIN_CHAT_TEMPLATE
 
 
 def test_parse_annot_utt_handles_messy_real_world_input():
@@ -66,29 +63,15 @@ def test_row_to_doc_renders_full_training_document():
     assert json.loads(call["arguments"]) == {"date": ["friday"], "time": ["nine am"]}
 
 
-def test_row_to_chat_doc_renders_with_marin_tool_template():
-    [doc] = row_to_chat_doc(_row("alarm_set"))
-    assert [message["role"] for message in doc["messages"]] == ["user", "assistant"]
-    tool_call = doc["messages"][1]["tool_calls"][0]
-    assert tool_call["function"]["name"] == "alarm_set"
-    assert json.loads(tool_call["function"]["arguments"]) == {"date": ["friday"], "time": ["nine am"]}
+def test_massive_normalizes_to_harmony_function_call():
+    [source] = row_to_chat_doc(_row("alarm_set"))
+    doc = _normalize_chat_record(source, "messages", "id")
+    call = doc["messages"][-1]
+    assert call["recipient"] == "functions.alarm_set"
+    assert call["channel"] == "commentary"
+    assert json.loads(call["content"][0]["text"]) == {"date": ["friday"], "time": ["nine am"]}
     tools = json.loads(doc["chat_template_kwargs"])["tools"]
     assert "alarm_set" in {tool["name"] for tool in tools}
-
-    rendered = (
-        load_tokenizer("marin-community/marin-tokenizer")
-        .with_chat_template(MARIN_CHAT_TEMPLATE)
-        .apply_chat_template(
-            _messages_for_template(doc["messages"]),
-            tokenize=False,
-            add_generation_prompt=False,
-            tools=tools,
-            enable_thinking=False,
-        )
-    )
-    assert '<tool_call>{"name": "alarm_set"' in rendered
-    assert "<|start_header_id|>system<|end_header_id|>\nReasoning: /nothink" in rendered
-    validate_rendered_chat(doc["messages"], {"tools": tools, "enable_thinking": False}, rendered)
 
 
 def test_transform_staged_massive_end_to_end(tmp_path):

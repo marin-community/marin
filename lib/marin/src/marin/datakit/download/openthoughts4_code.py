@@ -98,6 +98,6 @@ def openthoughts4_code_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/openthoughts4-code-glm-5.2-n4",
         deps=[download],
         fn=lambda output_path: _transform(download.output_path, output_path, chat=True),
-        hash_attrs={"version": "2026.09.05.2"},
+        hash_attrs={"version": "2026.09.05.2.harmony"},
     )
     return processed, normalize_chat_step(name="normalized-chat/openthoughts4-code-glm-5.2-n4", download=processed)

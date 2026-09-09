@@ -6,8 +6,6 @@
 from collections.abc import Callable
 from functools import cache
 
-from levanter.data.text.formats import ChatLmDatasetFormat
-
 from marin.datakit.chat import DatakitChatSource
 from marin.datakit.download.agenttrove import agenttrove_chat_normalize_steps
 from marin.datakit.download.coderforge import coderforge_chat_normalize_steps
@@ -28,11 +26,6 @@ from marin.datakit.download.synthetic1 import synthetic1_chat_normalize_steps
 from marin.datakit.sources import all_sources
 from marin.execution.step_spec import StepSpec
 
-_CHAT_FORMAT = ChatLmDatasetFormat(
-    mask_user_turns=False,
-    pack=True,
-    chat_template_kwargs="chat_template_kwargs",
-)
 _EXCLUDED_CHAT_SOURCES = frozenset(
     {
         # These OpenCode traces omit the user request from every conversation, so
@@ -45,7 +38,7 @@ _ChatSourceRow = tuple[str, Callable[[], tuple[StepSpec, ...]]]
 
 @cache
 def all_sft_sources() -> dict[str, DatakitChatSource]:
-    """Return sources whose canonical artifact contains OpenAI-style messages."""
+    """Return sources whose canonical artifact contains Harmony messages."""
     penfever_steps = cache(penfever_rollouts_chat_normalize_steps)
     nemotron_steps = cache(nemotron_sft_chat_normalize_steps)
     rows: list[_ChatSourceRow] = [
@@ -80,7 +73,6 @@ def all_sft_sources() -> dict[str, DatakitChatSource]:
         name: DatakitChatSource(
             name=name,
             normalize_steps=factory(),
-            format=_CHAT_FORMAT,
             rough_token_count_b=text_sources[name].rough_token_count_b,
         )
         for name, factory in rows

@@ -16,7 +16,7 @@ from zephyr import counters
 
 logger = logging.getLogger(__name__)
 
-CANONICAL_CHAT_ROLES = frozenset({"assistant", "system", "tool", "user"})
+CANONICAL_CHAT_ROLES = frozenset({"assistant", "developer", "system", "tool", "user"})
 CHAT_CONTROL_TOKEN = re.compile(
     r"<\|(?:begin_of_text|end_of_text|finetune_right_pad_id|start_header_id|end_header_id|"
     r"eom_id|eot_id|python_tag|reserved_special_token_\d+)\|>"
@@ -117,7 +117,7 @@ def _canonical_tool_calls(tool_calls: object) -> list[dict]:
 
 
 def canonical_chat_messages(messages: list[dict]) -> list[dict]:
-    """Normalize roles, tool calls, and parallel calls into the canonical message contract."""
+    """Normalize source turns before validation and conversion to Harmony."""
     canonical: list[dict[str, object]] = []
     for message in messages:
         role_value = message.get("role", message.get("from"))
@@ -133,11 +133,12 @@ def canonical_chat_messages(messages: list[dict]) -> list[dict]:
         if role == "assistant" and content is not None:
             content = normalize_reasoning_tokens(content)
         has_tool_call = bool(message.get("tool_calls") or message.get("function_call"))
-        if content is None and (role != "assistant" or not has_tool_call):
-            raise ValueError("Only assistant tool-call messages may have null content")
+        has_reasoning = bool(message.get("reasoning_content"))
+        if content is None and (role != "assistant" or not (has_tool_call or has_reasoning)):
+            raise ValueError("Only assistant reasoning or tool-call messages may have null content")
 
         normalized: dict[str, object] = {"role": role, "content": content}
-        for key in ("name", "tool_call_id"):
+        for key in ("name", "tool_call_id", "reasoning_content"):
             value = message.get(key)
             if value is not None:
                 if not isinstance(value, str):

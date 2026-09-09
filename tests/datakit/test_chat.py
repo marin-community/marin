@@ -1,103 +1,177 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import cast
+import json
 
-from levanter.data.text.formats import ChatLmDatasetFormat
-from levanter.tokenizers import MarinTokenizer
-from marin.datakit.chat import _render_messages
-
-
-class _Tokenizer:
-    bos_token = "<bos>"
-
-    def apply_chat_template(self, conversation, *, tokenize, add_generation_prompt, **kwargs):
-        assert tokenize is False
-        assert add_generation_prompt is False
-        assert kwargs["enable_thinking"] is False
-        blocks = ["<|start_header_id|>system<|end_header_id|>\nReasoning: /nothink<|eot_id|>"]
-        blocks.extend(
-            f"<|start_header_id|>{message['role']}<|end_header_id|>\n{message['content']}<|eot_id|>"
-            for message in conversation
-        )
-        return "<bos>" + "".join(blocks)
+import pytest
+from marin.datakit.chat_normalize import _normalize_chat_record
+from marin.datakit.download.glm_kernelgym_rollouts import chat_conversation_messages
+from marin.datakit.download.swe_zero_12m import row_to_chat_doc as swe_zero_row
+from openai_harmony import Conversation, Message
 
 
-class _ToolTokenizer:
-    bos_token = "<bos>"
-
-    def apply_chat_template(self, conversation, *, tokenize, add_generation_prompt, **kwargs):
-        arguments = conversation[1]["tool_calls"][0]["function"]["arguments"]
-        assert arguments == {"city": "Paris"}
-        assert kwargs["tools"][0]["name"] == "weather"
-        assert kwargs["enable_thinking"] is False
-        return (
-            "<bos><|start_header_id|>system<|end_header_id|>\nReasoning: /nothink<|eot_id|>"
-            "<|start_header_id|>user<|end_header_id|>\nWeather?<|eot_id|>"
-            '<|start_header_id|>assistant<|end_header_id|>\n<tool_call>{"id":"call_weather","name":"weather",'
-            '"arguments":{"city":"Paris"}}</tool_call><|eot_id|>'
-        )
-
-
-def test_render_messages_leaves_bos_insertion_to_text_tokenizer():
-    [document] = _render_messages(
+def test_harmony_separates_reasoning_answer_and_tool_handoff():
+    record = {
+        "messages": [
+            {"role": "developer", "content": "Be concise."},
+            {"role": "user", "content": "Weather?"},
+            {
+                "role": "assistant",
+                "content": "<think>Check Paris.</think>Let me check.",
+                "tool_calls": [{"id": "call_1", "function": {"name": "weather", "arguments": {"city": "Paris"}}}],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "Sunny"},
+            {"role": "assistant", "content": "It is sunny."},
+        ]
+    }
+    normalized = _normalize_chat_record(record, "messages", "id")
+    assert normalized["messages"] == [
+        {"role": "developer", "name": None, "content": [{"type": "text", "text": "Be concise."}]},
+        {"role": "user", "name": None, "content": [{"type": "text", "text": "Weather?"}]},
         {
-            "messages": [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello"}],
-            "source": "test",
+            "role": "assistant",
+            "name": None,
+            "channel": "analysis",
+            "content": [{"type": "text", "text": "Check Paris."}],
         },
-        cast(MarinTokenizer, _Tokenizer()),
-        ChatLmDatasetFormat(mask_user_turns=False),
-    )
+        {
+            "role": "assistant",
+            "name": None,
+            "channel": "commentary",
+            "content": [{"type": "text", "text": "Let me check."}],
+        },
+        {
+            "role": "assistant",
+            "name": None,
+            "channel": "commentary",
+            "recipient": "functions.weather",
+            "content": [{"type": "text", "text": '{"city":"Paris"}'}],
+        },
+        {
+            "role": "tool",
+            "name": "functions.weather",
+            "channel": "commentary",
+            "recipient": "assistant",
+            "content": [{"type": "text", "text": "Sunny"}],
+        },
+        {"role": "assistant", "name": None, "channel": "final", "content": [{"type": "text", "text": "It is sunny."}]},
+    ]
+    conversation = Conversation.from_json(json.dumps({"messages": normalized["messages"]}))
+    assert conversation.to_dict()["messages"] == normalized["messages"]
 
-    assert not document["text"].startswith("<bos>")
-    assert "<|start_header_id|>assistant<|end_header_id|>\nHello<|eot_id|>" in document["text"]
+
+def test_harmony_preserves_parallel_call_association_for_repeated_tool():
+    record = {
+        "messages": [
+            {"role": "user", "content": "Read both files."},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "a", "function": {"name": "read", "arguments": {"path": "a.py"}}},
+                    {"id": "b", "function": {"name": "read", "arguments": {"path": "b.py"}}},
+                ],
+            },
+            {"role": "tool", "tool_call_id": "b", "content": "B"},
+            {"role": "tool", "tool_call_id": "a", "content": "A"},
+            {"role": "assistant", "content": "Done."},
+        ]
+    }
+    normalized = _normalize_chat_record(record, "messages", "id")
+    messages = [Message.from_dict(message) for message in normalized["messages"]]
+    assert [message.content[0].to_dict()["text"] for message in messages[1:5]] == [
+        '{"path":"a.py"}',
+        '{"path":"b.py"}',
+        "A",
+        "B",
+    ]
+    assert [message.recipient for message in messages[1:3]] == ["functions.read", "functions.read"]
 
 
-def test_render_messages_decodes_tool_arguments_for_template():
-    [document] = _render_messages(
+@pytest.mark.parametrize(
+    "reasoning", ["<think>Plan.</think>", "<THINK>Plan.</THINK>", "<|start_think|>Plan.<|end_think|>"]
+)
+def test_harmony_normalizes_reasoning_spellings_to_same_identity(reasoning):
+    messages = [{"role": "user", "content": "Question"}, {"role": "assistant", "content": reasoning + "Answer"}]
+    tagged = _normalize_chat_record({"messages": messages}, "messages", "id")
+    messages[1] = {"role": "assistant", "reasoning_content": "Plan.", "content": "Answer"}
+    separated = _normalize_chat_record({"messages": messages}, "messages", "id")
+    assert tagged["id"] == separated["id"]
+    assert tagged["messages"][1]["content"] == [{"type": "text", "text": "Plan."}]
+
+
+def test_swe_zero_thought_becomes_harmony_analysis():
+    [source] = swe_zero_row(
         {
             "messages": [
-                {"role": "user", "content": "Weather?"},
+                {"role": "user", "content": "Fix the bug."},
+                {"role": "assistant", "content": "THOUGHT: Inspect files.\n```bash\nls\n```"},
+                {"role": "user", "content": "Observation: a.py"},
                 {
                     "role": "assistant",
-                    "content": None,
-                    "tool_calls": [
-                        {"id": "call_weather", "function": {"name": "weather", "arguments": '{"city":"Paris"}'}}
-                    ],
+                    "content": "THOUGHT: Finished.\n```bash\necho COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\n```",
                 },
-            ],
-            "chat_template_kwargs": {"tools": [{"name": "weather"}]},
-        },
-        cast(MarinTokenizer, _ToolTokenizer()),
-        ChatLmDatasetFormat(mask_user_turns=False, chat_template_kwargs="chat_template_kwargs"),
+            ]
+        }
     )
+    messages = _normalize_chat_record(source, "messages", "id")["messages"]
+    assert [(m["channel"], m["content"][0]["text"]) for m in messages if m.get("channel") == "analysis"] == [
+        ("analysis", "Inspect files."),
+        ("analysis", "Finished."),
+    ]
+    assert messages[-1]["channel"] == "final"
 
-    assert '"arguments":{"city":"Paris"}' in document["text"]
+
+def test_harmony_keeps_final_tool_call_without_observation():
+    record = {
+        "messages": [
+            {"role": "user", "content": "Run it."},
+            {"role": "assistant", "content": None, "tool_calls": [{"function": {"name": "run", "arguments": {}}}]},
+        ]
+    }
+    messages = _normalize_chat_record(record, "messages", "id")["messages"]
+    assert messages[-1]["recipient"] == "functions.run"
+    assert messages[-1]["channel"] == "commentary"
 
 
-def test_render_messages_labels_reasoning_mode():
-    class ThinkingTokenizer:
-        bos_token = "<bos>"
+def test_glm_reasoning_with_missing_opener_becomes_harmony_analysis():
+    response = "Inspect the kernel.</think>Use shared memory."
+    source_messages = chat_conversation_messages(
+        [{"role": "user", "content": "Optimize it."}, {"role": "assistant", "content": response}],
+        [{"response": response}],
+    )
+    messages = _normalize_chat_record({"messages": source_messages}, "messages", "id")["messages"]
+    assert [(m["channel"], m["content"][0]["text"]) for m in messages[1:]] == [
+        ("analysis", "Inspect the kernel."),
+        ("final", "Use shared memory."),
+    ]
 
-        def apply_chat_template(self, conversation, *, enable_thinking, **kwargs):
-            assert enable_thinking is True
-            assert conversation[1]["content"] == "<|start_think|>plan<|end_think|>answer"
-            return (
-                "<bos><|start_header_id|>system<|end_header_id|>\nReasoning: /think<|eot_id|>"
-                "<|start_header_id|>user<|end_header_id|>\nQuestion<|eot_id|>"
-                "<|start_header_id|>assistant<|end_header_id|>\n"
-                "<|start_think|>plan<|end_think|>answer<|eot_id|>"
-            )
 
-    [document] = _render_messages(
+def test_json_answer_keys_do_not_create_reasoning_or_tool_calls():
+    answer = '{"analysis":"a report", "commands":["help"]}'
+    messages = _normalize_chat_record(
         {
             "messages": [
-                {"role": "user", "content": "Question"},
-                {"role": "assistant", "content": "<|start_think|>plan<|end_think|>answer"},
+                {"role": "user", "content": "Return a JSON report."},
+                {"role": "assistant", "content": answer},
             ]
         },
-        cast(MarinTokenizer, ThinkingTokenizer()),
-        ChatLmDatasetFormat(mask_user_turns=False),
-    )
+        "messages",
+        "id",
+    )["messages"]
+    assert len(messages) == 2
+    assert messages[-1]["channel"] == "final"
+    assert messages[-1]["content"] == [{"type": "text", "text": answer}]
 
-    assert "Reasoning: /think" in document["text"]
+
+@pytest.mark.parametrize("content", [None, ""])
+def test_separate_reasoning_without_answer_matches_inline_reasoning(content):
+    user = {"role": "user", "content": "Think about it."}
+    inline = _normalize_chat_record(
+        {"messages": [user, {"role": "assistant", "content": "<think>Plan.</think>"}]}, "messages", "id"
+    )
+    separate = _normalize_chat_record(
+        {"messages": [user, {"role": "assistant", "content": content, "reasoning_content": "Plan."}]}, "messages", "id"
+    )
+    assert separate["id"] == inline["id"]
+    assert separate["messages"][-1]["channel"] == "analysis"

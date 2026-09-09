@@ -50,7 +50,7 @@ MARIN_CHAT_TEMPLATE = """
 {%- set _has_aux_header = (_reasoning_mode is not none) or _custom_instructions or (_xml_tools_list) or (_python_tools) -%}
 {%- if _has_aux_header -%}
 <|start_header_id|>system<|end_header_id|>
-{% if _reasoning_mode is not none -%}
+{%- if _reasoning_mode is not none -%}
 Reasoning: {{ _reasoning_mode }}
 {%- endif %}
 {%- if _custom_instructions %}
@@ -63,12 +63,15 @@ You may call one or more functions to assist with the user query.
 You are provided with function signatures within <tools> </tools> tags:
 
 <tools>
-{{ _xml_tools_list | tojson }}
+{% for tool in _xml_tools_list %}
+{{ tool | string }}{% if not loop.last %}
+{% endif %}
+{% endfor %}
 </tools>
 
-For each function call, pass a json object with a unique id, function name, and arguments within <tool_call> </tool_call> tags:
+For each function call, pass a json object with function name and arguments within <tool_call> </tool_call> tags:
 <tool_call>
-{"id": <unique-call-id>, "name": <function-name>, "arguments": <args-json-object>}
+{"name": <function-name>, "arguments": <args-json-object>}
 </tool_call>
 
 {% endif %}
@@ -157,23 +160,15 @@ You can use the following tools in your python code like regular functions:
 {% endif %}
 <|eot_id|>
 {% elif has_tool_calls -%}
+    {%- if message.tool_calls|length != 1 -%}
+      {{- raise_exception("This template expects exactly one tool call per assistant turn.") -}}
+    {%- endif -%}
+    {%- set tool_call = message.tool_calls[0].function -%}
 <|start_header_id|>assistant<|end_header_id|>
 {% generation %}
-{%- if message.get('content') is string and message.get('content') | trim %}
-{{- message.get('content') | trim }}
-{%- endif %}
-{%- for call in message.tool_calls %}
-{%- set tool_call = call.function %}
-<tool_call>
-{{- '{' -}}
-{%- if call.get('id') %}
-{{- '\"id\": ' + (call.get('id') | tojson) + ', ' -}}
-{%- endif %}
-{{- '\"name\": \"' + tool_call.name + '\", \"arguments\": ' -}}
+{{- '{\"name\": \"' + tool_call.name + '\", \"arguments\": ' -}}
 {{- tool_call.arguments | tojson -}}
-{{- \"}\" -}}
-</tool_call>
-{%- endfor %}<|eot_id|>
+{{- \"}\" -}}<|eot_id|>
 {% endgeneration %}
   {%- endif -%}
 {%- endfor -%}

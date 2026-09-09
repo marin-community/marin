@@ -322,7 +322,7 @@ def nemotron_sft_chat_normalize_steps() -> dict[str, tuple[StepSpec, ...]]:
             fn=lambda output_path, source_subset=subset, source_dir=subset_dir: _transform_nemotron_sft_chat(
                 prefix_join(download.output_path, source_dir), output_path, source_subset
             ),
-            hash_attrs={"version": "2026.09.05.2", "subset": subset},
+            hash_attrs={"version": "2026.09.05.2.harmony", "subset": subset},
         )
         normalized = normalize_chat_step(
             name=f"normalized-chat/{family}/{subset}",

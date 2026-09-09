@@ -266,6 +266,6 @@ def glm_kernelgym_rollouts_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/glm-5.2-kernelgym-rollouts",
         deps=[download],
         fn=lambda output_path: transform_chat(download.output_path, output_path, truncation_filter),
-        hash_attrs={"version": "2026.09.04.2", "truncation_filter": truncation_filter.value},
+        hash_attrs={"version": "2026.09.04.2.harmony", "truncation_filter": truncation_filter.value},
     )
     return processed, normalize_chat_step(name="normalized-chat/glm-5.2-kernelgym-rollouts", download=processed)

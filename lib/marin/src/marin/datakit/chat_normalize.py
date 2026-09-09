@@ -16,6 +16,7 @@ from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.readers import load_file
 
+from marin.datakit.chat import to_harmony_messages
 from marin.datakit.download.rollout_transforms import (
     CHAT_CONTROL_TOKEN,
     REASONING_TOKEN,
@@ -28,13 +29,12 @@ from marin.datakit.normalize import (
     ExactDupSideOutput,
     MainOutput,
     NormalizedData,
-    _compute_total_bytes,
     _discover_files,
     _make_split_writer,
 )
 from marin.execution.step_spec import StepSpec
 
-CHAT_NORMALIZE_VERSION = "2026.09.06"
+CHAT_NORMALIZE_VERSION = "2026.09.08.harmony"
 MAX_REJECTED_RECORD_FRACTION = 0.05
 _INLINE_TOOL_SYNTAX = re.compile(r"<tool_call(?::[^>]*)?>", re.IGNORECASE)
 _TOOL_RESPONSE_SYNTAX = re.compile(r"</?tool_response(?:\s|>)", re.IGNORECASE)
@@ -109,7 +109,7 @@ def validate_chat_messages(messages: list[dict], tools: list[dict]) -> None:
     for message in messages:
         role = message["role"]
         content = message.get("content")
-        if role not in {"assistant", "system", "tool", "user"}:
+        if role not in {"assistant", "developer", "system", "tool", "user"}:
             raise ValueError(f"Unsupported canonical chat role {role!r}")
         if isinstance(content, str) and CHAT_CONTROL_TOKEN.search(content):
             raise ValueError("Message content must not contain tokenizer control tokens")
@@ -117,9 +117,15 @@ def validate_chat_messages(messages: list[dict], tools: list[dict]) -> None:
             raise ValueError("Raw reasoning tags must be normalized before chat validation")
         if role != "assistant" and isinstance(content, str) and REASONING_TOKEN.search(content):
             raise ValueError("Reasoning delimiters are only valid in assistant messages")
-        if role == "system":
+        reasoning = message.get("reasoning_content")
+        if reasoning is not None:
+            if role != "assistant" or not isinstance(reasoning, str):
+                raise ValueError("reasoning_content is only valid as assistant text")
+            if _contains_unsafe_markup(reasoning):
+                raise ValueError("reasoning_content must contain plain text without control or reasoning tokens")
+        if role in {"system", "developer"}:
             if seen_non_system:
-                raise ValueError("System messages must precede all conversation turns")
+                raise ValueError("System and developer messages must precede all conversation turns")
             continue
         if not seen_non_system:
             if role != "user":
@@ -144,16 +150,14 @@ def validate_chat_messages(messages: list[dict], tools: list[dict]) -> None:
                 _validate_reasoning(content)
                 if _INLINE_TOOL_SYNTAX.search(content):
                     raise ValueError("Inline tool-call syntax must be split out by the source adapter")
-                try:
-                    provider_payload = json.loads(content)
-                except json.JSONDecodeError:
-                    provider_payload = None
-                if isinstance(provider_payload, dict) and ({"analysis", "commands"} & provider_payload.keys()):
-                    raise ValueError("Provider JSON protocols must be split out by the source adapter")
             calls = message.get("tool_calls") or []
             if _contains_unsafe_markup(calls):
                 raise ValueError("Tool calls must not contain chat control or reasoning tokens")
-            if not calls and (not isinstance(content, str) or not content.strip()):
+            if (
+                not calls
+                and not (reasoning and reasoning.strip())
+                and (not isinstance(content, str) or not content.strip())
+            ):
                 raise ValueError("Assistant turns must contain text, reasoning, or a tool call")
             for call in calls:
                 call_id = call.get("id")
@@ -213,6 +217,8 @@ def _normalize_chat_record(record: dict[str, Any], messages_field: str, id_field
     if tools:
         kwargs["tools"] = tools
     validate_chat_messages(messages, tools)
+
+    messages = to_harmony_messages(messages)
 
     source_id = record.get(id_field)
     out = {key: value for key, value in record.items() if key not in {id_field, messages_field, "chat_template_kwargs"}}
@@ -296,13 +302,13 @@ def normalize_chat_to_parquet(
     file_extensions: tuple[str, ...] | None = None,
     dedup_mode: DedupMode = DedupMode.EXACT,
 ) -> NormalizedData:
-    """Normalize, validate, and deduplicate structured chat records."""
+    """Normalize source conversations into deduplicated Harmony-message Parquet."""
     resources = worker_resources or ResourceConfig(cpu=2, ram="32g", disk="10g")
-    files = _discover_files(input_path, file_extensions=file_extensions)
-    if not files:
+    file_sizes = _discover_files(input_path, file_extensions=file_extensions)
+    if not file_sizes:
         raise FileNotFoundError(f"No data files found under {input_path}")
-    num_shards = max(1, _compute_total_bytes(files) // target_partition_bytes)
-    pipeline = _build_chat_pipeline(files, output_path, num_shards, messages_field, id_field, dedup_mode)
+    num_shards = max(1, sum(file_sizes.values()) // target_partition_bytes)
+    pipeline = _build_chat_pipeline(list(file_sizes), output_path, num_shards, messages_field, id_field, dedup_mode)
     outcome = ZephyrContext(name="normalize-chat", resources=resources, max_workers=max_workers).execute(pipeline)
     counters_dict = dict(outcome.counters)
     total_in = counters_dict.get("zephyr/records_in", 0)
@@ -337,7 +343,7 @@ def normalize_chat_step(
     file_extensions: tuple[str, ...] | None = None,
     dedup_mode: DedupMode = DedupMode.EXACT,
 ) -> StepSpec:
-    """Create a versioned canonical-chat normalization step."""
+    """Create a versioned Harmony-message normalization step."""
     hash_attrs = {
         "version": CHAT_NORMALIZE_VERSION,
         "messages_field": messages_field,

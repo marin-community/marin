@@ -9,6 +9,7 @@ import pytest
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from marin.datakit.chat_normalize import _normalize_chat_record, normalize_chat_to_parquet, validate_chat_messages
+from openai_harmony import Message
 
 
 @pytest.fixture(autouse=True)
@@ -34,11 +35,12 @@ def test_normalize_chat_record_canonicalizes_reasoning_and_tools():
 
     normalized = _normalize_chat_record(record, "messages", "id")
 
-    call = normalized["messages"][1]["tool_calls"][0]
-    assert normalized["messages"][1]["content"] == "<|start_think|>Need the forecast.<|end_think|>"
-    assert call["id"] == "call_1_0"
-    assert normalized["messages"][2]["tool_call_id"] == call["id"]
-    assert normalized["messages"][2]["name"] == "weather"
+    messages = normalized["messages"]
+    assert messages[1]["channel"] == "analysis"
+    assert messages[1]["content"] == [{"type": "text", "text": "Need the forecast."}]
+    assert messages[2]["recipient"] == "functions.weather"
+    assert messages[3]["name"] == "functions.weather"
+    assert messages[3]["recipient"] == "assistant"
     assert json.loads(normalized["chat_template_kwargs"])["tools"][0]["name"] == "weather"
 
 
@@ -113,6 +115,12 @@ def test_normalize_chat_to_parquet_keeps_varying_tool_schemas_arrow_stable(tmp_p
         row for path in (output_dir / "outputs" / "main").glob("*.parquet") for row in pq.read_table(path).to_pylist()
     ]
     assert len(normalized) == 2
+    calls = [Message.from_dict(row["messages"][-1]) for row in normalized]
+    assert {call.recipient: json.loads(call.content[0].to_dict()["text"]) for call in calls} == {
+        "functions.read": {"path": "a.py"},
+        "functions.search": {"query": "Marin", "limit": 3},
+    }
+    assert all(call.channel == "commentary" for call in calls)
     assert all(isinstance(record["chat_template_kwargs"], str) for record in normalized)
     assert {json.loads(record["chat_template_kwargs"])["tools"][0]["name"] for record in normalized} == {
         "read",
@@ -293,4 +301,4 @@ def test_normalize_chat_allows_protocol_text_inside_tool_arguments():
     }
 
     normalized = _normalize_chat_record(record, "messages", "id")
-    assert normalized["messages"][1]["tool_calls"]
+    assert normalized["messages"][1]["recipient"] == "functions.search"
