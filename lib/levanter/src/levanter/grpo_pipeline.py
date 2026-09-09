@@ -31,6 +31,7 @@ from levanter.grpo_model import GrpoExample
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.pipeline import reshape_batch_into_microbatches
 from levanter.utils.jax_utils import barrier_sync, multihost_broadcast_sync
+from levanter.utils.types import FilterTree
 
 try:
     import jaxpp.api as pp  # pyrefly: ignore[missing-import]  # Optional pipeline extra.
@@ -75,7 +76,7 @@ class PipelineStage(Protocol):
     def run_blocks_with_stats(self, hidden: jax.Array, segment_ids: jax.Array, position_ids: jax.Array): ...
     def finish(self, hidden: jax.Array) -> jax.Array: ...
     def get_lm_head(self) -> jax.Array: ...
-    def trainable_filter(self) -> Any: ...
+    def trainable_filter(self) -> FilterTree: ...
 
 
 @dataclass(frozen=True)
@@ -608,6 +609,56 @@ def _scorer_repeatability_details(first_logprobs, repeated_logprobs, policy_weig
     }
 
 
+def _compile_pipeline_scorer(scorer, state, sample, mpmd_mesh):
+    api = _require_jaxpp()
+    with jax.set_mesh(None):
+        compiled = scorer.compile(state.trainable, state.frozen, sample)
+    specs, kwargs = compiled.in_shardings
+    if kwargs:
+        raise ValueError("Pipeline scorer accepts positional parameters and batch")
+    trainable = _place_existing(state.trainable, specs[0], mpmd_mesh)
+    frozen = _place_existing(state.frozen, specs[1], mpmd_mesh)
+    sharding = NamedSharding(mpmd_mesh.jax_mesh, P(BATCH_AXES, None))
+    report_routing = mpmd_mesh.jax_mesh.shape["expert"] > 1
+    output_sharding = (
+        (sharding, {name: NamedSharding(mpmd_mesh.jax_mesh, P()) for name in ROUTING_METRIC_NAMES})
+        if report_routing
+        else sharding
+    )
+    return api, compiled, specs, trainable, frozen, report_routing, output_sharding
+
+
+def _score_first_pipeline_microbatch(
+    api, compiled, trainable, frozen, sample, specs, mpmd_mesh, output_sharding, report_routing
+):
+    placed = api.spmd_to_mpmd_reshard(mpmd_mesh, sample, specs[2], threshold=0)
+    placed = _place_existing(placed, specs[2], mpmd_mesh)
+    with jax.set_mesh(None):
+        score = compiled(trainable, frozen, placed)
+        score = api.mpmd_to_spmd_reshard(mpmd_mesh, score, output_sharding, threshold=0)
+    jax.block_until_ready(score)
+    barrier_sync()
+    with jax.set_mesh(None):
+        repeated = compiled(trainable, frozen, placed)
+        repeated = api.mpmd_to_spmd_reshard(mpmd_mesh, repeated, output_sharding, threshold=0)
+    jax.block_until_ready(repeated)
+    barrier_sync()
+    if all(
+        bool(jnp.array_equal(a, b)) for a, b in zip(jax.tree.leaves(score), jax.tree.leaves(repeated), strict=True)
+    ):
+        return score
+    first_logprobs = score[0] if report_routing else score
+    repeated_logprobs = repeated[0] if report_routing else repeated
+    details = _scorer_repeatability_details(
+        first_logprobs,
+        repeated_logprobs,
+        sample.policy_weights,
+        score[1] if report_routing else {},
+        repeated[1] if report_routing else {},
+    )
+    raise FloatingPointError(f"Compiled GRPO scorer is not repeatable: {details}")
+
+
 def score_pipeline_batch(
     scorer,
     state,
@@ -617,21 +668,9 @@ def score_pipeline_batch(
     routing_drop_policy: RoutingDropPolicy = RoutingDropPolicy.REJECT,
 ) -> PipelineBatch:
     """Freeze raw old scores and verify exact first-microbatch scorer repeatability."""
-    api = _require_jaxpp()
     sample = jax.tree.map(lambda x: x[0], batches)
-    with jax.set_mesh(None):
-        compiled = scorer.compile(state.trainable, state.frozen, sample)
-    specs, kwargs = compiled.in_shardings
-    if kwargs:
-        raise ValueError("Pipeline scorer accepts positional parameters and batch")
-    scoring_trainable = _place_existing(state.trainable, specs[0], mpmd_mesh)
-    scoring_frozen = _place_existing(state.frozen, specs[1], mpmd_mesh)
-    sharding = NamedSharding(mpmd_mesh.jax_mesh, P(BATCH_AXES, None))
-    report_routing = mpmd_mesh.jax_mesh.shape["expert"] > 1
-    output_sharding = (
-        (sharding, {name: NamedSharding(mpmd_mesh.jax_mesh, P()) for name in ROUTING_METRIC_NAMES})
-        if report_routing
-        else sharding
+    api, compiled, specs, scoring_trainable, scoring_frozen, report_routing, output_sharding = (
+        _compile_pipeline_scorer(scorer, state, sample, mpmd_mesh)
     )
     routing_totals = {name: -1 if name == "routing_drop_layer" else 0 for name in ROUTING_METRIC_NAMES}
 
@@ -650,31 +689,17 @@ def score_pipeline_batch(
     stacked_sharding = NamedSharding(mpmd_mesh.jax_mesh, P(None, BATCH_AXES, None))
     # Preserve the original first-microbatch repeatability check before allowing
     # independent microbatches to overlap across stages.
-    placed = api.spmd_to_mpmd_reshard(mpmd_mesh, sample, specs[2], threshold=0)
-    placed = _place_existing(placed, specs[2], mpmd_mesh)
-    with jax.set_mesh(None):
-        score = compiled(scoring_trainable, scoring_frozen, placed)
-        score = api.mpmd_to_spmd_reshard(mpmd_mesh, score, output_sharding, threshold=0)
-    jax.block_until_ready(score)
-    barrier_sync()
-    with jax.set_mesh(None):
-        repeated = compiled(scoring_trainable, scoring_frozen, placed)
-        repeated = api.mpmd_to_spmd_reshard(mpmd_mesh, repeated, output_sharding, threshold=0)
-    jax.block_until_ready(repeated)
-    barrier_sync()
-    if not all(
-        bool(jnp.array_equal(a, b)) for a, b in zip(jax.tree.leaves(score), jax.tree.leaves(repeated), strict=True)
-    ):
-        first_logprobs = score[0] if report_routing else score
-        repeated_logprobs = repeated[0] if report_routing else repeated
-        details = _scorer_repeatability_details(
-            first_logprobs,
-            repeated_logprobs,
-            sample.policy_weights,
-            score[1] if report_routing else {},
-            repeated[1] if report_routing else {},
-        )
-        raise FloatingPointError(f"Compiled GRPO scorer is not repeatable: {details}")
+    score = _score_first_pipeline_microbatch(
+        api,
+        compiled,
+        scoring_trainable,
+        scoring_frozen,
+        sample,
+        specs,
+        mpmd_mesh,
+        output_sharding,
+        report_routing,
+    )
     logger.info("Verified exact compiled scorer repeatability on the first microbatch")
     score = checked_score(score, 0)
     scores = [jax.lax.reshape(score, (1, *score.shape), out_sharding=stacked_sharding)]
