@@ -9,6 +9,7 @@ import posixpath
 import re
 
 from experiments.post_training import async_rl_audit as audit
+from experiments.post_training.math_eval.checkpoint_progress import validate_progress
 from experiments.post_training.math_eval.checkpoint_tokenizer import validate_tokenizer_source
 
 EAST_PREFIX = "s3://marin-us-east-02a/marin/"
@@ -91,6 +92,8 @@ def bind_checkpoint_export(
     seed,
     runtime_commit,
     tokenizer_source,
+    progress=None,
+    progress_sha256=None,
 ):
     """Bind content to preaudited terminal receipts, update96 and its training seed.
 
@@ -105,6 +108,18 @@ def bind_checkpoint_export(
     export_request, export_response = exported["request"], exported["response"]
     model = export_response["model"]
     checkpoint = train_response["training"]["checkpoint"]
+    native_step = 96
+    if (progress is None) != (progress_sha256 is None):
+        raise ValueError("Checkpoint progress requires its independently qualified digest")
+    if progress is not None:
+        if progress["progress_sha256"] != progress_sha256:
+            raise ValueError("Checkpoint progress differs from its independently qualified digest")
+        validate_progress(
+            progress, training_sha256=training_sha256, trainer_state_sha256=checkpoint["trainer_state_sha256"]
+        )
+        if progress["optimizer_updates"] != 96 or progress["training_seed"] != seed:
+            raise ValueError("Calibration requires the intended seed at 96 successful optimizer updates")
+        native_step = progress["global_step"]
     if (
         seed not in {17, 29}
         or train_request["seed"] != seed
@@ -113,10 +128,10 @@ def bind_checkpoint_export(
         or train_response["run_id"] != train_request["run_id"]
         or train_response["attempt_id"] != train_request["attempt_id"]
         or export_response["state"] != "succeeded"
-        or train_response["training"]["global_step"] != 96
-        or checkpoint["global_step"] != 96
-        or model["global_step"] != 96
-        or completion["global_step"] != 96
+        or train_response["training"]["global_step"] != native_step
+        or checkpoint["global_step"] != native_step
+        or model["global_step"] != native_step
+        or completion["global_step"] != native_step
         or exported["training_manifest_sha256"] != training_sha256
         or export_request["training_manifest_uri"] != train_request["output"]["terminal_manifest_uri"]
         or model["checkpoint_root"] != train_request["output"]["checkpoint_root"]
@@ -150,7 +165,7 @@ def bind_checkpoint_export(
     binding = {
         "schema": "math_eval_checkpoint_content_v1",
         "training_seed": seed,
-        "global_step": 96,
+        "global_step": native_step,
         "training_manifest_sha256": training_sha256,
         "export_manifest_sha256": export_sha256,
         "completion_receipt_sha256": completion_sha256,
@@ -161,4 +176,11 @@ def bind_checkpoint_export(
         "content": inventory,
         "tokenizer_source": tokenizer_source,
     }
+    if progress is not None:
+        binding.update(
+            schema="math_eval_checkpoint_content_v2",
+            optimizer_updates=96,
+            trainer_state_sha256=checkpoint["trainer_state_sha256"],
+            progress=progress,
+        )
     return binding | {"binding_sha256": audit.canonical_sha(binding)}

@@ -2,11 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import hashlib
+import io
 
 import fsspec
 import pytest
+import torch
 
 from experiments.post_training import async_rl_audit as audit
+from experiments.post_training.math_eval.calibration_protocol import checkpoint_serving_configuration
+from experiments.post_training.math_eval.checkpoint_state import checkpoint_progress
 from experiments.post_training.math_eval.export_binding import (
     bind_checkpoint_export,
     hash_file_inventory,
@@ -193,3 +197,91 @@ def test_binding_rejects_another_original_tokenizer_source():
     rows[1]["training_manifest_sha256"] = audit.canonical_sha(rows[0])
     with pytest.raises(ValueError, match="original training model"):
         bind(rows)
+
+
+def ladder_evidence(minibatches, *, saved_update_count=96, saved_batch_size=None):
+    rows = evidence()
+    native_step = 96 // minibatches
+    state = {
+        "global_step": native_step,
+        "successful_policy_updates": saved_update_count,
+        "config": {
+            "trainer": {
+                "seed": 17,
+                "max_steps": native_step,
+                "policy_mini_batch_size": 64,
+                "train_batch_size": 64 * minibatches if saved_batch_size is None else saved_batch_size,
+            }
+        },
+    }
+    buffer = io.BytesIO()
+    torch.save(state, buffer)
+    raw = buffer.getvalue()
+    training, exported, completion, _ = rows
+    training["response"]["training"].update(global_step=native_step)
+    training["response"]["training"]["checkpoint"].update(
+        global_step=native_step, trainer_state_sha256=hashlib.sha256(raw).hexdigest()
+    )
+    exported["training_manifest_sha256"] = audit.canonical_sha(training)
+    exported["response"]["model"]["global_step"] = native_step
+    completion["global_step"] = native_step
+    return rows, raw
+
+
+def ladder_bind(rows, progress, expected_progress_sha256):
+    return bind_checkpoint_export(
+        *rows,
+        training_sha256=audit.canonical_sha(rows[0]),
+        export_sha256=audit.canonical_sha(rows[1]),
+        completion_sha256=audit.canonical_sha(rows[2]),
+        seed=17,
+        runtime_commit="a" * 40,
+        tokenizer_source=tokenizer_source(),
+        progress=progress,
+        progress_sha256=expected_progress_sha256,
+    )
+
+
+@pytest.mark.parametrize("minibatches,native_step", [(1, 96), (2, 48)])
+def test_ladder_export_proves_saved_updates_separately_from_checkpoint_step(minibatches, native_step):
+    rows, raw = ladder_evidence(minibatches)
+    progress = checkpoint_progress(
+        rows[0], raw, training_sha256=audit.canonical_sha(rows[0]), optimizer_updates=96, minibatches=minibatches
+    )
+    binding = ladder_bind(rows, progress, progress["progress_sha256"])
+    assert binding["global_step"] == native_step and binding["optimizer_updates"] == 96
+    assert binding["progress"]["trainer_state_sha256"] == hashlib.sha256(raw).hexdigest()
+    model, _ = checkpoint_serving_configuration(binding, expected_binding_sha256=binding["binding_sha256"])
+    assert model.weights == rows[1]["response"]["model"]["policy_export_uri"]
+    rows[2]["global_step"] = 47
+    with pytest.raises(ValueError, match="training attempt"):
+        ladder_bind(rows, progress, progress["progress_sha256"])
+
+
+@pytest.mark.parametrize("saved_updates,saved_batch", [(95, 128), (None, 128), (96, 64)])
+def test_ladder_checkpoint_rejects_incomplete_updates_or_wrong_saved_geometry(saved_updates, saved_batch):
+    rows, raw = ladder_evidence(2, saved_update_count=saved_updates, saved_batch_size=saved_batch)
+    with pytest.raises(ValueError, match="successful updates"):
+        checkpoint_progress(
+            rows[0], raw, training_sha256=audit.canonical_sha(rows[0]), optimizer_updates=96, minibatches=2
+        )
+
+
+def test_ladder_progress_rejects_mutated_state_bytes_before_deserialization():
+    rows, raw = ladder_evidence(2)
+    with pytest.raises(ValueError, match="trainer bytes"):
+        checkpoint_progress(
+            rows[0], raw + b"changed", training_sha256=audit.canonical_sha(rows[0]), optimizer_updates=96, minibatches=2
+        )
+
+
+def test_rehashed_progress_cannot_replace_the_independently_qualified_receipt():
+    rows, raw = ladder_evidence(2)
+    progress = checkpoint_progress(
+        rows[0], raw, training_sha256=audit.canonical_sha(rows[0]), optimizer_updates=96, minibatches=2
+    )
+    expected = progress["progress_sha256"]
+    progress["saved_config_sha256"] = "b" * 64
+    progress["progress_sha256"] = audit.canonical_sha({k: v for k, v in progress.items() if k != "progress_sha256"})
+    with pytest.raises(ValueError, match="independently qualified digest"):
+        ladder_bind(rows, progress, expected)

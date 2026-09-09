@@ -14,6 +14,7 @@ from marin.inference.config import ServedModelConfig, VllmEngineConfig, VllmLaun
 
 from experiments.post_training import async_rl_audit as audit
 from experiments.post_training.math_eval import launcher
+from experiments.post_training.math_eval.checkpoint_progress import validate_progress
 from experiments.post_training.math_eval.checkpoint_tokenizer import tokenizer_stage_path
 from experiments.post_training.math_eval.export_binding import EAST_PREFIX, validate_inventory
 from experiments.post_training.math_eval.serving_records import _completion_rows, completion_request
@@ -104,11 +105,25 @@ def validate_calibration_battery(content, manifest, selection, overlay, *, proto
 def checkpoint_serving_configuration(binding, *, expected_binding_sha256, concurrency=8):
     """Build the endpoint identity after an independently qualified content binding."""
     unsigned = {key: value for key, value in binding.items() if key != "binding_sha256"}
+    schema = binding["schema"]
+    native_step = 96
+    if schema == "math_eval_checkpoint_content_v2":
+        progress = binding["progress"]
+        validate_progress(
+            progress,
+            training_sha256=binding["training_manifest_sha256"],
+            trainer_state_sha256=binding["trainer_state_sha256"],
+        )
+        if binding["optimizer_updates"] != 96 or progress["optimizer_updates"] != 96:
+            raise ValueError("Checkpoint serving requires 96 successful optimizer updates")
+        if progress["training_seed"] != binding["training_seed"]:
+            raise ValueError("Checkpoint progress and content bind different seeds")
+        native_step = progress["global_step"]
     if (
         binding["binding_sha256"] != expected_binding_sha256
         or audit.canonical_sha(unsigned) != expected_binding_sha256
-        or binding["schema"] != "math_eval_checkpoint_content_v1"
-        or binding["global_step"] != 96
+        or schema not in {"math_eval_checkpoint_content_v1", "math_eval_checkpoint_content_v2"}
+        or binding["global_step"] != native_step
         or binding["training_seed"] not in {17, 29}
         or not binding["model_uri"].startswith(EAST_PREFIX)
         or type(concurrency) is not int
