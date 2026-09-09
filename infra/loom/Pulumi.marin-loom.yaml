@@ -28,6 +28,7 @@ config:
       url: https://marina.oa.dev/api/marina/mcp/
       auth:
         type: iap
+        # Public client ID for rigging.auth.MARIN_DESKTOP_OAUTH_CLIENT in hai-gcp-models.
         audience: 748532799086-qf8m6mvovtdmd71npm07gk1ohijsr3q5.apps.googleusercontent.com
       enabled: true
   marin-loom:profiles:
