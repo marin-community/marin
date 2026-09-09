@@ -138,8 +138,9 @@ pub struct TableController {
     /// specification that introduced it: a transition rolled back to the
     /// version-0 layout still owns its objects and its HEAD.
     head_published: AtomicBool,
-    /// Serializes the revision-allocating transaction. Held only across the
-    /// synchronous mutation, never across I/O.
+    /// Serializes revision-allocating transactions with the synchronous
+    /// projection of one revision into a publishable state. Never held across
+    /// object-store I/O.
     mutation_gate: Mutex<()>,
     /// The state this writer last observed selected, and the token it presents
     /// on its next commit. Absent until this process claims the table.
@@ -872,8 +873,15 @@ impl TableController {
         let objects = self
             .require_objects()
             .map_err(CommitError::PublicationDeferred)?;
-        let mut catalog = namespace_catalog(&self.catalog, &self.table, &objects.table_dir)
-            .map_err(CommitError::PublicationDeferred)?;
+        // `namespace_catalog` reads several catalog relations. Keep the
+        // revision gate until that projection is complete so a concurrent
+        // cursor or segment commit cannot produce a hybrid value carrying the
+        // old revision with fields from the new one.
+        let mut catalog = {
+            let _gate = self.mutation_gate.lock().unwrap();
+            namespace_catalog(&self.catalog, &self.table, &objects.table_dir)
+                .map_err(CommitError::PublicationDeferred)?
+        };
         let expected = self.selected.lock().unwrap().clone();
         // A root that holds catalog history without a HEAD is an external
         // anomaly (the software never deletes HEAD). Creating a fresh HEAD
@@ -1774,6 +1782,52 @@ mod tests {
         let second = controller.publish_state().await.unwrap();
         assert_eq!(second.revision().get(), 2);
         assert!(!controller.publication_owed());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn publication_projects_after_an_in_flight_local_mutation() {
+        let (controller, states, _faults) = faulted_controller("controller_projection_race", 11);
+        controller.publish_state().await.unwrap();
+        let (entered_send, entered_receive) = std::sync::mpsc::channel();
+        let (release_send, release_receive) = std::sync::mpsc::channel();
+        let mutation = {
+            let controller = Arc::clone(&controller);
+            std::thread::spawn(move || {
+                controller
+                    .commit_owing_publication(|| {
+                        entered_send.send(()).unwrap();
+                        release_receive.recv().unwrap();
+                        let revision = controller.catalog.set_forward_cursor("hub", TABLE, 5)?;
+                        Ok((revision, ()))
+                    })
+                    .unwrap();
+            })
+        };
+        entered_receive.recv().unwrap();
+
+        let mut publication = {
+            let controller = Arc::clone(&controller);
+            tokio::spawn(async move { controller.publish_state().await.unwrap() })
+        };
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(250), &mut publication)
+                .await
+                .is_err(),
+            "publication must wait for the revision-owning mutation"
+        );
+
+        release_send.send(()).unwrap();
+        mutation.join().unwrap();
+        let published = publication.await.unwrap();
+        assert_eq!(published.revision().get(), 2);
+        assert_eq!(
+            published.state().catalog().forward_cursors[0].cursor,
+            Some(5)
+        );
+        assert_eq!(
+            states.load(TABLE).await.unwrap().unwrap().revision().get(),
+            2
+        );
     }
 
     #[tokio::test]
