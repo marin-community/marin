@@ -35,7 +35,7 @@ from jaxtyping import PyTree
 
 from rigging import telemetry
 from rigging.filesystem.atomic import atomic_rename
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from levanter._debug_logging import flush_debug_output
 from levanter.tensorstore_serialization import (
@@ -901,7 +901,7 @@ def _save_metadata(checkpoint_path, step, is_temporary, extra_metadata=None):
         "is_temporary": is_temporary,
     }
     if jax.process_index() == 0:
-        with atomic_rename(os.path.join(checkpoint_path, "metadata.json")) as temporary_path:
+        with atomic_rename(prefix_join(checkpoint_path, "metadata.json")) as temporary_path:
             StoragePath(temporary_path).write_text(json.dumps(metadata))
 
 
