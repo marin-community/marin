@@ -95,3 +95,12 @@ author: benfeuer
 - Result: all three upload jobs succeeded with 44/44 files and tags `ce41c24df0afc10079210521ea7e231115ad5a92`, `5052e68c4d88c9e0de87f7595a25ee4005aef1cf`, and `058ecaf27b9e4f37219df221a51e7d490d58ec3d`. All five base uploads now pass the publication gate, so the external `TRACKER.md` was created. Smoke attempt 3 is active with zero coordinator failures at submission.
 - Interpretation: every training base can now be referenced immutably; no training job will resolve a moving Hub `main`.
 - Next action: observe smoke 3 through load/update/save/reload, then materialize all five configs and fan out the dependency-ordered chains.
+
+### 2026-09-08 21:42 EDT - Cache preflight attempt 1 failed before remote read
+
+- Hypothesis: the cache preflight imports the same public filesystem helper locally and in the Iris bundle.
+- Commit Hash: `1d649a017f`.
+- Command: `/benfeuer/snowball-final-cache-preflight` on RNO2A.
+- Result: falsified before S3 access. The bundled `rigging.filesystem` package does not re-export `prefix_join`; Iris exhausted three identical attempts with `ImportError`. No cache content or accounting result was produced.
+- Interpretation: import `prefix_join` from its defining `rigging.filesystem.storage_path` module and cover the preflight import in the focused campaign test.
+- Next action: commit the import fix and run a new preflight identity.

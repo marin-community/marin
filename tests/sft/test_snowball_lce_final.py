@@ -10,6 +10,7 @@ from marin.execution.lazy import materialized_config
 
 from experiments.sft.configs import snowball_lce_final
 from experiments.sft.launcher import HFModel
+from experiments.sft.validate_snowball_caches import _EXPECTED_OPENCODE_STEPS, _OPENCODE_EPOCHS
 
 _PREFIX = "s3://test-prefix"
 _VERSION = "2026.09.08.99"
@@ -92,3 +93,8 @@ def test_all_five_base_revisions_are_immutable():
         assert repository.startswith("open-athena/snowball-67b-a2b-base-")
         assert revision is not None
         assert len(revision) == 40
+
+
+def test_cache_preflight_matches_frozen_opencode_length():
+    assert _OPENCODE_EPOCHS == 5
+    assert _EXPECTED_OPENCODE_STEPS == 1_888

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 import numpy as np
 from levanter.store.cache import CacheLedger, TreeCache
 from marin.processing.tokenize.cache_stats import read_tokenized_cache_stats
-from rigging.filesystem import prefix_join
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datasets.grug_a2b_agentic_sft_eot import _CACHE_SOURCE as OPENCODE_CACHE
 from experiments.sft.configs.snowball_lce_final import _NEMOTRON_CACHE_SOURCE as NEMOTRON_CACHE
@@ -39,9 +39,7 @@ def _validate(spec: CacheSpec) -> dict[str, int | str]:
     if not ledger.is_finished:
         raise ValueError(f"{spec.name}: cache ledger is unfinished")
     if ledger.total_num_rows != stats.total_elements:
-        raise ValueError(
-            f"{spec.name}: ledger has {ledger.total_num_rows} rows but stats report {stats.total_elements}"
-        )
+        raise ValueError(f"{spec.name}: ledger has {ledger.total_num_rows} rows but stats report {stats.total_elements}")
     if ledger.field_counts.get("input_ids") != stats.total_tokens:
         raise ValueError(
             f"{spec.name}: ledger has {ledger.field_counts.get('input_ids')} tokens but stats report "
