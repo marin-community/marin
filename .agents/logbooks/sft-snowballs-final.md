@@ -364,3 +364,10 @@ author: benfeuer
 - Reproducibility decision: the #8977 native checkpoints remain in `gs://marin-us-central2` and have no documented RNO2A mirror. The historical #8172 path accepts only its vendored native Grug pytree and statically reconstructs one architecture. Continue the current smoke as one bounded qualification because the alternatives require a roughly 5 TB regional copy or a new HF-to-vendored-Grug bridge. Make no further training-path changes without deterministic smoke evidence.
 - Result collection: the first fleet snapshot failed before data reads because the reducer attempted to compare `StoragePath` objects. Corrected CPU-only snapshot `/benfeuer/snowball-final-base-results-snapshot-all2` uses `key=str` and is active; no evaluation artifacts were mutated.
 - Next action: require smoke update/save/reload, finish the last staggered repair, and use the corrected durable snapshot to populate the remaining Base tables.
+
+### 2026-09-09 07:20 EDT - Five-base evaluation matrix complete
+
+- Result: the three staggered qk175-skew8 MMLU repairs all succeeded. Seeds 43 and 44 each wrote 14,042 samples across 57 subtasks and durable succeeded records. The apparent qk175-skew4 OlympiadBench seed-43 gap was an object-listing race: its original evaluation completed after the earlier snapshot enumerated the prefix, so no duplicate was launched.
+- Audit: read-only RNO2A snapshot `/benfeuer/snowball-final-base-results-snapshot-final` selected exactly 255 succeeded records: five Base checkpoints times 17 tasks times seeds 42, 43, and 44. Every Base has 51 headline cells. All five per-seed, mean, and sample-standard-deviation tables are recorded in external `RESULTS.md`; superseded failures are excluded.
+- Training: smoke 10 remains on attempt 0 with all eight workers running, zero failures/preemptions, and periodic collective probes reporting zero missing peers. It has not emitted a finite update or save, so the full chains remain gated.
+- Next action: require smoke 10 finite update/save and a native reload before releasing the five dependency-ordered training chains.
