@@ -66,8 +66,17 @@ class VerifiedPoolDataSource(ArtifactDataSource):
 
     def resolve(self, ctx: StepContext):
         resolved = super().resolve(ctx)
+        staged = resolved
+        if self.relative_path == BATTERY_PATH + "/qwen/dev.parquet":
+            # Stage only the immutable battery directory, excluding growing audit outputs.
+            staged = replace(
+                resolved,
+                uri=resolved.uri.rstrip("/") + "/" + BATTERY_PATH + "/qwen",
+                local_path=resolved.local_path.rstrip("/") + "/" + BATTERY_PATH + "/qwen",
+                relative_path="dev.parquet",
+            )
         if ctx.is_fingerprint:
-            return resolved
+            return staged
         if not os.environ.get("IRIS_TASK_ID"):
             raise ValueError("Resolve the pool inside an Iris CPU coordinator; bulk reads cannot run on the devbox")
         if resolved.uri != POOL_URI:
@@ -93,7 +102,7 @@ class VerifiedPoolDataSource(ArtifactDataSource):
         if len(rows) != expected_rows:
             raise ValueError("Pinned dataset size changed")
         validate_view(rows, manifest, selection, overlay, split=split, expected_ids=expected_ids)
-        return resolved
+        return staged
 
 
 def pool_inputs(argument: str):
