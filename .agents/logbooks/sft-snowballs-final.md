@@ -300,3 +300,11 @@ author: benfeuer
 - Result: confirmed. The generic campaign mesh resolves as ICI `(replica, model, expert)` followed by DCN `(replica_dcn, data)`, whereas the working Grug trainer constructs `(replica_dcn, data, expert, model)` directly. A new opt-in `MeshConfig.axis_order` preserves existing defaults and lets Snowball request the historical physical order. Forty-two focused mesh, campaign, and Snowball tests pass; full pre-commit, including Pyrefly, passes.
 - Interpretation: fix the mesh at its construction boundary instead of adding custom gradient rules or changing the meaning of batch axes. This is reusable for any model with raw physical PartitionSpecs, and existing non-Snowball users are unchanged because the new field defaults to `None`.
 - Next action: commit and push, then launch one full-topology smoke with a fresh port and require finite update, save, and native reload.
+
+### 2026-09-09 02:52 EDT - Base evaluation fan-out exceeded vLLM's internal load timeout
+
+- Hypothesis: the 24 failed non-qk157 Base evaluation groups are checkpoint failures or HBM failures.
+- Command: enumerate top-level Iris states and inspect the qk175-skew2 NLP seed-42 inference timeline through its first exception.
+- Result: falsified. Every qk157 group is progressing; all 24 later groups failed during inference startup. The representative worker remained healthy and streamed 502/502 tensors, but object-store load took 10m40s, just beyond vLLM's fixed 600-second engine-ready timeout. The frontend killed the engine at 600 seconds even though loading completed moments later. Marin's outer readiness budget is 2,400 seconds.
+- Interpretation: set vLLM's internal engine-ready default to 1,500 seconds, below Marin's outer budget, while preserving an explicit environment override. This is a general large-checkpoint startup correction, not Snowball model logic.
+- Next action: run gates, commit and push, then relaunch the 24 failed Base suite/seed groups with new identities; retain the five progressing qk157 groups.

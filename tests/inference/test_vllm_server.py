@@ -44,6 +44,14 @@ def test_engine_kwargs_forward_dtype_to_vllm_command() -> None:
     assert _engine_kwargs_to_cli_args({"dtype": "float16"}) == ["--dtype", "float16"]
 
 
+def test_vllm_env_allows_large_streamed_checkpoints_to_finish_loading(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("VLLM_ENGINE_READY_TIMEOUT_S", raising=False)
+    assert vllm_server._vllm_env()["VLLM_ENGINE_READY_TIMEOUT_S"] == "1500"
+
+    monkeypatch.setenv("VLLM_ENGINE_READY_TIMEOUT_S", "2400")
+    assert vllm_server._vllm_env()["VLLM_ENGINE_READY_TIMEOUT_S"] == "2400"
+
+
 def test_nccl_ras_probe_supports_direct_and_wrapped_cuda_launchers() -> None:
     cuda = IsolatedCudaVllm(version="test")
     preinstalled = PreinstalledVllm()
