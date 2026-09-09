@@ -72,6 +72,7 @@ runs:
           to commands invoked during triage.
         claude_args: |
           --model claude-opus-4-8
+          --effort high
           --max-turns ${{ inputs.max-turns }}
           --allowedTools "${{ inputs.allowed-tools }}${{ inputs.extra-allowed-tools != '' && format(',{0}', inputs.extra-allowed-tools) || '' }}"
       env:

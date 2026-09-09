@@ -27,6 +27,8 @@ module instructions and testing documents when those add scoped requirements.
 | `infra/cron/nightshift_cleanup.py` | `infra/cron/` | Inherited local Claude CLI auth | `claude-opus-4-8`, high | Four scouts and one merge agent |
 | `infra/cron/nightshift_ci_tests.py` | `infra/cron/` | Inherited local Claude CLI auth | `claude-opus-4-8`, high | One |
 | `infra/cron/nightshift_doc_drift.py` | `infra/cron/` | Inherited local Claude CLI auth | `claude-opus-4-8`, high | One |
+| `lib/iris/scripts/verify_screenshots.py` | `lib/iris/` | `CLAUDE_CODE_OAUTH_TOKEN` in Iris E2E CI | `claude-sonnet-4-6`, low | One |
+| `.github/actions/claude-triage/action.yaml` | `.github/actions/` | Caller-provided Claude OAuth token | `claude-opus-4-8`, high | One per canary workflow run |
 | `.github/workflows/ops-claude.yaml` | `.github/workflows/` | `CLAUDE_CODE_OAUTH_TOKEN` or `CLAUDE_MAX_OAUTH_TOKEN` | Opus/high for implementation, Sonnet/low for triage and autofix | One per triggered job |
 | `.github/workflows/ops-agent-prose-cleanup.yaml` | `.github/workflows/` | `CLAUDE_CODE_OAUTH_TOKEN` or `CLAUDE_MAX_OAUTH_TOKEN` | `claude-opus-4-8`, high | One; workflow is disabled |
 | `infra/loom/Pulumi.marin-loom.yaml` profiles | `infra/loom/` | Loom-managed agent credentials | Explicit Codex model and effort per profile | One primary session; profile concurrency bounds independent sessions |
