@@ -359,8 +359,8 @@ def test_snowball_load_path_multidevice_sharding():
     assert "OK" in result.stdout
 
 
-def test_snowball_multidevice_fused_loss_reshards_lm_head():
-    """The training loss must enter its kernel with only the device-local token batch."""
+def test_snowball_multidevice_fused_loss_keeps_head_replicated_and_batch_local():
+    """The head stays replicated while the loss kernel receives only the local token batch."""
     script = textwrap.dedent(
         """
         import os
@@ -411,7 +411,7 @@ def test_snowball_multidevice_fused_loss_reshards_lm_head():
 
         with set_mesh(mesh), hax.axis_mapping({"batch": ("replica_dcn", "data", "expert")}):
             model = SnowballLMHeadModel.init(Vocab, cfg, key=jax.random.key(0))
-            assert model.transformer.output_proj.sharding.spec == P(("replica_dcn", "data"), "model")
+            assert model.transformer.output_proj.sharding.spec == P(None, None)
             loss, grads = hax.named_jit(
                 eqx.filter_value_and_grad(lambda m, e: m.compute_next_token_loss(e).array)
             )(model, example)

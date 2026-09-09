@@ -52,7 +52,6 @@ from levanter.grug.grug_moe import MoeImplementation, MoEExpertMlp
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import (
     Pembed_vocab,
-    Plm_head,
     _current_mesh,
     _drop_absent_mesh_axes,
     _mesh_axis_size,
@@ -632,8 +631,11 @@ class SnowballTransformer(eqx.Module):
         token_embed = _reshard_for_init(
             _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pembed_vocab
         )
+        # Keep the LM head replicated. Sharding its hidden dimension over the same axes as the
+        # token batch forces the train-step transpose to rematerialize the global batch-by-vocab
+        # surface while reduce-scattering the head gradient.
         output_proj = _reshard_for_init(
-            _init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head
+            _init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), P(None, None)
         )
         blocks = tuple(SnowballBlock.init(cfg, key=block_keys[i]) for i in range(cfg.num_layers))
         return SnowballTransformer(
@@ -738,13 +740,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         return hax.named(hidden, out_axes)
 
     def get_lm_head(self) -> NamedArray:
-        # Snowball stores the LM head's Embed dimension over the raw Grug batch axes so the large
-        # checkpoint loads with the historical layout. The generic fused loss shard_map contracts
-        # Embed locally while those same physical axes shard the examples, so its compute input must
-        # be replicated over the batch axes. Reshard only at this boundary; gradients flow back to
-        # the stored layout after the loss collective.
-        output_proj = _reshard_for_init(self.transformer.output_proj, P(None, None))
-        return hax.named(output_proj, (self.Embed, self.Vocab))
+        return hax.named(self.transformer.output_proj, (self.Embed, self.Vocab))
 
     def compute_next_token_loss(
         self,
@@ -898,7 +894,7 @@ def snowball_from_state_dict(
     m = eqx.tree_at(
         lambda t: t.final_gated_norm.w_up, m, _reshard_replicated(_T(g("model.final_gated_norm.up_proj.weight")))
     )
-    m = eqx.tree_at(lambda t: t.output_proj, m, _reshard_for_init(_T(g("lm_head.weight")), Plm_head))
+    m = eqx.tree_at(lambda t: t.output_proj, m, _reshard_for_init(_T(g("lm_head.weight")), P(None, None)))
 
     for i in range(len(m.blocks)):
         p = f"model.layers.{i}"

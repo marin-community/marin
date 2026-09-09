@@ -239,3 +239,21 @@ author: benfeuer
 - Result: falsified after serving began. All eight ranks loaded and registered, and `/v1/models` returned 200. vLLM's 0.92 utilization target allocated a 51.2 GiB KV cache per 79.18 GiB GPU; during the workload, ranks had only 510 MiB free and failed a 1.46 GiB allocation. The benchmark's subsequent 404s were consequences of the dead inference endpoint, not an endpoint-name transport bug. The owned group was cancelled to stop futile retries. The campaign catalog now sets utilization to 0.85, retaining about 5.5 GiB more headroom per GPU, and the exact catalog invariant is covered by the existing 25-model regression test (29 tests passed).
 - Interpretation: staging, local URI normalization, architecture resolution, weight loading, endpoint registration, and request routing are all validated. One fresh canary must demonstrate that the lower KV reservation survives real requests and persists results before fan-out.
 - Next action: run repository gates, commit and push the headroom correction, then launch only qk157 Base/NLP seed 42 as canary 5.
+
+### 2026-09-09 00:22 EDT - Eval canary 5 submitted with explicit HBM headroom
+
+- Hypothesis: reducing the Snowball campaign's vLLM utilization from 0.92 to 0.85 leaves enough activation headroom for the real NLP workload while retaining ample KV capacity.
+- Commit Hash: `994053ca51`.
+- Command: launch `snowball-final-qk157-base` with suite `nlp`, seed 42, H100x8, federated cluster `cw-rno2a`, and interactive priority.
+- Result: submitted group `/benfeuer/eval-20260909-042148-snowball-final-qk157-base-4b74` with the same 14 NLP evaluations and one shared serve. Mechanical validation passed: pre-commit, 135 evaluation tests, and 1,429 affected safe tests with 172 skips. The branch-wide advisory review found no defect in the headroom change.
+- Interpretation: retain the single-canary gate until logs confirm 0.85 allocation, inference survives MMLU traffic, and all results are durable.
+- Next action: monitor canary 5 and smoke 5; do not fan out either campaign yet.
+
+### 2026-09-09 00:38 EDT - Smoke 5 falsified the local-kernel-only fix
+
+- Hypothesis: handing only device-local tokens to the fused CE kernel prevents the 64-way train-step transpose from materializing the global batch-by-vocabulary surface.
+- Commit Hash: `d08ef276c5`.
+- Command: run `/benfeuer/snowball-final-qk157-smoke5-coord` through all 39 HF shards and the first `jit__train_step` compile on 64 H100s.
+- Result: falsified before update. All eight ranks loaded 39/39 and selected `batched_xla`, but XLA again requested exactly 268.84 GiB per device. The compiler showed the local `[1,32768,2560]` activation crossing from the 64-way batch sharding to a replicated layout during transpose. The owned coordinator retry was cancelled immediately. The remaining conflict is the stored LM head: its hidden dimension uses the same physical axes as the token batch, so differentiating through its loss-boundary replication makes XLA reconstruct the global activation/logit surface.
+- Interpretation: keep `output_proj` replicated in the first-class adapter at initialization and HF/native load. The head is about 0.7 GiB in bf16, so replication is bounded; its data-parallel gradient can all-reduce without an incompatible post-loss reduce-scatter. The eight-device loss test now asserts replicated head storage and device-local kernel input. Focused Snowball/SFT/load tests pass (36), and full pre-commit passes.
+- Next action: complete affected tests and review, then launch smoke 6 with a fresh identity and port; continue to require finite update, save, and native reload.
