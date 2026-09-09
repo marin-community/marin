@@ -17,6 +17,7 @@ import draccus
 from fray.types import ResourceConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim.config import AdamConfig
+from levanter.utils.mesh import MeshConfig
 from marin.execution.lazy import ArtifactStep, materialized_config
 from marin.experiment.checkpoints import (
     HfToLevanterCheckpoint,
@@ -101,6 +102,23 @@ def test_raw_path_requires_explicit_arch_and_tokenizer():
     assert train_config.initialize_model_from_checkpoint_path == "gs://staged/ckpt"
     assert train_config.data.tokenizer == "gs://tok"
     assert train_config.model == arch
+
+
+def test_native_checkpoint_model_preserves_distributed_training_topology():
+    """A chained model keeps the mesh required to load and update its sharded weights."""
+    mesh = MeshConfig(axes={"expert": 8}, dcn_axes={"data": -1})
+    model = LevanterCheckpointModel(
+        init_from="gs://staged/ckpt",
+        model=_tiny_arch(),
+        tokenizer_path="gs://tok",
+        trainer_mesh=mesh,
+        use_explicit_mesh_axes=True,
+    )
+
+    train_config = materialized_config(sft_step(_spec(model), ResourceConfig.with_cpu()), _PREFIX).train_config
+
+    assert train_config.trainer.mesh == mesh
+    assert train_config.trainer.use_explicit_mesh_axes is True
 
 
 def test_training_handle_resolves_native_checkpoint_series_directory():

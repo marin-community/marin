@@ -85,6 +85,17 @@ class MeshConfig:
         axes = {**DEFAULT_ICI_AXIS_SPEC, **self.axes}
         dcn_axes = {**DEFAULT_DCN_AXIS_SPEC, **self.dcn_axes}
 
+        # An explicitly configured axis may move from its default topology. For example, a
+        # multi-node MoE can put ``expert`` on the eight local devices and move the default ICI
+        # ``data`` axis to DCN so parameters are sharded across nodes. Preserve an overlap only
+        # when the caller explicitly placed the same name on both sides; that remains an error.
+        for name in self.dcn_axes:
+            if name in DEFAULT_ICI_AXIS_SPEC and name not in self.axes:
+                axes.pop(name, None)
+        for name in self.axes:
+            if name in DEFAULT_DCN_AXIS_SPEC and name not in self.dcn_axes:
+                dcn_axes.pop(name, None)
+
         # If the user added another absorber (-1), drop the default absorber so exactly one remains.
         if sum(1 for v in axes.values() if v == -1) > 1 and "data" in axes and "data" not in self.axes:
             axes["data"] = 1

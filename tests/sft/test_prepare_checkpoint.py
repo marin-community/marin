@@ -7,7 +7,9 @@ from __future__ import annotations
 import numpy as np
 import pytest
 from fray.types import ResourceConfig
+from levanter.models.llama import LlamaConfig
 from levanter.optim.config import AdamConfig
+from levanter.utils.mesh import MeshConfig
 from marin.execution.lazy import materialized_config
 from safetensors.numpy import load, save
 from tokenizers import Tokenizer
@@ -135,6 +137,27 @@ def test_hf_model_separate_tokenizer_path():
     train_config = materialized_config(step, _PREFIX).train_config
     assert train_config.initialize_from_hf == "org/model"
     assert train_config.data.tokenizer == "org/tokenizer"
+
+
+def test_hf_model_can_pin_runtime_model_config_and_distributed_mesh():
+    """A tuned HF model keeps its runtime knobs while still loading pinned HF weights."""
+    model_config = LlamaConfig(num_layers=2, num_heads=2, num_kv_heads=2, hidden_dim=32, max_seq_len=64)
+    mesh = MeshConfig(axes={"expert": 8}, dcn_axes={"data": -1})
+    model = HFModel(
+        "org/model@deadbeef",
+        model_type="llama",
+        model_config=model_config,
+        trainer_mesh=mesh,
+        use_explicit_mesh_axes=True,
+    )
+
+    train_config = materialized_config(sft_step(_spec(model), ResourceConfig.with_cpu()), _PREFIX).train_config
+
+    assert train_config.initialize_from_hf == "org/model@deadbeef"
+    assert train_config.use_hf_model_config is False
+    assert train_config.model == model_config
+    assert train_config.trainer.mesh == mesh
+    assert train_config.trainer.use_explicit_mesh_axes is True
 
 
 def test_fingerprint_tracks_preparation_inputs():

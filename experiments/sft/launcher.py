@@ -68,7 +68,7 @@ import hashlib
 import math
 import re
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import timedelta
 from typing import Protocol, runtime_checkable
 
@@ -83,6 +83,7 @@ from levanter.models.lm_model import LmConfig
 from levanter.optim.config import OptimizerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import DEFAULT_JAX_CONFIG, TrainerConfig
+from levanter.utils.mesh import MeshConfig
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext, lower
 from marin.execution.remote import remote
@@ -253,6 +254,26 @@ def _levanter_train_job(pod_config: TrainLmOnPodConfig) -> None:
     remote(run_levanter_train_lm, resources=pod_config.resources)(pod_config)
 
 
+def _with_trainer_topology(
+    pod_config: TrainLmOnPodConfig,
+    *,
+    mesh: MeshConfig | None,
+    use_explicit_mesh_axes: bool | None,
+) -> TrainLmOnPodConfig:
+    if mesh is None and use_explicit_mesh_axes is None:
+        return pod_config
+    trainer = replace(
+        pod_config.train_config.trainer,
+        mesh=mesh or pod_config.train_config.trainer.mesh,
+        use_explicit_mesh_axes=(
+            use_explicit_mesh_axes
+            if use_explicit_mesh_axes is not None
+            else pod_config.train_config.trainer.use_explicit_mesh_axes
+        ),
+    )
+    return replace(pod_config, train_config=replace(pod_config.train_config, trainer=trainer))
+
+
 @dataclass(frozen=True)
 class HFModel:
     """Init from an HF checkpoint used verbatim: ``initialize_from_hf`` + ``use_hf_model_config``.
@@ -267,6 +288,11 @@ class HFModel:
     tokenizer_path: str | None = None  # defaults to model_ref
     model_type: str = "qwen3"
     eos_token_ids: Sequence[int] = (128001, 128009)  # Delphi: <|end_of_text|> + <|eot_id|>
+    model_config: LmConfig | None = None
+    """Pinned architecture/runtime config. When set, HF weights load into this config verbatim."""
+    trainer_mesh: MeshConfig | None = None
+    """Optional distributed mesh for models whose topology differs from Levanter's default."""
+    use_explicit_mesh_axes: bool | None = None
 
     def tokenizer_cache_key(self) -> str:
         return self.tokenizer_path or self.model_ref
@@ -289,18 +315,26 @@ class HFModel:
         resources: ResourceConfig,
         num_train_steps: int,
     ) -> TrainLmOnPodConfig:
-        return _levanter_pod_config(
+        model_config = self.model_config or LmConfig.get_choice_class(self.model_type)()
+        pod_config = _levanter_pod_config(
             ctx,
             spec,
             data_config,
             resources,
             num_train_steps,
-            # use_hf_model_config re-derives the arch from the checkpoint, so only the class matters.
-            model_config=LmConfig.get_choice_class(self.model_type)(),
+            # Without an explicit config, re-derive the architecture from the checkpoint. An
+            # explicit config is already resolved from that checkpoint and may add runtime-only
+            # choices (attention kernels, MoE transport) which HF config.json does not encode.
+            model_config=model_config,
             initialize_from_hf=self.model_ref,
             initialize_model_from_checkpoint_path=None,
-            use_hf_model_config=True,
+            use_hf_model_config=self.model_config is None,
             eos_token_ids=self.eos_token_ids,
+        )
+        return _with_trainer_topology(
+            pod_config,
+            mesh=self.trainer_mesh,
+            use_explicit_mesh_axes=self.use_explicit_mesh_axes,
         )
 
 
@@ -450,6 +484,8 @@ class LevanterCheckpointModel:
     model: LmConfig
     tokenizer_path: str
     eos_token_ids: Sequence[int] = (128001, 128009)
+    trainer_mesh: MeshConfig | None = None
+    use_explicit_mesh_axes: bool | None = None
 
     def tokenizer_cache_key(self) -> str:
         return self.tokenizer_path
@@ -478,7 +514,7 @@ class LevanterCheckpointModel:
         resources: ResourceConfig,
         num_train_steps: int,
     ) -> TrainLmOnPodConfig:
-        return _native_init_pod_config(
+        pod_config = _native_init_pod_config(
             ctx,
             spec,
             data_config,
@@ -487,6 +523,11 @@ class LevanterCheckpointModel:
             checkpoint_path=self._init_path(ctx),
             model_config=self.model,
             eos_token_ids=self.eos_token_ids,
+        )
+        return _with_trainer_topology(
+            pod_config,
+            mesh=self.trainer_mesh,
+            use_explicit_mesh_axes=self.use_explicit_mesh_axes,
         )
 
 

@@ -566,6 +566,13 @@ def _apply_chat_template_with_masks(
     return result
 
 
+def _split_hf_tokenizer_ref(name_or_path: str) -> tuple[str, str | None]:
+    """Split the same ``repo@revision`` syntax used by HFCheckpointConverter."""
+    if "@" not in name_or_path:
+        return name_or_path, None
+    return tuple(name_or_path.rsplit("@", 1))  # type: ignore[return-value]
+
+
 @dataclasses.dataclass(frozen=True)
 class HfMarinTokenizer:
     """MarinTokenizer backed by the HF tokenizers (Rust) library."""
@@ -719,7 +726,8 @@ class HfMarinTokenizer:
     def as_hf_tokenizer(self) -> Any:
         from transformers import AutoTokenizer  # noqa: PLC0415  # guarded: avoid eager torch
 
-        tokenizer = AutoTokenizer.from_pretrained(self._name_or_path, trust_remote_code=True)
+        name_or_path, revision = _split_hf_tokenizer_ref(self._name_or_path)
+        tokenizer = AutoTokenizer.from_pretrained(name_or_path, revision=revision, trust_remote_code=True)
         if self._chat_template is not None and getattr(tokenizer, "chat_template", None) != self._chat_template:
             tokenizer.chat_template = self._chat_template
         return tokenizer
@@ -866,7 +874,8 @@ def _stage_from_hf(name_or_path: str, local_dir: str) -> None:
     Raises ``RepositoryNotFoundError`` / ``OSError`` if the repo or
     network is unreachable (matches pre-mirror behaviour).
     """
-    snapshot_dir = snapshot_download(name_or_path, allow_patterns=_TOKENIZER_ALLOW_PATTERNS)
+    repo_id, revision = _split_hf_tokenizer_ref(name_or_path)
+    snapshot_dir = snapshot_download(repo_id, revision=revision, allow_patterns=_TOKENIZER_ALLOW_PATTERNS)
 
     mirror_base = f"mirror://{_MIRROR_TOKENIZER_PREFIX}/{name_or_path}/hf-hub-{_hf_hub_version}"
 

@@ -708,15 +708,28 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         key=None,
         pos_ids: NamedArray | None = None,
     ) -> NamedArray:
-        # attn_mask is ignored: the pinned recipe builds its own per-layer short/long causal masks
-        # inside the transformer core. Segmented/packed inputs are a follow-up (see plan).
         Pos = input_ids.resolve_axis(self.Pos.name)
         raw = input_ids.array
         lead = raw.shape[:-1]
         s = raw.shape[-1]
         b = int(np.prod(lead)) if lead else 1
         tokens = raw.reshape(b, s)
-        hidden = self.transformer(tokens)  # [B, S, D]
+
+        grug_mask = None
+        if isinstance(attn_mask, NamedArray):
+            raise NotImplementedError("Snowball does not support explicit NamedArray attention masks.")
+        if attn_mask is not None:
+            segment_ids = None
+            if attn_mask.segment_ids is not None:
+                q_segments, kv_segments = attn_mask.segment_ids
+                q_raw = q_segments.array.reshape(b, s)
+                kv_raw = kv_segments.array.reshape(b, s)
+                segment_ids = (q_raw, kv_raw)
+            # SnowballTransformer supplies the recipe's per-layer causal/sliding-window policy;
+            # carry only packed-document boundaries from the generic Levanter mask.
+            grug_mask = AttentionMask(is_causal=True, segment_ids=segment_ids)
+
+        hidden = self.transformer(tokens, grug_mask)  # [B, S, D]
         hidden = hidden.reshape(*lead, s, self.Embed.size) if lead else hidden.reshape(s, self.Embed.size)
         out_axes = (*input_ids.axes, self.Embed) if lead else (Pos, self.Embed)
         return hax.named(hidden, out_axes)

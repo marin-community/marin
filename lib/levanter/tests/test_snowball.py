@@ -25,6 +25,7 @@ from haliax import Axis
 from haliax.state_dict import from_torch_compatible_state_dict, to_torch_compatible_state_dict
 
 from levanter.grug.sharding import compact_grug_mesh
+from levanter.layers.attention import AttentionMask as LmAttentionMask
 from levanter.models.lm_model import LmConfig
 from levanter.models.snowball import (
     GRUG_MOE_ARCHITECTURE,
@@ -246,6 +247,30 @@ def test_snowball_forward_shapes_and_finite():
         logits = hax.named_jit(lambda m, x: m(x))(model, ids)
     assert logits.axes[-1].name == "vocab" and logits.axes[-1].size == cfg.vocab_size
     assert bool(jnp.all(jnp.isfinite(logits.array)))
+
+
+def test_snowball_activations_respect_packed_segment_boundaries():
+    """Tokens in one packed conversation cannot influence a later conversation."""
+    cfg = _tiny_config(max_seq_len=8, sliding_window=8)
+    Batch = Axis("batch", jax.device_count())
+    Pos = Axis("position", 8)
+    KeyPos = Pos.alias("key_position")
+    base_row = jnp.arange(Pos.size, dtype=jnp.int32) % cfg.vocab_size
+    changed_row = base_row.at[0].set((base_row[0] + 7) % cfg.vocab_size)
+    base = hax.named(jnp.broadcast_to(base_row, (Batch.size, Pos.size)), (Batch, Pos))
+    changed = hax.named(jnp.broadcast_to(changed_row, (Batch.size, Pos.size)), (Batch, Pos))
+    segment_row = jnp.array([0, 0, 0, 0, 1, 1, 1, 1], dtype=jnp.int32)
+    q_segments = hax.named(jnp.broadcast_to(segment_row, (Batch.size, Pos.size)), (Batch, Pos))
+    kv_segments = hax.named(jnp.broadcast_to(segment_row, (Batch.size, Pos.size)), (Batch, KeyPos))
+    mask = LmAttentionMask.causal().with_segment_ids(q_segments, kv_segments)
+
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(7))
+        run = hax.named_jit(lambda ids: model.activations(ids, mask))
+        base_hidden = np.asarray(run(base).array)
+        changed_hidden = np.asarray(run(changed).array)
+
+    np.testing.assert_array_equal(base_hidden[:, 4:], changed_hidden[:, 4:])
 
 
 @pytest.mark.parametrize(

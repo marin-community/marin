@@ -32,6 +32,16 @@ def test_axis_shapes_force_replica_dcn_when_other_absorber():
     assert dcn["other_dcn"] == 2
 
 
+def test_axis_shapes_can_move_default_data_axis_to_dcn():
+    """Expert parallelism can occupy a node while data parallelism spans nodes."""
+    cfg = MeshConfig(axes={"expert": 8}, dcn_axes={"data": -1})
+
+    ici, dcn = cfg.axis_shapes(num_devices=64, num_slices=8)
+
+    assert ici == {"replica": 1, "model": 1, "expert": 8}
+    assert dcn == {"replica_dcn": 1, "data": 8}
+
+
 def test_axis_shapes_overlap_error():
     cfg = MeshConfig(axes={"data": 1}, dcn_axes={"data": 1})
     with pytest.raises(ValueError):
