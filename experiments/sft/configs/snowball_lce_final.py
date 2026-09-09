@@ -150,6 +150,9 @@ _TRAIN_MESH = MeshConfig(
     axes={"expert": _EXPERT_PARALLEL},
     dcn_axes={"data": -1},
     compute_mapping={"batch": ["replica_dcn", "data", "expert"]},
+    # Match the compact production Grug mesh. The generic mesh builder otherwise puts ICI
+    # ``expert`` before DCN ``data``, while Snowball's raw batch PartitionSpecs use this order.
+    axis_order=("replica_dcn", "data", "expert", "replica", "model"),
 )
 
 

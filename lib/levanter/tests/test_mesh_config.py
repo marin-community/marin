@@ -3,7 +3,9 @@
 
 import pytest
 
-from levanter.utils.mesh import MeshConfig
+import jax
+
+from levanter.utils.mesh import MeshConfig, create_mesh_from_axis_specs
 
 
 def test_axis_shapes_inherit_defaults_and_absorb():
@@ -40,6 +42,27 @@ def test_axis_shapes_can_move_default_data_axis_to_dcn():
 
     assert ici == {"replica": 1, "model": 1, "expert": 8}
     assert dcn == {"replica_dcn": 1, "data": 8}
+
+
+def test_create_mesh_respects_explicit_axis_order():
+    mesh = create_mesh_from_axis_specs(
+        ici_axes={"expert": 1},
+        dcn_axes={"data": 1},
+        devices=jax.devices()[:1],
+        axis_order=("data", "expert"),
+    )
+
+    assert mesh.axis_names == ("data", "expert")
+
+
+def test_create_mesh_rejects_incomplete_axis_order():
+    with pytest.raises(ValueError, match="must contain exactly"):
+        create_mesh_from_axis_specs(
+            ici_axes={"expert": 1},
+            dcn_axes={"data": 1},
+            devices=jax.devices()[:1],
+            axis_order=("expert",),
+        )
 
 
 def test_axis_shapes_overlap_error():

@@ -38,6 +38,8 @@ class MeshConfig:
     shared_mapping: Mapping[str, list[str] | str] = field(default_factory=lambda: {})
     compute_mapping: Mapping[str, list[str] | str] = field(default_factory=lambda: {})
     param_mapping: Mapping[str, list[str] | str] = field(default_factory=lambda: {"embed": "data"})
+    axis_order: Sequence[str] | None = None
+    """Optional physical mesh-axis order. By default ICI axes precede DCN axes."""
 
     @cached_property
     def resolved_compute_mapping(self) -> ResourceMapping:
@@ -147,11 +149,24 @@ def create_mesh_from_axis_specs(
     devices=None,
     allow_split_physical_axes: bool = True,
     axis_types: tuple[AxisType, ...] | None = None,
+    axis_order: Sequence[str] | None = None,
 ) -> Mesh:
     """
     Create a JAX mesh from ICI and DCN axis sizes. Supports both single-slice and multi-slice layouts.
     """
-    axis_names = list(ici_axes.keys()) + [k for k in dcn_axes.keys() if k not in ici_axes]
+    default_axis_names = list(ici_axes.keys()) + [k for k in dcn_axes.keys() if k not in ici_axes]
+    if axis_order is None:
+        axis_names = default_axis_names
+    else:
+        axis_names = list(axis_order)
+        if len(axis_names) != len(set(axis_names)):
+            raise ValueError(f"axis_order contains duplicate names: {axis_names}")
+        missing = set(default_axis_names) - set(axis_names)
+        extra = set(axis_names) - set(default_axis_names)
+        if missing or extra:
+            raise ValueError(
+                f"axis_order must contain exactly the configured axes; missing={sorted(missing)}, extra={sorted(extra)}"
+            )
     if not axis_names:
         raise ValueError("At least one axis is required to build a mesh.")
     overlapping = set(ici_axes.keys()) & set(dcn_axes.keys())

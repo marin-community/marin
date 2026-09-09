@@ -88,6 +88,14 @@ def test_campaign_uses_canonical_optimizer_registration():
     assert snowball_lce_final.GrugMoeAdamHConfig.__module__ == "experiments.grug.moe.optimizer"
 
 
+def test_training_mesh_matches_historical_grug_batch_axis_order():
+    mesh = snowball_lce_final._TRAIN_MESH
+
+    assert mesh.axis_order is not None
+    assert mesh.axis_order[:3] == ("replica_dcn", "data", "expert")
+    assert mesh.resolved_compute_mapping["batch"] == ("replica_dcn", "data", "expert")
+
+
 def test_all_five_base_revisions_are_immutable():
     assert len(snowball_lce_final._BASE_REVISIONS) == 5
     for repository, revision in snowball_lce_final._BASE_REVISIONS.values():
