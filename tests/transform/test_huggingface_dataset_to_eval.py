@@ -205,3 +205,33 @@ def test_hf_dataset_to_jsonl_reports_unloadable_split(tmp_path):
 
     with pytest.raises(ValueError, match="arithmetic/absent"):
         hf_dataset_to_jsonl(cfg)
+
+
+def test_hf_dataset_to_jsonl_rejects_an_empty_split_list(tmp_path):
+    """An empty split list converts nothing, so it fails instead of succeeding silently."""
+    dataset_root = tmp_path / "input"
+    _write_local_hf_dataset(
+        dataset_root,
+        "arithmetic",
+        {"train": [{"question": "What is 2+2?", "choices": ["3", "4"], "answer": 1}]},
+    )
+
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    cfg = DatasetConversionConfig(
+        dataset_name="test/math",
+        subsets=["arithmetic"],
+        splits=[],
+        input_path=str(dataset_root),
+        hf_path="test/math",
+        output_path=str(output_dir),
+        output_format=OutputFormatOptions.evaluation,
+        prompt_key="question",
+        options_key="choices",
+        answer_idx_key="answer",
+        answer_labels=["A", "B"],
+    )
+
+    with pytest.raises(ValueError, match="No splits requested"):
+        hf_dataset_to_jsonl(cfg)

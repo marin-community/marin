@@ -158,6 +158,9 @@ def load_datasets(config: DatasetConversionConfig) -> list[DatasetWithMetaData]:
     Returns:
         List[DatasetWithMetaData]: A list of Hugging Face datasets, with their subset and split info
     """
+    if not config.splits:
+        raise ValueError(f"No splits requested for {config.input_path}; nothing would be converted")
+
     # set up input path which can be GCP path, HF Hub path, or local path
     # handle case of gs:// path which requires downloading resource from GCP to local for processing
     if config.input_path.startswith("gs://"):
