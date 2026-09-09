@@ -295,8 +295,13 @@ def validate_saved_source(trainer_state, *, seed, minibatches, dataset_sha256):
     return expected
 
 
-def audit_native_history(capture, selected_history, *, minibatches):
-    """Cross-check the retained native update series against independently read W&B rows."""
+def audit_native_history(capture, selected_history, *, minibatches, require_nonzero_gradients=True):
+    """Cross-check native updates against W&B, retaining strict capability defaults.
+
+    Exploratory calibration may explicitly permit finite zero-gradient updates.
+    Their norms must be exactly zero and adjacent cosine comparisons invalid;
+    successful-update and all other numerical coverage requirements still apply.
+    """
     steps = 96 // minibatches
     combined = {}
     for row in selected_history:
@@ -321,6 +326,8 @@ def audit_native_history(capture, selected_history, *, minibatches):
             raise ValueError("Native scalar differs from its actual W&B update")
         comparisons += 1
     maximum_norm_error = 0.0
+    previous_norm = 0.0
+    zero_gradient_updates = 0
     for step in range(1, steps + 1):
         for index in range(minibatches):
             prefix = f"policy/by_update/{index}/"
@@ -336,15 +343,25 @@ def audit_native_history(capture, selected_history, *, minibatches):
                     raise ValueError("Invalid successful-update or numerical coverage flag")
             if scalars[step, prefix + "stale/quantiles_overflow"] != 0:
                 raise ValueError("Exact quantiles overflowed")
-            if scalars[step, prefix + "grad_cosine_valid"] != int(step > 1 or index > 0):
-                raise ValueError("Gradient cosine validity differs from consecutive successful updates")
             raw, norm = (scalars[step, prefix + key] for key in ("raw_grad_norm", "grad_norm_reduced"))
+            if not all(math.isfinite(value) and value >= 0 for value in (raw, norm)):
+                raise ValueError("Invalid gradient norm")
             target = min(raw, 1.0)
-            if target <= 0:
+            if target == 0 and require_nonzero_gradients:
                 raise ValueError("Observed run cannot qualify nonzero gradient coverage")
-            error = abs(norm - target) / target
+            expected_cosine_valid = int(previous_norm > 0 and norm > 0)
+            if scalars[step, prefix + "grad_cosine_valid"] != expected_cosine_valid:
+                raise ValueError("Gradient cosine validity differs from consecutive nonzero gradients")
+            if target == 0:
+                if norm != 0:
+                    raise ValueError("Zero raw gradient has nonzero post-clip norm")
+                zero_gradient_updates += 1
+                error = 0.0
+            else:
+                error = abs(norm - target) / target
             if error >= 1e-3:
                 raise ValueError("Post-clip gradient coverage differs")
+            previous_norm = norm
             maximum_norm_error = max(maximum_norm_error, error)
     tokens = 0
     for row in capture["results"]["events"]:
@@ -358,7 +375,7 @@ def audit_native_history(capture, selected_history, *, minibatches):
     training = [combined[step] for step in range(1, steps + 1)]
     step_walls = [row.get("timing/step") for row in training]
     has_step_walls = all(isinstance(value, (int, float)) and math.isfinite(value) and value > 0 for value in step_walls)
-    return {
+    result = {
         "native_wandb_scalar_joins": comparisons,
         "optimizer_updates": 96,
         "maximum_postclip_relative_norm_error": maximum_norm_error,
@@ -371,3 +388,7 @@ def audit_native_history(capture, selected_history, *, minibatches):
         "dedicated_core_seconds_available": any(any(key.endswith("core_seconds") for key in row) for row in training),
         "selected_history_sha256": audit.canonical_sha(selected_history),
     }
+    if not require_nonzero_gradients:
+        result["zero_gradient_updates"] = zero_gradient_updates
+        result["nonzero_gradient_coverage_required"] = False
+    return result

@@ -144,7 +144,8 @@ def test_saved_source_uses_real_batch_geometry_and_successful_updates(minibatche
         validate_saved_source(state, seed=17, minibatches=minibatches, dataset_sha256="a" * 64)
 
 
-def test_native_history_keeps_integer_hashes_outside_float_tolerance():
+@pytest.fixture
+def native_history_capture():
     selected, scalars = [], []
     for step in range(1, 97):
         metrics = {
@@ -170,8 +171,45 @@ def test_native_history_keeps_integer_hashes_outside_float_tolerance():
         selected.append({"global_step": step, **metrics})
         scalars.extend({"step": step, "metric": key, "value": value} for key, value in metrics.items())
     capture = {"results": {"scalars": scalars, "events": []}}
+    return capture, selected
+
+
+def test_native_history_keeps_integer_hashes_outside_float_tolerance(native_history_capture):
+    capture, selected = native_history_capture
     assert audit_native_history(capture, selected, minibatches=1)["exact_integer_digest_joins"] == 96
     # This historical transport error is tiny relatively, but a hash is never approximate.
     selected[0]["consumed/uid_digest_u52"] = 3970228113034014.5
     with pytest.raises(ValueError, match="exact integers"):
         audit_native_history(capture, selected, minibatches=1)
+
+
+@pytest.mark.parametrize("poison", [None, "validity", "norm", "successful"])
+def test_zero_gradient_diagnostic_retains_validity_and_success_requirements(native_history_capture, poison):
+    capture, selected = native_history_capture
+    changes = {
+        2: {"raw_grad_norm": 0.0, "grad_norm_reduced": 0.0, "grad_cosine_valid": 0},
+        3: {"grad_cosine_valid": 0},
+    }
+    if poison == "validity":
+        changes[3]["grad_cosine_valid"] = 1
+    elif poison == "norm":
+        changes[2]["grad_norm_reduced"] = 1e-12
+    elif poison == "successful":
+        changes[2]["optimizer_step_succeeded"] = 0
+    for step, fields in changes.items():
+        for field, value in fields.items():
+            key = "policy/by_update/0/" + field
+            selected[step - 1][key] = value
+            for row in capture["results"]["scalars"]:
+                if row["step"] == step and row["metric"] == key:
+                    row["value"] = value
+    with pytest.raises(ValueError):
+        audit_native_history(capture, selected, minibatches=1)
+    if poison is not None:
+        with pytest.raises(ValueError):
+            audit_native_history(capture, selected, minibatches=1, require_nonzero_gradients=False)
+    else:
+        result = audit_native_history(capture, selected, minibatches=1, require_nonzero_gradients=False)
+        assert result["zero_gradient_updates"] == 1
+        assert result["optimizer_updates"] == 96
+        assert result["maximum_postclip_relative_norm_error"] == 0.0
