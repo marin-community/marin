@@ -104,3 +104,12 @@ author: benfeuer
 - Result: falsified before S3 access. The bundled `rigging.filesystem` package does not re-export `prefix_join`; Iris exhausted three identical attempts with `ImportError`. No cache content or accounting result was produced.
 - Interpretation: import `prefix_join` from its defining `rigging.filesystem.storage_path` module and cover the preflight import in the focused campaign test.
 - Next action: commit the import fix and run a new preflight identity.
+
+### 2026-09-08 21:46 EDT - Agentic cache preflight passed on RNO2A
+
+- Hypothesis: both adopted caches are complete, readable through Levanter's training cache reader, tokenizer-compatible, and reproduce the historical OpenCode step count.
+- Commit Hash: `099a4c977c`.
+- Command: `/benfeuer/snowball-final-cache-preflight2` on RNO2A.
+- Result: passed on the first attempt. OpenCode has 76,928 rows and 791,560,603 tokens; five epochs at seq32768/global-batch64 resolve to exactly 1,888 updates. Nemotron-Terminal has 366,154 rows and 6,068,571,206 tokens. For both caches, the ledger agrees with `.stats.json`, the first and last records load, input and mask lengths match, tokens stay inside the 128,256 vocabulary, and masks are binary.
+- Interpretation: the corrected OpenCode cache is the required 1,888-step lineage, unlike the superseded 797,783,562-token publication. Both prebuilt inputs are ready for training once the HF smoke gate passes.
+- Next action: continue smoke 3 through its finite update and checkpoint validation.

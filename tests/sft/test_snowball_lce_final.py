@@ -98,3 +98,18 @@ def test_all_five_base_revisions_are_immutable():
 def test_cache_preflight_matches_frozen_opencode_length():
     assert _OPENCODE_EPOCHS == 5
     assert _EXPECTED_OPENCODE_STEPS == 1_888
+
+
+def test_all_stage_shares_one_thinking_parent(local_base):
+    step = snowball_lce_final.build_all("qk157", _VERSION)
+    opencode, nemotron = step.deps
+
+    assert opencode.name.endswith("/qk157/opencode")
+    assert nemotron.name.endswith("/qk157/nemotron-terminal")
+    assert opencode.deps[1] is nemotron.deps[1]
+    assert opencode.deps[1].name.endswith("/qk157/thinking")
+
+    manifest = materialized_config(step, _PREFIX)
+    assert manifest.base == "qk157"
+    assert manifest.opencode_path.endswith("/qk157/opencode/2026.09.08.99")
+    assert manifest.nemotron_terminal_path.endswith("/qk157/nemotron-terminal/2026.09.08.99")

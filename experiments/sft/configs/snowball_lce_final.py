@@ -22,6 +22,7 @@ Launch a one-update full-shape smoke on RNO2A before the campaign fan-out::
 """
 
 import dataclasses
+import json
 from typing import Literal
 
 import click
@@ -30,6 +31,7 @@ from levanter.data.text.datasets import DatasetComponent, LmDataConfig, UrlDatas
 from levanter.data.text.formats import ChatLmDatasetFormat, LmDatasetFormatBase
 from levanter.models.snowball import SnowballConfig
 from levanter.utils.mesh import MeshConfig
+from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.checkpoints import resolve_lm_config
@@ -37,6 +39,7 @@ from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_namespaced_name
 from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.training.training import LevanterCheckpoint
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.datasets.grug_a2b_agentic_sft_eot import (
     GRUG_A2B_AGENTIC_SFT_FORMAT,
@@ -384,8 +387,14 @@ def _build_prefix(base: str, version: str | None = None) -> tuple[ArtifactStep[L
     return thinking, config, tokenizer
 
 
-def build_opencode(base: str, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
-    thinking, config, tokenizer = _build_prefix(base, version)
+def _build_opencode_from(
+    *,
+    base: str,
+    version: str | None,
+    thinking: ArtifactStep[LevanterCheckpoint],
+    config: SnowballConfig,
+    tokenizer: str,
+) -> ArtifactStep[LevanterCheckpoint]:
     return _build_prebuilt_stage(
         base=base,
         stage="opencode",
@@ -401,8 +410,14 @@ def build_opencode(base: str, version: str | None = None) -> ArtifactStep[Levant
     )
 
 
-def build_nemotron_terminal(base: str, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
-    thinking, config, tokenizer = _build_prefix(base, version)
+def _build_nemotron_terminal_from(
+    *,
+    base: str,
+    version: str | None,
+    thinking: ArtifactStep[LevanterCheckpoint],
+    config: SnowballConfig,
+    tokenizer: str,
+) -> ArtifactStep[LevanterCheckpoint]:
     return _build_prebuilt_stage(
         base=base,
         stage="nemotron-terminal",
@@ -422,11 +437,88 @@ def build_nemotron_terminal(base: str, version: str | None = None) -> ArtifactSt
     )
 
 
+def build_opencode(base: str, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
+    thinking, config, tokenizer = _build_prefix(base, version)
+    return _build_opencode_from(
+        base=base,
+        version=version,
+        thinking=thinking,
+        config=config,
+        tokenizer=tokenizer,
+    )
+
+
+def build_nemotron_terminal(base: str, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
+    thinking, config, tokenizer = _build_prefix(base, version)
+    return _build_nemotron_terminal_from(
+        base=base,
+        version=version,
+        thinking=thinking,
+        config=config,
+        tokenizer=tokenizer,
+    )
+
+
+@dataclasses.dataclass(frozen=True)
+class CampaignCompleteConfig:
+    output_path: str
+    base: str
+    opencode_path: str
+    nemotron_terminal_path: str
+
+
+def _write_campaign_complete(config: CampaignCompleteConfig) -> None:
+    manifest = {
+        "base": config.base,
+        "opencode_path": config.opencode_path,
+        "nemotron_terminal_path": config.nemotron_terminal_path,
+    }
+    StoragePath(prefix_join(config.output_path, "manifest.json")).write_text(json.dumps(manifest, sort_keys=True))
+
+
+def build_all(base: str, version: str | None = None) -> ArtifactStep[Artifact]:
+    """Build one shared Chat/Thinking prefix followed by both independent agentic branches."""
+    thinking, config, tokenizer = _build_prefix(base, version)
+    opencode = _build_opencode_from(
+        base=base,
+        version=version,
+        thinking=thinking,
+        config=config,
+        tokenizer=tokenizer,
+    )
+    nemotron_terminal = _build_nemotron_terminal_from(
+        base=base,
+        version=version,
+        thinking=thinking,
+        config=config,
+        tokenizer=tokenizer,
+    )
+    step_name = f"snowball-final/{base}/complete"
+    resolved_version = resolve_version(step_name, version)
+
+    def build_config(ctx: StepContext) -> CampaignCompleteConfig:
+        return CampaignCompleteConfig(
+            output_path=ctx.output_path,
+            base=base,
+            opencode_path=ctx.artifact_path(opencode),
+            nemotron_terminal_path=ctx.artifact_path(nemotron_terminal),
+        )
+
+    return ArtifactStep(
+        name=user_namespaced_name(step_name, resolved_version),
+        version=resolved_version,
+        artifact_type=Artifact,
+        run=_write_campaign_complete,
+        build_config=build_config,
+        deps=(opencode, nemotron_terminal),
+    )
+
+
 @click.command()
 @click.option("--base", type=click.Choice(tuple(_BASE_REVISIONS)), required=True)
 @click.option(
     "--stage",
-    type=click.Choice(("smoke", "chat", "thinking", "opencode", "nemotron-terminal")),
+    type=click.Choice(("smoke", "chat", "thinking", "opencode", "nemotron-terminal", "all")),
     required=True,
 )
 @build_options
@@ -439,7 +531,9 @@ def main(base: str, stage: str) -> ArtifactStep[LevanterCheckpoint]:
         return build_thinking(base)
     if stage == "opencode":
         return build_opencode(base)
-    return build_nemotron_terminal(base)
+    if stage == "nemotron-terminal":
+        return build_nemotron_terminal(base)
+    return build_all(base)
 
 
 if __name__ == "__main__":
