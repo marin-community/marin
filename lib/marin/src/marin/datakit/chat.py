@@ -88,18 +88,17 @@ def validate_chat_messages(messages: list[Message]) -> None:
         text = message_text(message)
         if message.content_type is not None:
             raise ValueError("Datakit text messages do not support content_type")
-        if role in {Role.SYSTEM, Role.DEVELOPER}:
-            if seen_user:
-                raise ValueError("System and developer messages must precede all conversation turns")
-            if message.channel is not None or message.recipient is not None:
-                raise ValueError("Instruction messages cannot have channels or recipients")
-            continue
-        if not seen_user:
-            if role != Role.USER:
-                raise ValueError("The first conversation message must be a user message")
-            seen_user = True
         match role:
+            case Role.SYSTEM | Role.DEVELOPER:
+                if seen_user:
+                    raise ValueError("System and developer messages must precede all conversation turns")
+                if message.channel is not None or message.recipient is not None:
+                    raise ValueError("Instruction messages cannot have channels or recipients")
+                continue
+            case _ if not seen_user and role != Role.USER:
+                raise ValueError("The first conversation message must be a user message")
             case Role.USER:
+                seen_user = True
                 if not text.strip():
                     raise ValueError("User messages must contain non-empty text")
                 if message.channel is not None or message.recipient is not None:
