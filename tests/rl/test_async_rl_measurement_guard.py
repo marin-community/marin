@@ -47,6 +47,11 @@ def test_actual_cli_binds_guard_and_explicit_retry_without_scientific_changes(ru
     assert "measurement_guard_uri" not in a["trainer"]
     assert b["trainer"].pop("measurement_guard_uri") == uri
     assert a == b
+    assert after["request"]["overrides"] == [
+        *before["request"]["overrides"][:2],
+        "++trainer.resume_mode=none",
+        *before["request"]["overrides"][2:],
+    ]
     assert before["request"]["run_id"] != after["request"]["run_id"]
 
 
