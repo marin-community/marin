@@ -130,14 +130,18 @@ def audit_correction_history(rows: Sequence[Mapping], *, algorithm: Mapping, cor
     }
 
 
-def audit_completed_noise_band(baseline: Sequence[float], repeat: Sequence[float], candidate: Sequence[float]) -> dict:
+def audit_completed_noise_band(
+    baseline: Sequence[float], repeat: Sequence[float], candidate: Sequence[float], *, expected_questions: int = 128
+) -> dict:
     """Apply the frozen absolute final-score band; paired CIs require a separate UID-paired audit."""
-    if len(baseline) != 128 or len(repeat) != 128 or len(candidate) != 128:
-        raise ValueError("Expected the fixed 128-question development battery")
+    if type(expected_questions) is not int or expected_questions <= 0:
+        raise ValueError("Expected a positive declared development battery size")
+    if any(len(values) != expected_questions for values in (baseline, repeat, candidate)):
+        raise ValueError(f"Expected the fixed {expected_questions}-question development battery")
     if any(value not in (0, 1) for values in (baseline, repeat, candidate) for value in values):
         raise ValueError("The historical screen uses binary completed correctness")
-    noise = abs(sum(repeat) - sum(baseline)) / 128
-    difference = abs(sum(candidate) - sum(baseline)) / 128
+    noise = abs(sum(repeat) - sum(baseline)) / expected_questions
+    difference = abs(sum(candidate) - sum(baseline)) / expected_questions
     return {"within_noise_band": difference <= noise, "absolute_difference": difference, "noise_band": noise}
 
 

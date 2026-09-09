@@ -130,6 +130,24 @@ def test_noise_band_uses_completed_scores_and_equality_boundary():
     assert not audit_completed_noise_band(baseline, repeat, candidate)["within_noise_band"]
 
 
+def test_current_battery_size_is_explicit_and_scales_the_noise_band():
+    baseline = [1] * 10 + [0] * 246
+    repeat = [1] * 12 + [0] * 244
+    candidate = [1] * 8 + [0] * 248
+    result = audit_completed_noise_band(baseline, repeat, candidate, expected_questions=256)
+    assert result == {"within_noise_band": True, "absolute_difference": 2 / 256, "noise_band": 2 / 256}
+    with pytest.raises(ValueError, match="128-question"):
+        audit_completed_noise_band(baseline, repeat, candidate)
+    with pytest.raises(ValueError, match="256-question"):
+        audit_completed_noise_band(baseline, repeat, candidate[:-1], expected_questions=256)
+
+
+@pytest.mark.parametrize("size", [True, 0, -1, 256.0])
+def test_noise_band_rejects_invalid_declared_battery_size(size):
+    with pytest.raises(ValueError, match="positive declared"):
+        audit_completed_noise_band([], [], [], expected_questions=size)
+
+
 def test_source_control_checks_batches_before_their_union():
     reference = {step: [str(index) for index in range((step - 1) * 64, step * 64)] for step in range(1, 9)}
     reordered = {step: list(reversed(values)) for step, values in reference.items()}
