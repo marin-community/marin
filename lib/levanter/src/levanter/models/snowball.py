@@ -21,7 +21,7 @@ guards against drift.
 
 import dataclasses
 from dataclasses import dataclass
-from typing import Any, Optional, Type
+from typing import Any, Optional, Type, cast
 
 import equinox as eqx
 import jax
@@ -49,6 +49,7 @@ from levanter.grug.attention import (
     attention,
 )
 from levanter.grug.grug_moe import MoeImplementation, MoEExpertMlp
+from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import (
     Pembed_vocab,
     Plm_head,
@@ -59,7 +60,8 @@ from levanter.grug.sharding import (
     unshard,
 )
 from levanter.layers.attention import AttentionMask as LmHeadAttentionMask
-from levanter.models.lm_model import LmConfig, LmHeadModel
+from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
+from levanter.models.loss import next_token_loss_weight
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.logging import silence_transformer_nag
 
@@ -681,7 +683,8 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
     """Levanter ``LmHeadModel`` boundary over the array-first Snowball transformer.
 
     Normalizes named-axis inputs to raw ``[B, S]`` arrays for the grug forward and wraps the raw
-    hidden state back into a ``NamedArray`` so the standard LM head / loss / scoring path works.
+    hidden state back into a ``NamedArray`` for standard scoring. Default SFT loss uses Grug's
+    explicit raw-array shard map; other reductions retain the generic named-axis loss API.
     """
 
     transformer: SnowballTransformer
@@ -742,6 +745,43 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         # the stored layout after the loss collective.
         output_proj = _reshard_for_init(self.transformer.output_proj, P(None, None))
         return hax.named(output_proj, (self.Embed, self.Vocab))
+
+    def compute_next_token_loss(
+        self,
+        example: LmExample,
+        *,
+        key=None,
+        reduction: Optional[hax.ReductionFunction] = cast(Optional[hax.ReductionFunction], hax.mean),
+        reduction_axis: Optional[hax.AxisSelection] = None,
+        logsumexp_weight: Optional[float] = None,
+        loss_dtype: Optional[jnp.dtype] = jnp.float32,
+        logit_soft_cap: Optional[float] = None,
+    ) -> jnp.ndarray | NamedArray:
+        if reduction is not hax.mean or reduction_axis is not None or logit_soft_cap is not None or loss_dtype is None:
+            return super().compute_next_token_loss(
+                example,
+                key=key,
+                reduction=reduction,
+                reduction_axis=reduction_axis,
+                logsumexp_weight=logsumexp_weight,
+                loss_dtype=loss_dtype,
+                logit_soft_cap=logit_soft_cap,
+            )
+
+        hidden = self.activations(example.tokens, example.attn_mask, key=key)
+        Pos = example.tokens.resolve_axis(self.Pos.name)
+        labels = jnp.roll(example.tokens.array, -1, axis=-1)
+        weight = next_token_loss_weight(Pos, example.loss_weight).array
+        loss = fused_linear_softmax_cross_entropy_loss(
+            hidden.array,
+            self.transformer.output_proj,
+            labels,
+            weight=weight,
+            reduction="mean",
+            logsumexp_weight=logsumexp_weight,
+            dtype=loss_dtype,
+        )
+        return hax.named(loss, ())
 
     def resize_vocab(self, new_size: int, key: Optional[PRNGKeyArray] = None) -> "SnowballLMHeadModel":
         old = self._config.vocab_size

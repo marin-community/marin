@@ -194,3 +194,30 @@ author: benfeuer
 - Result: staging completed and vLLM started, falsifying any remaining disk diagnosis. The cache resolver supplied `file:///Users/.../quick-serve-models/...`; Transformers passed that string through Hugging Face repository validation and raised `HFValidationError` before loading config or weights. No benchmark ran. `resolve_model_path` now converts local `file://` cache URIs to decoded filesystem paths while leaving Hub IDs and object-store URIs unchanged. A parameterized, model-agnostic regression covers ordinary, percent-encoded, and localhost file URIs; the focused resolver tests pass (7 passed).
 - Interpretation: this failure is independent of Qwen/Snowball architecture and can affect any model mirrored into a process-local cache. The correction belongs at Marin's cache-to-model-loader boundary, not in the Snowball catalog or vLLM model configuration.
 - Next action: run the full pre-commit and inference tests, commit the fix, then repeat only this canary.
+
+### 2026-09-08 23:28 EDT - Smoke 4 reached the update and exposed global rematerialization
+
+- Hypothesis: the LM-head loss-boundary reshard from smoke 3 is sufficient for the full 64-H100 train step.
+- Commit Hash: `c5ef700ef1`.
+- Command: inspect `/benfeuer/snowball-final-qk157-smoke4-coord/run_levanter_train_lm-356928e0` after all ranks loaded shard 39/39 and compiled `jit__train_step`.
+- Result: falsified before the first update. The GPU path selected `batched_xla`, but XLA planned 283.12 GiB per device and attempted one 288,666,052,208-byte (268.84 GiB) allocation. Its partitioner reported involuntary full rematerialization while converting a locally sharded `[1, 32768, 2560]` activation to an incompatible layout. All devices held only 14.32 GiB at failure, so this is a compiled intermediate, not resident checkpoint or optimizer-state exhaustion. Iris started an identical retry; the owned coordinator was cancelled before another 39-shard load.
+- Interpretation: the small eight-device loss/gradient test caught the prior legality error but cannot catch memory scaling at the real sequence, vocabulary, and nested-sharding geometry. The next regression must inspect the compiled sharding/memory shape, and the correction must preserve the bounded loss path.
+- Next action: reproduce the nested generic-loss/raw-Grug sharding transition locally, fix the boundary, and compile a memory-shape regression before smoke 5.
+
+### 2026-09-08 23:28 EDT - Local-file eval fix passed and canary 3 submitted
+
+- Hypothesis: normalizing the staged `file://` URI at `resolve_model_path` lets vLLM treat the cache as a local directory for every model architecture.
+- Commit Hash: `19df94ff62`.
+- Command: focused resolver tests, full inference tests, affected safe-test selection, full pre-commit, then launch qk157 Base/NLP seed 42 on H100x8.
+- Result: focused resolver tests passed (7). Inference tests passed 107 plus one skip after two unrelated host-lock cases passed serially. The affected-test runner passed all 1,600 selected tests with platform skips, and pre-commit passed. Canary 3 is group `20260909-032756-snowball-final-qk157-base-49f7` with the same 14 NLP evaluations.
+- Interpretation: the regression is architecture-neutral (`org/model` in the test) and exercises the public resolved loader path. Hold the other matrix launches until this canary serves and writes benchmark records.
+- Next action: monitor canary 3 through endpoint readiness and durable evaluation records.
+
+### 2026-09-08 23:44 EDT - Local-token loss boundary validated; eval canary exposed stale loader option
+
+- Hypothesis: Snowball can use the production Grug loss boundary for the default training reduction while retaining the generic Levanter path for non-default evaluation reductions, and the repaired evaluation canary will progress beyond its former URI failure.
+- Commit Hash: uncommitted follow-up on `19df94ff62`.
+- Command: compare the generic and raw Grug loss shard maps; add an eight-CPU-device local-token regression and a full-logits numerical oracle; inspect canary 3 through its vLLM worker failure.
+- Result: the training adapter now hands each device only its local flattened token batch to the bounded fused kernel and matches a full-logits cross-entropy oracle. The focused suite passed 53 tests, the affected runner passed 1,429 tests with 172 platform skips, and pre-commit passed. Canary 3 successfully normalized the cached URI and initialized the Grug architecture, then vLLM rejected `{"distributed": true}` because the staged HF directory uses load format `auto`; that option belongs only to the RunAI streaming loader.
+- Interpretation: keep non-default reductions on the generic model API, but use the explicit raw-array shard map for the default SFT mean. Remove the RunAI-only loader option only from the staged final-campaign models; retain it for direct object-store Snowball exports.
+- Next action: commit and push both corrections, launch smoke 5 with a fresh job identity/port, and repeat only the qk157 Base/NLP seed-42 canary.

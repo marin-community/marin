@@ -26,7 +26,7 @@ from haliax.state_dict import from_torch_compatible_state_dict, to_torch_compati
 
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.layers.attention import AttentionMask as LmAttentionMask
-from levanter.models.lm_model import LmConfig
+from levanter.models.lm_model import LmConfig, LmExample
 from levanter.models.snowball import (
     GRUG_MOE_ARCHITECTURE,
     GRUG_MOE_MODEL_TYPE,
@@ -360,7 +360,7 @@ def test_snowball_load_path_multidevice_sharding():
 
 
 def test_snowball_multidevice_fused_loss_reshards_lm_head():
-    """The generic fused loss must accept Snowball's raw data-sharded LM-head storage layout."""
+    """The training loss must enter its kernel with only the device-local token batch."""
     script = textwrap.dedent(
         """
         import os
@@ -374,6 +374,7 @@ def test_snowball_multidevice_fused_loss_reshards_lm_head():
         from haliax.partitioning import set_mesh
         from jax.sharding import NamedSharding, PartitionSpec as P
         from levanter.grug.sharding import compact_grug_mesh
+        import levanter.grug.loss as grug_loss
         from levanter.layers.attention import AttentionMask
         from levanter.models.lm_model import LmExample
         from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
@@ -400,6 +401,14 @@ def test_snowball_multidevice_fused_loss_reshards_lm_head():
             attn_mask=AttentionMask.causal(),
         )
 
+        local_kernel_batches = []
+
+        def fake_kernel(hidden, labels, lm_head, **kwargs):
+            local_kernel_batches.append(hidden.shape[0])
+            return jnp.sum(hidden.astype(jnp.float32), axis=-1) * 0
+
+        grug_loss.fused_cross_entropy_loss_and_logsumexp_penalty = fake_kernel
+
         with set_mesh(mesh), hax.axis_mapping({"batch": ("replica_dcn", "data", "expert")}):
             model = SnowballLMHeadModel.init(Vocab, cfg, key=jax.random.key(0))
             assert model.transformer.output_proj.sharding.spec == P(("replica_dcn", "data"), "model")
@@ -408,12 +417,34 @@ def test_snowball_multidevice_fused_loss_reshards_lm_head():
             )(model, example)
         assert bool(jnp.isfinite(loss))
         assert bool(jnp.all(jnp.isfinite(grads.transformer.output_proj)))
+        assert local_kernel_batches
+        assert set(local_kernel_batches) == {Pos.size}, local_kernel_batches
         print("OK")
         """
     )
     result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
     assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
     assert "OK" in result.stdout
+
+
+def test_snowball_training_loss_matches_unreduced_loss():
+    cfg = _tiny_config(num_layers=1)
+    ids = _device_batched_ids(cfg.vocab_size, 8)
+    weights = hax.ones(ids.axes, dtype=jnp.float32)
+    example = LmExample(tokens=ids, loss_weight=weights, attn_mask=LmAttentionMask.causal())
+
+    with (
+        jax.set_mesh(compact_grug_mesh(expert_axis_size=1)),
+        hax.axis_mapping({"batch": ("replica_dcn", "data", "expert")}),
+    ):
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(9))
+        optimized = model.compute_next_token_loss(example)
+        logits = model(example.tokens).array.astype(jnp.float32)
+
+    labels = jnp.roll(ids.array, -1, axis=-1)
+    per_position = -jnp.take_along_axis(jax.nn.log_softmax(logits), labels[..., None], axis=-1)[..., 0]
+    expected = jnp.mean(per_position[..., :-1])
+    np.testing.assert_allclose(np.asarray(optimized.array), np.asarray(expected), rtol=1e-5, atol=1e-5)
 
 
 def test_snowball_fresh_process_hf_discovery(tmp_path):
