@@ -3,23 +3,15 @@
 
 """Shard-local checkpoints for JaxPP MPMD array trees."""
 
-import json
-import uuid
-from collections.abc import Callable
-from typing import Any, TypeVar
+from typing import TypeVar
 
 import jax
-import numpy as np
-from jax.experimental import multihost_utils
 from jax.sharding import NamedSharding
-from levanter.checkpoint import discover_latest_checkpoint, load_checkpoint
-from levanter.checkpoint import save_checkpoint as save_levanter_checkpoint
+from levanter.checkpoint import load_checkpoint
 from levanter.tensorstore_serialization import (
     ReplicaRestoreMode,
     TensorStoreReadConfig,
 )
-from rigging.filesystem.atomic import atomic_rename
-from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 try:
     import jaxpp.api as jaxpp  # pyrefly: ignore[missing-import]  # Optional pipeline extra.
@@ -29,10 +21,6 @@ except ModuleNotFoundError as error:
     jaxpp = None
 
 State = TypeVar("State")
-
-_FORMAT_VERSION = 1
-_METADATA_FILE = "metadata.json"
-_LATEST_FILE = "latest.json"
 
 
 def checkpoint_arrays(state: State) -> State:
@@ -54,75 +42,23 @@ def checkpoint_arrays(state: State) -> State:
     return jax.tree.map(unwrap, state)
 
 
-def _array_layout(state) -> list[dict]:
-    return [
-        {
-            "path": jax.tree_util.keystr(path),
-            "shape": list(value.shape),
-            "dtype": str(value.dtype),
-            "spec": list(value.sharding.spec),
-            "mesh": dict(value.sharding.mesh.shape),
-            "processes": [device.process_index for device in value.sharding.mesh.devices.flat],
-        }
-        for path, value in jax.tree_util.tree_flatten_with_path(state)[0]
-    ]
+def restore_checkpoint(state: State, checkpoint_path: str, shardings) -> State:
+    """Load a normal Levanter checkpoint into the destination's MPMD placement.
 
+    The exemplar state supplies global array shapes and destination shardings.
+    The checkpoint's source mesh and partitioning may differ. Nonowning
+    processes keep empty array descriptors, and each replica reads its own
+    shards without collectives across pipeline stages.
 
-def save_checkpoint(root: str, state: State, *, step: int, metadata: dict) -> str:
-    """Commit a completed training step after every process finishes its shard writes."""
-    identifier = multihost_utils.broadcast_one_to_all(np.frombuffer(uuid.uuid4().bytes, dtype=np.uint8))
-    path = prefix_join(root, f"step-{step:012d}-{bytes(identifier).hex()}")
-    arrays = checkpoint_arrays(state)
-    checkpoint_metadata = {
-        "mpmd_version": _FORMAT_VERSION,
-        "user_metadata": metadata,
-        "arrays": _array_layout(arrays),
-    }
+    Args:
+        state: Destination array tree, including MPMD arrays or abstract arrays.
+        checkpoint_path: Concrete checkpoint directory from Levanter discovery.
+        shardings: Destination sharding tree, including JaxPP MPMD shardings.
 
-    def commit():
-        with atomic_rename(prefix_join(root, _LATEST_FILE)) as temporary_path:
-            StoragePath(temporary_path).write_text(json.dumps({"checkpoint": StoragePath(path).name, "step": step}))
-
-    save_levanter_checkpoint(
-        arrays, step, path, commit_callback=commit, is_temporary=False, metadata=checkpoint_metadata
-    )
-    return path
-
-
-def restore_checkpoint(
-    root: str,
-    state: State,
-    shardings,
-    *,
-    validate_metadata: Callable[[dict[str, Any]], None],
-) -> tuple[State, int]:
-    """Restore the newest committed step, or return fresh state for an empty root.
-
-    The compiled step supplies the exact MPMD placement. Array layouts and
-    process topology must match. The caller validates its application metadata
-    before any array data is read.
+    Returns:
+        Restored state with the destination's sharding and MPMD array types.
     """
-    latest_path = StoragePath(prefix_join(root, _LATEST_FILE))
-    latest = None
-    if latest_path.exists():
-        latest = json.loads(latest_path.read_text())
-        metadata_path = StoragePath(root) / latest["checkpoint"] / _METADATA_FILE
-    else:
-        # Recover a fully written first checkpoint if publication of latest.json
-        # was interrupted. Normal resumes need no checkpoint-directory listing.
-        checkpoint_path = discover_latest_checkpoint(root)
-        if checkpoint_path is None:
-            return state, 0
-        metadata_path = StoragePath(checkpoint_path) / _METADATA_FILE
-    metadata = json.loads(metadata_path.read_text())
-    if latest is not None and latest["step"] != metadata["step"]:
-        raise ValueError(f"Checkpoint step disagrees with latest.json: {metadata_path}")
     arrays = checkpoint_arrays(state)
-    expected_layout = json.loads(json.dumps(_array_layout(arrays)))
-    if metadata["mpmd_version"] != _FORMAT_VERSION or metadata["arrays"] != expected_layout:
-        raise ValueError(f"Checkpoint array layout or topology does not match: {metadata_path}")
-    validate_metadata(metadata["user_metadata"])
-    path = str(metadata_path.parent)
     # Levanter's reader expects at least one addressable shard per input array.
     # Other stages remain empty descriptors and never enter the read plan.
     local_arrays = jax.tree.map(
@@ -135,7 +71,7 @@ def restore_checkpoint(
     )
     restored = load_checkpoint(
         local_arrays,
-        path,
+        checkpoint_path,
         # Avoid restore collectives across processes that do not own this stage.
         read_config=TensorStoreReadConfig(replica_mode=ReplicaRestoreMode.EVERY_REPLICA),
     )
@@ -146,12 +82,26 @@ def restore_checkpoint(
         is_leaf=lambda value: value is None,
     )
 
+    return wrap_checkpoint_arrays(restored, shardings)
+
+
+def wrap_checkpoint_arrays(state: State, shardings) -> State:
+    """Wrap restored device buffers in the destination MPMD array types.
+
+    Arrays must already reside on the target devices; this does not reshard or
+    copy them. Ordinary JAX shardings leave arrays unchanged.
+    """
+
     def wrap(value, target):
-        if isinstance(target, NamedSharding):
+        if isinstance(target, jax.sharding.Sharding):
             return value
         if jaxpp is None:
             raise ImportError("MPMD restore requires jaxpp")
-        buffers = {shard.device: shard.data for shard in value.addressable_shards}
+        buffers = (
+            {shard.device: shard.data for shard in value.addressable_shards}
+            if value.sharding.addressable_devices
+            else {}
+        )
         local_arrays = []
         for mesh_id in sorted(target.mesh_ids):
             sharding = NamedSharding(target.mpmd_mesh.unstack[mesh_id], target.spec)
@@ -166,4 +116,4 @@ def restore_checkpoint(
                 )
         return jaxpp.MpmdArray(local_arrays, target, shape=value.shape, dtype=value.dtype)
 
-    return jax.tree.map(wrap, restored, shardings), int(metadata["step"])
+    return jax.tree.map(wrap, state, shardings)

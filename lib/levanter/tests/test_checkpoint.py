@@ -1116,30 +1116,36 @@ def test_backward_compatibility_with_ocdbt():
         assert restored_state.step == initial_state.step
 
 
-def test_mpmd_checkpoint_uses_standard_discovery_and_load(tmp_path):
-    mesh = jax.sharding.Mesh(np.array(jax.devices()[:1]), ("data",))
-    sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
-    state = {"weights": jax.device_put(jnp.arange(8, dtype=jnp.float32), sharding), "unused": None}
-    path = mpmd_checkpoint.save_checkpoint(str(tmp_path), state, step=7, metadata={"schedule": "test"})
+def test_mpmd_checkpoint_uses_standard_format_across_destination_shardings(tmp_path):
+    devices = np.array(jax.devices())
+    mesh = jax.sharding.Mesh(devices, ("data",))
+    source_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec("data"))
+    target_mesh = jax.sharding.Mesh(devices[:1], ("stage",))
+    target_sharding = jax.sharding.NamedSharding(target_mesh, jax.sharding.PartitionSpec())
+    weights = np.arange(8 * len(devices), dtype=np.float32)
+    state = {"weights": jax.device_put(weights, source_sharding), "unused": None}
+    path = str(tmp_path / "step-7")
+    save_checkpoint(mpmd_checkpoint.checkpoint_arrays(state), 7, path)
     assert discover_latest_checkpoint(tmp_path) == path
-    templates = jax.tree.map(lambda x: jax.ShapeDtypeStruct(x.shape, x.dtype, sharding=x.sharding), state)
-    loaded = load_checkpoint(templates, path)
-    np.testing.assert_array_equal(loaded["weights"], state["weights"])
+
+    templates = {
+        "weights": jax.ShapeDtypeStruct(weights.shape, weights.dtype, sharding=target_sharding),
+        "unused": None,
+    }
+    restored = mpmd_checkpoint.restore_checkpoint(templates, path, {"weights": target_sharding, "unused": None})
+    np.testing.assert_array_equal(restored["weights"], weights)
+    assert restored["weights"].sharding == target_sharding
+    assert restored["unused"] is None
+
+    # Save the stage-local result and read it with the ordinary loader on the
+    # original data mesh: the checkpoint format carries no source-topology gate.
+    reverse_path = str(tmp_path / "step-8")
+    save_checkpoint(mpmd_checkpoint.checkpoint_arrays(restored), 8, reverse_path)
+    source_templates = jax.tree.map(lambda x: jax.ShapeDtypeStruct(x.shape, x.dtype, sharding=x.sharding), state)
+    loaded = load_checkpoint(source_templates, reverse_path)
+    np.testing.assert_array_equal(loaded["weights"], weights)
+    assert loaded["weights"].sharding == source_sharding
     assert loaded["unused"] is None
-    # Recovery after interrupted pointer publication uses standard discovery.
-    (tmp_path / "latest.json").unlink()
-    (tmp_path / "step-000000000008-incomplete").mkdir()
-    empty = jax.tree.map(jnp.zeros_like, state)
-    shardings = jax.tree.map(lambda x: x.sharding, state)
-
-    def validate_metadata(metadata):
-        assert metadata == {"schedule": "test"}
-
-    restored, step = mpmd_checkpoint.restore_checkpoint(
-        str(tmp_path), empty, shardings, validate_metadata=validate_metadata
-    )
-    assert step == 7
-    np.testing.assert_array_equal(restored["weights"], state["weights"])
 
 
 def test_checkpoint_application_metadata_cannot_replace_completion_fields(tmp_path):

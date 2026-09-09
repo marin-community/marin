@@ -26,39 +26,38 @@ benchmark exposes these settings as `PIPELINE_CHECKPOINT_ROOT` and
 `PIPELINE_CHECKPOINT_EVERY_STEPS`. `steps` is the total target number of optimizer
 updates, including updates completed before restore.
 
-Checkpoints work with both automatic schedules. Grug validates the training
-configuration; `levanter.mpmd_checkpoint` handles MPMD array conversion and
-restore placement using Levanter's checkpoint save, load, and discovery APIs.
-Each save creates
-`step-<12-digit-completed-step>-<unique-id>/` containing Levanter's TensorStore
-Zarr3/OCDBT arrays and array manifest. `metadata.json` records the completed step,
-model and optimizer settings, and array shapes and placements. It is written only
-after every process commits its shards; directories without this marker are
-ignored during restore. An atomically published `latest.json` points to the
-committed checkpoint, so normal resumes do not list historical checkpoints.
-An existing pointer is authoritative: interruption before publishing a newer
-checkpoint leaves the previous checkpoint selected.
-If the first pointer write was interrupted, restore discovers committed metadata
-in the root. A committed checkpoint with incompatible metadata or
-missing array data raises an error. Checkpoints are retained until explicitly
-deleted. Use one writer gang per checkpoint root and a shared filesystem or
-object-store root accessible to every process.
+Checkpoints use ordinary Levanter TensorStore Zarr3/OCDBT storage and discovery.
+Each save creates `step-<12-digit-completed-step>-<unique-id>/`. Completion
+metadata is published atomically after all processes commit their shards;
+directories without that marker are ignored. Discovery selects the highest
+completed step. Use one writer gang per root and shared storage accessible to
+all processes. Checkpoints remain until explicitly deleted.
 
-The state contains each logical stage's parameters, Adam moments and integer
-count, and pending router-bias updates. Checkpoint I/O exposes existing local
-device buffers without gathering model or optimizer arrays. Restore uses abstract
-shape/sharding templates, reads only addressable shards, and reconstructs the
-compiled step's MPMD placement. Each
-process must own exactly one physical pipeline stage. Restore requires the same
-model, precision, batch and microbatch settings, schedule, logical stage split,
-mesh dimensions, and process-to-stage assignment. Changing pipeline, expert,
-replica, or data parallelism requires a separate conversion; this path does not
-reshard checkpoints across topologies.
+The saved `GrugMoeCheckpointState` contains one unsplit `params` model, one
+`opt_state` tree, and a tuple of pending router updates indexed by global layer.
+FSDP can save and load this tree with `levanter.checkpoint.save_checkpoint` and
+`load_checkpoint`. PP assembles the same paths from its stage-local buffers at
+save time, then partitions the restored tree according to the destination's
+compiled input shardings. No model or optimizer tensor is gathered across
+stages; the small replicated optimizer counters are read on every destination
+stage. Pending router biases are installed at the next step, so they are
+excluded from trainable parameters and Adam moments in both modes.
+
+The same state can move between FSDP and PP, between pipeline schedules, and
+between different layer splits or device meshes. The model and optimizer state
+structures must agree. Checkpoints written by this trainer also record and
+validate model configuration, optimizer settings, and precision; ordinary
+Levanter checkpoints without that optional metadata rely on the destination
+state template. Pipeline execution still requires each process to own exactly
+one physical stage. `levanter.mpmd_checkpoint` only adapts array buffers and
+placement; checkpoint publication and discovery use the standard Levanter APIs.
 
 [`checkpoint_smoke.py`](./checkpoint_smoke.py) tests continuation across fresh
 four-process H100x8 gangs with PP2, EP8, and replica axis two. Run `--phase save`
-and then `--phase resume` with the same `--checkpoint-root` and `--schedule
-zero_bubble` (or `dualpipe_v`). The first gang saves step one and an uninterrupted
+and then `--phase resume` with the same `--checkpoint-root`. Choose `--mode fsdp`
+or `--mode pp` independently for each phase; PP supports `--schedule zero_bubble`
+or `--schedule dualpipe_v`. Use `--dtype float32` for cross-mode numerical
+comparisons, or the default `bfloat16` for same-mode continuation. The first gang saves step one and an uninterrupted
 step-two reference; the second restores step one and compares its next step.
 Every integer leaf must match exactly, and every floating state leaf and loss
 must have relative L2 error at most 0.002. Adam counters must also equal the

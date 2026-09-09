@@ -301,11 +301,7 @@ def _run_grug_local(config: GrugPipelineTrainConfig) -> None:
     loss_denominator = prepared.loss_denominator
     checkpoint_contract = {
         "model": asdict(model_config),
-        "pipeline": asdict(pipeline_config),
-        "schedule": config.schedule,
-        "layer_counts": config.layer_counts,
         "mp_policy": config.mp_policy_string,
-        "batch_size": config.batch_size,
         "optimizer": "adamw-lr1e-4-b1-0.9-b2-0.95-wd0.1",
     }
     start_step = 0
