@@ -126,6 +126,23 @@ def test_resolve_model_path_includes_revision_in_cache_key(monkeypatch):
     assert observed == [("Qwen/Qwen3-0.6B@abc123", 14, "quick-serve-models")]
 
 
+@pytest.mark.parametrize(
+    ("resolved", "expected"),
+    [
+        ("file:///tmp/model", "/tmp/model"),
+        ("file:///tmp/model%20with%20spaces", "/tmp/model with spaces"),
+        ("file://localhost/tmp/model", "/tmp/model"),
+    ],
+)
+def test_resolve_model_path_converts_cached_file_uri_for_model_loader(monkeypatch, resolved, expected):
+    monkeypatch.setattr(
+        "marin.inference.model_preparation.resolve_cached_model_path",
+        lambda *_args, **_kwargs: resolved,
+    )
+
+    assert resolve_model_path("org/model", 14, "abc123") == expected
+
+
 def test_vllm_backend_serves_the_pinned_revision(monkeypatch):
     observed: dict[str, object] = {}
 

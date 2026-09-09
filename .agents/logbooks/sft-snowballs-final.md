@@ -185,3 +185,12 @@ author: benfeuer
 - Result: falsified before any benchmark request. The child began streaming 47 HF files, emitted no model/runtime exception, and exited 137 after six minutes. The catalog had overridden memory to 512 GB but inherited `DEFAULT_SERVE_DISK = "100g"`, which cannot hold this approximately 134 GB checkpoint plus staging overhead.
 - Interpretation: this is a resource declaration bug in the Snowball campaign catalog, not a score/model failure. Give every one of the 25 entries an explicit 512 GB disk and cover it in the catalog test.
 - Next action: run checks, push the resource fix, and repeat only the failed qk157 Base/NLP seed-42 canary.
+
+### 2026-09-08 23:15 EDT - Evaluation retry exposed local-file URI boundary
+
+- Hypothesis: after increasing the serve disk to 512 GB, the pinned HF snapshot returned by the regional cache is directly loadable by vLLM.
+- Commit Hash: retry ran `16bd28c4ae`; fix uncommitted.
+- Command: inspect retry group `20260909-025605-snowball-final-qk157-base-6886` and inference child `/benfeuer/eval-20260909-025605-snowball-final-qk157-base-6886/inference-3a8bcfe6cf1d45469e4c04734e91a143`.
+- Result: staging completed and vLLM started, falsifying any remaining disk diagnosis. The cache resolver supplied `file:///Users/.../quick-serve-models/...`; Transformers passed that string through Hugging Face repository validation and raised `HFValidationError` before loading config or weights. No benchmark ran. `resolve_model_path` now converts local `file://` cache URIs to decoded filesystem paths while leaving Hub IDs and object-store URIs unchanged. A parameterized, model-agnostic regression covers ordinary, percent-encoded, and localhost file URIs; the focused resolver tests pass (7 passed).
+- Interpretation: this failure is independent of Qwen/Snowball architecture and can affect any model mirrored into a process-local cache. The correction belongs at Marin's cache-to-model-loader boundary, not in the Snowball catalog or vLLM model configuration.
+- Next action: run the full pre-commit and inference tests, commit the fix, then repeat only this canary.
