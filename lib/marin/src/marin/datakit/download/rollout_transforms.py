@@ -55,28 +55,6 @@ def load_parquet_batched(path: str) -> Iterator[dict]:
                 yield {k: rows[k][i] for k in rows}
 
 
-def strip_think_tags(text: str) -> str:
-    return text.replace("<think>", "").replace("</think>", "").strip()
-
-
-def normalize_reasoning_tokens(text: str) -> str:
-    """Normalize balanced reasoning tags to the tokenizer's atomic delimiters."""
-    text = re.sub(r"<think>", "<|start_think|>", text, flags=re.IGNORECASE)
-    text = re.sub(r"</think>", "<|end_think|>", text, flags=re.IGNORECASE)
-    text = re.sub(r"<\|start_think\|>\s*<\|end_think\|>\s*", "", text)
-    depth = 0
-    for match in re.finditer(r"<\|(start|end)_think\|>", text):
-        if match.group(1) == "start":
-            depth += 1
-        else:
-            depth -= 1
-        if depth not in (0, 1):
-            raise ReasoningFormatError("Assistant reasoning delimiters must be balanced and cannot nest")
-    if depth != 0:
-        raise ReasoningFormatError("Assistant reasoning delimiters must be balanced and cannot nest")
-    return text.strip()
-
-
 def text_document(text: str, source: str) -> dict:
     """Build a datakit document with a content-addressed ``id`` derived from ``text``.
 
@@ -169,7 +147,21 @@ def openai_chat_messages(messages: list[dict]) -> list[Message]:
                 _check_source_markup(content)
                 output.append(Message.from_author_and_content(author, content))
             case Role.ASSISTANT:
-                content = normalize_reasoning_tokens(content or "")
+                content = content or ""
+                content = re.sub(r"<think>", "<|start_think|>", content, flags=re.IGNORECASE)
+                content = re.sub(r"</think>", "<|end_think|>", content, flags=re.IGNORECASE)
+                content = re.sub(r"<\|start_think\|>\s*<\|end_think\|>\s*", "", content)
+                depth = 0
+                for match in re.finditer(r"<\|(start|end)_think\|>", content):
+                    if match.group(1) == "start":
+                        depth += 1
+                    else:
+                        depth -= 1
+                    if depth not in (0, 1):
+                        raise ReasoningFormatError("Assistant reasoning delimiters must be balanced and cannot nest")
+                if depth != 0:
+                    raise ReasoningFormatError("Assistant reasoning delimiters must be balanced and cannot nest")
+                content = content.strip()
                 if REASONING_TOKEN.search(content):
                     match = re.fullmatch(r"<\|start_think\|>(.*?)<\|end_think\|>(.*)", content, re.DOTALL)
                     if match is None or not match[1].strip():
@@ -234,8 +226,6 @@ def openai_chat_messages(messages: list[dict]) -> list[Message]:
 def chat_document(messages: list[Message], source: str, **metadata: object) -> dict:
     """Serialize canonical Harmony messages into a source artifact."""
     serialized = [message.to_dict() for message in messages]
-    if metadata.get("source_id") is not None:
-        metadata["source_id"] = str(metadata["source_id"])
     encoded = json.dumps(serialized, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     chat_template_kwargs = metadata.get("chat_template_kwargs")
     if isinstance(chat_template_kwargs, dict):
@@ -261,18 +251,6 @@ def checked_openai_chat_document(
         counters.pipeline.update_counter(f"{counter_prefix}/quarantined", 1)
         counters.pipeline.update_counter(f"{counter_prefix}/quarantined/{type(error).__name__}", 1)
         return []
-
-
-def merge_adjacent_user_messages(messages: list[dict]) -> list[dict]:
-    """Combine adjacent source user turns without crossing assistant or tool turns."""
-    merged: list[dict] = []
-    for message in messages:
-        if merged and message.get("role") == "user" and merged[-1].get("role") == "user":
-            previous = merged[-1]
-            previous["content"] = f"{previous.get('content') or ''}\n\n{message.get('content') or ''}".strip()
-            continue
-        merged.append(dict(message))
-    return merged
 
 
 def render_role_message(msg: dict) -> str:

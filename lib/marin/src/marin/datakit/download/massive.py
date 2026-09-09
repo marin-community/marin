@@ -41,6 +41,7 @@ from marin.execution.step_spec import StepSpec
 SOURCE_CHAT_SCHEMA = pa.schema(
     [
         *CHAT_SCHEMA,
+        pa.field("upstream_id", pa.string()),
         pa.field("locale", pa.string()),
         pa.field("split", pa.string()),
         pa.field("intent", pa.string()),
@@ -702,7 +703,7 @@ def row_to_chat_doc(row: dict) -> list[dict]:
             locale=row["locale"],
             split=split,
             intent=intent,
-            source_id=row["id"],
+            upstream_id=str(row["id"]),
         )
     ]
 
@@ -858,7 +859,7 @@ def massive_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/massive_function_calling",
         deps=[staged],
         fn=lambda output_path: transform_staged_massive_chat(staged.output_path, output_path),
-        hash_attrs={"version": "2026.09.04.harmony-arrow"},
+        hash_attrs={"version": "2026.09.09.upstream-id"},
     )
     return (
         staged,

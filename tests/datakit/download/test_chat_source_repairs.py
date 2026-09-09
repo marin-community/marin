@@ -3,8 +3,11 @@
 
 import json
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from marin.datakit.chat_normalize import _normalize_chat_record
+from marin.datakit.download import massive, openthoughts4_code
 from marin.datakit.download.agenttrove import row_to_chat_doc as agenttrove_row_to_chat_doc
 from marin.datakit.download.coderforge import row_to_chat_doc as coderforge_row_to_chat_doc
 from marin.datakit.download.davinci_dev import env_row_to_chat_doc as davinci_row_to_chat_doc
@@ -327,3 +330,45 @@ def test_numinamath_splits_reasoning_python_and_output() -> None:
     assert messages[3]["content"] == [{"type": "text", "text": "42"}]
     assert messages[4]["channel"] == "final"
     assert messages[4]["content"] == [{"type": "text", "text": "Therefore, the answer is 42."}]
+
+
+@pytest.mark.parametrize(
+    "adapter,schema,row",
+    [
+        (
+            massive.row_to_chat_doc,
+            massive.SOURCE_CHAT_SCHEMA,
+            {
+                "id": 7,
+                "locale": "en-US",
+                "partition": "train",
+                "intent": "alarm_set",
+                "utt": "Set an alarm.",
+                "annot_utt": "Set an alarm.",
+            },
+        ),
+        (
+            openthoughts4_code.row_to_chat_doc,
+            openthoughts4_code.SOURCE_CHAT_SCHEMA,
+            {
+                "source_id": 7,
+                "messages": [
+                    {"role": "user", "content": "Write a function."},
+                    {"role": "assistant", "content": "def answer(): return 42"},
+                ],
+            },
+        ),
+    ],
+)
+def test_chat_preserves_upstream_and_processed_ids(adapter, schema, row, tmp_path):
+    [source] = adapter(row)
+    assert "source_id" not in source
+    processed_path = tmp_path / "processed.parquet"
+    pq.write_table(pa.Table.from_pylist([source], schema=schema), processed_path)
+    [processed] = pq.read_table(processed_path).to_pylist()
+    normalized = _normalize_chat_record(processed, "messages", "id")
+    output_path = tmp_path / "normalized.parquet"
+    pq.write_table(pa.Table.from_pylist([normalized], schema=schema), output_path)
+    [result] = pq.read_table(output_path).to_pylist()
+    assert result["upstream_id"] == "7"
+    assert result["source_id"] == source["id"]

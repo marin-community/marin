@@ -24,6 +24,7 @@ reasoning delimiters and rejects trajectories with any truncated generation, sin
 that spent its token budget commonly ends with unclosed reasoning.
 """
 
+import re
 from enum import StrEnum
 
 from fray.types import ResourceConfig
@@ -37,7 +38,6 @@ from marin.datakit.chat_normalize import CHAT_SCHEMA, normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import (
     ReasoningFormatError,
-    normalize_reasoning_tokens,
     openai_chat_document,
     render_role_message,
     text_document,
@@ -71,11 +71,29 @@ class TruncationFilter(StrEnum):
     reasoning block may appear anywhere in the context window."""
 
 
+def _normalize_reasoning_tokens(text: str) -> str:
+    """Normalize balanced reasoning tags to the tokenizer's atomic delimiters."""
+    text = re.sub(r"<think>", "<|start_think|>", text, flags=re.IGNORECASE)
+    text = re.sub(r"</think>", "<|end_think|>", text, flags=re.IGNORECASE)
+    text = re.sub(r"<\|start_think\|>\s*<\|end_think\|>\s*", "", text)
+    depth = 0
+    for match in re.finditer(r"<\|(start|end)_think\|>", text):
+        if match.group(1) == "start":
+            depth += 1
+        else:
+            depth -= 1
+        if depth not in (0, 1):
+            raise ReasoningFormatError("Assistant reasoning delimiters must be balanced and cannot nest")
+    if depth != 0:
+        raise ReasoningFormatError("Assistant reasoning delimiters must be balanced and cannot nest")
+    return text.strip()
+
+
 def join_reasoning_and_answer(content: str) -> str:
     """Replace GLM's dangling ``</think>`` with a paragraph break.
 
-    The shared ``strip_think_tags`` deletes the tag outright, which works for sources that
-    wrap it in newlines. GLM does not: responses read ``...write the final code.</think>Looking
+    Deleting the tag outright works for sources that wrap it in newlines.
+    GLM does not: responses read ``...write the final code.</think>Looking
     at the profile...``, so deleting the tag alone would run the last reasoning sentence into
     the first word of the answer.
     """
@@ -149,7 +167,7 @@ def chat_conversation_messages(messages: list[dict], turns: list[dict]) -> list[
         repaired.append(
             {
                 **message,
-                "content": normalize_reasoning_tokens(f"<think>{reasoning}</think>{answer}"),
+                "content": _normalize_reasoning_tokens(f"<think>{reasoning}</think>{answer}"),
             }
         )
     return repaired

@@ -41,7 +41,6 @@ from marin.datakit.download.rollout_transforms import (
     TRAJECTORY_UNVERIFIED_TAG,
     checked_openai_chat_document,
     load_parquet_batched,
-    merge_adjacent_user_messages,
     render_role_message,
     text_document,
 )
@@ -145,7 +144,13 @@ def row_to_chat_doc(row: dict) -> list[dict]:
     if converted is None:
         return []
     messages, metadata = converted
-    merged_messages = merge_adjacent_user_messages(messages)
+    merged_messages: list[dict] = []
+    for message in messages:
+        if merged_messages and message.get("role") == "user" and merged_messages[-1].get("role") == "user":
+            previous = merged_messages[-1]
+            previous["content"] = f"{previous.get('content') or ''}\n\n{message.get('content') or ''}".strip()
+        else:
+            merged_messages.append(dict(message))
     if merged_count := len(messages) - len(merged_messages):
         counters.pipeline.update_counter("agenttrove/chat/adjacent_user_merged", merged_count)
     return checked_openai_chat_document(

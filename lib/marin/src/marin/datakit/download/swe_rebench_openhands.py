@@ -24,7 +24,6 @@ from marin.datakit.download.rollout_transforms import (
     TRAJECTORY_SOLVED_TAG,
     checked_openai_chat_document,
     load_parquet_batched,
-    merge_adjacent_user_messages,
     render_role_message,
     text_document,
 )
@@ -93,7 +92,13 @@ def row_to_chat_doc(row: dict) -> list[dict]:
     ):
         counters.pipeline.update_counter("swe_rebench_openhands/chat_inline_tool_syntax_filtered", 1)
         return []
-    merged_trajectory = merge_adjacent_user_messages(trajectory)
+    merged_trajectory: list[dict] = []
+    for message in trajectory:
+        if merged_trajectory and message.get("role") == "user" and merged_trajectory[-1].get("role") == "user":
+            previous = merged_trajectory[-1]
+            previous["content"] = f"{previous.get('content') or ''}\n\n{message.get('content') or ''}".strip()
+        else:
+            merged_trajectory.append(dict(message))
     if merged_count := len(trajectory) - len(merged_trajectory):
         counters.pipeline.update_counter("swe_rebench_openhands/chat_adjacent_user_merged", merged_count)
     trajectory = merged_trajectory

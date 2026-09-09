@@ -30,7 +30,6 @@ from marin.datakit.download.rollout_transforms import (
     TRAJECTORY_UNVERIFIED_TAG,
     checked_openai_chat_document,
     load_parquet_batched,
-    merge_adjacent_user_messages,
     openai_chat_document,
     render_role_message,
     text_document,
@@ -1160,7 +1159,13 @@ def row_to_chat_doc(dataset: PenfeverRollout) -> Callable[[dict], list[dict]]:
             return []
         messages, metadata = converted
         if dataset.cohort_name == "qwen35-122b-32k":
-            merged = merge_adjacent_user_messages(messages)
+            merged: list[dict] = []
+            for message in messages:
+                if merged and message.get("role") == "user" and merged[-1].get("role") == "user":
+                    previous = merged[-1]
+                    previous["content"] = f"{previous.get('content') or ''}\n\n{message.get('content') or ''}".strip()
+                else:
+                    merged.append(dict(message))
             counters.pipeline.update_counter(
                 "penfever_rollouts/qwen32k/chat/adjacent_user_merged", len(messages) - len(merged)
             )
