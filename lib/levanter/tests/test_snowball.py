@@ -359,6 +359,63 @@ def test_snowball_load_path_multidevice_sharding():
     assert "OK" in result.stdout
 
 
+def test_snowball_multidevice_fused_loss_reshards_lm_head():
+    """The generic fused loss must accept Snowball's raw data-sharded LM-head storage layout."""
+    script = textwrap.dedent(
+        """
+        import os
+        os.environ["XLA_FLAGS"] = "--xla_force_host_platform_device_count=8"
+        os.environ["JAX_PLATFORMS"] = "cpu"
+        import equinox as eqx
+        import haliax as hax
+        import jax
+        import jax.numpy as jnp
+        from haliax import Axis
+        from haliax.partitioning import set_mesh
+        from jax.sharding import NamedSharding, PartitionSpec as P
+        from levanter.grug.sharding import compact_grug_mesh
+        from levanter.layers.attention import AttentionMask
+        from levanter.models.lm_model import LmExample
+        from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
+
+        cfg = SnowballConfig(
+            vocab_size=128, hidden_dim=64, intermediate_dim=64, shared_expert_intermediate_dim=64,
+            num_experts=16, num_experts_per_token=4, num_layers=1, num_heads=8, num_kv_heads=4,
+            head_dim=16, max_seq_len=8, sliding_window=4, qk_mult=1.37, layer_norm_eps=1e-5,
+            initializer_std=0.02, attention_implementation="reference",
+        )
+        Batch = Axis("batch", 8)
+        Pos = Axis("position", 8)
+        Vocab = Axis("vocab", cfg.vocab_size)
+        mesh = compact_grug_mesh(expert_axis_size=1)
+        input_sharding = NamedSharding(mesh, P(("replica_dcn", "data", "expert"), None))
+        tokens = jax.device_put(
+            jnp.arange(Batch.size * Pos.size, dtype=jnp.int32).reshape(Batch.size, Pos.size) % Vocab.size,
+            input_sharding,
+        )
+        loss_weight = jax.device_put(jnp.ones((Batch.size, Pos.size), dtype=jnp.float32), input_sharding)
+        example = LmExample(
+            tokens=hax.named(tokens, (Batch, Pos)),
+            loss_weight=hax.named(loss_weight, (Batch, Pos)),
+            attn_mask=AttentionMask.causal(),
+        )
+
+        with set_mesh(mesh), hax.axis_mapping({"batch": ("replica_dcn", "data", "expert")}):
+            model = SnowballLMHeadModel.init(Vocab, cfg, key=jax.random.key(0))
+            assert model.transformer.output_proj.sharding.spec == P(("replica_dcn", "data"), "model")
+            loss, grads = hax.named_jit(
+                eqx.filter_value_and_grad(lambda m, e: m.compute_next_token_loss(e).array)
+            )(model, example)
+        assert bool(jnp.isfinite(loss))
+        assert bool(jnp.all(jnp.isfinite(grads.transformer.output_proj)))
+        print("OK")
+        """
+    )
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+    assert "OK" in result.stdout
+
+
 def test_snowball_fresh_process_hf_discovery(tmp_path):
     """grug_moe must resolve via ``from_hf`` in a fresh interpreter with nothing pre-imported."""
     cfg = _tiny_config()

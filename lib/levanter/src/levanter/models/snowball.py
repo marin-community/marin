@@ -735,7 +735,13 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         return hax.named(hidden, out_axes)
 
     def get_lm_head(self) -> NamedArray:
-        return hax.named(self.transformer.output_proj, (self.Embed, self.Vocab))
+        # Snowball stores the LM head's Embed dimension over the raw Grug batch axes so the large
+        # checkpoint loads with the historical layout. The generic fused loss shard_map contracts
+        # Embed locally while those same physical axes shard the examples, so its compute input must
+        # be replicated over the batch axes. Reshard only at this boundary; gradients flow back to
+        # the stored layout after the loss collective.
+        output_proj = _reshard_for_init(self.transformer.output_proj, P(None, None))
+        return hax.named(output_proj, (self.Embed, self.Vocab))
 
     def resize_vocab(self, new_size: int, key: Optional[PRNGKeyArray] = None) -> "SnowballLMHeadModel":
         old = self._config.vocab_size
