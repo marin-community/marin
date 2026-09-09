@@ -6,7 +6,9 @@
 from typing import TypeVar
 
 import jax
-from jax.sharding import NamedSharding
+import numpy as np
+from jax.sharding import Mesh, NamedSharding, PartitionSpec
+from jaxtyping import PyTree
 from levanter.checkpoint import load_checkpoint
 from levanter.tensorstore_serialization import (
     ReplicaRestoreMode,
@@ -42,13 +44,15 @@ def checkpoint_arrays(state: State) -> State:
     return jax.tree.map(unwrap, state)
 
 
-def restore_checkpoint(state: State, checkpoint_path: str, shardings) -> State:
+def restore_checkpoint(state: State, checkpoint_path: str, shardings: PyTree) -> State:
     """Load a normal Levanter checkpoint into the destination's MPMD placement.
 
     The exemplar state supplies global array shapes and destination shardings.
     The checkpoint's source mesh and partitioning may differ. Nonowning
     processes keep empty array descriptors, and each replica reads its own
-    shards without collectives across pipeline stages.
+    shards without collectives across pipeline stages. Scalar leaves are read
+    on every device before wrapping the destination MPMD placement; ordinary
+    JAX scalar leaves retain that replication for subsequent stage splitting.
 
     Args:
         state: Destination array tree, including MPMD arrays or abstract arrays.
@@ -59,6 +63,15 @@ def restore_checkpoint(state: State, checkpoint_path: str, shardings) -> State:
         Restored state with the destination's sharding and MPMD array types.
     """
     arrays = checkpoint_arrays(state)
+    # Canonical scalars may be shared by several destination stages. Read them
+    # on every device so each stage can reuse its local copy after repartitioning.
+    scalar_sharding = NamedSharding(Mesh(np.array(jax.devices()), ("checkpoint",)), PartitionSpec())
+    arrays = jax.tree.map(
+        lambda value: (
+            jax.ShapeDtypeStruct(value.shape, value.dtype, sharding=scalar_sharding) if value.shape == () else value
+        ),
+        arrays,
+    )
     # Levanter's reader expects at least one addressable shard per input array.
     # Other stages remain empty descriptors and never enter the read plan.
     local_arrays = jax.tree.map(
@@ -85,7 +98,7 @@ def restore_checkpoint(state: State, checkpoint_path: str, shardings) -> State:
     return wrap_checkpoint_arrays(restored, shardings)
 
 
-def wrap_checkpoint_arrays(state: State, shardings) -> State:
+def wrap_checkpoint_arrays(state: State, shardings: PyTree) -> State:
     """Wrap restored device buffers in the destination MPMD array types.
 
     Arrays must already reside on the target devices; this does not reshard or

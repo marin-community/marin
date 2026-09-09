@@ -198,7 +198,8 @@ def _run_grug_local(config: GrugPipelineTrainConfig) -> None:
         expert_axis_size=config.expert_axis_size,
         replica_axis_size=replica_axis_size,
     )
-    optimizer = optax.adamw(learning_rate=1e-4, b1=0.9, b2=0.95, weight_decay=0.1)
+    optimizer_config = dict(learning_rate=1e-4, b1=0.9, b2=0.95, weight_decay=0.1)
+    optimizer = optax.adamw(**optimizer_config)
     peak_flops_per_device = device_flops("h100")
     if peak_flops_per_device is None:
         raise ValueError("Fray does not define H100 BF16 peak FLOP/s")
@@ -302,7 +303,7 @@ def _run_grug_local(config: GrugPipelineTrainConfig) -> None:
     checkpoint_contract = {
         "model": asdict(model_config),
         "mp_policy": config.mp_policy_string,
-        "optimizer": "adamw-lr1e-4-b1-0.9-b2-0.95-wd0.1",
+        "optimizer": {"type": optax.adamw.__name__, **optimizer_config},
     }
     start_step = 0
     if config.checkpoint_root:

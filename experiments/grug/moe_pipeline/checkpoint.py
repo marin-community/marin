@@ -4,16 +4,14 @@
 """Canonical model and optimizer checkpoints shared by FSDP and pipeline training."""
 
 import json
-import uuid
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 import jax
 import jax.numpy as jnp
-import numpy as np
 import optax
-from jax.experimental import multihost_utils
-from jax.sharding import Mesh, NamedSharding
+from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
+from jaxtyping import PyTree
 from levanter import mpmd_checkpoint
 from levanter.checkpoint import discover_checkpoint_candidates
 from levanter.checkpoint import save_checkpoint as save_levanter_checkpoint
@@ -125,16 +123,22 @@ def _pipeline_state(
 
 def save_checkpoint(root: str, state: GrugMoeAutomaticPipelineState, *, step: int, contract: dict) -> str:
     """Save canonical state with ordinary Levanter checkpoint publication."""
-    identifier = multihost_utils.broadcast_one_to_all(np.frombuffer(uuid.uuid4().bytes, dtype=np.uint8))
-    path = f"step-{step:012d}-{bytes(identifier).hex()}"
-    path = prefix_join(root, path)
+    path = prefix_join(root, f"step-{step}")
     return save_levanter_checkpoint(checkpoint_state(state), step, path, metadata={"training_config": contract})
 
 
 def restore_checkpoint(
-    root: str, state: GrugMoeAutomaticPipelineState, shardings, *, contract: dict
+    root: str, state: GrugMoeAutomaticPipelineState, shardings: PyTree, *, contract: dict
 ) -> tuple[GrugMoeAutomaticPipelineState, int]:
-    """Load an FSDP or PP checkpoint into the destination pipeline partition."""
+    """Load an FSDP or PP checkpoint into the destination pipeline partition.
+
+    Args:
+        root: Directory searched for the latest completed checkpoint.
+        state: Destination pipeline state used as a shape and structure template.
+        shardings: Compiled step input shardings with the same tree as state.
+        contract: Model, precision, and optimizer configuration to validate
+            against training_config metadata when the checkpoint supplies it.
+    """
     candidates = discover_checkpoint_candidates(root)
     if not candidates:
         return state, 0
@@ -144,18 +148,6 @@ def restore_checkpoint(
         raise ValueError("Checkpoint training configuration does not match")
     arrays = mpmd_checkpoint.checkpoint_arrays(state)
     canonical = checkpoint_state(arrays)
-    # A single optimizer counter becomes a copy on every destination stage.
-    # Reading these scalars on all devices avoids gathering any model tensors.
-    scalar_sharding = NamedSharding(Mesh(np.array(jax.devices()), ("checkpoint",)), P())
-    canonical = replace(
-        canonical,
-        opt_state=jax.tree.map(
-            lambda value: (
-                jax.ShapeDtypeStruct(value.shape, value.dtype, sharding=scalar_sharding) if value.shape == () else value
-            ),
-            canonical.opt_state,
-        ),
-    )
     loaded = mpmd_checkpoint.restore_checkpoint(
         canonical, checkpoint.path, jax.tree.map(lambda value: value.sharding, canonical)
     )

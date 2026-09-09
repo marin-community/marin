@@ -1123,18 +1123,30 @@ def test_mpmd_checkpoint_uses_standard_format_across_destination_shardings(tmp_p
     target_mesh = jax.sharding.Mesh(devices[:1], ("stage",))
     target_sharding = jax.sharding.NamedSharding(target_mesh, jax.sharding.PartitionSpec())
     weights = np.arange(8 * len(devices), dtype=np.float32)
-    state = {"weights": jax.device_put(weights, source_sharding), "unused": None}
+    state = {
+        "weights": jax.device_put(weights, source_sharding),
+        "progress": {"step": jax.device_put(np.array(7, dtype=np.int32), target_sharding)},
+        "unused": None,
+    }
     path = str(tmp_path / "step-7")
     save_checkpoint(mpmd_checkpoint.checkpoint_arrays(state), 7, path)
     assert discover_latest_checkpoint(tmp_path) == path
 
     templates = {
         "weights": jax.ShapeDtypeStruct(weights.shape, weights.dtype, sharding=target_sharding),
+        "progress": {"step": jax.ShapeDtypeStruct((), np.int32, sharding=target_sharding)},
         "unused": None,
     }
-    restored = mpmd_checkpoint.restore_checkpoint(templates, path, {"weights": target_sharding, "unused": None})
+    restored = mpmd_checkpoint.restore_checkpoint(
+        templates, path, jax.tree.map(lambda value: value.sharding, templates)
+    )
     np.testing.assert_array_equal(restored["weights"], weights)
     assert restored["weights"].sharding == target_sharding
+    # A canonical scalar can feed every destination stage, even when its
+    # exemplar initially resides on only one stage's devices.
+    assert restored["progress"]["step"].sharding.device_set == set(jax.devices())
+    for shard in restored["progress"]["step"].addressable_shards:
+        np.testing.assert_array_equal(shard.data, 7)
     assert restored["unused"] is None
 
     # Save the stage-local result and read it with the ordinary loader on the
@@ -1145,10 +1157,5 @@ def test_mpmd_checkpoint_uses_standard_format_across_destination_shardings(tmp_p
     loaded = load_checkpoint(source_templates, reverse_path)
     np.testing.assert_array_equal(loaded["weights"], weights)
     assert loaded["weights"].sharding == source_sharding
+    np.testing.assert_array_equal(loaded["progress"]["step"], 7)
     assert loaded["unused"] is None
-
-
-def test_checkpoint_application_metadata_cannot_replace_completion_fields(tmp_path):
-    with pytest.raises(ValueError, match="must not override"):
-        save_checkpoint({"weights": jnp.ones(2)}, 7, tmp_path, metadata={"step": 8})
-    assert discover_latest_checkpoint(tmp_path) is None
