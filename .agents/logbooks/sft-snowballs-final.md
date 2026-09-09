@@ -413,3 +413,9 @@ author: benfeuer
 - Action: cancelled exactly `/benfeuer/snowball-final-qk157-grug-smoke13-coord` before its deterministic retry could repeat the 134 GB download. No training GPU was allocated and no update or checkpoint save occurred.
 - Classification: this is a call-site error in the unmerged bridge, not an existing Marin defect, so no public issue was filed. The correction composes two joins, adds an object-store URI regression, and bumps the conversion artifact version to exclude the incomplete output.
 - Next action: run focused and repository gates, push the correction from the isolated worktree, and launch smoke 14 with a fresh identity and JAX port.
+
+### 2026-09-09 10:35 EDT - Historical Grug smoke 14 submitted
+
+- Validation: fourteen focused tests and the complete repository pre-commit gate passed. Commit `05967167c2` is pushed on the isolated run branch.
+- Run: submitted `/benfeuer/snowball-final-qk157-grug-smoke14-coord` from the worktree, stage version `2026.09.09.9`, conversion artifact version `2026.09.09.3`, and unique JAX port 19417.
+- Next action: require conversion save success, then one finite eight-node update and a loadable checkpoint before any campaign fan-out.
