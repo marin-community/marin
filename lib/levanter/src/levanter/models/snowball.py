@@ -52,6 +52,7 @@ from levanter.grug.grug_moe import MoeImplementation, MoEExpertMlp
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import (
     Pembed_vocab,
+    Plm_head,
     _current_mesh,
     _drop_absent_mesh_axes,
     _mesh_axis_size,
@@ -631,11 +632,8 @@ class SnowballTransformer(eqx.Module):
         token_embed = _reshard_for_init(
             _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pembed_vocab
         )
-        # Keep the LM head replicated. Sharding its hidden dimension over the same axes as the
-        # token batch forces the train-step transpose to rematerialize the global batch-by-vocab
-        # surface while reduce-scattering the head gradient.
         output_proj = _reshard_for_init(
-            _init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), P(None, None)
+            _init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head
         )
         blocks = tuple(SnowballBlock.init(cfg, key=block_keys[i]) for i in range(cfg.num_layers))
         return SnowballTransformer(
@@ -672,7 +670,14 @@ class SnowballTransformer(eqx.Module):
 
         def _scan_layer(carry: Float[Array, "B S D"], layer_and_flag) -> tuple[Float[Array, "B S D"], None]:
             layer, use_long = layer_and_flag
-            return layer(carry, short_mask, long_mask, use_long), None
+
+            def _run_layer(layer, hidden):
+                return layer(hidden, short_mask, long_mask, use_long)
+
+            # Match the production Grug recipe's recompute-all policy. A scan bounds live expert
+            # buffers to one layer, while checkpointing prevents its transpose from retaining every
+            # layer's attention and MoE intermediates until the backward sweep.
+            return eqx.filter_checkpoint(_run_layer)(layer, carry), None
 
         hidden, _ = jax.lax.scan(_scan_layer, hidden, (stacked, long_schedule))
         return self.final_gated_norm(self.final_norm(hidden))
@@ -894,7 +899,7 @@ def snowball_from_state_dict(
     m = eqx.tree_at(
         lambda t: t.final_gated_norm.w_up, m, _reshard_replicated(_T(g("model.final_gated_norm.up_proj.weight")))
     )
-    m = eqx.tree_at(lambda t: t.output_proj, m, _reshard_for_init(_T(g("lm_head.weight")), P(None, None)))
+    m = eqx.tree_at(lambda t: t.output_proj, m, _reshard_for_init(_T(g("lm_head.weight")), Plm_head))
 
     for i in range(len(m.blocks)):
         p = f"model.layers.{i}"

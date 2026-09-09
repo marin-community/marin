@@ -98,13 +98,9 @@ def fused_linear_softmax_cross_entropy_loss(
     has_mesh = mesh is not None and not mesh.empty
     weight_array = weight if weight is not None else jnp.ones_like(labels, dtype=dtype)
     batch_axis_spec = _batch_axis_spec(hidden) if has_mesh else None
-    batch_axis_names = _axis_names_from_spec(batch_axis_spec) if has_mesh else ()
 
     def _loss_shard(
-        shard_hidden: jax.Array,
-        shard_lm_head: jax.Array,
-        shard_labels: jax.Array,
-        shard_weight: jax.Array,
+        shard_hidden: jax.Array, shard_lm_head: jax.Array, shard_labels: jax.Array, shard_weight: jax.Array
     ) -> jax.Array:
         flat_hidden = shard_hidden.reshape((-1, hidden_dim))
         flat_labels = shard_labels.reshape((-1,)).astype(jnp.int32)
@@ -127,31 +123,41 @@ def fused_linear_softmax_cross_entropy_loss(
         if reduction_mode is None:
             return loss.reshape(shard_labels.shape)
 
+        if has_mesh:
+            reduction_axis_names = tuple(str(name) for name in jax.typeof(shard_hidden).mat.varying)
+        else:
+            reduction_axis_names = ()
         local_sum = jnp.sum(loss)
         local_denom = jnp.sum(flat_weight)
-        total_sum = _psum_over_axes(local_sum, batch_axis_names)
+        total_sum = _psum_over_axes(local_sum, reduction_axis_names)
         if reduction_mode == "sum":
             return total_sum
-        total_denom = _psum_over_axes(local_denom, batch_axis_names)
+        total_denom = _psum_over_axes(local_denom, reduction_axis_names)
         return jnp.where(total_denom != 0, total_sum / total_denom, jnp.zeros_like(total_denom))
 
     if not has_mesh:
         return _loss_shard(hidden, lm_head, labels, weight_array)
 
-    hidden_spec = P(batch_axis_spec)
     lm_head_spec = P(None, None)
+    lm_head = _reshard_for_shard_map(lm_head, mesh, lm_head_spec)
+    if reduction_mode is not None:
+        # Infer the input specs from their physical layouts. Reconstructing the same logical batch
+        # axes by name can transpose a multi-node data-by-expert mesh into a non-IOTA device order
+        # on GPU, while inferring preserves the already-valid flat batch sharding.
+        return jax.shard_map(_loss_shard, mesh=mesh, out_specs=P(), check_vma=True)(
+            hidden, lm_head, labels, weight_array
+        )
+
+    hidden_spec = P(batch_axis_spec)
     label_spec = P(batch_axis_spec)
     hidden = _reshard_for_shard_map(hidden, mesh, hidden_spec)
-    lm_head = _reshard_for_shard_map(lm_head, mesh, lm_head_spec)
     labels = _reshard_for_shard_map(labels, mesh, label_spec)
     weight_array = _reshard_for_shard_map(weight_array, mesh, label_spec)
-
-    out_specs = hidden_spec if reduction_mode is None else P()
     return jax.shard_map(
         _loss_shard,
         mesh=mesh,
         in_specs=(hidden_spec, lm_head_spec, label_spec, label_spec),
-        out_specs=out_specs,
+        out_specs=hidden_spec,
         check_vma=False,
     )(hidden, lm_head, labels, weight_array)
 

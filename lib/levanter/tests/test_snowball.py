@@ -120,6 +120,21 @@ def test_snowball_hf_converter_matches_config_class():
     assert converter.HfConfigClass is GrugMoeHfConfig
 
 
+def test_snowball_scan_body_is_checkpointed_for_training():
+    cfg = _tiny_config(num_layers=1, max_seq_len=8)
+    ids = _device_batched_ids(cfg.vocab_size, 8)
+    with (
+        jax.set_mesh(compact_grug_mesh(expert_axis_size=1)),
+        hax.axis_mapping({"batch": ("replica_dcn", "data", "expert")}),
+    ):
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(0))
+        forward_jaxpr = jax.make_jaxpr(lambda m, x: jnp.sum(m.activations(x).array))(model, ids)
+
+    # The production Grug recipe uses recompute-all for every transformer block. Without a remat
+    # inside the scan, its transpose retains all attention and MoE intermediates across every layer.
+    assert "remat" in str(forward_jaxpr)
+
+
 def _expected_state_dict_manifest(cfg: SnowballConfig) -> dict[str, tuple[int, ...]]:
     """Canonical HF keys -> shapes, written out independently of the model's own to_state_dict.
 
@@ -359,8 +374,8 @@ def test_snowball_load_path_multidevice_sharding():
     assert "OK" in result.stdout
 
 
-def test_snowball_multidevice_fused_loss_keeps_head_replicated_and_batch_local():
-    """The head stays replicated while the loss kernel receives only the local token batch."""
+def test_snowball_multidevice_fused_loss_preserves_physical_batch_sharding():
+    """The loss boundary preserves the physical batch layout and returns correct gradients."""
     script = textwrap.dedent(
         """
         import os
@@ -370,6 +385,7 @@ def test_snowball_multidevice_fused_loss_keeps_head_replicated_and_batch_local()
         import haliax as hax
         import jax
         import jax.numpy as jnp
+        import numpy as np
         from haliax import Axis
         from haliax.partitioning import set_mesh
         from jax.sharding import NamedSharding, PartitionSpec as P
@@ -388,7 +404,7 @@ def test_snowball_multidevice_fused_loss_keeps_head_replicated_and_batch_local()
         Batch = Axis("batch", 8)
         Pos = Axis("position", 8)
         Vocab = Axis("vocab", cfg.vocab_size)
-        mesh = compact_grug_mesh(expert_axis_size=1)
+        mesh = compact_grug_mesh(expert_axis_size=2, replica_axis_size=2)
         input_sharding = NamedSharding(mesh, P(("replica_dcn", "data", "expert"), None))
         tokens = jax.device_put(
             jnp.arange(Batch.size * Pos.size, dtype=jnp.int32).reshape(Batch.size, Pos.size) % Vocab.size,
@@ -405,20 +421,63 @@ def test_snowball_multidevice_fused_loss_keeps_head_replicated_and_batch_local()
 
         def fake_kernel(hidden, labels, lm_head, **kwargs):
             local_kernel_batches.append(hidden.shape[0])
-            return jnp.sum(hidden.astype(jnp.float32), axis=-1) * 0
+            logits = hidden.astype(jnp.float32) @ lm_head.astype(jnp.float32)
+            token_loss = -jax.nn.log_softmax(logits)[jnp.arange(labels.size), labels]
+            return token_loss * kwargs["weight"]
 
         grug_loss.fused_cross_entropy_loss_and_logsumexp_penalty = fake_kernel
 
         with set_mesh(mesh), hax.axis_mapping({"batch": ("replica_dcn", "data", "expert")}):
             model = SnowballLMHeadModel.init(Vocab, cfg, key=jax.random.key(0))
-            assert model.transformer.output_proj.sharding.spec == P(None, None)
+            assert model.transformer.output_proj.sharding.spec == P(("replica_dcn", "data"), "model")
             loss, grads = hax.named_jit(
                 eqx.filter_value_and_grad(lambda m, e: m.compute_next_token_loss(e).array)
             )(model, example)
         assert bool(jnp.isfinite(loss))
         assert bool(jnp.all(jnp.isfinite(grads.transformer.output_proj)))
+        assert float(jnp.linalg.norm(grads.transformer.output_proj)) > 0
+        assert grads.transformer.output_proj.sharding.spec == P(("replica_dcn", "data"), "model")
         assert local_kernel_batches
         assert set(local_kernel_batches) == {Pos.size}, local_kernel_batches
+
+        batch_axes = ("replica_dcn", "data", "expert")
+        hidden_np = np.arange(8 * 2 * 4, dtype=np.float32).reshape(8, 2, 4) / 50
+        head_np = np.sin(np.arange(4 * 7, dtype=np.float32)).reshape(4, 7) / 5
+        labels_np = np.arange(8 * 2, dtype=np.int32).reshape(8, 2) % 7
+        weights_np = np.linspace(0, 1, 8 * 2, dtype=np.float32).reshape(8, 2)
+
+        def reference_objective(hidden, head, weights, reduction):
+            logits = hidden.reshape(-1, hidden.shape[-1]) @ head
+            token_loss = -jax.nn.log_softmax(logits)[jnp.arange(labels_np.size), labels_np.reshape(-1)]
+            weighted_loss = token_loss * weights.reshape(-1)
+            if reduction == "mean":
+                return jnp.sum(weighted_loss) / jnp.sum(weights)
+            return jnp.sum(weighted_loss)
+
+        reference_args = tuple(jnp.asarray(x) for x in (hidden_np, head_np, weights_np))
+        for reduction in ("none", "sum", "mean"):
+            expected_loss, expected_grads = jax.value_and_grad(
+                lambda hidden, head, weights: reference_objective(hidden, head, weights, reduction),
+                argnums=(0, 1, 2),
+            )(*reference_args)
+            with set_mesh(mesh):
+                hidden = jax.device_put(hidden_np, NamedSharding(mesh, P(batch_axes, None, None)))
+                head = jax.device_put(head_np, NamedSharding(mesh, P(None, None)))
+                labels = jax.device_put(labels_np, NamedSharding(mesh, P(batch_axes, None)))
+                weights = jax.device_put(weights_np, NamedSharding(mesh, P(batch_axes, None)))
+
+                def sharded_objective(hidden, head, weights):
+                    loss = grug_loss.fused_linear_softmax_cross_entropy_loss(
+                        hidden, head, labels, weight=weights, reduction=reduction
+                    )
+                    return jnp.sum(loss)
+
+                actual_loss, actual_grads = jax.jit(jax.value_and_grad(sharded_objective, argnums=(0, 1, 2)))(
+                    hidden, head, weights
+                )
+            np.testing.assert_allclose(actual_loss, expected_loss, rtol=2e-5, atol=2e-5)
+            for actual_grad, expected_grad in zip(actual_grads, expected_grads, strict=True):
+                np.testing.assert_allclose(actual_grad, expected_grad, rtol=2e-5, atol=2e-5)
         print("OK")
         """
     )
