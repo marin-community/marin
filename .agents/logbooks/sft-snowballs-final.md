@@ -371,3 +371,11 @@ author: benfeuer
 - Audit: read-only RNO2A snapshot `/benfeuer/snowball-final-base-results-snapshot-final` selected exactly 255 succeeded records: five Base checkpoints times 17 tasks times seeds 42, 43, and 44. Every Base has 51 headline cells. All five per-seed, mean, and sample-standard-deviation tables are recorded in external `RESULTS.md`; superseded failures are excluded.
 - Training: smoke 10 remains on attempt 0 with all eight workers running, zero failures/preemptions, and periodic collective probes reporting zero missing peers. It has not emitted a finite update or save, so the full chains remain gated.
 - Next action: require smoke 10 finite update/save and a native reload before releasing the five dependency-ordered training chains.
+
+### 2026-09-09 07:30 EDT - Distributed fused-CE autotuning deadlock isolated
+
+- Hypothesis: smoke 10 is still performing a long whole-step compilation.
+- Result: falsified. Native thread snapshots of all eight ranks found every main thread blocked in `CoordinationServiceAgent::GetKeyValue` under XLA `ConfigAssigner::AssignConfigs` and `AutotunerPass`. Fused-CE logs immediately before compilation show that the manual-axis auxiliary jaxpr could not be hashed, after which ranks independently selected different block-size winners (rank 0 used vocab block 256; rank 6 used 64). The resulting HLOs diverged, so no rank could satisfy distributed config assignment. The owned smoke was cancelled after 3h42m to release 64 H100s; it produced no update or checkpoint.
+- Issue: filed [#9038](https://github.com/marin-community/marin/issues/9038) for the distinct distributed deadlock when fused-CE autotuning lacks a safe shared identity. No issue comment or fix PR was added.
+- Disposition: use the existing supported `LEVANTER_PALLAS_CE_AUTOTUNE_ON_MISS=0` launch setting. That branch returns the deterministic inferred block sizes and does not introduce a new training implementation. Smoke 11 is `/benfeuer/snowball-final-qk157-smoke11-coord`, version `2026.09.09.6`, unique JAX port 19414.
+- Next action: require smoke 11 finite update/save, then launch the native reload gate before any campaign fan-out.
