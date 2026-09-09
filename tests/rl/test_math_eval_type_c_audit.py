@@ -15,7 +15,7 @@ from experiments.post_training.math_eval.type_c_audit import (
 )
 
 
-def fixture(minibatches=1):
+def fixture(minibatches=1, runner="standard"):
     output = {
         "terminal_manifest_uri": "s3://fixture/run/terminal.json",
         "checkpoint_root": "s3://fixture/run/checkpoints",
@@ -31,13 +31,14 @@ def fixture(minibatches=1):
     }
     request["config_yaml"] = yaml.safe_dump(
         {
-            "entrypoint": "standard",
+            "entrypoint": runner,
             "trainer": {
                 "train_batch_size": 64 * minibatches,
                 "policy_mini_batch_size": 64,
                 "max_steps": 96 // minibatches,
                 "eval_interval": 32 // minibatches,
                 "update_epochs_per_batch": 1,
+                **({"fully_async": {"first_token_admission": True}} if runner == "fully_async" else {}),
             },
         }
     )
@@ -263,3 +264,38 @@ def test_physical_attempt_cost_retains_failed_startup_and_missing_sibling(missin
     readback["tasks"][1]["attempts"][-1]["state"] = "TASK_STATE_FAILED"
     with pytest.raises(ValueError):
         audit_native_attempts(readback, expected_job_id=job)
+
+
+def test_explicit_async_receipt_preserves_default_sync_validation():
+    receipts = fixture(1, runner="fully_async")
+    with pytest.raises(ValueError):
+        validate_checkpoint_receipts(*receipts, minibatches=1)
+    result = validate_checkpoint_receipts(*receipts, minibatches=1, runner="fully_async")
+    assert result["global_step"] == 96
+    assert result["saved_successful_updates_validation_required"]
+
+
+def test_async_saved_source_preserves_arithmetic_metadata_without_exposure_claim():
+    state = {
+        "successful_policy_updates": 96,
+        "source_order": {
+            "contract": {
+                "algorithm": "torch-randperm-seed-plus-epoch-v1",
+                "seed": 17,
+                "dataset_sha256": "a" * 64,
+                "rows": 1918,
+                "prompts_per_step": 64,
+                "updates_per_batch": 1,
+            },
+            "loader_batch_size": 1,
+            "loader_workers": 0,
+            "completed_step": 96,
+            "epoch": 3,
+            "step_in_epoch": 9,
+        },
+    }
+    with pytest.raises(ValueError):
+        validate_saved_source(state, seed=17, minibatches=1, dataset_sha256="a" * 64)
+    result = validate_saved_source(state, seed=17, minibatches=1, dataset_sha256="a" * 64, runner="fully_async")
+    assert result["loader_batch_size"] == 1
+    assert result["epoch"] == 3  # Arithmetic source metadata; actual consumed epochs require native vectors.

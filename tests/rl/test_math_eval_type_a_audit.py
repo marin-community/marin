@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from experiments.post_training.math_eval.type_a_audit import audit_async_groups
+from experiments.post_training.math_eval.type_a_audit import audit_async_groups, audit_async_history
 
 
 def population():
@@ -125,3 +125,47 @@ def test_rejects_missing_or_wrong_native_evidence(defect):
         event["body_json"] = json.dumps(body)
     with pytest.raises(ValueError):
         audit_async_groups(capture, staleness_limit=limit, updates=3, dataset_rows=64)
+
+
+def test_async_history_pools_rollout_ages_within_one_optimizer_update():
+    selected, scalars, events = [], [], []
+    for step in [1, 2]:
+        fields = {
+            "policy/by_update/0/" + key: 1
+            for key in [
+                "optimizer_step_succeeded",
+                "grad_norm_valid",
+                "stale/statistics_valid",
+                "stale/finite_fraction",
+                "stale/quantiles_valid",
+                "stale/p999_valid",
+                "raw_grad_norm",
+                "grad_norm_reduced",
+            ]
+        }
+        fields.update(
+            {
+                "policy/by_update/0/stale/quantiles_overflow": 0,
+                "policy/by_update/0/grad_cosine_valid": int(step > 1),
+                "policy/by_update/0/stale/selected_tokens": 10,
+                "consumed/uid_digest_u52": 3970228113034015,
+            }
+        )
+        selected.append({"global_step": step, **fields})
+        scalars.extend({"step": step, "metric": key, "value": value} for key, value in fields.items())
+        for age, tokens in [(0, 7), (step - 1, 3)]:
+            events.append(
+                {
+                    "name": "consumed_age",
+                    "body_json": json.dumps({"age": age, "response_tokens": tokens}),
+                    "attributes_json": json.dumps({"step": str(step)}),
+                }
+            )
+    capture = {"results": {"events": events, "scalars": scalars}}
+    result = audit_async_history(capture, selected, updates=2)
+    assert result["response_mask_tokens"] == 20
+    assert result["optimizer_updates"] == result["exact_integer_digest_joins"] == 2
+    event = events[-1]
+    event["body_json"] = json.dumps({"age": 1, "response_tokens": 4})
+    with pytest.raises(ValueError, match="Async mask-token total"):
+        audit_async_history(capture, selected, updates=2)

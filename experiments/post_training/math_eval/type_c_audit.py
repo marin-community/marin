@@ -15,15 +15,17 @@ from experiments.post_training import async_rl_audit as audit
 from experiments.post_training import async_rl_optimizer_gate as optimizer
 
 
-def validate_checkpoint_receipts(envelope, terminal, attempt, receipt, resolved, *, minibatches):
+def validate_checkpoint_receipts(envelope, terminal, attempt, receipt, resolved, *, minibatches, runner="standard"):
     """Bind a frozen reuse-ladder request to its actual native checkpoint step."""
     if type(minibatches) is not int or minibatches not in (1, 2, 4, 8, 16):
         raise ValueError("Reuse ladder requires a declared integer minibatch count")
+    if runner not in ("standard", "fully_async") or (runner == "fully_async" and minibatches != 1):
+        raise ValueError("Unsupported runner/reuse combination")
     native_step = 96 // minibatches
     recipe = yaml.safe_load(envelope["request"]["config_yaml"])
     trainer = recipe["trainer"]
     if (
-        audit.canonical_entrypoint(recipe["entrypoint"]) != "standard"
+        audit.canonical_entrypoint(recipe["entrypoint"]) != runner
         or trainer["train_batch_size"] != 64 * minibatches
         or trainer["policy_mini_batch_size"] != 64
         or trainer["max_steps"] != native_step
@@ -31,6 +33,11 @@ def validate_checkpoint_receipts(envelope, terminal, attempt, receipt, resolved,
         or trainer["update_epochs_per_batch"] != 1
     ):
         raise ValueError("Frozen request differs from the 96-update synchronous reuse schedule")
+    if runner == "fully_async" and (
+        trainer["fully_async"].get("first_token_admission") is not True
+        or trainer["fully_async"].get("weight_sync_interval", 1) != 1
+    ):
+        raise ValueError("Async checkpoint requires the frozen first-token C1 contract")
     request = envelope["request"]
     output = request["output"]
     if (
@@ -111,7 +118,7 @@ def validate_checkpoint_receipts(envelope, terminal, attempt, receipt, resolved,
     }
 
 
-def audit_checkpoint_history(run, request, receipt_proof, *, minibatches):
+def audit_checkpoint_history(run, request, receipt_proof, *, minibatches, runner="standard"):
     """Audit each rollout batch and every successful optimizer update separately."""
     steps = 96 // minibatches
     if run.state != "finished":
@@ -141,12 +148,25 @@ def audit_checkpoint_history(run, request, receipt_proof, *, minibatches):
         "generator.sampling_params.max_generate_length": 1024,
         "generator.engine_init_kwargs.max_model_len": 2048,
     }
+    if runner not in ("standard", "fully_async") or (runner == "fully_async" and minibatches != 1):
+        raise ValueError("Unsupported runner/reuse combination")
+    if runner == "fully_async":
+        recipe = yaml.safe_load(request["config_yaml"])
+        expected.update(
+            {
+                "trainer.fully_async.first_token_admission": True,
+                "trainer.fully_async.weight_sync_interval": 1,
+                "trainer.fully_async.num_parallel_generation_workers": 64,
+                "trainer.fully_async.max_staleness_steps": recipe["trainer"]["fully_async"]["max_staleness_steps"],
+                "trainer.policy.optimizer_config.lr": recipe["trainer"]["policy"]["optimizer_config"]["lr"],
+            }
+        )
     mismatches = [key for key, value in expected.items() if audit.lookup(cfg, key) != value]
     if mismatches:
         raise ValueError("Checkpoint W&B configuration differs from frozen reuse controls: " + ", ".join(mismatches))
     required = ["policy/updates_completed", "policy/updates_completed_valid"]
     required.extend(f"policy/by_update/{i}/optimizer_step_succeeded" for i in range(minibatches))
-    history, evaluations = audit.summarize_history(run, steps, "standard", required)
+    history, evaluations = audit.summarize_history(run, steps, runner, required)
     if history["sums"]["consumed/sequences"] != 6144 * 4:
         raise ValueError("Consumed response count differs from the fixed group budget")
     if sorted(evaluations) != [0, 32 // minibatches, 64 // minibatches, steps]:
@@ -270,8 +290,10 @@ def audit_native_capture(capture, *, minibatches, expected_source_uids):
     }
 
 
-def validate_saved_source(trainer_state, *, seed, minibatches, dataset_sha256):
-    """Verify saved real-data sampler contract; consumption vectors are checked separately."""
+def validate_saved_source(trainer_state, *, seed, minibatches, dataset_sha256, runner="standard"):
+    """Verify saved sampler metadata; its arithmetic epoch is not async exposure."""
+    if runner not in ("standard", "fully_async") or (runner == "fully_async" and minibatches != 1):
+        raise ValueError("Unsupported runner/reuse combination")
     steps = 96 // minibatches
     contract = {
         "algorithm": "torch-randperm-seed-plus-epoch-v1",
@@ -284,7 +306,7 @@ def validate_saved_source(trainer_state, *, seed, minibatches, dataset_sha256):
     epoch, offset = divmod(steps, 1918 // (64 * minibatches))
     expected = {
         "contract": contract,
-        "loader_batch_size": 64 * minibatches,
+        "loader_batch_size": 1 if runner == "fully_async" else 64 * minibatches,
         "loader_workers": 0,
         "completed_step": steps,
         "epoch": epoch,
