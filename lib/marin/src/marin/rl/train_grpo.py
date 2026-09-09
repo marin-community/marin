@@ -9,7 +9,6 @@ import json
 import logging
 from dataclasses import dataclass, field
 from functools import partial
-from typing import Any
 
 import draccus
 import equinox as eqx
@@ -27,6 +26,7 @@ from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.models.qwen import Qwen3Config
 from levanter.optim.config import AdamConfig
 from levanter.trainer import Trainer, TrainerConfig, initialize
+from levanter.utils.types import FilterTree
 from marin.rl.grpo_artifact import GoldenRollout, read_golden_rollout
 from rigging.filesystem.storage_path import StoragePath
 from transformers import AutoTokenizer
@@ -62,7 +62,7 @@ class OfflineGrpoConfig:
     stop_after: int | None = None
     """Stop at this absolute learner step, preserving the full schedule for resumption."""
 
-    def trainable_filter(self, _model: LmHeadModel) -> Any:
+    def trainable_filter(self, _model: LmHeadModel) -> FilterTree:
         """Return an Equinox filter tree; model adapters may select individual leaves."""
         return True
 
