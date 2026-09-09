@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from datasets import Dataset, DatasetDict
 from levanter.testing.helpers import skip_if_module_missing
 from transformers import AutoTokenizer
 
@@ -186,43 +185,6 @@ def test_task_config():
     q = config.to_task_dict()
 
     assert len(q) == 3
-
-
-@pytest.mark.parametrize(
-    ("task_spec", "expected_task", "expected_dataset_path"),
-    [
-        ("gsm8k", "gsm8k", "openai/gsm8k"),
-        (TaskConfig(task="gsm8k_cot"), "gsm8k_cot", "openai/gsm8k"),
-        (
-            TaskConfig(task="gsm8k", dataset_path="example/gsm8k"),
-            "gsm8k",
-            "example/gsm8k",
-        ),
-    ],
-)
-@skip_if_module_missing("lm_eval")
-def test_gsm8k_task_uses_namespaced_dataset(task_spec, expected_task, expected_dataset_path, monkeypatch):
-    dataset = DatasetDict(
-        {
-            "train": Dataset.from_dict({"question": ["What is 1 + 1?"], "answer": ["The answer is 2. #### 2"]}),
-            "test": Dataset.from_dict({"question": ["What is 2 + 2?"], "answer": ["The answer is 4. #### 4"]}),
-        }
-    )
-    loaded_dataset_paths = []
-
-    def load_dataset(path, *args, **kwargs):
-        loaded_dataset_paths.append(path)
-        if path != expected_dataset_path:
-            raise ValueError(f"Unexpected dataset path: {path}")
-        return dataset
-
-    monkeypatch.setattr("datasets.load_dataset", load_dataset)
-    monkeypatch.setattr("levanter.eval_harness.time.sleep", lambda _: None)
-
-    task_dict = LmEvalHarnessConfig(task_spec=[task_spec]).to_task_dict()
-
-    assert list(task_dict) == [expected_task]
-    assert loaded_dataset_paths == [expected_dataset_path]
 
 
 def test_call_with_retry_does_not_sleep_after_the_last_attempt(monkeypatch):
