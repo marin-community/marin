@@ -60,7 +60,14 @@ RAGGED_REQUIRED_XLA_FLAGS = (
 # -- so the plain ``ragged_dot`` semantics cover it with no segment masks. Its transpose rules
 # give the activation and weight gradients as ragged dots too, so the whole MLP is one HLO op
 # family and every GPU lowering XLA offers (cuDNN grouped GEMM, Triton, or the masked dense
-# expansion) applies to all six GEMMs without kernel-specific code here.
+# expansion) applies to all the GEMMs without kernel-specific code here.
+#
+# The gate and up projections are two ragged dots over the two halves of ``w13`` rather than one
+# over the fused weight. One product would make the backward concatenate the two cotangent halves
+# along the minor axis into a ``[C, 2I]`` buffer, an XLA input fusion that ran at a tenth of memory
+# bandwidth on the hero (12 ms per chunk, 1.4 s per step). Two products keep the cotangents apart
+# and cost an extra ``[C, H]`` add in the activation gradient; each half is still a full-width
+# grouped GEMM.
 def _expert_mlp(
     x_dispatch: Float[Array, "C H"],
     moe_w13_local: Float[Array, "Echunk H I2"],
@@ -69,9 +76,10 @@ def _expert_mlp(
     activation_fn: Callable[[jax.Array], jax.Array],
 ) -> Float[Array, "C H"]:
     """Expert MLP over a receiver buffer laid out expert-major, with ``group_sizes`` covering it."""
-    w13_out = jax.lax.ragged_dot(x_dispatch, moe_w13_local, group_sizes)
     moe_dim = moe_w2_local.shape[1]
-    gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
+    w_gate, w_up = jnp.split(moe_w13_local, [moe_dim], axis=-1)
+    gate = jax.lax.ragged_dot(x_dispatch, w_gate, group_sizes)
+    up = jax.lax.ragged_dot(x_dispatch, w_up, group_sizes)
     return jax.lax.ragged_dot(activation_fn(gate) * up, moe_w2_local, group_sizes)
 
 
