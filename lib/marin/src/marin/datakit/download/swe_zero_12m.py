@@ -16,6 +16,7 @@ from zephyr import counters
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
+from marin.datakit.chat import CHAT_SCHEMA
 from marin.datakit.chat_normalize import normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import (
@@ -174,7 +175,9 @@ def transform_chat(input_path: str, output_path: str) -> None:
         Dataset.from_files(f"{input_path}/**/*.parquet")
         .flat_map(load_parquet_batched)
         .flat_map(row_to_chat_doc)
-        .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
+        .write_parquet(
+            f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", schema=CHAT_SCHEMA, skip_existing=True
+        )
     )
     ZephyrContext(name="swe-zero-12m-chat-transform", resources=ResourceConfig(cpu=1, ram="32g")).execute(pipeline)
 
@@ -213,6 +216,8 @@ def swe_zero_12m_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/swe-zero-12m-trajectories",
         deps=[dl],
         fn=lambda output_path: transform_chat(dl.output_path, output_path),
-        hash_attrs={"version": "2026.09.05.harmony-direct"},
+        hash_attrs={"version": "2026.09.05.harmony-arrow"},
     )
-    return processed, normalize_chat_step(name="normalized-chat/swe-zero-12m", download=processed)
+    return processed, normalize_chat_step(
+        output_schema=CHAT_SCHEMA, name="normalized-chat/swe-zero-12m", download=processed
+    )

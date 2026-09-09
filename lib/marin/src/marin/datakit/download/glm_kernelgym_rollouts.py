@@ -33,6 +33,7 @@ from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.readers import load_jsonl
 
+from marin.datakit.chat import CHAT_SCHEMA
 from marin.datakit.chat_normalize import normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import (
@@ -212,7 +213,9 @@ def transform_chat(input_path: str, output_path: str, truncation_filter: Truncat
         Dataset.from_files(prefix_join(input_path, "**/*.jsonl.gz"))
         .flat_map(load_jsonl)
         .flat_map(lambda row: row_to_chat_doc(row, truncation_filter))
-        .write_parquet(prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"), skip_existing=True)
+        .write_parquet(
+            prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"), schema=CHAT_SCHEMA, skip_existing=True
+        )
     )
     ZephyrContext(name="glm-kernelgym-rollouts-chat-transform", resources=ResourceConfig(cpu=1, ram="8g")).execute(
         pipeline
@@ -266,6 +269,8 @@ def glm_kernelgym_rollouts_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/glm-5.2-kernelgym-rollouts",
         deps=[download],
         fn=lambda output_path: transform_chat(download.output_path, output_path, truncation_filter),
-        hash_attrs={"version": "2026.09.04.2.harmony-direct", "truncation_filter": truncation_filter.value},
+        hash_attrs={"version": "2026.09.04.2.harmony-arrow", "truncation_filter": truncation_filter.value},
     )
-    return processed, normalize_chat_step(name="normalized-chat/glm-5.2-kernelgym-rollouts", download=processed)
+    return processed, normalize_chat_step(
+        output_schema=CHAT_SCHEMA, name="normalized-chat/glm-5.2-kernelgym-rollouts", download=processed
+    )

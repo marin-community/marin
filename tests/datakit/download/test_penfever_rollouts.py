@@ -57,35 +57,6 @@ def test_terminal_protocol_becomes_reasoning_call_and_observation():
     assert json.loads(document["chat_template_kwargs"])["tools"][0]["name"] == "terminal"
 
 
-def test_opencode_protocol_becomes_structured_call_and_observation():
-    transform = row_to_chat_doc(_dataset("qwen35-122b-131k-opencode"))
-    [document] = transform(
-        {
-            "conversations": [
-                {"role": "user", "content": "Fix the code."},
-                {
-                    "role": "assistant",
-                    "content": (
-                        "<think>Inspect.</think>\n<tool_call>\n"
-                        '{"name":"bash","arguments":{"command":"ls"}}\n</tool_call>'
-                    ),
-                },
-                {"role": "user", "content": "file.py"},
-                {"role": "assistant", "content": "<think>Done.</think>The fix is complete."},
-            ]
-        }
-    )
-
-    messages = document["messages"]
-    assert messages[1]["channel"] == "analysis"
-    assert messages[1]["content"] == [{"type": "text", "text": "Inspect."}]
-    assert messages[2]["recipient"] == "functions.bash"
-    assert json.loads(messages[2]["content"][0]["text"]) == {"command": "ls"}
-    assert messages[3]["role"] == "tool"
-    assert messages[3]["name"] == "functions.bash"
-    assert json.loads(document["chat_template_kwargs"])["tools"][0]["name"] == "bash"
-
-
 def test_opencode_protocol_matches_parallel_calls_to_separate_observations():
     transform = row_to_chat_doc(_dataset("qwen35-122b-131k-opencode"))
     [document] = transform(

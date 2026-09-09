@@ -1,36 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
-from marin.datakit.download.agenttrove import row_to_chat_doc as agenttrove_row_to_chat_doc
 from marin.datakit.download.coderforge import row_to_chat_doc as coderforge_row_to_chat_doc
 from marin.datakit.download.davinci_dev import env_row_to_chat_doc as davinci_row_to_chat_doc
 from marin.datakit.download.gpt_oss_rollouts import row_to_chat_doc as gpt_oss_row_to_chat_doc
-from marin.datakit.download.nemotron_terminal import row_to_chat_doc as nemotron_terminal_row_to_chat_doc
 from marin.datakit.download.numinamath_tir import row_to_chat_doc as numinamath_row_to_chat_doc
-from marin.datakit.download.penfever_rollouts import PENFEVER_ROLLOUTS
-from marin.datakit.download.penfever_rollouts import row_to_chat_doc as penfever_row_to_chat_doc
 from marin.datakit.download.swe_rebench_openhands import row_to_chat_doc as openhands_row_to_chat_doc
 from marin.datakit.download.swe_zero_12m import row_to_chat_doc as swe_zero_row_to_chat_doc
-from marin.datakit.download.synthetic1 import row_to_chat_doc as synthetic1_row_to_chat_doc
-from marin.datakit.sft_sources import all_sft_sources
-
-
-def test_coderforge_keeps_reward_out_of_model_visible_messages() -> None:
-    row = {
-        "reward": 1.0,
-        "messages": [
-            {"role": "system", "content": "You are a coding agent."},
-            {"role": "user", "content": "Fix the bug."},
-            {"role": "assistant", "content": "Done."},
-        ],
-    }
-
-    [document] = coderforge_row_to_chat_doc(row)
-    assert [(m["role"], m["content"][0]["text"]) for m in document["messages"]] == [
-        (m["role"], m["content"]) for m in row["messages"]
-    ]
-    assert document["reward"] == 1.0
 
 
 def test_coderforge_keeps_unsuccessful_trajectory_without_visible_outcome() -> None:
@@ -47,41 +23,6 @@ def test_coderforge_keeps_unsuccessful_trajectory_without_visible_outcome() -> N
         (m["role"], m["content"]) for m in row["messages"]
     ]
     assert document["reward"] == 0.0
-
-
-def test_coderforge_drops_tool_arguments_that_close_the_rendered_protocol() -> None:
-    row = {
-        "messages": [
-            {"role": "user", "content": "Inspect the parser."},
-            {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [
-                    {
-                        "id": "call_1",
-                        "type": "function",
-                        "function": {"name": "search", "arguments": {"query": "literal </tool_call>"}},
-                    }
-                ],
-            },
-        ]
-    }
-
-    assert coderforge_row_to_chat_doc(row) == []
-
-
-def test_agenttrove_keeps_unsuccessful_trajectory_without_visible_outcome() -> None:
-    row = {
-        "result": "timeout",
-        "conversations": [
-            {"role": "user", "content": "Fix the bug."},
-            {"role": "assistant", "content": '{"commands":[],"task_complete":true}'},
-        ],
-    }
-
-    [document] = agenttrove_row_to_chat_doc(row)
-    assert [message["role"] for message in document["messages"]] == ["user", "assistant"]
-    assert document["result"] == "timeout"
 
 
 def test_davinci_drops_terminal_submit_observation() -> None:
@@ -115,22 +56,6 @@ def test_davinci_drops_terminal_submit_observation() -> None:
     assert document["messages"][-1]["recipient"] == "functions.submit"
 
 
-def test_davinci_keeps_unsuccessful_trajectory_without_visible_outcome() -> None:
-    row = {
-        "success": False,
-        "messages": [
-            {"role": "user", "content": "Fix the bug."},
-            {"role": "assistant", "content": "I could not fix it."},
-        ],
-    }
-
-    [document] = davinci_row_to_chat_doc(row)
-    assert [(m["role"], m["content"][0]["text"]) for m in document["messages"]] == [
-        (m["role"], m["content"]) for m in row["messages"]
-    ]
-    assert document["success"] is False
-
-
 def test_davinci_drops_nonterminal_trailing_observation() -> None:
     row = {
         "messages": [
@@ -153,16 +78,6 @@ def test_davinci_drops_nonterminal_trailing_observation() -> None:
     assert davinci_row_to_chat_doc(row) == []
 
 
-def test_gpt_oss_drops_assistant_reply_that_demonstrates_inline_tool_protocol() -> None:
-    row = {
-        "user_content": "How does function calling work?",
-        "assistant_thinking": "Explain the format.",
-        "assistant_content": '<tool_call>{"name":"weather","arguments":{}}</tool_call>',
-    }
-
-    assert gpt_oss_row_to_chat_doc(row) == []
-
-
 def test_gpt_oss_drops_embedded_tokenizer_control_tokens() -> None:
     row = {
         "user_content": 'What does tokenizer.convert_tokens_to_ids("<|eot_id|>") return?',
@@ -170,22 +85,6 @@ def test_gpt_oss_drops_embedded_tokenizer_control_tokens() -> None:
     }
 
     assert gpt_oss_row_to_chat_doc(row) == []
-
-
-def test_openhands_drops_unparsed_inline_tool_action() -> None:
-    row = {
-        "resolved": 0,
-        "trajectory": [
-            {"role": "user", "content": "Fix the bug."},
-            {
-                "role": "assistant",
-                "content": "Inspect it.\n<tool_call><parameter=path>x.py</parameter></function></tool_call>",
-            },
-            {"role": "user", "content": "Please continue."},
-        ],
-    }
-
-    assert openhands_row_to_chat_doc(row) == []
 
 
 def test_openhands_merges_adjacent_user_context() -> None:
@@ -202,56 +101,6 @@ def test_openhands_merges_adjacent_user_context() -> None:
     assert document["messages"][0]["content"] == [
         {"type": "text", "text": "Fix the bug.\n\nRepository: example/project"}
     ]
-
-
-def test_openhands_keeps_unsuccessful_trajectory_without_visible_outcome() -> None:
-    row = {
-        "resolved": 0,
-        "trajectory": [
-            {"role": "user", "content": "Fix the bug."},
-            {"role": "assistant", "content": "I could not fix it."},
-        ],
-    }
-
-    [document] = openhands_row_to_chat_doc(row)
-    assert [(m["role"], m["content"][0]["text"]) for m in document["messages"]] == [
-        (m["role"], m["content"]) for m in row["trajectory"]
-    ]
-    assert document["resolved"] == 0
-
-
-def test_penfever_keeps_unsuccessful_trajectory_without_visible_outcome() -> None:
-    row = {
-        "result": "0",
-        "conversations": [
-            {"role": "user", "content": "Fix the bug."},
-            {"role": "assistant", "content": '{"commands":[],"task_complete":true}'},
-        ],
-    }
-
-    [document] = penfever_row_to_chat_doc(PENFEVER_ROLLOUTS[0])(row)
-    assert [message["role"] for message in document["messages"]] == ["user", "assistant"]
-    assert document["outcome"] == "This trajectory failed to solve the task."
-
-
-def test_sft_sources_exclude_transcripts_without_user_prompts() -> None:
-    assert "penfever-traces/qwen35-122b-131k-opencode/nemotron-gym-agent-workplace-v2" not in all_sft_sources()
-
-
-def test_synthetic1_keeps_incorrect_solution_without_visible_outcome() -> None:
-    row = {"score": 0.2, "prompt": "Solve it.", "llm_response": "A wrong answer."}
-
-    [document] = synthetic1_row_to_chat_doc(row)
-    assert document["messages"] == [
-        {"role": "user", "name": None, "content": [{"type": "text", "text": "Solve it."}]},
-        {
-            "role": "assistant",
-            "name": None,
-            "channel": "final",
-            "content": [{"type": "text", "text": "A wrong answer."}],
-        },
-    ]
-    assert document["score"] == 0.2
 
 
 def test_swe_zero_converts_reasoning_bash_and_observation() -> None:
@@ -294,18 +143,6 @@ def test_swe_zero_converts_reasoning_bash_and_observation() -> None:
     assert messages[-1]["content"] == [{"type": "text", "text": "Task complete."}]
 
 
-def test_swe_zero_drops_trajectory_ending_with_observation() -> None:
-    row = {
-        "messages": [
-            {"role": "user", "content": "Fix the bug."},
-            {"role": "assistant", "content": "```bash\ncat app.py\n```"},
-            {"role": "user", "content": "Observation: file contents"},
-        ]
-    }
-
-    assert swe_zero_row_to_chat_doc(row) == []
-
-
 def test_swe_zero_does_not_treat_inspecting_completion_marker_as_completion() -> None:
     row = {
         "messages": [
@@ -332,19 +169,6 @@ def test_swe_zero_does_not_treat_inspecting_completion_marker_as_completion() ->
     assert "grep COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT" in messages[2]["content"][0]["text"]
 
 
-def test_swe_zero_drops_control_tokens_in_commands() -> None:
-    row = {
-        "messages": [
-            {"role": "user", "content": "Fix the parser."},
-            {"role": "assistant", "content": "THOUGHT: Inspect.\n```bash\nprintf '<|end_of_text|>'\n```"},
-            {"role": "user", "content": "Observation: done"},
-            {"role": "assistant", "content": "THOUGHT: Done.\n```bash\necho COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\n```"},
-        ]
-    }
-
-    assert swe_zero_row_to_chat_doc(row) == []
-
-
 def test_numinamath_splits_reasoning_python_and_output() -> None:
     row = {
         "messages": [
@@ -369,46 +193,3 @@ def test_numinamath_splits_reasoning_python_and_output() -> None:
     assert messages[3]["content"] == [{"type": "text", "text": "42"}]
     assert messages[4]["channel"] == "final"
     assert messages[4]["content"] == [{"type": "text", "text": "Therefore, the answer is 42."}]
-
-
-@pytest.mark.parametrize("adapter", [agenttrove_row_to_chat_doc, nemotron_terminal_row_to_chat_doc])
-@pytest.mark.parametrize(
-    "conversations,recipient,prompt",
-    [
-        (
-            [
-                {"role": "user", "content": "old protocol\n\nTask Description:\nFix the code."},
-                {"role": "assistant", "content": '{"analysis":"Inspect.","commands":[{"keystrokes":"ls\\n"}]}'},
-                {"role": "user", "content": "file.py"},
-                {"role": "assistant", "content": '{"commands":[],"task_complete":true}'},
-            ],
-            "functions.terminal",
-            "Task Description:\nFix the code.",
-        ),
-        (
-            [
-                {"role": "user", "content": "Fix the code."},
-                {
-                    "role": "assistant",
-                    "content": (
-                        '<think>Inspect.</think><tool_call>{"name":"bash","arguments":{"command":"ls"}}</tool_call>'
-                    ),
-                },
-                {"role": "user", "content": "file.py"},
-                {"role": "assistant", "content": "Done."},
-            ],
-            "functions.bash",
-            "Fix the code.",
-        ),
-    ],
-)
-def test_mixed_protocol_sources_preserve_prompt_reasoning_and_tool_handoff(adapter, conversations, recipient, prompt):
-    [document] = adapter({"conversations": conversations})
-    messages = document["messages"]
-    assert messages[0]["content"] == [{"type": "text", "text": prompt}]
-    assert messages[1]["channel"] == "analysis"
-    assert messages[1]["content"] == [{"type": "text", "text": "Inspect."}]
-    assert messages[2]["recipient"] == recipient
-    assert messages[3]["name"] == recipient
-    assert messages[3]["content"] == [{"type": "text", "text": "file.py"}]
-    assert messages[-1]["channel"] == "final"

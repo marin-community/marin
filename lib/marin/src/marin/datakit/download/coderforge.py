@@ -10,12 +10,14 @@ reward tag; canonical chat preserves reward only as non-model-visible metadata.
 
 import json
 
+import pyarrow as pa
 from fray.types import ResourceConfig
 from zephyr import counters
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.readers import load_parquet
 
+from marin.datakit.chat import CHAT_SCHEMA
 from marin.datakit.chat_normalize import normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import (
@@ -27,6 +29,13 @@ from marin.datakit.download.rollout_transforms import (
 )
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
+
+SOURCE_CHAT_SCHEMA = pa.schema(
+    [
+        *CHAT_SCHEMA,
+        pa.field("reward", pa.float64()),
+    ]
+)
 
 HF_DATASET_ID = "togethercomputer/CoderForge-Preview"
 HF_REVISION = "060fca9"
@@ -102,7 +111,9 @@ def transform_chat(input_path: str, output_path: str) -> None:
         Dataset.from_files(f"{input_path}/**/*.parquet")
         .flat_map(load_parquet)
         .flat_map(row_to_chat_doc)
-        .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
+        .write_parquet(
+            f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", schema=SOURCE_CHAT_SCHEMA, skip_existing=True
+        )
     )
     ZephyrContext(name="coderforge-chat-transform", resources=ResourceConfig(cpu=1, ram="8g")).execute(pipeline)
 
@@ -147,6 +158,8 @@ def coderforge_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/coderforge-preview",
         deps=[dl],
         fn=lambda output_path: transform_chat(dl.output_path, output_path),
-        hash_attrs={"version": "2026.09.06.harmony-direct"},
+        hash_attrs={"version": "2026.09.06.harmony-arrow"},
     )
-    return processed, normalize_chat_step(name="normalized-chat/coderforge", download=processed)
+    return processed, normalize_chat_step(
+        output_schema=SOURCE_CHAT_SCHEMA, name="normalized-chat/coderforge", download=processed
+    )

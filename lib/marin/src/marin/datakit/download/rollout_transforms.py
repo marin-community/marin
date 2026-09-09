@@ -232,6 +232,8 @@ def openai_chat_messages(messages: list[dict]) -> list[Message]:
 def chat_document(messages: list[Message], source: str, **metadata: object) -> dict:
     """Serialize canonical Harmony messages into a source artifact."""
     serialized = [message.to_dict() for message in messages]
+    if metadata.get("source_id") is not None:
+        metadata["source_id"] = str(metadata["source_id"])
     encoded = json.dumps(serialized, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     chat_template_kwargs = metadata.get("chat_template_kwargs")
     if isinstance(chat_template_kwargs, dict):

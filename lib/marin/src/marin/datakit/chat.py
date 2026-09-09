@@ -9,11 +9,43 @@ from collections import deque
 from dataclasses import dataclass
 from enum import StrEnum
 
+import pyarrow as pa
 from openai_harmony import Message, Role, TextContent
 
 from marin.execution.step_spec import StepSpec
 
 _SAFE_TOOL_IDENTIFIER = re.compile(r"[A-Za-z0-9_.:-]+")
+
+
+CHAT_MESSAGE_TYPE = pa.struct(
+    [
+        pa.field("role", pa.string(), nullable=False),
+        pa.field("name", pa.string()),
+        pa.field("channel", pa.string()),
+        pa.field("recipient", pa.string()),
+        pa.field(
+            "content",
+            pa.list_(
+                pa.struct(
+                    [
+                        pa.field("type", pa.string(), nullable=False),
+                        pa.field("text", pa.string(), nullable=False),
+                    ]
+                )
+            ),
+            nullable=False,
+        ),
+    ]
+)
+CHAT_SCHEMA = pa.schema(
+    [
+        pa.field("id", pa.string(), nullable=False),
+        pa.field("messages", pa.list_(CHAT_MESSAGE_TYPE), nullable=False),
+        pa.field("source", pa.string()),
+        pa.field("source_id", pa.string()),
+        pa.field("chat_template_kwargs", pa.string()),
+    ]
+)
 
 
 class ChatChannel(StrEnum):

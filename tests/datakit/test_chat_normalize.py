@@ -4,12 +4,15 @@
 import json
 from pathlib import Path
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from marin.datakit.chat import ChatChannel, validate_chat_messages
 from marin.datakit.chat_normalize import _normalize_chat_record, normalize_chat_to_parquet
+from marin.datakit.download.coderforge import SOURCE_CHAT_SCHEMA
+from marin.datakit.download.coderforge import transform_chat as transform_coderforge_chat
 from openai_harmony import Author, Message, Role
 
 
@@ -168,3 +171,49 @@ def test_normalization_quarantines_bad_harmony_and_enforces_source_health(tmp_pa
     assert len(normalized) == 1
     assert result.counters["normalize_chat/records_validated"] == valid_count
     assert result.counters["normalize_chat/records_quarantined"] == 1
+
+
+def test_source_writer_preserves_tool_fields_first_seen_after_plain_conversations(tmp_path: Path):
+    input_dir = tmp_path / "input"
+    processed_dir = tmp_path / "processed"
+    normalized_dir = tmp_path / "normalized"
+    input_dir.mkdir()
+    records = []
+    for index in range(9):
+        assistant = {"role": "assistant", "content": "Answer"}
+        if index == 8:
+            assistant = {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"function": {"name": "run", "arguments": {"command": "ls"}}},
+                ],
+            }
+        records.append(
+            {
+                "messages": json.dumps(
+                    [
+                        {"role": "user", "content": f"Question {index}"},
+                        assistant,
+                    ]
+                ),
+                "reward": 0.75,
+            }
+        )
+    pq.write_table(pa.Table.from_pylist(records), input_dir / "data.parquet")
+    transform_coderforge_chat(str(input_dir), str(processed_dir))
+    processed = [row for path in processed_dir.glob("*.parquet") for row in pq.read_table(path).to_pylist()]
+    call = next(row for row in processed if row["messages"][0]["content"][0]["text"] == "Question 8")
+    assert call["messages"][-1]["recipient"] == "functions.run"
+    assert call["messages"][-1]["content"] == [{"type": "text", "text": '{"command":"ls"}'}]
+    normalize_chat_to_parquet(
+        input_path=str(processed_dir), output_path=str(normalized_dir), output_schema=SOURCE_CHAT_SCHEMA
+    )
+    normalized = [
+        row
+        for path in (normalized_dir / "outputs" / "main").glob("*.parquet")
+        for row in pq.read_table(path).to_pylist()
+    ]
+    normalized_call = next(row for row in normalized if row["messages"][0]["content"][0]["text"] == "Question 8")
+    assert normalized_call["messages"][-1]["recipient"] == "functions.run"
+    assert normalized_call["reward"] == 0.75

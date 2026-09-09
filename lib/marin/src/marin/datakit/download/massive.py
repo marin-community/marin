@@ -23,6 +23,7 @@ import shutil
 import tarfile
 import tempfile
 
+import pyarrow as pa
 from fray.types import ResourceConfig
 from rigging.filesystem.atomic import atomic_rename
 from rigging.filesystem.factory import open_url
@@ -31,11 +32,21 @@ from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.readers import load_jsonl
 
+from marin.datakit.chat import CHAT_SCHEMA
 from marin.datakit.chat_normalize import normalize_chat_step
 from marin.datakit.download.http_session import build_retrying_session
 from marin.datakit.download.rollout_transforms import openai_chat_document
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
+
+SOURCE_CHAT_SCHEMA = pa.schema(
+    [
+        *CHAT_SCHEMA,
+        pa.field("locale", pa.string()),
+        pa.field("split", pa.string()),
+        pa.field("intent", pa.string()),
+    ]
+)
 
 logger = logging.getLogger(__name__)
 
@@ -796,7 +807,9 @@ def transform_staged_massive_chat(input_path: str, output_path: str) -> None:
         Dataset.from_list(files)
         .flat_map(load_jsonl)
         .flat_map(row_to_chat_doc)
-        .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
+        .write_parquet(
+            f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", schema=SOURCE_CHAT_SCHEMA, skip_existing=True
+        )
     )
     ZephyrContext(name="massive-chat-transform", resources=ResourceConfig(cpu=1, ram="2g")).execute(pipeline)
 
@@ -846,12 +859,13 @@ def massive_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/massive_function_calling",
         deps=[staged],
         fn=lambda output_path: transform_staged_massive_chat(staged.output_path, output_path),
-        hash_attrs={"version": "2026.09.04.harmony-direct"},
+        hash_attrs={"version": "2026.09.04.harmony-arrow"},
     )
     return (
         staged,
         transformed,
         normalize_chat_step(
+            output_schema=SOURCE_CHAT_SCHEMA,
             name="normalized-chat/massive_function_calling",
             download=transformed,
             worker_resources=ResourceConfig(cpu=2, ram="64g", disk="10g"),

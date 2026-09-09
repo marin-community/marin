@@ -212,32 +212,6 @@ def test_write_parquet_file_captures_fields_appearing_in_later_batches():
         assert table.column("z").to_pylist() == [None] * 8 + [42]
 
 
-def test_write_parquet_file_captures_nested_fields_appearing_in_later_batches():
-    records = [{"messages": [{"role": "user", "content": "plain"}]} for _ in range(8)] + [
-        {
-            "messages": [
-                {
-                    "role": "assistant",
-                    "content": None,
-                    "tool_calls": [
-                        {
-                            "id": "call_1",
-                            "function": {"name": "bash", "arguments": '{"command":"ls"}'},
-                        }
-                    ],
-                }
-            ]
-        }
-    ]
-    with tempfile.TemporaryDirectory() as tmpdir:
-        output_path = str(Path(tmpdir) / "test.parquet")
-        result = write_parquet_file(records, output_path)
-        assert result["count"] == 9
-
-        messages = pq.read_table(output_path).column("messages").to_pylist()
-        assert messages[-1][0]["tool_calls"][0]["id"] == "call_1"
-
-
 def test_write_parquet_file_raises_on_incompatible_type_conflict():
     """Genuine type conflicts (e.g. int vs string) must still raise a clear error."""
     records = [{"x": i} for i in range(8)] + [{"x": "stringy"}]

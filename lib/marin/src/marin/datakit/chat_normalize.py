@@ -8,6 +8,7 @@ from collections.abc import Callable, Iterator
 from typing import Any
 
 import dupekit
+import pyarrow as pa
 from fray.types import ResourceConfig
 from openai_harmony import Message
 from rigging.filesystem.storage_path import prefix_join
@@ -16,7 +17,7 @@ from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.readers import load_file
 
-from marin.datakit.chat import inferred_tool_definitions, validate_chat_messages, validate_tool_definitions
+from marin.datakit.chat import CHAT_SCHEMA, inferred_tool_definitions, validate_chat_messages, validate_tool_definitions
 from marin.datakit.normalize import (
     DEFAULT_MAX_WORKERS,
     DedupMode,
@@ -28,7 +29,7 @@ from marin.datakit.normalize import (
 )
 from marin.execution.step_spec import StepSpec
 
-CHAT_NORMALIZE_VERSION = "2026.09.09.harmony-direct"
+CHAT_NORMALIZE_VERSION = "2026.09.09.harmony-arrow"
 MAX_REJECTED_RECORD_FRACTION = 0.05
 
 
@@ -94,6 +95,7 @@ def _build_chat_pipeline(
     messages_field: str,
     id_field: str,
     dedup_mode: DedupMode,
+    output_schema: pa.Schema,
 ) -> Dataset:
     def normalize_record(record: dict[str, Any]) -> list[dict[str, Any]]:
         try:
@@ -136,7 +138,7 @@ def _build_chat_pipeline(
             sort_by=lambda record: record["id"],
             num_output_shards=num_shards,
         )
-        .map_shard(_make_split_writer(output_dir))
+        .map_shard(_make_split_writer(output_dir, output_schema=output_schema))
     )
 
 
@@ -151,6 +153,7 @@ def normalize_chat_to_parquet(
     max_workers: int = DEFAULT_MAX_WORKERS,
     file_extensions: tuple[str, ...] | None = None,
     dedup_mode: DedupMode = DedupMode.EXACT,
+    output_schema: pa.Schema = CHAT_SCHEMA,
 ) -> NormalizedData:
     """Normalize source conversations into deduplicated Harmony-message Parquet."""
     resources = worker_resources or ResourceConfig(cpu=2, ram="32g", disk="10g")
@@ -158,7 +161,9 @@ def normalize_chat_to_parquet(
     if not file_sizes:
         raise FileNotFoundError(f"No data files found under {input_path}")
     num_shards = max(1, sum(file_sizes.values()) // target_partition_bytes)
-    pipeline = _build_chat_pipeline(list(file_sizes), output_path, num_shards, messages_field, id_field, dedup_mode)
+    pipeline = _build_chat_pipeline(
+        list(file_sizes), output_path, num_shards, messages_field, id_field, dedup_mode, output_schema
+    )
     outcome = ZephyrContext(name="normalize-chat", resources=resources, max_workers=max_workers).execute(pipeline)
     counters_dict = dict(outcome.counters)
     total_in = counters_dict.get("zephyr/records_in", 0)
@@ -192,6 +197,7 @@ def normalize_chat_step(
     max_workers: int = DEFAULT_MAX_WORKERS,
     file_extensions: tuple[str, ...] | None = None,
     dedup_mode: DedupMode = DedupMode.EXACT,
+    output_schema: pa.Schema = CHAT_SCHEMA,
 ) -> StepSpec:
     """Create a versioned Harmony-message normalization step."""
     hash_attrs = {
@@ -201,6 +207,7 @@ def normalize_chat_step(
         "target_partition_bytes": target_partition_bytes,
         "file_extensions": file_extensions,
         "dedup_mode": dedup_mode,
+        "output_schema": str(output_schema),
     }
     return StepSpec(
         name=name,
@@ -214,6 +221,7 @@ def normalize_chat_step(
             max_workers=max_workers,
             file_extensions=file_extensions,
             dedup_mode=dedup_mode,
+            output_schema=output_schema,
         ),
         deps=[download],
         hash_attrs=hash_attrs,

@@ -11,17 +11,31 @@ transcripts, and preserves source metadata for downstream mixture analysis.
 
 import hashlib
 
+import pyarrow as pa
 from fray.types import ResourceConfig
 from zephyr import counters
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.readers import load_parquet
 
+from marin.datakit.chat import CHAT_SCHEMA
 from marin.datakit.chat_normalize import normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import openai_chat_document
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
+
+SOURCE_CHAT_SCHEMA = pa.schema(
+    [
+        *CHAT_SCHEMA,
+        pa.field("problem_hash", pa.string()),
+        pa.field("numina_source", pa.string()),
+        pa.field("answer", pa.string()),
+        pa.field("problem_type", pa.string()),
+        pa.field("question_type", pa.string()),
+        pa.field("synthetic", pa.bool_()),
+    ]
+)
 
 HF_DATASET_ID = "AI-MO/NuminaMath-1.5"
 HF_REVISION = "1b05109"
@@ -117,7 +131,9 @@ def transform_chat(input_path: str, output_path: str) -> None:
         Dataset.from_files(f"{input_path}/**/*.parquet")
         .flat_map(load_parquet)
         .flat_map(row_to_chat_doc)
-        .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
+        .write_parquet(
+            f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", schema=SOURCE_CHAT_SCHEMA, skip_existing=True
+        )
     )
     ZephyrContext(name="numinamath-v1-5-chat-transform", resources=ResourceConfig(cpu=1, ram="8g")).execute(pipeline)
 
@@ -162,6 +178,8 @@ def numinamath_v1_5_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/numinamath-1.5",
         deps=[download],
         fn=lambda output_path: transform_chat(download.output_path, output_path),
-        hash_attrs={"version": "2026.09.04.harmony-direct"},
+        hash_attrs={"version": "2026.09.04.harmony-arrow"},
     )
-    return processed, normalize_chat_step(name="normalized-chat/numinamath-1.5", download=processed)
+    return processed, normalize_chat_step(
+        output_schema=SOURCE_CHAT_SCHEMA, name="normalized-chat/numinamath-1.5", download=processed
+    )

@@ -60,6 +60,14 @@ Each item in `row["messages"]` can be loaded with
 `openai_harmony.Message.from_dict`. There is no
 conversation-level `content` column.
 
+Source processing and normalization both write Parquet using the explicit Arrow schema
+`marin.datakit.chat.CHAT_SCHEMA`. Optional message fields are nullable, so tool
+recipients survive even when the first rows contain only ordinary conversation.
+Sources extend this schema with their metadata columns and pass the same schema
+to `write_parquet(schema=...)` and `normalize_chat_step(output_schema=...)`.
+The `id` and `source_id` columns are strings; numeric source IDs are converted
+to strings by `chat_document`.
+
 Source adapters construct `openai_harmony.Message` objects directly. The shared
 OpenAI-style source helper, `openai_chat_messages`, handles role aliases,
 `reasoning_content`, tagged reasoning, and function-call dictionaries. It emits

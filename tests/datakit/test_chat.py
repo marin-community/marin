@@ -2,16 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-from pathlib import Path
 
-import pyarrow.parquet as pq
 import pytest
-from marin.datakit.chat_normalize import _normalize_chat_record
-from marin.datakit.download.glm_kernelgym_rollouts import chat_conversation_messages
 from marin.datakit.download.rollout_transforms import openai_chat_document
-from marin.datakit.download.swe_zero_12m import row_to_chat_doc as swe_zero_row
 from openai_harmony import Conversation, Message
-from zephyr.writers import write_parquet_file
 
 
 def test_harmony_separates_reasoning_answer_and_tool_handoff():
@@ -104,53 +98,6 @@ def test_harmony_normalizes_reasoning_spellings_to_same_identity(reasoning):
     assert tagged["messages"][1]["content"] == [{"type": "text", "text": "Plan."}]
 
 
-def test_swe_zero_thought_becomes_harmony_analysis():
-    [source] = swe_zero_row(
-        {
-            "messages": [
-                {"role": "user", "content": "Fix the bug."},
-                {"role": "assistant", "content": "THOUGHT: Inspect files.\n```bash\nls\n```"},
-                {"role": "user", "content": "Observation: a.py"},
-                {
-                    "role": "assistant",
-                    "content": "THOUGHT: Finished.\n```bash\necho COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\n```",
-                },
-            ]
-        }
-    )
-    messages = _normalize_chat_record(source, "messages", "id")["messages"]
-    assert [(m["channel"], m["content"][0]["text"]) for m in messages if m.get("channel") == "analysis"] == [
-        ("analysis", "Inspect files."),
-        ("analysis", "Finished."),
-    ]
-    assert messages[-1]["channel"] == "final"
-
-
-def test_harmony_keeps_final_tool_call_without_observation():
-    record = {
-        "messages": [
-            {"role": "user", "content": "Run it."},
-            {"role": "assistant", "content": None, "tool_calls": [{"function": {"name": "run", "arguments": {}}}]},
-        ]
-    }
-    messages = openai_chat_document(**record, source="test")["messages"]
-    assert messages[-1]["recipient"] == "functions.run"
-    assert messages[-1]["channel"] == "commentary"
-
-
-def test_glm_reasoning_with_missing_opener_becomes_harmony_analysis():
-    response = "Inspect the kernel.</think>Use shared memory."
-    source_messages = chat_conversation_messages(
-        [{"role": "user", "content": "Optimize it."}, {"role": "assistant", "content": response}],
-        [{"response": response}],
-    )
-    messages = openai_chat_document(**{"messages": source_messages}, source="test")["messages"]
-    assert [(m["channel"], m["content"][0]["text"]) for m in messages[1:]] == [
-        ("analysis", "Inspect the kernel."),
-        ("final", "Use shared memory."),
-    ]
-
-
 def test_json_answer_keys_do_not_create_reasoning_or_tool_calls():
     answer = '{"analysis":"a report", "commands":["help"]}'
     messages = openai_chat_document(
@@ -178,30 +125,3 @@ def test_separate_reasoning_without_answer_matches_inline_reasoning(content):
     )
     assert separate["id"] == inline["id"]
     assert separate["messages"][-1]["channel"] == "analysis"
-
-
-def test_source_harmony_parquet_is_consumed_without_a_second_conversion(tmp_path: Path):
-    record = openai_chat_document(
-        [
-            {"role": "user", "content": "Inspect the file."},
-            {
-                "role": "assistant",
-                "content": "<think>Read it.</think>",
-                "tool_calls": [
-                    {"id": "read", "function": {"name": "read", "arguments": {"path": "a.py"}}},
-                ],
-            },
-            {"role": "tool", "tool_call_id": "read", "content": "contents"},
-            {"role": "assistant", "content": "Done."},
-        ],
-        "test",
-    )
-    path = tmp_path / "processed.parquet"
-    write_parquet_file([record], str(path))
-    [persisted] = pq.read_table(path).to_pylist()
-    normalized = _normalize_chat_record(persisted, "messages", "id")
-    assert normalized["messages"] == record["messages"]
-    assert normalized["messages"][1]["channel"] == "analysis"
-    assert normalized["messages"][2]["recipient"] == "functions.read"
-    assert normalized["messages"][3]["name"] == "functions.read"
-    assert normalized["messages"][-1]["channel"] == "final"

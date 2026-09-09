@@ -20,6 +20,7 @@ from zephyr import counters
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
+from marin.datakit.chat import CHAT_SCHEMA
 from marin.datakit.chat_normalize import normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import checked_openai_chat_document, load_parquet_batched
@@ -248,7 +249,9 @@ def _transform_nemotron_sft_chat(input_path: str, output_path: str, subset: str)
         Dataset.from_files(prefix_join(input_path, "**/*.parquet"))
         .flat_map(load_parquet_batched)
         .flat_map(lambda row: _nemotron_sft_row_to_chat(row, subset))
-        .write_parquet(prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"), skip_existing=True)
+        .write_parquet(
+            prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"), schema=CHAT_SCHEMA, skip_existing=True
+        )
     )
     ZephyrContext(name=f"nemotron-sft-{subset}-chat", resources=ResourceConfig(cpu=1, ram="32g")).execute(pipeline)
 
@@ -322,9 +325,10 @@ def nemotron_sft_chat_normalize_steps() -> dict[str, tuple[StepSpec, ...]]:
             fn=lambda output_path, source_subset=subset, source_dir=subset_dir: _transform_nemotron_sft_chat(
                 prefix_join(download.output_path, source_dir), output_path, source_subset
             ),
-            hash_attrs={"version": "2026.09.05.2.harmony-direct", "subset": subset},
+            hash_attrs={"version": "2026.09.05.2.harmony-arrow", "subset": subset},
         )
         normalized = normalize_chat_step(
+            output_schema=CHAT_SCHEMA,
             name=f"normalized-chat/{family}/{subset}",
             download=processed,
             file_extensions=(".parquet",),

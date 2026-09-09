@@ -10,11 +10,13 @@ a resolved flag indicating whether the trajectory solved the issue.
 
 import json
 
+import pyarrow as pa
 from fray.types import ResourceConfig
 from zephyr import counters
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
+from marin.datakit.chat import CHAT_SCHEMA
 from marin.datakit.chat_normalize import normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.opencode import INLINE_TOOL_CALL
@@ -28,6 +30,13 @@ from marin.datakit.download.rollout_transforms import (
 )
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
+
+SOURCE_CHAT_SCHEMA = pa.schema(
+    [
+        *CHAT_SCHEMA,
+        pa.field("resolved", pa.int64()),
+    ]
+)
 
 HF_DATASET_ID = "nebius/SWE-rebench-openhands-trajectories"
 HF_REVISION = "3545538"
@@ -99,7 +108,9 @@ def transform_chat(input_path: str, output_path: str) -> None:
         Dataset.from_files(f"{input_path}/**/*.parquet")
         .flat_map(load_parquet_batched)
         .flat_map(row_to_chat_doc)
-        .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
+        .write_parquet(
+            f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", schema=SOURCE_CHAT_SCHEMA, skip_existing=True
+        )
     )
     ZephyrContext(name="swe-rebench-openhands-chat-transform", resources=ResourceConfig(cpu=1, ram="32g")).execute(
         pipeline
@@ -140,6 +151,8 @@ def swe_rebench_openhands_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/swe-rebench-openhands-trajectories",
         deps=[dl],
         fn=lambda output_path: transform_chat(dl.output_path, output_path),
-        hash_attrs={"version": "2026.09.05.1.harmony-direct"},
+        hash_attrs={"version": "2026.09.05.1.harmony-arrow"},
     )
-    return processed, normalize_chat_step(name="normalized-chat/swe-rebench-openhands", download=processed)
+    return processed, normalize_chat_step(
+        output_schema=SOURCE_CHAT_SCHEMA, name="normalized-chat/swe-rebench-openhands", download=processed
+    )

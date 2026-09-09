@@ -3,10 +3,12 @@
 
 """GLM-5.2 code reasoning responses from the OpenThoughts4 prompt set."""
 
+import pyarrow as pa
 from fray.types import ResourceConfig
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
+from marin.datakit.chat import CHAT_SCHEMA
 from marin.datakit.chat_normalize import normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import (
@@ -18,6 +20,14 @@ from marin.datakit.download.rollout_transforms import (
 )
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
+
+SOURCE_CHAT_SCHEMA = pa.schema(
+    [
+        *CHAT_SCHEMA,
+        pa.field("prompt_index", pa.int64()),
+        pa.field("response_index", pa.int64()),
+    ]
+)
 
 HF_DATASET_ID = "marin-community/openthoughts4-code-9168-prompts-glm-5.2-n4"
 HF_REVISION = "91f275562e041d798254122a7d50632e9d27badb"
@@ -70,7 +80,11 @@ def _transform(input_path: str, output_path: str, *, chat: bool) -> None:
         Dataset.from_files(f"{input_path}/**/*.parquet")
         .flat_map(load_parquet_batched)
         .flat_map(transform_row)
-        .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
+        .write_parquet(
+            f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet",
+            schema=SOURCE_CHAT_SCHEMA if chat else None,
+            skip_existing=True,
+        )
     )
     ZephyrContext(
         name="openthoughts4-code-chat" if chat else "openthoughts4-code", resources=ResourceConfig(cpu=1, ram="32g")
@@ -103,6 +117,8 @@ def openthoughts4_code_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/openthoughts4-code-glm-5.2-n4",
         deps=[download],
         fn=lambda output_path: _transform(download.output_path, output_path, chat=True),
-        hash_attrs={"version": "2026.09.05.2.harmony-direct"},
+        hash_attrs={"version": "2026.09.05.2.harmony-arrow"},
     )
-    return processed, normalize_chat_step(name="normalized-chat/openthoughts4-code-glm-5.2-n4", download=processed)
+    return processed, normalize_chat_step(
+        output_schema=SOURCE_CHAT_SCHEMA, name="normalized-chat/openthoughts4-code-glm-5.2-n4", download=processed
+    )
