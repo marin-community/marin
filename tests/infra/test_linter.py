@@ -15,9 +15,9 @@ def test_agent_spec_requires_explicit_model_and_effort():
     assert _agent_spec(
         ["codex", "exec", "--model", "gpt-5.6-terra", "--config", "model_reasoning_effort=low"]
     ) == AgentSpec("codex", "gpt-5.6-terra", "low")
-    assert _agent_spec(
-        ["claude", "-p", "--model", "claude-haiku-4-5-20251001", "--effort", "low"]
-    ) == AgentSpec("claude", "claude-haiku-4-5-20251001", "low")
+    assert _agent_spec(["claude", "-p", "--model", "claude-haiku-4-5-20251001", "--effort", "low"]) == AgentSpec(
+        "claude", "claude-haiku-4-5-20251001", "low"
+    )
 
 
 def test_claude_output_preserves_findings_and_usage():

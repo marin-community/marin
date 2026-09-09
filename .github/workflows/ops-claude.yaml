@@ -122,9 +122,6 @@ jobs:
           settings: '{"attribution":{"commit":"","pr":""}}'
           additional_permissions: |
             actions: read
-          claude_args: |
-            --model claude-sonnet-4-6
-            --effort low
           prompt: |
             Read AGENTS.md, .agents/skills/fix-issue/SKILL.md, and .agents/skills/commit/SKILL.md.
             Then analyze issue #${{ github.event.issue.number }}.
@@ -195,8 +192,8 @@ jobs:
 
             Always produce output — either a PR or an analysis comment. Never silently exit.
           claude_args: |
-            --model claude-opus-4-8
-            --effort high
+            --model claude-sonnet-4-6
+            --effort low
             --max-turns 250
             --permission-mode acceptEdits
             --allowedTools "Bash(git:*),Bash(./infra/pre-commit.py:*),Bash(uv:*),Bash(pytest:*),Bash(gh:*),Bash(python:*)"
