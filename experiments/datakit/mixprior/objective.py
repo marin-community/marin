@@ -77,23 +77,36 @@ class Objective:
     epsilon: float
 
     def __call__(self, outcomes: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        """Return higher-is-better scores and their propagated noise variances."""
-        z = (outcomes[:, self.columns] - self.mean) / self.scale
-        within_cap = np.abs(z) < STANDARDIZED_METRIC_CAP
-        z = np.clip(z, -STANDARDIZED_METRIC_CAP, STANDARDIZED_METRIC_CAP)
-        loss = np.zeros(len(z))
-        derivative = np.zeros_like(z)
+        """Score lower-is-better metric losses; return higher-is-better scores and noise variances."""
+        standardized = (outcomes[:, self.columns] - self.mean) / self.scale
+        within_cap = np.abs(standardized) < STANDARDIZED_METRIC_CAP
+        standardized = np.clip(standardized, -STANDARDIZED_METRIC_CAP, STANDARDIZED_METRIC_CAP)
+
+        # Average targets and guardrails separately: each group gets equal weight
+        # regardless of how many evaluation metrics it contains.
+        loss = np.zeros(len(standardized))
+        loss_gradient = np.zeros_like(standardized)
         for mask in (self.target_mask, ~self.target_mask):
-            if not mask.any():
+            metric_count = mask.sum()
+            if metric_count == 0:
                 continue
-            loss += np.maximum(z[:, mask], -self.epsilon).mean(axis=1)
-            derivative[:, mask] = (z[:, mask] > -self.epsilon) / mask.sum()
-        if self.target_mask.any():
-            loss += z[:, self.target_mask].mean(axis=1)
-            derivative[:, self.target_mask] += 1 / self.target_mask.sum()
-        derivative *= within_cap / self.scale
-        variance = np.einsum("ni,ij,nj->n", derivative, self.noise_covariance, derivative)
-        return -loss, np.maximum(variance, np.finfo(float).eps)
+            group_values = standardized[:, mask]
+            hinge_loss = np.maximum(group_values, -self.epsilon)
+            loss += hinge_loss.mean(axis=1)
+            loss_gradient[:, mask] = (group_values > -self.epsilon) / metric_count
+
+        # Targets also reward improvements beyond the hinge's flat region.
+        target_count = self.target_mask.sum()
+        if target_count > 0:
+            loss += standardized[:, self.target_mask].mean(axis=1)
+            loss_gradient[:, self.target_mask] += 1 / target_count
+
+        # Propagate metric noise through the score: variance = gradient.T @ noise @ gradient.
+        # Clipped metrics have zero derivative. Convert back to raw metric units.
+        loss_gradient *= within_cap / self.scale
+        variance = np.einsum("ni,ij,nj->n", loss_gradient, self.noise_covariance, loss_gradient)
+        variance = np.maximum(variance, np.finfo(float).eps)
+        return -loss, variance
 
 
 def fit_objective(
@@ -109,16 +122,20 @@ def fit_objective(
         raise ValueError("Objective metrics must be nonempty and unique")
     columns = np.asarray([data.labels.index(label) for label in metrics])
     values = data.outcomes[:, columns]
-    reference = values[np.asarray(data.groups) == PROPORTIONAL_REFERENCE_GROUP]
+    reference_rows = np.asarray(data.groups) == PROPORTIONAL_REFERENCE_GROUP
+    reference = values[reference_rows]
     if len(reference) < 2 or not np.isfinite(values).all():
         raise ValueError("The objective needs finite outcomes and at least two proportional references")
-    flat = np.round(data.weights.reshape(len(values), -1), decimals=12)
-    _, groups = np.unique(flat, axis=0, return_inverse=True)
+    # Repeated runs of the same mixture estimate observation noise.
+    flat_weights = data.weights.reshape(len(values), -1)
+    rounded_weights = np.round(flat_weights, decimals=12)
+    _, replicate_groups = np.unique(rounded_weights, axis=0, return_inverse=True)
     squared_error = np.zeros(len(metrics))
     degrees_of_freedom = 0
-    for group in np.unique(groups):
-        repeats = values[groups == group]
-        squared_error += np.square(repeats - repeats.mean(axis=0)).sum(axis=0)
+    for group in np.unique(replicate_groups):
+        repeats = values[replicate_groups == group]
+        deviations = repeats - repeats.mean(axis=0)
+        squared_error += np.square(deviations).sum(axis=0)
         degrees_of_freedom += len(repeats) - 1
     if degrees_of_freedom == 0:
         raise ValueError("Noise estimation requires replicated designs")
@@ -126,12 +143,14 @@ def fit_objective(
     reference_sd = reference.std(axis=0, ddof=1)
     if np.any(noise_sd <= 0) or np.any(reference_sd <= 0):
         raise ValueError("Replicates must identify positive noise for each objective metric")
+    # References supply cross-metric correlation; replicates supply noise magnitude.
     correlation = np.atleast_2d(np.corrcoef(reference, rowvar=False))
+    noise_covariance = correlation * noise_sd[:, None] * noise_sd[None, :]
     return Objective(
         columns=columns,
         target_mask=np.asarray([label in targets for label in metrics]),
         mean=reference.mean(axis=0),
         scale=np.maximum(reference_sd, noise_sd),
-        noise_covariance=correlation * noise_sd[:, None] * noise_sd[None, :],
+        noise_covariance=noise_covariance,
         epsilon=epsilon,
     )
