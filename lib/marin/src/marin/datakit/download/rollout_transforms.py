@@ -11,12 +11,12 @@ from collections.abc import Iterator
 from types import MappingProxyType
 
 import pyarrow.parquet as pq
+from openai_harmony import Role
 from rigging.filesystem.factory import open_url
 from zephyr import counters
 
 logger = logging.getLogger(__name__)
 
-CANONICAL_CHAT_ROLES = frozenset({"assistant", "developer", "system", "tool", "user"})
 CHAT_CONTROL_TOKEN = re.compile(
     r"<\|(?:begin_of_text|end_of_text|finetune_right_pad_id|start_header_id|end_header_id|"
     r"eom_id|eot_id|python_tag|reserved_special_token_\d+)\|>"
@@ -24,11 +24,11 @@ CHAT_CONTROL_TOKEN = re.compile(
 REASONING_TOKEN = re.compile(r"<\|(?:start|end)_think\|>")
 CHAT_ROLE_ALIASES = MappingProxyType(
     {
-        "bot": "assistant",
-        "function": "tool",
-        "gpt": "assistant",
-        "human": "user",
-        "model": "assistant",
+        "bot": Role.ASSISTANT,
+        "function": Role.TOOL,
+        "gpt": Role.ASSISTANT,
+        "human": Role.USER,
+        "model": Role.ASSISTANT,
     }
 )
 
@@ -123,21 +123,19 @@ def canonical_chat_messages(messages: list[dict]) -> list[dict]:
         role_value = message.get("role", message.get("from"))
         if not isinstance(role_value, str):
             raise ValueError("Chat messages require a string 'role' or 'from' field")
-        role = CHAT_ROLE_ALIASES.get(role_value.lower(), role_value.lower())
-        if role not in CANONICAL_CHAT_ROLES:
-            raise ValueError(f"Unsupported chat role {role_value!r}")
+        role = Role(CHAT_ROLE_ALIASES.get(role_value.lower(), role_value.lower()))
 
         content = message.get("content", message.get("value"))
         if content is not None and not isinstance(content, str):
             raise ValueError(f"Chat message content must be a string or null, got {type(content).__name__}")
-        if role == "assistant" and content is not None:
+        if role == Role.ASSISTANT and content is not None:
             content = normalize_reasoning_tokens(content)
         has_tool_call = bool(message.get("tool_calls") or message.get("function_call"))
         has_reasoning = bool(message.get("reasoning_content"))
-        if content is None and (role != "assistant" or not (has_tool_call or has_reasoning)):
+        if content is None and (role != Role.ASSISTANT or not (has_tool_call or has_reasoning)):
             raise ValueError("Only assistant reasoning or tool-call messages may have null content")
 
-        normalized: dict[str, object] = {"role": role, "content": content}
+        normalized: dict[str, object] = {"role": role.value, "content": content}
         for key in ("name", "tool_call_id", "reasoning_content"):
             value = message.get(key)
             if value is not None:
@@ -175,7 +173,7 @@ def _link_tool_messages(messages: list[dict[str, object]]) -> list[dict]:
                 pending[call_id] = function["name"]
                 linked_calls.append(call)
             message["tool_calls"] = linked_calls
-        if message["role"] == "tool":
+        if message["role"] == Role.TOOL:
             call_id = message.get("tool_call_id")
             if call_id is None and len(pending) == 1:
                 call_id = next(iter(pending))
@@ -183,7 +181,7 @@ def _link_tool_messages(messages: list[dict[str, object]]) -> list[dict]:
             if call_id not in pending:
                 raise ValueError("Tool messages must reference a pending tool call")
             message.setdefault("name", pending.pop(call_id))
-        elif message["role"] == "user" and pending:
+        elif message["role"] == Role.USER and pending:
             raise ValueError("Tool observations must use the tool role, not the user role")
         linked.append(message)
     return linked

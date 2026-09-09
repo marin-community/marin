@@ -6,12 +6,21 @@
 import json
 import re
 from dataclasses import dataclass
+from enum import StrEnum
 
 from openai_harmony import Author, Message, Role
 
 from marin.execution.step_spec import StepSpec
 
 _REASONING_PREFIX = re.compile(r"\A<\|start_think\|>(.*?)<\|end_think\|>(.*)\Z", re.DOTALL)
+
+
+class ChatChannel(StrEnum):
+    """Harmony channels emitted by Datakit chat normalization."""
+
+    ANALYSIS = "analysis"
+    COMMENTARY = "commentary"
+    FINAL = "final"
 
 
 @dataclass(frozen=True)
@@ -49,8 +58,8 @@ def to_harmony_messages(messages: list[dict]) -> list[dict]:
                         Message.from_author_and_content(
                             Author.new(Role.TOOL, f"functions.{name}"), observations[call_id]
                         )
-                        .with_channel("commentary")
-                        .with_recipient("assistant")
+                        .with_channel(ChatChannel.COMMENTARY)
+                        .with_recipient(Role.ASSISTANT.value)
                     )
                 pending_calls = []
                 observations = {}
@@ -66,11 +75,13 @@ def to_harmony_messages(messages: list[dict]) -> list[dict]:
                 raise ValueError("Assistant reasoning is present in both content and reasoning_content")
             reasoning, content = match.groups()
         if reasoning.strip():
-            output.append(Message.from_author_and_content(author, reasoning.strip()).with_channel("analysis"))
+            output.append(Message.from_author_and_content(author, reasoning.strip()).with_channel(ChatChannel.ANALYSIS))
         calls = message.get("tool_calls") or []
         if content.strip():
             output.append(
-                Message.from_author_and_content(author, content.strip()).with_channel("commentary" if calls else "final")
+                Message.from_author_and_content(author, content.strip()).with_channel(
+                    ChatChannel.COMMENTARY if calls else ChatChannel.FINAL
+                )
             )
         for call in calls:
             function = call["function"]
@@ -79,7 +90,7 @@ def to_harmony_messages(messages: list[dict]) -> list[dict]:
                 Message.from_author_and_content(
                     author, json.dumps(arguments, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
                 )
-                .with_channel("commentary")
+                .with_channel(ChatChannel.COMMENTARY)
                 .with_recipient(f"functions.{function['name']}")
             )
             pending_calls.append((call["id"], function["name"]))

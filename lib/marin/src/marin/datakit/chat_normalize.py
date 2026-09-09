@@ -10,6 +10,7 @@ from typing import Any
 
 import dupekit
 from fray.types import ResourceConfig
+from openai_harmony import Role
 from rigging.filesystem.storage_path import prefix_join
 from zephyr import counters
 from zephyr.context import ZephyrContext
@@ -105,44 +106,42 @@ def validate_chat_messages(messages: list[dict], tools: list[dict]) -> None:
     pending_calls: dict[str, str] = {}
     seen_call_ids: set[str] = set()
     seen_non_system = False
-    previous_role: str | None = None
+    previous_role: Role | None = None
     for message in messages:
-        role = message["role"]
+        role = Role(message["role"])
         content = message.get("content")
-        if role not in {"assistant", "developer", "system", "tool", "user"}:
-            raise ValueError(f"Unsupported canonical chat role {role!r}")
         if isinstance(content, str) and CHAT_CONTROL_TOKEN.search(content):
             raise ValueError("Message content must not contain tokenizer control tokens")
         if isinstance(content, str) and _RAW_REASONING_TOKEN.search(content):
             raise ValueError("Raw reasoning tags must be normalized before chat validation")
-        if role != "assistant" and isinstance(content, str) and REASONING_TOKEN.search(content):
+        if role != Role.ASSISTANT and isinstance(content, str) and REASONING_TOKEN.search(content):
             raise ValueError("Reasoning delimiters are only valid in assistant messages")
         reasoning = message.get("reasoning_content")
         if reasoning is not None:
-            if role != "assistant" or not isinstance(reasoning, str):
+            if role != Role.ASSISTANT or not isinstance(reasoning, str):
                 raise ValueError("reasoning_content is only valid as assistant text")
             if _contains_unsafe_markup(reasoning):
                 raise ValueError("reasoning_content must contain plain text without control or reasoning tokens")
-        if role in {"system", "developer"}:
+        if role in {Role.SYSTEM, Role.DEVELOPER}:
             if seen_non_system:
                 raise ValueError("System and developer messages must precede all conversation turns")
             continue
         if not seen_non_system:
-            if role != "user":
+            if role != Role.USER:
                 raise ValueError("The first non-system message must be a user message")
             seen_non_system = True
 
-        if role == "user":
+        if role == Role.USER:
             if not isinstance(content, str) or not content.strip():
                 raise ValueError("User messages must contain non-empty text")
             if pending_calls:
                 raise ValueError("A user turn cannot replace a pending tool observation")
-            if previous_role == "user":
+            if previous_role == Role.USER:
                 raise ValueError("Consecutive user turns must be merged by the source adapter")
-        elif role == "assistant":
+        elif role == Role.ASSISTANT:
             if pending_calls:
                 raise ValueError("Every tool call must be followed by its observations before another assistant turn")
-            if previous_role == "assistant":
+            if previous_role == Role.ASSISTANT:
                 raise ValueError("Consecutive assistant turns must be merged by the source adapter")
             if not isinstance(content, str) and content is not None:
                 raise ValueError("Assistant content must be text or null")
@@ -180,7 +179,7 @@ def validate_chat_messages(messages: list[dict], tools: list[dict]) -> None:
                 if name not in tool_names:
                     raise ValueError(f"Tool call {name!r} has no matching tool definition")
                 pending_calls[call_id] = name
-        elif role == "tool":
+        elif role == Role.TOOL:
             if not isinstance(content, str):
                 raise ValueError("Tool observations must contain text")
             if _INLINE_TOOL_SYNTAX.search(content) or _TOOL_RESPONSE_SYNTAX.search(content):
@@ -193,7 +192,7 @@ def validate_chat_messages(messages: list[dict], tools: list[dict]) -> None:
             del pending_calls[call_id]
         previous_role = role
 
-    if not seen_non_system or messages[-1]["role"] != "assistant":
+    if not seen_non_system or messages[-1]["role"] != Role.ASSISTANT:
         raise ValueError("A chat training record must end with an assistant response")
 
 

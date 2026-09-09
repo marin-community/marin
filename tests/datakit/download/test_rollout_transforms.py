@@ -105,7 +105,7 @@ def test_canonical_chat_messages_converts_legacy_function_call_and_drops_unknown
 
 
 def test_canonical_chat_messages_rejects_unknown_roles():
-    with pytest.raises(ValueError, match="Unsupported chat role"):
+    with pytest.raises(ValueError):
         canonical_chat_messages([{"role": "critic", "content": "No."}])
 
 
