@@ -419,3 +419,11 @@ author: benfeuer
 - Validation: fourteen focused tests and the complete repository pre-commit gate passed. Commit `05967167c2` is pushed on the isolated run branch.
 - Run: submitted `/benfeuer/snowball-final-qk157-grug-smoke14-coord` from the worktree, stage version `2026.09.09.9`, conversion artifact version `2026.09.09.3`, and unique JAX port 19417.
 - Next action: require conversion save success, then one finite eight-node update and a loadable checkpoint before any campaign fan-out.
+
+### 2026-09-09 12:31 EDT - Native conversion committed; tokenizer boundary corrected
+
+- Result: smoke 14 loaded all 39 pinned qk157 HF shards, imported and stacked the full model, and durably committed all 28 writes of the 124.94 GiB native checkpoint at conversion version `2026.09.09.3`. The conversion completed on attempt 0. All eight H100 workers then coordinated on port 19417 but failed before weight loading because the new historical wrapper supplied the conversion artifact's `s3://` URI as a tokenizer identifier; Levanter correctly rejected it as an invalid Hub repo. The deterministic retry was cancelled.
+- Correction: restore the previously validated common tokenizer `marin-community/marin-tokenizer@a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2` as both the build-time tokenizer and construction-time cache key. Tests assert this exact immutable ref in the smoke, reload, OpenCode, and Nemotron configs and across all five bases, and reject storage-scheme tokenizer values.
+- Validation: fourteen focused tests and full pre-commit/Pyrefly pass. The standalone `ty` executable remains absent from the environment.
+- Run: commit `630157b418` is pushed. Submitted `/benfeuer/snowball-final-qk157-grug-smoke15-coord` from the isolated worktree, stage version `2026.09.09.10`, cached conversion version `2026.09.09.3`, and unique JAX port 19418.
+- Next action: require smoke 15 to load the native checkpoint, produce one finite update, and save; then launch the separate native reload gate before campaign fan-out.
