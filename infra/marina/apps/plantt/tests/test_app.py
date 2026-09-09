@@ -90,18 +90,20 @@ def test_chart_api_persists_updates_and_rejects_stale_writes() -> None:
 def test_chart_api_rejects_unknown_dependencies() -> None:
     document = example_document()
     document["workstreams"][0]["tasks"][1]["deps"] = ["Missing"]
+    api = client()
 
-    response = client().post("/charts", json={"document": document})
+    response = api.post("/charts", json={"document": document})
 
     assert response.status_code == 422
-    assert response.json()["detail"] == "'Evaluate' depends on unknown item 'Missing'"
+    assert api.get("/charts").json() == []
 
 
 def test_chart_api_rejects_task_scheduling_cycles() -> None:
     document = example_document()
     document["workstreams"][0]["tasks"][0]["start"] = "Evaluate"
+    api = client()
 
-    response = client().post("/charts", json={"document": document})
+    response = api.post("/charts", json={"document": document})
 
     assert response.status_code == 422
-    assert response.json()["detail"] == "Task scheduling cycle includes 'Train'"
+    assert api.get("/charts").json() == []

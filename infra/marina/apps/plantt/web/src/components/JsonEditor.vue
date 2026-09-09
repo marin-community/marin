@@ -1,7 +1,7 @@
 <script setup>
 import { ref, watch } from "vue";
 
-import { validatePlan } from "../model.js";
+import { resolvePlan } from "../model.js";
 
 const props = defineProps({ plan: { type: Object, required: true } });
 const emit = defineEmits(["apply", "error"]);
@@ -20,7 +20,7 @@ watch(
 function apply() {
   try {
     const parsed = JSON.parse(text.value);
-    validatePlan(parsed);
+    resolvePlan(parsed);
     emit("apply", parsed);
     emit("error", "");
   } catch (error) {

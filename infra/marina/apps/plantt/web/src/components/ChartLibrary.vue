@@ -15,7 +15,7 @@ const shown = computed(() => {
   return needle ? props.charts.filter((chart) => chart.title.toLowerCase().includes(needle)) : props.charts;
 });
 
-function relativeTime(value) {
+function updatedAtLabel(value) {
   const elapsed = Date.now() - new Date(value).valueOf();
   if (elapsed < 60_000) return "just now";
   if (elapsed < 3_600_000) return `${Math.floor(elapsed / 60_000)}m ago`;
@@ -51,7 +51,7 @@ function relativeTime(value) {
         @click="$emit('open', chart.id)"
       >
         <span class="chart-row-title">{{ chart.title }}</span>
-        <span class="chart-row-meta">v{{ chart.revision }} · {{ relativeTime(chart.updated_at) }}</span>
+        <span class="chart-row-meta">v{{ chart.revision }} · {{ updatedAtLabel(chart.updated_at) }}</span>
       </button>
       <p v-if="!shown.length" class="library-empty">{{ charts.length ? "No matching plans" : "No plans yet" }}</p>
     </div>

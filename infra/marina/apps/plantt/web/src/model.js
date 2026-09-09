@@ -3,7 +3,7 @@ import LZString from "lz-string";
 const { decompressFromEncodedURIComponent } = LZString;
 
 export const PALETTE = ["#8aa0b2", "#ba9f8c", "#8daa91", "#a992b3", "#7fa9aa", "#c3aa72"];
-const DAY = 86_400_000;
+export const MILLISECONDS_PER_DAY = 86_400_000;
 
 export const EXAMPLE_PLAN = {
   title: "Example Project Plan",
@@ -117,7 +117,7 @@ export function addDuration(start, duration) {
   return result;
 }
 
-export function validatePlan(plan) {
+function validatePlan(plan) {
   if (!plan || typeof plan !== "object" || Array.isArray(plan)) throw new Error("Chart must be an object");
   if (typeof plan.title !== "string" || !plan.title.trim()) throw new Error("Chart title is required");
   if (!Array.isArray(plan.workstreams)) throw new Error("'workstreams' must be an array");
@@ -147,33 +147,32 @@ export function validatePlan(plan) {
       if (!names.has(dependency)) throw new Error(`'${item.name}' depends on unknown item '${dependency}'`);
     }
   }
-  return plan;
 }
 
-function taskStart(task, tasks, resolved, resolving) {
+function taskStart(task, resolver) {
   const spec = task.start;
-  if (typeof spec === "string") return resolveTask(spec, tasks, resolved, resolving).end;
+  if (typeof spec === "string") return resolveTask(spec, resolver).end;
   if (!Array.isArray(spec)) throw new Error(`'${task.name}' needs a start date`);
   if (spec[0] === "date") return parseDate(spec[1]);
   if (spec[0] === "after") {
-    const parent = resolveTask(spec[1], tasks, resolved, resolving);
+    const parent = resolveTask(spec[1], resolver);
     return addDuration(parent.end, spec[2]);
   }
   throw new Error(`Unknown start form for '${task.name}'`);
 }
 
-function resolveTask(name, tasks, resolved, resolving) {
-  if (resolved.has(name)) return resolved.get(name);
-  const task = tasks.get(name);
+function resolveTask(name, resolver) {
+  if (resolver.resolved.has(name)) return resolver.resolved.get(name);
+  const task = resolver.tasks.get(name);
   if (!task) throw new Error(`Unknown start dependency '${name}'`);
-  if (resolving.has(name)) throw new Error(`Scheduling cycle includes '${name}'`);
-  resolving.add(name);
-  const start = taskStart(task, tasks, resolved, resolving);
+  if (resolver.resolving.has(name)) throw new Error(`Scheduling cycle includes '${name}'`);
+  resolver.resolving.add(name);
+  const start = taskStart(task, resolver);
   const end = addDuration(start, task.end);
   if (end <= start) throw new Error(`'${name}' must end after it starts`);
   const span = { task, start, end };
-  resolving.delete(name);
-  resolved.set(name, span);
+  resolver.resolving.delete(name);
+  resolver.resolved.set(name, span);
   return span;
 }
 
@@ -196,7 +195,8 @@ export function resolvePlan(plan) {
   }
 
   const resolvedTasks = new Map();
-  for (const name of tasks.keys()) resolveTask(name, tasks, resolvedTasks, new Set());
+  const resolver = { tasks, resolved: resolvedTasks, resolving: new Set() };
+  for (const name of tasks.keys()) resolveTask(name, resolver);
   for (const capacity of plan.capacity || []) {
     parseDate(capacity.from);
     if (capacity.to) parseDate(capacity.to);
@@ -222,11 +222,11 @@ export function dateBounds(plan, resolved) {
     dates.push(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)));
     dates.push(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 3, 1)));
   }
-  const min = new Date(Math.min(...dates.map(Number)) - 7 * DAY);
-  const max = new Date(Math.max(...dates.map(Number)) + 14 * DAY);
+  const min = new Date(Math.min(...dates.map(Number)) - 7 * MILLISECONDS_PER_DAY);
+  const max = new Date(Math.max(...dates.map(Number)) + 14 * MILLISECONDS_PER_DAY);
   min.setUTCDate(1);
   max.setUTCMonth(max.getUTCMonth() + 1, 1);
-  return { min, max, days: Math.max(1, (max - min) / DAY) };
+  return { min, max, days: Math.max(1, (max - min) / MILLISECONDS_PER_DAY) };
 }
 
 export function monthTicks(bounds) {
@@ -280,7 +280,11 @@ export function capacitySegments(capacity, resolved, bounds) {
 export function decodeImport(value) {
   const input = value.trim();
   if (!input) throw new Error("Paste a Plantt link or chart JSON");
-  if (input.startsWith("{")) return validatePlan(JSON.parse(input));
+  if (input.startsWith("{")) {
+    const plan = JSON.parse(input);
+    resolvePlan(plan);
+    return plan;
+  }
 
   let encoded = input;
   try {
@@ -292,5 +296,7 @@ export function decodeImport(value) {
   const decoded = decompressFromEncodedURIComponent(encoded);
   if (!decoded) throw new Error("That link does not contain a Plantt chart");
   const payload = JSON.parse(decoded);
-  return validatePlan(payload.d || payload);
+  const plan = payload.d || payload;
+  resolvePlan(plan);
+  return plan;
 }

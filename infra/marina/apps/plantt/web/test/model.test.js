@@ -8,7 +8,6 @@ import {
   dateBounds,
   decodeImport,
   resolvePlan,
-  validatePlan,
 } from "../src/model.js";
 
 const { compressToEncodedURIComponent } = LZString;
@@ -65,9 +64,9 @@ test("decodeImport reads legacy compressed URLs without retaining chart data in 
   assert.deepEqual(imported, plan);
 });
 
-test("validatePlan rejects dependencies on absent items", () => {
+test("resolvePlan rejects dependencies on absent items", () => {
   const invalid = structuredClone(plan);
   invalid.workstreams[0].tasks[1].deps = ["Missing"];
 
-  assert.throws(() => validatePlan(invalid), /unknown item 'Missing'/);
+  assert.throws(() => resolvePlan(invalid), /unknown item 'Missing'/);
 });

@@ -6,7 +6,7 @@
 import json
 import uuid
 from datetime import UTC, date, datetime
-from typing import Any
+from typing import Any, Never
 
 from fastapi import FastAPI, HTTPException, Response, status
 from marina.apps import RegisteredApi, Services, registered_api
@@ -14,16 +14,17 @@ from marina.mcp import OperationRisk, operation_extension
 from pydantic import BaseModel, ConfigDict
 from rigging.server_auth import get_verified_user
 from sqlalchemy import JSON, BigInteger, Column, DateTime, MetaData, String, Table, Uuid, delete, select, update
-from sqlalchemy.engine import Engine, RowMapping
+from sqlalchemy.engine import Engine
 
 MAX_DOCUMENT_BYTES = 2 * 1024 * 1024
+CHART_TITLE_MAX_LENGTH = 300
 
 metadata = MetaData()
 charts = Table(
     "charts",
     metadata,
     Column("id", Uuid(as_uuid=True), primary_key=True),
-    Column("title", String(300), nullable=False),
+    Column("title", String(CHART_TITLE_MAX_LENGTH), nullable=False),
     Column("document", JSON, nullable=False),
     Column("revision", BigInteger, nullable=False),
     Column("created_by", String, nullable=False),
@@ -82,7 +83,7 @@ def migrate(engine: Engine) -> None:
     metadata.create_all(engine)
 
 
-def _validate_document(document: dict[str, Any]) -> str:
+def _validate_document(document: dict[str, Any]) -> None:
     encoded = json.dumps(document, separators=(",", ":")).encode()
     if len(encoded) > MAX_DOCUMENT_BYTES:
         raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "Chart document exceeds 2 MiB")
@@ -90,8 +91,11 @@ def _validate_document(document: dict[str, Any]) -> str:
     title = document.get("title")
     if not isinstance(title, str) or not title.strip():
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Chart title must be a non-empty string")
-    if len(title.strip()) > 300:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Chart title cannot exceed 300 characters")
+    if len(title.strip()) > CHART_TITLE_MAX_LENGTH:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            f"Chart title cannot exceed {CHART_TITLE_MAX_LENGTH} characters",
+        )
 
     workstreams = document.get("workstreams")
     if not isinstance(workstreams, list):
@@ -223,8 +227,6 @@ def _validate_document(document: dict[str, Any]) -> str:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Every annotation must be an object")
         _validate_date(annotation.get("date"), "Annotation date")
 
-    return title.strip()
-
 
 def _validate_date(value: object, field: str) -> None:
     if not isinstance(value, str):
@@ -252,16 +254,20 @@ def _user_id() -> str:
     return get_verified_user() or "anonymous"
 
 
-def _record(row: RowMapping) -> ChartRecord:
-    return ChartRecord.model_validate(dict(row))
-
-
 def _chart(engine: Engine, chart_id: uuid.UUID) -> ChartRecord:
     with engine.connect() as connection:
         row = connection.execute(select(charts).where(charts.c.id == chart_id)).mappings().one_or_none()
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Chart not found")
-    return _record(row)
+    return ChartRecord.model_validate(dict(row))
+
+
+def _raise_write_conflict(engine: Engine, chart_id: uuid.UUID) -> Never:
+    with engine.connect() as connection:
+        exists = connection.execute(select(charts.c.id).where(charts.c.id == chart_id)).scalar_one_or_none()
+    if exists is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Chart not found")
+    raise HTTPException(status.HTTP_409_CONFLICT, "Chart changed since it was loaded")
 
 
 def create_api(services: Services) -> RegisteredApi:
@@ -319,7 +325,8 @@ def create_api(services: Services) -> RegisteredApi:
         openapi_extra=operation_extension(OperationRisk.WRITE),
     )
     def create_chart(body: ChartWrite) -> ChartRecord:
-        title = _validate_document(body.document)
+        _validate_document(body.document)
+        title = body.document["title"].strip()
         now = datetime.now(UTC)
         chart_id = uuid.uuid4()
         user_id = _user_id()
@@ -356,7 +363,8 @@ def create_api(services: Services) -> RegisteredApi:
         openapi_extra=operation_extension(OperationRisk.WRITE),
     )
     def update_chart(chart_id: uuid.UUID, body: ChartUpdate) -> ChartRecord:
-        title = _validate_document(body.document)
+        _validate_document(body.document)
+        title = body.document["title"].strip()
         with engine.begin() as connection:
             result = connection.execute(
                 update(charts)
@@ -370,11 +378,7 @@ def create_api(services: Services) -> RegisteredApi:
                 )
             )
         if result.rowcount == 0:
-            with engine.connect() as connection:
-                exists = connection.execute(select(charts.c.id).where(charts.c.id == chart_id)).scalar_one_or_none()
-            if exists is None:
-                raise HTTPException(status.HTTP_404_NOT_FOUND, "Chart not found")
-            raise HTTPException(status.HTTP_409_CONFLICT, "Chart changed since it was loaded")
+            _raise_write_conflict(engine, chart_id)
         return _chart(engine, chart_id)
 
     @api.delete(
@@ -390,11 +394,7 @@ def create_api(services: Services) -> RegisteredApi:
                 delete(charts).where(charts.c.id == chart_id, charts.c.revision == body.revision)
             )
         if result.rowcount == 0:
-            with engine.connect() as connection:
-                exists = connection.execute(select(charts.c.id).where(charts.c.id == chart_id)).scalar_one_or_none()
-            if exists is None:
-                raise HTTPException(status.HTTP_404_NOT_FOUND, "Chart not found")
-            raise HTTPException(status.HTTP_409_CONFLICT, "Chart changed since it was loaded")
+            _raise_write_conflict(engine, chart_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     return registered_api(api)

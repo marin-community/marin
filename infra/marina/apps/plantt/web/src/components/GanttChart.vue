@@ -3,6 +3,7 @@ import { computed } from "vue";
 
 import {
   PALETTE,
+  MILLISECONDS_PER_DAY,
   capacitySegments,
   dateBounds,
   formatDate,
@@ -32,7 +33,7 @@ const timeline = computed(() => {
   const bounds = dateBounds(props.plan, resolved);
   const width = Math.max(1080, LABEL_WIDTH + RIGHT_PAD + bounds.days * 3.6);
   const plotWidth = width - LABEL_WIDTH - RIGHT_PAD;
-  const x = (date) => LABEL_WIDTH + ((date - bounds.min) / (bounds.days * 86_400_000)) * plotWidth;
+  const x = (date) => LABEL_WIDTH + ((date - bounds.min) / (bounds.days * MILLISECONDS_PER_DAY)) * plotWidth;
 
   let y = TOP;
   const sections = [];

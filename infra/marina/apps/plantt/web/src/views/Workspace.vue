@@ -137,13 +137,13 @@ async function createChart(document) {
 }
 
 async function saveChart() {
-  if (!record.value || !plan.value || !dirty.value || saving.value || conflict.value) return !conflict.value;
+  if (!record.value || !plan.value || !dirty.value || saving.value || conflict.value) return;
   clearTimeout(saveTimer);
   try {
     resolvePlan(plan.value);
   } catch (error) {
     editorError.value = error instanceof Error ? error.message : String(error);
-    return false;
+    return;
   }
 
   saving.value = true;
@@ -162,11 +162,9 @@ async function saveChart() {
     charts.value.unshift(summary);
     message.value = "Saved";
     if (dirty.value) saveTimer = setTimeout(() => saveChart(), 300);
-    return true;
   } catch (error) {
     if (error && error.status === 409) conflict.value = true;
     errorMessage.value = error instanceof Error ? error.message : String(error);
-    return false;
   } finally {
     saving.value = false;
   }
@@ -184,7 +182,7 @@ function mutatePlan(mutation) {
   replacePlan(updated);
 }
 
-function allNames(document) {
+function itemNames(document) {
   return document.workstreams.flatMap((workstream) => [
     ...workstream.tasks.map((task) => task.name),
     ...(workstream.milestones || []).map((milestone) => milestone.name),
@@ -220,7 +218,7 @@ function quickAdd(kind) {
     }
     if (!document.workstreams.length) document.workstreams.push({ name: "Workstream 1", tasks: [] });
     const workstream = document.workstreams[0];
-    const names = allNames(document);
+    const names = itemNames(document);
     if (kind === "task") {
       workstream.tasks.push({ name: uniqueName("Task", names), start: ["date", today], end: ["weeks", 2] });
     } else {
@@ -232,7 +230,8 @@ function quickAdd(kind) {
 }
 
 async function copyShareLink() {
-  if (!(await saveChart())) return;
+  await saveChart();
+  if (!record.value || dirty.value || conflict.value) return;
   const url = new URL(`/plantt/charts/${record.value.id}`, window.location.origin).href;
   await navigator.clipboard.writeText(url);
   message.value = "Link copied";
