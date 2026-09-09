@@ -10,6 +10,7 @@ from dataclasses import replace
 import pytest
 from marin.execution.artifact import FingerprintMismatchError
 from marin.execution.lazy import StepContext
+from marin.rl.skyrl import ArtifactDataSource
 
 import experiments.post_training.math_eval.launcher as launcher
 from experiments.post_training.curriculum_rl.pool import GSM8K_BIN, _pool_record
@@ -22,7 +23,13 @@ def test_pinned_datasource_fingerprint_performs_no_storage_reads(monkeypatch):
     monkeypatch.setattr(launcher.StoragePath, "read_bytes", lambda _self: pytest.fail("Fingerprint read storage"))
     ctx = StepContext.for_fingerprint(deps=train.deps())
     assert train.resolve(ctx).relative_path == "qwen/train.parquet"
-    assert dev.resolve(ctx).relative_path.endswith("qwen/dev.parquet")
+    previous = ArtifactDataSource.resolve(dev, ctx)
+    narrowed = dev.resolve(ctx)
+    assert narrowed.relative_path == "dev.parquet"
+    assert narrowed.uri + "/" + narrowed.relative_path == previous.uri + "/" + previous.relative_path
+    assert narrowed.local_path + "/" + narrowed.relative_path == previous.local_path + "/" + previous.relative_path
+    assert narrowed.identity == previous.identity
+    assert train.resolve(ctx) == ArtifactDataSource.resolve(train, ctx)
     assert train.step.fingerprint() == dev.step.fingerprint()
     with pytest.raises(ValueError, match="Unknown frozen pool"):
         launcher.pool_inputs("math-eval-pool@mutable")
