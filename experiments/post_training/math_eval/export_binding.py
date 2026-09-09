@@ -9,7 +9,7 @@ import posixpath
 import re
 
 from experiments.post_training import async_rl_audit as audit
-from experiments.post_training.math_eval.rate import MODEL_PROFILES
+from experiments.post_training.math_eval.checkpoint_tokenizer import validate_tokenizer_source
 
 EAST_PREFIX = "s3://marin-us-east-02a/marin/"
 MAX_EXPORT_BYTES = 2 * 1024**3
@@ -80,7 +80,17 @@ def validate_inventory(inventory):
 
 
 def bind_checkpoint_export(
-    training, exported, completion, inventory, *, training_sha256, export_sha256, completion_sha256, seed, runtime_commit
+    training,
+    exported,
+    completion,
+    inventory,
+    *,
+    training_sha256,
+    export_sha256,
+    completion_sha256,
+    seed,
+    runtime_commit,
+    tokenizer_source,
 ):
     """Bind content to preaudited terminal receipts, update96 and its training seed.
 
@@ -134,9 +144,9 @@ def bind_checkpoint_export(
     ):
         raise ValueError("Calibration tokenizer provenance changed")
     validate_inventory(inventory)
-    files = inventory["files"]
-    if files["tokenizer.json"]["sha256"] != MODEL_PROFILES["qwen"]["tokenizer_sha256"]:
-        raise ValueError("Export tokenizer bytes differ from the frozen contract")
+    validate_tokenizer_source(tokenizer_source)
+    if tokenizer_source["uri"] != train_request["model"]["uri"]:
+        raise ValueError("Calibration tokenizer source differs from the original training model")
     binding = {
         "schema": "math_eval_checkpoint_content_v1",
         "training_seed": seed,
@@ -149,5 +159,6 @@ def bind_checkpoint_export(
         "runtime_commit": runtime_commit,
         "model_uri": model["policy_export_uri"],
         "content": inventory,
+        "tokenizer_source": tokenizer_source,
     }
     return binding | {"binding_sha256": audit.canonical_sha(binding)}

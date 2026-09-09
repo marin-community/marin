@@ -24,6 +24,7 @@ from experiments.post_training.math_eval.calibration_protocol import (
 from experiments.post_training.math_eval.calibration_serving import run_panel
 from experiments.post_training.math_eval.rendering import renderer_provenance
 from tests.rl.test_math_eval_calibration_serving import endpoint_fixture
+from tests.rl.test_math_eval_export_binding import tokenizer_source
 from tests.rl.test_math_eval_serving import generation_fixture
 
 
@@ -35,6 +36,7 @@ def fixture():
         "global_step": 96,
         "training_seed": 17,
         "model_uri": "s3://marin-us-east-02a/marin/checkpoint/hf",
+        "tokenizer_source": tokenizer_source(),
         "content": {"files": files, "total_bytes": 3, "files_sha256": audit.canonical_sha(files)},
     }
     binding["binding_sha256"] = audit.canonical_sha(binding)
@@ -69,6 +71,8 @@ def fixture():
         "1",
         "--served-model-name",
         model.model_id,
+        "--tokenizer",
+        model.tokenizer,
         "--dtype",
         "bfloat16",
         "--max-num-seqs",
@@ -129,6 +133,7 @@ def test_calibration_task_cost_is_charged_once_for_nine_panels():
         "retry",
         "attempt",
         "native_cap",
+        "native_tokenizer",
         "claimed_restart",
     ],
 )
@@ -158,6 +163,8 @@ def test_calibration_cannot_certify_poisoned_panel_or_native_provenance(poison):
         tasks["tasks"][0]["current_attempt_id"] = 1
     elif poison == "attempt":
         generation["panels"][2]["attempt_uid"] = "another"
+    elif poison == "native_tokenizer":
+        generation["native_command"][generation["native_command"].index("--tokenizer") + 1] = "exported-tokenizer"
     elif poison == "native_cap":
         generation["native_command"][generation["native_command"].index("--max-model-len") + 1] = "3072"
     else:

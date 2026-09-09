@@ -86,6 +86,7 @@ def validate_calibration_generation(generation, native_tasks, native_job, *, bin
         "--tensor-parallel-size": "1",
         "--served-model-name": model.model_id,
         "--dtype": "bfloat16",
+        "--tokenizer": model.tokenizer,
         "--max-num-seqs": str(engine.max_num_seqs),
     }
     if command.count("serve") != 1 or command[command.index("serve") + 1] != model.weights:
@@ -219,7 +220,7 @@ def audit_checkpoint_calibration(output_uri, *, audit_uri, native_tasks, native_
         source_commit=source_commit,
         output_uri=output_uri,
     )
-    tokenizer_bytes = bounded_bytes(generation["binding"]["model_uri"] + "/tokenizer.json")
+    tokenizer_bytes = bounded_bytes(generation["binding"]["tokenizer_source"]["uri"] + "/tokenizer.json")
     tokenizer_sha = hashlib.sha256(tokenizer_bytes).hexdigest()
     if tokenizer_sha != MODEL_PROFILES["qwen"]["tokenizer_sha256"]:
         raise ValueError("Calibration audit tokenizer changed")

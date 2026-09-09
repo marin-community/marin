@@ -27,12 +27,26 @@ def test_export_inventory_hashes_weight_bytes_and_detects_mutation(tmp_path):
     assert first["files_sha256"] != second["files_sha256"]
 
 
+def tokenizer_source():
+    files = {
+        name: {"bytes": 1, "sha256": "c" * 64} for name in ("config.json", "tokenizer.json", "tokenizer_config.json")
+    }
+    files["tokenizer.json"]["sha256"] = MODEL_PROFILES["qwen"]["tokenizer_sha256"]
+    return {
+        "uri": "s3://marin-us-east-02a/marin/original/hf",
+        "files": files,
+        "total_bytes": 3,
+        "files_sha256": audit.canonical_sha(files),
+    }
+
+
 def evidence():
     prefix = "s3://marin-us-east-02a/marin/users/ahmad/checkpoints/fixture"
     runtime = {"commit": "a" * 40}
     training = {
         "request": {
             "seed": 17,
+            "model": {"uri": tokenizer_source()["uri"]},
             "completion_mode": "checkpoint",
             "runtime": runtime,
             "run_id": "fixture-run",
@@ -99,6 +113,7 @@ def bind(rows):
         completion_sha256=audit.canonical_sha(rows[2]),
         seed=17,
         runtime_commit="a" * 40,
+        tokenizer_source=tokenizer_source(),
     )
 
 
@@ -125,8 +140,7 @@ def test_checkpoint_binding_rejects_wrong_provenance_after_receipt_rehash(poison
     elif poison == "training_hash":
         rows[1]["training_manifest_sha256"] = "b" * 64
     elif poison == "tokenizer":
-        rows[3]["files"]["tokenizer.json"]["sha256"] = "b" * 64
-        rows[3]["files_sha256"] = audit.canonical_sha(rows[3]["files"])
+        rows[1]["response"]["model"]["tokenizer_revision"] = "another-revision"
     else:
         rows[3]["files_sha256"] = "b" * 64
     with pytest.raises(ValueError):
@@ -161,4 +175,21 @@ def test_training_response_must_match_request_after_rehash(field):
     rows[0]["response"][field] = "foreign"
     rows[1]["training_manifest_sha256"] = audit.canonical_sha(rows[0])
     with pytest.raises(ValueError):
+        bind(rows)
+
+
+def test_binding_preserves_exported_tokenizer_without_using_it_for_calibration():
+    rows = evidence()
+    rows[3]["files"]["tokenizer.json"]["sha256"] = "b" * 64
+    rows[3]["files_sha256"] = audit.canonical_sha(rows[3]["files"])
+    result = bind(rows)
+    assert result["content"]["files"]["tokenizer.json"]["sha256"] == "b" * 64
+    assert result["tokenizer_source"] == tokenizer_source()
+
+
+def test_binding_rejects_another_original_tokenizer_source():
+    rows = evidence()
+    rows[0]["request"]["model"]["uri"] = "s3://marin-us-east-02a/marin/another/hf"
+    rows[1]["training_manifest_sha256"] = audit.canonical_sha(rows[0])
+    with pytest.raises(ValueError, match="original training model"):
         bind(rows)

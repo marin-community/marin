@@ -28,6 +28,7 @@ from experiments.post_training.math_eval.calibration_protocol import (
     checkpoint_serving_configuration,
     load_calibration_inputs,
 )
+from experiments.post_training.math_eval.checkpoint_tokenizer import stage_tokenizer
 from experiments.post_training.math_eval.export_binding import EAST_PREFIX, hash_export_files
 from experiments.post_training.math_eval.pool import canonical_json
 from experiments.post_training.math_eval.pool_audit import verify_verifier_sources
@@ -159,7 +160,10 @@ def run_checkpoint_calibration(*, binding_uri, binding_sha256, output_uri, sourc
         or model_config.get("max_position_embeddings", 0) < 2048
     ):
         raise ValueError("Calibration export does not support the frozen Qwen model/context")
-    tokenizer_bytes = bounded_bytes(model.weights + "/tokenizer.json")
+    staged_tokenizer = stage_tokenizer(binding["tokenizer_source"])
+    if staged_tokenizer != model.tokenizer:
+        raise ValueError("Calibration native tokenizer path differs from its staged byte inventory")
+    tokenizer_bytes = bounded_bytes(staged_tokenizer + "/tokenizer.json")
     if hashlib.sha256(tokenizer_bytes).hexdigest() != MODEL_PROFILES["qwen"]["tokenizer_sha256"]:
         raise ValueError("Calibration tokenizer differs from frozen Qwen")
     decoder = Tokenizer.from_str(tokenizer_bytes.decode())

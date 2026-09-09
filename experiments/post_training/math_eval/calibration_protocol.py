@@ -14,6 +14,7 @@ from marin.inference.config import ServedModelConfig, VllmEngineConfig, VllmLaun
 
 from experiments.post_training import async_rl_audit as audit
 from experiments.post_training.math_eval import launcher
+from experiments.post_training.math_eval.checkpoint_tokenizer import tokenizer_stage_path
 from experiments.post_training.math_eval.export_binding import EAST_PREFIX, validate_inventory
 from experiments.post_training.math_eval.serving_records import _completion_rows, completion_request
 
@@ -119,6 +120,7 @@ def checkpoint_serving_configuration(binding, *, expected_binding_sha256, concur
         raise ValueError("Qualify the new calibration renderer before serving")
     model = ServedModelConfig(
         weights=binding["model_uri"],
+        tokenizer=tokenizer_stage_path(binding["tokenizer_source"]),
         api_model="checkpoint-" + expected_binding_sha256[:16],
         dtype="bfloat16",
         max_model_len=2048,
@@ -129,7 +131,7 @@ def checkpoint_serving_configuration(binding, *, expected_binding_sha256, concur
         source=VllmSource.MARIN_FORK,
         startup_timeout_seconds=600,
         max_num_seqs=concurrency * 8,
-        extra_args=("--seed", "17", "--generation-config", "vllm"),
+        extra_args=("--seed", "17", "--generation-config", "vllm", "--tokenizer", model.tokenizer),
     )
     return model, engine
 
