@@ -44,6 +44,7 @@ from experiments.grug.moe_pipeline.pipeline import (
 
 _RELATIVE_L2_TOLERANCE = 0.002
 _BATCH_SIZE = 128
+_FINGERPRINT_FILE = "fingerprint.json"
 
 
 def _assert_optimizer_counts(state, completed_steps: int) -> None:
@@ -289,7 +290,7 @@ def main() -> None:
         save(resume_root, state, 1)
         fingerprint = _fingerprint(state)
         if jax.process_index() == 0:
-            (StoragePath(args.checkpoint_root) / "fingerprint.json").write_text(json.dumps(fingerprint))
+            (StoragePath(args.checkpoint_root) / _FINGERPRINT_FILE).write_text(json.dumps(fingerprint))
         state, metrics = step(state, batches, denominator)
         _assert_optimizer_counts(state, 2)
         save(expected_root, state, 2)
@@ -301,7 +302,7 @@ def main() -> None:
     state, completed = restore(resume_root, state)
     assert completed == 1, f"expected checkpoint step 1, got {completed}"
     _assert_optimizer_counts(state, completed)
-    expected_fingerprint = json.loads((StoragePath(args.checkpoint_root) / "fingerprint.json").read_text())
+    expected_fingerprint = json.loads((StoragePath(args.checkpoint_root) / _FINGERPRINT_FILE).read_text())
     assert _fingerprint(state) == expected_fingerprint, "restored tensor bytes differ"
     print(f"CHECKPOINT_BYTES_PASSED mode={args.mode}", flush=True)
     if args.restore_only:
