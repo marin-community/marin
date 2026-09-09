@@ -10,7 +10,11 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
 
 from .config import BlockSizes
-from .reference import linear_softmax_cross_entropy_loss_reference, linear_softmax_cross_entropy_loss_streaming
+from .reference import (
+    _cross_entropy_exp,
+    linear_softmax_cross_entropy_loss_reference,
+    linear_softmax_cross_entropy_loss_streaming,
+)
 from .tuned_block_sizes import (
     infer_block_sizes_with_tuned_match,
     infer_xla_b_block_size,
@@ -350,7 +354,7 @@ def _linear_softmax_cross_entropy_loss_streaming_bwd(
                 cap_deriv = (1.0 - tanh_val**2).astype(logits.dtype)
 
             logits = jnp.where(valid[None, :], logits, -jnp.inf)
-            probs = jnp.exp(logits - lse_block[:, None].astype(logits.dtype))
+            probs = _cross_entropy_exp(logits - lse_block[:, None].astype(logits.dtype))
             delta = (
                 dout_loss_block[:, None].astype(logits.dtype) + dout_lse_block[:, None].astype(logits.dtype)
             ) * probs
@@ -488,7 +492,7 @@ def _linear_softmax_cross_entropy_loss_streaming_bwd_scan(
             cap_deriv = 1.0 - tanh_val**2
 
         in_vocab = (v_start + v_offsets) < v_dim
-        probs = jnp.where(in_vocab[None, :], jnp.exp(logits - lse_blk[:, None]), 0.0)
+        probs = jnp.where(in_vocab[None, :], _cross_entropy_exp(logits - lse_blk[:, None]), 0.0)
         dlogits = probs * g_softmax_blk[:, None]
 
         # Dense one-hot label subtraction. ``labels - v_start`` lands in

@@ -2512,7 +2512,14 @@ def test_xla_ce_partial_batch_tiles_preserve_values_and_all_gradients(rows, fast
         )
 
     def reference(x, w):
-        return linear_softmax_cross_entropy_loss_reference(x, labels, w, logit_soft_cap=soft_cap)
+        logits = x @ w
+        if soft_cap is not None:
+            logits = jnp.tanh(logits / soft_cap) * soft_cap
+        # These small logits need no stabilization. Keep the dense oracle independent
+        # of the production reduction and TPU's approximate default logarithms.
+        accuracy = jax.lax.AccuracyMode.HIGHEST if jax.default_backend() == "tpu" else None
+        lse = jax.lax.log(jnp.sum(jax.lax.exp(logits, accuracy=accuracy), axis=-1), accuracy=accuracy)
+        return lse - logits[jnp.arange(rows), labels], lse
 
     def objective(x, w, implementation):
         loss, lse = implementation(x, w)
@@ -2520,6 +2527,9 @@ def test_xla_ce_partial_batch_tiles_preserve_values_and_all_gradients(rows, fast
 
     actual_values = jax.jit(actual)(x, w)
     expected_values = reference(x, w)
+    dense_values = linear_softmax_cross_entropy_loss_reference(x, labels, w, logit_soft_cap=soft_cap)
+    for value, expected in zip(dense_values, expected_values, strict=True):
+        np.testing.assert_allclose(value, expected, atol=1e-5, rtol=1e-5)
     actual_grads = jax.jit(jax.grad(lambda x, w: objective(x, w, actual), argnums=(0, 1)))(x, w)
     expected_grads = jax.grad(lambda x, w: objective(x, w, reference), argnums=(0, 1))(x, w)
     for value, expected in zip((*actual_values, *actual_grads), (*expected_values, *expected_grads), strict=True):
