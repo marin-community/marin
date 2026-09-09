@@ -35,8 +35,8 @@ for search syntax and durable-record policy.
 ## Development
 
 ```bash
-# Lint and format changed files
-./infra/pre-commit.py --changed-files --fix
+# Lint and format
+./infra/pre-commit.py --all-files --fix
 
 # Type checking (also done by pre-commit.py)
 uv run pyrefly check
@@ -49,8 +49,7 @@ uv run --no-project infra/ci/run_tests.py
 ```
 
 - `./infra/pre-commit.py` is the required lint entry point; do not replace it
-  with `uv run pre-commit`. Reserve `--all-files` for an explicitly requested
-  repository sweep.
+  with `uv run pre-commit`.
 - Keep type hints passing under `uv run pyrefly check`; configuration lives in
   `pyproject.toml`.
 - Run agentic lint once before opening or updating a PR and resolve every

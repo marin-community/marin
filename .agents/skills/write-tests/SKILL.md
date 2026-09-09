@@ -34,6 +34,5 @@ Read these before choosing test style, fixtures, mocks, markers, or commands:
 - For package-specific commands, use the relevant `lib/*/AGENTS.md` or testing
   doc.
 
-Before a PR, run `./infra/pre-commit.py --changed-files --fix`. Use
-`--all-files` only for an explicit repository sweep. Do not substitute
-`uv run pre-commit`.
+Before a PR, run `./infra/pre-commit.py --changed-files --fix` or `--all-files`
+as appropriate. Do not substitute `uv run pre-commit`.

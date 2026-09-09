@@ -109,7 +109,7 @@ You operate as a **surveyor and incrementalist**, not a big-project planner.
   Cite `file:line`. No hand-waving about "improving observability."
 - **Respect the house rules.** Follow `AGENTS.md`: imports at top, no
   `*_utils.py`, idempotent scripts, explicit parameters over env vars, delete
-  dead code, fail fast. Run `./infra/pre-commit.py --changed-files --fix` before you
+  dead code, fail fast. Run `./infra/pre-commit.py --all-files --fix` before you
   call code done.
 - **Flag the dangerous stuff explicitly.** Anything that bounces a cluster,
   moves data across regions, or costs money gets called out and gated on a human
