@@ -455,3 +455,22 @@ author: benfeuer
 - Validation: twenty Snowball tests, nineteen historical import/campaign tests, eighty-eight fused-kernel tests with fifteen platform skips, and full pre-commit/Pyrefly pass. The advisory review found no issue in this commit. The standalone `ty` executable is absent.
 - Run: submitted `/benfeuer/snowball-final-qk157-grug-smoke18-coord` at interactive priority from the isolated worktree, stage version `2026.09.09.13`, cached conversion version `2026.09.09.3`, and unique port 19421. It uses normal XLA autotuning and requests `LEVANTER_PALLAS_CE_AUTOTUNE_ON_MISS=0`.
 - Next action: verify the child worker environment contains the Levanter control, then require native load, one finite optimizer update, and checkpoint save before the separate reload gate.
+
+### 2026-09-09 13:56 EDT - Explicit historical loss boundary passes full-topology smoke
+
+- Result: ranks 0 and 1 both exposed `LEVANTER_PALLAS_CE_AUTOTUNE_ON_MISS=0` and port 19421 in `/proc/1/environ`. All eight attempt-0 ranks completed the one-step loop in approximately 78.5 seconds and committed the 624.72 GiB step-1 checkpoint at `s3://marin-us-east-02a/marin/snowball-final/qk157/hf-smoke/2026.09.09.13/checkpoints/step-1`. Root and child succeeded with zero failures or preemptions.
+- Interpretation: restoring the explicit #8225 loss shard map changes the failed outcome to a finite update/save under the same model, converted weights, mesh, kernel correction, runtime, and cluster. This strongly supports `908e81c73e`'s trace-inferred reduced-loss wrapper as the collective-divergence cause; the historical Grug trainer is not causal in this discriminator.
+- Run: submitted native reload gate `/benfeuer/snowball-final-qk157-grug-smoke18-reload-coord` at interactive priority with stage version `2026.09.09.13` and unique port 19422.
+- Next action: require weights-only load from smoke 18, a fresh step counter/optimizer, one finite update, and an independent checkpoint commit before releasing five Chat roots.
+
+### 2026-09-09 14:04 EDT - Native reload gate passes
+
+- Result: reload ranks 0 and 1 confirmed the Levanter setting and unique port 19422. The stage discovered smoke 18's step-1 checkpoint, found no stage-local resume checkpoint, loaded the parent weights into a fresh step-0 state, completed one update in approximately 76.7 seconds, and committed `s3://marin-us-east-02a/marin/snowball-final/qk157/hf-smoke-reload/2026.09.09.13/checkpoints/step-1`.
+- Audit: root and all eight attempt-0 workers succeeded with zero failures or preemptions. The full HF conversion to native load, update, save, weights-only reload, update, and independent-save gate now passes.
+- Next action: release the five Chat roots in parallel with distinct JAX ports, then evaluate each completed Chat checkpoint while advancing its chain to Thinking.
+
+### 2026-09-09 14:05 EDT - Five Chat roots released
+
+- Run: submitted qk157, qk175, qk175-skew2, qk175-skew4, and qk175-skew8 Chat roots at interactive priority with version `2026.09.09.13` and distinct ports 19423 through 19427. All five roots entered running.
+- Scheduling: each stage is a separate root so sibling and cross-base gangs never inherit the same JAX port. Qk157 reuses its validated conversion; the other four roots first build their immutable HF-to-native conversion dependencies.
+- Next action: monitor conversions and Chat training independently; as each Chat checkpoint commits, launch its non-agentic evaluation and its Thinking child with new unique ports.
