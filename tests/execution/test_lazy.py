@@ -386,6 +386,17 @@ def test_consumer_reads_dependency_value_via_ctx_resolved(tmp_path, monkeypatch)
     assert saved.tokenizer == "llama3"
 
 
+def test_consumer_resolves_dependency_under_relative_prefix(tmp_path, monkeypatch):
+    """A relative ``MARIN_PREFIX`` (the tutorials' ``local_store``) must resolve a dependency's
+    record. The dep's path is joined onto the prefix and still looks relative, so an unanchored
+    prefix was applied again on read and the record came back missing."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MARIN_PREFIX", "local_store")
+    run(echo_consumer())
+    saved = TokenizerEcho.raw_load(f"{tmp_path}/local_store/checkpoints/echo/2026.06.28")
+    assert saved.tokenizer == "llama3"
+
+
 def test_resolved_caches_the_loaded_artifact(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     tok = dclm_tokens()

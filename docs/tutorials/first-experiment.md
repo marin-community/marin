@@ -138,9 +138,21 @@ MARIN_PREFIX=local_store uv run python my_experiment.py
 ```
 
 `MARIN_PREFIX` sets the root directory for all outputs. It can be a local path or anything
-[fsspec](https://filesystem-spec.readthedocs.io/en/latest/) supports (e.g. `gs://`). If
+[fsspec](https://filesystem-spec.readthedocs.io/en/latest/) supports (e.g. `gs://`). A
+relative path such as `local_store` resolves against the directory you run from. If
 you already exported `MARIN_PREFIX` in your shell, just run `uv run python my_experiment.py`.
 See [Understanding `MARIN_PREFIX`](../explanations/marin-prefix.md).
+
+Training reports metrics to Weights & Biases. Without an explicit `run_id`, `train_lm` names
+the W&B run ID after the last segment of the output path, which here is the version
+`2026.06.28`. A second person following this tutorial against the same project reuses that
+ID and can get a `403` when W&B attempts to resume the existing run. Either
+keep the run local with `WANDB_MODE=offline`, or pass `run_id="<your-name>-nano-tinystories"`
+to `train_lm` so the run is yours:
+
+```bash
+MARIN_PREFIX=local_store WANDB_MODE=offline uv run python my_experiment.py
+```
 
 This takes a few minutes on a CPU. The output ends with something like:
 
