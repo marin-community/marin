@@ -270,6 +270,11 @@ def main() -> int:
     parser.add_argument("--hidden", type=int, default=_DEFAULT_HIDDEN)
     parser.add_argument("--intermediate", type=int, default=_DEFAULT_INTERMEDIATE)
     parser.add_argument("--fill", type=float, default=_DEFAULT_FILL, help="fraction of rows inside a group")
+    parser.add_argument(
+        "--group-sizes",
+        default=None,
+        help="Comma-separated explicit group sizes (overrides --experts/--fill); a 0 tests an empty expert.",
+    )
     parser.add_argument("--variants", default="quack,xla,xla-cudnn,xla-triton,haliax,dense")
     parser.add_argument("--legs", default="fwd_w13,fwd_w2,dx_w13,dx_w2,dw13,dw2,mlp_fwd,mlp_fwd_bwd")
     parser.add_argument("--json", default=None)
@@ -277,7 +282,12 @@ def main() -> int:
 
     rows, experts, hidden, inter = args.rows, args.experts, args.hidden, args.intermediate
     print(f"device: {jax.devices()[0].device_kind}  jax {jax.__version__}")
-    sizes = _group_sizes(rows, experts, args.fill, _GROUP_SEED)
+    if args.group_sizes:
+        sizes = np.array([int(v) for v in args.group_sizes.split(",")], dtype=np.int64)
+        experts = len(sizes)
+        assert sizes.sum() <= rows
+    else:
+        sizes = _group_sizes(rows, experts, args.fill, _GROUP_SEED)
     active = int(sizes.sum())
     print(f"rows {rows} experts {experts} hidden {hidden} intermediate {inter} sizes {sizes.tolist()} active {active}")
 
