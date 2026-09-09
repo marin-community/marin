@@ -588,6 +588,37 @@ fn resume_after_eviction_reports_only_a_real_gap() {
 }
 
 #[test]
+fn forwarding_read_window_is_bounded_by_ordered_segment_ranges() {
+    let paths = vec![
+        "settled".into(),
+        "first".into(),
+        "overlap".into(),
+        "later".into(),
+    ];
+    let mut seq_bounds = BTreeMap::from([
+        ("settled".into(), (1, 10)),
+        ("first".into(), (11, 20)),
+        ("overlap".into(), (15, 30)),
+        ("later".into(), (31, 40)),
+    ]);
+
+    assert_eq!(
+        bounded_forward_read_through(&paths, &seq_bounds, 10, 40, 2),
+        30
+    );
+    assert_eq!(
+        bounded_forward_read_through(&paths, &seq_bounds, 10, 25, 2),
+        25
+    );
+
+    seq_bounds.remove("first");
+    assert_eq!(
+        bounded_forward_read_through(&paths, &seq_bounds, 10, 40, 1),
+        30
+    );
+}
+
+#[test]
 fn chunk_by_bytes_splits_and_pairs_each_chunk_with_its_last_seq() {
     let batch = RecordBatch::try_new(
         Arc::new(ArrowSchema::new(vec![Field::new(

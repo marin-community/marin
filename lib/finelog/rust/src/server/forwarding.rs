@@ -102,6 +102,11 @@ const FORWARD_READ_TIMEOUT: Duration = Duration::from_secs(60);
 /// million-row write limit.
 const FORWARD_BATCH_ROWS: i64 = 200_000;
 
+/// Maximum number of ordered segment ranges one forwarding scan intentionally spans.
+/// Sparse relay tables can seal thousands of tiny L0s while the hub is unavailable;
+/// bounding by rows alone still makes recovery localize all of them before LIMIT runs.
+const FORWARD_BATCH_SEGMENTS: usize = 128;
+
 /// Encoded bytes per outbound request. Keep ten MiB below the receiving store's hard
 /// Arrow IPC limit. [`chunk_by_bytes`] verifies the resulting size and adjusts each
 /// chunk toward this budget.
@@ -475,13 +480,19 @@ where
             }
         }
         let Some((ship, seqs)) = batch.rows else {
-            // Every row up to `persisted` was filtered out by the scan (rows already
-            // carrying a foreign origin cluster). Advance the cursor to `persisted`,
+            // Every row up to `scanned_through` was filtered out by the scan (rows already
+            // carrying a foreign origin cluster). Advance the cursor to `scanned_through`,
             // or the loop rereads them forever. Safe against a concurrent writer:
-            // `persisted` is a captured bound, and later rows arrive with a later
+            // `scanned_through` is a captured bound, and later rows arrive with a later
             // watermark.
-            self.persist_cursor(name, persisted).await;
-            return ForwardTurn::Wait;
+            if !self.persist_cursor(name, batch.scanned_through).await {
+                return ForwardTurn::Wait;
+            }
+            return if batch.scanned_through < persisted {
+                ForwardTurn::MoreRows
+            } else {
+                ForwardTurn::Wait
+            };
         };
         // The hub must hold the namespace before it can take rows for it.
         if !self.ensure_registered(name, schema).await {
@@ -558,6 +569,15 @@ where
                 }
             }
             cursor = last_seq;
+            if !self.persist_cursor(name, cursor).await {
+                return ForwardTurn::Wait;
+            }
+        }
+        // Fewer than LIMIT matching rows means the scan examined the complete bounded
+        // sequence window. Advance over any trailing foreign-origin rows after every
+        // outbound chunk is settled; doing this earlier could skip a failed chunk.
+        if batch.complete_window && cursor < batch.scanned_through {
+            cursor = batch.scanned_through;
             if !self.persist_cursor(name, cursor).await {
                 return ForwardTurn::Wait;
             }
@@ -716,11 +736,18 @@ where
         let resume_at = resume_after_eviction(cursor, snapshot.min_seq);
         let read_from = resume_at.unwrap_or(cursor);
 
+        let scanned_through = bounded_forward_read_through(
+            &snapshot.paths,
+            &snapshot.seq_bounds,
+            read_from,
+            persisted,
+            FORWARD_BATCH_SEGMENTS,
+        );
         let provider = self.store.namespace_provider(name, snapshot)?;
 
         let table = quote_ident(name);
         let mut sql =
-            format!("SELECT * FROM {table} WHERE seq > {read_from} AND seq <= {persisted}");
+            format!("SELECT * FROM {table} WHERE seq > {read_from} AND seq <= {scanned_through}");
         if has_origin {
             // Only rows this store's own writers produced. A row that already carries an
             // origin cluster arrived here by forwarding, and re-forwarding it would loop.
@@ -756,9 +783,15 @@ where
         )
         .await?;
 
+        let rows = self.ship_batch(result)?;
+        let complete_window = rows.as_ref().map_or(true, |(batch, _)| {
+            batch.num_rows() < FORWARD_BATCH_ROWS as usize
+        });
         Ok(Batch {
-            rows: self.ship_batch(result)?,
+            rows,
             resume_at,
+            scanned_through,
+            complete_window,
         })
     }
 
@@ -970,6 +1003,34 @@ async fn wait_or_stop(backoff: Duration, stop: &mut watch::Receiver<bool>) -> bo
 struct Batch {
     rows: Option<(RecordBatch, Int64Array)>,
     resume_at: Option<i64>,
+    /// Highest sequence position included in this physical scan window.
+    scanned_through: i64,
+    /// Whether LIMIT left no matching rows unread inside the window.
+    complete_window: bool,
+}
+
+/// Bound a forwarding scan by physical segment fanout as well as row count. Segment
+/// paths are ordered by minimum sequence, so the maximum sequence of the first
+/// `max_segments` live ranges gives the provider a tight predicate before localization.
+/// Any later range overlapping that bound is still selected by the provider, preserving
+/// correctness for historical overlapping geometry.
+fn bounded_forward_read_through(
+    paths: &[String],
+    seq_bounds: &BTreeMap<String, (i64, i64)>,
+    read_from: i64,
+    persisted: i64,
+    max_segments: usize,
+) -> i64 {
+    assert!(max_segments > 0);
+    paths
+        .iter()
+        .filter_map(|path| seq_bounds.get(path))
+        .filter(|(min_seq, max_seq)| *max_seq > read_from && *min_seq <= persisted)
+        .take(max_segments)
+        .map(|(_, max_seq)| *max_seq)
+        .max()
+        .unwrap_or(persisted)
+        .min(persisted)
 }
 
 /// The seq to resume from when the next row after `cursor` is already gone: `min_seq` is
