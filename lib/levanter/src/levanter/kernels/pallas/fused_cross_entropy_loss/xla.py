@@ -1,7 +1,6 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import math
 import os
 from functools import partial
 from typing import Optional, cast
@@ -434,12 +433,16 @@ def _linear_softmax_cross_entropy_loss_streaming_bwd_scan(
     if batch_block_size <= 0:
         raise ValueError(f"batch_block_size must be positive, got {batch_block_size}.")
 
-    b_dim, h_dim = x.shape
-    if batch_block_size < b_dim and b_dim % batch_block_size != 0:
-        raise ValueError(
-            f"batch_block_size must divide batch dimension, got B={b_dim}, batch_block_size={batch_block_size}."
-        )
-    b_block = min(batch_block_size, b_dim)
+    original_rows, h_dim = x.shape
+    b_block = min(batch_block_size, original_rows)
+    padding_rows = (-original_rows) % b_block
+    if padding_rows:
+        x = jnp.pad(x, ((0, padding_rows), (0, 0)))
+        labels = jnp.pad(labels, ((0, padding_rows),))
+        lse = jnp.pad(lse, ((0, padding_rows),))
+        dout_loss = jnp.pad(dout_loss, ((0, padding_rows),))
+        dout_lse = jnp.pad(dout_lse, ((0, padding_rows),))
+    b_dim = x.shape[0]
     num_b_blocks = b_dim // b_block
 
     v_dim = w.shape[1]
@@ -558,7 +561,7 @@ def _linear_softmax_cross_entropy_loss_streaming_bwd_scan(
     grad_x_init = jnp.zeros((b_dim, h_dim), dtype=jnp.float32)
     grad_x, grad_w_blocks = jax.lax.scan(scan_body, grad_x_init, jnp.arange(num_v_blocks, dtype=jnp.int32))
     grad_w = jnp.transpose(grad_w_blocks, (1, 0, 2)).reshape((h_dim, v_padded))
-    return grad_x.astype(x.dtype), grad_w[:, :v_dim]
+    return grad_x[:original_rows].astype(x.dtype), grad_w[:, :v_dim]
 
 
 @partial(jax.custom_vjp, nondiff_argnums=(0, 1, 2, 3, 4, 5, 6, 7))
@@ -735,12 +738,11 @@ def linear_softmax_cross_entropy_loss_xla(
         )
 
     original_rows = x.shape[0]
-    row_alignment = b_block_size
-    if fast_backward and bwd_batch_block_size is not None:
-        if bwd_batch_block_size <= 0:
-            raise ValueError(f"batch_block_size must be positive, got {bwd_batch_block_size}.")
-        row_alignment = math.lcm(row_alignment, bwd_batch_block_size)
-    padding_rows = (-original_rows) % row_alignment
+    if fast_backward and bwd_batch_block_size is not None and bwd_batch_block_size <= 0:
+        raise ValueError(f"batch_block_size must be positive, got {bwd_batch_block_size}.")
+    # Forward and backward tiles pad independently, bounding the extra rows
+    # even when the requested tile sizes are relatively prime.
+    padding_rows = (-original_rows) % b_block_size
     if padding_rows:
         x = jnp.pad(x, ((0, padding_rows), (0, 0)))
         labels = jnp.pad(labels, ((0, padding_rows),))

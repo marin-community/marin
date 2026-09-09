@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import re
 import warnings
 from typing import cast
 
@@ -2534,8 +2535,8 @@ def test_xla_ce_partial_batch_tiles_preserve_values_and_all_gradients(rows, fast
     np.testing.assert_array_equal(argmax, jnp.argmax(x @ w, axis=-1))
 
 
-@pytest.mark.parametrize("rows", [8192, 8519, 8521])
-def test_xla_ce_packed_length_preserves_requested_gemm_rows(rows):
+@pytest.mark.parametrize("rows,backward_tile", [(8192, None), (8519, None), (8521, None), (8519, 1217)])
+def test_xla_ce_packed_length_preserves_requested_gemm_rows(rows, backward_tile):
     # 8519 = 7 * 1217: divisor-sized GEMMs caused a packed-sequence performance cliff.
     def loss(x, labels, w):
         return fused_xla.linear_softmax_cross_entropy_loss_xla(
@@ -2543,6 +2544,8 @@ def test_xla_ce_packed_length_preserves_requested_gemm_rows(rows):
             labels,
             w,
             block_sizes=BlockSizes(b_block_size=256, h_block_size=8, v_block_size=16),
+            fast_backward=backward_tile is not None,
+            bwd_batch_block_size=backward_tile,
         )
 
     hlo = str(
@@ -2557,3 +2560,6 @@ def test_xla_ce_packed_length_preserves_requested_gemm_rows(rows):
     gemms = [line for line in hlo.splitlines() if "stablehlo.dot_general" in line]
     assert gemms
     assert all("tensor<256x8xf32>, tensor<8x16xf32>" in line for line in gemms)
+
+    row_counts = [int(rows) for rows in re.findall(r"tensor<(\d+)x8xf32>", hlo)]
+    assert max(row_counts) < rows + 256
