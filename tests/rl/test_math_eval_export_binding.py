@@ -17,6 +17,7 @@ from experiments.post_training.math_eval.export_binding import (
     validate_inventory,
 )
 from experiments.post_training.math_eval.rate import MODEL_PROFILES
+from experiments.post_training.math_eval.receipt_export_binding import bind_receipt_checkpoint_export
 
 
 def test_export_inventory_hashes_weight_bytes_and_detects_mutation(tmp_path):
@@ -285,3 +286,167 @@ def test_rehashed_progress_cannot_replace_the_independently_qualified_receipt():
     progress["progress_sha256"] = audit.canonical_sha({k: v for k, v in progress.items() if k != "progress_sha256"})
     with pytest.raises(ValueError, match="independently qualified digest"):
         ladder_bind(rows, progress, expected)
+
+
+def receipt_only_evidence():
+    request = evidence()[0]["request"]
+    checkpoint = {"global_step": 24, "trainer_state_sha256": "b" * 64, "files": [{"path": "policy/weights", "size": 7}]}
+    mechanical = {
+        "schema": "math_eval_checkpoint_receipt_audit_v1",
+        "seed": 17,
+        "optimizer_updates": 96,
+        "native_global_step": 24,
+        "minibatches": 4,
+        "training_result": {"checkpoint": checkpoint},
+        "training_receipt_sha256": "c" * 64,
+        "original_request_sha256": audit.canonical_sha(request),
+        "original_envelope_bytes_sha256": "d" * 64,
+        "effective_export_yaml_sha256": "e" * 64,
+    }
+    scientific = {
+        "schema": "math_eval_type_c_scientific_receipt_only_v1",
+        "seed": 17,
+        "optimizer_updates": 96,
+        "native_global_step": 24,
+        "minibatches": 4,
+        "scientific_measurement_qualified": True,
+        "lifecycle_clean": False,
+        "clean_end_to_end": False,
+        "receipt_proof": {
+            "terminal_sha256": None,
+            "saved_successful_updates": 96,
+            "trainer_state_sha256": checkpoint["trainer_state_sha256"],
+            "independent_checkpoint_audit_sha256": audit.canonical_sha(mechanical),
+            "receipt_sha256": mechanical["training_receipt_sha256"],
+            "runtime": request["runtime"],
+        },
+    }
+    snapshot = {
+        "seed": 17,
+        "optimizer_updates": 96,
+        "native_global_step": 24,
+        "original_checkpoint": checkpoint,
+        "original_audit_bytes_sha256": audit.canonical_sha(mechanical),
+        "source_and_readback_sha256_equal": True,
+        "source_metadata_before": {"etag": "original"},
+        "source_metadata_after": {"etag": "original"},
+        "native_before": {"attempt_uid": "original", "state": "killed"},
+        "native_after": {"attempt_uid": "original", "state": "killed"},
+        "files": [{"path": "policy/weights", "size": 7, "sha256": "f" * 64}],
+        "snapshot_root": "s3://marin-us-east-02a/snapshot",
+        "snapshot_checkpoint_path": "s3://marin-us-east-02a/snapshot/global_step_24",
+    }
+    snapshot["snapshot_sha256"] = audit.canonical_sha(snapshot)
+    source = {
+        "schema": "math_eval_receipt_only_export_source_v1",
+        "original_request_sha256": audit.canonical_sha(request),
+        "original_training_envelope_sha256": mechanical["original_envelope_bytes_sha256"],
+        "effective_yaml_sha256": mechanical["effective_export_yaml_sha256"],
+        "mechanical_sha256": audit.canonical_sha(mechanical),
+        "scientific_bytes_sha256": audit.canonical_sha(scientific),
+        "snapshot_bytes_sha256": audit.canonical_sha(snapshot),
+        "snapshot_sha256": snapshot["snapshot_sha256"],
+        "snapshot_root": snapshot["snapshot_root"],
+        "snapshot_checkpoint_path": snapshot["snapshot_checkpoint_path"],
+        "training_result": mechanical["training_result"],
+        "training_runtime": request["runtime"],
+        "exporter_runtime": {"commit": "1" * 40, "profile": "megatron-export"},
+        "output": {"exports": "s3://marin-us-east-02a/marin/converted"},
+    }
+    fingerprint = audit.canonical_sha(source)
+    exported = {
+        "schema": "math_eval_receipt_only_policy_export_v1",
+        "state": "succeeded",
+        "training_lifecycle_clean": False,
+        "training_manifest_sha256": None,
+        "source_binding": source,
+        "source_binding_sha256": fingerprint,
+        "exporter_runtime": source["exporter_runtime"],
+        "global_step": 24,
+        "export_attempt_id": "conversion-attempt",
+        "model_uri": source["output"]["exports"] + "/hf",
+        "completion_receipt_uri": source["output"]["exports"] + "/receipts/" + fingerprint + ".json",
+    }
+    completion = {
+        "global_step": 24,
+        "request_fingerprint": fingerprint,
+        "attempt_id": "conversion-attempt",
+        "export_path": exported["model_uri"],
+    }
+    return dict(
+        request=request,
+        mechanical=mechanical,
+        scientific=scientific,
+        snapshot=snapshot,
+        exported=exported,
+        completion=completion,
+    )
+
+
+def bind_receipt_rows(rows):
+    return bind_receipt_checkpoint_export(
+        **rows,
+        inventory=evidence()[3],
+        tokenizer_source=tokenizer_source(),
+        expected_hashes={name: audit.canonical_sha(value) for name, value in rows.items()},
+    )
+
+
+def test_receipt_only_conversion_serves_audited_weights_without_successful_training_manifest():
+    bound = bind_receipt_rows(receipt_only_evidence())
+    model, engine = checkpoint_serving_configuration(bound, expected_binding_sha256=bound["binding_sha256"])
+    assert model.weights == "s3://marin-us-east-02a/marin/converted/hf"
+    assert model.max_model_len == 2048 and engine.max_num_seqs == 64
+    assert bound["training_manifest_sha256"] is None and not bound["training_lifecycle_clean"]
+    assert bound["optimizer_updates"] == 96 and bound["global_step"] == 24
+    assert bound["runtime_commit"] != bound["exporter_runtime"]["commit"]
+
+
+@pytest.mark.parametrize(
+    "poison",
+    [
+        "lifecycle",
+        "terminal",
+        "snapshot_bytes",
+        "snapshot_path",
+        "source_write",
+        "attempt",
+        "progress",
+        "exporter",
+        "yaml",
+    ],
+)
+def test_receipt_only_rehashed_conflicting_proofs_cannot_certify_a_conversion(poison):
+    rows = receipt_only_evidence()
+    if poison == "lifecycle":
+        rows["scientific"]["lifecycle_clean"] = True
+    elif poison == "terminal":
+        rows["scientific"]["receipt_proof"]["terminal_sha256"] = "a" * 64
+    elif poison == "snapshot_bytes":
+        rows["snapshot"]["files"][0]["sha256"] = "a" * 64
+    elif poison == "snapshot_path":
+        rows["exported"]["source_binding"]["snapshot_checkpoint_path"] = "s3://marin-us-east-02a/foreign"
+    elif poison == "source_write":
+        rows["snapshot"]["source_metadata_after"]["etag"] = "replaced"
+    elif poison == "attempt":
+        rows["completion"]["attempt_id"] = "another-conversion"
+    elif poison == "progress":
+        rows["scientific"]["receipt_proof"]["saved_successful_updates"] = 95
+    elif poison == "exporter":
+        rows["exported"]["exporter_runtime"] = {"commit": "9" * 40}
+    else:
+        rows["exported"]["source_binding"]["effective_yaml_sha256"] = "f" * 64
+    with pytest.raises(ValueError):
+        bind_receipt_rows(rows)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [("training_lifecycle_clean", True), ("training_manifest_sha256", "a" * 64), ("optimizer_updates", 95)],
+)
+def test_receipt_serving_rejects_rehashed_lifecycle_or_progress_reclassification(field, value):
+    bound = bind_receipt_rows(receipt_only_evidence())
+    bound[field] = value
+    bound["binding_sha256"] = audit.canonical_sha({k: v for k, v in bound.items() if k != "binding_sha256"})
+    with pytest.raises(ValueError):
+        checkpoint_serving_configuration(bound, expected_binding_sha256=bound["binding_sha256"])

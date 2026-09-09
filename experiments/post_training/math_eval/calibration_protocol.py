@@ -17,6 +17,8 @@ from experiments.post_training.math_eval import launcher
 from experiments.post_training.math_eval.checkpoint_progress import validate_progress
 from experiments.post_training.math_eval.checkpoint_tokenizer import tokenizer_stage_path
 from experiments.post_training.math_eval.export_binding import EAST_PREFIX, validate_inventory
+from experiments.post_training.math_eval.receipt_export_binding import SCHEMA as RECEIPT_SCHEMA
+from experiments.post_training.math_eval.receipt_export_binding import validate_receipt_content_binding
 from experiments.post_training.math_eval.serving_records import _completion_rows, completion_request
 
 BATTERIES = {
@@ -119,10 +121,13 @@ def checkpoint_serving_configuration(binding, *, expected_binding_sha256, concur
         if progress["training_seed"] != binding["training_seed"]:
             raise ValueError("Checkpoint progress and content bind different seeds")
         native_step = progress["global_step"]
+    elif schema == RECEIPT_SCHEMA:
+        validate_receipt_content_binding(binding)
+        native_step = binding["global_step"]
     if (
         binding["binding_sha256"] != expected_binding_sha256
         or audit.canonical_sha(unsigned) != expected_binding_sha256
-        or schema not in {"math_eval_checkpoint_content_v1", "math_eval_checkpoint_content_v2"}
+        or schema not in {"math_eval_checkpoint_content_v1", "math_eval_checkpoint_content_v2", RECEIPT_SCHEMA}
         or binding["global_step"] != native_step
         or binding["training_seed"] not in {17, 29}
         or not binding["model_uri"].startswith(EAST_PREFIX)
