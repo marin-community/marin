@@ -59,6 +59,9 @@ _AGENTIC_STEPS = 1_888
 _PREBUILT_TRAIN_RESOURCES = "prebuilt_train_resources"
 _OPENCODE_DATASET_REVISION = "a9805934c9c98908c611236bbfc87799f1ff6fe5"
 _NEMOTRON_DATASET_REVISION = "a1667c4ffdadea02a89bffe4f1bb7ca2ff19f8d9"
+_TOKENIZER_REF = "marin-community/marin-tokenizer@a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2"
+# All five immutable base exports have this exact tokenizer.json digest, as does _TOKENIZER_REF.
+_TOKENIZER_JSON_SHA256 = "881c9c36c359e1617afef6f7583403567931b7b4f43f6552d2b2155a131650a2"
 
 # These are immutable tags created only after the uploader validated all 44 source files. Add the
 # three skew revisions after their export/upload jobs finish; never train from a moving ``main``.
@@ -193,7 +196,9 @@ def _base_model(base: str) -> tuple[HFModel, SnowballConfig, str]:
     return (
         HFModel(
             model_ref=ref,
-            tokenizer_path=ref,
+            # Use one immutable identity for byte-identical tokenizers. Besides making the
+            # preservation explicit, this lets all five roots reuse the same prefix data caches.
+            tokenizer_path=_TOKENIZER_REF,
             model_type="snowball",
             model_config=model,
             eos_token_ids=(128001, 128009),
@@ -201,7 +206,7 @@ def _base_model(base: str) -> tuple[HFModel, SnowballConfig, str]:
             use_explicit_mesh_axes=True,
         ),
         model,
-        ref,
+        _TOKENIZER_REF,
     )
 
 
@@ -479,6 +484,88 @@ class CampaignCompleteConfig:
     nemotron_terminal_path: str
 
 
+@dataclasses.dataclass(frozen=True)
+class PrefixCachesCompleteConfig:
+    output_path: str
+    chat_cache_path: str
+    thinking_cache_path: str
+    chat_tokens: int
+    thinking_tokens: int
+
+
+def _checked_cache_tokens(
+    ctx: StepContext,
+    cache: ArtifactStep[TokenizedCache],
+    *,
+    stage: str,
+    expected_steps: int,
+) -> int:
+    if ctx.is_fingerprint:
+        return expected_steps * _SEQ * _BATCH
+    tokens = ctx.resolved(cache).num_train_tokens
+    steps = (tokens + _SEQ * _BATCH - 1) // (_SEQ * _BATCH)
+    if steps != expected_steps:
+        raise ValueError(f"{stage} cache has {tokens} tokens ({steps} steps); expected {expected_steps} steps.")
+    return tokens
+
+
+def _write_prefix_caches_complete(config: PrefixCachesCompleteConfig) -> None:
+    manifest = dataclasses.asdict(config)
+    manifest.pop("output_path")
+    StoragePath(prefix_join(config.output_path, "manifest.json")).write_text(json.dumps(manifest, sort_keys=True))
+
+
+def build_prefix_caches(base: str, version: str | None = None) -> ArtifactStep[Artifact]:
+    """Materialize and gate the two shared epoch-based caches before five GPU roots fan out."""
+    model, _, _ = _base_model(base)
+    chat_probe = sft_step(
+        _spec(
+            base=base,
+            stage="chat",
+            version=version,
+            model=model,
+            dataset=_CHAT_DATASET,
+            epochs=1,
+            expected_epoch_steps=257,
+        ),
+        _resources(),
+    )
+    thinking_probe = sft_step(
+        _spec(
+            base=base,
+            stage="thinking",
+            version=version,
+            model=model,
+            dataset=_THINKING_DATASET,
+            epochs=1,
+            expected_epoch_steps=630,
+        ),
+        _resources(),
+    )
+    chat_cache = chat_probe.deps[0]
+    thinking_cache = thinking_probe.deps[0]
+    step_name = "snowball-final/prefix-caches-complete"
+    resolved_version = resolve_version(step_name, version)
+
+    def build_config(ctx: StepContext) -> PrefixCachesCompleteConfig:
+        return PrefixCachesCompleteConfig(
+            output_path=ctx.output_path,
+            chat_cache_path=ctx.artifact_path(chat_cache),
+            thinking_cache_path=ctx.artifact_path(thinking_cache),
+            chat_tokens=_checked_cache_tokens(ctx, chat_cache, stage="chat", expected_steps=257),
+            thinking_tokens=_checked_cache_tokens(ctx, thinking_cache, stage="thinking", expected_steps=630),
+        )
+
+    return ArtifactStep(
+        name=user_namespaced_name(step_name, resolved_version),
+        version=resolved_version,
+        artifact_type=Artifact,
+        run=_write_prefix_caches_complete,
+        build_config=build_config,
+        deps=(chat_cache, thinking_cache),
+    )
+
+
 def _write_campaign_complete(config: CampaignCompleteConfig) -> None:
     manifest = {
         "base": config.base,
@@ -530,13 +617,15 @@ def build_all(base: str, version: str | None = None) -> ArtifactStep[Artifact]:
 @click.option("--base", type=click.Choice(tuple(_BASE_REVISIONS)), required=True)
 @click.option(
     "--stage",
-    type=click.Choice(("smoke", "chat", "thinking", "opencode", "nemotron-terminal", "all")),
+    type=click.Choice(("smoke", "data", "chat", "thinking", "opencode", "nemotron-terminal", "all")),
     required=True,
 )
 @build_options
 def main(base: str, stage: str) -> ArtifactStep[LevanterCheckpoint]:
     if stage == "smoke":
         return build_smoke(base)
+    if stage == "data":
+        return build_prefix_caches(base)
     if stage == "chat":
         return build_chat(base)[0]
     if stage == "thinking":

@@ -122,3 +122,12 @@ author: benfeuer
 - Result: falsified before any content read: `tokenized/wildchat_386k-chat-25177e/2026.07.17/train/.stats.json` does not exist in `s3://marin-us-east-02a/marin`. Iris repeated the deterministic missing-file failure three times. The two agentic caches remain validated by attempt 2.
 - Interpretation: do not copy the large GCP cache across regions. The DAG's pinned tokenization dependencies will build the prefix caches on RNO2A before allocating their training child. Add an execution-time expected-step invariant so a rebuilt cache cannot silently drift from 257/630.
 - Next action: validate the expected-step gate locally and retain the smoke gate before launching the five full DAGs.
+
+### 2026-09-08 22:10 EDT - Tokenizer identity unified; cache fan-out race removed
+
+- Hypothesis: all five published bases preserve the same tokenizer bytes, so one immutable tokenizer identity can safely back every stage and both rebuilt prefix caches.
+- Commit Hash: uncommitted follow-up on `9c40c7b495`.
+- Command: download only `tokenizer.json` at each of the five pinned base revisions and at `marin-community/marin-tokenizer@a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2`; compare SHA-256; add and test a data-only prefix-cache gate.
+- Result: all six files have SHA-256 `881c9c36c359e1617afef6f7583403567931b7b4f43f6552d2b2155a131650a2`. The campaign now keeps each pinned model revision for weights/config while using the one pinned byte-identical tokenizer. A `data` stage builds the WildChat and Nemotron-Science caches once and refuses counts other than 257/630 updates before five GPU roots launch. Focused campaign tests pass. Smoke 3 remains failure-free; several ranks have completed shard 39/39 and the slowest are finishing the final shards.
+- Interpretation: parent tokenizer behavior is unchanged, while cache artifact identity is now genuinely shared instead of being forked by five equivalent repository strings. Prebuilding once prevents cross-coordinator writes to the same cache path.
+- Next action: finish smoke load/update/save/loadability validation, commit the cache gate, and run the data stage on RNO2A before fan-out.

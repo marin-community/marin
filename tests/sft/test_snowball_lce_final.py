@@ -6,7 +6,7 @@
 import pytest
 from levanter.data.text.formats import ChatLmDatasetFormat, LossWeightTransform, PrebuiltLmDatasetFormat
 from levanter.models.snowball import SnowballConfig
-from marin.execution.lazy import materialized_config
+from marin.execution.lazy import StepContext, materialized_config
 
 from experiments.sft import launcher as sft_launcher
 from experiments.sft.configs import snowball_lce_final
@@ -94,6 +94,43 @@ def test_all_five_base_revisions_are_immutable():
         assert repository.startswith("open-athena/snowball-67b-a2b-base-")
         assert revision is not None
         assert len(revision) == 40
+
+
+def test_bases_share_one_pinned_byte_identical_tokenizer(monkeypatch):
+    config = SnowballConfig(max_seq_len=262_144, qk_mult=1.5703)
+    monkeypatch.setattr(snowball_lce_final, "resolve_lm_config", lambda *_args: config)
+
+    model, _, tokenizer = snowball_lce_final._base_model("qk157")
+
+    assert model.model_ref.startswith("open-athena/snowball-67b-a2b-base-262k-qk157@")
+    assert model.tokenizer_path == snowball_lce_final._TOKENIZER_REF
+    assert tokenizer == snowball_lce_final._TOKENIZER_REF
+    assert len(snowball_lce_final._TOKENIZER_JSON_SHA256) == 64
+
+
+def test_data_stage_builds_and_gates_both_shared_prefix_caches(local_base):
+    step = snowball_lce_final.build_prefix_caches("qk157", _VERSION)
+    chat_cache, thinking_cache = step.deps
+
+    assert chat_cache.name.startswith("tokenized/wildchat_386k-chat-")
+    assert thinking_cache.name.startswith("tokenized/nemotron_science_think-chat-")
+    assert chat_cache.version == thinking_cache.version
+
+    config = step.build_config(StepContext.for_fingerprint((), step.deps))
+    assert config.chat_tokens == 257 * 32_768 * 64
+    assert config.thinking_tokens == 630 * 32_768 * 64
+
+    class MismatchedContext:
+        is_fingerprint = False
+
+        @staticmethod
+        def resolved(_cache):
+            return type("ResolvedCache", (), {"num_train_tokens": 1})()
+
+    with pytest.raises(ValueError, match=r"chat cache has 1 tokens \(1 steps\); expected 257"):
+        snowball_lce_final._checked_cache_tokens(
+            MismatchedContext(), chat_cache, stage="chat", expected_steps=257  # type: ignore[arg-type]
+        )
 
 
 def test_cache_preflight_matches_frozen_opencode_length():
