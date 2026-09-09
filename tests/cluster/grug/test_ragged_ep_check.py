@@ -18,6 +18,8 @@ PYTEST_DONT_REWRITE: the step dispatches serialized remote functions that must n
 pytest.
 """
 
+import os
+
 import pytest
 from iris.client.client import IrisClient
 from marin.execution.lazy import lower
@@ -39,4 +41,9 @@ def test_the_ragged_ep_transport_matches_a_dense_reference(iris_client: IrisClie
     ``iris_client`` binds the marin hub as the current Fray client, and the resources carry
     ``target_cluster``, so the hub federates the work to the GB200 peer.
     """
-    StepRunner().run([lower(build_benchmark(target_cluster=MARIN_GB200_CLUSTER, version="dev"))])
+    # RAGGED_EP_PIP_PACKAGES="<wheel url>,nvidia-cudnn-cu13==9.25.1.1,..." runs the gate on a
+    # candidate runtime ahead of its pins.
+    pip_packages = tuple(p for p in os.environ.get("RAGGED_EP_PIP_PACKAGES", "").split(",") if p)
+    StepRunner().run(
+        [lower(build_benchmark(target_cluster=MARIN_GB200_CLUSTER, version="dev", pip_packages=pip_packages))]
+    )

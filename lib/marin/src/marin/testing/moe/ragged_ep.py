@@ -434,7 +434,10 @@ def build_benchmark(
     target_cluster: str,
     version: str | None = None,
     transport_kernel: TransportKernel = TransportKernel.DEVICE,
+    pip_packages: tuple[str, ...] = (),
 ) -> ArtifactStep[RaggedEpResult]:
+    """``pip_packages`` are installed into the worker after the sync: a candidate PJRT wheel and the
+    cuDNN and cuBLAS versions its ragged-dot lowering needs, ahead of their pins."""
     name = "grug/ragged-ep-check"
     version = resolve_version(name, version)
 
@@ -450,6 +453,7 @@ def build_benchmark(
             name="ragged-ep-check-gb200",
             resources=_benchmark_resources(target_cluster),
             env_vars={"JAX_ENABLE_PGLE": "false", "XLA_FLAGS": " ".join(_transport_flags(transport_kernel))},
+            pip_packages=list(pip_packages),
         ),
         build_config=build_config,
     )
