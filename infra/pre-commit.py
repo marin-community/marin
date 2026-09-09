@@ -848,9 +848,11 @@ PRECOMMIT_CONFIGS = [
         ],
     ),
     PrecommitConfig(
-        patterns=["lib/marin/src/**/*.py"],
+        patterns=["lib/marin/**/*.py"],
         checks=[
             partial(check_ruff, config=MARIN_RUFF_CONFIG),
+            check_black,
+            partial(check_license_headers, license_file=MARIN_LICENSE),
         ],
     ),
     PrecommitConfig(
