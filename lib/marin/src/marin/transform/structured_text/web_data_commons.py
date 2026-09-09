@@ -26,15 +26,16 @@ from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
 import requests
+from rigging.filesystem.atomic import atomic_rename
+from rigging.filesystem.factory import open_url
+from rigging.filesystem.storage_path import StoragePath
+
 from marin.datakit.ingestion_manifest import (
     IngestionSourceManifest,
     MaterializedOutputMetadata,
     verify_content_fingerprint,
     write_ingestion_metadata_json,
 )
-from rigging.filesystem.atomic import atomic_rename
-from rigging.filesystem.factory import open_url
-from rigging.filesystem.storage_path import StoragePath
 
 logger = logging.getLogger(__name__)
 
