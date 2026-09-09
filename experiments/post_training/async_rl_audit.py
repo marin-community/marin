@@ -212,8 +212,15 @@ def summarize_history(
         }
         if metrics:
             check(all(math.isfinite(value) for value in metrics.values()), f"Nonfinite evaluation at step {step}")
-            check(step not in evaluations, f"Duplicate evaluation event at step {step}")
-            evaluations[step] = metrics
+            evaluation_step = metrics.get("eval/requested_at_step", step)
+            check(
+                math.isfinite(evaluation_step)
+                and int(evaluation_step) == evaluation_step
+                and 0 <= evaluation_step <= step,
+                "Invalid requested evaluation step",
+            )
+            check(evaluation_step not in evaluations, f"Duplicate evaluation event at step {evaluation_step}")
+            evaluations[int(evaluation_step)] = metrics
     updates = {step: row for step, row in combined.items() if "policy/final_loss" in row or "policy/policy_loss" in row}
     check(
         sorted(updates) == list(range(1, expected_steps + 1)),
@@ -247,7 +254,23 @@ def summarize_history(
     ):
         if all(key in row for row in updates.values()):
             sums[key] = sum(row[key] for row in updates.values())
-    return {"history_rows": row_count, "steps": sorted(updates), "ranges": ranges, "sums": sums}, evaluations
+    digests = {
+        str(step): row["consumed/uid_digest_u52"] for step, row in updates.items() if "consumed/uid_digest_u52" in row
+    }
+    check(
+        all(type(value) in (int, float) and int(value) == value and 0 <= value < 2**52 for value in digests.values()),
+        "Invalid consumed UID digest",
+    )
+    return {
+        "history_rows": row_count,
+        "steps": sorted(updates),
+        "ranges": ranges,
+        "sums": sums,
+        "consumed_uid_digests": digests,
+        "consumed_raw_rewards": {
+            str(step): row["reward/avg_raw_reward"] for step, row in updates.items() if "reward/avg_raw_reward" in row
+        },
+    }, evaluations
 
 
 def verify_no_model_files(export_root: str) -> int:
