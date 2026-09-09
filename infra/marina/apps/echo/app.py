@@ -24,7 +24,8 @@ import sqlalchemy
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastembed import TextEmbedding
 from fastembed.rerank.cross_encoder import TextCrossEncoder
-from marina.apps import Services
+from marina.apps import RegisteredApi, Services, registered_api
+from marina.mcp import OperationRisk, operation_extension
 from pydantic import BaseModel, Field, field_validator
 from rigging.server_auth import get_verified_identity
 
@@ -95,8 +96,8 @@ def environment_config() -> EchoConfig:
     )
 
 
-def create_api(services: Services) -> FastAPI:
-    """The ASGI app the kernel mounts at ``/echo/api/``.
+def create_api(services: Services) -> RegisteredApi:
+    """The registered API whose ASGI app the kernel mounts at ``/echo/api/``.
 
     The engine is the kernel's, on Echo's own schema.
     """
@@ -109,7 +110,7 @@ def create_api(services: Services) -> FastAPI:
     api.state.engine = services.engine()
     api.state.models = models.SearchModels()
     api.include_router(router)
-    return api
+    return registered_api(api)
 
 
 def migrate(engine: sqlalchemy.Engine) -> None:
@@ -1071,7 +1072,13 @@ def health(engine: Engine) -> dict[str, str]:
     return {"status": "ok"}
 
 
-@router.get("/search-configuration", response_model=SearchConfiguration)
+@router.get(
+    "/search-configuration",
+    operation_id="search_configuration",
+    description="Return the search domains, defaults, and display settings supported by Echo.",
+    response_model=SearchConfiguration,
+    openapi_extra=operation_extension(OperationRisk.READ),
+)
 def search_configuration() -> SearchConfiguration:
     return SearchConfiguration(
         domains=[
@@ -1083,7 +1090,12 @@ def search_configuration() -> SearchConfiguration:
     )
 
 
-@router.get("/repository-index", response_model=list[RepositoryIndexStatus])
+@router.get(
+    "/repository-index",
+    operation_id="repository_index",
+    response_model=list[RepositoryIndexStatus],
+    openapi_extra=operation_extension(OperationRisk.READ),
+)
 def repository_index_status(engine: Engine) -> list[RepositoryIndexStatus]:
     """Return freshness or build progress for every configured repository."""
     with engine.connect() as conn:
@@ -1106,7 +1118,12 @@ def repository_index_status(engine: Engine) -> list[RepositoryIndexStatus]:
     return statuses
 
 
-@router.get("/search", response_model=list[Hit])
+@router.get(
+    "/search",
+    operation_id="search",
+    response_model=list[Hit],
+    openapi_extra=operation_extension(OperationRisk.READ),
+)
 def search(
     engine: Engine,
     model: Model,
@@ -1223,7 +1240,14 @@ def server_timing_header(timings: SearchStageTimings, history_ms: float, total_m
     return ", ".join(f"{name};dur={duration:.1f}" for name, duration in metrics if duration is not None)
 
 
-@router.get("/federated-search", response_model=list[SearchResult])
+@router.get(
+    "/federated-search",
+    operation_id="federated_search",
+    summary="Search Echo",
+    description="Search wiki, repository files, GitHub activity, and optional Discord context in one ranked result set.",
+    response_model=list[SearchResult],
+    openapi_extra=operation_extension(OperationRisk.READ),
+)
 def federated_search_endpoint(
     engine: Engine,
     model: Model,
@@ -1290,7 +1314,12 @@ def federated_search_endpoint(
     ]
 
 
-@router.get("/grep", response_model=list[Hit])
+@router.get(
+    "/grep",
+    operation_id="grep",
+    response_model=list[Hit],
+    openapi_extra=operation_extension(OperationRisk.READ),
+)
 def grep(
     engine: Engine,
     config: Config,
@@ -1339,7 +1368,13 @@ def grep(
     return results
 
 
-@router.get("/chunks/{chunk_id}", response_model=Chunk)
+@router.get(
+    "/chunks/{chunk_id}",
+    operation_id="read_chunk",
+    description="Read the complete indexed context chunk identified by a search result.",
+    response_model=Chunk,
+    openapi_extra=operation_extension(OperationRisk.READ),
+)
 def chunk(chunk_id: int, engine: Engine) -> Chunk:
     with engine.connect() as conn:
         row = conn.execute(sqlalchemy.select(schema.chunks).where(schema.chunks.c.id == chunk_id)).first()
@@ -1353,7 +1388,13 @@ def chunk(chunk_id: int, engine: Engine) -> Chunk:
     return Chunk(score=0.0, distance=None, lexical_score=None, snippet=snippet(row), **fields)
 
 
-@router.get("/search-results/{search_result_id}", response_model=SearchResultIdentity)
+@router.get(
+    "/search-results/{search_result_id}",
+    operation_id="read_search_result",
+    description="Resolve a recorded search-result key to its stable source identity and domain.",
+    response_model=SearchResultIdentity,
+    openapi_extra=operation_extension(OperationRisk.READ),
+)
 def search_result_identity(search_result_id: int, engine: Engine) -> SearchResultIdentity:
     with engine.connect() as conn:
         result = stored_feedback_results(conn, {search_result_id}).get(search_result_id)
@@ -1366,7 +1407,12 @@ def search_result_identity(search_result_id: int, engine: Engine) -> SearchResul
     )
 
 
-@router.get("/repository-files/{reference_value:path}", response_model=RepositoryFileDetail)
+@router.get(
+    "/repository-files/{reference_value:path}",
+    operation_id="read_repository_file",
+    response_model=RepositoryFileDetail,
+    openapi_extra=operation_extension(OperationRisk.READ),
+)
 def repository_file(reference_value: str, engine: Engine) -> RepositoryFileDetail:
     """Return complete indexed text for one qualified repository-file identity."""
     try:
@@ -1398,7 +1444,12 @@ def repository_file(reference_value: str, engine: Engine) -> RepositoryFileDetai
     )
 
 
-@router.get("/work_log", response_model=list[LogSummary])
+@router.get(
+    "/work_log",
+    operation_id="list_work_log",
+    response_model=list[LogSummary],
+    openapi_extra=operation_extension(OperationRisk.READ),
+)
 def work_log(
     engine: Engine,
     days: int = Query(7, ge=1, description="Look back this many days."),
@@ -1420,7 +1471,13 @@ def work_log(
         ]
 
 
-@router.get("/work_log/{entry_id}", response_model=LogEntry)
+@router.get(
+    "/work_log/{entry_id}",
+    operation_id="read_work_log",
+    description="Read one complete work-log entry, including its Markdown body.",
+    response_model=LogEntry,
+    openapi_extra=operation_extension(OperationRisk.READ),
+)
 def work_log_entry(entry_id: int, engine: Engine) -> LogEntry:
     with engine.connect() as conn:
         row = conn.execute(sqlalchemy.select(schema.work_log).where(schema.work_log.c.id == entry_id)).first()
@@ -1429,7 +1486,13 @@ def work_log_entry(entry_id: int, engine: Engine) -> LogEntry:
     return LogEntry(**{c: getattr(row, c) for c in LogEntry.model_fields})
 
 
-@router.post("/work_log", response_model=LogEntry, status_code=201)
+@router.post(
+    "/work_log",
+    operation_id="append_work_log",
+    response_model=LogEntry,
+    status_code=201,
+    openapi_extra=operation_extension(OperationRisk.WRITE),
+)
 def add_work_log(entry: LogCreate, engine: Engine, author: Caller) -> LogEntry:
     """Append one entry, attributed to the signed-in caller."""
     statement = (
@@ -1442,7 +1505,12 @@ def add_work_log(entry: LogCreate, engine: Engine, author: Caller) -> LogEntry:
     return LogEntry(**{c: getattr(row, c) for c in LogEntry.model_fields})
 
 
-@router.get("/search-executions", response_model=list[SearchExecutionEntry])
+@router.get(
+    "/search-executions",
+    operation_id="list_search_executions",
+    response_model=list[SearchExecutionEntry],
+    openapi_extra=operation_extension(OperationRisk.READ),
+)
 def search_executions(
     engine: Engine,
     after_id: int = Query(0, ge=0),
@@ -1484,7 +1552,12 @@ def search_executions(
     ]
 
 
-@router.get("/feedback", response_model=list[SearchFeedbackListEntry])
+@router.get(
+    "/feedback",
+    operation_id="list_search_feedback",
+    response_model=list[SearchFeedbackListEntry],
+    openapi_extra=operation_extension(OperationRisk.READ),
+)
 def list_search_feedback(
     engine: Engine,
     config: Config,
@@ -1550,7 +1623,13 @@ def list_search_feedback(
     ]
 
 
-@router.post("/feedback", response_model=SearchFeedbackEntry, status_code=201)
+@router.post(
+    "/feedback",
+    operation_id="submit_search_feedback",
+    response_model=SearchFeedbackEntry,
+    status_code=201,
+    openapi_extra=operation_extension(OperationRisk.WRITE),
+)
 def add_search_feedback(
     feedback: SearchFeedbackCreate,
     engine: Engine,
@@ -1598,7 +1677,13 @@ def add_search_feedback(
     )
 
 
-@router.get("/wiki/search", response_model=list[WikiSummary])
+@router.get(
+    "/wiki/search",
+    operation_id="search_wiki",
+    description="Search durable Echo wiki entries by text and tags.",
+    response_model=list[WikiSummary],
+    openapi_extra=operation_extension(OperationRisk.READ),
+)
 def search_wiki(
     engine: Engine,
     search_models: Models,
@@ -1627,7 +1712,13 @@ def search_wiki(
         return [wiki_summary(row) for row in conn.execute(statement, params)]
 
 
-@router.get("/wiki/{entry_id}", response_model=WikiEntry)
+@router.get(
+    "/wiki/{entry_id}",
+    operation_id="read_wiki",
+    description="Read one complete durable Echo wiki entry.",
+    response_model=WikiEntry,
+    openapi_extra=operation_extension(OperationRisk.READ),
+)
 def get_wiki_entry(entry_id: int, engine: Engine) -> WikiEntry:
     statement = sqlalchemy.select(
         schema.wiki_entries,
@@ -1654,7 +1745,14 @@ def wiki_write_values(entry: WikiCreate, model: TextEmbedding) -> dict[str, Any]
     }
 
 
-@router.post("/wiki", response_model=WikiEntry, status_code=201)
+@router.post(
+    "/wiki",
+    operation_id="create_wiki",
+    description="Create and index a durable Echo wiki entry under the verified caller.",
+    response_model=WikiEntry,
+    status_code=201,
+    openapi_extra=operation_extension(OperationRisk.WRITE),
+)
 def add_wiki_entry(
     entry: WikiCreate,
     engine: Engine,
@@ -1671,7 +1769,12 @@ def add_wiki_entry(
     return wiki_entry(row)
 
 
-@router.put("/wiki/{entry_id}", response_model=WikiEntry)
+@router.put(
+    "/wiki/{entry_id}",
+    operation_id="update_wiki",
+    response_model=WikiEntry,
+    openapi_extra=operation_extension(OperationRisk.WRITE),
+)
 def update_wiki_entry(entry_id: int, entry: WikiCreate, engine: Engine, model: Model) -> WikiEntry:
     """Replace an entry's text and re-embed it. The original author and creation time stand."""
     statement = (
@@ -1687,7 +1790,13 @@ def update_wiki_entry(entry_id: int, entry: WikiCreate, engine: Engine, model: M
     return wiki_entry(row)
 
 
-@router.post("/wiki/{entry_id}/references", response_model=WikiEntry)
+@router.post(
+    "/wiki/{entry_id}/references",
+    operation_id="reference_wiki",
+    description="Record another reference to an existing Echo wiki entry and return the updated entry.",
+    response_model=WikiEntry,
+    openapi_extra=operation_extension(OperationRisk.WRITE),
+)
 def reference_wiki_entry(entry_id: int, engine: Engine) -> WikiEntry:
     statement = (
         schema.wiki_entries.update()

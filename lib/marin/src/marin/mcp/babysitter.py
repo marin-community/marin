@@ -23,7 +23,7 @@ from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.rpc.proto_display import job_state_friendly, task_state_friendly
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 from rigging.auth import BearerTokenInjector, StaticTokenProvider, TokenProvider
 from rigging.credential_store import cluster_name_from_url
 from rigging.credentials import MARIN_CLUSTER_TOKEN_ENV
@@ -715,13 +715,11 @@ def _profile_type(profile_type: str, *, include_locals: bool) -> job_pb2.Profile
     raise ValueError(f"Unknown profile_type: {profile_type}")
 
 
-def build_server(service: IrisBabysitter, *, host: str = "127.0.0.1", port: int = 8000) -> FastMCP:
-    """Build the FastMCP server for a resident Iris connection."""
-    server = FastMCP(
+def build_server(service: IrisBabysitter) -> MCPServer:
+    """Build the MCP server for a resident Iris connection."""
+    server = MCPServer(
         "marin-mcp-babysitter",
         instructions="Structured Iris and Zephyr job babysitting tools.",
-        host=host,
-        port=port,
     )
 
     @server.tool()
@@ -833,7 +831,7 @@ def main(argv: list[str] | None = None) -> None:
         )
     )
     try:
-        build_server(service, host=args.host, port=args.port).run(transport=args.transport)
+        build_server(service).run(transport=args.transport, host=args.host, port=args.port)
     finally:
         service.close()
 

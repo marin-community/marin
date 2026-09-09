@@ -186,10 +186,8 @@ humans can inspect a single rendered report.
   ([`lib/levanter/src/levanter/utils/hf_utils.py`](/Users/dlwh/.codex/worktrees/a2ab/marin/lib/levanter/src/levanter/utils/hf_utils.py#L23))
   remains useful for sanity checks, but offset-based byte attribution is the
   source of truth for mixed-tokenizer comparison.
-- `save_logprobs.py`
-  ([`lib/marin/src/marin/evaluation/save_logprobs.py`](/Users/dlwh/.codex/worktrees/a2ab/marin/lib/marin/src/marin/evaluation/save_logprobs.py#L85))
-  is a useful reference for how to gather per-token outputs on TPU, but the gap
-  finder should not serialize full token streams for both models by default.
+- The gap finder should not serialize full token streams for both models by
+  default.
 - The default raw validation helper should mirror the current tokenized helper's
   dataset coverage so the new tool can be dropped into existing analysis flows.
 

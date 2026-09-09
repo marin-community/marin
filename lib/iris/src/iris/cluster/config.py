@@ -289,8 +289,6 @@ class GcpSliceConfig(_Config):
 class CoreweaveSliceConfig(_Config):
     region: str = ""
     instance_type: str = ""  # e.g. "gd-8xh100ib-i128"
-    gpu_class: str = ""  # e.g. "H100"
-    infiniband: bool = False
 
 
 class ManualSliceConfig(_Config):
