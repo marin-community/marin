@@ -19,6 +19,7 @@ from rigging.filesystem.storage_path import StoragePath
 from tokenizers import Tokenizer
 
 from experiments.post_training import async_rl_audit as audit
+from experiments.post_training.math_eval.calibration_attempts import claim_measurement
 from experiments.post_training.math_eval.calibration_protocol import (
     bounded_bytes,
     calibration_panels,
@@ -107,16 +108,16 @@ def run_panel(items, decoder, protocol, session, *, api_model, output_uri, prove
 
 def _controller_allocation():
     job = get_job_info()
-    if job is None or job.attempt_id != 0:
-        raise ValueError("Calibration requires one first-attempt Iris task")
+    if job is None or job.attempt_id not in (0, 1, 2):
+        raise ValueError("Calibration requires a bounded Iris attempt chain")
     description = iris_ctx().client.describe_task(job.task_id)
     status, resources = description.status, description.resources
     device = resources.device
     if (
         status.execution_cluster_id not in {"local", "cw-us-east-02a"}
         or str(status.task_id) != str(job.task_id)
-        or status.current_attempt_number != 0
-        or len(status.attempts) != 1
+        or status.current_attempt_number != job.attempt_id
+        or [attempt.attempt_number for attempt in status.attempts] != list(range(job.attempt_id + 1))
         or device is None
         or device.kind != "gpu"
         or device.variant != "H100"
@@ -126,8 +127,8 @@ def _controller_allocation():
     return job, {
         "controller_scope": status.execution_cluster_id,
         "resources": asdict(resources),
-        "attempt_uid": status.attempts[0].attempt_uid,
-        "started_at_ms": None if status.attempts[0].started_at is None else status.attempts[0].started_at.epoch_ms(),
+        "attempt_uid": status.attempts[-1].attempt_uid,
+        "started_at_ms": None if status.attempts[-1].started_at is None else status.attempts[-1].started_at.epoch_ms(),
     }
 
 
@@ -195,6 +196,14 @@ def run_checkpoint_calibration(*, binding_uri, binding_sha256, output_uri, sourc
             "controller_allocation": allocation,
             "renderer": rendering,
         }
+        measurement_start = claim_measurement(
+            output_uri,
+            task_id=str(job.task_id),
+            attempt_id=job.attempt_id,
+            attempt_uid=allocation["attempt_uid"],
+            binding_sha256=binding_sha256,
+            source_commit=source_commit,
+        )
         for ordinal, panel in enumerate(panels):
             panel_uri = str(output / panel.identity)
             rows, timing = run_panel(
@@ -263,6 +272,7 @@ def run_checkpoint_calibration(*, binding_uri, binding_sha256, output_uri, sourc
         "bundle_id": job.bundle_id,
         "panels": panel_receipts,
         "responses": sum(panel["rows"] for panel in panel_receipts),
+        "measurement_start": measurement_start,
         "requires_independent_terminal_and_harness_audit": True,
         "allocation_scope": "one task shared by nine drained panels; charge allocation once",
     }

@@ -57,6 +57,15 @@ def fixture():
         renderer=renderer_provenance(),
         responses=29406,
     )
+    generation["measurement_start"] = {
+        "schema": "calibration_measurement_start_v1",
+        "task_id": generation["task_id"],
+        "attempt_id": generation["attempt_id"],
+        "attempt_uid": generation["attempt_uid"],
+        "binding_sha256": binding["binding_sha256"],
+        "source_commit": "b" * 40,
+        "started_at_ms": 1000,
+    }
     generation["native_command"] = [
         "vllm",
         "serve",

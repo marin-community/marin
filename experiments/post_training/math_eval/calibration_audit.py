@@ -14,6 +14,7 @@ from rigging.filesystem.storage_path import StoragePath
 from tokenizers import Tokenizer
 
 from experiments.post_training import async_rl_audit as audit
+from experiments.post_training.math_eval.calibration_attempts import validate_calibration_task
 from experiments.post_training.math_eval.calibration_protocol import (
     BATTERIES,
     bounded_bytes,
@@ -31,7 +32,6 @@ from experiments.post_training.math_eval.rendering import renderer_provenance
 from experiments.post_training.math_eval.scoring import SEMANTIC_DEPENDENCIES
 from experiments.post_training.math_eval.semantic_worker import SemanticWorker
 from experiments.post_training.math_eval.serving import verify_wheel_receipt
-from experiments.post_training.math_eval.serving_audit import validate_native_serving_task
 
 CALIBRATION_MAX_EVAL_BYTES = 512 * 1024**2
 
@@ -75,7 +75,7 @@ def validate_calibration_generation(generation, native_tasks, native_job, *, bin
         or generation.get("renderer") != renderer_provenance()
     ):
         raise ValueError("Calibration source, checkpoint, renderer, or frozen protocol differs")
-    proof = validate_native_serving_task(generation, native_tasks, native_job, allocated_gpus=1)
+    proof = validate_calibration_task(generation, native_tasks, native_job)
     runtime = generation["runtime"]
     verify_wheel_receipt("MARIN_VLLM_WHEEL_VERIFIED=" + json.dumps(runtime), runtime["api_version"])
     command = generation.get("native_command", [])
@@ -140,7 +140,10 @@ def validate_calibration_generation(generation, native_tasks, native_job, *, bin
         "native_job_sha256": audit.canonical_sha(native_job),
         "binding_sha256": binding_sha256,
         "source_commit": source_commit,
-        "task_gpu_hours": (proof["finish"] - proof["start"]) / 3_600_000,
+        "task_gpu_hours": proof["task_gpu_hours"],
+        "known_task_gpu_hours": proof["known_task_gpu_hours"],
+        "attempts": proof["attempts"],
+        "measurement_start_sha256": proof["measurement_start_sha256"],
         "gpu_count": 1,
         "execution_cluster": "cw-us-east-02a",
         "allocation_scope": "one task for all nine panels; do not sum its cost per panel",
@@ -220,6 +223,8 @@ def audit_checkpoint_calibration(output_uri, *, audit_uri, native_tasks, native_
         source_commit=source_commit,
         output_uri=output_uri,
     )
+    if json.loads(bounded_bytes(output_uri + "/measurement-start.json")) != generation["measurement_start"]:
+        raise ValueError("Calibration durable measurement marker changed")
     tokenizer_bytes = bounded_bytes(generation["binding"]["tokenizer_source"]["uri"] + "/tokenizer.json")
     tokenizer_sha = hashlib.sha256(tokenizer_bytes).hexdigest()
     if tokenizer_sha != MODEL_PROFILES["qwen"]["tokenizer_sha256"]:
