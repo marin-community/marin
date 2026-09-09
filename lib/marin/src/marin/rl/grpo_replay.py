@@ -7,13 +7,13 @@ import argparse
 import json
 from dataclasses import asdict, dataclass
 
-import fsspec
 import haliax as hax
 import jax
 import jax.numpy as jnp
 import numpy as np
 from levanter.grpo import GrpoConfig, KlGradient, grpo_advantages, grpo_loss, grpo_objective_weights
 from marin.rl.grpo_artifact import read_golden_rollout
+from rigging.filesystem.storage_path import StoragePath
 
 POLICY_DIAGNOSTICS = (
     "ppo_clip_ratio",
@@ -170,7 +170,7 @@ def main() -> None:
     args = parser.parse_args()
     result = asdict(replay_golden_rollout(args.capture, atol=args.atol, rtol=args.rtol))
     if args.output_uri:
-        with fsspec.open(args.output_uri, "wt") as output:
+        with StoragePath(args.output_uri).open("wt") as output:
             json.dump(result, output, indent=2, allow_nan=False)
     print(json.dumps(result, indent=2, allow_nan=False))
 

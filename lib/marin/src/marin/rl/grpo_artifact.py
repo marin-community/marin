@@ -7,8 +7,8 @@ import dataclasses
 import json
 from dataclasses import dataclass
 
-import fsspec
 import numpy as np
+from rigging.filesystem.storage_path import StoragePath
 
 
 @dataclass(frozen=True)
@@ -72,13 +72,13 @@ def write_golden_rollout(uri: str, batch: GoldenRollout, manifest: dict) -> None
         field.name: value for field in dataclasses.fields(batch) if (value := getattr(batch, field.name)) is not None
     }
     arrays["manifest"] = np.asarray(json.dumps({"schema_version": 1, **manifest}, allow_nan=False, sort_keys=True))
-    with fsspec.open(uri, "wb") as output:
+    with StoragePath(uri).open("wb") as output:
         np.savez_compressed(output, **arrays)
 
 
 def read_golden_rollout(uri: str) -> tuple[GoldenRollout, dict]:
     """Read a capture without allowing executable pickle payloads."""
-    with fsspec.open(uri, "rb") as source, np.load(source, allow_pickle=False) as archive:
+    with StoragePath(uri).open("rb") as source, np.load(source, allow_pickle=False) as archive:
         manifest = json.loads(str(archive["manifest"]))
         if manifest["schema_version"] != 1:
             raise ValueError(f"Unsupported golden rollout schema: {manifest['schema_version']}")

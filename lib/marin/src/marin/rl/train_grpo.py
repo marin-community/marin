@@ -7,14 +7,12 @@ import dataclasses
 import hashlib
 import json
 import logging
-import posixpath
 from dataclasses import dataclass, field
 from functools import partial
 from typing import Any
 
 import draccus
 import equinox as eqx
-import fsspec
 import haliax as hax
 import jax
 import jax.numpy as jnp
@@ -30,6 +28,7 @@ from levanter.models.qwen import Qwen3Config
 from levanter.optim.config import AdamConfig
 from levanter.trainer import Trainer, TrainerConfig, initialize
 from marin.rl.grpo_artifact import GoldenRollout, read_golden_rollout
+from rigging.filesystem.storage_path import StoragePath
 from transformers import AutoTokenizer
 
 logger = logging.getLogger(__name__)
@@ -63,7 +62,8 @@ class OfflineGrpoConfig:
     stop_after: int | None = None
     """Stop at this absolute learner step, preserving the full schedule for resumption."""
 
-    def trainable_filter(self, model: LmHeadModel) -> Any:
+    def trainable_filter(self, _model: LmHeadModel) -> Any:
+        """Return an Equinox filter tree; model adapters may select individual leaves."""
         return True
 
 
@@ -159,7 +159,7 @@ def score_grpo_batch(trainer: Trainer, model: LmHeadModel, batch: GrpoExample, *
 
 def _capture_identity(uri: str) -> dict[str, str]:
     digest = hashlib.sha256()
-    with fsspec.open(uri, "rb") as source:
+    with StoragePath(uri).open("rb") as source:
         for chunk in iter(partial(source.read, 1024 * 1024), b""):
             digest.update(chunk)
     return {"uri": uri, "sha256": digest.hexdigest()}
@@ -206,17 +206,16 @@ def main(config: OfflineGrpoConfig):
             "microbatch_size": microbatch_size,
             "vocab_block_size": config.vocab_block_size,
         }
-        contract_uri = posixpath.join(trainer.checkpoint_path, "offline-grpo.json")
-        fs, path = fsspec.core.url_to_fs(contract_uri)
-        if fs.exists(path):
-            with fs.open(path) as source:
+        contract_path = StoragePath(trainer.checkpoint_path) / "offline-grpo.json"
+        if contract_path.exists():
+            with contract_path.open("r") as source:
                 if json.load(source) != contract:
                     raise ValueError("Offline continuation requires the same capture stream and training recipe")
         elif is_checkpoint_path(trainer.checkpoint_path):
             raise ValueError("Existing checkpoints need their offline capture-stream contract")
         elif jax.process_index() == 0:
-            fs.makedirs(posixpath.dirname(path), exist_ok=True)
-            with fs.open(path, "wt") as output:
+            contract_path.parent.mkdirs()
+            with contract_path.open("wt") as output:
                 json.dump(contract, output, indent=2)
         Vocab = round_axis_for_partitioning(hax.Axis("vocab", len(tokenizer)), trainer.parameter_axis_mapping)
         model_key, training_key = jax.random.split(jax.random.PRNGKey(config.trainer.seed))
@@ -254,7 +253,7 @@ def main(config: OfflineGrpoConfig):
             save_checkpoint(
                 state,
                 int(state.step),
-                posixpath.join(trainer.checkpoint_path, f"step-{int(state.step)}"),
+                str(StoragePath(trainer.checkpoint_path) / f"step-{int(state.step)}"),
                 is_temporary=False,
             )
             logger.info("Completed offline GRPO step %d from %s: loss=%g", int(state.step), uri, info.loss)

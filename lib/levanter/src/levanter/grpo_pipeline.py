@@ -3,7 +3,7 @@
 
 """Stage-owned GRPO execution using JaxPP's standard 1F1B schedule.
 
-MPMD placement and initialization follow Marin PR 8739, commit f32a83bc.
+Each stage owns its model weights and optimizer moments.
 Model-specific stage wrappers implement the protocol below; this module owns
 only scoring, objective reduction, global clipping, and optimizer execution.
 """
@@ -14,7 +14,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from functools import partial
-from typing import Any, Protocol
+from typing import Any, NamedTuple, Protocol
 
 import equinox as eqx
 import haliax as hax
@@ -536,6 +536,12 @@ def _place_existing(tree, targets, mpmd_mesh):
     return jax.tree.map(place, tree, targets)
 
 
+class PreparedPipelineTrain(NamedTuple):
+    update: Callable
+    state: PipelineState
+    batches: PipelineBatch
+
+
 def prepare_pipeline_train(step, state, batches, mpmd_mesh):
     """Compile, place scalar state, and consume input batches into stage-owned arrays."""
     api = _require_jaxpp()
@@ -557,7 +563,7 @@ def prepare_pipeline_train(step, state, batches, mpmd_mesh):
     state = _place_existing(state, state_specs, mpmd_mesh)
     batches = api.spmd_to_mpmd_reshard(mpmd_mesh, batches, batch_specs, threshold=0)
     batches = _place_existing(batches, batch_specs, mpmd_mesh)
-    return partial(_run_pipeline_update, compiled), state, batches
+    return PreparedPipelineTrain(partial(_run_pipeline_update, compiled), state, batches)
 
 
 def _run_pipeline_update(compiled, state, batches):

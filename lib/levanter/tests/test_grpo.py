@@ -17,6 +17,19 @@ from levanter.grpo import GrpoConfig, KlGradient, grpo_advantages, grpo_loss, gr
 from levanter.testing.helpers import skip_if_no_torch, use_test_mesh
 
 
+@dataclasses.dataclass(frozen=True)
+class Rollout:
+    Batch: hax.Axis
+    Position: hax.Axis
+    old: np.ndarray
+    current: np.ndarray
+    reference: np.ndarray
+    mask: np.ndarray
+    groups: np.ndarray
+    rewards: np.ndarray
+    partitions: np.ndarray
+
+
 CONFIG = GrpoConfig(eps_clip_low=0.2, eps_clip_high=0.2, kl_loss_coef=0.001, kl_gradient=KlGradient.DETACHED)
 
 
@@ -34,7 +47,7 @@ def rollout():
     rewards = np.zeros_like(old)
     rewards[:, -1] = np.resize([1, -2, 3, 4, 1, 1, 2, 0], Batch.size)
     partitions = np.arange(Batch.size, dtype=np.int32) // 2
-    return Batch, Position, old, current, reference, mask, groups, rewards, partitions
+    return Rollout(Batch, Position, old, current, reference, mask, groups, rewards, partitions)
 
 
 def torch_advantages(rewards, mask, groups, normalize):
@@ -78,7 +91,11 @@ def torch_objective(current, old, reference, advantages, mask, partitions, confi
 @skip_if_no_torch
 @pytest.mark.parametrize("normalize", [False, True])
 def test_grpo_advantages_matches_torch_groups(rollout, normalize):
-    B, P, _, _, _, mask, groups, rewards, _ = rollout
+    B = rollout.Batch
+    P = rollout.Position
+    mask = rollout.mask
+    groups = rollout.groups
+    rewards = rollout.rewards
     actual = eqx.filter_jit(grpo_advantages)(
         hax.named(rewards, (B, P)),
         hax.named(mask, (B, P)),
@@ -101,7 +118,15 @@ def test_grpo_advantages_matches_torch_groups(rollout, normalize):
 def test_grpo_value_gradient_and_execution_partition_parity(rollout, kl_gradient, kl_coef, microbatch_size):
     import torch  # noqa: PLC0415  # optional dependency
 
-    B, P, old, current, reference, mask, groups, rewards, partitions = rollout
+    B = rollout.Batch
+    P = rollout.Position
+    old = rollout.old
+    current = rollout.current
+    reference = rollout.reference
+    mask = rollout.mask
+    groups = rollout.groups
+    rewards = rollout.rewards
+    partitions = rollout.partitions
     microbatch_size *= len(jax.devices())
     config = dataclasses.replace(CONFIG, kl_gradient=kl_gradient, kl_loss_coef=kl_coef)
     adv = torch_advantages(rewards, mask, groups, True)
@@ -192,7 +217,14 @@ def test_grpo_value_gradient_and_execution_partition_parity(rollout, kl_gradient
 def test_grpo_tiny_model_adamw_update_matches_torch(rollout):
     import torch  # noqa: PLC0415  # optional dependency
 
-    B, P, old, _, reference, mask, groups, rewards, partitions = rollout
+    B = rollout.Batch
+    P = rollout.Position
+    old = rollout.old
+    reference = rollout.reference
+    mask = rollout.mask
+    groups = rollout.groups
+    rewards = rollout.rewards
+    partitions = rollout.partitions
     rng = np.random.default_rng(5)
     features = rng.normal(size=(B.size, P.size, 3)).astype(np.float32) * 1000
     initial = rng.normal(size=(3, 7)).astype(np.float32) * 1e-4
@@ -247,7 +279,13 @@ def test_grpo_tiny_model_adamw_update_matches_torch(rollout):
 
 
 def test_grpo_zero_advantages_detached_kl_has_zero_surrogate_gradient(rollout):
-    B, P, old, current, reference, mask, _, _, partitions = rollout
+    B = rollout.Batch
+    P = rollout.Position
+    old = rollout.old
+    current = rollout.current
+    reference = rollout.reference
+    mask = rollout.mask
+    partitions = rollout.partitions
     pw, kw = grpo_objective_weights(
         hax.named(mask, (B, P)),
         hax.named(partitions, B),

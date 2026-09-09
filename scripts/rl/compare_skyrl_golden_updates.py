@@ -6,16 +6,15 @@
 import argparse
 import json
 import logging
-import posixpath
 
-import fsspec
 import numpy as np
+from rigging.filesystem.storage_path import StoragePath
 
 LOGGER = logging.getLogger(__name__)
 
 
 def read_json(uri: str) -> dict:
-    with fsspec.open(uri, "rt") as source:
+    with StoragePath(uri).open("rt") as source:
         return json.load(source)
 
 
@@ -45,7 +44,7 @@ def compare_updates(first_uri: str, replay_uri: str, ranks: int) -> dict:
     identity_fields = ("uri", "size", "etag", "version_id", "checksum_sha256")
     source_objects = []
     for uri in (first_uri, replay_uri):
-        identity_uri = posixpath.join(posixpath.dirname(uri), "source-identity.json")
+        identity_uri = str(StoragePath(uri).parent / "source-identity.json")
         record = read_json(identity_uri)
         source_objects.append(
             sorted(
@@ -61,8 +60,8 @@ def compare_updates(first_uri: str, replay_uri: str, ranks: int) -> dict:
         }
     }
     with (
-        fsspec.open(first_uri, "rb") as first_source,
-        fsspec.open(replay_uri, "rb") as replay_source,
+        StoragePath(first_uri).open("rb") as first_source,
+        StoragePath(replay_uri).open("rb") as replay_source,
         np.load(first_source, allow_pickle=False) as first,
         np.load(replay_source, allow_pickle=False) as replay,
     ):
@@ -125,7 +124,7 @@ def main() -> None:
     if args.ranks < 1:
         raise ValueError("ranks must be positive")
     result = compare_updates(args.first_uri, args.replay_uri, args.ranks)
-    with fsspec.open(args.output_uri, "wt") as output:
+    with StoragePath(args.output_uri).open("wt") as output:
         json.dump(result, output, indent=2, allow_nan=False)
     LOGGER.info("Replay comparison passed=%s: %s", result["passed"], args.output_uri)
     if not result["passed"]:
