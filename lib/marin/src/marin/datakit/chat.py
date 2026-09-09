@@ -98,39 +98,40 @@ def validate_chat_messages(messages: list[Message]) -> None:
             if role != Role.USER:
                 raise ValueError("The first conversation message must be a user message")
             seen_user = True
-        if role == Role.USER:
-            if not text.strip():
-                raise ValueError("User messages must contain non-empty text")
-            if message.channel is not None or message.recipient is not None:
-                raise ValueError("User messages cannot have channels or recipients")
-            if pending:
-                raise ValueError("A user turn cannot replace a pending tool observation")
-            if previous is not None and previous.author.role == Role.USER:
-                raise ValueError("Consecutive user turns must be merged by the source adapter")
-        elif role == Role.ASSISTANT:
-            if not text.strip():
-                raise ValueError("Assistant messages must contain non-empty text")
-            channel = ChatChannel(message.channel)
-            if previous is not None and previous.channel == ChatChannel.FINAL:
-                raise ValueError("An assistant final answer must be followed by a user turn")
-            if message.recipient is not None:
-                if channel != ChatChannel.COMMENTARY or not message.recipient.startswith("functions."):
-                    raise ValueError("Function calls require commentary and a functions.<name> recipient")
-                name = message.recipient.removeprefix("functions.")
-                if _SAFE_TOOL_IDENTIFIER.fullmatch(name) is None:
-                    raise ValueError("Function calls require a valid tool name")
-                if pending and previous is not None and previous.author.role == Role.TOOL:
-                    raise ValueError("Every pending tool call must receive an observation before another call")
-                if not isinstance(json.loads(text), dict):
-                    raise ValueError("Tool-call arguments must encode a JSON object")
-                pending.append(message.recipient)
-            elif pending:
-                raise ValueError("Every tool call must receive an observation before the assistant continues")
-        elif role == Role.TOOL:
-            if message.channel != ChatChannel.COMMENTARY or message.recipient != Role.ASSISTANT.value:
-                raise ValueError("Tool observations require commentary addressed to assistant")
-            if not pending or message.author.name != pending.popleft():
-                raise ValueError("Tool observations must match pending calls in call order")
+        match role:
+            case Role.USER:
+                if not text.strip():
+                    raise ValueError("User messages must contain non-empty text")
+                if message.channel is not None or message.recipient is not None:
+                    raise ValueError("User messages cannot have channels or recipients")
+                if pending:
+                    raise ValueError("A user turn cannot replace a pending tool observation")
+                if previous is not None and previous.author.role == Role.USER:
+                    raise ValueError("Consecutive user turns must be merged by the source adapter")
+            case Role.ASSISTANT:
+                if not text.strip():
+                    raise ValueError("Assistant messages must contain non-empty text")
+                channel = ChatChannel(message.channel)
+                if previous is not None and previous.channel == ChatChannel.FINAL:
+                    raise ValueError("An assistant final answer must be followed by a user turn")
+                if message.recipient is not None:
+                    if channel != ChatChannel.COMMENTARY or not message.recipient.startswith("functions."):
+                        raise ValueError("Function calls require commentary and a functions.<name> recipient")
+                    name = message.recipient.removeprefix("functions.")
+                    if _SAFE_TOOL_IDENTIFIER.fullmatch(name) is None:
+                        raise ValueError("Function calls require a valid tool name")
+                    if pending and previous is not None and previous.author.role == Role.TOOL:
+                        raise ValueError("Every pending tool call must receive an observation before another call")
+                    if not isinstance(json.loads(text), dict):
+                        raise ValueError("Tool-call arguments must encode a JSON object")
+                    pending.append(message.recipient)
+                elif pending:
+                    raise ValueError("Every tool call must receive an observation before the assistant continues")
+            case Role.TOOL:
+                if message.channel != ChatChannel.COMMENTARY or message.recipient != Role.ASSISTANT.value:
+                    raise ValueError("Tool observations require commentary addressed to assistant")
+                if not pending or message.author.name != pending.popleft():
+                    raise ValueError("Tool observations must match pending calls in call order")
         previous = message
     if not seen_user or messages[-1].author.role != Role.ASSISTANT:
         raise ValueError("A chat training record must end with an assistant response")
