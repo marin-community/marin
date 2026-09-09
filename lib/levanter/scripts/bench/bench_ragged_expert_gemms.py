@@ -102,19 +102,15 @@ def _rel_err(got, want, active: int) -> float:
 
 
 def _kernel_summary(text: str) -> str:
-    """Name the GEMM-bearing kernels in a compiled HLO, to show which lowering engaged."""
-    tags = []
-    for label, pattern in (
-        ("cudnn", r"__cudnn\$fusion|cudnn"),
-        ("cublas", r"__cublas\$"),
-        ("triton", r"__triton|triton_gemm|pallas"),
-        ("ragged-dot", r"ragged-dot"),
-        ("dense-expand", r"select\(.*broadcast|kind=kLoop"),
-    ):
-        n = len(re.findall(pattern, text))
-        if n:
-            tags.append(f"{label}:{n}")
-    return ",".join(tags) or "none"
+    """Name the fusion backends and library calls in a compiled HLO, to show which lowering engaged."""
+    counts: dict[str, int] = {}
+    for kind in re.findall(r'"kind":"([^"]+)"', text):
+        counts[kind] = counts.get(kind, 0) + 1
+    for target in re.findall(r'custom_call_target="([^"]+)"', text):
+        counts[target] = counts.get(target, 0) + 1
+    if "ragged-dot(" in text:
+        counts["ragged-dot"] = text.count("ragged-dot(")
+    return ",".join(f"{k}:{v}" for k, v in sorted(counts.items())) or "none"
 
 
 def _compiled_text(fn, *args) -> str:
@@ -342,6 +338,17 @@ def main() -> int:
             return _make_xla_variant(
                 "xla-triton",
                 {
+                    "xla_gpu_experimental_triton_ragged_dot": True,
+                    "xla_gpu_experimental_enable_tiling_propagation": True,
+                },
+                _xla_ragged_dot,
+            )
+        if name == "xla-cudnn-triton":
+            # cuDNN takes the forward-shaped contractions, Triton the rest (XLA's priority order).
+            return _make_xla_variant(
+                "xla-cudnn-triton",
+                {
+                    "xla_gpu_experimental_use_ragged_dot_fusion": True,
                     "xla_gpu_experimental_triton_ragged_dot": True,
                     "xla_gpu_experimental_enable_tiling_propagation": True,
                 },
