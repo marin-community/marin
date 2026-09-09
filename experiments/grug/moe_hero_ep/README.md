@@ -21,6 +21,8 @@ data-parallel rack uses one 64-device expert mesh.
   capacity. The transport reaches XLA's device-initiated (NCCL LSA) kernel, which needs Marin's patched
   PJRT build, installed on GB200 through the `gpu` extra (`lib/marin/pyproject.toml`); a run that
   reaches the stock plugin fails at startup.
+  The production hero trained on `fixed_pooled_wave_all_to_all` through step 81716 (3.77T of its 18T
+  tokens); `hero-ragged_a2a-ep-step81k` continues from that checkpoint on the ragged transport.
 - Optimizer: MuonH, with its state offloaded to pinned host memory.
 - Weights: fp32 on device with bf16 compute. A checkpoint written with a pinned-host fp32 master
   migrates in process on restore: its stored fp32 master is read directly into the run's params
