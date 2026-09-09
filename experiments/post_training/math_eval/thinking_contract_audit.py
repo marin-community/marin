@@ -16,6 +16,7 @@ from skyrl_gym.envs.data_contracts import get_data_contract
 from skyrl_gym.envs.reasoning_gym.scoring import score_response
 
 from experiments.post_training.async_rl_quality_audit import final_assistant_segment
+from experiments.post_training.math_eval.contract import POST_THINKING_METRIC_CONTRACT
 from experiments.post_training.math_eval.scoring import ACCEPTED_STOPS, semantic_answer
 
 PARSER_VERSION = "post-thinking-native-v1"
@@ -163,6 +164,7 @@ def audit_post_thinking_row(row, decoder, *, expected_parser, intervention=None,
     semantic, status, engine = semantic_answer(segment, boundary, semantic_gold)
     return {
         "parser_protocol": expected_parser,
+        "metric_contract_version": POST_THINKING_METRIC_CONTRACT["version"],
         "score_contract": raw,
         "contract_correct": correct,
         "score_contract_completed": completed,

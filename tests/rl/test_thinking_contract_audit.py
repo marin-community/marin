@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import copy
+import json
 
 import pytest
 from tokenizers import AddedToken, Tokenizer
@@ -136,3 +137,89 @@ def test_unresolved_answer_boundary_preserves_explicit_semantic_status(tokens, s
     result = audit_post_thinking_row(row, decoder, expected_parser=PARSER_VERSION)
     assert result["score_semantic"] is None and result["semantic_status"] == status
     assert result["score_contract_completed"] == 0
+
+
+@pytest.mark.parametrize("poison", [None, "premature", "missing_eos", "mask"])
+def test_repetition_termination_replays_first_eligible_window(poison):
+    row, decoder, _ = example(stop="repetition")
+    config = dict(
+        protocol="non-agentic-token-intervention-v1",
+        kind="repetition_stop",
+        thinking_end_id=2,
+        eos_id=3,
+        force_close_after=3072,
+        repetition_window=256,
+        repetition_ngram=16,
+        repetition_fraction=0.5,
+    )
+    tokens = [6] * 256 + [3]
+    if poison == "premature":
+        tokens = [*tokens[:-2], 3]
+    elif poison == "missing_eos":
+        tokens[-1] = 6
+    row.update(
+        response_ids=tokens,
+        response_length=len(tokens),
+        policy_action_mask=[1] * (len(tokens) - 1) + [int(poison == "mask")],
+        behavior_logprobs=[-0.5] * len(tokens),
+        score=[0] * len(tokens),
+    )
+    row["non_agentic_contract"].update(
+        boundary_status="missing_thinking_end",
+        verifier_reward=0,
+        legacy_full_text_reward=0,
+        contract_correct=0,
+        score_contract_completed=0,
+        thinking_closed=False,
+        intervention=dict(
+            configuration=config,
+            protocol=config["protocol"],
+            forced_positions=[len(tokens) - 1],
+            sampled_positions=list(range(len(tokens) - 1)),
+            sampled_token_count=len(tokens) - 1,
+            repetition_stopped=True,
+            original_engine_stop_reason="stop",
+        ),
+    )
+    if poison is not None:
+        with pytest.raises(ValueError):
+            audit_post_thinking_row(row, decoder, expected_parser=PARSER_VERSION, intervention=config)
+    else:
+        result = audit_post_thinking_row(row, decoder, expected_parser=PARSER_VERSION, intervention=config)
+        assert result["stop_reason"] == "repetition" and result["score_contract_completed"] == 0
+        assert result["forced_positions"] == [256] and result["score_semantic"] is None
+
+
+@pytest.mark.parametrize(
+    "env,answer,expected",
+    [("aime", "41", -1.0), ("reasoning_gym", "42 reasoning", 2 / 12), ("reasoning_gym", "42", 1.0)],
+)
+def test_task_native_signed_fractional_and_full_credit_dispatch(env, answer, expected):
+    row, decoder, _ = example()
+    decoder.add_tokens(["Answer:", "reasoning"])
+    tokens = decoder.encode("<|end_think|> Answer: " + answer + " <|eot_id|>").ids
+    gold = (
+        "42"
+        if env == "aime"
+        else json.dumps(
+            dict(task="chain_sum", entry=dict(question="41 + 1", answer="42", metadata=dict(source_dataset="chain_sum")))
+        )
+    )
+    row.update(
+        env_class=env,
+        response_ids=tokens,
+        response_length=len(tokens),
+        policy_action_mask=[1] * len(tokens),
+        behavior_logprobs=[-0.5] * len(tokens),
+        score=[0] * (len(tokens) - 1) + [expected],
+    )
+    row["env_extras"] = {"reward_model": {"ground_truth": gold}, "reward_spec": {"ground_truth": gold}}
+    row["non_agentic_contract"].update(
+        verifier_reward=expected,
+        legacy_full_text_reward=expected,
+        contract_correct=int(expected == 1),
+        score_contract_completed=int(expected == 1),
+    )
+    result = audit_post_thinking_row(row, decoder, expected_parser=PARSER_VERSION)
+    assert result["score_contract"] == expected and result["corrected_verifier_reward"] == expected
+    assert result["contract_correct"] == int(expected == 1) and result["score_contract_completed"] == int(expected == 1)
