@@ -8,6 +8,7 @@ from levanter.data.text.formats import ChatLmDatasetFormat, LossWeightTransform,
 from levanter.models.snowball import SnowballConfig
 from marin.execution.lazy import materialized_config
 
+from experiments.sft import launcher as sft_launcher
 from experiments.sft.configs import snowball_lce_final
 from experiments.sft.launcher import HFModel
 from experiments.sft.validate_snowball_caches import _EXPECTED_OPENCODE_STEPS, _OPENCODE_EPOCHS
@@ -113,3 +114,26 @@ def test_all_stage_shares_one_thinking_parent(local_base):
     assert manifest.base == "qk157"
     assert manifest.opencode_path.endswith("/qk157/opencode/2026.09.08.99")
     assert manifest.nemotron_terminal_path.endswith("/qk157/nemotron-terminal/2026.09.08.99")
+
+
+def test_prefix_stages_gate_historical_epoch_lengths(local_base, monkeypatch):
+    specs = []
+
+    def capture(spec, _resources):
+        specs.append(spec)
+        return object()
+
+    monkeypatch.setattr(snowball_lce_final, "sft_step", capture)
+    snowball_lce_final.build_thinking("qk157", _VERSION)
+
+    assert [(spec.num_train_epochs, spec.expected_epoch_steps) for spec in specs] == [(1, 257), (1, 630)]
+
+    class MismatchedContext:
+        is_fingerprint = False
+
+        @staticmethod
+        def resolved(_cache):
+            return type("ResolvedCache", (), {"num_train_tokens": 1})()
+
+    with pytest.raises(ValueError, match="resolve to 1 steps; expected 257"):
+        sft_launcher._resolve_epoch_steps(MismatchedContext(), specs[0], object())  # type: ignore[arg-type]

@@ -20,9 +20,6 @@ _BATCH_SIZE = 64
 _OPENCODE_EPOCHS = 5
 _EXPECTED_OPENCODE_STEPS = 1_888
 _VOCAB_SIZE = 128_256
-_MARIN_PREFIX = "s3://marin-us-east-02a/marin"
-_CHAT_CACHE = prefix_join(_MARIN_PREFIX, "tokenized/wildchat_386k-chat-25177e/2026.07.17")
-_THINKING_CACHE = prefix_join(_MARIN_PREFIX, "tokenized/nemotron_science_think-chat-25177e/2026.07.17")
 
 
 @dataclass(frozen=True)
@@ -88,22 +85,6 @@ def _validate(spec: CacheSpec) -> dict[str, int | str]:
 
 def main() -> None:
     specs = (
-        CacheSpec(
-            name="chat-wildchat",
-            root=_CHAT_CACHE,
-            mask_key="assistant_masks",
-            mask_dtype=np.dtype(np.int32),
-            expected_steps=257,
-            epochs=1,
-        ),
-        CacheSpec(
-            name="thinking-nemotron-science",
-            root=_THINKING_CACHE,
-            mask_key="assistant_masks",
-            mask_dtype=np.dtype(np.int32),
-            expected_steps=630,
-            epochs=1,
-        ),
         CacheSpec(
             name="opencode-fixed-eot",
             root=OPENCODE_CACHE,

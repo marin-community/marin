@@ -555,6 +555,8 @@ class SFTSpec:
     # for a mixture, where epoch semantics are undefined) and keeps the ``auto_build_caches`` path.
     num_train_steps: int | None = None
     num_train_epochs: int | None = None
+    expected_epoch_steps: int | None = None
+    """Optional invariant for a historically fixed epoch run; checked against the built cache."""
     wandb_project: str = "marin-sft-launcher"
 
     def __post_init__(self) -> None:
@@ -565,6 +567,11 @@ class SFTSpec:
                 f"num_train_epochs is only defined for a single dataset (got {len(self.datasets)}); "
                 "use num_train_steps for a mixture."
             )
+        if self.expected_epoch_steps is not None:
+            if self.num_train_epochs is None:
+                raise ValueError("expected_epoch_steps requires num_train_epochs.")
+            if self.expected_epoch_steps <= 0:
+                raise ValueError("expected_epoch_steps must be positive.")
 
 
 # Accelerator strings: "<count>x<gpu>" (e.g. "8xH100") for GPU, else a TPU slice variant ("v4-64").
@@ -766,7 +773,13 @@ def _resolve_epoch_steps(ctx: StepContext, spec: SFTSpec, chat_cache: ArtifactSt
     if ctx.is_fingerprint:
         return spec.num_train_epochs
     total_tokens = ctx.resolved(chat_cache).num_train_tokens
-    return math.ceil(spec.num_train_epochs * total_tokens / (spec.seq_len * spec.batch_size))
+    steps = math.ceil(spec.num_train_epochs * total_tokens / (spec.seq_len * spec.batch_size))
+    if spec.expected_epoch_steps is not None and steps != spec.expected_epoch_steps:
+        raise ValueError(
+            f"{spec.name}: {spec.num_train_epochs} epoch(s) over {total_tokens} tokens resolve to {steps} steps; "
+            f"expected {spec.expected_epoch_steps}."
+        )
+    return steps
 
 
 def sft_step(spec: SFTSpec, resources: ResourceConfig) -> ArtifactStep[LevanterCheckpoint]:

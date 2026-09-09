@@ -225,6 +225,7 @@ def _spec(
     dataset: DatasetSpec,
     steps: int | None = None,
     epochs: int | None = None,
+    expected_epoch_steps: int | None = None,
     learning_rate: float = 5e-5,
     chat_template: str = DELPHI_V0_CHAT_TEMPLATE,
 ) -> SFTSpec:
@@ -241,6 +242,7 @@ def _spec(
         batch_size=_BATCH,
         num_train_steps=steps,
         num_train_epochs=epochs,
+        expected_epoch_steps=expected_epoch_steps,
         wandb_project=_WANDB_PROJECT,
     )
 
@@ -256,7 +258,15 @@ def build_smoke(base: str, version: str | None = None) -> ArtifactStep[LevanterC
 def build_chat(base: str, version: str | None = None) -> tuple[ArtifactStep[LevanterCheckpoint], SnowballConfig, str]:
     model, config, tokenizer = _base_model(base)
     chat = sft_step(
-        _spec(base=base, stage="chat", version=version, model=model, dataset=_CHAT_DATASET, epochs=1),
+        _spec(
+            base=base,
+            stage="chat",
+            version=version,
+            model=model,
+            dataset=_CHAT_DATASET,
+            epochs=1,
+            expected_epoch_steps=257,
+        ),
         _resources(),
     )
     return chat, config, tokenizer
@@ -273,6 +283,7 @@ def build_thinking(base: str, version: str | None = None) -> ArtifactStep[Levant
             model=thinking_model,
             dataset=_THINKING_DATASET,
             epochs=1,
+            expected_epoch_steps=630,
         ),
         _resources(),
     )
@@ -381,6 +392,7 @@ def _build_prefix(base: str, version: str | None = None) -> tuple[ArtifactStep[L
             model=_native_model(chat, config, tokenizer),
             dataset=_THINKING_DATASET,
             epochs=1,
+            expected_epoch_steps=630,
         ),
         _resources(),
     )

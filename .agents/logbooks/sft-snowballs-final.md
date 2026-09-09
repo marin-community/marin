@@ -113,3 +113,12 @@ author: benfeuer
 - Result: passed on the first attempt. OpenCode has 76,928 rows and 791,560,603 tokens; five epochs at seq32768/global-batch64 resolve to exactly 1,888 updates. Nemotron-Terminal has 366,154 rows and 6,068,571,206 tokens. For both caches, the ledger agrees with `.stats.json`, the first and last records load, input and mask lengths match, tokens stay inside the 128,256 vocabulary, and masks are binary.
 - Interpretation: the corrected OpenCode cache is the required 1,888-step lineage, unlike the superseded 797,783,562-token publication. Both prebuilt inputs are ready for training once the HF smoke gate passes.
 - Next action: continue smoke 3 through its finite update and checkpoint validation.
+
+### 2026-09-08 21:56 EDT - Prefix caches absent in RNO2A; rebuild gated
+
+- Hypothesis: the historical WildChat and Nemotron-Science chat caches already exist under the RNO2A S3 prefix and can be audited before the full DAG.
+- Commit Hash: `f834a56079`.
+- Command: `/benfeuer/snowball-final-cache-preflight3`.
+- Result: falsified before any content read: `tokenized/wildchat_386k-chat-25177e/2026.07.17/train/.stats.json` does not exist in `s3://marin-us-east-02a/marin`. Iris repeated the deterministic missing-file failure three times. The two agentic caches remain validated by attempt 2.
+- Interpretation: do not copy the large GCP cache across regions. The DAG's pinned tokenization dependencies will build the prefix caches on RNO2A before allocating their training child. Add an execution-time expected-step invariant so a rebuilt cache cannot silently drift from 257/630.
+- Next action: validate the expected-step gate locally and retain the smoke gate before launching the five full DAGs.
