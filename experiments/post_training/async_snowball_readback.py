@@ -52,6 +52,7 @@ def prepare_readback(source_request: dict, *, runtime_commit: str, run_id: str, 
         attempt_id="pending",
         config_yaml=yaml.safe_dump(config, sort_keys=False),
         runtime={"profile": "megatron", "commit": runtime_commit},
+        overrides=["++trainer.hf_hub_repo_id=null"],
         output={
             "checkpoint_root": f"{temporary_prefix}/checkpoints",
             "export_root": f"{output_prefix}/exports",
