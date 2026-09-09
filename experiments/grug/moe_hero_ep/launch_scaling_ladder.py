@@ -29,6 +29,7 @@ Changelog:
     2026-09-09 (#8870): the ragged all-to-all transport with fp32 weights on device returns as the
         default after the pooled-wave fallback of 2026-09-03 (#8884).
         hero-ragged_a2a-ep-step81k forks hero-wd-gate-router-p02-step58k at step 81716 (see ``trigger_hero.sh``).
+        hero-ragged_a2a-nccl2307-ep-step81k restarts that fork on the NCCL 2.30.7 PJRT wheel (#9062).
 """
 
 import dataclasses
