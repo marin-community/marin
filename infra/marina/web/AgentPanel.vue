@@ -57,7 +57,9 @@ const live = ref(false)
 const liveText = ref('')
 const liveTool = ref<{ title: string; status: string } | null>(null)
 const sending = ref(false)
+const loadingOlder = ref(false)
 const continuityUnavailable = ref(false)
+const olderCursor = ref<{ turn: number; seq: number } | null>(null)
 const composer = ref<HTMLTextAreaElement | null>(null)
 const panel = ref<HTMLElement | null>(null)
 let closeStream: (() => void) | null = null
@@ -162,10 +164,26 @@ function upsertBlock(block: ChatBlock): void {
 async function loadSnapshot(sessionId: string): Promise<void> {
   const snapshot = await client.snapshot(sessionId)
   blocks.value = snapshot.blocks
+  olderCursor.value = snapshot.older_cursor
   live.value = snapshot.live_turn !== null
   if (!live.value) {
     liveText.value = ''
     liveTool.value = null
+  }
+}
+
+async function loadOlder(): Promise<void> {
+  if (!session.value || !olderCursor.value || loadingOlder.value) return
+  loadingOlder.value = true
+  error.value = ''
+  try {
+    const snapshot = await client.snapshot(session.value.id, olderCursor.value)
+    for (const block of snapshot.blocks) upsertBlock(block)
+    olderCursor.value = snapshot.older_cursor
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    loadingOlder.value = false
   }
 }
 
@@ -175,6 +193,7 @@ async function bind(next: AgentSession): Promise<void> {
   blocks.value = []
   liveText.value = ''
   liveTool.value = null
+  olderCursor.value = null
   closeStream = client.stream(next.id, {
     event(name, value) {
       if (name === 'block') upsertBlock(value as ChatBlock)
@@ -314,6 +333,7 @@ function newConversation(): void {
   live.value = false
   liveText.value = ''
   liveTool.value = null
+  olderCursor.value = null
   nextTick(() => composer.value?.focus())
 }
 
@@ -387,11 +407,15 @@ onBeforeUnmount(() => {
     <template v-else>
       <div class="transcript" aria-live="polite">
         <div v-if="!session" class="empty">
-          <p>Ask about the current chart. Marina can inspect the plan through its read-only API.</p>
+          <p>Ask about the current page. Marina can inspect its data through the available read-only API.</p>
           <button v-for="starter in config.starters" :key="starter" type="button" @click="submit(starter)">
             {{ starter }}
           </button>
         </div>
+
+        <button v-if="olderCursor" class="load-older quiet" type="button" :disabled="loadingOlder" @click="loadOlder">
+          {{ loadingOlder ? 'Loading…' : 'Load earlier messages' }}
+        </button>
 
         <template v-for="block in orderedBlocks" :key="`${block.turn}:${block.seq}`">
           <article v-if="block.kind === 'user_message'" class="message user-message">
@@ -476,6 +500,7 @@ onBeforeUnmount(() => {
 .transcript { flex: 1; overflow-y: auto; padding: 1rem; display: flex; flex-direction: column; gap: 1rem; }
 .empty { margin: auto 0; display: grid; gap: 0.65rem; color: var(--muted); }
 .empty button { text-align: left; color: var(--ink); background: var(--panel); }
+.load-older { align-self: center; }
 .message { display: grid; gap: 0.25rem; }
 .message > span { font: 0.7rem var(--mono); color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
 .message p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }

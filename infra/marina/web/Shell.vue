@@ -110,6 +110,7 @@ function closePanel() {
     <button v-if="panelOpen && modalPanel" class="scrim" type="button" aria-label="Close agent panel" @click="closePanel" />
     <AgentPanel
       v-if="panelOpen && agentContext"
+      :key="`${props.app}:${agentContext.contextKey}`"
       :app="props.app"
       :app-title="appTitle"
       :config="agentConfig"

@@ -37,6 +37,7 @@ class ScriptedLoom:
     requests: list[RecordedRequest] = field(default_factory=list)
     blocks: list[dict[str, object]] = field(default_factory=list)
     live_turn: int | None = None
+    page_size: int | None = None
     _events: queue.Queue[tuple[str, object]] = field(default_factory=queue.Queue)
     _lock: threading.Lock = field(default_factory=threading.Lock)
     _stopping: threading.Event = field(default_factory=threading.Event)
@@ -46,6 +47,7 @@ class ScriptedLoom:
             self.requests.clear()
             self.blocks.clear()
             self.live_turn = None
+            self.page_size = None
         while True:
             try:
                 self._events.get_nowait()
@@ -69,6 +71,12 @@ class ScriptedLoom:
             assert isinstance(turn, dict)
             self.live_turn = int(turn["turn"]) if turn.get("state") == "started" else None
         self._events.put((event, data))
+
+    def paginate(self, page_size: int) -> None:
+        """Limit chat snapshots so a journey can exercise older-page loading."""
+        if page_size < 1:
+            raise ValueError("page_size must be positive")
+        self.page_size = page_size
 
     def stop(self) -> None:
         self._stopping.set()
@@ -145,9 +153,19 @@ class ScriptedLoom:
             body = await request.json()
             self._record(request, body)
             with self._lock:
+                blocks = sorted(self.blocks, key=lambda block: (int(block["turn"]), int(block["seq"])))
+                before_turn = body.get("before_turn")
+                before_seq = body.get("before_seq")
+                if before_turn is not None and before_seq is not None:
+                    before = (int(before_turn), int(before_seq))
+                    blocks = [block for block in blocks if (int(block["turn"]), int(block["seq"])) < before]
+                has_more = self.page_size is not None and len(blocks) > self.page_size
+                if self.page_size is not None:
+                    blocks = blocks[-self.page_size :]
+                older_cursor = {"turn": blocks[0]["turn"], "seq": blocks[0]["seq"]} if has_more and blocks else None
                 return {
-                    "blocks": list(self.blocks),
-                    "older_cursor": None,
+                    "blocks": blocks,
+                    "older_cursor": older_cursor,
                     "live_turn": self.live_turn,
                     "effective_mode": "default" if self.live_turn is not None else None,
                     "pending_prompt": None,

@@ -132,8 +132,15 @@ export class LoomAgentClient {
     return this.json('/api/sessions/get', { session: sessionId })
   }
 
-  snapshot(sessionId: string): Promise<ChatSnapshot> {
-    return this.json('/api/sessions/chat', { session: sessionId, before_turn: null, before_seq: null })
+  snapshot(
+    sessionId: string,
+    before: { turn: number; seq: number } | null = null,
+  ): Promise<ChatSnapshot> {
+    return this.json('/api/sessions/chat', {
+      session: sessionId,
+      before_turn: before?.turn ?? null,
+      before_seq: before?.seq ?? null,
+    })
   }
 
   prompt(sessionId: string, context: AgentPageContext, message: string): Promise<{ queued: boolean; turn: number | null }> {

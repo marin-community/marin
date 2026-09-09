@@ -16,6 +16,7 @@ def test_create_example_plan(journey) -> None:
 
 @pytest.mark.timeout(120)
 def test_agent_panel_reads_the_current_plan_and_restores_after_refresh(journey, scripted_loom) -> None:
+    scripted_loom.paginate(2)
     journey.visit("/").click("Open an example")
     journey.sees("Example Project Plan").click("Ask Marina")
     journey.sees("Example Project Plan · revision 1")
@@ -88,9 +89,15 @@ def test_agent_panel_reads_the_current_plan_and_restores_after_refresh(journey, 
         },
     )
     scripted_loom.release("turn", {"turn": 1, "state": "ended", "stop_reason": "end_turn"})
-    journey.sees("The launch path is").shoot("agent-answer").widths("agent-complete")
+    journey.sees("The launch path is").sees("Load earlier messages").click("Load earlier messages")
+    journey.sees("What is on the critical path?").shoot("agent-answer").widths("agent-complete")
+
+    journey.click("Use example").sees("What is on the critical path?").absent("The launch path is")
+    assert len(scripted_loom.recorded("/api/sessions/launch")) == 1
+    journey.page.go_back(wait_until="domcontentloaded")
+    journey.sees("The launch path is")
 
     journey.page.reload(wait_until="domcontentloaded")
     journey.sees("Example Project Plan").click("Ask Marina").sees("The launch path is")
     assert len(scripted_loom.recorded("/api/sessions/launch")) == 1
-    assert len(scripted_loom.recorded("/api/sessions/get")) == 1
+    assert len(scripted_loom.recorded("/api/sessions/get")) == 2
