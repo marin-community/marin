@@ -20,6 +20,7 @@ from experiments.post_training.async_rl_stop_diagnostics import parser_inside_th
 
 SPEC = {}
 OUTPUT = None
+EOS_PROOF = None
 MAX_BYTES = 200 * 1024 * 1024
 byte_count = 0
 PAT = re.compile(r"#### (\-?[0-9\.\,]+)")
@@ -157,6 +158,19 @@ def group_summary(items):
     }
 
 
+def validate_eos_proof(raw, protocol):
+    assert hashlib.sha256(raw).hexdigest() == protocol["eos_method_proof_sha256"]
+    proof = json.loads(raw)
+    assert proof["status"] == "E61_PINNED_EOS_METHOD_PASS"
+    assert proof["vllm_revision"] == "fa50698a9a30"
+    assert proof["actual_default_ignore_eos"] is False
+    assert {row["ignore_eos"]: row["effective_stop_ids"] for row in proof["cases"]} == {
+        False: [128001, 128009],
+        True: [],
+    }
+    return proof
+
+
 def main():
     global byte_count
 
@@ -168,6 +182,8 @@ def main():
         ),
         "runs": {},
         "metadata": {},
+        "effective_eos_configuration_proof": validate_eos_proof(EOS_PROOF.read_bytes(), SPEC["analysis_protocol"]),
+        "effective_eos_scope": "Configuration diagnostic; not a causal attribution of any truncation.",
     }
     model = SPEC["runs"][0]["envelope"]["request"]["model"]
     for filename in ["config.json", "generation_config.json", "tokenizer_config.json", "special_tokens_map.json"]:
@@ -207,6 +223,7 @@ def main():
         d = json.loads(raw)
         if filename == "tokenizer.json":
             decoder = Tokenizer.from_str(raw.decode())
+            assert decoder.token_to_id("<|start_think|>") == 128002
             assert decoder.token_to_id("<|end_think|>") == 128003
         result["metadata"]["requested_hf_" + filename] = {
             "sha256": hashlib.sha256(raw).hexdigest(),
@@ -358,7 +375,9 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--spec", type=Path, required=True)
     p.add_argument("--output", type=Path, required=True)
+    p.add_argument("--eos-proof", type=Path, required=True)
     args = p.parse_args()
     SPEC = json.loads(args.spec.read_text())
     OUTPUT = args.output
+    EOS_PROOF = args.eos_proof
     main()

@@ -1,10 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
+import json
 from typing import ClassVar
 
 import pytest
 
+from experiments.post_training.async_rl_stop_diagnostic_audit import validate_eos_proof
 from experiments.post_training.async_rl_stop_diagnostics import (
     parser_inside_thinking,
     repeated_window_fraction,
@@ -73,3 +76,24 @@ def test_nonexclusive_fractions_keep_unknown_eos_and_missing_marker_denominators
     assert result["all"]["effective_eos_unknown_rows"] == 1
     assert result["rewarded_length"]["parser_and_repetition_ge_half"]["fraction"] == 1
     assert summarize([])["all"]["no_effective_eos"]["fraction"] is None
+
+
+def test_eos_proof_bytes_are_bound_and_controls_execute():
+    proof = {
+        "status": "E61_PINNED_EOS_METHOD_PASS",
+        "vllm_revision": "fa50698a9a30",
+        "actual_default_ignore_eos": False,
+        "cases": [
+            {"ignore_eos": False, "effective_stop_ids": [128001, 128009]},
+            {"ignore_eos": True, "effective_stop_ids": []},
+        ],
+    }
+    raw = json.dumps(proof).encode()
+    protocol = {"eos_method_proof_sha256": hashlib.sha256(raw).hexdigest()}
+    assert validate_eos_proof(raw, protocol) == proof
+    with pytest.raises(AssertionError):
+        validate_eos_proof(raw + b" ", protocol)
+    proof["cases"][0]["effective_stop_ids"] = []
+    changed = json.dumps(proof).encode()
+    with pytest.raises(AssertionError):
+        validate_eos_proof(changed, {"eos_method_proof_sha256": hashlib.sha256(changed).hexdigest()})
