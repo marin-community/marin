@@ -1,0 +1,118 @@
+{
+  "dataset": "marin-community/grug-moe-mix-swarm",
+  "revision": "9cdd208e42f926f2b23c204085c9dc45f63c6c92",
+  "swarm": "h100-d512-from10pct-store-4d2e363d",
+  "observations": 792,
+  "distinct_designs": 777,
+  "protocol": "First-appearance prefixes; inverse-variance aggregated replicate designs; full-campaign fixed objective and noise calibration; higher score is better; rank 1 is best. Original models use their unchanged fit settings. Elapsed seconds include fit and prediction; timings are not isolated throughput benchmarks.",
+  "results": [
+    {
+      "model": "direct",
+      "prefix": 128,
+      "rule": "mean",
+      "regret": 2.907546692334926,
+      "rank": 62,
+      "rho": 0.8775014815692783,
+      "elapsed": 6.318856893005432
+    },
+    {
+      "model": "direct",
+      "prefix": 128,
+      "rule": "lcb",
+      "regret": 3.503408417631917,
+      "rank": 107,
+      "rho": 0.8775014815692783,
+      "elapsed": 6.319695369005785
+    },
+    {
+      "model": "direct",
+      "prefix": 128,
+      "rule": "ucb",
+      "regret": 2.907546692334926,
+      "rank": 62,
+      "rho": 0.8775014815692783,
+      "elapsed": 6.320371401001466
+    },
+    {
+      "model": "quadratic",
+      "prefix": 128,
+      "rule": "mean",
+      "regret": 3.503408417631917,
+      "rank": 107,
+      "rho": 0.6170922172617088,
+      "elapsed": 84.82033598600538
+    },
+    {
+      "model": "quadratic",
+      "prefix": 128,
+      "rule": "lcb",
+      "regret": 3.503408417631917,
+      "rank": 107,
+      "rho": 0.6170922172617088,
+      "elapsed": 84.82119229499949
+    },
+    {
+      "model": "quadratic",
+      "prefix": 128,
+      "rule": "ucb",
+      "regret": 3.503408417631917,
+      "rank": 107,
+      "rho": 0.6170922172617088,
+      "elapsed": 84.82191782600421
+    },
+    {
+      "model": "direct",
+      "prefix": 384,
+      "rule": "mean",
+      "regret": 2.41166669438278,
+      "rank": 31,
+      "rho": 0.8895336101658861,
+      "elapsed": 5.044464083999628
+    },
+    {
+      "model": "direct",
+      "prefix": 384,
+      "rule": "lcb",
+      "regret": 2.41166669438278,
+      "rank": 31,
+      "rho": 0.8895336101658861,
+      "elapsed": 5.04519065299246
+    },
+    {
+      "model": "direct",
+      "prefix": 384,
+      "rule": "ucb",
+      "regret": 2.41166669438278,
+      "rank": 31,
+      "rho": 0.8895336101658861,
+      "elapsed": 5.04580868499761
+    },
+    {
+      "model": "quadratic",
+      "prefix": 384,
+      "rule": "mean",
+      "regret": 1.7305812649453944,
+      "rank": 14,
+      "rho": 0.9551254880221551,
+      "elapsed": 682.1144810560072
+    },
+    {
+      "model": "quadratic",
+      "prefix": 384,
+      "rule": "lcb",
+      "regret": 1.7305812649453944,
+      "rank": 14,
+      "rho": 0.9551254880221551,
+      "elapsed": 682.1152260160015
+    },
+    {
+      "model": "quadratic",
+      "prefix": 384,
+      "rule": "ucb",
+      "regret": 1.7305812649453944,
+      "rank": 14,
+      "rho": 0.9551254880221551,
+      "elapsed": 682.1158559760079
+    }
+  ]
+}
