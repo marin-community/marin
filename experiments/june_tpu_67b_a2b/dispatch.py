@@ -25,12 +25,15 @@ ConfigT = TypeVar("ConfigT")
 # JAX_PLATFORMS is excluded: the dispatcher runs CPU-only and its value must
 # not leak onto accelerator tasks.
 _FORWARDED_ENV_PREFIXES = ("XLA_FLAGS", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_")
+_FORWARDED_ENV_NAMES = ("IRIS_PORT_JAX",)
 _FORWARDED_ENV_EXCLUDE = ("JAX_PLATFORMS",)
 
 
 def _forwarded_env_vars() -> dict[str, str]:
     return {
-        k: v for k, v in os.environ.items() if k.startswith(_FORWARDED_ENV_PREFIXES) and k not in _FORWARDED_ENV_EXCLUDE
+        k: v
+        for k, v in os.environ.items()
+        if (k in _FORWARDED_ENV_NAMES or k.startswith(_FORWARDED_ENV_PREFIXES)) and k not in _FORWARDED_ENV_EXCLUDE
     }
 
 

@@ -3,10 +3,10 @@
 
 """Five-way Snowball LCE SFT campaign reconstructed from the Snowball training records.
 
-Each base is a pinned HF export of a native step-157000 checkpoint. The first stage loads HF
-weights into the first-class Snowball model with the architecture resolved from that exact Hub
-revision; later stages use weights-only native checkpoint initialization. Every stage therefore
-starts with a fresh optimizer and step counter while retaining the base-specific ``qk_mult``.
+Each base is a pinned HF export of a native step-157000 checkpoint. A cacheable CPU conversion
+materializes those weights in the stacked native format consumed by the historical Grug SFT backend;
+all stages use weights-only initialization. Every stage therefore starts with a fresh optimizer and
+step counter while retaining the base-specific ``qk_mult``.
 
 Launch a one-update full-shape smoke on RNO2A before the campaign fan-out::
 
@@ -30,12 +30,9 @@ import click
 from fray.cluster import ResourceConfig
 from levanter.data.text.datasets import DatasetComponent, LmDataConfig, UrlDatasetSourceConfig
 from levanter.data.text.formats import ChatLmDatasetFormat, LmDatasetFormatBase
-from levanter.models.snowball import SnowballConfig
-from levanter.utils.mesh import MeshConfig
 from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
-from marin.experiment.checkpoints import resolve_lm_config
 from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_namespaced_name
 from marin.processing.tokenize.tokenize import TokenizedCache
@@ -46,10 +43,16 @@ from experiments.datasets.grug_a2b_agentic_sft_eot import (
     GRUG_A2B_AGENTIC_SFT_FORMAT,
     grug_a2b_agentic_sft_eot_dataset,
 )
-from experiments.grug.moe.optimizer import GrugMoeAdamHConfig
+from experiments.june_tpu_67b_a2b.moe.hf_import import (
+    ConvertedSnowballGrugModel,
+    SnowballHfToGrugCheckpoint,
+    snowball_hf_to_grug,
+)
+from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig
+from experiments.june_tpu_67b_a2b.moe.optimizer import GrugMoeAdamHConfig
 from experiments.marin_tokenizer import MARIN_CHAT_TEMPLATE
 from experiments.sft.delphi_chat_template import DELPHI_V0_CHAT_TEMPLATE
-from experiments.sft.launcher import DatasetSpec, HFModel, LevanterCheckpointModel, SFTSpec, sft_step
+from experiments.sft.launcher import DatasetSpec, SFTSpec, sft_step
 
 _SEQ = 32_768
 _BATCH = 64
@@ -60,9 +63,7 @@ _AGENTIC_STEPS = 1_888
 _PREBUILT_TRAIN_RESOURCES = "prebuilt_train_resources"
 _OPENCODE_DATASET_REVISION = "a9805934c9c98908c611236bbfc87799f1ff6fe5"
 _NEMOTRON_DATASET_REVISION = "a1667c4ffdadea02a89bffe4f1bb7ca2ff19f8d9"
-_TOKENIZER_REF = "marin-community/marin-tokenizer@a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2"
-# All five immutable base exports have this exact tokenizer.json digest, as does _TOKENIZER_REF.
-_TOKENIZER_JSON_SHA256 = "881c9c36c359e1617afef6f7583403567931b7b4f43f6552d2b2155a131650a2"
+_CONVERSION_VERSION = "2026.09.09.1"
 
 # These immutable tags were created only after the uploader validated all 44 source files. Never
 # train from a moving ``main`` revision.
@@ -147,15 +148,6 @@ _NEMOTRON_PARQUET_FILES: tuple[str, ...] = (
 )
 _NEMOTRON_CACHE_SOURCE = "s3://marin-us-east-02a/marin/tokenized/nemotron_terminal_full-chat-7adc64/2026.07.17"
 
-_TRAIN_MESH = MeshConfig(
-    axes={"expert": _EXPERT_PARALLEL},
-    dcn_axes={"data": -1},
-    compute_mapping={"batch": ["replica_dcn", "data", "expert"]},
-    # Match the compact production Grug mesh. The generic mesh builder otherwise puts ICI
-    # ``expert`` before DCN ``data``, while Snowball's raw batch PartitionSpecs use this order.
-    axis_order=("replica_dcn", "data", "expert", "replica", "model"),
-)
-
 
 def _resources() -> ResourceConfig:
     return ResourceConfig.with_gpu(
@@ -167,6 +159,10 @@ def _resources() -> ResourceConfig:
         replicas=_NODES,
         preemptible=True,
     )
+
+
+def _conversion_resources() -> ResourceConfig:
+    return ResourceConfig.with_cpu(cpu=32, ram="512g", disk="512g")
 
 
 def _optimizer(learning_rate: float) -> GrugMoeAdamHConfig:
@@ -184,45 +180,68 @@ def _optimizer(learning_rate: float) -> GrugMoeAdamHConfig:
     )
 
 
-def _base_model(base: str) -> tuple[HFModel, SnowballConfig, str]:
+def _base_config(base: str) -> GrugModelConfig:
+    qk_mult = 1.57 if base == "qk157" else 1.75
+    return GrugModelConfig(
+        vocab_size=128256,
+        hidden_dim=2560,
+        intermediate_dim=1280,
+        shared_expert_intermediate_dim=2560,
+        num_experts=256,
+        num_experts_per_token=4,
+        num_layers=26,
+        num_heads=20,
+        num_kv_heads=5,
+        head_dim=128,
+        max_seq_len=_SEQ,
+        sliding_window=2048,
+        layer_norm_eps=1e-5,
+        initializer_std=0.009882117688026186,
+        qk_mult=qk_mult,
+        disable_pko=True,
+        disable_long_rope=True,
+        attention_implementation="gpu_fa4_cute",
+        moe_implementation="ring",
+        ce_implementation="batched_xla",
+        use_array_stacked_blocks=True,
+    )
+
+
+def _converted_model(
+    conversion: SnowballHfToGrugCheckpoint,
+    *,
+    init_from: ArtifactStep[LevanterCheckpoint] | None = None,
+) -> ConvertedSnowballGrugModel:
+    return ConvertedSnowballGrugModel(
+        conversion=conversion,
+        init_from=init_from,
+        expert_parallel=_EXPERT_PARALLEL,
+        model_axis=1,
+        replica_axis=1,
+    )
+
+
+def _base_model(
+    base: str,
+) -> tuple[ConvertedSnowballGrugModel, SnowballHfToGrugCheckpoint]:
     repo, revision = _BASE_REVISIONS[base]
     if revision is None:
         raise ValueError(f"Base {base} has not completed its validated HF upload.")
-    model = resolve_lm_config("snowball", repo, revision)
-    if not isinstance(model, SnowballConfig):
-        raise TypeError(f"Expected SnowballConfig for {repo}@{revision}, got {type(model).__name__}.")
-    model = dataclasses.replace(
-        model,
-        attention_implementation="gpu_fa4_cute",
-        moe_implementation="ring",
+    config = _base_config(base)
+    conversion = snowball_hf_to_grug(
+        repo,
+        hf_revision=revision,
+        model=config,
+        version=_CONVERSION_VERSION,
+        resources=_conversion_resources(),
     )
-    ref = f"{repo}@{revision}"
-    return (
-        HFModel(
-            model_ref=ref,
-            # Use one immutable identity for byte-identical tokenizers. Besides making the
-            # preservation explicit, this lets all five roots reuse the same prefix data caches.
-            tokenizer_path=_TOKENIZER_REF,
-            model_type="snowball",
-            model_config=model,
-            eos_token_ids=(128001, 128009),
-            trainer_mesh=_TRAIN_MESH,
-            use_explicit_mesh_axes=True,
-        ),
-        model,
-        _TOKENIZER_REF,
-    )
+    return _converted_model(conversion), conversion
 
 
-def _native_model(parent: ArtifactStep[LevanterCheckpoint], model: SnowballConfig, tokenizer: str):
-    return LevanterCheckpointModel(
-        init_from=parent,
-        model=model,
-        tokenizer_path=tokenizer,
-        eos_token_ids=(128001, 128009),
-        trainer_mesh=_TRAIN_MESH,
-        use_explicit_mesh_axes=True,
-    )
+def _native_model(
+    parent: ArtifactStep[LevanterCheckpoint], conversion: SnowballHfToGrugCheckpoint
+) -> ConvertedSnowballGrugModel:
+    return _converted_model(conversion, init_from=parent)
 
 
 def _spec(
@@ -257,7 +276,7 @@ def _spec(
 
 
 def build_smoke(base: str, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
-    model, _, _ = _base_model(base)
+    model, _ = _base_model(base)
     return sft_step(
         _spec(base=base, stage="hf-smoke", version=version, model=model, dataset=_CHAT_DATASET, steps=1),
         _resources(),
@@ -267,13 +286,13 @@ def build_smoke(base: str, version: str | None = None) -> ArtifactStep[LevanterC
 def build_smoke_reload(base: str, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
     """Reload the HF smoke's native checkpoint and run one update before campaign fan-out."""
     smoke = build_smoke(base, version)
-    _, config, tokenizer = _base_model(base)
+    _, conversion = _base_model(base)
     return sft_step(
         _spec(
             base=base,
             stage="hf-smoke-reload",
             version=version,
-            model=_native_model(smoke, config, tokenizer),
+            model=_native_model(smoke, conversion),
             dataset=_CHAT_DATASET,
             steps=1,
         ),
@@ -281,8 +300,10 @@ def build_smoke_reload(base: str, version: str | None = None) -> ArtifactStep[Le
     )
 
 
-def build_chat(base: str, version: str | None = None) -> tuple[ArtifactStep[LevanterCheckpoint], SnowballConfig, str]:
-    model, config, tokenizer = _base_model(base)
+def build_chat(
+    base: str, version: str | None = None
+) -> tuple[ArtifactStep[LevanterCheckpoint], SnowballHfToGrugCheckpoint]:
+    model, conversion = _base_model(base)
     chat = sft_step(
         _spec(
             base=base,
@@ -295,12 +316,12 @@ def build_chat(base: str, version: str | None = None) -> tuple[ArtifactStep[Leva
         ),
         _resources(),
     )
-    return chat, config, tokenizer
+    return chat, conversion
 
 
 def build_thinking(base: str, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
-    chat, config, tokenizer = build_chat(base, version)
-    thinking_model = _native_model(chat, config, tokenizer)
+    chat, conversion = build_chat(base, version)
+    thinking_model = _native_model(chat, conversion)
     return sft_step(
         _spec(
             base=base,
@@ -361,15 +382,14 @@ def _build_prebuilt_stage(
     stage: str,
     version: str | None,
     parent: ArtifactStep[LevanterCheckpoint],
-    config: SnowballConfig,
-    tokenizer: str,
+    conversion: SnowballHfToGrugCheckpoint,
     cache: ArtifactStep[TokenizedCache],
     dataset: DatasetSpec,
     data_format: LmDatasetFormatBase,
     chat_template: str,
     packed_slice_strategy: Literal["left", "right", "raise"] = "left",
 ) -> ArtifactStep[LevanterCheckpoint]:
-    model = _native_model(parent, config, tokenizer)
+    model = _native_model(parent, conversion)
     spec = _spec(
         base=base,
         stage=stage,
@@ -408,21 +428,23 @@ def _build_prebuilt_stage(
     )
 
 
-def _build_prefix(base: str, version: str | None = None) -> tuple[ArtifactStep[LevanterCheckpoint], SnowballConfig, str]:
-    chat, config, tokenizer = build_chat(base, version)
+def _build_prefix(
+    base: str, version: str | None = None
+) -> tuple[ArtifactStep[LevanterCheckpoint], SnowballHfToGrugCheckpoint]:
+    chat, conversion = build_chat(base, version)
     thinking = sft_step(
         _spec(
             base=base,
             stage="thinking",
             version=version,
-            model=_native_model(chat, config, tokenizer),
+            model=_native_model(chat, conversion),
             dataset=_THINKING_DATASET,
             epochs=1,
             expected_epoch_steps=630,
         ),
         _resources(),
     )
-    return thinking, config, tokenizer
+    return thinking, conversion
 
 
 def _build_opencode_from(
@@ -430,16 +452,14 @@ def _build_opencode_from(
     base: str,
     version: str | None,
     thinking: ArtifactStep[LevanterCheckpoint],
-    config: SnowballConfig,
-    tokenizer: str,
+    conversion: SnowballHfToGrugCheckpoint,
 ) -> ArtifactStep[LevanterCheckpoint]:
     return _build_prebuilt_stage(
         base=base,
         stage="opencode",
         version=version,
         parent=thinking,
-        config=config,
-        tokenizer=tokenizer,
+        conversion=conversion,
         cache=grug_a2b_agentic_sft_eot_dataset(),
         dataset=_OPENCODE_DATASET,
         data_format=GRUG_A2B_AGENTIC_SFT_FORMAT,
@@ -453,16 +473,14 @@ def _build_nemotron_terminal_from(
     base: str,
     version: str | None,
     thinking: ArtifactStep[LevanterCheckpoint],
-    config: SnowballConfig,
-    tokenizer: str,
+    conversion: SnowballHfToGrugCheckpoint,
 ) -> ArtifactStep[LevanterCheckpoint]:
     return _build_prebuilt_stage(
         base=base,
         stage="nemotron-terminal",
         version=version,
         parent=thinking,
-        config=config,
-        tokenizer=tokenizer,
+        conversion=conversion,
         cache=_adopt_nemotron_cache(),
         dataset=_NEMOTRON_DATASET,
         data_format=ChatLmDatasetFormat(
@@ -476,24 +494,22 @@ def _build_nemotron_terminal_from(
 
 
 def build_opencode(base: str, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
-    thinking, config, tokenizer = _build_prefix(base, version)
+    thinking, conversion = _build_prefix(base, version)
     return _build_opencode_from(
         base=base,
         version=version,
         thinking=thinking,
-        config=config,
-        tokenizer=tokenizer,
+        conversion=conversion,
     )
 
 
 def build_nemotron_terminal(base: str, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
-    thinking, config, tokenizer = _build_prefix(base, version)
+    thinking, conversion = _build_prefix(base, version)
     return _build_nemotron_terminal_from(
         base=base,
         version=version,
         thinking=thinking,
-        config=config,
-        tokenizer=tokenizer,
+        conversion=conversion,
     )
 
 
@@ -538,7 +554,7 @@ def _write_prefix_caches_complete(config: PrefixCachesCompleteConfig) -> None:
 
 def build_prefix_caches(base: str, version: str | None = None) -> ArtifactStep[Artifact]:
     """Materialize and gate the two shared epoch-based caches before five GPU roots fan out."""
-    model, _, _ = _base_model(base)
+    model, _ = _base_model(base)
     chat_probe = sft_step(
         _spec(
             base=base,
@@ -598,20 +614,18 @@ def _write_campaign_complete(config: CampaignCompleteConfig) -> None:
 
 def build_all(base: str, version: str | None = None) -> ArtifactStep[Artifact]:
     """Build one shared Chat/Thinking prefix followed by both independent agentic branches."""
-    thinking, config, tokenizer = _build_prefix(base, version)
+    thinking, conversion = _build_prefix(base, version)
     opencode = _build_opencode_from(
         base=base,
         version=version,
         thinking=thinking,
-        config=config,
-        tokenizer=tokenizer,
+        conversion=conversion,
     )
     nemotron_terminal = _build_nemotron_terminal_from(
         base=base,
         version=version,
         thinking=thinking,
-        config=config,
-        tokenizer=tokenizer,
+        conversion=conversion,
     )
     step_name = f"snowball-final/{base}/complete"
     resolved_version = resolve_version(step_name, version)

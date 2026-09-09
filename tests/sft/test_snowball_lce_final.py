@@ -5,12 +5,10 @@
 
 import pytest
 from levanter.data.text.formats import ChatLmDatasetFormat, LossWeightTransform, PrebuiltLmDatasetFormat
-from levanter.models.snowball import SnowballConfig
 from marin.execution.lazy import StepContext, materialized_config
 
 from experiments.sft import launcher as sft_launcher
 from experiments.sft.configs import snowball_lce_final
-from experiments.sft.launcher import HFModel
 from experiments.sft.validate_snowball_caches import _EXPECTED_OPENCODE_STEPS, _OPENCODE_EPOCHS
 
 _PREFIX = "s3://test-prefix"
@@ -18,37 +16,27 @@ _VERSION = "2026.09.08.99"
 
 
 @pytest.fixture
-def local_base(monkeypatch):
-    config = SnowballConfig(max_seq_len=262_144, qk_mult=1.5703)
-    ref = "open-athena/test-snowball@deadbeef"
-    source = HFModel(
-        model_ref=ref,
-        tokenizer_path=ref,
-        model_type="snowball",
-        model_config=config,
-        trainer_mesh=snowball_lce_final._TRAIN_MESH,
-        use_explicit_mesh_axes=True,
-    )
-    monkeypatch.setattr(snowball_lce_final, "_base_model", lambda _base: (source, config, ref))
-    return config, ref
+def local_base():
+    model, conversion = snowball_lce_final._base_model("qk157")
+    return model.conversion.model, conversion
 
 
 def test_opencode_is_packed_fixed_eot_child_of_thinking(local_base):
-    model_config, tokenizer = local_base
+    model_config, conversion = local_base
     step = snowball_lce_final.build_opencode("qk157", _VERSION)
-    cache, thinking = step.deps
+    cache = step.deps[0]
+    thinking = next(dep for dep in step.deps if dep.name.endswith("/qk157/thinking"))
 
     assert cache.name == "tokenized/grug-a2b-agentic-sft-eot"
     assert thinking.name.endswith("/qk157/thinking")
     assert any(dep.name.endswith("/qk157/chat") for dep in thinking.deps)
 
-    pod = materialized_config(step, _PREFIX)
-    train = pod.train_config
+    train = materialized_config(step, _PREFIX)
     component = train.data.components["grug_a2b_agentic_sft_eot"]
-    assert train.trainer.num_train_steps == 1_888
-    assert train.initialize_model_from_checkpoint_path.endswith("/qk157/thinking/2026.09.08.99/checkpoints")
+    assert train.steps == 1_888
+    assert train.init_from_path.endswith("/qk157/thinking/2026.09.08.99/checkpoints")
     assert train.model == model_config
-    assert train.data.tokenizer == tokenizer
+    assert train.data.tokenizer == f"{_PREFIX}/{conversion.step.name}/{conversion.step.version}"
     assert component.pack is True
     assert component.packed_slice_strategy == "right"
     assert isinstance(component.format, PrebuiltLmDatasetFormat)
@@ -56,21 +44,21 @@ def test_opencode_is_packed_fixed_eot_child_of_thinking(local_base):
 
 
 def test_nemotron_is_independent_thinking_child_with_historical_cache(local_base):
-    model_config, tokenizer = local_base
+    model_config, conversion = local_base
     step = snowball_lce_final.build_nemotron_terminal("qk157", _VERSION)
-    cache, thinking = step.deps
+    cache = step.deps[0]
+    thinking = next(dep for dep in step.deps if dep.name.endswith("/qk157/thinking"))
 
     assert cache.adopt_source == snowball_lce_final._NEMOTRON_CACHE_SOURCE
     assert thinking.name.endswith("/qk157/thinking")
     assert not any("opencode" in dep.name for dep in step.deps)
 
-    pod = materialized_config(step, _PREFIX)
-    train = pod.train_config
+    train = materialized_config(step, _PREFIX)
     component = train.data.components["nemotron_terminal_full"]
-    assert train.trainer.num_train_steps == 1_888
-    assert train.initialize_model_from_checkpoint_path.endswith("/qk157/thinking/2026.09.08.99/checkpoints")
+    assert train.steps == 1_888
+    assert train.init_from_path.endswith("/qk157/thinking/2026.09.08.99/checkpoints")
     assert train.model == model_config
-    assert train.data.tokenizer == tokenizer
+    assert train.data.tokenizer == f"{_PREFIX}/{conversion.step.name}/{conversion.step.version}"
     assert isinstance(component.format, ChatLmDatasetFormat)
     assert component.format.chat_template == snowball_lce_final.MARIN_CHAT_TEMPLATE
     assert component.packed_slice_strategy == "left"
@@ -84,12 +72,12 @@ def test_nemotron_file_selection_is_frozen():
     assert "synthetic_tasks/skill_based/medium/model_training/data_filtered.parquet" in files
 
 
-def test_training_mesh_matches_historical_grug_batch_axis_order():
-    mesh = snowball_lce_final._TRAIN_MESH
+def test_training_topology_matches_historical_grug_recipe(local_base):
+    train = materialized_config(snowball_lce_final.build_smoke("qk157", _VERSION), _PREFIX)
 
-    assert mesh.axis_order is not None
-    assert mesh.axis_order[:3] == ("replica_dcn", "data", "expert")
-    assert mesh.resolved_compute_mapping["batch"] == ("replica_dcn", "data", "expert")
+    assert train.expert_parallel == 8
+    assert train.grug_trainer.model_axis_size == 1
+    assert train.batch_size == 64
 
 
 def test_all_five_base_revisions_are_immutable():
@@ -100,15 +88,17 @@ def test_all_five_base_revisions_are_immutable():
         assert len(revision) == 40
 
 
-def test_bases_share_one_pinned_byte_identical_tokenizer(monkeypatch):
-    config = SnowballConfig(max_seq_len=262_144, qk_mult=1.5703)
-    monkeypatch.setattr(snowball_lce_final, "resolve_lm_config", lambda *_args: config)
+def test_each_base_uses_a_pinned_conversion_for_weights_and_tokenizer():
+    model, conversion = snowball_lce_final._base_model("qk157")
 
-    model, _, tokenizer = snowball_lce_final._base_model("qk157")
-
-    assert model.model_ref.startswith("open-athena/snowball-67b-a2b-base-262k-qk157@")
-    assert model.tokenizer_path == snowball_lce_final._TOKENIZER_REF
-    assert tokenizer == snowball_lce_final._TOKENIZER_REF
+    config = materialized_config(conversion.step, _PREFIX)
+    assert config.hf_id == "open-athena/snowball-67b-a2b-base-262k-qk157"
+    assert len(config.hf_revision) == 40
+    assert model.conversion is conversion
+    assert model.init_deps() == (conversion.step,)
+    assert model.resolve_tokenizer(StepContext.for_fingerprint((), (conversion.step,))) == (
+        f"{conversion.step.name}@{conversion.step.version}"
+    )
 
 
 def test_data_stage_builds_and_gates_both_shared_prefix_caches(local_base):
@@ -137,18 +127,16 @@ def test_data_stage_builds_and_gates_both_shared_prefix_caches(local_base):
 
 
 def test_smoke_reload_strictly_initializes_from_native_smoke(local_base):
-    model_config, tokenizer = local_base
+    model_config, conversion = local_base
     step = snowball_lce_final.build_smoke_reload("qk157", _VERSION)
 
     assert step.name.endswith("/qk157/hf-smoke-reload")
     assert any(dep.name.endswith("/qk157/hf-smoke") for dep in step.deps)
-    pod = materialized_config(step, _PREFIX)
-    train = pod.train_config
-    assert train.trainer.num_train_steps == 1
-    assert train.initialize_from_hf is False
-    assert train.initialize_model_from_checkpoint_path.endswith("/qk157/hf-smoke/2026.09.08.99/checkpoints")
+    train = materialized_config(step, _PREFIX)
+    assert train.steps == 1
+    assert train.init_from_path.endswith("/qk157/hf-smoke/2026.09.08.99/checkpoints")
     assert train.model == model_config
-    assert train.data.tokenizer == tokenizer
+    assert train.data.tokenizer == f"{_PREFIX}/{conversion.step.name}/{conversion.step.version}"
 
 
 def test_cache_preflight_matches_frozen_opencode_length():
@@ -162,8 +150,9 @@ def test_all_stage_shares_one_thinking_parent(local_base):
 
     assert opencode.name.endswith("/qk157/opencode")
     assert nemotron.name.endswith("/qk157/nemotron-terminal")
-    assert opencode.deps[1] is nemotron.deps[1]
-    assert opencode.deps[1].name.endswith("/qk157/thinking")
+    opencode_thinking = next(dep for dep in opencode.deps if dep.name.endswith("/qk157/thinking"))
+    nemotron_thinking = next(dep for dep in nemotron.deps if dep.name.endswith("/qk157/thinking"))
+    assert opencode_thinking is nemotron_thinking
 
     manifest = materialized_config(step, _PREFIX)
     assert manifest.base == "qk157"
