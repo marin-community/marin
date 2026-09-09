@@ -237,12 +237,22 @@ def training_config(
     dataloader_workers: int | None = None,
     publication_stage_timing: bool = False,
     serial_engine_startup: bool = False,
+    first_token_admission: bool = False,
+    generation_workers: int | None = None,
+    max_num_seqs: int | None = None,
+    training_ignore_eos: bool = False,
     optimizer_precision: OptimizerPrecision = OptimizerPrecision.NATIVE,
     optimizer_state_metrics: bool = False,
     eval_on_installed_weights: bool = False,
     eval_mode: str = "blocking",
 ) -> str:
     """Keep optimizer and inference settings identical across scheduler controls."""
+    if generation_workers is not None and (type(generation_workers) is not int or generation_workers <= 0):
+        raise ValueError("generation_workers must be a positive integer")
+    if max_num_seqs is not None and (type(max_num_seqs) is not int or max_num_seqs <= 0):
+        raise ValueError("max_num_seqs must be a positive integer")
+    if not isinstance(training_ignore_eos, bool):
+        raise ValueError("training_ignore_eos must be a boolean")
     schedule = SCHEDULES[scale]
     if not isinstance(epoch_seeded_shuffle, bool):
         raise ValueError("epoch_seeded_shuffle must be a boolean")
@@ -341,7 +351,7 @@ def training_config(
         )
     trainer["fully_async"] = {
         "max_staleness_steps": staleness,
-        "num_parallel_generation_workers": 64,
+        "num_parallel_generation_workers": 64 if generation_workers is None else generation_workers,
         "admission_stall_timeout": 300,
     }
     # Omit the default to preserve historical configuration fingerprints.
@@ -358,6 +368,10 @@ def training_config(
     trainer["ref"] = {"megatron_config": dict(megatron)}
     apply_optimizer_precision(trainer, scale=scale, precision=optimizer_precision, state_metrics=optimizer_state_metrics)
     config["generator"]["sampling_params"]["logprobs"] = 0
+    if max_num_seqs is not None:
+        config["generator"]["max_num_seqs"] = max_num_seqs
+    if training_ignore_eos:
+        config["generator"]["sampling_params"]["ignore_eos"] = True
     if eval_response_tokens is not None:
         config["generator"]["eval_sampling_params"] = {"max_generate_length": eval_response_tokens}
     config["generator"]["trajectory_retention"] = {
@@ -379,6 +393,12 @@ def training_config(
         if eval_mode == "background" and not eval_on_installed_weights:
             raise ValueError("Background evaluation requires installed weights")
         trainer["fully_async"].update(eval_on_installed_weights=eval_on_installed_weights, eval_mode=eval_mode)
+    if type(first_token_admission) is not bool:
+        raise ValueError("first_token_admission must be boolean")
+    if first_token_admission:
+        if runner is not Runner.ASYNC:
+            raise ValueError("First-token admission requires the async runner")
+        config["trainer"]["fully_async"]["first_token_admission"] = True
     if type(serial_engine_startup) is not bool:
         raise ValueError("serial_engine_startup must be a boolean")
     if serial_engine_startup:
@@ -565,6 +585,7 @@ def build_experiment(
     eval_interval: int | None = None,
     validation_offset: int = 0,
     validation_rows: int = VALIDATION_ROWS,
+    train_rows: int | None = None,
     initial_eval_repeat_count: int = 1,
     weight_change_probe: bool = False,
     epoch_seeded_shuffle: bool = False,
@@ -573,6 +594,10 @@ def build_experiment(
     dataloader_workers: int | None = None,
     publication_stage_timing: bool = False,
     serial_engine_startup: bool = False,
+    first_token_admission: bool = False,
+    generation_workers: int | None = None,
+    max_num_seqs: int | None = None,
+    training_ignore_eos: bool = False,
     optimizer_precision: OptimizerPrecision = OptimizerPrecision.NATIVE,
     optimizer_state_metrics: bool = False,
     eval_on_installed_weights: bool = False,
@@ -595,6 +620,9 @@ def build_experiment(
     if not 0 <= seed < 2**32:
         raise ValueError("Seed must be between 0 and 2**32 - 1")
     validate_validation_window(validation_offset, validation_rows)
+    if train_rows is not None and (type(train_rows) is not int or train_rows <= 0):
+        raise ValueError("train_rows must be a positive integer")
+    selected_train_rows = SCHEDULES[scale].train_rows if train_rows is None else train_rows
     config = training_config(
         runner,
         scale,
@@ -624,6 +652,10 @@ def build_experiment(
         eval_mode=eval_mode,
         publication_stage_timing=publication_stage_timing,
         serial_engine_startup=serial_engine_startup,
+        first_token_admission=first_token_admission,
+        generation_workers=generation_workers,
+        max_num_seqs=max_num_seqs,
+        training_ignore_eos=training_ignore_eos,
         optimizer_precision=optimizer_precision,
         optimizer_state_metrics=optimizer_state_metrics,
     )
@@ -655,19 +687,17 @@ def build_experiment(
             run=remote(write_gsm8k_window if validation_offset else write_gsm8k_subset, resources=cpu),
             build_config=lambda ctx: (
                 Gsm8kWindowConfig(
-                    Gsm8kSubsetConfig(
-                        ctx.output_path, train_rows=SCHEDULES[scale].train_rows, validation_rows=validation_rows
-                    ),
+                    Gsm8kSubsetConfig(ctx.output_path, train_rows=selected_train_rows, validation_rows=validation_rows),
                     validation_offset,
                 )
                 if validation_offset
-                else Gsm8kSubsetConfig(ctx.output_path, train_rows=SCHEDULES[scale].train_rows)
+                else Gsm8kSubsetConfig(ctx.output_path, train_rows=selected_train_rows)
             ),
         )
         train_source = ArtifactDataSource(data, relative_path=TRAIN_FILENAME)
         validation_source = ArtifactDataSource(data, relative_path=VALIDATION_FILENAME)
     else:
-        if validation_offset != 0 or validation_rows != VALIDATION_ROWS:
+        if train_rows is not None or validation_offset != 0 or validation_rows != VALIDATION_ROWS:
             raise ValueError("A frozen pool selects its own development rows")
         pool_config = yaml.safe_load(config)
         budget = pool_config["context_budget"]
@@ -791,6 +821,7 @@ def build_experiment(
     "--dataloader-workers", type=click.IntRange(min=0), help="Override loader workers; zero avoids spawn stalls."
 )
 @click.option("--publication-stage-timing/--no-publication-stage-timing", default=False, show_default=True)
+@click.option("--first-token-admission", is_flag=True, help="Admit groups by native sampled-token version.")
 @click.option("--serial-engine-startup/--no-serial-engine-startup", default=False, show_default=True)
 @click.option("--inference-replicas", type=click.Choice(["8", "16"]), default="8", show_default=True)
 @click.option("--seed", type=click.IntRange(min=0, max=2**32 - 1), default=SEED, show_default=True)
@@ -811,6 +842,10 @@ def build_experiment(
 @click.option(
     "--correction", type=click.Choice([c.value for c in Correction]), default="behavior_clip", show_default=True
 )
+@click.option("--max-num-seqs", type=click.IntRange(min=1), help="Concurrent native inference sequences per engine.")
+@click.option("--train-rows", type=click.IntRange(min=1), help="Training source rows; defaults to the scale schedule.")
+@click.option("--generation-workers", type=click.IntRange(min=1), help="Concurrent rollout groups; defaults to 64.")
+@click.option("--training-ignore-eos/--no-training-ignore-eos", default=False, show_default=True)
 @click.option("--response-tokens", type=click.IntRange(min=1), help="Training output cap; defaults to 1024.")
 @click.option(
     "--eval-response-tokens", type=click.IntRange(min=1), help="Internal evaluation cap; defaults to training."
@@ -881,6 +916,11 @@ def main(
     dataloader_workers: int | None,
     publication_stage_timing: bool,
     serial_engine_startup: bool,
+    first_token_admission: bool,
+    generation_workers: int | None,
+    max_num_seqs: int | None,
+    train_rows: int | None,
+    training_ignore_eos: bool,
     timeout_seconds: int,
     execute: bool,
     pool_artifact: str | None,
@@ -923,6 +963,7 @@ def main(
         eval_interval=eval_interval,
         validation_offset=validation_offset,
         validation_rows=validation_rows,
+        train_rows=train_rows,
         initial_eval_repeat_count=initial_eval_repeat_count,
         weight_change_probe=weight_change_probe,
         epoch_seeded_shuffle=epoch_seeded_shuffle,
@@ -933,6 +974,10 @@ def main(
         eval_mode=eval_mode,
         publication_stage_timing=publication_stage_timing,
         serial_engine_startup=serial_engine_startup,
+        first_token_admission=first_token_admission,
+        generation_workers=generation_workers,
+        max_num_seqs=max_num_seqs,
+        training_ignore_eos=training_ignore_eos,
     )
     prefix = marin_prefix()
     if allow_cross_region_io:
