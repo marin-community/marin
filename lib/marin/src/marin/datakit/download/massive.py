@@ -32,8 +32,7 @@ from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.readers import load_jsonl
 
-from marin.datakit.chat import CHAT_SCHEMA
-from marin.datakit.chat_normalize import normalize_chat_step
+from marin.datakit.chat_normalize import CHAT_SCHEMA, normalize_chat_step
 from marin.datakit.download.http_session import build_retrying_session
 from marin.datakit.download.rollout_transforms import openai_chat_document
 from marin.datakit.normalize import normalize_step

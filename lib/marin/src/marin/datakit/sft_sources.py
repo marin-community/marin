@@ -4,9 +4,9 @@
 """Canonical registry of Datakit sources that retain structured conversations."""
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from functools import cache
 
-from marin.datakit.chat import DatakitChatSource
 from marin.datakit.download.agenttrove import agenttrove_chat_normalize_steps
 from marin.datakit.download.coderforge import coderforge_chat_normalize_steps
 from marin.datakit.download.davinci_dev import davinci_dev_env_native_chat_normalize_steps
@@ -25,6 +25,20 @@ from marin.datakit.download.swe_zero_12m import swe_zero_12m_chat_normalize_step
 from marin.datakit.download.synthetic1 import synthetic1_chat_normalize_steps
 from marin.datakit.sources import all_sources
 from marin.execution.step_spec import StepSpec
+
+
+@dataclass(frozen=True)
+class DatakitChatSource:
+    """A source whose normalized artifact contains structured Harmony messages."""
+
+    name: str
+    normalize_steps: tuple[StepSpec, ...]
+    rough_token_count_b: float
+
+    @property
+    def normalized(self) -> StepSpec:
+        return self.normalize_steps[-1]
+
 
 _EXCLUDED_CHAT_SOURCES = frozenset(
     {

@@ -4,7 +4,7 @@
 import json
 
 import pytest
-from marin.datakit.chat import validate_chat_messages
+from marin.datakit.chat_normalize import validate_chat_messages
 from marin.datakit.download.opencode import opencode_conversation, opencode_protocol_messages
 from marin.datakit.download.penfever_rollouts import PenfeverRollout, row_to_chat_doc
 from marin.datakit.download.rollout_transforms import openai_chat_document, openai_chat_messages

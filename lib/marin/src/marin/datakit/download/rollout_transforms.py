@@ -15,7 +15,7 @@ from openai_harmony import Author, Message, Role
 from rigging.filesystem.factory import open_url
 from zephyr import counters
 
-from marin.datakit.chat import ChatChannel
+from marin.datakit.chat_normalize import ChatChannel
 
 logger = logging.getLogger(__name__)
 

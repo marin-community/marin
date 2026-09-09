@@ -9,8 +9,12 @@ import pyarrow.parquet as pq
 import pytest
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
-from marin.datakit.chat import ChatChannel, validate_chat_messages
-from marin.datakit.chat_normalize import _normalize_chat_record, normalize_chat_to_parquet
+from marin.datakit.chat_normalize import (
+    ChatChannel,
+    _normalize_chat_record,
+    normalize_chat_to_parquet,
+    validate_chat_messages,
+)
 from marin.datakit.download.coderforge import SOURCE_CHAT_SCHEMA
 from marin.datakit.download.coderforge import transform_chat as transform_coderforge_chat
 from openai_harmony import Author, Message, Role

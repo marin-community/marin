@@ -20,8 +20,7 @@ from zephyr import counters
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
-from marin.datakit.chat import CHAT_SCHEMA
-from marin.datakit.chat_normalize import normalize_chat_step
+from marin.datakit.chat_normalize import CHAT_SCHEMA, normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import checked_openai_chat_document, load_parquet_batched
 from marin.datakit.normalize import normalize_step

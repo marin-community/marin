@@ -33,8 +33,7 @@ from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.readers import load_jsonl
 
-from marin.datakit.chat import CHAT_SCHEMA
-from marin.datakit.chat_normalize import normalize_chat_step
+from marin.datakit.chat_normalize import CHAT_SCHEMA, normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import (
     ReasoningFormatError,
