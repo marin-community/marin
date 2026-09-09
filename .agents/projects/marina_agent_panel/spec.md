@@ -248,13 +248,18 @@ export interface ChatStreamHandlers {
   error(): void
 }
 
+export interface ChatCursor {
+  turn: number
+  seq: number
+}
+
 export interface LoomAgentClient {
   auth(): Promise<LoomIdentity>
   resolveLaunch(): Promise<ResolvedAgentLaunch>
   launch(context: AgentPageContext, message: string): Promise<AgentSessionRef>
   get(sessionId: string): Promise<AgentSession>
   sessionUrl(sessionId: string): Promise<string>
-  snapshot(sessionId: string): Promise<ChatSnapshot>
+  snapshot(sessionId: string, before?: ChatCursor): Promise<ChatSnapshot>
   stream(sessionId: string, handlers: ChatStreamHandlers): () => void
   prompt(sessionId: string, context: AgentPageContext, message: string): Promise<PromptAck>
   interrupt(sessionId: string): Promise<void>
@@ -325,7 +330,7 @@ The routes exchange direct JSON values rather than a response envelope. The cons
 | `sessions.launch` | launch body shown above | Loom `SessionView`; the client consumes the `AgentSession` fields. |
 | `sessions.get` | `{"session":"<id>"}` | Loom `SessionView`. |
 | `sessions.url` | `{"session":"<id>"}` | `{"url":"https://loom.oa.dev/sessions/<id>"}`. |
-| `sessions.chat` | `{"session":"<id>","before_turn":null,"before_seq":null}` | `ChatSnapshot`. |
+| `sessions.chat` | newest page: `{"session":"<id>","before_turn":null,"before_seq":null}`; older page: both fields from one `ChatCursor` | `ChatSnapshot`. |
 | `sessions.chat.stream` | query `session=<id>`; no body | SSE events in `ChatEvent`; no replay. |
 | `sessions.prompt.create` | `{"session":"<id>","text":"<prompt envelope>","send_now":true,"force_queued":false,"files":[]}` | `PromptAck`. |
 | `sessions.interrupt` | `{"session":"<id>"}` | `{"interrupted":bool}`. |
@@ -338,7 +343,7 @@ Every client error carries the operation id, HTTP status when available, and Loo
 
 - `sessions.get` or `sessions.chat` 404 removes the current mapping because the session no longer exists.
 - `sessions.permissions.answer` 404 or 409 retains the mapping and reloads chat because the pending decision changed.
-- A prompt request whose response is lost is ambiguous. The client reloads chat before enabling retry. If the user message or queued prompt is present, it treats the send as accepted; otherwise it restores the draft and offers retry.
+- A prompt request whose response is lost is ambiguous. Before sending, the client records the newest durable `(turn, seq)` and `pending_prompt`. After reloading chat, it treats the send as accepted only when the same envelope appears in a user block newer than that cursor, or as a `pending_prompt` value different from the baseline. Otherwise it restores the draft and offers retry. Matching an older message with identical text is insufficient.
 - SSE failure has no status. The client checks `auth.me`, then reconnects with exponential backoff from 250 ms to 5 seconds while the panel remains open.
 - Tool content does not expose an HTTP status. V0 renders it as a generic failed tool and does not classify a Plantt 409.
 
@@ -425,7 +430,7 @@ export interface ChatBlock {
 
 export interface ChatSnapshot {
   blocks: ChatBlock[]
-  older_cursor: { turn: number; seq: number } | null
+  older_cursor: ChatCursor | null
   live_turn: number | null
   effective_mode: string | null
   pending_prompt: string | null
@@ -446,7 +451,7 @@ export type ChatEvent =
   | { event: 'resync'; data: unknown }
 ```
 
-Durable blocks are keyed by `(turn, seq)` and upserted. The client preserves an SSE block observed after a snapshot request began when the older snapshot returns; this is required for mutable permission blocks. Delta shadows are keyed by `(turn, kind)`, append text within one connection, and disappear when the corresponding durable block arrives. Live tools are keyed by `tool_call_id` and disappear when a terminal `tool_call` block supersedes them. A `turn.ended` event clears live state but does not manufacture a final message.
+Durable blocks are keyed by `(turn, seq)` and upserted. The newest page loads on attach. When `older_cursor` is non-null, `Load earlier messages` requests a page with both cursor fields and prepends its upserted blocks while preserving scroll position; the control remains until a response returns a null cursor. Reconnect snapshots refresh the newest page without discarding older pages already loaded in memory. The client preserves an SSE block observed after a snapshot request began when the older snapshot returns; this is required for mutable permission blocks. Delta shadows are keyed by `(turn, kind)`, append text within one connection, and disappear when the corresponding durable block arrives. Live tools are keyed by `tool_call_id` and disappear when a terminal `tool_call` block supersedes them. A `turn.ended` event clears live state but does not manufacture a final message.
 
 Connection ordering:
 
@@ -472,7 +477,7 @@ interface AgentPanelState {
 
 The axes are independent: a running turn may be offline, and a permission may remain unresolved while the stream reconnects. Only one permission can receive a decision at a time. Buttons use the exact option ids advertised by Loom. Canonical `reject_once` and `reject_always` options appear first in DOM order, unknown kinds remain in provider order next, and canonical `allow_once` and `allow_always` options appear last. Other `reject_*` and `allow_*` values join their respective groups; labels and ids are never inferred from `kind`. An arriving permission is announced politely and never takes focus. Resolution disables every option until the refreshed journal confirms the outcome. A permission-answer 404 means the request disappeared; a 409 means another client resolved it. Both reload the snapshot without changing the stored session.
 
-Tool presentation uses only `LiveTool` and `tool_call` fields. It shows the supplied title, status, and tool-kind glyph. Content and locations are available through disclosure. The panel does not label a call as `find_tool`, `call_tool`, read, or write because Loom does not expose that identity. Completed tools collapse by default. Failed tools and pending permissions expand. At most 20 content items and 64 KiB of decoded content are rendered per tool. A text item or combined diff larger than 32 KiB becomes a byte-count placeholder. An image renders only when its decoded payload is at most 256 KiB and its MIME type is PNG, JPEG, GIF, or WebP; the panel never fetches its optional URI. Oversized, unsupported, and remaining items become typed byte-count placeholders. The agent still receives the full result through Loom.
+Tool presentation uses only `LiveTool` and `tool_call` fields. It shows the supplied title, status, and tool-kind glyph. Content and locations are available through disclosure. The panel does not label a call as `find_tool`, `call_tool`, read, or write because Loom does not expose that identity. Completed tools collapse by default. Failed tools and pending permissions expand. At most 20 content items and 256 KiB of decoded content are rendered per tool. A text item or combined diff larger than 32 KiB becomes a byte-count placeholder. An image renders only when it fits the remaining 256 KiB aggregate budget and its MIME type is PNG, JPEG, GIF, or WebP; the panel never fetches its optional URI. Oversized, unsupported, and remaining items become typed byte-count placeholders. The agent still receives the full result through Loom.
 
 Keyboard and responsive behavior:
 
@@ -520,7 +525,7 @@ class ScriptedLoom:
     def assert_finished(self) -> None: ...
 ```
 
-`ScriptedLoom` serves the routes in the Loom client table, exact credentialed CORS, a deterministic session-id sequence, one mutable journal per session, and chunked SSE. It never imports model or ACP packages. Launch and prompt acknowledgements return before any gated event, so the browser can subscribe without deadlock. The fake commits a durable block before publishing its SSE event and publishes only future events to each subscriber; reconnect recovery therefore comes from `sessions.chat`. It can hold a snapshot response while a streamed replacement for the same permission block arrives. `release` is thread-safe and returns only after the event is published. Unexpected operations, query/body/origin mismatches, repeated permission answers, and unreleased or unconsumed script steps fail `assert_finished`.
+`ScriptedLoom` serves the routes in the Loom client table, exact credentialed CORS, a deterministic session-id sequence, paginated mutable journals, and chunked SSE. It never imports model or ACP packages. Launch and prompt acknowledgements return before any gated event, so the browser can subscribe without deadlock. The fake commits a durable block before publishing its SSE event and publishes only future events to each subscriber; reconnect recovery therefore comes from `sessions.chat`. It can hold a snapshot response while a streamed replacement for the same permission block arrives. `release` is thread-safe and returns only after the event is published. Unexpected operations, query/body/origin mismatches, repeated permission answers, and unreleased or unconsumed script steps fail `assert_finished`.
 
 The journey plugin starts one `scripted_loom_server` per pytest session so the session-scoped Marina kernel has a stable origin. A function-scoped `scripted_loom` controller atomically resets the script before the journey, rejects a second active controller, and calls `assert_finished()` afterward. Each xdist worker owns a separate server. Journeys within one worker do not share script state.
 
@@ -541,7 +546,7 @@ The canonical script and assertions cover:
 9. `widths("agent-complete")` records 390, 900, and 1400 px layouts. At 1400 px the Plantt canvas is resized; at 390 px the background is inert.
 10. Closing restores launcher focus, and `ScriptedLoom.assert_finished()` passes.
 
-Separate journeys cover `auth.me` signed-out/sign-in, archived recovery, permission 409, ambiguous prompt delivery, route change during a live turn, two page-context sessions, and malformed stream data. They do not overload the main narrative journey.
+Separate journeys cover `auth.me` signed-out/sign-in, paginated history, archived recovery, permission 409, repeated-text ambiguous prompt delivery, route change during a live turn, two page-context sessions, and malformed stream data. They do not overload the main narrative journey.
 
 ## Live acceptance gates
 

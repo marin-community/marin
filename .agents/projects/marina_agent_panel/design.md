@@ -26,7 +26,7 @@ The `marina` profile selects only a new `marina-read` capability backed by `/api
 
 Opening the panel creates nothing. The first question resolves and launches an interactive ACP session using the `marina` profile; its goal contains the request and page-context envelope. Later turns use `sessions.prompt.create` with fresh context. The client opens `sessions.chat.stream` before loading `sessions.chat`, reconciles by stable identities, snapshots after reconnects and `resync`, and calls Loom directly for interrupt, recovery, and permission answers.
 
-One browser tab keeps up to 20 session ids per Loom username and page `contextKey` in `sessionStorage`. Plantt uses `chart:<uuid>`; an EvalDash run uses `run:<id>`. Reloading or returning to a page in that tab restores its transcript. If the route changes during a live turn or permission request, the panel asks whether to stay or switch after the turn; it never hides active work automatically. `New conversation` discards only the local mapping. The old Loom session remains auditable and visible under Loom's normal fleet policy.
+One browser tab keeps up to 20 session ids per Loom username and page `contextKey` in `sessionStorage`. Plantt uses `chart:<uuid>`; an EvalDash run uses `run:<id>`. Reloading or returning restores the recent transcript and offers older journal pages on demand. If the route changes during a live turn or permission request, the panel asks whether to stay or switch after the turn; it never hides active work automatically. `New conversation` discards only the local mapping. The old Loom session remains auditable and visible under Loom's normal fleet policy.
 
 ### Make page context an explicit shell contract
 
