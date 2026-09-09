@@ -16,6 +16,7 @@ from experiments.post_training import async_rl_audit as audit
 from experiments.post_training.math_eval import launcher
 from experiments.post_training.math_eval.checkpoint_progress import validate_progress
 from experiments.post_training.math_eval.checkpoint_tokenizer import tokenizer_stage_path
+from experiments.post_training.math_eval.e42_receipt_binding import validate_receipt_content_binding
 from experiments.post_training.math_eval.export_binding import EAST_PREFIX, validate_inventory
 from experiments.post_training.math_eval.serving_records import _completion_rows, completion_request
 
@@ -107,6 +108,8 @@ def checkpoint_serving_configuration(binding, *, expected_binding_sha256, concur
     unsigned = {key: value for key, value in binding.items() if key != "binding_sha256"}
     schema = binding["schema"]
     native_step = 96
+    if schema == "math_eval_e42_receipt_checkpoint_content_v1":
+        validate_receipt_content_binding(binding)
     if schema == "math_eval_checkpoint_content_v2":
         progress = binding["progress"]
         validate_progress(
@@ -122,7 +125,12 @@ def checkpoint_serving_configuration(binding, *, expected_binding_sha256, concur
     if (
         binding["binding_sha256"] != expected_binding_sha256
         or audit.canonical_sha(unsigned) != expected_binding_sha256
-        or schema not in {"math_eval_checkpoint_content_v1", "math_eval_checkpoint_content_v2"}
+        or schema
+        not in {
+            "math_eval_checkpoint_content_v1",
+            "math_eval_checkpoint_content_v2",
+            "math_eval_e42_receipt_checkpoint_content_v1",
+        }
         or binding["global_step"] != native_step
         or binding["training_seed"] not in {17, 29}
         or not binding["model_uri"].startswith(EAST_PREFIX)
