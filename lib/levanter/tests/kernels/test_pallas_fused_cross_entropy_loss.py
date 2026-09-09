@@ -1274,6 +1274,54 @@ def test_benchmark_candidate_handles_real_shard_map_tracers():
     assert float(score) >= 0.0
 
 
+@pytest.mark.parametrize("fast_backward", [False, True])
+def test_xla_fused_cross_entropy_supports_manual_batch_axes(fast_backward: bool):
+    """Loop carries preserve VMA types and the shared-weight gradient is reduced."""
+    partition_spec = jax.sharding.PartitionSpec
+    mesh = jax.sharding.Mesh(
+        np.array(jax.devices()[:1]),
+        ("data",),
+        axis_types=(jax.sharding.AxisType.Explicit,),
+    )
+    x_raw = jnp.arange(32, dtype=jnp.float32).reshape(4, 8) / 50
+    labels_raw = jnp.arange(4, dtype=jnp.int32)
+    w_raw = jnp.sin(jnp.arange(128, dtype=jnp.float32)).reshape(8, 16) / 5
+    x = jax.device_put(x_raw, jax.sharding.NamedSharding(mesh, partition_spec("data", None)))
+    labels = jax.device_put(labels_raw, jax.sharding.NamedSharding(mesh, partition_spec("data")))
+    w = jax.device_put(w_raw, jax.sharding.NamedSharding(mesh, partition_spec(None, None)))
+    block_sizes = BlockSizes(b_block_size=2, h_block_size=8, v_block_size=4)
+
+    def local_objective(x_shard, labels_shard, w_shard):
+        loss, _ = fused_xla.linear_softmax_cross_entropy_loss_xla(
+            x_shard,
+            labels_shard,
+            w_shard,
+            block_sizes=block_sizes,
+            fast_backward=fast_backward,
+            bwd_batch_block_size=2,
+            bwd_v_block_size=4,
+        )
+        return jax.lax.psum(jnp.sum(loss), "data")
+
+    sharded_objective = jax.shard_map(
+        local_objective,
+        mesh=mesh,
+        in_specs=(partition_spec("data", None), partition_spec("data"), partition_spec(None, None)),
+        out_specs=partition_spec(),
+        check_vma=True,
+    )
+    actual_value, actual_grads = jax.jit(jax.value_and_grad(sharded_objective, argnums=(0, 2)))(x, labels, w)
+
+    def reference_objective(x_ref, w_ref):
+        loss, _ = linear_softmax_cross_entropy_loss_reference(x_ref, labels_raw, w_ref)
+        return jnp.sum(loss)
+
+    expected_value, expected_grads = jax.value_and_grad(reference_objective, argnums=(0, 1))(x_raw, w_raw)
+    np.testing.assert_allclose(actual_value, expected_value, rtol=2e-5, atol=2e-5)
+    for actual, expected in zip(actual_grads, expected_grads, strict=True):
+        np.testing.assert_allclose(actual, expected, rtol=2e-5, atol=2e-5)
+
+
 def test_pallas_tpu_autotune_sweeps_for_real_shard_map_tracers(monkeypatch: pytest.MonkeyPatch):
     partition_spec = jax.sharding.PartitionSpec
     mesh = jax.sharding.Mesh(

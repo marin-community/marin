@@ -74,6 +74,26 @@ def _materialize_cotangent(
     return jnp.asarray(cotangent, dtype=reference.dtype)
 
 
+def _varying_like(value: jax.Array, source: jax.Array) -> jax.Array:
+    """Give a loop initializer the manual-axis type of values derived from ``source``."""
+    source_axes = jax.typeof(source).mat.varying
+    value_axes = jax.typeof(value).mat.varying
+    missing_axes = tuple(sorted(source_axes - value_axes))
+    if not missing_axes:
+        return value
+    return jax.lax.pcast(value, missing_axes, to="varying")
+
+
+def _sum_to_manual_type(value: jax.Array, target: jax.Array) -> jax.Array:
+    """Reduce axes introduced by local accumulation so the result matches ``target``."""
+    value_axes = jax.typeof(value).mat.varying
+    target_axes = jax.typeof(target).mat.varying
+    axes_to_sum = tuple(sorted(value_axes - target_axes))
+    if not axes_to_sum:
+        return value
+    return jax.lax.psum(value, axes_to_sum)
+
+
 def _resolve_xla_batch_block_size(
     b_dim: int,
     v_block_size: int,
@@ -180,8 +200,8 @@ def _linear_softmax_cross_entropy_loss_streaming_fwd(
         )
 
     out_dtype = jnp.dtype(dtype) if dtype is not None else jnp.float32
-    loss_init = jnp.zeros((b_dim,), dtype=out_dtype)
-    lse_init = jnp.zeros((b_dim,), dtype=out_dtype)
+    loss_init = _varying_like(jnp.zeros((b_dim,), dtype=out_dtype), x)
+    lse_init = _varying_like(jnp.zeros((b_dim,), dtype=out_dtype), x)
     num_b_blocks = b_dim // batch_block_size
 
     def body(block_idx, state):
@@ -246,9 +266,9 @@ def _linear_softmax_cross_entropy_loss_streaming_fwd_with_argmax(
         )
 
     out_dtype = jnp.dtype(dtype) if dtype is not None else jnp.float32
-    loss_init = jnp.zeros((b_dim,), dtype=out_dtype)
-    lse_init = jnp.zeros((b_dim,), dtype=out_dtype)
-    argmax_init = jnp.zeros((b_dim,), dtype=jnp.int32)
+    loss_init = _varying_like(jnp.zeros((b_dim,), dtype=out_dtype), x)
+    lse_init = _varying_like(jnp.zeros((b_dim,), dtype=out_dtype), x)
+    argmax_init = _varying_like(jnp.zeros((b_dim,), dtype=jnp.int32), x)
     num_b_blocks = b_dim // batch_block_size
 
     def body(block_idx, state):
@@ -317,8 +337,8 @@ def _linear_softmax_cross_entropy_loss_streaming_bwd(
     lse_dtype = lse.dtype
     dout_loss = dout_loss.astype(lse_dtype)
     dout_lse = dout_lse.astype(lse_dtype)
-    gx_init = jnp.zeros_like(x)
-    gw_init = jnp.zeros((h_dim, v_padded), dtype=w.dtype)
+    gx_init = _varying_like(jnp.zeros_like(x), x)
+    gw_init = _varying_like(jnp.zeros((h_dim, v_padded), dtype=w.dtype), x)
     num_b_blocks = b_dim // batch_block_size
 
     def body(block_idx, state):
@@ -387,7 +407,7 @@ def _linear_softmax_cross_entropy_loss_streaming_bwd(
             gx_inner = jax.lax.dynamic_update_slice(gx_inner, current_gx_block + gx_block, (batch_start, 0))
             return gx_inner, gw_block + gw_block_update
 
-        gw_block_init = jnp.zeros((h_dim, block_size), dtype=gw.dtype)
+        gw_block_init = _varying_like(jnp.zeros((h_dim, block_size), dtype=gw.dtype), x)
         gx, gw_block = jax.lax.fori_loop(0, num_b_blocks, batch_body, (gx, gw_block_init))
         gw = jax.lax.dynamic_update_slice(gw, gw_block, (0, start))
         return gx, gw
@@ -555,11 +575,11 @@ def _linear_softmax_cross_entropy_loss_streaming_bwd_scan(
             grad_x_inner = jax.lax.dynamic_update_slice(grad_x_inner, current + grad_x_blk, (b_start, 0))
             return grad_x_inner, grad_w_acc
 
-        grad_w_init = jnp.zeros((h_dim, block_size), dtype=jnp.float32)
+        grad_w_init = _varying_like(jnp.zeros((h_dim, block_size), dtype=jnp.float32), x)
         grad_x, grad_w_acc = jax.lax.fori_loop(0, num_b_blocks, batch_body, (grad_x, grad_w_init))
         return grad_x, grad_w_acc.astype(w.dtype)
 
-    grad_x_init = jnp.zeros((b_dim, h_dim), dtype=jnp.float32)
+    grad_x_init = _varying_like(jnp.zeros((b_dim, h_dim), dtype=jnp.float32), x)
     grad_x, grad_w_blocks = jax.lax.scan(scan_body, grad_x_init, jnp.arange(num_v_blocks, dtype=jnp.int32))
     grad_w = jnp.transpose(grad_w_blocks, (1, 0, 2)).reshape((h_dim, v_padded))
     return grad_x.astype(x.dtype), grad_w[:, :v_dim]
@@ -652,7 +672,7 @@ def _linear_softmax_cross_entropy_loss_streaming_custom_vjp_bwd(
             logit_soft_cap=logit_soft_cap,
             precision=precision,
         )
-        return gx, None, gw
+        return gx, None, _sum_to_manual_type(gw, w)
     gx, gw = _linear_softmax_cross_entropy_loss_streaming_bwd(
         x,
         labels,
@@ -666,7 +686,7 @@ def _linear_softmax_cross_entropy_loss_streaming_custom_vjp_bwd(
         logit_soft_cap=logit_soft_cap,
         precision=precision,
     )
-    return gx, None, gw
+    return gx, None, _sum_to_manual_type(gw, w)
 
 
 _linear_softmax_cross_entropy_loss_streaming_custom_vjp.defvjp(

@@ -425,6 +425,7 @@ def test_snowball_multidevice_fused_loss_preserves_physical_batch_sharding():
             token_loss = -jax.nn.log_softmax(logits)[jnp.arange(labels.size), labels]
             return token_loss * kwargs["weight"]
 
+        actual_kernel = grug_loss.fused_cross_entropy_loss_and_logsumexp_penalty
         grug_loss.fused_cross_entropy_loss_and_logsumexp_penalty = fake_kernel
 
         with set_mesh(mesh), hax.axis_mapping({"batch": ("replica_dcn", "data", "expert")}):
@@ -439,6 +440,7 @@ def test_snowball_multidevice_fused_loss_preserves_physical_batch_sharding():
         assert grads.transformer.output_proj.sharding.spec == P(("replica_dcn", "data"), "model")
         assert local_kernel_batches
         assert set(local_kernel_batches) == {Pos.size}, local_kernel_batches
+        grug_loss.fused_cross_entropy_loss_and_logsumexp_penalty = actual_kernel
 
         batch_axes = ("replica_dcn", "data", "expert")
         hidden_np = np.arange(8 * 2 * 4, dtype=np.float32).reshape(8, 2, 4) / 50
