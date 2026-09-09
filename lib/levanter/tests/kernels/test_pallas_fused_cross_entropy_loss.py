@@ -1044,6 +1044,126 @@ def test_batched_xla_backward_b_tiled_from_lse_matches_reference_gradients():
     np.testing.assert_allclose(actual_w, expected_w, rtol=1e-5, atol=1e-5)
 
 
+def test_batched_xla_full_vocab_b_tiled_supports_manual_batch_axes():
+    """The H100 fallback preserves manual batch axes through its loop and autodiff."""
+    partition_spec = jax.sharding.PartitionSpec
+    mesh = jax.sharding.Mesh(
+        np.array(jax.devices()[:1]),
+        ("data",),
+        axis_types=(jax.sharding.AxisType.Explicit,),
+    )
+    x_raw = jnp.arange(32, dtype=jnp.float32).reshape(4, 8) / 50
+    labels_raw = jnp.arange(4, dtype=jnp.int32)
+    w_raw = jnp.sin(jnp.arange(128, dtype=jnp.float32)).reshape(8, 16) / 5
+    x = jax.device_put(x_raw, jax.sharding.NamedSharding(mesh, partition_spec("data", None)))
+    labels = jax.device_put(labels_raw, jax.sharding.NamedSharding(mesh, partition_spec("data")))
+    w = jax.device_put(w_raw, jax.sharding.NamedSharding(mesh, partition_spec(None, None)))
+
+    def local_objective(x_shard, labels_shard, w_shard):
+        loss, _ = batched_xla._linear_softmax_cross_entropy_loss_full_vocab_b_tiled(
+            x_shard,
+            labels_shard,
+            w_shard,
+            b_block_size=2,
+            dtype=jnp.float32,
+            logit_soft_cap=None,
+            precision=jax.lax.Precision.HIGHEST,
+        )
+        return jax.lax.psum(jnp.sum(loss), "data")
+
+    sharded_objective = jax.shard_map(
+        local_objective,
+        mesh=mesh,
+        in_specs=(partition_spec("data", None), partition_spec("data"), partition_spec(None, None)),
+        out_specs=partition_spec(),
+        check_vma=True,
+    )
+    actual_value, actual_grads = jax.jit(jax.value_and_grad(sharded_objective, argnums=(0, 2)))(x, labels, w)
+
+    def reference_objective(x_ref, w_ref):
+        loss, _ = linear_softmax_cross_entropy_loss_reference(x_ref, labels_raw, w_ref)
+        return jnp.sum(loss)
+
+    expected_value, expected_grads = jax.value_and_grad(reference_objective, argnums=(0, 1))(x_raw, w_raw)
+    np.testing.assert_allclose(actual_value, expected_value, rtol=2e-5, atol=2e-5)
+    for actual, expected in zip(actual_grads, expected_grads, strict=True):
+        np.testing.assert_allclose(actual, expected, rtol=2e-5, atol=2e-5)
+
+
+@pytest.mark.parametrize("backward", ["b_tiled", "streaming"])
+def test_batched_xla_custom_backward_supports_manual_batch_axes(backward: str):
+    """Both custom backwards return a replicated gradient for replicated weights."""
+    partition_spec = jax.sharding.PartitionSpec
+    mesh = jax.sharding.Mesh(
+        np.array(jax.devices()[:1]),
+        ("data",),
+        axis_types=(jax.sharding.AxisType.Explicit,),
+    )
+    x_raw = jnp.arange(32, dtype=jnp.float32).reshape(4, 8) / 50
+    labels_raw = jnp.arange(4, dtype=jnp.int32)
+    w_raw = jnp.sin(jnp.arange(128, dtype=jnp.float32)).reshape(8, 16) / 5
+    g_loss_raw = jnp.linspace(0.5, 1.0, 4, dtype=jnp.float32)
+    g_lse_raw = jnp.linspace(-0.2, 0.1, 4, dtype=jnp.float32)
+    _, lse_raw = linear_softmax_cross_entropy_loss_reference(x_raw, labels_raw, w_raw)
+
+    varying = lambda value, spec: jax.device_put(value, jax.sharding.NamedSharding(mesh, spec))
+    x = varying(x_raw, partition_spec("data", None))
+    labels = varying(labels_raw, partition_spec("data"))
+    w = varying(w_raw, partition_spec(None, None))
+    lse = varying(lse_raw, partition_spec("data"))
+    g_loss = varying(g_loss_raw, partition_spec("data"))
+    g_lse = varying(g_lse_raw, partition_spec("data"))
+
+    def local_backward(x_shard, labels_shard, w_shard, lse_shard, g_loss_shard, g_lse_shard):
+        if backward == "b_tiled":
+            return batched_xla._backward_b_tiled_from_lse(
+                x_shard,
+                labels_shard,
+                w_shard,
+                lse_shard,
+                g_loss_shard,
+                g_lse_shard,
+                b_block_size=2,
+                logit_soft_cap=None,
+                precision=jax.lax.Precision.HIGHEST,
+            )
+        return batched_xla._backward_streaming_from_lse(
+            x_shard,
+            labels_shard,
+            w_shard,
+            lse_shard,
+            g_loss_shard,
+            g_lse_shard,
+            v_block_size=4,
+            logit_soft_cap=None,
+            precision=jax.lax.Precision.HIGHEST,
+        )
+
+    mapped_backward = jax.shard_map(
+        local_backward,
+        mesh=mesh,
+        in_specs=(
+            partition_spec("data", None),
+            partition_spec("data"),
+            partition_spec(None, None),
+            partition_spec("data"),
+            partition_spec("data"),
+            partition_spec("data"),
+        ),
+        out_specs=(partition_spec("data", None), partition_spec(None, None)),
+        check_vma=True,
+    )
+    actual_x, actual_w = jax.jit(mapped_backward)(x, labels, w, lse, g_loss, g_lse)
+
+    def reference_cotangent_loss(x_ref, w_ref):
+        loss, logsumexp = linear_softmax_cross_entropy_loss_reference(x_ref, labels_raw, w_ref)
+        return jnp.sum(loss * g_loss_raw + logsumexp * g_lse_raw)
+
+    expected_x, expected_w = jax.grad(reference_cotangent_loss, argnums=(0, 1))(x_raw, w_raw)
+    np.testing.assert_allclose(actual_x, expected_x, rtol=2e-5, atol=2e-5)
+    np.testing.assert_allclose(actual_w, expected_w, rtol=2e-5, atol=2e-5)
+
+
 def test_batched_xla_h100_full_vocab_policy_selects_b_tiled_path(monkeypatch: pytest.MonkeyPatch):
     x = jax.ShapeDtypeStruct((8192, 16), jnp.bfloat16)
     w = jax.ShapeDtypeStruct((16, 65536), jnp.bfloat16)

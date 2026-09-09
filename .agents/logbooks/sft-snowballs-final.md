@@ -427,3 +427,11 @@ author: benfeuer
 - Validation: fourteen focused tests and full pre-commit/Pyrefly pass. The standalone `ty` executable remains absent from the environment.
 - Run: commit `630157b418` is pushed. Submitted `/benfeuer/snowball-final-qk157-grug-smoke15-coord` from the isolated worktree, stage version `2026.09.09.10`, cached conversion version `2026.09.09.3`, and unique JAX port 19418.
 - Next action: require smoke 15 to load the native checkpoint, produce one finite update, and save; then launch the separate native reload gate before campaign fan-out.
+
+### 2026-09-09 12:41 EDT - Historical path reaches loss; batched-XLA VMA gap corrected
+
+- Result: smoke 15 reused the durable native conversion, coordinated all eight H100 ranks on port 19418, accepted the pinned tokenizer, loaded the historical Grug checkpoint, and reached the real training loss. The H100 full-vocabulary batch-tiled `batched_xla` forward then rejected its `fori_loop` carry: replicated `loss`/`lse` zeros became varying across `(replica_dcn, data, expert)` after the first batch tile. No update or save ran; the deterministic retry was cancelled.
+- Interpretation: the exact historical #8172 recipe selects `batched_xla`, so changing loss implementations would reduce path fidelity. The failure is a generic explicit-mesh bug in the current Levanter implementation, not a Qwen/Snowball model exception, and falls under public bug #9032's forward/backward loop-carry scope.
+- Correction: preserve the input's manual-axis type on the H100 tiled forward and both custom-backward loop initializers, then sum batch-introduced manual axes before returning a shared-weight gradient to a replicated primal. One-device explicit `shard_map(check_vma=True)` regressions exercise the H100 tiled forward plus tiled and streaming backward paths and compare values/gradients with the dense reference.
+- Validation: the complete fused-loss file passed 88 tests with 15 platform skips; fourteen Snowball/historical-bridge tests passed; full pre-commit, formatting, and Pyrefly checks passed.
+- Next action: commit and push the correction, then launch smoke 16 from the isolated worktree with a fresh identity, version, and JAX port. Require one finite update, save, and separate native reload before fan-out.

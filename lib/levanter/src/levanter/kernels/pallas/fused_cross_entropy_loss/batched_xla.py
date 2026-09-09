@@ -12,7 +12,7 @@ from jaxtyping import Array, Float, Int
 
 from .config import BlockSizes
 from .reference import linear_softmax_cross_entropy_loss_reference
-from .xla import linear_softmax_cross_entropy_loss_xla
+from .xla import _sum_to_manual_type, _varying_like, linear_softmax_cross_entropy_loss_xla
 
 
 # Empirical launch guardrails from Triton shared-memory launch failures.
@@ -334,8 +334,8 @@ def _linear_softmax_cross_entropy_loss_full_vocab_b_tiled(
     b_pad = x_pad.shape[0]
     num_b_blocks = b_pad // b_block_size
 
-    loss_init = jnp.zeros((b_pad,), dtype=out_dtype)
-    lse_init = jnp.zeros((b_pad,), dtype=out_dtype)
+    loss_init = _varying_like(jnp.zeros((b_pad,), dtype=out_dtype), x)
+    lse_init = _varying_like(jnp.zeros((b_pad,), dtype=out_dtype), x)
 
     def body(block_index, state):
         loss, lse = state
@@ -573,8 +573,8 @@ def _backward_b_tiled_from_lse(
     b_pad = x_pad.shape[0]
     num_b_blocks = b_pad // b_block_size
 
-    grad_x_init = jnp.zeros((b_pad, h_dim), dtype=jnp.float32)
-    grad_w_init = jnp.zeros((h_dim, v_dim), dtype=jnp.float32)
+    grad_x_init = _varying_like(jnp.zeros((b_pad, h_dim), dtype=jnp.float32), x)
+    grad_w_init = _varying_like(jnp.zeros((h_dim, v_dim), dtype=jnp.float32), x)
 
     def body(block_index, state):
         grad_x, grad_w = state
@@ -626,6 +626,7 @@ def _backward_b_tiled_from_lse(
         return grad_x, grad_w
 
     grad_x, grad_w = jax.lax.fori_loop(0, num_b_blocks, body, (grad_x_init, grad_w_init))
+    grad_w = _sum_to_manual_type(grad_w, w)
     return grad_x[:b_dim].astype(x.dtype), grad_w.astype(w.dtype)
 
 
@@ -660,7 +661,7 @@ def _backward_streaming_from_lse(
     g_softmax = g_loss_f32 + g_lse_f32
     v_offsets = jnp.arange(v_block_size, dtype=jnp.int32)
 
-    grad_x_init = jnp.zeros((b_dim, h_dim), dtype=jnp.float32)
+    grad_x_init = _varying_like(jnp.zeros((b_dim, h_dim), dtype=jnp.float32), x)
     v_indices = jnp.arange(num_v_blocks, dtype=jnp.int32)
 
     def body(grad_x, v_block_index):
@@ -710,6 +711,7 @@ def _backward_streaming_from_lse(
     grad_x, grad_w_blocks = jax.lax.scan(body, grad_x_init, v_indices)
     grad_w = jnp.transpose(grad_w_blocks, (1, 0, 2)).reshape((h_dim, v_pad))
     grad_w = grad_w[:, :v_dim]
+    grad_w = _sum_to_manual_type(grad_w, w)
     return grad_x.astype(x.dtype), grad_w.astype(w.dtype)
 
 
