@@ -392,3 +392,72 @@ def audit_native_history(capture, selected_history, *, minibatches, require_nonz
         result["zero_gradient_updates"] = zero_gradient_updates
         result["nonzero_gradient_coverage_required"] = False
     return result
+
+
+def audit_native_attempts(readback, *, expected_job_id):
+    """Retain startup failures and incomplete physical cost independently of science."""
+    job = readback["job"]
+    if (
+        job["job_id"] != expected_job_id
+        or job["state"] != "JOB_STATE_SUCCEEDED"
+        or job["resources"]["device"]["gpu"] != {"variant": "H100", "count": 8}
+        or {task["task_id"] for task in readback["tasks"]} != {expected_job_id + "/0", expected_job_id + "/1"}
+        or len(readback["tasks"]) != 2
+    ):
+        raise ValueError("Native job identity, allocation or success differs")
+    costs, missing, untimed, failures = [], [], [], []
+    for task in readback["tasks"]:
+        attempts = task["attempts"]
+        ids = [item.get("attempt_id", 0) for item in attempts]
+        if (
+            not task["task_id"].startswith(expected_job_id + "/")
+            or task["state"] != "TASK_STATE_SUCCEEDED"
+            or not attempts
+            or any(type(index) is not int or index < 0 for index in ids)
+            or ids != sorted(set(ids))
+            or attempts[-1]["state"] != "TASK_STATE_SUCCEEDED"
+            or attempts[-1].get("exit_code", 0) != 0
+        ):
+            raise ValueError("Final physical attempt did not succeed")
+        for index in sorted(set(range(max(ids) + 1)) - set(ids)):
+            missing.append({"task_id": task["task_id"], "attempt_id": index})
+        for attempt in attempts:
+            identity = {
+                "task_id": task["task_id"],
+                "attempt_id": attempt.get("attempt_id", 0),
+                "attempt_uid": attempt["attempt_uid"],
+            }
+            if attempt["state"] != "TASK_STATE_SUCCEEDED" or attempt.get("exit_code", 0) != 0:
+                failures.append(
+                    {
+                        **identity,
+                        "state": attempt["state"],
+                        "exit_code": attempt.get("exit_code"),
+                        "error_sha256": hashlib.sha256(attempt.get("error", "").encode()).hexdigest(),
+                    }
+                )
+            start = attempt.get("started_at", {}).get("epoch_ms")
+            finish = attempt.get("finished_at", {}).get("epoch_ms")
+            if start is None or finish is None or int(finish) <= int(start):
+                untimed.append(identity)
+                continue
+            costs.append(
+                {
+                    **identity,
+                    "started_at_ms": int(start),
+                    "finished_at_ms": int(finish),
+                    "task_h100_hours": (int(finish) - int(start)) * 8 / 3600000,
+                }
+            )
+    known = sum(row["task_h100_hours"] for row in costs)
+    complete = not missing and not untimed
+    return {
+        "lifecycle_clean": complete and not failures and len(costs) == 2,
+        "physical_cost_complete": complete,
+        "missing_attempts": missing,
+        "untimed_attempts": untimed,
+        "failed_attempts": failures,
+        "cost": costs,
+        "known_task_h100_hours": known,
+        "total_task_h100_hours": known if complete else None,
+    }

@@ -8,6 +8,7 @@ import yaml
 
 from experiments.post_training import async_rl_audit as audit
 from experiments.post_training.math_eval.type_c_audit import (
+    audit_native_attempts,
     audit_native_history,
     validate_checkpoint_receipts,
     validate_saved_source,
@@ -213,3 +214,52 @@ def test_zero_gradient_diagnostic_retains_validity_and_success_requirements(nati
         assert result["zero_gradient_updates"] == 1
         assert result["optimizer_updates"] == 96
         assert result["maximum_postclip_relative_norm_error"] == 0.0
+
+
+@pytest.mark.parametrize("missing_sibling", [False, True])
+def test_physical_attempt_cost_retains_failed_startup_and_missing_sibling(missing_sibling):
+    job = "/owner/native"
+    failed = {
+        "attempt_id": 0,
+        "attempt_uid": "failed-worker",
+        "state": "TASK_STATE_FAILED",
+        "exit_code": 1,
+        "error": "Artifact inventory changed before Ray startup",
+        "started_at": {"epoch_ms": "1000"},
+        "finished_at": {"epoch_ms": "2000"},
+    }
+    success = {
+        "attempt_id": 1,
+        "attempt_uid": "final-worker",
+        "state": "TASK_STATE_SUCCEEDED",
+        "exit_code": 0,
+        "started_at": {"epoch_ms": "3000"},
+        "finished_at": {"epoch_ms": "5000"},
+    }
+    sibling = {**failed, "attempt_uid": "bounced-sibling"}
+    readback = {
+        "job": {
+            "job_id": job,
+            "state": "JOB_STATE_SUCCEEDED",
+            "resources": {"device": {"gpu": {"variant": "H100", "count": 8}}},
+        },
+        "tasks": [
+            {
+                "task_id": job + "/0",
+                "state": "TASK_STATE_SUCCEEDED",
+                "attempts": ([] if missing_sibling else [sibling]) + [{**success, "attempt_uid": "final-sibling"}],
+            },
+            {"task_id": job + "/1", "state": "TASK_STATE_SUCCEEDED", "attempts": [failed, success]},
+        ],
+    }
+    proof = audit_native_attempts(readback, expected_job_id=job)
+    assert proof["lifecycle_clean"] is False
+    assert proof["physical_cost_complete"] is not missing_sibling
+    assert proof["known_task_h100_hours"] == pytest.approx((5 if missing_sibling else 6) * 8 / 3600)
+    assert proof["missing_attempts"] == ([{"task_id": job + "/0", "attempt_id": 0}] if missing_sibling else [])
+    assert len(proof["failed_attempts"]) == (1 if missing_sibling else 2)
+    assert (proof["total_task_h100_hours"] is None) is missing_sibling
+    # The same final checkpoint cannot stand in for a failed physical final attempt.
+    readback["tasks"][1]["attempts"][-1]["state"] = "TASK_STATE_FAILED"
+    with pytest.raises(ValueError):
+        audit_native_attempts(readback, expected_job_id=job)
