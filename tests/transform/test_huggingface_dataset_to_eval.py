@@ -6,6 +6,7 @@
 import gzip
 import json
 
+import pytest
 from datasets import Dataset
 from marin.transform.huggingface.dataset_to_eval import (
     DatasetConversionConfig,
@@ -14,7 +15,7 @@ from marin.transform.huggingface.dataset_to_eval import (
 )
 
 
-def _write_local_hf_dataset(root, subset: str, split: str, examples: list[dict]) -> None:
+def _write_local_hf_dataset(root, subset: str, examples_by_split: dict[str, list[dict]]) -> None:
     """Write a tiny on-disk HF dataset with a README declaring a named config.
 
     `datasets.load_dataset(root, subset, split=split)` resolves the config via the
@@ -22,13 +23,11 @@ def _write_local_hf_dataset(root, subset: str, split: str, examples: list[dict])
     """
     subset_dir = root / subset
     subset_dir.mkdir(parents=True, exist_ok=True)
-    Dataset.from_list(examples).to_parquet(str(subset_dir / f"{split}.parquet"))
-    entry = (
-        f"  - config_name: {subset}\n"
-        f"    data_files:\n"
-        f"      - split: {split}\n"
-        f"        path: {subset}/{split}.parquet\n"
-    )
+    data_files = ""
+    for split, examples in examples_by_split.items():
+        Dataset.from_list(examples).to_parquet(str(subset_dir / f"{split}.parquet"))
+        data_files += f"      - split: {split}\n        path: {subset}/{split}.parquet\n"
+    entry = f"  - config_name: {subset}\n    data_files:\n{data_files}"
     (root / "README.md").write_text("---\nconfigs:\n" + entry + "---\n")
 
 
@@ -39,7 +38,7 @@ def test_hf_dataset_to_jsonl_evaluation_format(tmp_path):
         {"question": "What is 3+3?", "choices": ["5", "6", "7"], "answer": 1},
     ]
     dataset_root = tmp_path / "input"
-    _write_local_hf_dataset(dataset_root, "arithmetic", "test", examples)
+    _write_local_hf_dataset(dataset_root, "arithmetic", {"test": examples})
 
     output_dir = tmp_path / "output"
     output_dir.mkdir()
@@ -92,7 +91,7 @@ def test_hf_dataset_to_jsonl_decontamination_format(tmp_path):
         {"question": "Question 2", "choices": ["C", "D"], "answer": 1},
     ]
     dataset_root = tmp_path / "input"
-    _write_local_hf_dataset(dataset_root, "subset1", "train", examples)
+    _write_local_hf_dataset(dataset_root, "subset1", {"train": examples})
 
     output_dir = tmp_path / "output"
     output_dir.mkdir()
@@ -132,3 +131,77 @@ def test_hf_dataset_to_jsonl_decontamination_format(tmp_path):
 
     second = json.loads(all_lines[1])
     assert second["text"] == "Question 2", f"Expected 'Question 2', got '{second['text']}'"
+
+
+def test_hf_dataset_to_jsonl_converts_every_requested_split(tmp_path):
+    """A config requesting several splits converts all of them instead of failing."""
+    dataset_root = tmp_path / "input"
+    _write_local_hf_dataset(
+        dataset_root,
+        "arithmetic",
+        {
+            "train": [{"question": "What is 2+2?", "choices": ["3", "4"], "answer": 1}],
+            "test": [{"question": "What is 3+3?", "choices": ["6", "7"], "answer": 0}],
+        },
+    )
+
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    cfg = DatasetConversionConfig(
+        dataset_name="test/math",
+        subsets=["arithmetic"],
+        splits=["train", "test"],
+        input_path=str(dataset_root),
+        hf_path="test/math",
+        output_path=str(output_dir),
+        output_format=OutputFormatOptions.evaluation,
+        prompt_key="question",
+        options_key="choices",
+        answer_idx_key="answer",
+        answer_labels=["A", "B"],
+    )
+
+    hf_dataset_to_jsonl(cfg)
+
+    for split, question in (("train", "What is 2+2?"), ("test", "What is 3+3?")):
+        shard_files = sorted((output_dir / "test").glob(f"math-arithmetic-{split}-evaluation-*.jsonl.gz"))
+        assert shard_files, f"No output files created for split {split}"
+        lines = []
+        for shard_file in shard_files:
+            with gzip.open(shard_file, "rt") as f:
+                lines.extend(f.readlines())
+        assert len(lines) == 1, f"Expected 1 line for split {split}, got {len(lines)}"
+        record = json.loads(lines[0])
+        assert question in record["prompt"]
+        assert record["metadata"]["split"] == split
+
+
+def test_hf_dataset_to_jsonl_reports_unloadable_split(tmp_path):
+    """A split that cannot be loaded names the offending subset/split pair."""
+    dataset_root = tmp_path / "input"
+    _write_local_hf_dataset(
+        dataset_root,
+        "arithmetic",
+        {"train": [{"question": "What is 2+2?", "choices": ["3", "4"], "answer": 1}]},
+    )
+
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    cfg = DatasetConversionConfig(
+        dataset_name="test/math",
+        subsets=["arithmetic"],
+        splits=["train", "absent"],
+        input_path=str(dataset_root),
+        hf_path="test/math",
+        output_path=str(output_dir),
+        output_format=OutputFormatOptions.evaluation,
+        prompt_key="question",
+        options_key="choices",
+        answer_idx_key="answer",
+        answer_labels=["A", "B"],
+    )
+
+    with pytest.raises(ValueError, match="arithmetic/absent"):
+        hf_dataset_to_jsonl(cfg)
