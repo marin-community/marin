@@ -9,7 +9,6 @@ description: Deslop, simplify, or review low-value tests and prose only when exp
 
 Read these before reviewing:
 
-- root `AGENTS.md`
 - root `TESTING.md`
 - `.agents/skills/writing-style/ai-writing-donts.md`
 - the nearest module `AGENTS.md` and testing guide for each changed test

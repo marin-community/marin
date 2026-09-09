@@ -70,7 +70,7 @@ After upstreaming, delete superseded experiment code; keep only the archive trai
 ### 6) Validate
 
 ```bash
-./infra/pre-commit.py --all-files
+./infra/pre-commit.py --changed-files
 uv run pytest tests/test_grug_variant_contracts.py
 ```
 

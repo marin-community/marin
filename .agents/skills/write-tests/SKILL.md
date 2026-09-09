@@ -7,7 +7,6 @@ description: Add, revise, or review Marin tests for an explicit behavior change,
 
 Read these before choosing test style, fixtures, mocks, markers, or commands:
 
-- root `AGENTS.md`
 - root `TESTING.md`
 - the nearest subproject `AGENTS.md` for files under `lib/*`
 - package testing docs referenced from that `AGENTS.md`, such as
@@ -35,5 +34,6 @@ Read these before choosing test style, fixtures, mocks, markers, or commands:
 - For package-specific commands, use the relevant `lib/*/AGENTS.md` or testing
   doc.
 
-Before a PR, run `./infra/pre-commit.py --changed-files --fix` or `--all-files`
-as appropriate. Do not substitute `uv run pre-commit`.
+Before a PR, run `./infra/pre-commit.py --changed-files --fix`. Use
+`--all-files` only for an explicit repository sweep. Do not substitute
+`uv run pre-commit`.

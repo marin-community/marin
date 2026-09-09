@@ -9,22 +9,13 @@ Distributed job orchestration for Marin. Start with the shared instructions in `
 - Echo — durable incident and debugging records; use `write-ops-log` after an
   infrastructure investigation and link the canonical Echo URL
 - `TESTING.md` — testing policy, markers, and commands
+- `docs/architecture.md` — controller, backend, persistence, and source layout
 - `docs/task-states.md` — task state machine + retry semantics
 - `docs/coreweave.md` — CoreWeave platform + `runtime=kubernetes` behavior
 - `docs/federation.md` — peer routing, root-job-only handoff, and cross-cluster storage
 - `docs/image-push.md` — multi-region image push/pull architecture
 
 Archived design docs (implemented, read code instead): `.agents/projects/2026*_iris_*.md`
-
-## Source Layout
-
-- `src/iris/cli/` — CLI entry point (`main.py` has all commands including `login`, `submit`, `status`)
-- `src/iris/cluster/controller/` — controller server: `service.py` (RPC handlers), `controller.py` (main loop), `backend.py` (the `TaskBackend` contract), `scheduling/` (`scheduler.py` + `policy.py`), `autoscaler/` (capacity), `auth_setup.py` (auth config), `dashboard.py` (dashboard serving), `db.py` (SQLite), `migrations/` (schema)
-- `src/iris/cluster/backends/` — `TaskBackend` implementations (`rpc/backend.py` = `RpcTaskBackend`, `k8s/tasks.py` = `K8sTaskProvider`)
-- `src/iris/cluster/platforms/` — machine-lifecycle providers (`gcp`, `k8s`, `local`, `manual`) behind `protocols.py` (`ControllerProvider`, `WorkerInfraProvider`) with shared handle/status types in `types.py`
-- `src/iris/cluster/worker/` — worker agent
-- `src/iris/rpc/` — protobuf definitions (`.proto`), generated code (`_pb2.py`), and RPC client helpers (`cluster_connect.py`, `auth.py`)
-- `dashboard/` — Vue 3 frontend (Vite + Tailwind)
 
 ## Development
 
@@ -123,52 +114,3 @@ against (notably `$IRIS_VENV`, the venv the run phase activates), child
 inheritance, and the Docker gotcha (setup runs in a separate container, so
 `export` does not reach the command — use `env_vars`) all live in
 `iris.cluster.setup_scripts`. See https://github.com/marin-community/marin/issues/6595.
-
-## Architecture Notes
-
-### The TaskBackend contract
-
-A `TaskBackend` (`controller/backend.py`) is the control-plane driver for ONE
-cluster. It implements explicit phase methods: `initialize`, `schedule`,
-`reconcile`, `observe`, `autoscale`, and `remove_capacity`, plus exact on-demand
-I/O (`get_process_status`, `profile_task`, `exec_in_container`). Composition
-creates an empty controller and calls `controller.register_backend(backend)`
-exactly once before `start()`. A second registration is invalid; federation
-composes distinct clusters. `BackendDescriptor` is the source for backend ID,
-kind, capabilities, advertised attributes, and scale groups.
-
-The controller owns Iris persistence and in-memory worker liveness. It builds
-complete phase requests from controller snapshots: scheduling facts, exact
-desired attempts and worker addresses, status/capacity facts, residual demand,
-and recovery checkpoints. Backends never receive a database, transaction,
-transition reader, or liveness tracker. `schedule` is a pure decision;
-`reconcile`, `initialize`, `observe`, `autoscale`, and `remove_capacity` perform
-bounded provider work and return observations or effects for the controller to
-fold and persist.
-
-The descriptor declares one reconciliation mechanism: `WORKER_FLEET` or
-`DIRECT_DISPATCH`; `AUTOSCALER` is an optional capability for worker fleets.
-The controller uses capabilities only to choose the complete request variant.
-Kubernetes reconcile receives the dispatch queue drain; worker reconcile
-receives a target list pairing each exact plan with its address. Dashboard
-capability strings are derived presentation data.
-
-Backends return one neutral `ReconcileObservation`: exact task updates and
-optional worker-health events, never controller effects. After backend I/O,
-`ops/reconcile.py` reloads current state, fences exact Attempt UIDs, runs one
-lifecycle-policy path, and applies liveness events. The controller then commits
-the effects. There is no ping loop: reconcile RPC outcomes are the worker
-liveness signal. Kubernetes backends report exact Pod observations and no worker
-liveness events.
-
-Two implementations satisfy it: `RpcTaskBackend` (`backends/rpc/backend.py`,
-kind `WORKER`, owns the `Scheduler` and optional `Autoscaler`) for
-GCP/TPU, CoreWeave bare-metal, manual, and local; and `K8sTaskProvider`
-(`backends/k8s/tasks.py`, kind `KUBERNETES`) for Kubernetes (Kueue schedules, the
-cluster autoscaler provisions, so its `schedule`/`autoscale` are no-ops). The
-contract type lives in `controller/backend.py`; see `docs/architecture.md` "The
-TaskBackend contract".
-
-Resource model: CPU demand is fungible and can route to any group; GPU/TPU demand is non-fungible and must match device type (and optionally variant).
-
-The controller is a plain GCE VM (or K8s Deployment on CoreWeave) with no zone affinity to workers. See `docs/coreweave.md` for CoreWeave-specific deployment topology and `docs/image-push.md` for the GHCR → AR remote repo image pipeline.

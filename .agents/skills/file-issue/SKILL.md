@@ -5,7 +5,7 @@ description: File a GitHub issue only when explicitly requested or delegated by 
 
 # File a GitHub issue
 
-Before drafting, read `AGENTS.md` and:
+Before drafting, read:
 
 - `.agents/skills/writing-style/SKILL.md`
 - `.agents/skills/writing-style/issues.md`

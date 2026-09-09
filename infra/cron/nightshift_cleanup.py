@@ -66,7 +66,7 @@ Read `AGENTS.md` (especially its Testing section) and
   invariant or policy. If its value needs a long explanation, report no change.
 - Do not bundle an opportunistic behavior change into a refactor. Preserve
   behavior or make the behavior fix the explicit purpose of the change.
-- Run `./infra/pre-commit.py --all-files --fix` before committing.
+- Run `./infra/pre-commit.py --changed-files --fix` before committing.
 - Run relevant tests: `uv run pytest -x` on any test files you modified or
   that test modules you changed.
 - If you find issues but the fix is non-trivial, file a GitHub issue instead
@@ -141,7 +141,7 @@ Code" trailer in commits, and no self-attribution in the PR description.
    diff into the current branch (`nightshift/cleanup-{date}`). Skip any that
    conflict or fail tests after merging.
 
-3. Run `./infra/pre-commit.py --all-files --fix` and `uv run pytest -x` on all
+3. Run `./infra/pre-commit.py --changed-files --fix` and `uv run pytest -x` on all
    affected test files to verify the combined changes are clean.
 
 4. Before pushing, rebase on origin/main:
@@ -212,7 +212,8 @@ def run_scout(subproject: str, worktree_path: Path) -> tuple[str, dict, str]:
     agent_result = run_claude(
         prompt,
         [
-            "--model=opus",
+            "--model=claude-opus-4-8",
+            "--effort=high",
             "--dangerously-skip-permissions",
             *NO_SELF_CREDIT_SETTINGS,
             "--tools=Read,Write,Edit,Glob,Grep,Bash",
@@ -260,7 +261,8 @@ def run_merge(date: str, scout_results: list[dict], worktree_info: list[tuple[st
     result = run_claude(
         prompt,
         [
-            "--model=opus",
+            "--model=claude-opus-4-8",
+            "--effort=high",
             "--dangerously-skip-permissions",
             *NO_SELF_CREDIT_SETTINGS,
             "--tools=Read,Write,Edit,Glob,Grep,Bash",

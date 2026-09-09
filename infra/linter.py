@@ -4,8 +4,8 @@
 """Agentic lint-review runner (lanes + composer) invoked by `pre-commit.py --review`.
 
 Fans out one headless agent per structured rule lane under ``infra/lint/`` over the branch's
-changes and merges the per-lane findings with a composer agent (or a deterministic
-dedupe-and-concat). Each lane is handed the changed-file inventory (`git diff --stat`)
+changes and merges the per-lane findings with deterministic dedupe-and-concat. An
+explicit option adds a composer agent. Each lane is handed the changed-file inventory (`git diff --stat`)
 and read-only git access, and probes each file itself rather than reading a pasted
 diff — so it can follow the change into other files and skip binary/oversized files
 on its own. This subsystem is self-contained and used only by the `--review` path of
@@ -37,7 +37,8 @@ LINT_DIR = ROOT_DIR / "infra/lint"
 LINT_CATALOG = load_catalog(LINT_DIR)
 
 
-LINT_REVIEW_AGENT_DEFAULT = "claude -p"
+CLAUDE_LINT_MODEL = "claude-haiku-4-5-20251001"
+LINT_REVIEW_AGENT_DEFAULT = f"claude -p --model {CLAUDE_LINT_MODEL} --effort low --output-format json"
 
 LINT_REVIEW_TIMEOUT = 600
 
@@ -110,7 +111,7 @@ LINT_REVIEW_LOG_ROOT = pathlib.Path("/tmp/marin-linter")
 
 # Prepended to every lane and composer prompt. The `claude` tool lockdown already makes
 # mutation impossible; this states the same contract in plain language for every agent CLI
-# (e.g. `codex exec`, which manages its own permissions) and orients the model on its job.
+# (including Codex, which manages its own permissions) and orients the model on its job.
 READ_ONLY_MANDATE = (
     "## Your role: READ-ONLY reviewer\n\n"
     "You are a code REVIEWER running non-interactively. Your ONLY output is advisory lint "
@@ -302,6 +303,44 @@ def _ship_review_stats(event: dict, log_dir: pathlib.Path | None) -> None:
 
 
 @dataclass(frozen=True)
+class AgentSpec:
+    vendor: str
+    model: str
+    effort: str
+
+
+@dataclass(frozen=True)
+class AgentUsage:
+    input_tokens: int | None = None
+    cache_creation_input_tokens: int | None = None
+    cache_read_input_tokens: int | None = None
+    output_tokens: int | None = None
+    cost_usd: float | None = None
+    reported_total_tokens: int | None = None
+
+    @property
+    def total_tokens(self) -> int | None:
+        if self.reported_total_tokens is not None:
+            return self.reported_total_tokens
+        values = (
+            self.input_tokens,
+            self.cache_creation_input_tokens,
+            self.cache_read_input_tokens,
+            self.output_tokens,
+        )
+        present = [value for value in values if value is not None]
+        return sum(present) if present else None
+
+
+@dataclass(frozen=True)
+class AgentResult:
+    stdout: str
+    stderr: str
+    returncode: int
+    usage: AgentUsage
+
+
+@dataclass(frozen=True)
 class LaneResult:
     name: str
     stdout: str
@@ -309,6 +348,7 @@ class LaneResult:
     returncode: int | None  # None means the lane agent timed out
     elapsed: float  # wall-clock seconds the lane's agent ran
     prompt: str  # the exact prompt fed to the lane (logged for debugging)
+    usage: AgentUsage = AgentUsage()
 
 
 @dataclass(frozen=True)
@@ -320,6 +360,7 @@ class ComposerRun:
     stderr: str
     returncode: int | None  # None means the composer timed out
     elapsed: float
+    usage: AgentUsage = AgentUsage()
 
 
 @dataclass(frozen=True)
@@ -343,6 +384,8 @@ class ReviewRun:
     diff_stats: tuple[int, int, int]
     elapsed_total: float
     branch: str | None
+    agent_spec: AgentSpec
+    agent_command: tuple[str, ...]
 
 
 def _lint_review_env() -> dict[str, str]:
@@ -371,6 +414,124 @@ def _readonly_agent_flags() -> list[str]:
         "--disallowedTools",
         ",".join(deny),
     ]
+
+
+def _option_value(command: list[str], names: tuple[str, ...]) -> str | None:
+    for index, argument in enumerate(command):
+        for name in names:
+            if argument == name:
+                return command[index + 1] if index + 1 < len(command) else None
+            if argument.startswith(f"{name}="):
+                return argument.split("=", maxsplit=1)[1]
+    return None
+
+
+def _codex_effort(command: list[str]) -> str | None:
+    for index, argument in enumerate(command):
+        if argument in {"--config", "-c"} and index + 1 < len(command):
+            setting = command[index + 1]
+        elif argument.startswith(("--config=", "-c=")):
+            setting = argument.split("=", maxsplit=1)[1]
+        else:
+            continue
+        if setting.startswith("model_reasoning_effort="):
+            return setting.split("=", maxsplit=1)[1].strip("\"'")
+    return None
+
+
+def _agent_spec(agent_cmd: list[str]) -> AgentSpec:
+    """Return the explicit vendor, model, and effort for a recursive agent command."""
+    agent_name = os.path.basename(agent_cmd[0])
+    model = _option_value(agent_cmd, ("--model", "-m"))
+    effort = _codex_effort(agent_cmd) if agent_name == "codex" else _option_value(agent_cmd, ("--effort",))
+    if not model or not effort:
+        raise ValueError(
+            "agent commands must select an explicit model and effort; "
+            "use '--model <model> --effort <level>' for Claude-compatible CLIs or "
+            "'--model <model> --config model_reasoning_effort=<level>' for Codex"
+        )
+    return AgentSpec(vendor=agent_name, model=model, effort=effort)
+
+
+def _int_field(data: dict, key: str) -> int | None:
+    value = data.get(key)
+    return int(value) if isinstance(value, int | float) else None
+
+
+def _float_field(data: dict, key: str) -> float | None:
+    value = data.get(key)
+    return float(value) if isinstance(value, int | float) else None
+
+
+def _claude_output(stdout: str) -> tuple[str, AgentUsage]:
+    try:
+        event = json.loads(stdout)
+    except json.JSONDecodeError:
+        return stdout.strip(), AgentUsage()
+    if not isinstance(event, dict) or event.get("type") != "result":
+        return stdout.strip(), AgentUsage()
+    usage = event.get("usage") if isinstance(event.get("usage"), dict) else {}
+    return str(event.get("result") or "").strip(), AgentUsage(
+        input_tokens=_int_field(usage, "input_tokens"),
+        cache_creation_input_tokens=_int_field(usage, "cache_creation_input_tokens"),
+        cache_read_input_tokens=_int_field(usage, "cache_read_input_tokens"),
+        output_tokens=_int_field(usage, "output_tokens"),
+        cost_usd=_float_field(event, "total_cost_usd"),
+    )
+
+
+def _codex_output(stdout: str) -> tuple[str, AgentUsage]:
+    messages: list[str] = []
+    usage = AgentUsage()
+    parsed_event = False
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        parsed_event = True
+        item = event.get("item")
+        if event.get("type") == "item.completed" and isinstance(item, dict):
+            if item.get("type") == "agent_message" and isinstance(item.get("text"), str):
+                messages.append(item["text"])
+        if event.get("type") == "turn.completed" and isinstance(event.get("usage"), dict):
+            raw_usage = event["usage"]
+            input_tokens = _int_field(raw_usage, "input_tokens")
+            output_tokens = _int_field(raw_usage, "output_tokens")
+            usage = AgentUsage(
+                input_tokens=input_tokens,
+                cache_read_input_tokens=_int_field(raw_usage, "cached_input_tokens"),
+                output_tokens=output_tokens,
+                reported_total_tokens=(
+                    input_tokens + output_tokens if input_tokens is not None and output_tokens is not None else None
+                ),
+            )
+    if not parsed_event:
+        return stdout.strip(), AgentUsage()
+    return "\n".join(messages).strip(), usage
+
+
+def _agent_output(spec: AgentSpec, stdout: str) -> tuple[str, AgentUsage]:
+    if spec.vendor == "claude":
+        return _claude_output(stdout)
+    if spec.vendor == "codex":
+        return _codex_output(stdout)
+    return stdout.strip(), AgentUsage()
+
+
+def _with_usage_output(agent_cmd: list[str], spec: AgentSpec) -> list[str]:
+    command = list(agent_cmd)
+    if spec.vendor == "claude":
+        output_format = _option_value(command, ("--output-format",))
+        if output_format is None:
+            command.extend(("--output-format", "json"))
+        elif output_format != "json":
+            raise ValueError("Claude lint commands must use '--output-format json' for usage telemetry")
+    elif spec.vendor == "codex" and "--json" not in command:
+        command.append("--json")
+    return command
 
 
 def _with_readonly_access(agent_cmd: list[str]) -> list[str]:
@@ -403,10 +564,10 @@ def _with_readonly_access(agent_cmd: list[str]) -> list[str]:
     return [*agent_cmd, *_readonly_agent_flags()]
 
 
-def _run_agent(agent_cmd: list[str], env: dict[str, str], prompt: str) -> subprocess.CompletedProcess | None:
+def _run_agent(agent_cmd: list[str], spec: AgentSpec, env: dict[str, str], prompt: str) -> AgentResult | None:
     """Run one headless agent over `prompt`; None if it times out."""
     try:
-        return subprocess.run(
+        completed = subprocess.run(
             agent_cmd,
             input=prompt,
             cwd=ROOT_DIR,
@@ -415,16 +576,18 @@ def _run_agent(agent_cmd: list[str], env: dict[str, str], prompt: str) -> subpro
             env=env,
             timeout=LINT_REVIEW_TIMEOUT,
         )
+        stdout, usage = _agent_output(spec, completed.stdout)
+        return AgentResult(stdout, completed.stderr.strip(), completed.returncode, usage)
     except subprocess.TimeoutExpired:
         return None
 
 
 def _timed_agent(
-    agent_cmd: list[str], env: dict[str, str], prompt: str
-) -> tuple[subprocess.CompletedProcess | None, float]:
+    agent_cmd: list[str], spec: AgentSpec, env: dict[str, str], prompt: str
+) -> tuple[AgentResult | None, float]:
     """`_run_agent` plus the wall-clock seconds it took (measured inside the worker thread)."""
     start = time.time()
-    cp = _run_agent(agent_cmd, env, prompt)
+    cp = _run_agent(agent_cmd, spec, env, prompt)
     return cp, time.time() - start
 
 
@@ -473,12 +636,13 @@ def _run_lanes(
     stat: str,
     leads: str,
     agent_cmd: list[str],
+    spec: AgentSpec,
     env: dict[str, str],
 ) -> list[LaneResult]:
     prompts = {lane.name: _lane_prompt(shared_text, lane, merge_base, stat, leads) for lane in lanes}
     results: dict[str, LaneResult] = {}
     with ThreadPoolExecutor(max_workers=len(lanes)) as pool:
-        futures = {pool.submit(_timed_agent, agent_cmd, env, prompts[lane.name]): lane for lane in lanes}
+        futures = {pool.submit(_timed_agent, agent_cmd, spec, env, prompts[lane.name]): lane for lane in lanes}
         for future in as_completed(futures):
             lane = futures[future]
             cp, elapsed = future.result()
@@ -487,7 +651,7 @@ def _run_lanes(
                 results[lane.name] = LaneResult(lane.name, "", "", None, elapsed, prompt)
             else:
                 results[lane.name] = LaneResult(
-                    lane.name, cp.stdout.strip(), cp.stderr.strip(), cp.returncode, elapsed, prompt
+                    lane.name, cp.stdout, cp.stderr, cp.returncode, elapsed, prompt, cp.usage
                 )
     return [results[lane.name] for lane in lanes]
 
@@ -512,13 +676,14 @@ def _compose(
     merge_base: str,
     stat: str,
     agent_cmd: list[str],
+    spec: AgentSpec,
     env: dict[str, str],
 ) -> ComposerRun:
     prompt = _composer_prompt(lane_results, shared_text, merge_base, stat)
-    cp, elapsed = _timed_agent(agent_cmd, env, prompt)
+    cp, elapsed = _timed_agent(agent_cmd, spec, env, prompt)
     if cp is None:
         return ComposerRun(prompt, "", "", None, elapsed)
-    return ComposerRun(prompt, cp.stdout.strip(), cp.stderr.strip(), cp.returncode, elapsed)
+    return ComposerRun(prompt, cp.stdout, cp.stderr, cp.returncode, elapsed, cp.usage)
 
 
 def _concat_findings(lane_results: list[LaneResult]) -> str:
@@ -570,13 +735,14 @@ def _merge_lane_results(
     merge_base: str,
     stat: str,
     agent_cmd: list[str],
+    spec: AgentSpec,
     env: dict[str, str],
     compose: bool,
 ) -> MergeOutcome:
-    """Merge lane outputs via the composer (default) or a deterministic concat."""
+    """Merge lane outputs deterministically, or use the optional composer."""
     timed_out = any(r.returncode is None for r in lane_results)
     if compose and len(lanes) > 1:
-        run = _compose(lane_results, shared_text, merge_base, stat, agent_cmd, env)
+        run = _compose(lane_results, shared_text, merge_base, stat, agent_cmd, spec, env)
         if run.returncode is None:
             click.echo("  ⚠ Lint composer timed out; falling back to concat")
             return MergeOutcome(_concat_findings(lane_results), "compose", -1, True, run)
@@ -616,6 +782,7 @@ def _summary_md(log_dir: pathlib.Path, run: ReviewRun) -> str:
         f"- branch: `{run.branch or '?'}`",
         f"- merge base: `{run.merge_base}`",
         f"- diff: {files} files, +{added} -{removed}",
+        f"- agent: {run.agent_spec.vendor} / {run.agent_spec.model} / {run.agent_spec.effort}",
         f"- merge mode: {outcome.mode}",
         f"- composer exit: {outcome.composer_rc}",
         f"- timed out: {str(outcome.timed_out).lower()}",
@@ -624,18 +791,20 @@ def _summary_md(log_dir: pathlib.Path, run: ReviewRun) -> str:
         "",
         "## Arms",
         "",
-        "| arm | status | elapsed | stdout lines |",
-        "| --- | --- | --- | --- |",
+        "| arm | status | elapsed | stdout lines | tokens | cost USD |",
+        "| --- | --- | --- | --- | --- | --- |",
     ]
-    arms: list[tuple[str, int | None, float, str]] = [
-        (r.name, r.returncode, r.elapsed, r.stdout) for r in run.lane_results
+    arms: list[tuple[str, int | None, float, str, AgentUsage]] = [
+        (r.name, r.returncode, r.elapsed, r.stdout, r.usage) for r in run.lane_results
     ]
     if outcome.composer is not None:
         c = outcome.composer
-        arms.append(("composer", c.returncode, c.elapsed, c.stdout))
-    for name, rc, elapsed, stdout in arms:
+        arms.append(("composer", c.returncode, c.elapsed, c.stdout, c.usage))
+    for name, rc, elapsed, stdout, usage in arms:
         status = "timed out" if rc is None else f"exit {rc}"
-        lines.append(f"| {name} | {status} | {elapsed:.2f}s | {len(stdout.splitlines())} |")
+        tokens = str(usage.total_tokens) if usage.total_tokens is not None else "?"
+        cost = f"{usage.cost_usd:.6f}" if usage.cost_usd is not None else "?"
+        lines.append(f"| {name} | {status} | {elapsed:.2f}s | {len(stdout.splitlines())} | {tokens} | {cost} |")
     return "\n".join(lines) + "\n"
 
 
@@ -669,31 +838,84 @@ def _write_review_log(log_dir: pathlib.Path, run: ReviewRun) -> None:
     (log_dir / "summary.md").write_text(_summary_md(log_dir, run))
 
 
+def _sum_complete_int(values: list[int | None]) -> int | None:
+    if not values or any(value is None for value in values):
+        return None
+    return sum(value for value in values if value is not None)
+
+
+def _sum_complete_float(values: list[float | None]) -> float | None:
+    if not values or any(value is None for value in values):
+        return None
+    return sum(value for value in values if value is not None)
+
+
+def _review_arms(run: ReviewRun) -> list[tuple[str, int | None, float, AgentUsage]]:
+    arms = [(result.name, result.returncode, result.elapsed, result.usage) for result in run.lane_results]
+    if run.outcome.composer is not None:
+        composer = run.outcome.composer
+        arms.append(("composer", composer.returncode, composer.elapsed, composer.usage))
+    return arms
+
+
+def _aggregate_usage(run: ReviewRun) -> AgentUsage:
+    usages = [usage for _, _, _, usage in _review_arms(run)]
+    return AgentUsage(
+        input_tokens=_sum_complete_int([usage.input_tokens for usage in usages]),
+        cache_creation_input_tokens=_sum_complete_int([usage.cache_creation_input_tokens for usage in usages]),
+        cache_read_input_tokens=_sum_complete_int([usage.cache_read_input_tokens for usage in usages]),
+        output_tokens=_sum_complete_int([usage.output_tokens for usage in usages]),
+        cost_usd=_sum_complete_float([usage.cost_usd for usage in usages]),
+        reported_total_tokens=_sum_complete_int([usage.total_tokens for usage in usages]),
+    )
+
+
 def _ship_review_event(
-    mode: str,
-    agent_cmd: list[str],
-    merge_base: str,
-    diff_stats: tuple[int, int, int],
+    run: ReviewRun,
     started: float,
-    elapsed: float,
-    composer_rc: int,
-    timed_out: bool,
     findings: list[list],
     log_dir: pathlib.Path | None,
 ) -> None:
     """Assemble and ship the review's telemetry event (see infra/codehealth/log_stats.py)."""
-    diff_files, diff_added, diff_removed = diff_stats
+    diff_files, diff_added, diff_removed = run.diff_stats
+    usage = _aggregate_usage(run)
+    arms = _review_arms(run)
+    arm_usage = [
+        {
+            "name": name,
+            "exit_code": returncode,
+            "elapsed": elapsed,
+            "input_tokens": arm.input_tokens,
+            "cache_creation_input_tokens": arm.cache_creation_input_tokens,
+            "cache_read_input_tokens": arm.cache_read_input_tokens,
+            "output_tokens": arm.output_tokens,
+            "total_tokens": arm.total_tokens,
+            "cost_usd": arm.cost_usd,
+        }
+        for name, returncode, elapsed, arm in arms
+    ]
     _ship_review_stats(
         {
             "invocation_id": str(uuid.uuid4()),
             "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(started)),
             "tool": "pre-commit-review",
             "invocation": {
-                "variant": mode,
+                "variant": run.outcome.mode,
                 "trigger": _review_trigger(),
-                "agent_cli": agent_cmd[0],
+                "agent_cli": run.agent_command[0],
+                "agent_vendor": run.agent_spec.vendor,
+                "agent_model": run.agent_spec.model,
+                "agent_effort": run.agent_spec.effort,
+                "agent_calls": len(arms),
+                "agent_calls_json": json.dumps(arm_usage, separators=(",", ":")),
+                "input_tokens": usage.input_tokens,
+                "cache_creation_input_tokens": usage.cache_creation_input_tokens,
+                "cache_read_input_tokens": usage.cache_read_input_tokens,
+                "output_tokens": usage.output_tokens,
+                "total_tokens": usage.total_tokens,
+                "cost_usd": usage.cost_usd,
                 "git_branch": _git(["rev-parse", "--abbrev-ref", "HEAD"]),
-                "merge_base_sha": merge_base,
+                "merge_base_sha": run.merge_base,
                 "head_sha": _review_head_sha(),
                 "pr_number": _review_pr_number(),
                 "marin_user": _git(["config", "user.email"]),
@@ -701,9 +923,9 @@ def _ship_review_event(
                 "diff_files": diff_files,
                 "diff_added_lines": diff_added,
                 "diff_removed_lines": diff_removed,
-                "elapsed": elapsed,
-                "agent_exit_code": composer_rc,
-                "timed_out": timed_out,
+                "elapsed": run.elapsed_total,
+                "agent_exit_code": run.outcome.composer_rc,
+                "timed_out": run.outcome.timed_out,
             },
             "findings": findings,
         },
@@ -711,18 +933,17 @@ def _ship_review_event(
     )
 
 
-def run_lint_review(agent_command: str, lane_names: list[str] | None = None, compose: bool = True) -> int:
+def run_lint_review(agent_command: str, lane_names: list[str] | None = None, compose: bool = False) -> int:
     """Run the advisory `infra/lint/` catalog over the branch's changes via headless agents.
 
     Fans out one agent per lane (see `LINT_LANES`); each lane is handed the changed-file
     inventory (`git diff --stat`) plus read-only git access and probes the files itself.
-    The complexity lane is also fed static-complexity leads. Their outputs are merged by a composer agent
-    (`compose=True`) or a deterministic dedupe-and-concat (`compose=False`).
+    The complexity lane is also fed static-complexity leads. Their outputs use deterministic
+    dedupe-and-concat by default; `compose=True` adds a composer agent.
     `lane_names` restricts the run to a subset of lanes for debugging.
 
     `agent_command` is the headless CLI invocation each lane/composer agent reads
-    its prompt from on stdin (e.g. `claude -p`, `codex exec`). Callers should pass
-    the command for the agent they are themselves running.
+    its prompt from on stdin. It must select a model and effort explicitly.
 
     Findings are advisory and never block. Returns 0 for every outcome that fits
     that contract (no findings, findings emitted, agent unavailable, merge-base
@@ -740,9 +961,17 @@ def run_lint_review(agent_command: str, lane_names: list[str] | None = None, com
         lanes = [lane for lane in LINT_LANES if lane.name in lane_names]
 
     agent_cmd = shlex.split(agent_command)
-    if not agent_cmd or shutil.which(agent_cmd[0]) is None:
-        agent_name = agent_cmd[0] if agent_cmd else "(empty)"
-        click.echo(f"  ⚠ Lint review skipped: agent '{agent_name}' not found on PATH")
+    if not agent_cmd:
+        click.echo("Error: agent command is empty", err=True)
+        return 1
+    try:
+        spec = _agent_spec(agent_cmd)
+        agent_cmd = _with_usage_output(agent_cmd, spec)
+    except ValueError as error:
+        click.echo(f"Error: {error}", err=True)
+        return 1
+    if shutil.which(agent_cmd[0]) is None:
+        click.echo(f"  ⚠ Lint review skipped: agent '{agent_cmd[0]}' not found on PATH")
         return 0
     agent_cmd = _with_readonly_access(agent_cmd)
 
@@ -775,7 +1004,7 @@ def run_lint_review(agent_command: str, lane_names: list[str] | None = None, com
     env = _lint_review_env()
     started = time.time()
 
-    lane_results = _run_lanes(lanes, shared_text, merge_base, stat, leads, agent_cmd, env)
+    lane_results = _run_lanes(lanes, shared_text, merge_base, stat, leads, agent_cmd, spec, env)
     for r in lane_results:
         if r.returncode is None:
             click.echo(f"  ⚠ Lint lane '{r.name}' timed out after {LINT_REVIEW_TIMEOUT}s")
@@ -783,14 +1012,14 @@ def run_lint_review(agent_command: str, lane_names: list[str] | None = None, com
             detail = r.stderr.splitlines()[0] if r.stderr else ""
             click.echo(f"  ⚠ Lint lane '{r.name}' exited {r.returncode}: {detail}")
 
-    outcome = _merge_lane_results(lane_results, lanes, shared_text, merge_base, stat, agent_cmd, env, compose)
+    outcome = _merge_lane_results(lane_results, lanes, shared_text, merge_base, stat, agent_cmd, spec, env, compose)
     parsed = _parse_findings(outcome.findings_text) if outcome.findings_text else []
     elapsed = time.time() - started
 
     # Persist raw per-arm + combined output for debugging a slow/broken cycle. Log I/O is a
     # side channel: a write failure (e.g. /tmp not writable) must not fail the advisory review.
     branch = _git(["rev-parse", "--abbrev-ref", "HEAD"])
-    run = ReviewRun(lane_results, outcome, merge_base, diff_stats, elapsed, branch)
+    run = ReviewRun(lane_results, outcome, merge_base, diff_stats, elapsed, branch, spec, tuple(agent_cmd))
     log_dir: pathlib.Path | None = None
     try:
         log_dir = _review_log_dir(branch, started)
@@ -802,18 +1031,7 @@ def run_lint_review(agent_command: str, lane_names: list[str] | None = None, com
 
     # Ships after the log dir exists so a failed write lands in stats.log beside
     # the run it belongs to instead of vanishing.
-    _ship_review_event(
-        outcome.mode,
-        agent_cmd,
-        merge_base,
-        diff_stats,
-        started,
-        elapsed,
-        outcome.composer_rc,
-        outcome.timed_out,
-        parsed,
-        log_dir,
-    )
+    _ship_review_event(run, started, parsed, log_dir)
 
     if all(r.returncode != 0 for r in lane_results):
         click.echo("  ⚠ Lint review: every lane failed to run (is the agent CLI working?)")

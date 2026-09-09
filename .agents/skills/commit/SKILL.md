@@ -63,7 +63,10 @@ If there are no changes to commit, say so and stop.
 ## 6. Lint-catalog review (before every PR)
 
 ```bash
-./infra/pre-commit.py --review --agent-command='<your headless CLI>'
+./infra/pre-commit.py --review
+# Codex override:
+./infra/pre-commit.py --review \
+  --agent-command='codex exec --model gpt-5.6-terra --config model_reasoning_effort=low'
 ```
 
 Run this after the initial commit and before publishing the PR. It reviews the
@@ -130,8 +133,18 @@ If Loom is available, set one honest status immediately before waiting:
 loom status set --tag ok --message "waiting for PR #<N> events"
 ```
 
-Do not refresh that status while nothing changes. Invoke one `wait_for.py`
-process in the foreground and keep it attached until it exits:
+Do not refresh that status while nothing changes.
+
+When the harness supports heartbeats, cron callbacks, or scheduled wakeups, use
+that capability. Schedule the first check near 10 minutes. If no actionable
+event arrives, use a 30–60 minute cadence. The scheduled check must compare PR
+state mechanically and start a reasoning turn only for a new or changed CI,
+review, comment, merge, close, or conflict event. Availability is a harness
+property: do not assume Codex App heartbeats, cron, or an equivalent vendor
+feature exists in another runtime.
+
+When scheduled wakeups are unavailable, invoke one `wait_for.py` process in the
+foreground and keep it attached until it exits:
 
 ```bash
 uv run scripts/ci/wait_for.py --timeout 12h \
@@ -142,9 +155,9 @@ uv run scripts/ci/wait_for.py --timeout 12h \
 The command's `--timeout 12h` is the only timeout. Do not background or detach
 the process, wrap it in a shell `timeout`, or give the command runner or agent a
 shorter deadline. A tool reporting that the command is still running does not
-end the foreground wait. Give the process handle back to the runtime's blocking
-wait/resume facility and continue waiting for that same process to exit. Repeat
-the blocking resume as often as the execution interface requires.
+end the foreground wait. Give a yielded process handle back to the runtime's
+blocking wait facility. A runner yield is not a PR event and must not start a
+reasoning turn or a side poll.
 
 `github.pr` covers terminal merged/closed state, merge conflicts,
 ready-for-review transitions, and review-decision changes. It does not inspect

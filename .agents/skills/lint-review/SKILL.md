@@ -18,8 +18,9 @@ for posting comments**: never edit, stage, commit, push, or "fix" anything, and
 never run a state-changing `git`/`gh` command. The review's own lane agents are
 already locked read-only.
 
-Report the findings **faithfully**. The `--review` run (its lanes + composer) is
-the authority on what is a finding: post each surviving finding **verbatim** —
+Report the findings **faithfully**. The `--review` run (its lanes and
+deterministic merge, or optional composer) is the authority on what is a
+finding: post each surviving finding **verbatim** —
 one comment per finding. Do **not** drop, merge, reword the substance of, soften,
 re-judge, or invent findings. Silently losing a real finding is the one
 unforgivable error; so is fabricating one.
@@ -40,12 +41,16 @@ unforgivable error; so is fabricating one.
    MARIN_REVIEW_TRIGGER=ci \
      MARIN_REVIEW_PR_NUMBER=<PR> \
      MARIN_REVIEW_HEAD_SHA="$head_sha" \
-     ./infra/pre-commit.py --review --agent-command='codex exec'
+     ./infra/pre-commit.py --review \
+       --agent-command='codex exec --model gpt-5.6-terra --config model_reasoning_effort=low'
    ```
 
-   The command writes its raw per-arm prompts/outputs and the
-   combined findings under `/tmp/marin-linter/<branch>/<timestamp>-<uniq>/` (path printed at the
-   end); read it if a run looks wrong.
+   The default command uses a pinned Claude Haiku model at low effort. The
+   example overrides it with the Codex Terra budget model. Other vendors must
+   select an explicit model and effort tier. The command writes its raw per-arm
+   prompts/outputs and combined findings under
+   `/tmp/marin-linter/<branch>/<timestamp>-<uniq>/` (path printed at the end);
+   read it if a run looks wrong.
 
 3. **Collect the findings.** Each finding the command emits on stdout is one line
    in the canonical catalog format:

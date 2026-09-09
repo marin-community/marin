@@ -5,7 +5,7 @@ description: Refresh a named Marin external fork pin onto a newer upstream base 
 
 # Refresh a fork
 
-Read `AGENTS.md`. Rebase the fork overlay onto `<branch>-next`, validate that
+Rebase the fork overlay onto `<branch>-next`, validate that
 staged tip, re-pin Marin, and prepare protected-branch promotion. An unattended
 run opens a draft Marin PR and names the required admin promotion; it never
 force-moves the stable branch.

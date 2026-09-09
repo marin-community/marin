@@ -411,7 +411,7 @@ Read `AGENTS.md` (especially its Testing section) and
 - Never credit yourself. Do not add a `Co-Authored-By: Claude` or "Generated
   with Claude Code" trailer to commits, and do not self-attribute in the PR
   description.
-- If you modify code or tests, run `./infra/pre-commit.py --all-files --fix`
+- If you modify code or tests, run `./infra/pre-commit.py --changed-files --fix`
   and run the relevant `uv run pytest ...` targets.
 
 ## Output
@@ -432,7 +432,8 @@ def run_agent(prompt: str, root: Path) -> None:
     result = run_claude(
         prompt,
         [
-            "--model=opus",
+            "--model=claude-opus-4-8",
+            "--effort=high",
             "--dangerously-skip-permissions",
             *NO_SELF_CREDIT_SETTINGS,
             "--tools=Read,Write,Edit,Glob,Grep,Bash",
