@@ -651,7 +651,9 @@ def _emit_to_runtime(
             if not math.isfinite(numeric):
                 raise ValueError("metric value must be finite")
             record["unit"] = unit
-            record["value"] = numeric
+            # Decimal JSON parsing can round an exactly representable integer by one ULP.
+            # Use the integer parser path for integral binary64 values; retain signed zero.
+            record["value"] = int(numeric) if numeric and abs(numeric) <= 2**53 and numeric.is_integer() else numeric
         return runtime.emit(serialization.json_bytes_bounded(record, runtime.max_record_bytes()))
     except Exception:
         runtime.count_lost()
