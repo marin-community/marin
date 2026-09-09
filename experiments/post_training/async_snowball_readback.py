@@ -46,6 +46,8 @@ def prepare_readback(source_request: dict, *, runtime_commit: str, run_id: str, 
     config["trainer"]["algorithm"]["batch_invariant"] = False
     config["trainer"]["eval_before_train"] = False
     config["trainer"]["eval_interval"] = -1
+    config["trainer"]["ckpt_interval"] = -1
+    config["trainer"]["hf_save_interval"] = -1
     request = copy.deepcopy(source_request)
     request.update(
         run_id=run_id,
