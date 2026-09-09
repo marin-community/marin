@@ -1,10 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 from marin.datakit.download.agenttrove import row_to_chat_doc as agenttrove_row_to_chat_doc
 from marin.datakit.download.coderforge import row_to_chat_doc as coderforge_row_to_chat_doc
 from marin.datakit.download.davinci_dev import env_row_to_chat_doc as davinci_row_to_chat_doc
 from marin.datakit.download.gpt_oss_rollouts import row_to_chat_doc as gpt_oss_row_to_chat_doc
+from marin.datakit.download.nemotron_terminal import row_to_chat_doc as nemotron_terminal_row_to_chat_doc
 from marin.datakit.download.numinamath_tir import row_to_chat_doc as numinamath_row_to_chat_doc
 from marin.datakit.download.penfever_rollouts import PENFEVER_ROLLOUTS
 from marin.datakit.download.penfever_rollouts import row_to_chat_doc as penfever_row_to_chat_doc
@@ -367,3 +369,46 @@ def test_numinamath_splits_reasoning_python_and_output() -> None:
     assert messages[3]["content"] == [{"type": "text", "text": "42"}]
     assert messages[4]["channel"] == "final"
     assert messages[4]["content"] == [{"type": "text", "text": "Therefore, the answer is 42."}]
+
+
+@pytest.mark.parametrize("adapter", [agenttrove_row_to_chat_doc, nemotron_terminal_row_to_chat_doc])
+@pytest.mark.parametrize(
+    "conversations,recipient,prompt",
+    [
+        (
+            [
+                {"role": "user", "content": "old protocol\n\nTask Description:\nFix the code."},
+                {"role": "assistant", "content": '{"analysis":"Inspect.","commands":[{"keystrokes":"ls\\n"}]}'},
+                {"role": "user", "content": "file.py"},
+                {"role": "assistant", "content": '{"commands":[],"task_complete":true}'},
+            ],
+            "functions.terminal",
+            "Task Description:\nFix the code.",
+        ),
+        (
+            [
+                {"role": "user", "content": "Fix the code."},
+                {
+                    "role": "assistant",
+                    "content": (
+                        '<think>Inspect.</think><tool_call>{"name":"bash","arguments":{"command":"ls"}}</tool_call>'
+                    ),
+                },
+                {"role": "user", "content": "file.py"},
+                {"role": "assistant", "content": "Done."},
+            ],
+            "functions.bash",
+            "Fix the code.",
+        ),
+    ],
+)
+def test_mixed_protocol_sources_preserve_prompt_reasoning_and_tool_handoff(adapter, conversations, recipient, prompt):
+    [document] = adapter({"conversations": conversations})
+    messages = document["messages"]
+    assert messages[0]["content"] == [{"type": "text", "text": prompt}]
+    assert messages[1]["channel"] == "analysis"
+    assert messages[1]["content"] == [{"type": "text", "text": "Inspect."}]
+    assert messages[2]["recipient"] == recipient
+    assert messages[3]["name"] == recipient
+    assert messages[3]["content"] == [{"type": "text", "text": "file.py"}]
+    assert messages[-1]["channel"] == "final"

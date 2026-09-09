@@ -18,6 +18,7 @@ from zephyr.readers import load_jsonl
 
 from marin.datakit.chat_normalize import normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
+from marin.datakit.download.opencode import INLINE_TOOL_CALL
 from marin.datakit.download.rollout_transforms import (
     CHAT_CONTROL_TOKEN,
     ReasoningFormatError,
@@ -25,7 +26,6 @@ from marin.datakit.download.rollout_transforms import (
     text_document,
 )
 from marin.datakit.normalize import normalize_step
-from marin.datakit.terminal_chat import INLINE_TOOL_CALL
 from marin.execution.step_spec import StepSpec
 
 HF_DATASET_ID = "andyrdt/gpt-oss-20b-rollouts"

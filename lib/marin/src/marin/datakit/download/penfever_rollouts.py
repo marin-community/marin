@@ -19,6 +19,7 @@ from zephyr.dataset import Dataset
 
 from marin.datakit.chat_normalize import normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
+from marin.datakit.download.opencode import opencode_protocol_messages
 from marin.datakit.download.rollout_transforms import (
     TRAJECTORY_FAILED_TAG,
     TRAJECTORY_SOLVED_TAG,
@@ -28,8 +29,8 @@ from marin.datakit.download.rollout_transforms import (
     render_role_message,
     text_document,
 )
+from marin.datakit.download.terminus import TASK_DESCRIPTION_MARKER, terminus_protocol_messages
 from marin.datakit.normalize import normalize_step
-from marin.datakit.terminal_chat import opencode_protocol_messages, terminal_protocol_messages
 from marin.execution.step_spec import StepSpec
 
 
@@ -1103,11 +1104,25 @@ def row_to_chat_doc(dataset: PenfeverRollout) -> Callable[[dict], list[dict]]:
             return []
         if dataset.cohort_name == "qwen35-122b-131k-opencode":
             instruction = row.get("instruction")
-            converted = opencode_protocol_messages(
-                conversations, initial_user_content=instruction if isinstance(instruction, str) else None
-            )
+            first = conversations[0]
+            content = first.get("content")
+            if (
+                first.get("role") == "user"
+                and isinstance(content, str)
+                and not content.strip()
+                and isinstance(instruction, str)
+            ):
+                conversations = [{**first, "content": instruction}, *conversations[1:]]
+            converted = opencode_protocol_messages(conversations)
         else:
-            converted = terminal_protocol_messages(conversations)
+            first = conversations[0]
+            content = first.get("content")
+            if first.get("role") == "user" and isinstance(content, str) and TASK_DESCRIPTION_MARKER in content:
+                conversations = [
+                    {**first, "content": content[content.index(TASK_DESCRIPTION_MARKER) :]},
+                    *conversations[1:],
+                ]
+            converted = terminus_protocol_messages(conversations)
         if converted is None:
             return []
         messages, metadata = converted

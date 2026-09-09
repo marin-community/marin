@@ -70,6 +70,13 @@ reasoning delimiter before calling that helper. `chat_document` serializes Harmo
 messages into the processed source artifact; there is no intermediate canonical
 OpenAI-message artifact.
 
+Protocol parsers live in `download/terminus.py` (JSON command batches) and
+`download/opencode.py` (inline tool calls). Source adapters choose the parser
+and handle dataset-specific prompt fields, such as recovering an empty first
+user message from an `instruction` field. The parsers return OpenAI-style message
+dictionaries and tool definitions for the source helper; they do not define
+the shared Harmony contract or run the normalization pipeline.
+
 The Parquet normalizer accepts only serialized Harmony messages. It validates
 conversation structure, channels, and function handoffs, then hashes and deduplicates
 records. It does not interpret reasoning delimiters or inline tool-call syntax.

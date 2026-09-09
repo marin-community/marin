@@ -17,6 +17,7 @@ from zephyr.dataset import Dataset
 
 from marin.datakit.chat_normalize import normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
+from marin.datakit.download.opencode import INLINE_TOOL_CALL
 from marin.datakit.download.rollout_transforms import (
     TRAJECTORY_FAILED_TAG,
     TRAJECTORY_SOLVED_TAG,
@@ -26,7 +27,6 @@ from marin.datakit.download.rollout_transforms import (
     text_document,
 )
 from marin.datakit.normalize import normalize_step
-from marin.datakit.terminal_chat import INLINE_TOOL_CALL
 from marin.execution.step_spec import StepSpec
 
 HF_DATASET_ID = "nebius/SWE-rebench-openhands-trajectories"

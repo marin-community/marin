@@ -33,6 +33,7 @@ from zephyr.dataset import Dataset
 
 from marin.datakit.chat_normalize import normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
+from marin.datakit.download.opencode import INLINE_TOOL_CALL, opencode_protocol_messages
 from marin.datakit.download.rollout_transforms import (
     TRAJECTORY_FAILED_TAG,
     TRAJECTORY_SOLVED_TAG,
@@ -42,8 +43,8 @@ from marin.datakit.download.rollout_transforms import (
     render_role_message,
     text_document,
 )
+from marin.datakit.download.terminus import TASK_DESCRIPTION_MARKER, terminus_protocol_messages
 from marin.datakit.normalize import normalize_step
-from marin.datakit.terminal_chat import agent_protocol_messages
 from marin.execution.step_spec import StepSpec
 
 HF_DATASET_ID = "open-thoughts/AgentTrove"
@@ -118,7 +119,14 @@ def row_to_chat_doc(row: dict) -> list[dict]:
     conversations = row.get("conversations")
     if not conversations:
         return []
-    converted = agent_protocol_messages(conversations)
+    if any(INLINE_TOOL_CALL.search(message.get("content") or "") for message in conversations):
+        converted = opencode_protocol_messages(conversations)
+    else:
+        first = conversations[0]
+        content = first.get("content")
+        if first.get("role") == "user" and isinstance(content, str) and TASK_DESCRIPTION_MARKER in content:
+            conversations = [{**first, "content": content[content.index(TASK_DESCRIPTION_MARKER) :]}, *conversations[1:]]
+        converted = terminus_protocol_messages(conversations)
     if converted is None:
         return []
     messages, metadata = converted
