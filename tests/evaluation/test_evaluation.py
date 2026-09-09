@@ -554,6 +554,7 @@ def test_snowball_final_catalog_covers_five_bases_and_all_stages():
     for name in expected:
         model = catalog[name]
         assert model.resource_hint.gpu == {"H100": 8}
+        assert model.resource_hint.disk == "512g"
         assert model.serve.max_model_len == 65536
         assert model.generation.extra_gen_kwargs["temperature"] == "0.7"
 

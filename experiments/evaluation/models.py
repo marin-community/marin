@@ -109,7 +109,9 @@ def _snowball_final(name: str, location: str, *, revision: str | None = None, ba
         # The campaign separately records the validated tokenizer.json digest in its fixed policy.
         tokenizer="marin-community/marin-tokenizer",
         apply_chat_template=True,
-        resource_hint=ResourceHint(gpu={"H100": 8}, memory="512g"),
+        # The 39-shard checkpoint is larger than the generic 100 GB serve disk; model staging
+        # otherwise exhausts the worker volume before vLLM can start.
+        resource_hint=ResourceHint(gpu={"H100": 8}, memory="512g", disk="512g"),
         serve=ServeConfig(
             tensor_parallel_size=1,
             data_parallel_size=8,

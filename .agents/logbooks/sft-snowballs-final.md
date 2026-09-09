@@ -167,3 +167,21 @@ author: benfeuer
 - Result: the campaign wiring test confirms native rather than HF initialization, the exact parent checkpoint path, the pinned Snowball config/tokenizer, and a one-update run. All 11 campaign tests and the full pre-commit gate pass.
 - Interpretation: after smoke 4 succeeds, a second RNO2A job can validate the same native boundary every downstream stage uses without starting the five-model campaign.
 - Next action: push this gate, then launch it against smoke version `2026.09.08.5` after the parent finishes.
+
+### 2026-09-08 22:44 EDT - First non-agentic base evaluation submitted
+
+- Hypothesis: one qk157 Base/NLP launch can validate the distributed Snowball serving/evaluation path while the 64-H100 training smoke continues, and contributes directly to the required matrix.
+- Commit Hash: `265ff8e495` (evaluation surface introduced in `1c01bff36d`).
+- Command: launch `snowball-final-qk157-base` with suite `nlp`, seed 42, H100x8, federated cluster `cw-rno2a`, and interactive priority.
+- Result: submitted group `20260909-024426-snowball-final-qk157-base-3d38` with all 14 NLP evaluations sharing one serve. Task-local generation caps overrode the catalog maximum as intended.
+- Interpretation: hold the other 29 base suite/seed launches until this canary proves model serving and durable record completion.
+- Next action: monitor both the qk157 HF training smoke and this evaluation group; fan out only after their respective gates pass.
+
+### 2026-09-08 22:53 EDT - Evaluation canary exposed undersized serve disk
+
+- Hypothesis: the generic evaluation worker resources are sufficient to stage the 39-shard Snowball checkpoint and start vLLM.
+- Commit Hash: canary ran `265ff8e495`; fix uncommitted.
+- Command: inspect the failed group and inference child `/benfeuer/eval-20260909-024426-snowball-final-qk157-base-3d38/inference-11485f945b2b44b081c903e5922d7c44`.
+- Result: falsified before any benchmark request. The child began streaming 47 HF files, emitted no model/runtime exception, and exited 137 after six minutes. The catalog had overridden memory to 512 GB but inherited `DEFAULT_SERVE_DISK = "100g"`, which cannot hold this approximately 134 GB checkpoint plus staging overhead.
+- Interpretation: this is a resource declaration bug in the Snowball campaign catalog, not a score/model failure. Give every one of the 25 entries an explicit 512 GB disk and cover it in the catalog test.
+- Next action: run checks, push the resource fix, and repeat only the failed qk157 Base/NLP seed-42 canary.
