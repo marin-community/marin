@@ -58,7 +58,13 @@ def full_softmax_scores(model, batch):
     tokens = batch.tokens.rearrange(("batch", "position"))
     width = batch.response_mask.axis_size("response")
     # Explicit shifted full-vocabulary reference, independent of fused CE slicing.
-    logprobs = jax.nn.log_softmax(logits.array.astype(jnp.float32)[:, :-1], axis=-1)
+    logits = logits.array.astype(jnp.float32)[:, :-1]
+    shifted = logits - jax.lax.stop_gradient(jnp.max(logits, axis=-1, keepdims=True))
+    # TPU's default log approximation is not a full-precision reference.
+    accuracy = jax.lax.AccuracyMode.HIGHEST if jax.default_backend() == "tpu" else None
+    logprobs = shifted - jax.lax.log(
+        jnp.sum(jax.lax.exp(shifted, accuracy=accuracy), axis=-1, keepdims=True), accuracy=accuracy
+    )
     selected = jnp.take_along_axis(logprobs, tokens.array[:, 1:, None], axis=-1)[..., 0]
     return hax.named(selected[:, -width:], batch.response_mask.axes)
 

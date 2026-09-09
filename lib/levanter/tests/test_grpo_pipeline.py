@@ -80,15 +80,25 @@ def test_pipeline_objective_preserves_response_alignment_masks_and_full_batch_we
             for stage in combined:
                 hidden = stage.run_blocks(hidden, mask, positions)
             logits = hidden @ combined[-1].get_lm_head()
-            logprobs = jax.nn.log_softmax(logits[:, -3:-1], axis=-1)
+            logits = logits[:, -3:-1]
+            shifted = logits - jax.lax.stop_gradient(jnp.max(logits, axis=-1, keepdims=True))
+            accuracy = jax.lax.AccuracyMode.HIGHEST if jax.default_backend() == "tpu" else None
+            logprobs = shifted - jax.lax.log(
+                jnp.sum(jax.lax.exp(shifted, accuracy=accuracy), axis=-1, keepdims=True), accuracy=accuracy
+            )
             selected_probs = jnp.take_along_axis(logprobs, tokens[:, -2:, None], axis=-1)[..., 0]
             inputs = (selected_probs, batch.old_logprobs, batch.reference_logprobs, advantages, weights, weights)
             return grpo_loss(
                 *(hax.named(value, (Batch, Response)) for value in inputs), config=config, accumulation_steps=1
             )[0]
 
-        value, grads = eqx.filter_jit(eqx.filter_value_and_grad(actual))(selected)
-        reference, reference_grads = eqx.filter_jit(eqx.filter_value_and_grad(expected))(selected)
+        # Preserve the same BF16 rounding across the shard_map and dense graphs.
+        # TPU excess precision can otherwise remove only the dense graph's casts.
+        compiler_options = {"xla_allow_excess_precision": False}
+        value, grads = eqx.filter_jit(eqx.filter_value_and_grad(actual), compiler_options=compiler_options)(selected)
+        reference, reference_grads = eqx.filter_jit(
+            eqx.filter_value_and_grad(expected), compiler_options=compiler_options
+        )(selected)
         np.testing.assert_allclose(value, reference, atol=1e-7, rtol=1e-6)
         for actual_grad, expected_grad in zip(jax.tree.leaves(grads), jax.tree.leaves(reference_grads), strict=True):
             np.testing.assert_allclose(actual_grad, expected_grad, atol=1e-7, rtol=1e-5)
