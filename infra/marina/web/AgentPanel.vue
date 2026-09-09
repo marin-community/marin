@@ -22,7 +22,7 @@ const props = defineProps<{
 const emit = defineEmits<{ close: [] }>()
 
 const SESSION_MAP_KEY = 'marina.agent.sessions.v2'
-const DRAFT_STORAGE_KEY = 'marina.agent.drafts.v1'
+const DRAFT_STORAGE_KEY = 'marina.agent.drafts.v2'
 const SESSION_LIMIT = 20
 
 interface StoredSessions {
@@ -33,7 +33,9 @@ interface StoredSessions {
 }
 
 interface StoredDrafts {
-  version: 1
+  version: 2
+  username: string
+  loomOrigin: string
   drafts: Record<string, string>
 }
 
@@ -118,13 +120,32 @@ function forgetSession(): void {
   writeStorage(localStorage, SESSION_MAP_KEY, stored)
 }
 
-function restoreDraft(): void {
+function storedDrafts(): StoredDrafts {
   const stored = readStorage<StoredDrafts>(sessionStorage, DRAFT_STORAGE_KEY)
-  draft.value = stored?.version === 1 ? stored.drafts[contextKey.value] ?? '' : ''
+  if (
+    stored?.version === 2 &&
+    stored.username === username.value &&
+    stored.loomOrigin === props.config.origin
+  ) {
+    return stored
+  }
+  const empty: StoredDrafts = {
+    version: 2,
+    username: username.value,
+    loomOrigin: props.config.origin ?? '',
+    drafts: {},
+  }
+  writeStorage(sessionStorage, DRAFT_STORAGE_KEY, empty)
+  return empty
+}
+
+function restoreDraft(): void {
+  draft.value = storedDrafts().drafts[contextKey.value] ?? ''
 }
 
 function saveDraft(): void {
-  const stored = readStorage<StoredDrafts>(sessionStorage, DRAFT_STORAGE_KEY) ?? { version: 1, drafts: {} }
+  if (!username.value) return
+  const stored = storedDrafts()
   stored.drafts[contextKey.value] = draft.value
   writeStorage(sessionStorage, DRAFT_STORAGE_KEY, stored)
 }
