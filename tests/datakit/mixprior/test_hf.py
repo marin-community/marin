@@ -50,7 +50,7 @@ def test_named_hf_data_runs_through_fit_search_and_parquet_output(tmp_path, data
     model = fit(loaded, *objective(loaded.outcomes))
     selected = search(model, loaded.available_tokens, loaded.phase_budgets, loaded.weights, pool_size=128, batch_size=2)
     path = tmp_path / "candidates.parquet"
-    write_candidates(path, loaded, selected, "test-revision")
+    write_candidates(path, selected, loaded.name, loaded.components, "test-revision")
     records = pq.read_table(path).to_pylist()
     assert len(records) == 2
     restored = np.array(

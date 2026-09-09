@@ -113,18 +113,18 @@ def load_hf(revision: str, swarm: str) -> Data:
     return load_data(Path(path), swarm)
 
 
-def write_candidates(path: Path, data: Data, weights: np.ndarray, revision: str) -> None:
+def write_candidates(path: Path, weights: np.ndarray, swarm_id: str, components: list[str], revision: str) -> None:
     """Write candidate phases with the same cell names as the HF observations."""
-    if weights.shape[1:] != (2, len(data.components)) or not np.isfinite(weights).all():
+    if weights.shape[1:] != (2, len(components)) or not np.isfinite(weights).all():
         raise ValueError("Candidate weights must match the named phase/component axes")
     if np.any(weights < 0) or not np.allclose(weights.sum(axis=-1), 1):
         raise ValueError("Candidate phases must be simplexes")
     rows = [
         {
-            "swarm_id": data.name,
+            "swarm_id": swarm_id,
             "hf_revision": revision,
-            "phase0_weights": dict(zip(data.components, phases[0].tolist(), strict=True)),
-            "phase1_weights": dict(zip(data.components, phases[1].tolist(), strict=True)),
+            "phase0_weights": dict(zip(components, phases[0].tolist(), strict=True)),
+            "phase1_weights": dict(zip(components, phases[1].tolist(), strict=True)),
         }
         for phases in weights
     ]
