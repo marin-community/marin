@@ -2,11 +2,12 @@
 // The chrome every Marina app renders inside.
 //
 // One origin serves many apps, each under `/{app}/`, and this is what tells a
-// reader which one they are in and how to reach the others. The bar is the
-// kernel's; everything below it is the app's, and the app's own navigation goes
-// in the `nav` slot beside the switcher rather than in a second bar under it.
+// reader which one they are in and how to reach the others. The bar and agent
+// panel are kernel UI. The app owns the main content and puts its navigation in
+// the `nav` slot beside the switcher.
 //
-// `/api/marina/apps` and `/api/marina/me` are the kernel's two GETs.
+// The shell reads the app directory, caller identity, and this app's agent
+// configuration from the kernel.
 
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 

@@ -11,8 +11,8 @@ large or changing files stay out of the image and the repository. A Python app's
 mounted at ``/<name>/api/`` behind the same authentication, with the caller's identity
 bound for its handlers. ``/api/marina/*`` is the surface shared by every
 app (the app directory and the caller's identity); ``/`` lists the apps. A per-app
-Content-Security-Policy restricts what the page may fetch to itself plus the manifest's
-``connect_src``.
+Content-Security-Policy restricts what the page may fetch to itself, the manifest's
+``connect_src``, and the configured Loom origin for apps that enable the agent panel.
 """
 
 import html
@@ -475,6 +475,32 @@ async def dispatch_applet_api(
         raise HTTPException(status_code=503, detail=str(error)) from error
 
 
+def install_agent_panel_config_route(
+    api: FastAPI,
+    apps: list[AppManifest],
+    service: AgentPanelService | None,
+) -> None:
+    """Expose an app's checked-in launch coordinates with the deployment Loom origin."""
+
+    @api.get("/api/marina/agent/config")
+    @requires_auth
+    def agent_config(app: str) -> JSONResponse:
+        manifest = next((candidate for candidate in apps if candidate.name == app), None)
+        if manifest is None:
+            raise HTTPException(status_code=404, detail="app not found")
+        if service is None or manifest.agent is None:
+            return JSONResponse({"enabled": False})
+        return JSONResponse(
+            {
+                "enabled": True,
+                "origin": service.origin,
+                "profile": manifest.agent.profile,
+                "repository": manifest.agent.repository,
+                "starters": list(manifest.agent.starters),
+            }
+        )
+
+
 def create_app(config: MarinaConfig) -> RouteAuthMiddleware:
     validate_agent_panel(config.agent_panel, config.iap_audience)
     apps = discover_apps(config.apps_dir)
@@ -523,23 +549,7 @@ def create_app(config: MarinaConfig) -> RouteAuthMiddleware:
         identity = identity_for(request, policy)
         return JSONResponse({"user": identity.user_id, "role": identity.role})
 
-    @api.get("/api/marina/agent/config")
-    @requires_auth
-    def agent_config(app: str) -> JSONResponse:
-        manifest = next((candidate for candidate in apps if candidate.name == app), None)
-        if manifest is None:
-            raise HTTPException(status_code=404, detail="app not found")
-        if config.agent_panel is None or manifest.agent is None:
-            return JSONResponse({"enabled": False})
-        return JSONResponse(
-            {
-                "enabled": True,
-                "origin": config.agent_panel.origin,
-                "profile": manifest.agent.profile,
-                "repository": manifest.agent.repository,
-                "starters": list(manifest.agent.starters),
-            }
-        )
+    install_agent_panel_config_route(api, apps, config.agent_panel)
 
     @api.get("/", include_in_schema=False)
     @requires_auth

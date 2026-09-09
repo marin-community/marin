@@ -50,7 +50,7 @@ class Services:
 
 @dataclass(frozen=True)
 class RegisteredApi:
-    """A checked-in app's mounted HTTP service and generated MCP server."""
+    """A checked-in app's HTTP service and full and read-only MCP projections."""
 
     app: ASGIApp
     mcp: FastMCP
