@@ -16,6 +16,7 @@ Launch a one-update full-shape smoke on RNO2A before the campaign fan-out::
       --cpu 2 --memory 2G --extra cpu --priority interactive --max-retries 10 --no-wait \
       -e MARIN_PREFIX s3://marin-us-east-02a/marin \
       -e HF_TOKEN "$HF_TOKEN" -e WANDB_API_KEY "$WANDB_API_KEY" \
+      -e LEVANTER_PALLAS_CE_AUTOTUNE_ON_MISS 0 \
       -e IRIS_PORT_JAX "$UNIQUE_IRIS_PORT_JAX" -- \
       python -m experiments.sft.configs.snowball_lce_final \
       --base qk157 --stage smoke --version YYYY.MM.DD.N --run
