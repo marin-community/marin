@@ -51,6 +51,7 @@ from levanter.training_control import TrainingDashboard
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
+from packaging.version import Version
 
 from experiments.grug.checkpointing import (
     LEGACY_STATE_KEY,
@@ -94,6 +95,9 @@ RAGGED_COLLECTIVE_OVERLAP_LIMIT = 1
 # Offload and latency hiding race the reloaded residual with its consumer when overlap exceeds 1.
 OFFLOAD_CARRY_COLLECTIVE_OVERLAP_LIMIT = 1
 RAGGED_MOE_IMPLEMENTATION = "ragged_all_to_all"
+# cuDNN's MoE grouped matmul forward needs cuDNN 9.22 and its weight gradient cuBLASLt 13.5
+# (cudnn-frontend docs/operations/MoeGroupedMatmul.md); these are the versions it was validated at.
+RAGGED_DOT_RUNTIME_MINIMUMS = {"nvidia-cudnn-cu13": "9.25.1.1", "nvidia-cublas": "13.6.1.10"}
 # TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU
 # command buffers after the CUDA graph failure is fixed.
 XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
@@ -249,7 +253,14 @@ def _apply_hero_ep_runtime_defaults(
 
 
 def verify_ragged_pjrt() -> None:
-    """Raise unless this process runs Marin's patched GPU PJRT plugin."""
+    """Raise unless this process runs Marin's patched GPU PJRT plugin on a new enough CUDA stack.
+
+    The expert MLP's ``ragged_dot`` lowers to cuDNN's MoE grouped matmul, which cudnn-frontend
+    compiles in only against cuDNN 9.22+ and whose weight gradient is a cuBLASLt grouped GEMM
+    available from cuBLASLt 13.5. An older runtime library does not fall back: the fusion fails to
+    find an execution plan at compile time, after the rack is allocated. Both libraries load from
+    their pip distributions, so their versions are checked here, before dispatch.
+    """
     try:
         installed = importlib.metadata.version(PJRT_DISTRIBUTION)
     except importlib.metadata.PackageNotFoundError as missing:
@@ -263,6 +274,14 @@ def verify_ragged_pjrt() -> None:
             f"({expected_prefix}*), found {installed}. The patched wheel is aarch64-only and the "
             "expert MLP is SM100-specialized; run the ragged transport on GB200."
         )
+    for distribution, minimum in RAGGED_DOT_RUNTIME_MINIMUMS.items():
+        found = importlib.metadata.version(distribution)
+        if Version(found) < Version(minimum):
+            raise RuntimeError(
+                f"{RAGGED_MOE_IMPLEMENTATION} lowers ragged_dot to cuDNN's MoE grouped matmul, which "
+                f"needs {distribution}>={minimum}; found {found}. Install it into the train tasks "
+                "(the launcher's --pip-package) or raise the pin."
+            )
 
 
 @dataclass(frozen=True)

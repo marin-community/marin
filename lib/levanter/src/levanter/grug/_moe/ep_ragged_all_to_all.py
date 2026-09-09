@@ -42,11 +42,16 @@ from levanter.grug.sharding import _batch_axes
 # back to a single chunk when the local expert count is not divisible.
 _EXPERT_CHUNKS = 2
 
-# Selects the device-initiated ragged all-to-all kernel. The second entry is scoped to that op, so
-# every other collective keeps NCCL's host-launched kernels.
+# The first two select the device-initiated ragged all-to-all kernel; the second is scoped to that
+# op, so every other collective keeps NCCL's host-launched kernels. The third lowers the expert
+# MLP's ``ragged_dot`` to cuDNN's MoE grouped matmul (forward, activation gradient, and weight
+# gradient). Without it XLA expands each ragged dot to a masked dense dot at the expert count
+# times the FLOPs. The fusion is compiled into the PJRT wheel against cuDNN 9.22+, and its weight
+# gradient is a cuBLASLt grouped GEMM that needs cuBLASLt 13.5+ at run time.
 RAGGED_REQUIRED_XLA_FLAGS = (
     "--xla_gpu_experimental_ragged_all_to_all_use_device_kernel=true",
     "--xla_enable_nccl_symmetric_buffers_for_collectives=raggedalltoall",
+    "--xla_gpu_experimental_use_ragged_dot_fusion=true",
 )
 
 

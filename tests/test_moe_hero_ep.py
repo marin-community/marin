@@ -312,14 +312,30 @@ def test_run_grug_reduces_collective_overlap_only_for_inline_watch(
     assert f"{train.XLA_COLLECTIVE_OVERLAP_FLAG}={expected_overlap_limit}" in flags
 
 
+def _fake_versions(pjrt: str, **libraries: str):
+    versions = {train.PJRT_DISTRIBUTION: pjrt, **train.RAGGED_DOT_RUNTIME_MINIMUMS, **libraries}
+    return lambda name: versions[name]
+
+
 def test_the_stock_pjrt_plugin_fails_a_ragged_run_rather_than_running_it_slowly(monkeypatch):
     """jax reports the stock generation either way, so nothing else catches a stock runtime."""
-    monkeypatch.setattr("importlib.metadata.version", lambda name: jax.__version__)
+    monkeypatch.setattr("importlib.metadata.version", _fake_versions(jax.__version__))
     with pytest.raises(RuntimeError, match=r"\+marin\."):
         train.verify_ragged_pjrt()
 
-    monkeypatch.setattr("importlib.metadata.version", lambda name: f"{jax.__version__}+marin.abc123def456")
+    monkeypatch.setattr("importlib.metadata.version", _fake_versions(f"{jax.__version__}+marin.abc123def456"))
     train.verify_ragged_pjrt()
+
+
+def test_an_old_cudnn_or_cublas_fails_a_ragged_run_before_dispatch(monkeypatch):
+    """The cuDNN grouped matmul has no fallback: an old library fails at compile, after the rack is up."""
+    patched = f"{jax.__version__}+marin.abc123def456"
+    monkeypatch.setattr("importlib.metadata.version", _fake_versions(patched, **{"nvidia-cudnn-cu13": "9.19.0.56"}))
+    with pytest.raises(RuntimeError, match="nvidia-cudnn-cu13>="):
+        train.verify_ragged_pjrt()
+    monkeypatch.setattr("importlib.metadata.version", _fake_versions(patched, **{"nvidia-cublas": "13.4.1.1"}))
+    with pytest.raises(RuntimeError, match="nvidia-cublas>="):
+        train.verify_ragged_pjrt()
 
 
 def test_the_patched_pjrt_wheel_pairs_with_the_pinned_jax():
