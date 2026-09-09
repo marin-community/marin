@@ -260,6 +260,7 @@ def store():
                 ("policy/offpolicy_mask/vetoed_sequence_fraction", 0.02),
                 ("policy/m2_mask/m2_before", 0.03),
                 ("policy/m2_mask/masked_fraction", 0.07),
+                ("policy/tis/imp_ratio_capped_fraction", 0.12),
                 ("policy/ppo_clip_ratio", 0.08),
             ]:
                 add(
@@ -719,6 +720,7 @@ def test_gradient_direction_panel_reports_band_and_reduced_norm(store):
 def test_correction_panel_distinguishes_populations_and_bounds_reference_coverage(store):
     rows = query(store, "Correction activity")
     assert [row["value"] for row in rows if "vetoed_sequence_fraction" in row["series"]] == [0.02, 0.04]
+    assert [row["value"] for row in rows if "policy/tis/imp_ratio_capped_fraction" in row["series"]] == [0.12, 0.24]
     assert [row["value"] for row in rows if "offpolicy_mask/masked_fraction" in row["series"]] == [0.05, 0.1]
     assert [row["value"] for row in rows if row["series"].startswith("M2 reference")] == [0.04, 0.04]
     store.execute(

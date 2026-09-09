@@ -5020,7 +5020,7 @@
       "id": 59,
       "type": "timeseries",
       "title": "Correction activity",
-      "description": "Token mask fraction, vetoed sequence fraction, M2 diagnostic and PPO clipping activity. The 0.04 M2 reference is a proposed threshold, not a validated quality boundary; it appears only alongside an M2 observation. Missing correction telemetry is unavailable.",
+      "description": "Token mask fraction, vetoed sequence fraction, M2 diagnostic, PPO clipping and capped TIS activity. Correction fractions summarize microbatch reports, not pooled token counts; separately exported by-update correction fields retain the last microbatch per rank. The 0.04 M2 reference is a proposed threshold, not a validated quality boundary; it appears only alongside an M2 observation. Missing correction telemetry is unavailable.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -5074,7 +5074,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "WITH r AS (SELECT * FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND run_id IN (${run:sqlstring}) AND job_id IN (${job:sqlstring}) AND execution_uid IN (${execution:sqlstring})) SELECT to_timestamp_millis(timestamp_ms) AS t,json_get(attributes_json,'metric') || ' · ' || execution_uid AS series,value FROM r WHERE name='training_metric_value' AND json_get(attributes_json,'phase')='train' AND json_get(attributes_json,'metric') IN ('policy/offpolicy_mask/masked_fraction','policy/offpolicy_mask/vetoed_sequence_fraction','policy/m2_mask/m2_before','policy/m2_mask/masked_fraction','policy/ppo_clip_ratio') UNION ALL SELECT to_timestamp_millis(timestamp_ms) AS t,'M2 reference 0.04 · ' || execution_uid AS series,0.04 AS value FROM r WHERE name='training_metric_value' AND json_get(attributes_json,'phase')='train' AND json_get(attributes_json,'metric')='policy/m2_mask/m2_before' ORDER BY t,series"
+                "value": "WITH r AS (SELECT * FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND run_id IN (${run:sqlstring}) AND job_id IN (${job:sqlstring}) AND execution_uid IN (${execution:sqlstring})) SELECT to_timestamp_millis(timestamp_ms) AS t,json_get(attributes_json,'metric') || ' · ' || execution_uid AS series,value FROM r WHERE name='training_metric_value' AND json_get(attributes_json,'phase')='train' AND json_get(attributes_json,'metric') IN ('policy/offpolicy_mask/masked_fraction','policy/offpolicy_mask/vetoed_sequence_fraction','policy/m2_mask/m2_before','policy/m2_mask/masked_fraction','policy/ppo_clip_ratio','policy/tis/imp_ratio_capped_fraction') UNION ALL SELECT to_timestamp_millis(timestamp_ms) AS t,'M2 reference 0.04 · ' || execution_uid AS series,0.04 AS value FROM r WHERE name='training_metric_value' AND json_get(attributes_json,'phase')='train' AND json_get(attributes_json,'metric')='policy/m2_mask/m2_before' ORDER BY t,series"
               },
               {
                 "key": "from",
