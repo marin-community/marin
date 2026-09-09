@@ -63,6 +63,7 @@ _AGENTIC_STEPS = 1_888
 _PREBUILT_TRAIN_RESOURCES = "prebuilt_train_resources"
 _OPENCODE_DATASET_REVISION = "a9805934c9c98908c611236bbfc87799f1ff6fe5"
 _NEMOTRON_DATASET_REVISION = "a1667c4ffdadea02a89bffe4f1bb7ca2ff19f8d9"
+_TOKENIZER_REF = "marin-community/marin-tokenizer@a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2"
 _CONVERSION_VERSION = "2026.09.09.3"
 
 # These immutable tags were created only after the uploader validated all 44 source files. Never
@@ -214,6 +215,7 @@ def _converted_model(
 ) -> ConvertedSnowballGrugModel:
     return ConvertedSnowballGrugModel(
         conversion=conversion,
+        tokenizer_path=_TOKENIZER_REF,
         init_from=init_from,
         expert_parallel=_EXPERT_PARALLEL,
         model_axis=1,

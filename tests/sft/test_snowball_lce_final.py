@@ -22,7 +22,7 @@ def local_base():
 
 
 def test_opencode_is_packed_fixed_eot_child_of_thinking(local_base):
-    model_config, conversion = local_base
+    model_config, _conversion = local_base
     step = snowball_lce_final.build_opencode("qk157", _VERSION)
     cache = step.deps[0]
     thinking = next(dep for dep in step.deps if dep.name.endswith("/qk157/thinking"))
@@ -36,7 +36,7 @@ def test_opencode_is_packed_fixed_eot_child_of_thinking(local_base):
     assert train.steps == 1_888
     assert train.init_from_path.endswith("/qk157/thinking/2026.09.08.99/checkpoints")
     assert train.model == model_config
-    assert train.data.tokenizer == f"{_PREFIX}/{conversion.step.name}/{conversion.step.version}"
+    assert train.data.tokenizer == snowball_lce_final._TOKENIZER_REF
     assert component.pack is True
     assert component.packed_slice_strategy == "right"
     assert isinstance(component.format, PrebuiltLmDatasetFormat)
@@ -44,7 +44,7 @@ def test_opencode_is_packed_fixed_eot_child_of_thinking(local_base):
 
 
 def test_nemotron_is_independent_thinking_child_with_historical_cache(local_base):
-    model_config, conversion = local_base
+    model_config, _conversion = local_base
     step = snowball_lce_final.build_nemotron_terminal("qk157", _VERSION)
     cache = step.deps[0]
     thinking = next(dep for dep in step.deps if dep.name.endswith("/qk157/thinking"))
@@ -58,7 +58,7 @@ def test_nemotron_is_independent_thinking_child_with_historical_cache(local_base
     assert train.steps == 1_888
     assert train.init_from_path.endswith("/qk157/thinking/2026.09.08.99/checkpoints")
     assert train.model == model_config
-    assert train.data.tokenizer == f"{_PREFIX}/{conversion.step.name}/{conversion.step.version}"
+    assert train.data.tokenizer == snowball_lce_final._TOKENIZER_REF
     assert isinstance(component.format, ChatLmDatasetFormat)
     assert component.format.chat_template == snowball_lce_final.MARIN_CHAT_TEMPLATE
     assert component.packed_slice_strategy == "left"
@@ -78,6 +78,10 @@ def test_training_topology_matches_historical_grug_recipe(local_base):
     assert train.expert_parallel == 8
     assert train.grug_trainer.model_axis_size == 1
     assert train.batch_size == 64
+    assert train.data.tokenizer == snowball_lce_final._TOKENIZER_REF
+    tokenizer_repo, tokenizer_revision = train.data.tokenizer.rsplit("@", 1)
+    assert tokenizer_repo == "marin-community/marin-tokenizer"
+    assert len(tokenizer_revision) == 40
 
 
 def test_all_five_base_revisions_are_immutable():
@@ -89,16 +93,21 @@ def test_all_five_base_revisions_are_immutable():
 
 
 def test_each_base_uses_a_pinned_conversion_for_weights_and_tokenizer():
-    model, conversion = snowball_lce_final._base_model("qk157")
+    tokenizer_keys = set()
+    for base, (expected_repo, expected_revision) in snowball_lce_final._BASE_REVISIONS.items():
+        model, conversion = snowball_lce_final._base_model(base)
+        config = materialized_config(conversion.step, _PREFIX)
+        ctx = StepContext.for_fingerprint((), (conversion.step,))
 
-    config = materialized_config(conversion.step, _PREFIX)
-    assert config.hf_id == "open-athena/snowball-67b-a2b-base-262k-qk157"
-    assert len(config.hf_revision) == 40
-    assert model.conversion is conversion
-    assert model.init_deps() == (conversion.step,)
-    assert model.resolve_tokenizer(StepContext.for_fingerprint((), (conversion.step,))) == (
-        f"{conversion.step.name}@{conversion.step.version}"
-    )
+        assert config.hf_id == expected_repo
+        assert config.hf_revision == expected_revision
+        assert model.conversion is conversion
+        assert model.init_deps() == (conversion.step,)
+        assert model.resolve_tokenizer(ctx) == snowball_lce_final._TOKENIZER_REF
+        assert "://" not in model.resolve_tokenizer(ctx)
+        tokenizer_keys.add(model.tokenizer_cache_key())
+
+    assert tokenizer_keys == {snowball_lce_final._TOKENIZER_REF}
 
 
 def test_data_stage_builds_and_gates_both_shared_prefix_caches(local_base):
@@ -127,7 +136,7 @@ def test_data_stage_builds_and_gates_both_shared_prefix_caches(local_base):
 
 
 def test_smoke_reload_strictly_initializes_from_native_smoke(local_base):
-    model_config, conversion = local_base
+    model_config, _conversion = local_base
     step = snowball_lce_final.build_smoke_reload("qk157", _VERSION)
 
     assert step.name.endswith("/qk157/hf-smoke-reload")
@@ -136,7 +145,7 @@ def test_smoke_reload_strictly_initializes_from_native_smoke(local_base):
     assert train.steps == 1
     assert train.init_from_path.endswith("/qk157/hf-smoke/2026.09.08.99/checkpoints")
     assert train.model == model_config
-    assert train.data.tokenizer == f"{_PREFIX}/{conversion.step.name}/{conversion.step.version}"
+    assert train.data.tokenizer == snowball_lce_final._TOKENIZER_REF
 
 
 def test_cache_preflight_matches_frozen_opencode_length():

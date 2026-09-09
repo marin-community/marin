@@ -229,6 +229,7 @@ class ConvertedSnowballGrugModel:
     """Historical Grug SFT source backed by a pinned HF-to-native conversion artifact."""
 
     conversion: SnowballHfToGrugCheckpoint
+    tokenizer_path: str
     expert_parallel: int
     init_from: ArtifactStep[LevanterCheckpoint] | None = None
     model_axis: int = 1
@@ -237,10 +238,11 @@ class ConvertedSnowballGrugModel:
     mp: str = "params=float32,compute=bfloat16,output=bfloat16"
 
     def tokenizer_cache_key(self) -> str:
-        return self.conversion.step.name
+        return self.tokenizer_path
 
     def resolve_tokenizer(self, ctx: StepContext) -> str:
-        return ctx.artifact_path(self.conversion.step)
+        del ctx
+        return self.tokenizer_path
 
     @property
     def run(self) -> Callable[..., None]:
@@ -271,10 +273,9 @@ class ConvertedSnowballGrugModel:
         resources: ResourceConfig,
         num_train_steps: int,
     ):
-        artifact_path = ctx.artifact_path(self.conversion.step)
         init_artifact = self.conversion.step if self.init_from is None else self.init_from
         init_from = prefix_join(ctx.artifact_path(init_artifact), "checkpoints")
-        return self._model(artifact_path, init_from).build_train_config(
+        return self._model(self.resolve_tokenizer(ctx), init_from).build_train_config(
             ctx,
             spec,
             data_config,
