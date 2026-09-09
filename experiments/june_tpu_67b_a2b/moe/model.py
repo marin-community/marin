@@ -8,6 +8,7 @@ No load-balancing loss; router z-loss only. All layers are MoE (no dense layers)
 """
 
 import dataclasses
+import math
 from dataclasses import dataclass
 from typing import Literal
 
@@ -119,6 +120,7 @@ class GrugModelConfig:
     disable_long_rope: bool = False
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
+    capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR
     ce_implementation: str | None = None
     """Fused cross-entropy backend selection (levanter fused_cross_entropy_loss). None keeps the
     backend default (GPU: full-logits ``xla`` path). Set ``"batched_xla"`` to use the blocked-vocab
@@ -150,6 +152,8 @@ class GrugModelConfig:
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
+        if not math.isfinite(self.capacity_factor) or self.capacity_factor <= 0:
+            raise ValueError("capacity_factor must be finite and positive")
         if self.num_heads % self.num_kv_heads != 0:
             raise ValueError("num_heads must be divisible by num_kv_heads for grouped-query attention")
         if self.vocab_size <= 0:
@@ -180,6 +184,8 @@ class GrugModelConfig:
 def rms_norm(x: jax.Array, eps: float = 1e-6) -> jax.Array:
     """Non-parametric RMS norm over the last dimension."""
     variance = jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1, keepdims=True)
+    # AD retains different intermediates; pin the reduction to preserve forward rounding.
+    variance = jax.lax.optimization_barrier(variance)
     return (x * jax.lax.rsqrt(variance + eps)).astype(x.dtype)
 
 
@@ -195,6 +201,7 @@ def _apply_half_rope(
     seq_len: int,
     head_dim: int,
     rope: RotaryConfig,
+    position_ids: jax.Array | None = None,
 ) -> tuple[jax.Array, jax.Array]:
     """RoPE applied to the first ``head_dim`` channels of q/k.
 
@@ -204,10 +211,12 @@ def _apply_half_rope(
     """
     half_dim = head_dim // 2
     inv_freq = _rope_inv_freq(half_dim, rope.theta)
-    positions = jnp.arange(seq_len, dtype=jnp.float32)
-    angles = positions[:, None] * inv_freq[None, :]
-    cos = jnp.cos(angles)[None, :, None, :]
-    sin = jnp.sin(angles)[None, :, None, :]
+    positions = (
+        jnp.arange(seq_len, dtype=jnp.float32)[None, :] if position_ids is None else position_ids.astype(jnp.float32)
+    )
+    angles = positions[..., None] * inv_freq
+    cos = jnp.cos(angles)[:, :, None, :]
+    sin = jnp.sin(angles)[:, :, None, :]
 
     def _apply(x: jax.Array) -> jax.Array:
         dtype = x.dtype
@@ -248,6 +257,7 @@ class CausalSelfAttention(eqx.Module):
         use_pko: bool = False,
         disable_rope: bool = False,
         qk_mult_scale: float = 1.0,
+        position_ids: jax.Array | None = None,
     ) -> Float[Array, "B S D"]:
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
@@ -309,6 +319,7 @@ class CausalSelfAttention(eqx.Module):
                 seq_len=seq_len,
                 head_dim=half,
                 rope=cfg.rope,
+                position_ids=position_ids,
             )
             q = jnp.concatenate([q_rot, q[..., half:]], axis=-1)
             k = jnp.concatenate([k_rot, k[..., half:]], axis=-1)
@@ -351,6 +362,8 @@ class RMSNorm(eqx.Module):
         dtype = x.dtype
         x = x.astype(jnp.float32)
         variance = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
+        # AD retains different intermediates; pin the reduction to preserve forward rounding.
+        variance = jax.lax.optimization_barrier(variance)
         normed = x * jax.lax.rsqrt(variance + self.eps)
         return (normed * weight).astype(dtype)
 
@@ -533,7 +546,7 @@ class MoEMLP(eqx.Module):
                 key=k_expert,
                 implementation=cfg.moe_implementation,
                 activation=ActivationFunctionEnum.silu,
-                capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
+                capacity_factor=cfg.capacity_factor,
             ),
             cfg=cfg,
         )
@@ -547,7 +560,7 @@ class MoEMLP(eqx.Module):
         x_flat = rearrange(x, "b s d -> (b s) d")
         # Keep the router path in fp32 before top-k, softmax, and QB statistics.
         router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
-        biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
+        biased_logits = router_logits + jax.lax.stop_gradient(unshard(self.router_bias))
         router_probs = jax.nn.softmax(router_logits, axis=-1)
         # Select top-(K+1) on biased logits; the (K+1)-th is the QB threshold alpha.
         _topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.cfg.num_experts_per_token + 1)
@@ -556,6 +569,8 @@ class MoEMLP(eqx.Module):
         # Sigmoid combine weights on unbiased logits for selected experts.
         unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
         combine_weights_f = jax.nn.sigmoid(unbiased_topk)
+        # Keep sigmoid rounding consistent when AD fuses expert-weight renormalization.
+        combine_weights_f = jax.lax.optimization_barrier(combine_weights_f)
         # Renormalize K combine weights to sum to ``_ROUTING_RENORM_SUM`` (baked in).
         denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
         combine_weights_f = combine_weights_f * (_ROUTING_RENORM_SUM / (denom + 1e-9))
@@ -596,6 +611,9 @@ class MoEMLP(eqx.Module):
             report_capacity_overflow=True,
         )
         router_stats["capacity_overflow"] = capacity_overflow.total.astype(jnp.float32)
+        router_stats["routing_assignments"] = jnp.asarray(b * s * self.cfg.num_experts_per_token, dtype=jnp.int32)
+        router_stats["routing_sender_drops"] = capacity_overflow.sender
+        router_stats["routing_receiver_drops"] = capacity_overflow.receiver
 
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         routed = reshard(routed, _batch_spec())
@@ -638,6 +656,7 @@ class Block(eqx.Module):
         use_long_mask: Bool[Array, ""] | bool,
         use_pko: bool = False,
         disable_long_rope: bool = False,
+        position_ids: jax.Array | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
         # lax.cond so the body has a uniform shape across scan iterations:
@@ -651,8 +670,11 @@ class Block(eqx.Module):
                 use_pko=use_pko,
                 disable_rope=disable_long_rope,
                 qk_mult_scale=self.attn.cfg.qk_mult_long_scale,
+                position_ids=position_ids,
             ),
-            lambda _: self.attn(attn_in, short_mask, use_pko=False, disable_rope=False, qk_mult_scale=1.0),
+            lambda _: self.attn(
+                attn_in, short_mask, use_pko=False, disable_rope=False, qk_mult_scale=1.0, position_ids=position_ids
+            ),
             operand=None,
         )
         x = x + attn_out
@@ -727,6 +749,8 @@ class Transformer(eqx.Module):
         self,
         token_ids: Int[Array, "B S"],
         mask: AttentionMask | jax.Array | None = None,
+        *,
+        position_ids: jax.Array | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         if mask is None:
             mask = AttentionMask.causal()
@@ -734,6 +758,8 @@ class Transformer(eqx.Module):
         batch_spec = _batch_spec()
         cfg = self.config
         hidden = self.token_embed.at[token_ids].get(out_sharding=batch_spec)
+        # Keep gather fusion from changing normalization rounding between scoring and AD.
+        hidden = jax.lax.optimization_barrier(hidden)
         hidden = self.embed_norm(hidden)
         hidden = self.embed_gated_norm(hidden)
 
@@ -755,7 +781,7 @@ class Transformer(eqx.Module):
                 is_long = i % 4 == 3 or is_last
                 use_pko = is_long and not cfg.disable_pko
                 hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(
-                    hidden, short_mask, long_mask, is_long, use_pko, cfg.disable_long_rope
+                    hidden, short_mask, long_mask, is_long, use_pko, cfg.disable_long_rope, position_ids
                 )
                 moe_router_stats.append(router_stats)
             router_metrics = {
@@ -776,7 +802,7 @@ class Transformer(eqx.Module):
             ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
                 layer, layer_use_long_mask = scan_inputs
                 return eqx.filter_checkpoint(layer, policy=remat_policy)(
-                    carry_hidden, short_mask, long_mask, layer_use_long_mask, False, cfg.disable_long_rope
+                    carry_hidden, short_mask, long_mask, layer_use_long_mask, False, cfg.disable_long_rope, position_ids
                 )
 
             hidden, stacked_router_stats = jax.lax.scan(
