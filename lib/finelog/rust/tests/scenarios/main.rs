@@ -26,6 +26,7 @@
 
 mod support;
 
+mod catalog_tree_failures;
 mod cold_restart;
 mod fence_steal;
 mod headless_recovery;

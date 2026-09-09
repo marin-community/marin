@@ -309,6 +309,50 @@ message CatalogHead {
   bool tombstoned = 7;
 }
 
+// One segment's position in the catalog state. Segment IDs are unique within
+// a table-version/live-or-retired set, rather than across the whole table.
+message CatalogSegmentKey {
+  uint64 table_spec_version = 1;
+  string segment_id = 2;
+  bool retired = 3;
+}
+
+message CatalogSegmentAddition {
+  CatalogSegmentKey key = 1;
+  CatalogSegment segment = 2;
+}
+
+// Typed changes made by one catalog commit. Metadata is the complete
+// non-segment portion of NamespaceCatalog; its segment collections are empty.
+message CatalogDelta {
+  NamespaceCatalog metadata = 1;
+  repeated CatalogSegmentAddition segment_additions = 2;
+  repeated CatalogSegmentKey segment_removals = 3;
+  repeated CatalogSegment direct_query_additions = 4;
+  repeated string direct_query_removals = 5;
+}
+
+message ReleasedObject {
+  ObjectRef object = 1;
+  int64 delete_after_ms = 2;
+}
+
+// An immutable node in the remote catalog tree. A checkpoint carries a full
+// NamespaceCatalog. A delta carries typed changes and names its exact parent.
+// HEAD selects exactly one tip; uploaded siblings that lose the HEAD CAS are
+// harmless and later collected as orphans.
+message CatalogNode {
+  uint64 format_version = 1;
+  string namespace = 2;
+  uint64 catalog_generation = 3;
+  ObjectRef parent = 4;
+  uint32 delta_depth = 5;
+  uint64 delta_bytes_since_checkpoint = 6;
+  NamespaceCatalog checkpoint = 7;
+  CatalogDelta delta = 8;
+  repeated ReleasedObject released_objects = 9;
+}
+
 // ============================================================================
 // STATS SERVICE
 // ============================================================================

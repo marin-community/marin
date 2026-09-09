@@ -103,6 +103,47 @@ def _write_catalog(
     return catalog_path
 
 
+def _upgrade_to_catalog_tree(root: Path, catalog_path: Path) -> None:
+    namespace = "iris.worker"
+    catalog = json.loads(catalog_path.read_text())
+    catalog["formatVersion"] = "2"
+    checkpoint_id = f"_finelog/tables/{namespace}/catalogs/00000000000000000007-checkpoint.json"
+    checkpoint = {
+        "formatVersion": "2",
+        "namespace": namespace,
+        "catalogGeneration": "7",
+        "checkpoint": catalog,
+    }
+    checkpoint_path = root / checkpoint_id
+    checkpoint_bytes = json.dumps(checkpoint).encode()
+    checkpoint_path.write_bytes(checkpoint_bytes)
+
+    metadata = dict(catalog)
+    metadata["catalogGeneration"] = "8"
+    metadata["versionSegments"] = [{"tableSpecVersion": "1"}]
+    metadata["directQuerySegments"] = []
+    tip_id = f"_finelog/tables/{namespace}/catalogs/00000000000000000008-delta.json"
+    tip = {
+        "formatVersion": "2",
+        "namespace": namespace,
+        "catalogGeneration": "8",
+        "parent": {"objectId": checkpoint_id, "byteSize": str(len(checkpoint_bytes))},
+        "deltaDepth": 1,
+        "deltaBytesSinceCheckpoint": "100",
+        "delta": {"metadata": metadata},
+    }
+    tip_bytes = json.dumps(tip).encode()
+    (root / tip_id).write_bytes(tip_bytes)
+    head = {
+        "formatVersion": "2",
+        "namespace": namespace,
+        "catalogGeneration": "8",
+        "activeTableSpecVersion": "1",
+        "catalog": {"objectId": tip_id, "byteSize": str(len(tip_bytes))},
+    }
+    (root / "_finelog" / "tables" / namespace / "HEAD.json").write_text(json.dumps(head))
+
+
 def test_object_query_reads_the_stable_catalog_projection(tmp_path: Path) -> None:
     _write_catalog(tmp_path)
     client = ObjectQueryClient(str(tmp_path))
@@ -118,6 +159,21 @@ def test_object_query_reads_the_stable_catalog_projection(tmp_path: Path) -> Non
         "mem_bytes": [10, 20],
     }
     assert pin.high_water == 2
+
+
+def test_object_query_folds_catalog_tree_from_checkpoint_and_delta(tmp_path: Path) -> None:
+    catalog_path = _write_catalog(tmp_path)
+    _upgrade_to_catalog_tree(tmp_path, catalog_path)
+
+    client = ObjectQueryClient(str(tmp_path))
+    pin = client.pin_catalog("iris.worker")
+    result = client.query(
+        'SELECT worker_id FROM "iris.worker" ORDER BY seq',
+        namespaces=["iris.worker"],
+    )
+
+    assert pin.catalog_generation == 8
+    assert result.to_pydict() == {"worker_id": ["w-1", "w-2"]}
 
 
 def test_object_query_reads_catalog_written_before_sha_field_removal(tmp_path: Path) -> None:

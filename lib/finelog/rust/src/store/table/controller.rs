@@ -37,6 +37,7 @@ use crate::store::object_store::{
     ObjectId, ObjectPrefix, ObjectReference, ObjectStore, ObjectVersion,
 };
 use crate::store::state_store::object::{ObjectTableStateStore, StateGcPolicy};
+use crate::store::state_store::tree::catalogs_equal;
 use crate::store::state_store::StoredTableState;
 use crate::store::table_spec::TablePolicy;
 use crate::store::table_state::{
@@ -888,7 +889,7 @@ impl TableController {
                     projected.persisted_high_water = Some(floor);
                 }
                 if projected.catalog_generation == previous.catalog.catalog_generation
-                    && projected != previous.catalog
+                    && !catalogs_equal(&projected, &previous.catalog)
                 {
                     let revision = self
                         .catalog
@@ -908,23 +909,11 @@ impl TableController {
             }
             projected
         };
-        // A root that holds catalog history without a HEAD is an external
-        // anomaly (the software never deletes HEAD). Creating a fresh HEAD
-        // would start a second history over the first, so publication defers
-        // until an operator restores HEAD from the newest catalog document.
-        if expected.is_none()
-            && objects
-                .state_store
-                .catalog_history_exists(&self.table)
-                .await
-                .map_err(CommitError::PublicationDeferred)?
-        {
-            let reason = format!(
-                "table {:?} remote root holds catalog history but no HEAD; refusing to start a \
-                 new history — restore HEAD.json from the newest catalog document and restart",
-                self.table
-            );
-            self.mark_degraded(&reason);
+        // Recovery marks a root that lost HEAD as degraded. A node uploaded by
+        // this process before a failed first CAS is different: it is merely an
+        // unselected sibling, and retrying the same local revision may safely
+        // create another checkpoint and attempt HEAD again.
+        if let (None, Some(reason)) = (expected.as_ref(), self.degraded_reason()) {
             return Err(CommitError::PublicationDeferred(StatsError::Internal(
                 reason,
             )));

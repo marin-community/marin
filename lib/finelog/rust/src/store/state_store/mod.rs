@@ -3,8 +3,9 @@
 //! [`object::ObjectTableStateStore`] is the only authority for an
 //! object-backed table's durable state. It enumerates heads, loads the
 //! selected state without touching data objects, hands a writer its fence,
-//! commits a complete next state under that fence, and publishes a tombstone
-//! revision when the table is deleted.
+//! commits a complete logical next state as a bounded checkpoint/delta tree
+//! under that fence, and publishes a tombstone revision when the table is
+//! deleted.
 //!
 //! Every mutating operation is fenced. A commit presents the HEAD version it
 //! observed plus its [`WriterFence`]; a HEAD that records a different fence
@@ -14,6 +15,7 @@
 //! process lifetime.
 
 pub mod object;
+pub(crate) mod tree;
 
 use crate::errors::StatsError;
 use crate::proto::finelog::stats::{CatalogHead, NamespaceCatalog};
@@ -27,6 +29,10 @@ pub struct StoredTableState {
     pub head: CatalogHead,
     pub catalog: NamespaceCatalog,
     pub(crate) head_version: ObjectVersion,
+    /// Tip-to-checkpoint object IDs needed to reconstruct the selected state.
+    pub(crate) catalog_chain: Vec<String>,
+    pub(crate) delta_depth: u32,
+    pub(crate) delta_bytes_since_checkpoint: u64,
 }
 
 impl StoredTableState {

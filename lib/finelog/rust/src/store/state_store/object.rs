@@ -1,28 +1,38 @@
 //! Object-store implementation of the durable table-state boundary.
 //!
-//! One table is an immutable state document per revision plus a mutable
-//! `HEAD.json` pointer swapped by compare-and-swap. HEAD records the revision
-//! and the [`WriterFence`] that owns it, so every commit is checked against
-//! both the backend token and the fence.
+//! One table is an immutable parent-linked catalog tree plus a mutable
+//! `HEAD.json` pointer swapped by compare-and-swap. Most publications append a
+//! typed delta; bounded checkpoints cap recovery work and cut old ancestry.
+//! HEAD records the selected tip, revision, and [`WriterFence`], so every
+//! commit is checked against both the backend token and the fence.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
 use uuid::Uuid;
 
 use crate::errors::StatsError;
-use crate::proto::finelog::stats::{CatalogHead, NamespaceCatalog, ObjectRef};
+use crate::proto::finelog::stats::{CatalogHead, CatalogNode, NamespaceCatalog, ObjectRef};
 use crate::store::object_store::{
-    ObjectId, ObjectMetadata, ObjectPrefix, ObjectStore, ObjectVersion, INDICES_PREFIX,
-    OBJECTS_PREFIX, PROJECTIONS_PREFIX,
+    ObjectId, ObjectMetadata, ObjectPrefix, ObjectStore, ObjectVersion, StoredObject,
+    INDICES_PREFIX, OBJECTS_PREFIX, PROJECTIONS_PREFIX,
+};
+use crate::store::state_store::tree::{
+    apply as apply_delta, canonical_catalog, catalogs_equal, delta as catalog_delta,
+    logical_reference, released_objects,
 };
 use crate::store::state_store::{fenced_error, StoredTableState, TableHead};
 use crate::store::table_state::{TableRevision, WriterFence};
 
-pub const TABLE_STATE_FORMAT_VERSION: u64 = 1;
+pub const TABLE_STATE_FORMAT_VERSION: u64 = 2;
+pub(crate) const LEGACY_TABLE_STATE_FORMAT_VERSION: u64 = 1;
 const HEAD_KEY: &str = "HEAD.json";
 const STATES_PREFIX: &str = "catalogs";
+const MAX_DELTA_DEPTH: u32 = 64;
+const MAX_DELTA_BYTES: u64 = 1024 * 1024;
+const MAX_RECOVERY_NODES: usize = MAX_DELTA_DEPTH as usize + 1;
 
 #[derive(Clone)]
 pub struct ObjectTableStateStore {
@@ -62,37 +72,169 @@ impl ObjectTableStateStore {
         let Some((head, head_version)) = self.load_head(table).await? else {
             return Ok(None);
         };
-        let state_ref = head.catalog.as_option().ok_or_else(|| {
+        let state_reference = head.catalog.as_option().ok_or_else(|| {
             StatsError::Internal(format!("object HEAD for {table:?} has no state reference"))
         })?;
-        let state_object_id = state_ref.object_id.as_deref().ok_or_else(|| {
-            StatsError::Internal(format!(
-                "table HEAD for {table:?} has an empty state object ID"
-            ))
-        })?;
-        let state_id = ObjectId::parse(state_object_id)?;
-        if state_id.table_relative(table).is_none() {
-            return Err(StatsError::Internal(format!(
-                "table HEAD for {table:?} references an object from another table"
-            )));
-        }
-        let state_object = self.storage.read(&state_id).await?.ok_or_else(|| {
-            StatsError::Internal(format!(
-                "table HEAD for {table:?} references missing state {state_object_id:?}"
-            ))
-        })?;
-        let catalog: NamespaceCatalog =
-            serde_json::from_slice(&state_object.bytes).map_err(|error| {
-                StatsError::Internal(format!(
-                    "decode table state {state_object_id:?} for {table:?}: {error}"
-                ))
-            })?;
-        validate_state(table, &head, &catalog)?;
+        let state_object_id = state_object_id(table, &head)?;
+        let format = head.format_version.unwrap_or(0);
+        let (catalog, catalog_chain, delta_depth, delta_bytes_since_checkpoint) = match format {
+            LEGACY_TABLE_STATE_FORMAT_VERSION => {
+                let state_object = self
+                    .read_table_object(table, &state_object_id, state_reference.byte_size)
+                    .await?;
+                let catalog: NamespaceCatalog = serde_json::from_slice(&state_object.bytes)
+                    .map_err(|error| {
+                        StatsError::Internal(format!(
+                            "decode legacy table state {state_object_id:?} for {table:?}: {error}"
+                        ))
+                    })?;
+                validate_state(table, &head, &catalog)?;
+                (catalog, vec![state_object_id], 0, 0)
+            }
+            TABLE_STATE_FORMAT_VERSION => {
+                let byte_size = catalog_reference_size(table, state_reference)?;
+                self.load_catalog_tree(table, &head, state_object_id, Some(byte_size))
+                    .await?
+            }
+            _ => {
+                return Err(StatsError::Internal(format!(
+                    "unsupported object HEAD format {format} for table {table:?}"
+                )))
+            }
+        };
         Ok(Some(StoredTableState {
             head,
             catalog,
             head_version,
+            catalog_chain,
+            delta_depth,
+            delta_bytes_since_checkpoint,
         }))
+    }
+
+    async fn read_table_object(
+        &self,
+        table: &str,
+        object_id: &str,
+        expected_size: Option<u64>,
+    ) -> Result<StoredObject, StatsError> {
+        let id = ObjectId::parse(object_id)?;
+        if id.table_relative(table).is_none() {
+            return Err(StatsError::Internal(format!(
+                "table HEAD for {table:?} references an object from another table"
+            )));
+        }
+        let object = self.storage.read(&id).await?.ok_or_else(|| {
+            StatsError::Internal(format!(
+                "table HEAD for {table:?} references missing state {object_id:?}"
+            ))
+        })?;
+        if expected_size.is_some_and(|expected| expected != object.bytes.len() as u64) {
+            return Err(StatsError::Internal(format!(
+                "catalog object {object_id:?} for table {table:?} has the wrong byte size"
+            )));
+        }
+        Ok(object)
+    }
+
+    async fn load_catalog_tree(
+        &self,
+        table: &str,
+        head: &CatalogHead,
+        mut object_id: String,
+        mut expected_size: Option<u64>,
+    ) -> Result<(NamespaceCatalog, Vec<String>, u32, u64), StatsError> {
+        let mut chain = Vec::new();
+        let mut deltas = Vec::new();
+        let mut recovered_delta_bytes = 0_u64;
+        let mut tip_shape = None;
+        let checkpoint = loop {
+            if chain.len() >= MAX_RECOVERY_NODES {
+                return Err(StatsError::Internal(format!(
+                    "catalog chain for table {table:?} exceeds {MAX_DELTA_DEPTH} deltas"
+                )));
+            }
+            if chain.iter().any(|seen| seen == &object_id) {
+                return Err(StatsError::Internal(format!(
+                    "catalog chain for table {table:?} contains a cycle at {object_id:?}"
+                )));
+            }
+            let object = self
+                .read_table_object(table, &object_id, expected_size)
+                .await?;
+            let node: CatalogNode = serde_json::from_slice(&object.bytes).map_err(|error| {
+                StatsError::Internal(format!(
+                    "decode catalog node {object_id:?} for {table:?}: {error}"
+                ))
+            })?;
+            validate_node(table, &node)?;
+            if chain.is_empty() && node.catalog_generation != head.catalog_generation {
+                return Err(StatsError::Internal(format!(
+                    "catalog tip does not match HEAD for table {table:?}"
+                )));
+            }
+            let tip_depth = node.delta_depth.unwrap_or(0);
+            let tip_bytes = node.delta_bytes_since_checkpoint.unwrap_or(0);
+            tip_shape.get_or_insert((tip_depth, tip_bytes));
+            chain.push(object_id.clone());
+            if let Some(checkpoint) = node.checkpoint.as_option() {
+                if node.parent.as_option().is_some()
+                    || node.delta.as_option().is_some()
+                    || tip_depth != 0
+                    || tip_bytes != 0
+                {
+                    return Err(StatsError::Internal(format!(
+                        "invalid checkpoint node {object_id:?} for table {table:?}"
+                    )));
+                }
+                break checkpoint.clone();
+            }
+            let delta = node.delta.as_option().ok_or_else(|| {
+                StatsError::Internal(format!(
+                    "catalog node {object_id:?} for table {table:?} has no payload"
+                ))
+            })?;
+            recovered_delta_bytes = recovered_delta_bytes.saturating_add(
+                serde_json::to_vec(delta)
+                    .map_err(|error| {
+                        StatsError::Internal(format!(
+                            "encode recovered catalog delta for {table:?}: {error}"
+                        ))
+                    })?
+                    .len() as u64,
+            );
+            deltas.push((node.catalog_generation.unwrap_or(0), delta.clone()));
+            let parent = node.parent.as_option().ok_or_else(|| {
+                StatsError::Internal(format!(
+                    "delta node {object_id:?} for table {table:?} has no parent"
+                ))
+            })?;
+            expected_size = Some(catalog_reference_size(table, parent)?);
+            object_id = parent.object_id.clone().ok_or_else(|| {
+                StatsError::Internal(format!(
+                    "delta node {object_id:?} for table {table:?} has no parent"
+                ))
+            })?;
+        };
+        let (tip_depth, tip_bytes) = tip_shape.unwrap_or_default();
+        if usize::try_from(tip_depth).ok() != Some(deltas.len())
+            || tip_bytes != recovered_delta_bytes
+        {
+            return Err(StatsError::Internal(format!(
+                "catalog tip shape does not match its chain for table {table:?}"
+            )));
+        }
+        let mut catalog = canonical_catalog(checkpoint);
+        for (generation, delta) in deltas.into_iter().rev() {
+            if generation <= catalog.catalog_generation.unwrap_or(0) {
+                return Err(StatsError::Internal(format!(
+                    "catalog generations do not increase along the chain for table {table:?}"
+                )));
+            }
+            catalog = apply_delta(&catalog, &delta)?;
+        }
+        validate_state(table, head, &catalog)?;
+        Ok((catalog, chain, tip_depth, tip_bytes))
     }
 
     pub async fn list(&self) -> Result<Vec<TableHead>, StatsError> {
@@ -120,7 +262,9 @@ impl ObjectTableStateStore {
     ///
     /// The software never deletes HEAD, so this state is always external —
     /// human error or a bucket lifecycle rule — and each such table needs an
-    /// operator to restore HEAD from the newest catalog document.
+    /// operator to restore the known selected HEAD from deployment records or
+    /// backup. Listing "the newest" node is unsafe because failed CAS attempts
+    /// deliberately leave unselected siblings.
     pub async fn headless_tables(&self) -> Result<Vec<String>, StatsError> {
         let mut headless = Vec::new();
         for table in self.storage.list_tables().await? {
@@ -159,6 +303,9 @@ impl ObjectTableStateStore {
             head,
             catalog: selected.catalog.clone(),
             head_version,
+            catalog_chain: selected.catalog_chain.clone(),
+            delta_depth: selected.delta_depth,
+            delta_bytes_since_checkpoint: selected.delta_bytes_since_checkpoint,
         })
     }
 
@@ -170,6 +317,7 @@ impl ObjectTableStateStore {
         catalog: NamespaceCatalog,
         expected: Option<&StoredTableState>,
     ) -> Result<StoredTableState, StatsError> {
+        let catalog = canonical_catalog(catalog);
         let revision = catalog.catalog_generation.unwrap_or(0);
         let previous = expected.map(|state| state.revision().get());
         if revision == 0 || previous.is_some_and(|previous| revision <= previous) {
@@ -185,13 +333,81 @@ impl ObjectTableStateStore {
             )));
         }
 
-        let state_bytes = serde_json::to_vec(&catalog).map_err(|error| {
-            StatsError::Internal(format!("encode table state for {table:?}: {error}"))
+        let delta = expected
+            .map(|previous| catalog_delta(&previous.catalog, &catalog))
+            .transpose()?;
+        let delta_bytes = delta
+            .as_ref()
+            .map(|delta| serde_json::to_vec(delta))
+            .transpose()
+            .map_err(|error| {
+                StatsError::Internal(format!("encode catalog delta for {table:?}: {error}"))
+            })?
+            .map(|bytes| bytes.len() as u64)
+            .unwrap_or(0);
+        let write_checkpoint = expected.is_none()
+            || expected.is_some_and(|state| {
+                state.head.format_version.unwrap_or(0) != TABLE_STATE_FORMAT_VERSION
+                    || state.delta_depth.saturating_add(1) > MAX_DELTA_DEPTH
+                    || state
+                        .delta_bytes_since_checkpoint
+                        .saturating_add(delta_bytes)
+                        > MAX_DELTA_BYTES
+            });
+        // A definition change may shorten the new query lifetime while reads
+        // pinned to the parent are still running. Release against the longer
+        // side so such a commit cannot collect an object under an older pin.
+        let release_grace_ms = expected
+            .map(|previous| previous.catalog.max_query_time_ms.unwrap_or(0))
+            .unwrap_or(0)
+            .max(catalog.max_query_time_ms.unwrap_or(0));
+        let delete_after_ms =
+            unix_time_ms().saturating_add(i64::try_from(release_grace_ms).unwrap_or(i64::MAX));
+        let released_objects = expected
+            .map(|previous| released_objects(&previous.catalog, &catalog, delete_after_ms))
+            .unwrap_or_default();
+        let (parent, checkpoint, delta, delta_depth, delta_bytes_since_checkpoint) =
+            if write_checkpoint {
+                (
+                    buffa::MessageField::none(),
+                    buffa::MessageField::some(catalog.clone()),
+                    buffa::MessageField::none(),
+                    0,
+                    0,
+                )
+            } else {
+                let previous = expected.expect("delta publication has a selected parent");
+                let parent = previous.head.catalog.as_option().ok_or_else(|| {
+                    StatsError::Internal(format!(
+                        "selected HEAD for table {table:?} has no catalog reference"
+                    ))
+                })?;
+                (
+                    buffa::MessageField::some(logical_reference(parent)),
+                    buffa::MessageField::none(),
+                    buffa::MessageField::some(delta.expect("delta was built from the parent")),
+                    previous.delta_depth + 1,
+                    previous.delta_bytes_since_checkpoint + delta_bytes,
+                )
+            };
+        let node = CatalogNode {
+            format_version: Some(TABLE_STATE_FORMAT_VERSION),
+            namespace: Some(table.to_string()),
+            catalog_generation: Some(revision),
+            parent,
+            delta_depth: Some(delta_depth),
+            delta_bytes_since_checkpoint: Some(delta_bytes_since_checkpoint),
+            checkpoint,
+            delta,
+            released_objects,
+            ..Default::default()
+        };
+        let state_bytes = serde_json::to_vec(&node).map_err(|error| {
+            StatsError::Internal(format!("encode catalog node for {table:?}: {error}"))
         })?;
         let state_key = format!("{STATES_PREFIX}/{revision:020}-{}.json", Uuid::new_v4());
         let state_id = ObjectId::table(table, &state_key)?;
-        let state_version = self
-            .storage
+        self.storage
             .write(&state_id, Bytes::from(state_bytes.clone()))
             .await?;
         let head = CatalogHead {
@@ -203,8 +419,6 @@ impl ObjectTableStateStore {
             tombstoned: catalog.tombstoned,
             catalog: buffa::MessageField::some(ObjectRef {
                 object_id: Some(state_id.as_str().to_string()),
-                provider_version: state_version.provider_version.clone(),
-                etag: state_version.e_tag.clone(),
                 byte_size: Some(state_bytes.len() as u64),
                 ..Default::default()
             }),
@@ -225,6 +439,21 @@ impl ObjectTableStateStore {
             head,
             catalog,
             head_version,
+            catalog_chain: if write_checkpoint {
+                vec![state_id.as_str().to_string()]
+            } else {
+                std::iter::once(state_id.as_str().to_string())
+                    .chain(
+                        expected
+                            .expect("delta publication has a selected parent")
+                            .catalog_chain
+                            .iter()
+                            .cloned(),
+                    )
+                    .collect()
+            },
+            delta_depth,
+            delta_bytes_since_checkpoint,
         })
     }
 
@@ -279,7 +508,7 @@ impl ObjectTableStateStore {
             let selected = current.revision().get();
             let attempted = next.catalog_generation.unwrap_or(0);
             if selected == attempted {
-                if current.catalog != next {
+                if !catalogs_equal(&current.catalog, &next) {
                     return Err(StatsError::SchemaConflict(format!(
                         "table {table:?} publishes a different state at revision {attempted}"
                     )));
@@ -323,18 +552,12 @@ impl ObjectTableStateStore {
             .collect())
     }
 
-    /// Remove superseded state documents and thin the rollback history.
+    /// Remove expired catalog history and unreferenced data objects.
     ///
-    /// A superseded state stays untouchable for `pin_retention_ms` (the maximum
-    /// query lifetime — a running query may hold it pinned). Between that
-    /// horizon and `state_retention_ms` only rollback reads it, and rollback
-    /// does not need one state per commit: the window keeps a single state per
-    /// `pin_retention_ms`-sized bucket, so a busy table retains tens of
-    /// snapshots instead of thousands. States that never won HEAD are removed
-    /// as soon as they leave the pin window. When `sweep_orphans` is set, data
-    /// objects no retained state references are also removed after
-    /// `orphan_grace_ms`; that pass re-reads every retained state document, so
-    /// callers run it on a slower cadence than the state trim.
+    /// V2 retains parent chains as checkpoint-bounded spans: keeping one delta
+    /// necessarily keeps its ancestry. Release sidecars can extend a span
+    /// beyond rollback retention so an in-flight query never loses an object.
+    /// V1 standalone snapshots retain their former bucket-thinning behavior.
     pub(crate) async fn gc_obsolete_states(
         &self,
         table: &str,
@@ -353,6 +576,9 @@ impl ObjectTableStateStore {
                 "skipping object GC from a fenced writer"
             );
             return Ok(0);
+        }
+        if selected.head.format_version == Some(TABLE_STATE_FORMAT_VERSION) {
+            return self.gc_catalog_tree(table, now_ms, policy, &selected).await;
         }
         let current_id = ObjectId::parse(
             selected
@@ -466,6 +692,143 @@ impl ObjectTableStateStore {
         Ok(removed)
     }
 
+    async fn gc_catalog_tree(
+        &self,
+        table: &str,
+        now_ms: i64,
+        policy: StateGcPolicy,
+        selected: &StoredTableState,
+    ) -> Result<usize, StatsError> {
+        let pin_cutoff =
+            now_ms.saturating_sub(i64::try_from(policy.pin_retention_ms).unwrap_or(i64::MAX));
+        let state_cutoff =
+            now_ms.saturating_sub(i64::try_from(policy.state_retention_ms).unwrap_or(i64::MAX));
+        let orphan_cutoff =
+            now_ms.saturating_sub(i64::try_from(policy.orphan_grace_ms).unwrap_or(i64::MAX));
+        let deletion_cutoff = pin_cutoff.min(state_cutoff);
+        let current_chain = selected
+            .catalog_chain
+            .iter()
+            .map(|object_id| {
+                ObjectId::parse(object_id).and_then(|id| {
+                    id.table_relative(table).map(str::to_string).ok_or_else(|| {
+                        StatsError::Internal(format!(
+                            "catalog node {object_id:?} escaped table {table:?}"
+                        ))
+                    })
+                })
+            })
+            .collect::<Result<HashSet<_>, _>>()?;
+
+        let state_objects = self.table_objects(table, STATES_PREFIX).await?;
+        let mut nodes = HashMap::new();
+        let mut legacy_catalogs = HashMap::new();
+        let mut keep = current_chain.clone();
+        for (key, metadata) in &state_objects {
+            let Some(object) = self.storage.read(&ObjectId::table(table, key)?).await? else {
+                continue;
+            };
+            let value: serde_json::Value =
+                serde_json::from_slice(&object.bytes).map_err(|error| {
+                    StatsError::Internal(format!(
+                        "decode retained catalog object {key:?} for {table:?}: {error}"
+                    ))
+                })?;
+            if value.get("checkpoint").is_some() || value.get("delta").is_some() {
+                let node: CatalogNode = serde_json::from_value(value).map_err(|error| {
+                    StatsError::Internal(format!(
+                        "decode retained catalog node {key:?} for {table:?}: {error}"
+                    ))
+                })?;
+                if metadata.modified_at_ms > deletion_cutoff
+                    || node
+                        .released_objects
+                        .iter()
+                        .any(|released| released.delete_after_ms.unwrap_or(0) > now_ms)
+                {
+                    keep.insert(key.clone());
+                }
+                nodes.insert(key.clone(), node);
+            } else {
+                let catalog: NamespaceCatalog = serde_json::from_value(value).map_err(|error| {
+                    StatsError::Internal(format!(
+                        "decode retained legacy catalog {key:?} for {table:?}: {error}"
+                    ))
+                })?;
+                if metadata.modified_at_ms > deletion_cutoff {
+                    keep.insert(key.clone());
+                }
+                legacy_catalogs.insert(key.clone(), catalog);
+            }
+        }
+        // A retained delta is useful only with its exact ancestry. Expand the
+        // keep set to checkpoint boundaries before deleting a whole old span.
+        loop {
+            let parents = keep
+                .iter()
+                .filter_map(|key| nodes.get(key))
+                .filter_map(|node| node.parent.as_option())
+                .filter_map(|parent| parent.object_id.as_deref())
+                .map(ObjectId::parse)
+                .collect::<Result<Vec<_>, _>>()?;
+            let before = keep.len();
+            for parent in parents {
+                let key = parent.table_relative(table).ok_or_else(|| {
+                    StatsError::Internal(format!(
+                        "retained catalog ancestry escaped table {table:?}"
+                    ))
+                })?;
+                if !nodes.contains_key(key) && !legacy_catalogs.contains_key(key) {
+                    return Err(StatsError::Internal(format!(
+                        "retained catalog node for {table:?} references missing parent {key:?}"
+                    )));
+                }
+                keep.insert(key.to_string());
+            }
+            if keep.len() == before {
+                break;
+            }
+        }
+
+        let mut removed = 0;
+        for (key, _) in &state_objects {
+            if keep.contains(key) {
+                continue;
+            }
+            self.storage.delete(&ObjectId::table(table, key)?).await?;
+            removed += 1;
+        }
+        if !policy.sweep_orphans {
+            return Ok(removed);
+        }
+
+        let mut referenced = referenced_object_keys(&selected.catalog);
+        for key in &keep {
+            if let Some(node) = nodes.get(key) {
+                referenced.extend(node_referenced_object_keys(
+                    node,
+                    now_ms,
+                    !current_chain.contains(key),
+                ));
+                continue;
+            }
+            if let Some(catalog) = legacy_catalogs.get(key) {
+                referenced.extend(referenced_object_keys(&catalog));
+            }
+        }
+        for prefix in [OBJECTS_PREFIX, INDICES_PREFIX, PROJECTIONS_PREFIX] {
+            for (key, metadata) in self.table_objects(table, prefix).await? {
+                let id = ObjectId::table(table, &key)?;
+                if referenced.contains(id.as_str()) || metadata.modified_at_ms > orphan_cutoff {
+                    continue;
+                }
+                self.storage.delete(&id).await?;
+                removed += 1;
+            }
+        }
+        Ok(removed)
+    }
+
     async fn table_objects(
         &self,
         table: &str,
@@ -533,10 +896,51 @@ fn referenced_object_keys(catalog: &NamespaceCatalog) -> std::collections::HashS
         .collect()
 }
 
+fn node_referenced_object_keys(
+    node: &CatalogNode,
+    now_ms: i64,
+    include_payload: bool,
+) -> HashSet<String> {
+    let mut referenced = HashSet::new();
+    if include_payload {
+        if let Some(checkpoint) = node.checkpoint.as_option() {
+            referenced.extend(referenced_object_keys(checkpoint));
+        }
+        if let Some(delta) = node.delta.as_option() {
+            referenced.extend(
+                delta
+                    .segment_additions
+                    .iter()
+                    .filter_map(|addition| addition.segment.as_option())
+                    .chain(delta.direct_query_additions.iter())
+                    .flat_map(segment_object_keys),
+            );
+        }
+    }
+    referenced.extend(node.released_objects.iter().filter_map(|released| {
+        (released.delete_after_ms.unwrap_or(0) > now_ms)
+            .then(|| {
+                released
+                    .object
+                    .as_option()
+                    .and_then(|object| object.object_id.clone())
+            })
+            .flatten()
+    }));
+    referenced
+}
+
 fn validate_head(table: &str, head: &CatalogHead) -> Result<(), StatsError> {
-    if head.format_version.unwrap_or(0) != TABLE_STATE_FORMAT_VERSION
-        || head.namespace.as_deref() != Some(table)
+    if !matches!(
+        head.format_version.unwrap_or(0),
+        LEGACY_TABLE_STATE_FORMAT_VERSION | TABLE_STATE_FORMAT_VERSION
+    ) || head.namespace.as_deref() != Some(table)
         || head.catalog_generation.unwrap_or(0) == 0
+        || head
+            .catalog
+            .as_option()
+            .and_then(|reference| reference.object_id.as_deref())
+            .is_none()
     {
         return Err(StatsError::Internal(format!(
             "invalid object HEAD for table {table:?}"
@@ -550,7 +954,7 @@ fn validate_state(
     head: &CatalogHead,
     catalog: &NamespaceCatalog,
 ) -> Result<(), StatsError> {
-    if catalog.format_version.unwrap_or(0) != TABLE_STATE_FORMAT_VERSION
+    if catalog.format_version != head.format_version
         || catalog.namespace.as_deref() != Some(table)
         || catalog.catalog_generation != head.catalog_generation
         || catalog.active_table_spec_version != head.active_table_spec_version
@@ -561,6 +965,45 @@ fn validate_state(
         )));
     }
     Ok(())
+}
+
+fn validate_node(table: &str, node: &CatalogNode) -> Result<(), StatsError> {
+    if node.format_version.unwrap_or(0) != TABLE_STATE_FORMAT_VERSION
+        || node.namespace.as_deref() != Some(table)
+        || node.catalog_generation.unwrap_or(0) == 0
+        || node.delta_depth.unwrap_or(0) > MAX_DELTA_DEPTH
+        || node.delta_bytes_since_checkpoint.unwrap_or(0) > MAX_DELTA_BYTES
+    {
+        return Err(StatsError::Internal(format!(
+            "invalid catalog node for table {table:?}"
+        )));
+    }
+    Ok(())
+}
+
+fn state_object_id(table: &str, head: &CatalogHead) -> Result<String, StatsError> {
+    head.catalog
+        .as_option()
+        .and_then(|reference| reference.object_id.clone())
+        .filter(|object_id| !object_id.is_empty())
+        .ok_or_else(|| {
+            StatsError::Internal(format!("object HEAD for {table:?} has no state reference"))
+        })
+}
+
+fn catalog_reference_size(table: &str, reference: &ObjectRef) -> Result<u64, StatsError> {
+    reference.byte_size.filter(|size| *size > 0).ok_or_else(|| {
+        StatsError::Internal(format!(
+            "catalog reference for table {table:?} has no byte size"
+        ))
+    })
+}
+
+fn unix_time_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))
+        .unwrap_or(0)
 }
 
 fn state_revision_from_key(key: &str) -> Option<u64> {
@@ -575,6 +1018,7 @@ fn state_revision_from_key(key: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::proto::finelog::stats::{CatalogSegment, TableVersionSegments};
     use crate::store::object_store::build_remote_object_store;
 
     const TABLE: &str = "iris.worker";
@@ -588,6 +1032,31 @@ mod tests {
             max_query_time_ms: Some(600_000),
             ..Default::default()
         }
+    }
+
+    fn segment(number: usize) -> CatalogSegment {
+        let id = format!("segment-{number:04}.parquet");
+        CatalogSegment {
+            segment_id: Some(id.clone()),
+            source: buffa::MessageField::some(ObjectRef {
+                object_id: Some(format!("_finelog/tables/{TABLE}/objects/v1/l0/{id}")),
+                byte_size: Some(100),
+                ..Default::default()
+            }),
+            table_spec_version: Some(1),
+            ..Default::default()
+        }
+    }
+
+    fn state_with_segments(revision: u64, segments: Vec<CatalogSegment>) -> NamespaceCatalog {
+        let mut catalog = state(TABLE, revision, 1);
+        catalog.version_segments = vec![TableVersionSegments {
+            table_spec_version: Some(1),
+            live_segments: segments.clone(),
+            ..Default::default()
+        }];
+        catalog.direct_query_segments = segments;
+        catalog
     }
 
     fn store(tag: &str) -> (ObjectTableStateStore, std::path::PathBuf) {
@@ -634,6 +1103,297 @@ mod tests {
         let loaded = states.load(TABLE).await.unwrap().unwrap();
         assert_eq!(loaded.catalog.active_table_spec_version, Some(2));
         assert_eq!(second.catalog, loaded.catalog);
+        std::fs::remove_dir_all(remote_dir).ok();
+    }
+
+    #[tokio::test]
+    async fn ordinary_commit_writes_one_small_typed_delta_with_the_exact_parent() {
+        let remote_dir = crate::test_support::unique_dir("object_state_store_delta_shape");
+        let remote = build_remote_object_store(remote_dir.to_str().unwrap())
+            .unwrap()
+            .unwrap();
+        let states = ObjectTableStateStore::new(Arc::new(remote.clone()));
+        let original_segments = (0..100).map(segment).collect::<Vec<_>>();
+        let first = states
+            .commit(
+                TABLE,
+                WriterFence::new(4),
+                None,
+                state_with_segments(1, original_segments.clone()),
+            )
+            .await
+            .unwrap();
+        let mut next_segments = original_segments;
+        next_segments.push(segment(100));
+        let second = states
+            .commit(
+                TABLE,
+                WriterFence::new(4),
+                Some(&first),
+                state_with_segments(2, next_segments),
+            )
+            .await
+            .unwrap();
+
+        let first_object = remote
+            .read(&ObjectId::parse(&first.catalog_chain[0]).unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        let second_object = remote
+            .read(&ObjectId::parse(&second.catalog_chain[0]).unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        let node: CatalogNode = serde_json::from_slice(&second_object.bytes).unwrap();
+        assert!(node.checkpoint.as_option().is_none());
+        assert_eq!(node.delta.as_option().unwrap().segment_additions.len(), 1);
+        assert_eq!(
+            node.delta.as_option().unwrap().direct_query_additions.len(),
+            1
+        );
+        assert_eq!(
+            node.parent
+                .as_option()
+                .and_then(|parent| parent.object_id.as_deref()),
+            Some(first.catalog_chain[0].as_str())
+        );
+        assert!(second_object.bytes.len() * 4 < first_object.bytes.len());
+        assert_eq!(
+            states.load(TABLE).await.unwrap().unwrap().catalog,
+            second.catalog
+        );
+        std::fs::remove_dir_all(remote_dir).ok();
+    }
+
+    #[tokio::test]
+    async fn a_large_delta_becomes_a_checkpoint() {
+        let remote_dir = crate::test_support::unique_dir("object_state_store_byte_checkpoint");
+        let remote = build_remote_object_store(remote_dir.to_str().unwrap())
+            .unwrap()
+            .unwrap();
+        let states = ObjectTableStateStore::new(Arc::new(remote.clone()));
+        let first = states
+            .commit(TABLE, WriterFence::new(4), None, state(TABLE, 1, 1))
+            .await
+            .unwrap();
+        let mut large = segment(1);
+        large.min_key_value = Some("x".repeat(MAX_DELTA_BYTES as usize));
+        let second = states
+            .commit(
+                TABLE,
+                WriterFence::new(4),
+                Some(&first),
+                state_with_segments(7, vec![large]),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            second.revision().get(),
+            7,
+            "coalesced generations are valid"
+        );
+        assert_eq!(second.catalog_chain.len(), 1);
+        let object = remote
+            .read(&ObjectId::parse(&second.catalog_chain[0]).unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        let node: CatalogNode = serde_json::from_slice(&object.bytes).unwrap();
+        assert!(node.checkpoint.as_option().is_some());
+        assert!(node.delta.as_option().is_none());
+        assert_eq!(node.delta_depth, Some(0));
+        assert_eq!(
+            states.load(TABLE).await.unwrap().unwrap().revision().get(),
+            7
+        );
+        std::fs::remove_dir_all(remote_dir).ok();
+    }
+
+    #[tokio::test]
+    async fn release_grace_uses_the_longer_parent_query_lifetime() {
+        let remote_dir = crate::test_support::unique_dir("object_state_store_parent_query_grace");
+        let remote = build_remote_object_store(remote_dir.to_str().unwrap())
+            .unwrap()
+            .unwrap();
+        let states = ObjectTableStateStore::new(Arc::new(remote.clone()));
+        let first = states
+            .commit(
+                TABLE,
+                WriterFence::new(4),
+                None,
+                state_with_segments(1, vec![segment(1)]),
+            )
+            .await
+            .unwrap();
+        let mut next = state_with_segments(2, vec![]);
+        next.max_query_time_ms = Some(1);
+        let started = unix_time_ms();
+        let second = states
+            .commit(TABLE, WriterFence::new(4), Some(&first), next)
+            .await
+            .unwrap();
+        let object = remote
+            .read(&ObjectId::parse(&second.catalog_chain[0]).unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        let node: CatalogNode = serde_json::from_slice(&object.bytes).unwrap();
+        assert_eq!(node.released_objects.len(), 1);
+        assert!(node.released_objects[0].delete_after_ms.unwrap() >= started + 600_000);
+        std::fs::remove_dir_all(remote_dir).ok();
+    }
+
+    #[tokio::test]
+    async fn released_object_survives_its_query_grace_then_becomes_collectible() {
+        let remote_dir = crate::test_support::unique_dir("object_state_store_release_grace");
+        let remote = build_remote_object_store(remote_dir.to_str().unwrap())
+            .unwrap()
+            .unwrap();
+        let states = ObjectTableStateStore::new(Arc::new(remote.clone()));
+        let source = segment(1)
+            .source
+            .as_option()
+            .and_then(|source| source.object_id.as_deref())
+            .unwrap()
+            .to_string();
+        let source_id = ObjectId::parse(&source).unwrap();
+        remote
+            .write(&source_id, Bytes::from_static(b"parquet"))
+            .await
+            .unwrap();
+        let first = states
+            .commit(
+                TABLE,
+                WriterFence::new(4),
+                None,
+                state_with_segments(1, vec![segment(1)]),
+            )
+            .await
+            .unwrap();
+        states
+            .commit(
+                TABLE,
+                WriterFence::new(4),
+                Some(&first),
+                state_with_segments(2, vec![]),
+            )
+            .await
+            .unwrap();
+        let policy = StateGcPolicy {
+            pin_retention_ms: 0,
+            state_retention_ms: u64::MAX,
+            orphan_grace_ms: 0,
+            sweep_orphans: true,
+        };
+
+        states
+            .gc_obsolete_states(TABLE, unix_time_ms() + 1, policy, WriterFence::new(4))
+            .await
+            .unwrap();
+        assert!(remote.read(&source_id).await.unwrap().is_some());
+        states
+            .gc_obsolete_states(TABLE, i64::MAX, policy, WriterFence::new(4))
+            .await
+            .unwrap();
+        assert!(remote.read(&source_id).await.unwrap().is_none());
+        std::fs::remove_dir_all(remote_dir).ok();
+    }
+
+    #[tokio::test]
+    async fn first_v2_commit_upgrades_a_v1_head_with_a_checkpoint() {
+        let remote_dir = crate::test_support::unique_dir("object_state_store_v1_upgrade");
+        let remote = build_remote_object_store(remote_dir.to_str().unwrap())
+            .unwrap()
+            .unwrap();
+        let states = ObjectTableStateStore::new(Arc::new(remote.clone()));
+        let legacy_catalog = NamespaceCatalog {
+            format_version: Some(LEGACY_TABLE_STATE_FORMAT_VERSION),
+            namespace: Some(TABLE.to_string()),
+            catalog_generation: Some(1),
+            active_table_spec_version: Some(1),
+            ..Default::default()
+        };
+        let legacy_id = ObjectId::table(TABLE, "catalogs/00000000000000000001-v1.json").unwrap();
+        let legacy_bytes = serde_json::to_vec(&legacy_catalog).unwrap();
+        remote
+            .write(&legacy_id, Bytes::from(legacy_bytes.clone()))
+            .await
+            .unwrap();
+        let legacy_head = CatalogHead {
+            format_version: Some(LEGACY_TABLE_STATE_FORMAT_VERSION),
+            namespace: Some(TABLE.to_string()),
+            writer_epoch: Some(9),
+            catalog_generation: Some(1),
+            active_table_spec_version: Some(1),
+            catalog: buffa::MessageField::some(ObjectRef {
+                object_id: Some(legacy_id.as_str().to_string()),
+                byte_size: Some(legacy_bytes.len() as u64),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        remote
+            .compare_and_swap(
+                &ObjectId::table(TABLE, HEAD_KEY).unwrap(),
+                None,
+                Bytes::from(serde_json::to_vec(&legacy_head).unwrap()),
+            )
+            .await
+            .unwrap();
+
+        let selected = states.load(TABLE).await.unwrap().unwrap();
+        assert_eq!(selected.head.format_version, Some(1));
+        let upgraded = states
+            .commit(
+                TABLE,
+                WriterFence::new(9),
+                Some(&selected),
+                state(TABLE, 2, 1),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            upgraded.head.format_version,
+            Some(TABLE_STATE_FORMAT_VERSION)
+        );
+        assert_eq!(upgraded.catalog_chain.len(), 1);
+        let tip = remote
+            .read(&ObjectId::parse(&upgraded.catalog_chain[0]).unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        let node: CatalogNode = serde_json::from_slice(&tip.bytes).unwrap();
+        assert!(node.checkpoint.as_option().is_some());
+        assert!(node.parent.as_option().is_none());
+        std::fs::remove_dir_all(remote_dir).ok();
+    }
+
+    #[tokio::test]
+    async fn recovery_rejects_a_tip_whose_exact_parent_is_missing() {
+        let remote_dir = crate::test_support::unique_dir("object_state_store_missing_parent");
+        let remote = build_remote_object_store(remote_dir.to_str().unwrap())
+            .unwrap()
+            .unwrap();
+        let states = ObjectTableStateStore::new(Arc::new(remote.clone()));
+        let first = states
+            .commit(TABLE, WriterFence::new(3), None, state(TABLE, 1, 1))
+            .await
+            .unwrap();
+        let second = states
+            .commit(TABLE, WriterFence::new(3), Some(&first), state(TABLE, 2, 1))
+            .await
+            .unwrap();
+        assert_eq!(second.catalog_chain.len(), 2);
+        remote
+            .delete(&ObjectId::parse(&second.catalog_chain[1]).unwrap())
+            .await
+            .unwrap();
+
+        let error = states.load(TABLE).await.unwrap_err();
+        assert!(error.to_string().contains("references missing state"));
         std::fs::remove_dir_all(remote_dir).ok();
     }
 
@@ -826,9 +1586,11 @@ mod tests {
                 )
                 .await
                 .unwrap(),
-            1
+            0
         );
-        assert_eq!(states.state_keys(TABLE).await.unwrap().len(), 1);
+        // Revision two is a delta over revision one, so both nodes remain
+        // reachable from HEAD until an automatic checkpoint cuts the chain.
+        assert_eq!(states.state_keys(TABLE).await.unwrap().len(), 2);
         std::fs::remove_dir_all(remote_dir).ok();
     }
 
@@ -890,7 +1652,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn garbage_collection_thins_rollback_states_to_one_per_bucket() {
+    async fn garbage_collection_reclaims_history_behind_a_checkpoint() {
         let remote_dir = crate::test_support::unique_dir("object_state_store_gc_thin");
         let remote = build_remote_object_store(remote_dir.to_str().unwrap())
             .unwrap()
@@ -898,7 +1660,7 @@ mod tests {
         let states = ObjectTableStateStore::new(Arc::new(remote.clone()));
         let fence = WriterFence::new(7);
         let mut previous = None;
-        for revision in 1..=5 {
+        for revision in 1..=66 {
             let committed = states
                 .commit(TABLE, fence, previous.as_ref(), state(TABLE, revision, 1))
                 .await
@@ -923,45 +1685,41 @@ mod tests {
                 .unwrap();
             file.set_modified(modified).unwrap();
         }
-        // Revisions 1-4 became obsolete at base+2000..base+5000: all past the
-        // 10s pin horizon, all inside the 99s rollback window, all in one
-        // 10s bucket. Only the newest (revision 4) is kept as the bucket's
-        // rollback target.
+        // Revision 66 is the automatic checkpoint after 64 deltas. Its parent
+        // chain is no longer needed for recovery and becomes collectible once
+        // both the pin and rollback windows expire.
         assert_eq!(
             states
                 .gc_obsolete_states(
                     TABLE,
-                    base_ms + 100_000,
+                    i64::MAX,
                     StateGcPolicy {
-                        pin_retention_ms: 10_000,
-                        state_retention_ms: 99_000,
-                        orphan_grace_ms: 99_000,
+                        pin_retention_ms: 0,
+                        state_retention_ms: 0,
+                        orphan_grace_ms: 0,
                         sweep_orphans: false,
                     },
                     fence,
                 )
                 .await
                 .unwrap(),
-            3
+            65
         );
         let keys = states.state_keys(TABLE).await.unwrap();
-        assert_eq!(keys.len(), 2);
+        assert_eq!(keys.len(), 1);
         assert!(keys
             .iter()
-            .any(|key| state_revision_from_key(key) == Some(4)));
-        assert!(keys
-            .iter()
-            .any(|key| state_revision_from_key(key) == Some(5)));
-        // The elected keeper survives a repeated pass.
+            .any(|key| state_revision_from_key(key) == Some(66)));
+        // The selected checkpoint survives a repeated pass.
         assert_eq!(
             states
                 .gc_obsolete_states(
                     TABLE,
-                    base_ms + 100_000,
+                    i64::MAX,
                     StateGcPolicy {
-                        pin_retention_ms: 10_000,
-                        state_retention_ms: 99_000,
-                        orphan_grace_ms: 99_000,
+                        pin_retention_ms: 0,
+                        state_retention_ms: 0,
+                        orphan_grace_ms: 0,
                         sweep_orphans: false,
                     },
                     fence,

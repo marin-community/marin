@@ -30,7 +30,7 @@ flowchart TB
     end
 
     subgraph durable["store/state_store/ — durable authority"]
-        OSS[object.rs: ObjectTableStateStore<br/>states + HEAD CAS]
+        OSS[object.rs + tree.rs<br/>catalog nodes + HEAD CAS]
     end
 
     subgraph objects["store/object_store/ — bytes"]
@@ -101,17 +101,21 @@ The ownership rule: `ObjectStore` owns bytes and localization; `TableController`
 
 ## Durable state
 
-Each object-backed table has one authority: an immutable, complete state document per revision plus a mutable HEAD replaced by compare-and-swap.
+Each object-backed table has one authority: a mutable HEAD, replaced by compare-and-swap, which selects one immutable catalog history. The history is a bounded parent-linked tree: most publications append a typed delta and periodic checkpoints materialize the complete table state. Unselected siblings are harmless upload-before-CAS orphans, not alternate authorities.
 
 ```text
-<remote>/_finelog/tables/<table>/HEAD.json                    mutable pointer: revision, writer fence, state ref
-<remote>/_finelog/tables/<table>/catalogs/<rev>-<uuid>.json   immutable complete TableState per revision
+<remote>/_finelog/tables/<table>/HEAD.json                    mutable pointer: generation, writer fence, tip ref
+<remote>/_finelog/tables/<table>/catalogs/<gen>-<uuid>.json   immutable checkpoint or parent-linked delta
 <remote>/_finelog/tables/<table>/objects/<uuid>.parquet       immutable data segments
 <remote>/_finelog/tables/<table>/indices/<uuid>.fidx          immutable index bundles
 <remote>/_finelog/tables/<table>/projections/<uuid>.parquet   immutable covering-projection artifacts
 ```
 
-Every durable mutation — flush, compaction, index backfill, registration, activation, abort, retire, forward cursor, tombstone — is a controller commit that allocates the next monotonic `TableRevision` and carries the process's `WriterFence`. SQLite is a rebuildable projection for object-backed tables; for legacy tables it is the single authority, guarded by the data-dir flock rather than a durable state store. Dropping a table publishes a durable tombstone revision; HEAD is never deleted, so a missing HEAD with no catalog documents unambiguously means "never published", while a missing HEAD *over surviving catalogs* is external damage (a bucket lifecycle rule, human error). Recovery flags such a table **degraded**: it keeps serving reads and accumulating locally durable writes, but every publication is refused rather than starting a second history over the surviving catalogs. The repair is to restore `HEAD.json` (pointing at the newest catalog document) and restart; the revisions committed while degraded then roll forward and publish.
+Every durable mutation — flush, compaction, index backfill, registration, activation, abort, retire, forward cursor, tombstone — updates one logical `TableState`. The state store computes a typed delta whose segment portion is one `UpdateSegments { additions, removals }` operation and whose metadata portion carries the resulting schema, migration, cursor, and high-water values. One publication may summarize several already-local-durable mutations, so generations increase strictly but need not be adjacent. The immutable node is uploaded first, then HEAD selects it with a fenced CAS. A failed CAS leaves an orphan node; an ambiguous response is settled only when HEAD selects that exact node and materialized state.
+
+Recovery reads HEAD once, follows exact parent references back to a checkpoint, reverses that suffix, and folds it forward. A checkpoint is forced after 64 deltas or 1 MiB of serialized delta payload, bounding startup work independently of table size. Nodes identify one another by object ID and byte length only; provider version fields, ETags, and content hashes are not part of logical identity. Every node also records release deadlines for objects removed by its delta. GC retains the complete ancestry needed by every live or rollback-visible tip, then removes expired tree spans and released data only after their deadlines.
+
+SQLite is the local persistent journal and query projection for object-backed tables; it may be ahead of HEAD while remote publication is owed. Recovery accepts that tail only if its high-water is monotone and it still contains every remotely live object, then publishes the accumulated difference as a child of the selected remote tip. It refuses a divergent local projection. For legacy tables SQLite remains the single authority, guarded by the data-dir flock rather than a durable state store. Dropping a table publishes a durable tombstone; HEAD is never deleted. A missing HEAD with no catalog nodes means "never published", while a missing HEAD over surviving nodes is external damage. Such a table is **degraded**: reads and local accumulation continue, but publication is refused until an operator restores the known selected HEAD. An arbitrary or merely newest sibling is never inferred as authoritative.
 
 The published `persisted_high_water` carries the table's sequence allocator watermark, not just the max seq in published segments: a legacy import excludes archive-only rows and retirement deletes legacy catalog rows, so published segments can top out below sequence numbers the table already issued. Publishes clamp the mark monotone across revisions, and recovery seeds the allocator past it, so a recovered writer never reissues a sequence number.
 
@@ -145,7 +149,7 @@ sequenceDiagram
     TC->>TC: publish Arc<TableSnapshot>; rebuild SQLite projection
 ```
 
-The append fast path never waits on durable I/O or the controller, and the flush path is **local-first**: staging the UUID-named Parquet in the local cache plus the local catalog commit is what acknowledges the write, and the committed revision is *owed* to HEAD from that moment. Publication — uploading the staged objects, then the fenced CAS — is attempted immediately after the ack and retried by maintenance until it lands, so a remote outage delays publication without blocking ingest (the sustained-outage scenario drives days' worth of rounds through a dead remote and drains them in one round when it returns). The trade-off is deliberate: between local ack and publication, that tail exists only on this node's disk, so a fence steal or total node loss can drop acknowledged-but-unpublished rows. On an ambiguous CAS (response lost), the controller re-reads HEAD and compares the writer fence, revision, and complete catalog value: the commit is durable, still owed (re-publish the same revision), or fenced — never rolled back.
+The append fast path never waits on durable I/O or the controller, and the flush path is **local-first**: staging the UUID-named Parquet in the local cache plus the local catalog commit is what acknowledges the write, and the committed revision is *owed* to HEAD from that moment. Publication — uploading the staged objects, then the fenced CAS — is attempted immediately after the ack and retried by maintenance until it lands, so a remote outage delays publication without blocking ingest (the sustained-outage scenario drives days' worth of rounds through a dead remote and drains them in one round when it returns). The trade-off is deliberate: between local ack and publication, that tail exists only on this node's disk, so a fence steal or total node loss can drop acknowledged-but-unpublished rows. On an ambiguous CAS (response lost), the controller re-reads HEAD and compares the writer fence, generation, exact selected node, and canonical materialized catalog value: the commit is durable, still owed, or fenced — never guessed from a later revision or rolled back.
 
 The write-ack invariant behind this split: **no lock, permit, or serialized context on the write-acknowledgement or query path spans a remote-storage operation** — every lock a write can wait on guards only quick local work (buffer seal, cache write, SQLite commit, in-memory swap). Publication runs detached from the flush that owed it: the flush releases its global flush permit and its per-table flush lock before publication starts, and a tracked background task drives the per-table publication mailbox, where owed revisions coalesce so a hot table publishes its newest state rather than one HEAD swap per flush. GCS rate-limits mutations of one object name to roughly one per second, so a hub flushing many tables cannot afford a synchronous CAS per flush — the mailbox absorbs the 429 backoff off every ack path.
 

@@ -50,6 +50,7 @@ use crate::store::schema::{
     IMPLICIT_SEQ_COLUMN, MAX_WRITE_ROWS_BYTES, MAX_WRITE_ROWS_ROWS,
 };
 use crate::store::state_store::object::ObjectTableStateStore;
+use crate::store::state_store::tree::catalogs_equal;
 use crate::store::table::query_view::SegmentObjectMap;
 use crate::store::table::{
     AckDurability, MaintenanceProfile, TableManager, TABLE_LIFECYCLE_SHUTDOWN_TIMEOUT,
@@ -457,7 +458,19 @@ impl Store {
             return Ok(0);
         };
         let mut loaded_count = 0;
-        for head in state_store.list().await? {
+        let heads = state_store.list().await?;
+        // Validate the entire deployment before claiming any table. A v1
+        // migration cannot change checkpoint identity halfway through its
+        // backfill, and partial writer claims would make rollback harder.
+        for head in &heads {
+            if head.tombstoned {
+                continue;
+            }
+            if let Some(selected) = state_store.load(&head.table).await? {
+                validate_v1_upgrade_preflight(&head.table, &selected.catalog)?;
+            }
+        }
+        for head in heads {
             let namespace = head.table;
             validate_namespace_name(&namespace, self.data_dir.as_deref())?;
             if head.tombstoned {
@@ -503,7 +516,7 @@ impl Store {
         for namespace in state_store.headless_tables().await? {
             let reason = format!(
                 "table {namespace:?} remote root holds catalog history but no HEAD; restore \
-                 HEAD.json from the newest catalog document and restart"
+                 the selected HEAD.json from deployment records or backup and restart"
             );
             tracing::error!(namespace, reason, "recovered a headless table");
             if self.catalog.contains(&namespace) {
@@ -555,6 +568,13 @@ impl Store {
         let remote_revision = state.catalog_generation.unwrap_or(0);
         let local_revision = self.catalog.spec_lifecycle(namespace)?.catalog_generation;
         if local_revision > remote_revision {
+            let table_dir = self.namespace_dir(namespace)?.ok_or_else(|| {
+                StatsError::Internal(format!(
+                    "local catalog for {namespace:?} is ahead of HEAD but has no table directory"
+                ))
+            })?;
+            let local = namespace_catalog(&self.catalog, namespace, &table_dir)?;
+            validate_local_catalog_extension(namespace, &state, &local)?;
             self.tables.controller(namespace).mark_publication_owed();
             tracing::info!(
                 namespace,
@@ -566,9 +586,10 @@ impl Store {
         }
         if local_revision == remote_revision {
             let local_matches = match self.namespace_dir(namespace)? {
-                Some(table_dir) => {
-                    namespace_catalog(&self.catalog, namespace, &table_dir)? == state
-                }
+                Some(table_dir) => catalogs_equal(
+                    &namespace_catalog(&self.catalog, namespace, &table_dir)?,
+                    &state,
+                ),
                 None => false,
             };
             if local_matches {
@@ -1653,6 +1674,62 @@ impl Store {
     }
 }
 
+fn validate_local_catalog_extension(
+    namespace: &str,
+    remote: &NamespaceCatalog,
+    local: &NamespaceCatalog,
+) -> Result<(), StatsError> {
+    let remote_high_water = remote.persisted_high_water.unwrap_or(0);
+    let local_high_water = local.persisted_high_water.unwrap_or(0);
+    let local_objects = catalog_live_object_ids(local);
+    let missing: Vec<_> = catalog_live_object_ids(remote)
+        .difference(&local_objects)
+        .cloned()
+        .collect();
+    if remote_high_water > local_high_water || !missing.is_empty() {
+        return Err(StatsError::SchemaConflict(format!(
+            "local catalog tail for {namespace:?} diverges from remote HEAD: remote high-water {remote_high_water}, local high-water {local_high_water}, {} remote objects absent locally; retaining local state for operator salvage",
+            missing.len()
+        )));
+    }
+    Ok(())
+}
+
+fn validate_v1_upgrade_preflight(
+    namespace: &str,
+    catalog: &NamespaceCatalog,
+) -> Result<(), StatsError> {
+    if catalog.format_version.unwrap_or(0)
+        != crate::store::state_store::object::LEGACY_TABLE_STATE_FORMAT_VERSION
+    {
+        return Ok(());
+    }
+    let migration_is_quiescent = catalog.migration.as_option().is_none_or(|migration| {
+        migration.phase.and_then(|phase| phase.as_known())
+            == Some(crate::proto::finelog::stats::MigrationPhase::MIGRATION_PHASE_RETIRED)
+    });
+    if !migration_is_quiescent {
+        return Err(StatsError::SchemaConflict(format!(
+            "table {namespace:?} has an active v1 migration; finish or abort it before enabling catalog format v2"
+        )));
+    }
+    Ok(())
+}
+
+fn catalog_live_object_ids(catalog: &NamespaceCatalog) -> BTreeSet<String> {
+    catalog
+        .version_segments
+        .iter()
+        .flat_map(|version| &version.live_segments)
+        .filter_map(|segment| {
+            segment
+                .source
+                .as_option()
+                .and_then(|source| source.object_id.clone())
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -1663,18 +1740,81 @@ mod tests {
     use super::*;
     use crate::levanter_metrics_policy::levanter_metrics_schema;
     use crate::proto::finelog::stats::{
-        partition_field, OperatingPolicy, PartitionField, PartitionSpec, RemoteRetentionPolicy,
-        SourceLayout, TableSpec, TableSpecView,
+        partition_field, CatalogSegment, ObjectRef, OperatingPolicy, PartitionField, PartitionSpec,
+        RemoteRetentionPolicy, SourceLayout, TableMigrationStatus, TableSpec, TableSpecView,
+        TableVersionSegments,
     };
     use crate::store::schema::{
         schema_to_arrow, schema_to_proto_owned, with_implicit_cluster, with_implicit_seq,
         CoveringProjection,
     };
     use crate::store::table::maintenance::{self, TableWork};
+    use crate::store::table_state::ArtifactReferences;
     use crate::store::types::SegmentLocation;
     use crate::test_support::{
         FaultAction, FaultInjectingObjectStore, ObjectFault, ObjectOp, ObjectPattern,
     };
+
+    fn catalog_with_live_object(
+        generation: u64,
+        high_water: i64,
+        object_id: &str,
+    ) -> NamespaceCatalog {
+        NamespaceCatalog {
+            catalog_generation: Some(generation),
+            persisted_high_water: Some(high_water),
+            version_segments: vec![TableVersionSegments {
+                table_spec_version: Some(1),
+                live_segments: vec![CatalogSegment {
+                    segment_id: Some("segment.parquet".to_string()),
+                    source: MessageField::some(ObjectRef {
+                        object_id: Some(object_id.to_string()),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn local_tail_bridge_refuses_a_catalog_that_is_not_a_remote_extension() {
+        let remote = catalog_with_live_object(7, 20, "_finelog/tables/t/objects/remote.parquet");
+        let behind = catalog_with_live_object(8, 19, "_finelog/tables/t/objects/remote.parquet");
+        assert!(validate_local_catalog_extension("t", &remote, &behind).is_err());
+
+        let divergent = catalog_with_live_object(8, 21, "_finelog/tables/t/objects/local.parquet");
+        let error = validate_local_catalog_extension("t", &remote, &divergent).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("1 remote objects absent locally"));
+    }
+
+    #[test]
+    fn v1_upgrade_preflight_requires_a_quiescent_migration() {
+        let mut catalog = NamespaceCatalog {
+            format_version: Some(1),
+            migration: MessageField::some(TableMigrationStatus {
+                phase: Some(
+                    crate::proto::finelog::stats::MigrationPhase::MIGRATION_PHASE_BACKFILL.into(),
+                ),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(validate_v1_upgrade_preflight("t", &catalog).is_err());
+
+        catalog.migration = MessageField::some(TableMigrationStatus {
+            phase: Some(
+                crate::proto::finelog::stats::MigrationPhase::MIGRATION_PHASE_RETIRED.into(),
+            ),
+            ..Default::default()
+        });
+        validate_v1_upgrade_preflight("t", &catalog).unwrap();
+    }
+
     fn worker_schema() -> Schema {
         Schema::new(
             vec![
@@ -2043,6 +2183,84 @@ mod tests {
         );
 
         store.shutdown(Duration::from_secs(10)).await;
+        std::fs::remove_dir_all(data_dir).ok();
+        std::fs::remove_dir_all(remote_dir).ok();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cold_index_backfill_localizes_its_object_source() {
+        let data_dir = crate::test_support::unique_dir("cold_index_backfill_data");
+        let remote_dir = crate::test_support::unique_dir("cold_index_backfill_remote");
+        let store = Store::new(
+            Some(data_dir.clone()),
+            remote_dir.to_string_lossy().into_owned(),
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Shadow,
+        )
+        .unwrap();
+        store.bootstrap_maintenance();
+        store
+            .register_versioned_table("iris.worker", object_backed_spec(1))
+            .unwrap();
+        store.publish_object_catalog("iris.worker").await.unwrap();
+
+        write_worker_rows(&store, &[("w-1", 128, 1)]).await;
+        write_worker_rows(&store, &[("w-2", 256, 2)]).await;
+        store.maintain_namespace("iris.worker", true).await.unwrap();
+        let record = store
+            .catalog
+            .object_segments("iris.worker")
+            .unwrap()
+            .remove(0);
+        assert_eq!(record.table_spec_version, 1);
+        assert!(!record.artifacts.is_empty());
+
+        let path = record.path.clone();
+        let controller = store.tables.controller("iris.worker");
+        controller
+            .commit(|| {
+                let revision = store.catalog.set_segment_artifacts(
+                    "iris.worker",
+                    &path,
+                    &ArtifactReferences::default(),
+                )?;
+                Ok((revision, ()))
+            })
+            .await
+            .unwrap();
+        store.shutdown(Duration::from_secs(1)).await;
+        drop(store);
+        std::fs::remove_dir_all(&data_dir).unwrap();
+
+        let restarted = Store::new(
+            Some(data_dir.clone()),
+            remote_dir.to_string_lossy().into_owned(),
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Shadow,
+        )
+        .unwrap();
+        restarted.recover_tables().await.unwrap();
+        let cold = restarted
+            .catalog
+            .object_segments("iris.worker")
+            .unwrap()
+            .remove(0);
+        assert!(cold.artifacts.is_empty());
+        assert!(!Path::new(&cold.path).exists());
+
+        let runtime = restarted.tables.require("iris.worker").unwrap();
+        maintenance::run(&runtime, TableWork::IndexArtifacts)
+            .await
+            .unwrap();
+        let rebuilt = restarted
+            .catalog
+            .object_segments("iris.worker")
+            .unwrap()
+            .remove(0);
+        assert!(!rebuilt.artifacts.is_empty());
+        assert!(Path::new(&rebuilt.path).exists());
+
+        restarted.shutdown(Duration::from_secs(1)).await;
         std::fs::remove_dir_all(data_dir).ok();
         std::fs::remove_dir_all(remote_dir).ok();
     }
@@ -3848,7 +4066,9 @@ mod tests {
         );
         let removed = controller
             .gc_published(
-                crate::store::table::now_ms(),
+                // Released-object deadlines are persisted in catalog nodes;
+                // force this test beyond that independently of wall clock.
+                i64::MAX,
                 crate::store::state_store::object::StateGcPolicy {
                     pin_retention_ms: 0,
                     state_retention_ms: 0,
@@ -3869,10 +4089,9 @@ mod tests {
             "unreferenced index bundles survive GC: {:?}",
             files_under("indices")
         );
-        assert_eq!(
-            files_under("catalogs").len(),
-            1,
-            "only the current catalog revision is retained"
+        assert!(
+            !files_under("catalogs").is_empty(),
+            "the selected tip-to-checkpoint chain must remain recoverable"
         );
         assert!(table_prefix.join("HEAD.json").exists());
 

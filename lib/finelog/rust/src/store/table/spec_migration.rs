@@ -326,15 +326,16 @@ async fn backfill(
             .collect();
         (object_records, sources, covered)
     };
-    // TODO(#8909): Remove after 2026-09-18 once every deployed table is
-    // RETIRED and no older server can publish the pre-metadata checkpoint
-    // format. Without it, a mixed-version migration could rewrite an already
-    // checkpointed source.
+    // A metadata-v1 identity included provider ETag/version. There is no safe
+    // one-to-one conversion to the provider-independent v2 identity, so this
+    // binary refuses to advance an in-flight migration created by an older
+    // writer. Deployment preflight must finish or abort it first.
     if covered.iter().any(|identity| {
-        identity.len() == 64 && identity.bytes().all(|byte| byte.is_ascii_hexdigit())
+        identity.contains("\"format\":\"metadata-v1\"")
+            || (identity.len() == 64 && identity.bytes().all(|byte| byte.is_ascii_hexdigit()))
     }) {
         return Err(StatsError::SchemaConflict(format!(
-            "migration for {table:?} has SHA-based checkpoints; complete or abort it with the prior server version before upgrading"
+            "migration for {table:?} has legacy checkpoints; complete or abort it with the prior server version before upgrading"
         )));
     }
     let partitioned_target = target_layout
@@ -690,8 +691,6 @@ fn validate_output_partition_count(outputs: &[LocalSegment]) -> Result<(), Stats
 struct MigrationSourceIdentity<'a> {
     format: &'static str,
     object_id: &'a str,
-    provider_version: Option<&'a str>,
-    etag: Option<&'a str>,
     byte_size: i64,
     min_seq: i64,
     max_seq: i64,
@@ -704,12 +703,10 @@ fn source_identity(
 ) -> Result<String, StatsError> {
     let source = object_record.map(|record| &record.source);
     serde_json::to_string(&MigrationSourceIdentity {
-        format: "metadata-v1",
+        format: "metadata-v2",
         object_id: source
             .and_then(|source| source.object_id.as_deref())
             .unwrap_or(&row.path),
-        provider_version: source.and_then(|source| source.provider_version.as_deref()),
-        etag: source.and_then(|source| source.etag.as_deref()),
         byte_size: row.byte_size,
         min_seq: row.min_seq,
         max_seq: row.max_seq,
