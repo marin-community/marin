@@ -57,10 +57,17 @@ four-process H100x8 gangs with PP2, EP8, and replica axis two. Run `--phase save
 and then `--phase resume` with the same `--checkpoint-root`. Choose `--mode fsdp`
 or `--mode pp` independently for each phase; PP supports `--schedule zero_bubble`
 or `--schedule dualpipe_v`. Use `--dtype float32` for cross-mode numerical
-comparisons, or the default `bfloat16` for same-mode continuation. The first gang saves step one and an uninterrupted
+comparisons, or the default `bfloat16` for same-mode continuation. The default
+FSDP mesh uses 32 devices; `--fsdp-devices 16` selects a smaller mesh. Cross-mode
+checks allow update differences because shard-local QB quantiles and
+expert-capacity clipping depend on token grouping. Byte-sensitive checksums
+indexed by global tensor coordinates verify restoration before any update.
+`--restore-only` skips the loss evaluation. The first gang saves step one and an uninterrupted
 step-two reference; the second restores step one and compares its next step.
-Every integer leaf must match exactly, and every floating state leaf and loss
-must have relative L2 error at most 0.002. Adam counters must also equal the
+Restore checksums must match exactly and loss must have relative error at most
+0.002. Add `--compare-state` for same-mode continuation to require exact integer
+state and floating state relative L2 error at most 0.002. Cross-mode optimizer
+updates can differ because routing depends on token grouping. Adam counters must equal the
 recorded completed step. Only local shards and scalar error
 reductions are read during comparison. Disable command buffers in both gangs:
 `XLA_FLAGS='--xla_gpu_executable_terminate_timeout=300 --xla_gpu_enable_command_buffer='`.

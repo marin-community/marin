@@ -24,7 +24,12 @@ from levanter.mpmd_checkpoint import checkpoint_arrays
 from levanter.pipeline import reshape_batch_into_microbatches
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
-from experiments.grug.moe_pipeline.checkpoint import GrugMoeCheckpointState, restore_checkpoint, save_checkpoint
+from experiments.grug.moe_pipeline.checkpoint import (
+    GrugMoeCheckpointState,
+    checkpoint_state,
+    restore_checkpoint,
+    save_checkpoint,
+)
 from experiments.grug.moe_pipeline.model import BATCH_AXES, GrugModelConfig, Transformer
 from experiments.grug.moe_pipeline.pipeline import (
     TRAIN_LOSS_KEY,
@@ -38,6 +43,7 @@ from experiments.grug.moe_pipeline.pipeline import (
 )
 
 _RELATIVE_L2_TOLERANCE = 0.002
+_BATCH_SIZE = 128
 
 
 def _assert_optimizer_counts(state, completed_steps: int) -> None:
@@ -86,9 +92,14 @@ def _fsdp_step(optimizer, policy, mesh):
                     -beta + jnp.mean(beta),
                     is_leaf=lambda value: value is None,
                 )
-            return policy.cast_to_compute(params).next_token_loss(
+            _, metrics = policy.cast_to_compute(params).next_token_loss(
                 batch.tokens, batch.loss_weight, return_router_metrics=True
             )
+            loss = (
+                metrics["train/cross_entropy_loss"] * jnp.sum(batch.loss_weight) / denominator
+                + metrics["train/router/aux_loss_weighted"] / batches.tokens.shape[0]
+            )
+            return loss, metrics
 
         gradients = jax.tree.map(jnp.zeros_like, state.params)
         pending = tuple(jnp.zeros_like(beta) for beta in state.pending_qb_betas)
@@ -100,14 +111,13 @@ def _fsdp_step(optimizer, policy, mesh):
             pending = tuple(beta + update for beta, update in zip(pending, metrics["qb_beta_per_layer"], strict=True))
             loss += batch_loss
         microbatches = batches.tokens.shape[0]
-        gradients = jax.tree.map(lambda value: value / microbatches, gradients)
         updates, opt_state = optimizer.update(gradients, state.opt_state, state.params)
         return replace(
             state,
             params=eqx.apply_updates(state.params, updates),
             opt_state=opt_state,
             pending_qb_betas=tuple(beta / microbatches for beta in pending),
-        ), {TRAIN_LOSS_KEY: loss / microbatches}
+        ), {TRAIN_LOSS_KEY: loss}
 
     def run(state, batches, denominator):
         with jax.set_mesh(mesh):
@@ -124,10 +134,53 @@ def _global_loss(value) -> float:
     return float(losses[np.isfinite(losses)][0])
 
 
+def _fingerprint(state) -> list[list[int]]:
+    """Compute partition-independent, byte-sensitive checksums of canonical leaves."""
+    canonical = state if isinstance(state, GrugMoeCheckpointState) else checkpoint_state(state)
+    checks = []
+    for value in jax.tree.leaves(canonical):
+        checksum = np.zeros(2, dtype=np.uint64)
+        for shard in value.addressable_shards:
+            if shard.replica_id != 0:
+                continue
+            data = np.asarray(shard.data)
+            indices = np.zeros(data.shape, dtype=np.uint64)
+            stride = 1
+            for axis in reversed(range(data.ndim)):
+                section = shard.index[axis]
+                coords = np.arange(*section.indices(value.shape[axis]), dtype=np.uint64)
+                shape = [1] * data.ndim
+                shape[axis] = len(coords)
+                indices += coords.reshape(shape) * np.uint64(stride)
+                stride *= value.shape[axis]
+            byte_indices = indices[..., None] * np.uint64(data.dtype.itemsize) + np.arange(
+                data.dtype.itemsize, dtype=np.uint64
+            )
+            bits = (
+                np.ascontiguousarray(data)
+                .reshape(-1)
+                .view(np.uint8)
+                .reshape((*data.shape, data.dtype.itemsize))
+                .astype(np.uint64)
+            )
+            weights = byte_indices + np.uint64(1)
+            checksum += np.array(
+                [np.sum(bits * weights, dtype=np.uint64), np.sum(bits * weights * weights, dtype=np.uint64)],
+                dtype=np.uint64,
+            )
+        checks.append(checksum)
+    words = np.asarray(checks).view(np.uint32)
+    gathered = np.asarray(multihost_utils.process_allgather(words)).reshape(-1, len(checks), 4).copy()
+    return gathered.view(np.uint64).sum(axis=0, dtype=np.uint64).tolist()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint-root", required=True)
     parser.add_argument("--mode", choices=("fsdp", "pp"), default="pp")
+    parser.add_argument("--fsdp-devices", type=int, choices=(16, 32), default=32)
+    parser.add_argument("--restore-only", action="store_true")
+    parser.add_argument("--compare-state", action="store_true")
     parser.add_argument("--dtype", choices=("float32", "bfloat16"), default="bfloat16")
     parser.add_argument(
         "--schedule", type=AutomaticPipelineSchedule, choices=list(AutomaticPipelineSchedule), required=True
@@ -145,7 +198,7 @@ def main() -> None:
         mesh, mpmd_mesh = make_pipeline_mesh(config, expert_axis_size=8, replica_axis_size=2)
     else:
         mesh = Mesh(
-            np.array(jax.devices()).reshape(1, 4, 8, 1),
+            np.array(jax.devices()).reshape(4, 8)[:, : args.fsdp_devices // 4].reshape(1, args.fsdp_devices // 8, 8, 1),
             (*BATCH_AXES, "model"),
             axis_types=(AxisType.Explicit,) * 4,
         )
@@ -184,8 +237,13 @@ def main() -> None:
                 optimizer.init(model),
                 tuple(jnp.zeros((model_config.num_experts,)) for _ in model.blocks),
             )
-        tokens = np.arange(128 * 16, dtype=np.int32).reshape(128, 16) % 256
-        weights = np.ones((128, 16), dtype=np.float32)
+        tokens = (
+            np.arange(_BATCH_SIZE * model_config.max_seq_len, dtype=np.int32).reshape(
+                _BATCH_SIZE, model_config.max_seq_len
+            )
+            % model_config.vocab_size
+        )
+        weights = np.ones_like(tokens, dtype=np.float32)
         weights[:, -1] = 0
         sharding = NamedSharding(mesh, P(BATCH_AXES, None))
         batch = GrugLmExample(tokens=jax.device_put(tokens, sharding), loss_weight=jax.device_put(weights, sharding))
@@ -229,6 +287,9 @@ def main() -> None:
         state, _ = step(state, batches, denominator)
         _assert_optimizer_counts(state, 1)
         save(resume_root, state, 1)
+        fingerprint = _fingerprint(state)
+        if jax.process_index() == 0:
+            (StoragePath(args.checkpoint_root) / "fingerprint.json").write_text(json.dumps(fingerprint))
         state, metrics = step(state, batches, denominator)
         _assert_optimizer_counts(state, 2)
         save(expected_root, state, 2)
@@ -240,17 +301,29 @@ def main() -> None:
     state, completed = restore(resume_root, state)
     assert completed == 1, f"expected checkpoint step 1, got {completed}"
     _assert_optimizer_counts(state, completed)
+    expected_fingerprint = json.loads((StoragePath(args.checkpoint_root) / "fingerprint.json").read_text())
+    assert _fingerprint(state) == expected_fingerprint, "restored tensor bytes differ"
+    print(f"CHECKPOINT_BYTES_PASSED mode={args.mode}", flush=True)
+    if args.restore_only:
+        return
     state, metrics = step(state, batches, denominator)
-    expected, expected_step = restore(expected_root, state)
-    assert completed + 1 == expected_step == 2
-    _assert_optimizer_counts(state, expected_step)
-    _assert_optimizer_counts(expected, expected_step)
-    maximum_error = _compare(state, expected)
+    _assert_optimizer_counts(state, completed + 1)
     loss = _global_loss(metrics[TRAIN_LOSS_KEY])
     expected_loss = json.loads(loss_path.read_text())
     loss_error = abs(loss - expected_loss) / max(abs(expected_loss), np.finfo(float).tiny)
     assert loss_error <= _RELATIVE_L2_TOLERANCE, (loss, expected_loss, loss_error)
-    print(f"CHECKPOINT_SMOKE_PASSED schedule={args.schedule} max_relative_l2={maximum_error}", flush=True)
+    print(
+        f"CHECKPOINT_LOSS_PASSED mode={args.mode} schedule={args.schedule} "
+        f"loss={loss} expected_loss={expected_loss} relative_error={loss_error}",
+        flush=True,
+    )
+    if args.compare_state:
+        expected, expected_step = restore(expected_root, state)
+        assert completed + 1 == expected_step == 2
+        _assert_optimizer_counts(expected, expected_step)
+        maximum_error = _compare(state, expected)
+        print(f"CHECKPOINT_STATE_PASSED max_relative_l2={maximum_error}", flush=True)
+    print("CHECKPOINT_SMOKE_PASSED", flush=True)
 
 
 if __name__ == "__main__":
