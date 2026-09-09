@@ -419,31 +419,56 @@ python -m levanter.main.eval_lm --config_path gs://path/to/config.yaml --checkpo
 
 You can also use this script to evaluate on other datasets by modifying the config.
 
-Set `document_losses_path` to a local or fsspec URL ending in `.jsonl` to write
-individual document-segment losses, for example
-`--document_losses_path gs://path/to/eval/documents.jsonl`. The file is overwritten
-on each evaluation; use a different path for each checkpoint. Only process zero
-writes, while all hosts participate in gathering the per-token results. Logging
-is disabled by default and does not change aggregate metrics.
+### Per-document loss exports
 
-Each JSONL record contains `dataset_index`, `dataset_tags`, `example_index`,
-`segment_index`, `loss_sum`, `token_count`, `token_weight`, and `mean_loss`.
-`loss_sum` uses the evaluator's per-token loss multiplied by its token weight;
-`token_count` counts positions with nonzero weight, and `token_weight` is the
-segment's sum of token weights. Divide the sum of `loss_sum`
-by the sum of `token_weight` to recover the aggregate token-weighted loss.
-Fully masked segments have zero counts and a null `mean_loss`. Loader padding
-and negative padding segments produce no records.
+`levanter.main.eval_documents` scores original documents directly from JSONL,
+Parquet, or a Hugging Face dataset. It streams one JSONL record per document:
 
-Segments follow the predicted tokens' document boundaries in the attention mask.
-Without segment IDs, the evaluation sequence is treated as one segment. `dataset_index` is the zero-based input dataset index; `example_index` is the
-zero-based row within that dataset before shuffling. `segment_index` is the
-zero-based ordinal of contiguous target segments within the example, rather than
-the attention mask's segment ID. Together these fields identify a record and remain stable across
-checkpoints with the same dataset order, packing, and sequence length. Fixed-length
-slices of a source document remain separate records; these are evaluation-fragment
-identifiers, not original source-document IDs. Boundary logging does not change
-the model's attention behavior.
+```json
+{"doc_id": "123", "corpus_id": "my-corpus", "loss": 2.31, "bits_per_byte": 0.83}
+```
+
+For a directory, bucket prefix, glob, or file containing JSONL or Parquet:
+
+```bash
+uv run python -m levanter.main.eval_documents \
+  --model.checkpoint_path gs://model-bucket/checkpoint/hf \
+  --model.checkpoint_is_hf true \
+  --source.input_path 'gs://data-bucket/documents/' \
+  --source.corpus_id my-corpus \
+  --output_path gs://output-bucket/document-losses.jsonl
+```
+
+For a Hugging Face dataset, replace `--source.input_path` with
+`--source.hf_dataset organization/dataset --source.hf_split train`. Use
+`--source.hf_name` for a dataset configuration and `--source.hf_revision` to pin
+its revision. Native Levanter checkpoints require `model.model` and
+`model.tokenizer` in a YAML config, with `model.checkpoint_is_hf: false`.
+
+The default text and document-ID fields are `text` and `id`; override them with
+`source.text_field` and `source.doc_id_field`. `source.corpus_id` overrides a
+row's `corpus_id` field; otherwise the input source identifies the corpus. Rows
+without an ID receive a deterministic ID derived from their source shard and
+row index. Keep the source snapshot fixed when comparing exports. Use
+`source.max_documents` for a bounded smoke test.
+
+Documents longer than `max_eval_length` (default 4096, capped at the model's
+context limit) are scored in windows with one token of overlap. Each next-token
+target is scored once, with attention reset between windows. Chunk loss sums
+and scored-token counts are combined before computing the document's `loss`;
+no suffix is truncated. Tokenization follows the shared Levanter
+[perplexity scorer](https://github.com/marin-community/marin/blob/main/lib/levanter/src/levanter/analysis/perplexity_gap.py).
+The first token is conditioning context; remaining tokens, including any
+explicitly inserted trailing EOS, are scored. Inserted special tokens contribute
+to the loss numerator but add no source bytes to the denominator. Training
+auxiliary losses are excluded.
+
+`loss` is mean negative log-likelihood in nats per scored token.
+`bits_per_byte` is the same loss sum divided by `ln(2)` and the original text's
+UTF-8 byte length. Empty documents and documents with no scored targets have
+null metrics. Output is overwritten on each invocation; choose a distinct
+output path outside the input prefix for each checkpoint. Only process zero
+writes the export, while all hosts participate in model evaluation.
 
 
 ## Huggingface Export

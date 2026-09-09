@@ -7,6 +7,7 @@ from typing import Optional
 
 import equinox as eqx
 import jax
+import jax.numpy as jnp
 import jmp
 
 import haliax
@@ -22,7 +23,7 @@ from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
 from levanter.data.loader import DataLoader
 from levanter.data.text.datasets import LmDataConfig
-from levanter.eval import LmEvalExample, LossFnOutput, TaggedEvaluator, _default_lm_eval_loss_fn, eval_model
+from levanter.eval import LossFnOutput, TaggedEvaluator, eval_model
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, split_activations
 from levanter.trainer import TrainerConfig
@@ -44,9 +45,6 @@ class EvalLmConfig:
     model: LmConfig = field(default_factory=LlamaConfig)
 
     eval_on_train: bool = False
-
-    document_losses_path: str | None = None
-    """Optional JSONL output of document-segment losses for this evaluation."""
 
     log_entropy: bool = False
     log_top2_gap: bool = False
@@ -94,8 +92,13 @@ def main(config: EvalLmConfig):
 
         mp: jmp.Policy = config.trainer.mp
 
-        def eval_loss_fn(model: LmHeadModel, batch: LmEvalExample) -> LossFnOutput:
-            return _default_lm_eval_loss_fn(model, batch, EvalBatch=Batch, mp=mp)
+        def eval_loss_fn(model: LmHeadModel, batch: LmExample) -> LossFnOutput:
+            model = inference_mode(model, True)
+            model = mp.cast_to_compute(model)
+            per_pos_loss = model.compute_next_token_loss(batch, reduction=None, reduction_axis=()).array
+            per_pos_weight = batch.loss_weight.array
+            per_pos_token_id = jnp.roll(batch.tokens.array, -1, axis=-1)
+            return per_pos_loss, per_pos_weight, per_pos_token_id
 
         evaluator = TaggedEvaluator(
             EvalBatch=Batch,
@@ -104,7 +107,6 @@ def main(config: EvalLmConfig):
             tokenizer=tokenizer,
             axis_mapping=compute_axis_mapping,
             max_examples_per_dataset=max_examples,
-            document_losses_path=config.document_losses_path,
         )
 
         @hax.named_jit(axis_resources=compute_axis_mapping)

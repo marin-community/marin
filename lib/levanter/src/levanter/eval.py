@@ -8,8 +8,7 @@ import logging
 import os
 import warnings
 from collections import defaultdict
-from contextlib import ExitStack
-from typing import Callable, Generic, Optional, Sequence, TextIO, TypeVar
+from typing import Callable, Generic, Optional, Sequence, TypeVar
 
 import equinox as eqx
 import fsspec
@@ -18,7 +17,6 @@ import jax.numpy as jnp
 import jmp
 import numpy as np
 from jax._src import config as jax_config
-from jax.experimental.multihost_utils import process_allgather
 from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
 from jaxtyping import Array, Float, Int
 from tqdm_loggable.auto import tqdm
@@ -173,86 +171,6 @@ class DomainTaggedDataset(AsyncDataset[tuple[T, TagArray]]):
 
     def is_finite(self) -> bool:
         return all(dataset.is_finite() for dataset, _ in self.datasets)
-
-
-class _IndexedTaggedDataset(AsyncDataset[tuple[Ex, TagArray, np.ndarray]], Generic[Ex]):
-    """Carry source indices through shuffling; zero is reserved for loader padding."""
-
-    def __init__(self, dataset: DomainTaggedDataset[Ex]):
-        self.dataset = dataset
-
-    async def async_len(self) -> int:
-        return await self.dataset.async_len()
-
-    def is_finite(self) -> bool:
-        return self.dataset.is_finite()
-
-    async def get_batch(self, indices: Sequence[int]) -> Sequence[tuple[Ex, TagArray, np.ndarray]]:
-        items = await self.dataset.get_batch(indices)
-        offsets = await self.dataset._get_offsets()
-        dataset_indices = np.searchsorted(offsets, indices, side="right") - 1
-        return [
-            (example, tags, np.array([dataset_index + 1, index - offsets[dataset_index]], dtype=np.int32))
-            for index, dataset_index, (example, tags) in zip(indices, dataset_indices, items)
-        ]
-
-    async def getitem_async(self, index: int) -> tuple[Ex, TagArray, np.ndarray]:
-        return (await self.get_batch([index]))[0]
-
-
-def _document_loss_arrays(batch: LmEvalExample, losses: jax.Array, weights: jax.Array) -> LossFnOutput:
-    """Return losses and target-document boundaries without copying model logits."""
-    mask = batch.attn_mask
-    if isinstance(mask, hax.NamedArray) or mask.segment_ids is None:
-        segments = jnp.zeros_like(weights, dtype=jnp.int32)
-    else:
-        segments = mask.segment_ids[1]
-        if isinstance(segments, hax.NamedArray):
-            segments = segments.array
-        # The last position has no next token; keep it in its source segment.
-        segments = jnp.concatenate((segments[:, 1:], segments[:, -1:]), axis=-1)
-    return losses * weights, weights, segments
-
-
-@dataclasses.dataclass(frozen=True)
-class DocumentLoss:
-    """Loss for a document fragment in a fixed evaluation dataset configuration."""
-
-    dataset_index: int
-    dataset_tags: list[str]
-    example_index: int
-    segment_index: int
-    loss_sum: float
-    token_count: int
-    token_weight: float
-    mean_loss: float | None
-
-
-def _write_document_losses(stream: TextIO, arrays, indices: np.ndarray, datasets):
-    weighted_losses, weights, segments = arrays
-    for row, (dataset_id, example_index) in enumerate(indices):
-        if dataset_id == 0:
-            continue
-        dataset_index = int(dataset_id - 1)
-        boundaries = np.flatnonzero(segments[row, 1:] != segments[row, :-1]) + 1
-        starts = np.concatenate(([0], boundaries))
-        ends = np.concatenate((boundaries, [weights.shape[1]]))
-        for segment_index, (start, end) in enumerate(zip(starts, ends)):
-            if segments[row, start] < 0:
-                continue
-            token_weight = float(weights[row, start:end].sum())
-            loss_sum = float(weighted_losses[row, start:end].sum())
-            record = DocumentLoss(
-                dataset_index=dataset_index,
-                dataset_tags=list(datasets[dataset_index][1]),
-                example_index=int(example_index),
-                segment_index=segment_index,
-                loss_sum=loss_sum,
-                token_count=int(np.count_nonzero(weights[row, start:end])),
-                token_weight=token_weight,
-                mean_loss=loss_sum / token_weight if token_weight > 0 else None,
-            )
-            stream.write(json.dumps(dataclasses.asdict(record), allow_nan=False) + "\n")
 
 
 def _join_prefix(prefix: str, tag: str) -> str:
@@ -600,18 +518,12 @@ class TaggedEvaluator(Generic[Ex, M]):
         axis_mapping=None,
         max_examples_per_dataset=None,
         shuffle: bool = False,
-        document_losses_path: str | None = None,
     ):
         if isinstance(EvalBatch, int):
             EvalBatch = hax.Axis("batch", EvalBatch)
         self.loss_fn = loss_fn
         self.dataset = DomainTaggedDataset(tagged_eval_sets, max_examples_per_dataset)
-        self.document_losses_path = document_losses_path
-        loader_dataset = (
-            _IndexedTaggedDataset(self.dataset)
-            if document_losses_path is not None
-            else self.dataset.as_async_dataset()
-        )
+        loader_dataset = self.dataset.as_async_dataset()
         if shuffle:
             # Keep evaluation order reproducible across hosts and repeated evaluations.
             loader_dataset = loader_dataset.shuffle(jax.random.PRNGKey(_TAGGED_EVAL_SHUFFLE_SEED))
@@ -631,9 +543,7 @@ class TaggedEvaluator(Generic[Ex, M]):
         self.hierarchy = self._construct_tag_hierarchy()
         self.accum_for_batch = self._make_accum_for_batch()
 
-    def _make_accum_for_batch(
-        self,
-    ) -> Callable[[M, "_EvalRunningMeans", Ex, BatchedTagArray], tuple["_EvalRunningMeans", LossFnOutput | None]]:
+    def _make_accum_for_batch(self) -> Callable[[M, "_EvalRunningMeans", Ex, BatchedTagArray], "_EvalRunningMeans"]:
         bytes_per_token = self.bytes_per_token
         log2e = jnp.log2(jnp.e)
         per_tag_out_sharding = None if self.device_mesh is None else NamedSharding(self.device_mesh, P(None))
@@ -654,7 +564,7 @@ class TaggedEvaluator(Generic[Ex, M]):
             this_weights_per_tag = jnp.einsum("bt,bk->k", weights, tags, out_sharding=per_tag_out_sharding)
             this_loss_per_tag = jnp.einsum("bt,bk->k", weighted_loss, tags, out_sharding=per_tag_out_sharding)
 
-            mean = state.token_avg_loss.add(this_loss / jnp.where(this_weights > 0, this_weights, 1.0), this_weights)
+            mean = state.token_avg_loss.add(this_loss / jnp.maximum(this_weights, 1.0), this_weights)
             state = dataclasses.replace(state, token_avg_loss=mean)
 
             if len(self.dataset.tag_to_index) > 0:
@@ -679,11 +589,7 @@ class TaggedEvaluator(Generic[Ex, M]):
                     bpb_per_tag_mean = state.bpb_per_tag.add(bpb_per_tag, this_weights_per_tag)
                     state = dataclasses.replace(state, bpb_per_tag=bpb_per_tag_mean)
 
-            if self.document_losses_path is not None:
-                if not isinstance(batch, (LmExample, GrugLmExample)):
-                    raise TypeError("Document loss logging requires LmExample or GrugLmExample inputs")
-                return state, _document_loss_arrays(batch, losses, weights)
-            return state, None
+            return state
 
         return accum_for_batch
 
@@ -697,22 +603,8 @@ class TaggedEvaluator(Generic[Ex, M]):
 
         iterator = LoadingTimeTrackerIterator(self.loader)
 
-        with ExitStack() as stack:
-            stream = None
-            if self.document_losses_path is not None and jax.process_index() == 0:
-                stream = stack.enter_context(fsspec.open(self.document_losses_path, "wt", auto_mkdir=True))
-            for item in tqdm(iterator, "eval", total=len(self.loader)):
-                batch, tags = item[:2]
-                if self.document_losses_path is None:
-                    state, _ = self.accum_for_batch(model, state, batch, tags)
-                else:
-                    assert len(item) == 3
-                    indices = item[2]
-                    state, arrays = self.accum_for_batch(model, state, batch, tags)
-                    # All hosts participate even though only process zero writes.
-                    arrays, indices = process_allgather((arrays, indices), tiled=True)
-                    if stream is not None:
-                        _write_document_losses(stream, arrays, indices, self.dataset.datasets)
+        for batch, tags in tqdm(iterator, "eval", total=len(self.loader)):
+            state = self.accum_for_batch(model, state, batch, tags)
 
         micro_avg_loss = state.token_avg_loss.mean.item()
         tag_avg_loss = state.loss_per_tag.mean

@@ -13,6 +13,7 @@ import equinox as eqx
 import jax
 import jmp
 import numpy as np
+from jax.experimental.multihost_utils import process_allgather
 
 import haliax as hax
 from haliax import Axis
@@ -44,7 +45,8 @@ from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
 from levanter.data.text.examples import GrugLmExample, named_lm_example_from_grug
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
-from levanter.models.lm_model import LmConfig, LmHeadModel
+from levanter.models.lm_model import LmConfig, LmHeadModel, split_activations
+from levanter.models.loss import maybe_fused_next_token_loss
 from levanter.tokenizers import MarinTokenizer, TokenizerBackend, load_tokenizer
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import use_cpu_device
@@ -88,7 +90,9 @@ class ModelPerplexityConfig:
 
 
 @dataclass
-class _ModelRunner:
+class ModelLossRunner:
+    """A loaded model and tokenizer for batched document scoring."""
+
     label: str
     model: LmHeadModel
     tokenizer: MarinTokenizer
@@ -122,6 +126,26 @@ class _ModelRunner:
 
         return tokenized, per_byte_losses
 
+    def score_token_totals(self, texts: Sequence[str]) -> tuple[np.ndarray, np.ndarray]:
+        """Score all next-token targets once, using one-token overlap between windows."""
+        totals = np.zeros(len(texts), dtype=np.float64)
+        counts = np.zeros(len(texts), dtype=np.int64)
+        chunks: list[TokenizedChunk] = []
+        for doc_index, text in enumerate(texts):
+            if not text:
+                continue
+            tokenized = tokenize_text_with_byte_spans(self.tokenizer, self.hf_tokenizer, text)
+            chunks.extend(chunk_tokenized_document(tokenized, self.eval_length, doc_index=doc_index))
+
+        for chunk_batch in batch_chunks(chunks, batch_size=self.eval_batch_size, max_eval_length=self.eval_length):
+            losses = self._score_chunk_batch(chunk_batch)
+            _check_finite_losses(self.label, losses)
+            for row, chunk in enumerate(chunk_batch):
+                count = max(0, len(chunk.token_ids) - 1)
+                totals[chunk.doc_index] += losses[row, :count].sum(dtype=np.float64)
+                counts[chunk.doc_index] += count
+        return totals, counts
+
     def _score_chunk_batch(self, chunk_batch: list[TokenizedChunk]) -> np.ndarray:
         tokens = np.zeros((self.eval_batch_size, self.eval_length), dtype=np.int32)
         loss_weight = np.zeros((self.eval_batch_size, self.eval_length), dtype=np.float32)
@@ -138,7 +162,7 @@ class _ModelRunner:
             attn_mask=GrugAttentionMask.causal(),
         )
         losses = self.compute_losses(self.model, batch)
-        return np.asarray(jax.device_get(losses), dtype=np.float64)
+        return np.asarray(process_allgather(losses, tiled=True), dtype=np.float64)
 
     def warmup(self) -> None:
         _check_finite_losses(self.label, self._score_chunk_batch([]))
@@ -151,10 +175,10 @@ def score_main(config: ModelPerplexityConfig) -> None:
 
     compute_axis_mapping = config.trainer.compute_axis_mapping
     parameter_axis_mapping = config.trainer.parameter_axis_mapping
-    model_spec = _resolved_model_spec(config.model)
+    model_spec = resolved_model_spec(config.model)
 
     with config.trainer.use_device_mesh():
-        runner = _load_model_runner(
+        runner = load_model_runner(
             spec=model_spec,
             trainer=config.trainer,
             max_eval_length=config.max_eval_length,
@@ -228,18 +252,18 @@ def main(config: GapFinderConfig) -> None:
     compute_axis_mapping = config.trainer.compute_axis_mapping
     parameter_axis_mapping = config.trainer.parameter_axis_mapping
 
-    model_a_spec = _resolved_model_spec(config.model_a)
-    model_b_spec = _resolved_model_spec(config.model_b)
+    model_a_spec = resolved_model_spec(config.model_a)
+    model_b_spec = resolved_model_spec(config.model_b)
 
     with config.trainer.use_device_mesh():
-        runner_a = _load_model_runner(
+        runner_a = load_model_runner(
             spec=model_a_spec,
             trainer=config.trainer,
             max_eval_length=config.max_eval_length,
             compute_axis_mapping=compute_axis_mapping,
             parameter_axis_mapping=parameter_axis_mapping,
         )
-        runner_b = _load_model_runner(
+        runner_b = load_model_runner(
             spec=model_b_spec,
             trainer=config.trainer,
             max_eval_length=config.max_eval_length,
@@ -340,7 +364,8 @@ def main(config: GapFinderConfig) -> None:
     levanter.tracker.current_tracker().finish()
 
 
-def _resolved_model_spec(spec: GapFinderModelConfig) -> GapFinderModelConfig:
+def resolved_model_spec(spec: GapFinderModelConfig) -> GapFinderModelConfig:
+    """Resolve missing model and tokenizer configuration from an HF checkpoint."""
     model = spec.model
     if model is None:
         if not spec.checkpoint_is_hf:
@@ -359,14 +384,15 @@ def _resolved_model_spec(spec: GapFinderModelConfig) -> GapFinderModelConfig:
     return dataclasses.replace(spec, model=model, tokenizer=tokenizer)
 
 
-def _load_model_runner(
+def load_model_runner(
     *,
     spec: GapFinderModelConfig,
     trainer: TrainerConfig,
     max_eval_length: int,
     compute_axis_mapping: Any,
     parameter_axis_mapping: Any,
-) -> _ModelRunner:
+) -> ModelLossRunner:
+    """Load a checkpoint and compile its per-token negative log-likelihood scorer."""
     assert spec.model is not None
     assert spec.tokenizer is not None
 
@@ -391,7 +417,23 @@ def _load_model_runner(
         model = inference_mode(model, True)
         model = mp.cast_to_compute(model)
         named_batch = named_lm_example_from_grug(batch, Pos=Pos, batch_axis=EvalBatch)
-        return model.compute_next_token_loss(named_batch, reduction=None, reduction_axis=()).array
+        named_batch = hax.shard_with_axis_mapping(named_batch, compute_axis_mapping)
+        activations, _ = split_activations(model.activations(named_batch.tokens, named_batch.attn_mask))
+        # Explicit-mesh models can store the head under a different parameter
+        # layout than the fused loss's token-parallel compute layout.
+        head = hax.shard_with_axis_mapping(model.get_lm_head(), compute_axis_mapping)
+        loss = maybe_fused_next_token_loss(
+            model.Pos,
+            model.Embed,
+            model.Vocab,
+            activations,
+            head,
+            named_batch.tokens,
+            loss_weight=named_batch.loss_weight,
+            reduction=None,
+            reduction_axis=(),
+        )
+        return loss.array
 
     if spec.checkpoint_is_hf:
         model_config = spec.model
@@ -402,6 +444,7 @@ def _load_model_runner(
         model = converter.load_pretrained(
             model_config.model_type,
             ref=spec.checkpoint_path,
+            config=model_config,
             axis_mapping=parameter_axis_mapping,
             dtype=trainer.mp.compute_dtype,  # type: ignore[arg-type]
         )
@@ -413,7 +456,7 @@ def _load_model_runner(
         model = hax.shard_with_axis_mapping(model, parameter_axis_mapping)
 
     label = _model_label(spec)
-    return _ModelRunner(
+    return ModelLossRunner(
         label=label,
         model=model,
         tokenizer=tokenizer,
