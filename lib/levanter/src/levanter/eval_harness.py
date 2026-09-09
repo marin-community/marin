@@ -102,13 +102,7 @@ _TASK_DATASET_PATH_OVERRIDES = {
 }
 
 
-def _task_spec_with_dataset_path_override(task: TaskConfig | str) -> dict[str, object] | str:
-    if isinstance(task, str):
-        dataset_path = _TASK_DATASET_PATH_OVERRIDES.get(task)
-        if dataset_path is None:
-            return task
-        return TaskConfig(task=task, dataset_path=dataset_path).to_dict()
-
+def _task_config_with_dataset_path_override(task: TaskConfig) -> dict[str, object]:
     if task.dataset_path is None:
         dataset_path = _TASK_DATASET_PATH_OVERRIDES.get(task.task)
         if dataset_path is not None:
@@ -1066,7 +1060,15 @@ class LmEvalHarnessConfig:
         Returns:
             List of task specifications, with TaskConfig objects converted to dictionaries
         """
-        return [_task_spec_with_dataset_path_override(task) for task in self.task_spec]
+        task_specs: list[str | dict] = []
+        for task in self.task_spec:
+            if isinstance(task, str):
+                if task not in _TASK_DATASET_PATH_OVERRIDES:
+                    task_specs.append(task)
+                    continue
+                task = TaskConfig(task=task)
+            task_specs.append(_task_config_with_dataset_path_override(task))
+        return task_specs
 
     def to_task_dict(self) -> dict:
         """
