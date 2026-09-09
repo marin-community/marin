@@ -83,12 +83,15 @@ def all_sft_sources() -> dict[str, DatakitChatSource]:
         if name.startswith("nemotron_sft/")
     )
 
-    text_sources = all_sources()
+    token_counts = {name: source.rough_token_count_b for name, source in all_sources().items()}
+    # This chat-only source has 3,341,347,579 completion tokens in its pinned
+    # manifest. The rough weight excludes repeated prompts.
+    token_counts["openthoughts4-code-glm-5.2-n4"] = 3.341347579
     return {
         name: DatakitChatSource(
             name=name,
             normalize_steps=factory(),
-            rough_token_count_b=text_sources[name].rough_token_count_b,
+            rough_token_count_b=token_counts[name],
         )
         for name, factory in rows
     }

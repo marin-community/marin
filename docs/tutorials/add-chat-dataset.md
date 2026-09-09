@@ -130,13 +130,11 @@ cached processed and normalized artifacts are rebuilt.
 
 Add the chat step factory to `all_sft_sources()` in `sft_sources.py`. Its
 `DatakitChatSource` records the name, ordered processing steps, and approximate
-token count. The current registry obtains token counts from `all_sources()` in
-`sources.py`, so the same source name must also have a text-source entry there.
-For a single dataset, add `(name, text_step_factory, rough_token_count_b)` to
-`single_sources`, importing the factory from your source module. The token count
-is in billions. This currently requires a working text transformation and text
-normalization chain as well as the chat chain; follow the paired factories in
-`superior_reasoning.py`.
+token count. Existing text sources reuse their weights from `all_sources()`.
+For a chat-only source, add its explicit weight in billions to `token_counts`
+inside `all_sft_sources()`. Do not add it to the pretraining registry merely to
+supply this weight: that registry also defines the expected coverage of pinned
+hero-data artifacts, including embeddings and tokenized outputs.
 
 Add behavior tests under `tests/datakit/download/` for the source conversion.
 Cover its real format quirks, preservation of requests and reasoning, tool
