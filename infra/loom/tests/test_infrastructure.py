@@ -16,6 +16,7 @@ from infra.loom.infrastructure import (
     DeploymentConfig,
     GitHubFederationConfig,
     ProfileConfig,
+    RemoteMcpConfig,
     WorkloadIdentityConfig,
     _deployment_manifest,
     _deployment_profiles,
@@ -72,6 +73,16 @@ def deployment_config() -> DeploymentConfig:
         boot_disk_snapshot="loom-pre-c4d-hyperdisk-20260816",
         dotenv_secret_version=3,
         prune_deployment=True,
+        remote_mcps=(
+            RemoteMcpConfig.parse(
+                {
+                    "identity": "/marina/api",
+                    "label": "Marina API",
+                    "url": "https://marina.example.com/api/marina/mcp/",
+                    "auth": {"type": "iap", "audience": "iap-client-id"},
+                }
+            ),
+        ),
         profiles=(
             ProfileConfig.parse(
                 "ops",
@@ -116,7 +127,7 @@ def field(inputs: dict, snake: str, camel: str):
 def test_empty_runtime_policy_cannot_prune_existing_profiles() -> None:
     base = deployment_config()
     with pytest.raises(ValueError, match="non-empty runtime policy"):
-        replace(base, prune_deployment=True, profiles=(), workloads=(), github_federations=())
+        replace(base, prune_deployment=True, remote_mcps=(), profiles=(), workloads=(), github_federations=())
 
 
 def test_domain_is_a_canonical_hostname() -> None:
@@ -276,6 +287,26 @@ def test_profile_instructions_reject_ambiguous_or_external_sources() -> None:
 def test_profile_mcp_access_rejects_invalid_selections(mcp_access: dict[str, object]) -> None:
     with pytest.raises(ValueError, match="mcpAccess"):
         ProfileConfig.parse("ops", {"agent": "codex", "mcpAccess": mcp_access})
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"url": "http://marina.example.com/mcp"},
+        {"auth": {"type": "iap"}},
+    ],
+)
+def test_remote_mcp_rejects_unsafe_or_ambiguous_configuration(override: dict[str, object]) -> None:
+    value: dict[str, object] = {
+        "identity": "/marina/api",
+        "label": "Marina API",
+        "url": "https://marina.example.com/mcp",
+        "auth": {"type": "none"},
+    }
+    value.update(override)
+
+    with pytest.raises(ValueError, match="remote MCP"):
+        RemoteMcpConfig.parse(value)
 
 
 @pulumi.runtime.test

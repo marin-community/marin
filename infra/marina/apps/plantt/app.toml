@@ -1,0 +1,3 @@
+title = "Plantt"
+description = "Build and share project and compute plans."
+build_command = "cd web && npm ci && npm run build"
