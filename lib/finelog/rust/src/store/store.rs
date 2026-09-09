@@ -459,25 +459,32 @@ impl Store {
         };
         let mut loaded_count = 0;
         let heads = state_store.list().await?;
-        // Validate the entire deployment before claiming any table. A v1
-        // migration cannot change checkpoint identity halfway through its
-        // backfill, and partial writer claims would make rollback harder.
-        for head in &heads {
+        // Load and validate the entire deployment before claiming any table. A
+        // v1 migration cannot change checkpoint identity halfway through its
+        // backfill, and partial writer claims would make rollback harder. Keep
+        // the loaded states: catalog trees are remote and can take several
+        // reads, so loading each one again during the claim loop doubles boot
+        // latency.
+        let mut selected_heads = Vec::with_capacity(heads.len());
+        for head in heads {
             if head.tombstoned {
+                selected_heads.push((head, None));
                 continue;
             }
-            if let Some(selected) = state_store.load(&head.table).await? {
+            let selected = state_store.load(&head.table).await?;
+            if let Some(selected) = &selected {
                 validate_v1_upgrade_preflight(&head.table, &selected.catalog)?;
             }
+            selected_heads.push((head, selected));
         }
-        for head in heads {
+        for (head, selected) in selected_heads {
             let namespace = head.table;
             validate_namespace_name(&namespace, self.data_dir.as_deref())?;
             if head.tombstoned {
                 self.discard_tombstoned_table(&namespace).await?;
                 continue;
             }
-            let Some(selected) = state_store.load(&namespace).await? else {
+            let Some(selected) = selected else {
                 continue;
             };
             let claimed = match state_store

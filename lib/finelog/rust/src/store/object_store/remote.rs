@@ -92,20 +92,24 @@ impl RemoteObjectStore {
             self.prefix_parts()
                 .chain([FINELOG_ROOT_COMPONENT, TABLES_COMPONENT]),
         );
-        let mut stream = self.provider.backend().list(Some(&root));
-        let mut namespaces = std::collections::BTreeSet::new();
-        while let Some(result) = stream.next().await {
-            let meta = result.map_err(|error| {
-                StatsError::Internal(format!("list object tables {root}: {error}"))
-            })?;
-            let Some(mut parts) = meta.location.prefix_match(&root) else {
-                continue;
-            };
-            if let Some(namespace) = parts.next() {
-                namespaces.insert(namespace.as_ref().to_string());
-            }
-        }
-        Ok(namespaces.into_iter().collect())
+        let result = self
+            .provider
+            .backend()
+            .list_with_delimiter(Some(&root))
+            .await
+            .map_err(|error| StatsError::Internal(format!("list object tables {root}: {error}")))?;
+        let mut tables = result
+            .common_prefixes
+            .into_iter()
+            .filter_map(|prefix| {
+                prefix
+                    .prefix_match(&root)
+                    .and_then(|mut parts| parts.next())
+                    .map(|namespace| namespace.as_ref().to_string())
+            })
+            .collect::<Vec<_>>();
+        tables.sort();
+        Ok(tables)
     }
 }
 
@@ -295,6 +299,30 @@ mod tests {
 
         store.delete(&id).await.unwrap();
         assert!(store.read(&id).await.unwrap().is_none());
+        std::fs::remove_dir_all(&remote_dir).ok();
+    }
+
+    #[tokio::test]
+    async fn table_listing_returns_only_immediate_table_prefixes() {
+        let remote_dir = unique_dir("remote_table_listing");
+        let store = build_remote_object_store(remote_dir.to_str().unwrap())
+            .unwrap()
+            .unwrap();
+        for id in [
+            ObjectId::table("iris.task", "objects/v1/a.parquet").unwrap(),
+            ObjectId::table("iris.task", "states/1.json").unwrap(),
+            ObjectId::table("log", "HEAD.json").unwrap(),
+        ] {
+            store
+                .write(&id, bytes::Bytes::from_static(b"data"))
+                .await
+                .unwrap();
+        }
+
+        assert_eq!(
+            store.list_tables().await.unwrap(),
+            vec!["iris.task".to_string(), "log".to_string()]
+        );
         std::fs::remove_dir_all(&remote_dir).ok();
     }
 }
