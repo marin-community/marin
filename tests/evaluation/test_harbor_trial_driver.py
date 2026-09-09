@@ -210,6 +210,33 @@ def test_preflight_digest_is_stable_across_hash_seeds(tmp_path, checked_policies
     assert all(result["digest"] == expected["digest"] for result in seeded)
 
 
+def test_snowball_nemotron_policy_freezes_matching_terminus_harness():
+    policy = yaml.safe_load((_POLICIES / "snowball-nemotron-terminal-id.yaml").read_text())
+
+    assert policy["n_attempts"] == 3
+    assert policy["n_concurrent_trials"] == 128
+    assert policy["retry"]["max_retries"] == 10
+    assert policy["retry"]["exclude_exceptions"] == [
+        "AgentTimeoutError",
+        "AgentEnvironmentTimeoutError",
+        "ContextLengthExceededError",
+    ]
+    assert policy["agents"][0]["name"] == "terminus-2"
+    assert policy["agents"][0]["max_timeout_sec"] == 7200
+    assert policy["agents"][0]["kwargs"]["model_info"] == {
+        "max_input_tokens": 32768,
+        "max_output_tokens": 16384,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+    }
+    assert policy["datasets"] == [
+        {
+            "name": "hf://DCAgent/dev_set_v2",
+            "ref": "377118ff3031c934f5a647ae2c425eb74eef3b21",
+        }
+    ]
+
+
 @pytest.mark.parametrize(
     ("setup_parameters", "run_parameters", "callback", "keywords"),
     [

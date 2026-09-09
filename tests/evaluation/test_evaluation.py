@@ -43,7 +43,7 @@ from experiments.evaluation.launch import (
     LaunchSpec,
     build_evaluation_batch,
 )
-from experiments.evaluation.models import models
+from experiments.evaluation.models import SNOWBALL_FINAL_BASES, SNOWBALL_FINAL_STAGES, models
 
 
 def _install_fake_harbor_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -517,6 +517,45 @@ def test_build_evaluation_batch_records_evalchemy_benchmark_extras(monkeypatch):
     )
 
     assert batch.evaluations[0].identity.eval_runtime == EVALCHEMY.requirement(("math500",))
+
+
+def test_launch_seed_override_is_recorded_for_registry_evalchemy(monkeypatch):
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+    spec = LaunchSpec(
+        model=models()["qwen3-8b"],
+        evals=("math500",),
+        evalchemy_definitions=(),
+        harbor_definitions=(),
+        platform=Platform.TPU,
+        accelerator=None,
+        limit=1,
+        records_prefix="memory://records",
+        submission_cluster="marin",
+        federated_cluster=None,
+        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
+        seed=42,
+    )
+
+    batch = build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="host"), "tester")
+
+    assert batch.evaluations[0].identity.eval_ref.evalchemy.seed == 42
+
+
+def test_snowball_final_catalog_covers_five_bases_and_all_stages():
+    catalog = models()
+    expected = {
+        f"snowball-final-{base}-{stage}"
+        for base, _, _ in SNOWBALL_FINAL_BASES
+        for stage in ("base", *(name for name, _ in SNOWBALL_FINAL_STAGES))
+    }
+
+    assert expected <= catalog.keys()
+    assert len(expected) == 25
+    for name in expected:
+        model = catalog[name]
+        assert model.resource_hint.gpu == {"H100": 8}
+        assert model.serve.max_model_len == 65536
+        assert model.generation.extra_gen_kwargs["temperature"] == "0.7"
 
 
 def test_file_evalchemy_chat_template_overrides_model_default(monkeypatch):

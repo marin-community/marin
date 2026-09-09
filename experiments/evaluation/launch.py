@@ -70,6 +70,7 @@ class LaunchSpec:
     submission_cluster: str
     federated_cluster: str | None
     priority_band: int
+    seed: int | None = None
     version: str | None = None
     description: str | None = None
 
@@ -146,6 +147,7 @@ def _resolve_definitions(
     definitions: tuple[tuple[str, EvaluationDefinition], ...],
     model: ModelConfig,
     limit: int | None,
+    seed: int | None,
 ) -> tuple[tuple[str, _ResolvedDefinition], ...]:
     evalchemy_definitions = [definition for _, definition in definitions if isinstance(definition, EvalchemyDefinition)]
     evalchemy_sources = iter(load_evalchemy_config(definition.config_path) for definition in evalchemy_definitions)
@@ -158,6 +160,8 @@ def _resolve_definitions(
         if isinstance(definition, EvalchemyDefinition):
             source = next(evalchemy_sources)
             config = definition.config_for(source, model, limit)
+            if seed is not None:
+                config = replace(config, seed=seed)
             resolved.append(
                 (
                     name,
@@ -200,7 +204,7 @@ def build_evaluation_batch(
         if accelerator.platform is not Platform.GPU:
             raise ValueError("--federated_cluster requires a GPU accelerator")
         accelerator = replace(accelerator, target_cluster=spec.federated_cluster)
-    definitions = _resolve_definitions(_evaluation_definitions(spec), model, spec.limit)
+    definitions = _resolve_definitions(_evaluation_definitions(spec), model, spec.limit, spec.seed)
     records_prefix = records_prefix_for(accelerator, spec)
     created_at = datetime.now(UTC).isoformat()
     evaluations: list[Evaluation] = []

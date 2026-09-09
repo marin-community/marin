@@ -28,6 +28,49 @@ SNOWBALL_SFT_EXPORT_URI = "s3://marin-us-east-02a/marin/exports/grug/june-67b-a2
 # The 256-expert Grug MoE fork serves data-parallel + expert-parallel with tensor_parallel_size=1; the
 # per-head TP heuristic cannot infer this, and the loader streams shards distributed across the ranks.
 SNOWBALL_VLLM_ARGS = ("--enable-expert-parallel", "--model-loader-extra-config", '{"distributed":true}')
+SNOWBALL_FINAL_VERSION = "2026.09.08.6"
+SNOWBALL_FINAL_GENERATION = GenerationConfig(
+    max_gen_toks=32768,
+    extra_gen_kwargs={
+        "temperature": "0.7",
+        "top_p": "1.0",
+        "repetition_penalty": "1.1",
+        "skip_special_tokens": "false",
+    },
+)
+SNOWBALL_FINAL_BASES: tuple[tuple[str, str, str], ...] = (
+    (
+        "qk157",
+        "open-athena/snowball-67b-a2b-base-262k-qk157",
+        "2b1f526273b8968b307a0098c08fb4321bb91e35",
+    ),
+    (
+        "qk175",
+        "open-athena/snowball-67b-a2b-base-262k-qk175",
+        "1934e71f2bb0fbeb19e5ce82372136e5297bf0a4",
+    ),
+    (
+        "qk175-skew2",
+        "open-athena/snowball-67b-a2b-base-262k-qk175-skew2",
+        "ce41c24df0afc10079210521ea7e231115ad5a92",
+    ),
+    (
+        "qk175-skew4",
+        "open-athena/snowball-67b-a2b-base-262k-qk175-skew4",
+        "5052e68c4d88c9e0de87f7595a25ee4005aef1cf",
+    ),
+    (
+        "qk175-skew8",
+        "open-athena/snowball-67b-a2b-base-262k-qk175-skew8",
+        "058ecaf27b9e4f37219df221a51e7d490d58ec3d",
+    ),
+)
+SNOWBALL_FINAL_STAGES: tuple[tuple[str, int], ...] = (
+    ("chat", 257),
+    ("thinking", 630),
+    ("opencode", 1888),
+    ("nemotron-terminal", 1888),
+)
 
 
 def _snowball(
@@ -54,6 +97,50 @@ def _snowball(
         ),
         generation=generation or GenerationConfig(),
     )
+
+
+def _snowball_final(name: str, location: str, *, revision: str | None = None, base: bool = False) -> ModelConfig:
+    """One checkpoint in the fixed five-base Snowball SFT evaluation matrix."""
+    return ModelConfig(
+        name=name,
+        location=location,
+        revision=revision,
+        # Evalchemy's external runtime accepts an HF repository name but not ``repo@revision``.
+        # The campaign separately records the validated tokenizer.json digest in its fixed policy.
+        tokenizer="marin-community/marin-tokenizer",
+        apply_chat_template=True,
+        resource_hint=ResourceHint(gpu={"H100": 8}, memory="512g"),
+        serve=ServeConfig(
+            tensor_parallel_size=1,
+            data_parallel_size=8,
+            max_model_len=65536,
+            max_num_batched_tokens=7168,
+            max_num_seqs=32,
+            tool_call_parser="hermes",
+            chat_template=CONCAT_CHAT_TEMPLATE if base else None,
+            auto_overrides=False,
+            vllm_extra_args=SNOWBALL_VLLM_ARGS,
+        ),
+        generation=SNOWBALL_FINAL_GENERATION,
+    )
+
+
+def _snowball_final_models() -> tuple[ModelConfig, ...]:
+    models: list[ModelConfig] = []
+    prefix = "s3://marin-us-east-02a/marin/snowball-final"
+    for base, repository, revision in SNOWBALL_FINAL_BASES:
+        models.append(
+            _snowball_final(
+                f"snowball-final-{base}-base",
+                repository,
+                revision=revision,
+                base=True,
+            )
+        )
+        for stage, step in SNOWBALL_FINAL_STAGES:
+            location = f"{prefix}/{base}/{stage}/{SNOWBALL_FINAL_VERSION}/hf/step-{step}/"
+            models.append(_snowball_final(f"snowball-final-{base}-{stage}", location))
+    return tuple(models)
 
 
 def _base_hf(name: str, location: str, revision: str, hbm_gb: int) -> ModelConfig:
@@ -135,6 +222,7 @@ _FACTORY_MODELS: tuple[ModelConfig, ...] = (
         SNOWBALL_SFT_EXPORT_URI,
         generation=GenerationConfig(extra_gen_kwargs={"skip_special_tokens": "false", "repetition_penalty": "1.1"}),
     ),
+    *_snowball_final_models(),
 )
 
 

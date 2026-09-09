@@ -119,6 +119,7 @@ def cli() -> None:
 )
 @click.option("--accelerator", default=None, help="Slice override, e.g. 'v6e-8' or 'H100x8'.")
 @click.option("--limit", type=int, default=None, help="Override max eval instances per task.")
+@click.option("--seed", type=int, default=None, help="Override the Evalchemy sampling seed for this launch.")
 @click.option(
     "--version",
     "version",
@@ -153,6 +154,7 @@ def launch(
     platform: str | None,
     accelerator: str | None,
     limit: int | None,
+    seed: int | None,
     version: str | None,
     description: str | None,
     no_wait: bool,
@@ -191,6 +193,7 @@ def launch(
         platform=resolved_platform,
         accelerator=accelerator,
         limit=limit,
+        seed=seed,
         records_prefix=records_prefix,
         submission_cluster=EVALUATION_CONTROLLER_CLUSTER,
         federated_cluster=federated_cluster,

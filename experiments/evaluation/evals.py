@@ -265,6 +265,7 @@ EVALS.update(
         "medagentbench": harbor_definition("medagentbench"),
         "financeagent": harbor_definition("financeagent"),
         "grug-opencode-id": harbor_definition("grug-opencode-id"),
+        "snowball-nemotron-terminal-id": harbor_definition("snowball-nemotron-terminal-id"),
     }
 )
 

@@ -140,3 +140,21 @@ author: benfeuer
 - Result: falsified before any update. Stored LM head sharding was `P(('replica_dcn', 'data'), 'model')`, but generic fused loss inferred `P(None, None)` for logical `(Embed, Vocab)` while example activations were data-sharded. The coordinator began an automatic retry; it was cancelled before repeating the full weight load. Snowball now reshards only `get_lm_head()` to `P(None, None)` at the generic loss boundary. The fresh eight-device regression reproduces the old exception and now compiles a finite loss and finite LM-head gradient. The broader Snowball/parity/SFT-packing/campaign suite passes (39 passed, 1 skipped).
 - Interpretation: HF conversion and every source shard are loadable on RNO2A. The blocker is isolated to the adapter between the raw Grug parameter layout and generic loss, not the checkpoint. Replication at the loss boundary is correct for the target mesh (`model=1`) and gradients return to the stored layout.
 - Next action: commit the fix and launch a fresh one-update smoke identity/port; continue to require update/save/loadability before campaign fan-out.
+
+### 2026-09-08 22:35 EDT - Shared prefix caches passed exact accounting gates
+
+- Hypothesis: one pinned tokenizer identity can materialize both shared prefix datasets on RNO2A with the fixed one-epoch counts before any five-model GPU fan-out.
+- Commit Hash: `6fe198511e`.
+- Command: `/benfeuer/snowball-final-prefix-caches-coord`, followed by `/benfeuer/snowball-final-prefix-manifest-read`.
+- Result: both jobs succeeded. WildChat produced 538,877,811 tokens, which resolves to exactly 257 updates at seq32768/global-batch64. Nemotron-Science produced 1,321,079,881 tokens, which resolves to exactly 630 updates. The manifests live under `wildchat_386k-chat-866d4c/2026.07.17` and `nemotron_science_think-chat-866d4c/2026.07.17` in the RNO2A S3 prefix.
+- Interpretation: the dependency gate has eliminated shared-cache races and exact epoch drift. This does not replace the GPU smoke gate.
+- Next action: finish `/benfeuer/snowball-final-qk157-smoke4-coord` through update/save/reload, then launch the five full chains.
+
+### 2026-09-08 22:35 EDT - Evaluation campaign surface validated locally
+
+- Hypothesis: the existing evaluation framework can represent all 25 checkpoints, three explicit seeds, and the branch-matching Nemotron-Terminal harness without weakening checked-in task policy.
+- Commit Hash: uncommitted follow-up on `c5ef700ef1`.
+- Command: focused evaluation tests, explicit harness integration test, and an H100x8 RNO2A dry-run launch for `snowball-final-qk157-base` at seed 42.
+- Result: 29 default-marker tests passed, the explicit integration test passed, and the dry run resolved the interactive RNO2A accelerator. The catalog contains all five bases across Base/Chat/Thinking/OpenCode/Nemotron-Terminal, and the launcher records seed overrides only for Evalchemy definitions.
+- Interpretation: non-agentic launches can be split by suite and seed while preserving task-local limits and few-shot settings; OpenCode and Nemotron-Terminal retain distinct harnesses.
+- Next action: review, commit, and push the evaluation surface while smoke 4 continues loading.
