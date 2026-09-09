@@ -12,24 +12,11 @@ import jax.numpy as jnp
 from jax.sharding import PartitionSpec as P
 
 from haliax.jax_utils import named_call
-from levanter.grug.sharding import _current_mesh, _reshard_for_shard_map
+from levanter.grug.sharding import _batch_axes, _current_mesh, _reshard_for_shard_map
 from levanter.kernels.pallas.fused_cross_entropy_loss import (
     BlockSizes,
     fused_cross_entropy_loss_and_logsumexp_penalty,
 )
-
-
-def _batch_axis_spec(x: jax.Array):
-    x_type = jax.typeof(x)
-    sharding = getattr(x_type, "sharding", None)
-    spec = getattr(sharding, "spec", None)
-    if spec is not None and len(spec) > 0 and spec[0] is not None:
-        return spec[0]
-    sharding = getattr(x, "sharding", None)
-    spec = getattr(sharding, "spec", None)
-    if spec is not None and len(spec) > 0 and spec[0] is not None:
-        return spec[0]
-    return ("data",)
 
 
 def _axis_names_from_spec(axis_spec) -> tuple[str, ...]:
@@ -97,7 +84,7 @@ def fused_linear_softmax_cross_entropy_loss(
     mesh = _current_mesh()
     has_mesh = mesh is not None and not mesh.empty
     weight_array = weight if weight is not None else jnp.ones_like(labels, dtype=dtype)
-    batch_axis_spec = _batch_axis_spec(hidden) if has_mesh else None
+    batch_axis_spec = _batch_axes(mesh) if has_mesh else None
     batch_axis_names = _axis_names_from_spec(batch_axis_spec) if has_mesh else ()
 
     def _loss_shard(

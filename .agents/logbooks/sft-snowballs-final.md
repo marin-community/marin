@@ -257,3 +257,24 @@ author: benfeuer
 - Result: falsified before update. All eight ranks loaded 39/39 and selected `batched_xla`, but XLA again requested exactly 268.84 GiB per device. The compiler showed the local `[1,32768,2560]` activation crossing from the 64-way batch sharding to a replicated layout during transpose. The owned coordinator retry was cancelled immediately. The remaining conflict is the stored LM head: its hidden dimension uses the same physical axes as the token batch, so differentiating through its loss-boundary replication makes XLA reconstruct the global activation/logit surface.
 - Interpretation: keep `output_proj` replicated in the first-class adapter at initialization and HF/native load. The head is about 0.7 GiB in bf16, so replication is bounded; its data-parallel gradient can all-reduce without an incompatible post-loss reduce-scatter. The eight-device loss test now asserts replicated head storage and device-local kernel input. Focused Snowball/SFT/load tests pass (36), and full pre-commit passes.
 - Next action: complete affected tests and review, then launch smoke 6 with a fresh identity and port; continue to require finite update, save, and native reload.
+
+### 2026-09-09 00:47 EDT - Smoke 6 launched with replicated LM head
+
+- Hypothesis: storing `output_proj` replicated removes the batch/head layout conflict that produced the 268.84 GiB train-step allocation.
+- Commit Hash: `2da2e46812`.
+- Command: submit `/benfeuer/snowball-final-qk157-smoke6-coord` on RNO2A with JAX port 19407 and version `2026.09.08.6`.
+- Result: coordinator accepted at interactive priority. Focused tests, full pre-commit, the 1,429-test affected suite, and advisory review passed without a head-placement finding. Evaluation canary 5 independently confirmed a 67.3 GiB target and 45.66 GiB KV cache at 0.85 utilization.
+- Interpretation: smoke 6 must still demonstrate the production 64-H100 compile, finite update, save, and native reload. Canary 5 must survive actual benchmark traffic.
+- Next action: monitor both gates; launch no campaign fan-out yet.
+
+### 2026-09-09 01:36 EDT - Replicated head falsified; base evaluations released
+
+- Result: smoke 6 reproduced the 268.69 GiB `jit__train_step` allocation after all ranks entered `batched_xla`; the owned retry was cancelled. MMLU canary 5 independently persisted 14,042 samples across 57 subtasks with `status=succeeded`, and its server advanced to ARC Challenge.
+- Interpretation: head storage alone is not causal. The compiler is still transposing between the full `data × expert` batch layout and an 8-way layout at the loss boundary. The evaluation serving correction is validated under benchmark traffic.
+- Next action: compare one-node/batch-8 and two-node/batch-16 probes with one sequence per GPU, while the remaining 29 base suite/seed evaluation groups run in parallel.
+
+### 2026-09-09 01:38 EDT - Topology probes relaunched with valid versions
+
+- Result: the initial probe coordinators rejected `topology1`/`topology2` as invalid immutable version labels before allocating GPUs.
+- Interpretation: this was a launch-only validation error and yielded no topology evidence.
+- Next action: monitor `/benfeuer/snowball-final-qk157-topology1b-coord` (`2026.09.09.1`) and `/benfeuer/snowball-final-qk157-topology2b-coord` (`2026.09.09.2`).
