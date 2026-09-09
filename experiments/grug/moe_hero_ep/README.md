@@ -25,7 +25,15 @@ data-parallel rack uses one 64-device expert mesh.
   ([#8870](https://github.com/marin-community/marin/issues/8870)): one update carries each (peer,
   local expert) pair, so rows arrive grouped by expert, and it reaches XLA's device-initiated
   (NCCL LSA) kernel, which needs Marin's patched PJRT build, installed on GB200 through the `gpu`
-  extra (`lib/marin/pyproject.toml`).
+  extra (`lib/marin/pyproject.toml`). Its expert MLP is six `jax.lax.ragged_dot` calls that XLA
+  lowers to cuDNN's MoE grouped matmul (`--xla_gpu_experimental_use_ragged_dot_fusion`, which the
+  ragged runtime defaults force). That lowering exists only in a PJRT build made against cuDNN
+  9.22 or newer, its weight gradient is a cuBLASLt grouped GEMM that needs cuBLASLt 13.5 at run
+  time, and XLA must not rematerialize the cuDNN fusions; the fork branch
+  `mcwitt/ragged-dot-cudnn` carries those changes and `verify_ragged_pjrt` checks the runtime
+  versions before dispatch. Until the wheel and the pins land, pass them to the train tasks with
+  `--pip-package <wheel url> --pip-package nvidia-cudnn-cu13==9.25.1.1 --pip-package
+  nvidia-cublas==13.6.1.10`.
 - Optimizer: MuonH, with its state offloaded to pinned host memory.
 - Weights: bf16 on device with a pinned-host fp32 master, which the pooled-wave device peak needs.
   A checkpoint written with a master restores natively here. A master-less checkpoint, which the
