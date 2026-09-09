@@ -94,7 +94,6 @@ def validate_chat_messages(messages: list[Message]) -> None:
                     raise ValueError("System and developer messages must precede all conversation turns")
                 if message.channel is not None or message.recipient is not None:
                     raise ValueError("Instruction messages cannot have channels or recipients")
-                continue
             case _ if not seen_user and role != Role.USER:
                 raise ValueError("The first conversation message must be a user message")
             case Role.USER:
@@ -129,8 +128,9 @@ def validate_chat_messages(messages: list[Message]) -> None:
             case Role.TOOL:
                 if message.channel != ChatChannel.COMMENTARY or message.recipient != Role.ASSISTANT.value:
                     raise ValueError("Tool observations require commentary addressed to assistant")
-                if not pending or message.author.name != pending.popleft():
+                if not pending or message.author.name != pending[0]:
                     raise ValueError("Tool observations must match pending calls in call order")
+                pending.popleft()
         previous = message
     if not seen_user or messages[-1].author.role != Role.ASSISTANT:
         raise ValueError("A chat training record must end with an assistant response")

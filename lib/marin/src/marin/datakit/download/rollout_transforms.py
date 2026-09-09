@@ -134,96 +134,98 @@ def openai_chat_messages(messages: list[dict]) -> list[Message]:
         if not isinstance(reasoning, str) or (reasoning and role != Role.ASSISTANT):
             raise ValueError("reasoning_content is only valid as assistant text")
         _check_source_markup(reasoning)
-        if role == Role.TOOL:
-            if content is None:
-                raise ValueError("Tool observations must contain text")
-            _check_source_markup(content)
-            if re.search(r"</?tool_(?:call|response)(?:[: >])", content, re.IGNORECASE):
-                raise ValueError("Tool observations must not contain chat protocol wrappers")
-            call_id = message.get("tool_call_id")
-            unanswered = pending.keys() - observations.keys()
-            if call_id is None and len(unanswered) == 1:
-                call_id = next(iter(unanswered))
-            if not isinstance(call_id, str) or call_id not in unanswered:
-                raise ValueError("Tool messages must reference a pending tool call")
-            if name is not None and name != pending[call_id]:
-                raise ValueError("Tool observation name must match its call")
-            observations[call_id] = content
-            if len(observations) == len(pending):
-                for call_id, tool_name in pending.items():
+        match role:
+            case Role.TOOL:
+                if content is None:
+                    raise ValueError("Tool observations must contain text")
+                _check_source_markup(content)
+                if re.search(r"</?tool_(?:call|response)(?:[: >])", content, re.IGNORECASE):
+                    raise ValueError("Tool observations must not contain chat protocol wrappers")
+                call_id = message.get("tool_call_id")
+                unanswered = pending.keys() - observations.keys()
+                if call_id is None and len(unanswered) == 1:
+                    call_id = next(iter(unanswered))
+                if not isinstance(call_id, str) or call_id not in unanswered:
+                    raise ValueError("Tool messages must reference a pending tool call")
+                if name is not None and name != pending[call_id]:
+                    raise ValueError("Tool observation name must match its call")
+                observations[call_id] = content
+                if len(observations) == len(pending):
+                    for call_id, tool_name in pending.items():
+                        output.append(
+                            Message.from_author_and_content(
+                                Author.new(Role.TOOL, f"functions.{tool_name}"), observations[call_id]
+                            )
+                            .with_channel(ChatChannel.COMMENTARY)
+                            .with_recipient(Role.ASSISTANT.value)
+                        )
+                    pending.clear()
+                    observations.clear()
+            case _ if pending:
+                raise ValueError("Every source tool call must receive an observation before another turn")
+            case Role.SYSTEM | Role.DEVELOPER | Role.USER:
+                if content is None:
+                    raise ValueError("Only assistant reasoning or tool-call messages may have null content")
+                _check_source_markup(content)
+                output.append(Message.from_author_and_content(author, content))
+            case Role.ASSISTANT:
+                content = normalize_reasoning_tokens(content or "")
+                if REASONING_TOKEN.search(content):
+                    match = re.fullmatch(r"<\|start_think\|>(.*?)<\|end_think\|>(.*)", content, re.DOTALL)
+                    if match is None or not match[1].strip():
+                        raise ReasoningFormatError("Assistant reasoning must be a non-empty prefix of the reply")
+                    if reasoning:
+                        raise ValueError("Assistant reasoning is present in both content and reasoning_content")
+                    reasoning, content = match.groups()
+                _check_source_markup(reasoning)
+                _check_source_markup(content)
+                if re.search(r"<tool_call(?::[^>]*)?>", content, re.IGNORECASE):
+                    raise ValueError("Inline tool-call syntax must be split out by the source adapter")
+                calls = message.get("tool_calls") or []
+                if not calls and message.get("function_call"):
+                    function = message["function_call"]
+                    if isinstance(function, str):
+                        function = json.loads(function)
+                    calls = [{"function": function}]
+                if not isinstance(calls, list):
+                    raise ValueError("Source tool_calls must be a list")
+                if not content.strip() and not reasoning.strip() and not calls:
+                    raise ValueError("Assistant turns must contain text, reasoning, or a tool call")
+                if reasoning.strip():
+                    output.append(
+                        Message.from_author_and_content(author, reasoning.strip()).with_channel(ChatChannel.ANALYSIS)
+                    )
+                if content.strip():
+                    output.append(
+                        Message.from_author_and_content(author, content.strip()).with_channel(
+                            ChatChannel.COMMENTARY if calls else ChatChannel.FINAL
+                        )
+                    )
+                for call_index, call in enumerate(calls):
+                    if not isinstance(call, dict) or not isinstance(call.get("function"), dict):
+                        raise ValueError("Each tool call requires a function object")
+                    function = call["function"]
+                    tool_name = function.get("name")
+                    if not isinstance(tool_name, str) or re.fullmatch(r"[A-Za-z0-9_.:-]+", tool_name) is None:
+                        raise ValueError("Each tool call requires a valid function name")
+                    call_id = call.get("id") or f"call_{index}_{call_index}"
+                    if not isinstance(call_id, str) or call_id in seen_call_ids:
+                        raise ValueError("Source tool-call IDs must be unique strings")
+                    seen_call_ids.add(call_id)
+                    arguments = function.get("arguments")
+                    if isinstance(arguments, str):
+                        arguments = json.loads(arguments)
+                    if not isinstance(arguments, dict):
+                        raise ValueError("Tool-call arguments must be JSON objects")
+                    _check_source_markup(arguments)
                     output.append(
                         Message.from_author_and_content(
-                            Author.new(Role.TOOL, f"functions.{tool_name}"), observations[call_id]
+                            author, json.dumps(arguments, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
                         )
                         .with_channel(ChatChannel.COMMENTARY)
-                        .with_recipient(Role.ASSISTANT.value)
+                        .with_recipient(f"functions.{tool_name}")
                     )
-                pending.clear()
-                observations.clear()
-            continue
-        if pending:
-            raise ValueError("Every source tool call must receive an observation before another turn")
-        if role != Role.ASSISTANT:
-            if content is None:
-                raise ValueError("Only assistant reasoning or tool-call messages may have null content")
-            _check_source_markup(content)
-            output.append(Message.from_author_and_content(author, content))
-            continue
-        content = normalize_reasoning_tokens(content or "")
-        if REASONING_TOKEN.search(content):
-            match = re.fullmatch(r"<\|start_think\|>(.*?)<\|end_think\|>(.*)", content, re.DOTALL)
-            if match is None or not match[1].strip():
-                raise ReasoningFormatError("Assistant reasoning must be a non-empty prefix of the reply")
-            if reasoning:
-                raise ValueError("Assistant reasoning is present in both content and reasoning_content")
-            reasoning, content = match.groups()
-        _check_source_markup(reasoning)
-        _check_source_markup(content)
-        if re.search(r"<tool_call(?::[^>]*)?>", content, re.IGNORECASE):
-            raise ValueError("Inline tool-call syntax must be split out by the source adapter")
-        calls = message.get("tool_calls") or []
-        if not calls and message.get("function_call"):
-            function = message["function_call"]
-            if isinstance(function, str):
-                function = json.loads(function)
-            calls = [{"function": function}]
-        if not isinstance(calls, list):
-            raise ValueError("Source tool_calls must be a list")
-        if not content.strip() and not reasoning.strip() and not calls:
-            raise ValueError("Assistant turns must contain text, reasoning, or a tool call")
-        if reasoning.strip():
-            output.append(Message.from_author_and_content(author, reasoning.strip()).with_channel(ChatChannel.ANALYSIS))
-        if content.strip():
-            output.append(
-                Message.from_author_and_content(author, content.strip()).with_channel(
-                    ChatChannel.COMMENTARY if calls else ChatChannel.FINAL
-                )
-            )
-        for call_index, call in enumerate(calls):
-            if not isinstance(call, dict) or not isinstance(call.get("function"), dict):
-                raise ValueError("Each tool call requires a function object")
-            function = call["function"]
-            tool_name = function.get("name")
-            if not isinstance(tool_name, str) or re.fullmatch(r"[A-Za-z0-9_.:-]+", tool_name) is None:
-                raise ValueError("Each tool call requires a valid function name")
-            call_id = call.get("id") or f"call_{index}_{call_index}"
-            if not isinstance(call_id, str) or call_id in seen_call_ids:
-                raise ValueError("Source tool-call IDs must be unique strings")
-            seen_call_ids.add(call_id)
-            arguments = function.get("arguments")
-            if isinstance(arguments, str):
-                arguments = json.loads(arguments)
-            if not isinstance(arguments, dict):
-                raise ValueError("Tool-call arguments must be JSON objects")
-            _check_source_markup(arguments)
-            output.append(
-                Message.from_author_and_content(
-                    author, json.dumps(arguments, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-                )
-                .with_channel(ChatChannel.COMMENTARY)
-                .with_recipient(f"functions.{tool_name}")
-            )
-            pending[call_id] = tool_name
+                    pending[call_id] = tool_name
     if observations:
         raise ValueError("A parallel tool-call batch is missing observations")
     return output

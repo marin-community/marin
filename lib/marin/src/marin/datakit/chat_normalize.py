@@ -65,20 +65,18 @@ def _normalize_chat_record(record: dict[str, Any], messages_field: str, id_field
     if not isinstance(tools, list):
         raise ValueError("tools must be a list of function definitions")
     validate_tool_definitions(tools, messages)
-    if tools:
-        kwargs["tools"] = tools
-    messages = [message.to_dict() for message in messages]
+    serialized_messages = [message.to_dict() for message in messages]
 
     source_id = record.get(id_field)
     out = {key: value for key, value in record.items() if key not in {id_field, messages_field, "chat_template_kwargs"}}
     identity = json.dumps(
-        {"messages": messages, "chat_template_kwargs": kwargs},
+        {"messages": serialized_messages, "chat_template_kwargs": kwargs},
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
     out["id"] = format(dupekit.hash_xxh3_128(identity), "032x")
-    out["messages"] = messages
+    out["messages"] = serialized_messages
     if kwargs:
         out["chat_template_kwargs"] = json.dumps(kwargs, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     if source_id is not None:
