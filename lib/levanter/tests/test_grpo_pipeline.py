@@ -46,7 +46,8 @@ class Stage(eqx.Module):
 def test_pipeline_objective_preserves_response_alignment_masks_and_full_batch_weights(compute_dtype):
     rows = 2 * jax.device_count()
     Batch, Response = hax.Axis("batch", rows), hax.Axis("response", 2)
-    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+    # TPU may otherwise approximate FP32 contractions differently across CE shapes.
+    with jax.default_matmul_precision("float32"), jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
         stages = tuple(
             Stage(jax.random.normal(jax.random.PRNGKey(i), (8, 8)) * 0.1, jnp.arange(8) * 0.001) for i in range(2)
         )

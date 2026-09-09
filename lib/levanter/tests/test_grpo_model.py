@@ -46,7 +46,9 @@ def model_batch(request):
         old_logprobs=hax.full((B, T), -3.5),
         reference_logprobs=None,
     )
-    return model, batch
+    # Compare blocked and full projections with the same FP32 multiplication policy.
+    with jax.default_matmul_precision("float32"):
+        yield model, batch
 
 
 def full_softmax_scores(model, batch):
