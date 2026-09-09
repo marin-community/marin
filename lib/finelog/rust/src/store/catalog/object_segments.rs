@@ -181,6 +181,23 @@ fn advance_generation_in(
 }
 
 impl Catalog {
+    /// Give a changed rebuildable projection a fresh durable-state revision.
+    ///
+    /// Recovery can replace local projection rows without allocating a new
+    /// revision. If those rows subsequently differ from the state selected at
+    /// that same revision, the controller calls this before publishing so it
+    /// never assigns two meanings to one revision.
+    pub fn advance_object_state_revision(
+        &self,
+        namespace: &str,
+    ) -> Result<TableRevision, StatsError> {
+        let mut inner = self.inner.lock().unwrap();
+        let transaction = inner.conn.transaction().map_err(sqlite_err)?;
+        let revision = advance_generation_in(&transaction, namespace)?;
+        transaction.commit().map_err(sqlite_err)?;
+        Ok(revision)
+    }
+
     /// Rebuild the complete local projection from a verified remote catalog.
     pub fn replace_with_published_snapshot(
         &self,

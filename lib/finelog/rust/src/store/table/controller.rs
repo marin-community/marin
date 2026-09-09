@@ -877,12 +877,37 @@ impl TableController {
         // revision gate until that projection is complete so a concurrent
         // cursor or segment commit cannot produce a hybrid value carrying the
         // old revision with fields from the new one.
+        let expected = self.selected.lock().unwrap().clone();
         let mut catalog = {
             let _gate = self.mutation_gate.lock().unwrap();
-            namespace_catalog(&self.catalog, &self.table, &objects.table_dir)
-                .map_err(CommitError::PublicationDeferred)?
+            let mut projected = namespace_catalog(&self.catalog, &self.table, &objects.table_dir)
+                .map_err(CommitError::PublicationDeferred)?;
+            if let Some(previous) = &expected {
+                let floor = previous.catalog.persisted_high_water.unwrap_or(0);
+                if projected.persisted_high_water.unwrap_or(0) < floor {
+                    projected.persisted_high_water = Some(floor);
+                }
+                if projected.catalog_generation == previous.catalog.catalog_generation
+                    && projected != previous.catalog
+                {
+                    let revision = self
+                        .catalog
+                        .advance_object_state_revision(&self.table)
+                        .map_err(CommitError::PublicationDeferred)?;
+                    tracing::warn!(
+                        table = %self.table,
+                        revision = revision.get(),
+                        "advanced a divergent recovered projection to a fresh revision"
+                    );
+                    projected = namespace_catalog(&self.catalog, &self.table, &objects.table_dir)
+                        .map_err(CommitError::PublicationDeferred)?;
+                    if projected.persisted_high_water.unwrap_or(0) < floor {
+                        projected.persisted_high_water = Some(floor);
+                    }
+                }
+            }
+            projected
         };
-        let expected = self.selected.lock().unwrap().clone();
         // A root that holds catalog history without a HEAD is an external
         // anomaly (the software never deletes HEAD). Creating a fresh HEAD
         // would start a second history over the first, so publication defers
@@ -1240,7 +1265,7 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     use crate::proto::finelog::stats::{
-        CatalogSegment, ColumnType, L0Mode, OperatingPolicy, SourceLayout,
+        CatalogSegment, ColumnType, ForwardCursor, L0Mode, OperatingPolicy, SourceLayout,
         TableSpec as ProtoTableSpec, TableVersionSegments,
     };
     use crate::store::object_store::build_remote_object_store;
@@ -1828,6 +1853,51 @@ mod tests {
             states.load(TABLE).await.unwrap().unwrap().revision().get(),
             2
         );
+    }
+
+    #[tokio::test]
+    async fn divergent_recovered_projection_gets_a_fresh_revision() {
+        let (controller, states, _faults) =
+            faulted_controller("controller_recovered_projection_revision", 11);
+        let first = controller.publish_state().await.unwrap();
+        assert_eq!(first.revision().get(), 1);
+
+        let mut divergent = first.state().catalog().clone();
+        divergent.forward_cursors.push(ForwardCursor {
+            target: Some("hub".to_string()),
+            cursor: Some(5),
+            ..Default::default()
+        });
+        let schema = with_implicit_seq(Schema::new(
+            vec![Column::new(
+                "timestamp_ms",
+                ColumnType::COLUMN_TYPE_INT64,
+                false,
+            )],
+            "",
+        ));
+        controller
+            .catalog
+            .replace_with_published_snapshot(
+                TABLE,
+                schema,
+                crate::store::policy::StoragePolicy::default(),
+                &divergent,
+                &[],
+            )
+            .unwrap();
+
+        let repaired = controller.publish_state().await.unwrap();
+        assert_eq!(repaired.revision().get(), 2);
+        assert_eq!(
+            repaired.state().catalog().forward_cursors[0].cursor,
+            Some(5)
+        );
+        assert_eq!(
+            states.load(TABLE).await.unwrap().unwrap().revision().get(),
+            2
+        );
+        assert!(controller.writes_ready());
     }
 
     #[tokio::test]
