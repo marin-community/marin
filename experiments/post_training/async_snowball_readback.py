@@ -44,6 +44,7 @@ def prepare_readback(source_request: dict, *, runtime_commit: str, run_id: str, 
     config["trainer"]["weight_sync_readback_output"] = f"{output_prefix}/native-readback"
     config["trainer"]["logger"] = "console"
     config["trainer"]["algorithm"]["batch_invariant"] = False
+    config["trainer"]["fully_async"]["first_token_admission"] = True
     config["trainer"]["eval_before_train"] = False
     config["trainer"]["eval_interval"] = -1
     config["trainer"]["ckpt_interval"] = -1
