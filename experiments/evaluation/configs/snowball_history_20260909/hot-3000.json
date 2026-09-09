@@ -1,0 +1,29 @@
+{
+  "checkpoint": {
+    "name": "hot-3000",
+    "path": "gs://marin-us-central2/grug/moe_67b_a2b_d2560_ep1_rep16_bs4096_seq8192_sw2k_v4_2048_muon_10T-93542a/checkpoints/step-3000",
+    "backend": "native_tpu",
+    "stage": "hot",
+    "step": 3000,
+    "parent": null,
+    "executor_info_path": "gs://marin-us-central2/grug/moe_67b_a2b_d2560_ep1_rep16_bs4096_seq8192_sw2k_v4_2048_muon_10T-93542a/.executor_info"
+  },
+  "datasets": [
+    {
+      "name": "legacy-2025",
+      "manifest_path": "gs://marin-us-central2/evaluation/document-losses/snowball-history-8975/data/legacy-2025/manifest.json",
+      "source_revision": "185c463882a8ae0f203e51ae5852d8cf4fe299cf",
+      "documents": 11052,
+      "subsets": 14
+    },
+    {
+      "name": "2026-07",
+      "manifest_path": "gs://marin-us-central2/evaluation/document-losses/snowball-history-8975/data/2026-07/manifest.json",
+      "source_revision": "65889535d56aa38d448ce7e07b08e6e36c031545",
+      "documents": 7500,
+      "subsets": 15
+    }
+  ],
+  "output_path": "gs://marin-us-central2/evaluation/document-losses/snowball-history-8975/hot-3000",
+  "max_eval_length": 4096
+}

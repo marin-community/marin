@@ -90,16 +90,17 @@ class ModelPerplexityConfig:
 
 
 @dataclass
-class ModelLossRunner:
+class ModelLossRunner[ModelT]:
     """A loaded model and tokenizer for batched document scoring."""
 
     label: str
-    model: LmHeadModel
+    model: ModelT
     tokenizer: MarinTokenizer
     hf_tokenizer: Any
     eval_batch_size: int
     eval_length: int
     compute_losses: Any
+    batch_sharding: jax.sharding.NamedSharding | None = None
 
     def score_texts(self, texts: list[str]) -> tuple[list[TokenizedDocument], list[np.ndarray]]:
         tokenized = [tokenize_text_with_byte_spans(self.tokenizer, self.hf_tokenizer, text) for text in texts]
@@ -156,9 +157,14 @@ class ModelLossRunner:
             if length > 1:
                 loss_weight[row, : length - 1] = 1.0
 
+        def put_batch(array: np.ndarray) -> jax.Array:
+            if self.batch_sharding is None:
+                return jax.device_put(array)
+            return jax.make_array_from_callback(array.shape, self.batch_sharding, lambda index: array[index])
+
         batch = GrugLmExample(
-            tokens=jax.device_put(tokens),
-            loss_weight=jax.device_put(loss_weight),
+            tokens=put_batch(tokens),
+            loss_weight=put_batch(loss_weight),
             attn_mask=GrugAttentionMask.causal(),
         )
         losses = self.compute_losses(self.model, batch)

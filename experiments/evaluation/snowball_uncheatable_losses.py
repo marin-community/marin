@@ -14,7 +14,9 @@ import logging
 import math
 import os
 import time
+from contextlib import nullcontext
 from dataclasses import dataclass, field
+from enum import StrEnum
 from itertools import islice
 from pathlib import Path
 from typing import Protocol
@@ -27,25 +29,53 @@ import levanter.tracker
 import levanter.trainer
 import numpy as np
 from huggingface_hub import snapshot_download
-from levanter.analysis.document_losses import Document, DocumentLoss, DocumentSourceConfig, iter_documents
+from levanter.analysis.document_losses import Document, DocumentSourceConfig, iter_documents
+from levanter.grug.sharding import compact_grug_mesh
 from levanter.main.perplexity_gap import GapFinderModelConfig, load_model_runner
 from levanter.models.snowball import SnowballConfig
 from levanter.tracker import NoopConfig
 from levanter.trainer import TrainerConfig
+from levanter.utils.jax_utils import barrier_sync_named
 from levanter.utils.mesh import MeshConfig
-from marin.testing.inference.snowball import SNOWBALL
 
-from experiments.evaluation.prepare_uncheatable_losses import CATEGORIES, EXPECTED_DOCUMENTS, SOURCE_REVISION
+from experiments.evaluation.native_snowball_losses import load_native_runner
 
 logger = logging.getLogger(__name__)
 TOKENIZER = "marin-community/marin-tokenizer"
 TOKENIZER_REVISION = "a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2"
-SCORING_VERSION = 1
+SCORING_VERSION = 2
+
+
+class ScoringBackend(StrEnum):
+    HF_GPU = "hf_gpu"
+    NATIVE_TPU = "native_tpu"
+
+
+@dataclass(frozen=True)
+class CheckpointSpec:
+    name: str
+    path: str
+    backend: ScoringBackend
+    stage: str
+    step: int
+    executor_info_path: str | None = None
+    training_tokens: int | None = None
+    parent: str | None = None
+
+
+@dataclass(frozen=True)
+class DatasetSpec:
+    name: str
+    manifest_path: str
+    source_revision: str
+    documents: int
+    subsets: int
 
 
 @dataclass
 class SweepConfig:
-    manifest_path: str
+    checkpoint: CheckpointSpec
+    datasets: list[DatasetSpec]
     output_path: str
     max_eval_length: int = 4096
     trainer: TrainerConfig = field(
@@ -75,6 +105,18 @@ class DocumentScorer(Protocol):
     def score_token_totals(self, texts: list[str]) -> tuple[np.ndarray, np.ndarray]: ...
 
 
+@dataclass(frozen=True)
+class SweepDocumentLoss:
+    doc_id: str
+    corpus_id: str
+    loss: float | None
+    bits_per_byte: float | None
+    total_nll: float
+    scored_tokens: int
+    num_bytes: int
+    text_sha256: str
+
+
 @dataclass
 class SubsetTotals:
     documents: int = 0
@@ -86,12 +128,21 @@ class SubsetTotals:
     document_loss_sum: float = 0.0
     document_bpb_sum: float = 0.0
 
-    def add(self, document: Document, loss_sum: float, token_count: int) -> DocumentLoss:
+    def add(self, document: Document, loss_sum: float, token_count: int) -> SweepDocumentLoss:
         num_bytes = len(document.text.encode("utf-8"))
         self.documents += 1
         self.total_bytes += num_bytes
         if token_count == 0:
-            return DocumentLoss(document.doc_id, document.corpus_id, None, None)
+            return SweepDocumentLoss(
+                document.doc_id,
+                document.corpus_id,
+                None,
+                None,
+                0.0,
+                0,
+                num_bytes,
+                hashlib.sha256(document.text.encode("utf-8")).hexdigest(),
+            )
         if token_count < 0 or num_bytes == 0 or not math.isfinite(loss_sum):
             raise ValueError(f"Invalid scoring totals for document {document.doc_id!r}")
         mean_loss = loss_sum / token_count
@@ -102,7 +153,16 @@ class SubsetTotals:
         self.loss_sum += loss_sum
         self.document_loss_sum += mean_loss
         self.document_bpb_sum += bits_per_byte
-        return DocumentLoss(document.doc_id, document.corpus_id, mean_loss, bits_per_byte)
+        return SweepDocumentLoss(
+            document.doc_id,
+            document.corpus_id,
+            mean_loss,
+            bits_per_byte,
+            loss_sum,
+            token_count,
+            num_bytes,
+            hashlib.sha256(document.text.encode("utf-8")).hexdigest(),
+        )
 
     def summary(self) -> dict:
         return {
@@ -151,6 +211,8 @@ def completed_subset(subset: Subset, output_path: str, fingerprint: str) -> dict
 
 
 def score_subset(scorer: DocumentScorer, subset: Subset, output_path: str, fingerprint: str) -> dict:
+    # Finish rank-zero publication before any host decides whether to resume.
+    barrier_sync_named(f"subset-start-{fingerprint}-{subset.name}")
     existing = completed_subset(subset, output_path, fingerprint)
     if existing is not None:
         logger.info("Skipping completed subset %s (%d documents)", subset.name, existing["documents"])
@@ -163,13 +225,15 @@ def score_subset(scorer: DocumentScorer, subset: Subset, output_path: str, finge
     source = DocumentSourceConfig(input_path=subset.input_path, corpus_id=subset.name)
     documents = iter(iter_documents(source))
     logger.info("Scoring subset %s: all %d documents from %s", subset.name, subset.expected_documents, subset.input_path)
-    with fsspec.open(output_uri, "wb", auto_mkdir=True) as stream:
+    output = fsspec.open(output_uri, "wb", auto_mkdir=True) if jax.process_index() == 0 else nullcontext(None)
+    with output as stream:
         while batch := list(islice(documents, scorer.eval_batch_size)):
             sums, counts = scorer.score_token_totals([doc.text for doc in batch])
             for document, loss_sum, token_count in zip(batch, sums, counts, strict=True):
                 record = totals.add(document, float(loss_sum), int(token_count))
                 encoded = (json.dumps(dataclasses.asdict(record), allow_nan=False) + "\n").encode("utf-8")
-                stream.write(encoded)
+                if stream is not None:
+                    stream.write(encoded)
                 output_hash.update(encoded)
             now = time.perf_counter()
             if now - last_progress >= 60:
@@ -179,7 +243,8 @@ def score_subset(scorer: DocumentScorer, subset: Subset, output_path: str, finge
                     "elapsed_seconds": now - start,
                     **totals.summary(),
                 }
-                write_json(f"{output_path}/progress.json", progress)
+                if jax.process_index() == 0:
+                    write_json(f"{output_path}/progress.json", progress)
                 logger.info("UNCHEATABLE_PROGRESS %s", json.dumps(progress))
                 last_progress = now
     if totals.documents != subset.expected_documents:
@@ -197,73 +262,127 @@ def score_subset(scorer: DocumentScorer, subset: Subset, output_path: str, finge
         "tokens_per_second": totals.scored_tokens / elapsed,
         **totals.summary(),
     }
-    write_json(f"{output_path}/{subset.name}/summary.json", summary)
+    if jax.process_index() == 0:
+        write_json(f"{output_path}/{subset.name}/summary.json", summary)
     logger.info("UNCHEATABLE_SUBSET_COMPLETE %s", json.dumps(summary))
     return summary
+
+
+def dataset_manifest(spec: DatasetSpec) -> dict:
+    manifest = read_json(spec.manifest_path)
+    subsets = manifest["subsets"]
+    if manifest["source_revision"] != spec.source_revision:
+        raise ValueError(f"Dataset {spec.name} does not match its pinned revision")
+    if len(subsets) != spec.subsets or sum(row["expected_documents"] for row in subsets) != spec.documents:
+        raise ValueError(f"Dataset {spec.name} does not match its expected counts")
+    names = [row["name"] for row in subsets]
+    if len(set(names)) != len(names):
+        raise ValueError("Manifest subset names must be unique")
+    for name in [spec.name, *names]:
+        if not name or Path(name).name != name or name in (".", ".."):
+            raise ValueError(f"Invalid dataset or subset name: {name!r}")
+    return manifest
+
+
+def validate_checkpoint_locality(checkpoint: CheckpointSpec, datasets: list[DatasetSpec], output_path: str) -> None:
+    """Reject configurations that move checkpoint weights between execution regions."""
+    if checkpoint.backend == ScoringBackend.NATIVE_TPU:
+        prefix = "gs://marin-us-central2/"
+        if checkpoint.executor_info_path is None:
+            raise ValueError("Native checkpoints require their original executor metadata")
+        paths = [checkpoint.path, checkpoint.executor_info_path, output_path, *(d.manifest_path for d in datasets)]
+    else:
+        prefix = "s3://marin-us-east-02a/"
+        paths = [checkpoint.path, output_path, *(d.manifest_path for d in datasets)]
+    if any(not path.startswith(prefix) for path in paths):
+        raise ValueError(f"All checkpoint, manifest, and output paths must remain under {prefix}")
+
+
+def score_dataset(scorer: DocumentScorer, dataset: DatasetSpec, manifest: dict, output_path: str, scoring: dict) -> dict:
+    identity = {"manifest": manifest, "scoring": scoring}
+    fingerprint = hashlib.sha256(json.dumps(identity, sort_keys=True).encode("utf-8")).hexdigest()
+    identity_path = f"{output_path}/manifest.json"
+    fs, path = fsspec.core.url_to_fs(identity_path)
+    if fs.exists(path) and read_json(identity_path) != {"fingerprint": fingerprint, **identity}:
+        raise ValueError("Output path contains a different evaluation manifest")
+    if jax.process_index() == 0:
+        write_json(identity_path, {"fingerprint": fingerprint, **identity})
+    summaries = [
+        score_subset(scorer, Subset(row["name"], row["input_path"], row["expected_documents"]), output_path, fingerprint)
+        for row in manifest["subsets"]
+    ]
+    result = {
+        "fingerprint": fingerprint,
+        "dataset": dataclasses.asdict(dataset),
+        "manifest": manifest,
+        "scoring": scoring,
+        "subsets": summaries,
+        "status": "complete",
+    }
+    if jax.process_index() == 0:
+        write_json(f"{output_path}/summary.json", result)
+        if "IRIS_OUTPUT_DIR" in os.environ:
+            write_json(str(Path(os.environ["IRIS_OUTPUT_DIR"]) / f"{dataset.name}-summary.json"), result)
+        logger.info("UNCHEATABLE_SWEEP_COMPLETE %s", json.dumps(result))
+    return result
 
 
 def main(config: SweepConfig):
     if config.max_eval_length < 2:
         raise ValueError("max_eval_length must be at least two")
-    manifest = read_json(config.manifest_path)
-    subsets = [
-        Subset(**{key: row[key] for key in ("name", "input_path", "expected_documents")}) for row in manifest["subsets"]
-    ]
-    if manifest["source_revision"] != SOURCE_REVISION:
-        raise ValueError("Manifest does not describe the pinned Uncheatable Eval revision")
-    if {subset.name for subset in subsets} != set(CATEGORIES) or sum(
-        subset.expected_documents for subset in subsets
-    ) != EXPECTED_DOCUMENTS:
-        raise ValueError("Manifest must contain all 15 July 2026 subsets and 7,500 original documents")
-    if len({subset.name for subset in subsets}) != len(subsets):
-        raise ValueError("Manifest subset names must be unique")
-    for subset in subsets:
-        if not subset.name or Path(subset.name).name != subset.name or subset.name in (".", ".."):
-            raise ValueError(f"Invalid subset name: {subset.name!r}")
-    scoring = {
-        "version": SCORING_VERSION,
-        "checkpoint": SNOWBALL.export_uri,
-        "tokenizer": TOKENIZER,
-        "tokenizer_revision": TOKENIZER_REVISION,
-        "max_eval_length": config.max_eval_length,
-        "moe_implementation": "sonic",
-        "attention_implementation": "gpu_fa4_cute",
-        "precision": str(config.trainer.mp),
-        "mesh": dataclasses.asdict(config.trainer.mesh),
-        "per_device_eval_parallelism": config.trainer.per_device_eval_parallelism,
-        "device_count": 8,
-    }
-    identity = {"manifest": manifest, "scoring": scoring}
-    fingerprint = hashlib.sha256(json.dumps(identity, sort_keys=True).encode("utf-8")).hexdigest()
-    identity_path = f"{config.output_path}/manifest.json"
-    fs, path = fsspec.core.url_to_fs(identity_path)
-    if fs.exists(path) and read_json(identity_path) != {"fingerprint": fingerprint, **identity}:
-        raise ValueError("Output path contains a different evaluation manifest")
-    write_json(identity_path, {"fingerprint": fingerprint, **identity})
-    summaries = [completed_subset(subset, config.output_path, fingerprint) for subset in subsets]
-    if any(summary is None for summary in summaries):
-        tokenizer_path = snapshot_download(
-            TOKENIZER,
-            revision=TOKENIZER_REVISION,
-            allow_patterns=["tokenizer*", "special_tokens*", "added_tokens*", "chat_template*"],
-        )
-        converter = SnowballConfig(
-            reference_checkpoint=SNOWBALL.export_uri, tokenizer=tokenizer_path
-        ).hf_checkpoint_converter()
-        model_config = dataclasses.replace(
-            converter.config_from_hf_config(converter.default_hf_config),
-            tokenizer=tokenizer_path,
-            moe_implementation="sonic",
-            attention_implementation="gpu_fa4_cute",
-        )
-        levanter.trainer.initialize(config)
-        try:
-            if jax.process_count() != 1 or jax.device_count() != 8:
-                raise ValueError("This Snowball sweep requires one host with eight devices")
-            with config.trainer.use_device_mesh():
+    if not config.datasets or len({d.name for d in config.datasets}) != len(config.datasets):
+        raise ValueError("Supply at least one dataset with unique names")
+    validate_checkpoint_locality(config.checkpoint, config.datasets, config.output_path)
+    manifests = [dataset_manifest(dataset) for dataset in config.datasets]
+    allowed_prefix = (
+        "gs://marin-us-central2/"
+        if config.checkpoint.backend == ScoringBackend.NATIVE_TPU
+        else "s3://marin-us-east-02a/"
+    )
+    if any(not row["input_path"].startswith(allowed_prefix) for m in manifests for row in m["subsets"]):
+        raise ValueError("Dataset shard paths must be in the scoring region")
+    tokenizer_path = snapshot_download(
+        TOKENIZER,
+        revision=TOKENIZER_REVISION,
+        allow_patterns=["tokenizer*", "special_tokens*", "added_tokens*", "chat_template*"],
+    )
+    levanter.trainer.initialize(config)
+    try:
+        if config.checkpoint.backend == ScoringBackend.NATIVE_TPU:
+            if jax.default_backend() != "tpu":
+                raise ValueError("GCS native checkpoints must run on TPU in us-central2")
+            mesh = compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)
+            mesh_context = jax.set_mesh(mesh)
+        else:
+            if jax.default_backend() != "gpu" or jax.process_count() != 1 or jax.device_count() != 8:
+                raise ValueError("HF GPU checkpoints require one host with eight GPUs in cw-us-east-02a")
+            mesh = None
+            mesh_context = config.trainer.use_device_mesh()
+        with mesh_context:
+            if config.checkpoint.backend == ScoringBackend.NATIVE_TPU:
+                assert mesh is not None and config.checkpoint.executor_info_path is not None
+                runner = load_native_runner(
+                    checkpoint_path=config.checkpoint.path,
+                    executor_info_path=config.checkpoint.executor_info_path,
+                    tokenizer_path=tokenizer_path,
+                    eval_batch_size=config.trainer.eval_batch_size,
+                    max_eval_length=config.max_eval_length,
+                    mp=config.trainer.mp,
+                    mesh=mesh,
+                )
+            else:
+                converter = SnowballConfig(
+                    reference_checkpoint=config.checkpoint.path, tokenizer=tokenizer_path
+                ).hf_checkpoint_converter()
+                model_config = dataclasses.replace(
+                    converter.config_from_hf_config(converter.default_hf_config),
+                    tokenizer=tokenizer_path,
+                    moe_implementation="sonic",
+                    attention_implementation="gpu_fa4_cute",
+                )
                 runner = load_model_runner(
                     spec=GapFinderModelConfig(
-                        checkpoint_path=SNOWBALL.export_uri,
+                        checkpoint_path=config.checkpoint.path,
                         checkpoint_is_hf=True,
                         model=model_config,
                         tokenizer=tokenizer_path,
@@ -273,23 +392,25 @@ def main(config: SweepConfig):
                     compute_axis_mapping=config.trainer.compute_axis_mapping,
                     parameter_axis_mapping=config.trainer.parameter_axis_mapping,
                 )
-                summaries = [
-                    previous if previous is not None else score_subset(runner, subset, config.output_path, fingerprint)
-                    for subset, previous in zip(subsets, summaries, strict=True)
-                ]
-        finally:
-            levanter.tracker.current_tracker().finish()
-    result = {
-        "fingerprint": fingerprint,
-        "manifest": manifest,
-        "scoring": scoring,
-        "subsets": summaries,
-        "status": "complete",
-    }
-    write_json(f"{config.output_path}/summary.json", result)
-    if "IRIS_OUTPUT_DIR" in os.environ:
-        write_json(str(Path(os.environ["IRIS_OUTPUT_DIR"]) / "summary.json"), result)
-    logger.info("UNCHEATABLE_SWEEP_COMPLETE %s", json.dumps(result))
+            scoring = {
+                "version": SCORING_VERSION,
+                "checkpoint": dataclasses.asdict(config.checkpoint),
+                "tokenizer": TOKENIZER,
+                "tokenizer_revision": TOKENIZER_REVISION,
+                "max_eval_length": config.max_eval_length,
+                "precision": str(config.trainer.mp),
+                "device_count": jax.device_count(),
+                "process_count": jax.process_count(),
+                "eval_batch_size": runner.eval_batch_size,
+            }
+            results = [
+                score_dataset(runner, dataset, manifest, f"{config.output_path}/{dataset.name}", scoring)
+                for dataset, manifest in zip(config.datasets, manifests, strict=True)
+            ]
+            if jax.process_index() == 0:
+                write_json(f"{config.output_path}/summary.json", {"status": "complete", "datasets": results})
+    finally:
+        levanter.tracker.current_tracker().finish()
 
 
 if __name__ == "__main__":

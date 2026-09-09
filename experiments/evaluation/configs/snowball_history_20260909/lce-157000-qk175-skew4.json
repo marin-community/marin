@@ -1,0 +1,29 @@
+{
+  "checkpoint": {
+    "name": "lce-157000-qk175-skew4",
+    "path": "gs://marin-us-central2/grug/moe_67b_a2b_d2560_ep1_rep1_ctx4_bs256_seq262144_ctxext_step156k_qk175_longctx_skew4-102e3c/checkpoints/step-157000",
+    "backend": "native_tpu",
+    "stage": "long_context",
+    "step": 157000,
+    "parent": "cooldown-156000",
+    "executor_info_path": "gs://marin-us-central2/grug/moe_67b_a2b_d2560_ep1_rep1_ctx4_bs256_seq262144_ctxext_step156k_qk175_longctx_skew4-102e3c/.executor_info"
+  },
+  "datasets": [
+    {
+      "name": "legacy-2025",
+      "manifest_path": "gs://marin-us-central2/evaluation/document-losses/snowball-history-8975/data/legacy-2025/manifest.json",
+      "source_revision": "185c463882a8ae0f203e51ae5852d8cf4fe299cf",
+      "documents": 11052,
+      "subsets": 14
+    },
+    {
+      "name": "2026-07",
+      "manifest_path": "gs://marin-us-central2/evaluation/document-losses/snowball-history-8975/data/2026-07/manifest.json",
+      "source_revision": "65889535d56aa38d448ce7e07b08e6e36c031545",
+      "documents": 7500,
+      "subsets": 15
+    }
+  ],
+  "output_path": "gs://marin-us-central2/evaluation/document-losses/snowball-history-8975/lce-157000-qk175-skew4",
+  "max_eval_length": 4096
+}

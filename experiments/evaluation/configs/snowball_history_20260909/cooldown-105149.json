@@ -1,0 +1,28 @@
+{
+  "checkpoint": {
+    "name": "cooldown-105149",
+    "path": "s3://marin-us-east-02a/marin/exports/grug/june-67b-a2b-step102k/step-105149/hf-bf16-vllm",
+    "backend": "hf_gpu",
+    "stage": "cooldown",
+    "step": 105149,
+    "parent": "hot-102000"
+  },
+  "datasets": [
+    {
+      "name": "legacy-2025",
+      "manifest_path": "s3://marin-us-east-02a/evaluation/document-losses/uncheatable/185c463882a8/data/manifest.json",
+      "source_revision": "185c463882a8ae0f203e51ae5852d8cf4fe299cf",
+      "documents": 11052,
+      "subsets": 14
+    },
+    {
+      "name": "2026-07",
+      "manifest_path": "s3://marin-us-east-02a/evaluation/document-losses/uncheatable/2026-07-65889535d56a/data/manifest.json",
+      "source_revision": "65889535d56aa38d448ce7e07b08e6e36c031545",
+      "documents": 7500,
+      "subsets": 15
+    }
+  ],
+  "output_path": "s3://marin-us-east-02a/evaluation/document-losses/snowball-history-8975/cooldown-105149",
+  "max_eval_length": 4096
+}

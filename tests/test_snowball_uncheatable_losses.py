@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
+import hashlib
 import json
 import math
 
@@ -11,7 +13,16 @@ import pytest
 from levanter.analysis.document_losses import Document, DocumentSourceConfig, iter_documents
 
 from experiments.evaluation.prepare_uncheatable_losses import CATEGORIES, DATASET_ID, prepare_manifest
-from experiments.evaluation.snowball_uncheatable_losses import Subset, SubsetTotals, completed_subset, score_subset
+from experiments.evaluation.snowball_uncheatable_losses import (
+    CheckpointSpec,
+    DatasetSpec,
+    ScoringBackend,
+    Subset,
+    SubsetTotals,
+    completed_subset,
+    score_subset,
+    validate_checkpoint_locality,
+)
 
 
 class FixedScorer:
@@ -54,7 +65,10 @@ def test_completed_subset_resume_verifies_identity_and_output(tmp_path):
     assert score_subset(FixedScorer(), subset, output, "manifest-and-model") == expected
     rows = [json.loads(line) for line in (tmp_path / "output/fixture/document-losses.jsonl").read_text().splitlines()]
     assert [row["doc_id"] for row in rows] == ["0", "1", "2"]
-    assert all(set(row) == {"doc_id", "corpus_id", "loss", "bits_per_byte"} for row in rows)
+    assert [row["total_nll"] for row in rows] == [2.0, 3.0, 0.0]
+    assert [row["scored_tokens"] for row in rows] == [1, 3, 0]
+    assert [row["num_bytes"] for row in rows] == [1, 4, 0]
+    assert rows[1]["text_sha256"] == hashlib.sha256("éé".encode()).hexdigest()
     with pytest.raises(ValueError, match="different manifest"):
         completed_subset(subset, output, "different-checkpoint")
     (tmp_path / "output/fixture/document-losses.jsonl").write_text("corrupted\n")
@@ -98,3 +112,38 @@ def test_july_release_preserves_benchmark_content_and_source_row_ids(tmp_path):
         exported.extend(documents)
     expected = {f"{DATASET_ID}#test:{index}": row["content"] for index, row in enumerate(rows)}
     assert {doc.doc_id: doc.text for doc in exported} == expected
+
+
+def test_nonprimary_process_scores_without_publishing_outputs(tmp_path, monkeypatch):
+    source = tmp_path / "input.jsonl"
+    source.write_text(json.dumps({"id": "a", "text": "a"}) + "\n")
+    monkeypatch.setattr("experiments.evaluation.snowball_uncheatable_losses.jax.process_index", lambda: 1)
+    output = tmp_path / "output"
+    summary = score_subset(FixedScorer(), Subset("fixture", str(source), 1), str(output), "identity")
+    assert summary["documents"] == 1 and summary["loss_sum"] == 2.0
+    assert not output.exists()
+
+
+def test_checkpoint_locality_rejects_cross_region_weight_reads():
+    checkpoint = CheckpointSpec(
+        "hot-3000",
+        "gs://marin-us-central2/grug/run/checkpoints/step-3000",
+        ScoringBackend.NATIVE_TPU,
+        "hot",
+        3000,
+        executor_info_path="gs://marin-us-central2/grug/run/.executor_info",
+    )
+    dataset = DatasetSpec("july", "gs://marin-us-central2/evaluation/manifest.json", "pinned", 7500, 15)
+    validate_checkpoint_locality(checkpoint, [dataset], "gs://marin-us-central2/evaluation/output")
+    with pytest.raises(ValueError, match="remain under"):
+        validate_checkpoint_locality(
+            dataclasses.replace(checkpoint, path="gs://marin-us-east5/grug/run/checkpoints/step-3000"),
+            [dataset],
+            "gs://marin-us-central2/evaluation/output",
+        )
+    with pytest.raises(ValueError, match="remain under"):
+        validate_checkpoint_locality(
+            dataclasses.replace(checkpoint, backend=ScoringBackend.HF_GPU),
+            [dataset],
+            "s3://marin-us-east-02a/evaluation/output",
+        )
