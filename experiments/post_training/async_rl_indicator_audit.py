@@ -149,7 +149,8 @@ def indicator_report(windows: Sequence[Mapping]) -> dict:
                         else None
                     )
         result["indicators"][feature] = row
-    result["held_out_seed_gate"] = "untestable: only one historical training seed; no calibrated alert or indicator kill"
+    result["held_out_seed_gate"] = "untestable: only one historical training seed"
+    result["operating_decision"] = "No predictive alert adopted; plan ladders around the empirical quality knee."
     return result
 
 
