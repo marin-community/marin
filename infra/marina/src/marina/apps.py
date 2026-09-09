@@ -24,7 +24,7 @@ from starlette.types import ASGIApp
 
 from marina.db import DatabaseSpec, engine_for
 from marina.manifest import AppManifest
-from marina.mcp import mcp_for_api
+from marina.mcp import OperationRisk, mcp_for_api
 
 APP_MODULE = "app"
 CREATE_API = "create_api"
@@ -50,16 +50,21 @@ class Services:
 
 @dataclass(frozen=True)
 class RegisteredApi:
-    """A checked-in app's mounted HTTP service and generated MCP server."""
+    """A checked-in app's HTTP service and full and read-only MCP projections."""
 
     app: ASGIApp
     mcp: FastMCP
+    read_mcp: FastMCP
 
 
 def registered_api(api: FastAPI, *, mounted_app: ASGIApp | None = None) -> RegisteredApi:
     """Generate MCP tools while optionally mounting a lifecycle wrapper around the API."""
     app = api if mounted_app is None else mounted_app
-    return RegisteredApi(app=app, mcp=mcp_for_api(api, app))
+    return RegisteredApi(
+        app=app,
+        mcp=mcp_for_api(api, app),
+        read_mcp=mcp_for_api(api, app, frozenset({OperationRisk.READ})),
+    )
 
 
 def is_python_app(manifest: AppManifest) -> bool:

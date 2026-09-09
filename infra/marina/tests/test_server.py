@@ -8,11 +8,21 @@ from pathlib import Path
 
 import pytest
 from fastmcp import Client
+from fastmcp.exceptions import ToolError
 from marina.apps import create_api as create_registered_api
 from marina.apps import services_for
 from marina.manifest import discover_apps, job_runners, load_manifest
 from marina.mcp import marina_mcp
-from marina.server import CANONICAL_ORIGIN_ENV, MCP_PATH, MarinaConfig, create_app, serve_app_file
+from marina.server import (
+    AGENT_ORIGIN_ENV,
+    CANONICAL_ORIGIN_ENV,
+    MCP_PATH,
+    MCP_READ_PATH,
+    AgentPanelService,
+    MarinaConfig,
+    create_app,
+    serve_app_file,
+)
 from mcp_types import LATEST_PROTOCOL_VERSION
 from rigging.server_auth import ANONYMOUS_ADMIN, identity_scope
 from starlette.testclient import TestClient
@@ -123,6 +133,27 @@ def test_manifest_rejects_unknown_keys(tmp_path: Path) -> None:
         load_manifest(root)
 
 
+def test_manifest_parses_agent_panel_configuration(tmp_path: Path) -> None:
+    manifest = load_manifest(
+        write_app(
+            tmp_path,
+            "tasktrove",
+            manifest=TASKTROVE_MANIFEST
+            + """
+[agent]
+profile = "marina"
+repository = "marin-community/marin"
+starters = ["What is on this page?"]
+""",
+        )
+    )
+
+    assert manifest.agent is not None
+    assert manifest.agent.profile == "marina"
+    assert manifest.agent.repository == "marin-community/marin"
+    assert manifest.agent.starters == ("What is on this page?",)
+
+
 def test_manifest_groups_jobs_by_runner_in_stable_order(tmp_path: Path) -> None:
     job = """
 [[jobs]]
@@ -208,6 +239,44 @@ def test_app_directory_and_identity(client: TestClient) -> None:
     assert me == {"user": "anonymous", "role": "admin"}
 
 
+def test_agent_config_and_csp_are_enabled_by_app_manifest(tmp_path: Path) -> None:
+    manifest = (
+        TASKTROVE_MANIFEST
+        + """
+[agent]
+profile = "marina"
+repository = "marin-community/marin"
+starters = ["What is on this page?"]
+"""
+    )
+    write_app(tmp_path / "apps", "tasktrove", manifest=manifest)
+    write_app(tmp_path / "apps", "plain")
+    config = replace(
+        config_for(tmp_path),
+        agent_panel=AgentPanelService("https://loom.example"),
+    )
+
+    with TestClient(create_app(config), client=("127.0.0.1", 40000)) as configured:
+        assert configured.get("/api/marina/agent/config", params={"app": "tasktrove"}).json() == {
+            "enabled": True,
+            "origin": "https://loom.example",
+            "profile": "marina",
+            "repository": "marin-community/marin",
+            "starters": ["What is on this page?"],
+        }
+        assert configured.get("/api/marina/agent/config", params={"app": "plain"}).json() == {"enabled": False}
+        assert "https://loom.example" in configured.get("/tasktrove/").headers["content-security-policy"]
+        assert "https://loom.example" not in configured.get("/plain/").headers["content-security-policy"]
+
+
+def test_agent_origin_rejects_insecure_remote_service(tmp_path: Path) -> None:
+    write_app(tmp_path / "apps", "tasktrove")
+    config = replace(config_for(tmp_path), agent_panel=AgentPanelService("http://loom.example"))
+
+    with pytest.raises(ValueError, match=AGENT_ORIGIN_ENV):
+        create_app(config)
+
+
 def test_registered_application_is_searchable_and_callable_over_mcp(tmp_path: Path) -> None:
     manifest = load_manifest(write_api_app(tmp_path / "apps", "tasktrove"))
     registered = create_registered_api(manifest, services_for(manifest, str(tmp_path / "data"), None))
@@ -244,6 +313,24 @@ def test_registered_application_is_searchable_and_callable_over_mcp(tmp_path: Pa
     assert called.data == {"body": {"grade": 10}, "query": "17", "request_id": None}
     assert identity.data == {"user": "anonymous"}
 
+    async def exercise_read_mcp():
+        read_server = marina_mcp({"tasktrove": registered.read_mcp})
+        async with Client(read_server) as read_client:
+            found_write = await read_client.call_tool("find_tool", {"query": "record a feedback grade"})
+            found_read = await read_client.call_tool("find_tool", {"query": "verified Marina caller"})
+            with pytest.raises(ToolError, match="Unknown tool"):
+                await read_client.call_tool(
+                    "call_tool",
+                    {"name": "tasktrove_feedback", "arguments": {"grade": 10}},
+                )
+            return found_write, found_read
+
+    with identity_scope(ANONYMOUS_ADMIN):
+        found_write, found_read = asyncio.run(exercise_read_mcp())
+
+    assert found_write.data == []
+    assert [tool["name"] for tool in found_read.data] == ["tasktrove_whoami"]
+
 
 def test_mcp_is_served_over_authenticated_streamable_http(tmp_path: Path) -> None:
     write_api_app(tmp_path / "apps", "tasktrove")
@@ -275,10 +362,25 @@ def test_mcp_is_served_over_authenticated_streamable_http(tmp_path: Path) -> Non
                 },
             },
         )
+        read_initialized = client.post(
+            f"{MCP_READ_PATH}/",
+            headers={"accept": "application/json, text/event-stream"},
+            json={
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": LATEST_PROTOCOL_VERSION,
+                    "capabilities": {},
+                    "clientInfo": {"name": "test", "version": "1"},
+                },
+            },
+        )
 
     assert response.status_code == 200
     assert response.json()["result"]["serverInfo"]["name"] == "Marina"
     assert called.status_code == 200
+    assert read_initialized.status_code == 200
     assert called.json()["result"]["structuredContent"] == {"user": "anonymous"}
 
 
