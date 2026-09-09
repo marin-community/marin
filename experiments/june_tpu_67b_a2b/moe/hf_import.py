@@ -38,6 +38,11 @@ from experiments.sft.launcher import SFTSpec
 _CHECKPOINT_STEP = 0
 
 
+def _conversion_checkpoint_path(output_path: str) -> str:
+    checkpoint_root = prefix_join(output_path, "checkpoints")
+    return prefix_join(checkpoint_root, f"step-{_CHECKPOINT_STEP}")
+
+
 def _stack_blocks(blocks: Sequence[Block], template: ArrayStacked[Block]) -> ArrayStacked[Block]:
     """Stack loaded per-layer leaves while retaining the trainer template's static metadata."""
     if len(blocks) != template.num_layers:
@@ -170,7 +175,7 @@ def _run_snowball_hf_to_grug(config: SnowballHfToGrugConfig) -> None:
         save_checkpoint(
             {"params": model, "pending_qb_betas": pending_qb_betas},
             step=_CHECKPOINT_STEP,
-            checkpoint_path=prefix_join(config.output_path, "checkpoints", f"step-{_CHECKPOINT_STEP}"),
+            checkpoint_path=_conversion_checkpoint_path(config.output_path),
             manager=manager,
             is_temporary=False,
         )

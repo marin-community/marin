@@ -400,3 +400,16 @@ author: benfeuer
 - Action: cancelled exactly `/benfeuer/snowball-final-qk157-grug-smoke12-coord`; it had not completed conversion, allocated training GPUs, updated weights, or saved a checkpoint. Replaced both concrete FP32 templates with Equinox shape-only templates and bumped the conversion artifact version so no partial artifact can be reused.
 - Validation: the tiny end-to-end import regression passes with shape-only leaves and continues to compare every dynamic block leaf plus logits after the first historical QB application.
 - Next action: run focused and repository gates, commit and push from the isolated worktree, then launch smoke 13 with a fresh root identity, artifact version, and JAX port.
+
+### 2026-09-09 09:24 EDT - Historical Grug smoke 13 submitted
+
+- Validation: thirteen focused tests and the complete repository pre-commit gate passed after formatting. Commit `7a3c1be553` is pushed on `benfeuer/sft-snowballs-final-run`.
+- Run: submitted `/benfeuer/snowball-final-qk157-grug-smoke13-coord` from `/Users/benfeuer/Documents/marin-worktrees/sft-snowballs-final`, stage version `2026.09.09.8`, conversion artifact version `2026.09.09.2`, and unique JAX port 19416.
+- Next action: monitor conversion memory and artifact completion, then require the dependency-gated eight-node smoke to produce a finite update and loadable checkpoint before campaign fan-out.
+
+### 2026-09-09 10:33 EDT - Shape-only import passed; checkpoint path rejected
+
+- Result: smoke 13 loaded all 39 pinned HF shards and completed the full-scale shape-only import/stack phase on attempt 0 without exceeding the 512 GB pod limit. It then raised before checkpoint serialization because the new bridge passed three arguments to the two-argument `prefix_join` helper.
+- Action: cancelled exactly `/benfeuer/snowball-final-qk157-grug-smoke13-coord` before its deterministic retry could repeat the 134 GB download. No training GPU was allocated and no update or checkpoint save occurred.
+- Classification: this is a call-site error in the unmerged bridge, not an existing Marin defect, so no public issue was filed. The correction composes two joins, adds an object-store URI regression, and bumps the conversion artifact version to exclude the incomplete output.
+- Next action: run focused and repository gates, push the correction from the isolated worktree, and launch smoke 14 with a fresh identity and JAX port.

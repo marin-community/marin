@@ -10,7 +10,7 @@ from levanter.grug.sharding import compact_grug_mesh
 
 from experiments.grug.moe.model import GrugModelConfig as ExportConfig
 from experiments.grug.moe.model import Transformer as ExportTransformer
-from experiments.june_tpu_67b_a2b.moe.hf_import import import_snowball_hf_weights
+from experiments.june_tpu_67b_a2b.moe.hf_import import _conversion_checkpoint_path, import_snowball_hf_weights
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig as TrainingConfig
 from experiments.june_tpu_67b_a2b.moe.train import _apply_qb_betas
 
@@ -56,6 +56,13 @@ def _training_config() -> TrainingConfig:
         disable_long_rope=True,
         use_array_stacked_blocks=True,
         moe_implementation="ring",
+    )
+
+
+def test_conversion_checkpoint_path_preserves_object_store_uri():
+    assert (
+        _conversion_checkpoint_path("s3://bucket/checkpoints/hf-to-stacked-grug/model/version")
+        == "s3://bucket/checkpoints/hf-to-stacked-grug/model/version/checkpoints/step-0"
     )
 
 
