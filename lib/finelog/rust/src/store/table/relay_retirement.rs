@@ -15,7 +15,10 @@ use crate::store::table::runtime::TableRuntime;
 use crate::store::table_state::CommitError;
 
 const RETIREMENT_GRACE_MS: i64 = 15 * 60 * 1_000;
-const SEGMENTS_PER_TICK: usize = 64;
+// Retirement is one catalog-only mutation: the object bytes remain protected by
+// retained table states and are collected later. Keep the batch large enough to
+// drain a restart or forwarding backlog in a handful of remote catalog commits.
+const SEGMENTS_PER_TICK: usize = 1024;
 
 /// Retire one bounded batch and report whether another immediate cycle is due.
 pub async fn maintain(

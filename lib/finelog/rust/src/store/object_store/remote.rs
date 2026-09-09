@@ -121,6 +121,17 @@ impl ObjectStore for RemoteObjectStore {
             .await
     }
 
+    async fn exists(&self, id: &ObjectId) -> Result<bool, StatsError> {
+        let path = self.provider.object_path(id);
+        match self.provider.backend().head(&path).await {
+            Ok(_) => Ok(true),
+            Err(object_store::Error::NotFound { .. }) => Ok(false),
+            Err(error) => Err(StatsError::Internal(format!(
+                "inspect object {path}: {error}"
+            ))),
+        }
+    }
+
     /// Create an immutable object, accepting an identical retry.
     async fn write(&self, id: &ObjectId, bytes: bytes::Bytes) -> Result<ObjectVersion, StatsError> {
         let path = self.provider.object_path(id);
@@ -290,6 +301,7 @@ mod tests {
             store.read(&id).await.unwrap().unwrap().bytes,
             b"parquet"[..]
         );
+        assert!(store.exists(&id).await.unwrap());
         let listed = store
             .list(&ObjectPrefix::table("iris.worker", "objects/v1").unwrap())
             .await
@@ -299,6 +311,7 @@ mod tests {
 
         store.delete(&id).await.unwrap();
         assert!(store.read(&id).await.unwrap().is_none());
+        assert!(!store.exists(&id).await.unwrap());
         std::fs::remove_dir_all(&remote_dir).ok();
     }
 

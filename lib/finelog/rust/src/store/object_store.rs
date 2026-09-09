@@ -180,6 +180,16 @@ pub trait ObjectStore: Send + Sync {
 
     async fn read(&self, id: &ObjectId) -> Result<Option<StoredObject>, StatsError>;
 
+    /// Whether one exact immutable object exists without reading its contents.
+    async fn exists(&self, id: &ObjectId) -> Result<bool, StatsError> {
+        let prefix = ObjectPrefix::table(id.table_name(), id.relative_key())?;
+        Ok(self
+            .list(&prefix)
+            .await?
+            .iter()
+            .any(|metadata| metadata.id == *id))
+    }
+
     /// Make `bytes` locally durable under `id` for a later
     /// [`ObjectStore::upload_staged`]. A store without local staging uploads
     /// immediately instead, so callers get remote durability either way.

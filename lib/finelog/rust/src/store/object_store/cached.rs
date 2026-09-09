@@ -302,6 +302,10 @@ impl ObjectStore for CachedObjectStore {
         self.source.read(id).await
     }
 
+    async fn exists(&self, id: &ObjectId) -> Result<bool, StatsError> {
+        self.source.exists(id).await
+    }
+
     async fn local_path(&self, reference: &ObjectReference) -> Result<PathBuf, StatsError> {
         self.materialize(reference).await
     }

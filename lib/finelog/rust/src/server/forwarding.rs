@@ -71,8 +71,7 @@ use crate::errors::StatsError;
 use crate::policies::storage_policy_for;
 use crate::proto::finelog::stats::{RegisterTableRequest, StatsServiceClient, WriteRowsRequest};
 use crate::query::{
-    make_ctx, query_timeout, run_query_over, run_within_query_timeout, QueryResult,
-    RegisteredProvider,
+    make_ctx, run_query_over, run_within_query_timeout, QueryResult, RegisteredProvider,
 };
 use crate::server::auth::FINELOG_AUDIENCE;
 use crate::server::telemetry::{counter_batch, telemetry_schema, CounterSample};
@@ -90,6 +89,10 @@ use crate::telemetry_policy::{FINELOG_NAMESPACE, TELEMETRY_NAMESPACE};
 /// progress. Backlogged namespaces trigger another round immediately, so throughput
 /// does not depend on this cadence.
 const FORWARD_INTERVAL: Duration = Duration::from_secs(5);
+
+/// A relay's bounded internal scan may need to open a cold set of remote L0s.
+/// Keep its recovery budget independent of the public Query RPC deadline.
+const FORWARD_READ_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Rows read from one namespace per batch. The hub durably acknowledges each outbound
 /// request, so a small row cap turns its one-second flush-coalescing interval into a
@@ -734,8 +737,14 @@ where
         // bounds it by the same non-disableable effective deadline.
         let query_ctx = make_ctx();
         let read = run_query_over(&query_ctx, providers, &sql);
+        let timeout = self
+            .store
+            .object_query_bound()
+            .map_or(FORWARD_READ_TIMEOUT, |bound| {
+                bound.min(FORWARD_READ_TIMEOUT)
+            });
         let result = run_within_query_timeout(
-            query_timeout(None, self.store.object_query_bound()),
+            Some(timeout),
             read,
             |timeout| {
                 StatsError::DeadlineExceeded(format!(

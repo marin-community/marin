@@ -21,6 +21,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use buffa::{Message, MessageField, MessageView};
 use clap::ValueEnum;
+use futures::{stream, StreamExt, TryStreamExt};
 
 use crate::errors::StatsError;
 use crate::indices::IndexRegistry;
@@ -63,6 +64,7 @@ use crate::telemetry_policy::{TelemetryRootWriteMode, TELEMETRY_NAMESPACE};
 /// The privileged log namespace name, which is also its on-disk subdirectory.
 pub const LOG_NAMESPACE_NAME: &str = "log";
 const STORE_LOCK_FILENAME: &str = ".finelog-store.lock";
+const MAX_PARALLEL_TABLE_RECOVERIES: usize = 8;
 
 fn writer_epoch() -> Result<u64, StatsError> {
     let nanos = SystemTime::now()
@@ -465,18 +467,20 @@ impl Store {
         // the loaded states: catalog trees are remote and can take several
         // reads, so loading each one again during the claim loop doubles boot
         // latency.
-        let mut selected_heads = Vec::with_capacity(heads.len());
-        for head in heads {
-            if head.tombstoned {
-                selected_heads.push((head, None));
-                continue;
-            }
-            let selected = state_store.load(&head.table).await?;
-            if let Some(selected) = &selected {
-                validate_v1_upgrade_preflight(&head.table, &selected.catalog)?;
-            }
-            selected_heads.push((head, selected));
-        }
+        let selected_heads = stream::iter(heads)
+            .map(|head| async move {
+                if head.tombstoned {
+                    return Ok((head, None));
+                }
+                let selected = state_store.load(&head.table).await?;
+                if let Some(selected) = &selected {
+                    validate_v1_upgrade_preflight(&head.table, &selected.catalog)?;
+                }
+                Ok::<_, StatsError>((head, selected))
+            })
+            .buffered(MAX_PARALLEL_TABLE_RECOVERIES)
+            .try_collect::<Vec<_>>()
+            .await?;
         for (head, selected) in selected_heads {
             let namespace = head.table;
             validate_namespace_name(&namespace, self.data_dir.as_deref())?;

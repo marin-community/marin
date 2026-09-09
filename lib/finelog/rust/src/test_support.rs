@@ -290,6 +290,10 @@ impl ObjectStore for FaultInjectingObjectStore {
             .await
     }
 
+    async fn exists(&self, id: &ObjectId) -> Result<bool, StatsError> {
+        self.inner.exists(id).await
+    }
+
     /// Staging is a local write; faults model the remote, so it always runs.
     async fn stage(&self, id: &ObjectId, bytes: bytes::Bytes) -> Result<ObjectVersion, StatsError> {
         self.inner.stage(id, bytes).await
