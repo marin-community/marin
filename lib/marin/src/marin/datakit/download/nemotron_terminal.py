@@ -13,9 +13,16 @@ from zephyr import counters
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
+from marin.datakit.chat_normalize import normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
-from marin.datakit.download.rollout_transforms import load_parquet_batched, render_role_message, text_document
+from marin.datakit.download.rollout_transforms import (
+    chat_document,
+    load_parquet_batched,
+    render_role_message,
+    text_document,
+)
 from marin.datakit.normalize import normalize_step
+from marin.datakit.terminal_chat import agent_protocol_messages
 from marin.execution.step_spec import StepSpec
 
 HF_DATASET_ID = "nvidia/Nemotron-Terminal-Corpus"
@@ -34,6 +41,17 @@ def row_to_doc(row: dict) -> list[dict]:
     return [text_document(text, "nvidia/Nemotron-Terminal-Corpus")]
 
 
+def row_to_chat_doc(row: dict) -> list[dict]:
+    conversations = row.get("conversations")
+    if not conversations:
+        return []
+    converted = agent_protocol_messages(conversations)
+    if converted is None:
+        return []
+    messages, metadata = converted
+    return [chat_document(messages, HF_DATASET_ID, **metadata)]
+
+
 def transform(input_path: str, output_path: str) -> None:
     pipeline = (
         Dataset.from_files(f"{input_path}/**/*.parquet")
@@ -44,6 +62,17 @@ def transform(input_path: str, output_path: str) -> None:
     )
     ctx = ZephyrContext(name="nemotron-terminal-transform", resources=ResourceConfig(cpu=1, ram="32g"))
     ctx.execute(pipeline)
+
+
+def transform_chat(input_path: str, output_path: str) -> None:
+    pipeline = (
+        Dataset.from_files(f"{input_path}/**/*.parquet")
+        .flat_map(load_parquet_batched)
+        .flat_map(row_to_chat_doc)
+        .reshard(64)
+        .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
+    )
+    ZephyrContext(name="nemotron-terminal-chat-transform", resources=ResourceConfig(cpu=1, ram="32g")).execute(pipeline)
 
 
 def download_nemotron_terminal_step() -> StepSpec:
@@ -72,3 +101,14 @@ def nemotron_terminal_normalize_steps() -> tuple[StepSpec, ...]:
         processed,
         normalize_step(name="normalized/nemotron-terminal", download=processed),
     )
+
+
+def nemotron_terminal_chat_normalize_steps() -> tuple[StepSpec, ...]:
+    download = download_hf_step("raw/nemotron-terminal-corpus", hf_dataset_id=HF_DATASET_ID, revision=HF_REVISION)
+    processed = StepSpec(
+        name="processed-chat/nemotron-terminal-corpus",
+        deps=[download],
+        fn=lambda output_path: transform_chat(download.output_path, output_path),
+        hash_attrs={"version": "2026.09.04.1"},
+    )
+    return processed, normalize_chat_step(name="normalized-chat/nemotron-terminal", download=processed)

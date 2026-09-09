@@ -22,16 +22,21 @@ The HF dataset is gated (auto-approve); ``HF_TOKEN`` must be set locally
 for ``download_hf_step`` to authenticate.
 """
 
+import json
+
 from fray.types import ResourceConfig
 from zephyr import counters
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.readers import load_jsonl
 
+from marin.datakit.chat_normalize import normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import (
     TRAJECTORY_FAILED_TAG,
     TRAJECTORY_SOLVED_TAG,
+    ReasoningFormatError,
+    chat_document,
     load_parquet_batched,
     render_tool_message,
     text_document,
@@ -158,6 +163,7 @@ def davinci_dev_ctx_native_normalize_steps() -> tuple[StepSpec, ...]:
 # ---------------------------------------------------------------------------
 
 ENV_GLOBS = ["env-native.jsonl"]
+TERMINAL_SUBMISSION_TOOLS = frozenset({"finish", "submit"})
 
 
 def _success_to_tag(success: bool | None) -> str | None:
@@ -181,6 +187,37 @@ def env_row_to_doc(row: dict) -> list[dict]:
     return [text_document(text, "GAIR/daVinci-Dev/env-native")]
 
 
+def env_row_to_chat_doc(row: dict) -> list[dict]:
+    messages = row.get("messages")
+    if not messages:
+        return []
+    if isinstance(messages, str):
+        messages = json.loads(messages)
+    if messages[-1].get("role") == "tool" and len(messages) >= 2:
+        final_call_id = messages[-1].get("tool_call_id")
+        previous = messages[-2]
+        terminal_call = next(
+            (
+                call
+                for call in previous.get("tool_calls") or []
+                if call.get("id") == final_call_id
+                and (call.get("function") or {}).get("name") in TERMINAL_SUBMISSION_TOOLS
+            ),
+            None,
+        )
+        if previous.get("role") == "assistant" and terminal_call is not None:
+            messages = messages[:-1]
+    if messages[-1].get("role") != "assistant":
+        counters.pipeline.update_counter("davinci_dev/env/chat_incomplete_filtered", 1)
+        return []
+    success = row.get("success") if "success" in row else None
+    try:
+        return [chat_document(messages, "GAIR/daVinci-Dev/env-native", success=success)]
+    except ReasoningFormatError:
+        counters.pipeline.update_counter("davinci_dev/env/chat_malformed_reasoning_filtered", 1)
+        return []
+
+
 def transform_env_native(input_path: str, output_path: str) -> None:
     pipeline = (
         Dataset.from_files(f"{input_path}/env-native.jsonl")
@@ -190,6 +227,16 @@ def transform_env_native(input_path: str, output_path: str) -> None:
     )
     ctx = ZephyrContext(name="davinci-dev-env-transform", resources=ResourceConfig(cpu=1, ram="16g"))
     ctx.execute(pipeline)
+
+
+def transform_env_native_chat(input_path: str, output_path: str) -> None:
+    pipeline = (
+        Dataset.from_files(f"{input_path}/env-native.jsonl")
+        .flat_map(load_jsonl)
+        .flat_map(env_row_to_chat_doc)
+        .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
+    )
+    ZephyrContext(name="davinci-dev-env-chat-transform", resources=ResourceConfig(cpu=1, ram="16g")).execute(pipeline)
 
 
 def download_davinci_dev_env_native_step() -> StepSpec:
@@ -223,4 +270,21 @@ def davinci_dev_env_native_normalize_steps() -> tuple[StepSpec, ...]:
             # the default 16 GiB worker on load. Bump to 64 GiB.
             worker_resources=ResourceConfig(cpu=2, ram="64g", disk="10g"),
         ),
+    )
+
+
+def davinci_dev_env_native_chat_normalize_steps() -> tuple[StepSpec, ...]:
+    dl = download_hf_step(
+        "raw/davinci-dev-env-native", hf_dataset_id=HF_DATASET_ID, revision=HF_REVISION, hf_urls_glob=ENV_GLOBS
+    )
+    processed = StepSpec(
+        name="processed-chat/davinci-dev-env-native",
+        deps=[dl],
+        fn=lambda output_path: transform_env_native_chat(dl.output_path, output_path),
+        hash_attrs={"version": "2026.09.05.1"},
+    )
+    return processed, normalize_chat_step(
+        name="normalized-chat/davinci-dev-env-native",
+        download=processed,
+        worker_resources=ResourceConfig(cpu=2, ram="64g", disk="10g"),
     )

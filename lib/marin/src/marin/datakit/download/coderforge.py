@@ -4,9 +4,8 @@
 """togethercomputer/CoderForge-Preview dataset download and transform.
 
 Downloads raw parquet files from HuggingFace, then transforms each trajectory
-into a single document by rendering the chat messages as readable text with a
-reward tag prefix so the model learns to distinguish successful and failed
-rollouts.
+into either legacy rendered text or canonical chat. The legacy path prefixes a
+reward tag; canonical chat preserves reward only as non-model-visible metadata.
 """
 
 import json
@@ -17,10 +16,12 @@ from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.readers import load_parquet
 
+from marin.datakit.chat_normalize import normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import (
     TRAJECTORY_FAILED_TAG,
     TRAJECTORY_SOLVED_TAG,
+    chat_document,
     render_tool_message,
     text_document,
 )
@@ -31,6 +32,17 @@ HF_DATASET_ID = "togethercomputer/CoderForge-Preview"
 HF_REVISION = "060fca9"
 
 SPLITS = ["SWE_Rebench", "SWE_Smith", "R2E_Gym"]
+TOOL_CALL_END = "</tool_call>"
+
+
+def _contains_tool_call_end(value: object) -> bool:
+    if isinstance(value, str):
+        return TOOL_CALL_END in value.lower()
+    if isinstance(value, dict):
+        return any(_contains_tool_call_end(key) or _contains_tool_call_end(item) for key, item in value.items())
+    if isinstance(value, list):
+        return any(_contains_tool_call_end(item) for item in value)
+    return False
 
 
 def reward_to_tag(reward: float | None) -> str:
@@ -60,6 +72,19 @@ def row_to_doc(row: dict) -> list[dict]:
     return [text_document(text, "togethercomputer/CoderForge-Preview")]
 
 
+def row_to_chat_doc(row: dict) -> list[dict]:
+    messages_raw = row.get("messages", "")
+    if not messages_raw:
+        return []
+    messages = json.loads(messages_raw) if isinstance(messages_raw, str) else messages_raw
+    if not messages:
+        return []
+    if _contains_tool_call_end(messages):
+        counters.pipeline.update_counter("coderforge/tool_call_end_filtered", 1)
+        return []
+    return [chat_document(messages, HF_DATASET_ID, reward=row.get("reward"))]
+
+
 def transform(input_path: str, output_path: str) -> None:
     # The download already filters to only the splits we want via hf_urls_glob
     pipeline = (
@@ -70,6 +95,16 @@ def transform(input_path: str, output_path: str) -> None:
     )
     ctx = ZephyrContext(name="coderforge-transform", resources=ResourceConfig(cpu=1, ram="8g"))
     ctx.execute(pipeline)
+
+
+def transform_chat(input_path: str, output_path: str) -> None:
+    pipeline = (
+        Dataset.from_files(f"{input_path}/**/*.parquet")
+        .flat_map(load_parquet)
+        .flat_map(row_to_chat_doc)
+        .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
+    )
+    ZephyrContext(name="coderforge-chat-transform", resources=ResourceConfig(cpu=1, ram="8g")).execute(pipeline)
 
 
 def download_coderforge_step() -> StepSpec:
@@ -99,3 +134,19 @@ def coderforge_normalize_steps() -> tuple[StepSpec, ...]:
         processed,
         normalize_step(name="normalized/coderforge", download=processed),
     )
+
+
+def coderforge_chat_normalize_steps() -> tuple[StepSpec, ...]:
+    dl = download_hf_step(
+        "raw/coderforge-preview",
+        hf_dataset_id=HF_DATASET_ID,
+        revision=HF_REVISION,
+        hf_urls_glob=[f"trajectories/{split}-*.parquet" for split in SPLITS],
+    )
+    processed = StepSpec(
+        name="processed-chat/coderforge-preview",
+        deps=[dl],
+        fn=lambda output_path: transform_chat(dl.output_path, output_path),
+        hash_attrs={"version": "2026.09.06"},
+    )
+    return processed, normalize_chat_step(name="normalized-chat/coderforge", download=processed)

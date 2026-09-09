@@ -155,8 +155,8 @@ def _accumulate_row_tables(
         Returns ``(table, schema)`` where ``schema`` may be wider than the
         input. Handles two kinds of divergence: (1) ``from_pylist`` raises
         because a field's type doesn't fit, (2) ``from_pylist`` would
-        silently drop extra top-level keys (new fields appearing only in
-        later batches). Raises (via :func:`_raise_schema_mismatch`) when
+        silently drop fields, including nested struct fields, that appear
+        only in later batches. Raises (via :func:`_raise_schema_mismatch`) when
         *schema* was explicitly provided by the caller, or when the
         divergence isn't representable as a widening (e.g. ``int`` vs
         ``string``).
@@ -168,14 +168,19 @@ def _accumulate_row_tables(
             mismatch_error = e
 
         if mismatch_error is None:
-            extra_keys = {k for d in dicts for k in d.keys()} - set(schema.names)
-            if not extra_keys:
-                return table, schema
-            mismatch_error = pa.ArrowInvalid(f"extra top-level keys not in schema: {sorted(extra_keys)}")
+            actual_schema = infer_arrow_schema(dicts)
+            try:
+                widened = pa.unify_schemas([schema, actual_schema])
+            except (pa.ArrowInvalid, pa.ArrowTypeError, pa.ArrowNotImplementedError) as error:
+                mismatch_error = error
+            else:
+                if widened.equals(schema, check_metadata=False):
+                    return table, schema
+                mismatch_error = pa.ArrowInvalid("record schema introduces fields absent from the current schema")
 
         if not schema_inferred:
             _raise_schema_mismatch(mismatch_error, dicts)
-        new_schema = pa.Table.from_pylist(dicts).schema
+        new_schema = infer_arrow_schema(dicts)
         try:
             widened = pa.unify_schemas([schema, new_schema])
         except (pa.ArrowInvalid, pa.ArrowTypeError, pa.ArrowNotImplementedError):

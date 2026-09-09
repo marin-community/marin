@@ -13,8 +13,9 @@ from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.readers import load_parquet
 
+from marin.datakit.chat_normalize import normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
-from marin.datakit.download.rollout_transforms import strip_think_tags, text_document
+from marin.datakit.download.rollout_transforms import checked_chat_document, strip_think_tags, text_document
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
@@ -59,6 +60,22 @@ def row_to_doc(row: dict) -> list[dict]:
     return [text_document(text, "PrimeIntellect/SYNTHETIC-1")]
 
 
+def row_to_chat_doc(row: dict) -> list[dict]:
+    prompt = row.get("prompt", "")
+    response = row.get("llm_response", "")
+    if not isinstance(prompt, str) or not isinstance(response, str) or not prompt or not response.strip():
+        return []
+    return checked_chat_document(
+        [
+            {"role": "user", "content": prompt},
+            {"role": "assistant", "content": response},
+        ],
+        HF_DATASET_ID,
+        counter_prefix="synthetic1/chat",
+        score=row.get("score"),
+    )
+
+
 def transform(input_path: str, output_path: str) -> None:
     pipeline = (
         Dataset.from_files(f"{input_path}/**/*.parquet")
@@ -68,6 +85,16 @@ def transform(input_path: str, output_path: str) -> None:
     )
     ctx = ZephyrContext(name="synthetic1-transform", resources=ResourceConfig(cpu=1, ram="4g"))
     ctx.execute(pipeline)
+
+
+def transform_chat(input_path: str, output_path: str) -> None:
+    pipeline = (
+        Dataset.from_files(f"{input_path}/**/*.parquet")
+        .flat_map(load_parquet)
+        .flat_map(row_to_chat_doc)
+        .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
+    )
+    ZephyrContext(name="synthetic1-chat-transform", resources=ResourceConfig(cpu=1, ram="4g")).execute(pipeline)
 
 
 def download_synthetic1_step() -> StepSpec:
@@ -96,3 +123,14 @@ def synthetic1_normalize_steps() -> tuple[StepSpec, ...]:
         processed,
         normalize_step(name="normalized/synthetic-1", download=processed),
     )
+
+
+def synthetic1_chat_normalize_steps() -> tuple[StepSpec, ...]:
+    dl = download_hf_step("raw/synthetic-1", hf_dataset_id=HF_DATASET_ID, revision=HF_REVISION)
+    processed = StepSpec(
+        name="processed-chat/synthetic-1",
+        deps=[dl],
+        fn=lambda output_path: transform_chat(dl.output_path, output_path),
+        hash_attrs={"version": "2026.09.05.4"},
+    )
+    return processed, normalize_chat_step(name="normalized-chat/synthetic-1", download=processed)

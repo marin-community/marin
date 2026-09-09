@@ -6,13 +6,35 @@
 import hashlib
 import json
 import logging
+import re
 from collections.abc import Iterator
+from types import MappingProxyType
 
 import pyarrow.parquet as pq
 from rigging.filesystem.factory import open_url
 from zephyr import counters
 
 logger = logging.getLogger(__name__)
+
+CANONICAL_CHAT_ROLES = frozenset({"assistant", "system", "tool", "user"})
+CHAT_CONTROL_TOKEN = re.compile(
+    r"<\|(?:begin_of_text|end_of_text|finetune_right_pad_id|start_header_id|end_header_id|"
+    r"eom_id|eot_id|python_tag|reserved_special_token_\d+)\|>"
+)
+REASONING_TOKEN = re.compile(r"<\|(?:start|end)_think\|>")
+CHAT_ROLE_ALIASES = MappingProxyType(
+    {
+        "bot": "assistant",
+        "function": "tool",
+        "gpt": "assistant",
+        "human": "user",
+        "model": "assistant",
+    }
+)
+
+
+class ReasoningFormatError(ValueError):
+    """Raised when an assistant reasoning span cannot be normalized safely."""
 
 
 def load_parquet_batched(path: str) -> Iterator[dict]:
@@ -35,6 +57,24 @@ def strip_think_tags(text: str) -> str:
     return text.replace("<think>", "").replace("</think>", "").strip()
 
 
+def normalize_reasoning_tokens(text: str) -> str:
+    """Normalize balanced reasoning tags to the tokenizer's atomic delimiters."""
+    text = re.sub(r"<think>", "<|start_think|>", text, flags=re.IGNORECASE)
+    text = re.sub(r"</think>", "<|end_think|>", text, flags=re.IGNORECASE)
+    text = re.sub(r"<\|start_think\|>\s*<\|end_think\|>\s*", "", text)
+    depth = 0
+    for match in re.finditer(r"<\|(start|end)_think\|>", text):
+        if match.group(1) == "start":
+            depth += 1
+        else:
+            depth -= 1
+        if depth not in (0, 1):
+            raise ReasoningFormatError("Assistant reasoning delimiters must be balanced and cannot nest")
+    if depth != 0:
+        raise ReasoningFormatError("Assistant reasoning delimiters must be balanced and cannot nest")
+    return text.strip()
+
+
 def text_document(text: str, source: str) -> dict:
     """Build a datakit document with a content-addressed ``id`` derived from ``text``.
 
@@ -46,6 +86,168 @@ def text_document(text: str, source: str) -> dict:
         "text": text,
         "source": source,
     }
+
+
+def _canonical_tool_calls(tool_calls: object) -> list[dict]:
+    if not isinstance(tool_calls, list):
+        raise ValueError("Chat message tool_calls must be a list")
+
+    canonical: list[dict[str, object]] = []
+    for tool_call in tool_calls:
+        if not isinstance(tool_call, dict):
+            raise ValueError("Each chat tool call must be an object")
+        function = tool_call.get("function")
+        if not isinstance(function, dict) or not isinstance(function.get("name"), str):
+            raise ValueError("Each chat tool call requires a function name")
+
+        arguments = function.get("arguments")
+        if not isinstance(arguments, str):
+            arguments = json.dumps(arguments, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+        normalized: dict[str, object] = {}
+        for key in ("id", "type"):
+            value = tool_call.get(key)
+            if value is not None:
+                if not isinstance(value, str):
+                    raise ValueError(f"Chat tool call {key} must be a string or null")
+                normalized[key] = value
+        normalized["function"] = {"name": function["name"], "arguments": arguments}
+        canonical.append(normalized)
+    return canonical
+
+
+def canonical_chat_messages(messages: list[dict]) -> list[dict]:
+    """Normalize roles, tool calls, and parallel calls into the canonical message contract."""
+    canonical: list[dict[str, object]] = []
+    for message in messages:
+        role_value = message.get("role", message.get("from"))
+        if not isinstance(role_value, str):
+            raise ValueError("Chat messages require a string 'role' or 'from' field")
+        role = CHAT_ROLE_ALIASES.get(role_value.lower(), role_value.lower())
+        if role not in CANONICAL_CHAT_ROLES:
+            raise ValueError(f"Unsupported chat role {role_value!r}")
+
+        content = message.get("content", message.get("value"))
+        if content is not None and not isinstance(content, str):
+            raise ValueError(f"Chat message content must be a string or null, got {type(content).__name__}")
+        if role == "assistant" and content is not None:
+            content = normalize_reasoning_tokens(content)
+        has_tool_call = bool(message.get("tool_calls") or message.get("function_call"))
+        if content is None and (role != "assistant" or not has_tool_call):
+            raise ValueError("Only assistant tool-call messages may have null content")
+
+        normalized: dict[str, object] = {"role": role, "content": content}
+        for key in ("name", "tool_call_id"):
+            value = message.get(key)
+            if value is not None:
+                if not isinstance(value, str):
+                    raise ValueError(f"Chat message {key} must be a string or null")
+                normalized[key] = value
+
+        tool_calls_value = message.get("tool_calls")
+        legacy_function_call = message.get("function_call")
+        if not tool_calls_value and legacy_function_call:
+            if isinstance(legacy_function_call, str):
+                legacy_function_call = json.loads(legacy_function_call)
+            tool_calls_value = [{"function": legacy_function_call}]
+        if tool_calls_value:
+            normalized["tool_calls"] = _canonical_tool_calls(tool_calls_value)
+        canonical.append(normalized)
+    if not canonical:
+        raise ValueError("A conversation must contain at least one message")
+    return _link_tool_messages(canonical)
+
+
+def _link_tool_messages(messages: list[dict[str, object]]) -> list[dict]:
+    linked: list[dict] = []
+    pending: dict[str, str] = {}
+    for message_index, message in enumerate(messages):
+        message = dict(message)
+        calls = message.get("tool_calls") or []
+        if calls:
+            linked_calls = []
+            for call_index, call_value in enumerate(calls):
+                call = dict(call_value)
+                call_id = call.get("id") or f"call_{message_index}_{call_index}"
+                call["id"] = call_id
+                function = call["function"]
+                pending[call_id] = function["name"]
+                linked_calls.append(call)
+            message["tool_calls"] = linked_calls
+        if message["role"] == "tool":
+            call_id = message.get("tool_call_id")
+            if call_id is None and len(pending) == 1:
+                call_id = next(iter(pending))
+                message["tool_call_id"] = call_id
+            if call_id not in pending:
+                raise ValueError("Tool messages must reference a pending tool call")
+            message.setdefault("name", pending.pop(call_id))
+        elif message["role"] == "user" and pending:
+            raise ValueError("Tool observations must use the tool role, not the user role")
+        linked.append(message)
+    return linked
+
+
+def inferred_tool_definitions(messages: list[dict]) -> list[dict]:
+    """Build minimal JSON schemas for tools called by a canonical conversation."""
+    definitions: dict[str, dict] = {}
+    for message in messages:
+        for call in message.get("tool_calls") or []:
+            function = call["function"]
+            arguments = function["arguments"]
+            if isinstance(arguments, str):
+                arguments = json.loads(arguments)
+            if not isinstance(arguments, dict):
+                raise ValueError("Tool-call arguments must be JSON objects")
+            properties = definitions.setdefault(function["name"], {})
+            for key, value in arguments.items():
+                if isinstance(value, bool):
+                    json_type = "boolean"
+                elif isinstance(value, (int, float)):
+                    json_type = "number"
+                elif isinstance(value, list):
+                    json_type = "array"
+                elif isinstance(value, dict):
+                    json_type = "object"
+                else:
+                    json_type = "string"
+                properties[key] = {"type": json_type}
+    return [
+        {
+            "type": "function",
+            "name": name,
+            "description": f"Execute the {name} tool.",
+            "parameters": {"type": "object", "properties": properties},
+        }
+        for name, properties in definitions.items()
+    ]
+
+
+def chat_document(messages: list[dict], source: str, **metadata: object) -> dict:
+    """Build a canonical structured-chat document with a content-derived ID."""
+    messages = canonical_chat_messages(messages)
+    encoded = json.dumps(messages, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    chat_template_kwargs = metadata.get("chat_template_kwargs")
+    if isinstance(chat_template_kwargs, dict):
+        metadata["chat_template_kwargs"] = json.dumps(
+            chat_template_kwargs, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
+    return {
+        "id": hashlib.sha256(encoded).hexdigest(),
+        "messages": messages,
+        "source": source,
+        **metadata,
+    }
+
+
+def checked_chat_document(messages: list[dict], source: str, *, counter_prefix: str, **metadata: object) -> list[dict]:
+    """Build a chat document, quarantining rows with malformed source data."""
+    try:
+        return [chat_document(messages, source, **metadata)]
+    except (UnicodeError, ValueError) as error:
+        counters.pipeline.update_counter(f"{counter_prefix}/quarantined", 1)
+        counters.pipeline.update_counter(f"{counter_prefix}/quarantined/{type(error).__name__}", 1)
+        return []
 
 
 def render_role_message(msg: dict) -> str:

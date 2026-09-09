@@ -17,16 +17,19 @@ from zephyr import counters
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
+from marin.datakit.chat_normalize import normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import (
     TRAJECTORY_FAILED_TAG,
     TRAJECTORY_SOLVED_TAG,
     TRAJECTORY_UNVERIFIED_TAG,
+    chat_document,
     load_parquet_batched,
     render_role_message,
     text_document,
 )
 from marin.datakit.normalize import normalize_step
+from marin.datakit.terminal_chat import opencode_protocol_messages, terminal_protocol_messages
 from marin.execution.step_spec import StepSpec
 
 
@@ -1066,6 +1069,7 @@ def outcome_tag(verifier_output: str | None, result: str | None) -> str | None:
 
 def row_to_doc(dataset: PenfeverRollout) -> Callable[[dict], list[dict]]:
     """Build a row-to-document transform for one repository."""
+
     counter_prefix = f"penfever_rollouts/{dataset.cohort_name}/{dataset.task_source}"
 
     def transform_row(row: dict) -> list[dict]:
@@ -1090,6 +1094,38 @@ def row_to_doc(dataset: PenfeverRollout) -> Callable[[dict], list[dict]]:
     return transform_row
 
 
+def row_to_chat_doc(dataset: PenfeverRollout) -> Callable[[dict], list[dict]]:
+    """Build a row-to-structured-chat transform for one repository."""
+
+    def transform_row(row: dict) -> list[dict]:
+        conversations = row.get("conversations")
+        if not conversations:
+            return []
+        if dataset.cohort_name == "qwen35-122b-131k-opencode":
+            instruction = row.get("instruction")
+            converted = opencode_protocol_messages(
+                conversations, initial_user_content=instruction if isinstance(instruction, str) else None
+            )
+        else:
+            converted = terminal_protocol_messages(conversations)
+        if converted is None:
+            return []
+        messages, metadata = converted
+        tag = outcome_tag(row.get("verifier_output"), row.get("result"))
+        return [
+            chat_document(
+                messages,
+                dataset.hf_dataset_id,
+                teacher=dataset.teacher,
+                task_source=dataset.task_source,
+                outcome=tag or "",
+                **metadata,
+            )
+        ]
+
+    return transform_row
+
+
 def transform(dataset: PenfeverRollout, input_path: str, output_path: str) -> None:
     pipeline = (
         Dataset.from_files(f"{input_path}/**/*.parquet")
@@ -1102,6 +1138,19 @@ def transform(dataset: PenfeverRollout, input_path: str, output_path: str) -> No
         resources=ResourceConfig(cpu=1, ram="32g"),
     )
     ctx.execute(pipeline)
+
+
+def transform_chat(dataset: PenfeverRollout, input_path: str, output_path: str) -> None:
+    pipeline = (
+        Dataset.from_files(f"{input_path}/**/*.parquet")
+        .flat_map(load_parquet_batched)
+        .flat_map(row_to_chat_doc(dataset))
+        .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
+    )
+    ZephyrContext(
+        name=f"penfever-{dataset.cohort_name}-{dataset.task_source}-chat-transform",
+        resources=ResourceConfig(cpu=1, ram="32g"),
+    ).execute(pipeline)
 
 
 def _rollout_steps(dataset: PenfeverRollout) -> tuple[StepSpec, StepSpec]:
@@ -1130,3 +1179,20 @@ def _rollout_steps(dataset: PenfeverRollout) -> tuple[StepSpec, StepSpec]:
 
 def penfever_rollouts_normalize_steps() -> dict[str, tuple[StepSpec, ...]]:
     return {dataset.marin_name: _rollout_steps(dataset) for dataset in PENFEVER_ROLLOUTS}
+
+
+def _rollout_chat_steps(dataset: PenfeverRollout) -> tuple[StepSpec, StepSpec]:
+    download = download_hf_step(
+        f"raw/{dataset.marin_name}", hf_dataset_id=dataset.hf_dataset_id, revision=dataset.revision
+    )
+    processed = StepSpec(
+        name=f"processed-chat/{dataset.marin_name}",
+        deps=[download],
+        fn=lambda output_path: transform_chat(dataset, download.output_path, output_path),
+        hash_attrs={"version": "2026.09.05.4", "teacher": dataset.teacher, "task_source": dataset.task_source},
+    )
+    return processed, normalize_chat_step(name=f"normalized-chat/{dataset.marin_name}", download=processed)
+
+
+def penfever_rollouts_chat_normalize_steps() -> dict[str, tuple[StepSpec, ...]]:
+    return {dataset.marin_name: _rollout_chat_steps(dataset) for dataset in PENFEVER_ROLLOUTS}
