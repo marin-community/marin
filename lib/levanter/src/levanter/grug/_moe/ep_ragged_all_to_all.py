@@ -20,18 +20,15 @@ Axis names used in the shape annotations:
 """
 
 import functools
-import logging
 import math
 from collections.abc import Callable
 from enum import auto, IntEnum
-from typing import Protocol
 
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
 
-from haliax.nn.ragged_dot import ragged_dot
-from levanter.grug._moe.common import CapacityOverflow, _interleave_gate_up
+from levanter.grug._moe.common import CapacityOverflow
 from levanter.grug._moe.sonic import sonic_gather_sum, sonic_gather_sum_available
 from levanter.grug._moe.ep_common import (
     ExpertA2aParams,
@@ -40,11 +37,6 @@ from levanter.grug._moe.ep_common import (
     _sort_activations,
 )
 from levanter.grug.sharding import _batch_axes
-
-logger = logging.getLogger(__name__)
-
-# QuACK's grouped GEMMs are written for SM100 and ship only with the CUDA 13 GPU extra.
-_SM100_COMPUTE_CAPABILITY = 10.0
 
 # Sequential local-expert chunks per MoE layer; capacity splits evenly across chunks. Falls
 # back to a single chunk when the local expert count is not divisible.
@@ -58,99 +50,24 @@ RAGGED_REQUIRED_XLA_FLAGS = (
 )
 
 
-class _ExpertMlp(Protocol):
-    """Runs the expert MLP over a receiver buffer laid out expert-major.
-
-    Implementations take both views of the buffer's group sizes: the physical sizes, which charge
-    trailing padding to the last expert, and the active sizes, which count only received rows.
-    Which one a kernel reads depends on whether it covers the whole buffer or works from segment
-    boundaries, so both are always passed and a kernel discards the one it does not use.
-    """
-
-    def __call__(
-        self,
-        x_dispatch: Float[Array, "C H"],
-        moe_w13_local: Float[Array, "Echunk H I2"],
-        moe_w2_local: Float[Array, "Echunk I H"],
-        physical_group_sizes: Int[Array, "Echunk"],
-        active_group_sizes: Int[Array, "Echunk"],
-        activation_fn: Callable[[jax.Array], jax.Array],
-    ) -> Float[Array, "C H"]: ...
-
-
-def _ragged_dot_expert_mlp(
+# The expert MLP contracts over the receiver buffer with XLA's own ragged dot. The buffer is
+# expert-major and every row belongs to a group -- trailing padding is charged to the last expert
+# -- so the plain ``ragged_dot`` semantics cover it with no segment masks. Its transpose rules
+# give the activation and weight gradients as ragged dots too, so the whole MLP is one HLO op
+# family and every GPU lowering XLA offers (cuDNN grouped GEMM, Triton, or the masked dense
+# expansion) applies to all six GEMMs without kernel-specific code here.
+def _expert_mlp(
     x_dispatch: Float[Array, "C H"],
     moe_w13_local: Float[Array, "Echunk H I2"],
     moe_w2_local: Float[Array, "Echunk I H"],
-    physical_group_sizes: Int[Array, "Echunk"],
-    active_group_sizes: Int[Array, "Echunk"],
+    group_sizes: Int[Array, "Echunk"],
     activation_fn: Callable[[jax.Array], jax.Array],
 ) -> Float[Array, "C H"]:
-    """Portable expert MLP over XLA's `ragged_dot`, which covers the whole receiver buffer."""
-    del active_group_sizes
-    w13_out = ragged_dot(x_dispatch, moe_w13_local, physical_group_sizes)
+    """Expert MLP over a receiver buffer laid out expert-major, with ``group_sizes`` covering it."""
+    w13_out = jax.lax.ragged_dot(x_dispatch, moe_w13_local, group_sizes)
     moe_dim = moe_w2_local.shape[1]
     gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
-    return ragged_dot(activation_fn(gate) * up, moe_w2_local, physical_group_sizes)
-
-
-def _cute_expert_mlp(
-    x_dispatch: Float[Array, "C H"],
-    moe_w13_local: Float[Array, "Echunk H I2"],
-    moe_w2_local: Float[Array, "Echunk I H"],
-    physical_group_sizes: Int[Array, "Echunk"],
-    active_group_sizes: Int[Array, "Echunk"],
-    activation_fn: Callable[[jax.Array], jax.Array],
-) -> Float[Array, "C H"]:
-    """Expert MLP on QuACK's SM100 grouped GEMMs, activation path and weight gradients alike.
-
-    The grouped kernels are driven by segment boundaries, so they take the active sizes and
-    mask the receiver buffer's trailing padding rather than charging it to the last expert.
-    """
-    del activation_fn, physical_group_sizes
-
-    # QuACK and CUTLASS DSL are installed only with the CUDA 13 GPU extra.
-    from levanter.grug._moe.sonic_cute import _expert_mlp_quack_wgrad  # noqa: PLC0415
-
-    moe_dim = moe_w2_local.shape[1]
-    w13_interleaved = _interleave_gate_up(moe_w13_local, moe_dim)
-    cumulative_group_sizes = jnp.concatenate(
-        [jnp.zeros((1,), jnp.int32), jnp.cumsum(active_group_sizes).astype(jnp.int32)]
-    )
-    return _expert_mlp_quack_wgrad(x_dispatch, w13_interleaved, moe_w2_local, cumulative_group_sizes)
-
-
-@functools.cache
-def _quack_grouped_gemm_available() -> bool:
-    if jax.default_backend() != "gpu":
-        return False
-    if float(jax.devices("gpu")[0].compute_capability) < _SM100_COMPUTE_CAPABILITY:
-        return False
-    try:
-        # `sonic_cute` pulls in `quack_moe_cute`, which imports QuACK's varlen entry points at
-        # module scope, so this covers a QuACK that is missing or has moved them.
-        import levanter.grug._moe.sonic_cute  # noqa: F401,PLC0415
-    except ImportError as exc:
-        logger.warning(
-            "SM100 GPU present but the QuACK grouped-GEMM kernels did not import (%s). "
-            "The ragged expert MLP falls back to ragged_dot, which computes the same function "
-            "more slowly. Install levanter's `gpu` extra to use them.",
-            exc,
-        )
-        return False
-    return True
-
-
-def _select_expert_mlp(activation_fn: Callable[[jax.Array], jax.Array]) -> _ExpertMlp:
-    """Pick the fastest expert-MLP kernel this process can actually run.
-
-    QuACK's kernel fuses SwiGLU, so it only applies to SiLU. Everything else -- another
-    activation, a non-SM100 GPU, a TPU or CPU, or a build without the GPU extra -- runs the
-    portable `ragged_dot` path, which computes the same function.
-    """
-    if activation_fn is jax.nn.silu and _quack_grouped_gemm_available():
-        return _cute_expert_mlp
-    return _ragged_dot_expert_mlp
+    return jax.lax.ragged_dot(activation_fn(gate) * up, moe_w2_local, group_sizes)
 
 
 def _unpermute_from_global_expert(
@@ -346,7 +263,6 @@ def _moe_mlp_ep_ragged_a2a_local(
         sorted_x = _gather_dispatch_rows(x_local, sorted_indices, topk)  # [TK, H]
         all_group_sizes = jax.lax.all_gather(group_sizes, "expert")  # [S, E]
 
-    expert_mlp = _select_expert_mlp(activation_fn)
     chunk_of_expert = (jnp.arange(num_experts, dtype=jnp.int32) % local_experts) // chunk_experts  # [E]
     # Unwritten rows remain zero for the final combine.
     returned = _loop_local_zeros(
@@ -392,14 +308,16 @@ def _moe_mlp_ep_ragged_a2a_local(
             active_group_sizes = active_all[
                 chunk_index * chunk_experts : (chunk_index + 1) * chunk_experts
             ]  # [Echunk]
+            # Charge the buffer's trailing padding to the last expert so the groups cover every
+            # row. Those rows are zero, so they add nothing to the weight gradients, and the
+            # return transport never reads their outputs.
             total_valid = jnp.sum(active_group_sizes, dtype=jnp.int32)
             physical_group_sizes = active_group_sizes.at[-1].add(chunk_capacity - total_valid)  # [Echunk]
-            out_dispatch = expert_mlp(  # [C, H]
+            out_dispatch = _expert_mlp(  # [C, H]
                 x_dispatch,
                 moe_w13_local[chunk_index * chunk_experts : (chunk_index + 1) * chunk_experts],
                 moe_w2_local[chunk_index * chunk_experts : (chunk_index + 1) * chunk_experts],
                 physical_group_sizes,
-                active_group_sizes,
                 activation_fn,
             )
             # The mirror of dispatch: valid prefixes land back at unclipped sorted positions.

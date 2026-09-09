@@ -86,6 +86,7 @@ def build_diagnostic_run(
     profile_steps: int = 0,
     profile_start_step: int = 5,
     training_data_mode: TrainingDataMode = TrainingDataMode.MIXTURE,
+    pip_packages: tuple[str, ...] = (),
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """Build a bounded diagnostic run for the production EP64 hero recipe.
@@ -278,6 +279,7 @@ def build_diagnostic_run(
             ),
             stop_after_steps=num_steps,
             processes_per_task=processes_per_task,
+            pip_packages=pip_packages,
         )
 
     return ArtifactStep(
@@ -456,6 +458,12 @@ def build_diagnostic_run(
     show_default=True,
     help="Override the pooled receiver capacity factor.",
 )
+@click.option(
+    "--pip-package",
+    "pip_packages",
+    multiple=True,
+    help="Install this requirement or wheel URL into the train tasks after the sync. Repeatable.",
+)
 @build_options
 def main(
     run_id: str,
@@ -482,6 +490,7 @@ def main(
     profile_steps: int,
     profile_start_step: int,
     training_data: str,
+    pip_packages: tuple[str, ...],
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_diagnostic_run(
         run_id=run_id,
@@ -518,6 +527,7 @@ def main(
         profile_steps=profile_steps,
         profile_start_step=profile_start_step,
         training_data_mode=TrainingDataMode(training_data),
+        pip_packages=pip_packages,
     )
 
 

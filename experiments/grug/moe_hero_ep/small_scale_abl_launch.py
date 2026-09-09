@@ -88,7 +88,6 @@ class Target:
     ram: str
     disk: str
     attention_implementation: str
-    use_syrk: bool
 
     @property
     def expert_axis_size(self) -> int:
@@ -101,10 +100,9 @@ class Target:
 # Kernel availability follows the accelerator, in two places. `gpu_fa4_cute` is Blackwell-only: its
 # MMA op accepts sm_100/sm_103/sm_110 and rejects H100's sm_90a outright, and `gpu_fa4_thd` needs
 # fixed-shape THD segment metadata this model does not supply, so Hopper falls back to reference
-# attention. MuonH's `use_syrk` likewise routes the 4D expert-stack Newton-Schulz through QuACK's
-# SM100 symmetric GEMM, so Hopper takes the plain vmapped path instead.
+# attention.
 TARGETS: dict[str, Target] = {
-    "gb200-rack": Target("GB200", HERO_GPUS_PER_NODE, HERO_EP_NODES, 120, "850g", "1t", "gpu_fa4_cute", True),
+    "gb200-rack": Target("GB200", HERO_GPUS_PER_NODE, HERO_EP_NODES, 120, "850g", "1t", "gpu_fa4_cute"),
     # 8 nodes, not 1: under pooled-wave the receiver cell pools over all senders and is
     # shard-count-independent, so only the sender pool tracks the fleet. The sender cell is per
     # (destination shard, wave) and shrinks as 1/shards^2 -- ~50,244 rows at EP8 against ~785 at EP64
@@ -115,7 +113,7 @@ TARGETS: dict[str, Target] = {
     # ("excluded: resource cpu: 39, resource memory: 25" of 65 nodes). Host memory here holds the
     # loader and checkpoint staging -- a d1280 checkpoint is about 38 GB -- so 600g keeps a wide
     # margin, and the trainer is GPU-bound at these capacity factors.
-    "h100-8node": Target("H100", 8, 8, 32, "600g", "900g", "reference", False),
+    "h100-8node": Target("H100", 8, 8, 32, "600g", "900g", "reference"),
     # 2 nodes = EP16. Under pooled-wave the receiver cell is `cf * tokens_per_step * top_k /
     # (num_experts * waves)` -- ~8,374 rows at the grid's 1,048,576 tokens per step, shard-count
     # independent, so it matches the EP64 hero at any fleet. Only the sender pool `cf_s *
@@ -124,7 +122,7 @@ TARGETS: dict[str, Target] = {
     # per-shard reproduction of the hero; gb200-rack / h100-8node at EP64 is the faithful sender gate.
     # (The sender gate pools each shard's ~65,536 tokens over ~2 documents, which is why per-cell
     # variance -- not the token count -- drives the drop rate.)
-    "h100-2node": Target("H100", 8, 2, 32, "600g", "900g", "reference", False),
+    "h100-2node": Target("H100", 8, 2, 32, "600g", "900g", "reference"),
 }
 
 
@@ -135,10 +133,8 @@ class Flavor:
     ``ep`` spans the fleet with expert parallelism and drops assignments through the pooled-wave
     transport's two gates: a sender pool (per destination shard, capped by
     ``pooled_transport_capacity_factor``) and per-wave receiver buffers (capped by ``capacity_factor``).
-    The FSDP arms keep one expert axis, so every device holds the whole bank and the local `sonic_cute`
-    kernel runs the experts: ``fsdp-nodrop`` at one chunk computes every assignment (dropless), and
-    ``fsdp-chunk4`` splits into four chunks to match the FSDP hero's minor-dropping reference. Both use
-    the same kernel; only the chunk count (drop rate) differs.
+    The FSDP arm keeps one expert axis, so every device holds the whole bank and the local ``scatter``
+    backend runs the experts over ``ragged_dot``: ``fsdp-nodrop`` computes every assignment (dropless).
 
     ``ragged`` spans the fleet like ``ep`` but moves tokens with the ragged all-to-all transport,
     which has a single gate: per-chunk receiver capacity from ``capacity_factor``. It has no sender
@@ -147,7 +143,6 @@ class Flavor:
 
     expert_axis_size: int | None  # None spans the fleet
     moe_implementation: str
-    expert_chunks: int
     pooled_transport_capacity_factor: float | None = None  # sender pool cap; pooled-wave only
     num_expert_waves: int = 1  # receiver-buffer waves; pooled-wave only
 
@@ -156,18 +151,17 @@ FLAVORS: dict[str, Flavor] = {
     # Pooled-wave EP mirroring the hero: 3 receiver waves and a 1.15 sender-pool cap (paired with the
     # 1.15 receiver capacity_factor default).
     "ep": Flavor(
-        None, "fixed_pooled_wave_all_to_all", 1, pooled_transport_capacity_factor=_EP_CAPACITY_FACTOR, num_expert_waves=3
+        None, "fixed_pooled_wave_all_to_all", pooled_transport_capacity_factor=_EP_CAPACITY_FACTOR, num_expert_waves=3
     ),
-    # The dropless FSDP arm is `sonic_cute` at one chunk -- "1 computes every assignment" per the FSDP
-    # hero -- so it matches `fsdp-chunk4`'s kernel and only the chunk count (drop rate) differs. The
-    # `scatter` grouped-GMM path mis-routes this QB/sigmoid-combine model (loss ~1.1 above chunk4).
-    "fsdp-nodrop": Flavor(1, "sonic_cute", 1),
-    "fsdp-chunk4": Flavor(1, "sonic_cute", 4),
+    # The dropless FSDP arm computes every assignment. Its `sonic_cute` predecessor also carried a
+    # four-chunk variant that reproduced the FSDP hero's minor drops; chunking was a property of
+    # that kernel's weight-gather schedule and has no counterpart here.
+    "fsdp-nodrop": Flavor(1, "scatter"),
     # Ragged a2a with the leg-2 lean data path (expert-granular updates, two sequential expert
     # chunks inside the backend). Per-chunk receiver capacity is capacity_factor/2 of the layer
     # total, a stricter per-chunk gate than the pooled receiver's -- the drop trajectory under a
     # trained router is exactly what this flavor exists to measure against `ep`.
-    "ragged": Flavor(None, "ragged_all_to_all", 1),
+    "ragged": Flavor(None, "ragged_all_to_all"),
 }
 
 
@@ -197,7 +191,6 @@ def _small_model(
     capacity_factor: float,
     attention_implementation: str,
     moe_implementation: str,
-    expert_chunks: int,
     seq_len: int,
     num_experts: int,
     num_experts_per_token: int,
@@ -235,7 +228,6 @@ def _small_model(
         sconv=True,
         attention_implementation=attention_implementation,
         moe_implementation=moe_implementation,
-        expert_chunks=expert_chunks,
         pooled_transport_capacity_factor=pooled_transport_capacity_factor,
         num_expert_waves=num_expert_waves,
         # Routed experts run in a latent space half the hidden width, matching the EP hero arm.
@@ -336,7 +328,6 @@ def build_small_run(
         capacity_factor,
         fleet.attention_implementation,
         sharding.moe_implementation,
-        sharding.expert_chunks,
         seq_len,
         num_experts,
         num_experts_per_token,
@@ -352,14 +343,11 @@ def build_small_run(
         num_steps = num_train_steps_override
     else:
         num_steps = max(1, round(tokens_per_active_param * _active_params(model) / global_tokens_per_step))
-    optimizer = dataclasses.replace(
-        MoeHeuristic().build_optimizer_config(
-            num_train_steps=num_steps,
-            batch_size=batch_size,
-            hidden_dim=model.hidden_dim,
-            seq_len=seq_len,
-        ),
-        use_syrk=fleet.use_syrk,
+    optimizer = MoeHeuristic().build_optimizer_config(
+        num_train_steps=num_steps,
+        batch_size=batch_size,
+        hidden_dim=model.hidden_dim,
+        seq_len=seq_len,
     )
     grug_trainer = GrugTrainerConfig(
         data_seed=None,

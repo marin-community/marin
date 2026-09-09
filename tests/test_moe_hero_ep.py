@@ -227,6 +227,7 @@ def _runtime_env_config(
         processes_per_task=processes_per_task,
         max_retries_failure=0,
         max_task_failures=10,
+        pip_packages=(),
     )
 
 
@@ -501,7 +502,6 @@ def test_ep_newton_schulz_returns_to_expert_sharding():
             steps=0,
             eps=1e-8,
             coefficient_type="quintic",
-            use_syrk=False,
         )
 
     with use_abstract_mesh(mesh):
@@ -548,7 +548,6 @@ def test_ep_newton_schulz_matches_replicated_path():
                 steps=1,
                 eps=1e-7,
                 coefficient_type="quintic",
-                use_syrk=False,
             )
         )
         with jax.set_mesh(mesh):
@@ -631,7 +630,7 @@ def test_dropless_local_transform_swaps_moe_backend_and_shares_weights():
     original = m.stacked_blocks.stacked.mlp.expert_mlp
     swapped = dropless.stacked_blocks.stacked.mlp.expert_mlp
     assert original.implementation == "fixed_all_to_all"  # input model left untouched
-    assert swapped.implementation == "sonic_cute"
+    assert swapped.implementation == "scatter"
     assert swapped.expert_chunks == 1
     orig_leaves = jax.tree_util.tree_leaves(original)
     swapped_leaves = jax.tree_util.tree_leaves(swapped)

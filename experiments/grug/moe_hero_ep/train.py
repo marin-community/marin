@@ -84,7 +84,7 @@ HERO_EP_RUNTIME_ENV = {
 }
 XLA_COLLECTIVE_OVERLAP_FLAG = "--xla_gpu_experimental_parallel_collective_overlap_limit"
 DEFAULT_COLLECTIVE_OVERLAP_LIMIT = 4
-DEFAULT_DROPLESS_MOE_IMPLEMENTATION: MoeImplementation = "sonic_cute"
+DEFAULT_DROPLESS_MOE_IMPLEMENTATION: MoeImplementation = "scatter"
 # Full inline norm watch failed with overlap 4. Overlap 1 completed the selected full-watch gate.
 INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT = 1
 # The ragged transport wants the opposite scheduling posture from the fixed and pooled ones. Its
@@ -317,8 +317,8 @@ class GrugEvalConfig:
     # For expert-parallel runs, evaluate under the dropless local backend on an expert-collapsed
     # mesh, logging an `eval_dropless` macro loss. No-op when the mesh has no expert parallelism.
     dropless_eval: bool = False
-    # Local MoE kernel used after collapsing the expert axis. ``sonic`` is the Hopper Triton path;
-    # ``sonic_cute`` is the Blackwell QuACK/CUTLASS path.
+    # Local MoE kernel used after collapsing the expert axis. ``scatter`` runs the experts on
+    # ``ragged_dot`` with a scatter-add combine; ``sonic`` is the Triton gather/combine path.
     dropless_eval_moe_implementation: MoeImplementation = DEFAULT_DROPLESS_MOE_IMPLEMENTATION
     # Run the evals once after the first optimization step, for a baseline at the start of the loss
     # curve. The periodic cadence first fires at `steps_per_eval`, thus it leaves that start bare.
@@ -349,6 +349,9 @@ class GrugRunConfig:
     # restores checkpoints benefits from a deep budget.
     max_retries_failure: int = 0
     max_task_failures: int = 10
+    # Extra distributions installed into the train tasks after the workspace sync (a URL or a
+    # requirement). Runtime overrides only: the lock stays the source of truth for everything else.
+    pip_packages: tuple[str, ...] = ()
 
 
 def build_train_dataset(
@@ -1271,6 +1274,7 @@ def run_grug(config: GrugRunConfig) -> None:
         processes_per_task=config.processes_per_task,
         max_retries_failure=config.max_retries_failure,
         max_task_failures=config.max_task_failures,
+        pip_packages=config.pip_packages,
     )
 
 

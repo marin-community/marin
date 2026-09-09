@@ -32,12 +32,7 @@ from fray.types import ANY_REGION, ResourceConfig
 from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from levanter.grug._moe.ep_common import _clip_receiver_group_sizes
-from levanter.grug._moe.ep_ragged_all_to_all import (
-    _EXPERT_CHUNKS,
-    RAGGED_REQUIRED_XLA_FLAGS,
-    _quack_grouped_gemm_available,
-    _select_expert_mlp,
-)
+from levanter.grug._moe.ep_ragged_all_to_all import _EXPERT_CHUNKS, RAGGED_REQUIRED_XLA_FLAGS
 from levanter.grug.grug_moe import moe_mlp
 from pydantic import BaseModel
 from rigging.filesystem.storage_path import StoragePath
@@ -149,17 +144,14 @@ class SeedRow(BaseModel):
 class RuntimeRow(BaseModel):
     """What the run actually exercised, so a green verdict names the code it covers.
 
-    The expert-MLP kernels are chosen at trace time from the device's compute capability and the
-    installed packages, and the transport kernel from XLA flags the runtime may not recognize.
-    Both are environment-dependent, so recording them is the difference between "the ragged EP
-    path is correct" and "some ragged EP path was correct somewhere".
+    The expert MLP is XLA's ``ragged_dot``, whose GPU lowering (cuDNN grouped GEMM, Triton, or the
+    masked dense expansion) and the transport kernel both follow XLA flags the runtime may not
+    recognize. Recording them is the difference between "the ragged EP path is correct" and "some
+    ragged EP path was correct somewhere".
     """
 
     jax_version: str
     device_kind: str
-    quack_grouped_gemm_available: bool
-    expert_mlp_silu: str
-    expert_mlp_gelu: str
     xla_flags: str
 
 
@@ -167,9 +159,6 @@ def _runtime_row() -> RuntimeRow:
     return RuntimeRow(
         jax_version=jax.__version__,
         device_kind=jax.devices()[0].device_kind,
-        quack_grouped_gemm_available=_quack_grouped_gemm_available(),
-        expert_mlp_silu=_select_expert_mlp(jax.nn.silu).__name__,
-        expert_mlp_gelu=_select_expert_mlp(jax.nn.gelu).__name__,
         xla_flags=os.environ.get("XLA_FLAGS", ""),
     )
 

@@ -210,14 +210,11 @@ def build_ladder_run(
     if size == "d6144":
         _, optimizer = build_hero_configs(num_train_steps=num_steps, batch_size=batch_size)
     else:
-        optimizer = dataclasses.replace(
-            MoeHeuristic().build_optimizer_config(
-                num_train_steps=num_steps,
-                batch_size=batch_size,
-                hidden_dim=model.hidden_dim,
-                seq_len=SEQ_LEN,
-            ),
-            use_syrk=True,  # GB200 SM100 symmetric GEMM for MuonH Newton-Schulz
+        optimizer = MoeHeuristic().build_optimizer_config(
+            num_train_steps=num_steps,
+            batch_size=batch_size,
+            hidden_dim=model.hidden_dim,
+            seq_len=SEQ_LEN,
         )
     optimizer = dataclasses.replace(optimizer, gate_router_weight_decay=gate_router_weight_decay)
 

@@ -163,8 +163,8 @@ count from the model's active-parameter count: `num_steps` trains `--tokens-per-
 (default 750) tokens per active parameter. Each flavor names its own transport rather than
 following the hero default, because comparing them is what this launcher is for: `--flavor ragged`
 is the hero's and needs a GB200 fleet, `--flavor ep` is the pooled-wave arm it replaced at a 1.15
-sender capacity over 3 waves, and `--flavor fsdp-nodrop` / `--flavor fsdp-chunk4` run the same
-shape dropless and at four-chunk capacity. The pooled gates are tunable with `--capacity-factor`
+sender capacity over 3 waves, and `--flavor fsdp-nodrop` runs the same shape dropless on one
+expert axis. The pooled gates are tunable with `--capacity-factor`
 (receiver) and `--transport-capacity-factor` (sender). Print the plan without a GPU run:
 
 ```bash

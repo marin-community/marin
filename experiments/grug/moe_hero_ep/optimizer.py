@@ -137,7 +137,6 @@ def scale_with_grug_muonh(
     muon_eps: float = 1e-8,
     learning_rate: float = 0.02,
     coefficient_type: CoefficientType = "quintic",
-    use_syrk: bool = True,
 ) -> optax.GradientTransformation:
     """MuonH transform for the stacked hero model: Newton-Schulz direction + Frobenius hyperball step."""
     muon_transform = _grug_scale_with_muon_hero(
@@ -146,7 +145,6 @@ def scale_with_grug_muonh(
         steps=steps,
         muon_eps=muon_eps,
         coefficient_type=coefficient_type,
-        use_syrk=use_syrk,
     )
 
     def init_fn(params):
@@ -172,8 +170,6 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     - ``adamh``: ``output_proj`` / ``lm_head``.
     - ``adam``: ``token_embed`` / ``router`` / ``router_bias`` / ``attn_gate`` / 1-D norm gains
       and the tiny SConv kernels.
-
-    ``use_syrk`` routes the 4D expert-stack Newton-Schulz through QuACK's symmetric GEMM.
     """
 
     adam_lr: float = 6e-4
@@ -186,7 +182,6 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     muon_epsilon: float = 1e-8
     max_grad_norm: float | None = None
     coefficient_type: CoefficientType = "quintic"
-    use_syrk: bool = True
     gate_router_weight_decay: float = 0.0
 
     def build(self, num_train_steps):
@@ -206,7 +201,6 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                         muon_eps=self.muon_epsilon,
                         learning_rate=learning_rate,
                         coefficient_type=self.coefficient_type,
-                        use_syrk=self.use_syrk,
                     )
                 )
                 components.append(_match_named_update_sharding())

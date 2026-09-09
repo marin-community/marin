@@ -4,7 +4,7 @@
 import logging
 import os
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import TypeVar
 
 from fray.cluster import ResourceConfig
@@ -55,6 +55,7 @@ def dispatch_grug_training_run(
     processes_per_task: int = 1,
     priority: int = INHERIT_PRIORITY,
     extras: list[str] | None = None,
+    pip_packages: Sequence[str] = (),
 ) -> None:
     """Submit a grug train entrypoint through Fray and wait for completion.
 
@@ -65,7 +66,9 @@ def dispatch_grug_training_run(
     cumulative one. The job fails when either is exhausted, so raise the two together: a large
     per-task budget under a small cumulative one still ends the job at the cumulative limit.
 
-    ``extras`` overrides the dependency extras inferred from the accelerator type.
+    ``extras`` overrides the dependency extras inferred from the accelerator type. ``pip_packages``
+    are installed into the task's environment after the workspace sync, so a pinned runtime wheel
+    (a PJRT build, a library upgrade) can be swapped in without touching the lock.
     """
     safe_run_id = _safe_job_suffix(run_id)
     env_vars = resolve_training_env(base_env=_forwarded_env_vars(), resources=resources)
@@ -76,6 +79,7 @@ def dispatch_grug_training_run(
         environment=create_environment(
             env_vars=env_vars,
             extras=extras_for_resources(resources) if extras is None else extras,
+            pip_packages=list(pip_packages),
         ),
         max_retries_failure=max_retries_failure,
         max_task_failures=max_task_failures,
