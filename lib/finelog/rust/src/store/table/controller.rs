@@ -1188,17 +1188,17 @@ async fn run_controller(
                 // flight. Avoid another HEAD read for every already-covered
                 // request; a later caller re-arms `publication_owed` before it
                 // enters the queue and therefore still validates its state.
-                let covered = (!controller.publication_owed()).then(|| {
-                    controller
-                        .selected
-                        .lock()
-                        .unwrap()
-                        .as_ref()
-                        .filter(|selected| selected.revision() >= required)
-                        .map(TableSnapshot::from_stored)
-                        .map(Arc::new)
+                let selected = controller.selected.lock().unwrap().clone();
+                let local_revision = controller.local_revision();
+                let covered = selected.as_ref().filter(|selected| {
+                    selected.revision() >= required
+                        && (!controller.publication_owed()
+                            || local_revision
+                                .as_ref()
+                                .is_ok_and(|local| *local > selected.revision()))
                 });
-                let result = if let Some(snapshot) = covered.flatten() {
+                let covered = covered.map(TableSnapshot::from_stored).map(Arc::new);
+                let result = if let Some(snapshot) = covered {
                     Ok(snapshot)
                 } else {
                     controller.run_publish().await
@@ -1701,19 +1701,25 @@ mod tests {
     #[tokio::test]
     async fn queued_publications_skip_revisions_an_earlier_request_already_published() {
         let (controller, states, faults) = faulted_controller("controller_publish_coalesce", 11);
-        let gate = crate::test_support::FaultGate::new();
+        let first_gate = crate::test_support::FaultGate::new();
+        let second_gate = crate::test_support::FaultGate::new();
         let (op, pattern) = head_swap();
         faults.arm(ObjectFault::new(
             op,
+            pattern.clone(),
+            FaultAction::Park(first_gate.clone()),
+        ));
+        faults.arm(ObjectFault::new(
+            op,
             pattern,
-            FaultAction::Park(gate.clone()),
+            FaultAction::Park(second_gate.clone()),
         ));
 
         let first = {
             let controller = Arc::clone(&controller);
             tokio::spawn(async move { controller.publish_state().await.unwrap() })
         };
-        gate.entered().await;
+        first_gate.entered().await;
 
         controller
             .catalog
@@ -1734,24 +1740,40 @@ mod tests {
         };
         tokio::task::yield_now().await;
 
-        gate.release();
+        first_gate.release();
         let first = first.await.unwrap();
+        second_gate.entered().await;
+
+        controller
+            .commit_owing_publication(|| {
+                let revision = controller.catalog.set_forward_cursor("hub", TABLE, 13)?;
+                Ok((revision, ()))
+            })
+            .unwrap();
+        let fourth = {
+            let controller = Arc::clone(&controller);
+            tokio::spawn(async move { controller.publish_state().await.unwrap() })
+        };
+        second_gate.release();
+
         let second = second.await.unwrap();
         let third = third.await.unwrap();
+        let fourth = fourth.await.unwrap();
 
         assert_eq!(first.revision().get(), 1);
         assert_eq!(second.revision().get(), 3);
         assert_eq!(third.revision().get(), 3);
+        assert_eq!(fourth.revision().get(), 4);
         let head_reads = faults
             .keys_for(ObjectOp::Read)
             .into_iter()
             .filter(|key| key.ends_with("HEAD.json"))
             .count();
-        assert_eq!(head_reads, 3);
-        assert_eq!(faults.keys_for(ObjectOp::CompareAndSwap).len(), 2);
+        assert_eq!(head_reads, 4);
+        assert_eq!(faults.keys_for(ObjectOp::CompareAndSwap).len(), 3);
         assert_eq!(
             states.load(TABLE).await.unwrap().unwrap().revision().get(),
-            3
+            4
         );
         assert!(!controller.publication_owed());
     }
