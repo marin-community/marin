@@ -35,13 +35,12 @@ from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 from marin.testing.inference.snowball import SNOWBALL
 
+from experiments.evaluation.prepare_uncheatable_losses import CATEGORIES, EXPECTED_DOCUMENTS, SOURCE_REVISION
+
 logger = logging.getLogger(__name__)
 TOKENIZER = "marin-community/marin-tokenizer"
 TOKENIZER_REVISION = "a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2"
 SCORING_VERSION = 1
-SOURCE_REVISION = "185c463882a8ae0f203e51ae5852d8cf4fe299cf"
-EXPECTED_SUBSETS = 14
-EXPECTED_DOCUMENTS = 11052
 
 
 @dataclass
@@ -212,8 +211,10 @@ def main(config: SweepConfig):
     ]
     if manifest["source_revision"] != SOURCE_REVISION:
         raise ValueError("Manifest does not describe the pinned Uncheatable Eval revision")
-    if len(subsets) != EXPECTED_SUBSETS or sum(subset.expected_documents for subset in subsets) != EXPECTED_DOCUMENTS:
-        raise ValueError("Manifest must contain all 14 subsets and 11,052 original documents")
+    if {subset.name for subset in subsets} != set(CATEGORIES) or sum(
+        subset.expected_documents for subset in subsets
+    ) != EXPECTED_DOCUMENTS:
+        raise ValueError("Manifest must contain all 15 July 2026 subsets and 7,500 original documents")
     if len({subset.name for subset in subsets}) != len(subsets):
         raise ValueError("Manifest subset names must be unique")
     for subset in subsets:

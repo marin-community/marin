@@ -5,9 +5,12 @@ import json
 import math
 
 import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
-from levanter.analysis.document_losses import Document
+from levanter.analysis.document_losses import Document, DocumentSourceConfig, iter_documents
 
+from experiments.evaluation.prepare_uncheatable_losses import CATEGORIES, DATASET_ID, prepare_manifest
 from experiments.evaluation.snowball_uncheatable_losses import Subset, SubsetTotals, completed_subset, score_subset
 
 
@@ -70,3 +73,28 @@ def test_incomplete_subset_does_not_get_a_completion_marker(tmp_path):
     summary = score_subset(FixedScorer(), Subset("fixture", str(source), 2), output, "identity")
     assert summary["documents"] == 2
     assert len((tmp_path / "output/fixture/document-losses.jsonl").read_text().splitlines()) == 2
+
+
+def test_july_release_preserves_benchmark_content_and_source_row_ids(tmp_path):
+    rows = [
+        {
+            "content": f"benchmark text {index}",
+            "untruncated_content": "Different source text that must not be scored",
+            "category": category,
+            "date": "2026-07-01",
+            "url": "https://example.com/shared-url",
+        }
+        for index in range(500)
+        for category in CATEGORIES
+    ]
+    source = tmp_path / "release.parquet"
+    pq.write_table(pa.Table.from_pylist(rows), source)
+    manifest = prepare_manifest(str(source), str(tmp_path / "normalized"))
+    exported = []
+    for subset in manifest["subsets"]:
+        documents = list(iter_documents(DocumentSourceConfig(input_path=subset["input_path"])))
+        assert len(documents) == subset["expected_documents"] == 500
+        assert all(doc.corpus_id == subset["name"] for doc in documents)
+        exported.extend(documents)
+    expected = {f"{DATASET_ID}#test:{index}": row["content"] for index, row in enumerate(rows)}
+    assert {doc.doc_id: doc.text for doc in exported} == expected
