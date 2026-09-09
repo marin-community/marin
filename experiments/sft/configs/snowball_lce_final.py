@@ -63,7 +63,7 @@ _AGENTIC_STEPS = 1_888
 _PREBUILT_TRAIN_RESOURCES = "prebuilt_train_resources"
 _OPENCODE_DATASET_REVISION = "a9805934c9c98908c611236bbfc87799f1ff6fe5"
 _NEMOTRON_DATASET_REVISION = "a1667c4ffdadea02a89bffe4f1bb7ca2ff19f8d9"
-_CONVERSION_VERSION = "2026.09.09.1"
+_CONVERSION_VERSION = "2026.09.09.2"
 
 # These immutable tags were created only after the uploader validated all 44 source files. Never
 # train from a moving ``main`` revision.

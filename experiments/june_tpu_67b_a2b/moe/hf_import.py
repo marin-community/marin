@@ -8,9 +8,9 @@ from __future__ import annotations
 import dataclasses
 import os
 import tempfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 import draccus
 import equinox as eqx
@@ -52,9 +52,7 @@ def _stack_blocks(blocks: Sequence[Block], template: ArrayStacked[Block]) -> Arr
     for leaf_index, template_leaf in enumerate(template_leaves):
         stacked = jnp.stack([leaves[leaf_index] for leaves in source_leaves])
         if stacked.shape != template_leaf.shape:
-            raise ValueError(
-                f"Stacked leaf {leaf_index} has shape {stacked.shape}; expected {template_leaf.shape}"
-            )
+            raise ValueError(f"Stacked leaf {leaf_index} has shape {stacked.shape}; expected {template_leaf.shape}")
         stacked_leaves.append(jax.sharding.reshard(stacked, template_leaf.sharding))
 
     stacked_block = jax.tree.unflatten(template_treedef, stacked_leaves)
@@ -78,12 +76,14 @@ def import_snowball_hf_weights(
         raise ValueError("Snowball SFT import requires use_array_stacked_blocks=True")
 
     unstacked_config = dataclasses.replace(config, use_array_stacked_blocks=False)
-    load_template = Transformer.init(unstacked_config, key=key)
+    # Shape-only templates avoid allocating two additional random FP32 copies of the model. At 67B,
+    # each such copy is roughly 268 GB and would dominate the conversion worker's memory budget.
+    load_template = eqx.filter_eval_shape(Transformer.init, unstacked_config, key=key)
     loaded = snowball_from_state_dict(load_template, dict(state_dict))
     if loaded.blocks is None:
         raise ValueError("HF import did not produce unstacked blocks")
 
-    target = Transformer.init(config, key=key)
+    target = eqx.filter_eval_shape(Transformer.init, config, key=key)
     if target.stacked_blocks is None:
         raise ValueError("Stacked trainer template did not produce stacked blocks")
     stacked_blocks = _stack_blocks(loaded.blocks, target.stacked_blocks)
