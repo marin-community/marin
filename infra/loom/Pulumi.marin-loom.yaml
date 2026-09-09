@@ -73,7 +73,7 @@ config:
       agent: codex
       description: Interactive questions over read-only Marina application APIs
       model: gpt-5.6-sol
-      effort: xhigh
+      effort: low
       protocol: acp
       mode: auto
       class: interactive
