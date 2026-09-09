@@ -16,6 +16,7 @@ import jax
 import jax.experimental.array_serialization.serialization as array_ser
 import jax.tree_util as jtu
 import levanter.checkpoint as checkpoint_module
+import levanter.mpmd_checkpoint as mpmd_checkpoint
 import levanter.tensorstore_serialization as tensorstore_serialization
 import numpy as np
 import optax
@@ -1113,3 +1114,35 @@ def test_backward_compatibility_with_ocdbt():
         )
         assert all(np.isclose(restored_state.training_key, initial_state.training_key))
         assert restored_state.step == initial_state.step
+
+
+def test_mpmd_checkpoint_uses_standard_discovery_and_load(tmp_path):
+    mesh = jax.sharding.Mesh(np.array(jax.devices()[:1]), ("data",))
+    sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
+    state = {"weights": jax.device_put(jnp.arange(8, dtype=jnp.float32), sharding), "unused": None}
+    path = mpmd_checkpoint.save_checkpoint(str(tmp_path), state, step=7, metadata={"schedule": "test"})
+    assert discover_latest_checkpoint(tmp_path) == path
+    templates = jax.tree.map(lambda x: jax.ShapeDtypeStruct(x.shape, x.dtype, sharding=x.sharding), state)
+    loaded = load_checkpoint(templates, path)
+    np.testing.assert_array_equal(loaded["weights"], state["weights"])
+    assert loaded["unused"] is None
+    # Recovery after interrupted pointer publication uses standard discovery.
+    (tmp_path / "latest.json").unlink()
+    (tmp_path / "step-000000000008-incomplete").mkdir()
+    empty = jax.tree.map(jnp.zeros_like, state)
+    shardings = jax.tree.map(lambda x: x.sharding, state)
+
+    def validate_metadata(metadata):
+        assert metadata == {"schedule": "test"}
+
+    restored, step = mpmd_checkpoint.restore_checkpoint(
+        str(tmp_path), empty, shardings, validate_metadata=validate_metadata
+    )
+    assert step == 7
+    np.testing.assert_array_equal(restored["weights"], state["weights"])
+
+
+def test_checkpoint_application_metadata_cannot_replace_completion_fields(tmp_path):
+    with pytest.raises(ValueError, match="must not override"):
+        save_checkpoint({"weights": jnp.ones(2)}, 7, tmp_path, metadata={"step": 8})
+    assert discover_latest_checkpoint(tmp_path) is None

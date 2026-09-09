@@ -16,10 +16,11 @@ from jax.experimental import multihost_utils
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 from levanter.data.text.examples import GrugLmExample
+from levanter.mpmd_checkpoint import checkpoint_arrays
 from levanter.pipeline import reshape_batch_into_microbatches
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
-from experiments.grug.moe_pipeline.checkpoint import checkpoint_arrays, restore_checkpoint, save_checkpoint
+from experiments.grug.moe_pipeline.checkpoint import restore_checkpoint, save_checkpoint
 from experiments.grug.moe_pipeline.model import BATCH_AXES, GrugModelConfig, Transformer
 from experiments.grug.moe_pipeline.pipeline import (
     TRAIN_LOSS_KEY,

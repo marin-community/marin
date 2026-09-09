@@ -233,5 +233,5 @@ def test_checkpoint_restores_optimizer_and_pending_router_updates(tmp_path):
         recovered, recovered_step = restore_checkpoint(root, empty, shardings, contract={"schedule": "zero_bubble"})
         assert recovered_step == step
         _assert_trees_close(recovered, state)
-        with pytest.raises(ValueError, match="configuration or topology"):
+        with pytest.raises(ValueError, match="training configuration"):
             restore_checkpoint(root, empty, shardings, contract={"schedule": "dualpipe_v"})

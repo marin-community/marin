@@ -26,7 +26,10 @@ benchmark exposes these settings as `PIPELINE_CHECKPOINT_ROOT` and
 `PIPELINE_CHECKPOINT_EVERY_STEPS`. `steps` is the total target number of optimizer
 updates, including updates completed before restore.
 
-Checkpoints work with both automatic schedules. Each save creates
+Checkpoints work with both automatic schedules. Grug validates the training
+configuration; `levanter.mpmd_checkpoint` handles MPMD array conversion and
+restore placement using Levanter's checkpoint save, load, and discovery APIs.
+Each save creates
 `step-<12-digit-completed-step>-<unique-id>/` containing Levanter's TensorStore
 Zarr3/OCDBT arrays and array manifest. `metadata.json` records the completed step,
 model and optimizer settings, and array shapes and placements. It is written only
