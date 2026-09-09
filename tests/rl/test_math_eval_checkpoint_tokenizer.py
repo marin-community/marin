@@ -4,15 +4,13 @@
 import hashlib
 import json
 from pathlib import Path
-from types import SimpleNamespace
 
 import fsspec
 import pytest
-from marin.inference.vllm_backend import VllmBackend, vllm_launcher
-from marin.inference.vllm_server import _vllm_serve_command
 
 from experiments.post_training import async_rl_audit as audit
 from experiments.post_training.math_eval import checkpoint_tokenizer as tokenizer
+from experiments.post_training.math_eval.calibration_preview import calibration_command
 from experiments.post_training.math_eval.calibration_protocol import checkpoint_serving_configuration
 from tests.rl.test_math_eval_export_binding import tokenizer_source
 
@@ -70,15 +68,18 @@ def test_actual_vllm_command_uses_separate_original_tokenizer():
     }
     binding["binding_sha256"] = audit.canonical_sha(binding)
     model, engine = checkpoint_serving_configuration(binding, expected_binding_sha256=binding["binding_sha256"])
-    spec = SimpleNamespace(tensor_parallel_size=1, api_model=model.model_id, revision=None)
-    args = VllmBackend(engine)._serve_args(spec, [], [])
-    command = _vllm_serve_command(
-        launcher=vllm_launcher(engine),
-        model_name_or_path=model.weights,
-        host="127.0.0.1",
-        port=8000,
-        extra_cli_args=args,
-    )
+    command = calibration_command(model, engine)
+    for flag, value in {
+        "--dtype": "bfloat16",
+        "--max-model-len": "2048",
+        "--max-num-seqs": "64",
+        "--load-format": "runai_streamer",
+        "--tensor-parallel-size": "1",
+        "--served-model-name": model.model_id,
+        "--seed": "17",
+    }.items():
+        assert command.count(flag) == 1
+        assert command[command.index(flag) + 1] == value
     assert command.count("--tokenizer") == 1
     assert command[command.index("--tokenizer") + 1] == tokenizer.tokenizer_stage_path(binding["tokenizer_source"])
     assert command[command.index("serve") + 1] == binding["model_uri"]
