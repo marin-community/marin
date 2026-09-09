@@ -435,3 +435,9 @@ author: benfeuer
 - Correction: preserve the input's manual-axis type on the H100 tiled forward and both custom-backward loop initializers, then sum batch-introduced manual axes before returning a shared-weight gradient to a replicated primal. One-device explicit `shard_map(check_vma=True)` regressions exercise the H100 tiled forward plus tiled and streaming backward paths and compare values/gradients with the dense reference.
 - Validation: the complete fused-loss file passed 88 tests with 15 platform skips; fourteen Snowball/historical-bridge tests passed; full pre-commit, formatting, and Pyrefly checks passed.
 - Next action: commit and push the correction, then launch smoke 16 from the isolated worktree with a fresh identity, version, and JAX port. Require one finite update, save, and separate native reload before fan-out.
+
+### 2026-09-09 12:43 EDT - Historical Grug smoke 16 submitted
+
+- Validation: the VMA correction and regressions are pushed in `33be7b0b56`; the complete fused-loss file passed 88 tests with 15 platform skips, fourteen Snowball/historical-bridge tests passed, and full pre-commit/Pyrefly passed.
+- Run: submitted `/benfeuer/snowball-final-qk157-grug-smoke16-coord` from the isolated worktree, stage version `2026.09.09.11`, cached conversion version `2026.09.09.3`, and unique JAX port 19419. The root pruned the completed conversion dependency and allocated the eight historical-training workers on attempt 0.
+- Next action: monitor this exact handle through native load, one finite optimizer update, and checkpoint save; then launch the separate native reload gate before campaign fan-out.
