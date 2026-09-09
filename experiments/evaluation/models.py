@@ -17,6 +17,7 @@ from marin.evaluation.model_config import (
     scan_model_configs,
 )
 from marin.inference.backend import CONCAT_CHAT_TEMPLATE
+from rigging.filesystem.storage_path import prefix_join
 
 MODEL_CATALOG_DIR = Path(__file__).parent / "serve" / "models"
 
@@ -145,7 +146,8 @@ def _snowball_final_models() -> tuple[ModelConfig, ...]:
             )
         )
         for stage, step in SNOWBALL_FINAL_STAGES:
-            location = f"{prefix}/{base}/{stage}/{SNOWBALL_FINAL_VERSION}/hf/step-{step}/"
+            suffix = f"{base}/{stage}/{SNOWBALL_FINAL_VERSION}/hf/step-{step}"
+            location = prefix_join(prefix, suffix)
             models.append(_snowball_final(f"snowball-final-{base}-{stage}", location))
     return tuple(models)
 

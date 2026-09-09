@@ -130,9 +130,13 @@ def test_snowball_scan_body_is_checkpointed_for_training():
         model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(0))
         forward_jaxpr = jax.make_jaxpr(lambda m, x: jnp.sum(m.activations(x).array))(model, ids)
 
+    scan_bodies = [eqn.params["jaxpr"] for eqn in forward_jaxpr.jaxpr.eqns if eqn.primitive.name == "scan"]
+
     # The production Grug recipe uses recompute-all for every transformer block. Without a remat
-    # inside the scan, its transpose retains all attention and MoE intermediates across every layer.
-    assert "remat" in str(forward_jaxpr)
+    # primitive directly inside the scan, its transpose retains all attention and MoE intermediates
+    # across every layer.
+    assert scan_bodies
+    assert any(any(eqn.primitive.name == "remat2" for eqn in body.jaxpr.eqns) for body in scan_bodies)
 
 
 def _expected_state_dict_manifest(cfg: SnowballConfig) -> dict[str, tuple[int, ...]]:

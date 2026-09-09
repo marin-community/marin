@@ -276,10 +276,11 @@ def _with_trainer_topology(
 
 @dataclass(frozen=True)
 class HFModel:
-    """Init from an HF checkpoint used verbatim: ``initialize_from_hf`` + ``use_hf_model_config``.
+    """Initialize from an HF checkpoint, optionally with an explicit Levanter model config.
 
     ``model_ref`` is an HF hub id or a staged directory; ``tokenizer_path`` defaults to it (the
-    common case). ``model_type`` is the Levanter model-registry key; ``use_hf_model_config``
+    common case). ``model_type`` is the Levanter model-registry key; when ``model_config`` is
+    omitted, ``use_hf_model_config``
     re-derives the arch from the checkpoint, so it only has to match the architecture (Delphi and
     the Qwen3 smoke are both ``qwen3``).
     """

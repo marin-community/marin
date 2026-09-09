@@ -43,7 +43,7 @@ from experiments.evaluation.launch import (
     LaunchSpec,
     build_evaluation_batch,
 )
-from experiments.evaluation.models import SNOWBALL_FINAL_BASES, SNOWBALL_FINAL_STAGES, models
+from experiments.evaluation.models import SNOWBALL_FINAL_BASES, SNOWBALL_FINAL_STAGES, SNOWBALL_FINAL_VERSION, models
 
 
 def _install_fake_harbor_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -551,6 +551,12 @@ def test_snowball_final_catalog_covers_five_bases_and_all_stages():
 
     assert expected <= catalog.keys()
     assert len(expected) == 25
+    for base, _, _ in SNOWBALL_FINAL_BASES:
+        for stage, step in SNOWBALL_FINAL_STAGES:
+            model = catalog[f"snowball-final-{base}-{stage}"]
+            assert model.location == (
+                f"s3://marin-us-east-02a/marin/snowball-final/{base}/{stage}/" f"{SNOWBALL_FINAL_VERSION}/hf/step-{step}"
+            )
     for name in expected:
         model = catalog[name]
         assert model.resource_hint.gpu == {"H100": 8}

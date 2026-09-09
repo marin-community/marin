@@ -567,7 +567,7 @@ def _apply_chat_template_with_masks(
 
 
 def _split_hf_tokenizer_ref(name_or_path: str) -> tuple[str, str | None]:
-    """Split the same ``repo@revision`` syntax used by HFCheckpointConverter."""
+    """Split ``repo@revision`` into the repository and optional revision."""
     if "@" not in name_or_path:
         return name_or_path, None
     return tuple(name_or_path.rsplit("@", 1))  # type: ignore[return-value]

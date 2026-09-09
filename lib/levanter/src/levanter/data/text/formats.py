@@ -97,7 +97,7 @@ class PrebuiltLmDatasetFormat(LmDatasetFormatBase):
     Attributes:
         input_ids_key: Field name containing token ids.
         loss_weights_key: Optional field name containing loss weights.
-        loss_weight_transform: Optional callable to transform loss weights before training.
+        loss_weight_transform: Optional named transform or callable applied to loss weights before training.
     """
 
     input_ids_key: str = "input_ids"

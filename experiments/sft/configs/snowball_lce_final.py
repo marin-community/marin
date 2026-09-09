@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Five-way Snowball LCE SFT campaign reconstructed from marin #8225 and #8977.
+"""Five-way Snowball LCE SFT campaign reconstructed from the Snowball training records.
 
 Each base is a pinned HF export of a native step-157000 checkpoint. The first stage loads HF
 weights into the first-class Snowball model with the architecture resolved from that exact Hub
@@ -12,13 +12,13 @@ Launch a one-update full-shape smoke on RNO2A before the campaign fan-out::
 
     source ../secrets.env
     uv run iris --config lib/iris/config/marin.yaml job run \
-      --target-cluster cw-rno2a --job-name snowball-final-qk157-smoke3-coord \
+      --target-cluster cw-rno2a --job-name snowball-final-qk157-smoke-coord \
       --cpu 2 --memory 2G --extra cpu --priority interactive --max-retries 10 --no-wait \
       -e MARIN_PREFIX s3://marin-us-east-02a/marin \
       -e HF_TOKEN "$HF_TOKEN" -e WANDB_API_KEY "$WANDB_API_KEY" \
-      -e IRIS_PORT_JAX 19403 -- \
+      -e IRIS_PORT_JAX "$UNIQUE_IRIS_PORT_JAX" -- \
       python -m experiments.sft.configs.snowball_lce_final \
-      --base qk157 --stage smoke --version 2026.09.08.3 --run
+      --base qk157 --stage smoke --version YYYY.MM.DD.N --run
 """
 
 import dataclasses
@@ -63,8 +63,8 @@ _TOKENIZER_REF = "marin-community/marin-tokenizer@a5ca45f2feb6c959bd87b81689aa72
 # All five immutable base exports have this exact tokenizer.json digest, as does _TOKENIZER_REF.
 _TOKENIZER_JSON_SHA256 = "881c9c36c359e1617afef6f7583403567931b7b4f43f6552d2b2155a131650a2"
 
-# These are immutable tags created only after the uploader validated all 44 source files. Add the
-# three skew revisions after their export/upload jobs finish; never train from a moving ``main``.
+# These immutable tags were created only after the uploader validated all 44 source files. Never
+# train from a moving ``main`` revision.
 _BASE_REVISIONS: dict[str, tuple[str, str | None]] = {
     "qk157": ("open-athena/snowball-67b-a2b-base-262k-qk157", "2b1f526273b8968b307a0098c08fb4321bb91e35"),
     "qk175": ("open-athena/snowball-67b-a2b-base-262k-qk175", "1934e71f2bb0fbeb19e5ce82372136e5297bf0a4"),

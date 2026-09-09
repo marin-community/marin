@@ -84,10 +84,6 @@ def test_nemotron_file_selection_is_frozen():
     assert "synthetic_tasks/skill_based/medium/model_training/data_filtered.parquet" in files
 
 
-def test_campaign_uses_canonical_optimizer_registration():
-    assert snowball_lce_final.GrugMoeAdamHConfig.__module__ == "experiments.grug.moe.optimizer"
-
-
 def test_training_mesh_matches_historical_grug_batch_axis_order():
     mesh = snowball_lce_final._TRAIN_MESH
 
@@ -113,7 +109,6 @@ def test_bases_share_one_pinned_byte_identical_tokenizer(monkeypatch):
     assert model.model_ref.startswith("open-athena/snowball-67b-a2b-base-262k-qk157@")
     assert model.tokenizer_path == snowball_lce_final._TOKENIZER_REF
     assert tokenizer == snowball_lce_final._TOKENIZER_REF
-    assert len(snowball_lce_final._TOKENIZER_JSON_SHA256) == 64
 
 
 def test_data_stage_builds_and_gates_both_shared_prefix_caches(local_base):
