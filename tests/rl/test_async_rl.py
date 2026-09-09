@@ -1026,7 +1026,8 @@ def test_pool_flag_preserves_default_preview_and_selects_verified_fixed_views():
     assert selected.run_id != baseline.run_id
     assert selected.config_yaml == baseline.config_yaml
     assert selected.train_data[0].relative_path == "qwen/train.parquet"
-    assert selected.validation_data[0].relative_path == BATTERY_PATH + "/qwen/dev.parquet"
+    assert selected.validation_data[0].relative_path == "dev.parquet"
+    assert selected.validation_data[0].uri.endswith("/" + BATTERY_PATH + "/qwen")
     result = CliRunner().invoke(
         async_rl.main,
         ["--version", "2026.09.06.10", "--stage", "rl", "--completion", "metrics", "--pool-artifact", POOL_ARGUMENT],
@@ -1034,7 +1035,8 @@ def test_pool_flag_preserves_default_preview_and_selects_verified_fixed_views():
     assert result.exit_code == 0, result.output
     cli = json.loads(result.output)["request"]
     assert cli["train_data"][0]["relative_path"] == "qwen/train.parquet"
-    assert cli["validation_data"][0]["relative_path"] == BATTERY_PATH + "/qwen/dev.parquet"
+    assert cli["validation_data"][0]["relative_path"] == "dev.parquet"
+    assert cli["validation_data"][0]["uri"].endswith("/" + BATTERY_PATH + "/qwen")
 
 
 @pytest.mark.parametrize("changes", [{"validation_offset": 128}, {"context_tokens": 1536}])
