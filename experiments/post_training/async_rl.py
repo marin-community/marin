@@ -24,6 +24,7 @@ Source publication/pinning and current capacity checks precede submission.
 from __future__ import annotations
 
 import json
+import math
 import re
 from dataclasses import asdict, dataclass, field, replace
 from enum import StrEnum
@@ -239,6 +240,7 @@ def training_config(
     serial_engine_startup: bool = False,
     first_token_admission: bool = False,
     generation_workers: int | None = None,
+    lr: float | None = None,
     max_num_seqs: int | None = None,
     training_ignore_eos: bool = False,
     optimizer_precision: OptimizerPrecision = OptimizerPrecision.NATIVE,
@@ -253,6 +255,8 @@ def training_config(
         raise ValueError("max_num_seqs must be a positive integer")
     if not isinstance(training_ignore_eos, bool):
         raise ValueError("training_ignore_eos must be a boolean")
+    if lr is not None and (type(lr) not in (int, float) or not math.isfinite(lr) or lr <= 0):
+        raise ValueError("lr must be finite and positive")
     schedule = SCHEDULES[scale]
     if not isinstance(epoch_seeded_shuffle, bool):
         raise ValueError("epoch_seeded_shuffle must be a boolean")
@@ -366,6 +370,8 @@ def training_config(
     trainer["policy"].pop("fsdp_config")
     trainer["policy"]["megatron_config"] = dict(megatron)
     trainer["ref"] = {"megatron_config": dict(megatron)}
+    if lr is not None:
+        trainer["policy"]["optimizer_config"]["lr"] = float(lr)
     apply_optimizer_precision(trainer, scale=scale, precision=optimizer_precision, state_metrics=optimizer_state_metrics)
     config["generator"]["sampling_params"]["logprobs"] = 0
     if max_num_seqs is not None:
@@ -596,6 +602,7 @@ def build_experiment(
     serial_engine_startup: bool = False,
     first_token_admission: bool = False,
     generation_workers: int | None = None,
+    lr: float | None = None,
     max_num_seqs: int | None = None,
     training_ignore_eos: bool = False,
     optimizer_precision: OptimizerPrecision = OptimizerPrecision.NATIVE,
@@ -654,6 +661,7 @@ def build_experiment(
         serial_engine_startup=serial_engine_startup,
         first_token_admission=first_token_admission,
         generation_workers=generation_workers,
+        lr=lr,
         max_num_seqs=max_num_seqs,
         training_ignore_eos=training_ignore_eos,
         optimizer_precision=optimizer_precision,
@@ -878,6 +886,7 @@ def build_experiment(
     "--eval-on-installed-weights", is_flag=True, help="Evaluate the installed async policy without off-grid sync."
 )
 @click.option("--eval-mode", type=click.Choice(["blocking", "background"]), default="blocking", show_default=True)
+@click.option("--lr", type=float, default=None, help="Override the policy learning rate; finite and positive.")
 @click.option("--pool-artifact", default=None, help="Use a frozen audited math pool by name@version.")
 def main(
     version: str,
@@ -918,6 +927,7 @@ def main(
     serial_engine_startup: bool,
     first_token_admission: bool,
     generation_workers: int | None,
+    lr: float | None,
     max_num_seqs: int | None,
     train_rows: int | None,
     training_ignore_eos: bool,
@@ -976,6 +986,7 @@ def main(
         serial_engine_startup=serial_engine_startup,
         first_token_admission=first_token_admission,
         generation_workers=generation_workers,
+        lr=lr,
         max_num_seqs=max_num_seqs,
         training_ignore_eos=training_ignore_eos,
     )
