@@ -26,9 +26,12 @@ INHERIT_PRIORITY = priority_band_value("inherit")
 # given (e.g. `iris job run -e XLA_FLAGS ...`) must be re-exported explicitly.
 # JAX_PLATFORMS is excluded: the dispatcher runs CPU-only and its value must
 # not leak onto accelerator tasks.
-_FORWARDED_ENV_PREFIXES = ("XLA_", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_", "MALLOC_")
+# CUDA_ is forwarded for the driver's core-dump switches (CUDA_ENABLE_*_COREDUMP, CUDA_COREDUMP_*),
+# which the driver reads at context creation on the train task; CUDA_VISIBLE_DEVICES is excluded
+# for the same reason as JAX_PLATFORMS.
+_FORWARDED_ENV_PREFIXES = ("XLA_", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_", "MALLOC_", "CUDA_")
 _FORWARDED_ENV_NAMES = ("LD_PRELOAD",)
-_FORWARDED_ENV_EXCLUDE = ("JAX_PLATFORMS",)
+_FORWARDED_ENV_EXCLUDE = ("JAX_PLATFORMS", "CUDA_VISIBLE_DEVICES")
 
 
 def _forwarded_env_vars() -> dict[str, str]:
