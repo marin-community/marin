@@ -10,7 +10,6 @@ import pulumi
 import pytest
 import yaml
 from pulumi.runtime import MockCallArgs, MockResourceArgs, Mocks
-from rigging.auth import MARIN_DESKTOP_OAUTH_CLIENT
 
 from infra.loom.infrastructure import (
     ROOT,
@@ -81,7 +80,6 @@ def deployment_config() -> DeploymentConfig:
                     "label": "Marina API",
                     "url": "https://marina.example.com/api/marina/mcp/",
                     "auth": {"type": "iap", "audience": "iap-client-id"},
-                    "tools": ["find_tool", "call_tool"],
                 }
             ),
         ),
@@ -296,7 +294,6 @@ def test_profile_mcp_access_rejects_invalid_selections(mcp_access: dict[str, obj
     [
         {"url": "http://marina.example.com/mcp"},
         {"auth": {"type": "iap"}},
-        {"tools": ["find_tool", "find_tool"]},
     ],
 )
 def test_remote_mcp_rejects_unsafe_or_ambiguous_configuration(override: dict[str, object]) -> None:
@@ -305,24 +302,11 @@ def test_remote_mcp_rejects_unsafe_or_ambiguous_configuration(override: dict[str
         "label": "Marina API",
         "url": "https://marina.example.com/mcp",
         "auth": {"type": "none"},
-        "tools": ["find_tool", "call_tool"],
     }
     value.update(override)
 
     with pytest.raises(ValueError, match="remote MCP"):
         RemoteMcpConfig.parse(value)
-
-
-def test_production_marina_profile_alone_receives_the_remote_mcp() -> None:
-    stack = yaml.safe_load((ROOT / "Pulumi.marin-loom.yaml").read_text())["config"]
-    remote = RemoteMcpConfig.parse(stack["marin-loom:remoteMcps"][0])
-    profiles = stack["marin-loom:profiles"]
-
-    assert remote.auth.manifest() == {
-        "type": "iap",
-        "audience": MARIN_DESKTOP_OAUTH_CLIENT.client_id,
-    }
-    assert {name for name, profile in profiles.items() if remote.group in profile["mcpAccess"]["groups"]} == {"marina"}
 
 
 @pulumi.runtime.test
@@ -448,17 +432,6 @@ def test_profiles_and_workloads_render_to_vm_metadata():
         manifest = json.loads(by_name(mocks, "loom").inputs["metadata"]["loom-deployment"])
         assert manifest["prune"] is True
         assert manifest["settings"] == {"slack.profile": "ops"}
-        assert manifest["remote_mcps"] == [
-            {
-                "identity": "/marina/api",
-                "label": "Marina API",
-                "description": "",
-                "url": "https://marina.example.com/api/marina/mcp/",
-                "auth": {"type": "iap", "audience": "iap-client-id"},
-                "tools": ["find_tool", "call_tool"],
-                "enabled": True,
-            }
-        ]
         assert manifest["profiles"][0]["profile"]["name"] == "ops"
         assert manifest["profiles"][0]["profile"]["instructions"] == (
             (ROOT / "profiles/ops/AGENTS.md").read_text().strip()

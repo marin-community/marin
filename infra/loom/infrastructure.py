@@ -205,7 +205,6 @@ class RemoteMcpConfig:
     description: str
     url: str
     auth: RemoteMcpAuthConfig
-    tools: tuple[str, ...]
     enabled: bool
 
     @classmethod
@@ -229,16 +228,6 @@ class RemoteMcpConfig:
             or parsed_url.fragment
         ):
             raise ValueError(f"remote MCP {identity!r} requires an HTTPS URL without credentials or a fragment")
-        tools_value = value.get("tools", [])
-        if (
-            not isinstance(tools_value, list)
-            or not tools_value
-            or not all(isinstance(tool, str) for tool in tools_value)
-        ):
-            raise ValueError(f"remote MCP {identity!r} tools must be a non-empty list of strings")
-        tools = tuple(tools_value)
-        if len(set(tools)) != len(tools) or any(not REMOTE_MCP_NAME.fullmatch(tool) for tool in tools):
-            raise ValueError(f"remote MCP {identity!r} tool names must be valid and unique")
         enabled = value.get("enabled", True)
         if not isinstance(enabled, bool):
             raise ValueError(f"remote MCP {identity!r} enabled must be a boolean")
@@ -248,13 +237,8 @@ class RemoteMcpConfig:
             description=str(value.get("description", "")).strip(),
             url=url,
             auth=_parse_remote_mcp_auth(value.get("auth", {}), identity),
-            tools=tools,
             enabled=enabled,
         )
-
-    @property
-    def group(self) -> str:
-        return self.identity.split("/", 2)[1]
 
     def manifest(self) -> dict[str, object]:
         return {
@@ -263,7 +247,6 @@ class RemoteMcpConfig:
             "description": self.description,
             "url": self.url,
             "auth": self.auth.manifest(),
-            "tools": list(self.tools),
             "enabled": self.enabled,
         }
 

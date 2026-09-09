@@ -29,9 +29,6 @@ config:
       auth:
         type: iap
         audience: 748532799086-qf8m6mvovtdmd71npm07gk1ohijsr3q5.apps.googleusercontent.com
-      tools:
-        - find_tool
-        - call_tool
       enabled: true
   marin-loom:profiles:
     default:
