@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "marin-rigging"
-version = "0.2.0"
+version = "0.2.91.dev32816546334+asyncv2digest1"
 requires-python = ">=3.12,<3.14"
 dependencies = [
     # Imported directly by rigging.filesystem.s3_compat, which subclasses
