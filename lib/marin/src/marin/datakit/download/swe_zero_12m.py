@@ -10,6 +10,7 @@
 """
 
 import re
+from textwrap import dedent
 
 from fray.types import ResourceConfig
 from zephyr import counters
@@ -38,11 +39,48 @@ _OBSERVATION_PREFIX = re.compile(r"\A\s*Observation:\s*", re.IGNORECASE)
 _COMPLETION_MARKER = "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
 _COMPLETION_COMMAND = re.compile(rf"\A\s*(?:echo|printf)\s+[\"']?{_COMPLETION_MARKER}(?:[\"'\\n]|\s|;|&|\||\Z)")
 
-SWE_ZERO_SYSTEM_PROMPT = """You are a software-engineering agent working in a repository.
-Use the bash tool to inspect and edit files. Each command runs in a fresh subshell from the
-repository root. Use repository-relative or absolute paths and do not use cd. The environment
-contains standard shell utilities but no language interpreters, compilers, package managers,
-or test runners. When the task is complete, answer with a concise final summary."""
+# Only the recorded response and completion protocol changes; retain all other instructions.
+_SYSTEM_PROTOCOL_REPLACEMENTS = (
+    (
+        dedent(
+            """\
+            Every response must contain EXACTLY ONE bash code block (triple backticks) with EXACTLY ONE command.
+            Before the bash block, include a THOUGHT section explaining your reasoning. Put ALL explanation in
+            THOUGHT — do NOT prefix the bash command with `# comment` lines.
+
+            Format:
+            THOUGHT: <your reasoning>
+
+            ```bash
+            <one bash command>
+            ```
+        """
+        ).strip(),
+        "Use the bash tool to run one command at a time. Put reasoning before the tool call.",
+    ),
+    (
+        dedent(
+            """\
+            - Do NOT prefix your bash command with a `# comment` line. Bash will run the command after the
+              comment, but the comment wastes input tokens. Put explanation in THOUGHT only.
+        """
+        ).strip(),
+        "",
+    ),
+    (
+        dedent(
+            """\
+            - The FIRST LINE of the output of your bash command must be exactly
+              `COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT`. The standard way is `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT`.
+        """
+        ).strip(),
+        "- When the task is complete, give a final response to the user.",
+    ),
+    (
+        "5. Submit with `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT`.",
+        "5. Finish with a final response to the user.",
+    ),
+)
 
 BASH_TOOL = {
     "type": "function",
@@ -68,6 +106,12 @@ def row_to_doc(row: dict) -> list[dict]:
     return [text_document(text, HF_DATASET_ID)]
 
 
+def _system_prompt_for_tools(content: str) -> str:
+    for original, replacement in _SYSTEM_PROTOCOL_REPLACEMENTS:
+        content = content.replace(original, replacement)
+    return content
+
+
 def row_to_chat_doc(row: dict) -> list[dict]:
     messages = row.get("messages")
     if not messages:
@@ -86,7 +130,7 @@ def row_to_chat_doc(row: dict) -> list[dict]:
             if canonical:
                 counters.pipeline.update_counter("swe_zero_12m/chat_malformed_filtered", 1)
                 return []
-            canonical.append({"role": "system", "content": SWE_ZERO_SYSTEM_PROMPT})
+            canonical.append({"role": "system", "content": _system_prompt_for_tools(content)})
             continue
         if role == "user":
             if skip_completion_observation:
@@ -214,7 +258,7 @@ def swe_zero_12m_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/swe-zero-12m-trajectories",
         deps=[dl],
         fn=lambda output_path: transform_chat(dl.output_path, output_path),
-        hash_attrs={"version": "2026.09.09.quarantine"},
+        hash_attrs={"version": "2026.09.10.preserve-system-instructions"},
     )
     return processed, normalize_chat_step(
         output_schema=CHAT_SCHEMA, name="normalized-chat/swe-zero-12m", download=processed

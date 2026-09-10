@@ -1269,6 +1269,7 @@ def _rollout_chat_steps(dataset: PenfeverRollout) -> tuple[StepSpec, StepSpec]:
                 }.get(dataset.cohort_name, "2026.09.05.4.explicit-tools")
             ),
             "schema_tokenizer": (OPENCODE_TOKENIZER, OPENCODE_TOKENIZER_REVISION),
+            "terminus_version": "2026.09.10.terminal-wait",
             "teacher": dataset.teacher,
             "task_source": dataset.task_source,
         },

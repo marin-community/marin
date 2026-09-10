@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -16,6 +17,32 @@ from marin.datakit.download.nemotron_terminal import row_to_chat_doc as nemotron
 from marin.datakit.download.numinamath_tir import row_to_chat_doc as numinamath_row_to_chat_doc
 from marin.datakit.download.swe_rebench_openhands import row_to_chat_doc as openhands_row_to_chat_doc
 from marin.datakit.download.swe_zero_12m import row_to_chat_doc as swe_zero_row_to_chat_doc
+
+
+@pytest.mark.parametrize("adapter", [agenttrove_row_to_chat_doc, nemotron_terminal_row_to_chat_doc])
+@pytest.mark.parametrize("completion", [{"task_complete": False}, {}])
+def test_terminal_empty_commands_preserve_wait_and_observation(adapter, completion) -> None:
+    row = {
+        "conversations": [
+            {"role": "user", "content": "Task Description:\nWait for the process to finish."},
+            {
+                "role": "assistant",
+                "content": json.dumps({"analysis": "The process is still running.", "commands": [], **completion}),
+            },
+            {"role": "user", "content": "New Terminal Output:\nProcess finished."},
+            {"role": "assistant", "content": '{"commands":[],"task_complete":true}'},
+        ]
+    }
+    [document] = adapter(row)
+    normalized = _normalize_chat_record(document, "messages", "id")
+    messages = normalized["messages"]
+    assert [message["role"] for message in messages] == ["user", "assistant", "assistant", "tool", "assistant"]
+    assert messages[1]["channel"] == "analysis"
+    assert messages[1]["content"] == [{"type": "text", "text": "The process is still running."}]
+    assert messages[2]["recipient"] == "functions.terminal"
+    assert messages[2]["content"] == [{"type": "text", "text": '{"commands":[]}'}]
+    assert messages[3]["content"] == [{"type": "text", "text": "New Terminal Output:\nProcess finished."}]
+    assert messages[4]["content"] == [{"type": "text", "text": "Task complete."}]
 
 
 @pytest.mark.parametrize("adapter", [agenttrove_row_to_chat_doc, nemotron_terminal_row_to_chat_doc])
@@ -372,3 +399,30 @@ def test_chat_preserves_upstream_and_processed_ids(adapter, schema, row, tmp_pat
     [result] = pq.read_table(output_path).to_pylist()
     assert result["upstream_id"] == "7"
     assert result["source_id"] == source["id"]
+
+
+def test_swe_zero_preserves_system_instructions_when_translating_protocol() -> None:
+    # Recorded prompt from AlienKevin/SWE-ZERO-12M-trajectories at 44e0280.
+    original = Path(__file__).with_name("fixtures").joinpath("swe_zero_system_prompt.txt").read_text()
+    row = {
+        "messages": [
+            {"role": "system", "content": original + "\nKeep edits limited to the requested fix."},
+            {"role": "user", "content": "Fix the bug."},
+            {"role": "assistant", "content": "THOUGHT: Done.\n```bash\necho COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\n```"},
+        ]
+    }
+    [document] = swe_zero_row_to_chat_doc(row)
+    prompt = document["messages"][0]["content"][0]["text"]
+    environment = original.split("ENVIRONMENT:\n", 1)[1].split("\nDO NOT:", 1)[0]
+    restrictions = original.split("- Do NOT use `cd`.", 1)[1].split("\nTO FINISH:", 1)[0]
+    workflow = original.split("WORKFLOW:\n", 1)[1].split("5. Submit", 1)[0]
+    assert environment in prompt
+    assert "- Do NOT use `cd`." + restrictions in prompt
+    assert workflow in prompt
+    assert prompt.endswith("Keep edits limited to the requested fix.")
+    assert "Use the bash tool" in prompt
+    assert "final response to the user" in prompt
+    assert "THOUGHT" not in prompt
+    assert "```" not in prompt
+    assert "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT" not in prompt
+    assert document["messages"][-1]["content"] == [{"type": "text", "text": "Task complete."}]

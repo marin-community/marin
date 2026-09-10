@@ -87,9 +87,8 @@ def terminus_protocol_messages(conversations: list[dict]) -> tuple[list[dict], d
             return None
         reasoning = _reasoning_content(content, payload)
         commands = payload["commands"]
-        if not commands:
-            final = "Task complete." if payload.get("task_complete") else "No terminal action is needed."
-            messages.append({"role": "assistant", "content": f"{reasoning}\n\n{final}".strip()})
+        if not commands and payload.get("task_complete"):
+            messages.append({"role": "assistant", "content": f"{reasoning}\n\nTask complete.".strip()})
             continue
         call_id = f"call_terminal_{index}"
         messages.append(
