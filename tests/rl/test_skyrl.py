@@ -143,6 +143,21 @@ def test_skyrl_retention_allows_explicit_rollback_depth_up_to_five() -> None:
         SkyRLRetentionPolicy(resume_checkpoint_count=6)
 
 
+def test_skyrl_role_plan_requires_within_group_sampling() -> None:
+    """A single sample per prompt leaves every group with zero variance, hence no GRPO advantage."""
+
+    assert _role_plan().n_samples_per_prompt == 4
+    with pytest.raises(ValueError, match="at least 2"):
+        dataclasses.replace(_role_plan(), n_samples_per_prompt=1)
+
+
+def test_skyrl_role_plan_requires_whole_rollout_groups_per_batch() -> None:
+    """A batch boundary slicing through a rollout group corrupts the group-relative advantage."""
+
+    with pytest.raises(ValueError, match="divisible"):
+        dataclasses.replace(_role_plan(), train_batch_size=18)
+
+
 def test_skyrl_step_fingerprint_includes_runtime_identity_and_excludes_placement() -> None:
     spec = _spec()
     base = skyrl_step(spec, _execution())
