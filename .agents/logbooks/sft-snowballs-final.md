@@ -553,3 +553,9 @@ author: benfeuer
 
 - The merged Evalchemy #118 pin passed the one-source/two-direction RNO2A gate at `/benfeuer/eval-20260910-214737-snowball-final-qk157-base-86ad`. Input pass@1 was 1.0, output pass@1 was 0.0, and Evalchemy durably persisted exactly two directional samples for the single capped source.
 - Released isolated full CruxEval roots: qk157 `/benfeuer/eval-20260910-220314-snowball-final-qk157-base-5d9e`, qk175 `/benfeuer/eval-20260910-220314-snowball-final-qk175-base-2694`, skew2 `/benfeuer/eval-20260910-220314-snowball-final-qk175-skew2-base-246e`, skew4 `/benfeuer/eval-20260910-220314-snowball-final-qk175-skew4-base-1c71`, and skew8 `/benfeuer/eval-20260910-220315-snowball-final-qk175-skew8-base-d8b7`.
+
+## 2026-09-10 18:25 EDT — MRCR corrected-dataset cell drift repaired
+
+- Evidence: all five isolated full MRCR evaluators failed before inference with the same cell shortfalls. Recomputing the full pinned revision with the official `o200k_base` prompt-plus-answer rule found 96–106 examples per cell and 1,196 total through 65,536 tokens; the evaluator's fixed 100-per-cell requirement no longer matches the corrected data.
+- Fix: Evalchemy [#119](https://github.com/marin-community/evalchemy/pull/119) selects the complete eligible pinned cohort, interleaves the uneven cells deterministically, respects the shared sample cap, and still fails if an expected cell is entirely absent. The regression covers uneven cells. Local validation passed with 457 tests and five skips, repository lint and lint-review were clean, every CI lane passed, and the PR merged at `725a0555077e45d6d602e9932eb1597aa2a85069`.
+- Campaign pin: `config/update-external.py evalchemy` advanced Evalchemy from `9d108108` to `725a0555`. Submit a one-source runtime gate on the merged pin before replacing the five failed MRCR roots.
