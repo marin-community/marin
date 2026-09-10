@@ -1,0 +1,85 @@
+{
+ "sources": [
+  {
+   "source": "laion__swesmith-oracle-filtered-v2",
+   "converter": "swe_trusted_paths",
+   "sampled": 5,
+   "statuses": {
+    "converted": 5
+   },
+   "images": 1,
+   "checks": [
+    {
+     "path": "swesmith-00000",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"setup_failed\", \"stderr\": \"fatal: not a git repository (or any of the parent directories): .git\\n\", \"passed\": 0, \"total\": 0}"
+    },
+    {
+     "path": "swesmith-00000",
+     "check": "oracle",
+     "reward": 1.0,
+     "status": "scored",
+     "detail": "{\"passed\": 673, \"total\": 673, \"exit_code\": 0}"
+    },
+    {
+     "path": "swesmith-00001",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"setup_failed\", \"stderr\": \"fatal: not a git repository (or any of the parent directories): .git\\n\", \"passed\": 0, \"total\": 0}"
+    },
+    {
+     "path": "swesmith-00001",
+     "check": "oracle",
+     "reward": 1.0,
+     "status": "scored",
+     "detail": "{\"passed\": 673, \"total\": 673, \"exit_code\": 0}"
+    },
+    {
+     "path": "swesmith-00002",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"setup_failed\", \"stderr\": \"fatal: not a git repository (or any of the parent directories): .git\\n\", \"passed\": 0, \"total\": 0}"
+    },
+    {
+     "path": "swesmith-00002",
+     "check": "oracle",
+     "reward": 1.0,
+     "status": "scored",
+     "detail": "{\"passed\": 673, \"total\": 673, \"exit_code\": 0}"
+    },
+    {
+     "path": "swesmith-00003",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"setup_failed\", \"stderr\": \"fatal: not a git repository (or any of the parent directories): .git\\n\", \"passed\": 0, \"total\": 0}"
+    },
+    {
+     "path": "swesmith-00003",
+     "check": "oracle",
+     "reward": 1.0,
+     "status": "scored",
+     "detail": "{\"passed\": 673, \"total\": 673, \"exit_code\": 0}"
+    },
+    {
+     "path": "swesmith-00004",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"setup_failed\", \"stderr\": \"fatal: not a git repository (or any of the parent directories): .git\\n\", \"passed\": 0, \"total\": 0}"
+    },
+    {
+     "path": "swesmith-00004",
+     "check": "oracle",
+     "reward": 1.0,
+     "status": "scored",
+     "detail": "{\"passed\": 673, \"total\": 673, \"exit_code\": 0}"
+    }
+   ]
+  }
+ ]
+}

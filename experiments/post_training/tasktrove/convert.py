@@ -1,31 +1,56 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Convert TaskTrove tasks to the Marin verifier format, one template converter at a time.
+"""Convert TaskTrove tasks to the Clean layout, one converter per key.
 
 Every task is fingerprinted again (cheap, and keeps this stage independent of the fingerprint
-shards), routed by source verdict and template id, and either rewritten as a new task binary or
-recorded as unconverted with the reason. Output parquets keep TaskTrove's ``path`` and
-``task_binary`` columns and add ``source``, ``template_id``, ``status`` and ``error``.
+shards), routed by source verdict and converter key, and either rewritten as a new task binary or
+recorded with the reason it was not. Output rows keep TaskTrove's ``path`` and ``task_binary``
+and add the selection columns; the oracle solution goes in ``solution_binary`` rather than in the
+binary the agent sees.
 """
 
+import hashlib
 import json
 import logging
+import re
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass
-from enum import StrEnum
 
 from rigging.filesystem.storage_path import StoragePath
+from tasktrove_verify.spec import mode_of, render_spec
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
-from experiments.post_training.tasktrove.converters.converted_task import ConvertedTask
-from experiments.post_training.tasktrove.converters.registry import CONVERTERS
-from experiments.post_training.tasktrove.fingerprint import TASKS_GLOB, iter_task_rows, source_name
-from experiments.post_training.tasktrove.sources import SourceVerdict, load_source_verdicts
+from experiments.post_training.tasktrove.contract import (
+    MODE_EXTRAS,
+    VERIFIER_TOML,
+    VERIFY_TEST_SH,
+    dockerfile_id,
+    edit_dockerfile,
+    render_task_toml,
+)
+from experiments.post_training.tasktrove.converters.converted_task import (
+    ConvertedTask,
+    Converter,
+    ConverterKey,
+    ConvertStatus,
+    Rejected,
+)
+from experiments.post_training.tasktrove.converters.registry import converter_index
+from experiments.post_training.tasktrove.fingerprint import (
+    COVERAGE_JSON,
+    TaskShard,
+    iter_shard_rows,
+    source_name,
+    task_shards,
+    uncovered_keys,
+)
+from experiments.post_training.tasktrove.sources import SourceInfo, SourceVerdict, load_source_verdicts
 from experiments.post_training.tasktrove.taskbinary import (
     DOCKERFILE,
     INSTRUCTION,
+    SOLUTION_DIR,
     TASK_TOML,
     TEST_SH,
     TaskFiles,
@@ -33,76 +58,140 @@ from experiments.post_training.tasktrove.taskbinary import (
     template_fingerprint,
     write_task_binary,
 )
-from experiments.post_training.tasktrove.verifier_spec import VERIFY_TEST_SH, render_task_toml, tier_dockerfile
 
 logger = logging.getLogger(__name__)
 
+CONVERTED_GLOB = "converted/*.parquet"
+_WHITESPACE = re.compile(r"\s+")
 
-class ConvertStatus(StrEnum):
-    CONVERTED = "converted"
-    NO_CONVERTER = "no_converter"
-    CONVERTER_ERROR = "converter_error"
-    DROPPED_SOURCE = "dropped_source"
-    REWRITE_SOURCE = "rewrite_source"
+
+def instruction_key(instruction: str) -> str:
+    """Two tasks are duplicates when their instructions match after lowercasing and whitespace collapsing."""
+    return hashlib.sha256(_WHITESPACE.sub(" ", instruction).strip().lower().encode()).hexdigest()
 
 
 @dataclass(frozen=True)
 class ConvertedRecord:
     source: str
     path: str
+    family: str
     template_id: str
+    converter: str
+    mode: str
+    dockerfile_id: str
+    language: str
+    tags: list[str]
+    has_solution: bool
     status: str
     error: str
+    instruction_key: str
+    """Hash of the normalized instruction; the deduped step reads this column instead of the binary."""
     task_binary: bytes | None
+    solution_binary: bytes | None
 
 
-def build_task_files(converted: ConvertedTask, source: str, path: str, template_id: str) -> TaskFiles:
-    """Assemble the new task binary: instruction, task.toml with ``[verifier]``, tier Dockerfile,
-    the three-line test.sh, data files, and the oracle solution if any."""
-    metadata = {**converted.metadata, "tasktrove_source": source, "tasktrove_path": path, "template_id": template_id}
+def build_task_files(converted: ConvertedTask, tool_ref: str, metadata: dict) -> TaskFiles:
+    """The binary the agent and Harbor see: instruction, task.toml, edited Dockerfile, shim, spec, data."""
+    mode = mode_of(converted.spec)
     files: dict[str, bytes] = {
         INSTRUCTION: converted.instruction.encode(),
-        TASK_TOML: (
-            render_task_toml(converted.agent_timeout, converted.verifier_timeout, converted.verifier, metadata).encode()
-        ),
-        DOCKERFILE: tier_dockerfile(converted.tier, converted.repo_setup).encode(),
+        TASK_TOML: render_task_toml(converted.agent_timeout, converted.verifier_timeout, metadata).encode(),
+        DOCKERFILE: edit_dockerfile(converted.dockerfile, tool_ref, MODE_EXTRAS.get(mode, ())).encode(),
         TEST_SH: VERIFY_TEST_SH.encode(),
+        VERIFIER_TOML: render_spec(converted.spec).encode(),
     }
+    for path in converted.data_files:
+        if path.startswith(SOLUTION_DIR):
+            raise ValueError(f"data file {path} is under {SOLUTION_DIR}; put it in solution_files")
     files.update(converted.data_files)
-    files.update(converted.solution_files)
     return TaskFiles(files)
 
 
-def convert_parquet(parquet_path: str) -> Iterator[dict]:
-    verdict = load_source_verdicts()[source_name(parquet_path)].verdict
-    skip_status = {
-        SourceVerdict.DROP: ConvertStatus.DROPPED_SOURCE,
-        SourceVerdict.REWRITE: ConvertStatus.REWRITE_SOURCE,
-    }.get(verdict)
-    for row in iter_task_rows(parquet_path):
-        yield asdict(_convert_one(row.source, row.path, row.task_binary, skip_status))
+def convert_shard(shard: TaskShard, tool_ref: str) -> Iterator[dict]:
+    info = load_source_verdicts()[source_name(shard.parquet_path)]
+    index = converter_index()
+    for row in iter_shard_rows(shard):
+        yield asdict(convert_one(info, row.path, row.task_binary, index, tool_ref))
 
 
-def _convert_one(source: str, path: str, blob: bytes, skip_status: ConvertStatus | None) -> ConvertedRecord:
+def _unconverted(info: SourceInfo, path: str, template_id: str, status: ConvertStatus, error: str) -> ConvertedRecord:
+    return ConvertedRecord(
+        source=info.source,
+        path=path,
+        family=info.family,
+        template_id=template_id,
+        converter="",
+        mode="",
+        dockerfile_id="",
+        language="",
+        tags=[],
+        has_solution=False,
+        status=status.value,
+        error=error,
+        instruction_key="",
+        task_binary=None,
+        solution_binary=None,
+    )
+
+
+def convert_one(
+    info: SourceInfo, path: str, blob: bytes, index: dict[ConverterKey, Converter], tool_ref: str
+) -> ConvertedRecord:
     task = read_task_binary(blob)
-    template_id = template_fingerprint(task).template_id
-    if skip_status is not None:
-        return ConvertedRecord(source, path, template_id, skip_status, "", None)
-    converter = CONVERTERS.get(template_id)
+    fingerprint = template_fingerprint(task)
+    template_id = fingerprint.template_id
+    if info.verdict == SourceVerdict.DROP:
+        return _unconverted(info, path, template_id, ConvertStatus.DROPPED_SOURCE, "")
+    converter = index.get(ConverterKey(info.family, frozenset(fingerprint.code_files)))
     if converter is None:
-        return ConvertedRecord(source, path, template_id, ConvertStatus.NO_CONVERTER, "", None)
+        return _unconverted(info, path, template_id, ConvertStatus.NO_CONVERTER, "")
     try:
-        converted = converter(task)
+        result = converter.convert(task)
     except (KeyError, ValueError, json.JSONDecodeError) as error:
-        return ConvertedRecord(
-            source, path, template_id, ConvertStatus.CONVERTER_ERROR, f"{type(error).__name__}: {error}", None
-        )
-    new_task = build_task_files(converted, source, path, template_id)
-    return ConvertedRecord(source, path, template_id, ConvertStatus.CONVERTED, "", write_task_binary(new_task))
+        return _unconverted(info, path, template_id, ConvertStatus.CONVERTER_ERROR, f"{type(error).__name__}: {error}")
+    if isinstance(result, Rejected):
+        return _unconverted(info, path, template_id, result.status, result.detail)
+    metadata = {
+        **result.metadata,
+        "tasktrove_source": info.source,
+        "tasktrove_path": path,
+        "family": info.family,
+        "template_id": template_id,
+        "converter": converter.name,
+        "mode": mode_of(result.spec).value,
+        "language": result.language,
+        "tags": list(result.tags),
+    }
+    new_task = build_task_files(result, tool_ref, metadata)
+    solution = write_task_binary(TaskFiles(dict(result.solution_files))) if result.solution_files else None
+    return ConvertedRecord(
+        source=info.source,
+        path=path,
+        family=info.family,
+        template_id=template_id,
+        converter=converter.name,
+        mode=metadata["mode"],
+        dockerfile_id=dockerfile_id(new_task.text(DOCKERFILE)),
+        language=result.language,
+        tags=list(result.tags),
+        has_solution=solution is not None,
+        status=ConvertStatus.CONVERTED.value,
+        error="",
+        instruction_key=instruction_key(result.instruction),
+        task_binary=write_task_binary(new_task),
+        solution_binary=solution,
+    )
 
 
-def convert_tasks(input_path: str, output_path: str) -> None:
-    """Zephyr stage: one output parquet per source parquet, every row tagged with its status."""
-    ds = Dataset.from_files(str(StoragePath(input_path) / TASKS_GLOB)).flat_map(convert_parquet)
+def convert_tasks(input_path: str, templates_path: str, output_path: str, tool_ref: str) -> None:
+    """Zephyr stage: one output parquet per source parquet, every row tagged with its status.
+
+    Refuses to run while ``coverage.json`` lists a kept key with an exemplar and no converter, so
+    a converter that was never written cannot silently become a ``no_converter`` column.
+    """
+    missing = uncovered_keys(json.loads((StoragePath(templates_path) / COVERAGE_JSON).read_text()))
+    if missing:
+        raise ValueError(f"{len(missing)} kept converter keys have no converter: {missing[:5]}")
+    ds = Dataset.from_list(task_shards(input_path)).flat_map(lambda shard: convert_shard(shard, tool_ref))
     ds = ds.write_parquet(str(StoragePath(output_path) / "converted/part-{shard:05d}.parquet"))
     ZephyrContext(name="tasktrove-convert").execute(ds)

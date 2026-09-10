@@ -1,0 +1,123 @@
+{
+ "source": "laion__all-puzzles-v2",
+ "converter": "all_puzzles",
+ "sampled": 8,
+ "statuses": {
+  "converted": 8
+ },
+ "images": 2,
+ "checks": [
+  {
+   "path": "all_puzzles-0000",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"reason\": \"no_output\"}"
+  },
+  {
+   "path": "all_puzzles-0000",
+   "check": "oracle",
+   "reward": 1.0,
+   "status": "scored",
+   "detail": "{\"extracted\": \"Defect, Salt, chair, donate\", \"expected\": [\"Defect\", \"Salt\", \"chair\", \"donate\"]}"
+  },
+  {
+   "path": "all_puzzles-0017",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"reason\": \"no_output\"}"
+  },
+  {
+   "path": "all_puzzles-0017",
+   "check": "oracle",
+   "reward": 1.0,
+   "status": "scored",
+   "detail": "{\"extracted\": \"-2\", \"expected\": \"-2\"}"
+  },
+  {
+   "path": "all_puzzles-0021",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"reason\": \"no_output\"}"
+  },
+  {
+   "path": "all_puzzles-0021",
+   "check": "oracle",
+   "reward": 1.0,
+   "status": "scored",
+   "detail": "{\"extracted\": \"Salt, came, learn, reply\", \"expected\": [\"Salt\", \"came\", \"learn\", \"reply\"]}"
+  },
+  {
+   "path": "all_puzzles-0027",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"reason\": \"no_output\"}"
+  },
+  {
+   "path": "all_puzzles-0027",
+   "check": "oracle",
+   "reward": 1.0,
+   "status": "scored",
+   "detail": "{\"extracted\": \"-24\", \"expected\": \"-24\"}"
+  },
+  {
+   "path": "all_puzzles-0028",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"reason\": \"no_output\"}"
+  },
+  {
+   "path": "all_puzzles-0028",
+   "check": "oracle",
+   "reward": 1.0,
+   "status": "scored",
+   "detail": "{\"extracted\": \"but, space, they\", \"expected\": [\"but\", \"space\", \"they\"]}"
+  },
+  {
+   "path": "all_puzzles-0033",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"reason\": \"no_output\"}"
+  },
+  {
+   "path": "all_puzzles-0033",
+   "check": "oracle",
+   "reward": 1.0,
+   "status": "scored",
+   "detail": "{\"extracted\": \"above, varied, wheels\", \"expected\": [\"above\", \"varied\", \"wheels\"]}"
+  },
+  {
+   "path": "all_puzzles-0056",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"reason\": \"no_output\"}"
+  },
+  {
+   "path": "all_puzzles-0056",
+   "check": "oracle",
+   "reward": 1.0,
+   "status": "scored",
+   "detail": "{\"extracted\": \"406\", \"expected\": \"406\"}"
+  },
+  {
+   "path": "all_puzzles-0066",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"reason\": \"no_output\"}"
+  },
+  {
+   "path": "all_puzzles-0066",
+   "check": "oracle",
+   "reward": 1.0,
+   "status": "scored",
+   "detail": "{\"extracted\": \"(5.545, 7.545)\", \"expected\": \"(5.545, 7.545)\"}"
+  }
+ ]
+}

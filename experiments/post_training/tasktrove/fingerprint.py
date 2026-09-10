@@ -21,6 +21,9 @@ from rigging.filesystem.storage_path import StoragePath
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
+from experiments.post_training.tasktrove.converters.converted_task import ConverterKey
+from experiments.post_training.tasktrove.converters.registry import converter_index
+from experiments.post_training.tasktrove.sources import SourceVerdict, load_source_verdicts
 from experiments.post_training.tasktrove.taskbinary import (
     DOCKERFILE,
     INSTRUCTION,
@@ -32,6 +35,10 @@ from experiments.post_training.tasktrove.taskbinary import (
 logger = logging.getLogger(__name__)
 
 TASKS_GLOB = "*/tasks.parquet"
+COVERAGE_JSON = "coverage.json"
+ROWS_PER_SHARD = 2000
+"""Row groups of one source parquet are grouped into shards of about this many tasks, so a
+600k-task source spreads over hundreds of workers instead of one."""
 EXEMPLAR_MIN_TASKS = 20
 """Templates below this many tasks are listed in the index but get no extracted exemplar. The
 long tail is per-repository SWE setup scripts, handled per repository rather than per template."""
@@ -65,16 +72,43 @@ class TaskFingerprintRecord:
     task_bytes: int
 
 
+@dataclass(frozen=True)
+class TaskShard:
+    """A contiguous run of row groups in one source parquet: the unit of work for every stage."""
+
+    parquet_path: str
+    first_row_group: int
+    end_row_group: int
+
+
 def source_name(parquet_path: str) -> str:
     return StoragePath(parquet_path).parent.name
 
 
-def iter_task_rows(parquet_path: str) -> Iterator[TaskRow]:
-    """Yield every task in one source parquet, one row group in memory at a time."""
+def task_shards(input_path: str, rows_per_shard: int = ROWS_PER_SHARD) -> list[TaskShard]:
+    """Split every source parquet under ``input_path`` into shards of about ``rows_per_shard`` tasks."""
+    shards: list[TaskShard] = []
+    for parquet in sorted((StoragePath(input_path) / TASKS_GLOB).glob(), key=str):
+        with parquet.open("rb") as handle:
+            metadata = pq.ParquetFile(handle).metadata
+        start, rows = 0, 0
+        for rg in range(metadata.num_row_groups):
+            rows += metadata.row_group(rg).num_rows
+            if rows >= rows_per_shard:
+                shards.append(TaskShard(str(parquet), start, rg + 1))
+                start, rows = rg + 1, 0
+        if start < metadata.num_row_groups:
+            shards.append(TaskShard(str(parquet), start, metadata.num_row_groups))
+    return shards
+
+
+def iter_task_rows(parquet_path: str, first_row_group: int = 0, end_row_group: int | None = None) -> Iterator[TaskRow]:
+    """Yield the tasks in one source parquet's row groups, one row group in memory at a time."""
     source = source_name(parquet_path)
     with StoragePath(parquet_path).open("rb") as handle:
         pf = pq.ParquetFile(handle)
-        for rg in range(pf.num_row_groups):
+        stop = pf.num_row_groups if end_row_group is None else end_row_group
+        for rg in range(first_row_group, stop):
             table = pf.read_row_group(rg, columns=["path", "task_binary"])
             paths = table.column("path").to_pylist()
             blobs = table.column("task_binary").to_pylist()
@@ -82,8 +116,12 @@ def iter_task_rows(parquet_path: str) -> Iterator[TaskRow]:
                 yield TaskRow(source, path, rg, i, blob)
 
 
-def fingerprint_parquet(parquet_path: str) -> Iterator[dict]:
-    for row in iter_task_rows(parquet_path):
+def iter_shard_rows(shard: TaskShard) -> Iterator[TaskRow]:
+    return iter_task_rows(shard.parquet_path, shard.first_row_group, shard.end_row_group)
+
+
+def fingerprint_shard(shard: TaskShard) -> Iterator[dict]:
+    for row in iter_shard_rows(shard):
         task = read_task_binary(row.task_binary)
         fp = template_fingerprint(task)
         dockerfile = task.get_text(DOCKERFILE) or ""
@@ -108,9 +146,8 @@ def fingerprint_parquet(parquet_path: str) -> Iterator[dict]:
 
 
 def fingerprint_tasks(input_path: str, output_path: str) -> None:
-    """Zephyr stage: one parquet shard of fingerprint records per source parquet."""
-    pattern = str(StoragePath(input_path) / TASKS_GLOB)
-    ds = Dataset.from_files(pattern).flat_map(fingerprint_parquet)
+    """Zephyr stage: one parquet of fingerprint records per task shard."""
+    ds = Dataset.from_list(task_shards(input_path)).flat_map(fingerprint_shard)
     ds = ds.write_parquet(str(StoragePath(output_path) / "fingerprints/part-{shard:05d}.parquet"))
     ZephyrContext(name="tasktrove-fingerprint").execute(ds)
 
@@ -129,6 +166,59 @@ class TemplateSummary:
     exemplar_path: str
     exemplar_row_group: int
     exemplar_row_in_group: int
+
+
+@dataclass
+class KeyCoverage:
+    """One converter key over the kept sources: what it covers and whether a converter exists."""
+
+    family: str
+    code_files: list[str]
+    tasks: int
+    templates: int
+    sources: dict[str, int]
+    exemplar_template: str
+    converter: str | None
+
+
+def key_coverage(summaries: list[TemplateSummary]) -> list[KeyCoverage]:
+    verdicts = load_source_verdicts()
+    index = converter_index()
+    grouped: dict[ConverterKey, dict] = {}
+    for s in summaries:
+        for source, count in s.sources.items():
+            info = verdicts.get(source)
+            if info is None or info.verdict != SourceVerdict.KEEP:
+                continue
+            key = ConverterKey(info.family, frozenset(s.code_files))
+            entry = grouped.setdefault(key, {"tasks": 0, "templates": set(), "sources": Counter(), "exemplar": s})
+            entry["tasks"] += count
+            entry["templates"].add(s.template_id)
+            entry["sources"][source] += count
+            if s.tasks > entry["exemplar"].tasks:
+                entry["exemplar"] = s
+    coverage = [
+        KeyCoverage(
+            family=key.family,
+            code_files=sorted(key.code_files),
+            tasks=entry["tasks"],
+            templates=len(entry["templates"]),
+            sources=dict(entry["sources"].most_common()),
+            exemplar_template=entry["exemplar"].template_id,
+            converter=index[key].name if key in index else None,
+        )
+        for key, entry in grouped.items()
+    ]
+    return sorted(coverage, key=lambda c: -c.tasks)
+
+
+def uncovered_keys(coverage: list[dict]) -> list[str]:
+    """Keys with at least one exemplar-sized template and no converter, largest first."""
+    return [
+        f"{c['family']} {c['code_files']} ({c['tasks']} tasks)"
+        for c in coverage
+        if c["converter"] is None and c["tasks"] >= EXEMPLAR_MIN_TASKS
+    ]
 
 
 def build_template_index(input_path: str, fingerprints_path: str, output_path: str) -> None:
@@ -169,7 +259,9 @@ def build_template_index(input_path: str, fingerprints_path: str, output_path: s
     out = StoragePath(output_path)
     _extract_exemplars(input_path, exemplars, out / "templates")
     (out / "templates.json").write_text(json.dumps([asdict(s) for s in summaries], indent=1))
-    (out / "templates.md").write_text(_render_summary(summaries, len(rows)))
+    coverage = key_coverage(summaries)
+    (out / COVERAGE_JSON).write_text(json.dumps([asdict(c) for c in coverage], indent=1))
+    (out / "templates.md").write_text(_render_summary(summaries, coverage, len(rows)))
     logger.info("wrote %d templates covering %d tasks to %s", len(summaries), len(rows), output_path)
 
 
@@ -190,13 +282,28 @@ def _extract_exemplars(input_path: str, exemplars: list[tuple[str, dict]], dest_
                     target.write_bytes(data)
 
 
-def _render_summary(summaries: list[TemplateSummary], total: int) -> str:
+def _render_summary(summaries: list[TemplateSummary], coverage: list[KeyCoverage], total: int) -> str:
     lines = [
         "# TaskTrove templates",
         "",
-        f"{len(summaries)} templates over {total} tasks. One converter per template id; see",
-        f"`converters/registry.py`. Templates with at least {EXEMPLAR_MIN_TASKS} tasks have one",
-        "extracted exemplar under `templates/<template_id>/exemplar/`; the rest are listed only.",
+        f"{len(summaries)} templates over {total} tasks. Templates with at least {EXEMPLAR_MIN_TASKS} tasks",
+        "have one extracted exemplar under `templates/<template_id>/exemplar/`; the rest are listed only.",
+        "",
+        "## Converter keys over kept sources",
+        "",
+        "One converter per key (source family plus the template's code files); see `converters/registry.py`.",
+        "",
+        "| family | code files | tasks | templates | converter | exemplar |",
+        "|---|---|---:|---:|---|---|",
+    ]
+    for c in coverage:
+        code = ", ".join(p for p in c.code_files if p != TEST_SH) or "test.sh only"
+        lines.append(
+            f"| {c.family} | {code} | {c.tasks} | {c.templates} | {c.converter or 'none'} | `{c.exemplar_template}` |"
+        )
+    lines += [
+        "",
+        "## Templates",
         "",
         "| template | tasks | sources | dockerfiles | with solution | test.sh / code files |",
         "|---|---:|---|---:|---:|---|",

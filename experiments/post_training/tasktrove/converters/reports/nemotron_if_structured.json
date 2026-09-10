@@ -1,0 +1,278 @@
+{
+ "sources": [
+  {
+   "source": "laion__nemotron-gym-instruction-following-structured-v3",
+   "converter": "nemotron_if_structured",
+   "sampled": 20,
+   "statuses": {
+    "converted": 20
+   },
+   "images": 1,
+   "checks": [
+    {
+     "path": "if-structured-183499346c6c",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"no_output\"}"
+    },
+    {
+     "path": "if-structured-2d55108fab5d",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"no_output\"}"
+    },
+    {
+     "path": "if-structured-eaf358e5a4e1",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"no_output\"}"
+    },
+    {
+     "path": "if-structured-a2bf2eb0369f",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"no_output\"}"
+    },
+    {
+     "path": "if-structured-d5998bff7dd4",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"no_output\"}"
+    },
+    {
+     "path": "if-structured-6be3c60cf031",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"no_output\"}"
+    },
+    {
+     "path": "if-structured-9700c099de57",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"no_output\"}"
+    },
+    {
+     "path": "if-structured-989395974559",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"no_output\"}"
+    },
+    {
+     "path": "if-structured-13fad8016f84",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"no_output\"}"
+    },
+    {
+     "path": "if-structured-6df8a9a68de6",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"no_output\"}"
+    },
+    {
+     "path": "if-structured-bc627dd38bf7",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"no_output\"}"
+    },
+    {
+     "path": "if-structured-8b9337de3b9d",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"no_output\"}"
+    },
+    {
+     "path": "if-structured-13c8df9a5b13",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"no_output\"}"
+    },
+    {
+     "path": "if-structured-9d328c9cc7b1",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"no_output\"}"
+    },
+    {
+     "path": "if-structured-d19d91c7555e",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"no_output\"}"
+    },
+    {
+     "path": "if-structured-658fd576c200",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"no_output\"}"
+    },
+    {
+     "path": "if-structured-aa1b4af6f2e0",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"no_output\"}"
+    },
+    {
+     "path": "if-structured-a9e17bca6e9c",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"no_output\"}"
+    },
+    {
+     "path": "if-structured-02b5afbf807b",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"no_output\"}"
+    },
+    {
+     "path": "if-structured-07657ae747ec",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"no_output\"}"
+    }
+   ]
+  },
+  {
+   "source": "laion__nemotron-gym-instruction-following-calendar-v3",
+   "converter": "nemotron_if_structured",
+   "sampled": 8,
+   "statuses": {
+    "converted": 8
+   },
+   "images": 1,
+   "checks": [
+    {
+     "path": "agent-calendar-0e76b84286f7",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"exit_code\": 0, \"stderr\": \"answer.txt missing\\n\", \"channel\": \"reward.json\"}"
+    },
+    {
+     "path": "agent-calendar-0e76b84286f7",
+     "check": "oracle",
+     "reward": 1.0,
+     "status": "scored",
+     "detail": "{\"exit_code\": 0, \"stderr\": \"\", \"channel\": \"reward.json\"}"
+    },
+    {
+     "path": "agent-calendar-abf9123f134d",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"exit_code\": 0, \"stderr\": \"answer.txt missing\\n\", \"channel\": \"reward.json\"}"
+    },
+    {
+     "path": "agent-calendar-abf9123f134d",
+     "check": "oracle",
+     "reward": 1.0,
+     "status": "scored",
+     "detail": "{\"exit_code\": 0, \"stderr\": \"\", \"channel\": \"reward.json\"}"
+    },
+    {
+     "path": "agent-calendar-b54009f9dc3b",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"exit_code\": 0, \"stderr\": \"answer.txt missing\\n\", \"channel\": \"reward.json\"}"
+    },
+    {
+     "path": "agent-calendar-b54009f9dc3b",
+     "check": "oracle",
+     "reward": 1.0,
+     "status": "scored",
+     "detail": "{\"exit_code\": 0, \"stderr\": \"\", \"channel\": \"reward.json\"}"
+    },
+    {
+     "path": "agent-calendar-21472dfbb37f",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"exit_code\": 0, \"stderr\": \"answer.txt missing\\n\", \"channel\": \"reward.json\"}"
+    },
+    {
+     "path": "agent-calendar-21472dfbb37f",
+     "check": "oracle",
+     "reward": 1.0,
+     "status": "scored",
+     "detail": "{\"exit_code\": 0, \"stderr\": \"\", \"channel\": \"reward.json\"}"
+    },
+    {
+     "path": "agent-calendar-323dd70085fd",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"exit_code\": 0, \"stderr\": \"answer.txt missing\\n\", \"channel\": \"reward.json\"}"
+    },
+    {
+     "path": "agent-calendar-323dd70085fd",
+     "check": "oracle",
+     "reward": 1.0,
+     "status": "scored",
+     "detail": "{\"exit_code\": 0, \"stderr\": \"\", \"channel\": \"reward.json\"}"
+    },
+    {
+     "path": "agent-calendar-8880ac1d6c19",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"exit_code\": 0, \"stderr\": \"answer.txt missing\\n\", \"channel\": \"reward.json\"}"
+    },
+    {
+     "path": "agent-calendar-8880ac1d6c19",
+     "check": "oracle",
+     "reward": 1.0,
+     "status": "scored",
+     "detail": "{\"exit_code\": 0, \"stderr\": \"\", \"channel\": \"reward.json\"}"
+    },
+    {
+     "path": "agent-calendar-b03e6a0a1023",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"exit_code\": 0, \"stderr\": \"answer.txt missing\\n\", \"channel\": \"reward.json\"}"
+    },
+    {
+     "path": "agent-calendar-b03e6a0a1023",
+     "check": "oracle",
+     "reward": 1.0,
+     "status": "scored",
+     "detail": "{\"exit_code\": 0, \"stderr\": \"\", \"channel\": \"reward.json\"}"
+    },
+    {
+     "path": "agent-calendar-ac4c7b7de5bd",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"exit_code\": 0, \"stderr\": \"answer.txt missing\\n\", \"channel\": \"reward.json\"}"
+    },
+    {
+     "path": "agent-calendar-ac4c7b7de5bd",
+     "check": "oracle",
+     "reward": 1.0,
+     "status": "scored",
+     "detail": "{\"exit_code\": 0, \"stderr\": \"\", \"channel\": \"reward.json\"}"
+    }
+   ]
+  }
+ ]
+}

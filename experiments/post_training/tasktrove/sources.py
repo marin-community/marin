@@ -4,8 +4,7 @@
 """Per-source crop verdicts from the 2026-09 TaskTrove audit.
 
 ``source_verdicts.json`` records, for each active TaskTrove source, whether its tasks are kept and
-converted as they are, sampled and rewritten by an agent, or dropped, with the reason. The
-pipeline reads it to skip dropped sources and to route rewrite sources to the rewrite queue.
+converted or dropped, with the reason. The pipeline reads it to skip dropped sources.
 """
 
 import json
@@ -22,7 +21,6 @@ _VERDICTS_PATH = Path(__file__).with_name("source_verdicts.json")
 
 class SourceVerdict(StrEnum):
     KEEP = "keep"
-    REWRITE = "rewrite"
     DROP = "drop"
 
 

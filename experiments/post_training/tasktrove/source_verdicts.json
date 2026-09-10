@@ -10,9 +10,9 @@
   "reason": "Hidden test_data.json, only the first case is shown. Exact-line compare; fine."
  },
  "DCAgent__exp_rle_adversarial-v6": {
-  "verdict": "keep",
+  "verdict": "drop",
   "family": "unit-test-gen",
-  "reason": "Hardened stack-pytest variant with skip-safe grading."
+  "reason": "Same generator as stack-pytest: implement a fake ddtrace/godot/mssqlcli module so LLM-written tests pass. Kata-grade fakes of real libraries."
  },
  "DCAgent__exp_rpt_curriculum-easy": {
   "verdict": "drop",
@@ -20,9 +20,9 @@
   "reason": "Starter skeleton is a complete working solution."
  },
  "DCAgent__exp_rpt_curriculum-medium-v2": {
-  "verdict": "keep",
+  "verdict": "drop",
   "family": "unit-test-gen",
-  "reason": "Implement-to-visible-pytest; small but sound."
+  "reason": "LLM-synthesized \"implement a mock cluster\" toys. Kata-grade."
  },
  "DCAgent__exp_rpt_e2egit-large": {
   "verdict": "drop",
@@ -35,12 +35,12 @@
   "reason": "Same generator as e2egit-large at 487 rows."
  },
  "DCAgent__exp_rpt_multifile-v3": {
-  "verdict": "keep",
+  "verdict": "drop",
   "family": "unit-test-gen",
-  "reason": "Two or three interdependent modules graded by pytest. Visible tests are acceptable; note monkeypatch assumptions."
+  "reason": "LLM-synthesized three-module toys (text normalizer, 1D Kalman update). Kata-grade, the tier already dropped for pymethods2test and unitsyn."
  },
  "DCAgent__exp_rpt_nemotron-cpp": {
-  "verdict": "rewrite",
+  "verdict": "drop",
   "family": "unit-test-gen",
   "reason": "GoogleTest grading, but the reference implementation is pasted inside the test file and some tests need doctest, which is not installed."
  },
@@ -80,7 +80,7 @@
   "reason": "Mixture; crosscodeeval slice only checks import succeeds."
  },
  "DCAgent__selfinstruct-naive-sandboxes-2-verified-v3": {
-  "verdict": "rewrite",
+  "verdict": "drop",
   "family": "shell-cmd",
   "reason": "Per-task LLM-written test_state.py with loose file discovery and dead code. Task ideas are usable; regenerate verifiers with an oracle/no-op gate."
  },
@@ -90,7 +90,7 @@
   "reason": "Real repos, hidden FAIL_TO_PASS, git gate, trusted-test restore. Bake the verify-time installs into the image."
  },
  "SankalpKJ__nemotron-code-oracle-filtered": {
-  "verdict": "rewrite",
+  "verdict": "drop",
   "family": "competitive-programming",
   "reason": "Only test is the example shown in the prompt. Oracle solutions exist, so generate hidden cases by fuzzing inputs through the oracle."
  },
@@ -115,12 +115,12 @@
   "reason": "Keep rows with at least 5 test files; drop the zero-test fallback (currently full credit for not crashing)."
  },
  "laion__exp_rpt_bugsinpy-v4": {
-  "verdict": "rewrite",
+  "verdict": "drop",
   "family": "swe-repo",
   "reason": "LLM-synthesized tests against a single-file stub, with assert True placeholders. Rewrite against the real BugsInPy project suites."
  },
  "laion__exp_rpt_codenet-python-v4": {
-  "verdict": "rewrite",
+  "verdict": "drop",
   "family": "competitive-programming",
   "reason": "Only 3 hidden cases and whitespace-collapsing compare. Oracle present; regenerate 20+ cases per task."
  },
@@ -160,14 +160,14 @@
   "reason": "20% of sampled tasks contain unconditional fail() stubs the verifier restores."
  },
  "laion__exp_rpt_scaffold-v3": {
-  "verdict": "keep",
+  "verdict": "drop",
   "family": "other",
-  "reason": "Implement-to-visible-pytest with starter code; visible tests are fine for this shape."
+  "reason": "LLM-synthesized stub-filling toys (TypeScript formatter shim, Flask hello page). Kata-grade."
  },
  "laion__exp_rpt_stack-cpp-v4": {
-  "verdict": "keep",
+  "verdict": "drop",
   "family": "unit-test-gen",
-  "reason": "Compile-and-run against a real acceptance test. Replace grep-based pass detection with structured output."
+  "reason": "Tests are lifted from real repositories with the repository stripped: sampled tasks include headers and data files that do not exist in the image, and one pastes the reference Solution class inside the test."
  },
  "laion__exp_rpt_stack-dockerfile-gpt5mini-v7": {
   "verdict": "drop",
@@ -175,9 +175,9 @@
   "reason": "587 rows of gpt-5-mini-written per-task test scripts whose instructions describe containers that do not exist."
  },
  "laion__exp_rpt_stack-go-v5": {
-  "verdict": "keep",
+  "verdict": "drop",
   "family": "unit-test-gen",
-  "reason": "Real go test. Vendor modules at conversion so grading is offline."
+  "reason": "Tests import packages from the original repository (bridgr/internal/..., gosnowflake internals) that are not in the task, so most tasks are unsolvable as specified."
  },
  "laion__exp_rpt_stack-jest-v5": {
   "verdict": "drop",
@@ -185,7 +185,7 @@
   "reason": "Spy-call contracts against a 90-package global npm image; 424 rows."
  },
  "laion__exp_rpt_stack-junit-v6": {
-  "verdict": "rewrite",
+  "verdict": "drop",
   "family": "unit-test-gen",
   "reason": "JUnit grading is real but every instruction cites a test path that does not exist and scan-class-path counts any test class."
  },
@@ -195,12 +195,12 @@
   "reason": "Fail-open exit paths, regex class discovery, 462 rows."
  },
  "laion__exp_rpt_stack-pytest-large-v3": {
-  "verdict": "keep",
+  "verdict": "drop",
   "family": "unit-test-gen",
-  "reason": "Sound pytest grading once the reward=1-then-exit-1 bug is fixed at conversion."
+  "reason": "Sampled tests only assert truthiness of return values; a stub that returns a dict passes. Same stripped-repository shape as stack-go."
  },
  "laion__exp_rpt_stack-rspec-v4": {
-  "verdict": "rewrite",
+  "verdict": "drop",
   "family": "unit-test-gen",
   "reason": "Real Ruby test files but gems are never installed and some tasks are unsolvable offline. Bake gems and drop tasks that fail the oracle gate."
  },
@@ -245,14 +245,14 @@
   "reason": "Deterministic schedule check. Templated; dedupe against calendar-v3."
  },
  "laion__nemotron-gym-agentic-function-calling-pivot-v3": {
-  "verdict": "rewrite",
+  "verdict": "drop",
   "family": "tool-use",
   "reason": "Predict-the-next-call from a frozen transcript with exact key-set match. The only tool-call data here; rewrite into executable mock-tool envs built from the transcripts."
  },
  "laion__nemotron-gym-agentic-indirect-prompt-injection-v3": {
-  "verdict": "rewrite",
-  "family": "tool-use",
-  "reason": "Only checks the injected action was avoided, so refusing everything scores 1. Add a legitimate-task completion check."
+  "verdict": "keep",
+  "family": "prompt-injection",
+  "reason": "Scores the single next action: 0 for the injected tool call, 1 for anything else, so a plain reply always scores 1; kept as a resistance signal to mix in."
  },
  "laion__nemotron-gym-agentic-swe-pivot-v4": {
   "verdict": "drop",
@@ -270,9 +270,9 @@
   "reason": "Direct grid answer against gold. Subsample; the inductive variant is stronger."
  },
  "laion__nemotron-gym-cfbench-v4": {
-  "verdict": "keep",
+  "verdict": "drop",
   "family": "instruction-following",
-  "reason": "Deterministic checks plus judge; agent seeing its own deterministic checker is acceptable."
+  "reason": "Deterministic gate before the judge uses 31 constraint ids outside the IFEval registry (tables, heading depth, numbered lists, unique words, ...); only 328 of 1,478 tasks are gate-able today. Port the gate checks before converting."
  },
  "laion__nemotron-gym-competitive-coding-v2": {
   "verdict": "keep",
@@ -280,7 +280,7 @@
   "reason": "50 hidden stdin/stdout cases per task. Best competitive source in the corpus."
  },
  "laion__nemotron-gym-identity-following-v4": {
-  "verdict": "rewrite",
+  "verdict": "drop",
   "family": "instruction-following",
   "reason": "Persona is NVIDIA's; judge-only. Rewrite with our identity and deterministic name/language checks, or skip."
  },
@@ -335,17 +335,17 @@
   "reason": "Exact gate then reference-based judge. Reference answers are real; needs the judge in the new grader."
  },
  "laion__nemotron-gym-knowledge-web-search-mcqa-v2": {
-  "verdict": "rewrite",
+  "verdict": "drop",
   "family": "qa-short-answer",
   "reason": "Promises web search but ships no tool. Worth rewriting as a real search-tool env; otherwise it is a 3k duplicate of mcqa."
  },
  "laion__nemotron-gym-litmus-bench-v2": {
-  "verdict": "rewrite",
+  "verdict": "drop",
   "family": "math-answer",
   "reason": "Instruction asks for ((answer)), verifier greps boxed or last number; SMILES tasks with no RDKit. Fix format contract and install cheminformatics."
  },
  "laion__nemotron-gym-math-advanced-calculations-v4": {
-  "verdict": "rewrite",
+  "verdict": "drop",
   "family": "math-answer",
   "reason": "Instruction refers to tools that do not exist and only the last number is graded. Ground-truth expression tree is present, so rewrite with a calculator tool and grade every subexpression."
  },
@@ -400,19 +400,19 @@
   "reason": "Keep JSON/YAML/TOML rows (full jsonschema validation); drop XML and CSV rows, which only check key presence."
  },
  "laion__nemotron-gym-sysbench-v4": {
-  "verdict": "keep",
+  "verdict": "drop",
   "family": "instruction-following",
-  "reason": "Deterministic constraint gate before the judge; heuristic parsers but sound overall."
+  "reason": "Deterministic gate before the judge uses 31 constraint ids outside the IFEval registry (tables, heading depth, numbered lists, unique words, ...); only 328 of 1,478 tasks are gate-able today. Port the gate checks before converting."
  },
  "laion__openswe-tasks-patched-v7-oracle-success": {
-  "verdict": "keep",
+  "verdict": "drop",
   "family": "swe-repo",
-  "reason": "Pytest with git-archive restore. Filter out the ~10% of tasks graded by bespoke heredoc scripts."
+  "reason": "No FAIL_TO_PASS ids: the v7 verifier scores whichever tests its custom pytest guard plugin saw execute, and the repository is cloned by a root-level setup script at agent time. Needs its own converter."
  },
  "laion__r2egym-patched-full-oracle-v3": {
-  "verdict": "keep",
+  "verdict": "drop",
   "family": "swe-repo",
-  "reason": "Real repos with per-test expected outcomes. Require full expected-test coverage, not the intersection."
+  "reason": "Grades by overlap between test_info.json and expected_output_json rather than by pytest node id; not the trusted-paths shape the swe converters handle."
  },
  "laion__stackexchange-codereview-sandboxes-verified-v2": {
   "verdict": "drop",
@@ -440,9 +440,9 @@
   "reason": "Same harness. Candidate for a shell-task rewrite, not for keeping."
  },
  "laion__swegym-tasks-patched-validated-v5": {
-  "verdict": "keep",
+  "verdict": "drop",
   "family": "swe-repo",
-  "reason": "Real repos, batched F2P/P2P groups, restore logic. Only 2.4k rows across ~11 repos."
+  "reason": "Image ships no repository: the instruction clones it and runs make init at agent time, and the old grader pip-installed requirements again at grading time. Sampled oracles fail on missing dependencies and the empty check cannot start."
  },
  "laion__swesmith-oracle-filtered-v2": {
   "verdict": "keep",
@@ -450,7 +450,7 @@
   "reason": "Real repo tests. Strip the oracle patch from tests/config.json at conversion."
  },
  "laion__toolscale-v4": {
-  "verdict": "rewrite",
+  "verdict": "drop",
   "family": "tool-use",
   "reason": "Good design (offline tool service) but the CLI script embeds the gold calls and answer, and the prompt states the conclusion. Move the fixture behind a server and strip the success criteria."
  },

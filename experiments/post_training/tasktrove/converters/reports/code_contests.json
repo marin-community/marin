@@ -1,0 +1,46 @@
+{
+ "source": "DCAgent__code-contests-noblock",
+ "converter": "code_contests",
+ "sampled": 5,
+ "statuses": {
+  "converted": 5
+ },
+ "images": 1,
+ "checks": [
+  {
+   "path": "code_contests-0000",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"passed\": 0, \"total\": 5, \"first_failure\": \"0\"}"
+  },
+  {
+   "path": "code_contests-0001",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"passed\": 0, \"total\": 5, \"first_failure\": \"0\"}"
+  },
+  {
+   "path": "code_contests-0002",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"passed\": 0, \"total\": 5, \"first_failure\": \"0\"}"
+  },
+  {
+   "path": "code_contests-0003",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"passed\": 0, \"total\": 5, \"first_failure\": \"0\"}"
+  },
+  {
+   "path": "code_contests-0004",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"passed\": 0, \"total\": 5, \"first_failure\": \"0\"}"
+  }
+ ]
+}

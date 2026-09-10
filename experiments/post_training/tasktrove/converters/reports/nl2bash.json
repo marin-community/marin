@@ -1,0 +1,151 @@
+{
+ "source": "DCAgent2__nl2bash-tasks-cleaned-oracle-v2",
+ "converter": "nl2bash",
+ "sampled": 10,
+ "statuses": {
+  "converted": 10
+ },
+ "images": 1,
+ "checks": [
+  {
+   "path": "task_0",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"missing output: /output/command_capture.txt\\n\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "task_0",
+   "check": "oracle",
+   "reward": 1.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "task_1007",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"missing output: /output/command_capture.txt\\n\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "task_1007",
+   "check": "oracle",
+   "reward": 1.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "task_1008",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"missing output: /output/command_capture.txt\\n\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "task_1008",
+   "check": "oracle",
+   "reward": 1.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "task_101",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"missing output: /output/command_capture.txt\\n\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "task_101",
+   "check": "oracle",
+   "reward": 1.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "task_1010",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"missing output: /output/command_capture.txt\\n\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "task_1010",
+   "check": "oracle",
+   "reward": 1.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "task_1029",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"missing output: /output/command_capture.txt\\n\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "task_1029",
+   "check": "oracle",
+   "reward": 1.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "task_1030",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"missing output: /output/command_capture.txt\\n\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "task_1030",
+   "check": "oracle",
+   "reward": 1.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "task_1035",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"missing output: /output/command_capture.txt\\n\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "task_1035",
+   "check": "oracle",
+   "reward": 1.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "task_1040",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"missing output: /output/command_capture.txt\\n\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "task_1040",
+   "check": "oracle",
+   "reward": 1.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "task_1047",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"missing output: /output/command_capture.txt\\n\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "task_1047",
+   "check": "oracle",
+   "reward": 1.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"\", \"channel\": \"reward.json\"}"
+  }
+ ]
+}

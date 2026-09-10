@@ -4,78 +4,86 @@
 """Converters for the Nemotron-Gym adapter templates (``verifier_data.json`` driven graders).
 
 These are the worked examples for agents writing further converters: read the per-task data
-file, map its fields onto a :class:`VerifierSpec`, and pass the instruction through.
+file, map its fields onto one spec, pass the instruction and Dockerfile through, set the tags.
 """
 
-import json
+import re
 
-from experiments.post_training.tasktrove.converters.converted_task import ConvertedTask
-from experiments.post_training.tasktrove.taskbinary import INSTRUCTION, TaskFiles
-from experiments.post_training.tasktrove.verifier_spec import (
-    AnswerSpec,
-    AnswerType,
-    ImageTier,
-    MathType,
-    VerifierKind,
-    VerifierSpec,
+from tasktrove_verify.spec import MathSpec, MathType, McqSpec
+
+from experiments.post_training.tasktrove.converters.answer_solution import answer_solution
+from experiments.post_training.tasktrove.converters.converted_task import (
+    ConvertedTask,
+    Converter,
+    ConverterKey,
+    ConvertStatus,
+    Rejected,
 )
+from experiments.post_training.tasktrove.converters.nemotron_data import metadata, verifier_data
+from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, TaskFiles
 
-VERIFIER_DATA = "tests/verifier_data.json"
-
-
-def _verifier_data(task: TaskFiles) -> dict:
-    return json.loads(task.text(VERIFIER_DATA))
-
-
-def _metadata(task: TaskFiles) -> dict:
-    raw = task.get_text("metadata.json")
-    return json.loads(raw) if raw else {}
+_OPTION_LINE = re.compile(r"^\s*\(?([A-Z])[\.\):]\s", re.MULTILINE)
+_MAX_OPTIONS = 10
 
 
-def convert_mcqa(task: TaskFiles) -> ConvertedTask:
+def _option_count(instruction: str) -> int:
+    letters = {m.group(1) for m in _OPTION_LINE.finditer(instruction)}
+    return max((ord(letter) - ord("A") + 1 for letter in letters), default=_MAX_OPTIONS)
+
+
+def convert_mcqa(task: TaskFiles) -> ConvertedTask | Rejected:
     """Knowledge MCQA: ``{"expected_answer": "C", "output_regex": ...}``.
 
-    The output regex captured one alphanumeric character, so a multi-character gold answer was
-    never matchable; those rows are rejected here rather than converted.
+    The output regex captured one alphanumeric character, so a multi-character gold answer was never
+    matchable; those rows are rejected rather than converted.
     """
-    data = _verifier_data(task)
+    data = verifier_data(task)
     expected = str(data["expected_answer"]).strip()
-    if len(expected) != 1 or not expected.isalnum():
-        raise ValueError(f"mcqa gold answer is not a single option letter: {expected!r}")
+    if len(expected) != 1 or not expected.isalpha():
+        return Rejected(ConvertStatus.UNSUPPORTED_VARIANT, f"mcqa gold answer is not one option letter: {expected!r}")
+    instruction = task.text(INSTRUCTION)
+    spec = McqSpec(expected=expected.upper(), options=_option_count(instruction))
     return ConvertedTask(
-        instruction=task.text(INSTRUCTION),
-        verifier=VerifierSpec(
-            kind=VerifierKind.ANSWER,
-            answer=AnswerSpec(type=AnswerType.MCQ, expected=expected.upper()),
-        ),
-        tier=ImageTier.ANSWER,
-        metadata=_metadata(task),
+        instruction=instruction,
+        spec=spec,
+        dockerfile=task.text(DOCKERFILE),
+        tags=("qa", "mcq", "nemotron"),
+        solution_files=answer_solution(spec),
+        metadata=metadata(task),
     )
 
 
-def convert_math_boxed(task: TaskFiles) -> ConvertedTask:
+def convert_math_boxed(task: TaskFiles) -> ConvertedTask | Rejected:
     """Typed math answers: ``{"expected_answer": "...", "answer_type": "scalar" | "equation" | ...}``."""
-    data = _verifier_data(task)
+    data = verifier_data(task)
+    expected = str(data["expected_answer"]).strip()
+    if not expected:
+        return Rejected(ConvertStatus.NULL_GRADER, "empty expected_answer")
+    spec = MathSpec(expected=expected, math_type=MathType(data.get("answer_type", "scalar")))
     return ConvertedTask(
         instruction=task.text(INSTRUCTION),
-        verifier=VerifierSpec(
-            kind=VerifierKind.ANSWER,
-            answer=AnswerSpec(
-                type=AnswerType.MATH,
-                expected=str(data["expected_answer"]),
-                math_type=MathType(data.get("answer_type", "scalar")),
+        spec=spec,
+        dockerfile=task.text(DOCKERFILE),
+        tags=("math", "nemotron"),
+        solution_files=task.under("solution/") or answer_solution(spec),
+        metadata=metadata(task),
+    )
+
+
+CONVERTERS = (
+    Converter(
+        name="nemotron_mcqa",
+        keys=(
+            ConverterKey(
+                "qa-short-answer",
+                frozenset({"tests/test.sh", "tests/validate_verifier_data.py", "tests/verifier.py"}),
             ),
         ),
-        tier=ImageTier.ANSWER,
-        solution_files=task.under("solution/"),
-        metadata=_metadata(task),
-    )
-
-
-# Template ids from templates.json (fingerprint run over the v4.15 tree, 2026-09-09).
-CONVERTERS = {
-    "c814af4f124d": convert_mcqa,  # laion__nemotron-gym-knowledge-mcqa-v2 (616,888)
-    "5ee94cf985a9": (
-        convert_math_boxed
-    ),  # nemotron math family: stack-overflow, oracle-filtered, openmathreasoning, nemo-prism
-}
+        convert=convert_mcqa,
+    ),
+    Converter(
+        name="nemotron_math",
+        keys=(ConverterKey("math-answer", frozenset({"tests/test.sh", "tests/verifier.py"})),),
+        convert=convert_math_boxed,
+    ),
+)

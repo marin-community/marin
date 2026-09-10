@@ -1,0 +1,155 @@
+{
+ "sources": [
+  {
+   "source": "laion__nemotron-gym-instruction-following-v3",
+   "converter": "nemotron_ifeval",
+   "sampled": 20,
+   "statuses": {
+    "converted": 20
+   },
+   "images": 1,
+   "checks": [
+    {
+     "path": "Nemotron-RL-instruction_following-ef0a9fea691e",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"no_output\"}"
+    },
+    {
+     "path": "Nemotron-RL-instruction_following-474d427eff49",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"no_output\"}"
+    },
+    {
+     "path": "Nemotron-RL-instruction_following-9b7c22bb004a",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"no_output\"}"
+    },
+    {
+     "path": "Nemotron-RL-instruction_following-a97a7f29570e",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"no_output\"}"
+    },
+    {
+     "path": "Nemotron-RL-instruction_following-710f075c0421",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"no_output\"}"
+    },
+    {
+     "path": "Nemotron-RL-instruction_following-579d6ed9a3ef",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"no_output\"}"
+    },
+    {
+     "path": "Nemotron-RL-instruction_following-c124bf509425",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"no_output\"}"
+    },
+    {
+     "path": "Nemotron-RL-instruction_following-d59eb9872446",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"no_output\"}"
+    },
+    {
+     "path": "Nemotron-RL-instruction_following-3b91c1bec11c",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"no_output\"}"
+    },
+    {
+     "path": "Nemotron-RL-instruction_following-30cef1bbbb95",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"no_output\"}"
+    },
+    {
+     "path": "Nemotron-RL-instruction_following-4c4a6adc4445",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"no_output\"}"
+    },
+    {
+     "path": "Nemotron-RL-instruction_following-88b910ca3db2",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"no_output\"}"
+    },
+    {
+     "path": "Nemotron-RL-instruction_following-313eed23b577",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"no_output\"}"
+    },
+    {
+     "path": "Nemotron-RL-instruction_following-050a42842635",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"no_output\"}"
+    },
+    {
+     "path": "Nemotron-RL-instruction_following-5a05ee854854",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"no_output\"}"
+    },
+    {
+     "path": "Nemotron-RL-instruction_following-8ebda45b1448",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"no_output\"}"
+    },
+    {
+     "path": "Nemotron-RL-instruction_following-37a473ceaafc",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"no_output\"}"
+    },
+    {
+     "path": "Nemotron-RL-instruction_following-81b87eecb329",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"no_output\"}"
+    },
+    {
+     "path": "Nemotron-RL-instruction_following-75091cf45e07",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"no_output\"}"
+    },
+    {
+     "path": "Nemotron-RL-instruction_following-e6fd717354d1",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"no_output\"}"
+    }
+   ]
+  }
+ ]
+}

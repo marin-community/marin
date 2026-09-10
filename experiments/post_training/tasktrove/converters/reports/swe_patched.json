@@ -1,0 +1,86 @@
+{
+ "sources": [
+  {
+   "source": "DCAgent__swe_rebench_v2_patched_oracle-v2",
+   "converter": "swe_patched",
+   "sampled": 5,
+   "statuses": {
+    "unsupported_variant": 37,
+    "converted": 5
+   },
+   "images": 1,
+   "checks": [
+    {
+     "path": "3yourmind__django-migration-linter-113",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"setup_failed\", \"stderr\": \"fatal: not a git repository (or any of the parent directories): .git\\n\", \"passed\": 0, \"total\": 0}"
+    },
+    {
+     "path": "3yourmind__django-migration-linter-113",
+     "check": "oracle",
+     "reward": 1.0,
+     "status": "scored",
+     "detail": "{\"passed\": 4, \"total\": 4, \"exit_code\": 1}"
+    },
+    {
+     "path": "3yourmind__django-migration-linter-186",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"setup_failed\", \"stderr\": \"fatal: not a git repository (or any of the parent directories): .git\\n\", \"passed\": 0, \"total\": 0}"
+    },
+    {
+     "path": "3yourmind__django-migration-linter-186",
+     "check": "oracle",
+     "reward": 1.0,
+     "status": "scored",
+     "detail": "{\"passed\": 31, \"total\": 31, \"exit_code\": 0}"
+    },
+    {
+     "path": "3yourmind__django-migration-linter-222",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"setup_failed\", \"stderr\": \"fatal: not a git repository (or any of the parent directories): .git\\n\", \"passed\": 0, \"total\": 0}"
+    },
+    {
+     "path": "3yourmind__django-migration-linter-222",
+     "check": "oracle",
+     "reward": 1.0,
+     "status": "scored",
+     "detail": "{\"passed\": 17, \"total\": 17, \"exit_code\": 1}"
+    },
+    {
+     "path": "3yourmind__django-migration-linter-258",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"setup_failed\", \"stderr\": \"fatal: not a git repository (or any of the parent directories): .git\\n\", \"passed\": 0, \"total\": 0}"
+    },
+    {
+     "path": "3yourmind__django-migration-linter-258",
+     "check": "oracle",
+     "reward": 1.0,
+     "status": "scored",
+     "detail": "{\"passed\": 37, \"total\": 37, \"exit_code\": 0}"
+    },
+    {
+     "path": "3yourmind__django-migration-linter-300",
+     "check": "empty",
+     "reward": 0.0,
+     "status": "scored",
+     "detail": "{\"reason\": \"setup_failed\", \"stderr\": \"fatal: not a git repository (or any of the parent directories): .git\\n\", \"passed\": 0, \"total\": 0}"
+    },
+    {
+     "path": "3yourmind__django-migration-linter-300",
+     "check": "oracle",
+     "reward": 1.0,
+     "status": "scored",
+     "detail": "{\"passed\": 47, \"total\": 47, \"exit_code\": 0}"
+    }
+   ]
+  }
+ ]
+}

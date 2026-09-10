@@ -1,0 +1,81 @@
+{
+ "source": "laion__nemotron-gym-math-v5",
+ "converter": "nemotron_math",
+ "sampled": 5,
+ "statuses": {
+  "converted": 5
+ },
+ "images": 1,
+ "checks": [
+  {
+   "path": "Nemotron-RL-Math-v2-f030c4d815a3",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"reason\": \"no_output\"}"
+  },
+  {
+   "path": "Nemotron-RL-Math-v2-f030c4d815a3",
+   "check": "oracle",
+   "reward": 1.0,
+   "status": "scored",
+   "detail": "{\"extracted\": \"\\\\frac{2\\\\sqrt{3}\\\\pi^{3}}{27}\", \"expected\": \"\\\\frac{2\\\\sqrt{3}\\\\pi^{3}}{27}\"}"
+  },
+  {
+   "path": "Nemotron-RL-Math-v2-a389f58336b4",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"reason\": \"no_output\"}"
+  },
+  {
+   "path": "Nemotron-RL-Math-v2-a389f58336b4",
+   "check": "oracle",
+   "reward": 1.0,
+   "status": "scored",
+   "detail": "{\"extracted\": \"595\", \"expected\": \"595\"}"
+  },
+  {
+   "path": "Nemotron-RL-Math-v2-c32989bf7e83",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"reason\": \"no_output\"}"
+  },
+  {
+   "path": "Nemotron-RL-Math-v2-c32989bf7e83",
+   "check": "oracle",
+   "reward": 1.0,
+   "status": "scored",
+   "detail": "{\"extracted\": \"41\", \"expected\": \"41\"}"
+  },
+  {
+   "path": "Nemotron-RL-Math-v2-8096f9e0cfaa",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"reason\": \"no_output\"}"
+  },
+  {
+   "path": "Nemotron-RL-Math-v2-8096f9e0cfaa",
+   "check": "oracle",
+   "reward": 1.0,
+   "status": "scored",
+   "detail": "{\"extracted\": \"\\\\left(\\\\left(\\\\frac{(k-1)!}{|\\\\psi^{(k)}(1)|}\\\\right)^{1/k}, \\\\frac 1 2\\\\right)\", \"expected\": \"\\\\left(\\\\left(\\\\frac{(k-1)!}{|\\\\psi^{(k)}(1)|}\\\\right)^{1/k}, \\\\frac 1 2\\\\right)\"}"
+  },
+  {
+   "path": "Nemotron-RL-Math-v2-1f450060d87e",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"reason\": \"no_output\"}"
+  },
+  {
+   "path": "Nemotron-RL-Math-v2-1f450060d87e",
+   "check": "oracle",
+   "reward": 1.0,
+   "status": "scored",
+   "detail": "{\"extracted\": \"730\", \"expected\": \"730\"}"
+  }
+ ]
+}

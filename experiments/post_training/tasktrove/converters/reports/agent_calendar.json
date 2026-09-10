@@ -1,0 +1,291 @@
+{
+ "source": "laion__nemotron-gym-agent-calendar-v2",
+ "converter": "agent_calendar",
+ "sampled": 20,
+ "statuses": {
+  "converted": 20
+ },
+ "images": 1,
+ "checks": [
+  {
+   "path": "agent-calendar-8667d4804372",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"answer.txt missing\\n\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "agent-calendar-8667d4804372",
+   "check": "oracle",
+   "reward": 1.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "agent-calendar-56a2d9ad6b24",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"answer.txt missing\\n\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "agent-calendar-56a2d9ad6b24",
+   "check": "oracle",
+   "reward": 1.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "agent-calendar-88f15559a9db",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"answer.txt missing\\n\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "agent-calendar-88f15559a9db",
+   "check": "oracle",
+   "reward": 1.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "agent-calendar-74b554e8383a",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"answer.txt missing\\n\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "agent-calendar-74b554e8383a",
+   "check": "oracle",
+   "reward": 1.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "agent-calendar-15078561c766",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"answer.txt missing\\n\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "agent-calendar-15078561c766",
+   "check": "oracle",
+   "reward": 1.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "agent-calendar-3f03500ad08e",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"answer.txt missing\\n\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "agent-calendar-3f03500ad08e",
+   "check": "oracle",
+   "reward": 1.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "agent-calendar-0cb42a815b25",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"answer.txt missing\\n\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "agent-calendar-0cb42a815b25",
+   "check": "oracle",
+   "reward": 1.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "agent-calendar-0045913dacc4",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"answer.txt missing\\n\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "agent-calendar-0045913dacc4",
+   "check": "oracle",
+   "reward": 1.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "agent-calendar-37ce7c5a034b",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"answer.txt missing\\n\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "agent-calendar-37ce7c5a034b",
+   "check": "oracle",
+   "reward": 1.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "agent-calendar-34d91014080d",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"answer.txt missing\\n\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "agent-calendar-34d91014080d",
+   "check": "oracle",
+   "reward": 1.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "agent-calendar-c8055c55989e",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"answer.txt missing\\n\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "agent-calendar-c8055c55989e",
+   "check": "oracle",
+   "reward": 1.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "agent-calendar-f7d8ef08e6e0",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"answer.txt missing\\n\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "agent-calendar-f7d8ef08e6e0",
+   "check": "oracle",
+   "reward": 1.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "agent-calendar-ee9716d42efd",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"answer.txt missing\\n\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "agent-calendar-ee9716d42efd",
+   "check": "oracle",
+   "reward": 1.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "agent-calendar-0af81da0c8fe",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"answer.txt missing\\n\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "agent-calendar-0af81da0c8fe",
+   "check": "oracle",
+   "reward": 1.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "agent-calendar-2a3cfd2a25da",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"answer.txt missing\\n\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "agent-calendar-2a3cfd2a25da",
+   "check": "oracle",
+   "reward": 1.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "agent-calendar-281e20e5cd9a",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"answer.txt missing\\n\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "agent-calendar-281e20e5cd9a",
+   "check": "oracle",
+   "reward": 1.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "agent-calendar-525ae210fab7",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"answer.txt missing\\n\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "agent-calendar-525ae210fab7",
+   "check": "oracle",
+   "reward": 1.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "agent-calendar-da0a2992336e",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"answer.txt missing\\n\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "agent-calendar-da0a2992336e",
+   "check": "oracle",
+   "reward": 1.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "agent-calendar-11d4b64a29c8",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"answer.txt missing\\n\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "agent-calendar-11d4b64a29c8",
+   "check": "oracle",
+   "reward": 1.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "agent-calendar-c74eac5946b1",
+   "check": "empty",
+   "reward": 0.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"answer.txt missing\\n\", \"channel\": \"reward.json\"}"
+  },
+  {
+   "path": "agent-calendar-c74eac5946b1",
+   "check": "oracle",
+   "reward": 1.0,
+   "status": "scored",
+   "detail": "{\"exit_code\": 0, \"stderr\": \"\", \"channel\": \"reward.json\"}"
+  }
+ ]
+}

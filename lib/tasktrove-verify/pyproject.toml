@@ -1,0 +1,44 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tasktrove-verify"
+version = "0.1.0"
+description = "One grader for TaskTrove Clean tasks: reads tests/verifier.toml, writes /logs/verifier/reward.json."
+readme = "README.md"
+requires-python = ">=3.11"
+# The core has no third-party runtime dependency: it must install quickly into every task image.
+# Each mode that needs more declares an extra below.
+dependencies = [
+    "tomlkit>=0.13",
+]
+
+[project.scripts]
+tasktrove-verify = "tasktrove_verify.cli:main"
+
+[project.optional-dependencies]
+answer = ["math-verify>=0.7", "sympy>=1.12"]
+schema = ["jsonschema>=4.20", "pyyaml>=6.0"]
+judge = ["openai>=1.40"]
+reasoning-gym = ["reasoning-gym>=0.1"]
+all = ["tasktrove-verify[answer,schema,judge,reasoning-gym]"]
+
+[dependency-groups]
+test = [
+    "pytest>=8.3.2",
+    "pytest-timeout",
+    "pytest-json-report>=1.5",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tasktrove_verify"]
+
+[tool.hatch.build.targets.sdist]
+only-include = ["src/tasktrove_verify"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "tests"]
+timeout = 120
+filterwarnings = ["ignore::DeprecationWarning"]
+addopts = "--import-mode=importlib"
