@@ -19,6 +19,7 @@ import re
 
 from tasktrove_verify.spec import ExactSpec, MathSpec, MathType, Spec
 
+from experiments.post_training.tasktrove.contract import drop_dockerfile_lines
 from experiments.post_training.tasktrove.converters.answer_solution import answer_solution
 from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertedTask,
@@ -33,11 +34,6 @@ GOLD_FILE = "tests/gold.json"
 _STRING_ANSWER_TYPES = frozenset({"choice", "exact", "ordered_list"})
 _NUMERIC_ANSWER_TYPES = frozenset({"number", "coords"})
 _OLD_GRADER_INSTALL = re.compile(r"pip install .*\bpytest\b")
-
-
-def _drop_old_grader_lines(dockerfile: str) -> str:
-    """Strip the ``pytest`` install the old ``tests/test_state.py`` check needed; the tool needs none."""
-    return "\n".join(line for line in dockerfile.splitlines() if not _OLD_GRADER_INSTALL.search(line))
 
 
 def _exact_spec(answer_type: str, gold: str) -> ExactSpec | None:
@@ -76,7 +72,7 @@ def convert_all_puzzles(task: TaskFiles) -> ConvertedTask | Rejected:
     return ConvertedTask(
         instruction=task.text(INSTRUCTION),
         spec=spec,
-        dockerfile=_drop_old_grader_lines(task.text(DOCKERFILE)),
+        dockerfile=drop_dockerfile_lines(task.text(DOCKERFILE), _OLD_GRADER_INSTALL),
         tags=("puzzle", "laion", ptype),
         solution_files=_solution_files(task, spec),
         metadata={"ptype": ptype, "answer_type": answer_type},

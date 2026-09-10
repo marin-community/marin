@@ -24,7 +24,9 @@ from pathlib import Path
 
 import openai
 
+from tasktrove_verify.modes.extract import extract_boxed
 from tasktrove_verify.modes.ifeval import resolve_checks
+from tasktrove_verify.modes.ifeval_constraints import Check
 from tasktrove_verify.output import read_output
 from tasktrove_verify.reward import InvalidTask, Reward, scored
 from tasktrove_verify.spec import RUBRIC_CHECKLIST, RUBRIC_REFERENCE, RUBRICS, JudgeSpec, Spec
@@ -72,7 +74,6 @@ SCORE: <0|1>
 """
 
 SCORE_PATTERN = re.compile(r"score\s*[:=]\s*\**\s*(\d+(?:\.\d+)?)", re.IGNORECASE)
-BOXED = r"\boxed{"
 
 logger = logging.getLogger(__name__)
 
@@ -113,30 +114,19 @@ def _context(spec: JudgeSpec, tests_dir: Path) -> str:
     return path.read_text(errors="replace")[:CONTEXT_LIMIT]
 
 
-def _passes(check, candidate: str, params: dict) -> bool:
+def _passes(check: Check, candidate: str, params: dict) -> bool:
     try:
         passed, _ = check(candidate, params)
-    except Exception:
+    except Exception as error:
+        logger.warning("constraint check %s crashed on the candidate, counted as failed: %s", check.__name__, error)
         return False
     return passed
 
 
 def boxed_answer(text: str) -> str:
     """The content of the last ``\\boxed{...}``, or the whole text when there is none."""
-    index = text.rfind(BOXED)
-    if index < 0:
-        return text.strip()
-    start = index + len(BOXED)
-    depth = 0
-    for offset in range(start, len(text)):
-        character = text[offset]
-        if character == "{":
-            depth += 1
-        elif character == "}":
-            if depth == 0:
-                return text[start:offset].strip()
-            depth -= 1
-    return text.strip()
+    boxed = extract_boxed(text)
+    return text.strip() if boxed is None else boxed
 
 
 def normalize(text: str) -> str:

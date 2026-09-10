@@ -25,12 +25,14 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import click
+from tasktrove_verify.cli import DEFAULT_LOGS_DIR
+from tasktrove_verify.reward import REWARD_JSON
 
-from experiments.post_training.tasktrove.contract import INSTALL_MARKER
+from experiments.post_training.tasktrove.contract import INSTALL_MARKER, TESTS_MOUNT
 from experiments.post_training.tasktrove.convert import ConvertedRecord, convert_one
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
 from experiments.post_training.tasktrove.converters.registry import converter_index
-from experiments.post_training.tasktrove.fingerprint import iter_task_rows
+from experiments.post_training.tasktrove.shards import iter_task_rows
 from experiments.post_training.tasktrove.sources import load_source_verdicts
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, read_task_binary
 
@@ -42,7 +44,6 @@ _INSTALL_LINE = re.compile(
     r'^RUN (UV_TOOL_BIN_DIR=\S+ )?uv tool install (--python "[^"]+" )?"tasktrove-verify(\[[^\]]*\])? @ [^"]+"$',
     re.MULTILINE,
 )
-_REWARD_JSON = "reward.json"
 _WORKDIR_LINE = re.compile(r"^WORKDIR\s+(\S+)", re.MULTILINE | re.IGNORECASE)
 SETUP_FILES_DIR = "setup_files"
 NO_NETWORK = "none"
@@ -110,19 +111,19 @@ def run_check(image: str, task_dir: Path, check: str, timeout: float, network: s
     logs = task_dir / "logs" / check
     logs.mkdir(parents=True, exist_ok=True)
     workdir = image_workdir((task_dir / "environment" / "Dockerfile").read_text())
-    command = "bash /tests/test.sh"
-    mounts = ["-v", f"{task_dir / 'tests'}:/tests:ro", "-v", f"{logs}:/logs/verifier"]
+    command = f"bash {TESTS_MOUNT}/test.sh"
+    mounts = ["-v", f"{task_dir / 'tests'}:{TESTS_MOUNT}:ro", "-v", f"{logs}:{DEFAULT_LOGS_DIR}"]
     if (task_dir / SETUP_FILES_DIR).is_dir():
         mounts += ["-v", f"{task_dir / SETUP_FILES_DIR}:/{SETUP_FILES_DIR}:ro"]
     if check == "oracle":
         mounts += ["-v", f"{task_dir / 'solution'}:/solution:ro"]
-        command = f"cd {workdir} && bash /solution/solve.sh && bash /tests/test.sh"
+        command = f"cd {workdir} && bash /solution/solve.sh && bash {TESTS_MOUNT}/test.sh"
     argv = ["docker", "run", "--rm", "--network", network, *mounts, image, "bash", "-c", command]
     try:
         proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         return CheckResult(task_dir.name, check, None, "timeout", "")
-    reward_file = logs / _REWARD_JSON
+    reward_file = logs / REWARD_JSON
     if not reward_file.is_file():
         return CheckResult(task_dir.name, check, None, "no_reward", (proc.stderr or proc.stdout)[-2000:])
     payload = json.loads(reward_file.read_text())
@@ -131,15 +132,9 @@ def run_check(image: str, task_dir: Path, check: str, timeout: float, network: s
 
 def write_task_dir(record: ConvertedRecord, root: Path) -> Path:
     task_dir = root / Path(record.path).name.removesuffix(".tar.gz")
-    for path, data in read_task_binary(record.task_binary).files.items():
-        target = task_dir / path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(data)
+    read_task_binary(record.task_binary).write_to(task_dir)
     if record.solution_binary is not None:
-        for path, data in read_task_binary(record.solution_binary).files.items():
-            target = task_dir / path
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(data)
+        read_task_binary(record.solution_binary).write_to(task_dir)
     return task_dir
 
 

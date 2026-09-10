@@ -13,7 +13,7 @@ grades as a run with no tests.
 import json
 from pathlib import Path
 
-from tasktrove_verify.modes.run import check_ids, restore, run_command, run_setup, workdir
+from tasktrove_verify.modes.run import STDERR_TAIL, check_ids, restore, run_command, run_setup, workdir
 from tasktrove_verify.reward import Reward, scored
 from tasktrove_verify.spec import GotestSpec
 
@@ -27,7 +27,7 @@ def grade(spec: GotestSpec, tests_dir: Path, workspace: Path) -> Reward:
     if spec.setup:
         setup = run_setup(spec.setup, tests_dir, directory, spec.timeout)
         if setup.timed_out or setup.returncode != 0:
-            return scored(0.0, reason="setup_failed", stderr=setup.stderr[-2000:], passed=0, total=0)
+            return scored(0.0, reason="setup_failed", stderr=setup.stderr[-STDERR_TAIL:], passed=0, total=0)
     result = run_command([GO, "test", "-json", *spec.args, *spec.packages], directory, spec.timeout)
     if result.timed_out:
         return scored(0.0, reason="timeout", passed=0, total=0)

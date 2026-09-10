@@ -12,8 +12,9 @@ import math
 import re
 import tempfile
 from pathlib import Path
+from typing import NamedTuple
 
-from tasktrove_verify.modes.run import Completed, run_command, split_command, workdir
+from tasktrove_verify.modes.run import STDERR_TAIL, Completed, run_command, split_command, workdir
 from tasktrove_verify.reward import InvalidTask, Reward, scored
 from tasktrove_verify.spec import Compare, StdioSpec
 
@@ -33,7 +34,7 @@ def grade(spec: StdioSpec, tests_dir: Path, workspace: Path) -> Reward:
     if spec.build:
         build = run_command(["bash", "-lc", spec.build], directory, spec.per_case_timeout * len(cases))
         if build.timed_out or build.returncode != 0:
-            return scored(0.0, reason="build_failed", stderr=build.stderr[-2000:], passed=0, total=len(cases))
+            return scored(0.0, reason="build_failed", stderr=build.stderr[-STDERR_TAIL:], passed=0, total=len(cases))
 
     with tempfile.TemporaryDirectory(prefix="tasktrove-stdio-") as scratch:
         got_path = Path(scratch) / "got.txt"
@@ -55,11 +56,17 @@ def grade(spec: StdioSpec, tests_dir: Path, workspace: Path) -> Reward:
     return scored(1.0, passed=len(cases), total=len(cases))
 
 
-def _cases(cases_dir: Path) -> list[tuple[str, Path, Path]]:
-    """The ``(case number, input, expected)`` triples under ``cases_dir``, in case-number order."""
+class Case(NamedTuple):
+    number: str
+    stdin: Path
+    expected: Path
+
+
+def _cases(cases_dir: Path) -> list[Case]:
+    """The cases under ``cases_dir``, in case-number order."""
     if not cases_dir.is_dir():
         raise InvalidTask(f"stdio cases directory {cases_dir} does not exist")
-    pairs = []
+    pairs: list[Case] = []
     for input_path in cases_dir.rglob("input_*.txt"):
         match = INPUT_PATTERN.match(input_path.name)
         if match is None:
@@ -68,8 +75,8 @@ def _cases(cases_dir: Path) -> list[tuple[str, Path, Path]]:
         expected = _expected(input_path, cases_dir, number)
         if expected is None:
             raise InvalidTask(f"stdio case {number} has no output_{number}.txt")
-        pairs.append((number, input_path, expected))
-    pairs.sort(key=lambda pair: (_sort_key(pair[0]), pair[1]))
+        pairs.append(Case(number, input_path, expected))
+    pairs.sort(key=lambda case: (_sort_key(case.number), case.stdin))
     return pairs
 
 

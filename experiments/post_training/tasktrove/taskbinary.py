@@ -17,12 +17,14 @@ import re
 import tarfile
 from dataclasses import dataclass, field
 from enum import StrEnum
+from pathlib import Path
 
 INSTRUCTION = "instruction.md"
 TASK_TOML = "task.toml"
 DOCKERFILE = "environment/Dockerfile"
 TEST_SH = "tests/test.sh"
 SOLUTION_DIR = "solution/"
+SOLVE_SH = "solution/solve.sh"
 
 # Files under tests/ or environment/ that carry per-task data rather than template code.
 DATA_FILE_PATTERNS = (
@@ -95,6 +97,13 @@ class TaskFiles:
 
     def under(self, prefix: str) -> dict[str, bytes]:
         return {p: b for p, b in self.files.items() if p.startswith(prefix)}
+
+    def write_to(self, root: Path) -> None:
+        """Materialize every file under ``root``, creating directories as needed."""
+        for path, data in self.files.items():
+            target = root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
 
 
 @dataclass(frozen=True)

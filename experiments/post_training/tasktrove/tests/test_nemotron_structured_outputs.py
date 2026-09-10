@@ -19,7 +19,6 @@ from experiments.post_training.tasktrove.sources import SourceInfo, SourceVerdic
 from experiments.post_training.tasktrove.taskbinary import (
     DOCKERFILE,
     TEST_SH,
-    TaskFiles,
     read_task_binary,
     write_task_binary,
 )
@@ -212,13 +211,3 @@ def test_schema_failing_metaschema_check_is_rejected_as_unsupported_variant():
     broken_schema = {"type": "object", "properties": {"x": {"type": "string"}}, "exclusiveMinimum": True}
     record = _convert(_mutate_verifier_data(schema=broken_schema))
     assert record.status == ConvertStatus.UNSUPPORTED_VARIANT and record.task_binary is None
-
-
-def test_dockerfile_edit_is_idempotent_across_tasks():
-    index = converter_index()
-    a = convert_one(_info(), "a.tar.gz", _fixture(), index, TOOL_REF)
-    b = convert_one(_info(), "b.tar.gz", _fixture(), index, TOOL_REF)
-    assert a.dockerfile_id == b.dockerfile_id
-    assert TaskFiles(read_task_binary(a.task_binary).files).text(DOCKERFILE) == read_task_binary(b.task_binary).text(
-        DOCKERFILE
-    )

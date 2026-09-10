@@ -14,6 +14,7 @@ import tomllib
 
 from tasktrove_verify.spec import RUBRIC_CHECKLIST, JudgeSpec
 
+from experiments.post_training.tasktrove.contract import OLD_GRADER_LINE, drop_dockerfile_lines
 from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertedTask,
     Converter,
@@ -28,7 +29,6 @@ JUDGE_TOML = "tests/judge.toml"
 CONVERSATION = "conversation.txt"
 RESPONSE_FILE = "/app/response.txt"
 _REQUIREMENT = re.compile(r"Requirement:\s*(.+)\Z", re.DOTALL)
-_OLD_GRADER_LINE = re.compile(r"^RUN .*\bharbor-rewardkit\b.*\n", re.MULTILINE)
 
 
 def _criteria(judge_toml: str) -> list[str]:
@@ -58,7 +58,7 @@ def convert_nemotron_multichallenge(task: TaskFiles) -> ConvertedTask | Rejected
     return ConvertedTask(
         instruction=task.text(INSTRUCTION),
         spec=spec,
-        dockerfile=_OLD_GRADER_LINE.sub("", task.text(DOCKERFILE)),
+        dockerfile=drop_dockerfile_lines(task.text(DOCKERFILE), OLD_GRADER_LINE),
         tags=("instruction-following", "multi-turn", "judge", "checklist", "nemotron"),
         data_files={f"tests/{CONVERSATION}": transcript.encode()},
         metadata=metadata(task),

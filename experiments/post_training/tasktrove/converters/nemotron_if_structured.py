@@ -21,10 +21,9 @@ from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertedTask,
     Converter,
     ConverterKey,
-    ConvertStatus,
     Rejected,
 )
-from experiments.post_training.tasktrove.converters.json_schemas import is_trivial, normalize_schema, schema_error
+from experiments.post_training.tasktrove.converters.json_schemas import usable_schema
 from experiments.post_training.tasktrove.converters.nemotron_data import metadata, verifier_data
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, TaskFiles
 
@@ -35,15 +34,9 @@ def convert_nemotron_if_structured(task: TaskFiles) -> ConvertedTask | Rejected:
     data = verifier_data(task)
     if "expected_events" in data:
         return convert_agent_calendar(task)
-    schema = data.get("schema")
-    if not isinstance(schema, dict) or not schema:
-        return Rejected(ConvertStatus.NULL_GRADER, f"schema missing or not an object: {type(schema).__name__}")
-    normalized = normalize_schema(schema)
-    if is_trivial(normalized):
-        return Rejected(ConvertStatus.NULL_GRADER, "schema has no properties or required fields to check")
-    error = schema_error(normalized)
-    if error is not None:
-        return Rejected(ConvertStatus.NULL_GRADER, f"schema fails jsonschema metaschema check: {error}")
+    normalized = usable_schema(data.get("schema"))
+    if isinstance(normalized, Rejected):
+        return normalized
     return ConvertedTask(
         instruction=task.text(INSTRUCTION),
         spec=JsonSchemaSpec(schema=SCHEMA_FILE, format=SchemaFormat.JSON),

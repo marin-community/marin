@@ -1,5 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Template converters: one function per TaskTrove template id, mapping a task's per-task data
-files to a Marin ``[verifier]`` spec and image tier. Register each in ``registry.py``."""
+"""Converters: one per ``ConverterKey`` (source family plus the old template's ``tests/`` code
+files), mapping a task's per-task data files onto one ``tests/verifier.toml`` mode. Register each
+in ``registry.py``."""

@@ -11,10 +11,10 @@ LLM judge on a miss. This maps onto :class:`JudgeSpec` directly, with ``exact_ga
 reproducing the gate and the tool's own judge replacing ``rewardkit``.
 """
 
-import re
 
 from tasktrove_verify.spec import JudgeSpec
 
+from experiments.post_training.tasktrove.contract import OLD_GRADER_LINE, drop_dockerfile_lines
 from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertedTask,
     Converter,
@@ -27,8 +27,6 @@ from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTI
 
 RESPONSE_OUTPUT = "/app/response.txt"
 """Every task in this template tells the agent to write here, not the tool's ``answer.txt`` default."""
-
-_OLD_GRADER_LINE = re.compile(r"rewardkit|litellm", re.IGNORECASE)
 
 
 def _references(data: dict) -> list[str]:
@@ -49,11 +47,6 @@ def _subject_tag(data: dict) -> str:
     return "openqa"
 
 
-def _drop_old_grader_lines(dockerfile: str) -> str:
-    """Strip the ``harbor-rewardkit`` install the old judge CLI needed; the tool's judge needs none."""
-    return "\n".join(line for line in dockerfile.splitlines() if not _OLD_GRADER_LINE.search(line))
-
-
 def convert_nemotron_openqa(task: TaskFiles) -> ConvertedTask | Rejected:
     data = verifier_data(task)
     references = _references(data)
@@ -68,7 +61,7 @@ def convert_nemotron_openqa(task: TaskFiles) -> ConvertedTask | Rejected:
             exact_gate=True,
             output=RESPONSE_OUTPUT,
         ),
-        dockerfile=_drop_old_grader_lines(task.text(DOCKERFILE)),
+        dockerfile=drop_dockerfile_lines(task.text(DOCKERFILE), OLD_GRADER_LINE),
         tags=tags,
         metadata=metadata(task),
     )

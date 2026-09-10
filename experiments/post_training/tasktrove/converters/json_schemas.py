@@ -12,6 +12,8 @@ broken after that, so those tasks are rejected rather than shipped with a grader
 from jsonschema.exceptions import SchemaError
 from jsonschema.validators import validator_for
 
+from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus, Rejected
+
 # Numeric/length keywords the dataset sometimes sets to JSON null instead of omitting; Draft
 # 2020-12 requires a number here, so null always fails the metaschema check.
 _NULLABLE_NUMERIC_KEYWORDS = frozenset(
@@ -110,3 +112,20 @@ def schema_error(schema: dict) -> str | None:
     except SchemaError as error:
         return error.message
     return None
+
+
+def usable_schema(schema: object) -> dict | Rejected:
+    """The normalized schema when it can grade an output, else the typed rejection.
+
+    A non-object schema or one with nothing to check is a null grader; one that fails the Draft
+    2020-12 metaschema after normalization is a variant the mode cannot validate.
+    """
+    if not isinstance(schema, dict) or not schema:
+        return Rejected(ConvertStatus.NULL_GRADER, f"schema missing or not an object: {type(schema).__name__}")
+    normalized = normalize_schema(schema)
+    if is_trivial(normalized):
+        return Rejected(ConvertStatus.NULL_GRADER, "schema has no properties or required fields to check")
+    error = schema_error(normalized)
+    if error is not None:
+        return Rejected(ConvertStatus.UNSUPPORTED_VARIANT, f"schema fails Draft 2020-12 metaschema check: {error}")
+    return normalized

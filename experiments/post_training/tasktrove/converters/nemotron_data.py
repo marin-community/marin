@@ -17,6 +17,9 @@ def verifier_data(task: TaskFiles) -> dict:
 
 
 def metadata(task: TaskFiles) -> dict:
-    """Top-level ``metadata.json`` when the template ships one, else empty."""
+    """Top-level ``metadata.json`` when the template ships one, else empty.
+
+    ``None`` values are dropped: they reach ``task.toml``, and TOML has no null.
+    """
     raw = task.get_text(METADATA)
-    return json.loads(raw) if raw else {}
+    return {key: value for key, value in json.loads(raw).items() if value is not None} if raw else {}

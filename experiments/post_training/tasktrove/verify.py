@@ -24,6 +24,7 @@ from fray.types import ResourceConfig
 from rigging.filesystem.storage_path import StoragePath
 from tasktrove_verify.grade import grade
 from tasktrove_verify.modes.ifeval_constraints import CONSTRAINTS
+from tasktrove_verify.output import local_output_path
 from tasktrove_verify.probe import negative_candidate, positive_candidate
 from tasktrove_verify.reward import Status
 from tasktrove_verify.spec import (
@@ -31,11 +32,14 @@ from tasktrove_verify.spec import (
     RUBRIC_REFERENCE,
     RUBRICS,
     ExactSpec,
+    GotestSpec,
     IfevalSpec,
     JsonSchemaSpec,
     JudgeSpec,
+    JunitSpec,
     MathSpec,
     NumericSpec,
+    PytestSpec,
     ReasoningGymSpec,
     ScriptSpec,
     Spec,
@@ -45,7 +49,7 @@ from tasktrove_verify.spec import (
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
-from experiments.post_training.tasktrove.contract import INSTALL_MARKER, VERIFIER_TOML, VERIFY_TEST_SH
+from experiments.post_training.tasktrove.contract import INSTALL_MARKER, OLD_GRADER_LINE, VERIFIER_TOML, VERIFY_TEST_SH
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
 from experiments.post_training.tasktrove.dedup import DEDUPED_GLOB, iter_rows
 from experiments.post_training.tasktrove.taskbinary import (
@@ -63,7 +67,6 @@ logger = logging.getLogger(__name__)
 VERIFIED_LEDGER_GLOB = "ledger/*.parquet"
 VERIFIED_SUMMARY = "verified.json"
 REQUIRED_FILES = (INSTRUCTION, TASK_TOML, DOCKERFILE, TEST_SH, VERIFIER_TOML)
-_OLD_GRADER_MARKERS = ("rewardkit", "litellm")
 _MIN_LEAK_CHARS = 12
 """Expected values shorter than this are not checked against the instruction: a single letter or
 small number appears in almost any prompt."""
@@ -107,7 +110,7 @@ def _spec_paths(spec: Spec) -> list[str]:
         return [spec.special_judge] if spec.special_judge else []
     if isinstance(spec, JudgeSpec):
         return [spec.context] if spec.context else []
-    return list(getattr(spec, "restore", ()))
+    return list(spec.restore if isinstance(spec, PytestSpec | JunitSpec | GotestSpec) else ())
 
 
 def check_spec(task: TaskFiles) -> tuple[Spec | None, Rejection | None]:
@@ -132,7 +135,7 @@ def check_dockerfile(task: TaskFiles) -> Rejection | None:
         return Rejection(Check.DOCKERFILE, "tool install block missing")
     for line in text.splitlines():
         lowered = line.lower()
-        if any(marker in lowered for marker in _OLD_GRADER_MARKERS):
+        if OLD_GRADER_LINE.search(line):
             return Rejection(Check.DOCKERFILE, f"old grader dependency: {line.strip()[:120]}")
         if lowered.startswith("copy ") and " tests/" in f" {line}":
             source = line.split()[1]
@@ -189,12 +192,8 @@ def check_shape(task: TaskFiles, spec: Spec) -> Rejection | None:
 
 
 def _materialize(task: TaskFiles, root: Path) -> Path:
-    tests_dir = root / "tests"
-    for path, data in task.under("tests/").items():
-        target = root / path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(data)
-    return tests_dir
+    TaskFiles(task.under("tests/")).write_to(root)
+    return root / "tests"
 
 
 def check_grading(task: TaskFiles, spec: Spec) -> Rejection | None:
@@ -203,13 +202,12 @@ def check_grading(task: TaskFiles, spec: Spec) -> Rejection | None:
     if positive is None:
         return None
     negative = negative_candidate(spec)
-    output = Path(spec.output)
     with tempfile.TemporaryDirectory(prefix="tasktrove-verify-") as tmp:
         root = Path(tmp)
         tests_dir = _materialize(task, root)
         workspace = root / "app"
         workspace.mkdir()
-        answer = workspace.joinpath(*output.parts[2:]) if output.parts[:2] == ("/", "app") else workspace / output.name
+        answer = local_output_path(spec.output, workspace)
         answer.parent.mkdir(parents=True, exist_ok=True)
 
         reward = grade(spec, tests_dir, workspace)

@@ -14,17 +14,15 @@ stdout. A script that exits without reporting a reward is an infrastructure fail
 import json
 import logging
 import os
-import signal
-import subprocess
 import tempfile
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
+from tasktrove_verify.modes.run import STDERR_TAIL, run_command
 from tasktrove_verify.reward import REWARD_JSON, REWARD_TXT, InvalidTask, Reward, scored
 from tasktrove_verify.spec import DEFAULT_WORKSPACE, ScriptSpec, Spec
 
-STDERR_TAIL = 2000
 SHELL = "bash"
 PYTHON = "python3"
 
@@ -88,25 +86,11 @@ def grade(spec: Spec, tests_dir: Path, workspace: Path) -> Reward:
 
 
 def _run(command: list[str], cwd: Path, env: dict[str, str], timeout: float) -> Completion:
-    """Run ``command`` in its own process group so the timeout kills the whole tree."""
-    with subprocess.Popen(
-        command,
-        cwd=cwd,
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        errors="replace",
-        start_new_session=True,
-    ) as process:
-        try:
-            stdout, stderr = process.communicate(timeout=timeout)
-            return Completion(process.returncode, stdout, stderr)
-        except subprocess.TimeoutExpired:
-            logger.warning("script %s exceeded %.1fs; killing its process group", command[1], timeout)
-            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-            stdout, stderr = process.communicate()
-            return Completion(None, stdout, stderr)
+    completed = run_command(command, cwd, timeout, env=env)
+    if completed.timed_out:
+        logger.warning("script %s exceeded %.1fs; killed its process group", command[1], timeout)
+        return Completion(None, completed.stdout, completed.stderr)
+    return Completion(completed.returncode, completed.stdout, completed.stderr)
 
 
 def _reported_reward(logs_dir: Path, stdout: str) -> Reported | None:

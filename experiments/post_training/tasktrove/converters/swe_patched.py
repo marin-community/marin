@@ -25,7 +25,8 @@ from experiments.post_training.tasktrove.converters.converted_task import (
     Rejected,
 )
 from experiments.post_training.tasktrove.converters.nemotron_data import metadata
-from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, SOLUTION_DIR, TaskFiles
+from experiments.post_training.tasktrove.converters.swe_repo import ensure_pytest_json_report, test_ids
+from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, SOLUTION_DIR, TEST_SH, TaskFiles
 
 CONFIG_JSON = "tests/config.json"
 TEST_PATCH = "tests/test_patch.diff"
@@ -75,17 +76,6 @@ def _setup_script(trusted_commit: str) -> str:
     return _SETUP_TEMPLATE.replace("TRUSTED_SHA", trusted_commit)
 
 
-def _as_str_list(value: object) -> list[str]:
-    """``FAIL_TO_PASS``/``PASS_TO_PASS`` are sometimes JSON-encoded strings rather than lists."""
-    if isinstance(value, str):
-        decoded: object = json.loads(value) if value.strip() else []
-    else:
-        decoded = value if value is not None else []
-    if not isinstance(decoded, list):
-        raise ValueError(f"expected a list of test ids, got {type(decoded).__name__}")
-    return [str(v) for v in decoded]
-
-
 def _is_pytest_node_id(node_id: str) -> bool:
     """A pytest node id names a ``.py`` file before the first ``::``; other languages' ids don't."""
     file_part, _, rest = node_id.partition("::")
@@ -96,8 +86,8 @@ def _fail_and_pass_to_pass(config: dict) -> tuple[list[str], list[str]]:
     """SWE-rebench-V2 and classic SWE-bench key these ``FAIL_TO_PASS``/``PASS_TO_PASS``; SWE-Gym
     keys them lowercase. Both are otherwise the same shape."""
     if "FAIL_TO_PASS" in config or "PASS_TO_PASS" in config:
-        return _as_str_list(config.get("FAIL_TO_PASS")), _as_str_list(config.get("PASS_TO_PASS"))
-    return _as_str_list(config.get("fail_to_pass")), _as_str_list(config.get("pass_to_pass"))
+        return test_ids(config.get("FAIL_TO_PASS")), test_ids(config.get("PASS_TO_PASS"))
+    return test_ids(config.get("fail_to_pass")), test_ids(config.get("pass_to_pass"))
 
 
 def _conda_activation(test_sh: str) -> tuple[str, ...]:
@@ -130,24 +120,6 @@ def _python_command(conda_lines: tuple[str, ...]) -> tuple[str, str]:
         f"chmod +x {wrapper}\n"
     )
     return wrapper, heredoc
-
-
-def _ensure_pytest_json_report(dockerfile: str, conda_lines: tuple[str, ...]) -> str:
-    """Add the ``pytest-json-report`` plugin the ``pytest`` mode needs into the repo's own Python.
-
-    Installed at image build time (not in ``setup``) because the sampling harness and the real
-    verifier both run with no network at grading time.
-    """
-    if "pytest-json-report" in dockerfile:
-        return dockerfile
-    if conda_lines:
-        activate = " && ".join(conda_lines)
-        install = f'RUN bash -lc "{activate} && pip install --no-cache-dir pytest-json-report"\n'
-    else:
-        install = (
-            "RUN (pip install --no-cache-dir pytest-json-report" " || pip3 install --no-cache-dir pytest-json-report)\n"
-        )
-    return dockerfile.rstrip("\n") + "\n" + install
 
 
 def convert_swe_patched(task: TaskFiles) -> ConvertedTask | Rejected:
@@ -184,7 +156,7 @@ def convert_swe_patched(task: TaskFiles) -> ConvertedTask | Rejected:
     if not test_patch.strip():
         return Rejected(ConvertStatus.NULL_GRADER, "tests/test_patch.diff is empty")
 
-    test_sh = task.get_text("tests/test.sh") or ""
+    test_sh = task.get_text(TEST_SH) or ""
     match = _PATCH_INVOCATION_RE.search(test_sh)
     if match is None:
         return Rejected(ConvertStatus.UNSUPPORTED_VARIANT, "tests/test.sh does not call install_trusted_test_patch.sh")
@@ -224,7 +196,7 @@ def convert_swe_patched(task: TaskFiles) -> ConvertedTask | Rejected:
     return ConvertedTask(
         instruction=task.text(INSTRUCTION),
         spec=spec,
-        dockerfile=_ensure_pytest_json_report(task.text(DOCKERFILE), conda_lines),
+        dockerfile=ensure_pytest_json_report(task.text(DOCKERFILE), conda_lines),
         tags=("code", "swe", "swe-repo", "python", "patched"),
         language="python",
         data_files=data_files,

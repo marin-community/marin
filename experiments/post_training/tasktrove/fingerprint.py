@@ -23,6 +23,11 @@ from zephyr.dataset import Dataset
 
 from experiments.post_training.tasktrove.converters.converted_task import ConverterKey
 from experiments.post_training.tasktrove.converters.registry import converter_index
+from experiments.post_training.tasktrove.shards import (
+    TaskShard,
+    iter_shard_rows,
+    task_shards,
+)
 from experiments.post_training.tasktrove.sources import SourceVerdict, load_source_verdicts
 from experiments.post_training.tasktrove.taskbinary import (
     DOCKERFILE,
@@ -34,25 +39,10 @@ from experiments.post_training.tasktrove.taskbinary import (
 
 logger = logging.getLogger(__name__)
 
-TASKS_GLOB = "*/tasks.parquet"
 COVERAGE_JSON = "coverage.json"
-ROWS_PER_SHARD = 2000
-"""Row groups of one source parquet are grouped into shards of about this many tasks, so a
-600k-task source spreads over hundreds of workers instead of one."""
 EXEMPLAR_MIN_TASKS = 20
 """Templates below this many tasks are listed in the index but get no extracted exemplar. The
 long tail is per-repository SWE setup scripts, handled per repository rather than per template."""
-
-
-@dataclass(frozen=True)
-class TaskRow:
-    """One TaskTrove row and where it sits in its source parquet."""
-
-    source: str
-    path: str
-    row_group: int
-    row_in_group: int
-    task_binary: bytes
 
 
 @dataclass(frozen=True)
@@ -70,54 +60,6 @@ class TaskFingerprintRecord:
     instruction_chars: int
     has_solution: bool
     task_bytes: int
-
-
-@dataclass(frozen=True)
-class TaskShard:
-    """A contiguous run of row groups in one source parquet: the unit of work for every stage."""
-
-    parquet_path: str
-    first_row_group: int
-    end_row_group: int
-
-
-def source_name(parquet_path: str) -> str:
-    return StoragePath(parquet_path).parent.name
-
-
-def task_shards(input_path: str, rows_per_shard: int = ROWS_PER_SHARD) -> list[TaskShard]:
-    """Split every source parquet under ``input_path`` into shards of about ``rows_per_shard`` tasks."""
-    shards: list[TaskShard] = []
-    for parquet in sorted((StoragePath(input_path) / TASKS_GLOB).glob(), key=str):
-        with parquet.open("rb") as handle:
-            metadata = pq.ParquetFile(handle).metadata
-        start, rows = 0, 0
-        for rg in range(metadata.num_row_groups):
-            rows += metadata.row_group(rg).num_rows
-            if rows >= rows_per_shard:
-                shards.append(TaskShard(str(parquet), start, rg + 1))
-                start, rows = rg + 1, 0
-        if start < metadata.num_row_groups:
-            shards.append(TaskShard(str(parquet), start, metadata.num_row_groups))
-    return shards
-
-
-def iter_task_rows(parquet_path: str, first_row_group: int = 0, end_row_group: int | None = None) -> Iterator[TaskRow]:
-    """Yield the tasks in one source parquet's row groups, one row group in memory at a time."""
-    source = source_name(parquet_path)
-    with StoragePath(parquet_path).open("rb") as handle:
-        pf = pq.ParquetFile(handle)
-        stop = pf.num_row_groups if end_row_group is None else end_row_group
-        for rg in range(first_row_group, stop):
-            table = pf.read_row_group(rg, columns=["path", "task_binary"])
-            paths = table.column("path").to_pylist()
-            blobs = table.column("task_binary").to_pylist()
-            for i, (path, blob) in enumerate(zip(paths, blobs, strict=True)):
-                yield TaskRow(source, path, rg, i, blob)
-
-
-def iter_shard_rows(shard: TaskShard) -> Iterator[TaskRow]:
-    return iter_task_rows(shard.parquet_path, shard.first_row_group, shard.end_row_group)
 
 
 def fingerprint_shard(shard: TaskShard) -> Iterator[dict]:

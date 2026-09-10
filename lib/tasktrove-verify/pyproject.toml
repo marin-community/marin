@@ -8,8 +8,8 @@ version = "0.1.0"
 description = "One grader for TaskTrove Clean tasks: reads tests/verifier.toml, writes /logs/verifier/reward.json."
 readme = "README.md"
 requires-python = ">=3.11"
-# The core has no third-party runtime dependency: it must install quickly into every task image.
-# Each mode that needs more declares an extra below.
+# The core depends only on a TOML reader so it installs quickly into every task image. Each mode
+# that needs more declares an extra below.
 dependencies = [
     "tomlkit>=0.13",
 ]

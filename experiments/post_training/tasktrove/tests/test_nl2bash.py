@@ -15,7 +15,7 @@ from tasktrove_verify.spec import ScriptSpec, parse_spec
 from experiments.post_training.tasktrove.contract import INSTALL_MARKER, VERIFIER_TOML, VERIFY_TEST_SH
 from experiments.post_training.tasktrove.convert import convert_one
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
-from experiments.post_training.tasktrove.converters.nl2bash import CHECKER_NAME, DATA_NAME, OUTPUT_ENV_OVERRIDE
+from experiments.post_training.tasktrove.converters.nl2bash import CHECKER_NAME, DATA_NAME
 from experiments.post_training.tasktrove.converters.registry import converter_index
 from experiments.post_training.tasktrove.sources import SourceInfo, SourceVerdict
 from experiments.post_training.tasktrove.taskbinary import (
@@ -40,7 +40,7 @@ def _info() -> SourceInfo:
 
 
 def _run_checker(checker_source: str, tests_dir: Path, output_file: Path) -> dict:
-    """Run the shipped checker exactly as the container would, redirecting its fixed output path."""
+    """Run the shipped checker exactly as the container would, naming the capture file to read."""
     script = tests_dir / CHECKER_NAME
     script.write_text(checker_source)
     logs_dir = tests_dir.parent / "logs"
@@ -48,9 +48,10 @@ def _run_checker(checker_source: str, tests_dir: Path, output_file: Path) -> dic
         **os.environ,
         "TASKTROVE_TESTS_DIR": str(tests_dir),
         "TASKTROVE_LOGS_DIR": str(logs_dir),
-        OUTPUT_ENV_OVERRIDE: str(output_file),
     }
-    proc = subprocess.run([sys.executable, str(script)], cwd=tests_dir.parent, env=env, capture_output=True, text=True)
+    proc = subprocess.run(
+        [sys.executable, str(script), str(output_file)], cwd=tests_dir.parent, env=env, capture_output=True, text=True
+    )
     assert proc.returncode == 0, proc.stderr
     return json.loads((logs_dir / "reward.json").read_text())
 

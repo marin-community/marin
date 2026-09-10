@@ -88,13 +88,13 @@ def test_calendar_shaped_task_goes_through_the_calendar_checker():
     assert "calendar" in record.tags and "tests/agent_calendar_checker.py" in read_task_binary(record.task_binary).files
 
 
-def test_schema_failing_metaschema_check_is_rejected_as_null_grader():
+def test_schema_failing_metaschema_check_is_rejected_as_unsupported_variant():
     task = read_task_binary(_fixture())
     data = json.loads(task.text("tests/verifier_data.json"))
     data["schema"]["properties"]["printSpeed"]["minimum"] = True  # not a number: invalid metaschema
     task.files["tests/verifier_data.json"] = json.dumps(data).encode()
     record = convert_one(_info(), "t.tar.gz", write_task_binary(task), converter_index(), TOOL_REF)
-    assert record.status == ConvertStatus.NULL_GRADER and record.task_binary is None
+    assert record.status == ConvertStatus.UNSUPPORTED_VARIANT and record.task_binary is None
 
 
 def test_missing_schema_is_rejected_as_null_grader():

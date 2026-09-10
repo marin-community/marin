@@ -16,7 +16,6 @@ from experiments.post_training.tasktrove.sources import SourceInfo, SourceVerdic
 from experiments.post_training.tasktrove.taskbinary import (
     DOCKERFILE,
     TEST_SH,
-    TaskFiles,
     read_task_binary,
     write_task_binary,
 )
@@ -83,13 +82,3 @@ def test_empty_instruction_list_is_rejected_as_null_grader():
     task.files["tests/verifier_data.json"] = json.dumps(data).encode()
     record = convert_one(_info(), "t.tar.gz", write_task_binary(task), converter_index(), TOOL_REF)
     assert record.status == ConvertStatus.NULL_GRADER and record.task_binary is None
-
-
-def test_dockerfile_edit_is_idempotent_across_tasks():
-    index = converter_index()
-    a = convert_one(_info(), "a.tar.gz", _fixture(), index, TOOL_REF)
-    b = convert_one(_info(), "b.tar.gz", _fixture(), index, TOOL_REF)
-    assert a.dockerfile_id == b.dockerfile_id
-    assert TaskFiles(read_task_binary(a.task_binary).files).text(DOCKERFILE) == read_task_binary(b.task_binary).text(
-        DOCKERFILE
-    )

@@ -27,7 +27,8 @@ from marin.experiment.data import hf_download
 from experiments.post_training.tasktrove.clean import build_clean
 from experiments.post_training.tasktrove.convert import convert_tasks
 from experiments.post_training.tasktrove.dedup import dedup_tasks
-from experiments.post_training.tasktrove.fingerprint import TASKS_GLOB, build_template_index, fingerprint_tasks
+from experiments.post_training.tasktrove.fingerprint import build_template_index, fingerprint_tasks
+from experiments.post_training.tasktrove.shards import TASKS_GLOB
 from experiments.post_training.tasktrove.sources import TASKTROVE_HF_ID, TASKTROVE_REVISION
 from experiments.post_training.tasktrove.verify import verify_tasks
 

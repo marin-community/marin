@@ -21,6 +21,8 @@ from tasktrove_verify.reward import InvalidTask, Reward, scored
 from tasktrove_verify.spec import DEFAULT_WORKSPACE, GotestSpec, JunitSpec, PytestSpec, StdioSpec
 
 KILL_GRACE = 5.0
+STDERR_TAIL = 2000
+"""Characters of stderr kept in a reward detail."""
 
 
 @dataclass(frozen=True)

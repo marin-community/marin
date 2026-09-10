@@ -23,9 +23,11 @@ shapes, so this converter routes on that shape:
 """
 
 import json
+import re
 
 from tasktrove_verify.spec import ExactSpec, ReasoningGymSpec, ScriptSpec
 
+from experiments.post_training.tasktrove.contract import drop_dockerfile_lines
 from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertedTask,
     Converter,
@@ -44,7 +46,7 @@ from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTI
 # scores its own gold answer 1.0.
 _UNSCORABLE_REASONING_GYM_DATASETS = frozenset({"arc_agi", "rearc"})
 
-_OLD_REASONING_GYM_PIP_INSTALL = "RUN pip install --no-cache-dir reasoning-gym"
+_OLD_REASONING_GYM_PIP_INSTALL = re.compile(r"^RUN pip install --no-cache-dir reasoning-gym")
 """The old grader imported ``reasoning_gym`` directly in the task's system Python; the new grader
 installs its own copy through ``tasktrove-verify[reasoning-gym]``, so this line is dead weight."""
 
@@ -77,13 +79,10 @@ def _convert_reasoning_gym(task: TaskFiles, data: dict) -> ConvertedTask | Rejec
     answer = data.get("answer")
     if not isinstance(answer, str) or not answer.strip():
         return Rejected(ConvertStatus.NULL_GRADER, "verifier_data.answer is empty")
-    dockerfile = "\n".join(
-        line for line in task.text(DOCKERFILE).splitlines() if not line.startswith(_OLD_REASONING_GYM_PIP_INSTALL)
-    )
     return ConvertedTask(
         instruction=task.text(INSTRUCTION),
         spec=ReasoningGymSpec(dataset=source_dataset),
-        dockerfile=dockerfile + "\n",
+        dockerfile=drop_dockerfile_lines(task.text(DOCKERFILE), _OLD_REASONING_GYM_PIP_INSTALL),
         tags=("reasoning", "reasoning-gym", source_dataset.replace("_", "-"), "nemotron"),
         data_files={"tests/entry.json": json.dumps(data).encode()},
         metadata=metadata(task),
@@ -158,7 +157,7 @@ from pathlib import Path
 TESTS_DIR = Path(os.environ["TASKTROVE_TESTS_DIR"])
 WORKSPACE = Path(os.environ["TASKTROVE_WORKSPACE"])
 CASES = json.loads((TESTS_DIR / "cases.json").read_text())
-TIMEOUT_S = 30
+TIMEOUT = 30
 
 _FENCE = re.compile(r"```(?:python|py)?\\s*\\n(.*?)```", re.DOTALL | re.IGNORECASE)
 
@@ -219,7 +218,7 @@ def main() -> float:
                 [sys.executable, str(runner_path), str(cases_path)],
                 capture_output=True,
                 text=True,
-                timeout=TIMEOUT_S,
+                timeout=TIMEOUT,
                 cwd=scratch,
             )
         except subprocess.TimeoutExpired:

@@ -20,7 +20,7 @@ from experiments.post_training.tasktrove.converters.converted_task import (
     Rejected,
 )
 from experiments.post_training.tasktrove.converters.nemotron_data import metadata, verifier_data
-from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, TaskFiles
+from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, SOLUTION_DIR, TaskFiles
 
 _OPTION_LINE = re.compile(r"^\s*\(?([A-Z])[\.\):]\s", re.MULTILINE)
 _MAX_OPTIONS = 10
@@ -65,7 +65,7 @@ def convert_math_boxed(task: TaskFiles) -> ConvertedTask | Rejected:
         spec=spec,
         dockerfile=task.text(DOCKERFILE),
         tags=("math", "nemotron"),
-        solution_files=task.under("solution/") or answer_solution(spec),
+        solution_files=task.under(SOLUTION_DIR) or answer_solution(spec),
         metadata=metadata(task),
     )
 

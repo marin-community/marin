@@ -29,14 +29,11 @@ from experiments.post_training.tasktrove.converters.converted_task import (
 )
 from experiments.post_training.tasktrove.converters.nemotron_data import metadata
 from experiments.post_training.tasktrove.converters.stdio_cases import case_files_from_dirs, hidden_case_rejection
-from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, TaskFiles
+from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, SOLVE_SH, TaskFiles
 
 COMMAND = "python3 /app/solution.py"
-"""Below this many cases a stdio grader is too easy to game by guessing; roughly two in five TACO
-tasks ship only a handful of examples and fall short."""
 
 SOLUTION_PY = "solution/solution.py"
-SOLVE_SH = "solution/solve.sh"
 _SOLVE_SCRIPT = "#!/bin/bash\nset -e\ncp /solution/solution.py /app/solution.py\n"
 
 _STDIN_READ_RE = re.compile(r"\b(input\s*\(|sys\.stdin|raw_input\s*\(|fileinput\.|open\(0\))")

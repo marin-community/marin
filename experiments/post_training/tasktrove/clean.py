@@ -50,6 +50,16 @@ TASK_COLUMNS = (
 )
 
 
+@dataclass(frozen=True)
+class ConvertLedgerRow:
+    """Why one task is absent from ``tasks/``: its convert, dedup, or ``verified:<check>`` status."""
+
+    source: str
+    path: str
+    status: str
+    detail: str
+
+
 @dataclass
 class CleanCounts:
     input_tasks: int = 0
@@ -87,9 +97,7 @@ def build_clean(deduped_path: str, verified_path: str, output_path: str, tool_re
             if row["converter"]:
                 counts.by_converter[row["converter"]][status] += 1
             if status != ConvertStatus.CONVERTED:
-                convert_ledger.append(
-                    {"source": row["source"], "path": row["path"], "status": status, "detail": row["error"]}
-                )
+                convert_ledger.append(asdict(ConvertLedgerRow(row["source"], row["path"], status, row["error"])))
                 continue
             counts.clean_tasks += 1
             counts.by_mode[row["mode"]] += 1
@@ -170,12 +178,8 @@ def export_task(tasks_dir: str, path: str, dest: Path) -> Path:
     row = rows[0]
     task_dir = dest / Path(path).name.removesuffix(".tar.gz")
     for blob in (row["task_binary"], row["solution_binary"]):
-        if blob is None:
-            continue
-        for name, data in read_task_binary(blob).files.items():
-            target = task_dir / name
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(data)
+        if blob is not None:
+            read_task_binary(blob).write_to(task_dir)
     return task_dir
 
 

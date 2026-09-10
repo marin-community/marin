@@ -38,14 +38,8 @@ from experiments.post_training.tasktrove.converters.converted_task import (
     Rejected,
 )
 from experiments.post_training.tasktrove.converters.registry import converter_index
-from experiments.post_training.tasktrove.fingerprint import (
-    COVERAGE_JSON,
-    TaskShard,
-    iter_shard_rows,
-    source_name,
-    task_shards,
-    uncovered_keys,
-)
+from experiments.post_training.tasktrove.fingerprint import COVERAGE_JSON, uncovered_keys
+from experiments.post_training.tasktrove.shards import TaskShard, iter_shard_rows, source_name, task_shards
 from experiments.post_training.tasktrove.sources import SourceInfo, SourceVerdict, load_source_verdicts
 from experiments.post_training.tasktrove.taskbinary import (
     DOCKERFILE,

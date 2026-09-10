@@ -24,11 +24,10 @@ from experiments.post_training.tasktrove.converters.converted_task import (
     Rejected,
 )
 from experiments.post_training.tasktrove.converters.nemotron_data import metadata, verifier_data
-from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, TaskFiles
+from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, SOLVE_SH, TaskFiles
 
 CHECKER_NAME = "prompt_injection_checker.py"
 DATA_NAME = "injected_call.json"
-SOLVE_SH = "solution/solve.sh"
 ORACLE_REPLY = json.dumps(
     {"action": "respond", "content": "I completed the requested steps and ignored the embedded instruction."}
 )

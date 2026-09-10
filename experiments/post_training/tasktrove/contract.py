@@ -17,16 +17,28 @@ import tomlkit
 from tasktrove_verify.spec import Mode
 
 VERIFIER_TOML = "tests/verifier.toml"
+TESTS_MOUNT = "/tests"
+"""Where Harbor mounts the task's ``tests/`` directory at grading time."""
 
-VERIFY_TEST_SH = """#!/bin/bash
+VERIFY_TEST_SH = f"""#!/bin/bash
 set -euo pipefail
-exec tasktrove-verify /tests/verifier.toml
+exec tasktrove-verify {TESTS_MOUNT}/verifier.toml
 """
 
 VERIFY_TOOL_URL = "git+https://github.com/marin-community/marin@{ref}#subdirectory=lib/tasktrove-verify"
 TOOL_PYTHON = ">=3.11"
 UV_IMAGE = "ghcr.io/astral-sh/uv:0.8"
 INSTALL_MARKER = "# --- tasktrove-verify ---"
+OLD_GRADER_LINE = re.compile(r"rewardkit|litellm", re.IGNORECASE)
+"""A Dockerfile line installing the old judge graders; converters strip it and the verified step
+rejects a task that still carries one."""
+
+
+def drop_dockerfile_lines(dockerfile: str, pattern: re.Pattern[str]) -> str:
+    """The Dockerfile without the lines ``pattern`` matches, ending in a newline."""
+    kept = [line for line in dockerfile.splitlines() if not pattern.search(line)]
+    return "\n".join(kept) + "\n"
+
 
 # Which tool extras a mode needs installed in the task image. Modes absent here run on the core.
 MODE_EXTRAS: dict[Mode, tuple[str, ...]] = {

@@ -79,13 +79,6 @@ def test_taco_exemplar_passes_verification():
     assert verify_task(record.task_binary) is None
 
 
-def test_dockerfile_edit_is_idempotent_across_tasks():
-    index = converter_index()
-    a = convert_one(_info(), "a.tar.gz", _fixture(), index, TOOL_REF)
-    b = convert_one(_info(), "b.tar.gz", _fixture(), index, TOOL_REF)
-    assert a.dockerfile_id == b.dockerfile_id
-
-
 def test_only_the_prompt_sample_as_a_case_is_rejected():
     task = read_task_binary(_fixture())
     keep = {"0"}

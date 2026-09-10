@@ -5,7 +5,6 @@
 
 import json
 import re
-from typing import Any
 
 from tasktrove_verify.spec import PytestSpec
 
@@ -16,7 +15,8 @@ from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertStatus,
     Rejected,
 )
-from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, TaskFiles
+from experiments.post_training.tasktrove.converters.swe_repo import ensure_pytest_json_report, test_ids
+from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, SOLUTION_DIR, TEST_SH, TaskFiles
 
 CONFIG_JSON = "tests/config.json"
 TRUSTED_TEST_PATHS = "tests/trusted_test_paths.txt"
@@ -61,26 +61,6 @@ def _restore_setup(trusted: str, fallback: str) -> str:
     return _RESTORE_SETUP.replace("TRUSTED_SHA", trusted).replace("FALLBACK_SHA", fallback)
 
 
-def _as_str_list(value: Any) -> list[str]:
-    """``FAIL_TO_PASS``/``PASS_TO_PASS`` are sometimes JSON-encoded strings rather than lists."""
-    if isinstance(value, str):
-        value = json.loads(value)
-    return [str(v) for v in value]
-
-
-def _ensure_pytest_json_report(dockerfile: str) -> str:
-    """Add the ``pytest-json-report`` plugin the ``pytest`` mode needs, reusing an existing pip line."""
-    if "pytest-json-report" in dockerfile:
-        return dockerfile
-    lines = dockerfile.splitlines()
-    for i, line in enumerate(lines):
-        tokens = line.split()
-        if tokens[:1] == ["RUN"] and "pip" in tokens and "install" in tokens and "pytest" in tokens:
-            lines[i] = line + " pytest-json-report"
-            return "\n".join(lines) + ("\n" if dockerfile.endswith("\n") else "")
-    return dockerfile.rstrip("\n") + "\nRUN pip install pytest-json-report\n"
-
-
 def convert_swe_trusted_paths(task: TaskFiles) -> ConvertedTask | Rejected:
     """SWE-bench-shaped repos with ``config.json``'s ``FAIL_TO_PASS``/``PASS_TO_PASS`` node ids.
 
@@ -99,12 +79,12 @@ def convert_swe_trusted_paths(task: TaskFiles) -> ConvertedTask | Rejected:
         return Rejected(ConvertStatus.UNSUPPORTED_VARIANT, f"no {CONFIG_JSON}: not the FAIL_TO_PASS/PASS_TO_PASS shape")
 
     config = json.loads(task.text(CONFIG_JSON))
-    fail_to_pass = _as_str_list(config.get("FAIL_TO_PASS", []))
-    pass_to_pass = _as_str_list(config.get("PASS_TO_PASS", []))
+    fail_to_pass = test_ids(config.get("FAIL_TO_PASS", []))
+    pass_to_pass = test_ids(config.get("PASS_TO_PASS", []))
     if not fail_to_pass and not pass_to_pass:
         return Rejected(ConvertStatus.NULL_GRADER, "config.json has no FAIL_TO_PASS or PASS_TO_PASS tests")
 
-    match = _INVOCATION_RE.search(task.get_text("tests/test.sh") or "")
+    match = _INVOCATION_RE.search(task.get_text(TEST_SH) or "")
     if match is None:
         return Rejected(ConvertStatus.UNSUPPORTED_VARIANT, "tests/test.sh does not call install_trusted_test_paths.sh")
     trusted, fallback = match["trusted"], match["fallback"] or ""
@@ -126,11 +106,11 @@ def convert_swe_trusted_paths(task: TaskFiles) -> ConvertedTask | Rejected:
     return ConvertedTask(
         instruction=task.text(INSTRUCTION),
         spec=spec,
-        dockerfile=_ensure_pytest_json_report(task.text(DOCKERFILE)),
+        dockerfile=ensure_pytest_json_report(task.text(DOCKERFILE)),
         tags=("code", "swe", "swe-repo", "trusted-test-paths"),
         language="python",
         data_files={TRUSTED_TEST_PATHS: task.files[TRUSTED_TEST_PATHS]},
-        solution_files=task.under("solution/"),
+        solution_files=task.under(SOLUTION_DIR),
     )
 
 

@@ -8,7 +8,7 @@ import shlex
 from tasktrove_verify.probe import positive_candidate
 from tasktrove_verify.spec import Spec
 
-SOLVE_SH = "solution/solve.sh"
+from experiments.post_training.tasktrove.taskbinary import SOLVE_SH
 
 
 def answer_solution(spec: Spec) -> dict[str, bytes]:

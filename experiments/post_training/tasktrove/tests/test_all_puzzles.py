@@ -131,10 +131,3 @@ def test_empty_gold_is_rejected_as_null_grader():
     task.files["tests/gold.json"] = json.dumps({"gold": "", "answer_type": "number", "ptype": "?"}).encode()
     record = _convert(write_task_binary(task))
     assert record.status == ConvertStatus.NULL_GRADER and record.task_binary is None
-
-
-def test_dockerfile_edit_is_idempotent_across_tasks():
-    index = converter_index()
-    a = convert_one(_info(), "a.tar.gz", _fixture(), index, TOOL_REF)
-    b = convert_one(_info(), "b.tar.gz", _fixture(), index, TOOL_REF)
-    assert a.dockerfile_id == b.dockerfile_id

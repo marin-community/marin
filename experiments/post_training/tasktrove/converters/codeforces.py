@@ -31,10 +31,6 @@ from experiments.post_training.tasktrove.converters.nemotron_data import metadat
 from experiments.post_training.tasktrove.converters.stdio_cases import case_files_from_dirs, hidden_case_rejection
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, TaskFiles
 
-"""Below this many provided input/output files a stdio grader is too easy to game by guessing;
-~30% of laion__codeforces-v3 tasks fall short, most shipping only the problem statement's own
-worked example. This is also the source audit's own cutoff (see ``source_verdicts.json``)."""
-
 CHECKER_PATH = "tests/checker.py"
 JUDGE_PATH = "tests/judge.py"
 
@@ -120,7 +116,7 @@ def convert_codeforces(task: TaskFiles) -> ConvertedTask | Rejected:
         tags=tags,
         language="python",
         data_files=data_files,
-        metadata={k: v for k, v in metadata(task).items() if v is not None},
+        metadata=metadata(task),
     )
 
 

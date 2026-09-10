@@ -30,20 +30,16 @@ from experiments.post_training.tasktrove.converters.converted_task import (
     Rejected,
 )
 from experiments.post_training.tasktrove.converters.nemotron_data import metadata, verifier_data
-from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, TaskFiles
+from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, SOLVE_SH, TaskFiles
 
 CHECKER_NAME = "nl2bash_check.py"
 DATA_NAME = "nl2bash_expected.json"
 OUTPUT_PATH = "/output/command_capture.txt"
-OUTPUT_ENV_OVERRIDE = "TASKTROVE_NL2BASH_OUTPUT"
-"""Overrides ``OUTPUT_PATH`` when set; unset in every real run, so production always reads the
-fixed container path. Exists so tests can point the checker at a temp file instead of ``/output``."""
 WORKSPACE = "/workspace"
 """Every task's Dockerfile sets ``WORKDIR /workspace``; ``ScriptSpec.workspace`` must match it
 exactly (rather than the default ``/app``, which nothing creates in this image) so the checker
 process has a cwd that exists."""
 
-SOLVE_SH = "solution/solve.sh"
 _BROKEN_SEED_CALL = "bash /tests/setup_seeds.sh"
 _FIXED_SEED_CALL = "bash /tests/setup_files/setup_seeds.sh"
 """Every shipped oracle calls the seed script at the wrong path (it lives at
@@ -55,7 +51,7 @@ _CHECKER_TEMPLATE = '''\
 """Score a captured shell session's output against one task's oracle output.
 
 Reads the expected output from __DATA_NAME__ beside this script (under
-``$TASKTROVE_TESTS_DIR``), compares it against __OUTPUT_PATH__ the agent's shell session wrote,
+``$TASKTROVE_TESTS_DIR``), compares it against the capture file named by its one argument,
 and reports the reward through ``$TASKTROVE_LOGS_DIR/reward.json``. The comparison is a
 normalized, order-insensitive multiset of "records" (one per output line; ANSI codes, a leading
 ``/workspace/`` or ``./`` prefix, a trailing size unit, and repeated whitespace are stripped):
@@ -70,7 +66,7 @@ import re
 import sys
 from pathlib import Path
 
-OUTPUT = Path(os.environ.get("__OUTPUT_ENV__", "__OUTPUT_PATH__"))
+OUTPUT = Path(sys.argv[1])
 ANSI = re.compile(r"\\x1b\\[[0-?]*[ -/]*[@-~]")
 ERROR = re.compile(r"(?i)\\b(?:error|failed|failure|no such file|not found|permission denied|traceback)\\b")
 UNIT = re.compile(r"(?i)\\s+(?:bytes?|kb|kib|mb|mib|gb|gib)\\s*$")
@@ -125,11 +121,7 @@ if __name__ == "__main__":
     raise SystemExit(main())
 '''
 
-CHECKER_PY = (
-    _CHECKER_TEMPLATE.replace("__DATA_NAME__", DATA_NAME)
-    .replace("__OUTPUT_ENV__", OUTPUT_ENV_OVERRIDE)
-    .replace("__OUTPUT_PATH__", OUTPUT_PATH)
-)
+CHECKER_PY = _CHECKER_TEMPLATE.replace("__DATA_NAME__", DATA_NAME).replace("__OUTPUT_PATH__", OUTPUT_PATH)
 
 
 def convert_nl2bash(task: TaskFiles) -> ConvertedTask | Rejected:
@@ -151,7 +143,7 @@ def convert_nl2bash(task: TaskFiles) -> ConvertedTask | Rejected:
 
     return ConvertedTask(
         instruction=task.text(INSTRUCTION),
-        spec=ScriptSpec(path=CHECKER_NAME, workspace=WORKSPACE),
+        spec=ScriptSpec(path=CHECKER_NAME, args=(OUTPUT_PATH,), workspace=WORKSPACE),
         dockerfile=task.text(DOCKERFILE),
         tags=("shell", "bash", "nl2bash", "terminal", "dcagent2"),
         language="bash",
