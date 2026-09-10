@@ -203,7 +203,7 @@ def training_config(
     weight_change_probe: bool = False,
     publication_stage_timing: bool = False,
     epoch_seeded_shuffle: bool = False,
-    dataloader_workers: int | None = None,
+    dataloader_workers: int | None = 0,
     eval_on_installed_weights: bool = False,
     eval_mode: str = "blocking",
     study_steps: int | None = None,
@@ -366,7 +366,7 @@ def build_experiment(
     weight_change_probe: bool = False,
     publication_stage_timing: bool = False,
     epoch_seeded_shuffle: bool = False,
-    dataloader_workers: int | None = None,
+    dataloader_workers: int | None = 0,
     eval_on_installed_weights: bool = False,
     eval_mode: str = "blocking",
     study_steps: int | None = None,
@@ -525,7 +525,11 @@ def build_experiment(
     help="Use a shared seed+epoch prompt permutation; off preserves each runner's historical ordering.",
 )
 @click.option(
-    "--dataloader-workers", type=click.IntRange(min=0), help="Override loader workers; zero avoids spawn stalls."
+    "--dataloader-workers",
+    type=click.IntRange(min=0),
+    default=0,
+    show_default=True,
+    help="Loader workers; zero avoids spawn stalls. Changing this invalidates source-order checkpoint resume.",
 )
 @click.option(
     "--eval-on-installed-weights", is_flag=True, help="Evaluate the installed async policy without off-grid sync."

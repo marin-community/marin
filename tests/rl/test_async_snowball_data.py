@@ -29,7 +29,9 @@ def test_explicit_snowball_rows_reach_data_writer_and_identity():
 def test_snowball_row_and_worker_defaults_are_cli_equivalent():
     args = ["--version", "2026.09.08.34", "--scale", "cadence-gate", "--completion", "metrics"]
     default = CliRunner().invoke(async_snowball.main, args)
-    explicit = CliRunner().invoke(async_snowball.main, [*args, "--train-rows", "1024", "--validation-rows", "128"])
+    explicit = CliRunner().invoke(
+        async_snowball.main, [*args, "--train-rows", "1024", "--validation-rows", "128", "--dataloader-workers", "0"]
+    )
     assert default.exit_code == explicit.exit_code == 0
     assert json.loads(default.output) == json.loads(explicit.output)
 

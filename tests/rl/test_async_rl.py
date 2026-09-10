@@ -1170,16 +1170,15 @@ def test_rno_guard_executes_when_actual_training_configuration_resolves():
 @pytest.mark.parametrize("runner", ["sync", "async"])
 def test_dataloader_worker_override_reaches_fingerprinted_recipe(runner):
     args = ["--version", "2026.09.08.1", "--runner", runner, "--stage", "rl", "--completion", "metrics"]
-    legacy = CliRunner().invoke(async_rl.main, args)
-    explicit = CliRunner().invoke(async_rl.main, [*args, "--dataloader-workers", "0"])
-    assert legacy.exit_code == explicit.exit_code == 0
-    before = json.loads(legacy.output)["request"]
+    default = CliRunner().invoke(async_rl.main, args)
+    explicit = CliRunner().invoke(async_rl.main, [*args, "--dataloader-workers", "8"])
+    assert default.exit_code == explicit.exit_code == 0
+    before = json.loads(default.output)["request"]
     after = json.loads(explicit.output)["request"]
     assert before["run_id"] != after["run_id"]
     config = yaml.safe_load(after["config_yaml"])
-    assert config["data"].pop("num_workers") == 0
-    if not config["data"]:
-        config.pop("data")
+    assert config["data"]["num_workers"] == 8
+    config["data"]["num_workers"] = 0
     assert config == yaml.safe_load(before["config_yaml"])
 
 

@@ -235,7 +235,7 @@ def training_config(
     epoch_seeded_shuffle: bool = False,
     seeded_sampling_control: bool = False,
     symmetric_weight_sync_environment: bool = False,
-    dataloader_workers: int | None = None,
+    dataloader_workers: int | None = 0,
     publication_stage_timing: bool = False,
     serial_engine_startup: bool = False,
     first_token_admission: bool = False,
@@ -597,7 +597,7 @@ def build_experiment(
     epoch_seeded_shuffle: bool = False,
     seeded_sampling_control: bool = False,
     symmetric_weight_sync_environment: bool = False,
-    dataloader_workers: int | None = None,
+    dataloader_workers: int | None = 0,
     publication_stage_timing: bool = False,
     serial_engine_startup: bool = False,
     first_token_admission: bool = False,
@@ -826,7 +826,11 @@ def build_experiment(
     help="Use a shared seed+epoch prompt permutation; off preserves each runner's historical ordering.",
 )
 @click.option(
-    "--dataloader-workers", type=click.IntRange(min=0), help="Override loader workers; zero avoids spawn stalls."
+    "--dataloader-workers",
+    type=click.IntRange(min=0),
+    default=0,
+    show_default=True,
+    help="Loader workers; zero avoids spawn stalls. Changing this invalidates source-order checkpoint resume.",
 )
 @click.option("--publication-stage-timing/--no-publication-stage-timing", default=False, show_default=True)
 @click.option("--first-token-admission", is_flag=True, help="Admit groups by native sampled-token version.")
