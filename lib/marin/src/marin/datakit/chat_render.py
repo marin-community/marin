@@ -28,19 +28,21 @@ RENDERED_CHAT_SCHEMA = pa.schema(
     [pa.field("id", pa.string(), nullable=False), pa.field("text", pa.string(), nullable=False)]
 )
 
-_TOOL_INSTRUCTIONS = """
+
+def _tool_instructions(tools: Sequence[dict]) -> str:
+    definitions = "".join(str(tool) for tool in tools)
+    return f"""
 ### Tools
 
 You may call one or more functions to assist with the user query.
 You are provided with function signatures within <tools> </tools> tags:
 
 <tools>
-"""
-_TOOL_CALL_INSTRUCTIONS = """</tools>
+{definitions}</tools>
 
 For each function call, pass a json object with function name and arguments within <tool_call> </tool_call> tags:
 <tool_call>
-{"name": <function-name>, "arguments": <args-json-object>}
+{{"name": <function-name>, "arguments": <args-json-object>}}
 </tool_call>
 
 """
@@ -57,7 +59,7 @@ def _assistant_content(message: Message) -> str:
     text = message_text(message)
     match message.channel:
         case ChatChannel.ANALYSIS:
-            return START_THINK + text + END_THINK
+            return f"{START_THINK}{text}{END_THINK}"
         case ChatChannel.COMMENTARY | ChatChannel.FINAL:
             return text
         case _:
@@ -77,7 +79,7 @@ def _message_turn(message: Message) -> _Turn:
             if not isinstance(arguments, dict):
                 raise ValueError("Tool-call arguments must be a JSON object")
             name = recipient.removeprefix("functions.")
-            body = '{"name": "' + name + '", "arguments": ' + json.dumps(arguments, ensure_ascii=False) + "}"
+            body = json.dumps({"name": name, "arguments": arguments}, ensure_ascii=False)
             return _Turn(Role.ASSISTANT, body, "\n")
         case Role.TOOL:
             name = message.author.name
@@ -121,14 +123,14 @@ def render_marin_chat(
     if custom_instructions:
         auxiliary.append(custom_instructions.strip())
     if tools:
-        auxiliary.append(_TOOL_INSTRUCTIONS + "".join(str(tool) for tool in tools) + _TOOL_CALL_INSTRUCTIONS)
+        auxiliary.append(_tool_instructions(tools))
     system = f"<|start_header_id|>system<|end_header_id|>{''.join(auxiliary)}<|eot_id|>" if auxiliary else ""
     conversation = "".join(
         f"<|start_header_id|>{turn.role.value}<|end_header_id|>\n{turn.content}<|eot_id|>{turn.separator}"
         for turn in _chat_turns(messages)
     )
     prefix = "<|start_header_id|>assistant<|end_header_id|>\n" if add_generation_prompt else ""
-    return bos_token + system + conversation + prefix
+    return f"{bos_token}{system}{conversation}{prefix}"
 
 
 def render_chat_record(record: dict) -> dict:
