@@ -91,7 +91,7 @@ def _finish_non_terminal_tasks(
             task_state,
             error,
             now_ms,
-            stamp_attempt_finished=False,
+            stamp_attempt_finished=row.current_worker_id is None,
             exit_code=exit_code,
         )
         overlay.emit_task_event(
