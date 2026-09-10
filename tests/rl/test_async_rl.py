@@ -1456,3 +1456,41 @@ def test_first_token_cli_defaults_change_only_async_admission_identity(recipe, a
     configs = [yaml.safe_load(r["config_yaml"]) for r in (enabled, disabled)]
     assert [c["trainer"]["fully_async"].pop("first_token_admission") for c in configs] == [True, False]
     assert configs[0] == configs[1]
+
+
+@pytest.mark.parametrize("foreign_field", [None, "model", "train", "dev", "output", "dump"])
+def test_snowball_cross_region_guard_preserves_east_artifacts(foreign_field):
+    step = async_snowball.build_experiment(
+        version="2026.09.06.10",
+        scale=async_snowball.Scale.QUALIFICATION,
+        timeout_seconds=4800,
+        completion="metrics",
+    )
+    prefix = "s3://marin-us-east-02a/marin"
+    context = StepContext(
+        output_path=prefix + "/output",
+        prefix=prefix,
+        region="us-east-02a",
+        is_fingerprint=False,
+        _dep_ref=lambda dependency: prefix + "/" + dependency.name + "/" + dependency.version,
+        _runtime_args=step.runtime_args,
+        _deps=step.deps,
+    )
+    request = step.build_config(context).request
+    before = asdict(request)
+    async_rl.validate_cross_region_request(request)
+    assert asdict(request) == before
+    if foreign_field is None:
+        return
+    foreign = "s3://marin-us-west-04a/changed"
+    if foreign_field == "model":
+        request = replace(request, model=replace(request.model, uri=foreign))
+    elif foreign_field in {"train", "dev"}:
+        field = "train_data" if foreign_field == "train" else "validation_data"
+        request = replace(request, **{field: (replace(getattr(request, field)[0], uri=foreign),)})
+    elif foreign_field == "output":
+        request = replace(request, output=replace(request.output, terminal_manifest_uri=foreign))
+    else:
+        request = replace(request, overrides=(*request.overrides, "++dump_path=" + foreign))
+    with pytest.raises(ValueError, match="Cross-region I/O requires east S3"):
+        async_rl.validate_cross_region_request(request)

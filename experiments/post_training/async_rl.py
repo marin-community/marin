@@ -529,7 +529,7 @@ def apply_observation_options(config: dict, *, initial_eval_repeat_count: int, w
 
 
 def validate_regional_storage(prefix: str, cluster: str, *, allow_cross_region_io: bool = False) -> None:
-    """Require local storage, with the explicit Qwen screening RNO/east exception."""
+    """Require local storage unless RNO explicitly opts into the east bucket."""
     region = cluster.removeprefix("cw-")
     expected = load_cluster_config("coreweave").region_buckets.get(region)
     path = StoragePath(prefix)
@@ -561,6 +561,11 @@ def validate_qwen_cross_region_request(request: SkyRLLaunchRequest) -> None:
     validate_version(version)
     if model.uri != f"s3://marin-us-east-02a/marin/{expected_name}/{version}/hf":
         raise ValueError("Cross-region I/O requires the pinned Qwen3-0.6B model path")
+    validate_cross_region_request(request)
+
+
+def validate_cross_region_request(request: SkyRLLaunchRequest) -> None:
+    """Keep resolved model, data and output I/O in east storage for RNO jobs."""
     trainer_config = yaml.safe_load(request.config_yaml).get("trainer", {})
     hub_repo = trainer_config.get("hf_hub_repo_id")
     save_interval = trainer_config.get("hf_save_interval", -1)
@@ -572,7 +577,11 @@ def validate_qwen_cross_region_request(request: SkyRLLaunchRequest) -> None:
             save_interval = yaml.safe_load(value)
     if request.completion_mode != "metrics" or hub_repo is not None or save_interval is None or save_interval > 0:
         raise ValueError("Cross-region I/O requires metrics completion with HF export disabled")
-    paths = [model.uri, *(item.uri for item in request.train_data), *(item.uri for item in request.validation_data)]
+    paths = [
+        request.model.uri,
+        *(item.uri for item in request.train_data),
+        *(item.uri for item in request.validation_data),
+    ]
     paths.extend(asdict(request.output).values())
     for path in paths:
         storage = StoragePath(path)
