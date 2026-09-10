@@ -48,13 +48,14 @@ def fixture():
             "policy/updates_completed_valid": 1,
             "consumed/uid_digest_u52": digest,
         }
-        for bucket in ("pooled", "age0", "age1", "age2", "age3", "age4-7", "age8+"):
-            for key in RATIO_STATISTICS:
-                row[f"policy/mismatch/{bucket}/{key}"] = 0
-            population = 512 if bucket in ("pooled", f"age{index}") else 0
-            row[f"policy/mismatch/{bucket}/selected_tokens"] = population
-            row[f"policy/mismatch/{bucket}/finite_fraction"] = 1
-            row[f"policy/mismatch/{bucket}/ess_fraction"] = 1
+        if not index:
+            for bucket in ("pooled", "age0", "age1", "age2", "age3", "age4-7", "age8+"):
+                for key in RATIO_STATISTICS:
+                    row[f"async/cohort_preparation/policy/mismatch/{bucket}/{key}"] = 0
+                population = 1024 if bucket in ("pooled", f"age{index}") else 0
+                row[f"async/cohort_preparation/policy/mismatch/{bucket}/selected_tokens"] = population
+                row[f"async/cohort_preparation/policy/mismatch/{bucket}/finite_fraction"] = 1
+                row[f"async/cohort_preparation/policy/mismatch/{bucket}/ess_fraction"] = 1
         update = {"stale/" + key: 0 for key in RATIO_STATISTICS}
         for key in ("finite_fraction", "statistics_valid", "p999_valid", "quantiles_valid", "ess_fraction"):
             update["stale/" + key] = 1
@@ -165,5 +166,22 @@ def test_native_n2_gate_rejects_corruption(defect):
 def test_reject_invalid_native_step_before_conversion(step):
     capture, rows = fixture()
     capture["results"]["scalars"][0]["step"] = step
+    with pytest.raises(ValueError):
+        audit_fresh_events(capture, rows)
+
+
+@pytest.mark.parametrize("defect", ["reprepared_even", "missing_odd", "wrong_population", "stale_admission"])
+def test_preparation_metrics_are_bound_once_per_cohort(defect):
+    capture, rows = fixture()
+    prefix = "async/cohort_preparation/policy/mismatch/"
+    if defect == "reprepared_even":
+        rows[1][prefix + "pooled/selected_tokens"] = 1024
+    elif defect == "missing_odd":
+        del rows[2][prefix + "pooled/selected_tokens"]
+    elif defect == "wrong_population":
+        rows[0][prefix + "pooled/selected_tokens"] = 512
+        rows[0][prefix + "age0/selected_tokens"] = 512
+    else:
+        rows[0][prefix + "age1/selected_tokens"] = 1
     with pytest.raises(ValueError):
         audit_fresh_events(capture, rows)

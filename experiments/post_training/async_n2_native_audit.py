@@ -235,13 +235,14 @@ def _number(row: Mapping, key: str) -> float:
 
 def audit_async_n2_history(rows: Sequence[Mapping]) -> dict:
     """Check full numerical coverage at the async optimizer clock, retaining N2 indices."""
-    rollout_batches = 8
+    optimizer_steps = 8
     minibatches = 1
     training = [row for row in rows if "policy/policy_update_steps" in row]
     steps = [_number(row, "global_step") for row in training]
-    if sorted(steps) != list(range(1, rollout_batches + 1)):
+    if sorted(steps) != list(range(1, optimizer_steps + 1)):
         raise ValueError(f"Training step coverage differs: {steps}")
-    updates, first_stale, monotone_batches, norm_errors = [], [], [], []
+    by_step = {row["global_step"]: row for row in training}
+    updates, first_stale, norm_errors = [], [], []
     for row in sorted(training, key=lambda item: item["global_step"]):
         step = row["global_step"]
         if _number(row, "policy/policy_update_steps") != minibatches:
@@ -253,22 +254,29 @@ def audit_async_n2_history(rows: Sequence[Mapping]) -> dict:
             raise ValueError("Attempted/successful update coverage differs")
         if _number(row, "policy/updates_completed") != step * minibatches:
             raise ValueError("Optimizer-update x-axis differs")
-        pooled = _number(row, "policy/mismatch/pooled/selected_tokens")
-        if pooled <= 0 or pooled != sum(
-            _number(row, f"policy/mismatch/{bucket}/selected_tokens")
-            for bucket in ("age0", "age1", "age2", "age3", "age4-7", "age8+")
-        ):
-            raise ValueError("Mismatch age populations do not partition the consumed tokens")
-        for bucket in ("pooled", "age0", "age1", "age2", "age3", "age4-7", "age8+"):
-            prefix = f"policy/mismatch/{bucket}/"
-            population = _number(row, prefix + "selected_tokens")
-            if population:
+        preparation_prefix = "async/cohort_preparation/policy/mismatch/"
+        if int(step) % 2:
+            pooled = _number(row, preparation_prefix + "pooled/selected_tokens")
+            if pooled <= 0 or pooled != _number(row, preparation_prefix + "age0/selected_tokens"):
+                raise ValueError("A0 cohort preparation must contain only admission-age-zero tokens")
+            partition_tokens = _number(row, "policy/by_update/0/stale/selected_tokens") + _number(
+                by_step[step + 1], "policy/by_update/1/stale/selected_tokens"
+            )
+            if pooled != partition_tokens:
+                raise ValueError("Prepared cohort and its two consumed partition populations differ")
+            for bucket in ("age1", "age2", "age3", "age4-7", "age8+"):
+                if _number(row, preparation_prefix + bucket + "/selected_tokens") != 0:
+                    raise ValueError("Nonzero stale population at A0 cohort preparation")
+            for bucket in ("pooled", "age0"):
+                prefix = preparation_prefix + bucket + "/"
                 for key in RATIO_STATISTICS:
                     _number(row, prefix + key)
                 if not 0 < _number(row, prefix + "ess_fraction") <= 1.0000001:
-                    raise ValueError("Invalid mismatch token ESS fraction")
+                    raise ValueError("Invalid cohort preparation mismatch token ESS fraction")
                 if _number(row, prefix + "finite_fraction") != 1:
-                    raise ValueError("Incomplete mismatch finite coverage")
+                    raise ValueError("Incomplete cohort preparation mismatch finite coverage")
+        elif any(key.startswith(preparation_prefix) for key in row):
+            raise ValueError("A pending partition must not reprepare cohort mismatch statistics")
         batch_stale = []
         for index in [(int(step) - 1) % 2]:
             prefix = f"policy/by_update/{index}/"
@@ -319,15 +327,15 @@ def audit_async_n2_history(rows: Sequence[Mapping]) -> dict:
             batch_stale.append(update["stale/abs_log_ratio_mean"])
             updates.append(update)
         first_stale.append(batch_stale[0])
-        monotone_batches.append(batch_stale == sorted(batch_stale))
     if max(first_stale[::2]) > 1e-4:
         raise ValueError("First cohort partitions differ from their freshly prepared policy log probabilities")
     return {
         "status": "ASYNC_N2_NUMERICAL_HISTORY_PASS",
-        "rollout_batches": rollout_batches,
+        "cohorts": optimizer_steps // 2,
         "optimizer_updates": len(updates),
         "maximum_relative_gradient_norm_error": max(norm_errors),
-        "first_update_stale_absolute_means": first_stale,
-        "monotone_stale_by_batch": monotone_batches,
+        "first_update_stale_absolute_means": first_stale[::2],
+        "stale_absolute_means_by_update": first_stale,
+        "monotone_stale_by_batch": [a <= b for a, b in zip(first_stale[::2], first_stale[1::2], strict=True)],
         "exact_quantiles_valid": True,
     }
