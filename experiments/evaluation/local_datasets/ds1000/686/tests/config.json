@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nI'm using tensorflow 2.10.0.\nWhat is the equivalent of the following in Tensorflow?\nnp.prod(A, axis=1)\nI want to get a tensor.\n\nA:\n<code>\nimport tensorflow as tf\nimport numpy as np\n\nnp.random.seed(10)\nA = tf.constant(np.random.randint(100,size=(5, 3)))\n</code>\nresult = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "def g(A):\n    return tf.reduce_prod(A, 1)\n\nresult = g(A.__copy__())\n",
+  "metadata": {
+    "problem_id": 686,
+    "library_problem_id": 20,
+    "library": "Tensorflow",
+    "test_case_cnt": 1,
+    "perturbation_type": "Semantic",
+    "perturbation_origin_id": 19
+  },
+  "code_context": "import tensorflow as tf\nimport numpy as np\nimport copy\nimport tokenize, io\n\n\ndef generate_test_case(test_case_id):\n    def generate_ans(data):\n        A = data\n        return tf.reduce_prod(A, 1)\n\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            np.random.seed(10)\n            A = tf.constant(np.random.randint(100, size=(5, 3)))\n        return A\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    def tensor_equal(a, b):\n        if type(a) != type(b):\n            return False\n        if isinstance(a, type(tf.constant([]))) is not True:\n            if isinstance(a, type(tf.Variable([]))) is not True:\n                return False\n        if a.shape != b.shape:\n            return False\n        if a.dtype != tf.float32:\n            a = tf.cast(a, tf.float32)\n        if b.dtype != tf.float32:\n            b = tf.cast(b, tf.float32)\n        if not tf.reduce_min(tf.cast(a == b, dtype=tf.int32)):\n            return False\n        return True\n\n    try:\n        assert tensor_equal(result, ans)\n        return 1\n    except:\n        return 0\n\n\nexec_context = r\"\"\"\nimport tensorflow as tf\nimport numpy as np\nA = test_input\n[insert]\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(1):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n\n\ndef test_string(solution: str):\n    tokens = []\n    for token in tokenize.tokenize(io.BytesIO(solution.encode(\"utf-8\")).readline):\n        tokens.append(token.string)\n    assert \"tf\" in tokens and \"reduce_prod\" in tokens\n"
+}

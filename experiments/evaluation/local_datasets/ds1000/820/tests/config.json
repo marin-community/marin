@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\n\nHow do I convert data from a Scikit-learn Bunch object (from sklearn.datasets) to a Pandas DataFrame?\n\nfrom sklearn.datasets import load_iris\nimport pandas as pd\ndata = load_iris()\nprint(type(data))\ndata1 = pd. # Is there a Pandas method to accomplish this?\n\nA:\n\n<code>\nimport numpy as np\nfrom sklearn.datasets import load_iris\nimport pandas as pd\ndata = load_data()\ndef solve(data):\n    # return the solution in this function\n    # result = solve(data)\n    ### BEGIN SOLUTION",
+  "reference_code": "# def solve(data):\n    ### BEGIN SOLUTION\n    result = pd.DataFrame(data=np.c_[data['data'], data['target']], columns=data['feature_names'] + ['target'])\n    ### END SOLUTION\n    # return result\n# data1 = solve(data)\n\n    return result\n",
+  "metadata": {
+    "problem_id": 820,
+    "library_problem_id": 3,
+    "library": "Sklearn",
+    "test_case_cnt": 1,
+    "perturbation_type": "Surface",
+    "perturbation_origin_id": 0
+  },
+  "code_context": "import numpy as np\nimport pandas as pd\nimport copy\nfrom sklearn.datasets import load_iris\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            data = load_iris()\n        return data\n\n    def generate_ans(data):\n        data = data\n        data1 = pd.DataFrame(\n            data=np.c_[data[\"data\"], data[\"target\"]],\n            columns=data[\"feature_names\"] + [\"target\"],\n        )\n        return data1\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    try:\n        for c in ans.columns:\n            pd.testing.assert_series_equal(result[c], ans[c], check_dtype=False)\n        return 1\n    except:\n        return 0\n\n\nexec_context = r\"\"\"\nimport pandas as pd\nimport numpy as np\nfrom sklearn.datasets import load_iris\ndata = test_input\ndef solve(data):\n[insert]\ndata1 = solve(data)\nresult = data1\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(1):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

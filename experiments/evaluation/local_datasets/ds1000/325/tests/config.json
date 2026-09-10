@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nHere is an interesting problem: whether a number is degree or radian depends on values of np.sin(). For instance, if sine value is bigger when the number is regarded as degree, then it is degree, otherwise it is radian. Your task is to help me confirm whether the number is a degree or a radian.\nThe result is an integer: 0 for degree and 1 for radian.\nA:\n<code>\nimport numpy as np\nnumber = np.random.randint(0, 360)\n</code>\nresult = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "deg = np.sin(np.deg2rad(number))\nrad = np.sin(number)\nresult = int(rad > deg)\n",
+  "metadata": {
+    "problem_id": 325,
+    "library_problem_id": 34,
+    "library": "Numpy",
+    "test_case_cnt": 3,
+    "perturbation_type": "Difficult-Rewrite",
+    "perturbation_origin_id": 32
+  },
+  "code_context": "import numpy as np\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            number = 4\n        elif test_case_id == 2:\n            np.random.seed(43)\n            number = np.random.randint(0, 360)\n        elif test_case_id == 3:\n            np.random.seed(142)\n            number = np.random.randint(0, 360)\n        return number\n\n    def generate_ans(data):\n        _a = data\n        number = _a\n        deg = np.sin(np.deg2rad(number))\n        rad = np.sin(number)\n        result = int(rad > deg)\n        return result\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    assert result == ans\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\nnumber = test_input\n[insert]\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(3):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

@@ -1,0 +1,13 @@
+{
+  "prompt": "import numpy as np\nimport pandas as pd\nimport matplotlib.pyplot as plt\nimport seaborn as sns\n\nx = np.linspace(0, 2 * np.pi, 400)\ny1 = np.sin(x)\ny2 = np.cos(x)\n\n# plot x vs y1 and x vs y2 in two subplots, sharing the x axis\n# SOLUTION START\n",
+  "reference_code": "fig, (ax1, ax2) = plt.subplots(nrows=2, sharex=True)\n\nplt.subplots_adjust(hspace=0.0)\nax1.grid()\nax2.grid()\n\nax1.plot(x, y1, color=\"r\")\nax2.plot(x, y2, color=\"b\", linestyle=\"--\")",
+  "metadata": {
+    "problem_id": 549,
+    "library_problem_id": 38,
+    "library": "Matplotlib",
+    "test_case_cnt": 1,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 38
+  },
+  "code_context": "import numpy as np\nimport pandas as pd\nimport matplotlib.pyplot as plt\nimport seaborn as sns\nfrom PIL import Image\n\n\ndef skip_plt_cmds(l):\n    return all(\n        p not in l for p in [\"plt.show()\", \"plt.clf()\", \"plt.close()\", \"savefig\"]\n    )\n\n\ndef generate_test_case(test_case_id):\n    x = np.linspace(0, 2 * np.pi, 400)\n    y1 = np.sin(x)\n    y2 = np.cos(x)\n    fig, (ax1, ax2) = plt.subplots(nrows=2, sharex=True)\n    plt.subplots_adjust(hspace=0.0)\n    ax1.grid()\n    ax2.grid()\n    ax1.plot(x, y1, color=\"r\")\n    ax2.plot(x, y2, color=\"b\", linestyle=\"--\")\n    plt.savefig(\"ans.png\", bbox_inches=\"tight\")\n    plt.close()\n    return None, None\n\n\ndef exec_test(result, ans):\n    code_img = np.array(Image.open(\"output.png\"))\n    oracle_img = np.array(Image.open(\"ans.png\"))\n    sample_image_stat = code_img.shape == oracle_img.shape and np.allclose(\n        code_img, oracle_img\n    )\n    if not sample_image_stat:\n        fig = plt.gcf()\n        ax12 = fig.axes\n        assert len(ax12) == 2\n        ax1, ax2 = ax12\n        x1 = ax1.get_xticks()\n        x2 = ax2.get_xticks()\n        np.testing.assert_equal(x1, x2)\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\nimport pandas as pd\nimport matplotlib.pyplot as plt\nimport seaborn as sns\nx = np.linspace(0, 2 * np.pi, 400)\ny1 = np.sin(x)\ny2 = np.cos(x)\n[insert]\nplt.savefig('output.png', bbox_inches ='tight')\nresult = None\n\"\"\"\n\n\ndef test_execution(solution: str):\n    solution = \"\\n\".join(filter(skip_plt_cmds, solution.split(\"\\n\")))\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(1):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

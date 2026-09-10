@@ -1,0 +1,13 @@
+{
+  "prompt": "import numpy as np\nimport pandas as pd\nimport matplotlib.pyplot as plt\nimport seaborn as sns\n\nsns.set_style(\"whitegrid\")\ntips = sns.load_dataset(\"tips\")\nax = sns.boxplot(x=\"day\", y=\"total_bill\", data=tips)\n\n# set the y axis limit to be 0 to 40\n# SOLUTION START\n",
+  "reference_code": "plt.ylim(0, 40)",
+  "metadata": {
+    "problem_id": 519,
+    "library_problem_id": 8,
+    "library": "Matplotlib",
+    "test_case_cnt": 1,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 8
+  },
+  "code_context": "import numpy as np\nimport pandas as pd\nimport matplotlib.pyplot as plt\nimport seaborn as sns\nfrom PIL import Image\n\n\ndef skip_plt_cmds(l):\n    return all(\n        p not in l for p in [\"plt.show()\", \"plt.clf()\", \"plt.close()\", \"savefig\"]\n    )\n\n\ndef generate_test_case(test_case_id):\n    sns.set_style(\"whitegrid\")\n    tips = sns.load_dataset(\"tips\")\n    ax = sns.boxplot(x=\"day\", y=\"total_bill\", data=tips)\n    plt.ylim(0, 40)\n    plt.savefig(\"ans.png\", bbox_inches=\"tight\")\n    plt.close()\n    return None, None\n\n\ndef exec_test(result, ans):\n    code_img = np.array(Image.open(\"output.png\"))\n    oracle_img = np.array(Image.open(\"ans.png\"))\n    sample_image_stat = code_img.shape == oracle_img.shape and np.allclose(\n        code_img, oracle_img\n    )\n    if not sample_image_stat:\n        ax = plt.gca()\n        yaxis = ax.get_yaxis()\n        np.testing.assert_allclose(ax.get_ybound(), [0, 40])\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\nimport pandas as pd\nimport matplotlib.pyplot as plt\nimport seaborn as sns\nsns.set_style(\"whitegrid\")\ntips = sns.load_dataset(\"tips\")\nax = sns.boxplot(x=\"day\", y=\"total_bill\", data=tips)\n[insert]\nplt.savefig('output.png', bbox_inches ='tight')\nresult = None\n\"\"\"\n\n\ndef test_execution(solution: str):\n    solution = \"\\n\".join(filter(skip_plt_cmds, solution.split(\"\\n\")))\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(1):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

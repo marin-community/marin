@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nI have the following dataframe:\n  key1  key2\n0    a   one\n1    a   two\n2    b   one\n3    b   two\n4    a   one\n5    c   two\n\nNow, I want to group the dataframe by the key1 and count the column key2 with the value \"two\" to get this result:\n  key1  count\n0    a      1\n1    b      1\n2    c      1\n\nI just get the usual count with:\ndf.groupby(['key1']).size()\n\nBut I don't know how to insert the condition.\nI tried things like this:\ndf.groupby(['key1']).apply(df[df['key2'] == 'two'])\n\nBut I can't get any further.  How can I do this?\n\n\nA:\n<code>\nimport pandas as pd\n\n\ndf = pd.DataFrame({'key1': ['a', 'a', 'b', 'b', 'a', 'c'],\n                   'key2': ['one', 'two', 'one', 'two', 'one', 'two']})\n</code>\nresult = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "def g(df):\n    return df.groupby('key1')['key2'].apply(lambda x: (x=='two').sum()).reset_index(name='count')\n\nresult = g(df.copy())\n",
+  "metadata": {
+    "problem_id": 213,
+    "library_problem_id": 213,
+    "library": "Pandas",
+    "test_case_cnt": 1,
+    "perturbation_type": "Semantic",
+    "perturbation_origin_id": 212
+  },
+  "code_context": "import pandas as pd\nimport numpy as np\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def generate_ans(data):\n        df = data\n        return (\n            df.groupby(\"key1\")[\"key2\"]\n            .apply(lambda x: (x == \"two\").sum())\n            .reset_index(name=\"count\")\n        )\n\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            df = pd.DataFrame(\n                {\n                    \"key1\": [\"a\", \"a\", \"b\", \"b\", \"a\", \"c\"],\n                    \"key2\": [\"one\", \"two\", \"one\", \"two\", \"one\", \"two\"],\n                }\n            )\n        return df\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    try:\n        pd.testing.assert_frame_equal(result, ans, check_dtype=False)\n        return 1\n    except:\n        return 0\n\n\nexec_context = r\"\"\"\nimport pandas as pd\nimport numpy as np\ndf = test_input\n[insert]\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(1):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

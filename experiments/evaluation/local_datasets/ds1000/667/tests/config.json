@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nI'm using tensorflow 2.10.0.\nI am trying to change a tensorflow variable to another value and get it as an integer in python and let result be the value of x.\nimport tensorflow as tf\nx = tf.Variable(0)\n### let the value of x be 114514\n\nSo the value has not changed. How can I achieve it?\n\nA:\n<code>\nimport tensorflow as tf\n\nx = tf.Variable(0)\n</code>\n# solve this question with example variable `x`\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "x.assign(114514)",
+  "metadata": {
+    "problem_id": 667,
+    "library_problem_id": 1,
+    "library": "Tensorflow",
+    "test_case_cnt": 1,
+    "perturbation_type": "Surface",
+    "perturbation_origin_id": 0
+  },
+  "code_context": "import tensorflow as tf\nimport copy\nimport tokenize, io\n\n\ndef generate_test_case(test_case_id):\n    def generate_ans(data):\n        x = data\n        x.assign(114514)\n        return x\n\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            x = tf.Variable(0)\n        return x\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    def tensor_equal(a, b):\n        if type(a) != type(b):\n            return False\n        if isinstance(a, type(tf.constant([]))) is not True:\n            if isinstance(a, type(tf.Variable([]))) is not True:\n                return False\n        if a.shape != b.shape:\n            return False\n        if a.dtype != tf.float32:\n            a = tf.cast(a, tf.float32)\n        if b.dtype != tf.float32:\n            b = tf.cast(b, tf.float32)\n        if not tf.reduce_min(tf.cast(a == b, dtype=tf.int32)):\n            return False\n        return True\n\n    try:\n        assert tensor_equal(result, ans)\n        return 1\n    except:\n        return 0\n\n\nexec_context = r\"\"\"\nimport tensorflow as tf\nx = test_input\n[insert]\nresult = x\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(1):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n\n\ndef test_string(solution: str):\n    tokens = []\n    for token in tokenize.tokenize(io.BytesIO(solution.encode(\"utf-8\")).readline):\n        tokens.append(token.string)\n    assert \"assign\" in tokens\n"
+}

@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\n\nHow to convert a numpy array of dtype=object to torch Tensor?\n\narray([\n   array([0.5, 1.0, 2.0], dtype=float16),\n   array([4.0, 6.0, 8.0], dtype=float16)\n], dtype=object)\n\n\nA:\n\n<code>\nimport pandas as pd\nimport torch\nimport numpy as np\nx_array = load_data()\n</code>\nx_tensor = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "x_tensor = torch.from_numpy(x_array.astype(float))",
+  "metadata": {
+    "problem_id": 948,
+    "library_problem_id": 16,
+    "library": "Pytorch",
+    "test_case_cnt": 2,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 16
+  },
+  "code_context": "import numpy as np\nimport torch\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            x = np.array(\n                [\n                    np.array([0.5, 1.0, 2.0], dtype=np.float16),\n                    np.array([4.0, 6.0, 8.0], dtype=np.float16),\n                ],\n                dtype=object,\n            )\n        elif test_case_id == 2:\n            x = np.array(\n                [\n                    np.array([0.5, 1.0, 2.0, 3.0], dtype=np.float16),\n                    np.array([4.0, 6.0, 8.0, 9.0], dtype=np.float16),\n                    np.array([4.0, 6.0, 8.0, 9.0], dtype=np.float16),\n                ],\n                dtype=object,\n            )\n        return x\n\n    def generate_ans(data):\n        x_array = data\n        x_tensor = torch.from_numpy(x_array.astype(float))\n        return x_tensor\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    try:\n        assert torch.is_tensor(result)\n        torch.testing.assert_close(result, ans, check_dtype=False)\n        return 1\n    except:\n        return 0\n\n\nexec_context = r\"\"\"\nimport numpy as np\nimport pandas as pd\nimport torch\nx_array = test_input\n[insert]\nresult = x_tensor\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

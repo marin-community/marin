@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nHow can I get get the position (indices) of the largest value in a multi-dimensional NumPy array `a`?\nNote that I want to get the raveled index of it, in C order.\nA:\n<code>\nimport numpy as np\nexample_a = np.array([[10,50,30],[60,20,40]])\ndef f(a = example_a):\n    # return the solution in this function\n    # result = f(a)\n    ### BEGIN SOLUTION",
+  "reference_code": "    result = a.argmax()\n\n    return result\n",
+  "metadata": {
+    "problem_id": 313,
+    "library_problem_id": 22,
+    "library": "Numpy",
+    "test_case_cnt": 2,
+    "perturbation_type": "Surface",
+    "perturbation_origin_id": 18
+  },
+  "code_context": "import numpy as np\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            a = np.array([[10, 50, 30], [60, 20, 40]])\n        elif test_case_id == 2:\n            np.random.seed(42)\n            a = np.random.rand(np.random.randint(5, 10), np.random.randint(6, 10))\n        return a\n\n    def generate_ans(data):\n        _a = data\n        a = _a\n        result = a.argmax()\n        return result\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    np.testing.assert_array_equal(result, ans)\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\na = test_input\ndef f(a):\n[insert]\nresult = f(a)\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\n\nHow can I pass a preprocessor to TfidfVectorizer? I made a function \"preprocess\" that takes a string and returns a preprocessed string then I set processor parameter to that function \"preprocessor=preprocess\", but it doesn't work. I've searched so many times, but I didn't found any example as if no one use it.\nthe preprocessor looks like\ndef preprocess(s):\n    return s.upper()\n\n\nA:\n\n<code>\nimport numpy as np\nimport pandas as pd\nfrom sklearn.feature_extraction.text import TfidfVectorizer\n</code>\nsolve this question with example variable `tfidf`\nBEGIN SOLUTION\n<code>",
+  "reference_code": "def preprocess(s):\n    return s.upper()\n\n\ntfidf = TfidfVectorizer(preprocessor=preprocess)\n",
+  "metadata": {
+    "problem_id": 852,
+    "library_problem_id": 35,
+    "library": "Sklearn",
+    "test_case_cnt": 0,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 35
+  },
+  "code_context": "import tokenize, io\n\n\ndef generate_test_case(test_case_id):\n    return None, None\n\n\ndef exec_test(result, ans):\n    return 1\n\n\nexec_context = r\"\"\"\nimport pandas as pd\nimport numpy as np\nfrom sklearn.feature_extraction.text import TfidfVectorizer\n[insert]\nresult = None\nassert preprocess(\"asdfASDFASDFWEQRqwerASDFAqwerASDFASDF\") == \"ASDFASDFASDFWEQRQWERASDFAQWERASDFASDF\"\nassert preprocess == tfidf.preprocessor\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(1):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n\n\ndef test_string(solution: str):\n    tokens = []\n    for token in tokenize.tokenize(io.BytesIO(solution.encode(\"utf-8\")).readline):\n        tokens.append(token.string)\n    assert \"TfidfVectorizer\" in tokens\n"
+}

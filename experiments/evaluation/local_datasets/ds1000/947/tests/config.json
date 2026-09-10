@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\n\nI'm trying to slice a PyTorch tensor using an index on the columns. The index, contains a list of columns that I want to select in order. You can see the example later.\nI know that there is a function index_select. Now if I have the index, which is a LongTensor, how can I apply index_select to get the expected result?\n\nFor example:\nthe expected output:\nC = torch.LongTensor([[1, 3], [4, 6]])\n# 1 3\n# 4 6\nthe index and the original data should be:\nidx = torch.LongTensor([1, 2])\nB = torch.LongTensor([[2, 1, 3], [5, 4, 6]])\n\nThanks.\n\n\nA:\n\n<code>\nimport numpy as np\nimport pandas as pd\nimport torch\nidx, B = load_data()\n</code>\nC = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "C = B.index_select(1, idx)",
+  "metadata": {
+    "problem_id": 947,
+    "library_problem_id": 15,
+    "library": "Pytorch",
+    "test_case_cnt": 2,
+    "perturbation_type": "Difficult-Rewrite",
+    "perturbation_origin_id": 9
+  },
+  "code_context": "import torch\nimport copy\nimport tokenize, io\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            idx = torch.LongTensor([1, 2])\n            B = torch.LongTensor([[2, 1, 3], [5, 4, 6]])\n        elif test_case_id == 2:\n            idx = torch.LongTensor([0, 1, 3])\n            B = torch.LongTensor([[1, 2, 3, 777], [4, 999, 5, 6]])\n        return idx, B\n\n    def generate_ans(data):\n        idx, B = data\n        C = B.index_select(1, idx)\n        return C\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    try:\n        torch.testing.assert_close(result, ans, check_dtype=False)\n        return 1\n    except:\n        return 0\n\n\nexec_context = r\"\"\"\nimport numpy as np\nimport pandas as pd\nimport torch\nidx, B = test_input\n[insert]\nresult = C\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n\n\ndef test_string(solution: str):\n    tokens = []\n    for token in tokenize.tokenize(io.BytesIO(solution.encode(\"utf-8\")).readline):\n        tokens.append(token.string)\n    assert \"index_select\" in tokens\n"
+}

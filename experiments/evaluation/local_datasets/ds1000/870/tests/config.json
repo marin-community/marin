@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\n\nDoes scikit-learn provide facility to use SVM for regression, using a polynomial kernel (degree=2)? I looked at the APIs and I don't see any. Has anyone built a package on top of scikit-learn that does this?\nNote to use default arguments\n\nA:\n\n<code>\nimport numpy as np\nimport pandas as pd\nimport sklearn\nX, y = load_data()\nassert type(X) == np.ndarray\nassert type(y) == np.ndarray\n# fit, then predict X\n</code>\npredict = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "from sklearn.svm import SVR\n\nsvr_poly = SVR(kernel='poly', degree=2)\nsvr_poly.fit(X, y)\npredict = svr_poly.predict(X)\n",
+  "metadata": {
+    "problem_id": 870,
+    "library_problem_id": 53,
+    "library": "Sklearn",
+    "test_case_cnt": 1,
+    "perturbation_type": "Semantic",
+    "perturbation_origin_id": 51
+  },
+  "code_context": "import numpy as np\nimport copy\nimport sklearn\nfrom sklearn.datasets import make_regression\nfrom sklearn.svm import SVR\n\n\ndef generate_test_case(test_case_id):\n\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            X, y = make_regression(n_samples=1000, n_features=4, random_state=42)\n        return X, y\n\n    def generate_ans(data):\n        X, y = data\n        svr_poly = SVR(kernel=\"poly\", degree=2)\n        svr_poly.fit(X, y)\n        predict = svr_poly.predict(X)\n        return predict\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    try:\n        np.testing.assert_allclose(result, ans)\n        return 1\n    except:\n        return 0\n\n\nexec_context = r\"\"\"\nimport pandas as pd\nimport numpy as np\nimport sklearn\nX, y = test_input\n[insert]\nresult = predict\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(1):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+
+# Write reference solution into the container solution file.
+cat <<'PY' > /solution/solution.py
+if denominator == 0:
+    result = (np.nan, np.nan)
+else:
+    gcd = np.gcd(numerator, denominator)
+    result = (numerator//gcd, denominator//gcd)
+PY

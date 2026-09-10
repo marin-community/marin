@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nI have two arrays A (len of 3.8million) and B (len of 20k). For the minimal example, lets take this case:\nA = np.array([1,1,2,3,3,3,4,5,6,7,8,8])\nB = np.array([1,2,8])\nNow I want the resulting array to be:\nC = np.array([3,3,3,4,5,6,7])\ni.e. if any value in B is found in A, remove it from A, if not keep it.\nI would like to know if there is any way to do it without a for loop because it is a lengthy array and so it takes long time to loop.\nA:\n<code>\nimport numpy as np\nA = np.array([1,1,2,3,3,3,4,5,6,7,8,8])\nB = np.array([1,2,8])\n</code>\nC = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "C = A[~np.in1d(A,B)]\n",
+  "metadata": {
+    "problem_id": 442,
+    "library_problem_id": 151,
+    "library": "Numpy",
+    "test_case_cnt": 2,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 151
+  },
+  "code_context": "import numpy as np\nimport pandas as pd\nimport copy\nimport tokenize, io\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            A = np.array([1, 1, 2, 3, 3, 3, 4, 5, 6, 7, 8, 8])\n            B = np.array([1, 2, 8])\n        elif test_case_id == 2:\n            np.random.seed(42)\n            A = np.random.randint(0, 10, (20,))\n            B = np.random.randint(0, 10, (3,))\n        return A, B\n\n    def generate_ans(data):\n        _a = data\n        A, B = _a\n        C = A[~np.in1d(A, B)]\n        return C\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    np.testing.assert_array_equal(result, ans)\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\nA, B = test_input\n[insert]\nresult = C\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n\n\ndef test_string(solution: str):\n    tokens = []\n    for token in tokenize.tokenize(io.BytesIO(solution.encode(\"utf-8\")).readline):\n        tokens.append(token.string)\n    assert \"while\" not in tokens and \"for\" not in tokens\n"
+}

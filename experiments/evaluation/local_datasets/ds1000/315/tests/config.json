@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nI would like to delete selected columns in a numpy.array . This is what I do:\nn [397]: a = array([[ NaN,   2.,   3., NaN],\n   .....:        [  1.,   2.,   3., 9]])  #can be another array\nIn [398]: print a\n[[ NaN   2.   3.  NaN]\n [  1.   2.   3.   9.]]\nIn [399]: z = any(isnan(a), axis=0)\nIn [400]: print z\n[ True False False  True]\nIn [401]: delete(a, z, axis = 1)\nOut[401]:\n array([[  3.,  NaN],\n       [  3.,   9.]])\nIn this example my goal is to delete all the columns that contain NaN's. I expect the last command to result in:\narray([[2., 3.],\n       [2., 3.]])\nHow can I do that?\nA:\n<code>\nimport numpy as np\na = np.array([[np.nan, 2., 3., np.nan],\n\t\t[1., 2., 3., 9]])\n</code>\na = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "z = np.any(np.isnan(a), axis = 0)\na = a[:, ~z]\n\n",
+  "metadata": {
+    "problem_id": 315,
+    "library_problem_id": 24,
+    "library": "Numpy",
+    "test_case_cnt": 2,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 24
+  },
+  "code_context": "import numpy as np\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            a = np.array([[np.nan, 2.0, 3.0, np.nan], [1.0, 2.0, 3.0, 9]])\n        elif test_case_id == 2:\n            np.random.seed(42)\n            a = np.random.rand(np.random.randint(5, 10), np.random.randint(6, 10))\n            for i in range(5):\n                x, y = np.random.randint(1, 4, (2,))\n                a[x][y] = np.nan\n        return a\n\n    def generate_ans(data):\n        _a = data\n        a = _a\n        z = np.any(np.isnan(a), axis=0)\n        a = a[:, ~z]\n        return a\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    np.testing.assert_array_equal(result, ans)\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\na = test_input\n[insert]\nresult = a\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

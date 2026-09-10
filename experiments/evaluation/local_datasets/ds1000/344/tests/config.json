@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nExample Input:\nmystr = \"100110\"\nDesired output numpy array(of integers):\nresult == np.array([1, 0, 0, 1, 1, 0])\nI have tried:\nnp.fromstring(mystr, dtype=int, sep='')\nbut the problem is I can't split my string to every digit of it, so numpy takes it as an one number. Any idea how to convert my string to numpy array?\nA:\n<code>\nimport numpy as np\nmystr = \"100110\"\n</code>\nresult = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "result = np.array(list(mystr), dtype = int)\n",
+  "metadata": {
+    "problem_id": 344,
+    "library_problem_id": 53,
+    "library": "Numpy",
+    "test_case_cnt": 2,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 53
+  },
+  "code_context": "import numpy as np\nimport pandas as pd\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            mystr = \"100110\"\n        elif test_case_id == 2:\n            mystr = \"987543\"\n        return mystr\n\n    def generate_ans(data):\n        _a = data\n        mystr = _a\n        result = np.array(list(mystr), dtype=int)\n        return result\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    np.testing.assert_array_equal(result, ans)\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\nmystr = test_input\n[insert]\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

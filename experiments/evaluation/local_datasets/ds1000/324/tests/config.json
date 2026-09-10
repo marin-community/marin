@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nI'm working on a problem that has to do with calculating angles of refraction and what not. However, it seems that I'm unable to use the numpy.cos() function in degrees. I have tried to use numpy.degrees() and numpy.rad2deg().\ndegree = 90\nnumpy.cos(degree)\nnumpy.degrees(numpy.cos(degree))\nBut with no help. \nHow do I compute cosine value using degree?\nThanks for your help.\nA:\n<code>\nimport numpy as np\ndegree = 90\n</code>\nresult = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "\nresult = np.cos(np.deg2rad(degree))\n",
+  "metadata": {
+    "problem_id": 324,
+    "library_problem_id": 33,
+    "library": "Numpy",
+    "test_case_cnt": 2,
+    "perturbation_type": "Semantic",
+    "perturbation_origin_id": 32
+  },
+  "code_context": "import numpy as np\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            degree = 90\n        elif test_case_id == 2:\n            np.random.seed(42)\n            degree = np.random.randint(0, 360)\n        return degree\n\n    def generate_ans(data):\n        _a = data\n        degree = _a\n        result = np.cos(np.deg2rad(degree))\n        return result\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    assert np.allclose(result, ans)\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\ndegree = test_input\n[insert]\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

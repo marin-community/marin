@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\n\nUsing scipy, is there an easy way to emulate the behaviour of MATLAB's dctmtx function which returns a NxN (ortho-mode normed) DCT matrix for some given N? There's scipy.fftpack.dctn but that only applies the DCT. Do I have to implement this from scratch if I don't want use another dependency besides scipy?\nA:\n<code>\nimport numpy as np\nimport scipy.fft as sf\nN = 8\n</code>\nresult = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "result = sf.dct(np.eye(N), axis=0, norm= 'ortho')\n\n",
+  "metadata": {
+    "problem_id": 774,
+    "library_problem_id": 63,
+    "library": "Scipy",
+    "test_case_cnt": 2,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 63
+  },
+  "code_context": "import numpy as np\nimport copy\nimport scipy.fft as sf\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            N = 8\n        elif test_case_id == 2:\n            np.random.seed(42)\n            N = np.random.randint(4, 15)\n        return N\n\n    def generate_ans(data):\n        _a = data\n        N = _a\n        result = sf.dct(np.eye(N), axis=0, norm=\"ortho\")\n        return result\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    assert np.allclose(result, ans)\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\nimport scipy.fft as sf\nN = test_input\n[insert]\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

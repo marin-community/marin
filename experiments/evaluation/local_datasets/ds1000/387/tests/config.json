@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nI have a 2-d numpy array as follows:\na = np.array([[1,5,9,13],\n              [2,6,10,14],\n              [3,7,11,15],\n              [4,8,12,16]]\nI want to extract it into patches of 2 by 2 sizes with out repeating the elements.\nThe answer should exactly be the same. This can be 3-d array or list with the same order of elements as below:\n[[[1,5],\n [2,6]],   \n [[9,13],\n [10,14]],\n [[3,7],\n [4,8]],\n [[11,15],\n [12,16]]]\nHow can do it easily?\nIn my real problem the size of a is (36, 72). I can not do it one by one. I want programmatic way of doing it.\nA:\n<code>\nimport numpy as np\na = np.array([[1,5,9,13],\n              [2,6,10,14],\n              [3,7,11,15],\n              [4,8,12,16]])\n</code>\nresult = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "result = a.reshape(a.shape[0]//2, 2, a.shape[1]//2, 2).swapaxes(1, 2).reshape(-1, 2, 2)\n",
+  "metadata": {
+    "problem_id": 387,
+    "library_problem_id": 96,
+    "library": "Numpy",
+    "test_case_cnt": 2,
+    "perturbation_type": "Semantic",
+    "perturbation_origin_id": 94
+  },
+  "code_context": "import numpy as np\nimport copy\nimport tokenize, io\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            a = np.array(\n                [[1, 5, 9, 13], [2, 6, 10, 14], [3, 7, 11, 15], [4, 8, 12, 16]]\n            )\n        elif test_case_id == 2:\n            np.random.seed(42)\n            a = np.random.rand(100, 200)\n        return a\n\n    def generate_ans(data):\n        _a = data\n        a = _a\n        result = (\n            a.reshape(a.shape[0] // 2, 2, a.shape[1] // 2, 2)\n            .swapaxes(1, 2)\n            .reshape(-1, 2, 2)\n        )\n        return result\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    np.testing.assert_array_equal(result, ans)\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\na = test_input\n[insert]\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n\n\ndef test_string(solution: str):\n    tokens = []\n    for token in tokenize.tokenize(io.BytesIO(solution.encode(\"utf-8\")).readline):\n        tokens.append(token.string)\n    assert \"while\" not in tokens and \"for\" not in tokens\n"
+}

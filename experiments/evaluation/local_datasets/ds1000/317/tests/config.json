@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nI have a 2D list something like\na = [[1, 2, 3], [4, 5, 6], [7, 8, 9]] \nand I want to convert it to a 2d numpy array. Can we do it without allocating memory like\nnumpy.zeros((3,3))\nand then storing values to it?\nA:\n<code>\nimport numpy as np\na = [[1, 2, 3], [4, 5, 6], [7, 8, 9]] \n</code>\nresult = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "result = np.array(a)\n",
+  "metadata": {
+    "problem_id": 317,
+    "library_problem_id": 26,
+    "library": "Numpy",
+    "test_case_cnt": 2,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 26
+  },
+  "code_context": "import numpy as np\nimport pandas as pd\nimport copy\nimport tokenize, io\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            a = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]\n        elif test_case_id == 2:\n            np.random.seed(42)\n            a = np.random.rand(10, 20, 5).tolist()\n        return a\n\n    def generate_ans(data):\n        _a = data\n        a = _a\n        result = np.array(a)\n        return result\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    assert type(result) == type(ans)\n    np.testing.assert_array_equal(result, ans)\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\na = test_input\n[insert]\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n\n\ndef test_string(solution: str):\n    tokens = []\n    for token in tokenize.tokenize(io.BytesIO(solution.encode(\"utf-8\")).readline):\n        tokens.append(token.string)\n    assert \"while\" not in tokens and \"for\" not in tokens\n"
+}

@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nI have a file with arrays or different shapes. I want to zeropad all the array to match the largest shape. The largest shape is (93,13).\nTo test this I have the following code:\na = np.ones((41,12))\nhow can I zero pad this array to match the shape of (93,13)? And ultimately, how can I do it for thousands of rows? Specifically, I want to pad to the right and bottom of original array in 2D.\nA:\n<code>\nimport numpy as np\na = np.ones((41, 12))\nshape = (93, 13)\n</code>\nresult = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "result = np.pad(a, ((0, shape[0]-a.shape[0]), (0, shape[1]-a.shape[1])), 'constant')\n",
+  "metadata": {
+    "problem_id": 496,
+    "library_problem_id": 205,
+    "library": "Numpy",
+    "test_case_cnt": 4,
+    "perturbation_type": "Surface",
+    "perturbation_origin_id": 204
+  },
+  "code_context": "import numpy as np\nimport pandas as pd\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            a = np.ones((41, 12))\n            shape = (93, 13)\n        elif test_case_id == 2:\n            a = np.ones((41, 13))\n            shape = (93, 13)\n        elif test_case_id == 3:\n            a = np.ones((93, 11))\n            shape = (93, 13)\n        elif test_case_id == 4:\n            a = np.ones((42, 10))\n            shape = (93, 13)\n        return a, shape\n\n    def generate_ans(data):\n        _a = data\n        a, shape = _a\n        result = np.pad(\n            a, ((0, shape[0] - a.shape[0]), (0, shape[1] - a.shape[1])), \"constant\"\n        )\n        return result\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    np.testing.assert_array_equal(result, ans)\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\na, shape = test_input\n[insert]\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(4):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

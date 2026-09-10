@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nI want to generate a random array of size N which only contains 0 and 1, I want my array to have some ratio between 0 and 1. For example, 90% of the array be 1 and the remaining 10% be 0 (I want this 90% to be random along with the whole array).\nright now I have:\nrandomLabel = np.random.randint(2, size=numbers)\nBut I can't control the ratio between 0 and 1.\nA:\n<code>\nimport numpy as np\none_ratio = 0.9\nsize = 1000\n</code>\nnums = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "nums = np.ones(size)\nnums[:int(size*(1-one_ratio))] = 0\nnp.random.shuffle(nums)",
+  "metadata": {
+    "problem_id": 376,
+    "library_problem_id": 85,
+    "library": "Numpy",
+    "test_case_cnt": 2,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 85
+  },
+  "code_context": "import numpy as np\nimport pandas as pd\nimport copy\nimport tokenize, io\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            one_ratio = 0.9\n            size = 1000\n        elif test_case_id == 2:\n            size = 100\n            one_ratio = 0.8\n        return size, one_ratio\n\n    def generate_ans(data):\n        _a = data\n        return _a\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    size, one_ratio = ans\n    assert result.shape == (size,)\n    assert abs(len(np.where(result == 1)[0]) - size * one_ratio) / size <= 0.05\n    assert abs(len(np.where(result == 0)[0]) - size * (1 - one_ratio)) / size <= 0.05\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\nsize, one_ratio = test_input\n[insert]\nresult = nums\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n\n\ndef test_string(solution: str):\n    tokens = []\n    for token in tokenize.tokenize(io.BytesIO(solution.encode(\"utf-8\")).readline):\n        tokens.append(token.string)\n    assert \"random\" in tokens\n"
+}

@@ -1,0 +1,13 @@
+{
+  "prompt": "import matplotlib.pyplot as plt\nimport numpy as np\n\ncolumn_labels = list(\"ABCD\")\nrow_labels = list(\"WXYZ\")\ndata = np.random.rand(4, 4)\nfig, ax = plt.subplots()\nheatmap = ax.pcolor(data, cmap=plt.cm.Blues)\n\n# Move the x-axis of this heatmap to the top of the plot\n# SOLUTION START\n",
+  "reference_code": "ax.xaxis.tick_top()",
+  "metadata": {
+    "problem_id": 560,
+    "library_problem_id": 49,
+    "library": "Matplotlib",
+    "test_case_cnt": 1,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 49
+  },
+  "code_context": "import matplotlib.pyplot as plt\nimport numpy as np\nfrom PIL import Image\n\n\ndef skip_plt_cmds(l):\n    return all(\n        p not in l for p in [\"plt.show()\", \"plt.clf()\", \"plt.close()\", \"savefig\"]\n    )\n\n\ndef generate_test_case(test_case_id):\n    column_labels = list(\"ABCD\")\n    row_labels = list(\"WXYZ\")\n    data = np.random.rand(4, 4)\n    fig, ax = plt.subplots()\n    heatmap = ax.pcolor(data, cmap=plt.cm.Blues)\n    ax.xaxis.tick_top()\n    plt.savefig(\"ans.png\", bbox_inches=\"tight\")\n    plt.close()\n    return None, None\n\n\ndef exec_test(result, ans):\n    code_img = np.array(Image.open(\"output.png\"))\n    oracle_img = np.array(Image.open(\"ans.png\"))\n    sample_image_stat = code_img.shape == oracle_img.shape and np.allclose(\n        code_img, oracle_img\n    )\n    if not sample_image_stat:\n        ax = plt.gca()\n        assert ax.xaxis._major_tick_kw[\"tick2On\"]\n        assert ax.xaxis._major_tick_kw[\"label2On\"]\n        assert not ax.xaxis._major_tick_kw[\"tick1On\"]\n        assert not ax.xaxis._major_tick_kw[\"label1On\"]\n    return 1\n\n\nexec_context = r\"\"\"\nimport matplotlib.pyplot as plt\nimport numpy as np\ncolumn_labels = list(\"ABCD\")\nrow_labels = list(\"WXYZ\")\ndata = np.random.rand(4, 4)\nfig, ax = plt.subplots()\nheatmap = ax.pcolor(data, cmap=plt.cm.Blues)\n[insert]\nplt.savefig('output.png', bbox_inches ='tight')\nresult = None\n\"\"\"\n\n\ndef test_execution(solution: str):\n    solution = \"\\n\".join(filter(skip_plt_cmds, solution.split(\"\\n\")))\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(1):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

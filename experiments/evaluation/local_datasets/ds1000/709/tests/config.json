@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nI'm using tensorflow 2.10.0.\nI would like to generate 10 random integers as a tensor in TensorFlow but I don't which command I should use. In particular, I would like to generate from a uniform random variable which takes values in {1, 2, 3, 4}. I have tried to look among the distributions included in tensorflow_probability but I didn't find it.\nPlease set the random seed to 10 with tf.random.ser_seed().\nThanks in advance for your help.\n\nA:\n<code>\nimport tensorflow as tf\n\ndef f(seed_x=10):\n    # return the solution in this function\n    # result = f(seed_x)\n    ### BEGIN SOLUTION",
+  "reference_code": "    tf.random.set_seed(seed_x)\n    result = tf.random.uniform(shape=(10,), minval=1, maxval=5, dtype=tf.int32)\n\n    return result\n",
+  "metadata": {
+    "problem_id": 709,
+    "library_problem_id": 43,
+    "library": "Tensorflow",
+    "test_case_cnt": 1,
+    "perturbation_type": "Surface",
+    "perturbation_origin_id": 41
+  },
+  "code_context": "import tensorflow as tf\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def generate_ans(data):\n        seed_x = data\n        tf.random.set_seed(seed_x)\n        return tf.random.uniform(shape=(10,), minval=1, maxval=5, dtype=tf.int32)\n\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            seed_x = 10\n        return seed_x\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    def tensor_equal(a, b):\n        if type(a) != type(b):\n            return False\n        if isinstance(a, type(tf.constant([]))) is not True:\n            if isinstance(a, type(tf.Variable([]))) is not True:\n                return False\n        if a.shape != b.shape:\n            return False\n        if a.dtype != tf.float32:\n            a = tf.cast(a, tf.float32)\n        if b.dtype != tf.float32:\n            b = tf.cast(b, tf.float32)\n        if not tf.reduce_min(tf.cast(a == b, dtype=tf.int32)):\n            return False\n        return True\n\n    try:\n        assert tensor_equal(result, ans)\n        return 1\n    except:\n        return 0\n\n\nexec_context = r\"\"\"\nimport tensorflow as tf\nseed_x = test_input\ndef f(seed_x):\n[insert]\nresult = f(seed_x)\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(1):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

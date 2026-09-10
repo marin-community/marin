@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nI need to do some analysis on a large dataset from a hydrolgeology field work. I am using NumPy. I want to know how I can:\n1.\tmultiply e.g. the col-th column of my array by a number (e.g. 5.2). And then\n2.\tcalculate the cumulative sum of the numbers in that column.\nAs I mentioned I only want to work on a specific column and not the whole array.The result should be an 1-d array --- the cumulative sum.\nA:\n<code>\nimport numpy as np\na = np.random.rand(8, 5)\ncol = 2\nmultiply_number = 5.2\n</code>\nresult = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "a[:, col-1] *= multiply_number\nresult = np.cumsum(a[:, col-1])\n\n",
+  "metadata": {
+    "problem_id": 345,
+    "library_problem_id": 54,
+    "library": "Numpy",
+    "test_case_cnt": 2,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 54
+  },
+  "code_context": "import numpy as np\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            np.random.seed(42)\n            a = np.random.rand(8, 5)\n            col = 2\n            const = 5.2\n        elif test_case_id == 2:\n            np.random.seed(42)\n            a = np.random.rand(np.random.randint(5, 10), np.random.randint(6, 10))\n            col = 4\n            const = np.random.rand()\n        return a, col, const\n\n    def generate_ans(data):\n        _a = data\n        a, col, multiply_number = _a\n        a[:, col - 1] *= multiply_number\n        result = np.cumsum(a[:, col - 1])\n        return result\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    np.testing.assert_allclose(result, ans)\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\na, col, multiply_number = test_input\n[insert]\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

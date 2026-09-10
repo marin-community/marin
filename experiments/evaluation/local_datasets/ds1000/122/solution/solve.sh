@@ -1,0 +1,27 @@
+#!/bin/sh
+set -eu
+
+# Write reference solution into the container solution file.
+cat <<'PY' > /solution/solution.py
+import numpy as np
+def g(df):
+    time = df.time.tolist()
+    car = df.car.tolist()
+    farmost_neighbour = []
+    euclidean_distance = []
+    for i in range(len(df)):
+        n = 0
+        d = 0
+        for j in range(len(df)):
+            if df.loc[i, 'time'] == df.loc[j, 'time'] and df.loc[i, 'car'] != df.loc[j, 'car']:
+                t = np.sqrt(((df.loc[i, 'x'] - df.loc[j, 'x'])**2) + ((df.loc[i, 'y'] - df.loc[j, 'y'])**2))
+                if t >= d:
+                    d = t
+                    n = df.loc[j, 'car']
+        farmost_neighbour.append(n)
+        euclidean_distance.append(d)
+    return pd.DataFrame({'time': time, 'car': car, 'farmost_neighbour': farmost_neighbour, 'euclidean_distance': euclidean_distance})
+
+df = g(df.copy())
+
+PY

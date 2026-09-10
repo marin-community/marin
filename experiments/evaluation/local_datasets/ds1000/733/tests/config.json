@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nI have two csr_matrix, c1 and c2.\n\nI want a new matrix \nFeature = [c1\n           c2]. \n          \nThat is, I want to concatenate c1 and c2 in vertical direction.          \n\nBut I don't know how to represent the concatenation or how to form the format.\n\nHow can I achieve the matrix concatenation and still get the same type of matrix, i.e. a csr_matrix?\n\nAny help would be appreciated.\n\nA:\n<code>\nfrom scipy import sparse\nc1 = sparse.csr_matrix([[0, 0, 1, 0], [2, 0, 0, 0], [0, 0, 0, 0]])\nc2 = sparse.csr_matrix([[0, 3, 4, 0], [0, 0, 0, 5], [6, 7, 0, 8]])\n</code>\nFeature = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "Feature = sparse.vstack((c1, c2))\n\n",
+  "metadata": {
+    "problem_id": 733,
+    "library_problem_id": 22,
+    "library": "Scipy",
+    "test_case_cnt": 1,
+    "perturbation_type": "Semantic",
+    "perturbation_origin_id": 20
+  },
+  "code_context": "import copy\nfrom scipy import sparse\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            c1 = sparse.csr_matrix([[0, 0, 1, 0], [2, 0, 0, 0], [0, 0, 0, 0]])\n            c2 = sparse.csr_matrix([[0, 3, 4, 0], [0, 0, 0, 5], [6, 7, 0, 8]])\n        return c1, c2\n\n    def generate_ans(data):\n        _a = data\n        c1, c2 = _a\n        Feature = sparse.vstack((c1, c2))\n        return Feature\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    assert type(result) == sparse.csr_matrix\n    assert len(sparse.find(ans != result)[0]) == 0\n    return 1\n\n\nexec_context = r\"\"\"\nfrom scipy import sparse\nc1, c2 = test_input\n[insert]\nresult = Feature\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(1):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

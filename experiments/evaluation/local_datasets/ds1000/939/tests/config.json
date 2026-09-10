@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\n\nI'm trying to convert a torch tensor to pandas DataFrame.\nHowever, the numbers in the data is still tensors, what I actually want is numerical values.\nThis is my code\nimport torch\nimport pandas as  pd\nx = torch.rand(4,4)\npx = pd.DataFrame(x)\nAnd px looks like\n\n0   1   2   3\ntensor(0.3880)  tensor(0.4598)  tensor(0.4239)  tensor(0.7376)\ntensor(0.4174)  tensor(0.9581)  tensor(0.0987)  tensor(0.6359)\ntensor(0.6199)  tensor(0.8235)  tensor(0.9947)  tensor(0.9679)\ntensor(0.7164)  tensor(0.9270)  tensor(0.7853)  tensor(0.6921)\nHow can I just get rid of 'tensor'?\n\n\nA:\n\n<code>\nimport numpy as np\nimport torch\nimport pandas as pd\nx = load_data()\n</code>\npx = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "px = pd.DataFrame(x.numpy())",
+  "metadata": {
+    "problem_id": 939,
+    "library_problem_id": 7,
+    "library": "Pytorch",
+    "test_case_cnt": 2,
+    "perturbation_type": "Surface",
+    "perturbation_origin_id": 6
+  },
+  "code_context": "import numpy as np\nimport pandas as pd\nimport torch\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        torch.random.manual_seed(42)\n        if test_case_id == 1:\n            x = torch.rand(4, 4)\n        elif test_case_id == 2:\n            x = torch.rand(6, 6)\n        return x\n\n    def generate_ans(data):\n        x = data\n        px = pd.DataFrame(x.numpy())\n        return px\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    try:\n        assert type(result) == pd.DataFrame\n        np.testing.assert_allclose(result, ans)\n        return 1\n    except:\n        return 0\n\n\nexec_context = r\"\"\"\nimport numpy as np\nimport pandas as pd\nimport torch\nx = test_input\n[insert]\nresult = px\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\n\nHow do I convert data from a Scikit-learn Bunch object (from sklearn.datasets) to a Pandas DataFrame?\n\nfrom sklearn.datasets import fetch_california_housing\nimport pandas as pd\ndata = fetch_california_housing()\nprint(type(data))\ndata1 = pd. # Is there a Pandas method to accomplish this?\n\nA:\n\n<code>\nimport numpy as np\nfrom sklearn.datasets import fetch_california_housing\nimport pandas as pd\ndata = load_data()\n</code>\ndata1 = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "data1 = pd.DataFrame(data.data, columns=data.feature_names)\ndata1['target'] = pd.Series(data.target)",
+  "metadata": {
+    "problem_id": 819,
+    "library_problem_id": 2,
+    "library": "Sklearn",
+    "test_case_cnt": 1,
+    "perturbation_type": "Semantic",
+    "perturbation_origin_id": 0
+  },
+  "code_context": "import pandas as pd\nimport copy\nfrom sklearn.datasets import fetch_california_housing\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            data = fetch_california_housing()\n        return data\n\n    def generate_ans(data):\n        data = data\n        data1 = pd.DataFrame(data.data, columns=data.feature_names)\n        data1[\"target\"] = pd.Series(data.target)\n        return data1\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    try:\n        for c in ans.columns:\n            pd.testing.assert_series_equal(result[c], ans[c], check_dtype=False)\n        return 1\n    except:\n        return 0\n\n\nexec_context = r\"\"\"\nimport pandas as pd\nimport numpy as np\nfrom sklearn.datasets import fetch_california_housing\ndata = test_input\n[insert]\nresult = data1\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(1):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

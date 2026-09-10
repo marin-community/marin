@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nConsidering a simple df:\nHeaderA | HeaderB | HeaderC \n    476      4365      457\n\n\nIs there a way to rename all columns, for example to add to all columns an \"X\" in the head? \nXHeaderA | XHeaderB | XHeaderC\n    476      4365      457\n\n\nI am concatenating multiple dataframes and want to easily differentiate the columns dependent on which dataset they came from. \n\n\nI have over 50 column headers and ten files; so the above approach will take a long time. \nThank You\n\n\nA:\n<code>\nimport pandas as pd\n\n\ndf = pd.DataFrame(\n    {'HeaderA': [476],\n     'HeaderB': [4365],\n     'HeaderC': [457]})\n</code>\ndf = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "def g(df):\n    return df.add_prefix('X')\n\ndf = g(df.copy())\n",
+  "metadata": {
+    "problem_id": 31,
+    "library_problem_id": 31,
+    "library": "Pandas",
+    "test_case_cnt": 2,
+    "perturbation_type": "Semantic",
+    "perturbation_origin_id": 30
+  },
+  "code_context": "import pandas as pd\nimport numpy as np\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def generate_ans(data):\n        df = data\n        return df.add_prefix(\"X\")\n\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            df = pd.DataFrame({\"HeaderA\": [476], \"HeaderB\": [4365], \"HeaderC\": [457]})\n        if test_case_id == 2:\n            df = pd.DataFrame({\"HeaderD\": [114], \"HeaderF\": [4365], \"HeaderG\": [514]})\n        return df\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    try:\n        pd.testing.assert_frame_equal(result, ans, check_dtype=False)\n        return 1\n    except:\n        return 0\n\n\nexec_context = r\"\"\"\nimport pandas as pd\nimport numpy as np\ndf = test_input\n[insert]\nresult = df\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

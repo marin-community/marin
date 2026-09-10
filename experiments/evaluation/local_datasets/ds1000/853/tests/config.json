@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\n\nIs it possible to pass a custom function as a preprocessor to TfidfVectorizer?\nI want to write a function \"prePro\" that can turn every capital letter to lowercase letter.\nThen somehow set the processor parameter to TfidfTVectorizer like \"preprocessor=prePro\". However, it doesn't work. I searched a lot but didn't find any examples useful.\nCan anyone help me about this?\n\nA:\n\n<code>\nimport numpy as np\nimport pandas as pd\nfrom sklearn.feature_extraction.text import TfidfVectorizer\n</code>\nsolve this question with example variable `tfidf`\nBEGIN SOLUTION\n<code>",
+  "reference_code": "def prePro(s):\n    return s.lower()\n\n\ntfidf = TfidfVectorizer(preprocessor=prePro)\n",
+  "metadata": {
+    "problem_id": 853,
+    "library_problem_id": 36,
+    "library": "Sklearn",
+    "test_case_cnt": 0,
+    "perturbation_type": "Semantic",
+    "perturbation_origin_id": 35
+  },
+  "code_context": "import tokenize, io\n\n\ndef generate_test_case(test_case_id):\n    return None, None\n\n\ndef exec_test(result, ans):\n    return 1\n\n\nexec_context = r\"\"\"\nimport pandas as pd\nimport numpy as np\nfrom sklearn.feature_extraction.text import TfidfVectorizer\n[insert]\nresult = None\nassert prePro(\"asdfASDFASDFWEQRqwerASDFAqwerASDFASDF\") == \"asdfasdfasdfweqrqwerasdfaqwerasdfasdf\"\nassert prePro == tfidf.preprocessor\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(1):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n\n\ndef test_string(solution: str):\n    tokens = []\n    for token in tokenize.tokenize(io.BytesIO(solution.encode(\"utf-8\")).readline):\n        tokens.append(token.string)\n    assert \"TfidfVectorizer\" in tokens\n"
+}

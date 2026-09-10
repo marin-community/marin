@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nInput example:\nI have a numpy array, e.g.\na=np.array([[0,1], [2, 1], [4, 8]])\nDesired output:\nI would like to produce a mask array with the min value along a given axis, in my case axis 1, being True and all others being False. e.g. in this case\nmask = np.array([[True, False], [False, True], [True, False]])\nHow can I achieve that?\n\nA:\n<code>\nimport numpy as np\na = np.array([[0, 1], [2, 1], [4, 8]])\n</code>\nmask = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "mask = (a.min(axis=1,keepdims=1) == a)\n",
+  "metadata": {
+    "problem_id": 437,
+    "library_problem_id": 146,
+    "library": "Numpy",
+    "test_case_cnt": 2,
+    "perturbation_type": "Semantic",
+    "perturbation_origin_id": 145
+  },
+  "code_context": "import numpy as np\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            a = np.array([[0, 1], [2, 1], [4, 8]])\n        elif test_case_id == 2:\n            np.random.seed(42)\n            a = np.random.rand(10, 5)\n        return a\n\n    def generate_ans(data):\n        _a = data\n        a = _a\n        mask = a.min(axis=1, keepdims=1) == a\n        return mask\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    np.testing.assert_array_equal(result, ans)\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\na = test_input\n[insert]\nresult = mask\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

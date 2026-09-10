@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nI am trying to modify a DataFrame df to only contain rows for which the values in the column closing_price are not between 99 and 101 and trying to do this with the code below. \nHowever, I get the error \n\n\nValueError: The truth value of a Series is ambiguous. Use a.empty, a.bool(), a.item(), a.any() or a.all()\n\n\nand I am wondering if there is a way to do this without using loops.\ndf = df[~(99 <= df['closing_price'] <= 101)]\n\n\nA:\n<code>\nimport pandas as pd\nimport numpy as np\n\n\nnp.random.seed(2)\ndf = pd.DataFrame({'closing_price': np.random.randint(95, 105, 10)})\n</code>\nresult = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "def g(df):\n    return df.query('closing_price < 99 or closing_price > 101')\n\nresult = g(df.copy())\n",
+  "metadata": {
+    "problem_id": 218,
+    "library_problem_id": 218,
+    "library": "Pandas",
+    "test_case_cnt": 1,
+    "perturbation_type": "Semantic",
+    "perturbation_origin_id": 217
+  },
+  "code_context": "import pandas as pd\nimport numpy as np\nimport copy\nimport tokenize, io\n\n\ndef generate_test_case(test_case_id):\n    def generate_ans(data):\n        df = data\n        return df.query(\"closing_price < 99 or closing_price > 101\")\n\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            np.random.seed(2)\n            df = pd.DataFrame({\"closing_price\": np.random.randint(95, 105, 10)})\n        return df\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    try:\n        pd.testing.assert_frame_equal(result, ans, check_dtype=False)\n        return 1\n    except:\n        return 0\n\n\nexec_context = r\"\"\"\nimport pandas as pd\nimport numpy as np\ndf = test_input\n[insert]\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(1):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n\n\ndef test_string(solution: str):\n    tokens = []\n    for token in tokenize.tokenize(io.BytesIO(solution.encode(\"utf-8\")).readline):\n        tokens.append(token.string)\n    assert \"for\" not in tokens and \"while\" not in tokens\n"
+}

@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nI'm sorry in advance if this is a duplicated question, I looked for this information but still couldn't find it.\nIs it possible to get a numpy array (or python list) filled with the indexes of the elements in decreasing order?\nFor instance, the array:\na = array([4, 1, 0, 8, 5, 2])\nThe indexes of the elements in decreasing order would give :\n8 --> 3\n5 --> 4\n4 --> 0\n2 --> 5\n1 --> 1\n0 --> 2\nresult = [3, 4, 0, 5, 1, 2]\nThanks in advance!\nA:\n<code>\nimport numpy as np\na = np.array([4, 1, 0, 8, 5, 2])\n</code>\nresult = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "result = np.argsort(a)[::-1][:len(a)]\n",
+  "metadata": {
+    "problem_id": 381,
+    "library_problem_id": 90,
+    "library": "Numpy",
+    "test_case_cnt": 2,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 90
+  },
+  "code_context": "import numpy as np\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            a = np.array([4, 1, 0, 8, 5, 2])\n        elif test_case_id == 2:\n            np.random.seed(42)\n            a = (np.random.rand(100) - 0.5) * 100\n        return a\n\n    def generate_ans(data):\n        _a = data\n        a = _a\n        result = np.argsort(a)[::-1][: len(a)]\n        return result\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    np.testing.assert_array_equal(result, ans)\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\na = test_input\n[insert]\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

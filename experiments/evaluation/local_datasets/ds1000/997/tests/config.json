@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\n\nI have a tensor t, for example\n\n1 2\n3 4\nAnd I would like to make it\n\n0 0 0 0\n0 1 2 0\n0 3 4 0\n0 0 0 0\nI tried stacking with new=torch.tensor([0. 0. 0. 0.]) tensor four times but that did not work.\n\nt = torch.arange(4).reshape(1,2,2).float()\nprint(t)\nnew=torch.tensor([[0., 0., 0.,0.]])\nprint(new)\nr = torch.stack([t,new])  # invalid argument 0: Tensors must have same number of dimensions: got 4 and 3\nnew=torch.tensor([[[0., 0., 0.,0.]]])\nprint(new)\nr = torch.stack([t,new])  # invalid argument 0: Sizes of tensors must match except in dimension 0.\nI also tried cat, that did not work either.\n\n\nA:\n\n<code>\nimport numpy as np\nimport pandas as pd\nimport torch\nt = load_data()\n</code>\nresult = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "result = torch.nn.functional.pad(t, (1, 1, 1, 1))",
+  "metadata": {
+    "problem_id": 997,
+    "library_problem_id": 65,
+    "library": "Pytorch",
+    "test_case_cnt": 2,
+    "perturbation_type": "Surface",
+    "perturbation_origin_id": 64
+  },
+  "code_context": "import torch\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            t = torch.LongTensor([[1, 2], [3, 4], [5, 6], [7, 8]])\n        elif test_case_id == 2:\n            t = torch.LongTensor(\n                [[5, 6, 7], [2, 3, 4], [1, 2, 3], [7, 8, 9], [10, 11, 12]]\n            )\n        return t\n\n    def generate_ans(data):\n        t = data\n        result = torch.nn.functional.pad(t, (1, 1, 1, 1))\n        return result\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    try:\n        torch.testing.assert_close(result, ans, check_dtype=False)\n        return 1\n    except:\n        return 0\n\n\nexec_context = r\"\"\"\nimport numpy as np\nimport pandas as pd\nimport torch\nt = test_input\n[insert]\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

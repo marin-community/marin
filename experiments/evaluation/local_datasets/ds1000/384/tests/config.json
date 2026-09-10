@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\n\nI want to raise a 2-dimensional numpy array, let's call it A, to the power of some number n, but I have thus far failed to find the function or operator to do that.\nI'm aware that I could cast it to the matrix type and use the fact that then (similar to what would be the behaviour in Matlab), A**n does just what I want, (for array the same expression means elementwise exponentiation). Casting to matrix and back seems like a rather ugly workaround though.\nSurely there must be a good way to perform that calculation while keeping the format to array?\nA:\n<code>\nimport numpy as np\nA = np.arange(16).reshape(4, 4)\nn = 5\n</code>\nresult = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "result = np.linalg.matrix_power(A, n)\n",
+  "metadata": {
+    "problem_id": 384,
+    "library_problem_id": 93,
+    "library": "Numpy",
+    "test_case_cnt": 2,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 93
+  },
+  "code_context": "import numpy as np\nimport pandas as pd\nimport copy\nimport tokenize, io\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            A = np.arange(16).reshape(4, 4)\n            n = 5\n        elif test_case_id == 2:\n            np.random.seed(42)\n            dim = np.random.randint(10, 15)\n            A = np.random.rand(dim, dim)\n            n = np.random.randint(3, 8)\n        return A, n\n\n    def generate_ans(data):\n        _a = data\n        A, n = _a\n        result = np.linalg.matrix_power(A, n)\n        return result\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    assert type(result) == np.ndarray\n    np.testing.assert_allclose(result, ans)\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\nA, n = test_input\n[insert]\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n\n\ndef test_string(solution: str):\n    tokens = []\n    for token in tokenize.tokenize(io.BytesIO(solution.encode(\"utf-8\")).readline):\n        tokens.append(token.string)\n    assert \"matrix\" not in tokens\n"
+}

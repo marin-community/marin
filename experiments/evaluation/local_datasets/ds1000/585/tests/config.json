@@ -1,0 +1,13 @@
+{
+  "prompt": "import matplotlib.pyplot as plt\n\na, b = 1, 1\nc, d = 3, 4\n\n# draw a line that pass through (a, b) and (c, d)\n# do not just draw a line segment\n# set the xlim and ylim to be between 0 and 5\n# SOLUTION START\n",
+  "reference_code": "plt.axline((a, b), (c, d))\nplt.xlim(0, 5)\nplt.ylim(0, 5)",
+  "metadata": {
+    "problem_id": 585,
+    "library_problem_id": 74,
+    "library": "Matplotlib",
+    "test_case_cnt": 1,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 74
+  },
+  "code_context": "import matplotlib.pyplot as plt\nfrom PIL import Image\nimport numpy as np\nimport matplotlib\n\n\ndef skip_plt_cmds(l):\n    return all(\n        p not in l for p in [\"plt.show()\", \"plt.clf()\", \"plt.close()\", \"savefig\"]\n    )\n\n\ndef generate_test_case(test_case_id):\n    a, b = 1, 1\n    c, d = 3, 4\n    plt.axline((a, b), (c, d))\n    plt.xlim(0, 5)\n    plt.ylim(0, 5)\n    plt.savefig(\"ans.png\", bbox_inches=\"tight\")\n    plt.close()\n    return None, None\n\n\ndef exec_test(result, ans):\n    code_img = np.array(Image.open(\"output.png\"))\n    oracle_img = np.array(Image.open(\"ans.png\"))\n    sample_image_stat = code_img.shape == oracle_img.shape and np.allclose(\n        code_img, oracle_img\n    )\n    if not sample_image_stat:\n        ax = plt.gca()\n        assert len(ax.get_lines()) == 1\n        assert isinstance(ax.get_lines()[0], matplotlib.lines.AxLine)\n        assert ax.get_xlim()[0] == 0 and ax.get_xlim()[1] == 5\n        assert ax.get_ylim()[0] == 0 and ax.get_ylim()[1] == 5\n    return 1\n\n\nexec_context = r\"\"\"\nimport matplotlib.pyplot as plt\na, b = 1, 1\nc, d = 3, 4\n[insert]\nplt.savefig('output.png', bbox_inches ='tight')\nresult = None\n\"\"\"\n\n\ndef test_execution(solution: str):\n    solution = \"\\n\".join(filter(skip_plt_cmds, solution.split(\"\\n\")))\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(1):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

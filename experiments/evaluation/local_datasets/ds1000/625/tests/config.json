@@ -1,0 +1,13 @@
+{
+  "prompt": "import matplotlib.pyplot as plt\nimport numpy as np\n\n# Specify the values of blue bars (height)\nblue_bar = (23, 25, 17)\n# Specify the values of orange bars (height)\norange_bar = (19, 18, 14)\n\n# Plot the blue bar and the orange bar side-by-side in the same bar plot.\n# Make  sure the bars don't overlap with each other.\n# SOLUTION START\n",
+  "reference_code": "# Position of bars on x-axis\nind = np.arange(len(blue_bar))\n\n# Figure size\nplt.figure(figsize=(10, 5))\n\n# Width of a bar\nwidth = 0.3\nplt.bar(ind, blue_bar, width, label=\"Blue bar label\")\nplt.bar(ind + width, orange_bar, width, label=\"Orange bar label\")",
+  "metadata": {
+    "problem_id": 625,
+    "library_problem_id": 114,
+    "library": "Matplotlib",
+    "test_case_cnt": 1,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 114
+  },
+  "code_context": "import matplotlib.pyplot as plt\nimport numpy as np\nfrom PIL import Image\n\n\ndef skip_plt_cmds(l):\n    return all(\n        p not in l for p in [\"plt.show()\", \"plt.clf()\", \"plt.close()\", \"savefig\"]\n    )\n\n\ndef generate_test_case(test_case_id):\n    blue_bar = (23, 25, 17)\n    orange_bar = (19, 18, 14)\n    ind = np.arange(len(blue_bar))\n    plt.figure(figsize=(10, 5))\n    width = 0.3\n    plt.bar(ind, blue_bar, width, label=\"Blue bar label\")\n    plt.bar(ind + width, orange_bar, width, label=\"Orange bar label\")\n    plt.savefig(\"ans.png\", bbox_inches=\"tight\")\n    plt.close()\n    return None, None\n\n\ndef exec_test(result, ans):\n    code_img = np.array(Image.open(\"output.png\"))\n    oracle_img = np.array(Image.open(\"ans.png\"))\n    sample_image_stat = code_img.shape == oracle_img.shape and np.allclose(\n        code_img, oracle_img\n    )\n    if not sample_image_stat:\n        ax = plt.gca()\n        assert len(ax.patches) == 6\n        x_positions = [rec.get_x() for rec in ax.patches]\n        assert len(x_positions) == len(set(x_positions))\n    return 1\n\n\nexec_context = r\"\"\"\nimport matplotlib.pyplot as plt\nimport numpy as np\nblue_bar = (23, 25, 17)\norange_bar = (19, 18, 14)\n[insert]\nplt.savefig('output.png', bbox_inches ='tight')\nresult = None\n\"\"\"\n\n\ndef test_execution(solution: str):\n    solution = \"\\n\".join(filter(skip_plt_cmds, solution.split(\"\\n\")))\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(1):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nI have a numpy array which contains time series data. I want to bin that array into equal partitions of a given length (it is fine to drop the last partition if it is not the same size) and then calculate the maximum of each of those bins.\nI suspect there is numpy, scipy, or pandas functionality to do this.\nexample:\ndata = [4,2,5,6,7,5,4,3,5,7]\nfor a bin size of 2:\nbin_data = [(4,2),(5,6),(7,5),(4,3),(5,7)]\nbin_data_max = [4,6,7,4,7]\nfor a bin size of 3:\nbin_data = [(4,2,5),(6,7,5),(4,3,5)]\nbin_data_max = [5,7,5]\nA:\n<code>\nimport numpy as np\ndata = np.array([4, 2, 5, 6, 7, 5, 4, 3, 5, 7])\nbin_size = 3\n</code>\nbin_data_max = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "bin_data_max = data[:(data.size // bin_size) * bin_size].reshape(-1, bin_size).max(axis=1)\n",
+  "metadata": {
+    "problem_id": 415,
+    "library_problem_id": 124,
+    "library": "Numpy",
+    "test_case_cnt": 2,
+    "perturbation_type": "Semantic",
+    "perturbation_origin_id": 123
+  },
+  "code_context": "import numpy as np\nimport pandas as pd\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            data = np.array([4, 2, 5, 6, 7, 5, 4, 3, 5, 7])\n            width = 3\n        elif test_case_id == 2:\n            np.random.seed(42)\n            data = np.random.rand(np.random.randint(5, 10))\n            width = 4\n        return data, width\n\n    def generate_ans(data):\n        _a = data\n        data, bin_size = _a\n        bin_data_max = (\n            data[: (data.size // bin_size) * bin_size].reshape(-1, bin_size).max(axis=1)\n        )\n        return bin_data_max\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    np.testing.assert_allclose(result, ans, atol=1e-2)\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\ndata, bin_size = test_input\n[insert]\nresult = bin_data_max\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

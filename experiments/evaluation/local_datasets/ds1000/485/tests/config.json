@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nI'm trying the following:\nGiven a matrix A (x, y ,3) and another matrix B (3, 3), I would like to return a (x, y, 3) matrix in which the 3rd dimension of A multiplies the values of B (similar when an RGB image is transformed into gray, only that those \"RGB\" values are multiplied by a matrix and not scalars)...\nHere's what I've tried:\nnp.multiply(B, A)\nnp.einsum('ijk,jl->ilk', B, A)\nnp.einsum('ijk,jl->ilk', A, B)\nAll of them failed with dimensions not aligned.\nWhat am I missing?\nA:\n<code>\nimport numpy as np\nA = np.random.rand(5, 6, 3)\nB = np.random.rand(3, 3)\n</code>\nresult = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "result = np.tensordot(A,B,axes=((2),(0)))\n",
+  "metadata": {
+    "problem_id": 485,
+    "library_problem_id": 194,
+    "library": "Numpy",
+    "test_case_cnt": 1,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 194
+  },
+  "code_context": "import numpy as np\nimport pandas as pd\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            np.random.seed(42)\n            A = np.random.rand(5, 6, 3)\n            B = np.random.rand(3, 3)\n        return A, B\n\n    def generate_ans(data):\n        _a = data\n        A, B = _a\n        result = np.tensordot(A, B, axes=((2), (0)))\n        return result\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    np.testing.assert_allclose(result, ans)\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\nA, B = test_input\n[insert]\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(1):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

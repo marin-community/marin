@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\n\nI have used sklearn for Cross-validation and want to do a more visual information with the values of each model.\n\nThe problem is, I can't only get the name of the templates.\nInstead, the parameters always come altogether. How can I only retrieve the name of the models without its parameters?\nOr does it mean that I have to create an external list for the names?\n\nhere I have a piece of code:\n\nfor model in models:\n   scores = cross_val_score(model, X, y, cv=5)\n   print(f'Name model: {model} , Mean score: {scores.mean()}')\nBut I also obtain the parameters:\n\nName model: LinearRegression(copy_X=True, fit_intercept=True, n_jobs=1, normalize=False), Mean score: 0.8066782865537986\nIn fact I want to get the information this way:\n\nName Model: LinearRegression, Mean Score: 0.8066782865537986\nAny ideas to do that? Thanks!\n\nA:\n\n<code>\nimport numpy as np\nimport pandas as pd\nfrom sklearn.linear_model import LinearRegression\nmodel = LinearRegression()\n</code>\nmodel_name = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "model_name = type(model).__name__",
+  "metadata": {
+    "problem_id": 844,
+    "library_problem_id": 27,
+    "library": "Sklearn",
+    "test_case_cnt": 2,
+    "perturbation_type": "Surface",
+    "perturbation_origin_id": 26
+  },
+  "code_context": "import numpy as np\nimport copy\nfrom sklearn.linear_model import LinearRegression\nimport sklearn\nfrom sklearn.svm import LinearSVC\n\n\ndef generate_test_case(test_case_id):\n\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            model = LinearRegression()\n        elif test_case_id == 2:\n            model = LinearSVC()\n        return model\n\n    def generate_ans(data):\n        model = data\n        model_name = type(model).__name__\n        return model_name\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    try:\n        np.testing.assert_equal(result, ans)\n        return 1\n    except:\n        return 0\n\n\nexec_context = r\"\"\"\nimport pandas as pd\nimport numpy as np\nfrom sklearn.linear_model import LinearRegression\nmodel = test_input\n[insert]\nresult = model_name\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

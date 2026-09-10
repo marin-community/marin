@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nI have a dataFrame with rows and columns that max value is 2.\n   A  B  C  D\n0  1  2  0  1\n1  0  0  0  0\n2  1  0  0  1\n3  0  1  2  0\n4  1  1  0  1\n\n\nThe end result should be\n   A  D\n1  0  0\n2  1  1\n4  1  1\n\n\nNotice the rows and columns that had maximum 2 have been removed.\n\n\nA:\n<code>\nimport pandas as pd\n\n\ndf = pd.DataFrame([[1,2,3,1],[0,0,0,0],[1,0,0,1],[0,1,2,0],[1,1,0,1]],columns=['A','B','C','D'])\n</code>\nresult = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "def g(df):\n    return df.loc[(df.max(axis=1) != 2), (df.max(axis=0) != 2)]\n\nresult = g(df.copy())\n",
+  "metadata": {
+    "problem_id": 171,
+    "library_problem_id": 171,
+    "library": "Pandas",
+    "test_case_cnt": 2,
+    "perturbation_type": "Semantic",
+    "perturbation_origin_id": 169
+  },
+  "code_context": "import pandas as pd\nimport numpy as np\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def generate_ans(data):\n        df = data\n        return df.loc[(df.max(axis=1) != 2), (df.max(axis=0) != 2)]\n\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            df = pd.DataFrame(\n                [[1, 2, 3, 1], [0, 0, 0, 0], [1, 0, 0, 1], [0, 1, 2, 0], [1, 1, 0, 1]],\n                columns=[\"A\", \"B\", \"C\", \"D\"],\n            )\n        if test_case_id == 2:\n            df = pd.DataFrame(\n                [[1, 1, 3, 1], [0, 0, 0, 0], [1, 0, 0, 1], [0, 1, 2, 0], [1, 1, 0, 1]],\n                columns=[\"A\", \"B\", \"C\", \"D\"],\n            )\n        return df\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    try:\n        pd.testing.assert_frame_equal(result, ans, check_dtype=False)\n        return 1\n    except:\n        return 0\n\n\nexec_context = r\"\"\"\nimport pandas as pd\nimport numpy as np\ndf = test_input\n[insert]\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

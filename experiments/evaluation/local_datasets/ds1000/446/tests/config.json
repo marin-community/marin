@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nWhat I am trying to achieve is a 'highest to lowest' ranking of a list of values, basically the reverse of rankdata.\nSo instead of:\na = [1,2,3,4,3,2,3,4]\nrankdata(a).astype(int)\narray([1, 2, 5, 7, 5, 2, 5, 7])\nI want to get this:\nresult = array([7, 6, 4, 1, 3, 5, 2, 0])\nNote that there is no equal elements in result. For elements of same values, the earlier it appears in `a`, the larger rank it will get in `result`.\nI wasn't able to find anything in the rankdata documentation to do this.\nA:\n<code>\nimport numpy as np\nfrom scipy.stats import rankdata\na = [1,2,3,4,3,2,3,4]\n</code>\nresult = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "result = len(a) - rankdata(a, method = 'ordinal').astype(int)\n",
+  "metadata": {
+    "problem_id": 446,
+    "library_problem_id": 155,
+    "library": "Numpy",
+    "test_case_cnt": 2,
+    "perturbation_type": "Semantic",
+    "perturbation_origin_id": 154
+  },
+  "code_context": "import numpy as np\nimport copy\nfrom scipy.stats import rankdata\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            a = [1, 2, 3, 4, 3, 2, 3, 4]\n        elif test_case_id == 2:\n            np.random.seed(42)\n            a = np.random.randint(0, 8, (20,))\n        return a\n\n    def generate_ans(data):\n        _a = data\n        a = _a\n        result = len(a) - rankdata(a, method=\"ordinal\").astype(int)\n        return result\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    np.testing.assert_array_equal(result, ans)\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\nfrom scipy.stats import rankdata\na = test_input\n[insert]\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

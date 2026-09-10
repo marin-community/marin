@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\n\nGiven a 3d tenzor, say: batch x sentence length x embedding dim\n\na = torch.rand((10, 1000, 96))\nand an array(or tensor) of actual lengths for each sentence\n\nlengths =  torch .randint(1000,(10,))\noutputs tensor([ 370., 502., 652., 859., 545., 964., 566., 576.,1000., 803.])\n\nHow to fill tensor \u2018a\u2019 with zeros after certain index along dimension 1 (sentence length) according to tensor \u2018lengths\u2019 ?\n\nI want smth like that :\n\na[ : , lengths : , : ]  = 0\n\n\nA:\n\n<code>\nimport numpy as np\nimport pandas as pd\nimport torch\na = torch.rand((10, 1000, 96))\nlengths = torch.randint(1000, (10,))\n</code>\na = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "for i_batch in range(10):\n    a[i_batch, lengths[i_batch]:, :] = 0",
+  "metadata": {
+    "problem_id": 960,
+    "library_problem_id": 28,
+    "library": "Pytorch",
+    "test_case_cnt": 1,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 28
+  },
+  "code_context": "import torch\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            torch.random.manual_seed(42)\n            a = torch.rand((10, 1000, 96))\n            lengths = torch.randint(1000, (10,))\n        return a, lengths\n\n    def generate_ans(data):\n        a, lengths = data\n        for i_batch in range(10):\n            a[i_batch, lengths[i_batch] :, :] = 0\n        return a\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    try:\n        torch.testing.assert_close(result, ans, check_dtype=False)\n        return 1\n    except:\n        return 0\n\n\nexec_context = r\"\"\"\nimport numpy as np\nimport pandas as pd\nimport torch\na, lengths = test_input\n[insert]\nresult = a\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(1):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

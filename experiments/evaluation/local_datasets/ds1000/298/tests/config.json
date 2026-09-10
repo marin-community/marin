@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nLet's say I have a 1d numpy array like this\na = np.array([1.5,-0.4,1.3])\nI would like to encode this as a 2D one-hot array(only for elements appear in `a`)\nb = array([[0,0,1], [1,0,0], [0,1,0]])\nThe leftmost element always corresponds to the smallest element in `a`, and the rightmost vice versa.\nIs there a quick way to do this only using numpy? Quicker than just looping over a to set elements of b, that is.\nA:\n<code>\nimport numpy as np\na = np.array([1.5, -0.4, 1.3])\n</code>\nb = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "vals, idx = np.unique(a, return_inverse=True)\nb = np.zeros((a.size, vals.size))\nb[np.arange(a.size), idx] = 1",
+  "metadata": {
+    "problem_id": 298,
+    "library_problem_id": 7,
+    "library": "Numpy",
+    "test_case_cnt": 3,
+    "perturbation_type": "Difficult-Rewrite",
+    "perturbation_origin_id": 4
+  },
+  "code_context": "import numpy as np\nimport copy\nimport tokenize, io\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            a = np.array([1.5, -0.4, 1.3])\n        elif test_case_id == 2:\n            np.random.seed(42)\n            a = np.random.rand(20)\n        elif test_case_id == 3:\n            a = np.array([1.5, -0.4, 1.3, 1.5, 1.3])\n        return a\n\n    def generate_ans(data):\n        _a = data\n        a = _a\n        vals, idx = np.unique(a, return_inverse=True)\n        b = np.zeros((a.size, vals.size))\n        b[np.arange(a.size), idx] = 1\n        return b\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    np.testing.assert_array_equal(result, ans)\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\na = test_input\n[insert]\nresult = b\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(3):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n\n\ndef test_string(solution: str):\n    tokens = []\n    for token in tokenize.tokenize(io.BytesIO(solution.encode(\"utf-8\")).readline):\n        tokens.append(token.string)\n    assert \"while\" not in tokens and \"for\" not in tokens\n"
+}

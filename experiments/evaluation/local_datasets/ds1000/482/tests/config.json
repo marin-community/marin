@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nSuppose I have a hypotetical function I'd like to approximate:\ndef f(x):\n    return a * x ** 2 + b * x + c\nWhere a, b and c are the values I don't know.\nAnd I have certain points where the function output is known, i.e.\nx = [-1, 2, 5, 100]\ny = [123, 456, 789, 1255]\n(actually there are way more values)\nI'd like to get a, b and c while minimizing the squared error .\nWhat is the way to do that in Python? The result should be an array like [a, b, c], from highest order to lowest order.\nThere should be existing solutions in numpy or anywhere like that.\nA:\n<code>\nimport numpy as np\nx = [-1, 2, 5, 100]\ny = [123, 456, 789, 1255]\n</code>\nresult = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "result = np.polyfit(x, y, 2)\n",
+  "metadata": {
+    "problem_id": 482,
+    "library_problem_id": 191,
+    "library": "Numpy",
+    "test_case_cnt": 2,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 191
+  },
+  "code_context": "import numpy as np\nimport pandas as pd\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            x = [-1, 2, 5, 100]\n            y = [123, 456, 789, 1255]\n        elif test_case_id == 2:\n            np.random.seed(42)\n            x = (np.random.rand(100) - 0.5) * 10\n            y = (np.random.rand(100) - 0.5) * 10\n        return x, y\n\n    def generate_ans(data):\n        _a = data\n        x, y = _a\n        result = np.polyfit(x, y, 2)\n        return result\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    np.testing.assert_allclose(result, ans)\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\nx, y = test_input\n[insert]\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

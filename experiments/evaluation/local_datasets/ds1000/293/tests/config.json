@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nI want to figure out how to replace nan values from my array with np.inf. \nFor example, My array looks something like this:\nx = [1400, 1500, 1600, nan, nan, nan ,1700] #Not in this exact configuration\nHow can I replace the nan values from x?\nA:\n<code>\nimport numpy as np\nx = np.array([1400, 1500, 1600, np.nan, np.nan, np.nan ,1700])\n</code>\nx = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "x[np.isnan(x)] = np.inf\n",
+  "metadata": {
+    "problem_id": 293,
+    "library_problem_id": 2,
+    "library": "Numpy",
+    "test_case_cnt": 2,
+    "perturbation_type": "Semantic",
+    "perturbation_origin_id": 1
+  },
+  "code_context": "import numpy as np\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            x = np.array([1400, 1500, 1600, np.nan, np.nan, np.nan, 1700])\n        elif test_case_id == 2:\n            np.random.seed(42)\n            x = np.random.rand(20)\n            x[np.random.randint(0, 20, 3)] = np.nan\n        return x\n\n    def generate_ans(data):\n        _a = data\n        x = _a\n        x[np.isnan(x)] = np.inf\n        return x\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    np.testing.assert_array_equal(result, ans)\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\nx = test_input\n[insert]\nresult = x\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

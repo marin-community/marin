@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nHow do we pass two datasets in scipy.stats.anderson_ksamp?\n\nThe anderson function asks only for one parameter and that should be 1-d array. So I am wondering how to pass two different arrays to be compared in it? \nFurther, I want to interpret the result, that is, telling whether the two different arrays are drawn from the same population at the 5% significance level, result should be `True` or `False` . \nA:\n<code>\nimport numpy as np\nimport scipy.stats as ss\nx1=[38.7,  41.5,  43.8,  44.5,  45.5,  46.0,  47.7,  58.0]\nx2=[39.2,  39.3,  39.7,  41.4,  41.8,  42.9,  43.3,  45.8]\n</code>\nresult = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "s, c_v, s_l = ss.anderson_ksamp([x1,x2])\nresult = c_v[2] >= s\n\n",
+  "metadata": {
+    "problem_id": 754,
+    "library_problem_id": 43,
+    "library": "Scipy",
+    "test_case_cnt": 3,
+    "perturbation_type": "Difficult-Rewrite",
+    "perturbation_origin_id": 42
+  },
+  "code_context": "import numpy as np\nimport copy\nimport scipy.stats as ss\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            x1 = [38.7, 41.5, 43.8, 44.5, 45.5, 46.0, 47.7, 58.0]\n            x2 = [39.2, 39.3, 39.7, 41.4, 41.8, 42.9, 43.3, 45.8]\n        elif test_case_id == 2:\n            np.random.seed(42)\n            x1, x2 = np.random.randn(2, 20)\n        elif test_case_id == 3:\n            np.random.seed(20)\n            x1 = np.random.randn(10)\n            x2 = np.random.normal(4, 5, size=(10,))\n        return x1, x2\n\n    def generate_ans(data):\n        _a = data\n        x1, x2 = _a\n        s, c_v, s_l = ss.anderson_ksamp([x1, x2])\n        result = c_v[2] >= s\n        return result\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    assert result == ans\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\nimport scipy.stats as ss\nx1, x2 = test_input\n[insert]\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(3):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

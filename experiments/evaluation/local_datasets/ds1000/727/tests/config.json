@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nHow can I extract the main diagonal(1-d array) of a sparse matrix? The matrix is created in scipy.sparse. I want equivalent of np.diagonal(), but for sparse matrix.\n\nA:\n<code>\nimport numpy as np\nfrom scipy.sparse import csr_matrix\n\narr = np.random.rand(4, 4)\nM = csr_matrix(arr)\n</code>\nresult = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "result = M.A.diagonal(0)",
+  "metadata": {
+    "problem_id": 727,
+    "library_problem_id": 16,
+    "library": "Scipy",
+    "test_case_cnt": 2,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 16
+  },
+  "code_context": "import numpy as np\nimport copy\nfrom scipy.sparse import csr_matrix\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            arr = np.array(\n                [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12], [13, 14, 15, 16]]\n            )\n        elif test_case_id == 2:\n            np.random.seed(42)\n            arr = np.random.rand(6, 6)\n        return arr\n\n    def generate_ans(data):\n        _a = data\n        arr = _a\n        M = csr_matrix(arr)\n        result = M.A.diagonal(0)\n        return result\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    np.testing.assert_array_equal(result, ans)\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\nfrom scipy.sparse import csr_matrix\narr = test_input\nM = csr_matrix(arr)\n[insert]\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nI would like to resample a numpy array as suggested here Resampling a numpy array representing an image however this resampling will do so by a factor i.e.\nx = np.arange(9).reshape(3,3)\nprint scipy.ndimage.zoom(x, 2, order=1)\nWill create a shape of (6,6) but how can I resample an array to its best approximation within a (4,6),(6,8) or (6,10) shape for instance?\nA:\n<code>\nimport numpy as np\nimport scipy.ndimage\nx = np.arange(9).reshape(3, 3)\nshape = (6, 8)\n</code>\nresult = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "result = scipy.ndimage.zoom(x, zoom=(shape[0]/x.shape[0], shape[1]/x.shape[1]), order=1)\n",
+  "metadata": {
+    "problem_id": 785,
+    "library_problem_id": 74,
+    "library": "Scipy",
+    "test_case_cnt": 4,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 74
+  },
+  "code_context": "import numpy as np\nimport copy\nimport scipy.ndimage\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            shape = (6, 8)\n        elif test_case_id == 2:\n            shape = (6, 10)\n        elif test_case_id == 3:\n            shape = (4, 6)\n        elif test_case_id == 4:\n            np.random.seed(42)\n            shape = np.random.randint(4, 20, (2,))\n        x = np.arange(9).reshape(3, 3)\n        return x, shape\n\n    def generate_ans(data):\n        _a = data\n        x, shape = _a\n        result = scipy.ndimage.zoom(\n            x, zoom=(shape[0] / x.shape[0], shape[1] / x.shape[1]), order=1\n        )\n        return result\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    np.testing.assert_array_equal(result, ans)\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\nimport scipy.ndimage\nx, shape = test_input\n[insert]\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(4):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

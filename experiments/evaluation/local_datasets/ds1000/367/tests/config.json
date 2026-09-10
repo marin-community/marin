@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nI have a numpy array of different numpy arrays and I want to make a deep copy of the arrays. I found out the following:\nimport numpy as np\npairs = [(2, 3), (3, 4), (4, 5)]\narray_of_arrays = np.array([np.arange(a*b).reshape(a,b) for (a, b) in pairs])\na = array_of_arrays[:] # Does not work\nb = array_of_arrays[:][:] # Does not work\nc = np.array(array_of_arrays, copy=True) # Does not work\nIs for-loop the best way to do this? Is there a deep copy function I missed? And what is the best way to interact with each element in this array of different sized arrays?\nA:\n<code>\nimport numpy as np\npairs = [(2, 3), (3, 4), (4, 5)]\narray_of_arrays = np.array([np.arange(a*b).reshape(a,b) for (a, b) in pairs])\n</code>\nresult = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "import copy\nresult = copy.deepcopy(array_of_arrays)",
+  "metadata": {
+    "problem_id": 367,
+    "library_problem_id": 76,
+    "library": "Numpy",
+    "test_case_cnt": 1,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 76
+  },
+  "code_context": "import numpy as np\nimport pandas as pd\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            pairs = [(2, 3), (3, 4), (4, 5)]\n            array_of_arrays = np.array(\n                [np.arange(a * b).reshape(a, b) for (a, b) in pairs], dtype=object\n            )\n        return pairs, array_of_arrays\n\n    def generate_ans(data):\n        _a = data\n        pairs, array_of_arrays = _a\n        return array_of_arrays\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    assert id(result) != id(ans)\n    for arr1, arr2 in zip(result, ans):\n        assert id(arr1) != id(arr2)\n        np.testing.assert_array_equal(arr1, arr2)\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\npairs, array_of_arrays = test_input\n[insert]\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(1):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

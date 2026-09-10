@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nI have the following code to run Wilcoxon rank-sum test \nprint stats.ranksums(pre_course_scores, during_course_scores)\nRanksumsResult(statistic=8.1341352369246582, pvalue=4.1488919597127145e-16)\n\nHowever, I am interested in extracting the pvalue from the result. I could not find a tutorial about this. i.e.Given two ndarrays, pre_course_scores, during_course_scores, I want to know the pvalue of ranksum. Can someone help?\n\nA:\n<code>\nimport numpy as np\nfrom scipy import stats\nexample_pre_course_scores = np.random.randn(10)\nexample_during_course_scores = np.random.randn(10)\ndef f(pre_course_scores = example_pre_course_scores, during_course_scores = example_during_course_scores):\n    # return the solution in this function\n    # p_value = f(pre_course_scores, during_course_scores)\n    ### BEGIN SOLUTION",
+  "reference_code": "    p_value = stats.ranksums(pre_course_scores, during_course_scores).pvalue\n\n    return p_value\n",
+  "metadata": {
+    "problem_id": 760,
+    "library_problem_id": 49,
+    "library": "Scipy",
+    "test_case_cnt": 1,
+    "perturbation_type": "Surface",
+    "perturbation_origin_id": 48
+  },
+  "code_context": "import numpy as np\nimport copy\nfrom scipy import stats\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            np.random.seed(10)\n            A = np.random.randn(10)\n            B = np.random.randn(10)\n        return A, B\n\n    def generate_ans(data):\n        _a = data\n        pre_course_scores, during_course_scores = _a\n        p_value = stats.ranksums(pre_course_scores, during_course_scores).pvalue\n        return p_value\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    assert abs(result - ans) <= 1e-5\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\nfrom scipy import stats\ndef f(pre_course_scores, during_course_scores):\n[insert]\npre_course_scores, during_course_scores = test_input\nresult = f(pre_course_scores, during_course_scores)\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(1):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

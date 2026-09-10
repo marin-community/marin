@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\n\nConsider I have 2D Tensor, index_in_batch * diag_ele. How can I get a 3D Tensor index_in_batch * Matrix (who is a diagonal matrix, construct by drag_ele)?\n\nThe torch.diag() construct diagonal matrix only when input is 1D, and return diagonal element when input is 2D.\n\n\nA:\n\n<code>\nimport numpy as np\nimport pandas as pd\nimport torch\nTensor_2D = load_data()\ndef Convert(t):\n    # return the solution in this function\n    # result = Convert(t)\n    ### BEGIN SOLUTION",
+  "reference_code": "# def Convert(t):\n    ### BEGIN SOLUTION\n    result = torch.diag_embed(t)\n    ### END SOLUTION\n    # return result\n# Tensor_3D = Convert(Tensor_2D)\n\n    return result\n",
+  "metadata": {
+    "problem_id": 956,
+    "library_problem_id": 24,
+    "library": "Pytorch",
+    "test_case_cnt": 2,
+    "perturbation_type": "Surface",
+    "perturbation_origin_id": 23
+  },
+  "code_context": "import torch\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        torch.random.manual_seed(42)\n        if test_case_id == 1:\n            a = torch.rand(2, 3)\n        elif test_case_id == 2:\n            a = torch.rand(4, 5)\n        return a\n\n    def generate_ans(data):\n        a = data\n        Tensor_3D = torch.diag_embed(a)\n        return Tensor_3D\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    try:\n        torch.testing.assert_close(result, ans, check_dtype=False)\n        return 1\n    except:\n        return 0\n\n\nexec_context = r\"\"\"\nimport numpy as np\nimport pandas as pd\nimport torch\nTensor_2D = test_input\ndef Convert(t):\n[insert]\nTensor_3D = Convert(Tensor_2D)\nresult = Tensor_3D\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

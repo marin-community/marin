@@ -1,0 +1,13 @@
+{
+  "prompt": "import numpy as np\nimport pandas as pd\nimport matplotlib.pyplot as plt\nimport seaborn as sns\n\nx = np.linspace(0, 2 * np.pi, 10)\ny = np.cos(x)\nplt.plot(x, y, label=\"sin\")\n\n# put a x axis ticklabels at 0, 2, 4...\n# SOLUTION START\n",
+  "reference_code": "minx = x.min()\nmaxx = x.max()\nplt.xticks(np.arange(minx, maxx, step=2))",
+  "metadata": {
+    "problem_id": 534,
+    "library_problem_id": 23,
+    "library": "Matplotlib",
+    "test_case_cnt": 1,
+    "perturbation_type": "Semantic",
+    "perturbation_origin_id": 21
+  },
+  "code_context": "import numpy as np\nimport pandas as pd\nimport matplotlib.pyplot as plt\nimport seaborn as sns\nfrom PIL import Image\n\n\ndef skip_plt_cmds(l):\n    return all(\n        p not in l for p in [\"plt.show()\", \"plt.clf()\", \"plt.close()\", \"savefig\"]\n    )\n\n\ndef generate_test_case(test_case_id):\n    x = np.linspace(0, 2 * np.pi, 10)\n    y = np.cos(x)\n    plt.plot(x, y, label=\"sin\")\n    minx = x.min()\n    maxx = x.max()\n    plt.xticks(np.arange(minx, maxx, step=2))\n    plt.savefig(\"ans.png\", bbox_inches=\"tight\")\n    plt.close()\n    return None, None\n\n\ndef exec_test(result, ans):\n    code_img = np.array(Image.open(\"output.png\"))\n    oracle_img = np.array(Image.open(\"ans.png\"))\n    sample_image_stat = code_img.shape == oracle_img.shape and np.allclose(\n        code_img, oracle_img\n    )\n    if not sample_image_stat:\n        ax = plt.gca()\n        plt.show()\n        x = ax.get_xaxis()\n        ticks = ax.get_xticks()\n        labels = ax.get_xticklabels()\n        for t, l in zip(ticks, ax.get_xticklabels()):\n            assert int(t) % 2 == 0\n            assert l.get_text() == str(int(t))\n        assert all(sorted(ticks) == ticks)\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\nimport pandas as pd\nimport matplotlib.pyplot as plt\nimport seaborn as sns\nx = np.linspace(0, 2 * np.pi, 10)\ny = np.cos(x)\nplt.plot(x, y, label=\"sin\")\n[insert]\nplt.savefig('output.png', bbox_inches ='tight')\nresult = None\n\"\"\"\n\n\ndef test_execution(solution: str):\n    solution = \"\\n\".join(filter(skip_plt_cmds, solution.split(\"\\n\")))\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(1):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nI want to convert a 1-dimensional array into a 2-dimensional array by specifying the number of columns in the 2D array. Something that would work like this:\n> import numpy as np\n> A = np.array([1,2,3,4,5,6])\n> B = vec2matrix(A,ncol=2)\n> B\narray([[1, 2],\n       [3, 4],\n       [5, 6]])\nDoes numpy have a function that works like my made-up function \"vec2matrix\"? (I understand that you can index a 1D array like a 2D array, but that isn't an option in the code I have - I need to make this conversion.)\nA:\n<code>\nimport numpy as np\nA = np.array([1,2,3,4,5,6])\nncol = 2\n</code>\nB = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "B = np.reshape(A, (-1, ncol))\n",
+  "metadata": {
+    "problem_id": 301,
+    "library_problem_id": 10,
+    "library": "Numpy",
+    "test_case_cnt": 2,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 10
+  },
+  "code_context": "import numpy as np\nimport pandas as pd\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            A = np.array([1, 2, 3, 4, 5, 6])\n            ncol = 2\n        elif test_case_id == 2:\n            np.random.seed(42)\n            A = np.random.rand(20)\n            ncol = 5\n        return A, ncol\n\n    def generate_ans(data):\n        _a = data\n        A, ncol = _a\n        B = np.reshape(A, (-1, ncol))\n        return B\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    np.testing.assert_array_equal(result, ans)\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\nA, ncol = test_input\n[insert]\nresult = B\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

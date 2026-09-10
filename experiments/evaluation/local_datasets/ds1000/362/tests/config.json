@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\n\n>>> arr = np.array([[1,2,3,4], [5,6,7,8], [9,10,11,12]])\n>>> del_col = [1, 2, 4, 5]\n>>> arr\narray([[ 1,  2,  3,  4],\n       [ 5,  6,  7,  8],\n       [ 9, 10, 11, 12]])\nI am deleting some columns(in this example, 1st, 2nd and 4th)\ndef_col = np.array([1, 2, 4, 5])\narray([[ 3],\n       [ 7],\n       [ 11]])\nNote that del_col might contain out-of-bound indices, so we should ignore them.\nAre there any good way ? Please consider this to be a novice question.\nA:\n<code>\nimport numpy as np\na = np.arange(12).reshape(3, 4)\ndel_col = np.array([1, 2, 4, 5])\n</code>\nresult = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "mask = (del_col <= a.shape[1])\ndel_col = del_col[mask] - 1\nresult = np.delete(a, del_col, axis=1)\n\n",
+  "metadata": {
+    "problem_id": 362,
+    "library_problem_id": 71,
+    "library": "Numpy",
+    "test_case_cnt": 2,
+    "perturbation_type": "Difficult-Rewrite",
+    "perturbation_origin_id": 68
+  },
+  "code_context": "import numpy as np\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            a = np.arange(12).reshape(3, 4)\n            del_col = np.array([1, 2, 4, 5])\n        elif test_case_id == 2:\n            np.random.seed(42)\n            a = np.random.rand(np.random.randint(5, 10), np.random.randint(6, 10))\n            del_col = np.random.randint(0, 15, (4,))\n        return a, del_col\n\n    def generate_ans(data):\n        _a = data\n        a, del_col = _a\n        mask = del_col <= a.shape[1]\n        del_col = del_col[mask] - 1\n        result = np.delete(a, del_col, axis=1)\n        return result\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    np.testing.assert_array_equal(result, ans)\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\na, del_col = test_input\n[insert]\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

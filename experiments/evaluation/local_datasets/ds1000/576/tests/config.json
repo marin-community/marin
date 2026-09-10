@@ -1,0 +1,13 @@
+{
+  "prompt": "import numpy as np\nimport pandas as pd\nimport matplotlib.pyplot as plt\n\nx = np.arange(10)\ny = np.arange(10)\n\n# make two side-by-side subplots and and in each subplot, plot y over x\n# Title each subplot as \"Y\"\n# SOLUTION START\n",
+  "reference_code": "fig, axs = plt.subplots(1, 2)\nfor ax in axs:\n    ax.plot(x, y)\n    ax.set_title(\"Y\")",
+  "metadata": {
+    "problem_id": 576,
+    "library_problem_id": 65,
+    "library": "Matplotlib",
+    "test_case_cnt": 1,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 65
+  },
+  "code_context": "import numpy as np\nimport pandas as pd\nimport matplotlib.pyplot as plt\nfrom PIL import Image\n\n\ndef skip_plt_cmds(l):\n    return all(\n        p not in l for p in [\"plt.show()\", \"plt.clf()\", \"plt.close()\", \"savefig\"]\n    )\n\n\ndef generate_test_case(test_case_id):\n    x = np.arange(10)\n    y = np.arange(10)\n    fig, axs = plt.subplots(1, 2)\n    for ax in axs:\n        ax.plot(x, y)\n        ax.set_title(\"Y\")\n    plt.savefig(\"ans.png\", bbox_inches=\"tight\")\n    plt.close()\n    return None, None\n\n\ndef exec_test(result, ans):\n    code_img = np.array(Image.open(\"output.png\"))\n    oracle_img = np.array(Image.open(\"ans.png\"))\n    sample_image_stat = code_img.shape == oracle_img.shape and np.allclose(\n        code_img, oracle_img\n    )\n    if not sample_image_stat:\n        fig = plt.gcf()\n        flat_list = fig.axes\n        assert len(flat_list) == 2\n        if not isinstance(flat_list, list):\n            flat_list = flat_list.flatten()\n        for ax in flat_list:\n            assert ax.get_title() == \"Y\"\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\nimport pandas as pd\nimport matplotlib.pyplot as plt\nx = np.arange(10)\ny = np.arange(10)\n[insert]\nplt.savefig('output.png', bbox_inches ='tight')\nresult = None\n\"\"\"\n\n\ndef test_execution(solution: str):\n    solution = \"\\n\".join(filter(skip_plt_cmds, solution.split(\"\\n\")))\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(1):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

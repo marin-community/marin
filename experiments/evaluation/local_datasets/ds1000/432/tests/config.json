@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nI try to retrieve percentiles from an array with NoData values. In my case the Nodata values are represented by -3.40282347e+38. I thought a masked array would exclude this values (and other that is lower than 0)from further calculations. I succesfully create the masked array but for the np.percentile() function the mask has no effect.\n>>> DataArray = np.array(data)\n>>> DataArray\n([[ value, value...]], dtype=float32)\n>>> masked_data = ma.masked_where(DataArray < 0, DataArray)\n>>> percentile = 5\n>>> prob = np.percentile(masked_data, percentile)\n>>> print(prob)\n -3.40282347e+38\nA:\n<code>\nimport numpy as np\nDataArray = np.arange(-5.5, 10.5)\npercentile = 50\n</code>\nprob = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "mdata = np.ma.masked_where(DataArray < 0, DataArray)\nmdata = np.ma.filled(mdata, np.nan)\nprob = np.nanpercentile(mdata, percentile)\n\n",
+  "metadata": {
+    "problem_id": 432,
+    "library_problem_id": 141,
+    "library": "Numpy",
+    "test_case_cnt": 2,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 141
+  },
+  "code_context": "import numpy as np\nimport pandas as pd\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            a = np.arange(-5.5, 10.5)\n            percentile = 50\n        elif test_case_id == 2:\n            np.random.seed(42)\n            a = np.random.rand(50) - 0.5\n            percentile = np.random.randint(1, 100)\n        return a, percentile\n\n    def generate_ans(data):\n        _a = data\n        DataArray, percentile = _a\n        mdata = np.ma.masked_where(DataArray < 0, DataArray)\n        mdata = np.ma.filled(mdata, np.nan)\n        prob = np.nanpercentile(mdata, percentile)\n        return prob\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    np.testing.assert_allclose(result, ans)\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\nDataArray, percentile = test_input\n[insert]\nresult = prob\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

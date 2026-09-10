@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nI have a list of numpy arrays, and want to check if all the arrays have NaN. What is the quickest way of doing this?\nThanks,\nA:\n<code>\nimport numpy as np\na = [np.array([np.nan,2,3]),np.array([1,np.nan,3]),np.array([1,2,np.nan])]\n</code>\nresult = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "result = True\nfor arr in a:\n    if any(np.isnan(arr)) == False:\n        result = False\n        break\n",
+  "metadata": {
+    "problem_id": 494,
+    "library_problem_id": 203,
+    "library": "Numpy",
+    "test_case_cnt": 5,
+    "perturbation_type": "Difficult-Rewrite",
+    "perturbation_origin_id": 202
+  },
+  "code_context": "import numpy as np\nimport pandas as pd\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            a = [\n                np.array([np.nan, 2, 3]),\n                np.array([1, np.nan, 3]),\n                np.array([1, 2, np.nan]),\n            ]\n        elif test_case_id == 2:\n            a = [\n                np.array([np.nan, 2, 3]),\n                np.array([1, np.nan, 3]),\n                np.array([1, 2, 3]),\n            ]\n        elif test_case_id == 3:\n            a = [np.array([10, 2, 3]), np.array([1, 9, 3]), np.array([1, 6, 3])]\n        elif test_case_id == 4:\n            a = [np.array([10, 4, 3]), np.array([1, np.nan, 3]), np.array([8, 6, 3])]\n        elif test_case_id == 5:\n            a = [\n                np.array([np.nan, np.nan]),\n                np.array([np.nan, np.nan]),\n                np.array([np.nan, np.nan]),\n            ]\n        return a\n\n    def generate_ans(data):\n        _a = data\n        a = _a\n        result = True\n        for arr in a:\n            if any(np.isnan(arr)) == False:\n                result = False\n                break\n        return result\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    np.testing.assert_array_equal(result, ans)\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\na = test_input\n[insert]\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(5):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

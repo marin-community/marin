@@ -1,0 +1,13 @@
+{
+  "prompt": "import numpy as np\nimport pandas as pd\nimport matplotlib.pyplot as plt\n\npoints = [(3, 5), (5, 10), (10, 150)]\n\n# plot a line plot for points in points.\n# Make the y-axis log scale\n# SOLUTION START\n",
+  "reference_code": "plt.plot(*zip(*points))\nplt.yscale(\"log\")",
+  "metadata": {
+    "problem_id": 589,
+    "library_problem_id": 78,
+    "library": "Matplotlib",
+    "test_case_cnt": 1,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 78
+  },
+  "code_context": "import numpy as np\nimport pandas as pd\nimport matplotlib.pyplot as plt\nfrom PIL import Image\n\n\ndef skip_plt_cmds(l):\n    return all(\n        p not in l for p in [\"plt.show()\", \"plt.clf()\", \"plt.close()\", \"savefig\"]\n    )\n\n\ndef generate_test_case(test_case_id):\n    points = [(3, 5), (5, 10), (10, 150)]\n    plt.plot(*zip(*points))\n    plt.yscale(\"log\")\n    plt.savefig(\"ans.png\", bbox_inches=\"tight\")\n    plt.close()\n    return None, None\n\n\ndef exec_test(result, ans):\n    points = [(3, 5), (5, 10), (10, 150)]\n    code_img = np.array(Image.open(\"output.png\"))\n    oracle_img = np.array(Image.open(\"ans.png\"))\n    sample_image_stat = code_img.shape == oracle_img.shape and np.allclose(\n        code_img, oracle_img\n    )\n    if not sample_image_stat:\n        ax = plt.gca()\n        assert len(ax.get_lines()) == 1\n        assert np.all(ax.get_lines()[0]._xy == np.array(points))\n        assert ax.get_yscale() == \"log\"\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\nimport pandas as pd\nimport matplotlib.pyplot as plt\npoints = [(3, 5), (5, 10), (10, 150)]\n[insert]\nplt.savefig('output.png', bbox_inches ='tight')\nresult = None\n\"\"\"\n\n\ndef test_execution(solution: str):\n    solution = \"\\n\".join(filter(skip_plt_cmds, solution.split(\"\\n\")))\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(1):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

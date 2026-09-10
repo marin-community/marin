@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\n\n\nI have a pandas series which values are numpy array. For simplicity, say\n\n\n\n\n    series = pd.Series([np.array([1,2,3,4]), np.array([5,6,7,8]), np.array([9,10,11,12])], index=['file1', 'file2', 'file3'])\n\n\nfile1       [1, 2, 3, 4]\nfile2       [5, 6, 7, 8]\nfile3    [9, 10, 11, 12]\n\n\nHow can I expand it to a dataframe of the form df_concatenated:\n       0   1   2   3\nfile1  1   2   3   4\nfile2  5   6   7   8\nfile3  9  10  11  12\n\n\nA:\n<code>\nimport pandas as pd\nimport numpy as np\n\n\nseries = pd.Series([np.array([1,2,3,4]), np.array([5,6,7,8]), np.array([9,10,11,12])], index=['file1', 'file2', 'file3'])\n</code>\ndf = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "def g(s):\n    return pd.DataFrame.from_records(s.values,index=s.index)\n\ndf = g(series.copy())\n",
+  "metadata": {
+    "problem_id": 246,
+    "library_problem_id": 246,
+    "library": "Pandas",
+    "test_case_cnt": 2,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 246
+  },
+  "code_context": "import pandas as pd\nimport numpy as np\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def generate_ans(data):\n        s = data\n        return pd.DataFrame.from_records(s.values, index=s.index)\n\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            series = pd.Series(\n                [\n                    np.array([1, 2, 3, 4]),\n                    np.array([5, 6, 7, 8]),\n                    np.array([9, 10, 11, 12]),\n                ],\n                index=[\"file1\", \"file2\", \"file3\"],\n            )\n        if test_case_id == 2:\n            series = pd.Series(\n                [\n                    np.array([11, 12, 13, 14]),\n                    np.array([5, 6, 7, 8]),\n                    np.array([9, 10, 11, 12]),\n                ],\n                index=[\"file1\", \"file2\", \"file3\"],\n            )\n        return series\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    try:\n        pd.testing.assert_frame_equal(result, ans, check_dtype=False)\n        return 1\n    except:\n        return 0\n\n\nexec_context = r\"\"\"\nimport pandas as pd\nimport numpy as np\nseries = test_input\n[insert]\nresult = df\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

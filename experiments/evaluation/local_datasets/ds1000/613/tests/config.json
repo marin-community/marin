@@ -1,0 +1,13 @@
+{
+  "prompt": "import matplotlib.pyplot as plt\nimport numpy as np\n\ndata = np.random.random((10, 10))\n\n# Set xlim and ylim to be between 0 and 10\n# Plot a heatmap of data in the rectangle where right is 5, left is 1, bottom is 1, and top is 4.\n# SOLUTION START\n",
+  "reference_code": "plt.xlim(0, 10)\nplt.ylim(0, 10)\nplt.imshow(data, extent=[1, 5, 1, 4])",
+  "metadata": {
+    "problem_id": 613,
+    "library_problem_id": 102,
+    "library": "Matplotlib",
+    "test_case_cnt": 1,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 102
+  },
+  "code_context": "import matplotlib.pyplot as plt\nimport numpy as np\nfrom PIL import Image\nimport matplotlib\n\n\ndef skip_plt_cmds(l):\n    return all(\n        p not in l for p in [\"plt.show()\", \"plt.clf()\", \"plt.close()\", \"savefig\"]\n    )\n\n\ndef generate_test_case(test_case_id):\n    data = np.random.random((10, 10))\n    plt.xlim(0, 10)\n    plt.ylim(0, 10)\n    plt.imshow(data, extent=[1, 5, 1, 4])\n    plt.savefig(\"ans.png\", bbox_inches=\"tight\")\n    plt.close()\n    return None, None\n\n\ndef exec_test(result, ans):\n    code_img = np.array(Image.open(\"output.png\"))\n    oracle_img = np.array(Image.open(\"ans.png\"))\n    sample_image_stat = code_img.shape == oracle_img.shape and np.allclose(\n        code_img, oracle_img\n    )\n    if not sample_image_stat:\n        for c in plt.gca().get_children():\n            if isinstance(c, matplotlib.image.AxesImage):\n                break\n        assert c.get_extent() == [1, 5, 1, 4]\n    return 1\n\n\nexec_context = r\"\"\"\nimport matplotlib.pyplot as plt\nimport numpy as np\ndata = np.random.random((10, 10))\n[insert]\nplt.savefig('output.png', bbox_inches ='tight')\nresult = None\n\"\"\"\n\n\ndef test_execution(solution: str):\n    solution = \"\\n\".join(filter(skip_plt_cmds, solution.split(\"\\n\")))\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(1):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

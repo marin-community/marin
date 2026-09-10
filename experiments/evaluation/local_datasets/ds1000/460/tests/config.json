@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nI want to be able to calculate the mean of A:\n import numpy as np\n A = ['inf', '33.33', '33.33', '33.37']\n NA = np.asarray(A)\n AVG = np.mean(NA, axis=0)\n print AVG\nThis does not work, unless converted to:\nA = [inf, 33.33, 33.33, 33.37]\nIs it possible to compute AVG WITHOUT loops?\n\nA:\n<code>\nimport numpy as np\nA = ['inf', '33.33', '33.33', '33.37']\nNA = np.asarray(A)\n</code>\nAVG = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "AVG = np.mean(NA.astype(float), axis = 0)\n\n",
+  "metadata": {
+    "problem_id": 460,
+    "library_problem_id": 169,
+    "library": "Numpy",
+    "test_case_cnt": 2,
+    "perturbation_type": "Surface",
+    "perturbation_origin_id": 168
+  },
+  "code_context": "import numpy as np\nimport copy\nimport tokenize, io\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            A = [\"inf\", \"33.33\", \"33.33\", \"33.37\"]\n            NA = np.asarray(A)\n        elif test_case_id == 2:\n            np.random.seed(42)\n            A = np.random.rand(5)\n            A[0] = np.inf\n            NA = A.astype(str)\n        return A, NA\n\n    def generate_ans(data):\n        _a = data\n        A, NA = _a\n        AVG = np.mean(NA.astype(float), axis=0)\n        return AVG\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    np.testing.assert_allclose(result, ans)\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\nA, NA = test_input\n[insert]\nresult = AVG\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n\n\ndef test_string(solution: str):\n    tokens = []\n    for token in tokenize.tokenize(io.BytesIO(solution.encode(\"utf-8\")).readline):\n        tokens.append(token.string)\n    assert \"while\" not in tokens and \"for\" not in tokens\n"
+}

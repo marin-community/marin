@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\n\nI am using KMeans in sklearn on a data set which have more than 5000 samples. And I want to get the 50 samples(not just index but full data) closest to \"p\" (e.g. p=2), a cluster center, as an output, here \"p\" means the p^th center.\nAnyone can help me?\n\nA:\n\n<code>\nimport numpy as np\nimport pandas as pd\nfrom sklearn.cluster import KMeans\np, X = load_data()\nassert type(X) == np.ndarray\nkm = KMeans()\n</code>\nclosest_50_samples = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "km.fit(X)\nd = km.transform(X)[:, p]\nindexes = np.argsort(d)[::][:50]\nclosest_50_samples = X[indexes]",
+  "metadata": {
+    "problem_id": 863,
+    "library_problem_id": 46,
+    "library": "Sklearn",
+    "test_case_cnt": 2,
+    "perturbation_type": "Surface",
+    "perturbation_origin_id": 45
+  },
+  "code_context": "import numpy as np\nimport copy\nfrom sklearn.cluster import KMeans\nimport sklearn\nfrom sklearn.datasets import make_blobs\n\n\ndef generate_test_case(test_case_id):\n\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            X, y = make_blobs(n_samples=200, n_features=3, centers=8, random_state=42)\n            p = 2\n        elif test_case_id == 2:\n            X, y = make_blobs(n_samples=200, n_features=3, centers=8, random_state=42)\n            p = 3\n        return p, X\n\n    def generate_ans(data):\n        p, X = data\n        km = KMeans(n_clusters=8, random_state=42)\n        km.fit(X)\n        d = km.transform(X)[:, p]\n        indexes = np.argsort(d)[::][:50]\n        closest_50_samples = X[indexes]\n        return closest_50_samples\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    try:\n        np.testing.assert_allclose(result, ans)\n        return 1\n    except:\n        return 0\n\n\nexec_context = r\"\"\"\nimport pandas as pd\nimport numpy as np\nfrom sklearn.cluster import KMeans\np, X = test_input\nkm = KMeans(n_clusters=8, random_state=42)\n[insert]\nresult = closest_50_samples\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

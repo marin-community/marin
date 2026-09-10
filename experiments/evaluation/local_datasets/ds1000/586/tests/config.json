@@ -1,0 +1,13 @@
+{
+  "prompt": "import matplotlib.pyplot as plt\nimport numpy as np\n\nx = np.random.random((10, 10))\ny = np.random.random((10, 10))\n\n# make two colormaps with x and y and put them into different subplots\n# use a single colorbar for these two subplots\n# SOLUTION START\n",
+  "reference_code": "fig, axes = plt.subplots(nrows=1, ncols=2)\naxes[0].imshow(x, vmin=0, vmax=1)\nim = axes[1].imshow(x, vmin=0, vmax=1)\nfig.subplots_adjust(right=0.8)\ncbar_ax = fig.add_axes([0.85, 0.15, 0.05, 0.7])\nfig.colorbar(im, cax=cbar_ax)",
+  "metadata": {
+    "problem_id": 586,
+    "library_problem_id": 75,
+    "library": "Matplotlib",
+    "test_case_cnt": 1,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 75
+  },
+  "code_context": "import matplotlib.pyplot as plt\nimport numpy as np\nfrom PIL import Image\n\n\ndef skip_plt_cmds(l):\n    return all(\n        p not in l for p in [\"plt.show()\", \"plt.clf()\", \"plt.close()\", \"savefig\"]\n    )\n\n\ndef generate_test_case(test_case_id):\n    x = np.random.random((10, 10))\n    y = np.random.random((10, 10))\n    fig, axes = plt.subplots(nrows=1, ncols=2)\n    axes[0].imshow(x, vmin=0, vmax=1)\n    im = axes[1].imshow(x, vmin=0, vmax=1)\n    fig.subplots_adjust(right=0.8)\n    cbar_ax = fig.add_axes([0.85, 0.15, 0.05, 0.7])\n    fig.colorbar(im, cax=cbar_ax)\n    plt.savefig(\"ans.png\", bbox_inches=\"tight\")\n    plt.close()\n    return None, None\n\n\ndef exec_test(result, ans):\n    code_img = np.array(Image.open(\"output.png\"))\n    oracle_img = np.array(Image.open(\"ans.png\"))\n    sample_image_stat = code_img.shape == oracle_img.shape and np.allclose(\n        code_img, oracle_img\n    )\n    if not sample_image_stat:\n        f = plt.gcf()\n        plt.show()\n        assert len(f.get_children()) == 4\n    return 1\n\n\nexec_context = r\"\"\"\nimport matplotlib.pyplot as plt\nimport numpy as np\nx = np.random.random((10, 10))\ny = np.random.random((10, 10))\n[insert]\nplt.savefig('output.png', bbox_inches ='tight')\nresult = None\n\"\"\"\n\n\ndef test_execution(solution: str):\n    solution = \"\\n\".join(filter(skip_plt_cmds, solution.split(\"\\n\")))\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(1):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

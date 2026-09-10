@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nGive the N and P, I want to get a 2D binomial distribution probability matrix M,\nfor i in range(N+1):\n   for j in range(i+1):\n      M[i,j] = choose(i, j) * p**j * (1-p)**(i-j)\nother value = 0\n\nI want to know is there any fast way to get this matrix, instead of the for loop. the N may be bigger than 100,000\n\nA:\n<code>\nimport numpy as np\nimport scipy.stats\nN = 3\np = 0.5\n</code>\nresult = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "n = np.arange(N + 1, dtype=np.int64)\ndist = scipy.stats.binom(p=p, n=n)\nresult = dist.pmf(k=np.arange(N + 1, dtype=np.int64)[:, None]).T\n",
+  "metadata": {
+    "problem_id": 776,
+    "library_problem_id": 65,
+    "library": "Scipy",
+    "test_case_cnt": 2,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 65
+  },
+  "code_context": "import numpy as np\nimport copy\nimport tokenize, io\nimport scipy.stats\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            N = 3\n            p = 0.5\n        elif test_case_id == 2:\n            np.random.seed(234)\n            N = np.random.randint(6, 10)\n            p = 0.3\n        return N, p\n\n    def generate_ans(data):\n        _a = data\n        N, p = _a\n        n = np.arange(N + 1, dtype=np.int64)\n        dist = scipy.stats.binom(p=p, n=n)\n        result = dist.pmf(k=np.arange(N + 1, dtype=np.int64)[:, None]).T\n        return result\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    assert np.allclose(result, ans)\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\nimport scipy.stats\nN, p = test_input\n[insert]\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n\n\ndef test_string(solution: str):\n    tokens = []\n    for token in tokenize.tokenize(io.BytesIO(solution.encode(\"utf-8\")).readline):\n        tokens.append(token.string)\n    assert \"while\" not in tokens and \"for\" not in tokens\n"
+}

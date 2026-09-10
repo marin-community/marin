@@ -1,0 +1,14 @@
+schema_version = "1.0"
+
+[task]
+name = "ds-1000/542"
+
+[metadata]
+difficulty = "medium"
+
+[verifier]
+timeout_sec = 900
+
+[agent]
+timeout_sec = 900
+

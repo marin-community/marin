@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nI have only the summary statistics of sample 1 and sample 2, namely mean, variance, nobs(number of observations). I want to do a weighted (take n into account) two-tailed t-test.\nAny help on how to get the p-value would be highly appreciated.\nA:\n<code>\nimport numpy as np\nimport scipy.stats\namean = -0.0896\navar = 0.954\nanobs = 40\nbmean = 0.719\nbvar = 11.87\nbnobs = 50\n</code>\np_value = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "_, p_value = scipy.stats.ttest_ind_from_stats(amean, np.sqrt(avar), anobs, bmean, np.sqrt(bvar), bnobs, equal_var=False)\n",
+  "metadata": {
+    "problem_id": 352,
+    "library_problem_id": 61,
+    "library": "Numpy",
+    "test_case_cnt": 1,
+    "perturbation_type": "Difficult-Rewrite",
+    "perturbation_origin_id": 59
+  },
+  "code_context": "import numpy as np\nimport copy\nimport scipy.stats\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            amean = -0.0896\n            avar = 0.954\n            anobs = 40\n            bmean = 0.719\n            bvar = 11.87\n            bnobs = 50\n        return amean, avar, anobs, bmean, bvar, bnobs\n\n    def generate_ans(data):\n        _a = data\n        amean, avar, anobs, bmean, bvar, bnobs = _a\n        _, p_value = scipy.stats.ttest_ind_from_stats(\n            amean, np.sqrt(avar), anobs, bmean, np.sqrt(bvar), bnobs, equal_var=False\n        )\n        return p_value\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    assert abs(ans - result) <= 1e-5\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\nimport scipy.stats\namean, avar, anobs, bmean, bvar, bnobs = test_input\n[insert]\nresult = p_value\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(1):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

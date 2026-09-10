@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nWhat's the more pythonic way to pad an array with zeros at the end?\ndef pad(A, length):\n    ...\nA = np.array([1,2,3,4,5])\npad(A, 8)    # expected : [1,2,3,4,5,0,0,0]\n\npad(A, 3)    # expected : [1,2,3,0,0]\n \nIn my real use case, in fact I want to pad an array to the closest multiple of 1024. Ex: 1342 => 2048, 3000 => 3072, so I want non-loop solution.\nA:\n<code>\nimport numpy as np\nA = np.array([1,2,3,4,5])\nlength = 8\n</code>\nresult = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "if length > A.shape[0]:\n    result = np.pad(A, (0, length-A.shape[0]), 'constant')\nelse:\n    result = A.copy()\n    result[length:] = 0\n",
+  "metadata": {
+    "problem_id": 328,
+    "library_problem_id": 37,
+    "library": "Numpy",
+    "test_case_cnt": 3,
+    "perturbation_type": "Difficult-Rewrite",
+    "perturbation_origin_id": 36
+  },
+  "code_context": "import numpy as np\nimport copy\nimport tokenize, io\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            A = np.array([1, 2, 3, 4, 5])\n            length = 8\n        elif test_case_id == 2:\n            np.random.seed(42)\n            A = np.random.rand(10)\n            length = np.random.randint(6, 14)\n        elif test_case_id == 3:\n            A = np.array([1, 2, 3, 4, 5])\n            length = 3\n        return A, length\n\n    def generate_ans(data):\n        _a = data\n        A, length = _a\n        if length > A.shape[0]:\n            result = np.pad(A, (0, length - A.shape[0]), \"constant\")\n        else:\n            result = A.copy()\n            result[length:] = 0\n        return result\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    np.testing.assert_array_equal(result, ans)\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\nA, length = test_input\n[insert]\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(3):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n\n\ndef test_string(solution: str):\n    tokens = []\n    for token in tokenize.tokenize(io.BytesIO(solution.encode(\"utf-8\")).readline):\n        tokens.append(token.string)\n    assert \"while\" not in tokens and \"for\" not in tokens\n"
+}

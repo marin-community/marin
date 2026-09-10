@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nIn pandas, how do I replace &AMP;,&LT;,&GT; with '&''<''>' from all columns where &AMP could be in any position in a string?\nFor example, in column Title if there is a value 'Good &AMP; bad', how do I replace it with 'Good & bad'?\n\n\nA:\n<code>\nimport pandas as pd\n\n\ndf = pd.DataFrame({'A': ['Good &AMP; bad', 'BB', 'CC', 'DD', 'Good &LT; bad'], 'B': range(5), 'C': ['Good &GT; bad'] * 5})\n</code>\ndf = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "def g(df):\n    df.replace('&AMP;', '&', regex=True, inplace=True)\n    df.replace('&LT;', '<', regex=True, inplace=True)\n    df.replace('&GT;', '>', regex=True, inplace=True)\n    return df\n\ndf = g(df.copy())\n",
+  "metadata": {
+    "problem_id": 103,
+    "library_problem_id": 103,
+    "library": "Pandas",
+    "test_case_cnt": 1,
+    "perturbation_type": "Difficult-Rewrite",
+    "perturbation_origin_id": 100
+  },
+  "code_context": "import pandas as pd\nimport numpy as np\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def generate_ans(data):\n        df = data\n        df.replace(\"&AMP;\", \"&\", regex=True, inplace=True)\n        df.replace(\"&LT;\", \"<\", regex=True, inplace=True)\n        df.replace(\"&GT;\", \">\", regex=True, inplace=True)\n        return df\n\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            df = pd.DataFrame(\n                {\n                    \"A\": [\"Good &AMP; bad\", \"BB\", \"CC\", \"DD\", \"Good &LT; bad\"],\n                    \"B\": range(5),\n                    \"C\": [\"Good &GT; bad\"] * 5,\n                }\n            )\n        return df\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    try:\n        pd.testing.assert_frame_equal(result, ans, check_dtype=False)\n        return 1\n    except:\n        return 0\n\n\nexec_context = r\"\"\"\nimport pandas as pd\nimport numpy as np\ndf = test_input\n[insert]\nresult = df\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(1):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

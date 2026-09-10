@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\n\nHow to convert a list of tensors to a tensor of tensors?\nI have tried torch.tensor() but it gave me this error message\nValueError: only one element tensors can be converted to Python scalars\n\nmy current code is here:\nimport torch\n\nlist = [ torch.randn(3), torch.randn(3), torch.randn(3)]\nnew_tensors = torch.tensor(list)\n\nSo how should I do that? Thanks\n\n\nA:\n\n<code>\nimport numpy as np\nimport pandas as pd\nimport torch\nlist = load_data()\n</code>\nnew_tensors = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "new_tensors = torch.stack((list))",
+  "metadata": {
+    "problem_id": 965,
+    "library_problem_id": 33,
+    "library": "Pytorch",
+    "test_case_cnt": 1,
+    "perturbation_type": "Surface",
+    "perturbation_origin_id": 32
+  },
+  "code_context": "import torch\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        torch.random.manual_seed(42)\n        if test_case_id == 1:\n            list = [torch.randn(3), torch.randn(3), torch.randn(3)]\n        return list\n\n    def generate_ans(data):\n        list = data\n        new_tensors = torch.stack((list))\n        return new_tensors\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    try:\n        torch.testing.assert_close(result, ans, check_dtype=False)\n        return 1\n    except:\n        return 0\n\n\nexec_context = r\"\"\"\nimport numpy as np\nimport pandas as pd\nimport torch\nlist = test_input\n[insert]\nresult = new_tensors\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(1):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

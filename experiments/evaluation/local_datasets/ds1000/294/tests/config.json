@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nI want to figure out how to remove nan values from my array. \nFor example, My array looks something like this:\nx = [[1400, 1500, 1600, nan], [1800, nan, nan ,1700]] #Not in this exact configuration\nHow can I remove the nan values from x?\nNote that after removing nan, the result cannot be np.array due to dimension mismatch, so I want to convert the result to list of lists.\nx = [[1400, 1500, 1600], [1800, 1700]]\nA:\n<code>\nimport numpy as np\nx = np.array([[1400, 1500, 1600, np.nan], [1800, np.nan, np.nan ,1700]])\n</code>\nresult = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "result = [x[i, row] for i, row in enumerate(~np.isnan(x))]\n\n",
+  "metadata": {
+    "problem_id": 294,
+    "library_problem_id": 3,
+    "library": "Numpy",
+    "test_case_cnt": 3,
+    "perturbation_type": "Difficult-Rewrite",
+    "perturbation_origin_id": 1
+  },
+  "code_context": "import numpy as np\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            x = np.array([[1400, 1500, 1600, np.nan], [1800, np.nan, np.nan, 1700]])\n        elif test_case_id == 2:\n            x = np.array([[1, 2, np.nan], [3, np.nan, np.nan]])\n        elif test_case_id == 3:\n            x = np.array([[5, 5, np.nan, np.nan, 2], [3, 4, 5, 6, 7]])\n        return x\n\n    def generate_ans(data):\n        _a = data\n        x = _a\n        result = [x[i, row] for i, row in enumerate(~np.isnan(x))]\n        return result\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    for arr1, arr2 in zip(ans, result):\n        np.testing.assert_array_equal(arr1, arr2)\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\nx = test_input\n[insert]\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(3):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

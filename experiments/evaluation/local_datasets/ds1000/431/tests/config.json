@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nSay, I have an array:\nimport numpy as np\na = np.array([0, 1, 2, 5, 6, 7, 8, 8, 8, 10, 29, 32, 45])\nHow can I calculate the 2nd standard deviation for it, so I could get the value of +2sigma ? Then I can get 2nd standard deviation interval, i.e., (\u03bc-2\u03c3, \u03bc+2\u03c3).\nWhat I want is detecting outliers of 2nd standard deviation interval from array x. \nHopefully result should be a bool array, True for outlier and False for not.\nA:\n<code>\nimport numpy as np\na = np.array([0, 1, 2, 5, 6, 7, 8, 8, 8, 10, 29, 32, 45])\n</code>\nresult = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "interval = (a.mean()-2*a.std(), a.mean()+2*a.std())\nresult = ~np.logical_and(a>interval[0], a<interval[1])\n",
+  "metadata": {
+    "problem_id": 431,
+    "library_problem_id": 140,
+    "library": "Numpy",
+    "test_case_cnt": 3,
+    "perturbation_type": "Difficult-Rewrite",
+    "perturbation_origin_id": 137
+  },
+  "code_context": "import numpy as np\nimport pandas as pd\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            a = np.array([0, 1, 2, 5, 6, 7, 8, 8, 8, 10, 29, 32, 45])\n        elif test_case_id == 2:\n            np.random.seed(42)\n            a = np.random.randn(30)\n        elif test_case_id == 3:\n            a = np.array([-1, -2, -10, 0, 1, 2, 2, 3])\n        return a\n\n    def generate_ans(data):\n        _a = data\n        a = _a\n        interval = (a.mean() - 2 * a.std(), a.mean() + 2 * a.std())\n        result = ~np.logical_and(a > interval[0], a < interval[1])\n        return result\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    np.testing.assert_array_equal(result, ans)\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\na = test_input\n[insert]\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(3):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nHow does one convert a list of Z-scores from the Z-distribution (standard normal distribution, Gaussian distribution) to left-tailed p-values? I have yet to find the magical function in Scipy's stats module to do this, but one must be there.\nA:\n<code>\nimport numpy as np\nimport scipy.stats\nz_scores = np.array([-3, -2, 0, 2, 2.5])\n</code>\np_values = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "temp = np.array(z_scores)\np_values = scipy.stats.norm.cdf(temp)\n",
+  "metadata": {
+    "problem_id": 717,
+    "library_problem_id": 6,
+    "library": "Scipy",
+    "test_case_cnt": 1,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 6
+  },
+  "code_context": "import numpy as np\nimport copy\nimport scipy.stats\n\n\ndef generate_test_case(test_case_id):\n\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            a = np.array([-3, -2, 0, 2, 2.5])\n        return a\n\n    def generate_ans(data):\n        _a = data\n        z_scores = _a\n        temp = np.array(z_scores)\n        p_values = scipy.stats.norm.cdf(temp)\n        return p_values\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    np.testing.assert_allclose(result, ans)\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\nimport scipy.stats\nz_scores = test_input\n[insert]\nresult = p_values\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(1):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

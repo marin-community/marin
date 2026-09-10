@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nI need to rename only the first column in my dataframe, the issue is there are many columns with the same name (there is a reason for this), thus I cannot use the code in other examples online. Is there a way to use something specific that just isolates the first column?\nI have tried to do something like this\ndf.rename(columns={df.columns[0]: 'Test'}, inplace=True)\nHowever this then means that all columns with that same header are changed to 'Test', whereas I just want the first one to change.\nI kind of need something like df.columns[0] = 'Test'  but this doesn't work.\n\n\nA:\n<code>\nimport pandas as pd\n\n\ndf = pd.DataFrame([[1, 2, 3], [4, 5, 6], [7, 8, 9]], columns=list('ABA'))\n</code>\nresult = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "def g(df):\n    return df.set_axis(['Test', *df.columns[1:]], axis=1, inplace=False)\n\nresult = g(df.copy())\n",
+  "metadata": {
+    "problem_id": 283,
+    "library_problem_id": 283,
+    "library": "Pandas",
+    "test_case_cnt": 1,
+    "perturbation_type": "Semantic",
+    "perturbation_origin_id": 282
+  },
+  "code_context": "import pandas as pd\nimport numpy as np\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def generate_ans(data):\n        df = data\n        return df.set_axis([\"Test\", *df.columns[1:]], axis=1, inplace=False)\n\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            df = pd.DataFrame([[1, 2, 3], [4, 5, 6], [7, 8, 9]], columns=list(\"ABA\"))\n        return df\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    try:\n        pd.testing.assert_frame_equal(result, ans, check_dtype=False)\n        return 1\n    except:\n        return 0\n\n\nexec_context = r\"\"\"\nimport pandas as pd\nimport numpy as np\ndf = test_input\n[insert]\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(1):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

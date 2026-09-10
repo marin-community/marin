@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nIs there a convenient way to calculate percentiles for a sequence or single-dimensional numpy array?\nI am looking for something similar to Excel's percentile function.\nI looked in NumPy's statistics reference, and couldn't find this. All I could find is the median (50th percentile), but not something more specific.\n\nA:\n<code>\nimport numpy as np\na = np.array([1,2,3,4,5])\np = 25\n</code>\nresult = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "result = np.percentile(a, p)\n",
+  "metadata": {
+    "problem_id": 300,
+    "library_problem_id": 9,
+    "library": "Numpy",
+    "test_case_cnt": 2,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 9
+  },
+  "code_context": "import numpy as np\nimport pandas as pd\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            a = np.array([1, 2, 3, 4, 5])\n            p = 25\n        elif test_case_id == 2:\n            np.random.seed(42)\n            a = np.random.rand(20)\n            p = np.random.randint(1, 99)\n        return a, p\n\n    def generate_ans(data):\n        _a = data\n        a, p = _a\n        result = np.percentile(a, p)\n        return result\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    np.testing.assert_allclose(result, ans)\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\na, p = test_input\n[insert]\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

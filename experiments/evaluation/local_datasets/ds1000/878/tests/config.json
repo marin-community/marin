@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\n\nGiven a list of variant length features:\n\nfeatures = [\n    ['f1', 'f2', 'f3'],\n    ['f2', 'f4', 'f5', 'f6'],\n    ['f1', 'f2']\n]\nwhere each sample has variant number of features and the feature dtype is str and already one hot.\n\nIn order to use feature selection utilities of sklearn, I have to convert the features to a 2D-array which looks like:\n\n    f1  f2  f3  f4  f5  f6\ns1   1   1   1   0   0   0\ns2   0   1   0   1   1   1\ns3   1   1   0   0   0   0\nHow could I achieve it via sklearn or numpy?\n\nA:\n\n<code>\nimport pandas as pd\nimport numpy as np\nimport sklearn\nfeatures = load_data()\ndef solve(features):\n    # return the solution in this function\n    # new_features = solve(features)\n    ### BEGIN SOLUTION",
+  "reference_code": "# def solve(features):\n    ### BEGIN SOLUTION\n    from sklearn.preprocessing import MultiLabelBinarizer\n\n    new_features = MultiLabelBinarizer().fit_transform(features)\n    ### END SOLUTION\n    # return new_features\n# new_features = solve(features)\n\n    return new_features\n",
+  "metadata": {
+    "problem_id": 878,
+    "library_problem_id": 61,
+    "library": "Sklearn",
+    "test_case_cnt": 1,
+    "perturbation_type": "Surface",
+    "perturbation_origin_id": 58
+  },
+  "code_context": "import numpy as np\nimport copy\nimport sklearn\nfrom sklearn.preprocessing import MultiLabelBinarizer\n\n\ndef generate_test_case(test_case_id):\n\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            features = [[\"f1\", \"f2\", \"f3\"], [\"f2\", \"f4\", \"f5\", \"f6\"], [\"f1\", \"f2\"]]\n        return features\n\n    def generate_ans(data):\n        features = data\n        new_features = MultiLabelBinarizer().fit_transform(features)\n        return new_features\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    try:\n        np.testing.assert_equal(result, ans)\n        return 1\n    except:\n        return 0\n\n\nexec_context = r\"\"\"\nimport pandas as pd\nimport numpy as np\nimport sklearn\nfeatures = test_input\ndef solve(features):\n[insert]\nnew_features = solve(features)\nresult = new_features\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(1):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

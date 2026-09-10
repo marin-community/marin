@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nI have a pandas dataframe with a column which could have integers, float, string etc. I would like to iterate over all the rows and check if each value is integer and if not, I would like to create a list with error values (values that are not integer)\nI have tried isnumeric(), but couldnt iterate over each row and write errors to output. I tried using iterrows() but it converts all values to float.\nID     Field1\n1      1.15\n2      2\n3      1\n4      25\n5      and\n\n\nExpected Result:\n[1.15,\"and\"]\n\n\nA:\n<code>\nimport pandas as pd\n\n\ndf = pd.DataFrame({\"ID\": [1,2,3,4,5], \"Field1\": [1.15,2,1,25,\"and\"]})\n</code>\ndf = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "def g(df):\n    return df.loc[~df['Field1'].astype(str).str.isdigit(), 'Field1'].tolist()\n\ndf = g(df.copy())\n",
+  "metadata": {
+    "problem_id": 112,
+    "library_problem_id": 112,
+    "library": "Pandas",
+    "test_case_cnt": 2,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 112
+  },
+  "code_context": "import pandas as pd\nimport numpy as np\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def generate_ans(data):\n        df = data\n        return df.loc[~df[\"Field1\"].astype(str).str.isdigit(), \"Field1\"].tolist()\n\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            df = pd.DataFrame(\n                {\"ID\": [1, 2, 3, 4, 5], \"Field1\": [1.15, 2, 1, 25, \"and\"]}\n            )\n        if test_case_id == 2:\n            df = pd.DataFrame({\"ID\": [1, 2, 3, 4, 5], \"Field1\": [1, 2, 1, 2.5, \"and\"]})\n        return df\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    try:\n        assert result == ans\n        return 1\n    except:\n        return 0\n\n\nexec_context = r\"\"\"\nimport pandas as pd\nimport numpy as np\ndf = test_input\n[insert]\nresult = df\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

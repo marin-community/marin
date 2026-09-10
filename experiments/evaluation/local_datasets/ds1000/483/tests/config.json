@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nSuppose I have a hypotetical function I'd like to approximate:\ndef f(x):\n    return a+ b * x + c * x ** 2 + \u2026\nWhere a, b, c,\u2026 are the values I don't know.\nAnd I have certain points where the function output is known, i.e.\nx = [-1, 2, 5, 100]\ny = [123, 456, 789, 1255]\n(actually there are way more values)\nI'd like to get the parameters while minimizing the squared error .\nWhat is the way to do that in Python for a given degree? The result should be an array like [\u2026, c, b, a], from highest order to lowest order.\nThere should be existing solutions in numpy or anywhere like that.\nA:\n<code>\nimport numpy as np\nx = [-1, 2, 5, 100]\ny = [123, 456, 789, 1255]\ndegree = 3\n</code>\nresult = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "result = np.polyfit(x, y, degree)\n",
+  "metadata": {
+    "problem_id": 483,
+    "library_problem_id": 192,
+    "library": "Numpy",
+    "test_case_cnt": 2,
+    "perturbation_type": "Semantic",
+    "perturbation_origin_id": 191
+  },
+  "code_context": "import numpy as np\nimport pandas as pd\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            x = [-1, 2, 5, 100]\n            y = [123, 456, 789, 1255]\n            degree = 3\n        elif test_case_id == 2:\n            np.random.seed(42)\n            x = (np.random.rand(100) - 0.5) * 10\n            y = (np.random.rand(100) - 0.5) * 10\n            degree = np.random.randint(3, 7)\n        return x, y, degree\n\n    def generate_ans(data):\n        _a = data\n        x, y, degree = _a\n        result = np.polyfit(x, y, degree)\n        return result\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    np.testing.assert_allclose(result, ans)\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\nx, y, degree = test_input\n[insert]\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

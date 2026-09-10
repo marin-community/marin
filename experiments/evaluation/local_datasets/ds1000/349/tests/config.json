@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nHow do i get the length of the row in a 2D array?\nexample, i have a nD array called a. when i print a.shape, it returns (1,21). I want to do a for loop, in the range of the row size (21) of the array a. How do i get the value of row size as result?\nA:\n<code>\nimport numpy as np\na = np.random.rand(np.random.randint(5, 10), np.random.randint(6, 10))\n</code>\nresult = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "result = a.shape[1]\n",
+  "metadata": {
+    "problem_id": 349,
+    "library_problem_id": 58,
+    "library": "Numpy",
+    "test_case_cnt": 1,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 58
+  },
+  "code_context": "import numpy as np\nimport pandas as pd\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            np.random.seed(42)\n            a = np.random.rand(np.random.randint(5, 10), np.random.randint(6, 10))\n        return a\n\n    def generate_ans(data):\n        _a = data\n        a = _a\n        result = a.shape[1]\n        return result\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    np.testing.assert_array_equal(result, ans)\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\na = test_input\n[insert]\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(1):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

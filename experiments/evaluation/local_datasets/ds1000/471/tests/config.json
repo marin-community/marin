@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nFor example, if I have a 2D array X, I can do slicing X[:,-1:]; if I have a 3D array Y, then I can do similar slicing for the last dimension like Y[:,:,-1:].\nWhat is the right way to do the slicing when given an array Z of unknown dimension?\nThanks!\nA:\n<code>\nimport numpy as np\nZ = np.random.rand(*np.random.randint(2, 10, (np.random.randint(2, 10))))\n</code>\nresult = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "result = Z[..., -1:]\n",
+  "metadata": {
+    "problem_id": 471,
+    "library_problem_id": 180,
+    "library": "Numpy",
+    "test_case_cnt": 2,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 180
+  },
+  "code_context": "import numpy as np\nimport pandas as pd\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            np.random.seed(42)\n            a = np.random.rand(*np.random.randint(2, 10, 4))\n        elif test_case_id == 2:\n            np.random.seed(43)\n            a = np.random.rand(*np.random.randint(2, 10, 6))\n        return a\n\n    def generate_ans(data):\n        _a = data\n        Z = _a\n        result = Z[..., -1:]\n        return result\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    np.testing.assert_allclose(result, ans)\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\nZ = test_input\n[insert]\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

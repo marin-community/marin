@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nHow do we pass four datasets in scipy.stats.anderson_ksamp?\n\nThe anderson function asks only for one parameter and that should be 1-d array. So I am wondering how to pass four different arrays to be compared in it? Thanks\nA:\n<code>\nimport numpy as np\nimport scipy.stats as ss\nx1=[38.7,  41.5,  43.8,  44.5,  45.5,  46.0,  47.7,  58.0]\nx2=[39.2,  39.3,  39.7,  41.4,  41.8,  42.9,  43.3,  45.8]\nx3=[34.0,  35.0,  39.0,  40.0,  43.0,  43.0,  44.0,  45.0]\nx4=[34.0,  34.8,  34.8,  35.4,  37.2,  37.8,  41.2,  42.8]\n</code>\nstatistic, critical_values, significance_level = ... # put solution in these variables\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "statistic, critical_values, significance_level = ss.anderson_ksamp([x1,x2,x3,x4])\n\n",
+  "metadata": {
+    "problem_id": 753,
+    "library_problem_id": 42,
+    "library": "Scipy",
+    "test_case_cnt": 2,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 42
+  },
+  "code_context": "import numpy as np\nimport copy\nimport scipy.stats as ss\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            x1 = [38.7, 41.5, 43.8, 44.5, 45.5, 46.0, 47.7, 58.0]\n            x2 = [39.2, 39.3, 39.7, 41.4, 41.8, 42.9, 43.3, 45.8]\n            x3 = [34.0, 35.0, 39.0, 40.0, 43.0, 43.0, 44.0, 45.0]\n            x4 = [34.0, 34.8, 34.8, 35.4, 37.2, 37.8, 41.2, 42.8]\n        elif test_case_id == 2:\n            np.random.seed(42)\n            x1, x2, x3, x4 = np.random.randn(4, 20)\n        return x1, x2, x3, x4\n\n    def generate_ans(data):\n        _a = data\n        x1, x2, x3, x4 = _a\n        statistic, critical_values, significance_level = ss.anderson_ksamp(\n            [x1, x2, x3, x4]\n        )\n        return [statistic, critical_values, significance_level]\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    assert abs(result[0] - ans[0]) <= 1e-5\n    assert np.allclose(result[1], ans[1])\n    assert abs(result[2] - ans[2]) <= 1e-5\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\nimport scipy.stats as ss\nx1, x2, x3, x4 = test_input\n[insert]\nresult = [statistic, critical_values, significance_level]\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

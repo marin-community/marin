@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nDoes Python have a function to reduce fractions?\nFor example, when I calculate 98/42 I want to get 7/3, not 2.3333333, is there a function for that using Python or Numpy?\nThe result should be a tuple, namely (7, 3), the first for numerator and the second for denominator.\nA:\n<code>\nimport numpy as np\nnumerator = 98\ndenominator = 42\n</code>\nresult = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "gcd = np.gcd(numerator, denominator)\nresult = (numerator//gcd, denominator//gcd)",
+  "metadata": {
+    "problem_id": 331,
+    "library_problem_id": 40,
+    "library": "Numpy",
+    "test_case_cnt": 3,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 40
+  },
+  "code_context": "import numpy as np\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            numerator = 98\n            denominator = 42\n        elif test_case_id == 2:\n            np.random.seed(42)\n            numerator = np.random.randint(2, 10)\n            denominator = np.random.randint(2, 10)\n        elif test_case_id == 3:\n            numerator = -5\n            denominator = 10\n        return numerator, denominator\n\n    def generate_ans(data):\n        _a = data\n        numerator, denominator = _a\n        gcd = np.gcd(numerator, denominator)\n        result = (numerator // gcd, denominator // gcd)\n        return result\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    assert result[0] == ans[0] and result[1] == ans[1]\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\nnumerator, denominator = test_input\n[insert]\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(3):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

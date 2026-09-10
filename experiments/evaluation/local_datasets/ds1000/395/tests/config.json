@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nI could not find a built-in function in Python to generate a log uniform distribution given a min and max value (the R equivalent is here), something like: loguni[n, min, max, base] that returns n log uniformly distributed in the range min and max.\nThe closest I found though was numpy.random.uniform.\nThat is, given range of x, I want to get samples of given size (n) that suit log-uniform distribution. \nAny help would be appreciated!\nA:\n<code>\nimport numpy as np\n\nmin = 1\nmax = np.e\nn = 10000\n</code>\nresult = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "import scipy.stats\nresult = scipy.stats.loguniform.rvs(a = min, b = max, size = n)\n\n",
+  "metadata": {
+    "problem_id": 395,
+    "library_problem_id": 104,
+    "library": "Numpy",
+    "test_case_cnt": 1,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 104
+  },
+  "code_context": "import numpy as np\nimport copy\nimport tokenize, io\nimport scipy\nfrom scipy.stats import ks_2samp\n\n\ndef generate_test_case(test_case_id):\n\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            low = 1\n            high = np.e\n            size = 10000\n        return low, high, size\n\n    def generate_ans(data):\n        _a = data\n        min, max, n = _a\n        result = scipy.stats.loguniform.rvs(a=min, b=max, size=n)\n        return result\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n\n    np.testing.assert_array_equal(result.shape, ans.shape)\n    assert ks_2samp(result, ans)[0] <= 0.1\n\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\nmin, max, n = test_input\n[insert]\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(1):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n\n\ndef test_string(solution: str):\n    tokens = []\n    for token in tokenize.tokenize(io.BytesIO(solution.encode(\"utf-8\")).readline):\n        tokens.append(token.string)\n    assert \"while\" not in tokens and \"for\" not in tokens\n"
+}

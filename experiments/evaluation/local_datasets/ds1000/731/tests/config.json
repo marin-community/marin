@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nI have two csr_matrix, c1, c2.\n\nI want a new matrix Feature = [c1, c2]. But if I directly concatenate them horizontally this way, there's an error that says the matrix Feature is a list. How can I achieve the matrix concatenation and still get the same type of matrix, i.e. a csr_matrix?\n\nAnd it doesn't work if I do this after the concatenation: Feature = csr_matrix(Feature) It gives the error:\n\nTraceback (most recent call last):\n  File \"yelpfilter.py\", line 91, in <module>\n    Feature = csr_matrix(Feature)\n  File \"c:\\python27\\lib\\site-packages\\scipy\\sparse\\compressed.py\", line 66, in __init__\n    self._set_self( self.__class__(coo_matrix(arg1, dtype=dtype)) )\n  File \"c:\\python27\\lib\\site-packages\\scipy\\sparse\\coo.py\", line 185, in __init__\n    self.row, self.col = M.nonzero()\nTypeError: __nonzero__ should return bool or int, returned numpy.bool_\n\nA:\n<code>\nfrom scipy import sparse\nc1 = sparse.csr_matrix([[0, 0, 1, 0], [2, 0, 0, 0], [0, 0, 0, 0]])\nc2 = sparse.csr_matrix([[0, 3, 4, 0], [0, 0, 0, 5], [6, 7, 0, 8]])\n</code>\nFeature = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "Feature = sparse.hstack((c1, c2)).tocsr()\n\n",
+  "metadata": {
+    "problem_id": 731,
+    "library_problem_id": 20,
+    "library": "Scipy",
+    "test_case_cnt": 1,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 20
+  },
+  "code_context": "import copy\nfrom scipy import sparse\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            c1 = sparse.csr_matrix([[0, 0, 1, 0], [2, 0, 0, 0], [0, 0, 0, 0]])\n            c2 = sparse.csr_matrix([[0, 3, 4, 0], [0, 0, 0, 5], [6, 7, 0, 8]])\n        return c1, c2\n\n    def generate_ans(data):\n        _a = data\n        c1, c2 = _a\n        Feature = sparse.hstack((c1, c2)).tocsr()\n        return Feature\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    assert type(result) == sparse.csr_matrix\n    assert len(sparse.find(ans != result)[0]) == 0\n    return 1\n\n\nexec_context = r\"\"\"\nfrom scipy import sparse\nc1, c2 = test_input\n[insert]\nresult = Feature\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(1):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

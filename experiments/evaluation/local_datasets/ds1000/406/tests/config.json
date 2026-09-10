@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nI'm looking for a fast solution to compute maximum of the elements of an array which belong to the same index. An example:\na = np.arange(1,11)\n# array([ 1,  2,  3,  4,  5,  6,  7,  8,  9, 10])\nindex = np.array([0,1,0,0,0,1,1,2,2,1])\nResult should be\narray([5, 10, 9])\nIs there any recommendations?\nA:\n<code>\nimport numpy as np\na = np.arange(1,11)\nindex = np.array([0,1,0,0,0,1,1,2,2,1])\n</code>\nresult = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "uni = np.unique(index)\nresult = np.zeros(np.amax(index)+1)\nfor i in uni:\n    result[i] = np.max(a[index==i])\n\n",
+  "metadata": {
+    "problem_id": 406,
+    "library_problem_id": 115,
+    "library": "Numpy",
+    "test_case_cnt": 2,
+    "perturbation_type": "Semantic",
+    "perturbation_origin_id": 114
+  },
+  "code_context": "import numpy as np\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            a = np.arange(1, 11)\n            index = np.array([0, 1, 0, 0, 0, 1, 1, 2, 2, 1])\n        elif test_case_id == 2:\n            np.random.seed(42)\n            index = np.random.randint(0, 5, (100,))\n            a = np.random.randint(-100, 100, (100,))\n        return a, index\n\n    def generate_ans(data):\n        _a = data\n        a, index = _a\n        uni = np.unique(index)\n        result = np.zeros(np.amax(index) + 1)\n        for i in uni:\n            result[i] = np.max(a[index == i])\n        return result\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    np.testing.assert_array_equal(result, ans)\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\na, index = test_input\n[insert]\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

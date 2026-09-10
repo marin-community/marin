@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nI just want to check if a numpy array contains a single number quickly similar to contains for a list. Is there a concise way to do this?\na = np.array(9,2,7,0)\na.contains(0)  == true\nA:\n<code>\nimport numpy as np\na = np.array([9, 2, 7, 0])\nnumber = 0\n</code>\nis_contained = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "is_contained = number in a\n",
+  "metadata": {
+    "problem_id": 441,
+    "library_problem_id": 150,
+    "library": "Numpy",
+    "test_case_cnt": 3,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 150
+  },
+  "code_context": "import numpy as np\nimport pandas as pd\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            a = np.array([9, 2, 7, 0])\n            number = 0\n        elif test_case_id == 2:\n            a = np.array([1, 2, 3, 5])\n            number = 4\n        elif test_case_id == 3:\n            a = np.array([1, 1, 1, 1])\n            number = 1\n        return a, number\n\n    def generate_ans(data):\n        _a = data\n        a, number = _a\n        is_contained = number in a\n        return is_contained\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    assert result == ans\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\na, number = test_input\n[insert]\nresult = is_contained\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(3):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

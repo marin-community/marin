@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+
+# Write reference solution into the container solution file.
+cat <<'PY' > /solution/solution.py
+def g(s):
+    return pd.DataFrame.from_records(s.values,index=s.index).reset_index().rename(columns={'index': 'name'})
+
+df = g(series.copy())
+
+PY

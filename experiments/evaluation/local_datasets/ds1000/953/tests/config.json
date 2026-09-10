@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\n\nHow to batch convert sentence lengths to masks in PyTorch?\nFor example, from\n\nlens = [3, 5, 4]\nwe want to get\n\nmask = [[0, 0, 1, 1, 1],\n        [1, 1, 1, 1, 1],\n        [0, 1, 1, 1, 1]]\nBoth of which are torch.LongTensors.\n\n\nA:\n\n<code>\nimport numpy as np\nimport pandas as pd\nimport torch\nlens = load_data()\n</code>\nmask = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "max_len = max(lens)\nmask = torch.arange(max_len).expand(len(lens), max_len) > (max_len - lens.unsqueeze(1) - 1)\nmask = mask.type(torch.LongTensor)",
+  "metadata": {
+    "problem_id": 953,
+    "library_problem_id": 21,
+    "library": "Pytorch",
+    "test_case_cnt": 2,
+    "perturbation_type": "Semantic",
+    "perturbation_origin_id": 19
+  },
+  "code_context": "import torch\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            lens = torch.LongTensor([3, 5, 4])\n        elif test_case_id == 2:\n            lens = torch.LongTensor([3, 2, 4, 6, 5])\n        return lens\n\n    def generate_ans(data):\n        lens = data\n        max_len = max(lens)\n        mask = torch.arange(max_len).expand(len(lens), max_len) > (\n            max_len - lens.unsqueeze(1) - 1\n        )\n        mask = mask.type(torch.LongTensor)\n        return mask\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    try:\n        torch.testing.assert_close(result, ans)\n        return 1\n    except:\n        return 0\n\n\nexec_context = r\"\"\"\nimport numpy as np\nimport pandas as pd\nimport torch\nlens = test_input\n[insert]\nresult = mask\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

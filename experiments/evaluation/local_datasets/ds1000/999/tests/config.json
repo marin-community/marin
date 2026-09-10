@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\n\nI have batch data and want to dot() to the data. W is trainable parameters. How to dot between batch data and weights?\nHere is my code below, how to fix it?\n\nhid_dim = 32\ndata = torch.randn(10, 2, 3, hid_dim)\ndata = data.view(10, 2*3, hid_dim)\nW = torch.randn(hid_dim) # assume trainable parameters via nn.Parameter\nresult = torch.bmm(data, W).squeeze() # error, want (N, 6)\nresult = result.view(10, 2, 3)\n\n\nA:\n\ncorrected, runnable code\n<code>\nimport numpy as np\nimport pandas as pd\nimport torch\nhid_dim = 32\ndata = torch.randn(10, 2, 3, hid_dim)\ndata = data.view(10, 2 * 3, hid_dim)\nW = torch.randn(hid_dim)\n</code>\nresult = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "W = W.unsqueeze(0).unsqueeze(0).expand(*data.size())\nresult = torch.sum(data * W, 2)\nresult = result.view(10, 2, 3)",
+  "metadata": {
+    "problem_id": 999,
+    "library_problem_id": 67,
+    "library": "Pytorch",
+    "test_case_cnt": 1,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 67
+  },
+  "code_context": "import torch\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            torch.random.manual_seed(42)\n            hid_dim = 32\n            data = torch.randn(10, 2, 3, hid_dim)\n            data = data.view(10, 2 * 3, hid_dim)\n            W = torch.randn(hid_dim)\n        return data, W\n\n    def generate_ans(data):\n        data, W = data\n        W = W.unsqueeze(0).unsqueeze(0).expand(*data.size())\n        result = torch.sum(data * W, 2)\n        result = result.view(10, 2, 3)\n        return result\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    try:\n        torch.testing.assert_close(result, ans, check_dtype=False)\n        return 1\n    except:\n        return 0\n\n\nexec_context = r\"\"\"\nimport numpy as np\nimport pandas as pd\nimport torch\ndata, W = test_input\n[insert]\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(1):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nI have this example of matrix by matrix multiplication using numpy arrays:\nimport numpy as np\nm = np.array([[1,2,3],[4,5,6],[7,8,9]])\nc = np.array([0,1,2])\nm * c\narray([[ 0,  2,  6],\n       [ 0,  5, 12],\n       [ 0,  8, 18]])\nHow can i do the same thing if m is scipy sparse CSR matrix? The result should be csr_matrix as well.\nThis gives dimension mismatch:\nsp.sparse.csr_matrix(m)*sp.sparse.csr_matrix(c)\n\nA:\n<code>\nfrom scipy import sparse\nimport numpy as np\nsa = sparse.csr_matrix(np.array([[1,2,3],[4,5,6],[7,8,9]]))\nsb = sparse.csr_matrix(np.array([0,1,2]))\n</code>\nresult = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "result = sa.multiply(sb)\n\n",
+  "metadata": {
+    "problem_id": 722,
+    "library_problem_id": 11,
+    "library": "Scipy",
+    "test_case_cnt": 2,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 11
+  },
+  "code_context": "import numpy as np\nimport copy\nfrom scipy import sparse\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            sa = sparse.csr_matrix(np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9]]))\n            sb = sparse.csr_matrix(np.array([0, 1, 2]))\n        elif test_case_id == 2:\n            sa = sparse.random(10, 10, density=0.2, format=\"csr\", random_state=42)\n            sb = sparse.random(10, 1, density=0.4, format=\"csr\", random_state=45)\n        return sa, sb\n\n    def generate_ans(data):\n        _a = data\n        sa, sb = _a\n        result = sa.multiply(sb)\n        return result\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    assert type(result) == sparse.csr.csr_matrix\n    assert len(sparse.find(result != ans)[0]) == 0\n    return 1\n\n\nexec_context = r\"\"\"\nfrom scipy import sparse\nimport numpy as np\nsa, sb = test_input\n[insert]\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

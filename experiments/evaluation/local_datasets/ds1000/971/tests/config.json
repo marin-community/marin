@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\n\nI have the tensors:\n\nids: shape (70,1) containing indices like [[1],[0],[2],...]\n\nx: shape(70,3,2)\n\nids tensor encodes the index of bold marked dimension of x which should be selected. I want to gather the selected slices in a resulting vector:\n\nresult: shape (70,2)\n\nBackground:\n\nI have some scores (shape = (70,3)) for each of the 3 elements and want only to select the one with the highest score. Therefore, I used the function\n\nids = torch.argmax(scores,1,True)\ngiving me the maximum ids. I already tried to do it with gather function:\n\nresult = x.gather(1,ids)\nbut that didn't work.\n\n\nA:\n\n<code>\nimport numpy as np\nimport pandas as pd\nimport torch\nids, x = load_data()\n</code>\nresult = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "idx = ids.repeat(1, 2).view(70, 1, 2)\nresult = torch.gather(x, 1, idx)\nresult = result.squeeze(1)",
+  "metadata": {
+    "problem_id": 971,
+    "library_problem_id": 39,
+    "library": "Pytorch",
+    "test_case_cnt": 1,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 39
+  },
+  "code_context": "import torch\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        torch.random.manual_seed(42)\n        if test_case_id == 1:\n            x = torch.arange(70 * 3 * 2).view(70, 3, 2)\n            ids = torch.randint(0, 3, size=(70, 1))\n        return ids, x\n\n    def generate_ans(data):\n        ids, x = data\n        idx = ids.repeat(1, 2).view(70, 1, 2)\n        result = torch.gather(x, 1, idx)\n        result = result.squeeze(1)\n        return result\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    try:\n        torch.testing.assert_close(result, ans, check_dtype=False)\n        return 1\n    except:\n        return 0\n\n\nexec_context = r\"\"\"\nimport numpy as np\nimport pandas as pd\nimport torch\nids, x = test_input\n[insert]\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(1):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

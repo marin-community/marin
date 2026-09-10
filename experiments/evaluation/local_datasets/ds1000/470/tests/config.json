@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nnumpy seems to not be a good friend of complex infinities\nHow do I compute mean of an array of complex numbers?\nWhile we can evaluate:\nIn[2]: import numpy as np\nIn[3]: np.mean([1, 2, np.inf])\nOut[3]: inf\nThe following result is more cumbersome:\nIn[4]: np.mean([1 + 0j, 2 + 0j, np.inf + 0j])\nOut[4]: (inf+nan*j)\n...\\_methods.py:80: RuntimeWarning: invalid value encountered in cdouble_scalars\n  ret = ret.dtype.type(ret / rcount)\nI'm not sure the imaginary part make sense to me. But please do comment if I'm wrong.\nAny insight into interacting with complex infinities in numpy?\nA:\n<code>\nimport numpy as np\ndef f(a = np.array([1 + 0j, 2 + 3j, np.inf + 0j])):\n    # return the solution in this function\n    # result = f(a)\n    ### BEGIN SOLUTION",
+  "reference_code": "    n = len(a)\n    s = np.sum(a)\n    result = np.real(s) / n + 1j * np.imag(s) / n\n\n    return result\n",
+  "metadata": {
+    "problem_id": 470,
+    "library_problem_id": 179,
+    "library": "Numpy",
+    "test_case_cnt": 1,
+    "perturbation_type": "Surface",
+    "perturbation_origin_id": 178
+  },
+  "code_context": "import numpy as np\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            a = np.array([1 + 0j, 2 + 0j, np.inf + 0j])\n        return a\n\n    def generate_ans(data):\n        _a = data\n        a = _a\n        n = len(a)\n        s = np.sum(a)\n        result = np.real(s) / n + 1j * np.imag(s) / n\n        return result\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    np.testing.assert_array_equal(result, ans)\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\na = test_input\ndef f(a):\n[insert]\nresult = f(a)\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(1):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

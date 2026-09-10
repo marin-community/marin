@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\n\n>>> arr = np.array([[1,2,3,4], [5,6,7,8], [9,10,11,12]])\n>>> arr\narray([[ 1,  2,  3,  4],\n       [ 5,  6,  7,  8],\n       [ 9, 10, 11, 12]])\nI am deleting the 1st and 3rd column\narray([[ 2,  4],\n       [ 6,  8],\n       [ 10, 12]])\nAre there any good way ? Please consider this to be a novice question.\nA:\n<code>\nimport numpy as np\na = np.arange(12).reshape(3, 4)\n</code>\na = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "temp = np.array([0, 2])\na = np.delete(a, temp, axis = 1)\n",
+  "metadata": {
+    "problem_id": 361,
+    "library_problem_id": 70,
+    "library": "Numpy",
+    "test_case_cnt": 2,
+    "perturbation_type": "Difficult-Rewrite",
+    "perturbation_origin_id": 68
+  },
+  "code_context": "import numpy as np\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            a = np.arange(12).reshape(3, 4)\n        elif test_case_id == 2:\n            a = np.ones((6, 6))\n        return a\n\n    def generate_ans(data):\n        _a = data\n        a = _a\n        temp = np.array([0, 2])\n        a = np.delete(a, temp, axis=1)\n        return a\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    np.testing.assert_array_equal(result, ans)\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\na = test_input\n[insert]\nresult = a\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

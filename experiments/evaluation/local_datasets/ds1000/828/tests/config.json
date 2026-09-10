@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\n\nI have used the\n\nsklearn.preprocessing.OneHotEncoder\nto transform some data the output is scipy.sparse.csr.csr_matrix how can I merge it back into my original dataframe along with the other columns?\n\nI tried to use pd.concat but I get\n\nTypeError: cannot concatenate a non-NDFrame object\nThanks\n\nA:\n\n<code>\nimport pandas as pd\nimport numpy as np\nfrom scipy.sparse import csr_matrix\ndf_origin, transform_output = load_data()\n</code>\ndf = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "df = pd.concat([df_origin, pd.DataFrame(transform_output.toarray())], axis=1)",
+  "metadata": {
+    "problem_id": 828,
+    "library_problem_id": 11,
+    "library": "Sklearn",
+    "test_case_cnt": 2,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 11
+  },
+  "code_context": "import pandas as pd\nimport copy\nfrom scipy.sparse import csr_matrix\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            df_origin = pd.DataFrame([[1, 1, 4], [0, 3, 0]], columns=[\"A\", \"B\", \"C\"])\n            transform_output = csr_matrix([[1, 0, 2], [0, 3, 0]])\n        elif test_case_id == 2:\n            df_origin = pd.DataFrame(\n                [[1, 1, 4, 5], [1, 4, 1, 9]], columns=[\"A\", \"B\", \"C\", \"D\"]\n            )\n            transform_output = csr_matrix([[1, 9, 8, 1, 0], [1, 1, 4, 5, 1]])\n        return df_origin, transform_output\n\n    def generate_ans(data):\n        df_origin, transform_output = data\n        df = pd.concat([df_origin, pd.DataFrame(transform_output.toarray())], axis=1)\n        return df\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    try:\n        pd.testing.assert_frame_equal(result, ans, check_dtype=False, check_names=False)\n        return 1\n    except:\n        return 0\n\n\nexec_context = r\"\"\"\nimport pandas as pd\nimport numpy as np\nfrom scipy.sparse import csr_matrix\ndf_origin, transform_output = test_input\n[insert]\nresult = df\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\n\nIs there any package in Python that does data transformation like scaling and centering to eliminate skewness of data?\nI know about sklearn, but I was unable to find functions to do scaling and centering.\nHow can I use sklearn to solve this?\n\nA:\n\n<code>\nimport numpy as np\nimport pandas as pd\nimport sklearn\ndata = load_data()\nassert type(data) == np.ndarray\n</code>\ncentered_scaled_data = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "from sklearn import preprocessing\n\ncentered_scaled_data = preprocessing.scale(data)",
+  "metadata": {
+    "problem_id": 887,
+    "library_problem_id": 70,
+    "library": "Sklearn",
+    "test_case_cnt": 2,
+    "perturbation_type": "Surface",
+    "perturbation_origin_id": 69
+  },
+  "code_context": "import numpy as np\nimport copy\nimport tokenize, io\nimport sklearn\nfrom sklearn import preprocessing\n\n\ndef generate_test_case(test_case_id):\n\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            data = np.array([[1, 2], [3, 2], [4, 5]])\n        elif test_case_id == 2:\n            data = np.array([1, 2, 3, 2, 4, 5])\n        return data\n\n    def generate_ans(data):\n        data = data\n        centered_scaled_data = preprocessing.scale(data)\n        return centered_scaled_data\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    try:\n        np.testing.assert_allclose(result, ans)\n        return 1\n    except:\n        return 0\n\n\nexec_context = r\"\"\"\nimport pandas as pd\nimport numpy as np\nimport sklearn\ndata = test_input\n[insert]\nresult = centered_scaled_data\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n\n\ndef test_string(solution: str):\n    tokens = []\n    for token in tokenize.tokenize(io.BytesIO(solution.encode(\"utf-8\")).readline):\n        tokens.append(token.string)\n    assert \"sklearn\" in tokens\n"
+}

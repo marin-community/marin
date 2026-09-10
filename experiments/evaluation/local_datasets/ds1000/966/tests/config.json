@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\n\nI have this code:\n\nimport torch\n\nlist_of_tensors = [ torch.randn(3), torch.randn(3), torch.randn(3)]\ntensor_of_tensors = torch.tensor(list_of_tensors)\nI am getting the error:\n\nValueError: only one element tensors can be converted to Python scalars\n\nHow can I convert the list of tensors to a tensor of tensors in pytorch?\n\n\nA:\n\n<code>\nimport numpy as np\nimport pandas as pd\nimport torch\nlist_of_tensors = load_data()\ndef Convert(lt):\n    # return the solution in this function\n    # tt = Convert(lt)\n    ### BEGIN SOLUTION",
+  "reference_code": "# def Convert(lt):\n    ### BEGIN SOLUTION\n    tt = torch.stack((lt))\n    ### END SOLUTION\n    # return tt\n# tensor_of_tensors = Convert(list_of_tensors)\n\n    return tt\n",
+  "metadata": {
+    "problem_id": 966,
+    "library_problem_id": 34,
+    "library": "Pytorch",
+    "test_case_cnt": 1,
+    "perturbation_type": "Surface",
+    "perturbation_origin_id": 32
+  },
+  "code_context": "import torch\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        torch.random.manual_seed(42)\n        if test_case_id == 1:\n            list_of_tensors = [torch.randn(3), torch.randn(3), torch.randn(3)]\n        return list_of_tensors\n\n    def generate_ans(data):\n        list_of_tensors = data\n        tensor_of_tensors = torch.stack((list_of_tensors))\n        return tensor_of_tensors\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    try:\n        torch.testing.assert_close(result, ans, check_dtype=False)\n        return 1\n    except:\n        return 0\n\n\nexec_context = r\"\"\"\nimport numpy as np\nimport pandas as pd\nimport torch\nlist_of_tensors = test_input\ndef Convert(lt):\n[insert]\ntensor_of_tensors = Convert(list_of_tensors)\nresult = tensor_of_tensors\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(1):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

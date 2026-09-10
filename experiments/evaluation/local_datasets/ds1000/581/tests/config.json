@@ -1,0 +1,13 @@
+{
+  "prompt": "import numpy as np\nimport pandas as pd\nimport matplotlib.pyplot as plt\n\nx = np.random.rand(10)\ny = np.random.rand(10)\n\n# Make a histogram of x and show outline of each bar in the histogram\n# Make the outline of each bar has a line width of 1.2\n# SOLUTION START\n",
+  "reference_code": "plt.hist(x, edgecolor=\"black\", linewidth=1.2)",
+  "metadata": {
+    "problem_id": 581,
+    "library_problem_id": 70,
+    "library": "Matplotlib",
+    "test_case_cnt": 1,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 70
+  },
+  "code_context": "import numpy as np\nimport pandas as pd\nimport matplotlib.pyplot as plt\nfrom PIL import Image\nimport matplotlib\n\n\ndef skip_plt_cmds(l):\n    return all(\n        p not in l for p in [\"plt.show()\", \"plt.clf()\", \"plt.close()\", \"savefig\"]\n    )\n\n\ndef generate_test_case(test_case_id):\n    x = np.random.rand(10)\n    y = np.random.rand(10)\n    plt.hist(x, edgecolor=\"black\", linewidth=1.2)\n    plt.savefig(\"ans.png\", bbox_inches=\"tight\")\n    plt.close()\n    return None, None\n\n\ndef exec_test(result, ans):\n    code_img = np.array(Image.open(\"output.png\"))\n    oracle_img = np.array(Image.open(\"ans.png\"))\n    sample_image_stat = code_img.shape == oracle_img.shape and np.allclose(\n        code_img, oracle_img\n    )\n    if not sample_image_stat:\n        ax = plt.gca()\n        assert len(ax.patches) > 0\n        for rec in ax.get_children():\n            if isinstance(rec, matplotlib.patches.Rectangle):\n                if rec.xy != (0, 0):\n                    assert rec.get_edgecolor() != rec.get_facecolor()\n                    assert rec.get_linewidth() == 1.2\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\nimport pandas as pd\nimport matplotlib.pyplot as plt\nx = np.random.rand(10)\ny = np.random.rand(10)\n[insert]\nplt.savefig('output.png', bbox_inches ='tight')\nresult = None\n\"\"\"\n\n\ndef test_execution(solution: str):\n    solution = \"\\n\".join(filter(skip_plt_cmds, solution.split(\"\\n\")))\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(1):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

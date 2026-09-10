@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nIs it possible to perform circular cross-/auto-correlation on 1D arrays with a numpy/scipy/matplotlib function? I have looked at numpy.correlate() and matplotlib.pyplot.xcorr (based on the numpy function), and both seem to not be able to do circular cross-correlation.\nTo illustrate the difference, I will use the example of an array of [1, 2, 3, 4]. With circular correlation, a periodic assumption is made, and a lag of 1 looks like [2, 3, 4, 1]. The python functions I've found only seem to use zero-padding, i.e., [2, 3, 4, 0]. \nIs there a way to get these functions to do periodic circular correlation of array a and b ? I want b to be the sliding periodic one, and a to be the fixed one.\nIf not, is there a standard workaround for circular correlations?\n\nA:\n<code>\nimport numpy as np\na = np.array([1,2,3,4])\nb = np.array([5, 4, 3, 2])\n</code>\nresult = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "result = np.correlate(a, np.hstack((b[1:], b)), mode='valid')\n",
+  "metadata": {
+    "problem_id": 422,
+    "library_problem_id": 131,
+    "library": "Numpy",
+    "test_case_cnt": 2,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 131
+  },
+  "code_context": "import numpy as np\nimport pandas as pd\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            a = np.array([1, 2, 3, 4])\n            b = np.array([5, 4, 3, 2])\n        elif test_case_id == 2:\n            np.random.seed(42)\n            a = np.random.rand(50)\n            b = np.random.rand(50)\n        return a, b\n\n    def generate_ans(data):\n        _a = data\n        a, b = _a\n        result = np.correlate(a, np.hstack((b[1:], b)), mode=\"valid\")\n        return result\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    np.testing.assert_allclose(result, ans)\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\na, b = test_input\n[insert]\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

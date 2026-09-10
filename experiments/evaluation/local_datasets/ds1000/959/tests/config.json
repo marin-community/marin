@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\n\nIn pytorch, given the tensors a of shape (1X11) and b of shape (1X11), torch.stack((a,b),0) would give me a tensor of shape (2X11)\n\nHowever, when a is of shape (2X11) and b is of shape (1X11), torch.stack((a,b),0) will raise an error cf. \"the two tensor size must exactly be the same\".\n\nBecause the two tensor are the output of a model (gradient included), I can't convert them to numpy to use np.stack() or np.vstack().\n\nIs there any possible solution to give me a tensor ab of shape (3X11)?\n\n\nA:\n\n<code>\nimport numpy as np\nimport pandas as pd\nimport torch\na, b = load_data()\ndef solve(a, b):\n    # return the solution in this function\n    # ab = solve(a, b)\n    ### BEGIN SOLUTION",
+  "reference_code": "# def solve(a, b):\n    ### BEGIN SOLUTION\n    ab = torch.cat((a, b), 0)\n    ### END SOLUTION\n    # return ab\n# ab = solve(a, b)\n\n    return ab\n",
+  "metadata": {
+    "problem_id": 959,
+    "library_problem_id": 27,
+    "library": "Pytorch",
+    "test_case_cnt": 2,
+    "perturbation_type": "Surface",
+    "perturbation_origin_id": 25
+  },
+  "code_context": "import torch\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            torch.random.manual_seed(42)\n            a = torch.randn(2, 11)\n            b = torch.randn(1, 11)\n        elif test_case_id == 2:\n            torch.random.manual_seed(7)\n            a = torch.randn(2, 11)\n            b = torch.randn(1, 11)\n        return a, b\n\n    def generate_ans(data):\n        a, b = data\n        ab = torch.cat((a, b), 0)\n        return ab\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    try:\n        torch.testing.assert_close(result, ans, check_dtype=False)\n        return 1\n    except:\n        return 0\n\n\nexec_context = r\"\"\"\nimport numpy as np\nimport pandas as pd\nimport torch\na, b = test_input\ndef solve(a, b):\n[insert]\nab = solve(a, b)\nresult = ab\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

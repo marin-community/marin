@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nI have a 2D array `a` to represent a many-many mapping :\n0   3   1   3\n3   0   0   0\n1   0   0   0\n3   0   0   0\nWhat is the quickest way to 'zero' out rows and column entries corresponding to particular indices (e.g. zero_rows = [0, 1], zero_cols = [0, 1] corresponds to the 1st and 2nd row / column) in this array?\nA:\n<code>\nimport numpy as np\na = np.array([[0, 3, 1, 3], [3, 0, 0, 0], [1, 0, 0, 0], [3, 0, 0, 0]])\nzero_rows = [1, 3]\nzero_cols = [1, 2]\n</code>\na = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "a[zero_rows, :] = 0\na[:, zero_cols] = 0\n",
+  "metadata": {
+    "problem_id": 434,
+    "library_problem_id": 143,
+    "library": "Numpy",
+    "test_case_cnt": 1,
+    "perturbation_type": "Semantic",
+    "perturbation_origin_id": 142
+  },
+  "code_context": "import numpy as np\nimport pandas as pd\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            a = np.array([[0, 3, 1, 3], [3, 0, 0, 0], [1, 0, 0, 0], [3, 0, 0, 0]])\n            zero_rows = [1, 3]\n            zero_cols = [1, 2]\n        return a, zero_rows, zero_cols\n\n    def generate_ans(data):\n        _a = data\n        a, zero_rows, zero_cols = _a\n        a[zero_rows, :] = 0\n        a[:, zero_cols] = 0\n        return a\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    np.testing.assert_array_equal(result, ans)\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\na, zero_rows, zero_cols = test_input\n[insert]\nresult = a\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(1):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

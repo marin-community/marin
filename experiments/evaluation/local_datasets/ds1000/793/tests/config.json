@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nI have problems using scipy.sparse.csr_matrix:\nfor instance:\na = csr_matrix([[1,2,3],[4,5,6]])\nb = csr_matrix([[7,8,9],[10,11,12]])\nhow to merge them into\n[[1,2,3,7,8,9],[4,5,6,10,11,12]]\nI know a way is to transfer them into numpy array first:\ncsr_matrix(numpy.hstack((a.toarray(),b.toarray())))\nbut it won't work when the matrix is huge and sparse, because the memory would run out.\nso are there any way to merge them together in csr_matrix?\nany answers are appreciated!\nA:\n<code>\nfrom scipy import sparse\nsa = sparse.random(10, 10, density = 0.01, format = 'csr')\nsb = sparse.random(10, 10, density = 0.01, format = 'csr')\n</code>\nresult = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "result = sparse.hstack((sa, sb)).tocsr()\n",
+  "metadata": {
+    "problem_id": 793,
+    "library_problem_id": 82,
+    "library": "Scipy",
+    "test_case_cnt": 1,
+    "perturbation_type": "Semantic",
+    "perturbation_origin_id": 81
+  },
+  "code_context": "import copy\nimport tokenize, io\nfrom scipy import sparse\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            sa = sparse.random(10, 10, density=0.01, format=\"csr\", random_state=42)\n            sb = sparse.random(10, 10, density=0.01, format=\"csr\", random_state=45)\n        return sa, sb\n\n    def generate_ans(data):\n        _a = data\n        sa, sb = _a\n        result = sparse.hstack((sa, sb)).tocsr()\n        return result\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    assert type(result) == sparse.csr.csr_matrix\n    assert len(sparse.find(result != ans)[0]) == 0\n    return 1\n\n\nexec_context = r\"\"\"\nfrom scipy import sparse\nsa, sb = test_input\n[insert]\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(1):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n\n\ndef test_string(solution: str):\n    tokens = []\n    for token in tokenize.tokenize(io.BytesIO(solution.encode(\"utf-8\")).readline):\n        tokens.append(token.string)\n    assert (\n        \"toarray\" not in tokens\n        and \"array\" not in tokens\n        and \"todense\" not in tokens\n        and \"A\" not in tokens\n    )\n"
+}

@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\n\nAre you able to train a DecisionTreeClassifier with string data?\n\nWhen I try to use String data I get a ValueError: could not converter string to float\n\nX = [['dsa', '2'], ['sato', '3']]\n\nclf = DecisionTreeClassifier()\n\nclf.fit(X, ['4', '5'])\n\nSo how can I use this String data to train my model?\n\nNote I need X to remain a list or numpy array.\n\nA:\n\ncorrected, runnable code\n<code>\nimport numpy as np\nimport pandas as pd\nfrom sklearn.tree import DecisionTreeClassifier\nX = [['dsa', '2'], ['sato', '3']]\nclf = DecisionTreeClassifier()\n</code>\nsolve this question with example variable `new_X`\nBEGIN SOLUTION\n<code>",
+  "reference_code": "from sklearn.feature_extraction import DictVectorizer\n\nX = [dict(enumerate(x)) for x in X]\nvect = DictVectorizer(sparse=False)\nnew_X = vect.fit_transform(X)",
+  "metadata": {
+    "problem_id": 918,
+    "library_problem_id": 101,
+    "library": "Sklearn",
+    "test_case_cnt": 0,
+    "perturbation_type": "Surface",
+    "perturbation_origin_id": 99
+  },
+  "code_context": "def generate_test_case(test_case_id):\n    return None, None\n\n\ndef exec_test(result, ans):\n    try:\n        assert len(result[0]) > 1 and len(result[1]) > 1\n        return 1\n    except:\n        return 0\n\n\nexec_context = r\"\"\"\nimport pandas as pd\nimport numpy as np\nfrom sklearn.tree import DecisionTreeClassifier\nX = [['dsa', '2'], ['sato', '3']]\nclf = DecisionTreeClassifier()\n[insert]\nclf.fit(new_X, ['4', '5'])\nresult = new_X\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(1):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

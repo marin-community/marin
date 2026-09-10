@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nI am waiting for another developer to finish a piece of code that will return an np array of shape (100,2000) with values of either -1,0, or 1.\nIn the meantime, I want to randomly create an array of the same characteristics so I can get a head start on my development and testing. The thing is that I want this randomly created array to be the same each time, so that I'm not testing against an array that keeps changing its value each time I re-run my process.\nI can create my array like this, but is there a way to create it so that it's the same each time. I can pickle the object and unpickle it, but wondering if there's another way.\nr = np.random.randint(3, size=(100, 2000)) - 1\nSpecifically, I want r_old, r_new to be generated in the same way as r, but their result should be the same.\nA:\n<code>\nimport numpy as np\n</code>\nr_old, r_new = ... # put solution in these variables\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "np.random.seed(0)\nr_old = np.random.randint(3, size=(100, 2000)) - 1\nnp.random.seed(0)\nr_new = np.random.randint(3, size=(100, 2000)) - 1",
+  "metadata": {
+    "problem_id": 308,
+    "library_problem_id": 17,
+    "library": "Numpy",
+    "test_case_cnt": 1,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 17
+  },
+  "code_context": "import numpy as np\nimport pandas as pd\nimport copy\nimport tokenize, io\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            return None\n\n    def generate_ans(data):\n        none_input = data\n        np.random.seed(0)\n        r_old = np.random.randint(3, size=(100, 2000)) - 1\n        np.random.seed(0)\n        r_new = np.random.randint(3, size=(100, 2000)) - 1\n        return r_old, r_new\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    r_old, r_new = result\n    assert id(r_old) != id(r_new)\n    np.testing.assert_array_equal(r_old, r_new)\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\n[insert]\nresult = [r_old, r_new]\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(1):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n\n\ndef test_string(solution: str):\n    tokens = []\n    for token in tokenize.tokenize(io.BytesIO(solution.encode(\"utf-8\")).readline):\n        tokens.append(token.string)\n    assert \"randint\" in tokens\n"
+}

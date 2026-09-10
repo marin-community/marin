@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nI have a set of data and I want to compare which line describes it best (polynomials of different orders, exponential or logarithmic).\nI use Python and Numpy and for polynomial fitting there is a function polyfit(). But I found no such functions for exponential and logarithmic fitting.\nHow do I fit y = A*exp(Bx) + C ? The result should be an np.array of [A, B, C]. I know that polyfit performs bad for this function, so I would like to use curve_fit to solve the problem, and it should start from initial guess p0.\nA:\n<code>\nimport numpy as np\nimport scipy.optimize\ny = np.array([1, 7, 20, 50, 79])\nx = np.array([10, 19, 30, 35, 51])\np0 = (4, 0.1, 1)\n</code>\nresult = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "result = scipy.optimize.curve_fit(lambda t,a,b, c: a*np.exp(b*t) + c,  x,  y,  p0=p0)[0]\n",
+  "metadata": {
+    "problem_id": 713,
+    "library_problem_id": 2,
+    "library": "Scipy",
+    "test_case_cnt": 1,
+    "perturbation_type": "Difficult-Rewrite",
+    "perturbation_origin_id": 0
+  },
+  "code_context": "import numpy as np\nimport copy\nimport scipy.optimize\n\n\ndef generate_test_case(test_case_id):\n\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            y = np.array([1, 7, 20, 50, 79])\n            x = np.array([10, 19, 30, 35, 51])\n            p0 = (4, 0.1, 1)\n        return x, y, p0\n\n    def generate_ans(data):\n        _a = data\n        x, y, p0 = _a\n        result = scipy.optimize.curve_fit(\n            lambda t, a, b, c: a * np.exp(b * t) + c, x, y, p0=p0\n        )[0]\n        return result\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    assert np.allclose(result, ans)\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\nimport scipy.optimize\nx, y, p0 = test_input\n[insert]\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(1):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nHaving a pandas data frame as follow:\n    a  b\n0  12  1\n1  13  1\n2  23  1\n3  22  2\n4  23  2\n5  24  2\n6  30  3\n7  35  3\n8  55  3\n\n\n\n\nI want to find the mean standard deviation of column a in each group.\nMy following code give me 0 for each group.\nstdMeann = lambda x: np.std(np.mean(x))\nprint(pd.Series(data.groupby('b').a.apply(stdMeann)))\ndesired output:\n   mean        std\nb                 \n1  16.0   6.082763\n2  23.0   1.000000\n3  40.0  13.228757\n\n\n\n\nA:\n<code>\nimport pandas as pd\n\n\ndf = pd.DataFrame({'a':[12,13,23,22,23,24,30,35,55], 'b':[1,1,1,2,2,2,3,3,3]})\n</code>\nresult = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "import numpy as np\ndef g(df):\n    return df.groupby(\"b\")[\"a\"].agg([np.mean, np.std])\n\nresult = g(df.copy())\n",
+  "metadata": {
+    "problem_id": 167,
+    "library_problem_id": 167,
+    "library": "Pandas",
+    "test_case_cnt": 2,
+    "perturbation_type": "Semantic",
+    "perturbation_origin_id": 166
+  },
+  "code_context": "import pandas as pd\nimport numpy as np\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def generate_ans(data):\n        df = data\n        return df.groupby(\"b\")[\"a\"].agg([np.mean, np.std])\n\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            df = pd.DataFrame(\n                {\n                    \"a\": [12, 13, 23, 22, 23, 24, 30, 35, 55],\n                    \"b\": [1, 1, 1, 2, 2, 2, 3, 3, 3],\n                }\n            )\n        if test_case_id == 2:\n            df = pd.DataFrame(\n                {\n                    \"a\": [12, 13, 23, 22, 23, 24, 30, 35, 55],\n                    \"b\": [4, 4, 4, 5, 5, 5, 6, 6, 6],\n                }\n            )\n        return df\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    try:\n        pd.testing.assert_frame_equal(result, ans, check_dtype=False)\n        return 1\n    except:\n        return 0\n\n\nexec_context = r\"\"\"\nimport pandas as pd\nimport numpy as np\ndf = test_input\n[insert]\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

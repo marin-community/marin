@@ -1,0 +1,13 @@
+{
+  "prompt": "import numpy as np\nimport matplotlib.pyplot as plt\n\nlines = [[(0, 1), (1, 1)], [(2, 3), (3, 3)], [(1, 2), (1, 3)]]\nc = np.array([(1, 0, 0, 1), (0, 1, 0, 1), (0, 0, 1, 1)])\n\n# Plot line segments according to the positions specified in lines\n# Use the colors specified in c to color each line segment\n# SOLUTION START\n",
+  "reference_code": "for i in range(len(lines)):\n    plt.plot([lines[i][0][0], lines[i][1][0]], [lines[i][0][1], lines[i][1][1]], c=c[i])",
+  "metadata": {
+    "problem_id": 592,
+    "library_problem_id": 81,
+    "library": "Matplotlib",
+    "test_case_cnt": 1,
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 81
+  },
+  "code_context": "import numpy as np\nimport matplotlib.pyplot as plt\nfrom PIL import Image\n\n\ndef skip_plt_cmds(l):\n    return all(\n        p not in l for p in [\"plt.show()\", \"plt.clf()\", \"plt.close()\", \"savefig\"]\n    )\n\n\ndef generate_test_case(test_case_id):\n    lines = [[(0, 1), (1, 1)], [(2, 3), (3, 3)], [(1, 2), (1, 3)]]\n    c = np.array([(1, 0, 0, 1), (0, 1, 0, 1), (0, 0, 1, 1)])\n    for i in range(len(lines)):\n        plt.plot(\n            [lines[i][0][0], lines[i][1][0]], [lines[i][0][1], lines[i][1][1]], c=c[i]\n        )\n    plt.savefig(\"ans.png\", bbox_inches=\"tight\")\n    plt.close()\n    return None, None\n\n\ndef exec_test(result, ans):\n    lines = [[(0, 1), (1, 1)], [(2, 3), (3, 3)], [(1, 2), (1, 3)]]\n    c = np.array([(1, 0, 0, 1), (0, 1, 0, 1), (0, 0, 1, 1)])\n    code_img = np.array(Image.open(\"output.png\"))\n    oracle_img = np.array(Image.open(\"ans.png\"))\n    sample_image_stat = code_img.shape == oracle_img.shape and np.allclose(\n        code_img, oracle_img\n    )\n    if not sample_image_stat:\n        ax = plt.gca()\n        assert len(ax.get_lines()) == len(lines)\n        for i in range(len(lines)):\n            assert np.all(ax.get_lines()[i].get_color() == c[i])\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\nimport matplotlib.pyplot as plt\nlines = [[(0, 1), (1, 1)], [(2, 3), (3, 3)], [(1, 2), (1, 3)]]\nc = np.array([(1, 0, 0, 1), (0, 1, 0, 1), (0, 0, 1, 1)])\n[insert]\nplt.savefig('output.png', bbox_inches ='tight')\nresult = None\n\"\"\"\n\n\ndef test_execution(solution: str):\n    solution = \"\\n\".join(filter(skip_plt_cmds, solution.split(\"\\n\")))\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(1):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}

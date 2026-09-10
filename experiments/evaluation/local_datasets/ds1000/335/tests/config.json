@@ -1,0 +1,13 @@
+{
+  "prompt": "Problem:\nI'd like to calculate element-wise maximum of numpy ndarrays. For example\nIn [56]: a = np.array([10, 20, 30])\nIn [57]: b = np.array([30, 20, 20])\nIn [58]: c = np.array([50, 20, 40])\nWhat I want:\n[50, 20, 40]\nA:\n<code>\nimport numpy as np\na = np.array([10, 20, 30])\nb = np.array([30, 20, 20])\nc = np.array([50, 20, 40])\n</code>\nresult = ... # put solution in this variable\nBEGIN SOLUTION\n<code>\n",
+  "reference_code": "result = np.max([a, b, c], axis=0)\n",
+  "metadata": {
+    "problem_id": 335,
+    "library_problem_id": 44,
+    "library": "Numpy",
+    "test_case_cnt": 2,
+    "perturbation_type": "Semantic",
+    "perturbation_origin_id": 43
+  },
+  "code_context": "import numpy as np\nimport pandas as pd\nimport copy\n\n\ndef generate_test_case(test_case_id):\n    def define_test_input(test_case_id):\n        if test_case_id == 1:\n            a = np.array([10, 20, 30])\n            b = np.array([30, 20, 20])\n            c = np.array([50, 20, 40])\n        elif test_case_id == 2:\n            np.random.seed(42)\n            a = np.random.rand(50)\n            b = np.random.rand(50)\n            c = np.random.rand(50)\n        return a, b, c\n\n    def generate_ans(data):\n        _a = data\n        a, b, c = _a\n        result = np.max([a, b, c], axis=0)\n        return result\n\n    test_input = define_test_input(test_case_id)\n    expected_result = generate_ans(copy.deepcopy(test_input))\n    return test_input, expected_result\n\n\ndef exec_test(result, ans):\n    np.testing.assert_array_equal(result, ans)\n    return 1\n\n\nexec_context = r\"\"\"\nimport numpy as np\na, b, c = test_input\n[insert]\n\"\"\"\n\n\ndef test_execution(solution: str):\n    code = exec_context.replace(\"[insert]\", solution)\n    for i in range(2):\n        test_input, expected_result = generate_test_case(i + 1)\n        test_env = {\"test_input\": test_input}\n        exec(code, test_env)\n        assert exec_test(test_env[\"result\"], expected_result)\n"
+}
