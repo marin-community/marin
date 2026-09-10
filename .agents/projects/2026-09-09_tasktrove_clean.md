@@ -35,7 +35,7 @@ raw → summaries → templates → converted → graded → clean
 17. [x] End-to-end validity sample (`validity.py` + `validity_daytona.py`): stratified sample, Sonnet solve scripts, empty/oracle/candidate checks in Daytona; pilot of 54 tasks and full sample of 190 in the validity section below
 18. [x] Fixes from the validity sample: pytest node ids rebased onto the workspace in the tool (a `tests/pytest.ini` rootdir made every id miss), failing pytest grades keep the output tail, truncated parametrized ids are dropped from PASS_TO_PASS and reject FAIL_TO_PASS (394 swe_rebench tasks); whole-directory uploads and per-task agent timeouts in the validity tooling
 19. [x] M1 cleanup: recover non-null TOML/XML/CSV structured-output tasks, add end-to-end converter tests, fix the root `reasoning-gym` dependency, merge current `origin/main`, and run the format-parity audit
-20. [ ] M2 cleanup: decode literal MCQA newlines, map non-letter golds only on one exact option match, and decide `arc_agi`/`rearc` from their existing grid records
+20. [x] M2 cleanup: leave non-letter MCQA golds, literal-newline prompt failures, and the broken `arc_agi`/`rearc` scorer rows rejected; their small recovery does not justify format-specific parsing or grading paths
 21. [ ] M3 cleanup: audit the 25 dropped test sources and reinstate only tasks supported by existing graders or small direct adapters; tag usable kata tasks instead of dropping them for ease
 22. [ ] M4 cleanup: validate kept Python SWE tasks and decide non-Python repository tasks without adding a new grading family or repairing repositories/toolchains
 23. [ ] M5 cleanup: sample kept and dropped judge sources against the answerability, rubric, leakage, triviality, and persona checklist
@@ -64,6 +64,12 @@ confirmed that every one of the 14,135 converted XML specs has representable ele
 merging `origin/main` at `9f3cc8a80d`, the TaskTrove suites reported 411 passed and 1 skipped,
 Pyrefly reported zero errors, the diff-scoped repository lint passed, and the safe affected-test
 runner reported 1,683 passed, 4 skipped, and 5 expected failures.
+
+M2 makes no converter change. The 3,607 non-letter MCQA golds include numeric and formatted
+answer fragments that do not identify one displayed option without stripping units, LaTeX, or
+other content-specific syntax. The 1,463 literal-newline prompt failures and 282 reasoning-gym
+`arc_agi`/`rearc` rows could be special-cased, but together do not justify extra prompt rewriting
+or grid-grading behavior. These rows remain rejected rather than adding recovery heuristics.
 
 ## Run 2026.09.10.5
 
