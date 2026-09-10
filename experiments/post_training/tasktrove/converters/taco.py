@@ -17,6 +17,7 @@ converted.
 """
 
 import re
+import warnings
 
 from tasktrove_verify.spec import Compare, StdioSpec
 
@@ -49,6 +50,18 @@ def _oracle_solution_files(solution: str) -> dict[str, bytes]:
     return {SOLVE_SH: _SOLVE_SCRIPT.encode(), SOLUTION_PY: solution.encode()}
 
 
+def _syntax_error(solution: str) -> str | None:
+    """Why the oracle cannot run as a script: about 1% of TACO oracles are function bodies pasted at
+    module level (``return`` or ``nonlocal`` outside a function), which fail every hidden case."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", SyntaxWarning)
+        try:
+            compile(solution, SOLUTION_PY, "exec")
+        except SyntaxError as error:
+            return error.msg
+    return None
+
+
 def _compare(instruction: str) -> Compare:
     return Compare.FLOAT if _FLOAT_TOLERANCE_RE.search(instruction) else Compare.TOKENS
 
@@ -61,6 +74,9 @@ def convert_taco(task: TaskFiles) -> ConvertedTask | Rejected:
         return Rejected(
             ConvertStatus.UNSUPPORTED_VARIANT, "oracle solution never reads stdin: function-call style problem"
         )
+    syntax_error = _syntax_error(solution)
+    if syntax_error is not None:
+        return Rejected(ConvertStatus.UNSUPPORTED_VARIANT, f"oracle solution does not compile: {syntax_error}")
     try:
         cases = case_files_from_dirs(task)
     except ValueError as error:

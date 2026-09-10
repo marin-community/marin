@@ -31,6 +31,7 @@ from experiments.post_training.tasktrove.converters.swe_repo import (
     ensure_pytest_json_report,
     test_file,
     test_ids,
+    uncollectable,
     uncovered_files,
 )
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, SOLUTION_DIR, TEST_SH, TaskFiles
@@ -151,6 +152,12 @@ def convert_swe_patched(task: TaskFiles) -> ConvertedTask | Rejected:
     fail_to_pass, pass_to_pass = _fail_and_pass_to_pass(config)
     if not fail_to_pass:
         return Rejected(ConvertStatus.TOO_FEW_CASES, "config.json has no FAIL_TO_PASS tests")
+    foreign = [node_id for node_id in fail_to_pass if uncollectable(node_id)]
+    if foreign:
+        return Rejected(
+            ConvertStatus.UNSUPPORTED_VARIANT, f"FAIL_TO_PASS ids the pytest mode cannot collect: {foreign[:3]}"
+        )
+    pass_to_pass = [node_id for node_id in pass_to_pass if not uncollectable(node_id)]
     node_ids = [*fail_to_pass, *pass_to_pass]
     non_pytest = [node_id for node_id in node_ids if not _is_pytest_node_id(node_id)]
     if non_pytest:

@@ -22,6 +22,7 @@ from experiments.post_training.tasktrove.converters.swe_repo import (
     ensure_pytest_json_report,
     test_file,
     test_ids,
+    uncollectable,
     uncovered_files,
 )
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, SOLUTION_DIR, TEST_SH, TaskFiles
@@ -92,12 +93,12 @@ def convert_swe_trusted_paths(task: TaskFiles) -> ConvertedTask | Rejected:
         return Rejected(ConvertStatus.UNSUPPORTED_VARIANT, "tests/test.sh does not call install_trusted_test_paths.sh")
     trusted, fallback = match["trusted"], match["fallback"] or ""
 
-    # The pytest mode clears the repository's addopts, which drops any doctest-glob, so a node id
-    # in a non-Python file (voluptuous grades ``tests.md``) is never collected and aborts the run.
-    foreign = [node_id for node_id in fail_to_pass if not test_file(node_id).endswith(".py")]
+    foreign = [node_id for node_id in fail_to_pass if uncollectable(node_id)]
     if foreign:
-        return Rejected(ConvertStatus.UNSUPPORTED_VARIANT, f"FAIL_TO_PASS ids outside Python test files: {foreign[:3]}")
-    pass_to_pass = [node_id for node_id in pass_to_pass if test_file(node_id).endswith(".py")]
+        return Rejected(
+            ConvertStatus.UNSUPPORTED_VARIANT, f"FAIL_TO_PASS ids the pytest mode cannot collect: {foreign[:3]}"
+        )
+    pass_to_pass = [node_id for node_id in pass_to_pass if not uncollectable(node_id)]
 
     graded_files = {test_file(node_id) for node_id in [*fail_to_pass, *pass_to_pass]}
     uncovered = uncovered_files(graded_files, [task.get_text(TRUSTED_TEST_PATHS)])

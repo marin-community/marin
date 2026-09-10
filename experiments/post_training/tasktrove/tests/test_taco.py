@@ -113,6 +113,15 @@ def test_function_call_style_solution_is_rejected_as_unsupported_variant():
     assert record.status == ConvertStatus.UNSUPPORTED_VARIANT and record.task_binary is None
 
 
+def test_solution_that_does_not_compile_is_rejected_as_unsupported_variant():
+    """A function body pasted at module level reads stdin but cannot run as a script."""
+    task = read_task_binary(_fixture())
+    task.files["solution/solution.py"] = b"n = int(input())\nif n == 0:\n    print(0)\n    return\nprint(n)\n"
+    record = _convert(write_task_binary(task))
+    assert record.status == ConvertStatus.UNSUPPORTED_VARIANT and record.task_binary is None
+    assert "does not compile" in record.error
+
+
 def test_float_tolerance_instruction_uses_float_compare():
     task = read_task_binary(_fixture())
     original = task.text("instruction.md")

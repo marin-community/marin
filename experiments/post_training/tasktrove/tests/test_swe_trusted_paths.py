@@ -132,6 +132,36 @@ def test_pass_to_pass_outside_a_python_file_is_dropped_from_the_spec():
     assert all(path.endswith(".py") for path in spec.paths)
 
 
+def test_fail_to_pass_doctest_item_is_rejected():
+    record = convert_one(
+        _info(), "t.tar.gz", _edited(FAIL_TO_PASS=["parso/__init__.py::parso"]), converter_index(), TOOL_REF
+    )
+    assert record.status == ConvertStatus.UNSUPPORTED_VARIANT
+    assert "parso/__init__.py::parso" in record.error
+
+
+def test_pass_to_pass_doctest_items_are_dropped_but_parametrized_ids_with_colons_stay():
+    record = convert_one(
+        _info(),
+        "t.tar.gz",
+        _edited(
+            PASS_TO_PASS=[
+                "parso/tree.py::parso.tree.NodeOrLeaf.dump",
+                "tests/test_common.py::test_parse_address[[::1]:8000-expected5]",
+                "tests/test_common.py::TestAddress::test_ipv6[ff::aa:1::2]",
+            ]
+        ),
+        converter_index(),
+        TOOL_REF,
+    )
+    assert record.status == ConvertStatus.CONVERTED
+    spec = parse_spec(read_task_binary(record.task_binary).text(VERIFIER_TOML))
+    assert spec.must_not_break == (
+        "tests/test_common.py::test_parse_address[[::1]:8000-expected5]",
+        "tests/test_common.py::TestAddress::test_ipv6[ff::aa:1::2]",
+    )
+
+
 def test_json_encoded_string_fail_to_pass_is_accepted():
     record = convert_one(
         _info(),

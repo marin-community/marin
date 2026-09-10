@@ -5,6 +5,7 @@
 
 import json
 from collections.abc import Iterable
+from pathlib import PurePosixPath
 
 PLUGIN = "pytest-json-report"
 CONFIG_JSON = "tests/config.json"
@@ -15,6 +16,27 @@ TESTBED = "/testbed"
 
 def test_file(node_id: str) -> str:
     return node_id.split("::", 1)[0]
+
+
+def uncollectable(node_id: str) -> bool:
+    """True when the pytest mode cannot collect ``node_id``.
+
+    The mode clears the repository's ``addopts``, which drops ``--doctest-glob`` and
+    ``--doctest-modules``, so ids in non-Python files (``tests/tests.md::tests.md``) and doctest items,
+    whose name is the dotted object path (``parso/__init__.py::parso``,
+    ``parso/tree.py::parso.tree.NodeOrLeaf.dump``), never run and count as failures.
+    """
+    file, _, rest = node_id.partition("::")
+    if not file.endswith(".py"):
+        return True
+    name = rest.split("[", 1)[0]
+    if "::" in name:
+        return False
+    path = PurePosixPath(file)
+    module = path.parent.name if path.name == "__init__.py" else path.stem
+    # A module doctest is named after its module; a test module's own name also matches pytest's
+    # ``test*`` function pattern, so only a non-test name identifies a doctest.
+    return "." in name or (name == module and not name.startswith("test"))
 
 
 def uncovered_files(graded_files: set[str], manifests: Iterable[str | None]) -> list[str]:
