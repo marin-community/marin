@@ -110,6 +110,7 @@ class OptimizerPrecision(StrEnum):
     BF16_FIRST = "bf16_first"
     BF16_BOTH = "bf16_both"
     FP32_REMAINDERS = "fp32_remainders"
+    BF16_GRAD_REDUCE = "bf16_grad_reduce"
 
 
 @dataclass(frozen=True)
@@ -433,21 +434,37 @@ def training_config(
 
 
 def apply_optimizer_precision(
-    trainer: dict, *, scale: Scale, precision: OptimizerPrecision, state_metrics: bool
+    trainer: dict, *, scale: Scale | str, precision: OptimizerPrecision, state_metrics: bool, snowball_gate: bool = False
 ) -> None:
     """Keep native identities stable and isolate the declared optimizer storage change."""
     if precision not in OptimizerPrecision or type(state_metrics) is not bool:
         raise ValueError("Declare a supported optimizer precision and boolean state-metrics setting")
     if precision == OptimizerPrecision.NATIVE and not state_metrics:
         return
-    if scale != Scale.SCREENING:
-        raise ValueError("Optimizer precision experiments require the Qwen screening scale")
+    snowball_geometry = trainer["policy"].get("megatron_config", {})
+    supported_snowball = (
+        snowball_gate
+        and str(scale) in {"gate", "cadence-gate", "qualification"}
+        and all(
+            snowball_geometry.get(key) == expected
+            for key, expected in {
+                "tensor_model_parallel_size": 1,
+                "pipeline_model_parallel_size": 2,
+                "expert_model_parallel_size": 8,
+            }.items()
+        )
+    )
+    if scale != Scale.SCREENING and not supported_snowball:
+        raise ValueError("Optimizer precision experiments require the Qwen screening scale or an explicit Snowball gate")
     if not trainer["policy_train_spans"]:
         raise ValueError("Optimizer state metrics require policy training spans for matching memory peaks")
     trainer["optimizer_state_metrics"] = True
     if precision == OptimizerPrecision.NATIVE:
         return
     config = trainer["policy"]["megatron_config"]
+    if precision is OptimizerPrecision.BF16_GRAD_REDUCE:
+        config["ddp_config"] = {"grad_reduce_in_fp32": False}
+        return
     config["ddp_config"] = {"grad_reduce_in_fp32": True}
     config["optimizer_config_kwargs"] = {
         "use_precision_aware_optimizer": True,

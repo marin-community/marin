@@ -17,7 +17,7 @@ from transformers import PreTrainedTokenizerFast
 
 from experiments.post_training import async_rl, async_snowball
 from experiments.post_training.curriculum_rl import pool
-from experiments.post_training.math_eval.launcher import BATTERY_PATH, POOL_ARGUMENT
+from experiments.post_training.math_eval.launcher import POOL_ARGUMENT
 
 
 def test_optimizer_precision_cli_keeps_controls_distinct_and_reproducible():
@@ -183,7 +183,7 @@ def test_study_preview_locks_schedule_seed_and_validation_identity(recipe, sched
 def test_study_rejects_overlapping_or_out_of_bounds_windows_before_submission(monkeypatch, recipe, offset, rows):
     submitted = []
     monkeypatch.setattr(recipe, "run", lambda step, **_kwargs: submitted.append(step))
-    monkeypatch.setattr(recipe, "validate_regional_storage", lambda *_args: None)
+    monkeypatch.setattr(recipe, "validate_regional_storage", lambda *_args, **_kwargs: None)
     args = [
         "--version",
         "2026.09.06.10",
@@ -409,7 +409,7 @@ def test_qwen_cli_dry_run_previews_training_and_export() -> None:
 
 def test_snowball_model_run_submits_graph_without_resolving_checkpoint(monkeypatch) -> None:
     submitted = []
-    monkeypatch.setattr(async_snowball, "validate_regional_storage", lambda *_args: None)
+    monkeypatch.setattr(async_snowball, "validate_regional_storage", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(async_snowball, "run", lambda step, **_kwargs: submitted.append(step))
 
     result = CliRunner().invoke(
@@ -830,7 +830,7 @@ def test_qwen_invalid_screening_configuration_rejected_before_submission(monkeyp
 
 def test_qwen_metrics_preview_and_submission_have_no_export_stage(monkeypatch):
     submitted = []
-    monkeypatch.setattr(async_rl, "validate_regional_storage", lambda *_args: None)
+    monkeypatch.setattr(async_rl, "validate_regional_storage", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(async_rl, "run", lambda step, **kwargs: submitted.append(step))
     result = CliRunner().invoke(
         async_rl.main,
@@ -986,7 +986,7 @@ def test_pool_flag_preserves_default_preview_and_selects_verified_fixed_views():
     assert selected.run_id != baseline.run_id
     assert selected.config_yaml == baseline.config_yaml
     assert selected.train_data[0].relative_path == "qwen/train.parquet"
-    assert selected.validation_data[0].relative_path == BATTERY_PATH + "/qwen/dev.parquet"
+    assert selected.validation_data[0].relative_path == "dev.parquet"
     result = CliRunner().invoke(
         async_rl.main,
         ["--version", "2026.09.06.10", "--stage", "rl", "--completion", "metrics", "--pool-artifact", POOL_ARGUMENT],
@@ -994,7 +994,7 @@ def test_pool_flag_preserves_default_preview_and_selects_verified_fixed_views():
     assert result.exit_code == 0, result.output
     cli = json.loads(result.output)["request"]
     assert cli["train_data"][0]["relative_path"] == "qwen/train.parquet"
-    assert cli["validation_data"][0]["relative_path"] == BATTERY_PATH + "/qwen/dev.parquet"
+    assert cli["validation_data"][0]["relative_path"] == "dev.parquet"
 
 
 @pytest.mark.parametrize("changes", [{"validation_offset": 128}, {"context_tokens": 1536}])
@@ -1082,7 +1082,7 @@ def test_rno_exception_rejects_other_buckets_and_snowball(monkeypatch):
     assert "not local to cw-rno2a" in result.output
     snowball = CliRunner().invoke(async_snowball.main, ["--version", "2026.09.08.1", "--allow-cross-region-io"])
     assert snowball.exit_code != 0
-    assert "No such option" in snowball.output
+    assert "Cross-region Snowball requires RNO and metrics" in str(snowball.exception)
 
 
 @pytest.mark.parametrize(
