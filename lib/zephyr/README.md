@@ -5,7 +5,9 @@ Simple data processing library for Marin pipelines. Build lazy dataset pipelines
 ## Quick Start
 
 ```python
-from zephyr import Dataset, ZephyrContext, load_jsonl
+from zephyr.context import ZephyrContext
+from zephyr.dataset import Dataset
+from zephyr.readers import load_jsonl
 
 # Read, transform, write
 ctx = ZephyrContext(max_workers=100)
@@ -106,7 +108,9 @@ worker pool and invalidates its table handles.
 
 **Wikipedia Processing:**
 ```python
-from zephyr import Dataset, ZephyrContext, load_jsonl
+from zephyr.context import ZephyrContext
+from zephyr.dataset import Dataset
+from zephyr.readers import load_jsonl
 
 ctx = ZephyrContext(max_workers=100)
 pipeline = (
@@ -121,7 +125,8 @@ ctx.execute(pipeline)
 
 **Dataset Sampling:**
 ```python
-from zephyr import Dataset, ZephyrContext
+from zephyr.context import ZephyrContext
+from zephyr.dataset import Dataset
 
 ctx = ZephyrContext(max_workers=1000)
 pipeline = (
@@ -134,7 +139,8 @@ ctx.execute(pipeline)
 
 **Parallel Downloads:**
 ```python
-from zephyr import Dataset, ZephyrContext
+from zephyr.context import ZephyrContext
+from zephyr.dataset import Dataset
 
 tasks = [(config, fs, src, dst) for src, dst in file_pairs]
 ctx = ZephyrContext(max_workers=32)
