@@ -11,8 +11,8 @@ large or changing files stay out of the image and the repository. A Python app's
 mounted at ``/<name>/api/`` behind the same authentication, with the caller's identity
 bound for its handlers. ``/api/marina/*`` is the surface shared by every
 app (the app directory and the caller's identity); ``/`` lists the apps. A per-app
-Content-Security-Policy restricts what the page may fetch to itself plus the manifest's
-``connect_src``.
+Content-Security-Policy restricts what the page may fetch to itself, the manifest's
+``connect_src``, and the configured Loom origin for apps that enable the agent panel.
 """
 
 import html
@@ -20,6 +20,7 @@ import mimetypes
 import os
 import posixpath
 import uuid
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
@@ -81,14 +82,23 @@ HOST_APPS_ENV = "MARINA_HOST_APPS"
 CANONICAL_ORIGIN_ENV = "MARINA_CANONICAL_ORIGIN"
 APPLET_ORIGIN_ENV = "MARINA_APPLET_ORIGIN"
 APPLET_OPERATORS_ENV = "MARINA_APPLET_OPERATORS"
+AGENT_ORIGIN_ENV = "MARINA_AGENT_ORIGIN"
 DATA_PREFIX = "data/"
 API_PREFIX = "/api"
 MCP_PATH = "/api/marina/mcp"
+MCP_READ_PATH = "/api/marina/mcp/read"
 # The first path segment the kernel answers itself. An app named for one of these would
 # register the same route and lose it: FastAPI keeps the first match, and the kernel's
 # routes are installed before any app's.
 KERNEL_PREFIXES = frozenset({"a", "api", "healthz"})
 DATA_CACHE_CONTROL = "private, max-age=300"
+
+
+@dataclass(frozen=True)
+class AgentPanelService:
+    """Deployment-specific location of the Loom service."""
+
+    origin: str
 
 
 @dataclass(frozen=True)
@@ -107,6 +117,7 @@ class MarinaConfig:
     # A separate IAP-gated origin that exposes only /a/* applet routes.
     applet_origin: str | None = None
     applet_operators: frozenset[str] = frozenset()
+    agent_panel: AgentPanelService | None = None
 
     @classmethod
     def from_env(cls, default_apps_dir: Path) -> "MarinaConfig":
@@ -129,6 +140,11 @@ class MarinaConfig:
             applet_operators=frozenset(
                 item.strip() for item in os.environ.get(APPLET_OPERATORS_ENV, "").split(",") if item.strip()
             ),
+            agent_panel=(
+                AgentPanelService(origin=os.environ[AGENT_ORIGIN_ENV].rstrip("/"))
+                if os.environ.get(AGENT_ORIGIN_ENV)
+                else None
+            ),
         )
 
 
@@ -142,6 +158,29 @@ def parse_host_apps(spec: str) -> dict[str, str]:
             raise ValueError(f"{HOST_APPS_ENV} entry {pair!r} is not host=app")
         result[host.strip().lower()] = app.strip()
     return result
+
+
+def validate_agent_panel(service: AgentPanelService | None, iap_audience: str | None) -> None:
+    """Reject origins that cannot safely receive credentialed browser requests."""
+    if service is None:
+        return
+    parsed = urlparse(service.origin)
+    absolute_origin = (
+        parsed.scheme in {"http", "https"}
+        and parsed.hostname is not None
+        and parsed.path in {"", "/"}
+        and not parsed.params
+        and not parsed.query
+        and not parsed.fragment
+        and parsed.username is None
+        and parsed.password is None
+    )
+    if not absolute_origin:
+        raise ValueError(f"{AGENT_ORIGIN_ENV} must be an absolute HTTP origin without a path")
+    if parsed.scheme == "https":
+        return
+    if iap_audience is not None or parsed.hostname not in {"127.0.0.1", "::1"}:
+        raise ValueError(f"{AGENT_ORIGIN_ENV} must use HTTPS outside a loopback development kernel")
 
 
 def host_redirect(host: str, path: str, host_apps: dict[str, str], canonical_origin: str) -> str | None:
@@ -258,7 +297,7 @@ def landing_page(apps: list[AppManifest], applets: list[dict[str, object]] | Non
     )
 
 
-def serve_app_file(app: AppManifest, path: str) -> Response:
+def serve_app_file(app: AppManifest, path: str, connect_src: tuple[str, ...] | None = None) -> Response:
     """A file from the app's dist, or index.html for a client-side route."""
     dist = app.dist.resolve()
     if not (dist / INDEX_FILE).is_file():
@@ -266,7 +305,7 @@ def serve_app_file(app: AppManifest, path: str) -> Response:
             f"<h1>{html.escape(app.title)}</h1><p>Frontend not built. Run <code>marina build</code>.</p>",
             status_code=503,
         )
-    headers = {"Content-Security-Policy": content_security_policy(app.connect_src)}
+    headers = {"Content-Security-Policy": content_security_policy(connect_src or app.connect_src)}
     candidate = (dist / path).resolve() if path else dist / INDEX_FILE
     inside = candidate == dist or dist in candidate.parents
     if not inside:
@@ -288,14 +327,22 @@ def clean_relative_path(path: str) -> str | None:
     return normalized
 
 
-async def serve_data_file(app: AppManifest, data_root: str, path: str) -> Response:
+async def serve_data_file(
+    app: AppManifest,
+    data_root: str,
+    path: str,
+    connect_src: tuple[str, ...] | None = None,
+) -> Response:
     """A file from the app's data directory, gzip-encoded when only ``x.gz`` exists."""
     relative = clean_relative_path(path)
     if relative is None:
         return JSONResponse({"error": "not found"}, status_code=404)
     fs, root = url_to_fs(data_url_for(data_root, app.name))
     target = prefix_join(root, relative)
-    headers = {"Content-Security-Policy": content_security_policy(app.connect_src), "Cache-Control": DATA_CACHE_CONTROL}
+    headers = {
+        "Content-Security-Policy": content_security_policy(connect_src or app.connect_src),
+        "Cache-Control": DATA_CACHE_CONTROL,
+    }
     media_type = mimetypes.guess_type(relative)[0] or "application/octet-stream"
     if await run_in_threadpool(fs.isfile, target):
         body = await run_in_threadpool(fs.cat_file, target)
@@ -332,8 +379,14 @@ class AuthenticatedMount:
             return await self._app(scope, receive, send)
 
 
-def install_app_routes(api: FastAPI, app: AppManifest, data_root: str) -> None:
+def install_app_routes(
+    api: FastAPI,
+    app: AppManifest,
+    data_root: str,
+    agent_panel: AgentPanelService | None,
+) -> None:
     prefix = app.path.rstrip("/")
+    connect_src = app.connect_src + ((agent_panel.origin,) if app.agent is not None and agent_panel is not None else ())
 
     @api.get(prefix, include_in_schema=False)
     @requires_auth
@@ -343,12 +396,12 @@ def install_app_routes(api: FastAPI, app: AppManifest, data_root: str) -> None:
     @api.api_route(prefix + "/" + DATA_PREFIX + "{path:path}", methods=["GET", "HEAD"], include_in_schema=False)
     @requires_auth
     async def app_data(path: str) -> Response:
-        return await serve_data_file(app, data_root, path)
+        return await serve_data_file(app, data_root, path, connect_src)
 
     @api.api_route(prefix + "/{path:path}", methods=["GET", "HEAD"], include_in_schema=False)
     @requires_auth
     def app_file(path: str) -> Response:
-        return serve_app_file(app, path)
+        return serve_app_file(app, path, connect_src)
 
 
 async def call_applet_api(app: ASGIApp, request: Request, path: str) -> Response:
@@ -422,7 +475,34 @@ async def dispatch_applet_api(
         raise HTTPException(status_code=503, detail=str(error)) from error
 
 
+def install_agent_panel_config_route(
+    api: FastAPI,
+    apps: list[AppManifest],
+    service: AgentPanelService | None,
+) -> None:
+    """Expose an app's checked-in launch coordinates with the deployment Loom origin."""
+
+    @api.get("/api/marina/agent/config")
+    @requires_auth
+    def agent_config(app: str) -> JSONResponse:
+        manifest = next((candidate for candidate in apps if candidate.name == app), None)
+        if manifest is None:
+            raise HTTPException(status_code=404, detail="app not found")
+        if service is None or manifest.agent is None:
+            return JSONResponse({"enabled": False})
+        return JSONResponse(
+            {
+                "enabled": True,
+                "origin": service.origin,
+                "profile": manifest.agent.profile,
+                "repository": manifest.agent.repository,
+                "starters": list(manifest.agent.starters),
+            }
+        )
+
+
 def create_app(config: MarinaConfig) -> RouteAuthMiddleware:
+    validate_agent_panel(config.agent_panel, config.iap_audience)
     apps = discover_apps(config.apps_dir)
     shadowed = sorted(app.name for app in apps if app.name in KERNEL_PREFIXES)
     if shadowed:
@@ -434,8 +514,17 @@ def create_app(config: MarinaConfig) -> RouteAuthMiddleware:
         if is_python_app(app)
     }
     mcp = marina_mcp({name: registered.mcp for name, registered in registered_apis.items()})
+    read_mcp = marina_mcp({name: registered.read_mcp for name, registered in registered_apis.items()})
     mcp_app = mcp.http_app(path="/", json_response=True, stateless_http=True)
-    api = FastAPI(title="Marina", docs_url=None, redoc_url=None, lifespan=mcp_app.lifespan)
+    read_mcp_app = read_mcp.http_app(path="/", json_response=True, stateless_http=True)
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        async with mcp_app.lifespan(_app):
+            async with read_mcp_app.lifespan(_app):
+                yield
+
+    api = FastAPI(title="Marina", docs_url=None, redoc_url=None, lifespan=lifespan)
     applet_store = AppletStore(config.database) if config.database is not None else None
     applet_runtime = AppletRuntime(applet_store) if applet_store is not None else None
 
@@ -459,6 +548,8 @@ def create_app(config: MarinaConfig) -> RouteAuthMiddleware:
     def me(request: Request) -> JSONResponse:
         identity = identity_for(request, policy)
         return JSONResponse({"user": identity.user_id, "role": identity.role})
+
+    install_agent_panel_config_route(api, apps, config.agent_panel)
 
     @api.get("/", include_in_schema=False)
     @requires_auth
@@ -768,11 +859,12 @@ def create_app(config: MarinaConfig) -> RouteAuthMiddleware:
             # earlier target would keep following it after this mapping changes.
             return RedirectResponse(target + query, status_code=307, headers={"Cache-Control": "no-store"})
 
+    api.mount(MCP_READ_PATH, AuthenticatedMount(read_mcp_app, policy))
     api.mount(MCP_PATH, AuthenticatedMount(mcp_app, policy))
 
     for app in apps:
         if is_python_app(app):
             api.mount(app.path.rstrip("/") + API_PREFIX, AuthenticatedMount(registered_apis[app.name].app, policy))
-        install_app_routes(api, app, config.data_root)
+        install_app_routes(api, app, config.data_root, config.agent_panel)
 
     return RouteAuthMiddleware(api, policy)

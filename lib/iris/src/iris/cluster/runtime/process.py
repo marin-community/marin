@@ -598,9 +598,6 @@ class ProcessRuntime:
         self._handles.append(handle)
         return handle
 
-    def prepare_workdir(self, workdir: Path, disk_bytes: int) -> None:
-        pass
-
     def stage_bundle(
         self,
         *,

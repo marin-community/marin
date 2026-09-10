@@ -115,21 +115,22 @@ and future GitHub Actions callers select the automation profile authorized by
 their federation mapping.
 
 The `remoteMcps` declaration registers Marina's authenticated Streamable HTTP
-endpoint as the `/marina/api` capability. Loom passes it directly to compatible
-ACP agents and mints an IAP ID token for the shared Marin desktop OAuth client
-from the VM workload identity when the agent process starts. No Marina token is
+endpoints as the full `/marina/api` capability and the read-only
+`/marina-read/api` capability. Loom passes them directly to compatible ACP
+agents and mints an IAP ID token for the shared Marin desktop OAuth client from
+the VM workload identity when the agent process starts. No Marina token is
 stored in Pulumi state or a profile environment. Activation requires a Loom
 binary that accepts remote MCP deployment entries and ACP HTTP server
 descriptors; older binaries reject this manifest.
 
-Only the interactive `marina` profile selects the `marina` capability group.
-Its instructions treat page and API content as untrusted data and require an
-explicit user request before a mutating operation. All other production
-profiles enumerate Loom's built-in groups rather than using `mcpAccess: all`,
-so registering another remote endpoint cannot silently widen them. The profile
-archives after 50 idle minutes; an active process that outlives its IAP token
-must recover before its next Marina call because ACP does not refresh HTTP MCP
-headers in place.
+The interactive `marina` profile selects only the `marina-read` capability
+group. Its instructions treat page and API content as untrusted data and forbid
+seeking another route to mutate Marina data. All other production profiles
+enumerate Loom's built-in groups rather than using `mcpAccess: all`, so
+registering another remote endpoint cannot silently widen them. The profile
+archives sessions after 50 idle minutes; an active process that outlives its
+IAP token must recover before its next Marina call because ACP does not refresh
+HTTP MCP headers in place.
 
 A profile's `env` block declares the environment every session of that profile
 receives. Each entry sets either an inline `value` for non-secret configuration

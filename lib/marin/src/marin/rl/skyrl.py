@@ -16,6 +16,8 @@ from enum import StrEnum
 from pathlib import PurePosixPath
 from typing import cast
 
+from rigging.filesystem.storage_path import prefix_join
+
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.utils import discover_hf_checkpoints
 from marin.execution.artifact import Artifact
@@ -23,7 +25,6 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import sanitize_job_name
 from marin.external_dependencies import MARIN_SKYRL
 from marin.training.training import LevanterCheckpoint, temporary_storage_base_path
-from rigging.filesystem.storage_path import prefix_join
 
 _EXECUTION = "skyrl_execution"
 _LAUNCHER_PYTHON = "3.12"

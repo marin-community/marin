@@ -86,8 +86,6 @@ class ZephyrWorker:
         self._counter_generation: int = 0
         self._last_reported_counters: dict[str, CounterEntry] = {}
         self._active_shards: list[_ActiveShard] = []
-        self._active_task_count: int = 0
-        self._current_stage_name: str = ""
 
         # Resource pool: each accepted task deducts its cost and restores it on
         # completion. The coordinator gates dispatch on the available amount,
@@ -263,9 +261,6 @@ class ZephyrWorker:
                     active_shard.start_time,
                     {},
                 )
-            self._active_task_count += 1
-            self._current_stage_name = work.task.stage_name
-
             t = threading.Thread(
                 target=self._task_thread,
                 args=(work, active_shard),
@@ -358,7 +353,6 @@ class ZephyrWorker:
         finally:
             with self._resources_lock:
                 self._available = self._available + task.cost
-            self._active_task_count = max(0, self._active_task_count - 1)
             self._task_completed_event.set()
 
     def _finish_active_shard(
@@ -382,10 +376,14 @@ class ZephyrWorker:
 
     def _report_worker_iris_status(self) -> None:
         """Push worker status text to Iris for UI display. Called on each heartbeat."""
-        _push_iris_task_status(
-            self._iris_status_limiter,
-            lambda: _format_worker_status_md(self._active_task_count, self._current_stage_name),
-        )
+        _push_iris_task_status(self._iris_status_limiter, self._worker_status_md)
+
+    def _worker_status_md(self) -> tuple[str, str]:
+        """Render the live ``_active_shards`` list as ``(detail, summary)`` markdown."""
+        with self._resources_lock:
+            active = list(self._active_shards)
+        stage = active[-1].task.stage_name if active else ""
+        return _format_worker_status_md(len(active), stage)
 
     def _heartbeat_counter_snapshot(self) -> CounterSnapshot | None:
         """Aggregate live counters from all active runners; return None if unchanged."""

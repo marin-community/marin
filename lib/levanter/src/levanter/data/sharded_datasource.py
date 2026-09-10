@@ -325,7 +325,7 @@ class AudioTextUrlDataSource(UrlBackedShardedDataSource[Tuple[np.ndarray, int, s
         import librosa  # noqa F401
 
         def _load_audio_file(file_name, sampling_rate):
-            with open_url(audio_pointer, "rb", compression="infer") as f:
+            with open_url(file_name, "rb", compression="infer") as f:
                 array, sr = librosa.load(f, sr=sampling_rate)
             return {"array": array, "sampling_rate": sr}
 
