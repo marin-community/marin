@@ -3,12 +3,13 @@
 
 """Finelog stats schemas and counter-key constants for Zephyr pipelines.
 
-Two namespaces are written:
+Three namespaces are written:
 
 - ``zephyr.stage`` — one row per stage at completion, emitted by the
   coordinator. Contains throughput and aggregated resource usage.
 - ``zephyr.worker`` — one row per shard at START, each sample interval
   (RUNNING), and END, emitted by the long-lived worker actor.
+- ``zephyr.shuffle`` — optional target placeholders and reducer input sizes.
 
 Runners sample CPU and memory counters. Worker heartbeats write per-shard rows
 and send aggregated counters to the coordinator for stage stats.
@@ -27,12 +28,15 @@ from finelog.client import LogClient, Table
 from iris.client.client import get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
+from rigging.connect import IapAuth
+from rigging.credentials import iap_provider_for
 from rigging.timing import RateLimiter
 
 logger = logging.getLogger(__name__)
 
 ZEPHYR_STAGE_STATS_NAMESPACE = "zephyr.stage"
 ZEPHYR_WORKER_STATS_NAMESPACE = "zephyr.worker"
+ZEPHYR_SHUFFLE_STATS_NAMESPACE = "zephyr.shuffle"
 WORKER_STATS_INTERVAL = 5.0
 
 ZEPHYR_STAGE_ITEM_COUNT_KEY = "zephyr/item_count"
@@ -134,10 +138,41 @@ class ZephyrWorkerStat:
     mem_peak_bytes: int
 
 
+@dataclass(frozen=True)
+class StatsConfig:
+    """Explicit Finelog URL and optional Marin cluster name for IAP credentials."""
+
+    url: str
+    auth_profile: str | None = None
+
+
+@dataclass
+class ZephyrShuffleStat:
+    """Initial target placeholder or input size observed by a reducer.
+
+    Payload bytes measure encoded records, not compressed storage or RAM.
+    All three counts are null until measured. Stage names identify the reduce
+    stage; job IDs identify the producer. Local runs have no job ID.
+    """
+
+    key_column: ClassVar[str] = "execution_id"
+
+    execution_id: str
+    stage_name: str
+    target_shard: int
+    num_targets: int
+    attempt: int
+    input_rows: int | None
+    payload_bytes: int | None
+    num_sources: int | None
+    ts: datetime
+    job_id: str
+
+
 class StatsWriter:
     """Manages finelog connections and emits Zephyr stat rows.
 
-    Call ``connect()`` to get a live instance; pass a pre-resolved URL when
+    Call ``connect()`` to get a live instance; pass explicit ``StatsConfig`` when
     an Iris context is not available. All emit methods are no-ops when the
     log client is unavailable.
     """
@@ -146,6 +181,7 @@ class StatsWriter:
         self._log_client = log_client
         self._stage_table: Table | None = None
         self._worker_table: Table | None = None
+        self._shuffle_table: Table | None = None
         if log_client is not None:
             with suppress(Exception):
                 self._stage_table = log_client.get_table(ZEPHYR_STAGE_STATS_NAMESPACE, ZephyrStageStat)
@@ -153,17 +189,22 @@ class StatsWriter:
                 self._worker_table = log_client.get_table(ZEPHYR_WORKER_STATS_NAMESPACE, ZephyrWorkerStat)
 
     @classmethod
-    def connect(cls, url: str | None = None) -> "StatsWriter":
-        """Connect to finelog; resolves the URL via Iris if not provided.
+    def connect(cls, config: StatsConfig | None = None) -> "StatsWriter":
+        """Connect to Finelog using explicit configuration or Iris discovery.
 
         Returns a no-op instance if the URL cannot be determined or the
         connection fails.
         """
-        resolved = url or cls.resolve_url()
+        resolved = config.url if config is not None else cls.resolve_url()
         if resolved is None:
             return cls(None)
         try:
-            return cls(LogClient.connect(resolved))
+            interceptors = (
+                IapAuth(iap_provider_for(config.auth_profile)).interceptors()
+                if config is not None and config.auth_profile is not None
+                else ()
+            )
+            return cls(LogClient.connect(resolved, interceptors=interceptors))
         except Exception:
             logger.warning("Could not connect to finelog at %s; stats disabled", resolved, exc_info=True)
             return cls(None)
@@ -262,6 +303,17 @@ class StatsWriter:
             self._worker_table.write([stat])
         except Exception:
             logger.warning("Failed to write worker stat to finelog", exc_info=True)
+
+    def emit_shuffle_stats(self, records: list[ZephyrShuffleStat]) -> None:
+        """Append target placeholders or measurements; create the table on demand."""
+        if self._log_client is None:
+            return
+        try:
+            if self._shuffle_table is None:
+                self._shuffle_table = self._log_client.get_table(ZEPHYR_SHUFFLE_STATS_NAMESPACE, ZephyrShuffleStat)
+            self._shuffle_table.write(records)
+        except Exception:
+            logger.warning("Failed to write shuffle stats to finelog", exc_info=True)
 
     def close(self) -> None:
         if self._log_client is not None:

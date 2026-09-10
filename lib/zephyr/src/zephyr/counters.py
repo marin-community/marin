@@ -56,6 +56,9 @@ RECORDS_OUT = "zephyr/records_out"
 """Records written by the output writers (jsonl/parquet/vortex/binary)."""
 PARTITIONS_SKIPPED = "zephyr/partitions_skipped"
 """Output partitions skipped because the target already existed (``skip_existing``)."""
+SHUFFLE_INPUT_ROWS = "zephyr/shuffle/input_rows"
+SHUFFLE_PAYLOAD_BYTES = "zephyr/shuffle/payload_bytes"
+SHUFFLE_NUM_SOURCES = "zephyr/shuffle/num_sources"
 
 
 class ScopedCounters:
