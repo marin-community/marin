@@ -68,6 +68,7 @@ from experiments.post_training.async_rl import (
     VALIDATION_ROWS,
     Correction,
     Runner,
+    apply_first_token_admission,
     apply_observation_options,
     validate_eval_interval,
     validate_regional_storage,
@@ -206,6 +207,7 @@ def training_config(
     dataloader_workers: int | None = 0,
     eval_on_installed_weights: bool = False,
     eval_mode: str = "blocking",
+    first_token_admission: bool | None = None,
     study_steps: int | None = None,
     eval_interval: int | None = None,
 ) -> str:
@@ -282,6 +284,7 @@ def training_config(
         "num_parallel_generation_workers": 64,
         "admission_stall_timeout": 900,
     }
+    apply_first_token_admission(config, runner, first_token_admission)
     megatron = {
         "tensor_model_parallel_size": 1,
         "pipeline_model_parallel_size": 2,
@@ -369,6 +372,7 @@ def build_experiment(
     dataloader_workers: int | None = 0,
     eval_on_installed_weights: bool = False,
     eval_mode: str = "blocking",
+    first_token_admission: bool | None = None,
     study_steps: int | None = None,
     eval_interval: int | None = None,
     seed: int = SEED,
@@ -434,6 +438,7 @@ def build_experiment(
         dataloader_workers=dataloader_workers,
         eval_on_installed_weights=eval_on_installed_weights,
         eval_mode=eval_mode,
+        first_token_admission=first_token_admission,
         study_steps=study_steps,
         eval_interval=eval_interval,
     )
@@ -534,6 +539,11 @@ def build_experiment(
 @click.option(
     "--eval-on-installed-weights", is_flag=True, help="Evaluate the installed async policy without off-grid sync."
 )
+@click.option(
+    "--first-token-admission/--no-first-token-admission",
+    default=None,
+    help="Default on for async admission. Disable only to retain legacy submission stamps, including checkpoint resume.",
+)
 @click.option("--eval-mode", type=click.Choice(["blocking", "background"]), default="blocking", show_default=True)
 @click.option("--train-rows", type=click.IntRange(min=1, max=7473), default=1024, show_default=True)
 @click.option("--study-steps", type=click.IntRange(min=1), help="Qualification-only update count; defaults to 25.")
@@ -563,6 +573,7 @@ def main(
     dataloader_workers: int | None,
     eval_on_installed_weights: bool,
     eval_mode: str,
+    first_token_admission: bool | None,
     train_rows: int,
     study_steps: int | None,
     eval_interval: int | None,
@@ -592,6 +603,7 @@ def main(
         dataloader_workers=dataloader_workers,
         eval_on_installed_weights=eval_on_installed_weights,
         eval_mode=eval_mode,
+        first_token_admission=first_token_admission,
         study_steps=study_steps,
         eval_interval=eval_interval,
         seed=seed,

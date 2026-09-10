@@ -261,7 +261,7 @@ def training_config(
     dataloader_workers: int | None = 0,
     publication_stage_timing: bool = False,
     serial_engine_startup: bool = False,
-    first_token_admission: bool = False,
+    first_token_admission: bool | None = None,
     generation_workers: int | None = None,
     lr: float | None = None,
     max_num_seqs: int | None = None,
@@ -417,12 +417,7 @@ def training_config(
         if eval_mode == "background" and not eval_on_installed_weights:
             raise ValueError("Background evaluation requires installed weights")
         trainer["fully_async"].update(eval_on_installed_weights=eval_on_installed_weights, eval_mode=eval_mode)
-    if type(first_token_admission) is not bool:
-        raise ValueError("first_token_admission must be boolean")
-    if first_token_admission:
-        if runner is not Runner.ASYNC:
-            raise ValueError("First-token admission requires the async runner")
-        config["trainer"]["fully_async"]["first_token_admission"] = True
+    apply_first_token_admission(config, runner, first_token_admission)
     if type(serial_engine_startup) is not bool:
         raise ValueError("serial_engine_startup must be a boolean")
     if serial_engine_startup:
@@ -485,6 +480,17 @@ def apply_optimizer_precision(
         ),
         "exp_avg_sq_dtype": "bfloat16" if precision == OptimizerPrecision.BF16_BOTH else "float32",
     }
+
+
+def apply_first_token_admission(config: dict, runner: Runner, enabled: bool | None) -> None:
+    """Use native first-token stamps by default only for fully async admission."""
+    if enabled is not None and type(enabled) is not bool:
+        raise ValueError("first_token_admission must be boolean or None")
+    if runner is not Runner.ASYNC:
+        if enabled:
+            raise ValueError("First-token admission requires the async runner")
+        return
+    config["trainer"]["fully_async"]["first_token_admission"] = True if enabled is None else enabled
 
 
 def apply_observation_options(config: dict, *, initial_eval_repeat_count: int, weight_change_probe: bool) -> None:
@@ -618,7 +624,7 @@ def build_experiment(
     dataloader_workers: int | None = 0,
     publication_stage_timing: bool = False,
     serial_engine_startup: bool = False,
-    first_token_admission: bool = False,
+    first_token_admission: bool | None = None,
     generation_workers: int | None = None,
     lr: float | None = None,
     max_num_seqs: int | None = None,
@@ -851,7 +857,11 @@ def build_experiment(
     help="Loader workers; zero avoids spawn stalls. Changing this invalidates source-order checkpoint resume.",
 )
 @click.option("--publication-stage-timing/--no-publication-stage-timing", default=False, show_default=True)
-@click.option("--first-token-admission", is_flag=True, help="Admit groups by native sampled-token version.")
+@click.option(
+    "--first-token-admission/--no-first-token-admission",
+    default=None,
+    help="Default on for async admission. Disable only to retain legacy submission stamps, including checkpoint resume.",
+)
 @click.option("--serial-engine-startup/--no-serial-engine-startup", default=False, show_default=True)
 @click.option("--inference-replicas", type=click.Choice(["8", "16"]), default="8", show_default=True)
 @click.option("--seed", type=click.IntRange(min=0, max=2**32 - 1), default=SEED, show_default=True)
@@ -947,7 +957,7 @@ def main(
     dataloader_workers: int | None,
     publication_stage_timing: bool,
     serial_engine_startup: bool,
-    first_token_admission: bool,
+    first_token_admission: bool | None,
     generation_workers: int | None,
     lr: float | None,
     max_num_seqs: int | None,

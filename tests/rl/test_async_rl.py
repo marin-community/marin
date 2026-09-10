@@ -646,6 +646,7 @@ def test_snowball_sync_control_changes_only_scheduler(completion) -> None:
         requests.append(preview["training"]["request"] if completion == "model" else preview["request"])
     configs = [yaml.safe_load(request["config_yaml"]) for request in requests]
     assert [config.pop("entrypoint") for config in configs] == ["standard", "fully_async"]
+    assert configs[1]["trainer"]["fully_async"].pop("first_token_admission")
     assert configs[0] == configs[1]
     assert requests[0]["run_id"] != requests[1]["run_id"]
     for field in ("model", "train_data", "validation_data", "topology", "runtime", "seed", "completion_mode"):
@@ -1418,3 +1419,40 @@ def test_qwen_weight_sync_trace_is_opt_in_and_changes_request_identity():
     assert config["generator"].pop("publication_stage_timing") is True
     assert config["generator"].pop("inference_stats_poll_seconds") == 1.0
     assert config == yaml.safe_load(before["config_yaml"])
+
+
+@pytest.mark.parametrize(
+    "recipe,arguments", [(async_rl, ["--stage", "rl", "--scale", "smoke"]), (async_snowball, ["--scale", "gate"])]
+)
+def test_first_token_cli_defaults_change_only_async_admission_identity(recipe, arguments):
+    requests = {}
+    for runner in ("sync", "async"):
+        for flag in (None, "--first-token-admission", "--no-first-token-admission"):
+            result = CliRunner().invoke(
+                recipe.main,
+                [
+                    "--version",
+                    "2026.09.09.1",
+                    "--completion",
+                    "metrics",
+                    "--dry-run",
+                    "--runner",
+                    runner,
+                    *arguments,
+                    *([flag] if flag else []),
+                ],
+            )
+            if runner == "sync" and flag == "--first-token-admission":
+                assert result.exit_code != 0
+                assert "requires the async runner" in str(result.exception)
+                continue
+            assert result.exit_code == 0, result.output + str(result.exception)
+            requests[runner, flag] = json.loads(result.output)["request"]
+    assert requests["sync", None] == requests["sync", "--no-first-token-admission"]
+    assert requests["async", None] == requests["async", "--first-token-admission"]
+    enabled = requests["async", None]
+    disabled = requests["async", "--no-first-token-admission"]
+    assert enabled["run_id"] != disabled["run_id"]
+    configs = [yaml.safe_load(r["config_yaml"]) for r in (enabled, disabled)]
+    assert [c["trainer"]["fully_async"].pop("first_token_admission") for c in configs] == [True, False]
+    assert configs[0] == configs[1]
