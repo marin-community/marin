@@ -174,6 +174,16 @@ pub fn namespace_catalog(
     })
 }
 
+/// Raise a projected catalog's sequence high-water to a durable floor.
+///
+/// Segment removal can leave no live rows from which SQLite can recompute the
+/// monotonic sequence space.
+pub fn floor_persisted_high_water(catalog: &mut NamespaceCatalog, floor: i64) {
+    if catalog.persisted_high_water.unwrap_or(0) < floor {
+        catalog.persisted_high_water = Some(floor);
+    }
+}
+
 /// The artifact-reference fields of a published segment.
 ///
 /// Membership is by reference: a reader opens exactly the bundle and projection

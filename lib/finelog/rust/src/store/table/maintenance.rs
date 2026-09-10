@@ -31,6 +31,25 @@ use crate::store::table::key_bounds;
 use crate::store::table::runtime::TableRuntime;
 use crate::store::table::spec_migration::{self, SpecMigration};
 
+/// Physical maintenance appropriate to the process hosting a table.
+///
+/// A relay is a durable forwarding spool, not a query-serving replica. It
+/// keeps the logical table specification intact while omitting derived query
+/// artifacts and retiring data only after its configured downstream settles
+/// the corresponding sequence range.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub enum MaintenanceProfile {
+    #[default]
+    QueryServing,
+    Relay,
+}
+
+impl MaintenanceProfile {
+    pub fn is_relay(&self) -> bool {
+        matches!(self, Self::Relay)
+    }
+}
+
 /// One unit of table maintenance, each owned by exactly one module.
 #[derive(Clone, Copy, Debug)]
 pub enum TableWork {
@@ -62,22 +81,37 @@ pub enum TableWork {
     Cycle { force_compact_l0: bool },
 }
 
+/// Resource class for a prompt follow-up maintenance cycle.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MaintenanceClass {
+    QueryServing,
+    SpecMigration,
+    RelayIo,
+}
+
 /// Whether the scheduler should run another cycle on its prompt cadence.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum WorkOutcome {
     #[default]
     Complete,
-    MoreWork,
+    Continue(MaintenanceClass),
 }
 
 impl WorkOutcome {
     pub fn has_more_work(self) -> bool {
-        self == Self::MoreWork
+        matches!(self, Self::Continue(_))
     }
 
-    fn from_pending(pending: bool) -> Self {
+    pub fn next_class(self) -> Option<MaintenanceClass> {
+        match self {
+            Self::Complete => None,
+            Self::Continue(class) => Some(class),
+        }
+    }
+
+    pub(super) fn from_pending(pending: bool, class: MaintenanceClass) -> Self {
         if pending {
-            Self::MoreWork
+            Self::Continue(class)
         } else {
             Self::Complete
         }
@@ -128,11 +162,15 @@ async fn run_one(runtime: &Arc<TableRuntime>, work: TableWork) -> Result<WorkOut
                 on_activated: &activated,
             })
             .await?;
-            Ok(WorkOutcome::from_pending(owns_cycle))
+            Ok(WorkOutcome::from_pending(
+                owns_cycle,
+                MaintenanceClass::SpecMigration,
+            ))
         }
         TableWork::Compaction { force_compact_l0 } => compact(runtime, force_compact_l0).await,
         TableWork::KeyBounds => Ok(WorkOutcome::from_pending(
             key_bounds::maintain(runtime).await?,
+            MaintenanceClass::QueryServing,
         )),
         TableWork::IndexArtifacts => {
             let tracker = &runtime.layout_tracker;
@@ -179,7 +217,10 @@ async fn run_one(runtime: &Arc<TableRuntime>, work: TableWork) -> Result<WorkOut
             .map_err(|error| {
                 StatsError::Internal(format!("maintenance placement task panicked: {error}"))
             })??;
-            Ok(WorkOutcome::from_pending(pending))
+            Ok(WorkOutcome::from_pending(
+                pending,
+                MaintenanceClass::QueryServing,
+            ))
         }
         TableWork::ArchivePlacement => {
             layout::advance_archive_placement(&local_layout(runtime)).await?;
@@ -200,12 +241,6 @@ async fn run_one(runtime: &Arc<TableRuntime>, work: TableWork) -> Result<WorkOut
     }
 }
 
-/// Run one full maintenance cycle, serialized against other cycles.
-///
-/// An object-backed table publishes pending state, compacts immutable objects,
-/// collects, and maintains indexes. A legacy table converges its physical
-/// placement, compacts local segments, synchronizes the archive, evicts, and
-/// performs index and encoding maintenance.
 async fn cycle(
     runtime: &Arc<TableRuntime>,
     force_compact_l0: bool,
@@ -234,10 +269,15 @@ async fn cycle(
             runtime.controller.gc_objects().await?;
             run_one(runtime, TableWork::ObjectCollection).await?;
         }
-        return Ok(WorkOutcome::MoreWork);
+        return Ok(WorkOutcome::Continue(MaintenanceClass::SpecMigration));
     }
     if runtime.policy().object_backed() {
         runtime.controller.publish_owed().await?;
+        if runtime.maintenance_profile().is_relay() {
+            runtime.controller.gc_objects().await?;
+            run_one(runtime, TableWork::ObjectCollection).await?;
+            return Ok(WorkOutcome::Complete);
+        }
         // Report pending while compaction keeps finding runs: an L0 backlog
         // then drains at the fast re-poll cadence through the dedicated slot
         // instead of one run per shared-queue visit, mirroring how a legacy
@@ -251,7 +291,17 @@ async fn cycle(
         runtime.controller.gc_objects().await?;
         run_one(runtime, TableWork::ObjectCollection).await?;
         run_one(runtime, TableWork::IndexArtifacts).await?;
-        return Ok(WorkOutcome::from_pending(bounds_pending || compacted));
+        return Ok(WorkOutcome::from_pending(
+            bounds_pending || compacted,
+            MaintenanceClass::QueryServing,
+        ));
+    }
+
+    if runtime.maintenance_profile().is_relay() {
+        run_one(runtime, TableWork::Compaction { force_compact_l0 }).await?;
+        run_one(runtime, TableWork::LegacyArchive).await?;
+        run_one(runtime, TableWork::Eviction).await?;
+        return Ok(WorkOutcome::Complete);
     }
 
     let placement_pending = run_one(runtime, TableWork::Placement)
@@ -269,7 +319,10 @@ async fn cycle(
     // re-compacted, so without it a table carries whatever layout it was written
     // with until eviction ages it out.
     run_one(runtime, TableWork::EncodingRewrite).await?;
-    Ok(WorkOutcome::from_pending(placement_pending))
+    Ok(WorkOutcome::from_pending(
+        placement_pending,
+        MaintenanceClass::QueryServing,
+    ))
 }
 
 /// Compact one run, or — for a legacy table — drain the planner's backlog.
@@ -294,7 +347,10 @@ async fn compact(
             force_compact_l0,
         )
         .await?;
-        return Ok(WorkOutcome::from_pending(compacted.has_pending_work()));
+        return Ok(WorkOutcome::from_pending(
+            compacted.has_pending_work(),
+            MaintenanceClass::QueryServing,
+        ));
     }
     // The legacy path decodes Parquet and takes the query-visibility write lock,
     // so the whole drain runs on the blocking pool. It checks the stop latch
@@ -325,7 +381,10 @@ async fn compact(
                 break;
             }
         }
-        Ok(WorkOutcome::from_pending(compacted))
+        Ok(WorkOutcome::from_pending(
+            compacted,
+            MaintenanceClass::QueryServing,
+        ))
     })
     .await
     .map_err(|error| StatsError::Internal(format!("maintenance compact task panicked: {error}")))?
@@ -415,6 +474,12 @@ fn table_dir(runtime: &TableRuntime) -> &std::path::Path {
 }
 
 fn index_config(runtime: &TableRuntime) -> SegmentIndexConfig {
+    if runtime.maintenance_profile().is_relay() {
+        return SegmentIndexConfig {
+            indexes: Vec::new(),
+            key_column: Some(runtime.key_column().to_string()),
+        };
+    }
     runtime.format.index_config(runtime.name())
 }
 
@@ -431,7 +496,8 @@ pub(crate) fn index_backfill<'a>(
         registry: &runtime.indices,
         limits: &runtime.limits,
         config: index_config(runtime),
-        indexes_enabled: segment_indexes_enabled_for(runtime.name()),
+        indexes_enabled: !runtime.maintenance_profile().is_relay()
+            && segment_indexes_enabled_for(runtime.name()),
         layout_is_current,
         skips: &runtime.index_skips,
     }
@@ -447,7 +513,11 @@ pub(crate) fn local_compaction(runtime: &TableRuntime) -> LocalCompaction<'_> {
         segments: &runtime.segments,
         query_visibility: &runtime.query_visibility,
         config: &runtime.compaction_config,
-        partition_policy: physical_partition_policy_for(runtime.name()),
+        partition_policy: if runtime.maintenance_profile().is_relay() {
+            None
+        } else {
+            physical_partition_policy_for(runtime.name())
+        },
     }
 }
 

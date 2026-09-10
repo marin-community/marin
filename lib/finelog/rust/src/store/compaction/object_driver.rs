@@ -329,32 +329,28 @@ async fn commit_replacement(
 ) -> Result<CompactionOutcome, StatsError> {
     let compaction = leased.resources;
     let removed_paths = removed.to_vec();
-    let committed = match compaction
-        .controller
-        .commit_maintenance(&leased.lease, || {
-            let live: HashSet<String> = compaction
-                .catalog
-                .object_segments(compaction.table)?
-                .into_iter()
-                .map(|record| record.path)
-                .collect();
-            if let Some(retired) = removed_paths.iter().find(|path| !live.contains(*path)) {
-                return Err(StatsError::SchemaConflict(format!(
-                    "compaction input {retired} is no longer live"
-                )));
-            }
-            let revision = compaction.catalog.replace_object_segments(
-                compaction.table,
-                &removed_paths,
-                &outputs,
-                leased.table_spec_version,
-                leased.migration_backfill,
-            )?;
-            Ok((revision, ()))
-        })
-        .await
-    {
-        Ok(committed) => Some(committed.token.revision()),
+    let committed = match compaction.controller.commit_maintenance(&leased.lease, || {
+        let live: HashSet<String> = compaction
+            .catalog
+            .object_segments(compaction.table)?
+            .into_iter()
+            .map(|record| record.path)
+            .collect();
+        if let Some(retired) = removed_paths.iter().find(|path| !live.contains(*path)) {
+            return Err(StatsError::SchemaConflict(format!(
+                "compaction input {retired} is no longer live"
+            )));
+        }
+        let revision = compaction.catalog.replace_object_segments(
+            compaction.table,
+            &removed_paths,
+            &outputs,
+            leased.table_spec_version,
+            leased.migration_backfill,
+        )?;
+        Ok((revision, ()))
+    }) {
+        Ok(committed) => committed.token.revision(),
         Err(error) if is_lease_conflict(&error) => {
             tracing::info!(
                 namespace = %compaction.table,
@@ -365,13 +361,7 @@ async fn commit_replacement(
             );
             return Ok(CompactionOutcome::Conflicted);
         }
-        Err(error) if !error.is_committed() => return Err(error.into()),
-        // Durable locally but not published; the maintenance loop owes HEAD that
-        // revision. The local view still follows the committed rows.
-        Err(error) => {
-            tracing::warn!(namespace = %compaction.table, %error, "compaction commit awaits publication");
-            None
-        }
+        Err(error) => return Err(error.into()),
     };
     let _visibility_guard = compaction.query_visibility.write().await;
     let rows = published
@@ -385,7 +375,7 @@ async fn commit_replacement(
         inputs = removed_paths.len(),
         outputs,
         rows,
-        catalog_generation = committed.map(|revision| revision.get()),
+        catalog_generation = committed.get(),
         "object-backed compaction committed"
     );
     Ok(CompactionOutcome::Committed)

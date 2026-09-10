@@ -37,17 +37,21 @@ use datafusion::datasource::MemTable;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableType};
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::ExecutionPlan;
+use futures::{stream, StreamExt, TryStreamExt};
 
 use crate::errors::StatsError;
 use crate::indices::{IndexRegistry, SegmentArtifacts};
 use crate::partition_policy::{PhysicalPartitionPolicy, SegmentPartition};
-use crate::store::object_store::{ObjectId, ObjectPrefix, ObjectStore};
+use crate::store::object_store::{ObjectId, ObjectStore};
 use crate::store::table::query_view::SegmentObjectMap;
 
 /// Tail bytes fetched per remote Parquet file when reading its footer. Large
 /// enough to cover the metadata of a target-size object in one ranged GET; a
 /// larger footer falls back to a second fetch.
 const REMOTE_FOOTER_SIZE_HINT: usize = 512 * 1024;
+
+/// Concurrent exact existence probes for selected uncached source objects.
+const MAX_PARALLEL_SOURCE_PROBES: usize = 32;
 
 /// A live namespace as one DataFusion table.
 ///
@@ -175,27 +179,30 @@ impl ObjectSources {
     ///
     /// The listing table treats a URL whose object does not exist as an empty
     /// listing, which would silently drop that segment's rows from the answer.
-    /// One listing of the table prefix covers every uncached source at a single
-    /// round trip; a scan served entirely from cache skips it.
+    /// Probe only the objects selected by catalog pruning. Listing the whole
+    /// table makes a bounded tail query scale with historical segment count.
     async fn verify_remote_sources_exist(
         &self,
         remote_sources: &[ObjectId],
     ) -> Result<(), StatsError> {
-        let Some(first) = remote_sources.first() else {
+        if remote_sources.is_empty() {
             return Ok(());
-        };
-        let prefix = ObjectPrefix::table(first.table_name(), "")?;
-        let listed: BTreeSet<String> = self
-            .store
-            .list(&prefix)
-            .await?
+        }
+        let store = Arc::clone(&self.store);
+        let checked = stream::iter(remote_sources.iter().cloned())
+            .map(move |id| {
+                let store = Arc::clone(&store);
+                async move {
+                    let exists = store.exists(&id).await?;
+                    Ok::<_, StatsError>((id, exists))
+                }
+            })
+            .buffer_unordered(MAX_PARALLEL_SOURCE_PROBES)
+            .try_collect::<Vec<_>>()
+            .await?;
+        let missing: Vec<String> = checked
             .into_iter()
-            .map(|metadata| metadata.id.as_str().to_string())
-            .collect();
-        let missing: Vec<&str> = remote_sources
-            .iter()
-            .map(|id| id.as_str())
-            .filter(|id| !listed.contains(*id))
+            .filter_map(|(id, exists)| (!exists).then_some(id.as_str().to_string()))
             .collect();
         if missing.is_empty() {
             return Ok(());

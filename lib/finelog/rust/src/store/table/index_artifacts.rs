@@ -21,6 +21,7 @@ use crate::indices::{
     IndexBuildRequest, IndexRegistry, SegmentIndexConfig,
 };
 use crate::maintenance::MaintenanceLimits;
+use crate::proto::finelog::stats::ObjectRef;
 use crate::store::catalog::Catalog;
 use crate::store::compaction::executor::read_segment_projected;
 use crate::store::object_store::{INDICES_PREFIX, PROJECTIONS_PREFIX};
@@ -148,8 +149,24 @@ async fn rebuild_missing_artifacts(backfill: &IndexBackfill<'_>, max: usize) -> 
     };
     let table = backfill.table;
     let mut built = 0;
-    for candidate in candidates(backfill, max) {
-        let path = PathBuf::from(&candidate.path);
+    let candidates = match candidates(backfill, max) {
+        Ok(candidates) => candidates,
+        Err(error) => {
+            tracing::warn!(namespace = %table, %error, "index backfill candidate selection failed");
+            return 0;
+        }
+    };
+    for candidate in candidates {
+        let path = match &candidate.source {
+            Some(source) => match backfill.controller.localize(source).await {
+                Ok(path) => path,
+                Err(error) => {
+                    tracing::warn!(namespace = %table, path = %candidate.path, %error, "index backfill source localization failed");
+                    continue;
+                }
+            },
+            None => PathBuf::from(&candidate.path),
+        };
         let registry = Arc::clone(backfill.registry);
         let config = backfill.config.clone();
         let build_path = path.clone();
@@ -311,11 +328,21 @@ fn remove_disabled_artifacts(backfill: &IndexBackfill<'_>, max: usize) -> usize 
 struct BackfillCandidate {
     path: String,
     expected_rows: i64,
+    source: Option<ObjectRef>,
 }
 
 /// The newest-first segments whose artifacts do not satisfy the index policy.
-fn candidates(backfill: &IndexBackfill<'_>, max: usize) -> Vec<BackfillCandidate> {
+fn candidates(
+    backfill: &IndexBackfill<'_>,
+    max: usize,
+) -> Result<Vec<BackfillCandidate>, StatsError> {
     let segments: Vec<LocalSegment> = backfill.segments.segments();
+    let object_sources: std::collections::HashMap<_, _> = backfill
+        .catalog
+        .object_segments(backfill.table)?
+        .into_iter()
+        .map(|record| (record.path, record.source))
+        .collect();
     let fingerprint = format!("{:?}", backfill.config.policy_fingerprint());
     let mut skips = backfill.skips.lock().unwrap();
     let live: HashSet<&str> = segments
@@ -338,14 +365,15 @@ fn candidates(backfill: &IndexBackfill<'_>, max: usize) -> Vec<BackfillCandidate
         })
         .collect::<Vec<_>>();
     candidates.sort_by_key(|segment| Reverse(segment.max_seq));
-    candidates
+    Ok(candidates
         .into_iter()
         .take(max)
         .map(|segment| BackfillCandidate {
             path: segment.path.clone(),
             expected_rows: segment.row_count,
+            source: object_sources.get(&segment.path).cloned(),
         })
-        .collect()
+        .collect())
 }
 
 /// Segments the backfill cannot bring up to date, and the indexed set that

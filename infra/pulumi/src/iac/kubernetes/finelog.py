@@ -76,7 +76,12 @@ class FinelogResourceArgs:
 
 
 def _container_env(config: FinelogConfig) -> list[k8s.core.v1.EnvVarArgs]:
+    assert config.deployment.k8s is not None
+    ack_durability = (
+        "object-store" if config.deployment.k8s.cache_storage is K8sCacheStorage.NODE_LOCAL else "local-disk"
+    )
     env = [
+        k8s.core.v1.EnvVarArgs(name="FINELOG_ACK_DURABILITY", value=ack_durability),
         k8s.core.v1.EnvVarArgs(name="FINELOG_PORT", value=str(config.port)),
         k8s.core.v1.EnvVarArgs(name="FINELOG_REMOTE_DIR", value=config.remote_log_dir),
     ]
