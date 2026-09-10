@@ -9,12 +9,13 @@ from urllib.parse import urlsplit
 
 import yaml
 from fray.types import CpuConfig
-from marin.execution.lazy import ArtifactStep
+from marin.execution.fingerprint import canonical_json
+from marin.execution.lazy import ArtifactStep, StepContext, run
 from marin.execution.remote import RemoteCallable
 
 from experiments.post_training import async_rl
 from experiments.post_training.curriculum_rl.launch import mirror_hf_model
-from experiments.post_training.math_eval.bucket_launcher import BUCKET_ARGUMENT
+from experiments.post_training.math_eval.bucket_launcher import BUCKET_ARGUMENT, bucket_inputs
 
 
 def _east_object(uri: str) -> str:
@@ -111,3 +112,38 @@ def local_model_dependency(step: ArtifactStep) -> ArtifactStep:
     if local.fingerprint_payload() != step.fingerprint_payload():
         raise ValueError("Local execution must preserve dependency identity")
     return local
+
+
+def preparation_dependency(step: ArtifactStep) -> ArtifactStep:
+    """Accept exact adopted task inputs or the allowlisted local model mirror."""
+    if step.adopt_source is None:
+        return local_model_dependency(step)
+    approved = tuple(dep for source in bucket_inputs() for dep in source.deps())
+    for reference in approved:
+        if (
+            (step.name, step.version, step.fingerprint_payload(), step.expected_fingerprint)
+            == (reference.name, reference.version, reference.fingerprint_payload(), reference.expected_fingerprint)
+            and not step.deps
+            and step.override_path is None
+        ):
+            return step
+    raise ValueError("Unsupported adopted preparation input")
+
+
+def resolve_qualification(step: ArtifactStep, prefix: str, seen: set):
+    """Resolve the complete model/input graph before building its native request."""
+    for dep in step.deps:
+        identity = (dep.name, dep.version, dep.fingerprint())
+        if identity in seen:
+            continue
+        local = preparation_dependency(dep)
+        context = StepContext.for_run(dep.path(prefix), prefix, runtime_args=dep.runtime_args, deps=dep.deps)
+        if local.path(prefix) != dep.path(prefix) or canonical_json(local.build_config(context)) != canonical_json(
+            dep.build_config(context)
+        ):
+            raise ValueError("Preparation changed dependency configuration or output")
+        run(local)
+        seen.add(identity)
+    return step.build_config(
+        StepContext.for_run(step.path(prefix), prefix, runtime_args=step.runtime_args, deps=step.deps)
+    )

@@ -1,17 +1,25 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
 from fray.iris_backend import FrayIrisClient
 from fray.local_backend import LocalClient
 from hydra.core.override_parser.overrides_parser import OverridesParser
+from marin.execution import artifact, lazy
 from marin.execution.lazy import materialized_config, run
 from marin.rl.skyrl import ArtifactDataSource
 
-from experiments.post_training.async_n2_qualification import build_qualification, local_model_dependency
+from experiments.post_training.async_n2_qualification import (
+    build_qualification,
+    local_model_dependency,
+    preparation_dependency,
+    resolve_qualification,
+)
 from experiments.post_training.curriculum_rl import launch
 from experiments.post_training.math_eval.bucket_launcher import VerifiedBucketDataSource
 from experiments.post_training.math_eval.launcher import VerifiedPoolDataSource
@@ -121,3 +129,54 @@ def test_local_mirror_uses_actual_step_runner_without_submissions(tmp_path, monk
     run(local)
     assert len(calls) == 1
     assert retained == {str(path.relative_to(output)): path.read_bytes() for path in output.rglob("*") if path.is_file()}
+
+
+def test_complete_fresh_and_continuation_graph_uses_no_nested_submission(tmp_path, monkeypatch, local_config_inputs):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    downloads = []
+
+    def download(*, repo_id, revision, local_dir, cache_dir):
+        downloads.append((repo_id, revision))
+        local = Path(local_dir)
+        local.mkdir(parents=True)
+        (local / "config.json").write_text("{}")
+        return str(local)
+
+    def submission_trap(*args, **kwargs):
+        raise AssertionError("Complete graph attempted a nested submission")
+
+    fresh = build_qualification(version="2026.09.09.259", measurement_uri=MARKER)
+    adopted = {dep.adopt_source for dep in fresh.deps if dep.adopt_source}
+    assert len(fresh.deps) == 3 and len(adopted) == 2
+    original_fs = lazy.url_to_fs
+    original_record = artifact.read_record
+
+    def metadata_fs(path, **kwargs):
+        if path in adopted:
+            return SimpleNamespace(exists=lambda value: value in adopted), path
+        return original_fs(path, **kwargs)
+
+    # Only retained input existence/record reads and input content validators are
+    # stubbed. Real StepRunner, graph dispatch and request builders execute.
+    monkeypatch.setattr(lazy, "url_to_fs", metadata_fs)
+    monkeypatch.setattr(artifact, "read_record", lambda path: None if path in adopted else original_record(path))
+    monkeypatch.setattr(launch, "snapshot_download", download)
+    monkeypatch.setattr(FrayIrisClient, "submit", submission_trap)
+    monkeypatch.setattr(LocalClient, "submit", submission_trap)
+    seen = set()
+    first = resolve_qualification(fresh, PREFIX, seen)
+    checkpoint = first.request.output.checkpoint_root + "/global_step_7"
+    continuation = build_qualification(
+        version="2026.09.09.260", measurement_uri=MARKER.replace("fresh", "continuation"), checkpoint_seven=checkpoint
+    )
+    second = resolve_qualification(continuation, PREFIX, seen)
+    assert len(seen) == 4 and len(downloads) == 2
+    parsed = OverridesParser.create().parse_overrides(list(second.request.overrides))
+    assert [item.value() for item in parsed if item.key_or_group == "trainer.resume_path"] == [checkpoint]
+    assert yaml.safe_load(first.request.config_yaml)["trainer"]["max_steps"] == 8
+    assert yaml.safe_load(second.request.config_yaml)["trainer"]["max_steps"] == 8
+    wrong = replace(fresh.deps[1], adopt_source=PREFIX + "/unreviewed")
+    with pytest.raises(ValueError, match="Unsupported adopted"):
+        preparation_dependency(wrong)
+    with pytest.raises(ValueError, match="Only the native model mirror"):
+        preparation_dependency(fresh)
