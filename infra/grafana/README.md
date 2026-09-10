@@ -81,6 +81,38 @@ latency/outcomes, and worst-replica freshness after a serve exits; reset-aware
 deltas preserve replica identity, and an explicit no-data row distinguishes
 missing telemetry from healthy application silence.
 
+The inference pages open on five minutes and refresh every two minutes. Historical
+ranges remain selectable, up to seven days. Each cache miss fetches one compact
+Finelog result with the selected series' samples; the bridge computes all panels
+locally with DuckDB and shares the result across both pages. Packing series avoids
+repeating the raw scan for every diagnostic section. The fetch retains the existing
+three-minute lookback and refuses more than one million samples or 50,000 series;
+the local calculation uses one thread, a 512 MB memory limit, and no disk spill.
+Local calculations run one at a time because Grafana and the bridge share one CPU.
+Dense historical ranges can exceed these limits and must be narrowed. Missing
+historical ITL remains unavailable; the bridge does not reconstruct it from TPOT.
+
+To replay both pages against the existing four-node data in
+[Marin #8929](https://github.com/marin-community/marin/issues/8929), run from the
+repository root (the replay uses the repository's Finelog connection helpers):
+
+```bash
+PYTHONPATH=infra/grafana/src uv run python infra/grafana/benchmarks/inference_query_cost.py \
+  --identity snowball-throughput-20260905-four-node \
+  --from-ms 1788576120000 --to-ms 1788576150000 \
+  --output /tmp/inference-query-after
+```
+
+The replay requests the selector, sends each page's panels in parallel, then
+repeats both pages with a warm cache. It saves SQL, Arrow inputs, responses,
+upstream call counts and durations, and page latency. `--refresh-after 120` also
+waits two minutes and advances the window. To compare the original draft, extract
+`infra/grafana/{src,dashboards}` from commit
+`4ace1ba5eb91cd184dec17c704ec7aa5962a9ac3` with `git archive`, point `PYTHONPATH` at
+that extracted `src/`, and pass its parent as `--grafana-dir`. Keep the identity,
+window, and request sequence the same, and use a separate output directory.
+These are read-only live queries; repeat only the windows needed for comparison.
+
 `fleet_health` reads one row from `finelog-marin`'s `log` namespace and combines that
 result with the three CoreWeave mirror Deployments' HTTP-readiness state. A hub query
 at or above 5 seconds is slow. Clusters' finelog row adds effective pod

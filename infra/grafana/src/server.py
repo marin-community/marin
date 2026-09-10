@@ -126,9 +126,11 @@ from starlette.routing import Route
 from training_stalls import telemetry_query, training_stall_alert_rows
 from vllm_observability import (
     VLLM_MAX_RESULT_ROWS,
+    VLLM_MAX_SERIES,
     VLLM_OVERVIEW_SECTIONS,
     VllmIdentityField,
     vllm_overview_query,
+    vllm_overview_table,
 )
 from wandb_source import WandbSource
 from zephyr_stalls import zephyr_progress_query, zephyr_stall_alert_rows
@@ -449,10 +451,8 @@ def create_app(
                     overview.start_ms,
                     overview.end_ms,
                 )
-                table = finelog_sources[target.name].query(
-                    overview.sql,
-                    max_rows=min(config.max_rows, VLLM_MAX_RESULT_ROWS),
-                )
+                series = finelog_sources[target.name].query(overview.samples_sql, max_rows=VLLM_MAX_SERIES)
+                table = vllm_overview_table(overview, series, max_rows=min(config.max_rows, VLLM_MAX_RESULT_ROWS))
                 return rows_to_json(table)
 
             rows = finelog_cache.get_or_compute(key, run)
