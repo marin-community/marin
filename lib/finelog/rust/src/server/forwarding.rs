@@ -895,9 +895,9 @@ where
         let rows = self.ship_batch(result)?;
         let encode_elapsed = encode_started.elapsed();
         let row_count = rows.as_ref().map_or(0, |(batch, _)| batch.num_rows());
-        let complete_window = rows.as_ref().map_or(true, |(batch, _)| {
-            batch.num_rows() < FORWARD_BATCH_ROWS as usize
-        });
+        let complete_window = rows
+            .as_ref()
+            .is_none_or(|(batch, _)| batch.num_rows() < FORWARD_BATCH_ROWS as usize);
         let total = read_started.elapsed();
         let log_read = || {
             tracing::info!(
