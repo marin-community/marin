@@ -3,6 +3,7 @@
 
 import copy
 
+import click
 import pytest
 import yaml
 
@@ -73,3 +74,19 @@ def test_timing_request_rejects_wrong_region_existing_outputs_or_geometry(source
         source["config_yaml"] = yaml.safe_dump(cfg)
     with pytest.raises(ValueError):
         make_request(source, "reference")
+
+
+def test_timing_rno_execution_requires_opt_in_and_preserves_scientific_request(source):
+    arguments = dict(
+        runtime_commit="a" * 40, mode="bucket", run_id="timing", output_prefix="s3://marin-us-east-02a/new/bucket"
+    )
+    east = prepare_timing_request(source, **arguments)
+    with pytest.raises(click.ClickException, match="not local"):
+        prepare_timing_request(source, **arguments, cluster="cw-rno2a")
+    rno = prepare_timing_request(source, **arguments, cluster="cw-rno2a", allow_cross_region_io=True)
+    assert east["request"] == rno["request"]
+    assert east["request_hash"] == rno["request_hash"]
+    assert rno["execution"]["cluster"] == "cw-rno2a"
+    assert rno["execution"]["timeout_seconds"] == 4800
+    assert rno["execution"]["max_retries"] == 0
+    assert rno["coordinator_timeout_seconds"] > rno["coordinator_wait_seconds"] > 4800

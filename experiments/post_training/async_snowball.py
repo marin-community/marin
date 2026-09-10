@@ -69,6 +69,7 @@ from experiments.post_training.async_rl import (
     Correction,
     Runner,
     apply_observation_options,
+    validate_cross_region_request,
     validate_eval_interval,
     validate_regional_storage,
     validate_validation_window,
@@ -375,9 +376,15 @@ def build_experiment(
     validation_offset: int = 0,
     validation_rows: int = VALIDATION_ROWS,
     train_rows: int = 1024,
+    cluster: str = CLUSTER,
+    allow_cross_region_io: bool = False,
 ) -> ArtifactStep[SkyRLModel] | ArtifactStep[SkyRLCheckpoint] | ArtifactStep[SkyRLTrainingResult]:
     """Build Snowball training with the requested terminal artifact."""
     backend = Backend(backend)
+    if cluster not in (CLUSTER, "cw-rno2a"):
+        raise ValueError("Snowball requires an H100 cluster")
+    if allow_cross_region_io and (cluster != "cw-rno2a" or completion != "metrics"):
+        raise ValueError("Cross-region Snowball requires RNO and metrics completion")
     validate_version(version)
     if is_mutable_version(version) or timeout_seconds <= 0:
         raise ValueError("Use an immutable version and positive training deadline")
@@ -467,8 +474,8 @@ def build_experiment(
         overrides=("++trainer.hf_hub_repo_id=null",) + (FSDP2_OVERRIDES if backend is Backend.FSDP2 else ()),
     )
     execution = IrisSkyRLExecution(
-        cluster=CLUSTER,
-        cluster_config=f"lib/iris/config/{CLUSTER}.yaml",
+        cluster=cluster,
+        cluster_config=f"lib/iris/config/{cluster}.yaml",
         cpu=16,
         # Megatron checkpoint staging can use ~146GB per rank on eight ranks.
         memory="1800GB",
@@ -478,7 +485,18 @@ def build_experiment(
         timeout_seconds=timeout_seconds,
     )
     if completion == "metrics":
-        return skyrl_metrics_step(spec, execution)
+        step = skyrl_metrics_step(spec, execution)
+        if allow_cross_region_io:
+            original_build_config = step.build_config
+
+            def checked_build_config(ctx):
+                config = original_build_config(ctx)
+                if not ctx.is_fingerprint:
+                    validate_cross_region_request(config.request)
+                return config
+
+            step = replace(step, build_config=checked_build_config)
+        return step
     if completion == "checkpoint":
         return skyrl_checkpoint_step(spec, execution)
     if completion == "model":
@@ -537,6 +555,8 @@ def build_experiment(
 @click.option("--seed", type=click.IntRange(min=0, max=2**32 - 1), default=SEED, show_default=True)
 @click.option("--validation-offset", type=click.IntRange(min=0), default=0, show_default=True)
 @click.option("--validation-rows", type=click.IntRange(min=1), default=VALIDATION_ROWS, show_default=True)
+@click.option("--cluster", type=click.Choice([CLUSTER, "cw-rno2a"]), default=CLUSTER, show_default=True)
+@click.option("--allow-cross-region-io", is_flag=True, help="Read and write east artifacts while running on RNO.")
 @click.option("--run/--dry-run", "execute", default=False, show_default=True)
 def main(
     version: str,
@@ -566,6 +586,8 @@ def main(
     validation_offset: int,
     validation_rows: int,
     execute: bool,
+    cluster: str,
+    allow_cross_region_io: bool,
 ) -> None:
     training = build_experiment(
         version=version,
@@ -594,10 +616,12 @@ def main(
         validation_offset=validation_offset,
         validation_rows=validation_rows,
         train_rows=train_rows,
+        cluster=cluster,
+        allow_cross_region_io=allow_cross_region_io,
     )
     prefix = marin_prefix()
-    if execute:
-        validate_regional_storage(prefix, CLUSTER)
+    if execute or allow_cross_region_io:
+        validate_regional_storage(prefix, cluster, allow_cross_region_io=allow_cross_region_io)
     if completion == "model":
         checkpoint = cast(ArtifactStep[SkyRLCheckpoint], training.deps[0])
         training_context = StepContext.for_fingerprint(checkpoint.runtime_args.keys(), checkpoint.deps)

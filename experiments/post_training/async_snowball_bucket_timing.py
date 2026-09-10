@@ -11,15 +11,25 @@ from pathlib import Path
 
 import yaml
 
+from experiments.post_training.async_rl import validate_regional_storage
+
 EAST = "s3://marin-us-east-02a/"
 MODES = ("reference", "bucket")
 HISTORICAL_BROADCAST_MEDIAN = 14.955344404093921
 
 
 def prepare_timing_request(
-    source_request: dict, *, runtime_commit: str, mode: str, run_id: str, output_prefix: str
+    source_request: dict,
+    *,
+    runtime_commit: str,
+    mode: str,
+    run_id: str,
+    output_prefix: str,
+    cluster: str = "cw-us-east-02a",
+    allow_cross_region_io: bool = False,
 ) -> dict:
     """Preserve model/data selection and give each transfer arm fresh outputs."""
+    validate_regional_storage(output_prefix, cluster, allow_cross_region_io=allow_cross_region_io)
     if mode not in MODES:
         raise ValueError("Timing mode must be reference or bucket")
     if len(runtime_commit) != 40 or any(char not in "0123456789abcdef" for char in runtime_commit):
@@ -102,17 +112,17 @@ def prepare_timing_request(
         "request": request,
         "request_hash": digest,
         "execution": {
-            "cluster": "cw-us-east-02a",
-            "cluster_config": "lib/iris/config/cw-us-east-02a.yaml",
+            "cluster": cluster,
+            "cluster_config": f"lib/iris/config/{cluster}.yaml",
             "cpu": 16,
             "memory": "1800GB",
             "disk": "2TB",
             "priority": "batch",
-            "max_retries": 1,
+            "max_retries": 0,
             "target_cluster": None,
             "parent_cluster_config": None,
             "wandb_entity": None,
-            "timeout_seconds": 2400,
+            "timeout_seconds": 4800,
         },
         "expected_updates": 20,
         "expected_initial_syncs": 1,
@@ -122,10 +132,10 @@ def prepare_timing_request(
         "transfer_mode": mode,
         "historical_broadcast_median_seconds": HISTORICAL_BROADCAST_MEDIAN,
         "primary_candidate_threshold_seconds": HISTORICAL_BROADCAST_MEDIAN / 2,
-        "measurement_policy": "First post-update begin writes an immutable marker; startup retries only",
+        "measurement_policy": "First post-update begin writes an immutable marker; all native retries disabled",
         "timing_scope": "Original weight_broadcast Timer; preparation and complete replay excluded",
         "overall_scope": "Pause/core include full replay after every sync; no production throughput or quality ranking",
-        "reservation_estimate_gpu_hours": 40 * 2400 / 3600,
+        "reservation_estimate_gpu_hours": 40 * 4800 / 3600,
         "coordinator_wait_seconds": 7 * 2400 + 900,
         "coordinator_timeout_seconds": 7 * 2400 + 1800,
         "retry_horizon_scope": "Operational horizon; uncharged assigned losses or indefinite pending are not bounded",
@@ -139,6 +149,8 @@ def main() -> None:
     parser.add_argument("--mode", choices=MODES, required=True)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--output-prefix", required=True)
+    parser.add_argument("--cluster", choices=("cw-us-east-02a", "cw-rno2a"), default="cw-us-east-02a")
+    parser.add_argument("--allow-cross-region-io", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     source = json.loads(args.source_manifest.read_text())
@@ -148,6 +160,8 @@ def main() -> None:
         mode=args.mode,
         run_id=args.run_id,
         output_prefix=args.output_prefix,
+        cluster=args.cluster,
+        allow_cross_region_io=args.allow_cross_region_io,
     )
     args.output.write_text(json.dumps(report, indent=2) + "\n")
     print("SNOWBALL_TIMING_REQUEST_PREPARED", report["request_hash"])

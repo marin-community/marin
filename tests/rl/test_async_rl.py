@@ -1426,3 +1426,62 @@ def test_snowball_cross_region_guard_preserves_east_artifacts(foreign_field):
         request = replace(request, overrides=(*request.overrides, "++dump_path=" + foreign))
     with pytest.raises(ValueError, match="Cross-region I/O requires east S3"):
         async_rl.validate_cross_region_request(request)
+
+
+@pytest.mark.parametrize("cluster,allow", [("cw-us-east-02a", False), ("cw-rno2a", True)])
+def test_snowball_cli_routes_resolved_request_with_explicit_opt_in(cluster, allow, monkeypatch):
+    prefix = "s3://marin-us-east-02a/marin"
+    monkeypatch.setenv("MARIN_PREFIX", prefix)
+    submitted = []
+
+    def submit(step, **kwargs):
+        context = StepContext(
+            output_path=prefix + "/output",
+            prefix=prefix,
+            region="us-east-02a",
+            is_fingerprint=False,
+            _dep_ref=lambda dependency: prefix + "/" + dependency.name + "/" + dependency.version,
+            _runtime_args=step.runtime_args,
+            _deps=step.deps,
+        )
+        submitted.append(asdict(step.build_config(context)))
+
+    monkeypatch.setattr(async_snowball, "run", submit)
+    args = [
+        "--version",
+        "2026.09.06.10",
+        "--scale",
+        "qualification",
+        "--completion",
+        "metrics",
+        "--timeout-seconds",
+        "4800",
+        "--cluster",
+        cluster,
+        "--run",
+    ]
+    if allow:
+        args.append("--allow-cross-region-io")
+    result = CliRunner().invoke(async_snowball.main, args)
+    assert result.exit_code == 0, result.output
+    assert len(submitted) == 1
+    envelope = submitted[0]
+    assert envelope["execution"]["cluster"] == cluster
+    assert envelope["execution"]["timeout_seconds"] == 4800
+    request = envelope["request"]
+    assert request["model"]["uri"].startswith("s3://marin-us-east-02a/")
+    assert request["completion_mode"] == "metrics"
+    assert request["topology"]["num_nodes"] == 5
+
+
+@pytest.mark.parametrize("cluster,completion", [("cw-us-east-02a", "metrics"), ("cw-rno2a", "model")])
+def test_snowball_cross_region_opt_in_rejects_wrong_execution_contract(cluster, completion):
+    with pytest.raises(ValueError, match="Cross-region Snowball requires RNO and metrics"):
+        async_snowball.build_experiment(
+            version="2026.09.06.10",
+            scale=async_snowball.Scale.QUALIFICATION,
+            timeout_seconds=4800,
+            cluster=cluster,
+            completion=completion,
+            allow_cross_region_io=True,
+        )
