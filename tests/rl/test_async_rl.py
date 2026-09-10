@@ -20,6 +20,37 @@ from experiments.post_training.curriculum_rl import pool
 from experiments.post_training.math_eval.launcher import BATTERY_PATH, POOL_ARGUMENT
 
 
+@pytest.mark.parametrize("preset", ["regular_mask", "bc_mask"])
+def test_correction_transform_presets_change_only_declared_algorithm(preset):
+    baseline = yaml.safe_load(
+        async_rl.training_config(async_rl.Runner.SYNC, async_rl.Scale.SCREENING, spans=False, staleness=0)
+    )
+    actual = yaml.safe_load(
+        async_rl.training_config(
+            async_rl.Runner.SYNC,
+            async_rl.Scale.SCREENING,
+            spans=False,
+            staleness=0,
+            correction=async_rl.Correction(preset),
+        )
+    )
+    algorithm = actual["trainer"]["algorithm"]
+    assert algorithm["use_tis"] is False
+    assert algorithm.pop("require_rollout_logprobs") is True
+    expected_loss = "regular" if preset.startswith("regular") else "behavior_clip"
+    assert algorithm["policy_loss_type"] == expected_loss
+    algorithm["policy_loss_type"] = "behavior_clip"
+    assert algorithm.pop("offpolicy_mask") == {
+        "enabled": True,
+        "ratio": "mismatch",
+        "low": 0.5,
+        "high": 5.0,
+        "veto_ratio": 1e-5,
+        "renormalize": False,
+    }
+    assert actual == baseline
+
+
 def test_optimizer_precision_cli_keeps_controls_distinct_and_reproducible():
     arguments = [
         "--version",

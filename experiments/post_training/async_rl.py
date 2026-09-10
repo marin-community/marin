@@ -103,6 +103,29 @@ class Correction(StrEnum):
     BEHAVIOR_CLIP = "behavior_clip"
     REGULAR_TIS = "regular_tis"
     REGULAR_NO_TIS = "regular_no_tis"
+    REGULAR_MASK = "regular_mask"
+    BC_MASK = "bc_mask"
+
+
+def apply_correction(algorithm: dict, correction: Correction) -> None:
+    """Apply an explicit objective preset, preserving historical presets exactly."""
+    if correction not in Correction:
+        raise ValueError(f"Unknown correction mode: {correction}")
+    if correction == Correction.REGULAR_NO_TIS:
+        algorithm.update(policy_loss_type="regular", require_rollout_logprobs=True)
+    elif correction == Correction.REGULAR_TIS:
+        algorithm.update(policy_loss_type="regular", use_tis=True, tis_imp_ratio_cap=2.0, require_rollout_logprobs=True)
+    elif correction in (Correction.REGULAR_MASK, Correction.BC_MASK):
+        regular = correction == Correction.REGULAR_MASK
+        algorithm.update(policy_loss_type="regular" if regular else "behavior_clip", require_rollout_logprobs=True)
+        algorithm["offpolicy_mask"] = {
+            "enabled": True,
+            "ratio": "mismatch",
+            "low": 0.5,
+            "high": 5.0,
+            "veto_ratio": 1e-5,
+            "renormalize": False,
+        }
 
 
 class OptimizerPrecision(StrEnum):
@@ -347,12 +370,7 @@ def training_config(
     trainer["algorithm"].update(use_kl_loss=kl_loss, policy_loss_type="behavior_clip", use_tis=False)
     if not kl_loss:
         trainer["algorithm"]["use_kl_in_reward"] = False
-    if correction == Correction.REGULAR_NO_TIS:
-        trainer["algorithm"].update(policy_loss_type="regular", require_rollout_logprobs=True)
-    if correction == Correction.REGULAR_TIS:
-        trainer["algorithm"].update(
-            policy_loss_type="regular", use_tis=True, tis_imp_ratio_cap=2.0, require_rollout_logprobs=True
-        )
+    apply_correction(trainer["algorithm"], correction)
     trainer["fully_async"] = {
         "max_staleness_steps": staleness,
         "num_parallel_generation_workers": 64 if generation_workers is None else generation_workers,
