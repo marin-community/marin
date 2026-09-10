@@ -398,6 +398,26 @@ mod tests {
         std::fs::remove_dir_all(&remote_dir).ok();
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn batch_delete_maps_missing_objects_through_a_symlinked_root() {
+        let parent = unique_dir("remote_batch_delete_symlink");
+        let remote_dir = parent.join("objects");
+        let alias = parent.join("alias");
+        std::fs::create_dir(&remote_dir).unwrap();
+        std::os::unix::fs::symlink(&remote_dir, &alias).unwrap();
+        let store = build_remote_object_store(alias.to_str().unwrap())
+            .unwrap()
+            .unwrap();
+        let missing = ObjectId::table("iris.task", "catalogs/missing.json").unwrap();
+
+        let outcome = store.delete_many(vec![missing.clone()]).await;
+
+        assert!(outcome.error.is_none());
+        assert_eq!(outcome.deleted, vec![missing]);
+        std::fs::remove_dir_all(&parent).ok();
+    }
+
     #[tokio::test]
     async fn table_listing_returns_only_immediate_table_prefixes() {
         let remote_dir = unique_dir("remote_table_listing");

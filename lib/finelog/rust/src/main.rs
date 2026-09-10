@@ -272,14 +272,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?;
     tracing::info!("finelog-server draining background tasks");
 
-    if let Some(task) = forward_task {
+    let forward_result = if let Some(task) = forward_task {
         task.abort();
         match task.await {
-            Ok(()) => {}
-            Err(error) if error.is_cancelled() => {}
-            Err(error) => return Err(error.into()),
+            Ok(()) => Ok(()),
+            Err(error) if error.is_cancelled() => Ok(()),
+            Err(error) => Err(error),
         }
-    }
+    } else {
+        Ok(())
+    };
 
     diag_stop.store(true, Ordering::SeqCst);
     diag_shutdown.notify_waiters();
@@ -290,6 +292,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await;
     tracing::info!("finelog-server stopped");
+    forward_result?;
     Ok(())
 }
 

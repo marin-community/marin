@@ -1198,7 +1198,12 @@ fn bounded_forward_read_through(
         .take(max_segments)
         .map(|(_, max_seq)| *max_seq)
         .max()
-        .unwrap_or(persisted)
+        // `persisted` and the segment snapshot are separate observations. A
+        // concurrent local-disk-acknowledged flush may raise the former before
+        // its segment appears in the latter. No visible range means this scan
+        // can prove no progress, not that every sequence through `persisted`
+        // was inspected.
+        .unwrap_or(read_from)
         .min(persisted)
 }
 

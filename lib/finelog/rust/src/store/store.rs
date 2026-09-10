@@ -586,7 +586,8 @@ impl Store {
                     "local catalog for {namespace:?} is ahead of HEAD but has no table directory"
                 ))
             })?;
-            let local = namespace_catalog(&self.catalog, namespace, &table_dir)?;
+            let mut local = namespace_catalog(&self.catalog, namespace, &table_dir)?;
+            preserve_persisted_high_water(&mut local, &state);
             validate_local_catalog_extension(namespace, &state, &local)?;
             self.tables.controller(namespace).mark_publication_owed();
             tracing::info!(
@@ -599,10 +600,11 @@ impl Store {
         }
         if local_revision == remote_revision {
             let local_matches = match self.namespace_dir(namespace)? {
-                Some(table_dir) => catalogs_equal(
-                    &namespace_catalog(&self.catalog, namespace, &table_dir)?,
-                    &state,
-                ),
+                Some(table_dir) => {
+                    let mut local = namespace_catalog(&self.catalog, namespace, &table_dir)?;
+                    preserve_persisted_high_water(&mut local, &state);
+                    catalogs_equal(&local, &state)
+                }
                 None => false,
             };
             if local_matches {
@@ -1728,6 +1730,16 @@ fn validate_local_catalog_extension(
     Ok(())
 }
 
+/// Preserve the durable sequence space when the local projection has no live
+/// rows from which to recompute it. Segment membership is still validated
+/// independently, so this only restores monotonic metadata.
+fn preserve_persisted_high_water(local: &mut NamespaceCatalog, remote: &NamespaceCatalog) {
+    let floor = remote.persisted_high_water.unwrap_or(0);
+    if local.persisted_high_water.unwrap_or(0) < floor {
+        local.persisted_high_water = Some(floor);
+    }
+}
+
 /// A relay settlement is the one valid local-tail transition that removes
 /// selected objects without replacing them. Every configured target cursor in
 /// the resulting catalog must cover every missing remote segment.
@@ -1855,6 +1867,23 @@ mod tests {
         assert!(error
             .to_string()
             .contains("1 remote objects absent locally"));
+    }
+
+    #[test]
+    fn segment_free_projection_preserves_the_selected_high_water() {
+        let remote = NamespaceCatalog {
+            persisted_high_water: Some(42),
+            ..Default::default()
+        };
+        let mut local = NamespaceCatalog {
+            persisted_high_water: Some(0),
+            ..Default::default()
+        };
+
+        preserve_persisted_high_water(&mut local, &remote);
+
+        assert_eq!(local.persisted_high_water, Some(42));
+        validate_local_catalog_extension("t", &remote, &local).unwrap();
     }
 
     #[test]

@@ -83,6 +83,17 @@ async fn uploaded_node_that_loses_head_cas_is_an_orphan_and_retry_converges() {
             .any(|key| key.contains("/catalogs/")),
         "the immutable node must upload before HEAD is attempted"
     );
+    let orphan = faults
+        .keys_for(ObjectOp::Write)
+        .into_iter()
+        .find(|key| key.contains("/catalogs/"))
+        .unwrap();
+    assert_ne!(
+        still_selected.head.catalog.object_id.as_deref(),
+        Some(orphan.as_str()),
+        "the failed CAS must leave the uploaded node unselected"
+    );
+    assert!(cluster.remote_dir.join(&orphan).is_file());
 
     store.maintain_namespace(TABLE, false).await.unwrap();
     store
@@ -92,6 +103,16 @@ async fn uploaded_node_that_loses_head_cas_is_an_orphan_and_retry_converges() {
     let after = invariants.check(&store).await;
     assert_eq!(after.seqs, vec![1, 2]);
     assert!(after.state.catalog_generation > before.state.catalog_generation);
+    let selected_after_retry = cluster.states().load(TABLE).await.unwrap().unwrap();
+    assert_ne!(
+        selected_after_retry.head.catalog.object_id.as_deref(),
+        Some(orphan.as_str()),
+        "retry must select a fresh child rather than the failed sibling"
+    );
+    assert!(
+        cluster.remote_dir.join(orphan).is_file(),
+        "the unselected immutable node remains an orphan for collection"
+    );
 
     store.shutdown(Duration::from_secs(1)).await;
     cluster.cleanup();
@@ -104,6 +125,8 @@ async fn lost_head_response_is_settled_only_by_the_exact_selected_tip() {
     let (store, faults) = cluster.open();
     register_v1(&store).await;
     write_row(&store, "w-1", 10).await;
+    let before = cluster.states().load(TABLE).await.unwrap().unwrap();
+    faults.clear_calls();
 
     faults.arm(ObjectFault::new(
         ObjectOp::CompareAndSwap,
@@ -114,6 +137,18 @@ async fn lost_head_response_is_settled_only_by_the_exact_selected_tip() {
         },
     ));
     let seq = write_row(&store, "w-2", 20).await;
+    let catalog_node = faults
+        .keys_for(ObjectOp::Write)
+        .into_iter()
+        .find(|key| key.contains("/catalogs/"))
+        .unwrap();
+    let durable = cluster.states().load(TABLE).await.unwrap().unwrap();
+    assert_eq!(durable.revision().get(), before.revision().get() + 1);
+    assert_eq!(
+        durable.head.catalog.object_id.as_deref(),
+        Some(catalog_node.as_str()),
+        "the lost response is success only when HEAD selects the attempted node"
+    );
     let selected = invariants.check(&store).await;
     assert_eq!(selected.seqs, vec![1, seq]);
 

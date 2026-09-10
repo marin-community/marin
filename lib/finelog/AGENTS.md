@@ -83,8 +83,9 @@ batches.
 
 Non-log chunks from one read turn may wait for hub durability concurrently; log chunks
 stay serial to preserve line order. Rows are skipped after the hub returns
-`invalid_argument` for permanently invalid content or when local retention has already
-evicted a sequence range. A `failed_precondition` write preserves its cursor and
+`invalid_argument` for permanently invalid content. Version-0 local retention can also
+evict a sequence range; object-native relays fail closed instead of skipping it. A
+`failed_precondition` write preserves its cursor and
 invalidates the cached hub registration; the next sweep re-registers the current source
 schema and retries while other namespaces continue forwarding. Transient failures get
 three attempts before the namespace yields for the sweep, without advancing its cursor.

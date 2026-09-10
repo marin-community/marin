@@ -660,8 +660,25 @@ mod tests {
         };
         fixture.upload.entered().await;
         assert_eq!(fixture.runtime.persisted_seq(), target);
+
+        let newer = fixture.manager.append(TABLE, &aligned(1)).unwrap();
+        fixture.runtime.flush().await.unwrap();
+        assert_eq!(fixture.runtime.persisted_seq(), newer);
         fixture.upload.release();
         publishing.await.unwrap().unwrap();
+        let visible_max = fixture
+            .runtime
+            .query_snapshot()
+            .unwrap()
+            .seq_bounds
+            .values()
+            .map(|(_, maximum)| *maximum)
+            .max();
+        assert_eq!(
+            visible_max,
+            Some(newer),
+            "an older remote publication must not replace the newer local snapshot"
+        );
         fixture.manager.shutdown(Duration::from_secs(1)).await;
         std::fs::remove_dir_all(fixture.root).ok();
     }

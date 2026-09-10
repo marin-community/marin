@@ -406,10 +406,15 @@ impl TableRuntime {
 
     /// The high-water mark acknowledged under this host's durability policy.
     pub fn persisted_seq(&self) -> i64 {
-        if self.requires_object_ack() {
-            return self.controller.published_high_water();
-        }
-        *self.buffer.watch_persisted().borrow()
+        let acknowledged = if self.requires_object_ack() {
+            self.controller.published_high_water()
+        } else {
+            *self.buffer.watch_persisted().borrow()
+        };
+        // Relay settlement can leave a table with no live segments. Its
+        // sequence high-water remains durable in the selected catalog even
+        // though a fresh local buffer necessarily starts empty.
+        acknowledged.max(self.controller.claimed_high_water())
     }
 
     /// The table's readable segments as one consistent observation.
@@ -442,15 +447,17 @@ impl TableRuntime {
     /// transaction has no removal delta. Comparing with the catalog's live set
     /// keeps namespace stats correct in that case without relying on restart.
     pub(crate) fn reconcile_settled_segments(&self) -> Result<(), StatsError> {
+        // Capture candidates first. A flush that becomes visible after this
+        // observation cannot be mistaken for an obsolete segment when the
+        // catalog read below races its publication into SegmentView.
+        let candidates = self.segments.segments();
         let live: HashSet<String> = self
             .catalog
             .list_segments(&self.name)?
             .into_iter()
             .map(|segment| segment.path)
             .collect();
-        let removed: Vec<String> = self
-            .segments
-            .segments()
+        let removed: Vec<String> = candidates
             .into_iter()
             .filter(|segment| !live.contains(&segment.path))
             .map(|segment| segment.path)

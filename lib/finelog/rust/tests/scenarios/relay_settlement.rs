@@ -119,6 +119,53 @@ async fn a_failed_settlement_publication_replays_the_local_tail_after_restart() 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn segment_free_relay_replays_a_metadata_tail_after_restart() {
+    let cluster = Cluster::new("journey_relay_empty_metadata_restart");
+    let (store, faults) = cluster.open();
+    register_v1(&store).await;
+    let settled = write_row(&store, "w-1", 10).await;
+    store
+        .settle_forwarding("hub", TABLE, settled)
+        .await
+        .unwrap();
+    assert!(store.list_segments(TABLE).unwrap().is_empty());
+
+    faults.arm(ObjectFault::new(
+        ObjectOp::CompareAndSwap,
+        ObjectPattern::EndsWith("HEAD.json".to_string()),
+        FaultAction::Fail(rejected_head_swap()),
+    ));
+    assert!(store
+        .set_forward_cursor("backup-hub", TABLE, settled)
+        .await
+        .is_err());
+    drop(store);
+
+    let (restarted, _) = cluster.open();
+    restarted.recover_tables().await.unwrap();
+    assert_eq!(restarted.namespace_persisted_seq(TABLE).unwrap(), settled);
+    assert_eq!(
+        restarted.forward_cursor("hub", TABLE).unwrap(),
+        Some(settled)
+    );
+    assert_eq!(
+        restarted.forward_cursor("backup-hub", TABLE).unwrap(),
+        Some(settled)
+    );
+    restarted.maintain_namespace(TABLE, false).await.unwrap();
+    let selected = cluster.states().load(TABLE).await.unwrap().unwrap();
+    assert_eq!(selected.catalog.persisted_high_water, Some(settled));
+    assert!(selected
+        .catalog
+        .version_segments
+        .iter()
+        .all(|version| version.live_segments.is_empty()));
+
+    restarted.shutdown(Duration::from_secs(1)).await;
+    cluster.cleanup();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_in_process_retry_reconciles_accounting_after_publication_failure() {
     let cluster = Cluster::new("journey_relay_settlement_retry");
     let (store, faults) = cluster.open();

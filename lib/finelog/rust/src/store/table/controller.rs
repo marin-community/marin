@@ -978,7 +978,7 @@ impl TableController {
         // A local mutation may commit while the remote swap is in flight. Make
         // the owed decision under the same short gate as mutation allocation,
         // so an older publication cannot clear a newer revision's obligation.
-        {
+        let still_owed = {
             let _gate = self.mutation_gate.lock().unwrap();
             let still_owed = match self.local_revision() {
                 Ok(local) => local > published.revision(),
@@ -992,7 +992,8 @@ impl TableController {
                 }
             };
             self.publication_owed.store(still_owed, Ordering::SeqCst);
-        }
+            still_owed
+        };
         self.record_published_high_water(
             published
                 .state()
@@ -1000,7 +1001,13 @@ impl TableController {
                 .persisted_high_water
                 .unwrap_or(0),
         );
-        self.snapshot.send_replace(Some(Arc::clone(&published)));
+        // A synchronous local mutation publishes its newer snapshot before
+        // this older remote CAS returns. Keep that view while its revision is
+        // still owed; replacing it here would temporarily hide an acknowledged
+        // segment from forwarding and queries.
+        if !still_owed {
+            self.snapshot.send_replace(Some(Arc::clone(&published)));
+        }
         Ok(published)
     }
 

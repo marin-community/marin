@@ -616,6 +616,12 @@ fn forwarding_read_window_is_bounded_by_ordered_segment_ranges() {
         bounded_forward_read_through(&paths, &seq_bounds, 10, 40, 1),
         30
     );
+
+    assert_eq!(
+        bounded_forward_read_through(&[], &BTreeMap::new(), 10, 40, 1),
+        10,
+        "a newer durability watermark must not make absent snapshot rows look scanned"
+    );
 }
 
 #[test]
