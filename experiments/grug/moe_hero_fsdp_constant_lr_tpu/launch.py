@@ -176,7 +176,24 @@ def build_d512_constant_lr_run(
     wandb_sweep_tag: str = EXPERIMENT_PREFIX,
 ) -> ArtifactStep[LevanterCheckpoint]:
     """Build one TPU checkpoint cell from the d512 constant-LR matrix."""
-    model = d512_model_config()
+    return build_d512_constant_lr_run_with_model(
+        point,
+        model=d512_model_config(),
+        version=version,
+        wandb_group=wandb_group,
+        wandb_sweep_tag=wandb_sweep_tag,
+    )
+
+
+def build_d512_constant_lr_run_with_model(
+    point: D512ConstantLrPoint,
+    *,
+    model: GrugModelConfig,
+    version: str,
+    wandb_group: str,
+    wandb_sweep_tag: str,
+) -> ArtifactStep[LevanterCheckpoint]:
+    """Build one TPU checkpoint cell with an explicit d512 model config."""
     optimizer = constant_lr_optimizer(point)
     name = f"grug/{point.run_id}"
     version = resolve_version(name, version)
