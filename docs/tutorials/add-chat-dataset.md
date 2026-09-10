@@ -129,8 +129,9 @@ cached processed and normalized artifacts are rebuilt.
 ## 5. Register and verify the source
 
 Add the chat step factory to `all_sft_sources()` in `sft_sources.py`. Its
-`DatakitChatSource` records the name, ordered processing steps, and approximate
-token count. Existing text sources reuse their weights from `all_sources()`.
+`DatakitChatSource` records the name, structured-chat processing steps, and
+approximate token count. It appends rendering and standard text normalization
+automatically; `normalize_steps` exposes the complete chain. Existing text sources reuse their weights from `all_sources()`.
 For a chat-only source, add its explicit weight in billions to `token_counts`
 inside `all_sft_sources()`. Do not add it to the pretraining registry merely to
 supply this weight: that registry also defines the expected coverage of pinned
@@ -161,8 +162,8 @@ from marin.execution.artifact import read_artifact
 from marin.execution.step_runner import StepRunner
 
 source = all_sft_sources()["superior-reasoning"]
-StepRunner().run([source.normalized], max_concurrent=1)
-artifact = read_artifact(source.normalized.output_path, NormalizedData)
+StepRunner().run([source.chat_normalized], max_concurrent=1)
+artifact = read_artifact(source.chat_normalized.output_path, NormalizedData)
 print(artifact.main_output_dir)
 print(artifact.counters)
 ```
@@ -177,24 +178,23 @@ not establish answer quality.
 
 ## 6. Render for text processing
 
-`marin.datakit.chat_render.render_chat_step` renders a normalized chat source
-into Parquet containing only `id` and `text`:
+`all_sft_sources()` exposes both the structured conversation and its rendered
+text. `.chat_normalized` contains Harmony messages, `.rendered` contains only
+`id` and `text`, and `.normalized` contains standard Datakit normalized text:
 
 ```python
-from marin.datakit.chat_render import render_chat_step
 from marin.datakit.sft_sources import all_sft_sources
 
 source = all_sft_sources()["superior-reasoning"]
-rendered = render_chat_step(
-    name="rendered/superior-reasoning-marin",
-    chat=source.normalized,
-)
+rendered = source.rendered
+normalized = source.normalized
 ```
 
-The step reads the chat normalization step's `outputs/main` directory. Its
-output can be supplied as the `download` argument to the standard
-`normalize_step`. Rendering preserves input IDs and duplicate rows; standard
-normalization assigns content hashes afterward.
+`StepRunner().run([source.normalized], max_concurrent=1)` builds the full dependency
+chain. Rendering preserves input IDs and duplicate rows; standard normalization assigns content hashes and
+deduplicates the rendered text. The original chat IDs become `source_id` in the
+normalized text. The structured Harmony artifact remains available through
+`source.chat_normalized`.
 
 Python prepares message bodies and uses f-strings for headers and separators,
 reproducing `MARIN_CHAT_TEMPLATE` in `experiments/marin_tokenizer.py`. The renderer

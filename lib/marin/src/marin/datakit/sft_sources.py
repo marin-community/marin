@@ -5,8 +5,9 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from functools import cache
+from functools import cache, cached_property
 
+from marin.datakit.chat_render import render_chat_step
 from marin.datakit.download.agenttrove import agenttrove_chat_normalize_steps
 from marin.datakit.download.coderforge import coderforge_chat_normalize_steps
 from marin.datakit.download.davinci_dev import davinci_dev_env_native_chat_normalize_steps
@@ -23,21 +24,34 @@ from marin.datakit.download.superior_reasoning import superior_reasoning_chat_no
 from marin.datakit.download.swe_rebench_openhands import swe_rebench_openhands_chat_normalize_steps
 from marin.datakit.download.swe_zero_12m import swe_zero_12m_chat_normalize_steps
 from marin.datakit.download.synthetic1 import synthetic1_chat_normalize_steps
+from marin.datakit.normalize import normalize_step
 from marin.datakit.sources import all_sources
 from marin.execution.step_spec import StepSpec
 
 
 @dataclass(frozen=True)
 class DatakitChatSource:
-    """A source whose normalized artifact contains structured Harmony messages."""
+    """An SFT source with structured chat and normalized rendered-text artifacts."""
 
     name: str
-    normalize_steps: tuple[StepSpec, ...]
+    chat_steps: tuple[StepSpec, ...]
     rough_token_count_b: float
 
     @property
+    def chat_normalized(self) -> StepSpec:
+        return self.chat_steps[-1]
+
+    @cached_property
+    def rendered(self) -> StepSpec:
+        return render_chat_step(name=f"rendered/sft/{self.name}", chat=self.chat_normalized)
+
+    @cached_property
     def normalized(self) -> StepSpec:
-        return self.normalize_steps[-1]
+        return normalize_step(name=f"normalized/sft/{self.name}", download=self.rendered)
+
+    @property
+    def normalize_steps(self) -> tuple[StepSpec, ...]:
+        return (*self.chat_steps, self.rendered, self.normalized)
 
 
 _EXCLUDED_CHAT_SOURCES = frozenset(
@@ -53,7 +67,7 @@ _ChatSourceRow = tuple[str, Callable[[], tuple[StepSpec, ...]]]
 
 @cache
 def all_sft_sources() -> dict[str, DatakitChatSource]:
-    """Return sources whose canonical artifact contains Harmony messages."""
+    """Return SFT sources with Harmony-to-text normalization pipelines."""
     penfever_steps = cache(penfever_rollouts_chat_normalize_steps)
     nemotron_steps = cache(nemotron_sft_chat_normalize_steps)
     rows: list[_ChatSourceRow] = [
@@ -90,7 +104,7 @@ def all_sft_sources() -> dict[str, DatakitChatSource]:
     return {
         name: DatakitChatSource(
             name=name,
-            normalize_steps=factory(),
+            chat_steps=factory(),
             rough_token_count_b=token_counts[name],
         )
         for name, factory in rows
