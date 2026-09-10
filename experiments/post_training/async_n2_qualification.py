@@ -31,13 +31,17 @@ def _east_object(uri: str) -> str:
     return uri
 
 
-def build_qualification(*, version: str, measurement_uri: str, checkpoint_seven: str | None = None):
+def build_qualification(
+    *, version: str, measurement_uri: str, checkpoint_seven: str | None = None, cluster: str = "cw-us-east-02a"
+):
     """Return a fingerprinted checkpoint step; continuation inputs remain explicit.
 
     The callback replaces the actual identity-bearing request before lazy
     fingerprinting/materialization. No old request or resolved output is edited.
     Native source, input coverage and checkpoint-byte audits remain separate.
     """
+    if cluster not in {"cw-us-east-02a", "cw-rno2a"}:
+        raise ValueError("Qwen qualification permits only east H100 or the ruled RNO path")
     _east_object(measurement_uri)
     if checkpoint_seven is not None:
         _east_object(checkpoint_seven)
@@ -45,7 +49,7 @@ def build_qualification(*, version: str, measurement_uri: str, checkpoint_seven:
             raise ValueError("Continuation must select the original checkpoint seven explicitly")
     export_step, _ = async_rl.build_experiment(
         version=version,
-        cluster="cw-us-east-02a",
+        cluster=cluster,
         runner=async_rl.Runner.ASYNC,
         scale=async_rl.Scale.SCREENING,
         completion="model",

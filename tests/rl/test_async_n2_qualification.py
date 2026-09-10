@@ -180,3 +180,20 @@ def test_complete_fresh_and_continuation_graph_uses_no_nested_submission(tmp_pat
         preparation_dependency(wrong)
     with pytest.raises(ValueError, match="Only the native model mirror"):
         preparation_dependency(fresh)
+
+
+def test_rno_changes_only_execution_cluster(local_config_inputs):
+    kwargs = dict(version="2026.09.09.259", measurement_uri=MARKER)
+    east = materialized_config(build_qualification(**kwargs), PREFIX)
+    rno = materialized_config(build_qualification(**kwargs, cluster="cw-rno2a"), PREFIX)
+    assert rno.execution.cluster == "cw-rno2a"
+    assert rno.execution.cluster_config == "lib/iris/config/cw-rno2a.yaml"
+    assert (
+        replace(rno.execution, cluster=east.execution.cluster, cluster_config=east.execution.cluster_config)
+        == east.execution
+    )
+    assert replace(rno.request, attempt_id=east.request.attempt_id) == east.request
+    assert rno.request.output.checkpoint_root.startswith("s3://marin-us-east-02a/")
+    assert rno.request.model.uri.startswith("s3://marin-us-east-02a/")
+    with pytest.raises(ValueError, match="Qwen qualification"):
+        build_qualification(**kwargs, cluster="cw-us-east-08a")
