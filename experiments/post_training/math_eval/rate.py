@@ -57,6 +57,19 @@ def empirical_difficulty(passes, samples):
     return "mastered"
 
 
+def bin_evidence(rows):
+    """Use resolved responses for difficulty; retain missing semantics as no evidence."""
+    resolved = [row for row in rows if row["score_semantic"] is not None]
+    samples = len(resolved)
+    passes = sum(int(row["score_contract_completed"]) for row in resolved)
+    return {
+        "bin_evidence_samples": samples,
+        "bin_evidence_passes": passes,
+        "bin_evidence_rate": passes / samples if samples else None,
+        "empirical_difficulty": empirical_difficulty(passes, samples) if samples else None,
+    }
+
+
 def rate_from_dump(harness_output_uri, *, generation_audit_uri, generation_audit_sha256, **kwargs):
     """Read a proven record parquet, checking its exact receipt hash before reducing."""
     receipt = json.loads(StoragePath(harness_output_uri + "/summary.json").read_bytes())
@@ -88,6 +101,7 @@ def rate_from_records(
 
     The harness receipt must certify frozen-pool identity and aggregate parity. Raw
     optimization rewards and exact correctness remain separate diagnostic means.
+    Difficulty uses only semantically resolved rows; all-K observed counts stay intact.
     Returning a ratings overlay leaves the candidate pool's immutable hash intact.
     Without a hash-pinned generation audit this is only a trusted-input reduction;
     its unverified overlay cannot be attached to a pool for selection.
@@ -149,7 +163,7 @@ def rate_from_records(
         "generation_provenance": protocol,
         "generated_at_utc": None if protocol is None else protocol.get("generated_at_utc"),
         "dump_uri": None if protocol is None else protocol.get("dump_uri"),
-        "difficulty_category_basis": "empirical_completed_correctness",
+        "difficulty_category_basis": "completed_correctness_among_semantically_resolved",
         "temperature": temperature,
         "max_response_tokens": max_response_tokens,
         "samples": samples,
@@ -166,9 +180,7 @@ def rate_from_records(
             "samples": samples,
             "passes": sum(int(row["score_contract_completed"]) for row in rows),
             "mean_response_tokens": sum(row["response_tokens"] for row in rows) / samples,
-            "empirical_difficulty": empirical_difficulty(
-                sum(int(row["score_contract_completed"]) for row in rows), samples
-            ),
+            **bin_evidence(rows),
             "pass_rate_k": sum(row["score_contract_completed"] for row in rows) / samples,
             "contract_correct_rate": sum(row["contract_correct"] for row in rows) / samples,
             "native_score_mean": sum(row["score_contract"] for row in rows) / samples,

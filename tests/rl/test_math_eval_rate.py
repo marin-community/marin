@@ -31,6 +31,7 @@ def fixture():
             "contract_response_rendering": "decode_skip_special_tokens",
             "score_contract_completed": int(i == 1),
             "contract_correct": True,
+            "score_semantic": 1.0,
             "score_contract": 1.0,
             "truncated": i != 1,
         }
@@ -320,7 +321,32 @@ def test_k4_and_k8_cannot_resolve_a_positive_frontier_category():
         assert "frontier" not in {empirical_difficulty(passes, samples) for passes in range(samples + 1)}
     _manifest, records, receipt, kwargs = fixture()
     result = rate_from_records(records, receipt, **kwargs)
-    assert result["metadata"]["difficulty_category_basis"] == "empirical_completed_correctness"
+    assert result["metadata"]["difficulty_category_basis"] == "completed_correctness_among_semantically_resolved"
     assert [row["passes"] for row in result["ratings"]] == [1, 0]
     assert [row["empirical_difficulty"] for row in result["ratings"]] == ["mid", "beyond"]
     assert all(row["mean_response_tokens"] == 100 for row in result["ratings"])
+
+
+def test_unresolved_rows_do_not_assign_difficulty_or_change_observed_counts():
+    manifest, records, receipt, kwargs = fixture()
+    records[0]["score_semantic"] = None
+    records[2]["score_semantic"] = None
+    records[3]["score_semantic"] = None
+    result = rate_from_records(records, receipt, **kwargs)
+    a, b = result["ratings"]
+    assert (a["passes"], a["samples"], a["pass_rate_k"]) == (1, 2, 0.5)
+    assert (a["bin_evidence_passes"], a["bin_evidence_samples"], a["bin_evidence_rate"]) == (1, 1, 1.0)
+    assert a["empirical_difficulty"] == "mastered"
+    assert (b["passes"], b["samples"], b["pass_rate_k"]) == (0, 2, 0.0)
+    assert (b["bin_evidence_passes"], b["bin_evidence_samples"]) == (0, 0)
+    assert b["bin_evidence_rate"] is None and b["empirical_difficulty"] is None
+    assert attach_ratings(manifest, result)[1]["rating"]["empirical_difficulty"] is None
+
+
+def test_resolved_wrong_response_is_evidence_for_difficulty():
+    _manifest, records, receipt, kwargs = fixture()
+    for row in records:
+        row["score_semantic"] = 0.0
+    result = rate_from_records(records, receipt, **kwargs)
+    assert result["ratings"][1]["bin_evidence_samples"] == 2
+    assert result["ratings"][1]["empirical_difficulty"] == "beyond"
