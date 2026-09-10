@@ -27,7 +27,9 @@ write a verdict; nothing about the candidate can make it exit non-zero.
 | `math` | output file, boxed or last expression | expected expression via math-verify |
 | `numeric` | output file | expected number with tolerance |
 | `exact` | output file | expected string or list after normalization |
-| `json-schema` | output file parsed as JSON or YAML | a JSON Schema under tests/ |
+| `json-schema` | output file parsed as JSON, YAML or TOML | a JSON Schema under tests/ |
+| `xml-elements` | output file parsed as XML | element and attribute names the document must carry |
+| `csv-columns` | output file parsed as CSV | column headers the document must carry |
 | `ifeval` | output file | a list of IFEval constraints |
 | `reasoning-gym` | output file | the reasoning-gym scorer for the entry |
 | `stdio` | a program in the workspace, run per case | expected stdout per case |

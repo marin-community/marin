@@ -3,18 +3,26 @@
 
 r"""Pulling a final answer out of free-form model output.
 
-The answer-file modes share three ways of narrowing an output file to one candidate string: the
-last ``\boxed{}`` expression, the last non-empty line, and whitespace normalization. Nothing here
-inspects a spec or decides a reward; each mode composes these as its own extraction rule.
+The answer-file modes share a few ways of narrowing an output file to one candidate string: the
+body of a fenced code block, the last ``\boxed{}`` expression, the last non-empty line, and
+whitespace normalization. Nothing here inspects a spec or decides a reward; each mode composes
+these as its own extraction rule.
 """
 
 import re
 
 BOXED = r"\boxed{"
 
+_FENCE = re.compile(r"```(?:[a-zA-Z0-9_+-]*)?\s*(.*?)```", re.DOTALL)
 _WHITESPACE = re.compile(r"\s+")
 # Longest-first: ``$$`` must be tried before ``$``.
 _MATH_DELIMITERS = ((r"\[", r"\]"), (r"\(", r"\)"), ("$$", "$$"), ("$", "$"))
+
+
+def unwrap_fence(text: str) -> str:
+    """The body of the first fenced code block, or the whole text when there is no fence."""
+    match = _FENCE.search(text)
+    return match.group(1) if match else text
 
 
 def extract_boxed(text: str) -> str | None:

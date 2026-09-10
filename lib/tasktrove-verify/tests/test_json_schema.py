@@ -149,3 +149,27 @@ def test_unusable_schema_is_an_invalid_task(tmp_path, workspace, schema_text, me
     answer(workspace, json.dumps(ORDER))
     with pytest.raises(InvalidTask, match=message):
         json_schema.grade(JsonSchemaSpec(), tests_dir, workspace)
+
+
+def test_toml_candidate_validates_against_the_same_schema(tests_dir, workspace):
+    answer(workspace, 'name = "Ada"\nemail = "ada@example.com"\nquantity = 3\n')
+    spec = JsonSchemaSpec(format=SchemaFormat.TOML)
+    assert json_schema.grade(spec, tests_dir, workspace).reward == 1.0
+    answer(workspace, 'name = "Ada"\nemail = "ada@example.com"\nquantity = 0\n')
+    assert json_schema.grade(spec, tests_dir, workspace).reward == 0.0
+
+
+def test_toml_dates_are_stringified_for_string_typed_fields(tmp_path, workspace):
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    schema = {"type": "object", "required": ["due"], "properties": {"due": {"type": "string", "format": "date"}}}
+    (tests_dir / "schema.json").write_text(json.dumps(schema))
+    answer(workspace, "due = 2026-03-01\n")
+    assert json_schema.grade(JsonSchemaSpec(format=SchemaFormat.TOML), tests_dir, workspace).reward == 1.0
+
+
+def test_unparsable_toml_scores_zero_without_raising(tests_dir, workspace):
+    answer(workspace, "name = Ada\n")
+    reward = json_schema.grade(JsonSchemaSpec(format=SchemaFormat.TOML), tests_dir, workspace)
+    assert (reward.reward, reward.status) == (0.0, Status.SCORED)
+    assert reward.detail["reason"] == "parse_error"

@@ -26,6 +26,8 @@ class Mode(StrEnum):
     NUMERIC = "numeric"
     EXACT = "exact"
     JSON_SCHEMA = "json-schema"
+    XML_ELEMENTS = "xml-elements"
+    CSV_COLUMNS = "csv-columns"
     IFEVAL = "ifeval"
     REASONING_GYM = "reasoning-gym"
     STDIO = "stdio"
@@ -48,6 +50,7 @@ class MathType(StrEnum):
 class SchemaFormat(StrEnum):
     JSON = "json"
     YAML = "yaml"
+    TOML = "toml"
 
 
 class Compare(StrEnum):
@@ -91,6 +94,28 @@ class ExactSpec:
 class JsonSchemaSpec:
     schema: str = "schema.json"
     format: SchemaFormat = SchemaFormat.JSON
+    output: str = DEFAULT_OUTPUT
+
+
+@dataclass(frozen=True)
+class XmlElementsSpec:
+    """Names a well-formed XML answer must carry as element tags or attribute names.
+
+    Every name in ``required`` must appear. ``any_of`` is the weaker alternative for a schema that
+    marks no field required: one of its names present is enough. A spec with neither is invalid.
+    """
+
+    required: tuple[str, ...] = ()
+    any_of: tuple[str, ...] = ()
+    output: str = DEFAULT_OUTPUT
+
+
+@dataclass(frozen=True)
+class CsvColumnsSpec:
+    """Column headers a CSV answer must carry, in the same ``required`` / ``any_of`` form."""
+
+    required: tuple[str, ...] = ()
+    any_of: tuple[str, ...] = ()
     output: str = DEFAULT_OUTPUT
 
 
@@ -212,6 +237,8 @@ Spec = (
     | NumericSpec
     | ExactSpec
     | JsonSchemaSpec
+    | XmlElementsSpec
+    | CsvColumnsSpec
     | IfevalSpec
     | ReasoningGymSpec
     | StdioSpec
@@ -228,6 +255,8 @@ SPEC_TYPES: dict[Mode, type] = {
     Mode.NUMERIC: NumericSpec,
     Mode.EXACT: ExactSpec,
     Mode.JSON_SCHEMA: JsonSchemaSpec,
+    Mode.XML_ELEMENTS: XmlElementsSpec,
+    Mode.CSV_COLUMNS: CsvColumnsSpec,
     Mode.IFEVAL: IfevalSpec,
     Mode.REASONING_GYM: ReasoningGymSpec,
     Mode.STDIO: StdioSpec,

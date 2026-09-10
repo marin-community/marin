@@ -3,14 +3,15 @@
 
 """Mode json-schema: the answer file must parse and then validate against a JSON Schema under tests/.
 
-The schema is task data, so a missing file or one the metaschema rejects raises ``InvalidTask``.
-Everything the candidate controls -- a document that does not parse, a constraint it violates --
-scores 0.0 with the first validation error in the detail.
+``format`` says how the candidate is read: as JSON, YAML or TOML. The schema is task data, so a
+missing file or one the metaschema rejects raises ``InvalidTask``. Everything the candidate
+controls -- a document that does not parse, a constraint it violates -- scores 0.0 with the first
+validation error in the detail.
 """
 
 import datetime
 import json
-import re
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -18,21 +19,14 @@ import yaml
 from jsonschema.exceptions import SchemaError
 from jsonschema.validators import validator_for
 
+from tasktrove_verify.modes.extract import unwrap_fence
 from tasktrove_verify.output import read_output
 from tasktrove_verify.reward import InvalidTask, Reward, scored
 from tasktrove_verify.spec import JsonSchemaSpec, SchemaFormat
 
-FENCE = re.compile(r"```(?:[a-zA-Z0-9_+-]*)?\s*(.*?)```", re.DOTALL)
-
-
-def unwrap_fence(text: str) -> str:
-    """The body of the first fenced code block, or the whole text when there is no fence."""
-    match = FENCE.search(text)
-    return match.group(1) if match else text
-
 
 def stringify_dates(node: Any) -> Any:
-    """YAML parses dates and times into objects; a schema saying ``type: string`` expects text."""
+    """YAML and TOML parse dates and times into objects; a schema saying ``type: string`` expects text."""
     if isinstance(node, dict):
         return {key: stringify_dates(value) for key, value in node.items()}
     if isinstance(node, list):
@@ -63,6 +57,8 @@ def parse_candidate(text: str, candidate_format: SchemaFormat) -> Any:
     """The candidate document. Raises ``ValueError`` or ``yaml.YAMLError`` when it does not parse."""
     if candidate_format is SchemaFormat.JSON:
         return json.loads(text)
+    if candidate_format is SchemaFormat.TOML:
+        return stringify_dates(tomllib.loads(text))
     document = yaml.safe_load(text)
     if document is None:
         raise ValueError("YAML document is empty")

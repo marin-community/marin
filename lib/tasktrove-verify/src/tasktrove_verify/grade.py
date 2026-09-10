@@ -23,6 +23,8 @@ MODE_MODULES: dict[Mode, str] = {
     Mode.NUMERIC: "numeric",
     Mode.EXACT: "exact",
     Mode.JSON_SCHEMA: "json_schema",
+    Mode.XML_ELEMENTS: "xml_elements",
+    Mode.CSV_COLUMNS: "csv_columns",
     Mode.IFEVAL: "ifeval",
     Mode.REASONING_GYM: "reasoning_gym_answer",
     Mode.STDIO: "stdio",
