@@ -165,6 +165,14 @@ def test_full_marin_suite_includes_experiment_tests(
     assert leg_paths(selection.matrix, "marin") == ["tests", "experiments"]
 
 
+def test_deleted_experiment_source_runs_full_marin_suite(tmp_path: Path) -> None:
+    write(tmp_path, "experiments/moe/test_optimizer.py", "from experiments.moe.optimizer import RATE\n")
+
+    matrix = select_matrix(["experiments/moe/optimizer.py"], tmp_path)
+
+    assert leg_paths(matrix, "marin") == ["tests", "experiments"]
+
+
 def test_deleted_experiment_test_is_not_handed_to_pytest(tmp_path: Path) -> None:
     write(tmp_path, "experiments/moe/test_other.py", "def test_other():\n    assert True\n")
 

@@ -465,6 +465,9 @@ def classify(
                     and filename != "conftest.py"
                     and not is_test_module(filename)
                 ):
+                    # Deleted modules have no edges in the current import graph.
+                    if not (repo_root / filepath).exists():
+                        forced.add(scope)
                     break
                 # conftest.py, helper modules (stubs, workload scripts, generators), and
                 # non-Python assets (snapshots, fixtures, data files) can all change test
