@@ -676,7 +676,7 @@ impl TableRuntime {
 
     /// Resource class for this table's ordinary maintenance visit.
     pub fn maintenance_class(&self) -> MaintenanceClass {
-        if self.maintenance_profile().relay_target().is_some() && self.policy().object_backed() {
+        if self.maintenance_profile().is_relay() && self.policy().object_backed() {
             MaintenanceClass::RelayIo
         } else {
             MaintenanceClass::QueryServing

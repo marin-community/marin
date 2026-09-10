@@ -1477,7 +1477,7 @@ async fn an_object_native_relay_retires_only_hub_settled_segments() {
         .unwrap();
     source.publish_object_catalog(EVENTS).await.unwrap();
     drive_object_activation(&source, EVENTS, 8).await;
-    source.configure_relay(target_url.clone());
+    source.configure_relay();
 
     let first_tip = durable_id_rows(&source, EVENTS, 0..20).await;
     source.maintain_namespace(EVENTS, false).await.unwrap();
@@ -1583,7 +1583,7 @@ async fn an_object_native_relay_never_compacts_its_unsettled_spool() {
         .unwrap();
     source.publish_object_catalog(EVENTS).await.unwrap();
     drive_object_activation(&source, EVENTS, 8).await;
-    source.configure_relay("http://127.0.0.1:1".to_string());
+    source.configure_relay();
 
     durable_id_rows(&source, EVENTS, 0..10).await;
     durable_id_rows(&source, EVENTS, 10..20).await;

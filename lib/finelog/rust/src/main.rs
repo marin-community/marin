@@ -238,7 +238,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Cross-cluster forwarding starts before the listener binds so an existing
     // backlog drains immediately. Keep the sender alive while serving; shutdown
     // aborts the task after the listener stops.
-    let (_forward_stop, forward_task) = match &forwarder {
+    // The sender is a liveness token for the task's watch receiver. Production
+    // shutdown aborts the task after the listener drains; tests can still use
+    // the receiver's cooperative stop path directly.
+    let (_forward_liveness, forward_task) = match &forwarder {
         Some(forwarder) => {
             let (tx, rx) = tokio::sync::watch::channel(false);
             (Some(tx), Some(spawn_forwarder(Arc::clone(forwarder), rx)))
@@ -357,7 +360,7 @@ fn build_forwarder(args: &Args, store: Arc<Store>) -> Result<Option<Forwarder>, 
         cluster = %config.cluster,
         "finelog-server: forwarding configured"
     );
-    store.configure_relay(config.target.clone());
+    store.configure_relay();
     Ok(Some(Forwarder::new(store, config, &args.signing_key)?))
 }
 

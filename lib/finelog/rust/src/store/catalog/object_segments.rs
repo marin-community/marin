@@ -9,7 +9,6 @@
 //! durable remotely, and [`Catalog::replace_with_published_snapshot`] rebuilds
 //! the whole projection from a verified remote state after recovery.
 
-use rusqlite::OptionalExtension;
 use sha2::{Digest, Sha256};
 
 use super::segments::{remove_segments_in, upsert_segment_in};
@@ -410,43 +409,6 @@ impl Catalog {
                 source_rows: None,
             },
         )?;
-        let revision = advance_generation_in(&transaction, namespace)?;
-        transaction.commit().map_err(sqlite_err)?;
-        Ok(revision)
-    }
-
-    /// Retire immutable objects without replacement and advance one catalog
-    /// generation. Fails without changing the catalog when any path is no
-    /// longer an object-backed live segment.
-    pub fn retire_object_segments(
-        &self,
-        namespace: &str,
-        removed_paths: &[String],
-    ) -> Result<TableRevision, StatsError> {
-        if removed_paths.is_empty() {
-            return Err(StatsError::Internal(
-                "object retirement must carry at least one segment".to_string(),
-            ));
-        }
-        let mut inner = self.inner.lock().unwrap();
-        let transaction = inner.conn.transaction().map_err(sqlite_err)?;
-        for path in removed_paths {
-            let live = transaction
-                .query_row(
-                    "SELECT 1 FROM object_segments WHERE namespace = ?1 AND path = ?2",
-                    rusqlite::params![namespace, path],
-                    |_| Ok(()),
-                )
-                .optional()
-                .map_err(sqlite_err)?
-                .is_some();
-            if !live {
-                return Err(StatsError::SchemaConflict(format!(
-                    "object segment {path:?} is no longer live in {namespace:?}"
-                )));
-            }
-        }
-        remove_segments_in(&transaction, namespace, removed_paths)?;
         let revision = advance_generation_in(&transaction, namespace)?;
         transaction.commit().map_err(sqlite_err)?;
         Ok(revision)

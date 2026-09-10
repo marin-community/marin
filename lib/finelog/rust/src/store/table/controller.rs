@@ -30,7 +30,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::errors::StatsError;
 use crate::proto::finelog::stats::{MigrationPhase, NamespaceCatalog, ObjectRef};
-use crate::store::catalog::projection::namespace_catalog;
+use crate::store::catalog::projection::{floor_persisted_high_water, namespace_catalog};
 use crate::store::catalog::{Catalog, ObjectSegmentRecord, SpecLifecycle};
 use crate::store::object_store::OBJECTS_PREFIX;
 use crate::store::object_store::{
@@ -120,9 +120,9 @@ enum ControllerCommand {
 const COMMAND_QUEUE_DEPTH: usize = 32;
 
 /// Floor between owed publications of one table. Every flush and compaction
-/// commit marks HEAD owed, and each publication PUTs a full catalog snapshot
-/// and rewrites the same `HEAD.json` object — which object stores rate-limit
-/// per object. Local-disk acknowledgement can defer publication to batch staged
+/// commit marks HEAD owed, and each publication writes one catalog-tree node
+/// and rewrites the same `HEAD.json` object, which object stores rate-limit per
+/// object. Local-disk acknowledgement can defer publication to batch staged
 /// uploads and snapshot churn. Object-store acknowledgement uses an explicit
 /// publication command and bypasses this throttle.
 const MIN_PUBLISH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
@@ -895,9 +895,7 @@ impl TableController {
                 .map_err(CommitError::PublicationDeferred)?;
             if let Some(previous) = &expected {
                 let floor = previous.catalog.persisted_high_water.unwrap_or(0);
-                if projected.persisted_high_water.unwrap_or(0) < floor {
-                    projected.persisted_high_water = Some(floor);
-                }
+                floor_persisted_high_water(&mut projected, floor);
                 if projected.catalog_generation == previous.catalog.catalog_generation
                     && !catalogs_equal(&projected, &previous.catalog)
                 {
@@ -912,9 +910,7 @@ impl TableController {
                     );
                     projected = namespace_catalog(&self.catalog, &self.table, &objects.table_dir)
                         .map_err(CommitError::PublicationDeferred)?;
-                    if projected.persisted_high_water.unwrap_or(0) < floor {
-                        projected.persisted_high_water = Some(floor);
-                    }
+                    floor_persisted_high_water(&mut projected, floor);
                 }
             }
             projected
@@ -938,9 +934,7 @@ impl TableController {
         // a shrunken mark would let a later recovery reissue sequence numbers.
         if let Some(previous) = &expected {
             let floor = previous.catalog.persisted_high_water.unwrap_or(0);
-            if catalog.persisted_high_water.unwrap_or(0) < floor {
-                catalog.persisted_high_water = Some(floor);
-            }
+            floor_persisted_high_water(&mut catalog, floor);
         }
         let state = TableState::new(catalog);
         let outcome = objects

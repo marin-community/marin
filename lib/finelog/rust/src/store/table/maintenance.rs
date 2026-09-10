@@ -41,17 +41,12 @@ use crate::store::table::spec_migration::{self, SpecMigration};
 pub enum MaintenanceProfile {
     #[default]
     QueryServing,
-    Relay {
-        target: String,
-    },
+    Relay,
 }
 
 impl MaintenanceProfile {
-    pub fn relay_target(&self) -> Option<&str> {
-        match self {
-            Self::QueryServing => None,
-            Self::Relay { target } => Some(target),
-        }
+    pub fn is_relay(&self) -> bool {
+        matches!(self, Self::Relay)
     }
 }
 
@@ -278,7 +273,7 @@ async fn cycle(
     }
     if runtime.policy().object_backed() {
         runtime.controller.publish_owed().await?;
-        if runtime.maintenance_profile().relay_target().is_some() {
+        if runtime.maintenance_profile().is_relay() {
             runtime.controller.gc_objects().await?;
             run_one(runtime, TableWork::ObjectCollection).await?;
             return Ok(WorkOutcome::Complete);
@@ -302,7 +297,7 @@ async fn cycle(
         ));
     }
 
-    if runtime.maintenance_profile().relay_target().is_some() {
+    if runtime.maintenance_profile().is_relay() {
         run_one(runtime, TableWork::Compaction { force_compact_l0 }).await?;
         run_one(runtime, TableWork::LegacyArchive).await?;
         run_one(runtime, TableWork::Eviction).await?;
@@ -479,7 +474,7 @@ fn table_dir(runtime: &TableRuntime) -> &std::path::Path {
 }
 
 fn index_config(runtime: &TableRuntime) -> SegmentIndexConfig {
-    if runtime.maintenance_profile().relay_target().is_some() {
+    if runtime.maintenance_profile().is_relay() {
         return SegmentIndexConfig {
             indexes: Vec::new(),
             key_column: Some(runtime.key_column().to_string()),
@@ -501,7 +496,7 @@ pub(crate) fn index_backfill<'a>(
         registry: &runtime.indices,
         limits: &runtime.limits,
         config: index_config(runtime),
-        indexes_enabled: runtime.maintenance_profile().relay_target().is_none()
+        indexes_enabled: !runtime.maintenance_profile().is_relay()
             && segment_indexes_enabled_for(runtime.name()),
         layout_is_current,
         skips: &runtime.index_skips,
@@ -518,7 +513,7 @@ pub(crate) fn local_compaction(runtime: &TableRuntime) -> LocalCompaction<'_> {
         segments: &runtime.segments,
         query_visibility: &runtime.query_visibility,
         config: &runtime.compaction_config,
-        partition_policy: if runtime.maintenance_profile().relay_target().is_some() {
+        partition_policy: if runtime.maintenance_profile().is_relay() {
             None
         } else {
             physical_partition_policy_for(runtime.name())

@@ -36,7 +36,7 @@ use crate::proto::finelog::stats::{
 };
 use crate::query::provider::NamespaceProvider;
 use crate::query::RegisteredProvider;
-use crate::store::catalog::projection::namespace_catalog;
+use crate::store::catalog::projection::{floor_persisted_high_water, namespace_catalog};
 use crate::store::catalog::{
     Catalog, ForwardingSettlement, PublishedObjectSegment, RegisteredNamespace, SpecLifecycle,
 };
@@ -587,7 +587,7 @@ impl Store {
                 ))
             })?;
             let mut local = namespace_catalog(&self.catalog, namespace, &table_dir)?;
-            preserve_persisted_high_water(&mut local, &state);
+            floor_persisted_high_water(&mut local, state.persisted_high_water.unwrap_or(0));
             validate_local_catalog_extension(namespace, &state, &local)?;
             self.tables.controller(namespace).mark_publication_owed();
             tracing::info!(
@@ -602,7 +602,7 @@ impl Store {
             let local_matches = match self.namespace_dir(namespace)? {
                 Some(table_dir) => {
                     let mut local = namespace_catalog(&self.catalog, namespace, &table_dir)?;
-                    preserve_persisted_high_water(&mut local, &state);
+                    floor_persisted_high_water(&mut local, state.persisted_high_water.unwrap_or(0));
                     catalogs_equal(&local, &state)
                 }
                 None => false,
@@ -1454,9 +1454,9 @@ impl Store {
     /// Configure this process as a forwarding relay before maintenance starts.
     /// Logical table specifications are unchanged; only host-local physical
     /// maintenance follows the relay policy.
-    pub fn configure_relay(&self, target: String) {
+    pub fn configure_relay(&self) {
         self.tables
-            .set_maintenance_profile(MaintenanceProfile::Relay { target });
+            .set_maintenance_profile(MaintenanceProfile::Relay);
     }
 
     /// Select the recovery authority an ingest acknowledgement must reach.
@@ -1730,16 +1730,6 @@ fn validate_local_catalog_extension(
     Ok(())
 }
 
-/// Preserve the durable sequence space when the local projection has no live
-/// rows from which to recompute it. Segment membership is still validated
-/// independently, so this only restores monotonic metadata.
-fn preserve_persisted_high_water(local: &mut NamespaceCatalog, remote: &NamespaceCatalog) {
-    let floor = remote.persisted_high_water.unwrap_or(0);
-    if local.persisted_high_water.unwrap_or(0) < floor {
-        local.persisted_high_water = Some(floor);
-    }
-}
-
 /// A relay settlement is the one valid local-tail transition that removes
 /// selected objects without replacing them. Every configured target cursor in
 /// the resulting catalog must cover every missing remote segment.
@@ -1864,9 +1854,7 @@ mod tests {
 
         let divergent = catalog_with_live_object(8, 21, "_finelog/tables/t/objects/local.parquet");
         let error = validate_local_catalog_extension("t", &remote, &divergent).unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("1 remote objects absent locally"));
+        assert!(matches!(error, StatsError::SchemaConflict(_)));
     }
 
     #[test]
@@ -1880,7 +1868,7 @@ mod tests {
             ..Default::default()
         };
 
-        preserve_persisted_high_water(&mut local, &remote);
+        floor_persisted_high_water(&mut local, remote.persisted_high_water.unwrap_or(0));
 
         assert_eq!(local.persisted_high_water, Some(42));
         validate_local_catalog_extension("t", &remote, &local).unwrap();

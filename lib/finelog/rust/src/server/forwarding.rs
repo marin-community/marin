@@ -470,9 +470,9 @@ where
                 return ForwardTurn::Wait;
             }
         };
-        // The scan reported its oldest locally-readable row. Anything below it was
-        // archived to remote storage while we lagged, and no scan here can reach it —
-        // jump the cursor and say how much was skipped.
+        // The scan reported its oldest locally-readable row. Legacy retention
+        // may require a cursor jump; object-native relays fail closed because
+        // their live spool must retain every unsettled row.
         if let Some(resume_at) = batch.resume_at {
             if object_native {
                 tracing::error!(
@@ -718,9 +718,10 @@ where
             .await
     }
 
-    /// Record `cursor` as the durable watermark for `name`, reporting whether the write
-    /// stuck. `false` is not data loss: every row stays queryable in this store, and the
-    /// catalog still names an older cursor for the next round to resume from.
+    /// Commit `cursor` and retire object-native relay segments it covers.
+    ///
+    /// `false` leaves the previous durable cursor selected, so the next sweep
+    /// retries the same unsettled prefix.
     async fn persist_cursor(
         &self,
         name: &str,
@@ -866,8 +867,7 @@ where
             provider,
         }];
         let planning_elapsed = planning_started.elapsed();
-        // The forwarder is a server read like any other: an object-backed source
-        // bounds it by the same non-disableable effective deadline.
+        // Honor the table's query lifetime and the tighter forwarder deadline.
         let query_ctx = make_ctx();
         let read = run_query_over(&query_ctx, providers, &sql);
         let timeout = self

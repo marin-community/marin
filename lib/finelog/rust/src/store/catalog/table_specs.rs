@@ -11,6 +11,7 @@
 
 use rusqlite::{Connection, OptionalExtension};
 
+use super::object_segments::advance_generation_in;
 use super::segments::remove_segments_in;
 use super::*;
 use crate::errors::StatsError;
@@ -633,13 +634,9 @@ impl Catalog {
                     rusqlite::params![namespace, refreshed_total],
                 )
                 .map_err(sqlite_err)?;
-            transaction
-                .execute(
-                    "UPDATE table_heads SET catalog_generation = catalog_generation + 1
-                     WHERE namespace = ?1",
-                    [namespace],
-                )
-                .map_err(sqlite_err)?;
+            let revision = advance_generation_in(&transaction, namespace)?;
+            transaction.commit().map_err(sqlite_err)?;
+            return Ok(revision);
         }
         let generation: i64 = transaction
             .query_row(
