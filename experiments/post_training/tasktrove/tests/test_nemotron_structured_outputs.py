@@ -7,9 +7,9 @@ import json
 import tempfile
 from pathlib import Path
 
-from tasktrove_verify.modes.json_schema import grade
+from tasktrove_verify.grade import grade
 from tasktrove_verify.reward import Status
-from tasktrove_verify.spec import JsonSchemaSpec, parse_spec
+from tasktrove_verify.spec import CsvColumnsSpec, JsonSchemaSpec, SchemaFormat, XmlElementsSpec, parse_spec
 
 from experiments.post_training.tasktrove.contract import INSTALL_MARKER, VERIFIER_TOML, VERIFY_TEST_SH
 from experiments.post_training.tasktrove.convert import convert_one
@@ -141,20 +141,104 @@ def test_yaml_schema_type_maps_to_yaml_format():
     assert record.tags == ["structured-outputs", "json-schema", "nemotron", "yaml"]
 
 
-def test_xml_schema_type_is_rejected_as_unsupported_variant():
+def test_xml_schema_type_grades_required_element_or_attribute_names():
     record = _convert(_mutate_verifier_data(schema_type="xml"))
-    assert record.status == ConvertStatus.UNSUPPORTED_VARIANT and record.task_binary is None
-    assert "xml" in record.error
+    assert record.status == ConvertStatus.CONVERTED
+    assert record.mode == "xml-elements"
+    assert record.tags == ["structured-outputs", "xml-elements", "nemotron", "xml"]
+
+    task = read_task_binary(record.task_binary)
+    spec = parse_spec(task.text(VERIFIER_TOML))
+    assert isinstance(spec, XmlElementsSpec)
+    assert spec.required == tuple(_VALID_CANDIDATE)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        task.write_to(root)
+        workspace = root / "app"
+        workspace.mkdir()
+        answer = workspace / "answer.txt"
+
+        answer.write_text(
+            '<pairing dishName="Grilled Salmon"><wineType>White</wineType><flavorProfile />'
+            "<acidityLevel>Medium</acidityLevel><tanninLevel>Low</tanninLevel>"
+            "<servingTemperature>12</servingTemperature><isRecommended>true</isRecommended></pairing>"
+        )
+        reward = grade(spec, root / "tests", workspace)
+        assert reward.status == Status.SCORED and reward.reward == 1.0
+
+        answer.write_text("<pairing><dishName>Grilled Salmon</dishName></pairing>")
+        reward = grade(spec, root / "tests", workspace)
+        assert reward.status == Status.SCORED and reward.reward == 0.0
 
 
-def test_csv_schema_type_is_rejected_as_unsupported_variant():
+def test_csv_schema_type_grades_required_scalar_columns():
     record = _convert(_mutate_verifier_data(schema_type="csv"))
-    assert record.status == ConvertStatus.UNSUPPORTED_VARIANT and record.task_binary is None
+    assert record.status == ConvertStatus.CONVERTED
+    assert record.mode == "csv-columns"
+    assert record.tags == ["structured-outputs", "csv-columns", "nemotron", "csv"]
+
+    task = read_task_binary(record.task_binary)
+    spec = parse_spec(task.text(VERIFIER_TOML))
+    assert isinstance(spec, CsvColumnsSpec)
+    assert spec.required == (
+        "dishName",
+        "wineType",
+        "acidityLevel",
+        "tanninLevel",
+        "servingTemperature",
+        "isRecommended",
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        task.write_to(root)
+        workspace = root / "app"
+        workspace.mkdir()
+        answer = workspace / "answer.txt"
+
+        answer.write_text(
+            "dishName,wineType,acidityLevel,tanninLevel,servingTemperature,isRecommended\n"
+            "Grilled Salmon,White,Medium,Low,12,true\n"
+        )
+        reward = grade(spec, root / "tests", workspace)
+        assert reward.status == Status.SCORED and reward.reward == 1.0
+
+        answer.write_text("dishName,wineType\nGrilled Salmon,White\n")
+        reward = grade(spec, root / "tests", workspace)
+        assert reward.status == Status.SCORED and reward.reward == 0.0
 
 
-def test_toml_schema_type_is_rejected_as_unsupported_variant():
+def test_toml_schema_type_grades_parsed_document_against_json_schema():
     record = _convert(_mutate_verifier_data(schema_type="toml"))
-    assert record.status == ConvertStatus.UNSUPPORTED_VARIANT and record.task_binary is None
+    assert record.status == ConvertStatus.CONVERTED
+    assert record.mode == "json-schema"
+    assert record.tags == ["structured-outputs", "json-schema", "nemotron", "toml"]
+
+    task = read_task_binary(record.task_binary)
+    spec = parse_spec(task.text(VERIFIER_TOML))
+    assert isinstance(spec, JsonSchemaSpec)
+    assert spec.format is SchemaFormat.TOML
+    assert "tests/schema.json" in task.files
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        task.write_to(root)
+        workspace = root / "app"
+        workspace.mkdir()
+        answer = workspace / "answer.txt"
+
+        answer.write_text(
+            'dishName = "Grilled Salmon"\nwineType = "White"\nacidityLevel = "Medium"\n'
+            'tanninLevel = "Low"\nservingTemperature = 12\nisRecommended = true\n'
+            '[flavorProfile]\nprimary = "citrus"\nsecondary = "green apple"\n'
+        )
+        reward = grade(spec, root / "tests", workspace)
+        assert reward.status == Status.SCORED and reward.reward == 1.0
+
+        answer.write_text('dishName = "Grilled Salmon"\nwineType = 42\n')
+        reward = grade(spec, root / "tests", workspace)
+        assert reward.status == Status.SCORED and reward.reward == 0.0
 
 
 def test_non_object_schema_is_rejected_as_null_grader():

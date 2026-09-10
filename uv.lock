@@ -7181,7 +7181,7 @@ dependencies = [
     { name = "marin-zephyr" },
     { name = "seaborn" },
     { name = "sqlalchemy" },
-    { name = "tasktrove-verify", extra = ["answer", "schema"] },
+    { name = "tasktrove-verify", extra = ["answer", "reasoning-gym", "schema"] },
     { name = "watchdog" },
 ]
 
@@ -7226,7 +7226,7 @@ requires-dist = [
     { name = "quack-kernels", extras = ["cu13"], marker = "sys_platform == 'linux' and extra == 'pipeline'", specifier = "==0.6.1" },
     { name = "seaborn", specifier = ">=0.13" },
     { name = "sqlalchemy", specifier = ">=2" },
-    { name = "tasktrove-verify", extras = ["answer", "schema"], editable = "lib/tasktrove-verify" },
+    { name = "tasktrove-verify", extras = ["answer", "reasoning-gym", "schema"], editable = "lib/tasktrove-verify" },
     { name = "torch", marker = "sys_platform == 'linux' and extra == 'pipeline'", specifier = "==2.11.0+cpu", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "marin-root", extra = "pipeline" } },
     { name = "triton", marker = "sys_platform == 'linux' and extra == 'pipeline'", specifier = ">=3.6.0,<3.7" },
     { name = "watchdog" },

@@ -20,7 +20,7 @@ dependencies = [
     # cloud credentials and reads the key from a projected Secret instead.
     "marin-rigging[secrets]",
     "marin-zephyr",
-    "tasktrove-verify[answer,schema]",
+    "tasktrove-verify[answer,reasoning-gym,schema]",
     # marin-finelog is the pure-Python finelog client + deploy/CLI tooling, a
     # workspace member (editable source) so deploy/CLI fixes land without a wheel
     # republish. Its native companion marin-finelog-server (the in-process
