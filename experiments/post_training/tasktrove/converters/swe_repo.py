@@ -24,10 +24,14 @@ def uncollectable(node_id: str) -> bool:
     The mode clears the repository's ``addopts``, which drops ``--doctest-glob`` and
     ``--doctest-modules``, so ids in non-Python files (``tests/tests.md::tests.md``) and doctest items,
     whose name is the dotted object path (``parso/__init__.py::parso``,
-    ``parso/tree.py::parso.tree.NodeOrLeaf.dump``), never run and count as failures.
+    ``parso/tree.py::parso.tree.NodeOrLeaf.dump``), never run and count as failures. Some sources
+    split their id lists on whitespace, so a parametrized id whose parameter contains a space arrives
+    truncated (``test_ddl[add-kwargs0-ALTER``) and never matches a collected item either.
     """
     file, _, rest = node_id.partition("::")
     if not file.endswith(".py"):
+        return True
+    if "[" in rest and not rest.endswith("]"):
         return True
     name = rest.split("[", 1)[0]
     if "::" in name:

@@ -14,8 +14,9 @@ per task. One Daytona snapshot is built per distinct Dockerfile and reused acros
 tasks; when the organisation's snapshot quota refuses a build the run stops, since the
 organisation does not allow building a sandbox from a Dockerfile directly (delete stale
 snapshots and rerun). Every check runs in a fresh sandbox: ``tests/`` is uploaded to ``/tests``,
-the solve script (``solution/solve.sh`` for the oracle, ``candidate/solve.sh`` for the candidate)
-to ``/solution``, the script runs from the image's working directory, then ``/tests/test.sh``
+the solve directory (``solution/`` for the oracle, ``candidate/`` for the candidate) to
+``/solution`` and ``setup_files/`` to ``/setup_files`` when the task ships one,
+``/solution/solve.sh`` runs from the image's working directory, then ``/tests/test.sh``
 grades and ``/logs/verifier/verdict.json`` comes back as ``logs/<check>/verdict.json``. Checks
 that already have a verdict are skipped, and ``results.json`` is rewritten from every verdict on
 disk at the end.
@@ -48,11 +49,14 @@ SAMPLE_JSON = "sample.json"
 RESULTS_JSON = "results.json"
 TASKS_DIR = "tasks"
 CHECKS = ("empty", "oracle", "candidate")
-SOLVE_FOR_CHECK = {"oracle": "solution/solve.sh", "candidate": "candidate/solve.sh"}
+SOLVE_DIR_FOR_CHECK = {"oracle": "solution", "candidate": "candidate"}
+SOLVE_SH = "solve.sh"
 DOCKERFILE = "environment/Dockerfile"
 TESTS = "tests"
+SETUP_FILES = "setup_files"
 TESTS_MOUNT = "/tests"
-SOLUTION_MOUNT = "/solution/solve.sh"
+SOLUTION_MOUNT = "/solution"
+SETUP_FILES_MOUNT = "/setup_files"
 VERDICT = "/logs/verifier/verdict.json"
 DEFAULT_WORKDIR = "/app"
 _WORKDIR_LINE = re.compile(r"^WORKDIR\s+(\S+)", re.MULTILINE | re.IGNORECASE)
@@ -66,6 +70,15 @@ TAIL = 4000
 def image_workdir(dockerfile: str) -> str:
     workdirs = _WORKDIR_LINE.findall(dockerfile)
     return workdirs[-1] if workdirs else DEFAULT_WORKDIR
+
+
+def tree_uploads(root: Path, mount: str) -> list[FileUpload]:
+    """Every file under ``root`` as an upload to the same relative path under ``mount``."""
+    return [
+        FileUpload(source=path.read_bytes(), destination=f"{mount}/{path.relative_to(root)}")
+        for path in root.rglob("*")
+        if path.is_file()
+    ]
 
 
 def is_quota_error(error: Exception) -> bool:
@@ -126,26 +139,24 @@ def run_check(
     logs = task_dir / "logs" / check
     logs.mkdir(parents=True, exist_ok=True)
     result = {"name": task["name"], "check": check, "reward": None, "status": "", "detail": "", "solve_exit": None}
-    script = task_dir / SOLVE_FOR_CHECK[check] if check in SOLVE_FOR_CHECK else None
-    if script is not None and not script.is_file():
+    solve_dir = task_dir / SOLVE_DIR_FOR_CHECK[check] if check in SOLVE_DIR_FOR_CHECK else None
+    if solve_dir is not None and not (solve_dir / SOLVE_SH).is_file():
         result["status"] = STATUS_NO_SCRIPT
         return result
     dockerfile = task_dir / DOCKERFILE
     workdir = image_workdir(dockerfile.read_text())
-    uploads = [
-        FileUpload(source=path.read_bytes(), destination=f"{TESTS_MOUNT}/{path.relative_to(task_dir / TESTS)}")
-        for path in (task_dir / TESTS).rglob("*")
-        if path.is_file()
-    ]
-    if script is not None:
-        uploads.append(FileUpload(source=script.read_bytes(), destination=SOLUTION_MOUNT))
+    uploads = tree_uploads(task_dir / TESTS, TESTS_MOUNT)
+    if (task_dir / SETUP_FILES).is_dir():
+        uploads += tree_uploads(task_dir / SETUP_FILES, SETUP_FILES_MOUNT)
+    if solve_dir is not None:
+        uploads += tree_uploads(solve_dir, SOLUTION_MOUNT)
     sandbox = None
     try:
         params = CreateSandboxFromSnapshotParams(snapshot=snapshots.name_for(task["dockerfile_id"]), ephemeral=True)
         sandbox = client.create(params, timeout=timeout)
         sandbox.fs.upload_files(uploads)
-        if script is not None:
-            solve = sandbox.process.exec(f"bash {SOLUTION_MOUNT}", cwd=workdir, env=env, timeout=timeout)
+        if solve_dir is not None:
+            solve = sandbox.process.exec(f"bash {SOLUTION_MOUNT}/{SOLVE_SH}", cwd=workdir, env=env, timeout=timeout)
             result["solve_exit"] = solve.exit_code
             (logs / "solve.txt").write_text(f"exit {solve.exit_code}\n{solve.result[-TAIL:]}")
         test = sandbox.process.exec(f"bash {TESTS_MOUNT}/test.sh", cwd=workdir, env=env, timeout=timeout)

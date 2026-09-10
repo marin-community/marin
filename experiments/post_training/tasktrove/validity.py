@@ -29,6 +29,7 @@ import logging
 import os
 import random
 import re
+import shlex
 import subprocess
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
@@ -185,11 +186,16 @@ def solve_task(task_dir: Path, agent_command: list[str], model: str, timeout: fl
         workdir=image_workdir(dockerfile), instruction=(task_dir / INSTRUCTION).read_text(), dockerfile=dockerfile
     )
     env = {k: v for k, v in os.environ.items() if k not in STRIPPED_ENV}
-    proc = subprocess.run(
-        [*agent_command, "--model", model], input=prompt, capture_output=True, text=True, timeout=timeout, env=env
-    )
     candidate = task_dir / CANDIDATE_DIR
     candidate.mkdir(exist_ok=True)
+    try:
+        proc = subprocess.run(
+            [*agent_command, "--model", model], input=prompt, capture_output=True, text=True, timeout=timeout, env=env
+        )
+    except subprocess.TimeoutExpired:
+        # One hung agent call must not take the rest of the batch down with it.
+        (candidate / "error.txt").write_text(f"no reply after {timeout:.0f} s\n")
+        return {"name": task_dir.name, "ok": False, "error": f"timeout after {timeout:.0f} s"}
     if proc.returncode != 0:
         (candidate / "error.txt").write_text(proc.stderr[-4000:] + proc.stdout[-4000:])
         return {"name": task_dir.name, "ok": False, "error": f"exit {proc.returncode}"}
@@ -307,7 +313,7 @@ def solve(root: Path, model: str, agent_command: str, jobs: int, timeout: float)
         if not (root / TASKS_DIR / t.name / CANDIDATE_DIR / SOLVE_SH).is_file()
     ]
     logger.info("%d tasks to solve", len(pending))
-    command = agent_command.split()
+    command = shlex.split(agent_command)
     with ThreadPoolExecutor(jobs) as pool:
         outcomes = list(pool.map(lambda d: solve_task(d, command, model, timeout), pending))
     for outcome in outcomes:

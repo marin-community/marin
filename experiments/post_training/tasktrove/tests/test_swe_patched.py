@@ -99,6 +99,26 @@ def test_empty_fail_to_pass_is_rejected():
     assert record.status == ConvertStatus.TOO_FEW_CASES and record.task_binary is None
 
 
+def test_truncated_parametrized_ids_are_dropped_or_rejected():
+    """meltano's PASS_TO_PASS carried ``test_get_column_ddl[...-ALTER`` (the id was split on the space
+    inside its parameter); such an id can never be collected, so it leaves ``must_not_break`` and
+    makes the task unconvertible when it is a FAIL_TO_PASS id."""
+    truncated = "tests/test_calc.py::test_ddl[get_column_add_ddl-kwargs0-context0-ALTER"
+    task = read_task_binary(_fixture())
+    config = json.loads(task.text("tests/config.json"))
+    config["PASS_TO_PASS"] = [*config["PASS_TO_PASS"], truncated]
+    task.files["tests/config.json"] = json.dumps(config).encode()
+    record = _convert(write_task_binary(task))
+    assert record.status == ConvertStatus.CONVERTED
+    spec = parse_spec(read_task_binary(record.task_binary).text(VERIFIER_TOML))
+    assert isinstance(spec, PytestSpec) and truncated not in spec.must_not_break
+
+    config["FAIL_TO_PASS"] = [truncated]
+    task.files["tests/config.json"] = json.dumps(config).encode()
+    record = _convert(write_task_binary(task))
+    assert record.status == ConvertStatus.UNSUPPORTED_VARIANT and record.task_binary is None
+
+
 def test_top_level_setup_files_script_is_rejected():
     """The OpenSWE template's ``instruction.md`` tells the agent to run a root-level
     ``/setup_files/setup.sh`` that the pytest mode's sandbox only ever mounts ``tests/`` and

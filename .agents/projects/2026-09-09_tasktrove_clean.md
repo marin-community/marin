@@ -30,6 +30,10 @@ raw → summaries → templates → converted → graded → clean
 12. [x] Publish an artifact with the detailed analysis: https://claude.ai/code/artifact/22018f48-ca1f-4a55-9f5c-12108557d2ba (funnel, kept and dropped sources with reasons, per-check rejections, normalization, the four Docker samples, the smoke run)
 13. [x] Smoke-train Qwen 0.6B on the clean dataset through marin skyrl, configured after the curriculum experiment; config and result in the smoke section below (third attempt succeeded end to end, reward 0.0)
 14. [x] Final report to the user and PR monitoring per the commit skill
+15. [x] Reinstate the rubric-only judge sources with a `judge_rubric` converter and `rubric`/`no-reference` tags; run 2026.09.10.4 (`/power/iris-run-job-20260910-164051`)
+16. [x] Report and manifest: distinct Dockerfiles with base image and per-converter/source counts, tags, dropped sources by reason (`clean summary` regenerates them)
+17. [x] End-to-end validity sample (`validity.py` + `validity_daytona.py`): stratified sample, Sonnet solve scripts, empty/oracle/candidate checks in Daytona; pilot of 54 tasks and full sample of 190 in the validity section below
+18. [x] Fixes from the validity sample: truncated parametrized pytest ids are dropped from PASS_TO_PASS and reject FAIL_TO_PASS (swe_rebench meltano); whole-directory uploads in the Daytona runner
 
 ## Run 2026.09.10.3
 

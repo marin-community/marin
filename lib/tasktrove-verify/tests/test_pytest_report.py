@@ -68,6 +68,25 @@ def test_pytest_required_id_failing_scores_zero_and_names_it(tmp_path):
     assert reward.detail["first_failure"] == REGRESSION
 
 
+def test_pytest_ids_are_rebased_when_an_ini_moves_the_rootdir(tmp_path):
+    """A ``tests/pytest.ini`` makes pytest report ``test_calc.py::...`` instead of
+    ``tests/test_calc.py::...``; the spec's workspace-relative ids must still match."""
+    workspace = _project(tmp_path, FIXED)
+    (workspace / "tests" / "pytest.ini").write_text("[pytest]\n")
+    reward = pytest_report.grade(_spec(must_pass=(REGRESSION,), must_not_break=(PASSING,)), tmp_path, workspace)
+    assert reward.reward == 1.0
+    assert reward.detail["passed"] == 2
+
+
+def test_pytest_failure_detail_carries_the_output_tail(tmp_path):
+    workspace = _project(tmp_path, BROKEN)
+    reward = pytest_report.grade(_spec(must_pass=(REGRESSION,)), tmp_path, workspace)
+    assert reward.reward == 0.0
+    assert "test_add_negative" in reward.detail["output"]
+    passing = pytest_report.grade(_spec(must_pass=(PASSING,)), tmp_path, workspace)
+    assert passing.reward == 1.0 and "output" not in passing.detail
+
+
 def test_pytest_id_absent_from_report_counts_as_failed(tmp_path):
     workspace = _project(tmp_path, FIXED)
     missing = "tests/test_calc.py::test_never_written"

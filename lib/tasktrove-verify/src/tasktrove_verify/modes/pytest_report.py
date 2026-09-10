@@ -10,7 +10,9 @@ not a failed attempt, so it raises instead of scoring zero.
 """
 
 import json
+import os
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 
 from tasktrove_verify.modes.run import STDERR_TAIL, check_ids, restore, run_command, run_setup, workdir
@@ -51,19 +53,35 @@ def grade(spec: PytestSpec, tests_dir: Path, workspace: Path) -> Reward:
             output = _tail(result.stderr or result.stdout)
             raise RuntimeError(f"pytest wrote no json report (exit {result.returncode}): {output}")
         report = json.loads(report_path.read_text())
-    return check_ids(_outcomes(report), spec.must_pass, spec.must_not_break, exit_code=result.returncode)
+    outcomes = _outcomes(report, directory)
+    reward = check_ids(outcomes, spec.must_pass, spec.must_not_break, exit_code=result.returncode)
+    if reward.reward < 1.0:
+        output = _tail(result.stdout + result.stderr, STDERR_TAIL)
+        reward = replace(reward, detail={**reward.detail, "output": output})
+    return reward
 
 
-def _outcomes(report: dict) -> dict[str, bool]:
-    """Node id to pass/fail. Skipped and xfailed tests are neither and stay out of the map."""
+def _outcomes(report: dict, workspace: Path) -> dict[str, bool]:
+    """Node id to pass/fail. Skipped and xfailed tests are neither and stay out of the map.
+
+    pytest writes node ids relative to its rootdir, which a ``tests/pytest.ini`` moves below the
+    workspace (``unit/test_x.py::test_y`` for ``tests/unit/test_x.py``); the spec's ids are relative
+    to the workspace, so the ids are rebased before they are compared.
+    """
+    root = Path(report.get("root", workspace))
     outcomes = {}
     for test in report.get("tests", []):
         outcome = test.get("outcome")
         if outcome in PASS_OUTCOMES:
-            outcomes[test["nodeid"]] = True
+            outcomes[_rebase(test["nodeid"], root, workspace)] = True
         elif outcome in FAIL_OUTCOMES:
-            outcomes[test["nodeid"]] = False
+            outcomes[_rebase(test["nodeid"], root, workspace)] = False
     return outcomes
+
+
+def _rebase(nodeid: str, root: Path, workspace: Path) -> str:
+    file, separator, rest = nodeid.partition("::")
+    return os.path.relpath(root / file, workspace) + separator + rest
 
 
 def _tail(text: str, limit: int = 500) -> str:
