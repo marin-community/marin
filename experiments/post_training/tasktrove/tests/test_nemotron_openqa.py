@@ -42,7 +42,7 @@ def test_exemplar_converts_to_judge_spec_with_exact_gate():
     record = _convert()
     assert record.status == ConvertStatus.CONVERTED
     assert record.converter == "nemotron_openqa" and record.mode == "judge"
-    assert record.tags == ["qa", "openqa", "nemotron", "knowledge"]
+    assert record.tags == ["qa", "openqa", "judge", "reference", "nemotron", "knowledge"]
     task = read_task_binary(record.task_binary)
     spec = parse_spec(task.text(VERIFIER_TOML))
     assert isinstance(spec, JudgeSpec)
@@ -86,7 +86,7 @@ def test_reference_answer_shape_routes_to_the_science_tag():
         _info("science-openq", "llm-judge-freeform"), "t.tar.gz", write_task_binary(task), converter_index(), TOOL_REF
     )
     assert record.status == ConvertStatus.CONVERTED
-    assert record.tags == ["qa", "openqa", "nemotron", "science"]
+    assert record.tags == ["qa", "openqa", "judge", "reference", "nemotron", "science"]
     spec = parse_spec(read_task_binary(record.task_binary).text(VERIFIER_TOML))
     assert isinstance(spec, JudgeSpec)
     assert spec.references == ("Ohmic heating in the transformer windings reduces secondary voltage under load.",)

@@ -210,14 +210,14 @@
   "reason": "Hidden cases plus oracle. Filter to tasks with at least 5 cases and add tolerance-aware compare where the prompt promises one."
  },
  "laion__glaive-code-assistant-sandboxes-verified-v2": {
-  "verdict": "drop",
+  "verdict": "keep",
   "family": "llm-judge-freeform",
-  "reason": "Judge-only over code that is never run; boilerplate 4-criterion rubric."
+  "reason": "Judge-only over code that is never run, four-criterion rubric, no reference. Kept as rubric-only (tag no-reference)."
  },
  "laion__magicoder-v4": {
   "verdict": "drop",
   "family": "llm-judge-freeform",
-  "reason": "Judge-only, nothing executed, boilerplate rubric, vague prompts."
+  "reason": "Judge-only over a bundle of every file under /app collected by tests/collect_submission.py; the judge mode grades one answer file, so the bundle shape needs its own converter. Vague refactor prompts, nothing executed."
  },
  "laion__mix_h10_reward_proportional-v2": {
   "verdict": "drop",
@@ -385,9 +385,9 @@
   "reason": "reasoning_gym library scoring is sound; remove the substring fallback at conversion."
  },
  "laion__nemotron-gym-safety-v3": {
-  "verdict": "drop",
+  "verdict": "keep",
   "family": "llm-judge-freeform",
-  "reason": "Judge-only with a generic per-family rubric and no reference; reward is judge noise."
+  "reason": "Judge-only against a two-line safety principle, no reference. Kept as rubric-only (tag no-reference): the principle is specific to each prompt (refuse the harmful ones, help with the benign ones)."
  },
  "laion__nemotron-gym-science-so-openq-v3": {
   "verdict": "keep",
@@ -415,29 +415,29 @@
   "reason": "Grades by overlap between test_info.json and expected_output_json rather than by pytest node id; not the trusted-paths shape the swe converters handle."
  },
  "laion__stackexchange-codereview-sandboxes-verified-v2": {
-  "verdict": "drop",
+  "verdict": "keep",
   "family": "llm-judge-freeform",
-  "reason": "Judge-only, no gold, gpt-4o-mini, rubric readable by the agent."
+  "reason": "Judge-only code review with a four-criterion rubric and no reference; the rubric ships under tests/, which the agent never sees. Kept as rubric-only (tag no-reference)."
  },
  "laion__stackexchange-overflow-sandboxes-verified-v2": {
-  "verdict": "drop",
+  "verdict": "keep",
   "family": "llm-judge-freeform",
-  "reason": "Same harness as codereview; no ground truth."
+  "reason": "Judge-only Stack Overflow answers, four-criterion rubric, no reference. Kept as rubric-only (tag no-reference)."
  },
  "laion__stackexchange-superuser-sandboxes-verified-v2": {
-  "verdict": "drop",
+  "verdict": "keep",
   "family": "llm-judge-freeform",
-  "reason": "Same harness. If shell coverage is wanted, rewrite a small slice into sandboxed tasks instead."
+  "reason": "Judge-only Super User answers, four-criterion rubric, no reference. Kept as rubric-only (tag no-reference)."
  },
  "laion__stackexchange-tezos-sandboxes-verified-v2": {
-  "verdict": "drop",
+  "verdict": "keep",
   "family": "llm-judge-freeform",
-  "reason": "Same harness and every sampled id is a _copyN duplicate."
+  "reason": "Judge-only Tezos answers, four-criterion rubric, no reference; the _copyN duplicates fall to the dedup step. Kept as rubric-only (tag no-reference)."
  },
  "laion__stackexchange-unix-sandboxes-verified-v2": {
-  "verdict": "drop",
+  "verdict": "keep",
   "family": "llm-judge-freeform",
-  "reason": "Same harness. Candidate for a shell-task rewrite, not for keeping."
+  "reason": "Judge-only Unix & Linux answers, four-criterion rubric, no reference. Kept as rubric-only (tag no-reference)."
  },
  "laion__swegym-tasks-patched-validated-v5": {
   "verdict": "drop",
@@ -460,8 +460,8 @@
   "reason": "Easy SFT persona math, gold in plaintext, carries the terminal-bench canary."
  },
  "laion__wizardlm-orca-v4": {
-  "verdict": "drop",
+  "verdict": "keep",
   "family": "llm-judge-freeform",
-  "reason": "Judge-only over stilted Orca paraphrases."
+  "reason": "Judge-only over Orca-style instructions, three-criterion rubric, no reference. Kept as rubric-only (tag no-reference)."
  }
 }

@@ -33,8 +33,14 @@ source with a reason; every kept source has a converter in this tree.
 
 Output rows carry `source`, `family`, `template_id`, `converter`, `mode`, `dockerfile_id`,
 `language`, `tags`, `has_solution`, `task_binary`, and `solution_binary`. The oracle solution
-never ships inside the binary the agent sees. `python -m experiments.post_training.tasktrove.clean
-<tasks-dir> <path>` writes one task back out as a Harbor task directory.
+never ships inside the binary the agent sees. `mode` says how a task is graded; `tags` are the
+converter's selection labels, counted in `manifest.json` and `report.md` under `by_tag`. Judge-graded
+tasks carry `judge` plus `reference` (an exact gate over gold answers, then the judge) or
+`rubric` and `no-reference` (a checklist with no gold answer anywhere; the reward is the judge's
+reading of the rubric), so a mix can include or exclude the rubric-only tasks by tag.
+`python -m experiments.post_training.tasktrove.clean export <tasks-dir> <path>` writes one task
+back out as a Harbor task directory; `clean summary` rewrites the ledger, manifest and report of
+an existing output.
 
 ## Converters
 
@@ -80,3 +86,17 @@ most one-case TACO and code-contests tasks are samples).
 carries the install block and nothing from the old grader; no expected value or `solution/` is
 visible to the agent; the per-mode shape holds; and for output-file modes the tool is run
 in-process on an empty output (0), the expected value (1), and a perturbation (0).
+
+## Validity sample
+
+`validity.py` asks whether a capable model can solve the tasks, so a group nobody can solve stands
+out as a broken environment rather than a hard one. `validity sample` draws a stratified sample
+(per converter, mode or source) from the clean parquet as task directories; `validity solve` sends
+each instruction and Dockerfile to a headless agent (`claude -p --model sonnet` by default) and
+keeps the one bash script it replies with as `candidate/solve.sh`; `validity_daytona.py` grades the
+empty workspace, the oracle and the candidate in fresh Daytona sandboxes, one snapshot per distinct
+Dockerfile; `validity report` tabulates the verdicts per group. The Daytona runner is a standalone
+script (`uv run --no-project --isolated --prerelease=allow --with "daytona>=0.182,<1"`) because the
+Daytona SDK does not resolve against this project's lock. Judge-graded tasks need
+`TASKTROVE_JUDGE_*` forwarded with `--env`; without an endpoint their candidate check is an
+infrastructure error, not a score.

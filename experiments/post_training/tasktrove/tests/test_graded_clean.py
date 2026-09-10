@@ -22,7 +22,9 @@ from experiments.post_training.tasktrove.taskbinary import INSTRUCTION, TaskFile
 from experiments.post_training.tasktrove.verify import grade_tasks
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
-SOURCE = "mcqa"
+# Real source names: the clean summary looks every source up in source_verdicts.json.
+SOURCE = "laion__nemotron-gym-knowledge-mcqa-v2"
+MATH_SOURCE = "laion__nemotron-gym-math-v5"
 
 
 def _record(path: str, blob: bytes, source: str = SOURCE, family: str = "qa-short-answer") -> ConvertedRecord:
@@ -37,7 +39,7 @@ def _reworded(blob: bytes, instruction: str) -> bytes:
 
 def _leaking_math_record(path: str) -> ConvertedRecord:
     """A converted math task whose instruction quotes the expected answer."""
-    record = _record(path, (FIXTURES / "nemotron_math.tar.gz").read_bytes(), "math", "math-answer")
+    record = _record(path, (FIXTURES / "nemotron_math.tar.gz").read_bytes(), MATH_SOURCE, "math-answer")
     task = read_task_binary(record.task_binary)
     answer = "x^2 + 2x + 1 = 0"
     spec = re.sub(r'expected = ".*"', f'expected = "{answer}"', task.text(VERIFIER_TOML))

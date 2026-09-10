@@ -57,7 +57,7 @@ def convert_nemotron_openqa(task: TaskFiles) -> ConvertedTask | Rejected:
     references = _references(data)
     if not references:
         return Rejected(ConvertStatus.NULL_GRADER, "no non-empty reference answers")
-    tags = tuple(dict.fromkeys(("qa", "openqa", "nemotron", _subject_tag(data))))
+    tags = tuple(dict.fromkeys(("qa", "openqa", "judge", "reference", "nemotron", _subject_tag(data))))
     return ConvertedTask(
         instruction=task.text(INSTRUCTION),
         spec=JudgeSpec(
