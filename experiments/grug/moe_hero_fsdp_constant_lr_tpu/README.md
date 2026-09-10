@@ -96,3 +96,24 @@ uv run iris --cluster=marin job run \
 ```
 
 W&B group: `issue-7856-d512-constant-lr-one-layer-tpu`.
+
+## One-layer SGD-H ablation
+
+The matched SGD-H sweep uses the same 25 one-layer cells, LR schedules, and
+AdamH/Adam fallback parameter groups. For matrix parameters and GatedNorms it
+replaces MuonH's momentum, Nesterov lookahead, and Newton--Schulz direction
+with the current raw gradient, then applies the unchanged Frobenius Hyperball
+projection. This isolates the contribution of Muon's outer optimizer while
+retaining the fixed-radius geometry.
+
+```bash
+uv run iris --cluster=marin job run \
+  --no-wait \
+  --cpu=1 \
+  --memory=2G \
+  --extra=cpu \
+  -e WANDB_API_KEY "${WANDB_API_KEY}" \
+  -- python -m experiments.grug.moe_hero_fsdp_constant_lr_tpu.launch_one_layer_sgdh_lr_scaling
+```
+
+W&B group: `issue-7856-d512-constant-lr-one-layer-sgdh-tpu`.

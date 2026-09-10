@@ -113,6 +113,50 @@ def scale_with_grug_muonh(
     return optax.GradientTransformation(init_fn, update_fn)
 
 
+def scale_with_grug_sgdh(learning_rate: float = 0.02) -> optax.GradientTransformation:
+    """Raw-gradient Hyperball step without momentum or Newton--Schulz orthogonalization."""
+
+    def init_fn(params):
+        del params
+        return optax.EmptyState()
+
+    def update_fn(updates, state, params=None):
+        if params is None:
+            raise ValueError("scale_with_grug_sgdh requires params for norm-preserving updates")
+        sgdh_updates = _scale_invariant_hyperball_updates(params, updates, learning_rate)
+        return sgdh_updates, state
+
+    return optax.GradientTransformation(init_fn, update_fn)
+
+
+def _grug_moe_hyperball_mask(params, hyperball_group: str):
+    paths = leaf_key_paths(params)
+
+    def mask_fn(param, path):
+        path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
+        path_lower = path_str.lower()
+        if (
+            "token_embed" in path_lower
+            or "router_bias" in path_lower
+            or path_lower.endswith(".attn_gate")
+            or ".router" in path_lower
+        ):
+            return "adam"
+        if "output_proj" in path_lower or "lm_head" in path_lower:
+            return "adamh"
+        if "gated_norm" in path_lower:
+            return hyperball_group
+        # Scanning prepends a layer axis, so norm gains / SConv kernels stay named ``.weight``
+        # (route to Adam) while expert matrices become 4D and other matmuls 3D.
+        if path_lower.endswith(".weight"):
+            return "adam"
+        if hasattr(param, "ndim") and param.ndim in (2, 3, 4):
+            return hyperball_group
+        return "adam"
+
+    return jax.tree.map(mask_fn, params, paths)
+
+
 @OptimizerConfig.register_subclass("grug_moe_hero_fsdp_muonh_v1")
 @dataclass(frozen=True)
 class GrugMoeMuonHConfig(OptimizerConfig):
@@ -190,35 +234,72 @@ class GrugMoeMuonHConfig(OptimizerConfig):
         )
 
     def create_mask(self, params):
-        paths = leaf_key_paths(params)
+        return _grug_moe_hyperball_mask(params, "muonh")
 
-        def mask_fn(param, path):
-            path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
-            path_lower = path_str.lower()
-            if (
-                "token_embed" in path_lower
-                or "router_bias" in path_lower
-                or path_lower.endswith(".attn_gate")
-                or ".router" in path_lower
-            ):
-                return "adam"
-            if "output_proj" in path_lower or "lm_head" in path_lower:
-                return "adamh"
-            # GatedNorms route to muonh (NS + Frobenius hyperball), same as matrices.
-            if "gated_norm" in path_lower:
-                return "muonh"
-            # Scanning prepends a layer axis, so norm gains / SConv kernels stay named ``.weight``
-            # (route to Adam) while expert matrices become 4D and other matmuls 3D (route to MuonH).
-            if path_lower.endswith(".weight"):
-                return "adam"
-            if hasattr(param, "ndim") and param.ndim in (2, 3, 4):
-                return "muonh"
-            return "adam"
 
-        return jax.tree.map(mask_fn, params, paths)
+@OptimizerConfig.register_subclass("grug_moe_hero_fsdp_sgdh_v1")
+@dataclass(frozen=True)
+class GrugMoeSGDHConfig(OptimizerConfig):
+    """SGD-H matrix updates with the MuonH experiment's AdamH/Adam fallback groups.
+
+    Matrix leaves and GatedNorms use the raw gradient followed by the same
+    Frobenius Hyperball projection as MuonH. There is no momentum, Nesterov
+    lookahead, or Newton--Schulz orthogonalization.
+    """
+
+    adam_lr: float = 6e-4
+    beta1: float = 0.9
+    beta2: float = 0.95
+    epsilon: float = 1e-8
+    max_grad_norm: float | None = None
+
+    def build(self, num_train_steps):
+        learning_rate_schedule = self.lr_scheduler(num_train_steps)
+        adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
+
+        def optimizer(learning_rate, adam_lr):
+            def sgdh_transform():
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(scale_with_grug_sgdh(learning_rate))
+                components.append(_match_named_update_sharding())
+                return optax.chain(*components)
+
+            def adamh_transform_at(lr):
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(scale_by_adamh(self.beta1, self.beta2, self.epsilon, lr))
+                return optax.chain(*components)
+
+            def adam_transform_at(lr):
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(optax.scale_by_adam(self.beta1, self.beta2, self.epsilon))
+                components.append(optax.scale(-lr))
+                return optax.chain(*components)
+
+            transforms = {
+                "sgdh": sgdh_transform(),
+                "adamh": adamh_transform_at(learning_rate),
+                "adam": adam_transform_at(adam_lr),
+            }
+            return optax.multi_transform(transforms, self.create_mask)
+
+        return optax.inject_hyperparams(optimizer)(
+            learning_rate=learning_rate_schedule,
+            adam_lr=adam_lr_schedule,
+        )
+
+    def create_mask(self, params):
+        return _grug_moe_hyperball_mask(params, "sgdh")
 
 
 __all__ = [
     "GrugMoeMuonHConfig",
+    "GrugMoeSGDHConfig",
     "scale_with_grug_muonh",
+    "scale_with_grug_sgdh",
 ]

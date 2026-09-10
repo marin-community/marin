@@ -22,6 +22,7 @@ from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
+from levanter.optim.config import OptimizerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from marin.execution.build_context import resolve_version
@@ -194,7 +195,26 @@ def build_d512_constant_lr_run_with_model(
     wandb_sweep_tag: str,
 ) -> ArtifactStep[LevanterCheckpoint]:
     """Build one TPU checkpoint cell with an explicit d512 model config."""
-    optimizer = constant_lr_optimizer(point)
+    return build_d512_constant_lr_run_with_model_and_optimizer(
+        point,
+        model=model,
+        optimizer=constant_lr_optimizer(point),
+        version=version,
+        wandb_group=wandb_group,
+        wandb_sweep_tag=wandb_sweep_tag,
+    )
+
+
+def build_d512_constant_lr_run_with_model_and_optimizer(
+    point: D512ConstantLrPoint,
+    *,
+    model: GrugModelConfig,
+    optimizer: OptimizerConfig,
+    version: str,
+    wandb_group: str,
+    wandb_sweep_tag: str,
+) -> ArtifactStep[LevanterCheckpoint]:
+    """Build one TPU checkpoint cell with explicit model and optimizer configs."""
     name = f"grug/{point.run_id}"
     version = resolve_version(name, version)
 
