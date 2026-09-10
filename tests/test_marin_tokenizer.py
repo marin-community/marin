@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+import re
 from dataclasses import dataclass
 from itertools import pairwise
 
@@ -15,11 +17,11 @@ from levanter.data.text.trace_chat import (
 )
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
 from marin.datakit.chat_render import render_marin_chat
+from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 from openai_harmony import Author, Message, Role
 from transformers import AutoTokenizer, PreTrainedTokenizer
 
 from experiments.marin_tokenizer import (
-    MARIN_CHAT_TEMPLATE,
     MARIN_CUSTOM_SPECIAL_TOKENS,
     create_marin_tokenizer,
 )
@@ -219,7 +221,7 @@ def test_chat_processor_renders_tool_calls(marin_chat_tokenizer: MarinTokenizer)
 
     rendered = _decode(marin_chat_tokenizer, result["input_ids"])
     assert '{"name": "check_valid_vin", "arguments": {"vin": "1FMXK92W8YPA12345"}}' in rendered
-    assert '<tool_response name="check_valid_vin" id="call_abc">' in rendered
+    assert '<tool_response name="check_valid_vin">' in rendered
     assert result["assistant_masks"].sum() > 0
 
 
@@ -311,10 +313,9 @@ def test_chat_processor_renders_ipython_output(marin_chat_tokenizer: MarinTokeni
             ],
             [
                 {"role": "user", "content": "Calculate 2 + 2."},
-                {"role": "assistant", "content": "<|start_think|>Use the calculator.<|end_think|>Calculating now."},
                 {
                     "role": "assistant",
-                    "content": "",
+                    "content": "<|start_think|>Use the calculator.<|end_think|>Calculating now.",
                     "tool_calls": [
                         {
                             "type": "function",
@@ -380,10 +381,10 @@ def test_chat_processor_renders_ipython_output(marin_chat_tokenizer: MarinTokeni
                                 "name": "first",
                                 "arguments": {"z": "café <>&", "a": True},
                             }
-                        }
+                        },
+                        {"function": {"name": "second", "arguments": {}}},
                     ],
                 },
-                {"role": "assistant", "tool_calls": [{"function": {"name": "second", "arguments": {}}}]},
             ],
             {
                 "tools": [
@@ -429,3 +430,129 @@ def test_harmony_rendering_matches_inference_tokens(
     )
     actual = marin_tokenizer.encode(rendered, add_special_tokens=False)
     assert actual == expected["input_ids"]
+
+
+@pytest.mark.parametrize("arguments", [{"query": "café <>&"}, '{"query": "café <>&"}'])
+def test_agent_turn_retains_reasoning_content_and_parallel_calls(marin_chat_tokenizer, arguments):
+    messages = [
+        {"role": "user", "content": "Look in both places."},
+        {
+            "role": "assistant",
+            "reasoning_content": "Search both indexes.",
+            "content": "Looking now.",
+            "tool_calls": [
+                {"function": {"name": "first", "arguments": arguments}},
+                {"function": {"name": "second", "arguments": {}}},
+            ],
+        },
+        {"role": "tool", "name": "first", "content": "One result."},
+        {"role": "tool", "name": "second", "content": "No results."},
+        {"role": "assistant", "content": "Found one result."},
+    ]
+    result = marin_chat_tokenizer.apply_chat_template_with_masks([messages])
+    ids = np.array(result["input_ids"][0])
+    mask = np.array(result["assistant_masks"][0]).astype(bool)
+    rendered = marin_chat_tokenizer.decode(ids.tolist(), skip_special_tokens=False)
+    assistant_start = "<|start_header_id|>assistant<|end_header_id|>\n"
+    first_turn = rendered.split(assistant_start)[1].split("<|eot_id|>")[0]
+    assert first_turn.startswith("<|start_think|>Search both indexes.<|end_think|>Looking now.")
+    calls = [json.loads(payload) for payload in re.findall(r"<tool_call>(.*?)</tool_call>", first_turn, re.DOTALL)]
+    assert calls == [
+        {"name": "first", "arguments": {"query": "café <>&"}},
+        {"name": "second", "arguments": {}},
+    ]
+    trained = marin_chat_tokenizer.decode(ids[mask].tolist(), skip_special_tokens=False)
+    assert first_turn in trained
+    assert "Found one result." in trained
+    assert "One result." not in trained
+    assert "No results." not in trained
+
+
+def test_structured_tool_definitions_are_json(marin_chat_tokenizer):
+    tools = [{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}]
+    rendered = marin_chat_tokenizer.apply_chat_template(QUESTION, tools=tools, tokenize=False)
+    definitions = rendered.split("<tools>\n")[1].split("</tools>")[0]
+    assert [json.loads(line) for line in definitions.splitlines() if line.strip()] == tools
+
+
+def test_tool_reply_ids_render_like_named_harmony_observations(marin_chat_tokenizer):
+    calls = [
+        {"id": "call_a", "function": {"name": "first", "arguments": {}}},
+        {"id": "call_b", "function": {"name": "second", "arguments": {}}},
+    ]
+    prefix = [{"role": "user", "content": "Run both."}, {"role": "assistant", "tool_calls": calls}]
+    api_replies = [
+        {"role": "tool", "tool_call_id": "call_a", "content": "A"},
+        {"role": "tool", "tool_call_id": "call_b", "content": "B"},
+    ]
+    named_replies = [
+        {"role": "tool", "name": "first", "content": "A"},
+        {"role": "tool", "name": "second", "content": "B"},
+    ]
+    assert marin_chat_tokenizer.apply_chat_template(prefix + api_replies) == marin_chat_tokenizer.apply_chat_template(
+        prefix + named_replies
+    )
+
+
+@pytest.mark.parametrize("chunk_size", [1, 3, 17, 1000])
+def test_hermes_parser_round_trip(marin_tokenizer, chunk_size):
+    # vLLM is an optional serving dependency; this CPU-only test also runs in
+    # environments with the pinned MarinSkyRL vLLM installed.
+    hermes = pytest.importorskip("vllm.tool_parsers.hermes_tool_parser")
+    protocol = pytest.importorskip("vllm.entrypoints.openai.chat_completion.protocol")
+    user = {"role": "user", "content": "Search both places."}
+    assistant = {
+        "role": "assistant",
+        "content": "<|start_think|>Need two searches.<|end_think|>Looking now.",
+        "tool_calls": [
+            {"function": {"name": "first", "arguments": {"query": "café <>&"}}},
+            {"function": {"name": "second", "arguments": {}}},
+        ],
+    }
+    prompt = marin_tokenizer.apply_chat_template([user], tokenize=False, add_generation_prompt=True)
+    full = marin_tokenizer.apply_chat_template([user, assistant], tokenize=False)
+    completion = full.removeprefix(prompt).removesuffix("<|eot_id|>")
+    request = protocol.ChatCompletionRequest(model="marin", messages=[user])
+    result = hermes.Hermes2ProToolParser(marin_tokenizer).extract_tool_calls(completion, request)
+    assert result.tools_called
+    assert result.content == assistant["content"]
+    expected = [("first", {"query": "café <>&"}), ("second", {})]
+    assert [(call.function.name, json.loads(call.function.arguments)) for call in result.tool_calls] == expected
+
+    parser = hermes.Hermes2ProToolParser(marin_tokenizer)
+    previous = ""
+    content = ""
+    calls = {}
+    for end in range(chunk_size, len(completion) + chunk_size, chunk_size):
+        current = completion[:end]
+        delta_text = current[len(previous) :]
+        delta = parser.extract_tool_calls_streaming(
+            previous,
+            current,
+            delta_text,
+            marin_tokenizer.encode(previous),
+            marin_tokenizer.encode(current),
+            marin_tokenizer.encode(delta_text),
+            request,
+        )
+        if delta:
+            content += delta.content or ""
+            for call in delta.tool_calls:
+                entry = calls.setdefault(call.index, {"name": "", "arguments": ""})
+                if call.function:
+                    entry["name"] += call.function.name or ""
+                    entry["arguments"] += call.function.arguments or ""
+        previous = current
+    assert content == result.content
+    assert [(call["name"], json.loads(call["arguments"])) for call in calls.values()] == expected
+
+    replay = {
+        "role": "assistant",
+        "content": result.content,
+        "tool_calls": [call.model_dump() for call in result.tool_calls],
+    }
+    api_replies = [{"role": "tool", "tool_call_id": call.id, "content": "Done."} for call in result.tool_calls]
+    named_replies = [{"role": "tool", "name": name, "content": "Done."} for name, _ in expected]
+    assert marin_tokenizer.apply_chat_template([user, replay, *api_replies]) == marin_tokenizer.apply_chat_template(
+        [user, assistant, *named_replies]
+    )
