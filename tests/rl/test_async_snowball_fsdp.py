@@ -124,3 +124,108 @@ def test_snowball_rejects_an_unknown_backend_before_building_an_experiment():
             timeout_seconds=3600,
             backend="fsdp",
         )
+
+
+@pytest.mark.parametrize("backend", list(snowball.Backend))
+@pytest.mark.parametrize("policy_nodes,inference_replicas", [(2, 3), (4, 1)])
+def test_snowball_placement_cli_preserves_workload_and_resolves_requested_roles(
+    backend, policy_nodes, inference_replicas
+):
+    args = [
+        "--version",
+        "2026.09.10.77",
+        "--completion",
+        "metrics",
+        "--backend",
+        backend.value,
+        "--scale",
+        "cadence-gate",
+        "--policy-nodes",
+        str(policy_nodes),
+        "--inference-replicas",
+        str(inference_replicas),
+    ]
+    result = CliRunner().invoke(snowball.main, args)
+    assert result.exit_code == 0, result.output
+    request = json.loads(result.output)["request"]
+    topology = request["topology"]
+    assert topology["num_nodes"] == 5 and topology["gpus_per_node"] == 8
+    assert topology["role_plan"]["policy_num_nodes"] == policy_nodes
+    assert topology["role_plan"]["num_inference_engines"] == inference_replicas
+    config = yaml.safe_load(request["config_yaml"])
+    trainer = config["trainer"]
+    assert trainer["train_batch_size"] == trainer["policy_mini_batch_size"] == 32
+    assert config["generator"]["n_samples_per_prompt"] == 4
+    if backend is snowball.Backend.MEGATRON:
+        geometry = trainer["policy"]["megatron_config"]
+        assert geometry["pipeline_model_parallel_size"] == 2
+        assert geometry["expert_model_parallel_size"] == 8
+    default = CliRunner().invoke(snowball.main, args[:-4])
+    assert default.exit_code == 0, default.output
+    baseline = json.loads(default.output)["request"]
+    for field in ("model", "train_data", "validation_data", "seed", "runtime"):
+        assert request[field] == baseline[field]
+    assert (request == baseline) == (policy_nodes == 4)
+
+
+@pytest.mark.parametrize("policy_nodes", [True, 0, 1, 3, 8])
+def test_snowball_rejects_unsupported_policy_node_counts(policy_nodes):
+    with pytest.raises(ValueError, match="policy_nodes must be 2 or 4"):
+        snowball.training_config(snowball.Scale.GATE, policy_nodes=policy_nodes)
+
+
+@pytest.mark.parametrize("scale", list(snowball.Scale))
+def test_snowball_precision_presets_change_only_declared_optimizer_configuration(scale):
+    baseline = yaml.safe_load(snowball.training_config(scale, policy_nodes=2, inference_replicas=3))
+    configs = []
+    for precision in snowball.OptimizerPrecision:
+        config = yaml.safe_load(
+            snowball.training_config(scale, policy_nodes=2, inference_replicas=3, optimizer_precision=precision)
+        )
+        configs.append(json.dumps(config, sort_keys=True))
+        if precision is not snowball.OptimizerPrecision.NATIVE:
+            assert config["trainer"].pop("optimizer_state_metrics") is True
+            geometry = config["trainer"]["policy"]["megatron_config"]
+            assert geometry.pop("ddp_config") == {
+                "grad_reduce_in_fp32": precision is not snowball.OptimizerPrecision.BF16_GRAD_REDUCE
+            }
+            if precision is snowball.OptimizerPrecision.BF16_GRAD_REDUCE:
+                assert "optimizer_config_kwargs" not in geometry
+            else:
+                optimizer = geometry.pop("optimizer_config_kwargs")
+                assert optimizer["use_precision_aware_optimizer"] is True
+                assert optimizer["store_param_remainders"] == (precision is snowball.OptimizerPrecision.FP32_REMAINDERS)
+        assert config == baseline
+    assert len(set(configs)) == len(snowball.OptimizerPrecision)
+
+
+def test_snowball_rejects_megatron_precision_for_fsdp_before_submission():
+    result = CliRunner().invoke(
+        snowball.main, ["--version", "2026.09.10.77", "--backend", "fsdp2", "--optimizer-precision", "bf16_both"]
+    )
+    assert result.exit_code != 0
+    assert "require the Megatron backend" in str(result.exception)
+
+
+def test_snowball_cli_composes_p16_precision_request():
+    result = CliRunner().invoke(
+        snowball.main,
+        [
+            "--version",
+            "2026.09.10.77",
+            "--completion",
+            "metrics",
+            "--policy-nodes",
+            "2",
+            "--inference-replicas",
+            "3",
+            "--optimizer-precision",
+            "bf16_both",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    request = json.loads(result.output)["request"]
+    config = yaml.safe_load(request["config_yaml"])
+    assert config["trainer"]["optimizer_state_metrics"] is True
+    assert config["trainer"]["policy"]["megatron_config"]["optimizer_config_kwargs"]["exp_avg_sq_dtype"] == "bfloat16"
+    assert request["topology"]["role_plan"]["policy_num_nodes"] == 2

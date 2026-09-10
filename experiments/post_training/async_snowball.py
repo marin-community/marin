@@ -67,9 +67,11 @@ from experiments.post_training.async_rl import (
     SEED,
     VALIDATION_ROWS,
     Correction,
+    OptimizerPrecision,
     Runner,
     apply_first_token_admission,
     apply_observation_options,
+    apply_optimizer_precision,
     validate_eval_interval,
     validate_regional_storage,
     validate_validation_window,
@@ -194,6 +196,9 @@ def training_config(
     backend: Backend = Backend.MEGATRON,
     runner: Runner = Runner.ASYNC,
     inference_replicas: int = 1,
+    policy_nodes: int = 4,
+    optimizer_precision: OptimizerPrecision = OptimizerPrecision.NATIVE,
+    optimizer_state_metrics: bool = False,
     response_tokens: int | None = None,
     eval_response_tokens: int | None = None,
     context_tokens: int | None = None,
@@ -217,6 +222,8 @@ def training_config(
     gate = scale is Scale.GATE
     if not isinstance(epoch_seeded_shuffle, bool):
         raise ValueError("epoch_seeded_shuffle must be a boolean")
+    if type(policy_nodes) is not int or policy_nodes not in (2, 4):
+        raise ValueError("Snowball policy_nodes must be 2 or 4")
     if inference_replicas < 1:
         raise ValueError("Inference replica count must be positive")
     if correction not in Correction:
@@ -240,7 +247,7 @@ def training_config(
         raise ValueError("Context budget must fit the validated prompt limit plus either response budget")
     preset = replace(
         SNOWBALL_SMOKE,
-        role_plan=replace(ROLE_PLAN, num_inference_engines=inference_replicas),
+        role_plan=replace(ROLE_PLAN, policy_num_nodes=policy_nodes, num_inference_engines=inference_replicas),
         max_steps=steps,
         ckpt_interval=steps,
         eval_interval=eval_interval if eval_interval is not None else (-1 if gate else steps),
@@ -305,6 +312,11 @@ def training_config(
             expert_model_parallel_size=1,
         )
         trainer["policy"]["optimizer_config"]["optimizer"] = "AdamW"
+    if backend is Backend.FSDP2 and (optimizer_precision != OptimizerPrecision.NATIVE or optimizer_state_metrics):
+        raise ValueError("Snowball optimizer precision presets require the Megatron backend")
+    apply_optimizer_precision(
+        trainer, scale=scale, precision=optimizer_precision, state_metrics=optimizer_state_metrics, snowball_gate=True
+    )
     config["generator"].update(
         inference_engine_data_parallel_size=8,
         inference_engine_expert_parallel_size=8,
@@ -359,6 +371,9 @@ def build_experiment(
     backend: Backend = Backend.MEGATRON,
     runner: Runner = Runner.ASYNC,
     inference_replicas: int = 1,
+    policy_nodes: int = 4,
+    optimizer_precision: OptimizerPrecision = OptimizerPrecision.NATIVE,
+    optimizer_state_metrics: bool = False,
     response_tokens: int | None = None,
     eval_response_tokens: int | None = None,
     context_tokens: int | None = None,
@@ -425,6 +440,9 @@ def build_experiment(
         backend=backend,
         runner=runner,
         inference_replicas=inference_replicas,
+        policy_nodes=policy_nodes,
+        optimizer_precision=optimizer_precision,
+        optimizer_state_metrics=optimizer_state_metrics,
         response_tokens=response_tokens,
         eval_response_tokens=eval_response_tokens,
         context_tokens=context_tokens,
@@ -442,7 +460,7 @@ def build_experiment(
         study_steps=study_steps,
         eval_interval=eval_interval,
     )
-    role_plan = replace(ROLE_PLAN, num_inference_engines=inference_replicas)
+    role_plan = replace(ROLE_PLAN, policy_num_nodes=policy_nodes, num_inference_engines=inference_replicas)
     topology = SkyRLTopology(role_plan.policy_num_nodes + inference_replicas, 8, "H100", role_plan)
     identity = fingerprint_hash(
         canonical_json(
@@ -495,6 +513,14 @@ def build_experiment(
 @click.option("--version", required=True)
 @click.option("--backend", type=click.Choice([b.value for b in Backend]), default="megatron", show_default=True)
 @click.option("--runner", type=click.Choice([r.value for r in Runner]), default="async", show_default=True)
+@click.option(
+    "--optimizer-precision",
+    type=click.Choice([p.value for p in OptimizerPrecision]),
+    default="native",
+    show_default=True,
+)
+@click.option("--optimizer-state-metrics/--no-optimizer-state-metrics", default=False, show_default=True)
+@click.option("--policy-nodes", type=click.Choice(["2", "4"]), default="4", show_default=True)
 @click.option("--inference-replicas", type=click.IntRange(min=1), default=1, show_default=True)
 @click.option("--scale", type=click.Choice([s.value for s in Scale]), default="gate", show_default=True)
 @click.option("--timeout-seconds", type=click.IntRange(min=1), default=3600, show_default=True)
@@ -557,6 +583,9 @@ def main(
     backend: str,
     runner: str,
     inference_replicas: int,
+    policy_nodes: str,
+    optimizer_precision: str,
+    optimizer_state_metrics: bool,
     scale: str,
     timeout_seconds: int,
     completion: str,
@@ -587,6 +616,9 @@ def main(
         backend=Backend(backend),
         runner=Runner(runner),
         inference_replicas=inference_replicas,
+        policy_nodes=int(policy_nodes),
+        optimizer_precision=OptimizerPrecision(optimizer_precision),
+        optimizer_state_metrics=optimizer_state_metrics,
         scale=Scale(scale),
         timeout_seconds=timeout_seconds,
         completion=completion,
