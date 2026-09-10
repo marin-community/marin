@@ -57,7 +57,7 @@ EVALCHEMY = ExternalDependency(
     distribution="evalchemy",
     repository="https://github.com/marin-community/evalchemy.git",
     version="0.1.0",
-    commit="d6c02d2606709087a70de782857c8061649f490f",
+    commit="1d6943d88062f7d87976adf59792dd4f35a3983a",
     runtime_requirements=(),
 )
 
