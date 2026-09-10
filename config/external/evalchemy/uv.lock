@@ -427,7 +427,7 @@ wheels = [
 [[package]]
 name = "evalchemy"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/evalchemy.git?branch=main#8b64112acf3dfc7469e259580264b832e0797e5b" }
+source = { git = "https://github.com/marin-community/evalchemy.git?branch=main#d6c02d2606709087a70de782857c8061649f490f" }
 dependencies = [
     { name = "bespokelabs-curator" },
     { name = "datasets" },
