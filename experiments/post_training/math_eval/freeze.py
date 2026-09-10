@@ -67,7 +67,7 @@ def freeze_batteries(pool_uri: str, output_uri: str) -> dict[str, Any]:
         "audit_source_sha256": hashlib.sha256(audit_content).hexdigest(),
         "statuses": {row["prompt_sha256"]: "accept" if row["passed"] else "reject" for row in audit_rows},
         "audit_stage": "mechanical_only",
-        "llm_audit": "pending_KE9",
+        "llm_audit": "not_built_ruling5",
     }
     # The rated Snowball hard battery is deliberately absent until KE7 calibration.
     protocols = {
