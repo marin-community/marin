@@ -119,7 +119,11 @@ def _snowball_final(name: str, location: str, *, revision: str | None = None, ba
         serve=ServeConfig(
             tensor_parallel_size=1,
             data_parallel_size=8,
-            max_model_len=65536,
+            # MRCR's nominal 65,536-token bin reaches 66,909 tokens after the
+            # Snowball chat template/tokenizer and still needs output room.
+            # The checkpoint is native 262K; 72K covers that complete bin while
+            # remaining below MRCR's next 131,072-token boundary.
+            max_model_len=73728,
             max_num_batched_tokens=7168,
             max_num_seqs=32,
             tool_call_parser="hermes",
