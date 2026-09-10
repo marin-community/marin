@@ -1,8 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+
 import pytest
 import yaml
+from click.testing import CliRunner
 from marin.execution.lazy import materialized_config
 
 from experiments.post_training import async_rl as recipe
@@ -46,11 +49,38 @@ def test_incompatible_update_and_batch_units_reject(options):
         recipe.training_config(recipe.Runner.SYNC, recipe.Scale.SCREENING, spans=True, staleness=0, **options)
 
 
-def test_async_multiple_minibatches_are_rejected():
-    with pytest.raises(ValueError, match="synchronous"):
+def test_async_more_than_two_minibatches_are_rejected():
+    with pytest.raises(ValueError, match="one or two"):
         recipe.training_config(
             recipe.Runner.ASYNC, recipe.Scale.SCREENING, spans=True, staleness=0, minibatches=4, updates=8
         )
+
+
+def test_async_n2_keeps_successful_update_schedule_and_complete_cohort():
+    step, _ = recipe.build_experiment(
+        version="2026.09.08.90",
+        cluster="cw-us-east-02a",
+        runner=recipe.Runner.ASYNC,
+        scale=recipe.Scale.SCREENING,
+        completion="metrics",
+        minibatches=2,
+        updates=96,
+        eval_updates=32,
+        staleness=0,
+        weight_sync_interval=1,
+        epoch_seeded_shuffle=True,
+        kl_loss=False,
+    )
+    request = materialized_config(step, "s3://marin-us-east-02a/marin").request
+    cfg = yaml.safe_load(request.config_yaml)
+    assert cfg["trainer"]["train_batch_size"] == request.topology.role_plan.train_batch_size == 128
+    assert cfg["trainer"]["policy_mini_batch_size"] == request.topology.role_plan.policy_mini_batch_size == 64
+    assert cfg["trainer"]["max_steps"] == cfg["trainer"]["ckpt_interval"] == 96
+    assert cfg["trainer"]["eval_interval"] == 32
+    assert cfg["trainer"]["fully_async"].get("weight_sync_interval", 1) == 1
+    assert cfg["trainer"]["fully_async"]["first_token_admission"] is True
+    assert cfg["trainer"]["algorithm"].get("loss_reduction", "token_mean") == "token_mean"
+    assert cfg["entrypoint"] == "fully_async"
 
 
 @pytest.mark.parametrize("enabled,store", [(True, "gpu_fp32"), (False, "cpu_bf16"), (False, "off")])
@@ -71,3 +101,42 @@ def test_explicit_gradient_monitoring_reaches_native_config(enabled, store):
 def test_gradient_override_absence_preserves_runtime_default():
     cfg = yaml.safe_load(recipe.training_config(recipe.Runner.SYNC, recipe.Scale.SCREENING, spans=True, staleness=0))
     assert "grad_cosine" not in cfg["trainer"]["algorithm"]
+
+
+@pytest.mark.parametrize("runner,steps,eval_steps", [("sync", 48, 16), ("async", 96, 32)])
+def test_actual_cli_preserves_optimizer_budget_with_runner_specific_native_clock(runner, steps, eval_steps):
+    result = CliRunner().invoke(
+        recipe.main,
+        [
+            "--version",
+            "2026.09.10.1",
+            "--runner",
+            runner,
+            "--stage",
+            "rl",
+            "--scale",
+            "screening",
+            "--completion",
+            "metrics",
+            "--minibatches",
+            "2",
+            "--updates",
+            "96",
+            "--eval-updates",
+            "32",
+            "--staleness",
+            "0",
+            "--weight-sync-interval",
+            "1",
+            "--no-kl-loss",
+            "--dry-run",
+        ],
+    )
+    assert result.exit_code == 0, result.output + repr(result.exception)
+    request = json.loads(result.output)["request"]
+    cfg = yaml.safe_load(request["config_yaml"])
+    assert cfg["trainer"]["max_steps"] == cfg["trainer"]["ckpt_interval"] == steps
+    assert cfg["trainer"]["eval_interval"] == eval_steps
+    assert cfg["trainer"]["train_batch_size"] == 128
+    assert cfg["trainer"]["policy_mini_batch_size"] == 64
+    assert request["topology"]["role_plan"]["train_batch_size"] == 128

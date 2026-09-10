@@ -291,8 +291,12 @@ def training_config(
         )
     if type(minibatches) is not int or not 1 <= minibatches <= 16:
         raise ValueError("minibatches must be an integer in [1,16]")
-    if minibatches != 1 and (runner is not Runner.SYNC or updates is None):
-        raise ValueError("Multiple minibatches require the synchronous runner and explicit total updates")
+    if minibatches != 1 and updates is None:
+        raise ValueError("Multiple minibatches require explicit total updates")
+    if runner is Runner.ASYNC and minibatches not in (1, 2):
+        raise ValueError("The asynchronous runner supports one or two minibatches per prepared cohort")
+    if runner is Runner.ASYNC and minibatches == 2 and kl_loss:
+        raise ValueError("Async N2 currently requires explicit no-KL-loss screening settings")
     if updates is not None:
         if type(updates) is not int or updates <= 0 or updates % minibatches:
             raise ValueError("Total updates must be positive and divisible by minibatches")
@@ -303,9 +307,9 @@ def training_config(
             raise ValueError("eval_updates must divide total updates and be divisible by minibatches")
         schedule = replace(
             schedule,
-            max_steps=updates // minibatches,
-            checkpoint_interval=updates // minibatches,
-            eval_interval=cadence // minibatches,
+            max_steps=updates // minibatches if runner is Runner.SYNC else updates,
+            checkpoint_interval=updates // minibatches if runner is Runner.SYNC else updates,
+            eval_interval=cadence // minibatches if runner is Runner.SYNC else cadence,
         )
     elif eval_updates is not None:
         raise ValueError("eval_updates requires explicit total updates")
