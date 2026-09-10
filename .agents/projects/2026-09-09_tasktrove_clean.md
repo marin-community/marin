@@ -34,6 +34,36 @@ raw → summaries → templates → converted → graded → clean
 16. [x] Report and manifest: distinct Dockerfiles with base image and per-converter/source counts, tags, dropped sources by reason (`clean summary` regenerates them)
 17. [x] End-to-end validity sample (`validity.py` + `validity_daytona.py`): stratified sample, Sonnet solve scripts, empty/oracle/candidate checks in Daytona; pilot of 54 tasks and full sample of 190 in the validity section below
 18. [x] Fixes from the validity sample: pytest node ids rebased onto the workspace in the tool (a `tests/pytest.ini` rootdir made every id miss), failing pytest grades keep the output tail, truncated parametrized ids are dropped from PASS_TO_PASS and reject FAIL_TO_PASS (394 swe_rebench tasks); whole-directory uploads and per-task agent timeouts in the validity tooling
+19. [x] M1 cleanup: recover non-null TOML/XML/CSV structured-output tasks, add end-to-end converter tests, fix the root `reasoning-gym` dependency, merge current `origin/main`, and run the format-parity audit
+20. [ ] M2 cleanup: decode literal MCQA newlines, map non-letter golds only on one exact option match, and decide `arc_agi`/`rearc` from their existing grid records
+21. [ ] M3 cleanup: audit the 25 dropped test sources and reinstate only tasks supported by existing graders or small direct adapters; tag usable kata tasks instead of dropping them for ease
+22. [ ] M4 cleanup: validate kept Python SWE tasks and decide non-Python repository tasks without adding a new grading family or repairing repositories/toolchains
+23. [ ] M5 cleanup: sample kept and dropped judge sources against the answerability, rubric, leakage, triviality, and persona checklist
+24. [ ] M6 cleanup: measure near duplicates over instructions and hidden grading text before changing the exact within-source key
+25. [ ] M7 cleanup: rerun the full pipeline once after the cleanup decisions, regenerate the report and artifact, run the final Docker sample, and update PR #9061
+
+## Cleanup extension
+
+The remaining cleanup lands in PR #9061. A row may be recovered only by a small deterministic
+normalization with one interpretation, such as trimming surrounding whitespace, decoding literal
+newlines, or matching answer text to exactly one option. Rows stay dropped when recovery needs
+heuristic answer extraction, generated tests, repository reconstruction, a new language-specific
+grader, dependency archaeology, or a subjective guess.
+
+M1 added TOML parsing to `json-schema` and the structural `xml-elements` and `csv-columns` modes.
+The complete structured-output source contains 4,166 TOML, 14,546 XML, and 4,151 CSV rows. The
+converter recovers 3,520 TOML, 14,135 XML, and 2,802 CSV rows (20,457 total) and rejects the other
+2,406 as null graders: the empty TOML table satisfies the schema, or an arbitrary well-formed XML
+or CSV document would pass because the schema names no checkable field.
+
+A seeded audit (`20260910`) sampled 100 converted rows per format from the local source parquet.
+For each row, the bundled grader and `tasktrove-verify` graded an empty answer, a constructed
+conforming answer, and the same answer with a required field removed. All 900 grader pairs agreed:
+empty and perturbed answers scored 0, and conforming answers scored 1. A full-source check also
+confirmed that every one of the 14,135 converted XML specs has representable element names. After
+merging `origin/main` at `9f3cc8a80d`, the TaskTrove suites reported 411 passed and 1 skipped,
+Pyrefly reported zero errors, the diff-scoped repository lint passed, and the safe affected-test
+runner reported 1,683 passed, 4 skipped, and 5 expected failures.
 
 ## Run 2026.09.10.5
 
