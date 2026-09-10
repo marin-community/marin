@@ -423,8 +423,18 @@ def test_wandb_run_activity_separates_active_time_from_downtime():
         "summaryMetrics": json.dumps({"_runtime": 90 * 3_600, "throughput/total_tokens": 1_038_000_000_000}),
     }
     tps_points = [
-        {"_step": 39_000, "throughput/total_tokens": 390_010_000_000, "throughput/tokens_per_second": 2_000_000},
-        {"_step": 78_001, "throughput/total_tokens": 780_020_000_000, "throughput/tokens_per_second": 3_000_000},
+        {
+            "_step": 39_000,
+            "_timestamp": 1_787_364_000,
+            "throughput/total_tokens": 390_010_000_000,
+            "throughput/tokens_per_second": 2_000_000,
+        },
+        {
+            "_step": 78_001,
+            "_timestamp": 1_787_700_000,
+            "throughput/total_tokens": 780_020_000_000,
+            "throughput/tokens_per_second": 3_000_000,
+        },
     ]
 
     (row,) = _wandb(_activity_handler("marin_moe", run, asked, tps_points)).run_activity("hero-run")
@@ -441,6 +451,7 @@ def test_wandb_run_activity_separates_active_time_from_downtime():
         "active_share": 0.9375,
         "reference_tps": 2_500_000.0,
         "progress_efficiency": pytest.approx(0.75),
+        "projected_finish_ms": None,  # no `_step` or `run_progress` in this summary
     }
 
 
@@ -457,7 +468,14 @@ def test_wandb_run_activity_credits_a_from_scratch_run_its_first_step():
         "heartbeatAt": "2026-08-21T05:46:40Z",
         "summaryMetrics": json.dumps({"_runtime": 90_000, "throughput/total_tokens": 100_000_000_000}),
     }
-    tps_points = [{"_step": 0, "throughput/total_tokens": 100_000_000_000, "throughput/tokens_per_second": 2_000_000}]
+    tps_points = [
+        {
+            "_step": 0,
+            "_timestamp": 1_787_364_000,
+            "throughput/total_tokens": 100_000_000_000,
+            "throughput/tokens_per_second": 2_000_000,
+        }
+    ]
 
     (row,) = _wandb(_activity_handler("marin_moe", run, asked, tps_points)).run_activity("hero-run")
 
@@ -483,7 +501,48 @@ def test_wandb_run_activity_reports_no_active_time_before_the_first_log():
     assert asked == ["marin_moe", "marin"]
     assert (row["active_seconds"], row["downtime_seconds"], row["active_share"]) == (None, None, None)
     assert row["wall_seconds"] == 600.0
-    assert (row["reference_tps"], row["progress_efficiency"]) == (None, None)
+    assert (row["reference_tps"], row["progress_efficiency"], row["projected_finish_ms"]) == (None, None, None)
+
+
+def test_wandb_run_activity_projects_the_finish_from_this_runs_own_steps():
+    # A completion date extrapolates this run's own step rate, measured from its first
+    # sampled step to the summary's last over the wall clock between them, to the stop step
+    # that `_step / run_progress` recovers. This run is a fresh id resumed at step 81,000 that
+    # has done 4,320 steps in the 24 hours since its first sample: 20 s a step, and 304,680
+    # steps to go on a 390,000-step schedule is another 70.5 days. Crediting it with the
+    # 85,320 steps of the global counter over the same day would put the finish 3.6 days
+    # out. The half hour between creation and the first sample is startup, and does not
+    # count against the rate.
+    asked: list[str] = []
+    first_sample = datetime(2026, 9, 9, 22, 30, tzinfo=UTC)
+    heartbeat = datetime(2026, 9, 10, 22, 30, tzinfo=UTC)
+    run = {
+        "state": "running",
+        "createdAt": "2026-09-09T22:00:00Z",
+        "heartbeatAt": "2026-09-10T22:30:00Z",
+        "summaryMetrics": json.dumps(
+            {"_runtime": 86_000, "_step": 85_320, "run_progress": 85_320 / 390_000, "throughput/total_tokens": 1.0}
+        ),
+    }
+    tps_points = [
+        {
+            "_step": 81_000,
+            "_timestamp": first_sample.timestamp(),
+            "throughput/total_tokens": 1.0,
+            "throughput/tokens_per_second": 1.0,
+        }
+    ]
+
+    (row,) = _wandb(_activity_handler("marin_moe", run, asked, tps_points)).run_activity("hero-run")
+
+    projected = datetime.fromtimestamp(row["projected_finish_ms"] / 1000, UTC)
+    assert projected == heartbeat + timedelta(seconds=304_680 * 20)
+    assert projected == datetime(2026, 11, 20, 11, 10, tzinfo=UTC)
+
+    # Before the run advances past its first sample there is no rate, and so no date.
+    run["summaryMetrics"] = json.dumps({"_step": 81_000, "run_progress": 81_000 / 390_000})
+    (row,) = _wandb(_activity_handler("marin_moe", run, asked, tps_points)).run_activity("hero-run")
+    assert row["projected_finish_ms"] is None
 
 
 def test_wandb_run_activity_fails_loud_when_no_project_has_the_run():
