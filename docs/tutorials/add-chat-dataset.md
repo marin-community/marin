@@ -1,32 +1,32 @@
 # How to add a chat dataset
 
-A Datakit chat source converts its original records into structured Harmony messages,
-then normalizes them into Parquet. Add the conversion in a source module under
-`lib/marin/src/marin/datakit/download/` and register its processing steps in
-`lib/marin/src/marin/datakit/sft_sources.py`.
+Add a source converter, write its conversations to Parquet, then register it in
+`all_sft_sources()`. Marin's Datakit pipeline validates and deduplicates the
+conversations.
 
-Use `superior_reasoning.py` as a small prompt/response example, `coderforge.py` for
-records with tool definitions, and `glm_kernelgym_rollouts.py` for a source that
-needs its own reasoning-boundary repairs. All three live in the download directory.
+This tutorial uses a prompt/response dataset. For complete source modules, see
+[`superior_reasoning.py`](../../lib/marin/src/marin/datakit/download/superior_reasoning.py),
+[`coderforge.py`](../../lib/marin/src/marin/datakit/download/coderforge.py) for tool use,
+and [`glm_kernelgym_rollouts.py`](../../lib/marin/src/marin/datakit/download/glm_kernelgym_rollouts.py)
+for repairs to reasoning boundaries.
 
-## 1. Inspect the original records
+## 1. Inspect the source
 
-Pin the dataset revision and inspect examples before choosing a parser. Find the
-original user request, assistant response, reasoning, tool calls, tool results,
-and tool definitions. Check unsuccessful and incomplete conversations too.
+Pin the dataset revision. Inspect successful, failed, and incomplete conversations
+for user requests, assistant responses, reasoning, tool calls, results, and
+definitions. Every source needs the original user requests. Tool calls also need
+the recorded tool definitions. Leave a source out of the chat registry if these
+inputs cannot be recovered.
 
-Keep source-specific repairs in the source module. For example, a source may need
-to combine adjacent user messages or repair a missing reasoning opener. Preserve
-the recorded text and ordering; do not invent missing prompts or tool definitions.
-Every source needs the original user requests; definitions are needed when tools
-are called. Leave an export out of the chat registry if those required inputs
-cannot be recovered.
+Put the converter in `lib/marin/src/marin/datakit/download/`. Keep repairs specific
+to the source there, such as combining adjacent user messages or restoring a
+missing reasoning opener. Preserve recorded text and order; do not invent prompts
+or infer tool definitions from call arguments.
 
-## 2. Convert each row
+## 2. Convert rows to chat documents
 
-Write a `row_to_chat_doc` function that returns a list of zero or one documents.
-For OpenAI-style messages, use `checked_openai_chat_document` from
-`marin.datakit.download.rollout_transforms`:
+Datakit stores conversations as serialized Harmony messages. For OpenAI-style
+messages, `checked_openai_chat_document` handles this conversion:
 
 ```python
 from zephyr import counters
@@ -40,108 +40,130 @@ def row_to_chat_doc(row: dict) -> list[dict]:
     if not prompt or not answer:
         counters.pipeline.update_counter("example/chat/missing_text_filtered", 1)
         return []
-    messages = [
-        {"role": "user", "content": prompt},
-        {"role": "assistant", "content": answer},
-    ]
     return checked_openai_chat_document(
-        messages,
+        [
+            {"role": "user", "content": prompt},
+            {"role": "assistant", "content": answer},
+        ],
         "organization/example",
         counter_prefix="example/chat",
     )
 ```
 
-This example assumes the source fields contain strings. Adapt the field names and
-checks to the actual export. The helper converts messages into Harmony, including
-separate reasoning and tool calls. It counts and quarantines conversion errors
-that are `ValueError` or `UnicodeError`. Other errors propagate. Keep intentional
-source filters counted as well so drops can be investigated.
+Adapt the fields and checks to your source; this example assumes strings. Return
+an empty list for a dropped row or a one-element list for a chat document. Count
+intentional drops. The helper counts and skips conversion failures raised as
+`ValueError` or `UnicodeError`; other errors propagate.
 
-If the source already supplies separate reasoning, pass it as `reasoning_content`
-on the assistant message. For tools, pass the recorded definitions through
-`chat_template_kwargs={"tools": tools}`. Preserve call IDs in source messages so
-the converter can associate results with calls before producing Harmony messages.
-Do not reconstruct tool definitions from observed arguments.
+Pass separate reasoning as the assistant message's `reasoning_content`. Pass tool
+definitions as `chat_template_kwargs={"tools": tools}` and preserve call IDs so
+the converter can match results to calls. If you construct Harmony `Message`
+objects directly, serialize them with `chat_document` instead.
 
-For a source that constructs Harmony `Message` objects directly, use
-`chat_document` to serialize them instead.
+### Conversation requirements
 
-## 3. Meet the chat contract
+These rules apply to the converted Harmony messages. The helper supplies channels
+and tool recipients from the OpenAI-style input. The validators in
+`marin.datakit.chat_normalize` require:
 
-The schema and validators live in `marin.datakit.chat_normalize`:
-
-- Messages contain text only; images and audio are unsupported.
-- System/developer instructions come first, with no channel or recipient.
-- The conversation starts with a nonblank user request. User messages have no
-  channel or recipient, and adjacent user messages must be combined by the source.
-- Assistant messages contain nonblank text and identify `analysis`, `commentary`,
-  or `final`. After a final answer, a continuing conversation needs a new user turn.
-- Tool calls are assistant commentary addressed to `functions.<name>`, with a JSON
-  object of arguments. Every called tool needs an explicit definition with a unique
-  name and an object-valued `parameters` field.
-- Tool replies are commentary addressed to `assistant`, named for their calls.
+- Text-only messages; images and audio are unsupported.
+- System/developer instructions first, without a channel or recipient.
+- A nonblank user request to start the conversation. User messages have no channel
+  or recipient; the source must combine adjacent user messages.
+- Nonblank assistant messages with an `analysis`, `commentary`, or `final` channel.
+  A conversation continuing after a final answer needs a new user turn.
+- Tool calls as assistant commentary addressed to `functions.<name>`, with a JSON
+  object of arguments. Each called tool needs an explicit definition with a
+  unique name and an object-valued `parameters` field.
+- Tool replies as commentary addressed to `assistant`, named for their calls.
   Replies must match pending calls in order before the conversation resumes.
-- Records end with an assistant message. Reasoning-only endings and unanswered
-  final batches of tool calls are allowed, preserving incomplete attempts.
+- An assistant message at the end. Reasoning-only endings and unanswered final
+  batches of tool calls are allowed.
 
-The normalizer expects serialized Harmony, not source fields such as `tool_calls`
-or `reasoning_content`. Incorrect answers and tool arguments that violate the
-parameter schema are not rejected solely for being wrong: failed attempts can
-still be useful examples.
+Normalization accepts serialized Harmony. Convert source fields such as
+`tool_calls` and `reasoning_content` first. Validation checks conversation
+structure; incorrect answers and arguments that violate a tool's parameter schema
+can remain as examples of failed attempts.
 
-## 4. Write and normalize Parquet
+## 3. Write and normalize Parquet
 
-Use a Zephyr pipeline to read the pinned download, apply `row_to_chat_doc` with
-`flat_map`, and write Parquet with an explicit schema. Start with `CHAT_SCHEMA`
-from `marin.datakit.chat_normalize`.
-
-If retaining annotations such as reward or teacher, extend `CHAT_SCHEMA` with
-explicit Arrow fields and pass those values to the document helper. Metadata is
-currently stored as source-specific top-level columns; it is not automatically
-packed into a catchall. Keep original dataset identifiers in `upstream_id`, with
-an explicit Arrow field, rather than supplying `source_id`: normalization owns
-that field. `chat_template_kwargs` is stored as JSON text.
-
-Follow `transform_chat` and `superior_reasoning_chat_normalize_steps` in
-`lib/marin/src/marin/datakit/download/superior_reasoning.py` for a complete writer
-and step-factory example. Create a `StepSpec` for `transform_chat`,
-with the download as a dependency and a version in `hash_attrs`. Then return the
-processed step and normalization step:
+A source needs a download, a conversion step, and a chat normalization step.
+For a Hugging Face dataset stored as Parquet, add this beside `row_to_chat_doc`.
+Replace the dataset ID, revision, file pattern, and `example` names:
 
 ```python
-return processed, normalize_chat_step(
-    name="normalized-chat/example",
-    download=processed,
-    output_schema=SOURCE_CHAT_SCHEMA,
-)
+from fray.types import ResourceConfig
+from zephyr.context import ZephyrContext
+from zephyr.dataset import Dataset
+from zephyr.readers import load_parquet
+
+from marin.datakit.chat_normalize import CHAT_SCHEMA, normalize_chat_step
+from marin.datakit.download.huggingface import download_hf_step
+from marin.execution.step_spec import StepSpec
+
+
+def transform_chat(input_path: str, output_path: str) -> None:
+    pipeline = (
+        Dataset.from_files(f"{input_path}/**/*.parquet")
+        .flat_map(load_parquet)
+        .flat_map(row_to_chat_doc)
+        .write_parquet(f"{output_path}/part-{{shard:05d}}.parquet", schema=CHAT_SCHEMA)
+    )
+    ZephyrContext(name="example-chat", resources=ResourceConfig(cpu=1, ram="8g")).execute(pipeline)
+
+
+def example_chat_normalize_steps() -> tuple[StepSpec, ...]:
+    download = download_hf_step(
+        "raw/example",
+        hf_dataset_id="organization/example",
+        revision="<commit hash>",
+        hf_urls_glob=["data/train-*.parquet"],
+    )
+    processed = StepSpec(
+        name="processed-chat/example",
+        deps=[download],
+        fn=lambda output_path: transform_chat(download.output_path, output_path),
+        hash_attrs={"version": "v1"},
+    )
+    return processed, normalize_chat_step(
+        name="normalized-chat/example", download=processed, output_schema=CHAT_SCHEMA
+    )
 ```
 
-Here `processed` is the chat transformation `StepSpec`, and `SOURCE_CHAT_SCHEMA`
-is the schema used by its Parquet writer. Import `normalize_chat_step` from
-`marin.datakit.chat_normalize`. Use `CHAT_SCHEMA` directly if there are no extra
-columns. Pass the same schema to both writing stages so optional fields survive.
+A `StepSpec` describes a pipeline step and its dependencies. Bump the conversion
+version when its output changes so cached results are rebuilt. Normalization
+validates conversations, hashes messages plus template arguments, removes exact
+duplicates, and preserves the incoming document ID as `source_id`.
 
-Normalization validates conversations, hashes messages plus template arguments,
-and removes exact duplicates. It preserves the incoming document ID as
-`source_id`. Bump the source transformation version when its output changes so
-cached processed and normalized artifacts are rebuilt.
+To retain metadata, add Arrow fields to `CHAT_SCHEMA` and use that extended schema
+in both `write_parquet` and `normalize_chat_step`. Pass values as keyword arguments
+to the document helper, such as `upstream_id=row["id"]`. Metadata becomes top-level
+columns. Reserve `source_id` for normalization. The helper stores
+`chat_template_kwargs` as JSON text.
 
-## 5. Register and verify the source
+## 4. Register the source
 
-Add the chat step factory to `all_sft_sources()` in `sft_sources.py`. Its
-`DatakitChatSource` records the name, structured-chat processing steps, and
-approximate token count. It appends rendering and standard text normalization
-automatically; `normalize_steps` exposes the complete chain. Existing text sources reuse their weights from `all_sources()`.
-For a chat-only source, add its explicit weight in billions to `token_counts`
-inside `all_sft_sources()`. Do not add it to the pretraining registry merely to
-supply this weight: that registry also defines the expected coverage of pinned
-hero-data artifacts, including embeddings and tokenized outputs.
+In [`sft_sources.py`](../../lib/marin/src/marin/datakit/sft_sources.py), import
+your factory:
 
-Add behavior tests under `tests/datakit/download/` for the source conversion.
-Cover its real format quirks, preservation of requests and reasoning, tool
-associations when present, and intentional drops. Read `TESTING.md` first.
+```python
+from marin.datakit.download.example import example_chat_normalize_steps
+```
 
-Run the chat tests and repository checks from the repository root:
+Add `("example", example_chat_normalize_steps)` to `rows` inside
+`all_sft_sources()`. For a chat-only source, also add
+`token_counts["example"] = <estimated billions of tokens>` before the return.
+Existing text sources get this value from `all_sources()`; keep chat-only sources
+in the SFT registry.
+
+The registry builds a `DatakitChatSource` from the factory's steps and adds the
+rendering and text-normalization steps automatically.
+
+## 5. Verify the output
+
+Read [`TESTING.md`](../../TESTING.md), then add conversion tests under
+`tests/datakit/download/`. Cover the source's format quirks, preserved requests and
+reasoning, tool associations, and intentional drops. Run from the repository root:
 
 ```bash
 uv run pytest tests/datakit/download tests/datakit/test_chat.py tests/datakit/test_chat_normalize.py
@@ -149,11 +171,11 @@ uv run --no-project infra/ci/run_tests.py
 ./infra/pre-commit.py --changed-files --fix
 ```
 
-Before using the source in training, run its processing chain in an environment
-configured for the data's region. For example, save this as
-`scratch/run_chat_source.py`, replace `superior-reasoning` with your registered
-name, and run `uv run python scratch/run_chat_source.py`. This runs the full source,
-not a bounded sample; use a small fixture for initial development.
+Start with a small fixture. Before training, run the full source in an environment
+configured for its data region (see [Iris job operations](../../lib/iris/OPS.md)).
+Save this as `scratch/run_chat_source.py`, replace
+`superior-reasoning` with your registered name, and run
+`uv run python scratch/run_chat_source.py`:
 
 ```python
 from marin.datakit.normalize import NormalizedData
@@ -168,134 +190,10 @@ print(artifact.main_output_dir)
 print(artifact.counters)
 ```
 
-The runner builds dependencies, including download and conversion. Inspect actual
-normalized Parquet records in `artifact.main_output_dir`. Check roles, reasoning, tool definitions, and results
-against the source. Compare input, source-filter, normalization-quarantine, and
-deduplication counts. Normalization fails if quarantined records exceed its 5%
-health limit; investigate unexpected drops instead of raising the limit. Run near
-the source data when using Iris to avoid cross-region reads. Formatting checks do
-not establish answer quality.
-
-## 6. Render for text processing
-
-`all_sft_sources()` exposes both the structured conversation and its rendered
-text. `.chat_normalized` contains Harmony messages, `.rendered` contains only
-`id` and `text`, and `.normalized` contains standard Datakit normalized text:
-
-```python
-from marin.datakit.sft_sources import all_sft_sources
-
-source = all_sft_sources()["superior-reasoning"]
-rendered = source.rendered
-normalized = source.normalized
-```
-
-`StepRunner().run([source.normalized], max_concurrent=1)` builds the full dependency
-chain. Rendering preserves input IDs and duplicate rows; standard normalization assigns content hashes and
-deduplicates the rendered text. The original chat IDs become `source_id` in the
-normalized text. The structured Harmony artifact remains available through
-`source.chat_normalized`.
-
-Python converts Harmony messages to Hugging Face message dictionaries, then Hugging Face
-renders them with `MARIN_CHAT_TEMPLATE` in `marin.datakit.chat_template`. Tokenizer
-export uses the same template. The adapter joins adjacent assistant analysis, commentary, and function calls
-into one turn. The template emits one end-of-turn token after all parallel calls,
-so generation can reach the tool handoff. Analysis uses Marin think tokens,
-function calls use `<tool_call>` JSON blocks, and named tool replies use
-`<tool_response>` blocks. The template also accepts `reasoning_content` from
-inference clients and serializes structured tool definitions as JSON. API tool
-reply IDs are resolved to function names; the rendered text omits the IDs. Reasoning
-from earlier turns is retained, including records ending in analysis or unanswered
-tool calls. Supported per-record `chat_template_kwargs` are `tools` (a list of
-recorded function definitions), `enable_thinking` (a boolean), and
-`custom_instructions` (a string). `enable_thinking` adds a `/think` or `/nothink`
-system instruction; omitting it adds neither. It does not remove reasoning.
-
-All rendering helpers are in `marin.datakit.chat_render`.
-For an existing directory of normalized chat Parquet, use
-`render_chat_to_parquet(input_path=..., output_path=...)`. For a conversation in
-memory, `render_marin_chat(messages)` returns the rendered string. Bump
-`CHAT_RENDER_VERSION` when changing the Harmony conversion. The template itself
-is included in the rendering step hash, so template changes also produce a new
-artifact. The inference-consistency tests live in
-`tests/test_marin_tokenizer.py`.
-
-
-For inference, export this template with the model's tokenizer; the existing
-`marin-community/marin-tokenizer` revision
-`a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2` contains the older template:
-
-```python
-from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
-from transformers import AutoTokenizer
-
-tokenizer = AutoTokenizer.from_pretrained("path/to/model")
-tokenizer.chat_template = MARIN_CHAT_TEMPLATE
-tokenizer.save_pretrained("path/to/model")
-```
-
-Point MarinSkyRL's policy tokenizer at that same artifact and enable tool parsing
-in the generator's `engine_init_kwargs` with `enable_auto_tool_choice: true` and
-`tool_call_parser: hermes`. This preserves the existing Marin header and reasoning
-tokens. The [pinned MarinSkyRL wrapper](https://github.com/marin-community/MarinSkyRL/blob/93d84333acdf27275d258f0f25dad24129f0cf6e/skyrl-train/skyrl_train/inference_engines/vllm/utils.py)
-forwards tool-parser settings but does not forward a reasoning parser. Reasoning
-therefore remains in assistant `content`; tool-enabled requests preserve its
-think markers. Returning a separate reasoning field in OpenAI chat-completion
-responses requires a MarinSkyRL wrapper change. Native Harmony wire tokens are not used by this
-renderer.
-
-## 7. Build deduplication and decontamination attributes
-
-`experiments.datakit.sft_pipeline` connects the SFT registry to the existing
-Datakit exact deduplication, verified fuzzy deduplication, and eval-contamination
-stages. It reuses each source's `.rendered` artifact and builds `.normalized`
-before computing attributes. Run in the same region as the rendered data.
-
-Print the target paths without executing processing:
-
-```bash
-uv run python -m experiments.datakit.sft_pipeline --sources superior-reasoning
-```
-
-For the rendered data in `us-central2`, submit:
-
-```bash
-uv run iris --cluster=marin job run --no-wait --region us-central2 \
-    --extra=cpu --cpu 2 --memory 8GB \
-    -- python -m experiments.datakit.sft_pipeline --execute
-```
-
-See [Iris job operations](../../lib/iris/OPS.md) for submission options. Omit
-`--sources` to include the full SFT registry. Global deduplication covers only
-the selected sources. `--pool-workers` defaults to 16 and
-`--max-concurrent` to 4. Existing successful dependencies are reused.
-
-The targets are global exact-duplicate attributes, verified fuzzy-duplicate
-attributes, and per-source contamination attributes. They refer to the IDs in
-normalized rendered text. This entry point does not materialize a filtered
-training dataset or run tokenization, embeddings, quality scoring, or clustering.
-A downstream consumer must apply the duplicate and contamination attributes.
-
-Deduplication compares whole rendered conversations, including system prompts,
-tool definitions, reasoning, and observations. Shared boilerplate can affect
-fuzzy similarity; inspect candidate and verified-duplicate counts before applying
-removals. MinHash uses the reference pipeline's 500,000-character text cap.
-Decontamination uses the reference eval corpus and its source/global frequency
-filters. The required eval corpus and versioned manifests must be staged in the
-run's region; missing required evaluations fail validation. Changing the selected
-source set changes cross-source deduplication and frequency filtering results.
-
-The SFT decontamination and verification setup lives in
-[`sft_pipeline.py`](../../experiments/datakit/sft_pipeline.py), copied from the
-[`reference pipeline`](../../experiments/datakit/reference_pipeline.py).
-[`prepare_eval_corpus.py`](../../experiments/datakit/decontam/prepare_eval_corpus.py)
-defines the versioned regional eval paths, manifests, and preparation command.
-
-Read the returned artifacts with `marin.execution.artifact.read_artifact`:
-`GlobalExactDedupData`, `VerifiedFuzzyDupsAttrData`, and `DeconAttributes` expose
-stage counters and attribute locations. Deduplication outputs are sparse,
-co-partitioned `id`/`dup_doc` marks; decontamination marks include `id` and
-`contaminated`. A consumer joins each source's marks to its normalized text by
-`id`, treating absent duplicate marks as false. The reference pipeline's
-[`build_clustered_store`](../../experiments/datakit/store/datakit_store.py) consumer illustrates
-how attributes are applied when producing training output.
+The runner builds dependencies, including download and conversion. Compare
+normalized Parquet records in `artifact.main_output_dir` with the source. Check
+roles, reasoning, tool definitions, and results. Inspect conversion counters in the
+Zephyr job logs and normalization counters printed above for unexpected drops.
+Normalization fails if empty or quarantined records exceed its 5% rejection
+limit. When using Iris, run near the data to avoid
+cross-region reads. These checks do not establish answer quality.
