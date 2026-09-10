@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Offline charts of reducer input sizes read from Finelog."""
 
 from collections import defaultdict

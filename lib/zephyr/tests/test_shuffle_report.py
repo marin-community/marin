@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Checks for reducer chart values, grouping, and untrusted labels."""
 
 from dataclasses import replace

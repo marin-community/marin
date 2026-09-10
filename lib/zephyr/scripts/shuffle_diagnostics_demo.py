@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Run local shuffles, persist diagnostics in Finelog, and render their histograms."""
 
 import argparse
