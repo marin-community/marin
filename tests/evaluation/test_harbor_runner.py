@@ -498,7 +498,7 @@ def test_harbor_executor_fails_when_too_few_trials_were_graded(tmp_path, monkeyp
             json.dumps(
                 {
                     "task_name": "trial-one",
-                    "verifier_result": {"rewards": {"reward": 0.0}},
+                    "verifier_result": None,
                     "exception_info": {
                         "exception_type": "AgentError",
                         "exception_message": "model request failed",
@@ -513,8 +513,8 @@ def test_harbor_executor_fails_when_too_few_trials_were_graded(tmp_path, monkeyp
     with pytest.raises(EvaluationError) as exc_info:
         executor(_inference_session(), str(tmp_path), {})
 
-    # A trial that errored is an ungraded item, not a wrong answer: the only trial here is ungraded,
-    # so the run graded 0% of what it attempted and is rejected as an infrastructure failure.
+    # A trial for which the verifier produced no result is ungraded, not a wrong answer: the only
+    # trial here is ungraded, so the run graded 0% and is rejected as an infrastructure failure.
     assert exc_info.value.status is RunStatus.INFRA_FAILED
     assert exc_info.value.coverage["failed-" + tmp_path.name].errors == {"AgentError": 1}
     result = json.loads((tmp_path / "harbor_result.json").read_text())
@@ -567,6 +567,42 @@ def test_harbor_executor_admits_a_batch_that_clears_the_completion_gate(tmp_path
     coverage = outcome.coverage[dataset]
     assert (coverage.n_attempted, coverage.n_scored) == (20, 19)
     assert coverage.errors == {"AgentTimeoutError": 1}
+
+
+def test_harbor_executor_counts_a_verified_agent_timeout_as_scored(tmp_path, monkeypatch):
+    """Harbor verifies the sandbox after an agent timeout and preserves the timeout as diagnostic
+    metadata. A non-null verifier result remains the source of truth for whether the trial was scored.
+    """
+
+    def run_driver(_config, overlay, _driver_env, _backend_state) -> None:
+        job_dir = Path(overlay.jobs_dir) / overlay.job_name
+        _write_job_record(job_dir, 1)
+        trial_dir = job_dir / "trial-one"
+        trial_dir.mkdir(parents=True)
+        trial_dir.joinpath("result.json").write_text(
+            json.dumps(
+                {
+                    "task_name": "task-one",
+                    "verifier_result": {"rewards": {"reward": 0.0}},
+                    "exception_info": {
+                        "exception_type": "AgentTimeoutError",
+                        "exception_message": "agent phase expired",
+                    },
+                }
+            )
+        )
+
+    monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
+    executor = _harbor_executor(f"verified-timeout-{tmp_path.name}")
+
+    outcome = executor(_inference_session(), str(tmp_path), {})
+
+    dataset = executor.config.record_dataset
+    assert outcome.metrics[dataset]["total"] == 1.0
+    assert outcome.metrics[dataset]["accuracy"] == 0.0
+    coverage = outcome.coverage[dataset]
+    assert (coverage.n_attempted, coverage.n_scored) == (1, 1)
+    assert coverage.errors == {}
 
 
 def test_an_unreadable_job_record_reports_unknown_coverage_rather_than_complete(tmp_path, monkeypatch):

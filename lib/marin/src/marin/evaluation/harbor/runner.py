@@ -74,10 +74,10 @@ _CANONICAL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 class HarborTrial:
     """One finished Harbor trial, normalized off its ``result.json``.
 
-    ``scored`` is whether the trial is a usable measurement: a verifier graded it and the trial raised
-    no exception. A trial whose agent timed out part-way is often still verified, and scores zero
-    because it was cut short rather than because the model was wrong -- counting that as a wrong
-    answer is the imputation the coverage accounting exists to avoid, so it is an ungraded item.
+    ``scored`` is whether the trial is a usable measurement: a verifier produced a result. Harbor
+    deliberately continues to verification after terminal agent outcomes such as timeouts, nonzero
+    exits, and context exhaustion; their exception metadata describes how the rollout ended but does
+    not invalidate the verifier's score.
     """
 
     task_id: str
@@ -194,7 +194,7 @@ def _read_trial(result_file: StoragePath) -> HarborTrial:
         task_id=task_id,
         trial_id=trial_dir.name,
         reward=reward,
-        scored=verifier_result is not None and error is None,
+        scored=verifier_result is not None,
         status="failed" if exc else "completed",
         trajectory_path=trajectory_path,
         error=error,
@@ -407,8 +407,8 @@ def _evaluation_outcome(
 
     A run clearing the gate keeps its aggregate and its per-trial error distribution, so a downstream
     reader can tell the model's score apart from the infrastructure quality behind it. A run below the
-    gate fails as an infrastructure failure -- agent and verifier timeouts are not evaluation outcomes
-    -- and still records its coverage so the rejection is legible as counts rather than as prose.
+    gate fails as an infrastructure failure because those trials have no verifier result, and still
+    records its coverage so the rejection is legible as counts rather than as prose.
 
     A run whose attempted-trial count is unknown has no rate to gate on. It is admitted with its
     coverage left unreported, which downstream widens to "completeness unknown" rather than treating
