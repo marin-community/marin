@@ -852,3 +852,25 @@ def test_sidecar_reads_build_one_client(tmp_path):
 
     assert [sidecar.path for sidecar in sidecars] == paths
     assert _CountingFileSystem.clients_built == 1
+
+
+def test_scatter_reader_reports_input_totals_including_empty_targets(tmp_path):
+    rows = [{"k": 1, "v": value} for value in range(9)] + [{"k": 3, "v": 100}]
+    paths = [str(tmp_path / f"mapper-{index}") + "/" for index in range(3)]
+    for index, chunk in enumerate((rows[:5], rows[5:], [])):
+        _write_scatter(iter(chunk), index, paths[index], key_fn=lambda row: row["k"], num_output_shards=8)
+
+    expected_rows = [0] * 8
+    for row in rows:
+        expected_rows[deterministic_hash(row["k"]) % 8] += 1
+    for target, count in enumerate(expected_rows):
+        reader = ScatterReader.from_sidecars(paths, target)
+        assert reader.shard_payload_rows == count == len(_read_shard(reader))
+        assert reader.shard_payload_bytes == sum(
+            len(cloudpickle.dumps(row)) for row in rows if deterministic_hash(row["k"]) % 8 == target
+        )
+        assert reader.contributing_sidecars == sum(
+            any(deterministic_hash(row["k"]) % 8 == target for row in chunk) for chunk in (rows[:5], rows[5:], [])
+        )
+    empty_reader = ScatterReader.from_sidecars([], 0)
+    assert empty_reader.shard_payload_rows == empty_reader.shard_payload_bytes == empty_reader.contributing_sidecars == 0

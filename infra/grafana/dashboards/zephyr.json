@@ -1,0 +1,527 @@
+{
+  "uid": "marin-zephyr-shuffle",
+  "title": "Zephyr shuffle inputs",
+  "description": "Reducer input diagnostics with coordinator target announcements and incremental measurements. Null sizes are unreported; numeric zero means measured empty.",
+  "tags": [
+    "marin",
+    "zephyr"
+  ],
+  "timezone": "utc",
+  "editable": false,
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "execution_id",
+        "label": "Execution",
+        "type": "query",
+        "datasource": {
+          "type": "yesoreyeram-infinity-datasource",
+          "uid": "finelog-marin"
+        },
+        "query": {
+          "queryType": "infinity",
+          "refId": "variable-execution_id",
+          "infinityQuery": {
+            "refId": "variable-execution_id",
+            "type": "json",
+            "source": "url",
+            "format": "table",
+            "parser": "backend",
+            "url": "/query",
+            "url_options": {
+              "method": "GET",
+              "params": [
+                {
+                  "key": "sql",
+                  "value": "SELECT DISTINCT execution_id AS value FROM \"zephyr.shuffle\" WHERE ts >= {{from}} AND ts < {{to}} ORDER BY value LIMIT 1000"
+                },
+                {
+                  "key": "from",
+                  "value": "${__from}"
+                },
+                {
+                  "key": "to",
+                  "value": "${__to}"
+                }
+              ]
+            },
+            "columns": [
+              {
+                "selector": "value",
+                "text": "value",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "current": {
+          "text": "",
+          "value": ""
+        },
+        "options": [],
+        "includeAll": false,
+        "multi": false,
+        "refresh": 2,
+        "sort": 1
+      },
+      {
+        "name": "stage_name",
+        "label": "Reduce stage",
+        "type": "query",
+        "datasource": {
+          "type": "yesoreyeram-infinity-datasource",
+          "uid": "finelog-marin"
+        },
+        "query": {
+          "queryType": "infinity",
+          "refId": "variable-stage_name",
+          "infinityQuery": {
+            "refId": "variable-stage_name",
+            "type": "json",
+            "source": "url",
+            "format": "table",
+            "parser": "backend",
+            "url": "/query",
+            "url_options": {
+              "method": "GET",
+              "params": [
+                {
+                  "key": "sql",
+                  "value": "SELECT DISTINCT stage_name AS value FROM \"zephyr.shuffle\" WHERE ts >= {{from}} AND ts < {{to}} AND execution_id = ${execution_id:sqlstring} ORDER BY value"
+                },
+                {
+                  "key": "from",
+                  "value": "${__from}"
+                },
+                {
+                  "key": "to",
+                  "value": "${__to}"
+                }
+              ]
+            },
+            "columns": [
+              {
+                "selector": "value",
+                "text": "value",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "current": {
+          "text": "",
+          "value": ""
+        },
+        "options": [],
+        "includeAll": false,
+        "multi": false,
+        "refresh": 2,
+        "sort": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "text",
+      "title": "Reading these charts",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 5
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "Select one execution and its **reduce stage**. The coordinator announces each target with null sizes. Reducers fill in measurements after reading mapper metadata; transport can delay publication. **Coverage is measurement coverage, not task completion.** UNREPORTED targets may be queued, loading, or missing/delayed telemetry. The target table lists persisted announcements and measurements. Incomplete telemetry can temporarily omit IDs; the offline HTML report also infers missing IDs from the announced target count. Histograms and summaries exclude null sizes; numeric zero means measured empty. Queries prefer the greatest attempt, then a measurement over a placeholder, then timestamp and ingestion sequence. This does not establish which attempt succeeded. Encoded bytes exclude Parquet overhead and do not measure RAM or network traffic."
+      }
+    },
+    {
+      "id": 2,
+      "type": "barchart",
+      "title": "Observed input rows by target reducer",
+      "description": "Reported targets sorted largest first, including reported zeros. Unreported targets are excluded, never filled with zero.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 9,
+        "w": 12,
+        "h": 10
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "custom": {
+            "fillOpacity": 80,
+            "axisPlacement": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "showValue": "auto",
+        "stacking": "none",
+        "legend": {
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "WITH snapshots AS (SELECT target_shard, num_targets, input_rows, payload_bytes, num_sources, attempt, ROW_NUMBER() OVER (PARTITION BY target_shard ORDER BY attempt DESC, (input_rows IS NOT NULL) DESC, ts DESC, seq DESC) AS sample_rank FROM \"zephyr.shuffle\" WHERE ts >= {{from}} AND ts < {{to}} AND execution_id = ${execution_id:sqlstring} AND stage_name = ${stage_name:sqlstring}) SELECT CAST(target_shard AS VARCHAR) AS target_reducer, input_rows FROM snapshots WHERE sample_rank = 1 AND input_rows IS NOT NULL ORDER BY input_rows DESC, target_shard"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "target_reducer",
+              "text": "target_reducer",
+              "type": "string"
+            },
+            {
+              "selector": "input_rows",
+              "text": "input_rows",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "barchart",
+      "title": "Observed encoded payload bytes by target reducer",
+      "description": "Reported targets sorted largest first, including reported zeros. Unreported targets are excluded, never filled with zero.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 9,
+        "w": 12,
+        "h": 10
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "min": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "custom": {
+            "fillOpacity": 80,
+            "axisPlacement": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "showValue": "auto",
+        "stacking": "none",
+        "legend": {
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "WITH snapshots AS (SELECT target_shard, num_targets, input_rows, payload_bytes, num_sources, attempt, ROW_NUMBER() OVER (PARTITION BY target_shard ORDER BY attempt DESC, (input_rows IS NOT NULL) DESC, ts DESC, seq DESC) AS sample_rank FROM \"zephyr.shuffle\" WHERE ts >= {{from}} AND ts < {{to}} AND execution_id = ${execution_id:sqlstring} AND stage_name = ${stage_name:sqlstring}) SELECT CAST(target_shard AS VARCHAR) AS target_reducer, payload_bytes FROM snapshots WHERE sample_rank = 1 AND input_rows IS NOT NULL ORDER BY payload_bytes DESC, target_shard"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "target_reducer",
+              "text": "target_reducer",
+              "type": "string"
+            },
+            {
+              "selector": "payload_bytes",
+              "text": "payload_bytes",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Telemetry coverage (not task completion)",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 5,
+        "w": 24,
+        "h": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "noValue": "Unknown"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "none",
+        "graphMode": "none",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "WITH snapshots AS (SELECT target_shard, num_targets, input_rows, payload_bytes, num_sources, attempt, ROW_NUMBER() OVER (PARTITION BY target_shard ORDER BY attempt DESC, (input_rows IS NOT NULL) DESC, ts DESC, seq DESC) AS sample_rank FROM \"zephyr.shuffle\" WHERE ts >= {{from}} AND ts < {{to}} AND execution_id = ${execution_id:sqlstring} AND stage_name = ${stage_name:sqlstring}) SELECT COUNT(input_rows) AS observed_targets, MAX(num_targets) AS expected_targets, MAX(num_targets) - COUNT(input_rows) AS unreported_targets, SUM(CASE WHEN input_rows = 0 THEN 1 ELSE 0 END) AS reported_empty_targets, SUM(input_rows) AS observed_input_rows FROM snapshots WHERE sample_rank = 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "observed_targets",
+              "text": "observed targets",
+              "type": "number"
+            },
+            {
+              "selector": "expected_targets",
+              "text": "expected targets",
+              "type": "number"
+            },
+            {
+              "selector": "unreported_targets",
+              "text": "unreported targets",
+              "type": "number"
+            },
+            {
+              "selector": "reported_empty_targets",
+              "text": "reported empty targets",
+              "type": "number"
+            },
+            {
+              "selector": "observed_input_rows",
+              "text": "observed input rows",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "description": "Counts numeric measurements only. Target announcements establish the expected count even before a reducer reports. No records at all leaves the expected count unknown."
+    },
+    {
+      "id": 7,
+      "type": "table",
+      "title": "Target reducers: measured or UNREPORTED",
+      "description": "Shows persisted target announcements and measurements. UNREPORTED means null sizes. Missing announcements can temporarily omit IDs if telemetry delivery is incomplete. Attempt is shown only for measurements.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 19,
+        "w": 24,
+        "h": 12
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "UNREPORTED",
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "status"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "UNREPORTED": {
+                        "text": "UNREPORTED",
+                        "color": "gray"
+                      },
+                      "EMPTY": {
+                        "text": "EMPTY",
+                        "color": "blue"
+                      },
+                      "REPORTED": {
+                        "text": "REPORTED",
+                        "color": "green"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "WITH snapshots AS (SELECT target_shard, num_targets, input_rows, payload_bytes, num_sources, attempt, ROW_NUMBER() OVER (PARTITION BY target_shard ORDER BY attempt DESC, (input_rows IS NOT NULL) DESC, ts DESC, seq DESC) AS sample_rank FROM \"zephyr.shuffle\" WHERE ts >= {{from}} AND ts < {{to}} AND execution_id = ${execution_id:sqlstring} AND stage_name = ${stage_name:sqlstring}) SELECT target_shard, CASE WHEN input_rows IS NULL THEN 'UNREPORTED' WHEN input_rows = 0 THEN 'EMPTY' ELSE 'REPORTED' END AS status, CASE WHEN input_rows IS NOT NULL THEN attempt END AS attempt, input_rows, payload_bytes, num_sources FROM snapshots WHERE sample_rank = 1 ORDER BY target_shard"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "target_shard",
+              "text": "target shard",
+              "type": "number"
+            },
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "string"
+            },
+            {
+              "selector": "attempt",
+              "text": "attempt",
+              "type": "number"
+            },
+            {
+              "selector": "input_rows",
+              "text": "input rows",
+              "type": "number"
+            },
+            {
+              "selector": "payload_bytes",
+              "text": "payload bytes",
+              "type": "number"
+            },
+            {
+              "selector": "num_sources",
+              "text": "num sources",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

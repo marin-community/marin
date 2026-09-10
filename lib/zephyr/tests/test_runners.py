@@ -7,20 +7,26 @@ import os
 import time
 import uuid
 from contextlib import suppress
+from threading import Lock
 
 import polars as pl
 import pytest
 from finelog.client import LogClient
 from finelog.embedded import EmbeddedServer
 from fray.types import ResourceConfig
+from fsspec.implementations.local import LocalFileSystem
+from rigging.filesystem.storage_path import StoragePath
+from rigging.timing import Duration, ExponentialBackoff
 from zephyr import counters, runners, worker
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.runners import InlineRunner, SubprocessRunner
+from zephyr.shard_keys import deterministic_hash
 from zephyr.stage_io import ZephyrWorkerError
 from zephyr.stats import (
     ZEPHYR_STAGE_STATS_NAMESPACE,
     ZEPHYR_WORKER_STATS_NAMESPACE,
+    StatsConfig,
     StatsWriter,
 )
 
@@ -232,6 +238,7 @@ def test_finelog_stats_emitted(local_client, tmp_path, finelog_server, monkeypat
     try:
         stage_rows = query_client.query(f'SELECT * FROM "{ZEPHYR_STAGE_STATS_NAMESPACE}"')
         worker_rows = query_client.query(f'SELECT * FROM "{ZEPHYR_WORKER_STATS_NAMESPACE}"')
+        assert "zephyr.shuffle" not in {info.namespace for info in query_client.list_namespaces()}
     finally:
         query_client.close()
 
@@ -336,3 +343,215 @@ def test_finelog_stats_emitted(local_client, tmp_path, finelog_server, monkeypat
     # aggregate must therefore lie within the final per-shard averages.
     assert min(end_cpu_avg_pct) <= stage["cpu_pct_avg"] <= max(end_cpu_avg_pct)
     assert min(end_mem_avg_bytes) <= stage["mem_bytes_avg"] <= max(end_mem_avg_bytes)
+
+
+def test_shuffle_diagnostics_persist_target_sizes(local_client, tmp_path, finelog_server, monkeypatch, runner_factory):
+    read_bytes = StoragePath.read_bytes
+
+    def reject_extra_metadata_read(path, **kwargs):
+        if str(path).endswith("metadata.msgpack"):
+            raise AssertionError("Diagnostics must not reread metadata")
+        return read_bytes(path, **kwargs)
+
+    monkeypatch.setattr(StoragePath, "read_bytes", reject_extra_metadata_read)
+    rows = [{"key": "hot", "value": 1}] * 90 + [{"key": "cold", "value": 1}] * 10
+    dataset = (
+        Dataset.from_list(rows)
+        .reshard(2)
+        .group_by(
+            key=lambda row: row["key"],
+            reducer=lambda key, items: (key, sum(row["value"] for row in items)),
+            num_output_shards=8,
+        )
+    )
+    with ZephyrContext(
+        client=local_client,
+        max_workers=2,
+        resources=ResourceConfig(cpu=1, ram="512m"),
+        chunk_storage_prefix=str(tmp_path / "chunks"),
+        stats_config=StatsConfig(finelog_server),
+        stage_runner_factory=runner_factory,
+    ) as context:
+        first = context.execute(dataset)
+        second = context.execute(dataset)
+
+    assert sorted(first.results) == [("cold", 10), ("hot", 90)]
+    assert sorted(second.results) == sorted(first.results)
+    query_client = LogClient.connect(finelog_server)
+    try:
+        stage_rows = query_client.query('SELECT * FROM "zephyr.stage"').to_pylist()
+        assert len({row["execution_id"] for row in stage_rows}) == 2
+        reports = query_client.query('SELECT * FROM "zephyr.shuffle"').to_pylist()
+    finally:
+        query_client.close()
+    assert len(reports) == 32
+    assert {row["execution_id"] for row in reports} == {first.execution_id, second.execution_id}
+    for execution_id in {row["execution_id"] for row in reports}:
+        placeholders = [row for row in reports if row["execution_id"] == execution_id and row["input_rows"] is None]
+        assert sorted(row["target_shard"] for row in placeholders) == list(range(8))
+        assert all(row["payload_bytes"] is None and row["num_sources"] is None for row in placeholders)
+        targets = [row for row in reports if row["execution_id"] == execution_id and row["input_rows"] is not None]
+        assert sorted(row["target_shard"] for row in targets) == list(range(8))
+        assert sum(row["input_rows"] for row in targets) == 100
+        assert max(row["input_rows"] for row in targets) >= 90
+        assert sum(row["input_rows"] == 0 for row in targets) >= 6
+        assert all((row["payload_bytes"] > 0) == (row["input_rows"] > 0) for row in targets)
+        assert {row["job_id"] for row in targets} == {""}
+        assert {row["num_targets"] for row in targets} == {8}
+        assert {row["attempt"] for row in targets} == {0}
+        assert all(0 <= row["num_sources"] <= 2 for row in targets)
+        assert all((row["num_sources"] == 0) == (row["input_rows"] == 0) for row in targets)
+        assert {row["stage_name"] for row in targets} == {
+            row["stage_name"] for row in stage_rows if "Reduce" in row["stage_name"]
+        }
+
+
+def test_shuffle_diagnostics_visible_before_reducer_completes(local_client, tmp_path, finelog_server, runner_factory):
+    key = next(value for value in range(100) if deterministic_hash(value) % 8 == 0)
+
+    def reduce_after_observation(key, items):
+        query_client = LogClient.connect(finelog_server)
+        reports = []
+
+        def input_size_visible():
+            nonlocal reports
+            if "zephyr.shuffle" not in {info.namespace for info in query_client.list_namespaces()}:
+                return False
+            reports = query_client.query('SELECT * FROM "zephyr.shuffle"').to_pylist()
+            return any(row["target_shard"] == 0 and row["input_rows"] is not None for row in reports)
+
+        try:
+            assert ExponentialBackoff().wait_until(input_size_visible, timeout=Duration.from_seconds(25))
+            placeholders = [row for row in reports if row["input_rows"] is None]
+            measured = [row for row in reports if row["input_rows"] is not None]
+            assert sorted(row["target_shard"] for row in placeholders) == list(range(8))
+            assert all(row["payload_bytes"] is None and row["num_sources"] is None for row in placeholders)
+            assert len(measured) == 1
+            assert measured[0]["input_rows"] == 10
+            assert measured[0]["num_targets"] == 8
+            assert measured[0]["num_sources"] == 2
+            return key, sum(row["value"] for row in items)
+        finally:
+            query_client.close()
+
+    dataset = (
+        Dataset.from_list([{"key": key, "value": 1}] * 10)
+        .reshard(2)
+        .group_by(key=lambda row: row["key"], reducer=reduce_after_observation, num_output_shards=8)
+    )
+    with ZephyrContext(
+        client=local_client,
+        max_workers=1,
+        resources=ResourceConfig(cpu=1, ram="512m"),
+        chunk_storage_prefix=str(tmp_path / "chunks"),
+        stats_config=StatsConfig(finelog_server),
+        stage_runner_factory=runner_factory,
+    ) as context:
+        result = context.execute(dataset)
+    assert result.results == [(key, 10)]
+
+
+def test_shuffle_diagnostics_do_not_add_storage_reads(local_client, tmp_path, monkeypatch):
+    metadata_reads = []
+    read_file = LocalFileSystem.cat_file
+
+    def count_metadata_reads(filesystem, path, *args, **kwargs):
+        if str(path).endswith("metadata.msgpack"):
+            metadata_reads.append(str(path))
+        return read_file(filesystem, path, *args, **kwargs)
+
+    monkeypatch.setattr(LocalFileSystem, "cat_file", count_metadata_reads)
+    dataset = (
+        Dataset.from_list(list(range(20)))
+        .reshard(2)
+        .group_by(key=lambda value: value % 3, reducer=lambda key, values: (key, sum(values)), num_output_shards=8)
+    )
+    with ZephyrContext(
+        client=local_client,
+        max_workers=2,
+        resources=ResourceConfig(cpu=1, ram="512m"),
+        chunk_storage_prefix=str(tmp_path / "chunks"),
+        stage_runner_factory=InlineRunner,
+    ) as context:
+        result = context.execute(dataset)
+    assert sorted(result.results) == [(0, 63), (1, 70), (2, 57)]
+    assert len(metadata_reads) == 2 * 8
+
+
+def test_shuffle_diagnostics_preserve_retry_attempts(local_client, tmp_path, finelog_server, runner_factory):
+    retry_marker = tmp_path / "retried"
+
+    def reduce_with_retry(key, values):
+        if not retry_marker.exists():
+            retry_marker.touch()
+            raise OSError("Retry the reducer after its metadata is ready")
+        return key, sum(values)
+
+    dataset = Dataset.from_list([1, 2, 3]).group_by(key=lambda value: 0, reducer=reduce_with_retry, num_output_shards=1)
+    with ZephyrContext(
+        client=local_client,
+        max_workers=1,
+        resources=ResourceConfig(cpu=1, ram="512m"),
+        chunk_storage_prefix=str(tmp_path / "chunks"),
+        stats_config=StatsConfig(finelog_server),
+        stage_runner_factory=runner_factory,
+    ) as context:
+        result = context.execute(dataset)
+    assert result.results == [(0, 6)]
+    query_client = LogClient.connect(finelog_server)
+    try:
+        observations = query_client.query(
+            'SELECT * FROM "zephyr.shuffle" WHERE input_rows IS NOT NULL ORDER BY attempt'
+        ).to_pylist()
+    finally:
+        query_client.close()
+    assert [row["attempt"] for row in observations] == [0, 1]
+    assert {row["execution_id"] for row in observations} == {result.execution_id}
+    assert {row["target_shard"] for row in observations} == {0}
+    assert {row["input_rows"] for row in observations} == {3}
+
+
+def test_shuffle_placeholders_visible_before_metadata_read(local_client, tmp_path, finelog_server, monkeypatch):
+    initial_reports = []
+    metadata_lock = Lock()
+    read_file = LocalFileSystem.cat_file
+
+    def read_after_placeholders(filesystem, path, *args, **kwargs):
+        nonlocal initial_reports
+        if str(path).endswith("metadata.msgpack"):
+            with metadata_lock:
+                if not initial_reports:
+                    query_client = LogClient.connect(finelog_server)
+
+                    def placeholders_visible():
+                        nonlocal initial_reports
+                        if "zephyr.shuffle" not in {info.namespace for info in query_client.list_namespaces()}:
+                            return False
+                        initial_reports = query_client.query('SELECT * FROM "zephyr.shuffle"').to_pylist()
+                        return len(initial_reports) == 8
+
+                    try:
+                        assert ExponentialBackoff().wait_until(placeholders_visible, timeout=Duration.from_seconds(10))
+                        assert all(row["input_rows"] is None for row in initial_reports)
+                    finally:
+                        query_client.close()
+        return read_file(filesystem, path, *args, **kwargs)
+
+    monkeypatch.setattr(LocalFileSystem, "cat_file", read_after_placeholders)
+    dataset = Dataset.from_list([1, 2, 3]).group_by(
+        key=lambda value: 0, reducer=lambda key, values: sum(values), num_output_shards=8
+    )
+    with ZephyrContext(
+        client=local_client,
+        max_workers=1,
+        max_shard_failures=1,
+        resources=ResourceConfig(cpu=1, ram="512m"),
+        chunk_storage_prefix=str(tmp_path / "chunks"),
+        stats_config=StatsConfig(finelog_server),
+        stage_runner_factory=InlineRunner,
+    ) as context:
+        result = context.execute(dataset)
+    assert result.results == [6]
+    assert sorted(row["target_shard"] for row in initial_reports) == list(range(8))
+    assert {row["execution_id"] for row in initial_reports} == {result.execution_id}
+    assert all(row["input_rows"] is row["payload_bytes"] is row["num_sources"] is None for row in initial_reports)
