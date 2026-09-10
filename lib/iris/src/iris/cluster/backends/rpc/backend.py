@@ -84,7 +84,7 @@ _T = TypeVar("_T")
 _R = TypeVar("_R")
 
 
-def _state_observations(
+def _without_release_only_observations(
     result: WorkerReconcileResult,
     release_only_uids: frozenset[AttemptUid],
 ) -> WorkerReconcileResult:
@@ -115,7 +115,7 @@ def _confirmed_runtime_releases(
 def _targets_with_runtime_releases(
     request: WorkerFleetReconcileRequest,
 ) -> tuple[list[WorkerReconcileTarget], dict[WorkerId, frozenset[AttemptUid]]]:
-    """Merge exact stop intents into immutable per-worker reconcile plans."""
+    """Return reconcile targets and requested release UIDs grouped by worker."""
     targets_by_worker: dict[WorkerId, WorkerReconcileTarget] = {}
     for target in request.targets:
         wire_request = worker_pb2.Worker.ReconcileRequest()
@@ -343,7 +343,7 @@ class RpcTaskBackend:
             releases = releases_by_worker.get(plan.worker_id, frozenset())
             regular_attempt_uids = {row.attempt_uid for row in plan.attempts}
             release_only_uids = releases - regular_attempt_uids
-            state_result = _state_observations(result, frozenset(release_only_uids))
+            state_result = _without_release_only_observations(result, frozenset(release_only_uids))
             response_is_trusted = result.error is None and (
                 result.responder_worker_id is None or result.responder_worker_id == str(plan.worker_id)
             )

@@ -307,7 +307,9 @@ def list_endpoints(
     del context
     prefix = request.prefix
     if prefix.startswith("/system/"):
-        return _list_system_endpoints(dependencies.registry, prefix, exact=request.exact)
+        if request.exact:
+            return _list_exact_system_endpoint(dependencies.registry, prefix)
+        return _list_system_endpoints_with_prefix(dependencies.registry, prefix)
 
     rows = dependencies.db.caches[EndpointsProjection].query(
         EndpointQuery(
@@ -346,15 +348,25 @@ def _granted_lease(
     return requested
 
 
-def _list_system_endpoints(
+def _list_exact_system_endpoint(
     registry: EndpointRegistry,
-    prefix: str,
-    *,
-    exact: bool,
+    name: str,
 ) -> controller_pb2.Controller.ListEndpointsResponse:
     results = [
-        controller_pb2.Controller.Endpoint(endpoint_id=name, name=name, address=address)
-        for name, address in registry.system_endpoints()
-        if (name == prefix if exact else name.startswith(prefix))
+        _system_endpoint(candidate, address) for candidate, address in registry.system_endpoints() if candidate == name
     ]
     return controller_pb2.Controller.ListEndpointsResponse(endpoints=results)
+
+
+def _list_system_endpoints_with_prefix(
+    registry: EndpointRegistry,
+    prefix: str,
+) -> controller_pb2.Controller.ListEndpointsResponse:
+    results = [
+        _system_endpoint(name, address) for name, address in registry.system_endpoints() if name.startswith(prefix)
+    ]
+    return controller_pb2.Controller.ListEndpointsResponse(endpoints=results)
+
+
+def _system_endpoint(name: str, address: str) -> controller_pb2.Controller.Endpoint:
+    return controller_pb2.Controller.Endpoint(endpoint_id=name, name=name, address=address)

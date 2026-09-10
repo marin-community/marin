@@ -69,7 +69,7 @@ def test_sync_applies_pods_for_tasks_to_run(provider, k8s):
     assert result == []
 
 
-def test_reconcile_confirms_release_only_after_a_fresh_absence_scan(provider, k8s):
+def test_reconcile_confirms_release_only_after_a_fresh_absence_scan(provider):
     task_id = JobName.from_wire("/job/cancelled/0")
     attempt_uid = AttemptUid("0123456789abcdef")
     request = make_run_req(task_id.to_wire(), attempt_uid=attempt_uid)

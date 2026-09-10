@@ -30,13 +30,25 @@ from iris.cluster.controller.worker_health import WorkerLiveness
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.process_status import get_process_status as local_process_status
-from iris.cluster.runtime.profile import build_profile_row, profile_local_process
+from iris.cluster.runtime.profile import SYSTEM_PROCESS_TARGET, build_profile_row, profile_local_process
 from iris.cluster.types import JobName, TaskAttempt, WorkerId
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.rpc.auth import FEDERATION_PEER_ROLE
 from iris.time_proto import duration_from_proto, timestamp_to_proto
 
 Response = TypeVar("Response")
+
+_DEFAULT_PROFILE_DURATION = 10
+_PROFILE_RPC_TIMEOUT_MARGIN_MS = 30_000
+_SYSTEM_CONTROLLER_TARGET = "/system/controller"
+
+
+def _profile_duration(request: job_pb2.ProfileTaskRequest) -> int:
+    return request.duration_seconds or _DEFAULT_PROFILE_DURATION
+
+
+def _profile_rpc_timeout_ms(request: job_pb2.ProfileTaskRequest) -> int:
+    return _profile_duration(request) * 1000 + _PROFILE_RPC_TIMEOUT_MARGIN_MS
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,14 +100,14 @@ def profile_task(
     if not request.HasField("profile_type"):
         raise ConnectError(Code.INVALID_ARGUMENT, "profile_type is required")
 
-    if request.target in ("/system/controller", "/system/process"):
+    if request.target in (_SYSTEM_CONTROLLER_TARGET, SYSTEM_PROCESS_TARGET):
         try:
-            duration = request.duration_seconds or 10
+            duration = _profile_duration(request)
             data = profile_local_process(duration, request.profile_type)
             dependencies.profile_table.write(
                 [
                     build_profile_row(
-                        source="/system/controller",
+                        source=_SYSTEM_CONTROLLER_TARGET,
                         attempt_id=None,
                         vm_id="controller-self",
                         duration_seconds=duration,
@@ -116,14 +128,14 @@ def profile_task(
         if not dependencies.runtime.liveness_for_worker(worker.worker_id).healthy:
             raise ConnectError(Code.UNAVAILABLE, f"Worker {worker_id} is unavailable")
         forwarded = job_pb2.ProfileTaskRequest(
-            target="/system/process",
+            target=SYSTEM_PROCESS_TARGET,
             duration_seconds=request.duration_seconds,
             profile_type=request.profile_type,
         )
         response = dependencies.runtime.backend.profile_task(
             TaskTarget(task_id="", attempt_id=0, worker_id=worker.worker_id, address=worker.address),
             forwarded,
-            (request.duration_seconds or 10) * 1000 + 30000,
+            _profile_rpc_timeout_ms(request),
         )
         return job_pb2.ProfileTaskResponse(profile_data=response.profile_data, error=response.error)
 
@@ -145,7 +157,7 @@ def profile_task(
     response = dependencies.runtime.backend.profile_task(
         task_target,
         request,
-        (request.duration_seconds or 10) * 1000 + 30000,
+        _profile_rpc_timeout_ms(request),
     )
     return job_pb2.ProfileTaskResponse(profile_data=response.profile_data, error=response.error)
 
@@ -158,7 +170,7 @@ def get_process_status(
     """Return controller, worker, or task-container process information."""
     del context
     target = request.target
-    if not target or target == "/system/process":
+    if not target or target == SYSTEM_PROCESS_TARGET:
         return local_process_status(dependencies.timer)
 
     worker_id = workers.parse_worker_target(target)

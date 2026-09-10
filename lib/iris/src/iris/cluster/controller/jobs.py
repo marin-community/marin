@@ -26,7 +26,7 @@ from iris.cluster.constraints import (
     validate_tpu_request,
 )
 from iris.cluster.controller import ops, reads, writes
-from iris.cluster.controller.auth import ControllerAuth, authorize_owner_if_configured
+from iris.cluster.controller.auth import ADMIN_ROLE, ControllerAuth, authorize_owner_if_configured
 from iris.cluster.controller.autoscaler.status import PendingHint
 from iris.cluster.controller.backend import BackendCapability, BackendObservation, JobFeasibilityRequest, TaskBackend
 from iris.cluster.controller.budget import budget_user_id
@@ -121,14 +121,7 @@ class JobStatusRow(Protocol):
 def submitting_user_for_root(
     identity: VerifiedIdentity | None, request: controller_pb2.Controller.LaunchJobRequest
 ) -> str:
-    """The authenticated principal to attribute a *root* submission to.
-
-    A received handoff carries the submitter as a signed claim the receiving peer
-    already re-checked against the presented token, so it is authoritative here. An
-    IAP/JWT caller is its verified email; a CIDR/loopback caller authenticates as the
-    anonymous admin (a machine, not a person) and is attributed to ``local_admin``.
-    Child jobs do not call this — they inherit their root's value at insert time.
-    """
+    """Return the submitting principal recorded for a root job."""
     if request.HasField("federation"):
         return request.federation.submitting_user
     if identity is None or identity.user_id == ANONYMOUS_ADMIN.user_id:
@@ -225,15 +218,7 @@ def peer_status(cluster: str, handoff_state: int | None, has_reported_tasks: boo
 
 
 def _federated_pending_reason(cluster: str, handoff_state: int | None, peer_status: int) -> str:
-    """Pending reason for a federated job, which the local scheduler never sees.
-
-    A handed-off job's tasks live on the peer and are excluded from the local
-    fold, so the local scheduling diagnostic is meaningless for it. Derive the
-    message from the handoff posture (single source of truth): waiting in the
-    federation queue for a peer with free capacity, awaiting the peer's acceptance,
-    awaiting its first status report, or pending on the peer once it has reported
-    tasks. A queued job names a peer only when it is pinned to one.
-    """
+    """Return the user-visible reason for a pending federated job."""
     if handoff_state == int(HandoffState.QUEUED_HANDOFF):
         if not cluster:
             return "Queued for a federation peer to report free capacity"
@@ -266,7 +251,6 @@ def _query_jobs(
     query: controller_pb2.Controller.JobQuery,
     state_ids: tuple[int, ...],
 ) -> tuple[list, int]:
-    """Return jobs matching a normalized query and state filter."""
     if query.scope == controller_pb2.Controller.JOB_QUERY_SCOPE_CHILDREN and not query.parent_job_id:
         raise ConnectError(
             Code.INVALID_ARGUMENT,
@@ -377,7 +361,7 @@ def _authorize_federation_handoff(
                 Code.PERMISSION_DENIED,
                 f"Submitter {request.federation.submitting_user!r} is not admitted for federation to this cluster",
             )
-    elif identity is None or identity.role != "admin":
+    elif identity is None or identity.role != ADMIN_ROLE:
         raise ConnectError(Code.PERMISSION_DENIED, "The federation handoff field may only be set by a trusted peer.")
     if not job_id.is_root:
         raise ConnectError(Code.INVALID_ARGUMENT, "A federation handoff must be a root job.")
@@ -506,7 +490,7 @@ def _launch_identity(
         dependencies.auth.provider
         and identity is not None
         and job_id.is_root
-        and identity.role != "admin"
+        and identity.role != ADMIN_ROLE
         and not received_handoff
     ):
         job_id = JobName.root(identity.user_id, job_id.name)
