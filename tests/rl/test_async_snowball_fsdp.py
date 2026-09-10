@@ -229,3 +229,26 @@ def test_snowball_cli_composes_p16_precision_request():
     assert config["trainer"]["optimizer_state_metrics"] is True
     assert config["trainer"]["policy"]["megatron_config"]["optimizer_config_kwargs"]["exp_avg_sq_dtype"] == "bfloat16"
     assert request["topology"]["role_plan"]["policy_num_nodes"] == 2
+
+
+@pytest.mark.parametrize("backend", list(snowball.Backend))
+@pytest.mark.parametrize("correction", [snowball.Correction.REGULAR_MASK, snowball.Correction.BC_MASK])
+def test_snowball_mask_presets_emit_declared_loss_and_only_mask_fields(backend, correction):
+    baseline = yaml.safe_load(snowball.training_config(snowball.Scale.GATE, backend=backend))
+    actual = yaml.safe_load(snowball.training_config(snowball.Scale.GATE, backend=backend, correction=correction))
+    algorithm = actual["trainer"]["algorithm"]
+    assert algorithm["use_tis"] is False
+    assert algorithm.pop("require_rollout_logprobs") is True
+    assert algorithm["policy_loss_type"] == (
+        "regular" if correction == snowball.Correction.REGULAR_MASK else "behavior_clip"
+    )
+    algorithm["policy_loss_type"] = "behavior_clip"
+    assert algorithm.pop("offpolicy_mask") == {
+        "enabled": True,
+        "ratio": "mismatch",
+        "low": 0.5,
+        "high": 5.0,
+        "veto_ratio": 1e-5,
+        "renormalize": False,
+    }
+    assert actual == baseline
