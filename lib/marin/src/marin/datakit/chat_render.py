@@ -7,6 +7,7 @@ import json
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from itertools import groupby
+from textwrap import dedent
 
 import pyarrow as pa
 from fray.types import ResourceConfig
@@ -31,21 +32,23 @@ RENDERED_CHAT_SCHEMA = pa.schema(
 
 def _tool_instructions(tools: Sequence[dict]) -> str:
     definitions = "".join(str(tool) for tool in tools)
-    return f"""
-### Tools
+    return dedent(
+        f"""
+        ### Tools
 
-You may call one or more functions to assist with the user query.
-You are provided with function signatures within <tools> </tools> tags:
+        You may call one or more functions to assist with the user query.
+        You are provided with function signatures within <tools> </tools> tags:
 
-<tools>
-{definitions}</tools>
+        <tools>
+        {definitions}</tools>
 
-For each function call, pass a json object with function name and arguments within <tool_call> </tool_call> tags:
-<tool_call>
-{{"name": <function-name>, "arguments": <args-json-object>}}
-</tool_call>
+        For each function call, pass a json object with function name and arguments within <tool_call> </tool_call> tags:
+        <tool_call>
+        {{"name": <function-name>, "arguments": <args-json-object>}}
+        </tool_call>
 
-"""
+        """
+    )
 
 
 @dataclass(frozen=True)
