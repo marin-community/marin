@@ -37,7 +37,7 @@ use crate::store::object_store::{
     ObjectId, ObjectPrefix, ObjectReference, ObjectStore, ObjectVersion,
 };
 use crate::store::state_store::object::{ObjectTableStateStore, StateGcPolicy};
-use crate::store::state_store::tree::catalogs_equal;
+use crate::store::state_store::tree::{catalogs_equal, referenced_objects};
 use crate::store::state_store::StoredTableState;
 use crate::store::table_spec::TablePolicy;
 use crate::store::table_state::{
@@ -111,6 +111,10 @@ enum ControllerCommand {
     PublishOwed(oneshot::Sender<Result<(), StatsError>>),
     Claim(oneshot::Sender<Result<(), StatsError>>),
     Tombstone(oneshot::Sender<Result<(), StatsError>>),
+    PruneReleases {
+        deleted: Vec<String>,
+        reply: oneshot::Sender<Result<(), StatsError>>,
+    },
 }
 
 const COMMAND_QUEUE_DEPTH: usize = 32;
@@ -615,10 +619,22 @@ impl TableController {
         now_ms: i64,
         policy: StateGcPolicy,
     ) -> Result<usize, StatsError> {
-        self.require_objects()?
+        let Some(selected) = self.selected.lock().unwrap().clone() else {
+            return Ok(0);
+        };
+        let result = self
+            .require_objects()?
             .state_store
-            .gc_obsolete_states(&self.table, now_ms, policy, self.fence)
-            .await
+            .gc_selected(&self.table, now_ms, policy, &selected)
+            .await?;
+        if !result.deleted_releases.is_empty() {
+            self.dispatch(|reply| ControllerCommand::PruneReleases {
+                deleted: result.deleted_releases,
+                reply,
+            })
+            .await??;
+        }
+        Ok(result.removed)
     }
 
     /// Take a lease for one compaction.
@@ -1167,6 +1183,32 @@ impl TableController {
             .send_replace(Some(Arc::new(TableSnapshot::from_stored(&tombstoned))));
         Ok(())
     }
+
+    fn run_prune_releases(&self, deleted: Vec<String>) -> Result<(), StatsError> {
+        let deleted = deleted.into_iter().collect::<HashSet<_>>();
+        let mut selected = self.selected.lock().unwrap();
+        let Some(selected) = selected.as_mut() else {
+            return Ok(());
+        };
+        let referenced = referenced_objects(&selected.catalog)
+            .into_iter()
+            .filter_map(|reference| reference.object_id)
+            .collect::<HashSet<_>>();
+        if let Some(object_id) = deleted.intersection(&referenced).next() {
+            return Err(StatsError::Internal(format!(
+                "deleted released object {object_id:?} re-entered table {:?}",
+                self.table
+            )));
+        }
+        selected.pending_releases.retain(|released| {
+            released
+                .object
+                .as_option()
+                .and_then(|object| object.object_id.as_deref())
+                .is_none_or(|object_id| !deleted.contains(object_id))
+        });
+        Ok(())
+    }
 }
 
 /// The controller task: the only publisher of one table's durable state.
@@ -1225,6 +1267,9 @@ async fn run_controller(
             }
             ControllerCommand::Tombstone(reply) => {
                 let _ = reply.send(controller.run_tombstone().await);
+            }
+            ControllerCommand::PruneReleases { deleted, reply } => {
+                let _ = reply.send(controller.run_prune_releases(deleted));
             }
         }
     }
@@ -1969,7 +2014,15 @@ mod tests {
                     .unwrap()
             })
         };
-        gate.entered().await;
+        if tokio::time::timeout(std::time::Duration::from_secs(1), gate.entered())
+            .await
+            .is_err()
+        {
+            panic!(
+                "collection did not reach catalog LIST: {:?}",
+                faults.calls()
+            );
+        }
 
         controller
             .catalog
@@ -1986,6 +2039,59 @@ mod tests {
 
         gate.release();
         collection.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn object_deletion_does_not_block_a_durability_publication() {
+        let (controller, _states, faults) = faulted_controller("controller_gc_delete", 11);
+        controller.publish_state().await.unwrap();
+        let orphan = ObjectId::table(TABLE, "objects/v1/l0/orphan/source.parquet").unwrap();
+        faults
+            .write(&orphan, Bytes::from_static(b"orphan"))
+            .await
+            .unwrap();
+        let gate = crate::test_support::FaultGate::new();
+        faults.arm(ObjectFault::new(
+            ObjectOp::Delete,
+            ObjectPattern::Contains("/objects/".to_string()),
+            FaultAction::Park(gate.clone()),
+        ));
+        let collection = {
+            let controller = Arc::clone(&controller);
+            tokio::spawn(async move {
+                controller
+                    .gc_published(
+                        i64::MAX,
+                        StateGcPolicy {
+                            pin_retention_ms: 0,
+                            state_retention_ms: 0,
+                            orphan_grace_ms: 0,
+                            sweep_orphans: true,
+                        },
+                    )
+                    .await
+                    .unwrap()
+            })
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(1), gate.entered())
+            .await
+            .expect("collection must reach object deletion");
+
+        controller
+            .catalog
+            .set_forward_cursor("hub", TABLE, 5)
+            .unwrap();
+        let published = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            controller.publish_state(),
+        )
+        .await
+        .expect("publication must not wait for object deletion")
+        .unwrap();
+        assert_eq!(published.revision().get(), 2);
+
+        gate.release();
+        assert_eq!(collection.await.unwrap(), 1);
     }
 
     #[tokio::test(start_paused = true)]

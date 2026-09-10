@@ -22,8 +22,8 @@ use tokio::sync::{RwLock, Semaphore};
 
 use crate::errors::StatsError;
 use crate::store::object_store::{
-    ObjectId, ObjectMetadata, ObjectPrefix, ObjectReference, ObjectStore, ObjectVersion,
-    StoredObject, FINELOG_ROOT_COMPONENT,
+    DeleteManyOutcome, ObjectId, ObjectMetadata, ObjectPrefix, ObjectReference, ObjectStore,
+    ObjectVersion, StoredObject, FINELOG_ROOT_COMPONENT,
 };
 
 use super::local_file::atomic_write;
@@ -357,6 +357,34 @@ impl ObjectStore for CachedObjectStore {
         tokio::task::spawn_blocking(move || cache.remove(&id))
             .await
             .map_err(|error| StatsError::Internal(format!("object cache delete task: {error}")))?
+    }
+
+    async fn delete_many(&self, ids: Vec<ObjectId>) -> DeleteManyOutcome {
+        let outcome = self.source.delete_many(ids).await;
+        if outcome.deleted.is_empty() {
+            return outcome;
+        }
+        let _visibility = self.query_visibility.write().await;
+        let cache = self.cache.clone();
+        let deleted = outcome.deleted.clone();
+        let cache_result = tokio::task::spawn_blocking(move || {
+            for id in &deleted {
+                cache.remove(id)?;
+            }
+            Ok::<(), StatsError>(())
+        })
+        .await;
+        let cache_error = match cache_result {
+            Ok(Ok(())) => None,
+            Ok(Err(error)) => Some(error),
+            Err(error) => Some(StatsError::Internal(format!(
+                "object cache delete task: {error}"
+            ))),
+        };
+        DeleteManyOutcome {
+            deleted: outcome.deleted,
+            error: outcome.error.or(cache_error),
+        }
     }
 
     async fn list(&self, prefix: &ObjectPrefix) -> Result<Vec<ObjectMetadata>, StatsError> {

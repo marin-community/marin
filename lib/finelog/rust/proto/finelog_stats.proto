@@ -351,6 +351,13 @@ message CatalogNode {
   NamespaceCatalog checkpoint = 7;
   CatalogDelta delta = 8;
   repeated ReleasedObject released_objects = 9;
+  // This node was written by a publisher that folds released_objects across
+  // the whole selected checkpoint span. Every node through the checkpoint
+  // must carry this marker before history-free collection is safe.
+  bool release_summary = 10;
+  // Pre-summary history may carry releases outside the bounded selected span.
+  // Orphan and historical-node collection waits through this deadline.
+  int64 legacy_history_safe_after_ms = 11;
 }
 
 // ============================================================================

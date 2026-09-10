@@ -12,8 +12,8 @@ use async_trait::async_trait;
 
 use crate::errors::StatsError;
 use crate::store::object_store::{
-    ObjectId, ObjectMetadata, ObjectPrefix, ObjectReference, ObjectStore, ObjectVersion,
-    StoredObject,
+    DeleteManyOutcome, ObjectId, ObjectMetadata, ObjectPrefix, ObjectReference, ObjectStore,
+    ObjectVersion, StoredObject,
 };
 
 /// A fresh directory under the system temp dir, unique per call.
@@ -37,6 +37,7 @@ pub enum ObjectOp {
     LocalPath,
     List,
     CompareAndSwap,
+    Delete,
 }
 
 /// Which object IDs a fault applies to.
@@ -347,7 +348,27 @@ impl ObjectStore for FaultInjectingObjectStore {
     }
 
     async fn delete(&self, id: &ObjectId) -> Result<(), StatsError> {
-        self.inner.delete(id).await
+        self.execute(ObjectOp::Delete, id.as_str(), || self.inner.delete(id))
+            .await
+    }
+
+    async fn delete_many(&self, ids: Vec<ObjectId>) -> DeleteManyOutcome {
+        let mut deleted = Vec::with_capacity(ids.len());
+        for id in ids {
+            match self.delete(&id).await {
+                Ok(()) => deleted.push(id),
+                Err(error) => {
+                    return DeleteManyOutcome {
+                        deleted,
+                        error: Some(error),
+                    };
+                }
+            }
+        }
+        DeleteManyOutcome {
+            deleted,
+            error: None,
+        }
     }
 
     async fn list(&self, prefix: &ObjectPrefix) -> Result<Vec<ObjectMetadata>, StatsError> {

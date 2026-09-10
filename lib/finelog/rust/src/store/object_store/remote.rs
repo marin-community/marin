@@ -17,14 +17,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use futures::StreamExt;
+use futures::{stream, StreamExt};
 use object_store::path::Path as OsPath;
 use object_store::{ObjectStoreExt, PutMode, PutOptions};
 
 use crate::errors::StatsError;
 use crate::store::object_store::{
-    ObjectId, ObjectMetadata, ObjectPrefix, ObjectStore, ObjectVersion, StoredObject,
-    FINELOG_ROOT_COMPONENT, TABLES_COMPONENT,
+    DeleteManyOutcome, ObjectId, ObjectMetadata, ObjectPrefix, ObjectStore, ObjectVersion,
+    StoredObject, FINELOG_ROOT_COMPONENT, TABLES_COMPONENT,
 };
 
 use super::provider::Provider;
@@ -231,6 +231,54 @@ impl ObjectStore for RemoteObjectStore {
         }
     }
 
+    async fn delete_many(&self, ids: Vec<ObjectId>) -> DeleteManyOutcome {
+        let by_path = ids
+            .into_iter()
+            .map(|id| (self.provider.object_path(&id).to_string(), id))
+            .collect::<std::collections::HashMap<_, _>>();
+        let paths = by_path
+            .keys()
+            .cloned()
+            .map(OsPath::from)
+            .map(Ok)
+            .collect::<Vec<Result<OsPath, object_store::Error>>>();
+        let mut results = self
+            .provider
+            .backend()
+            .delete_stream(stream::iter(paths).boxed());
+        let mut deleted = Vec::with_capacity(by_path.len());
+        let mut first_error = None;
+        while let Some(result) = results.next().await {
+            match result {
+                Ok(path) => {
+                    if let Some(id) = by_path.get(path.as_ref()) {
+                        deleted.push(id.clone());
+                    }
+                }
+                Err(object_store::Error::NotFound { path, .. }) => {
+                    let logical_path = self
+                        .provider
+                        .local_root()
+                        .and_then(|root| Path::new(&path).strip_prefix(root).ok())
+                        .map(|relative| relative.to_string_lossy().into_owned())
+                        .unwrap_or(path);
+                    if let Some(id) = by_path.get(&logical_path) {
+                        deleted.push(id.clone());
+                    }
+                }
+                Err(error) => {
+                    first_error.get_or_insert_with(|| {
+                        StatsError::Internal(format!("delete object batch: {error}"))
+                    });
+                }
+            }
+        }
+        DeleteManyOutcome {
+            deleted,
+            error: first_error,
+        }
+    }
+
     async fn list_tables(&self) -> Result<Vec<String>, StatsError> {
         self.list_tables_under_root().await
     }
@@ -312,6 +360,41 @@ mod tests {
         store.delete(&id).await.unwrap();
         assert!(store.read(&id).await.unwrap().is_none());
         assert!(!store.exists(&id).await.unwrap());
+        std::fs::remove_dir_all(&remote_dir).ok();
+    }
+
+    #[tokio::test]
+    async fn batch_delete_confirms_existing_and_missing_objects() {
+        let remote_dir = unique_dir("remote_batch_delete");
+        let store = build_remote_object_store(remote_dir.to_str().unwrap())
+            .unwrap()
+            .unwrap();
+        let existing = [
+            ObjectId::table("iris.task", "catalogs/1.json").unwrap(),
+            ObjectId::table("iris.task", "catalogs/2.json").unwrap(),
+        ];
+        for id in &existing {
+            store
+                .write(id, bytes::Bytes::from_static(b"catalog"))
+                .await
+                .unwrap();
+        }
+        let missing = ObjectId::table("iris.task", "catalogs/missing.json").unwrap();
+        let outcome = store
+            .delete_many(
+                existing
+                    .iter()
+                    .cloned()
+                    .chain(std::iter::once(missing.clone()))
+                    .collect(),
+            )
+            .await;
+
+        assert!(outcome.error.is_none());
+        assert_eq!(outcome.deleted.len(), 3);
+        for id in existing.iter().chain(std::iter::once(&missing)) {
+            assert!(!store.exists(id).await.unwrap());
+        }
         std::fs::remove_dir_all(&remote_dir).ok();
     }
 

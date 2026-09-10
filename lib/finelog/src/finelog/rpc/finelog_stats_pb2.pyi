@@ -421,7 +421,7 @@ class ReleasedObject(_message.Message):
     def __init__(self, object: _Optional[_Union[ObjectRef, _Mapping]] = ..., delete_after_ms: _Optional[int] = ...) -> None: ...
 
 class CatalogNode(_message.Message):
-    __slots__ = ("format_version", "namespace", "catalog_generation", "parent", "delta_depth", "delta_bytes_since_checkpoint", "checkpoint", "delta", "released_objects")
+    __slots__ = ("format_version", "namespace", "catalog_generation", "parent", "delta_depth", "delta_bytes_since_checkpoint", "checkpoint", "delta", "released_objects", "release_summary", "legacy_history_safe_after_ms")
     FORMAT_VERSION_FIELD_NUMBER: _ClassVar[int]
     NAMESPACE_FIELD_NUMBER: _ClassVar[int]
     CATALOG_GENERATION_FIELD_NUMBER: _ClassVar[int]
@@ -431,6 +431,8 @@ class CatalogNode(_message.Message):
     CHECKPOINT_FIELD_NUMBER: _ClassVar[int]
     DELTA_FIELD_NUMBER: _ClassVar[int]
     RELEASED_OBJECTS_FIELD_NUMBER: _ClassVar[int]
+    RELEASE_SUMMARY_FIELD_NUMBER: _ClassVar[int]
+    LEGACY_HISTORY_SAFE_AFTER_MS_FIELD_NUMBER: _ClassVar[int]
     format_version: int
     namespace: str
     catalog_generation: int
@@ -440,7 +442,9 @@ class CatalogNode(_message.Message):
     checkpoint: NamespaceCatalog
     delta: CatalogDelta
     released_objects: _containers.RepeatedCompositeFieldContainer[ReleasedObject]
-    def __init__(self, format_version: _Optional[int] = ..., namespace: _Optional[str] = ..., catalog_generation: _Optional[int] = ..., parent: _Optional[_Union[ObjectRef, _Mapping]] = ..., delta_depth: _Optional[int] = ..., delta_bytes_since_checkpoint: _Optional[int] = ..., checkpoint: _Optional[_Union[NamespaceCatalog, _Mapping]] = ..., delta: _Optional[_Union[CatalogDelta, _Mapping]] = ..., released_objects: _Optional[_Iterable[_Union[ReleasedObject, _Mapping]]] = ...) -> None: ...
+    release_summary: bool
+    legacy_history_safe_after_ms: int
+    def __init__(self, format_version: _Optional[int] = ..., namespace: _Optional[str] = ..., catalog_generation: _Optional[int] = ..., parent: _Optional[_Union[ObjectRef, _Mapping]] = ..., delta_depth: _Optional[int] = ..., delta_bytes_since_checkpoint: _Optional[int] = ..., checkpoint: _Optional[_Union[NamespaceCatalog, _Mapping]] = ..., delta: _Optional[_Union[CatalogDelta, _Mapping]] = ..., released_objects: _Optional[_Iterable[_Union[ReleasedObject, _Mapping]]] = ..., release_summary: _Optional[bool] = ..., legacy_history_safe_after_ms: _Optional[int] = ...) -> None: ...
 
 class RegisterTableRequest(_message.Message):
     __slots__ = ("namespace", "schema", "storage_policy", "table_spec")

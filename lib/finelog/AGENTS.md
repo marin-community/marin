@@ -74,11 +74,12 @@ ordinary additive registration.
 
 Forwarding deployments are durable relays after their tables migrate to object-native
 state. A backlog is a cursor into immutable source objects rather than a separate queue.
-Maintenance cannot retire a segment until its maximum sequence is at or below the
-downstream cursor. It also waits 15 minutes from segment creation; retained table states
-and the rollback window keep the object referenced after retirement. Relays compact to
-bound file count, but omit local indexes, projections, partition placement, and encoding
-rewrites.
+One settlement transaction advances the downstream cursor and removes every segment it
+fully covers. Released objects remain available through the query and rollback window.
+Relays do not compact, index, project, repartition, or rewrite their short-lived spool.
+Catalog checkpoints carry the folded release set, so collection reads the selected state,
+lists historical keys without opening them, and deletes eligible objects in provider
+batches.
 
 Non-log chunks from one read turn may wait for hub durability concurrently; log chunks
 stay serial to preserve line order. Rows are skipped after the hub returns

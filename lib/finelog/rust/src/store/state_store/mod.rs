@@ -18,7 +18,7 @@ pub mod object;
 pub(crate) mod tree;
 
 use crate::errors::StatsError;
-use crate::proto::finelog::stats::{CatalogHead, NamespaceCatalog};
+use crate::proto::finelog::stats::{CatalogHead, NamespaceCatalog, ReleasedObject};
 use crate::store::object_store::ObjectVersion;
 use crate::store::table_state::{TableRevision, WriterFence};
 
@@ -33,6 +33,13 @@ pub struct StoredTableState {
     pub(crate) catalog_chain: Vec<String>,
     pub(crate) delta_depth: u32,
     pub(crate) delta_bytes_since_checkpoint: u64,
+    /// Exact objects released by the selected checkpoint span but not yet
+    /// confirmed deleted by this process.
+    pub(crate) pending_releases: Vec<ReleasedObject>,
+    /// Every node in the selected span implements folded release summaries.
+    pub(crate) release_summary_complete: bool,
+    /// Before this instant, pre-summary history may still protect old readers.
+    pub(crate) legacy_history_safe_after_ms: i64,
 }
 
 impl StoredTableState {

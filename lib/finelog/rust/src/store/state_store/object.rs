@@ -13,7 +13,9 @@ use bytes::Bytes;
 use uuid::Uuid;
 
 use crate::errors::StatsError;
-use crate::proto::finelog::stats::{CatalogHead, CatalogNode, NamespaceCatalog, ObjectRef};
+use crate::proto::finelog::stats::{
+    CatalogHead, CatalogNode, NamespaceCatalog, ObjectRef, ReleasedObject,
+};
 use crate::store::object_store::{
     ObjectId, ObjectMetadata, ObjectPrefix, ObjectStore, ObjectVersion, StoredObject,
     INDICES_PREFIX, OBJECTS_PREFIX, PROJECTIONS_PREFIX,
@@ -47,11 +49,20 @@ pub(crate) struct StateGcPolicy {
     pub sweep_orphans: bool,
 }
 
+#[derive(Debug, Default)]
+pub(crate) struct StateGcResult {
+    pub removed: usize,
+    pub deleted_releases: Vec<String>,
+}
+
 struct LoadedCatalogTree {
     catalog: NamespaceCatalog,
     chain: Vec<String>,
     delta_depth: u32,
     delta_bytes_since_checkpoint: u64,
+    pending_releases: Vec<ReleasedObject>,
+    release_summary_complete: bool,
+    legacy_history_safe_after_ms: i64,
 }
 
 impl ObjectTableStateStore {
@@ -101,6 +112,9 @@ impl ObjectTableStateStore {
                     chain: vec![state_object_id],
                     delta_depth: 0,
                     delta_bytes_since_checkpoint: 0,
+                    pending_releases: Vec::new(),
+                    release_summary_complete: false,
+                    legacy_history_safe_after_ms: 0,
                 }
             }
             TABLE_STATE_FORMAT_VERSION => {
@@ -121,6 +135,9 @@ impl ObjectTableStateStore {
             catalog_chain: loaded.chain,
             delta_depth: loaded.delta_depth,
             delta_bytes_since_checkpoint: loaded.delta_bytes_since_checkpoint,
+            pending_releases: loaded.pending_releases,
+            release_summary_complete: loaded.release_summary_complete,
+            legacy_history_safe_after_ms: loaded.legacy_history_safe_after_ms,
         }))
     }
 
@@ -160,6 +177,9 @@ impl ObjectTableStateStore {
         let mut deltas = Vec::new();
         let mut recovered_delta_bytes = 0_u64;
         let mut tip_shape = None;
+        let mut pending_releases = Vec::new();
+        let mut release_summary_complete = true;
+        let mut legacy_history_safe_after_ms = 0;
         let checkpoint = loop {
             if chain.len() >= MAX_RECOVERY_NODES {
                 return Err(StatsError::Internal(format!(
@@ -180,6 +200,10 @@ impl ObjectTableStateStore {
                 ))
             })?;
             validate_node(table, &node)?;
+            pending_releases.extend(node.released_objects.iter().cloned());
+            release_summary_complete &= node.release_summary.unwrap_or(false);
+            legacy_history_safe_after_ms =
+                legacy_history_safe_after_ms.max(node.legacy_history_safe_after_ms.unwrap_or(0));
             if chain.is_empty() && node.catalog_generation != head.catalog_generation {
                 return Err(StatsError::Internal(format!(
                     "catalog tip does not match HEAD for table {table:?}"
@@ -251,6 +275,9 @@ impl ObjectTableStateStore {
             chain,
             delta_depth: tip_depth,
             delta_bytes_since_checkpoint: tip_bytes,
+            pending_releases: merge_released_objects(pending_releases),
+            release_summary_complete,
+            legacy_history_safe_after_ms,
         })
     }
 
@@ -323,6 +350,9 @@ impl ObjectTableStateStore {
             catalog_chain: selected.catalog_chain.clone(),
             delta_depth: selected.delta_depth,
             delta_bytes_since_checkpoint: selected.delta_bytes_since_checkpoint,
+            pending_releases: selected.pending_releases.clone(),
+            release_summary_complete: selected.release_summary_complete,
+            legacy_history_safe_after_ms: selected.legacy_history_safe_after_ms,
         })
     }
 
@@ -371,18 +401,63 @@ impl ObjectTableStateStore {
                         .saturating_add(delta_bytes)
                         > MAX_DELTA_BYTES
             });
-        // A definition change may shorten the new query lifetime while reads
-        // pinned to the parent are still running. Release against the longer
-        // side so such a commit cannot collect an object under an older pin.
+        // A definition change may shorten either retention policy while reads
+        // or migration rollback still pin the parent. Release against the
+        // longest policy on either side.
         let release_grace_ms = expected
-            .map(|previous| previous.catalog.max_query_time_ms.unwrap_or(0))
+            .map(|previous| catalog_retention_ms(&previous.catalog))
             .unwrap_or(0)
-            .max(catalog.max_query_time_ms.unwrap_or(0));
+            .max(catalog_retention_ms(&catalog));
+        let now_ms = now_ms();
         let delete_after_ms =
-            now_ms().saturating_add(i64::try_from(release_grace_ms).unwrap_or(i64::MAX));
-        let released_objects = expected
+            now_ms.saturating_add(i64::try_from(release_grace_ms).unwrap_or(i64::MAX));
+        let newly_released = expected
             .map(|previous| released_objects(&previous.catalog, &catalog, delete_after_ms))
             .unwrap_or_default();
+        let mut pending_releases = expected
+            .map(|previous| previous.pending_releases.clone())
+            .unwrap_or_default();
+        let referenced = referenced_object_keys(&catalog);
+        if let Some(reentered) = pending_releases.iter().find_map(|released| {
+            released
+                .object
+                .as_option()
+                .and_then(|object| object.object_id.as_deref())
+                .filter(|object_id| referenced.contains(*object_id))
+        }) {
+            return Err(StatsError::SchemaConflict(format!(
+                "released object {reentered:?} cannot re-enter table {table:?}"
+            )));
+        }
+        pending_releases.extend(newly_released.iter().cloned());
+        pending_releases = merge_released_objects(pending_releases);
+        let previous_summary_complete = expected
+            .map(|previous| previous.release_summary_complete)
+            .unwrap_or(true);
+        let mut legacy_history_safe_after_ms = expected
+            .map(|previous| previous.legacy_history_safe_after_ms)
+            .unwrap_or(0);
+        if !previous_summary_complete {
+            if legacy_history_safe_after_ms <= now_ms {
+                legacy_history_safe_after_ms = delete_after_ms;
+            }
+            for released in &mut pending_releases {
+                released.delete_after_ms = Some(
+                    released
+                        .delete_after_ms
+                        .unwrap_or(0)
+                        .max(legacy_history_safe_after_ms),
+                );
+            }
+        }
+        // A checkpoint owns the complete pending set. A marked delta normally
+        // carries only its mutation's releases, but the first marked node over
+        // an old span also persists the conservatively extended inherited set.
+        let node_releases = if write_checkpoint || !previous_summary_complete {
+            pending_releases.clone()
+        } else {
+            newly_released
+        };
         let (parent, checkpoint, delta, delta_depth, delta_bytes_since_checkpoint) =
             if write_checkpoint {
                 (
@@ -416,7 +491,9 @@ impl ObjectTableStateStore {
             delta_bytes_since_checkpoint: Some(delta_bytes_since_checkpoint),
             checkpoint,
             delta,
-            released_objects,
+            released_objects: node_releases,
+            release_summary: Some(true),
+            legacy_history_safe_after_ms: Some(legacy_history_safe_after_ms),
             ..Default::default()
         };
         let state_bytes = serde_json::to_vec(&node).map_err(|error| {
@@ -471,6 +548,9 @@ impl ObjectTableStateStore {
             },
             delta_depth,
             delta_bytes_since_checkpoint,
+            pending_releases,
+            release_summary_complete: write_checkpoint || previous_summary_complete,
+            legacy_history_safe_after_ms,
         })
     }
 
@@ -484,7 +564,7 @@ impl ObjectTableStateStore {
         fence: WriterFence,
         expected: Option<&StoredTableState>,
     ) -> Result<Option<StoredTableState>, StatsError> {
-        let Some(current) = self.load(table).await? else {
+        let Some((head, head_version)) = self.load_head(table).await? else {
             if expected.is_some() {
                 return Err(StatsError::SchemaConflict(format!(
                     "table {table:?} has no HEAD for the presented commit token"
@@ -492,25 +572,37 @@ impl ObjectTableStateStore {
             }
             return Ok(None);
         };
-        if current.fence() != fence {
-            return Err(fenced_error(table, fence, current.fence()));
+        let owner = WriterFence::new(head.writer_epoch.unwrap_or(0));
+        if owner != fence {
+            return Err(fenced_error(table, fence, owner));
         }
-        if current.is_tombstoned() {
+        if head.tombstoned.unwrap_or(false) {
             return Err(StatsError::SchemaConflict(format!(
                 "table {table:?} was deleted at revision {}",
-                current.revision()
+                head.catalog_generation.unwrap_or(0)
             )));
         }
-        if let Some(expected) = expected {
-            if expected.revision() != current.revision() {
-                return Err(StatsError::SchemaConflict(format!(
-                    "table {table:?} moved from revision {} to {} under this writer's token",
-                    expected.revision(),
-                    current.revision()
-                )));
-            }
+        let Some(expected) = expected else {
+            return Err(StatsError::SchemaConflict(format!(
+                "table {table:?} already has HEAD at revision {}",
+                head.catalog_generation.unwrap_or(0)
+            )));
+        };
+        if expected.head != head {
+            return Err(StatsError::SchemaConflict(format!(
+                "table {table:?} changed HEAD value at revision {}",
+                expected.revision(),
+            )));
         }
-        Ok(Some(current))
+        if !same_pointer_version(&expected.head_version, &head_version) {
+            return Err(StatsError::SchemaConflict(format!(
+                "table {table:?} changed HEAD version at revision {}: expected {:?}, found {:?}",
+                expected.revision(),
+                expected.head_version,
+                head_version,
+            )));
+        }
+        Ok(Some(expected.clone()))
     }
 
     pub async fn commit(
@@ -569,12 +661,8 @@ impl ObjectTableStateStore {
             .collect())
     }
 
-    /// Remove expired catalog history and unreferenced data objects.
-    ///
-    /// V2 retains parent chains as checkpoint-bounded spans: keeping one delta
-    /// necessarily keeps its ancestry. Release sidecars can extend a span
-    /// beyond rollback retention so an in-flight query never loses an object.
-    /// V1 standalone snapshots retain their former bucket-thinning behavior.
+    /// Test entry point that reloads the selected state before collection.
+    #[cfg(test)]
     pub(crate) async fn gc_obsolete_states(
         &self,
         table: &str,
@@ -594,128 +682,37 @@ impl ObjectTableStateStore {
             );
             return Ok(0);
         }
-        if selected.head.format_version == Some(TABLE_STATE_FORMAT_VERSION) {
-            return self.gc_catalog_tree(table, now_ms, policy, &selected).await;
-        }
-        let current_id = ObjectId::parse(
-            selected
-                .head
-                .catalog
-                .as_option()
-                .and_then(|reference| reference.object_id.as_deref())
-                .ok_or_else(|| {
-                    StatsError::Internal(format!("table HEAD for {table:?} has no state object ID"))
-                })?,
-        )?;
-        let current = current_id.table_relative(table).ok_or_else(|| {
-            StatsError::Internal(format!("table HEAD for {table:?} points outside its table"))
-        })?;
-        let pin_cutoff =
-            now_ms.saturating_sub(i64::try_from(policy.pin_retention_ms).unwrap_or(i64::MAX));
-        let state_cutoff =
-            now_ms.saturating_sub(i64::try_from(policy.state_retention_ms).unwrap_or(i64::MAX));
-        let orphan_cutoff =
-            now_ms.saturating_sub(i64::try_from(policy.orphan_grace_ms).unwrap_or(i64::MAX));
-        let bucket_ms = i64::try_from(policy.pin_retention_ms)
-            .unwrap_or(i64::MAX)
-            .max(1);
-        let current_revision = selected.revision().get();
-        let state_objects = self.table_objects(table, STATES_PREFIX).await?;
-        let mut candidates = Vec::new();
-        for (key, meta) in &state_objects {
-            if key == current {
-                continue;
-            }
-            let Some(revision) = state_revision_from_key(key) else {
-                tracing::warn!(table, key, "retaining unrecognized table state key");
-                continue;
-            };
-            // A rollback target won HEAD and was later replaced; it became
-            // obsolete when the first newer revision was published. Same- and
-            // future-revision objects never won HEAD and are obsolete from
-            // their own write.
-            let rollbackable = revision < current_revision;
-            let obsolete_at_ms = if rollbackable {
-                state_objects
-                    .iter()
-                    .filter_map(|(candidate_key, candidate_meta)| {
-                        let candidate_revision = state_revision_from_key(candidate_key)?;
-                        (candidate_revision > revision && candidate_revision <= current_revision)
-                            .then_some(candidate_meta.modified_at_ms)
-                    })
-                    .min()
-            } else {
-                Some(meta.modified_at_ms)
-            };
-            let Some(obsolete_at_ms) = obsolete_at_ms else {
-                continue;
-            };
-            candidates.push((key, revision, obsolete_at_ms, rollbackable));
-        }
-        // Elect the newest rollback target per bucket of the rollback window.
-        let mut keepers: HashMap<i64, (i64, u64)> = HashMap::new();
-        for (_, revision, obsolete_at_ms, rollbackable) in &candidates {
-            if !rollbackable || *obsolete_at_ms > pin_cutoff || *obsolete_at_ms <= state_cutoff {
-                continue;
-            }
-            let elected = keepers
-                .entry(obsolete_at_ms / bucket_ms)
-                .or_insert((*obsolete_at_ms, *revision));
-            *elected = (*elected).max((*obsolete_at_ms, *revision));
-        }
-        let mut removed = 0;
-        for (key, revision, obsolete_at_ms, rollbackable) in candidates {
-            if obsolete_at_ms > pin_cutoff {
-                continue;
-            }
-            let kept_for_rollback = rollbackable
-                && obsolete_at_ms > state_cutoff
-                && keepers.get(&(obsolete_at_ms / bucket_ms)) == Some(&(obsolete_at_ms, revision));
-            if kept_for_rollback {
-                continue;
-            }
-            self.storage.delete(&ObjectId::table(table, key)?).await?;
-            removed += 1;
-        }
-        if !policy.sweep_orphans {
-            return Ok(removed);
-        }
-        let mut referenced = referenced_object_keys(&selected.catalog);
-        for (key, _) in self.table_objects(table, STATES_PREFIX).await? {
-            if key == current {
-                continue;
-            }
-            let Some(object) = self.storage.read(&ObjectId::table(table, &key)?).await? else {
-                continue;
-            };
-            let catalog: NamespaceCatalog =
-                serde_json::from_slice(&object.bytes).map_err(|error| {
-                    StatsError::Internal(format!(
-                        "decode retained table state {key:?} for {table:?}: {error}"
-                    ))
-                })?;
-            referenced.extend(referenced_object_keys(&catalog));
-        }
-        for prefix in [OBJECTS_PREFIX, INDICES_PREFIX, PROJECTIONS_PREFIX] {
-            for (key, meta) in self.table_objects(table, prefix).await? {
-                let id = ObjectId::table(table, &key)?;
-                if referenced.contains(id.as_str()) || meta.modified_at_ms > orphan_cutoff {
-                    continue;
-                }
-                self.storage.delete(&id).await?;
-                removed += 1;
-            }
-        }
-        Ok(removed)
+        self.gc_selected(table, now_ms, policy, &selected)
+            .await
+            .map(|result| result.removed)
     }
 
-    async fn gc_catalog_tree(
+    pub(crate) async fn gc_selected(
         &self,
         table: &str,
         now_ms: i64,
         policy: StateGcPolicy,
         selected: &StoredTableState,
-    ) -> Result<usize, StatsError> {
+    ) -> Result<StateGcResult, StatsError> {
+        let started = std::time::Instant::now();
+        let Some((head, head_version)) = self.load_head(table).await? else {
+            return Ok(StateGcResult::default());
+        };
+        if selected.head != head || !same_pointer_version(&selected.head_version, &head_version) {
+            tracing::debug!(table, "skipping object GC after HEAD changed");
+            return Ok(StateGcResult::default());
+        }
+        if selected.fence() != WriterFence::new(head.writer_epoch.unwrap_or(0)) {
+            tracing::warn!(table, "skipping object GC from a fenced writer");
+            return Ok(StateGcResult::default());
+        }
+        if !selected.release_summary_complete {
+            tracing::debug!(
+                table,
+                "skipping object GC until a checkpoint consolidates release history"
+            );
+            return Ok(StateGcResult::default());
+        }
         let pin_cutoff =
             now_ms.saturating_sub(i64::try_from(policy.pin_retention_ms).unwrap_or(i64::MAX));
         let state_cutoff =
@@ -737,109 +734,14 @@ impl ObjectTableStateStore {
             })
             .collect::<Result<HashSet<_>, _>>()?;
 
+        let list_started = std::time::Instant::now();
         let state_objects = self.table_objects(table, STATES_PREFIX).await?;
-        let mut nodes = HashMap::new();
-        let mut node_modified_at = HashMap::new();
-        let mut legacy_catalogs = HashMap::new();
-        let mut keep = current_chain.clone();
-        for (key, metadata) in &state_objects {
-            let Some(object) = self.storage.read(&ObjectId::table(table, key)?).await? else {
-                continue;
-            };
-            let value: serde_json::Value =
-                serde_json::from_slice(&object.bytes).map_err(|error| {
-                    StatsError::Internal(format!(
-                        "decode retained catalog object {key:?} for {table:?}: {error}"
-                    ))
-                })?;
-            if value.get("checkpoint").is_some() || value.get("delta").is_some() {
-                let node: CatalogNode = serde_json::from_value(value).map_err(|error| {
-                    StatsError::Internal(format!(
-                        "decode retained catalog node {key:?} for {table:?}: {error}"
-                    ))
-                })?;
-                if metadata.modified_at_ms > deletion_cutoff
-                    || node
-                        .released_objects
-                        .iter()
-                        .any(|released| released.delete_after_ms.unwrap_or(0) > now_ms)
-                {
-                    keep.insert(key.clone());
-                }
-                node_modified_at.insert(key.clone(), metadata.modified_at_ms);
-                nodes.insert(key.clone(), node);
-            } else {
-                let catalog: NamespaceCatalog = serde_json::from_value(value).map_err(|error| {
-                    StatsError::Internal(format!(
-                        "decode retained legacy catalog {key:?} for {table:?}: {error}"
-                    ))
-                })?;
-                if metadata.modified_at_ms > deletion_cutoff {
-                    keep.insert(key.clone());
-                }
-                legacy_catalogs.insert(key.clone(), catalog);
-            }
-        }
-        // A retained delta is useful only with its exact ancestry. Expand the
-        // keep set to checkpoint boundaries before deleting a whole old span.
-        loop {
-            let parents = keep
-                .iter()
-                .filter_map(|key| nodes.get(key))
-                .filter_map(|node| node.parent.as_option())
-                .filter_map(|parent| parent.object_id.as_deref())
-                .map(ObjectId::parse)
-                .collect::<Result<Vec<_>, _>>()?;
-            let before = keep.len();
-            for parent in parents {
-                let key = parent.table_relative(table).ok_or_else(|| {
-                    StatsError::Internal(format!(
-                        "retained catalog ancestry escaped table {table:?}"
-                    ))
-                })?;
-                if !nodes.contains_key(key) && !legacy_catalogs.contains_key(key) {
-                    return Err(StatsError::Internal(format!(
-                        "retained catalog node for {table:?} references missing parent {key:?}"
-                    )));
-                }
-                keep.insert(key.to_string());
-            }
-            if keep.len() == before {
-                break;
-            }
-        }
-
-        // Build the complete data-reference set before deleting either data or
-        // catalog nodes. A rollback-retained node pins both its payload and every
-        // unexpired release; the selected catalog pins the current materialized
-        // state regardless of which deltas mention it.
+        let catalog_list_ms = list_started.elapsed().as_millis() as u64;
+        let catalog_objects = state_objects.len();
         let mut referenced = referenced_object_keys(&selected.catalog);
-        for key in &keep {
-            if let Some(node) = nodes.get(key) {
-                referenced.extend(released_object_keys(node, now_ms));
-                if !current_chain.contains(key) {
-                    referenced.extend(node_payload_object_keys(node));
-                }
-                continue;
-            }
-            if let Some(catalog) = legacy_catalogs.get(key) {
-                referenced.extend(referenced_object_keys(catalog));
-            }
-        }
-
-        // A selected transition records the exact objects it released. Once the
-        // releasing node is outside the rollback window and no retained state
-        // refers to an object, delete it directly instead of making a relay wait
-        // the generic 24-hour orphan grace. Data goes first; only then may the
-        // obsolete node carrying this release record be removed below.
-        let expired_releases = nodes
+        let expired_releases = selected
+            .pending_releases
             .iter()
-            .filter(|(key, _)| {
-                node_modified_at
-                    .get(*key)
-                    .is_some_and(|modified| *modified <= state_cutoff)
-            })
-            .flat_map(|(_, node)| &node.released_objects)
             .filter(|released| released.delete_after_ms.unwrap_or(i64::MAX) <= now_ms)
             .filter_map(|released| {
                 released
@@ -848,34 +750,102 @@ impl ObjectTableStateStore {
                     .and_then(|object| object.object_id.clone())
             })
             .filter(|object_id| !referenced.contains(object_id))
-            .collect::<HashSet<_>>();
-
-        let mut removed = 0;
-        for object_id in expired_releases {
-            self.storage.delete(&ObjectId::parse(&object_id)?).await?;
-            removed += 1;
+            .map(|object_id| ObjectId::parse(&object_id))
+            .collect::<Result<Vec<_>, _>>()?;
+        let release_delete_started = std::time::Instant::now();
+        let released = self.storage.delete_many(expired_releases).await;
+        let release_delete_ms = release_delete_started.elapsed().as_millis() as u64;
+        if let Some(error) = released.error {
+            tracing::warn!(table, %error, "released-object batch deletion was partial");
         }
-        for (key, _) in &state_objects {
-            if keep.contains(key) {
+        let deleted_releases = released
+            .deleted
+            .iter()
+            .map(|id| id.as_str().to_string())
+            .collect::<Vec<_>>();
+        let deleted_release_set = deleted_releases.iter().cloned().collect::<HashSet<_>>();
+        for release in &selected.pending_releases {
+            let Some(object_id) = release
+                .object
+                .as_option()
+                .and_then(|object| object.object_id.as_deref())
+            else {
                 continue;
+            };
+            if !deleted_release_set.contains(object_id) {
+                referenced.insert(object_id.to_string());
             }
-            self.storage.delete(&ObjectId::table(table, key)?).await?;
-            removed += 1;
         }
-        if !policy.sweep_orphans {
-            return Ok(removed);
+
+        let legacy_history_protected = selected.legacy_history_safe_after_ms > now_ms;
+        let obsolete_states = if legacy_history_protected {
+            Vec::new()
+        } else {
+            state_objects
+                .into_iter()
+                .filter(|(key, metadata)| {
+                    !current_chain.contains(key) && metadata.modified_at_ms <= deletion_cutoff
+                })
+                .map(|(key, _)| ObjectId::table(table, &key))
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        let catalog_delete_started = std::time::Instant::now();
+        let deleted_states = self.storage.delete_many(obsolete_states).await;
+        let catalog_delete_ms = catalog_delete_started.elapsed().as_millis() as u64;
+        if let Some(error) = deleted_states.error {
+            tracing::warn!(table, %error, "catalog-node batch deletion was partial");
         }
-        for prefix in [OBJECTS_PREFIX, INDICES_PREFIX, PROJECTIONS_PREFIX] {
-            for (key, metadata) in self.table_objects(table, prefix).await? {
-                let id = ObjectId::table(table, &key)?;
-                if referenced.contains(id.as_str()) || metadata.modified_at_ms > orphan_cutoff {
-                    continue;
+
+        let released_deleted = released.deleted.len();
+        let catalogs_deleted = deleted_states.deleted.len();
+        let mut removed = released_deleted + catalogs_deleted;
+        let orphan_started = std::time::Instant::now();
+        let mut orphans_examined = 0;
+        let mut orphans_deleted = 0;
+        if policy.sweep_orphans && !legacy_history_protected {
+            let mut orphans = Vec::new();
+            for prefix in [OBJECTS_PREFIX, INDICES_PREFIX, PROJECTIONS_PREFIX] {
+                for (key, metadata) in self.table_objects(table, prefix).await? {
+                    orphans_examined += 1;
+                    let id = ObjectId::table(table, &key)?;
+                    if referenced.contains(id.as_str()) || metadata.modified_at_ms > orphan_cutoff {
+                        continue;
+                    }
+                    orphans.push(id);
                 }
-                self.storage.delete(&id).await?;
-                removed += 1;
             }
+            let deleted_orphans = self.storage.delete_many(orphans).await;
+            if let Some(error) = deleted_orphans.error {
+                tracing::warn!(table, %error, "orphan-object batch deletion was partial");
+            }
+            orphans_deleted = deleted_orphans.deleted.len();
+            removed += orphans_deleted;
         }
-        Ok(removed)
+        let orphan_ms = orphan_started.elapsed().as_millis() as u64;
+        let total_ms = started.elapsed().as_millis() as u64;
+        if removed > 0 || total_ms >= 1_000 {
+            tracing::info!(
+                table,
+                catalog_objects,
+                selected_chain_nodes = current_chain.len(),
+                historical_nodes_opened = 0,
+                pending_releases = selected.pending_releases.len(),
+                released_deleted,
+                catalogs_deleted,
+                orphans_examined,
+                orphans_deleted,
+                catalog_list_ms,
+                release_delete_ms,
+                catalog_delete_ms,
+                orphan_ms,
+                total_ms,
+                "collected object table state"
+            );
+        }
+        Ok(StateGcResult {
+            removed,
+            deleted_releases,
+        })
     }
 
     async fn table_objects(
@@ -906,28 +876,15 @@ impl ObjectTableStateStore {
     }
 }
 
-/// Every object ID a segment keeps alive: its data source, its index bundle,
-/// and each covering-projection artifact.
-fn segment_object_keys(
-    segment: &crate::proto::finelog::stats::CatalogSegment,
-) -> impl Iterator<Item = String> + '_ {
-    segment
-        .source
-        .as_option()
-        .and_then(|source| source.object_id.clone())
-        .into_iter()
-        .chain(
-            segment
-                .index_bundle
-                .as_option()
-                .and_then(|bundle| bundle.object_id.clone()),
-        )
-        .chain(segment.projections.iter().filter_map(|projection| {
-            projection
-                .object
-                .as_option()
-                .and_then(|object| object.object_id.clone())
-        }))
+fn same_pointer_version(left: &ObjectVersion, right: &ObjectVersion) -> bool {
+    match (&left.local_value, &right.local_value) {
+        (Some(left), Some(right)) => left == right,
+        _ => {
+            left.e_tag == right.e_tag
+                && left.provider_version == right.provider_version
+                && left.byte_size == right.byte_size
+        }
+    }
 }
 
 fn referenced_object_keys(catalog: &NamespaceCatalog) -> std::collections::HashSet<String> {
@@ -937,38 +894,47 @@ fn referenced_object_keys(catalog: &NamespaceCatalog) -> std::collections::HashS
         .collect()
 }
 
-fn node_payload_object_keys(node: &CatalogNode) -> HashSet<String> {
-    let mut referenced = HashSet::new();
-    if let Some(checkpoint) = node.checkpoint.as_option() {
-        referenced.extend(referenced_object_keys(checkpoint));
-    }
-    if let Some(delta) = node.delta.as_option() {
-        referenced.extend(
-            delta
-                .segment_additions
-                .iter()
-                .filter_map(|addition| addition.segment.as_option())
-                .chain(delta.direct_query_additions.iter())
-                .flat_map(segment_object_keys),
-        );
-    }
-    referenced
+fn catalog_retention_ms(catalog: &NamespaceCatalog) -> u64 {
+    catalog
+        .max_query_time_ms
+        .unwrap_or(0)
+        .max(catalog.rollback_window_ms.unwrap_or(0))
 }
 
-fn released_object_keys(node: &CatalogNode, now_ms: i64) -> HashSet<String> {
-    node.released_objects
-        .iter()
-        .filter_map(|released| {
-            (released.delete_after_ms.unwrap_or(0) > now_ms)
-                .then(|| {
-                    released
-                        .object
-                        .as_option()
-                        .and_then(|object| object.object_id.clone())
-                })
-                .flatten()
-        })
-        .collect()
+fn merge_released_objects(
+    releases: impl IntoIterator<Item = ReleasedObject>,
+) -> Vec<ReleasedObject> {
+    let mut by_id = HashMap::new();
+    for release in releases {
+        let object_id = release
+            .object
+            .as_option()
+            .and_then(|object| object.object_id.clone())
+            .expect("validated released objects have an ID");
+        match by_id.entry(object_id) {
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(release);
+            }
+            std::collections::hash_map::Entry::Occupied(mut entry) => {
+                if release.delete_after_ms.unwrap_or(0) > entry.get().delete_after_ms.unwrap_or(0) {
+                    entry.insert(release);
+                }
+            }
+        }
+    }
+    let mut releases = by_id.into_values().collect::<Vec<_>>();
+    releases.sort_by(|left, right| {
+        left.object
+            .as_option()
+            .and_then(|object| object.object_id.as_deref())
+            .cmp(
+                &right
+                    .object
+                    .as_option()
+                    .and_then(|object| object.object_id.as_deref()),
+            )
+    });
+    releases
 }
 
 fn validate_head(table: &str, head: &CatalogHead) -> Result<(), StatsError> {
@@ -1019,6 +985,18 @@ fn validate_node(table: &str, node: &CatalogNode) -> Result<(), StatsError> {
             "invalid catalog node for table {table:?}"
         )));
     }
+    if node.released_objects.iter().any(|released| {
+        released.delete_after_ms.unwrap_or(0) <= 0
+            || released
+                .object
+                .as_option()
+                .and_then(|object| object.object_id.as_deref())
+                .is_none()
+    }) {
+        return Err(StatsError::Internal(format!(
+            "invalid released object in catalog node for table {table:?}"
+        )));
+    }
     Ok(())
 }
 
@@ -1040,6 +1018,7 @@ fn catalog_reference_size(table: &str, reference: &ObjectRef) -> Result<u64, Sta
     })
 }
 
+#[cfg(test)]
 fn state_revision_from_key(key: &str) -> Option<u64> {
     key.strip_prefix(STATES_PREFIX)?
         .strip_prefix('/')?
@@ -1054,6 +1033,7 @@ mod tests {
     use super::*;
     use crate::proto::finelog::stats::{CatalogSegment, TableVersionSegments};
     use crate::store::object_store::build_remote_object_store;
+    use crate::test_support::{FaultInjectingObjectStore, ObjectOp};
 
     const TABLE: &str = "iris.worker";
 
@@ -1406,6 +1386,75 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn publication_after_an_unmarked_delta_rearms_legacy_history_protection() {
+        let remote_dir = crate::test_support::unique_dir("object_state_old_writer_roll_forward");
+        let remote = build_remote_object_store(remote_dir.to_str().unwrap())
+            .unwrap()
+            .unwrap();
+        let states = ObjectTableStateStore::new(Arc::new(remote.clone()));
+        let fence = WriterFence::new(9);
+        let first = states
+            .commit(TABLE, fence, None, state(TABLE, 1, 1))
+            .await
+            .unwrap();
+
+        let second_catalog = state(TABLE, 2, 1);
+        let delta = catalog_delta(&first.catalog, &second_catalog).unwrap();
+        let delta_bytes = serde_json::to_vec(&delta).unwrap().len() as u64;
+        let node = CatalogNode {
+            format_version: Some(TABLE_STATE_FORMAT_VERSION),
+            namespace: Some(TABLE.to_string()),
+            catalog_generation: Some(2),
+            parent: buffa::MessageField::some(logical_reference(
+                first.head.catalog.as_option().unwrap(),
+            )),
+            delta_depth: Some(1),
+            delta_bytes_since_checkpoint: Some(delta_bytes),
+            delta: buffa::MessageField::some(delta),
+            ..Default::default()
+        };
+        let node_bytes = serde_json::to_vec(&node).unwrap();
+        let node_id = ObjectId::table(TABLE, "catalogs/00000000000000000002-old.json").unwrap();
+        remote
+            .write(&node_id, Bytes::from(node_bytes.clone()))
+            .await
+            .unwrap();
+        let mut head = first.head.clone();
+        head.catalog_generation = Some(2);
+        head.catalog = buffa::MessageField::some(ObjectRef {
+            object_id: Some(node_id.as_str().to_string()),
+            byte_size: Some(node_bytes.len() as u64),
+            ..Default::default()
+        });
+        remote
+            .compare_and_swap(
+                &ObjectId::table(TABLE, HEAD_KEY).unwrap(),
+                Some(&first.head_version),
+                Bytes::from(serde_json::to_vec(&head).unwrap()),
+            )
+            .await
+            .unwrap();
+
+        let selected = states.load(TABLE).await.unwrap().unwrap();
+        assert!(!selected.release_summary_complete);
+        let started = now_ms();
+        let rolled_forward = states
+            .commit(TABLE, fence, Some(&selected), state(TABLE, 3, 1))
+            .await
+            .unwrap();
+        assert!(!rolled_forward.release_summary_complete);
+        assert!(rolled_forward.legacy_history_safe_after_ms >= started + 600_000);
+        let tip = remote
+            .read(&ObjectId::parse(&rolled_forward.catalog_chain[0]).unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        let tip: CatalogNode = serde_json::from_slice(&tip.bytes).unwrap();
+        assert!(tip.release_summary.unwrap());
+        std::fs::remove_dir_all(remote_dir).ok();
+    }
+
+    #[tokio::test]
     async fn recovery_rejects_a_tip_whose_exact_parent_is_missing() {
         let remote_dir = crate::test_support::unique_dir("object_state_store_missing_parent");
         let remote = build_remote_object_store(remote_dir.to_str().unwrap())
@@ -1710,23 +1759,28 @@ mod tests {
             .write(&object_id, Bytes::from_static(b"released"))
             .await
             .unwrap();
+        let mut first_state = state_with_segments(1, vec![released]);
+        first_state.rollback_window_ms = Some(3_600_000);
         let first = states
-            .commit(TABLE, fence, None, state_with_segments(1, vec![released]))
+            .commit(TABLE, fence, None, first_state)
             .await
             .unwrap();
-        states
-            .commit(TABLE, fence, Some(&first), state_with_segments(2, vec![]))
+        let mut second_state = state_with_segments(2, vec![]);
+        second_state.rollback_window_ms = Some(3_600_000);
+        let second = states
+            .commit(TABLE, fence, Some(&first), second_state)
             .await
             .unwrap();
+        let release_deadline = second.pending_releases[0].delete_after_ms.unwrap();
 
         assert_eq!(
             states
                 .gc_obsolete_states(
                     TABLE,
-                    i64::MAX,
+                    release_deadline - 1,
                     StateGcPolicy {
-                        pin_retention_ms: u64::MAX,
-                        state_retention_ms: u64::MAX,
+                        pin_retention_ms: 0,
+                        state_retention_ms: 0,
                         orphan_grace_ms: 0,
                         sweep_orphans: false,
                     },
@@ -1742,7 +1796,7 @@ mod tests {
             states
                 .gc_obsolete_states(
                     TABLE,
-                    i64::MAX,
+                    release_deadline + 1,
                     StateGcPolicy {
                         pin_retention_ms: 0,
                         state_retention_ms: 0,
@@ -1836,6 +1890,147 @@ mod tests {
                 .unwrap(),
             0
         );
+        std::fs::remove_dir_all(remote_dir).ok();
+    }
+
+    #[tokio::test]
+    async fn checkpoint_carries_releases_from_the_previous_span() {
+        let remote_dir = crate::test_support::unique_dir("object_state_release_checkpoint");
+        let remote = build_remote_object_store(remote_dir.to_str().unwrap())
+            .unwrap()
+            .unwrap();
+        let states = ObjectTableStateStore::new(Arc::new(remote.clone()));
+        let fence = WriterFence::new(2);
+        let first = states
+            .commit(TABLE, fence, None, state_with_segments(1, vec![segment(1)]))
+            .await
+            .unwrap();
+        let mut selected = states
+            .commit(TABLE, fence, Some(&first), state_with_segments(2, vec![]))
+            .await
+            .unwrap();
+        for revision in 3..=66 {
+            selected = states
+                .commit(
+                    TABLE,
+                    fence,
+                    Some(&selected),
+                    state_with_segments(revision, vec![]),
+                )
+                .await
+                .unwrap();
+        }
+
+        assert_eq!(selected.catalog_chain.len(), 1);
+        assert_eq!(selected.pending_releases.len(), 1);
+        let checkpoint = remote
+            .read(&ObjectId::parse(&selected.catalog_chain[0]).unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        let checkpoint: CatalogNode = serde_json::from_slice(&checkpoint.bytes).unwrap();
+        assert_eq!(checkpoint.released_objects.len(), 1);
+        assert!(checkpoint.release_summary.unwrap());
+        assert_eq!(
+            states
+                .load(TABLE)
+                .await
+                .unwrap()
+                .unwrap()
+                .pending_releases
+                .len(),
+            1
+        );
+        std::fs::remove_dir_all(remote_dir).ok();
+    }
+
+    #[tokio::test]
+    async fn checkpoint_persists_locally_pruned_releases() {
+        let remote_dir = crate::test_support::unique_dir("object_state_pruned_checkpoint");
+        let remote = build_remote_object_store(remote_dir.to_str().unwrap())
+            .unwrap()
+            .unwrap();
+        let states = ObjectTableStateStore::new(Arc::new(remote));
+        let fence = WriterFence::new(3);
+        let first = states
+            .commit(TABLE, fence, None, state_with_segments(1, vec![segment(1)]))
+            .await
+            .unwrap();
+        let mut selected = states
+            .commit(TABLE, fence, Some(&first), state_with_segments(2, vec![]))
+            .await
+            .unwrap();
+        assert_eq!(selected.pending_releases.len(), 1);
+        selected.pending_releases.clear();
+        for revision in 3..=66 {
+            selected = states
+                .commit(
+                    TABLE,
+                    fence,
+                    Some(&selected),
+                    state_with_segments(revision, vec![]),
+                )
+                .await
+                .unwrap();
+        }
+
+        assert_eq!(selected.catalog_chain.len(), 1);
+        assert!(selected.pending_releases.is_empty());
+        assert!(states
+            .load(TABLE)
+            .await
+            .unwrap()
+            .unwrap()
+            .pending_releases
+            .is_empty());
+        std::fs::remove_dir_all(remote_dir).ok();
+    }
+
+    #[tokio::test]
+    async fn collection_never_reads_catalog_nodes_outside_the_selected_chain() {
+        let remote_dir = crate::test_support::unique_dir("object_state_metadata_only_gc");
+        let remote = Arc::new(
+            build_remote_object_store(remote_dir.to_str().unwrap())
+                .unwrap()
+                .unwrap(),
+        );
+        let faults = FaultInjectingObjectStore::new(remote);
+        let states = ObjectTableStateStore::new(Arc::clone(&faults) as Arc<dyn ObjectStore>);
+        let fence = WriterFence::new(4);
+        let selected = states
+            .commit(TABLE, fence, None, state(TABLE, 1, 1))
+            .await
+            .unwrap();
+        for revision in 2..=315 {
+            let stale =
+                ObjectId::table(TABLE, &format!("catalogs/{revision:020}-stale.json")).unwrap();
+            faults
+                .write(&stale, Bytes::from_static(b"not decoded"))
+                .await
+                .unwrap();
+        }
+        faults.clear_calls();
+
+        let result = states
+            .gc_selected(
+                TABLE,
+                i64::MAX,
+                StateGcPolicy {
+                    pin_retention_ms: 0,
+                    state_retention_ms: 0,
+                    orphan_grace_ms: 0,
+                    sweep_orphans: false,
+                },
+                &selected,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.removed, 314);
+        assert!(faults
+            .keys_for(ObjectOp::Read)
+            .iter()
+            .all(|key| !key.contains("/catalogs/")));
         std::fs::remove_dir_all(remote_dir).ok();
     }
 }

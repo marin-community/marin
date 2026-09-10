@@ -582,6 +582,14 @@ remote object and local cache copy. The generic 24-hour orphan grace applies to
 unselected uploads whose owning transaction is unknown, not to settled relay
 segments.
 
+State collection uses the selected catalog and its checkpoint-folded release
+set. It lists historical catalog keys for age and selected-chain membership but
+does not download them. CoreWeave S3 deletes up to 1,000 eligible keys per
+request. The `collected object table state` event reports listed catalog keys,
+selected-chain size, pending and deleted releases, deleted catalog keys, orphan
+counts, and milliseconds for each stage. `historical_nodes_opened` must remain
+zero.
+
 Sequence positions measure cursor distance, not decoded row count. Gaps and rows
 filtered because they already carry a foreign origin can make both `skipped_seqs` and
 `forwarding_seq_positions` an upper bound on affected rows. Telemetry values are

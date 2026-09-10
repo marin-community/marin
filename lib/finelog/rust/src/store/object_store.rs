@@ -59,6 +59,16 @@ pub struct ObjectReference {
     pub version: ObjectVersion,
 }
 
+/// Result of a best-effort batch deletion.
+///
+/// Confirmed IDs are safe to forget even when the provider reports a later
+/// error. Every unconfirmed ID remains eligible for an idempotent retry.
+#[derive(Debug)]
+pub struct DeleteManyOutcome {
+    pub deleted: Vec<ObjectId>,
+    pub error: Option<StatsError>,
+}
+
 impl TryFrom<&ProtoObjectRef> for ObjectReference {
     type Error = StatsError;
 
@@ -257,6 +267,25 @@ pub trait ObjectStore: Send + Sync {
     }
 
     async fn delete(&self, id: &ObjectId) -> Result<(), StatsError>;
+
+    async fn delete_many(&self, ids: Vec<ObjectId>) -> DeleteManyOutcome {
+        let mut deleted = Vec::with_capacity(ids.len());
+        for id in ids {
+            match self.delete(&id).await {
+                Ok(()) => deleted.push(id),
+                Err(error) => {
+                    return DeleteManyOutcome {
+                        deleted,
+                        error: Some(error),
+                    };
+                }
+            }
+        }
+        DeleteManyOutcome {
+            deleted,
+            error: None,
+        }
+    }
 
     async fn list(&self, prefix: &ObjectPrefix) -> Result<Vec<ObjectMetadata>, StatsError>;
 
