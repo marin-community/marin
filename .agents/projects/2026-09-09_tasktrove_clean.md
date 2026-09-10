@@ -24,23 +24,23 @@ raw → summaries → templates → converted → graded → clean
 6. [x] Verified step: spec, dockerfile, gold leak, empty, expected, perturbed, shape
 7. [x] Clean step: tasks/ per source, ledger/, manifest.json, report.md, export CLI, README
 8. [x] Full run on Iris `cw-us-east-02a` with the pushed SHA as tool ref; measured counts in the PR body; 100-task random sample inspected
-9. [x] Run 2026.09.10.1 (`/power/iris-run-job-20260910-030245`, tool ref 105b4541): its Docker sample exposed doctest-graded swesmith tasks and an uncompilable TACO oracle; both fixed in the converters and rerun as 2026.09.10.2, whose sample was clean
-10. [x] Delete superseded bucket artifacts: `tasktrove/*/{2026.09.09,2026.09.10,2026.09.10.1}` and `raw/tasktrove/2026.09.10` (duplicate download; the pipeline pins `raw/tasktrove/2026.09.09`) are gone; `raw/tasktrove/2026.09.09`, `tasktrove/*/2026.09.10.2` and the smoke's exported task directories remain
-11. [ ] Update this logbook's run section and the PR body with the final numbers; verify with `gh pr view --json title,body`
+9. [x] Run 2026.09.10.1 (`/power/iris-run-job-20260910-030245`, tool ref 105b4541): its Docker sample exposed doctest-graded swesmith tasks and an uncompilable TACO oracle; both fixed in the converters and rerun as 2026.09.10.2, whose sample was clean; the reward-file fix reran it as 2026.09.10.3 (`/power/iris-run-job-20260910-055608`, tool ref 5062aaa3)
+10. [x] Delete superseded bucket artifacts: `tasktrove/*/{2026.09.09,2026.09.10,2026.09.10.1,2026.09.10.2}`, `raw/tasktrove/2026.09.10` (duplicate download; the pipeline pins `raw/tasktrove/2026.09.09`) and the first two smoke attempts' exports and checkpoints are gone; `raw/tasktrove/2026.09.09`, `tasktrove/*/2026.09.10.3` and the third smoke's export and checkpoint remain
+11. [x] Update this logbook's run section and the PR body with the final numbers; verified with `gh pr view --json title,body`
 12. [x] Publish an artifact with the detailed analysis: https://claude.ai/code/artifact/22018f48-ca1f-4a55-9f5c-12108557d2ba (funnel, kept and dropped sources with reasons, per-check rejections, normalization, the four Docker samples, the smoke run)
-13. [ ] Smoke-train Qwen 0.6B on the clean dataset through marin skyrl, configured after the curriculum experiment; record the config and result here
-14. [ ] Final report to the user and PR monitoring per the commit skill
+13. [x] Smoke-train Qwen 0.6B on the clean dataset through marin skyrl, configured after the curriculum experiment; config and result in the smoke section below (third attempt succeeded end to end, reward 0.0)
+14. [x] Final report to the user and PR monitoring per the commit skill
 
-## Run 2026.09.10.2
+## Run 2026.09.10.3
 
-Job `/power/iris-run-job-20260910-034718` on `cw-us-east-02a`, tool ref `105b4541b630c60750967cc736dc7bc3a781bfd4`,
+Job `/power/iris-run-job-20260910-055608` on `cw-us-east-02a`, tool ref `5062aaa3a6ac9dbf31730e587b77593996d4de28`,
 25 minutes end to end (summaries 4 min, templates 4 min, converted 4 min, graded 4 min, clean 4 min; the raw
 download is pinned to `raw/tasktrove/2026.09.09` and was reused). Output at
-`s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.2`: `tasks/part-*.parquet` (1,025 shards, 3.2 GiB),
-`ledger.parquet` (one row per rejected task with its reason), `manifest.json`, `report.md`. The bucket
-directories of runs 2026.09.09, 2026.09.10 and 2026.09.10.1 and the duplicate download `raw/tasktrove/2026.09.10`
-were deleted; the smoke run below drew its shard from clean 2026.09.10.1, whose only difference from this run is
-the 208 tasks the last two converter fixes reject, and its exported task directories are kept.
+`s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.3`: `tasks/part-*.parquet` (1,025 shards, 3.2 GiB),
+`ledger.parquet` (one row per rejected task with its reason), `manifest.json`, `report.md`. This run differs
+from 2026.09.10.2 only in the tool ref (the reward-file fix below); its per-task counts are identical. The bucket
+directories of runs 2026.09.09 through 2026.09.10.2 and the duplicate download `raw/tasktrove/2026.09.10` were
+deleted, as were the first two smoke attempts' exports and checkpoints.
 
 | status | tasks | meaning |
 |---|---:|---|
@@ -208,7 +208,7 @@ letter; 1,463 MCQA prompts carry literal `\n` sequences instead of newlines so o
 
 Sample: 100 tasks drawn at random (seed 20260912): 58 mcq, 17 math, 14 judge, 3 pytest, 3 script, 2 json-schema, 1 reasoning-gym, 1 exact, 1 ifeval. Every instruction is answerable as written and
 names the file the grader reads; every Dockerfile pins the tool ref above. Under Docker the empty workspace must
-score 0 and the oracle 1: 180 of 180 checks over 9 images. The three earlier samples exposed six defects that this run fixes: half of
+score 0 and the oracle 1: 180 of 180 checks over 9 images. The earlier samples exposed six defects that this run fixes: half of
 the MCQA prompts ask for `Answer: \boxed{X}`, which the mcq mode rejected; nemotron-math-oracle prompts named
 `/app/solution.txt` while the grader read `/app/answer.txt`; some openqa references carried a leading `**`; the
 voluptuous swesmith tasks failed pytest collection because the pytest mode clears `addopts` (dropping the repo's
@@ -216,7 +216,8 @@ voluptuous swesmith tasks failed pytest collection because the pytest mode clear
 tasks graded doctest items (`parso/__init__.py::parso`) that the same cleared `addopts` never collects, so
 doctest node ids are rejected too (143 tasks) and dropped from PASS_TO_PASS (637 tasks); and 65 TACO oracles
 are function bodies pasted at module level (`return` or `nonlocal` outside a function), now rejected because
-they cannot compile. Known quirks left in place: one MCQA prompt lists its options twice (once as `A)` and once
+they cannot compile. The sample of run 2026.09.10.2 was clean; the RL smoke on it then found that Harbor
+rejects the tool's reward file, fixed in the tool for this run. Known quirks left in place: one MCQA prompt lists its options twice (once as `A)` and once
 as `A:`); SankalpKJ expected values are sometimes 30-digit decimals rather than closed forms; swesmith and
 swe_rebench tasks clone their repository at agent time, so they need network access.
 
@@ -251,10 +252,30 @@ Daytona, vLLM, trainer and export paths were exercised while the reward path was
 was 0.0. Filed as marin-community/MarinSkyRL#538.
 
 Attempt 2 (`/power/iris-run-job-20260910-045146`, clean 2026.09.10.2): the export is capped at 160 tasks drawn
-round-robin across converters (about 1,000 objects, a few minutes of staging) and
-`collect_rollout_details: false` makes Harbor count tokens locally instead of calling `/tokenize` (allowed
-because the objective needs no behavior logprobs; it drops TIS/TITO evidence, which a real run would want back
-once #538 is fixed). SMOKE_RESULT
+round-robin across converters (2,685 objects, 18 minutes of staging) and `collect_rollout_details: false`
+makes Harbor count tokens locally instead of calling `/tokenize` (allowed because the objective needs no
+behavior logprobs; it drops TIS/TITO evidence, which a real run would want back once #538 is fixed). The
+reward path now ran and failed in Harbor's verifier: `tasktrove-verify` wrote `reward.json` as
+`{"reward", "status", "detail"}` and Harbor's `VerifierResult` only accepts a name-to-number map, so all 2,334
+trials raised a pydantic `ValidationError` and the run sat at step 0 until it was cancelled. Fixed in
+5062aaa3: the tool writes `verdict.json` with the status and detail, `reward.json` as `{"reward": x}` and
+`reward.txt` only for a scored grade, so an invalid task or grader crash becomes Harbor's missing-reward
+error and is masked. Because the tool ref is baked into every Dockerfile, the pipeline reran as 2026.09.10.3
+(`/power/iris-run-job-20260910-055608`, tool ref 5062aaa3, converters unchanged).
+
+Attempt 3 (`/power/iris-run-job-20260910-061854`, clean 2026.09.10.3): succeeded end to end. 160 tasks over 16
+converters (2,685 objects, staging 06:21 to 06:42), then two steps of 128 trajectories (190 s and 91 s), 726
+trials, 0 failed trials, 0 masked, 166 `TurnCapExhaustedError`, 328 to 3,865 output tokens per trajectory
+(mean 1,219). Every trial ran `tasktrove-verify` and produced `reward.json` with `{"reward": 0.0}` and a
+`verdict.json` with status `scored`, so the reward path is exercised and every task in the sample is
+gradable; `reward/avg_raw_reward` was 0.0 on both steps because Qwen3-0.6B solved nothing. The verdict
+details say why: the agent almost never wrote the answer file (`no_output` dominates every mode; the
+trajectories show the model repeating `ls -la` / `cd project` without a newline until the turn cap),
+swesmith trials hit `setup_failed` (34, the clone-at-agent-time repositories), codeforces `build_failed`
+(24), stdio tasks scored `passed=0/N`, arc-agi "no transform() found", and the 14 judge tasks scored 0 for
+lack of a `TASKTROVE_JUDGE_*` endpoint. Checkpoint and HF export at
+`users/power/checkpoints/tasktrove-rl-smoke/2026.09.10.3`, W&B run
+https://wandb.ai/marin-community/marin-tasktrove/runs/ugi33mqj.
 
 ## Not in this PR
 
