@@ -328,6 +328,25 @@ iris --cluster=marin cluster dashboard --port 8080
 # Local clusters: dashboard is at the URL printed by `cluster start --local`
 ```
 
+For Zephyr jobs, the job detail page shows an execution selector and List/Graph
+tabs when a `zephyr.execution` plan record is available in Finelog. Join plans
+default to Graph; other plans default to List. A tab choice is saved in the
+browser and overrides that default. Switching tabs preserves the selected
+stage and its details. The list numbers the steps in each join's right-input
+chain; the graph shows their data dependencies.
+
+Select a stage to inspect its completion report and reducer input sizes.
+Reducer rows are ordered by payload size and paged in groups of 20.
+Null or absent measurements count as UNREPORTED; they do not indicate task
+state. Each reducer also shows its latest worker-task status and payload size
+relative to the stage median. Worker status has no attempt identifier, so it
+can describe a different attempt from the size measurement. Follow the
+coordinator task link for live progress.
+
+This requires both the updated Zephyr code in the job and an updated Iris
+dashboard build. Runs without a persisted plan record do not appear in the
+execution selector. Telemetry delivery is best-effort.
+
 ### Job Management
 
 ```bash

@@ -3,10 +3,11 @@
 
 """Tests for the pluggable StageRunner strategies (zephyr.runners)."""
 
+import json
 import os
 import time
 import uuid
-from contextlib import suppress
+from contextlib import closing, suppress
 from threading import Lock
 
 import polars as pl
@@ -238,11 +239,16 @@ def test_finelog_stats_emitted(local_client, tmp_path, finelog_server, monkeypat
     try:
         stage_rows = query_client.query(f'SELECT * FROM "{ZEPHYR_STAGE_STATS_NAMESPACE}"')
         worker_rows = query_client.query(f'SELECT * FROM "{ZEPHYR_WORKER_STATS_NAMESPACE}"')
+        executions = query_client.query('SELECT * FROM "zephyr.execution"').to_pylist()
         assert "zephyr.shuffle" not in {info.namespace for info in query_client.list_namespaces()}
     finally:
         query_client.close()
 
     assert stage_rows.num_rows >= 1, "Expected stage stat rows, got none"
+    assert len(executions) == 1
+    assert {stage["stage_name"] for stage in json.loads(executions[0]["stages_json"])} == {
+        stage["stage_name"] for stage in stage_rows.to_pylist()
+    }
     assert worker_rows.num_rows >= 1, "Expected worker stat rows, got none"
 
     stage_names = stage_rows.column("stage_name").to_pylist()
@@ -382,9 +388,21 @@ def test_shuffle_diagnostics_persist_target_sizes(local_client, tmp_path, finelo
         stage_rows = query_client.query('SELECT * FROM "zephyr.stage"').to_pylist()
         assert len({row["execution_id"] for row in stage_rows}) == 2
         reports = query_client.query('SELECT * FROM "zephyr.shuffle"').to_pylist()
+        executions = query_client.query('SELECT * FROM "zephyr.execution"').to_pylist()
     finally:
         query_client.close()
     assert len(reports) == 32
+    assert {execution["execution_id"] for execution in executions} == {first.execution_id, second.execution_id}
+    assert len(executions) == 2
+    for execution in executions:
+        graph = json.loads(execution["stages_json"])
+        assert {stage["stage_name"] for stage in graph if stage["stage_type"] != "reshard"} == {
+            stage["stage_name"] for stage in stage_rows if stage["execution_id"] == execution["execution_id"]
+        }
+        assert [stage["dependencies"] for stage in graph] == [[]] + [[stage["stage_name"]] for stage in graph[:-1]]
+        assert {stage["stage_name"] for stage in graph if stage["has_reduce"]} == {
+            report["stage_name"] for report in reports if report["execution_id"] == execution["execution_id"]
+        }
     assert {row["execution_id"] for row in reports} == {first.execution_id, second.execution_id}
     for execution_id in {row["execution_id"] for row in reports}:
         placeholders = [row for row in reports if row["execution_id"] == execution_id and row["input_rows"] is None]
@@ -404,6 +422,44 @@ def test_shuffle_diagnostics_persist_target_sizes(local_client, tmp_path, finelo
         assert {row["stage_name"] for row in targets} == {
             row["stage_name"] for row in stage_rows if "Reduce" in row["stage_name"]
         }
+
+
+def test_execution_plan_preserves_join_dependencies(local_client, tmp_path, finelog_server):
+    left = Dataset.from_list([{"id": 1, "text": "hello"}, {"id": 2, "text": "world"}]).group_by(
+        key=lambda row: row["id"], reducer=lambda key, rows: next(rows), num_output_shards=2
+    )
+    right = Dataset.from_list([{"id": 1, "score": 7}]).group_by(
+        key=lambda row: row["id"], reducer=lambda key, rows: next(rows), num_output_shards=2
+    )
+    joined = left.sorted_merge_join(right, left_key=lambda row: row["id"], right_key=lambda row: row["id"])
+    with ZephyrContext(
+        client=local_client,
+        max_workers=2,
+        resources=ResourceConfig(cpu=1, ram="512m"),
+        chunk_storage_prefix=str(tmp_path / "chunks"),
+        stats_config=StatsConfig(finelog_server),
+        stage_runner_factory=lambda: InlineRunner(),
+    ) as context:
+        result = context.execute(joined)
+
+    assert result.results == [{"id": 1, "text": "hello", "score": 7}]
+    with closing(LogClient.connect(finelog_server)) as client:
+        executions = client.query('SELECT * FROM "zephyr.execution"').to_pylist()
+        reported = client.query('SELECT stage_name FROM "zephyr.stage"').to_pylist()
+    assert len(executions) == 1
+    execution = next(row for row in executions if row["execution_id"] == result.execution_id)
+    graph = json.loads(execution["stages_json"])
+    assert {stage["stage_name"] for stage in graph if stage["stage_type"] != "reshard"} == {
+        row["stage_name"] for row in reported
+    }
+    joins = [stage for stage in graph if len(stage["dependencies"]) == 2]
+    assert len(joins) == 1
+    left_input, right_input = joins[0]["dependencies"]
+    assert not left_input.startswith("join-right-")
+    assert right_input.startswith("join-right-")
+    right_sources = [stage for stage in graph if stage["stage_name"].startswith("join-right-")]
+    assert right_sources[0]["dependencies"] == []
+    assert right_sources[-1]["stage_name"] == right_input
 
 
 def test_shuffle_diagnostics_visible_before_reducer_completes(local_client, tmp_path, finelog_server, runner_factory):

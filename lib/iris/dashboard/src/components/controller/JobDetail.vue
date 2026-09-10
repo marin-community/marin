@@ -27,6 +27,7 @@ import MarkdownRenderer from '@/components/shared/MarkdownRenderer.vue'
 import EndpointLink from '@/components/shared/EndpointLink.vue'
 import ClusterLink from '@/components/shared/ClusterLink.vue'
 import { useMediaQuery } from '@/composables/useMediaQuery'
+import ZephyrExecutionPanel from './ZephyrExecutionPanel.vue'
 
 // Tailwind's `sm` breakpoint is 640px. Cards on mobile, table on desktop.
 // v-if-switched (not CSS-hidden) so only one variant is in the DOM.
@@ -1262,6 +1263,8 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
           </div>
         </div>
       </details>
+
+      <ZephyrExecutionPanel :key="props.jobId" :job-id="props.jobId" :start-ms="timestampMs(job.submittedAt)" />
 
       <!-- Child Jobs -->
       <div v-if="flattenedChildJobs.length > 0" class="mb-6">
