@@ -36,6 +36,7 @@ use tokio_stream::StreamExt;
 
 pub const DECISION_PATH: &str = "/_iris/internal/proxy-decision";
 pub const DECISION_SECRET_HEADER: &str = "x-iris-decision-secret";
+pub const ENDPOINT_NAME_HEADER: &str = "x-iris-endpoint-name";
 pub const IDENTITY_HEADER: &str = "x-iris-verified-identity";
 pub const UPSTREAM_URL_HEADER: &str = "x-iris-upstream-url";
 pub const UPSTREAM_AUTHORIZATION_HEADER: &str = "x-iris-upstream-authorization";
@@ -363,6 +364,11 @@ struct AppState {
 
 struct ProxyDecision {
     upstream: Uri,
+    handoff: ProxyHandoff,
+}
+
+struct ProxyHandoff {
+    endpoint_name: Option<HeaderValue>,
     proxy_prefix: Option<HeaderValue>,
     upstream_authorization: Option<HeaderValue>,
     timeout: Duration,
@@ -375,11 +381,7 @@ struct ControllerHandoff {
 
 enum ForwardMode {
     Controller(ControllerHandoff),
-    Proxy {
-        proxy_prefix: Option<HeaderValue>,
-        upstream_authorization: Option<HeaderValue>,
-        timeout: Duration,
-    },
+    Proxy(ProxyHandoff),
 }
 
 struct ProxyRoute {
@@ -417,6 +419,8 @@ struct FederationDecision {
     proxy_prefix: String,
     peer_id: String,
     task_id: Option<String>,
+    #[serde(skip_serializing)]
+    endpoint_name: Option<HeaderValue>,
     // The capability token, carried only on a relay so the controller can rebuild
     // the child-side `/proxy/t/<token>/<name>` path. None on inbound/outbound.
     token: Option<String>,
@@ -510,6 +514,7 @@ fn remove_connection_headers(headers: &mut HeaderMap) {
 fn remove_internal_headers(headers: &mut HeaderMap) {
     for name in [
         DECISION_SECRET_HEADER,
+        ENDPOINT_NAME_HEADER,
         IDENTITY_HEADER,
         UPSTREAM_URL_HEADER,
         UPSTREAM_AUTHORIZATION_HEADER,
@@ -605,27 +610,32 @@ async fn decision(state: &AppState, decision: &FederationDecision) -> DecisionRe
     }
     Ok(ProxyDecision {
         upstream,
-        proxy_prefix: response.headers().get(PROXY_PREFIX_HEADER).cloned(),
-        upstream_authorization: response
-            .headers()
-            .get(UPSTREAM_AUTHORIZATION_HEADER)
-            .cloned(),
-        timeout: response
-            .headers()
-            .get(PROXY_TIMEOUT_HEADER)
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.parse::<f64>().ok())
-            .filter(|value| value.is_finite() && *value > 0.0)
-            .map(Duration::from_secs_f64)
-            .unwrap_or(DEFAULT_PROXY_TIMEOUT),
+        handoff: ProxyHandoff {
+            endpoint_name: decision.endpoint_name.clone(),
+            proxy_prefix: response.headers().get(PROXY_PREFIX_HEADER).cloned(),
+            upstream_authorization: response
+                .headers()
+                .get(UPSTREAM_AUTHORIZATION_HEADER)
+                .cloned(),
+            timeout: response
+                .headers()
+                .get(PROXY_TIMEOUT_HEADER)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.parse::<f64>().ok())
+                .filter(|value| value.is_finite() && *value > 0.0)
+                .map(Duration::from_secs_f64)
+                .unwrap_or(DEFAULT_PROXY_TIMEOUT),
+        },
     })
 }
 
-fn prepare_proxy_request(
-    headers: &mut HeaderMap,
-    proxy_prefix: Option<HeaderValue>,
-    upstream_authorization: Option<HeaderValue>,
-) {
+fn prepare_proxy_request(headers: &mut HeaderMap, handoff: ProxyHandoff) {
+    let ProxyHandoff {
+        endpoint_name,
+        proxy_prefix,
+        upstream_authorization,
+        ..
+    } = handoff;
     let forwarded_host = headers
         .get(&X_FORWARDED_HOST)
         .cloned()
@@ -639,6 +649,9 @@ fn prepare_proxy_request(
 
     if let Some(host) = forwarded_host {
         headers.insert(X_FORWARDED_HOST, host);
+    }
+    if let Some(endpoint_name) = endpoint_name {
+        headers.insert(ENDPOINT_NAME_HEADER, endpoint_name);
     }
     if !headers.contains_key(&X_FORWARDED_PROTO) {
         headers.insert(X_FORWARDED_PROTO, HeaderValue::from_static("http"));
@@ -970,6 +983,10 @@ fn federation_decision(
     query: Option<&str>,
     local_upstream: Option<String>,
 ) -> NativeDecision {
+    let endpoint_name = match endpoint_name_header(&mapping.name) {
+        Ok(endpoint_name) => endpoint_name,
+        Err(response) => return NativeDecision::Response(response),
+    };
     NativeDecision::Federation(FederationDecision {
         direction,
         encoded_name: route.encoded_name,
@@ -978,6 +995,7 @@ fn federation_decision(
         proxy_prefix: route.proxy_prefix,
         peer_id,
         task_id: mapping.task_id,
+        endpoint_name: Some(endpoint_name),
         token: None,
         local_upstream,
         timeout_seconds: mapping.timeout_seconds,
@@ -996,6 +1014,7 @@ fn relay_decision(route: ProxyRoute, peer_id: String, query: Option<&str>) -> Na
         proxy_prefix: route.proxy_prefix,
         peer_id,
         task_id: None,
+        endpoint_name: None,
         token: route.token,
         local_upstream: None,
         timeout_seconds: None,
@@ -1025,15 +1044,31 @@ fn local_proxy_decision(
             )))
         }
     };
+    let endpoint_name = match endpoint_name_header(&mapping.name) {
+        Ok(endpoint_name) => endpoint_name,
+        Err(response) => return NativeDecision::Response(response),
+    };
     NativeDecision::Proxy(ProxyDecision {
         upstream,
-        proxy_prefix: Some(proxy_prefix),
-        upstream_authorization: None,
-        timeout: mapping
-            .timeout_seconds
-            .filter(|timeout| timeout.is_finite() && *timeout > 0.0)
-            .map(Duration::from_secs_f64)
-            .unwrap_or(DEFAULT_PROXY_TIMEOUT),
+        handoff: ProxyHandoff {
+            endpoint_name: Some(endpoint_name),
+            proxy_prefix: Some(proxy_prefix),
+            upstream_authorization: None,
+            timeout: mapping
+                .timeout_seconds
+                .filter(|timeout| timeout.is_finite() && *timeout > 0.0)
+                .map(Duration::from_secs_f64)
+                .unwrap_or(DEFAULT_PROXY_TIMEOUT),
+        },
+    })
+}
+
+fn endpoint_name_header(endpoint_name: &str) -> Result<HeaderValue, Box<Response<Body>>> {
+    HeaderValue::from_str(endpoint_name).map_err(|error| {
+        Box::new(error_response(
+            StatusCode::BAD_GATEWAY,
+            &format!("invalid endpoint name: {error}"),
+        ))
     })
 }
 
@@ -1170,16 +1205,10 @@ async fn send(
             prepare_controller_request(request.headers_mut(), handoff);
             (false, None, None)
         }
-        ForwardMode::Proxy {
-            proxy_prefix,
-            upstream_authorization,
-            timeout,
-        } => {
-            prepare_proxy_request(
-                request.headers_mut(),
-                proxy_prefix.clone(),
-                upstream_authorization,
-            );
+        ForwardMode::Proxy(handoff) => {
+            let proxy_prefix = handoff.proxy_prefix.clone();
+            let timeout = handoff.timeout;
+            prepare_proxy_request(request.headers_mut(), handoff);
             (true, proxy_prefix, Some(timeout))
         }
     };
@@ -1322,11 +1351,7 @@ async fn ingress_inner(
                     &state.upstream_client,
                     request,
                     decision.upstream,
-                    ForwardMode::Proxy {
-                        proxy_prefix: decision.proxy_prefix,
-                        upstream_authorization: decision.upstream_authorization,
-                        timeout: decision.timeout,
-                    },
+                    ForwardMode::Proxy(decision.handoff),
                 )
                 .await;
             }
@@ -1342,11 +1367,7 @@ async fn ingress_inner(
                             &state.upstream_client,
                             request,
                             decision.upstream,
-                            ForwardMode::Proxy {
-                                proxy_prefix: decision.proxy_prefix,
-                                upstream_authorization: decision.upstream_authorization,
-                                timeout: decision.timeout,
-                            },
+                            ForwardMode::Proxy(decision.handoff),
                         )
                         .await
                     }
@@ -1497,6 +1518,42 @@ mod tests {
         assert_eq!(r.relay_peer, None);
         assert_eq!(r.encoded_name, "cw-rno2a");
         assert_eq!(r.sub_path, "v1/models");
+    }
+
+    #[test]
+    fn federation_decision_keeps_endpoint_name_off_the_controller_wire() {
+        let decision = federation_decision(
+            FederationDirection::Outbound,
+            route("/proxy/a/"),
+            mapping("a", "/a"),
+            "peer".to_string(),
+            None,
+            None,
+        );
+        let NativeDecision::Federation(decision) = decision else {
+            panic!("expected a federation decision")
+        };
+
+        let payload = serde_json::to_value(&decision).unwrap();
+        assert!(payload.get("endpoint_name").is_none());
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            ENDPOINT_NAME_HEADER,
+            HeaderValue::from_static("/caller/spoof"),
+        );
+        prepare_proxy_request(
+            &mut headers,
+            ProxyHandoff {
+                endpoint_name: decision.endpoint_name,
+                proxy_prefix: None,
+                upstream_authorization: None,
+                timeout: DEFAULT_PROXY_TIMEOUT,
+            },
+        );
+        assert_eq!(
+            headers.get(ENDPOINT_NAME_HEADER),
+            Some(&HeaderValue::from_static("/a")),
+        );
     }
 
     #[test]
