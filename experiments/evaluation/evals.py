@@ -115,9 +115,10 @@ class HarborDefinition:
     max_eval_instances: int | None = None
 
     def secret_env_for(self, config: ValidatedHarborConfig) -> Mapping[str, SecretSpec]:
-        if config.environment == _DAYTONA_ENVIRONMENT_TYPE:
-            return _DAYTONA_SECRET_ENV
-        return MappingProxyType({})
+        secret_env = dict(_DAYTONA_SECRET_ENV) if config.environment == _DAYTONA_ENVIRONMENT_TYPE else {}
+        for key in config.verifier_env_keys:
+            secret_env.setdefault(key, (f"env:{key}",))
+        return MappingProxyType(secret_env)
 
     def record_ref_for(self, config: ValidatedHarborConfig, runtime_task_limit: int | None) -> EvalRef:
         return EvalRef(
