@@ -1,5 +1,4 @@
-ARG docker_base=python:3.10-slim
-FROM $python:3.10-slim
+FROM python:3.10-slim
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
