@@ -196,10 +196,9 @@ output can be supplied as the `download` argument to the standard
 `normalize_step`. Rendering preserves input IDs and duplicate rows; standard
 normalization assigns content hashes afterward.
 
-Python prepares message bodies and a short Jinja template adds headers and
-separators, reproducing `MARIN_CHAT_TEMPLATE` in `experiments/marin_tokenizer.py`.
-The renderer joins
-adjacent assistant analysis and response messages into one turn, wraps analysis
+Python prepares message bodies and uses f-strings for headers and separators,
+reproducing `MARIN_CHAT_TEMPLATE` in `experiments/marin_tokenizer.py`. The renderer
+joins adjacent assistant analysis and response messages into one turn, wraps analysis
 in think tokens, and renders function calls and named tool replies. Reasoning
 from earlier turns is retained, including records ending in analysis or unanswered
 tool calls. Supported per-record `chat_template_kwargs` are `tools` (a list of
