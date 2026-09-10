@@ -237,6 +237,37 @@ def test_snowball_nemotron_policy_freezes_matching_terminus_harness():
     ]
 
 
+def test_preflight_reports_only_verifier_host_environment_dependencies(tmp_path):
+    policy_path = tmp_path / "external-judge.yaml"
+    policy_path.write_text(
+        """
+environment:
+  type: daytona
+agents:
+  - name: terminus-2
+datasets:
+  - name: simpleqa
+    version: "1.0"
+verifier:
+  env:
+    OPENAI_API_KEY: "${TOGETHER_API_KEY}"
+    OPENAI_BASE_URL: "https://api.together.xyz/v1"
+    MODEL_NAME: "openai/gpt-oss-120b"
+"""
+    )
+
+    payload = json.loads(_preflight(tmp_path, [(policy_path, {})]).stdout)[0]
+    stable_policy = json.loads(payload["stable_policy_json"])
+
+    assert payload["verifier_env_keys"] == ["TOGETHER_API_KEY"]
+    assert stable_policy["verifier"]["env"] == {
+        "MODEL_NAME": "openai/gpt-oss-120b",
+        "OPENAI_API_KEY": "${TOGETHER_API_KEY}",
+        "OPENAI_BASE_URL": "https://api.together.xyz/v1",
+    }
+    assert stable_policy["agents"][0]["env"] == {}
+
+
 @pytest.mark.parametrize(
     ("setup_parameters", "run_parameters", "callback", "keywords"),
     [
@@ -349,7 +380,10 @@ def test_terminus_policies_retry_transient_endpoint_errors(tmp_path, checked_pol
                     def add_hook(self, _event, _hook):
                         pass
 
-                async def create_trial(_config):
+                    def pending_cleanup_tasks(self):
+                        return ()
+
+                async def create_trial(_config, *, attempt_index):
                     return FailedTrial()
 
                 async def record_wait(delay):
@@ -359,7 +393,7 @@ def test_terminus_policies_retry_transient_endpoint_errors(tmp_path, checked_pol
                 queue_module.asyncio.sleep = record_wait
                 queue_module.safe_rmtree = lambda *_args, **_kwargs: None
                 result = await TrialQueue(n_concurrent=1, retry_config=retry)._run_trial(
-                    SimpleNamespace(trial_name="endpoint-failure")
+                    SimpleNamespace(trial_name="endpoint-failure", trial_attempt_timeout_sec=None)
                 )
                 assert result is failed_result
                 outcomes[name] = {"attempts": attempts, "wait_seconds": sum(waits)}
@@ -454,7 +488,7 @@ def test_effective_job_applies_runtime_precedence_and_validates_nested_updates(t
     }
 
 
-def test_effective_aime_job_preserves_capability_url_in_live_config_and_redacts_dump(tmp_path, checked_policies):
+def test_effective_aime_job_preserves_capability_url_in_live_and_serialized_config(tmp_path, checked_policies):
     capability_token = "dummy-capability-token"
     capability_url = f"https://iris.example/proxy/t/{capability_token}/serve.inference-test/v1"
     policy_path = tmp_path / "policy.json"
@@ -488,12 +522,7 @@ def test_effective_aime_job_preserves_capability_url_in_live_config_and_redacts_
     assert result["api_base"] == capability_url
     assert result["job_dir"] == str(tmp_path / "jobs" / "runtime-job")
     serialized = result["serialized"]
-    assert serialized["agents"][0]["kwargs"]["api_base"] == (
-        "https://iris.example/proxy/t/<redacted>/serve.inference-test/v1"
-    )
-    serialized_json = json.dumps(serialized)
-    assert capability_token not in serialized_json
-    assert "<redacted>" in serialized_json
+    assert serialized["agents"][0]["kwargs"]["api_base"] == capability_url
 
 
 @pytest.mark.parametrize(

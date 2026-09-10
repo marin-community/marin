@@ -22,6 +22,7 @@ from harbor.agents.factory import AgentFactory  # pyrefly: ignore[missing-import
 from harbor.environments.factory import _load_environment_class  # pyrefly: ignore[missing-import]
 from harbor.job import Job  # pyrefly: ignore[missing-import]  # installed by external driver
 from harbor_config import JobConfig  # pyrefly: ignore[missing-import]  # installed by external driver
+from harbor_config.env import get_required_host_vars  # pyrefly: ignore[missing-import]
 from harbor_config.models.agent.name import AgentName  # pyrefly: ignore[missing-import]
 from harbor_config.models.job.config import DatasetConfig  # pyrefly: ignore[missing-import]
 from harbor_config.models.trial.config import AgentConfig  # pyrefly: ignore[missing-import]
@@ -365,6 +366,7 @@ def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict
         "dataset_revision": dataset_metadata.revision,
         "agent": agent_name,
         "environment": environment_name,
+        "verifier_env_keys": sorted({name for name, _default in get_required_host_vars(config.verifier.env)}),
     }
 
 
