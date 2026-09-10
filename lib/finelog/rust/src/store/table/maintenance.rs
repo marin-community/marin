@@ -28,7 +28,6 @@ use crate::store::legacy::layout::{self, LocalLayout};
 use crate::store::state_store::object::StateGcPolicy;
 use crate::store::table::index_artifacts::{self, IndexBackfill, INDEX_BUNDLES_PER_TICK};
 use crate::store::table::key_bounds;
-use crate::store::table::relay_retirement;
 use crate::store::table::runtime::TableRuntime;
 use crate::store::table::spec_migration::{self, SpecMigration};
 
@@ -87,22 +86,37 @@ pub enum TableWork {
     Cycle { force_compact_l0: bool },
 }
 
+/// Resource class for a prompt follow-up maintenance cycle.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MaintenanceClass {
+    QueryServing,
+    SpecMigration,
+    RelayIo,
+}
+
 /// Whether the scheduler should run another cycle on its prompt cadence.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum WorkOutcome {
     #[default]
     Complete,
-    MoreWork,
+    Continue(MaintenanceClass),
 }
 
 impl WorkOutcome {
     pub fn has_more_work(self) -> bool {
-        self == Self::MoreWork
+        matches!(self, Self::Continue(_))
     }
 
-    pub(super) fn from_pending(pending: bool) -> Self {
+    pub fn next_class(self) -> Option<MaintenanceClass> {
+        match self {
+            Self::Complete => None,
+            Self::Continue(class) => Some(class),
+        }
+    }
+
+    pub(super) fn from_pending(pending: bool, class: MaintenanceClass) -> Self {
         if pending {
-            Self::MoreWork
+            Self::Continue(class)
         } else {
             Self::Complete
         }
@@ -153,11 +167,15 @@ async fn run_one(runtime: &Arc<TableRuntime>, work: TableWork) -> Result<WorkOut
                 on_activated: &activated,
             })
             .await?;
-            Ok(WorkOutcome::from_pending(owns_cycle))
+            Ok(WorkOutcome::from_pending(
+                owns_cycle,
+                MaintenanceClass::SpecMigration,
+            ))
         }
         TableWork::Compaction { force_compact_l0 } => compact(runtime, force_compact_l0).await,
         TableWork::KeyBounds => Ok(WorkOutcome::from_pending(
             key_bounds::maintain(runtime).await?,
+            MaintenanceClass::QueryServing,
         )),
         TableWork::IndexArtifacts => {
             let tracker = &runtime.layout_tracker;
@@ -204,7 +222,10 @@ async fn run_one(runtime: &Arc<TableRuntime>, work: TableWork) -> Result<WorkOut
             .map_err(|error| {
                 StatsError::Internal(format!("maintenance placement task panicked: {error}"))
             })??;
-            Ok(WorkOutcome::from_pending(pending))
+            Ok(WorkOutcome::from_pending(
+                pending,
+                MaintenanceClass::QueryServing,
+            ))
         }
         TableWork::ArchivePlacement => {
             layout::advance_archive_placement(&local_layout(runtime)).await?;
@@ -253,15 +274,14 @@ async fn cycle(
             runtime.controller.gc_objects().await?;
             run_one(runtime, TableWork::ObjectCollection).await?;
         }
-        return Ok(WorkOutcome::MoreWork);
+        return Ok(WorkOutcome::Continue(MaintenanceClass::SpecMigration));
     }
     if runtime.policy().object_backed() {
         runtime.controller.publish_owed().await?;
-        if let Some(target) = runtime.maintenance_profile().relay_target() {
-            let retirement = relay_retirement::maintain(runtime, target).await?;
+        if runtime.maintenance_profile().relay_target().is_some() {
             runtime.controller.gc_objects().await?;
             run_one(runtime, TableWork::ObjectCollection).await?;
-            return Ok(retirement);
+            return Ok(WorkOutcome::Complete);
         }
         // Report pending while compaction keeps finding runs: an L0 backlog
         // then drains at the fast re-poll cadence through the dedicated slot
@@ -276,7 +296,10 @@ async fn cycle(
         runtime.controller.gc_objects().await?;
         run_one(runtime, TableWork::ObjectCollection).await?;
         run_one(runtime, TableWork::IndexArtifacts).await?;
-        return Ok(WorkOutcome::from_pending(bounds_pending || compacted));
+        return Ok(WorkOutcome::from_pending(
+            bounds_pending || compacted,
+            MaintenanceClass::QueryServing,
+        ));
     }
 
     if runtime.maintenance_profile().relay_target().is_some() {
@@ -301,7 +324,10 @@ async fn cycle(
     // re-compacted, so without it a table carries whatever layout it was written
     // with until eviction ages it out.
     run_one(runtime, TableWork::EncodingRewrite).await?;
-    Ok(WorkOutcome::from_pending(placement_pending))
+    Ok(WorkOutcome::from_pending(
+        placement_pending,
+        MaintenanceClass::QueryServing,
+    ))
 }
 
 /// Compact one run, or — for a legacy table — drain the planner's backlog.
@@ -326,7 +352,10 @@ async fn compact(
             force_compact_l0,
         )
         .await?;
-        return Ok(WorkOutcome::from_pending(compacted.has_pending_work()));
+        return Ok(WorkOutcome::from_pending(
+            compacted.has_pending_work(),
+            MaintenanceClass::QueryServing,
+        ));
     }
     // The legacy path decodes Parquet and takes the query-visibility write lock,
     // so the whole drain runs on the blocking pool. It checks the stop latch
@@ -357,7 +386,10 @@ async fn compact(
                 break;
             }
         }
-        Ok(WorkOutcome::from_pending(compacted))
+        Ok(WorkOutcome::from_pending(
+            compacted,
+            MaintenanceClass::QueryServing,
+        ))
     })
     .await
     .map_err(|error| StatsError::Internal(format!("maintenance compact task panicked: {error}")))?

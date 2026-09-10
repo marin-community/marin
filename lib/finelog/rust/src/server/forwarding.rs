@@ -144,6 +144,7 @@ const PUSH_RETRY_BACKOFF: Duration = Duration::from_secs(1);
 /// Emit a progress line at most this often, so a healthy forwarder is observable
 /// without flooding the logs it forwards.
 const PROGRESS_INTERVAL: Duration = Duration::from_secs(300);
+const SLOW_FORWARD_TURN: Duration = Duration::from_secs(5);
 
 const OUTCOME_ACCEPTED: &str = "accepted";
 const OUTCOME_PERMANENT_REJECTION: &str = "permanent_rejection";
@@ -441,6 +442,15 @@ where
                 return ForwardTurn::Wait;
             }
         };
+        let starting_cursor = cursor;
+        let object_native = match self.store.namespace_uses_object_state(name) {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::warn!(namespace = name, %error, "finelog forwarder: cannot resolve storage state; skipping");
+                return ForwardTurn::Wait;
+            }
+        };
+        let turn_started = Instant::now();
         self.observe_lag(name, cursor, persisted);
         // The forwarder stamps this column with its own cluster on the way out and
         // forwards only rows that do not already carry a foreign origin, so a hub's
@@ -464,6 +474,16 @@ where
         // archived to remote storage while we lagged, and no scan here can reach it —
         // jump the cursor and say how much was skipped.
         if let Some(resume_at) = batch.resume_at {
+            if object_native {
+                tracing::error!(
+                    namespace = name,
+                    cursor,
+                    resume_at,
+                    persisted,
+                    "finelog forwarder: object-native cursor precedes the live spool; refusing to skip rows"
+                );
+                return ForwardTurn::Wait;
+            }
             let skipped = resume_at - cursor;
             progress.skipped_seqs += skipped;
             progress.record_seq_positions(name, OUTCOME_RETENTION_EVICTION, skipped);
@@ -475,7 +495,10 @@ where
                 "finelog forwarder: rows evicted before they were forwarded; skipping ahead"
             );
             cursor = resume_at;
-            if !self.persist_cursor(name, cursor).await {
+            if !self
+                .persist_cursor(name, starting_cursor, cursor, turn_started)
+                .await
+            {
                 return ForwardTurn::Wait;
             }
         }
@@ -485,7 +508,10 @@ where
             // or the loop rereads them forever. Safe against a concurrent writer:
             // `scanned_through` is a captured bound, and later rows arrive with a later
             // watermark.
-            if !self.persist_cursor(name, batch.scanned_through).await {
+            if !self
+                .persist_cursor(name, starting_cursor, batch.scanned_through, turn_started)
+                .await
+            {
                 return ForwardTurn::Wait;
             }
             return if batch.scanned_through < persisted {
@@ -533,11 +559,15 @@ where
                 }
                 Err(PushError::Stopping(e)) => {
                     tracing::warn!(namespace = name, cursor, error = %e, "finelog forwarder: push interrupted");
+                    self.persist_accepted_prefix(name, starting_cursor, cursor, turn_started)
+                        .await;
                     return ForwardTurn::Wait;
                 }
                 Err(PushError::Retryable(e)) => {
                     progress.record_batch(name, OUTCOME_RETRYABLE_FAILURE);
                     tracing::warn!(namespace = name, cursor, error = %e, "finelog forwarder: push failed; retrying next sweep");
+                    self.persist_accepted_prefix(name, starting_cursor, cursor, turn_started)
+                        .await;
                     return ForwardTurn::Wait;
                 }
                 Err(PushError::SchemaConflict(e)) => {
@@ -551,6 +581,8 @@ where
                         error = %e,
                         "finelog forwarder: batch conflicts with the hub schema; preserving the cursor and refreshing registration next sweep"
                     );
+                    self.persist_accepted_prefix(name, starting_cursor, cursor, turn_started)
+                        .await;
                     return ForwardTurn::Wait;
                 }
                 Err(PushError::Permanent(e)) => {
@@ -569,18 +601,18 @@ where
                 }
             }
             cursor = last_seq;
-            if !self.persist_cursor(name, cursor).await {
-                return ForwardTurn::Wait;
-            }
         }
         // Fewer than LIMIT matching rows means the scan examined the complete bounded
         // sequence window. Advance over any trailing foreign-origin rows after every
         // outbound chunk is settled; doing this earlier could skip a failed chunk.
         if batch.complete_window && cursor < batch.scanned_through {
             cursor = batch.scanned_through;
-            if !self.persist_cursor(name, cursor).await {
-                return ForwardTurn::Wait;
-            }
+        }
+        if !self
+            .persist_cursor(name, starting_cursor, cursor, turn_started)
+            .await
+        {
+            return ForwardTurn::Wait;
         }
         if cursor < persisted {
             ForwardTurn::MoreRows
@@ -598,6 +630,11 @@ where
     async fn seed(&self, name: &str, persisted: i64) -> Result<i64, StatsError> {
         match self.store.forward_cursor(&self.config.target, name)? {
             Some(cursor) if cursor <= persisted => Ok(cursor),
+            Some(cursor) if self.store.namespace_uses_object_state(name)? => {
+                Err(StatsError::Internal(format!(
+                    "object-native forwarding cursor {cursor} is ahead of durable high-water {persisted} for {name:?}"
+                )))
+            }
             Some(cursor) => {
                 tracing::warn!(
                     namespace = name,
@@ -684,12 +721,68 @@ where
     /// Record `cursor` as the durable watermark for `name`, reporting whether the write
     /// stuck. `false` is not data loss: every row stays queryable in this store, and the
     /// catalog still names an older cursor for the next round to resume from.
-    async fn persist_cursor(&self, name: &str, cursor: i64) -> bool {
-        if let Err(e) = self.persist(name, cursor).await {
-            tracing::warn!(namespace = name, cursor, error = %e, "finelog forwarder: persisting the watermark failed");
-            return false;
+    async fn persist_cursor(
+        &self,
+        name: &str,
+        previous_cursor: i64,
+        cursor: i64,
+        turn_started: Instant,
+    ) -> bool {
+        let settlement_started = Instant::now();
+        let settlement = match self
+            .store
+            .settle_forwarding(&self.config.target, name, cursor)
+            .await
+        {
+            Ok(settlement) => settlement,
+            Err(e) => {
+                tracing::warn!(namespace = name, cursor, error = %e, "finelog forwarder: persisting the watermark failed");
+                return false;
+            }
+        };
+        let total = turn_started.elapsed();
+        let settlement_elapsed = settlement_started.elapsed();
+        tracing::debug!(
+            namespace = name,
+            previous_cursor,
+            cursor = settlement.cursor,
+            advanced_seqs = settlement.cursor.saturating_sub(previous_cursor),
+            retired_segments = settlement.removed_paths.len(),
+            retired_rows = settlement.removed_rows,
+            retired_bytes = settlement.removed_bytes,
+            settle_ms = settlement_elapsed.as_millis() as u64,
+            total_ms = total.as_millis() as u64,
+            "finelog forwarder: settled namespace turn"
+        );
+        if total >= SLOW_FORWARD_TURN {
+            tracing::info!(
+                namespace = name,
+                previous_cursor,
+                cursor = settlement.cursor,
+                persisted = self.store.namespace_persisted_seq(name).unwrap_or(cursor),
+                advanced_seqs = settlement.cursor.saturating_sub(previous_cursor),
+                retired_segments = settlement.removed_paths.len(),
+                retired_rows = settlement.removed_rows,
+                retired_bytes = settlement.removed_bytes,
+                settle_ms = settlement_elapsed.as_millis() as u64,
+                total_ms = total.as_millis() as u64,
+                "finelog forwarder: slow namespace turn completed"
+            );
         }
         true
+    }
+
+    async fn persist_accepted_prefix(
+        &self,
+        name: &str,
+        starting_cursor: i64,
+        cursor: i64,
+        turn_started: Instant,
+    ) {
+        if cursor > starting_cursor {
+            self.persist_cursor(name, starting_cursor, cursor, turn_started)
+                .await;
+        }
     }
 
     /// Report a growing backlog once without changing its cursor. Clear the latch after
@@ -723,15 +816,20 @@ where
         persisted: i64,
         has_origin: bool,
     ) -> Result<Batch, StatsError> {
+        let read_started = Instant::now();
         // One guard across both the snapshot and the scan: eviction takes the write side
         // before unlinking, so no segment can vanish between the two.
+        let visibility_started = Instant::now();
         let _read_guard = self.store.query_visibility().read().await;
+        let visibility_wait = visibility_started.elapsed();
 
+        let snapshot_started = Instant::now();
         let store = Arc::clone(&self.store);
         let owned = name.to_string();
         let snapshot = tokio::task::spawn_blocking(move || store.query_snapshot(&owned))
             .await
             .map_err(|e| StatsError::Internal(format!("snapshot task panicked: {e}")))??;
+        let snapshot_elapsed = snapshot_started.elapsed();
 
         let resume_at = resume_after_eviction(cursor, snapshot.min_seq);
         let read_from = resume_at.unwrap_or(cursor);
@@ -743,6 +841,13 @@ where
             persisted,
             FORWARD_BATCH_SEGMENTS,
         );
+        let candidate_segments = snapshot
+            .seq_bounds
+            .values()
+            .filter(|(minimum, maximum)| *maximum > read_from && *minimum <= scanned_through)
+            .count();
+        let live_segments = snapshot.paths.len();
+        let planning_started = Instant::now();
         let provider = self.store.namespace_provider(name, snapshot)?;
 
         let table = quote_ident(name);
@@ -760,6 +865,7 @@ where
             name: name.to_string(),
             provider,
         }];
+        let planning_elapsed = planning_started.elapsed();
         // The forwarder is a server read like any other: an object-backed source
         // bounds it by the same non-disableable effective deadline.
         let query_ctx = make_ctx();
@@ -770,6 +876,7 @@ where
             .map_or(FORWARD_READ_TIMEOUT, |bound| {
                 bound.min(FORWARD_READ_TIMEOUT)
             });
+        let scan_started = Instant::now();
         let result = run_within_query_timeout(
             Some(timeout),
             read,
@@ -782,11 +889,54 @@ where
             |e| StatsError::Internal(format!("read {name:?} failed: {e}")),
         )
         .await?;
+        let scan_elapsed = scan_started.elapsed();
 
+        let encode_started = Instant::now();
         let rows = self.ship_batch(result)?;
+        let encode_elapsed = encode_started.elapsed();
+        let row_count = rows.as_ref().map_or(0, |(batch, _)| batch.num_rows());
         let complete_window = rows.as_ref().map_or(true, |(batch, _)| {
             batch.num_rows() < FORWARD_BATCH_ROWS as usize
         });
+        let total = read_started.elapsed();
+        let log_read = || {
+            tracing::info!(
+                namespace = name,
+                cursor,
+                persisted,
+                scanned_through,
+                live_segments,
+                candidate_segments,
+                rows = row_count,
+                visibility_wait_ms = visibility_wait.as_millis() as u64,
+                snapshot_ms = snapshot_elapsed.as_millis() as u64,
+                planning_ms = planning_elapsed.as_millis() as u64,
+                scan_ms = scan_elapsed.as_millis() as u64,
+                encode_ms = encode_elapsed.as_millis() as u64,
+                total_ms = total.as_millis() as u64,
+                "finelog forwarder: slow read completed"
+            );
+        };
+        if total >= SLOW_FORWARD_TURN {
+            log_read();
+        } else {
+            tracing::debug!(
+                namespace = name,
+                cursor,
+                persisted,
+                scanned_through,
+                live_segments,
+                candidate_segments,
+                rows = row_count,
+                visibility_wait_ms = visibility_wait.as_millis() as u64,
+                snapshot_ms = snapshot_elapsed.as_millis() as u64,
+                planning_ms = planning_elapsed.as_millis() as u64,
+                scan_ms = scan_elapsed.as_millis() as u64,
+                encode_ms = encode_elapsed.as_millis() as u64,
+                total_ms = total.as_millis() as u64,
+                "finelog forwarder: read completed"
+            );
+        }
         Ok(Batch {
             rows,
             resume_at,
@@ -899,6 +1049,7 @@ where
         arrow_ipc: Vec<u8>,
         mut stop: watch::Receiver<bool>,
     ) -> Result<(), PushError> {
+        let bytes = arrow_ipc.len();
         let request = WriteRowsRequest::default()
             .with_namespace(name)
             .with_arrow_ipc(arrow_ipc);
@@ -908,6 +1059,7 @@ where
             if *stop.borrow() {
                 return Err(PushError::Stopping("shutdown requested".to_string()));
             }
+            let attempt_started = Instant::now();
             let result = match self.minter.bearer() {
                 Ok(bearer) => {
                     let options = CallOptions::default()
@@ -919,7 +1071,24 @@ where
                         .await
                     {
                         Ok(_) => {
-                            tracing::debug!(namespace = name, "finelog forwarder: batch delivered");
+                            let elapsed = attempt_started.elapsed();
+                            if elapsed >= SLOW_FORWARD_TURN {
+                                tracing::info!(
+                                    namespace = name,
+                                    attempt,
+                                    bytes,
+                                    push_ms = elapsed.as_millis() as u64,
+                                    "finelog forwarder: slow hub durability acknowledgement completed"
+                                );
+                            } else {
+                                tracing::debug!(
+                                    namespace = name,
+                                    attempt,
+                                    bytes,
+                                    push_ms = elapsed.as_millis() as u64,
+                                    "finelog forwarder: batch delivered"
+                                );
+                            }
                             return Ok(());
                         }
                         Err(e) if is_permanent_rejection(&e) => {

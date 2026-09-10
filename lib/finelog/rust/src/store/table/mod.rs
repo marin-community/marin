@@ -21,7 +21,6 @@ pub mod ingest;
 mod key_bounds;
 pub mod maintenance;
 pub mod query_view;
-mod relay_retirement;
 pub mod runtime;
 pub mod segment_format;
 pub mod segment_view;
@@ -52,7 +51,7 @@ use crate::store::store::{ServeMode, LOG_NAMESPACE_NAME};
 use crate::store::table_state::{TableSnapshot, WriterFence};
 
 pub use controller::{MaintenanceLease, ObjectPersistence, TableController, WrittenObject};
-pub use maintenance::{MaintenanceProfile, TableWork, WorkOutcome};
+pub use maintenance::{MaintenanceClass, MaintenanceProfile, TableWork, WorkOutcome};
 pub use runtime::TableRuntime;
 pub use segment_view::SegmentSnapshot;
 

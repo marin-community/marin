@@ -1434,9 +1434,9 @@ async fn durable_id_rows(store: &Store, namespace: &str, ids: std::ops::Range<us
 }
 
 /// An object-native relay keeps a durable local copy while the hub is behind,
-/// then retires only whole segments covered by the hub's settled cursor. The
-/// object remains recoverable through retained table states until ordinary
-/// object GC's rollback and orphan windows expire.
+/// then advances its cursor and retires covered segments in one publication.
+/// The bytes remain recoverable through retained states until object GC's
+/// rollback window expires.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_object_native_relay_retires_only_hub_settled_segments() {
     const EVENTS: &str = "events";
@@ -1474,15 +1474,6 @@ async fn an_object_native_relay_retires_only_hub_settled_segments() {
     source.configure_relay(target_url.clone());
 
     let first_tip = durable_id_rows(&source, EVENTS, 0..20).await;
-    let first_segment = source.list_segments(EVENTS).unwrap().pop().unwrap();
-    source
-        .backdate_segment(
-            EVENTS,
-            &crate::store::types::basename(&first_segment.path),
-            1,
-        )
-        .unwrap();
-
     source.maintain_namespace(EVENTS, false).await.unwrap();
     assert_eq!(
         source.list_segments(EVENTS).unwrap().len(),
@@ -1502,21 +1493,18 @@ async fn an_object_native_relay_retires_only_hub_settled_segments() {
         source.forward_cursor(&target_url, EVENTS).unwrap(),
         Some(first_tip)
     );
+    assert!(
+        source.list_segments(EVENTS).unwrap().is_empty(),
+        "settlement must remove the covered segment without an age-based maintenance pass"
+    );
 
     let tip = durable_id_rows(&source, EVENTS, 20..40).await;
     let remaining = source.list_segments(EVENTS).unwrap();
     assert_eq!(
         remaining.len(),
         1,
-        "maintenance should retire only the first cursor-covered segment"
+        "the newly written segment remains live until its sequences settle"
     );
-    source
-        .backdate_segment(
-            EVENTS,
-            &crate::store::types::basename(&remaining[0].path),
-            1,
-        )
-        .unwrap();
     source.maintain_namespace(EVENTS, false).await.unwrap();
     assert_eq!(
         source.list_segments(EVENTS).unwrap().len(),
@@ -1536,7 +1524,6 @@ async fn an_object_native_relay_retires_only_hub_settled_segments() {
         source.forward_cursor(&target_url, EVENTS).unwrap(),
         Some(tip)
     );
-    source.maintain_namespace(EVENTS, false).await.unwrap();
 
     assert!(
         source.list_segments(EVENTS).unwrap().is_empty(),

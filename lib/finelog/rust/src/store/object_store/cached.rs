@@ -348,6 +348,9 @@ impl ObjectStore for CachedObjectStore {
     }
 
     async fn delete(&self, id: &ObjectId) -> Result<(), StatsError> {
+        // A scan may already hold the planned cache path. Wait for every pinned
+        // read before removing the remote object or its cache copy.
+        let _visibility = self.query_visibility.write().await;
         self.source.delete(id).await?;
         let cache = self.cache.clone();
         let id = id.clone();

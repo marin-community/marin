@@ -12,7 +12,7 @@
 //! [`TableManager::run_work`](crate::store::table::TableManager::run_work), not
 //! through methods here.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -44,7 +44,7 @@ use crate::store::table_spec::TablePolicy;
 use crate::store::table_state::TableSnapshot;
 use crate::store::types::{segment_to_row, NamespaceStats, SegmentRow};
 
-use super::AckDurability;
+use super::{AckDurability, MaintenanceClass};
 
 /// A single table's live runtime, disk-backed or in-memory.
 ///
@@ -436,6 +436,29 @@ impl TableRuntime {
         Ok(self.segments.snapshot())
     }
 
+    /// Reconcile the local accounting view after a durable relay settlement.
+    ///
+    /// A retry may publish a locally committed settlement whose second catalog
+    /// transaction has no removal delta. Comparing with the catalog's live set
+    /// keeps namespace stats correct in that case without relying on restart.
+    pub(crate) fn reconcile_settled_segments(&self) -> Result<(), StatsError> {
+        let live: HashSet<String> = self
+            .catalog
+            .list_segments(&self.name)?
+            .into_iter()
+            .map(|segment| segment.path)
+            .collect();
+        let removed: Vec<String> = self
+            .segments
+            .segments()
+            .into_iter()
+            .filter(|segment| !live.contains(&segment.path))
+            .map(|segment| segment.path)
+            .collect();
+        self.segments.replace(&removed, Vec::new());
+        Ok(())
+    }
+
     /// Plan this table's read from the state its controller last published.
     ///
     /// Metadata only: no object is fetched and the local cache is not consulted,
@@ -642,6 +665,15 @@ impl TableRuntime {
     /// How often this table owes an ordinary maintenance cycle.
     pub fn maintenance_interval(&self) -> Duration {
         self.compaction_config.check_interval
+    }
+
+    /// Resource class for this table's ordinary maintenance visit.
+    pub fn maintenance_class(&self) -> MaintenanceClass {
+        if self.maintenance_profile().relay_target().is_some() && self.policy().object_backed() {
+            MaintenanceClass::RelayIo
+        } else {
+            MaintenanceClass::QueryServing
+        }
     }
 
     /// What the scheduler needs to time this table's next flush.

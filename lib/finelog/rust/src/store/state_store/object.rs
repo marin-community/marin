@@ -739,6 +739,7 @@ impl ObjectTableStateStore {
 
         let state_objects = self.table_objects(table, STATES_PREFIX).await?;
         let mut nodes = HashMap::new();
+        let mut node_modified_at = HashMap::new();
         let mut legacy_catalogs = HashMap::new();
         let mut keep = current_chain.clone();
         for (key, metadata) in &state_objects {
@@ -765,6 +766,7 @@ impl ObjectTableStateStore {
                 {
                     keep.insert(key.clone());
                 }
+                node_modified_at.insert(key.clone(), metadata.modified_at_ms);
                 nodes.insert(key.clone(), node);
             } else {
                 let catalog: NamespaceCatalog = serde_json::from_value(value).map_err(|error| {
@@ -807,18 +809,10 @@ impl ObjectTableStateStore {
             }
         }
 
-        let mut removed = 0;
-        for (key, _) in &state_objects {
-            if keep.contains(key) {
-                continue;
-            }
-            self.storage.delete(&ObjectId::table(table, key)?).await?;
-            removed += 1;
-        }
-        if !policy.sweep_orphans {
-            return Ok(removed);
-        }
-
+        // Build the complete data-reference set before deleting either data or
+        // catalog nodes. A rollback-retained node pins both its payload and every
+        // unexpired release; the selected catalog pins the current materialized
+        // state regardless of which deltas mention it.
         let mut referenced = referenced_object_keys(&selected.catalog);
         for key in &keep {
             if let Some(node) = nodes.get(key) {
@@ -831,6 +825,45 @@ impl ObjectTableStateStore {
             if let Some(catalog) = legacy_catalogs.get(key) {
                 referenced.extend(referenced_object_keys(catalog));
             }
+        }
+
+        // A selected transition records the exact objects it released. Once the
+        // releasing node is outside the rollback window and no retained state
+        // refers to an object, delete it directly instead of making a relay wait
+        // the generic 24-hour orphan grace. Data goes first; only then may the
+        // obsolete node carrying this release record be removed below.
+        let expired_releases = nodes
+            .iter()
+            .filter(|(key, _)| {
+                node_modified_at
+                    .get(*key)
+                    .is_some_and(|modified| *modified <= state_cutoff)
+            })
+            .flat_map(|(_, node)| &node.released_objects)
+            .filter(|released| released.delete_after_ms.unwrap_or(i64::MAX) <= now_ms)
+            .filter_map(|released| {
+                released
+                    .object
+                    .as_option()
+                    .and_then(|object| object.object_id.clone())
+            })
+            .filter(|object_id| !referenced.contains(object_id))
+            .collect::<HashSet<_>>();
+
+        let mut removed = 0;
+        for object_id in expired_releases {
+            self.storage.delete(&ObjectId::parse(&object_id)?).await?;
+            removed += 1;
+        }
+        for (key, _) in &state_objects {
+            if keep.contains(key) {
+                continue;
+            }
+            self.storage.delete(&ObjectId::table(table, key)?).await?;
+            removed += 1;
+        }
+        if !policy.sweep_orphans {
+            return Ok(removed);
         }
         for prefix in [OBJECTS_PREFIX, INDICES_PREFIX, PROJECTIONS_PREFIX] {
             for (key, metadata) in self.table_objects(table, prefix).await? {
@@ -1651,6 +1684,78 @@ mod tests {
             1
         );
         assert!(remote.read(&orphan_id).await.unwrap().is_none());
+        std::fs::remove_dir_all(remote_dir).ok();
+    }
+
+    #[tokio::test]
+    async fn garbage_collection_deletes_a_known_release_only_after_rollback_retention() {
+        let remote_dir = crate::test_support::unique_dir("object_state_known_release_gc");
+        let remote = build_remote_object_store(remote_dir.to_str().unwrap())
+            .unwrap()
+            .unwrap();
+        let states = ObjectTableStateStore::new(Arc::new(remote.clone()));
+        let fence = WriterFence::new(1);
+        let released = segment(1);
+        let object_id = ObjectId::parse(
+            released
+                .source
+                .as_option()
+                .unwrap()
+                .object_id
+                .as_deref()
+                .unwrap(),
+        )
+        .unwrap();
+        remote
+            .write(&object_id, Bytes::from_static(b"released"))
+            .await
+            .unwrap();
+        let first = states
+            .commit(TABLE, fence, None, state_with_segments(1, vec![released]))
+            .await
+            .unwrap();
+        states
+            .commit(TABLE, fence, Some(&first), state_with_segments(2, vec![]))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            states
+                .gc_obsolete_states(
+                    TABLE,
+                    i64::MAX,
+                    StateGcPolicy {
+                        pin_retention_ms: u64::MAX,
+                        state_retention_ms: u64::MAX,
+                        orphan_grace_ms: 0,
+                        sweep_orphans: false,
+                    },
+                    fence,
+                )
+                .await
+                .unwrap(),
+            0
+        );
+        assert!(remote.read(&object_id).await.unwrap().is_some());
+
+        assert_eq!(
+            states
+                .gc_obsolete_states(
+                    TABLE,
+                    i64::MAX,
+                    StateGcPolicy {
+                        pin_retention_ms: 0,
+                        state_retention_ms: 0,
+                        orphan_grace_ms: u64::MAX,
+                        sweep_orphans: false,
+                    },
+                    fence,
+                )
+                .await
+                .unwrap(),
+            1
+        );
+        assert!(remote.read(&object_id).await.unwrap().is_none());
         std::fs::remove_dir_all(remote_dir).ok();
     }
 

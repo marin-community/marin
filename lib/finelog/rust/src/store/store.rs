@@ -37,7 +37,9 @@ use crate::proto::finelog::stats::{
 use crate::query::provider::NamespaceProvider;
 use crate::query::RegisteredProvider;
 use crate::store::catalog::projection::namespace_catalog;
-use crate::store::catalog::{Catalog, PublishedObjectSegment, RegisteredNamespace, SpecLifecycle};
+use crate::store::catalog::{
+    Catalog, ForwardingSettlement, PublishedObjectSegment, RegisteredNamespace, SpecLifecycle,
+};
 use crate::store::ipc::decode_one_record_batch;
 use crate::store::namespace_name::validate_namespace_name;
 use crate::store::object_store::{
@@ -1490,6 +1492,24 @@ impl Store {
         Ok(())
     }
 
+    /// Settle a forwarding prefix and release every object-backed relay segment
+    /// wholly covered by it through one durable table-state publication.
+    pub async fn settle_forwarding(
+        &self,
+        target: &str,
+        namespace: &str,
+        cursor: i64,
+    ) -> Result<ForwardingSettlement, StatsError> {
+        let runtime = self.tables.require(namespace)?;
+        let committed = self
+            .tables
+            .controller(namespace)
+            .commit(|| self.catalog.settle_forwarding(target, namespace, cursor))
+            .await?;
+        runtime.reconcile_settled_segments()?;
+        Ok(committed.output)
+    }
+
     /// Return `(name, schema, stats, policy)` for every live namespace in
     /// registration order. Stats come from the per-namespace engine (sealed
     /// segments + RAM buffer seq-window math), falling back to the catalog
@@ -1697,13 +1717,47 @@ fn validate_local_catalog_extension(
         .difference(&local_objects)
         .cloned()
         .collect();
-    if remote_high_water > local_high_water || !missing.is_empty() {
+    let settlement_removal =
+        !missing.is_empty() && missing_remote_objects_are_settled(remote, local);
+    if !settlement_removal && (remote_high_water > local_high_water || !missing.is_empty()) {
         return Err(StatsError::SchemaConflict(format!(
             "local catalog tail for {namespace:?} diverges from remote HEAD: remote high-water {remote_high_water}, local high-water {local_high_water}, {} remote objects absent locally; retaining local state for operator salvage",
             missing.len()
         )));
     }
     Ok(())
+}
+
+/// A relay settlement is the one valid local-tail transition that removes
+/// selected objects without replacing them. Every configured target cursor in
+/// the resulting catalog must cover every missing remote segment.
+fn missing_remote_objects_are_settled(remote: &NamespaceCatalog, local: &NamespaceCatalog) -> bool {
+    if local.forward_cursors.is_empty() {
+        return false;
+    }
+    let Some(retirement_cursor) = local
+        .forward_cursors
+        .iter()
+        .try_fold(i64::MAX, |minimum, cursor| {
+            cursor.cursor.map(|value| minimum.min(value))
+        })
+    else {
+        return false;
+    };
+    let local_objects = catalog_live_object_ids(local);
+    remote
+        .version_segments
+        .iter()
+        .flat_map(|version| &version.live_segments)
+        .chain(&remote.direct_query_segments)
+        .filter(|segment| {
+            segment
+                .source
+                .as_option()
+                .and_then(|source| source.object_id.as_ref())
+                .is_some_and(|object| !local_objects.contains(object))
+        })
+        .all(|segment| segment.max_seq.unwrap_or(i64::MAX) <= retirement_cursor)
 }
 
 fn validate_v1_upgrade_preflight(

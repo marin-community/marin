@@ -154,7 +154,7 @@ fn insert_object_segments_in(
 
 /// Advance the namespace's catalog generation and return the new revision.
 /// Fails when the namespace has no head row to advance.
-fn advance_generation_in(
+pub(super) fn advance_generation_in(
     transaction: &rusqlite::Transaction<'_>,
     namespace: &str,
 ) -> Result<TableRevision, StatsError> {

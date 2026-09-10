@@ -34,6 +34,7 @@ mod legacy_import_rehearsal;
 mod migration_backfill_crash;
 mod missing_remote_object;
 mod registration_race;
+mod relay_settlement;
 mod remote_outage;
 mod schema_evolution;
 mod write_during_backfill;
