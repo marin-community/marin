@@ -51,6 +51,12 @@ uv run pytest <relevant test paths>
 uv run --no-project infra/ci/run_tests.py
 ```
 
+CI and the local test runner select Marin tests from `tests/` and `experiments/`.
+Changes to a test or modules it imports select that test. The selector follows
+module-scope imports. Changes to experiment `conftest.py` files or non-Python files
+select the full Marin suite. The full Marin suite includes the two directories.
+Existing marker filters still apply.
+
 `pyproject.toml` already excludes the slow, integration, data-integration,
 live-cluster, Docker, and manual markers by default. Do not pass `-m 'not slow'`:
 `-m` replaces the whole default expression, so it re-selects the cluster and
