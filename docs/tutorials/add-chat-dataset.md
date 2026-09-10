@@ -285,8 +285,9 @@ filters. The required eval corpus and versioned manifests must be staged in the
 run's region; missing required evaluations fail validation. Changing the selected
 source set changes cross-source deduplication and frequency filtering results.
 
-The shared settings and stage builders live in
-[`reference_pipeline.py`](../../experiments/datakit/reference_pipeline.py).
+The SFT decontamination and verification setup lives in
+[`sft_pipeline.py`](../../experiments/datakit/sft_pipeline.py), copied from the
+[`reference pipeline`](../../experiments/datakit/reference_pipeline.py).
 [`prepare_eval_corpus.py`](../../experiments/datakit/decontam/prepare_eval_corpus.py)
 defines the versioned regional eval paths, manifests, and preparation command.
 
