@@ -243,3 +243,58 @@ therefore remains in assistant `content`; tool-enabled requests preserve its
 think markers. Returning a separate reasoning field in OpenAI chat-completion
 responses requires a MarinSkyRL wrapper change. Native Harmony wire tokens are not used by this
 renderer.
+
+## 7. Build deduplication and decontamination attributes
+
+`experiments.datakit.sft_pipeline` connects the SFT registry to the existing
+Datakit exact deduplication, verified fuzzy deduplication, and eval-contamination
+stages. It reuses each source's `.rendered` artifact and builds `.normalized`
+before computing attributes. Run in the same region as the rendered data.
+
+Print the target paths without executing processing:
+
+```bash
+uv run python -m experiments.datakit.sft_pipeline --sources superior-reasoning
+```
+
+For the rendered data in `us-central2`, submit:
+
+```bash
+uv run iris --cluster=marin job run --no-wait --region us-central2 \
+    --extra=cpu --cpu 2 --memory 8GB \
+    -- python -m experiments.datakit.sft_pipeline --execute
+```
+
+See [Iris job operations](../../lib/iris/OPS.md) for submission options. Omit
+`--sources` to include the full SFT registry. Global deduplication covers only
+the selected sources. `--pool-workers` defaults to 16 and
+`--max-concurrent` to 4. Existing successful dependencies are reused.
+
+The targets are global exact-duplicate attributes, verified fuzzy-duplicate
+attributes, and per-source contamination attributes. They refer to the IDs in
+normalized rendered text. This entry point does not materialize a filtered
+training dataset or run tokenization, embeddings, quality scoring, or clustering.
+A downstream consumer must apply the duplicate and contamination attributes.
+
+Deduplication compares whole rendered conversations, including system prompts,
+tool definitions, reasoning, and observations. Shared boilerplate can affect
+fuzzy similarity; inspect candidate and verified-duplicate counts before applying
+removals. MinHash uses the reference pipeline's 500,000-character text cap.
+Decontamination uses the reference eval corpus and its source/global frequency
+filters. The required eval corpus and versioned manifests must be staged in the
+run's region; missing required evaluations fail validation. Changing the selected
+source set changes cross-source deduplication and frequency filtering results.
+
+The shared settings and stage builders live in
+[`reference_pipeline.py`](../../experiments/datakit/reference_pipeline.py).
+[`prepare_eval_corpus.py`](../../experiments/datakit/decontam/prepare_eval_corpus.py)
+defines the versioned regional eval paths, manifests, and preparation command.
+
+Read the returned artifacts with `marin.execution.artifact.read_artifact`:
+`GlobalExactDedupData`, `VerifiedFuzzyDupsAttrData`, and `DeconAttributes` expose
+stage counters and attribute locations. Deduplication outputs are sparse,
+co-partitioned `id`/`dup_doc` marks; decontamination marks include `id` and
+`contaminated`. A consumer joins each source's marks to its normalized text by
+`id`, treating absent duplicate marks as false. The reference pipeline's
+[`build_clustered_store`](../../experiments/datakit/store/datakit_store.py) consumer illustrates
+how attributes are applied when producing training output.

@@ -13,6 +13,7 @@ import dataclasses
 import json
 
 import pytest
+from marin.datakit.sft_sources import DatakitChatSource
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.fuzzy_dups import compute_fuzzy_dups_attrs_step
 from marin.processing.classification.deduplication.fuzzy_minhash import compute_minhash_attrs_step
@@ -24,6 +25,7 @@ from experiments.datakit.reference_pipeline import (
     reference_datakit_steps,
     zephyr_datakit_steps,
 )
+from experiments.datakit.sft_pipeline import sft_filter_steps
 from experiments.datakit.zephyr_benchmark import _route_outputs
 
 
@@ -211,3 +213,41 @@ def test_dedup_step_builders_match_the_datakit_graph_identity():
         name: step.hash_id for name, step in graph.minhash.items()
     }
     assert dedup.hash_id == graph.fuzzy_dedup.hash_id
+
+
+def test_sft_filter_targets_reuse_renders_and_exclude_training_stages():
+    sources = {name: DatakitChatSource(name, (step,), 1.0) for name, step in _sources().items()}
+    result = sft_filter_steps(sources)
+    reference = reference_datakit_steps(
+        result.normalized,
+        quality_model="gs://r/model",
+        quality_model_version="v1",
+        scale=SMOKE_SCALE,
+    )
+    reference_steps = _steps_by_name(reference)
+    for target in result.targets:
+        assert target.hash_id == reference_steps[target.name].hash_id
+        for source in sources.values():
+            assert _depends_on(target, source.rendered)
+
+    pending = list(result.targets)
+    names = set()
+    while pending:
+        step = pending.pop()
+        names.add(step.name)
+        pending.extend(step.deps)
+    assert not any(
+        name.startswith(("datakit/tokenize/", "datakit/embed/", "datakit/quality/", "datakit/cluster", "datakit/store"))
+        for name in names
+    )
+
+
+def test_sft_render_changes_invalidate_filter_outputs():
+    def targets(revision):
+        chat = StepSpec(name="normalized-chat/a", fn=lambda op: None, hash_attrs={"revision": revision})
+        return sft_filter_steps({"a": DatakitChatSource("a", (chat,), 1.0)}).targets
+
+    base = targets(1)
+    changed = targets(2)
+    assert len(base) == len(changed)
+    assert all(before.hash_id != after.hash_id for before, after in zip(base, changed, strict=True))
