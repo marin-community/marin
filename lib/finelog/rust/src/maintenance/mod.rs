@@ -93,7 +93,10 @@ pub struct MaintenanceLimits {
 
 /// Concurrent maintenance cycles across all tables.
 const MAX_CONCURRENT_MAINTENANCE_CYCLES: usize = 2;
-const MAX_CONCURRENT_RELAY_IO_CYCLES: usize = 8;
+// Physical relay collection is intentionally low priority. A cycle can walk a
+// large remote catalog tree; concurrent walks compete with durability flushes
+// and forwarding settlements for the same object-store budget.
+const MAX_CONCURRENT_RELAY_IO_CYCLES: usize = 1;
 
 /// Concurrent flushes across all tables.
 const MAX_CONCURRENT_FLUSHES: usize = 4;
