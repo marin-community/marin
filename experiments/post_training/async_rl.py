@@ -240,6 +240,9 @@ def training_config(
     serial_engine_startup: bool = False,
     first_token_admission: bool = False,
     generation_workers: int | None = None,
+    admission_order: str = "fifo",
+    injected_delay_max: int = 0,
+    max_buffered_groups: int | None = None,
     lr: float | None = None,
     max_num_seqs: int | None = None,
     training_ignore_eos: bool = False,
@@ -249,6 +252,16 @@ def training_config(
     eval_mode: str = "blocking",
 ) -> str:
     """Keep optimizer and inference settings identical across scheduler controls."""
+    if admission_order not in {"fifo", "lifo", "freshest_first", "age_weighted"}:
+        raise ValueError("Unknown admission order")
+    if type(injected_delay_max) is not int or injected_delay_max < 0:
+        raise ValueError("injected_delay_max must be a nonnegative integer")
+    if max_buffered_groups is not None and (type(max_buffered_groups) is not int or max_buffered_groups <= 0):
+        raise ValueError("max_buffered_groups must be a positive integer")
+    if runner is Runner.SYNC and (admission_order != "fifo" or injected_delay_max or max_buffered_groups is not None):
+        raise ValueError("Admission and completed-buffer controls require the async runner")
+    if injected_delay_max and (not first_token_admission or injected_delay_max > staleness):
+        raise ValueError("Injected delay requires first-token admission and a sufficient true-age bound")
     if generation_workers is not None and (type(generation_workers) is not int or generation_workers <= 0):
         raise ValueError("generation_workers must be a positive integer")
     if max_num_seqs is not None and (type(max_num_seqs) is not int or max_num_seqs <= 0):
@@ -358,6 +371,12 @@ def training_config(
         "num_parallel_generation_workers": 64 if generation_workers is None else generation_workers,
         "admission_stall_timeout": 300,
     }
+    if admission_order != "fifo":
+        trainer["fully_async"]["admission_order"] = admission_order
+    if injected_delay_max:
+        trainer["fully_async"]["injected_delay_max_steps"] = injected_delay_max
+    if max_buffered_groups is not None:
+        trainer["fully_async"]["max_buffered_groups"] = max_buffered_groups
     # Omit the default to preserve historical configuration fingerprints.
     if weight_sync_interval != 1:
         trainer["fully_async"]["weight_sync_interval"] = weight_sync_interval
@@ -602,6 +621,9 @@ def build_experiment(
     serial_engine_startup: bool = False,
     first_token_admission: bool = False,
     generation_workers: int | None = None,
+    admission_order: str = "fifo",
+    injected_delay_max: int = 0,
+    max_buffered_groups: int | None = None,
     lr: float | None = None,
     max_num_seqs: int | None = None,
     training_ignore_eos: bool = False,
@@ -661,6 +683,9 @@ def build_experiment(
         serial_engine_startup=serial_engine_startup,
         first_token_admission=first_token_admission,
         generation_workers=generation_workers,
+        admission_order=admission_order,
+        injected_delay_max=injected_delay_max,
+        max_buffered_groups=max_buffered_groups,
         lr=lr,
         max_num_seqs=max_num_seqs,
         training_ignore_eos=training_ignore_eos,
@@ -852,6 +877,9 @@ def build_experiment(
 )
 @click.option("--max-num-seqs", type=click.IntRange(min=1), help="Concurrent native inference sequences per engine.")
 @click.option("--train-rows", type=click.IntRange(min=1), help="Training source rows; defaults to the scale schedule.")
+@click.option("--admission-order", type=click.Choice(["fifo", "lifo", "freshest_first", "age_weighted"]), default="fifo")
+@click.option("--injected-delay-max", type=click.IntRange(min=0), default=0)
+@click.option("--max-buffered-groups", type=click.IntRange(min=1))
 @click.option("--generation-workers", type=click.IntRange(min=1), help="Concurrent rollout groups; defaults to 64.")
 @click.option("--training-ignore-eos/--no-training-ignore-eos", default=False, show_default=True)
 @click.option("--response-tokens", type=click.IntRange(min=1), help="Training output cap; defaults to 1024.")
@@ -927,6 +955,9 @@ def main(
     serial_engine_startup: bool,
     first_token_admission: bool,
     generation_workers: int | None,
+    admission_order: str,
+    injected_delay_max: int,
+    max_buffered_groups: int | None,
     lr: float | None,
     max_num_seqs: int | None,
     train_rows: int | None,
@@ -986,6 +1017,9 @@ def main(
         serial_engine_startup=serial_engine_startup,
         first_token_admission=first_token_admission,
         generation_workers=generation_workers,
+        admission_order=admission_order,
+        injected_delay_max=injected_delay_max,
+        max_buffered_groups=max_buffered_groups,
         lr=lr,
         max_num_seqs=max_num_seqs,
         training_ignore_eos=training_ignore_eos,
