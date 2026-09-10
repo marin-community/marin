@@ -196,10 +196,15 @@ deduplicates the rendered text. The original chat IDs become `source_id` in the
 normalized text. The structured Harmony artifact remains available through
 `source.chat_normalized`.
 
-Python prepares message bodies and uses f-strings for headers and separators,
-reproducing `MARIN_CHAT_TEMPLATE` in `experiments/marin_tokenizer.py`. The renderer
-joins adjacent assistant analysis and response messages into one turn, wraps analysis
-in think tokens, and renders function calls and named tool replies. Reasoning
+Python converts Harmony messages to Hugging Face message dictionaries, then Hugging Face
+renders them with `MARIN_CHAT_TEMPLATE` in `marin.datakit.chat_template`. Tokenizer
+export uses the same template. The adapter joins adjacent assistant analysis, commentary, and function calls
+into one turn. The template emits one end-of-turn token after all parallel calls,
+so generation can reach the tool handoff. Analysis uses Marin think tokens,
+function calls use `<tool_call>` JSON blocks, and named tool replies use
+`<tool_response>` blocks. The template also accepts `reasoning_content` from
+inference clients and serializes structured tool definitions as JSON. API tool
+reply IDs are resolved to function names; the rendered text omits the IDs. Reasoning
 from earlier turns is retained, including records ending in analysis or unanswered
 tool calls. Supported per-record `chat_template_kwargs` are `tools` (a list of
 recorded function definitions), `enable_thinking` (a boolean), and
@@ -210,6 +215,31 @@ All rendering helpers are in `marin.datakit.chat_render`.
 For an existing directory of normalized chat Parquet, use
 `render_chat_to_parquet(input_path=..., output_path=...)`. For a conversation in
 memory, `render_marin_chat(messages)` returns the rendered string. Bump
-`CHAT_RENDER_VERSION` when changing rendering so existing artifacts retain their
-original format. The inference-consistency tests live in
+`CHAT_RENDER_VERSION` when changing the Harmony conversion. The template itself
+is included in the rendering step hash, so template changes also produce a new
+artifact. The inference-consistency tests live in
 `tests/test_marin_tokenizer.py`.
+
+
+For inference, export this template with the model's tokenizer; the existing
+`marin-community/marin-tokenizer` revision
+`a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2` contains the older template:
+
+```python
+from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
+from transformers import AutoTokenizer
+
+tokenizer = AutoTokenizer.from_pretrained("path/to/model")
+tokenizer.chat_template = MARIN_CHAT_TEMPLATE
+tokenizer.save_pretrained("path/to/model")
+```
+
+Point MarinSkyRL's policy tokenizer at that same artifact and enable tool parsing
+in the generator's `engine_init_kwargs` with `enable_auto_tool_choice: true` and
+`tool_call_parser: hermes`. This preserves the existing Marin header and reasoning
+tokens. The [pinned MarinSkyRL wrapper](https://github.com/marin-community/MarinSkyRL/blob/93d84333acdf27275d258f0f25dad24129f0cf6e/skyrl-train/skyrl_train/inference_engines/vllm/utils.py)
+forwards tool-parser settings but does not forward a reasoning parser. Reasoning
+therefore remains in assistant `content`; tool-enabled requests preserve its
+think markers. Returning a separate reasoning field in OpenAI chat-completion
+responses requires a MarinSkyRL wrapper change. Native Harmony wire tokens are not used by this
+renderer.
