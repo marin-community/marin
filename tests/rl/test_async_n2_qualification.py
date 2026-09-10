@@ -1,18 +1,24 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from pathlib import Path
+
 import pytest
 import yaml
-from marin.execution.lazy import materialized_config
+from fray.iris_backend import FrayIrisClient
+from fray.local_backend import LocalClient
+from hydra.core.override_parser.overrides_parser import OverridesParser
+from marin.execution.lazy import materialized_config, run
 from marin.rl.skyrl import ArtifactDataSource
 
-from experiments.post_training.async_n2_qualification import build_qualification
+from experiments.post_training.async_n2_qualification import build_qualification, local_model_dependency
+from experiments.post_training.curriculum_rl import launch
 from experiments.post_training.math_eval.bucket_launcher import VerifiedBucketDataSource
 from experiments.post_training.math_eval.launcher import VerifiedPoolDataSource
 
 PREFIX = "s3://marin-us-east-02a/marin"
 MARKER = PREFIX + "/users/ahmad/diagnostics/async-rl/async-n2-native-v1/measurement/fresh.json"
-CHECKPOINT = PREFIX + "/users/ahmad/checkpoints/n2-qualification/global_step_7"
+CHECKPOINT = "s3://marin-us-east-02a/tmp/ttl=14d/skyrl/n2-qualification/global_step_7"
 
 
 @pytest.fixture
@@ -52,7 +58,9 @@ def test_qualification_request_keeps_eight_optimizer_updates_and_explicit_resume
     mode = "none" if checkpoint is None else "from_path"
     assert f"++trainer.resume_mode={mode}" in request.overrides
     if checkpoint is not None:
-        assert f"++trainer.resume_path={checkpoint}" in request.overrides
+        parsed_overrides = OverridesParser.create().parse_overrides(list(request.overrides))
+        resume = [item.value() for item in parsed_overrides if item.key_or_group == "trainer.resume_path"]
+        assert resume == [checkpoint]
     assert config.execution.max_retries == 1
     assert config.execution.timeout_seconds == 1800
     assert config.execution.wandb_entity == "dogml"
@@ -68,3 +76,48 @@ def test_measurement_identity_changes_fingerprinted_request():
 def test_qualification_rejects_unbound_or_wrong_region_marker(uri):
     with pytest.raises(ValueError, match="east S3"):
         build_qualification(version="2026.09.09.259", measurement_uri=uri)
+
+
+def test_local_model_dependency_preserves_identity_and_callable():
+    step = build_qualification(version="2026.09.09.259", measurement_uri=MARKER)
+    mirrors = [dep for dep in step.deps if callable(getattr(dep.run, "fn", None))]
+    assert len(mirrors) == 1
+    remote = mirrors[0]
+    local = local_model_dependency(remote)
+    assert local.fingerprint() == remote.fingerprint()
+    assert local.path(PREFIX) == remote.path(PREFIX)
+    assert local.build_config is remote.build_config
+    assert local.run is remote.run.fn
+    with pytest.raises(ValueError, match="Only the native model mirror"):
+        local_model_dependency(step)
+
+
+def test_local_mirror_uses_actual_step_runner_without_submissions(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    calls = []
+
+    def download(*, repo_id, revision, local_dir, cache_dir):
+        calls.append((repo_id, revision))
+        path = Path(local_dir)
+        path.mkdir(parents=True)
+        (path / "config.json").write_bytes(b'{"test":true}')
+        (path / "model.safetensors").write_bytes(b"bounded model fixture")
+        return str(path)
+
+    def submission_trap(*args, **kwargs):
+        raise AssertionError("Dependency escaped the CPU preparation process")
+
+    monkeypatch.setattr(launch, "snapshot_download", download)
+    monkeypatch.setattr(FrayIrisClient, "submit", submission_trap)
+    monkeypatch.setattr(LocalClient, "submit", submission_trap)
+    original = launch.model_step("2026.01.01")
+    local = local_model_dependency(original)
+    assert materialized_config(local, str(tmp_path)) == materialized_config(original, str(tmp_path))
+    run(local)
+    output = Path(local.path())
+    assert (output / "hf/model.safetensors").read_bytes() == b"bounded model fixture"
+    assert (output / "hf/config.json").read_bytes() == b'{"test":true}'
+    retained = {str(path.relative_to(output)): path.read_bytes() for path in output.rglob("*") if path.is_file()}
+    run(local)
+    assert len(calls) == 1
+    assert retained == {str(path.relative_to(output)): path.read_bytes() for path in output.rglob("*") if path.is_file()}

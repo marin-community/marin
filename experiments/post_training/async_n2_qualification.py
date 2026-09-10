@@ -3,12 +3,17 @@
 
 """Construct the bounded async N2 mechanism requests without submitting jobs."""
 
+import json
 from dataclasses import replace
 from urllib.parse import urlsplit
 
 import yaml
+from fray.types import CpuConfig
+from marin.execution.lazy import ArtifactStep
+from marin.execution.remote import RemoteCallable
 
 from experiments.post_training import async_rl
+from experiments.post_training.curriculum_rl.launch import mirror_hf_model
 from experiments.post_training.math_eval.bucket_launcher import BUCKET_ARGUMENT
 
 
@@ -81,7 +86,7 @@ def build_qualification(*, version: str, measurement_uri: str, checkpoint_seven:
         mode = "from_path" if checkpoint_seven is not None else "none"
         overrides = [*config.request.overrides, f"++trainer.resume_mode={mode}"]
         if checkpoint_seven is not None:
-            overrides.append(f"++trainer.resume_path={checkpoint_seven}")
+            overrides.append(f"++trainer.resume_path={json.dumps(checkpoint_seven)}")
         return replace(
             config,
             request=replace(
@@ -93,3 +98,16 @@ def build_qualification(*, version: str, measurement_uri: str, checkpoint_seven:
         key: replace(value, max_retries=1, wandb_entity="dogml") for key, value in checkpoint_step.runtime_args.items()
     }
     return replace(checkpoint_step, build_config=build_config, runtime_args=runtime_args)
+
+
+def local_model_dependency(step: ArtifactStep) -> ArtifactStep:
+    """Run the allowlisted model mirror inside the bounded east preparation task."""
+    remote = step.run
+    if not isinstance(remote, RemoteCallable) or remote.fn is not mirror_hf_model:
+        raise ValueError("Only the native model mirror is an approved local dependency")
+    if step.deps or not isinstance(remote.resources.device, CpuConfig):
+        raise ValueError("Local model preparation requires a dependency-free CPU callable")
+    local = replace(step, run=remote.fn)
+    if local.fingerprint_payload() != step.fingerprint_payload():
+        raise ValueError("Local execution must preserve dependency identity")
+    return local
