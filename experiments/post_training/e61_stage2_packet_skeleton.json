@@ -49,15 +49,41 @@
       128001,
       128009
     ],
-    "generator.max_input_length": 1024
+    "generator.max_input_length": 1024,
+    "generator.sampling_params.logprobs": 0,
+    "generator.eval_sampling_params.logprobs": 0,
+    "generator.eval_sampling_params.max_generate_length": 4096,
+    "generator.eval_sampling_params.stop_token_ids": [
+      128001,
+      128009
+    ],
+    "generator.engine_init_kwargs.logprobs_mode": "raw_logprobs",
+    "generator.engine_init_kwargs.logits_processors": [
+      "skyrl_train.inference_engines.non_agentic_logits_processor.NonAgenticTokenProcessor"
+    ],
+    "trainer.fully_async.eval_mode": "blocking",
+    "trainer.fully_async.eval_on_installed_weights": false
   },
   "arms": [
     {
       "name": "parser_only",
-      "additional_overrides": {},
+      "additional_overrides": {
+        "generator.non_agentic_eval_endpoints": [
+          "package_on"
+        ]
+      },
       "endpoint_modes": [
         "shared_common_off_and_package_on"
-      ]
+      ],
+      "endpoint_evidence": {
+        "generated_modes": [
+          "package_on"
+        ],
+        "common_off_correctness_alias": "package_on token-identical rows; correctness only, no separate raw optimization reward claim",
+        "ordering": "common_off then package_on for token-intervention arms",
+        "source_gate": "a92f endpoint CPU gate passed; f00f adds independently qualified storage fix; native K16 and actual dump qualification pending"
+      },
+      "artifact_version": "2026.09.09.261"
     },
     {
       "name": "force_close",
@@ -71,32 +97,70 @@
           "repetition_window": 256,
           "repetition_ngram": 16,
           "repetition_fraction": 0.5
-        }
+        },
+        "generator.non_agentic_eval_endpoints": [
+          "common_off",
+          "package_on"
+        ]
       },
       "endpoint_modes": [
         "common_off",
         "package_on"
-      ]
+      ],
+      "endpoint_evidence": {
+        "generated_modes": [
+          "common_off",
+          "package_on"
+        ],
+        "common_off_correctness_alias": null,
+        "ordering": "common_off then package_on for token-intervention arms",
+        "source_gate": "a92f endpoint CPU gate passed; f00f adds independently qualified storage fix; native K16 and actual dump qualification pending"
+      },
+      "artifact_version": "2026.09.09.262"
     },
     {
       "name": "soft_overlong",
       "additional_overrides": {
         "generator.trajectory_reward_shaping.enabled": true,
         "generator.trajectory_reward_shaping.overlong.l_max": 4096,
-        "generator.trajectory_reward_shaping.overlong.l_cache": 512
+        "generator.trajectory_reward_shaping.overlong.l_cache": 512,
+        "generator.non_agentic_eval_endpoints": [
+          "package_on"
+        ]
       },
       "endpoint_modes": [
         "shared_common_off_and_package_on"
-      ]
+      ],
+      "endpoint_evidence": {
+        "generated_modes": [
+          "package_on"
+        ],
+        "common_off_correctness_alias": "package_on token-identical rows; correctness only, no separate raw optimization reward claim",
+        "ordering": "common_off then package_on for token-intervention arms",
+        "source_gate": "a92f endpoint CPU gate passed; f00f adds independently qualified storage fix; native K16 and actual dump qualification pending"
+      },
+      "artifact_version": "2026.09.09.263"
     },
     {
       "name": "negative_truncation_advantage",
       "additional_overrides": {
-        "trainer.algorithm.non_agentic_truncated_advantage_cap": -1.0
+        "trainer.algorithm.non_agentic_truncated_advantage_cap": -1.0,
+        "generator.non_agentic_eval_endpoints": [
+          "package_on"
+        ]
       },
       "endpoint_modes": [
         "shared_common_off_and_package_on"
-      ]
+      ],
+      "endpoint_evidence": {
+        "generated_modes": [
+          "package_on"
+        ],
+        "common_off_correctness_alias": "package_on token-identical rows; correctness only, no separate raw optimization reward claim",
+        "ordering": "common_off then package_on for token-intervention arms",
+        "source_gate": "a92f endpoint CPU gate passed; f00f adds independently qualified storage fix; native K16 and actual dump qualification pending"
+      },
+      "artifact_version": "2026.09.09.264"
     },
     {
       "name": "repetition_stop",
@@ -110,12 +174,26 @@
           "repetition_window": 256,
           "repetition_ngram": 16,
           "repetition_fraction": 0.5
-        }
+        },
+        "generator.non_agentic_eval_endpoints": [
+          "common_off",
+          "package_on"
+        ]
       },
       "endpoint_modes": [
         "common_off",
         "package_on"
-      ]
+      ],
+      "endpoint_evidence": {
+        "generated_modes": [
+          "common_off",
+          "package_on"
+        ],
+        "common_off_correctness_alias": null,
+        "ordering": "common_off then package_on for token-intervention arms",
+        "source_gate": "a92f endpoint CPU gate passed; f00f adds independently qualified storage fix; native K16 and actual dump qualification pending"
+      },
+      "artifact_version": "2026.09.09.265"
     }
   ],
   "score_contract": "verbatim native optimization reward after any shaping",
@@ -133,7 +211,7 @@
     "versioned parser/intervention/mask/logprob/advantage dump checks",
     "unique artifact families and exact absence plus root GPU release",
     "Revalidate actual full-input receipt against final composed runtime/config",
-    "Native package/common-off evaluation before metrics-only weights are discarded; do not reuse package rows as off-mode results"
+    "Native package/common-off evaluation before metrics-only weights are discarded: separate generated dumps for token-intervention arms; explicit token-identical correctness alias for shaping-only arms."
   ],
   "native_outcome_branches": {
     "queued_or_startup_failure": "no scientific outcome; retain packet and failures, CPU preparation continues",
@@ -162,6 +240,17 @@
     "generic_filter_fix": "0cd9f74cc2cbd01b009d65b2813331c22cbef2c0",
     "generic_filter_test_format_followup": "afb49ed5",
     "native_K16_mechanical_result": null,
-    "native_K16_external_response_audit": null
-  }
+    "native_K16_external_response_audit": null,
+    "endpoint_runtime_commit": "5ceb506edcab1c7f2f8da4a56e76c60dd030fd25",
+    "input_budget_scope": {
+      "fixed_input_qualification_limit": 1024,
+      "native_derived_input_allowance": 4096,
+      "native_context": 8192,
+      "native_response_allowance": 4096,
+      "actual_train_maximum": 261,
+      "actual_dev_maximum": 700
+    },
+    "runtime_helper_scope": "5ceb adds CPU-only native driver/serializer proof entrypoints on unchanged f00f endpoint and storage runtime"
+  },
+  "metric_protocol": "post-thinking-native-metrics-v1"
 }
