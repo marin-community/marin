@@ -8,7 +8,7 @@
     python -m experiments.post_training.tasktrove.pipeline --version 2026.09.09 --verify-tool-ref <sha> \\
         --stage templates --run
 
-Steps: ``raw`` downloads the parquets; ``summaries`` fingerprints every task and groups by
+Steps: ``raw`` downloads the parquets once per dataset revision; ``summaries`` fingerprints every task and groups by
 template; ``templates`` extracts one exemplar per template and writes the converter coverage; ``converted``
 applies the registered converters; ``graded`` drops repeated instructions and throws away tasks
 whose grader does not hold up; ``clean`` assembles the output.
@@ -32,6 +32,8 @@ from experiments.post_training.tasktrove.sources import TASKTROVE_HF_ID, TASKTRO
 from experiments.post_training.tasktrove.verify import grade_tasks
 
 STAGES = ("raw", "summaries", "templates", "converted", "graded", "clean")
+RAW_VERSION = "2026.09.09"
+"""Pinned download version; bump only when ``TASKTROVE_REVISION`` changes, so reruns reuse the download."""
 
 
 @dataclass(frozen=True)
@@ -46,7 +48,9 @@ class TaskTroveWorkflow:
 
 def build_workflow(tool_ref: str, max_tasks_per_source: int | None) -> TaskTroveWorkflow:
     coordinator = ResourceConfig.with_cpu(cpu=4, ram="16g")
-    raw = hf_download("raw/tasktrove", hf_id=TASKTROVE_HF_ID, revision=TASKTROVE_REVISION, urls_glob=(TASKS_GLOB,))
+    raw = hf_download(
+        "raw/tasktrove", hf_id=TASKTROVE_HF_ID, revision=TASKTROVE_REVISION, version=RAW_VERSION, urls_glob=(TASKS_GLOB,)
+    )
     summaries = apply(
         "tasktrove/template_summaries",
         remote(summarize_templates, resources=coordinator),
