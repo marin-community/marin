@@ -1,4 +1,5 @@
 n_concurrent_trials: 16
+agent_timeout_multiplier: 20.0
 release_trial_payloads_in_memory: true
 retry:
   max_retries: 10

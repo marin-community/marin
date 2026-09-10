@@ -474,3 +474,57 @@ author: benfeuer
 - Run: submitted qk157, qk175, qk175-skew2, qk175-skew4, and qk175-skew8 Chat roots at interactive priority with version `2026.09.09.13` and distinct ports 19423 through 19427. All five roots entered running.
 - Scheduling: each stage is a separate root so sibling and cross-base gangs never inherit the same JAX port. Qk157 reuses its validated conversion; the other four roots first build their immutable HF-to-native conversion dependencies.
 - Next action: monitor conversions and Chat training independently; as each Chat checkpoint commits, launch its non-agentic evaluation and its Thinking child with new unique ports.
+
+### 2026-09-10 11:01 EDT - AIME policy matrix completed and repaired evaluators pinned
+
+- Code refs: campaign branch `93251781092fa281077dff0a9c7b455fd6cc9677`; Evalchemy `f7c85686d4b8d1957135a7a18391c2023b670e8d`; Harbor `ce2a55949f99f2d3baa48e5b523e0703f81280c0`.
+- Command: `uv run python config/update-external.py evalchemy harbor`, followed by `uv run python config/update-external.py --check evalchemy harbor` in `/Users/benfeuer/Documents/marin-worktrees/sft-snowballs-final`.
+- Durable audit: RNO2A CPU jobs `/benfeuer/snowball-final-record-audit-20260910` and `/benfeuer/snowball-final-aime-summary-20260910` scanned `s3://marin-us-east-02a/marin/evals` from inside the credentialed cluster boundary.
+- Result: all 13 previously missing AIME seed/model cells are `status=succeeded`, contain `accuracy_avg`, and attempted all 30 questions. `RESULTS.md` now reports seeds 42–51 for all five Base models instead of leaving seeds 49–51 pending.
+- Next action: exercise the repaired Evalchemy task routes with bounded canaries, repair Marin's verifier-secret forwarding boundary for SimpleQA, and rerun the incomplete targeted benchmarks before full five-model fan-out.
+
+### 2026-09-10 16:30 EDT - Custom benchmark cap gates passed; full recovery released
+
+- Code refs: Evalchemy #116 at `d6c02d2606709087a70de782857c8061649f490f` centralizes unique-source sample caps and adds the future-custom-benchmark contract; Evalchemy #117 at `1d6943d88062f7d87976adf59792dd4f35a3983a` serializes CruxEval directional samples; campaign pin `dd4131163d75bd06651fc40eb4c325ca776373fb`.
+- Runtime gates: group `/benfeuer/eval-20260910-194301-snowball-final-qk157-base-abde` wrote one capped MMLU-Pro result and one capped MRCR result. Fresh Crux gate `/benfeuer/eval-20260910-201418-snowball-final-qk157-base-26e2` succeeded on #117 and compacted exactly two directional records for one source.
+- Runs: released qk157 CruxEval/MRCR group `…-c592`; released MMLU-Pro/CruxEval/MRCR groups qk175 `…-7f85`, skew2 `…-8d90`, skew4 `…-bfea`, and skew8 `…-9289`. The older qk157 full MMLU-Pro run remains `…-2429` and is not duplicated.
+- FinanceBench: skew2 `…-6394` completed at 44% (22 correct, 20 incorrect, 8 not attempted; 50/50) and skew8 `…-5f04` at 42% (21/19/10; 50/50). Qk175 and skew4 failed on transient Together HTTP 503 responses and were resubmitted as `…-3362` and `…-40cc` without changing policy.
+- Observation: typed parsing of the one-item MMLU-Pro canary rejects its `accuracy_std_err: null`; this does not block the full run, whose sample count should make the uncertainty numeric. Campaign collector now reports one malformed record without aborting the rest of a batch.
+- Next action: monitor the full custom, FinanceBench retry, SimpleQA, DS-1000, and hardened agentic roots; reduce only durable successful records meeting full-coverage gates into external `RESULTS.md`.
+
+### 2026-09-10 16:42 EDT - FinanceBench five-base matrix complete
+
+- Evidence: read-only RNO2A snapshot `/benfeuer/snowball-final-finance-summary-20260910` parsed the two retry records against campaign schema. Qk175 `…-3362` scored 40% (20 correct, 19 incorrect, 11 not attempted); skew4 `…-40cc` scored 44% (22/22/6). Both have 50 attempted and 50 scored, empty error maps, Evalchemy runtime `1d6943d…`, and Marin provenance `dd4131163d…`.
+- Result: combined with qk157 44% (`…-9dc4`), skew2 44% (`…-6394`), and skew8 42% (`…-5f04`), FinanceBench is complete for all five Base checkpoints under the unchanged Together `openai/gpt-oss-120b` judge policy.
+- Next action: continue monitoring the remaining custom, SimpleQA, DS-1000, and agentic recoveries; snapshot and report each only after its full coverage gate passes.
+
+## 2026-09-10 16:47 EDT — Full recovery progress denominators
+
+- Verified immutable suite sizes: DS-1000 1,000, SimpleQA 4,326, SWE-bench random recovery 100, Terminal-Bench 2.0 89, OT-TBLite 100, MMLU-Pro test 12,032, CruxEval 799 sources/two directions, and MRCR 1,200 selected sources at the served 65,536-token context limit.
+- Persisted progress counters were DS-1000 239–260, SimpleQA 125–469, and the first SWE stage 34–43 per Base. These are operational counters only, not coverage claims, because retries may be represented.
+- All full custom evaluators remained running. One MMLU-Pro evaluator logged a transient HTTP 502 and entered its configured retry path; no new blocking Harbor or Evalchemy defect was established.
+
+## 2026-09-10 17:00 EDT — Recovery progress remains live
+
+- DS-1000 advanced to 275–307 persisted trial events per Base and SimpleQA to 140–493, materially above the 16:47 snapshot.
+- Qk157 CruxEval remained controller-running with zero failures or preemptions after 851 successful generations. Its current 16-request decode batch had produced no completion for roughly 14 minutes, which remains inside Marin's configured 30-minute Evalchemy request timeout.
+- No restart was launched; continue observing the exact handle and classify only after it advances, times out into the typed retry/failure path, or becomes terminal.
+
+## 2026-09-10 17:13 EDT — DS-1000 progress checkpoint
+
+- All five DS-1000 roots remained live and reached 318–355 persisted trial events out of 1,000 per Base, up from 275–307 at 17:00.
+- No newly failed targeted root appeared. Qk157 CruxEval resumed incremental successful responses after its long decode batch, so no restart or framework repair was justified.
+
+## 2026-09-10 17:20 EDT — DS-1000 timeout recovery replaced
+
+- Evidence: qk157 alone logged 132 distinct `AgentTimeoutError` trials before task ordinal 400; the other Bases logged 146–150. Representative trial `390__jeuTrAX` spent 904 seconds between agent start and verification, exactly matching the task's 900-second agent timeout, then persisted as failed. Every first-attempt full run was therefore already unable to meet the 95% coverage gate.
+- Policy: external `eval-configs/ds-1000.yaml` now sets `agent_timeout_multiplier: 8.0`. Harbor's isolated preflight resolved this as an agent-only multiplier with the global multiplier at 1.0 and no verifier multiplier, yielding a 7,200-second agent ceiling without changing scoring.
+- Lifecycle: cancelled only the five invalid DS roots (`…-3e51`, `…-0606`, `…-7692`, `…-1fbf`, `…-5e6d`). Submitted fresh full roots qk157 `…-2df9`, qk175 `…-5cfa`, skew2 `…-991f`, skew4 `…-d225`, and skew8 `…-1aaa` from campaign worktree commit `dd4131163d` at interactive priority on `cw-rno2a`.
+- Initial state: qk157 root entered running with its serve child pending on the peer; the other four roots briefly queued while cancelled serve pods released. By 17:21 EDT, all five roots and all five serve children were running on RNO2A. The first submission attempt created no jobs because the fresh shell lacked ADC; retry loaded `/Users/benfeuer/Documents/secrets.env` so the existing environment-backed Daytona secret resolved. No secret values were printed or recorded.
+
+## 2026-09-10 17:25 EDT — SimpleQA timeout recovery replaced
+
+- Evidence: trial `simpleqa-3111__XaapTrV` started its agent at 20:25:56 UTC, entered verification at 21:16:00, completed verification successfully, and persisted as `AgentTimeoutError`. The 3,004-second agent interval matches the task's 3,000-second ceiling. Across the five roots, distinct timeout counts were 27/543, 12/163, 53/431, 53/391, and 51/431 persisted trial events; four were already below 95% among completed events and qk157 was at the edge.
+- Policy: external `eval-configs/simpleqa.yaml` now sets `agent_timeout_multiplier: 2.4`. Harbor's isolated preflight resolves this as an agent-only multiplier with the global multiplier at 1.0 and no verifier multiplier, yielding a 7,200-second agent ceiling without changing judge or verifier behavior.
+- Lifecycle: cancelled only the five invalid SimpleQA roots (`…-6154`, `…-193e`, `…-d1fd`, `…-00e0`, `…-6619`). Submitted fresh full roots qk157 `…-86de`, qk175 `…-0f33`, skew2 `…-0d04`, skew4 `…-c792`, and skew8 `…-337c` from campaign worktree commit `dd4131163d` at interactive priority on `cw-rno2a`, using the established Together judge environment from `/Users/benfeuer/Documents/secrets.env`.
+- Initial state: qk157 and qk175 roots were running; the three skew roots were pending. All five reported zero failures and zero preemptions.
