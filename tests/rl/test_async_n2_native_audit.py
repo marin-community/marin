@@ -159,3 +159,11 @@ def test_native_n2_gate_rejects_corruption(defect):
         item["body_json"] = json.dumps(body)
     with pytest.raises(ValueError):
         audit_fresh_events(capture, rows)
+
+
+@pytest.mark.parametrize("step", [1.25, True, "1.25", "1e0", "01"])
+def test_reject_invalid_native_step_before_conversion(step):
+    capture, rows = fixture()
+    capture["results"]["scalars"][0]["step"] = step
+    with pytest.raises(ValueError):
+        audit_fresh_events(capture, rows)

@@ -11,6 +11,7 @@ required inputs to the final gate; this module does not synthesize those proofs.
 import hashlib
 import json
 import math
+import re
 from collections import Counter
 from collections.abc import Mapping, Sequence
 
@@ -19,6 +20,14 @@ def _integer(value):
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or int(value) != value:
         raise ValueError("Expected an exact finite integer")
     return int(value)
+
+
+def _step(value):
+    if isinstance(value, str):
+        if not re.fullmatch(r"-?(0|[1-9][0-9]*)", value):
+            raise ValueError("Expected an integer telemetry step string")
+        return int(value)
+    return _integer(value)
 
 
 def _equal(actual, expected, label):
@@ -53,7 +62,7 @@ def audit_fresh_events(capture, history):
     for item in capture["results"]["events"]:
         attributes = json.loads(item["attributes_json"])
         body = json.loads(item["body_json"])
-        step = _integer(int(attributes.get("step", -1)))
+        step = _step(attributes.get("step", -1))
         events.setdefault(item["name"], []).append((step, body, attributes))
 
     prepared = events.get("cohort_prepared", [])
@@ -139,7 +148,7 @@ def audit_fresh_events(capture, history):
     scalar_joins = 0
     scalar_seen = {}
     for scalar in capture["results"]["scalars"]:
-        step = _integer(int(scalar["step"]))
+        step = _step(scalar["step"])
         if step not in rows:
             continue
         metric, value = scalar["metric"], scalar["value"]
