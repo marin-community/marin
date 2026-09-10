@@ -376,8 +376,6 @@ class ZephyrWorker:
 
     def _report_worker_iris_status(self) -> None:
         """Push worker status text to Iris for UI display. Called on each heartbeat."""
-        # Pass the renderer, not its result: the limiter throttles pushes, so
-        # eager rendering would take the resource lock for output nobody reads.
         _push_iris_task_status(self._iris_status_limiter, self._worker_status_md)
 
     def _worker_status_md(self) -> tuple[str, str]:
