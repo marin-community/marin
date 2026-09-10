@@ -12,6 +12,7 @@ from fray.types import CpuConfig
 from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import ArtifactStep, StepContext, run
 from marin.execution.remote import RemoteCallable
+from marin.rl.skyrl import SkyRLCompletionMode, SkyRLLaunchRequest
 
 from experiments.post_training import async_rl
 from experiments.post_training.curriculum_rl.launch import mirror_hf_model
@@ -29,6 +30,20 @@ def _east_object(uri: str) -> str:
     ):
         raise ValueError("Qualification objects must use explicit east S3 URIs")
     return uri
+
+
+def validate_rno_qualification(request: SkyRLLaunchRequest) -> None:
+    """Apply K28 to this checkpoint-only Qwen mechanism gate.
+
+    The shared validator contains the exact pinned Qwen, HF-disabled and east
+    URI checks, but its older completion restriction is metrics-only. Validate
+    those unchanged storage checks with a temporary projection; the actual
+    request stays CHECKPOINT and is returned/submitted without modification.
+    This exception is local to this qualification builder, not a fleet default.
+    """
+    if request.completion_mode is not SkyRLCompletionMode.CHECKPOINT:
+        raise ValueError("RNO N2 qualification requires checkpoint completion")
+    async_rl.validate_qwen_cross_region_request(replace(request, completion_mode=SkyRLCompletionMode.METRICS))
 
 
 def build_qualification(
@@ -92,12 +107,12 @@ def build_qualification(
         overrides = [*config.request.overrides, f"++trainer.resume_mode={mode}"]
         if checkpoint_seven is not None:
             overrides.append(f"++trainer.resume_path={json.dumps(checkpoint_seven)}")
-        return replace(
-            config,
-            request=replace(
-                config.request, config_yaml=yaml.safe_dump(recipe, sort_keys=False), overrides=tuple(overrides)
-            ),
+        request = replace(
+            config.request, config_yaml=yaml.safe_dump(recipe, sort_keys=False), overrides=tuple(overrides)
         )
+        if cluster == "cw-rno2a" and not ctx.is_fingerprint:
+            validate_rno_qualification(request)
+        return replace(config, request=request)
 
     runtime_args = {
         key: replace(value, max_retries=1, wandb_entity="dogml") for key, value in checkpoint_step.runtime_args.items()

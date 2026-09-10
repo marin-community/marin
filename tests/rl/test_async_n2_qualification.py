@@ -19,6 +19,7 @@ from experiments.post_training.async_n2_qualification import (
     local_model_dependency,
     preparation_dependency,
     resolve_qualification,
+    validate_rno_qualification,
 )
 from experiments.post_training.curriculum_rl import launch
 from experiments.post_training.math_eval.bucket_launcher import VerifiedBucketDataSource
@@ -131,7 +132,10 @@ def test_local_mirror_uses_actual_step_runner_without_submissions(tmp_path, monk
     assert retained == {str(path.relative_to(output)): path.read_bytes() for path in output.rglob("*") if path.is_file()}
 
 
-def test_complete_fresh_and_continuation_graph_uses_no_nested_submission(tmp_path, monkeypatch, local_config_inputs):
+@pytest.mark.parametrize("cluster", ["cw-us-east-02a", "cw-rno2a"])
+def test_complete_fresh_and_continuation_graph_uses_no_nested_submission(
+    tmp_path, monkeypatch, local_config_inputs, cluster
+):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     downloads = []
 
@@ -145,7 +149,7 @@ def test_complete_fresh_and_continuation_graph_uses_no_nested_submission(tmp_pat
     def submission_trap(*args, **kwargs):
         raise AssertionError("Complete graph attempted a nested submission")
 
-    fresh = build_qualification(version="2026.09.09.259", measurement_uri=MARKER)
+    fresh = build_qualification(version="2026.09.09.259", measurement_uri=MARKER, cluster=cluster)
     adopted = {dep.adopt_source for dep in fresh.deps if dep.adopt_source}
     assert len(fresh.deps) == 3 and len(adopted) == 2
     original_fs = lazy.url_to_fs
@@ -167,7 +171,10 @@ def test_complete_fresh_and_continuation_graph_uses_no_nested_submission(tmp_pat
     first = resolve_qualification(fresh, PREFIX, seen)
     checkpoint = first.request.output.checkpoint_root + "/global_step_7"
     continuation = build_qualification(
-        version="2026.09.09.260", measurement_uri=MARKER.replace("fresh", "continuation"), checkpoint_seven=checkpoint
+        version="2026.09.09.260",
+        measurement_uri=MARKER.replace("fresh", "continuation"),
+        checkpoint_seven=checkpoint,
+        cluster=cluster,
     )
     second = resolve_qualification(continuation, PREFIX, seen)
     assert len(seen) == 4 and len(downloads) == 2
@@ -197,3 +204,18 @@ def test_rno_changes_only_execution_cluster(local_config_inputs):
     assert rno.request.model.uri.startswith("s3://marin-us-east-02a/")
     with pytest.raises(ValueError, match="Qwen qualification"):
         build_qualification(**kwargs, cluster="cw-us-east-08a")
+
+
+def test_rno_boundary_rejects_other_model_and_region(local_config_inputs):
+    config = materialized_config(
+        build_qualification(version="2026.09.09.259", measurement_uri=MARKER, cluster="cw-rno2a"), PREFIX
+    )
+    request = config.request
+    validate_rno_qualification(request)
+    assert request.completion_mode.value == "checkpoint"
+    with pytest.raises(ValueError, match="pinned Qwen"):
+        validate_rno_qualification(replace(request, model=replace(request.model, tokenizer_uri="other/model")))
+    with pytest.raises(ValueError, match="east S3"):
+        validate_rno_qualification(
+            replace(request, output=replace(request.output, checkpoint_root="s3://marin-us-west-01/other"))
+        )
