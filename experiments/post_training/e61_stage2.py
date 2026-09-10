@@ -86,6 +86,12 @@ def stage2_packet(source_request: dict, input_receipt: bytes, arm_name: str) -> 
     name = "users/ahmad/checkpoints/async-rl/e61-stage2-" + arm_name
     output = EAST + "marin/" + name + "/" + version
     temporary = EAST + "tmp/ttl=14d/skyrl/marin-us-east-02a/marin/" + name + "/" + version
+    overrides.extend(
+        [
+            "++generator.trajectory_retention.output_path=" + json.dumps(temporary + "/attempts/trajectories"),
+            "++terminal_bench_config.trials_dir=" + json.dumps(temporary + "/attempts/trace_jobs"),
+        ]
+    )
     request = copy.deepcopy(source_request)
     request.update(
         run_id=name.replace("_", "-") + "-" + version,

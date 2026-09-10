@@ -203,7 +203,7 @@
     "highest package completed correctness at update 25",
     "lowest total incomplete fraction",
     "highest common-off completed correctness",
-    "simplest treatment; parser-only first"
+    "simplest treatment in frozen exact-tie order: parser_only, soft_overlong, negative_truncation_advantage, force_close, repetition_stop"
   ],
   "required_before_native_freeze": [
     "K16 actual GPU mechanical result and independent 64-row external audit",
