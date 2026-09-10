@@ -17,10 +17,10 @@ import re
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass
 
+import pyarrow as pa
 from rigging.filesystem.storage_path import StoragePath
 from tasktrove_verify.spec import mode_of, render_spec
 from zephyr.context import ZephyrContext
-from zephyr.dataset import Dataset
 
 from experiments.post_training.tasktrove.contract import (
     MODE_EXTRAS,
@@ -39,7 +39,7 @@ from experiments.post_training.tasktrove.converters.converted_task import (
 )
 from experiments.post_training.tasktrove.converters.registry import converter_index
 from experiments.post_training.tasktrove.fingerprint import COVERAGE_JSON, uncovered_keys
-from experiments.post_training.tasktrove.shards import TaskShard, iter_shard_rows, source_name, task_shards
+from experiments.post_training.tasktrove.raw_tasks import WORKER_RESOURCES, raw_tasks
 from experiments.post_training.tasktrove.sources import SourceInfo, SourceVerdict, load_source_verdicts
 from experiments.post_training.tasktrove.taskbinary import (
     DOCKERFILE,
@@ -84,6 +84,27 @@ class ConvertedRecord:
     solution_binary: bytes | None
 
 
+CONVERTED_SCHEMA = pa.schema(
+    [
+        ("source", pa.string()),
+        ("path", pa.string()),
+        ("family", pa.string()),
+        ("template_id", pa.string()),
+        ("converter", pa.string()),
+        ("mode", pa.string()),
+        ("dockerfile_id", pa.string()),
+        ("language", pa.string()),
+        ("tags", pa.list_(pa.string())),
+        ("has_solution", pa.bool_()),
+        ("status", pa.string()),
+        ("error", pa.string()),
+        ("instruction_key", pa.string()),
+        ("task_binary", pa.binary()),
+        ("solution_binary", pa.binary()),
+    ]
+)
+
+
 def build_task_files(converted: ConvertedTask, tool_ref: str, metadata: dict) -> TaskFiles:
     """The binary the agent and Harbor see: instruction, task.toml, edited Dockerfile, shim, spec, data."""
     mode = mode_of(converted.spec)
@@ -101,11 +122,11 @@ def build_task_files(converted: ConvertedTask, tool_ref: str, metadata: dict) ->
     return TaskFiles(files)
 
 
-def convert_shard(shard: TaskShard, tool_ref: str) -> Iterator[dict]:
-    info = load_source_verdicts()[source_name(shard.parquet_path)]
+def convert_rows(rows: Iterator[dict], tool_ref: str) -> Iterator[dict]:
+    verdicts = load_source_verdicts()
     index = converter_index()
-    for row in iter_shard_rows(shard):
-        yield asdict(convert_one(info, row.path, row.task_binary, index, tool_ref))
+    for row in rows:
+        yield asdict(convert_one(verdicts[row["source"]], row["path"], row["task_binary"], index, tool_ref))
 
 
 def _unconverted(info: SourceInfo, path: str, template_id: str, status: ConvertStatus, error: str) -> ConvertedRecord:
@@ -178,7 +199,7 @@ def convert_one(
 
 
 def convert_tasks(input_path: str, templates_path: str, output_path: str, tool_ref: str) -> None:
-    """Zephyr stage: one output parquet per source parquet, every row tagged with its status.
+    """Zephyr stage: one converted parquet per shard, every row tagged with its status.
 
     Refuses to run while ``coverage.json`` lists a kept key with an exemplar and no converter, so
     a converter that was never written cannot silently become a ``no_converter`` column.
@@ -186,6 +207,6 @@ def convert_tasks(input_path: str, templates_path: str, output_path: str, tool_r
     missing = uncovered_keys(json.loads((StoragePath(templates_path) / COVERAGE_JSON).read_text()))
     if missing:
         raise ValueError(f"{len(missing)} kept converter keys have no converter: {missing[:5]}")
-    ds = Dataset.from_list(task_shards(input_path)).flat_map(lambda shard: convert_shard(shard, tool_ref))
-    ds = ds.write_parquet(str(StoragePath(output_path) / "converted/part-{shard:05d}.parquet"))
-    ZephyrContext(name="tasktrove-convert").execute(ds)
+    ds = raw_tasks(input_path).map_shard(lambda rows, _: convert_rows(rows, tool_ref))
+    ds = ds.write_parquet(str(StoragePath(output_path) / "converted/part-{shard:05d}.parquet"), schema=CONVERTED_SCHEMA)
+    ZephyrContext(name="tasktrove-convert", resources=WORKER_RESOURCES).execute(ds)

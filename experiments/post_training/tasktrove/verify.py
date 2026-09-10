@@ -20,7 +20,6 @@ from enum import StrEnum
 from pathlib import Path
 
 import pyarrow as pa
-from fray.types import ResourceConfig
 from rigging.filesystem.storage_path import StoragePath
 from tasktrove_verify.grade import grade
 from tasktrove_verify.modes.ifeval_constraints import CONSTRAINTS
@@ -48,10 +47,12 @@ from tasktrove_verify.spec import (
 )
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
+from zephyr.readers import load_parquet
 
 from experiments.post_training.tasktrove.contract import INSTALL_MARKER, OLD_GRADER_LINE, VERIFIER_TOML, VERIFY_TEST_SH
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
-from experiments.post_training.tasktrove.dedup import DEDUPED_GLOB, iter_rows
+from experiments.post_training.tasktrove.dedup import DEDUPED_GLOB
+from experiments.post_training.tasktrove.raw_tasks import APPROX_SHARD_BYTES, WORKER_RESOURCES
 from experiments.post_training.tasktrove.taskbinary import (
     DOCKERFILE,
     INSTRUCTION,
@@ -244,22 +245,19 @@ def verify_rows(rows: Iterator[dict]) -> Iterator[LedgerRow]:
             )
 
 
-def verify_shard(shard_path: str) -> Iterator[dict]:
-    for ledger_row in verify_rows(iter_rows(StoragePath(shard_path))):
-        yield asdict(ledger_row)
-
-
 def read_ledger(verified_path: str) -> list[LedgerRow]:
-    return [LedgerRow(**row) for row in iter_rows(StoragePath(verified_path) / VERIFIED_LEDGER_GLOB)]
+    files = sorted((StoragePath(verified_path) / VERIFIED_LEDGER_GLOB).glob(), key=str)
+    return [LedgerRow(**row) for f in files for row in load_parquet(str(f))]
 
 
 def verify_tasks(deduped_path: str, output_path: str) -> None:
     """Zephyr stage: one ledger shard of rejections per deduped shard, then a per-check summary."""
-    shards = [str(shard) for shard in sorted((StoragePath(deduped_path) / DEDUPED_GLOB).glob(), key=str)]
     out = StoragePath(output_path)
-    ds = Dataset.from_list(shards).flat_map(verify_shard)
+    ds = Dataset.from_files(str(StoragePath(deduped_path) / DEDUPED_GLOB))
+    ds = ds.load_parquet(columns=_VERIFY_COLUMNS, approx_shard_bytes=APPROX_SHARD_BYTES)
+    ds = ds.map_shard(lambda rows, _: (asdict(ledger_row) for ledger_row in verify_rows(rows)))
     ds = ds.write_parquet(str(out / "ledger/part-{shard:05d}.parquet"), schema=_LEDGER_SCHEMA)
-    ZephyrContext(name="tasktrove-verify", resources=ResourceConfig(cpu=1, ram="2g")).execute(ds)
+    ZephyrContext(name="tasktrove-verify", resources=WORKER_RESOURCES).execute(ds)
     ledger = read_ledger(output_path)
     summary = {
         "rejected": len(ledger),
@@ -270,6 +268,7 @@ def verify_tasks(deduped_path: str, output_path: str) -> None:
     logger.info("verified: %d rejected %s", len(ledger), summary["by_check"])
 
 
+_VERIFY_COLUMNS = ["source", "path", "converter", "mode", "status", "task_binary"]
 _LEDGER_SCHEMA = pa.schema(
     [
         ("source", pa.string()),

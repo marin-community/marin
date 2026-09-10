@@ -19,16 +19,17 @@ is part of every task's identity.
 | step | module | what it does |
 |---|---|---|
 | `raw` | `pipeline.py` | `hf_download` of every `*/tasks.parquet` at the pinned revision |
-| `fingerprints` | `fingerprint.py` | one row per task with its template id (normalized `tests/` and `environment/` code) |
+| `summaries` | `fingerprint.py` | fingerprint every task and `group_by` template id (normalized `tests/` and `environment/` code) |
 | `templates` | `fingerprint.py` | `templates.json`, one exemplar per template with 20+ tasks, `coverage.json` per converter key |
 | `converted` | `convert.py` | route by `source_verdicts.json` and converter key; emit the new binary and selection columns |
 | `deduped` | `dedup.py` | drop repeated instructions within a source; optional `--max-tasks-per-source` |
 | `verified` | `verify.py` | throw away tasks whose grader does not hold up; the ledger names the check |
 | `clean` | `clean.py` | `tasks/<source>/*.parquet`, `ledger/`, `manifest.json`, `report.md` |
 
-The unit of work is a shard of about 2,000 tasks (a run of row groups in one source parquet), so
-the Zephyr stages spread a 600k-task source over hundreds of workers and the single-process steps
-hold one shard in memory. `source_verdicts.json` keeps or drops each source with a reason; every
+The Zephyr stages load the source parquets with `load_parquet`, shuffle the rows into 1,024 even
+shards before any per-task work (twenty sources store every task in a single row group), and use
+`group_by` for the template index and dedup; the `templates` and `clean` steps stream one shard at
+a time on the coordinator. `source_verdicts.json` keeps or drops each source with a reason; every
 kept source has a converter in this tree.
 
 Output rows carry `source`, `family`, `template_id`, `converter`, `mode`, `dockerfile_id`,

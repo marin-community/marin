@@ -8,8 +8,8 @@
     python -m experiments.post_training.tasktrove.pipeline --version 2026.09.09 --verify-tool-ref <sha> \\
         --stage templates --run
 
-Steps: ``raw`` downloads the parquets; ``fingerprints`` records one template id per task;
-``templates`` extracts one exemplar per template and writes the converter coverage; ``converted``
+Steps: ``raw`` downloads the parquets; ``summaries`` fingerprints every task and groups by
+template; ``templates`` extracts one exemplar per template and writes the converter coverage; ``converted``
 applies the registered converters; ``deduped`` drops repeated instructions; ``verified`` throws
 away tasks whose grader does not hold up; ``clean`` assembles the output.
 """
@@ -27,18 +27,18 @@ from marin.experiment.data import hf_download
 from experiments.post_training.tasktrove.clean import build_clean
 from experiments.post_training.tasktrove.convert import convert_tasks
 from experiments.post_training.tasktrove.dedup import dedup_tasks
-from experiments.post_training.tasktrove.fingerprint import build_template_index, fingerprint_tasks
-from experiments.post_training.tasktrove.shards import TASKS_GLOB
+from experiments.post_training.tasktrove.fingerprint import build_template_index, summarize_templates
+from experiments.post_training.tasktrove.raw_tasks import TASKS_GLOB
 from experiments.post_training.tasktrove.sources import TASKTROVE_HF_ID, TASKTROVE_REVISION
 from experiments.post_training.tasktrove.verify import verify_tasks
 
-STAGES = ("raw", "fingerprints", "templates", "converted", "deduped", "verified", "clean")
+STAGES = ("raw", "summaries", "templates", "converted", "deduped", "verified", "clean")
 
 
 @dataclass(frozen=True)
 class TaskTroveWorkflow:
     raw: ArtifactStep
-    fingerprints: ArtifactStep
+    summaries: ArtifactStep
     templates: ArtifactStep
     converted: ArtifactStep
     deduped: ArtifactStep
@@ -49,9 +49,9 @@ class TaskTroveWorkflow:
 def build_workflow(tool_ref: str, max_tasks_per_source: int | None) -> TaskTroveWorkflow:
     coordinator = ResourceConfig.with_cpu(cpu=4, ram="16g")
     raw = hf_download("raw/tasktrove", hf_id=TASKTROVE_HF_ID, revision=TASKTROVE_REVISION, urls_glob=(TASKS_GLOB,))
-    fingerprints = apply(
-        "tasktrove/fingerprints",
-        remote(fingerprint_tasks, resources=coordinator),
+    summaries = apply(
+        "tasktrove/template_summaries",
+        remote(summarize_templates, resources=coordinator),
         input_path=raw,
         output_path=OUT,
     )
@@ -59,7 +59,7 @@ def build_workflow(tool_ref: str, max_tasks_per_source: int | None) -> TaskTrove
         "tasktrove/templates",
         remote(build_template_index, resources=coordinator),
         input_path=raw,
-        fingerprints_path=fingerprints,
+        summaries_path=summaries,
         output_path=OUT,
     )
     converted = apply(
@@ -92,7 +92,7 @@ def build_workflow(tool_ref: str, max_tasks_per_source: int | None) -> TaskTrove
         tool_ref=tool_ref,
         artifact_type=Artifact,
     )
-    return TaskTroveWorkflow(raw, fingerprints, templates, converted, deduped, verified, clean)
+    return TaskTroveWorkflow(raw, summaries, templates, converted, deduped, verified, clean)
 
 
 @click.command(help=__doc__)

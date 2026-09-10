@@ -3,11 +3,12 @@
 
 """Fingerprint every TaskTrove task and build the template index.
 
-``fingerprint_tasks`` walks every ``*/tasks.parquet`` and writes one row per task with its
-template id, so per-template work replaces per-task work. ``build_template_index`` groups those
-rows, extracts one exemplar task per template into ``templates/<template_id>/`` and writes
-``templates.json`` plus a Markdown summary. That directory is the handoff for agents writing
-converters: each template gets one converter, not each task.
+``summarize_templates`` fingerprints every row of every ``*/tasks.parquet`` and groups the
+fingerprints by template id, writing one summary per template, so per-template work replaces
+per-task work. ``build_template_index`` extracts one exemplar task per template into
+``templates/<template_id>/`` and writes ``templates.json`` plus a Markdown summary. That
+directory is the handoff for agents writing converters: each template gets one converter, not
+each task.
 """
 
 import json
@@ -19,15 +20,11 @@ from dataclasses import asdict, dataclass
 import pyarrow.parquet as pq
 from rigging.filesystem.storage_path import StoragePath
 from zephyr.context import ZephyrContext
-from zephyr.dataset import Dataset
+from zephyr.readers import load_jsonl
 
 from experiments.post_training.tasktrove.converters.converted_task import ConverterKey
 from experiments.post_training.tasktrove.converters.registry import converter_index
-from experiments.post_training.tasktrove.shards import (
-    TaskShard,
-    iter_shard_rows,
-    task_shards,
-)
+from experiments.post_training.tasktrove.raw_tasks import WORKER_RESOURCES, raw_tasks
 from experiments.post_training.tasktrove.sources import SourceVerdict, load_source_verdicts
 from experiments.post_training.tasktrove.taskbinary import (
     DOCKERFILE,
@@ -40,6 +37,9 @@ from experiments.post_training.tasktrove.taskbinary import (
 logger = logging.getLogger(__name__)
 
 COVERAGE_JSON = "coverage.json"
+SUMMARIES_GLOB = "template_summaries/*.jsonl.gz"
+SHAPE_SAMPLE = 50
+"""Data-file shapes are collected from this many members of each template."""
 EXEMPLAR_MIN_TASKS = 20
 """Templates below this many tasks are listed in the index but get no extracted exemplar. The
 long tail is per-repository SWE setup scripts, handled per repository rather than per template."""
@@ -49,8 +49,6 @@ long tail is per-repository SWE setup scripts, handled per repository rather tha
 class TaskFingerprintRecord:
     source: str
     path: str
-    row_group: int
-    row_in_group: int
     template_id: str
     dockerfile_id: str
     test_sh_id: str
@@ -62,36 +60,26 @@ class TaskFingerprintRecord:
     task_bytes: int
 
 
-def fingerprint_shard(shard: TaskShard) -> Iterator[dict]:
-    for row in iter_shard_rows(shard):
-        task = read_task_binary(row.task_binary)
-        fp = template_fingerprint(task)
-        dockerfile = task.get_text(DOCKERFILE) or ""
-        base_image = next((line.split()[1] for line in dockerfile.splitlines() if line.startswith("FROM ")), "")
-        yield asdict(
-            TaskFingerprintRecord(
-                source=row.source,
-                path=row.path,
-                row_group=row.row_group,
-                row_in_group=row.row_in_group,
-                template_id=fp.template_id,
-                dockerfile_id=fp.dockerfile_id,
-                test_sh_id=fp.test_sh_id,
-                base_image=base_image,
-                code_files=list(fp.code_files),
-                data_files=list(fp.data_files),
-                instruction_chars=len(task.files.get(INSTRUCTION, b"")),
-                has_solution=task.has_solution,
-                task_bytes=len(row.task_binary),
-            )
+def fingerprint_row(row: dict) -> dict:
+    task = read_task_binary(row["task_binary"])
+    fp = template_fingerprint(task)
+    dockerfile = task.get_text(DOCKERFILE) or ""
+    base_image = next((line.split()[1] for line in dockerfile.splitlines() if line.startswith("FROM ")), "")
+    return asdict(
+        TaskFingerprintRecord(
+            source=row["source"],
+            path=row["path"],
+            template_id=fp.template_id,
+            dockerfile_id=fp.dockerfile_id,
+            test_sh_id=fp.test_sh_id,
+            base_image=base_image,
+            code_files=list(fp.code_files),
+            data_files=list(fp.data_files),
+            instruction_chars=len(task.files.get(INSTRUCTION, b"")),
+            has_solution=task.has_solution,
+            task_bytes=len(row["task_binary"]),
         )
-
-
-def fingerprint_tasks(input_path: str, output_path: str) -> None:
-    """Zephyr stage: one parquet of fingerprint records per task shard."""
-    ds = Dataset.from_list(task_shards(input_path)).flat_map(fingerprint_shard)
-    ds = ds.write_parquet(str(StoragePath(output_path) / "fingerprints/part-{shard:05d}.parquet"))
-    ZephyrContext(name="tasktrove-fingerprint").execute(ds)
+    )
 
 
 @dataclass
@@ -106,8 +94,6 @@ class TemplateSummary:
     tasks_with_solution: int
     exemplar_source: str
     exemplar_path: str
-    exemplar_row_group: int
-    exemplar_row_in_group: int
 
 
 @dataclass
@@ -163,65 +149,89 @@ def uncovered_keys(coverage: list[dict]) -> list[str]:
     ]
 
 
-def build_template_index(input_path: str, fingerprints_path: str, output_path: str) -> None:
-    """Group fingerprints by template, extract one exemplar per template, write the index."""
-    shards = (StoragePath(fingerprints_path) / "fingerprints/*.parquet").glob()
-    rows: list[dict] = []
-    for shard in sorted(shards, key=str):
-        with shard.open("rb") as handle:
-            rows.extend(pq.read_table(handle).to_pylist())
-    logger.info("loaded %d fingerprint rows from %d shards", len(rows), len(shards))
-
-    by_template: dict[str, list[dict]] = defaultdict(list)
-    for r in rows:
-        by_template[r["template_id"]].append(r)
-
-    summaries: list[TemplateSummary] = []
-    exemplars: list[tuple[str, dict]] = []
-    for template_id, members in sorted(by_template.items(), key=lambda kv: -len(kv[1])):
-        exemplar = members[0]
-        if len(members) >= EXEMPLAR_MIN_TASKS:
-            exemplars.append((template_id, exemplar))
-        summaries.append(
-            TemplateSummary(
-                template_id=template_id,
-                tasks=len(members),
-                sources=dict(Counter(m["source"] for m in members).most_common()),
-                dockerfile_ids=dict(Counter(m["dockerfile_id"] for m in members).most_common()),
-                base_images=dict(Counter(m["base_image"] for m in members).most_common()),
-                code_files=exemplar["code_files"],
-                data_file_shapes=sorted({p for m in members[:50] for p in m["data_files"]})[:40],
-                tasks_with_solution=sum(1 for m in members if m["has_solution"]),
-                exemplar_source=exemplar["source"],
-                exemplar_path=exemplar["path"],
-                exemplar_row_group=exemplar["row_group"],
-                exemplar_row_in_group=exemplar["row_in_group"],
-            )
+def summarize_template(template_id: str, members: Iterator[dict]) -> dict:
+    """Reduce one template's fingerprints to a ``TemplateSummary``; the exemplar is the lowest (source, path)."""
+    tasks = 0
+    sources: Counter = Counter()
+    dockerfile_ids: Counter = Counter()
+    base_images: Counter = Counter()
+    with_solution = 0
+    shapes: set[str] = set()
+    exemplar: dict | None = None
+    for m in members:
+        tasks += 1
+        sources[m["source"]] += 1
+        dockerfile_ids[m["dockerfile_id"]] += 1
+        base_images[m["base_image"]] += 1
+        with_solution += m["has_solution"]
+        if tasks <= SHAPE_SAMPLE:
+            shapes.update(m["data_files"])
+        if exemplar is None or (m["source"], m["path"]) < (exemplar["source"], exemplar["path"]):
+            exemplar = m
+    assert exemplar is not None
+    return asdict(
+        TemplateSummary(
+            template_id=template_id,
+            tasks=tasks,
+            sources=dict(sources.most_common()),
+            dockerfile_ids=dict(dockerfile_ids.most_common()),
+            base_images=dict(base_images.most_common()),
+            code_files=exemplar["code_files"],
+            data_file_shapes=sorted(shapes)[:40],
+            tasks_with_solution=with_solution,
+            exemplar_source=exemplar["source"],
+            exemplar_path=exemplar["path"],
         )
+    )
+
+
+def summarize_templates(input_path: str, output_path: str) -> None:
+    """Zephyr stage: fingerprint every task, group by template id, write one summary per template."""
+    ds = raw_tasks(input_path).map(fingerprint_row)
+    ds = ds.group_by(key=lambda fp: fp["template_id"], reducer=summarize_template)
+    ds = ds.write_jsonl(str(StoragePath(output_path) / "template_summaries/part-{shard:05d}.jsonl.gz"))
+    ZephyrContext(name="tasktrove-templates", resources=WORKER_RESOURCES).execute(ds)
+
+
+def read_summaries(summaries_path: str) -> list[TemplateSummary]:
+    files = sorted((StoragePath(summaries_path) / SUMMARIES_GLOB).glob(), key=str)
+    summaries = [TemplateSummary(**row) for f in files for row in load_jsonl(str(f))]
+    return sorted(summaries, key=lambda s: (-s.tasks, s.template_id))
+
+
+def build_template_index(input_path: str, summaries_path: str, output_path: str) -> None:
+    """Extract one exemplar per template with enough tasks and write the index and coverage."""
+    summaries = read_summaries(summaries_path)
+    total = sum(s.tasks for s in summaries)
     out = StoragePath(output_path)
-    _extract_exemplars(input_path, exemplars, out / "templates")
+    _extract_exemplars(input_path, [s for s in summaries if s.tasks >= EXEMPLAR_MIN_TASKS], out / "templates")
     (out / "templates.json").write_text(json.dumps([asdict(s) for s in summaries], indent=1))
     coverage = key_coverage(summaries)
     (out / COVERAGE_JSON).write_text(json.dumps([asdict(c) for c in coverage], indent=1))
-    (out / "templates.md").write_text(_render_summary(summaries, coverage, len(rows)))
-    logger.info("wrote %d templates covering %d tasks to %s", len(summaries), len(rows), output_path)
+    (out / "templates.md").write_text(_render_summary(summaries, coverage, total))
+    logger.info("wrote %d templates covering %d tasks to %s", len(summaries), total, output_path)
 
 
-def _extract_exemplars(input_path: str, exemplars: list[tuple[str, dict]], dest_root: StoragePath) -> None:
-    """Extract exemplar tasks, reading each parquet row group once for every exemplar it holds."""
-    by_group: dict[tuple[str, int], list[tuple[str, dict]]] = defaultdict(list)
-    for template_id, record in exemplars:
-        by_group[(record["source"], record["row_group"])].append((template_id, record))
-    for (source, row_group), wanted in sorted(by_group.items()):
+def _extract_exemplars(input_path: str, exemplars: list[TemplateSummary], dest_root: StoragePath) -> None:
+    """Extract exemplar tasks, scanning each source parquet's paths once and reading only the row groups that hit."""
+    by_source: dict[str, dict[str, str]] = defaultdict(dict)
+    for s in exemplars:
+        by_source[s.exemplar_source][s.exemplar_path] = s.template_id
+    for source, wanted in sorted(by_source.items()):
         parquet = StoragePath(input_path) / source / "tasks.parquet"
         with parquet.open("rb") as handle:
-            column = pq.ParquetFile(handle).read_row_group(row_group, columns=["task_binary"]).column("task_binary")
-            for template_id, record in wanted:
-                task = read_task_binary(column[record["row_in_group"]].as_py())
-                for path, data in task.files.items():
-                    target = dest_root / template_id / "exemplar" / path
-                    target.parent.mkdirs()
-                    target.write_bytes(data)
+            pf = pq.ParquetFile(handle)
+            for rg in range(pf.num_row_groups):
+                paths = pf.read_row_group(rg, columns=["path"]).column("path").to_pylist()
+                hits = [(i, wanted[p]) for i, p in enumerate(paths) if p in wanted]
+                if not hits:
+                    continue
+                column = pf.read_row_group(rg, columns=["task_binary"]).column("task_binary")
+                for i, template_id in hits:
+                    for path, data in read_task_binary(column[i].as_py()).files.items():
+                        target = dest_root / template_id / "exemplar" / path
+                        target.parent.mkdirs()
+                        target.write_bytes(data)
 
 
 def _render_summary(summaries: list[TemplateSummary], coverage: list[KeyCoverage], total: int) -> str:

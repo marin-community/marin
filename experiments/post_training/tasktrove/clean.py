@@ -25,9 +25,10 @@ import click
 import pyarrow as pa
 import pyarrow.parquet as pq
 from rigging.filesystem.storage_path import StoragePath
+from zephyr.readers import load_parquet
 
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
-from experiments.post_training.tasktrove.dedup import DEDUPED_GLOB, iter_rows
+from experiments.post_training.tasktrove.dedup import DEDUPED_GLOB
 from experiments.post_training.tasktrove.sources import TASKTROVE_HF_ID, TASKTROVE_REVISION
 from experiments.post_training.tasktrove.taskbinary import read_task_binary
 from experiments.post_training.tasktrove.verify import read_ledger
@@ -87,7 +88,7 @@ def build_clean(deduped_path: str, verified_path: str, output_path: str, tool_re
     convert_ledger: list[dict] = []
     for shard in sorted((StoragePath(deduped_path) / DEDUPED_GLOB).glob(), key=str):
         by_source_rows: dict[str, list[dict]] = defaultdict(list)
-        for row in iter_rows(shard):
+        for row in load_parquet(str(shard)):
             counts.input_tasks += 1
             status = row["status"]
             if status == ConvertStatus.CONVERTED and (row["source"], row["path"]) in rejected:

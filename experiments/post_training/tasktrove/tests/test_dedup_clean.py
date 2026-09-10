@@ -54,7 +54,9 @@ def _write_converted(root: Path, records: list[ConvertedRecord]) -> Path:
 
 
 def _rows(path: Path) -> dict[str, dict]:
-    return {row["path"]: row for row in pq.read_table(path).to_pylist()}
+    """Rows of one parquet, or of every parquet in a directory, keyed by task path."""
+    files = sorted(path.glob("*.parquet")) if path.is_dir() else [path]
+    return {row["path"]: row for f in files for row in pq.read_table(f).to_pylist()}
 
 
 def test_dedup_marks_repeated_instructions_and_capped_rows(tmp_path):
@@ -70,7 +72,7 @@ def test_dedup_marks_repeated_instructions_and_capped_rows(tmp_path):
     converted = _write_converted(tmp_path / "converted", records)
 
     dedup_tasks(str(converted), str(tmp_path / "deduped"), max_tasks_per_source=2)
-    rows = _rows(tmp_path / "deduped" / "deduped" / "part-00000.parquet")
+    rows = _rows(tmp_path / "deduped" / "deduped")
 
     assert rows["b.tar.gz"]["status"] == DedupStatus.DUPLICATE and rows["b.tar.gz"]["task_binary"] is None
     assert rows["e.tar.gz"]["status"] == ConvertStatus.NULL_GRADER
@@ -80,13 +82,13 @@ def test_dedup_marks_repeated_instructions_and_capped_rows(tmp_path):
     assert rows[capped]["task_binary"] is None
 
     dedup_tasks(str(converted), str(tmp_path / "again"), max_tasks_per_source=2)
-    assert _rows(tmp_path / "again" / "deduped" / "part-00000.parquet") == rows
+    assert _rows(tmp_path / "again" / "deduped") == rows
 
 
 def test_clean_keeps_survivors_and_ledgers_the_rest(tmp_path):
     blob = (FIXTURES / "nemotron_mcqa.tar.gz").read_bytes()
     good = _record("good.tar.gz", blob)
-    duplicate = _record("dup.tar.gz", blob)
+    duplicate = _record("later-dup.tar.gz", blob)
     leaking = _leaking_math_record("leak.tar.gz")
     unconverted = replace(_record("bad.tar.gz", blob), status=ConvertStatus.NULL_GRADER, error="empty", task_binary=None)
     converted = _write_converted(tmp_path / "converted", [good, duplicate, leaking, unconverted])
@@ -96,7 +98,7 @@ def test_clean_keeps_survivors_and_ledgers_the_rest(tmp_path):
     verify_tasks(deduped, verified)
     build_clean(deduped, verified, clean, tool_ref="ref")
 
-    tasks = _rows(tmp_path / "clean" / "tasks" / SOURCE / "part-00000.parquet")
+    tasks = _rows(tmp_path / "clean" / "tasks" / SOURCE)
     assert set(tasks) == {"good.tar.gz"}
     assert tasks["good.tar.gz"]["mode"] == "mcq" and tasks["good.tar.gz"]["converter"] == "nemotron_mcqa"
     manifest = json.loads((tmp_path / "clean" / "manifest.json").read_text())
@@ -105,7 +107,7 @@ def test_clean_keeps_survivors_and_ledgers_the_rest(tmp_path):
     assert not (tmp_path / "clean" / "tasks" / "math").exists()
     ledger = _rows(tmp_path / "clean" / "ledger" / "convert.parquet")
     assert {p: r["status"] for p, r in ledger.items()} == {
-        "dup.tar.gz": "duplicate",
+        "later-dup.tar.gz": "duplicate",
         "leak.tar.gz": "verified:gold_leak",
         "bad.tar.gz": "null_grader",
     }

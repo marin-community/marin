@@ -9,7 +9,7 @@ Branch `tasktrove-conversion-pipeline`, one PR (#9061 is absorbed into it).
 
 ## Pipeline (`experiments/post_training/tasktrove/pipeline.py`)
 
-raw → fingerprints → templates → converted → deduped → verified → clean
+raw → summaries → templates → converted → deduped → verified → clean
 
 - Agents write `source_verdicts.json` (done) and `converters/<name>.py` (one per converter key).
 - Everything else is mechanical and reruns from the checked-in files.

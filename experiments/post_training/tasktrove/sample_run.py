@@ -27,12 +27,12 @@ from pathlib import Path
 import click
 from tasktrove_verify.cli import DEFAULT_LOGS_DIR
 from tasktrove_verify.reward import REWARD_JSON
+from zephyr.readers import load_parquet
 
 from experiments.post_training.tasktrove.contract import INSTALL_MARKER, TESTS_MOUNT
 from experiments.post_training.tasktrove.convert import ConvertedRecord, convert_one
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
 from experiments.post_training.tasktrove.converters.registry import converter_index
-from experiments.post_training.tasktrove.shards import iter_task_rows
 from experiments.post_training.tasktrove.sources import load_source_verdicts
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, read_task_binary
 
@@ -143,10 +143,10 @@ def sample_source(source: str, parquet: Path, count: int, out: Path, timeout: fl
     index = converter_index()
     statuses: collections.Counter = collections.Counter()
     converted: list[ConvertedRecord] = []
-    for row in iter_task_rows(str(parquet)):
+    for row in load_parquet(str(parquet)):
         if len(converted) >= count:
             break
-        record = convert_one(info, row.path, row.task_binary, index, LOCAL_TOOL_REF)
+        record = convert_one(info, row["path"], row["task_binary"], index, LOCAL_TOOL_REF)
         statuses[record.status] += 1
         if record.status == ConvertStatus.CONVERTED:
             converted.append(record)
