@@ -4,10 +4,10 @@
 """Tests for datakit decon step."""
 
 import gzip
+import hashlib
 import json
 from pathlib import Path
 
-import dupekit
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
@@ -19,7 +19,6 @@ from marin.datakit.decon import (
     _bloom_hash,
     _extract_ngrams,
     _load_drop_set,
-    _paragraph_overlap_and_matches,
     bloom_paths,
     build_all_source_drop_sets,
     build_eval_bloom,
@@ -130,7 +129,7 @@ def test_decon_ngram_flags_high_overlap_and_gates_low(fox_corpus):
         normalized_data=_as_source(Path(fox_corpus["input_dir"])),
         eval_data_sources=fox_corpus["eval_dir"],
         output_path=fox_corpus["output_dir"],
-        ngram=NGramConfig(ngram_length=3, stride=0, overlap_threshold=0.5),
+        ngram=NGramConfig(min_matched_features=2, ngram_length=3, stride=0, overlap_threshold=0.5),
         estimated_doc_count=10_000,
         false_positive_rate=1e-9,
     )
@@ -176,7 +175,7 @@ def test_decon_preserves_partition_filenames(fox_corpus):
         normalized_data=_as_source(Path(fox_corpus["input_dir"])),
         eval_data_sources=fox_corpus["eval_dir"],
         output_path=fox_corpus["output_dir"],
-        ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
+        ngram=NGramConfig(min_matched_features=2, ngram_length=3, overlap_threshold=0.5),
         estimated_doc_count=10_000,
         false_positive_rate=1e-9,
     )
@@ -191,7 +190,7 @@ def test_decon_output_schema(fox_corpus):
         normalized_data=_as_source(Path(fox_corpus["input_dir"])),
         eval_data_sources=fox_corpus["eval_dir"],
         output_path=fox_corpus["output_dir"],
-        ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
+        ngram=NGramConfig(min_matched_features=2, ngram_length=3, overlap_threshold=0.5),
         estimated_doc_count=10_000,
         false_positive_rate=1e-9,
     )
@@ -213,7 +212,7 @@ def test_decon_emits_eval_hash_index_sidecar(fox_corpus):
         normalized_data=_as_source(Path(fox_corpus["input_dir"])),
         eval_data_sources=fox_corpus["eval_dir"],
         output_path=fox_corpus["output_dir"],
-        ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
+        ngram=NGramConfig(min_matched_features=2, ngram_length=3, overlap_threshold=0.5),
         estimated_doc_count=10_000,
         false_positive_rate=1e-9,
     )
@@ -236,7 +235,7 @@ def test_decon_matched_hashes_join_recovers_eval_id(fox_corpus):
         normalized_data=_as_source(Path(fox_corpus["input_dir"])),
         eval_data_sources=fox_corpus["eval_dir"],
         output_path=fox_corpus["output_dir"],
-        ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
+        ngram=NGramConfig(min_matched_features=2, ngram_length=3, overlap_threshold=0.5),
         estimated_doc_count=10_000,
         false_positive_rate=1e-9,
     )
@@ -273,7 +272,7 @@ def test_decon_overlap_threshold_gates(fox_corpus, threshold, expect_high_flagge
         normalized_data=_as_source(Path(fox_corpus["input_dir"])),
         eval_data_sources=fox_corpus["eval_dir"],
         output_path=fox_corpus["output_dir"],
-        ngram=NGramConfig(ngram_length=3, overlap_threshold=threshold),
+        ngram=NGramConfig(min_matched_features=2, ngram_length=3, overlap_threshold=threshold),
         estimated_doc_count=10_000,
         false_positive_rate=1e-9,
     )
@@ -296,7 +295,7 @@ def test_decon_empty_input_raises(tmp_path: Path):
             normalized_data=_as_source(input_dir),
             eval_data_sources=str(eval_dir),
             output_path=str(output_dir),
-            ngram=NGramConfig(ngram_length=3),
+            ngram=NGramConfig(min_matched_features=2, ngram_length=3),
         )
 
 
@@ -334,7 +333,7 @@ def test_decon_eval_dir_with_sidecar_files_is_safe(tmp_path: Path):
         normalized_data=_as_source(input_dir),
         eval_data_sources=str(eval_dir),
         output_path=str(output_dir),
-        ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
+        ngram=NGramConfig(min_matched_features=2, ngram_length=3, overlap_threshold=0.5),
         estimated_doc_count=1_000,
         false_positive_rate=1e-9,
     )
@@ -369,7 +368,7 @@ def test_decon_fallback_eval_id_uses_full_path_for_uniqueness(tmp_path: Path):
         normalized_data=_as_source(input_dir),
         eval_data_sources=str(eval_dir),
         output_path=str(output_dir),
-        ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
+        ngram=NGramConfig(min_matched_features=2, ngram_length=3, overlap_threshold=0.5),
         estimated_doc_count=1_000,
         false_positive_rate=1e-9,
     )
@@ -411,7 +410,7 @@ def test_decon_synthesizes_partition_id_from_shard_index(tmp_path: Path):
         normalized_data=_as_source(input_dir),
         eval_data_sources=str(eval_dir),
         output_path=str(output_dir),
-        ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
+        ngram=NGramConfig(min_matched_features=2, ngram_length=3, overlap_threshold=0.5),
         estimated_doc_count=1_000,
         false_positive_rate=1e-9,
     )
@@ -449,7 +448,7 @@ def test_decon_paragraphs_below_short_exact_minimum_contribute_nothing(tmp_path:
         normalized_data=_as_source(input_dir),
         eval_data_sources=str(eval_dir),
         output_path=str(output_dir),
-        ngram=NGramConfig(ngram_length=8, overlap_threshold=0.5),
+        ngram=NGramConfig(min_matched_features=2, ngram_length=8, overlap_threshold=0.5),
         estimated_doc_count=1_000,
         false_positive_rate=1e-9,
     )
@@ -474,7 +473,7 @@ def test_decon_short_alphabetic_paragraph_uses_exact_feature(tmp_path: Path):
     result = build_eval_bloom(
         eval_data_sources=str(eval_dir),
         output_path=str(output_dir / "bloom"),
-        ngram=NGramConfig(ngram_length=8, overlap_threshold=0.5),
+        ngram=NGramConfig(min_matched_features=2, ngram_length=8, overlap_threshold=0.5),
     )
 
     assert result.n_eval_records == 1
@@ -487,11 +486,149 @@ def test_decon_short_record_fallback_spans_tiny_paragraphs(tmp_path: Path):
         tmp_path,
         eval_records=[{"id": "short_eval", "text": text}],
         input_records=[{"id": "doc", "text": text, "partition_id": 0}],
-        ngram=NGramConfig(ngram_length=8, overlap_threshold=0.5),
+        ngram=NGramConfig(min_matched_features=2, ngram_length=8, overlap_threshold=0.5),
     )
 
     assert rows["doc"]["contaminated"] is True
     assert rows["doc"]["max_overlap"] == 1.0
+
+
+def test_decon_long_record_fallback_spans_short_paragraphs(tmp_path: Path):
+    text = "one two three four\n\nfive six seven eight\n\nnine ten eleven twelve\n\nthirteen fourteen"
+    rows = _run_decon_one_shot(
+        tmp_path,
+        eval_records=[{"id": "eval", "text": text}],
+        input_records=[{"id": "doc", "text": text, "partition_id": 0}],
+        ngram=NGramConfig(min_matched_features=2, ngram_length=13, overlap_threshold=0.5),
+    )
+
+    assert rows["doc"]["contaminated"] is True
+    assert rows["doc"]["max_overlap"] == 1.0
+
+
+def test_decon_complete_record_with_one_ngram_and_short_answer_matches(tmp_path: Path):
+    text = "In which fiscal quarter of 2024 did Atlassian record its second highest revenue?\n\nQ4"
+    rows = _run_decon_one_shot(
+        tmp_path,
+        eval_records=[{"id": "eval", "text": text}],
+        input_records=[{"id": "doc", "text": text, "partition_id": 0}],
+        ngram=NGramConfig(min_matched_features=2, ngram_length=13, overlap_threshold=0.5),
+    )
+
+    assert rows["doc"]["contaminated"] is True
+    assert len(rows["doc"]["matched_hashes"]) == 1
+
+
+@pytest.mark.parametrize("short_match", ["September 29, 2011", "2, 3 and 4"])
+def test_decon_does_not_mark_long_document_from_one_short_match(tmp_path: Path, short_match: str):
+    rows = _run_decon_one_shot(
+        tmp_path,
+        eval_records=[{"id": "short_eval", "text": short_match}],
+        input_records=[
+            {
+                "id": "doc",
+                "text": (
+                    "This document has unrelated material before the short value.\n\n"
+                    f"{short_match}\n\n"
+                    "It also has unrelated material after the short value."
+                ),
+                "partition_id": 0,
+            }
+        ],
+        ngram=NGramConfig(min_matched_features=2, ngram_length=13, overlap_threshold=0.5),
+    )
+
+    assert rows["doc"]["contaminated"] is False
+    assert rows["doc"]["max_overlap"] == 1.0
+    assert rows["doc"]["matched_hashes"] == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Distinctive alpha phrase",
+        "one two three four five six seven eight nine ten eleven twelve thirteen",
+    ],
+)
+def test_decon_keeps_one_feature_match_for_complete_document(tmp_path: Path, text: str):
+    rows = _run_decon_one_shot(
+        tmp_path,
+        eval_records=[{"id": "short_eval", "text": text}],
+        input_records=[{"id": "doc", "text": text, "partition_id": 0}],
+        ngram=NGramConfig(min_matched_features=2, ngram_length=13, overlap_threshold=0.5),
+    )
+
+    assert rows["doc"]["contaminated"] is True
+    assert rows["doc"]["matched_hashes"] == [_bloom_hash(text)]
+
+
+def test_decon_does_not_index_short_paragraph_from_long_eval_record(tmp_path: Path):
+    long_match = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen"
+    short_match = "See comment above."
+    rows = _run_decon_one_shot(
+        tmp_path,
+        eval_records=[{"id": "eval", "text": f"{long_match}\n\n{short_match}"}],
+        input_records=[
+            {"id": "long", "text": long_match, "partition_id": 0},
+            {"id": "short", "text": short_match, "partition_id": 0},
+        ],
+        ngram=NGramConfig(min_matched_features=2, ngram_length=13, overlap_threshold=0.5),
+    )
+
+    assert rows["long"]["contaminated"] is True
+    assert rows["short"]["contaminated"] is False
+    assert rows["short"]["matched_hashes"] == []
+
+
+def test_decon_uses_configured_minimum_distinct_features(tmp_path: Path):
+    text = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen"
+    eval_records = [{"id": "eval", "text": text}]
+    input_records = [{"id": "doc", "text": text, "partition_id": 0}]
+
+    two = _run_decon_one_shot(
+        tmp_path / "two",
+        eval_records=eval_records,
+        input_records=input_records,
+        ngram=NGramConfig(ngram_length=13, overlap_threshold=0.5, min_matched_features=2),
+    )
+    three = _run_decon_one_shot(
+        tmp_path / "three",
+        eval_records=eval_records,
+        input_records=input_records,
+        ngram=NGramConfig(ngram_length=13, overlap_threshold=0.5, min_matched_features=3),
+    )
+
+    assert two["doc"]["contaminated"] is True
+    assert three["doc"]["contaminated"] is False
+
+
+def test_ngram_config_rejects_zero_minimum_matched_features():
+    with pytest.raises(ValueError, match="min_matched_features must be at least 1"):
+        NGramConfig(min_matched_features=0)
+
+
+def test_decon_attributes_only_report_hashes_that_triggered_mark(tmp_path: Path):
+    strong_match = "alpha beta gamma delta epsilon zeta"
+    weak_match = "September 29, 2011"
+    rows = _run_decon_one_shot(
+        tmp_path,
+        eval_records=[
+            {"id": "strong_eval", "text": strong_match},
+            {"id": "weak_eval", "text": weak_match},
+        ],
+        input_records=[
+            {
+                "id": "doc",
+                "text": f"{strong_match}\n\n{weak_match}",
+                "partition_id": 0,
+            }
+        ],
+        ngram=NGramConfig(min_matched_features=2, ngram_length=3, overlap_threshold=0.5),
+    )
+
+    expected = {_bloom_hash(ngram) for ngram in _extract_ngrams(strong_match, 3, 0)}
+    assert rows["doc"]["contaminated"] is True
+    assert set(rows["doc"]["matched_hashes"]) == expected
 
 
 def test_double_newline_delimiter_spans_single_line_breaks(tmp_path: Path):
@@ -510,7 +647,7 @@ def test_double_newline_delimiter_spans_single_line_breaks(tmp_path: Path):
         tmp_path / "nl",
         eval_records=[{"id": "e", "text": eval_text}],
         input_records=[{"id": "doc", "text": wrapped, "partition_id": 0}],
-        ngram=NGramConfig(ngram_length=5, overlap_threshold=0.5, paragraph_delimiter="\n"),
+        ngram=NGramConfig(min_matched_features=2, ngram_length=5, overlap_threshold=0.5, paragraph_delimiter="\n"),
     )
     assert per_line["doc"]["contaminated"] is False  # short lines form no 5-grams
 
@@ -518,7 +655,7 @@ def test_double_newline_delimiter_spans_single_line_breaks(tmp_path: Path):
         tmp_path / "nlnl",
         eval_records=[{"id": "e", "text": eval_text}],
         input_records=[{"id": "doc", "text": wrapped, "partition_id": 0}],
-        ngram=NGramConfig(ngram_length=5, overlap_threshold=0.5, paragraph_delimiter="\n\n"),
+        ngram=NGramConfig(min_matched_features=2, ngram_length=5, overlap_threshold=0.5, paragraph_delimiter="\n\n"),
     )
     assert true_para["doc"]["contaminated"] is True
 
@@ -538,7 +675,7 @@ def test_double_newline_delimiter_dilutes_isolated_matched_line(tmp_path: Path):
         tmp_path / "nl",
         eval_records=[{"id": "e", "text": eval_text}],
         input_records=[{"id": "doc", "text": block, "partition_id": 0}],
-        ngram=NGramConfig(ngram_length=5, overlap_threshold=0.5, paragraph_delimiter="\n"),
+        ngram=NGramConfig(min_matched_features=2, ngram_length=5, overlap_threshold=0.5, paragraph_delimiter="\n"),
     )
     assert per_line["doc"]["contaminated"] is True
 
@@ -546,7 +683,7 @@ def test_double_newline_delimiter_dilutes_isolated_matched_line(tmp_path: Path):
         tmp_path / "nlnl",
         eval_records=[{"id": "e", "text": eval_text}],
         input_records=[{"id": "doc", "text": block, "partition_id": 0}],
-        ngram=NGramConfig(ngram_length=5, overlap_threshold=0.5, paragraph_delimiter="\n\n"),
+        ngram=NGramConfig(min_matched_features=2, ngram_length=5, overlap_threshold=0.5, paragraph_delimiter="\n\n"),
     )
     assert true_para["doc"]["contaminated"] is False
 
@@ -610,7 +747,7 @@ def test_decon_catches_eval_paragraph_among_other_paragraphs(tmp_path: Path):
                 ),
             },
         ],
-        ngram=NGramConfig(ngram_length=4, overlap_threshold=0.5),
+        ngram=NGramConfig(min_matched_features=2, ngram_length=4, overlap_threshold=0.5),
     )
     assert rows["doc_buried"]["contaminated"] is True
     assert rows["doc_buried"]["max_overlap"] == 1.0
@@ -636,7 +773,7 @@ def test_decon_catches_multi_paragraph_eval_against_single_paragraph_input(tmp_p
                 "text": "What is the capital of France The capital city is Paris",
             },
         ],
-        ngram=NGramConfig(ngram_length=4, overlap_threshold=0.5),
+        ngram=NGramConfig(min_matched_features=2, ngram_length=4, overlap_threshold=0.5),
     )
     assert rows["doc_inline"]["contaminated"] is True
     # 7 ngrams in input paragraph, 5 match (the cross-boundary 2 don't): 5/7 ≈ 0.71.
@@ -658,7 +795,7 @@ def test_decon_catches_near_verbatim_with_word_insertion(tmp_path: Path):
                 "text": "Arctic predators have superior auditory capabilities for hunting beneath thick snow",
             },
         ],
-        ngram=NGramConfig(ngram_length=4, overlap_threshold=0.5),
+        ngram=NGramConfig(min_matched_features=2, ngram_length=4, overlap_threshold=0.5),
     )
     assert rows["doc_inserted"]["contaminated"] is True
     assert rows["doc_inserted"]["max_overlap"] >= 0.5
@@ -685,7 +822,7 @@ def test_decon_misses_case_only_differences(tmp_path: Path):
                 "text": "LOREM IPSUM DOLOR SIT AMET CONSECTETUR",
             },
         ],
-        ngram=NGramConfig(ngram_length=4, overlap_threshold=0.5),
+        ngram=NGramConfig(min_matched_features=2, ngram_length=4, overlap_threshold=0.5),
     )
     assert rows["doc_uppercase"]["contaminated"] is True
 
@@ -710,7 +847,7 @@ def test_decon_misses_punctuation_only_differences(tmp_path: Path):
             },
         ],
         # Use n=8 so EVERY ngram includes the last token and thus changes.
-        ngram=NGramConfig(ngram_length=8, overlap_threshold=0.5),
+        ngram=NGramConfig(min_matched_features=2, ngram_length=8, overlap_threshold=0.5),
     )
     assert rows["doc_no_qmark"]["contaminated"] is True
 
@@ -744,7 +881,7 @@ def test_decon_misses_short_eval_diluted_in_long_paragraph(tmp_path: Path):
                 ),
             },
         ],
-        ngram=NGramConfig(ngram_length=4, overlap_threshold=0.5),
+        ngram=NGramConfig(min_matched_features=2, ngram_length=4, overlap_threshold=0.5),
     )
     assert rows["doc_buried"]["contaminated"] is True
 
@@ -768,7 +905,7 @@ def test_decon_misses_paraphrased_eval(tmp_path: Path):
                 "text": "Which city serves as France's capital",
             },
         ],
-        ngram=NGramConfig(ngram_length=4, overlap_threshold=0.5),
+        ngram=NGramConfig(min_matched_features=2, ngram_length=4, overlap_threshold=0.5),
     )
     assert rows["doc_paraphrased"]["contaminated"] is True
 
@@ -792,7 +929,7 @@ def test_decon_misses_word_order_permutation(tmp_path: Path):
                 "text": "zeta epsilon delta gamma beta alpha",
             },
         ],
-        ngram=NGramConfig(ngram_length=4, overlap_threshold=0.5),
+        ngram=NGramConfig(min_matched_features=2, ngram_length=4, overlap_threshold=0.5),
     )
     assert rows["doc_permuted"]["contaminated"] is True
 
@@ -808,7 +945,7 @@ def test_build_eval_bloom_then_decon_matches_inline(fox_corpus):
         normalized_data=_as_source(Path(fox_corpus["input_dir"])),
         eval_data_sources=fox_corpus["eval_dir"],
         output_path=str(inline_output),
-        ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
+        ngram=NGramConfig(min_matched_features=2, ngram_length=3, overlap_threshold=0.5),
         estimated_doc_count=10_000,
         false_positive_rate=1e-9,
     )
@@ -819,7 +956,7 @@ def test_build_eval_bloom_then_decon_matches_inline(fox_corpus):
     artifact = build_eval_bloom(
         eval_data_sources=fox_corpus["eval_dir"],
         output_path=str(bloom_dir),
-        ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
+        ngram=NGramConfig(min_matched_features=2, ngram_length=3, overlap_threshold=0.5),
         estimated_doc_count=10_000,
         false_positive_rate=1e-9,
     )
@@ -836,7 +973,7 @@ def test_build_eval_bloom_then_decon_matches_inline(fox_corpus):
         normalized_data=_as_source(Path(fox_corpus["input_dir"])),
         prebuilt_bloom_dir=str(bloom_dir),
         output_path=str(prebuilt_output),
-        ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
+        ngram=NGramConfig(min_matched_features=2, ngram_length=3, overlap_threshold=0.5),
     )
     prebuilt_rows = _read_attributes(prebuilt_output)
 
@@ -944,7 +1081,42 @@ def test_build_eval_bloom_requires_features_for_every_required_record(tmp_path: 
         build_eval_bloom(
             eval_data_sources=str(eval_root),
             output_path=str(tmp_path / "bloom"),
-            ngram=NGramConfig(ngram_length=13),
+            ngram=NGramConfig(min_matched_features=2, ngram_length=13),
+            required_eval_manifest_path=str(manifest_path),
+            required_eval_corpus_version="test-corpus-v1",
+            required_eval_names=("Required Eval",),
+        )
+
+
+def test_build_eval_bloom_requires_each_required_record_to_self_match(tmp_path: Path):
+    eval_root = tmp_path / "evals"
+    artifact_path = eval_root / "aa" / "required_eval" / "test.parquet"
+    text = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen"
+    _write_input_parquet(artifact_path, [{"id": "eval-1", "text": text}])
+    manifest_path = eval_root / "aa" / "_manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "corpus_version": "test-corpus-v1",
+                "required": True,
+                "status": "complete",
+                "benchmarks": [
+                    {
+                        "name": "Required Eval",
+                        "artifact": "required_eval/test.parquet",
+                        "expected_records": 1,
+                    }
+                ],
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="1 of 1 required eval records do not match an exact copy"):
+        build_eval_bloom(
+            eval_data_sources=str(eval_root),
+            output_path=str(tmp_path / "bloom"),
+            ngram=NGramConfig(ngram_length=13, min_matched_features=3),
             required_eval_manifest_path=str(manifest_path),
             required_eval_corpus_version="test-corpus-v1",
             required_eval_names=("Required Eval",),
@@ -1032,7 +1204,7 @@ def test_build_eval_bloom_excludes_named_task_dirs(tmp_path: Path):
     build_eval_bloom(
         eval_data_sources=str(eval_root),
         output_path=str(bloom_dir),
-        ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
+        ngram=NGramConfig(min_matched_features=2, ngram_length=3, overlap_threshold=0.5),
         estimated_doc_count=1_000,
         false_positive_rate=1e-9,
         exclude_eval_dirs=frozenset({"code2text_python"}),
@@ -1055,7 +1227,7 @@ def test_build_eval_bloom_excludes_named_task_dirs(tmp_path: Path):
         normalized_data=_as_source(input_dir),
         prebuilt_bloom_dir=str(bloom_dir),
         output_path=str(output_dir),
-        ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
+        ngram=NGramConfig(min_matched_features=2, ngram_length=3, overlap_threshold=0.5),
     )
     rows = _read_attributes(output_dir)
     assert rows["hits-kept"]["contaminated"] is True
@@ -1097,7 +1269,7 @@ def test_merge_eval_blooms_equals_single_build(tmp_path: Path):
         ],
     )
     src = _as_source(input_dir)
-    ngram = NGramConfig(ngram_length=3, overlap_threshold=0.5)
+    ngram = NGramConfig(min_matched_features=2, ngram_length=3, overlap_threshold=0.5)
 
     # Combined-build baseline.
     baseline_out = tmp_path / "out_baseline"
@@ -1162,7 +1334,7 @@ def test_decon_to_parquet_requires_exactly_one_of_eval_or_prebuilt(fox_corpus):
 
     # neither
     with pytest.raises(ValueError, match="exactly one"):
-        decon_to_parquet(normalized_data=src, output_path=out, ngram=NGramConfig(ngram_length=3))
+        decon_to_parquet(normalized_data=src, output_path=out, ngram=NGramConfig(min_matched_features=2, ngram_length=3))
 
     # both
     with pytest.raises(ValueError, match="exactly one"):
@@ -1171,7 +1343,7 @@ def test_decon_to_parquet_requires_exactly_one_of_eval_or_prebuilt(fox_corpus):
             eval_data_sources=fox_corpus["eval_dir"],
             prebuilt_bloom_dir="/tmp/whatever",
             output_path=out,
-            ngram=NGramConfig(ngram_length=3),
+            ngram=NGramConfig(min_matched_features=2, ngram_length=3),
         )
 
 
@@ -1198,6 +1370,30 @@ def test_extract_ngrams_drops_letterless_ngrams():
     assert list(_extract_ngrams(mixed, 13, 0)) == [mixed]
 
 
+def test_build_eval_bloom_indexes_large_record_ngrams(tmp_path: Path):
+    edge_token = "a" * 600_000
+    text = f"{edge_token} beta gamma delta {edge_token}"
+    eval_dir = tmp_path / "eval"
+    _write_eval_jsonl(eval_dir / "eval.jsonl.gz", [{"id": "large", "text": text}])
+
+    result = build_eval_bloom(
+        eval_data_sources=str(eval_dir),
+        output_path=str(tmp_path / "bloom"),
+        ngram=NGramConfig(ngram_length=4, min_matched_features=2),
+        estimated_doc_count=10,
+        false_positive_rate=1e-9,
+    )
+
+    expected_features = (f"{edge_token} beta gamma delta", f"beta gamma delta {edge_token}")
+    expected_hashes = {
+        int.from_bytes(hashlib.blake2b(feature.encode(), digest_size=8).digest(), "big") for feature in expected_features
+    }
+    index_rows = pq.read_table(result.eval_hash_index_path).to_pylist()
+    assert {row["hash"] for row in index_rows} == expected_hashes
+    assert {row["eval_id"] for row in index_rows} == {"large"}
+    assert not (tmp_path / "bloom/_bloom/_index_parts").exists()
+
+
 def test_decon_skips_numeric_only_contamination(tmp_path: Path):
     """Cluster D: a numeric-list eval item does NOT flag a verbatim numeric-list
     corpus doc (no alphabetic 13-gram to key on), while a real textual overlap in
@@ -1215,7 +1411,7 @@ def test_decon_skips_numeric_only_contamination(tmp_path: Path):
             {"id": "doc_numbers", "partition_id": 0, "text": numbers},  # numeric-only → filtered → not flagged
             {"id": "doc_text", "partition_id": 0, "text": text},  # real overlap → still flagged
         ],
-        ngram=NGramConfig(ngram_length=13, overlap_threshold=0.5),
+        ngram=NGramConfig(min_matched_features=2, ngram_length=13, overlap_threshold=0.5),
     )
     assert rows["doc_numbers"]["contaminated"] is False
     assert rows["doc_numbers"]["max_overlap"] == 0.0
@@ -1230,7 +1426,7 @@ def test_merge_eval_blooms_rejects_size_mismatch(tmp_path: Path):
     eval_b = tmp_path / "eval_b"
     _write_eval_jsonl(eval_a / "e.jsonl.gz", [{"id": "a", "text": "alpha beta gamma delta epsilon zeta eta theta"}])
     _write_eval_jsonl(eval_b / "e.jsonl.gz", [{"id": "b", "text": "uno dos tres cuatro cinco seis siete ocho"}])
-    ngram = NGramConfig(ngram_length=3)
+    ngram = NGramConfig(min_matched_features=2, ngram_length=3)
 
     build_eval_bloom(
         eval_data_sources=str(eval_a),
@@ -1258,24 +1454,6 @@ def test_merge_eval_blooms_rejects_size_mismatch(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_paragraph_overlap_drop_hashes_excludes_from_both_sides():
-    """``drop_hashes`` removes matched ngrams from numerator and denominator.
-
-    An all-boilerplate paragraph (every ngram dropped) scores 0; a distinctive
-    ngram left un-dropped still scores 1.0."""
-    ngram = NGramConfig(ngram_length=4, overlap_threshold=0.5)
-    para = "be it enacted by the assembled congress today"  # 8 tokens -> 5 four-grams
-    grams = list(_extract_ngrams(para, 4, 0))
-    bf = dupekit.Bloom(1000, 1e-9)
-    for g in grams:
-        bf.add(_bloom_hash(g))
-
-    assert _paragraph_overlap_and_matches(para, bf, ngram)[0] == 1.0
-    drop = frozenset(_bloom_hash(g) for g in grams)
-    score, hits = _paragraph_overlap_and_matches(para, bf, ngram, drop)
-    assert score == 0.0 and hits == []
-
-
 def test_source_drop_set_filters_source_ubiquitous_ngram(tmp_path: Path):
     """An eval ngram present in ~every source doc lands in the drop-set and stops
     flagging boilerplate-only docs, while a distinctive eval match still flags."""
@@ -1291,7 +1469,7 @@ def test_source_drop_set_filters_source_ubiquitous_ngram(tmp_path: Path):
     build_eval_bloom(
         eval_data_sources=str(eval_dir),
         output_path=str(bloom_dir),
-        ngram=NGramConfig(ngram_length=4, overlap_threshold=0.5),
+        ngram=NGramConfig(min_matched_features=2, ngram_length=4, overlap_threshold=0.5),
         estimated_doc_count=10_000,
         false_positive_rate=1e-9,
     )
@@ -1309,7 +1487,7 @@ def test_source_drop_set_filters_source_ubiquitous_ngram(tmp_path: Path):
         df_sample_dir=str(input_dir),
         prebuilt_bloom_dir=str(bloom_dir),
         output_path=str(drop_dir),
-        ngram=NGramConfig(ngram_length=4, paragraph_delimiter="\n"),
+        ngram=NGramConfig(min_matched_features=2, ngram_length=4, paragraph_delimiter="\n"),
         sample_docs=1000,
         common_frac=0.5,
         common_min_abs=2,
@@ -1321,7 +1499,7 @@ def test_source_drop_set_filters_source_ubiquitous_ngram(tmp_path: Path):
         normalized_data=_as_source(input_dir),
         prebuilt_bloom_dir=str(bloom_dir),
         output_path=str(out_dir),
-        ngram=NGramConfig(ngram_length=4, overlap_threshold=0.5, paragraph_delimiter="\n"),
+        ngram=NGramConfig(min_matched_features=2, ngram_length=4, overlap_threshold=0.5, paragraph_delimiter="\n"),
         drop_set_dirs=[str(drop_dir)],
     )
     rows = _read_attributes(out_dir)
@@ -1339,7 +1517,7 @@ def test_source_drop_set_empty_leaves_marks_unchanged(tmp_path: Path):
     build_eval_bloom(
         eval_data_sources=str(eval_dir),
         output_path=str(bloom_dir),
-        ngram=NGramConfig(ngram_length=4, overlap_threshold=0.5),
+        ngram=NGramConfig(min_matched_features=2, ngram_length=4, overlap_threshold=0.5),
         estimated_doc_count=10_000,
         false_positive_rate=1e-9,
     )
@@ -1353,7 +1531,7 @@ def test_source_drop_set_empty_leaves_marks_unchanged(tmp_path: Path):
         df_sample_dir=str(input_dir),
         prebuilt_bloom_dir=str(bloom_dir),
         output_path=str(drop_dir),
-        ngram=NGramConfig(ngram_length=4, paragraph_delimiter="\n"),
+        ngram=NGramConfig(min_matched_features=2, ngram_length=4, paragraph_delimiter="\n"),
         sample_docs=1000,
         common_frac=0.5,
         common_min_abs=5,
@@ -1364,7 +1542,7 @@ def test_source_drop_set_empty_leaves_marks_unchanged(tmp_path: Path):
         normalized_data=_as_source(input_dir),
         prebuilt_bloom_dir=str(bloom_dir),
         output_path=str(out_dir),
-        ngram=NGramConfig(ngram_length=4, overlap_threshold=0.5, paragraph_delimiter="\n"),
+        ngram=NGramConfig(min_matched_features=2, ngram_length=4, overlap_threshold=0.5, paragraph_delimiter="\n"),
         drop_set_dirs=[str(drop_dir)],
     )
     assert _read_attributes(out_dir)["leak"]["contaminated"] is True
@@ -1376,7 +1554,7 @@ def test_build_all_source_drop_sets_rejects_reserved_global_source_name(tmp_path
             sources=[("_global", str(tmp_path / "input"))],
             prebuilt_bloom_dir=str(tmp_path / "bloom"),
             output_path=str(tmp_path / "drops"),
-            ngram=NGramConfig(ngram_length=4),
+            ngram=NGramConfig(min_matched_features=2, ngram_length=4),
             sample_docs=100,
             common_frac=0.5,
             common_min_abs=3,
@@ -1400,7 +1578,7 @@ def test_build_all_source_drop_sets_distributes_per_source(tmp_path: Path):
     build_eval_bloom(
         eval_data_sources=str(eval_dir),
         output_path=str(bloom_dir),
-        ngram=NGramConfig(ngram_length=4, overlap_threshold=0.5),
+        ngram=NGramConfig(min_matched_features=2, ngram_length=4, overlap_threshold=0.5),
         estimated_doc_count=10_000,
         false_positive_rate=1e-9,
     )
@@ -1420,7 +1598,7 @@ def test_build_all_source_drop_sets_distributes_per_source(tmp_path: Path):
         sources=[("finepdfs/fra_Latn", str(a_dir)), ("finepdfs", str(b_dir))],
         prebuilt_bloom_dir=str(bloom_dir),
         output_path=str(out),
-        ngram=NGramConfig(ngram_length=4, paragraph_delimiter="\n"),
+        ngram=NGramConfig(min_matched_features=2, ngram_length=4, paragraph_delimiter="\n"),
         sample_docs=1000,
         common_frac=0.5,
         common_min_abs=2,
@@ -1447,7 +1625,7 @@ def test_all_source_drop_sets_filters_diffuse_global_boilerplate(tmp_path: Path)
             {"id": "genuine_leak", "text": leak},
         ],
     )
-    ngram = NGramConfig(ngram_length=4, overlap_threshold=0.5)
+    ngram = NGramConfig(min_matched_features=2, ngram_length=4, overlap_threshold=0.5)
     bloom_dir = tmp_path / "bloom"
     build_eval_bloom(
         eval_data_sources=str(eval_dir),
@@ -1501,6 +1679,62 @@ def test_all_source_drop_sets_filters_diffuse_global_boilerplate(tmp_path: Path)
     assert rows["leak"]["contaminated"] is True
 
 
+def test_all_source_drop_sets_parallel_sample_respects_document_limits(tmp_path: Path):
+    common = "four score and seven years ago our fathers brought forth a new nation"
+    late_leak = "the platypus juggled seventeen luminous kumquats beside a silent observatory"
+    filler = "ordinary source material with no shared evaluation sequence"
+    eval_dir = tmp_path / "eval"
+    _write_eval_jsonl(
+        eval_dir / "eval.jsonl.gz",
+        [{"id": "common", "text": common}, {"id": "late", "text": late_leak}],
+    )
+    ngram = NGramConfig(min_matched_features=2, ngram_length=4, overlap_threshold=0.5)
+    bloom_dir = tmp_path / "bloom"
+    build_eval_bloom(
+        eval_data_sources=str(eval_dir),
+        output_path=str(bloom_dir),
+        ngram=ngram,
+        estimated_doc_count=10_000,
+        false_positive_rate=1e-9,
+    )
+
+    source_dir = tmp_path / "source"
+    texts = [common, common, common, filler, filler, filler, late_leak, late_leak]
+    for file_index in range(4):
+        rows = [
+            {"id": f"doc_{row_index}", "text": texts[row_index], "partition_id": file_index}
+            for row_index in range(file_index * 2, file_index * 2 + 2)
+        ]
+        _write_input_parquet(source_dir / f"part-{file_index:05d}-of-00004.parquet", rows)
+
+    out = tmp_path / "drops"
+    result = build_all_source_drop_sets(
+        sources=[("source", str(source_dir))],
+        prebuilt_bloom_dir=str(bloom_dir),
+        output_path=str(out),
+        ngram=ngram,
+        sample_docs=3,
+        common_frac=0.5,
+        common_min_abs=2,
+        global_sample_docs=6,
+        global_common_min_abs=2,
+        global_common_min_sources=1,
+    )
+    assert result.counters["decon_drop/global_documents_sampled"] == 6
+
+    marked = tmp_path / "marked"
+    decon_to_parquet(
+        normalized_data=_as_source(source_dir),
+        prebuilt_bloom_dir=str(bloom_dir),
+        output_path=str(marked),
+        ngram=ngram,
+        drop_set_dirs=[str(out / "source"), result.global_output_dir],
+    )
+    rows = _read_attributes(marked)
+    assert rows["doc_0"]["contaminated"] is False
+    assert rows["doc_6"]["contaminated"] is True
+
+
 def test_decon_flagged_sample_sidecar(fox_corpus):
     """flagged_sample_size writes an `outputs/flagged_sample` sidecar of contaminated
     docs + text, so reports read O(sample) instead of rescanning the corpus."""
@@ -1508,7 +1742,7 @@ def test_decon_flagged_sample_sidecar(fox_corpus):
         normalized_data=_as_source(Path(fox_corpus["input_dir"])),
         eval_data_sources=fox_corpus["eval_dir"],
         output_path=fox_corpus["output_dir"],
-        ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
+        ngram=NGramConfig(min_matched_features=2, ngram_length=3, overlap_threshold=0.5),
         flagged_sample_size=10,
         estimated_doc_count=10_000,
         false_positive_rate=1e-9,

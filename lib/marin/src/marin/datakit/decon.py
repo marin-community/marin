@@ -12,9 +12,9 @@ consumable by :func:`marin.processing.classification.consolidate.consolidate`):
 
     id                       : string         — matches source document id
     partition_id             : int            — source partition index (from sorted file order)
-    contaminated             : bool           — max paragraph overlap meets the threshold
+    contaminated             : bool           — one paragraph meets the overlap and evidence thresholds
     max_overlap              : float          — highest paragraph overlap fraction in [0, 1]
-    matched_hashes           : list[uint64]   — bloom-hit ngram hashes from this record
+    matched_hashes           : list[uint64]   — bloom-hit hashes that caused the mark
 
 Build also emits ``<output>/_bloom/eval_hash_index.parquet`` with columns
 ``hash: uint64, eval_id: string`` (flattened, one row per (hash, eval_id) pair).
@@ -39,11 +39,12 @@ import json
 import logging
 import os
 import random
-from collections import Counter
-from collections.abc import Callable, Iterator, Mapping
+import re
+from collections import Counter, deque
+from collections.abc import Callable, Container, Iterator, Mapping
 from dataclasses import dataclass
-from itertools import islice
-from typing import Any
+from itertools import chain, islice
+from typing import Any, NamedTuple
 
 import dupekit
 import pyarrow as pa
@@ -55,7 +56,8 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr import counters
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, ShardInfo
-from zephyr.readers import SUPPORTED_EXTENSIONS, load_file
+from zephyr.input_file import InputFileSpec
+from zephyr.readers import SUPPORTED_EXTENSIONS, compute_parquet_splits, load_file
 from zephyr.writers import write_parquet_file
 
 from marin.datakit.normalize import NormalizedData
@@ -65,6 +67,7 @@ from marin.execution.step_spec import StepSpec
 
 logger = logging.getLogger(__name__)
 
+
 # Bump when the ngram feature-extraction policy changes. Both the bloom build and
 # the corpus mark fold this into their step hash_attrs, so a policy change
 # re-addresses cached blooms/marks instead of silently reusing incompatible
@@ -72,12 +75,27 @@ logger = logging.getLogger(__name__)
 # v3 added an exact feature for short alphabetic paragraphs with at least three
 # tokens. This keeps required eval records matchable without restoring the
 # one-token punctuation and label collisions removed in v2.
-FEATURE_FILTER_VERSION = 3
-DECON_ATTRIBUTES_VERSION = 4
+# v4 limits that exact feature to a complete short record. It does not index a
+# short paragraph from a longer record because common labels can then mark an
+# unrelated complete document. With the default blank-line policy, a record-level
+# n-gram fallback keeps records matchable when all paragraphs are short.
+FEATURE_FILTER_VERSION = 4
+DECON_ATTRIBUTES_VERSION = 5
+BLOOM_BUILD_VERSION = 2
+# v5 keeps the v4 logical shards and bounds physical tasks by the worker count.
+DROP_SET_BUILD_VERSION = 5
 MIN_SHORT_EXACT_TOKENS = 3
+DEFAULT_PARAGRAPH_DELIMITER = "\n\n"
+DROP_SET_SAMPLE_SHARD_BYTES = 64 * 1024 * 1024
+DROP_SET_SAMPLE_SHARDS_PER_SOURCE = 512
+DROP_SET_STAGE_PARTITIONS_PER_SOURCE = 128
+DROP_SET_STAGE_TASKS_PER_WORKER = 4
+DEFAULT_DROP_SET_STAGE_PARTITIONS = 4_000
+LARGE_TEXT_STREAMING_THRESHOLD = 1024 * 1024
+_TOKEN_PATTERN = re.compile(r"\S+")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class NGramConfig:
     """Word-ngram matching parameters.
 
@@ -86,6 +104,9 @@ class NGramConfig:
         stride: Step between successive ngrams. 0 = contiguous (every position).
         overlap_threshold: Minimum fraction of paragraph ngrams that must hit
             the filter for the paragraph to count as contaminated.
+        min_matched_features: Minimum number of distinct matched features that
+            a paragraph must contain. A complete document with exactly one
+            feature can still match.
         paragraph_delimiter: String the text is split on to form paragraphs (the
             unit the overlap fraction is computed over). Defaults to ``"\n\n"``, a
             blank-line-delimited block, so ngrams span single line breaks — this
@@ -97,7 +118,12 @@ class NGramConfig:
     ngram_length: int = 13
     stride: int = 0
     overlap_threshold: float = 0.5
-    paragraph_delimiter: str = "\n\n"
+    min_matched_features: int
+    paragraph_delimiter: str = DEFAULT_PARAGRAPH_DELIMITER
+
+    def __post_init__(self) -> None:
+        if self.min_matched_features < 1:
+            raise ValueError("min_matched_features must be at least 1")
 
 
 class DeconAttributes(BaseModel):
@@ -113,8 +139,8 @@ class DeconAttributes(BaseModel):
             (``<output>/outputs/flagged_sample``); empty when no sample was taken.
         num_partitions: Number of output partitions; matches the source.
         eval_hash_index_path: Path to the ``hash → eval_id`` sidecar Parquet.
-            Join the per-record ``matched_hashes`` column against
-            this to attribute contamination to specific eval records.
+            Join the causal per-record ``matched_hashes`` column against this
+            to attribute contamination to specific eval records.
         counters: Aggregated zephyr counters from the marking pipeline.
     """
 
@@ -195,93 +221,223 @@ def _has_alpha(ngram: str) -> bool:
     return any(c.isalpha() for c in ngram)
 
 
-def _extract_ngrams(text: str, n: int, stride: int) -> Iterator[str]:
-    tokens = text.split()
+def _extract_token_ngrams(tokens: list[str], n: int, stride: int) -> Iterator[str]:
+    token_has_alpha = bytearray(_has_alpha(token) for token in tokens)
     for i in range(0, len(tokens) - n + 1, stride + 1):
-        ngram = " ".join(tokens[i : i + n])
-        if _has_alpha(ngram):
-            yield ngram
+        if any(token_has_alpha[i : i + n]):
+            yield " ".join(tokens[i : i + n])
 
 
-def _short_exact_feature(text: str, n: int) -> str | None:
-    """Return one normalized feature for guarded short exact matching."""
-    tokens = text.split()
-    if MIN_SHORT_EXACT_TOKENS <= len(tokens) < n and _has_alpha(text):
+def _extract_streaming_ngrams(text: str, n: int, stride: int) -> Iterator[str]:
+    """Yield n-grams without retaining every token from a large record."""
+    window: deque[tuple[int, int, bool]] = deque()
+    alpha_tokens = 0
+    step = stride + 1
+    for token_index, match in enumerate(_TOKEN_PATTERN.finditer(text)):
+        if len(window) == n:
+            _, _, had_alpha = window.popleft()
+            alpha_tokens -= had_alpha
+
+        start, end = match.span()
+        has_alpha = any(text[index].isalpha() for index in range(start, end))
+        window.append((start, end, has_alpha))
+        alpha_tokens += has_alpha
+
+        ngram_start = token_index - n + 1
+        if len(window) == n and ngram_start % step == 0 and alpha_tokens:
+            yield " ".join(text[start:end] for start, end, _ in window)
+
+
+def _extract_ngrams(text: str, n: int, stride: int) -> Iterator[str]:
+    if len(text) < LARGE_TEXT_STREAMING_THRESHOLD:
+        yield from _extract_token_ngrams(text.split(), n, stride)
+        return
+    yield from _extract_streaming_ngrams(text, n, stride)
+
+
+def _short_exact_feature_from_tokens(tokens: list[str], n: int) -> str | None:
+    if MIN_SHORT_EXACT_TOKENS <= len(tokens) < n and any(_has_alpha(token) for token in tokens):
         return " ".join(tokens)
     return None
 
 
-def _extract_paragraph_features(text: str, n: int, stride: int) -> Iterator[str]:
-    """Yield n-grams, or one guarded exact feature for a short paragraph."""
-    short_exact = _short_exact_feature(text, n)
-    if short_exact is not None:
-        yield short_exact
+def _short_exact_feature(text: str, n: int) -> str | None:
+    """Return one normalized feature for guarded short exact matching."""
+    if len(text) < LARGE_TEXT_STREAMING_THRESHOLD:
+        return _short_exact_feature_from_tokens(text.split(), n)
+
+    matches = list(islice(_TOKEN_PATTERN.finditer(text), n))
+    if not MIN_SHORT_EXACT_TOKENS <= len(matches) < n:
+        return None
+    spans = [match.span() for match in matches]
+    if not any(text[index].isalpha() for start, end in spans for index in range(start, end)):
+        return None
+    return " ".join(text[start:end] for start, end in spans)
+
+
+def _iter_nonempty_segments(text: str, delimiter: str) -> Iterator[str]:
+    """Yield split segments one at a time to bound memory for large records."""
+    if not delimiter:
+        raise ValueError("empty separator")
+    start = 0
+    while True:
+        end = text.find(delimiter, start)
+        if end < 0:
+            if start < len(text):
+                yield text[start:]
+            return
+        if end > start:
+            yield text[start:end]
+        start = end + len(delimiter)
+
+
+def _iter_paragraphs(text: str, delimiter: str) -> Iterator[str]:
+    if len(text) < LARGE_TEXT_STREAMING_THRESHOLD:
+        yield from (paragraph for paragraph in text.split(delimiter) if paragraph)
         return
-    yield from _extract_ngrams(text, n, stride)
+    yield from _iter_nonempty_segments(text, delimiter)
 
 
 def _extract_features(text: str, ngram: NGramConfig | None) -> Iterator[str]:
-    """Yield matchable features: ngrams within each paragraph, or whole paragraphs.
+    """Yield matchable features from a complete record.
 
-    In n-gram mode, an alphabetic paragraph with 3 to ``ngram_length - 1``
-    tokens contributes one normalized exact feature. Shorter and
-    non-alphabetic paragraphs contribute nothing. This avoids the trivial
-    ``"..."`` and ``"A."`` collisions found in PR #5656 while keeping short
-    required eval records matchable. If every paragraph is shorter than three
-    tokens, a full record with at least three tokens contributes one exact
-    feature.
+    N-gram mode emits n-grams from each paragraph. It does not emit exact
+    features for short paragraphs in a longer record. With the default
+    blank-line policy, the complete record emits n-grams when all paragraphs
+    are short. A complete short record emits one guarded exact feature.
     """
     delimiter = ngram.paragraph_delimiter if ngram is not None else "\n"
-    yielded = False
-    for para in text.split(delimiter):
-        if not para:
-            continue
-        if ngram is None:
+    paragraphs = _iter_paragraphs(text, delimiter)
+    if ngram is None:
+        for para in paragraphs:
             yield para
-            continue
-        for feature in _extract_paragraph_features(para, ngram.ngram_length, ngram.stride):
+        return
+
+    short_exact = _short_exact_feature(text, ngram.ngram_length)
+    if short_exact is not None:
+        yield short_exact
+        return
+
+    yielded = False
+    for para in paragraphs:
+        for feature in _extract_ngrams(para, ngram.ngram_length, ngram.stride):
             yielded = True
             yield feature
-    if ngram is not None and not yielded:
-        short_exact = _short_exact_feature(text, ngram.ngram_length)
-        if short_exact is not None:
-            yield short_exact
+    if not yielded and ngram.paragraph_delimiter == DEFAULT_PARAGRAPH_DELIMITER:
+        yield from _extract_ngrams(text, ngram.ngram_length, ngram.stride)
 
 
-def _paragraph_overlap_and_matches(
-    paragraph: str, bf: dupekit.Bloom, ngram: NGramConfig | None, drop_hashes: frozenset[int] = frozenset()
-) -> tuple[float, list[int]]:
-    """Return ``(overlap_score, matched_hashes)`` for a single paragraph.
-
-    Score is 0.0 or 1.0 in exact-paragraph mode and the fraction of bloom-hit
-    ngrams otherwise. *matched_hashes* is the list of ngram hashes that hit
-    the bloom (in iteration order, with duplicates if the same ngram repeats).
-
-    *drop_hashes* are removed from *both* the numerator and denominator.
-    Corpus-common boilerplate carries no contamination signal, so an
-    all-boilerplate paragraph collapses to zero ngrams and scores 0. Remaining
-    distinctive leak ngrams stay matchable; a leak made entirely of dropped
-    ngrams is intentionally suppressed.
-
-    Alphabetic paragraphs with at least three but fewer than ``ngram_length``
-    tokens use one exact feature. Shorter and non-alphabetic paragraphs return
-    ``(0.0, [])``.
-    """
+def _paragraph_overlap_matches_and_presence(
+    paragraph: str,
+    bf: Container[int],
+    ngram: NGramConfig | None,
+    drop_hashes: frozenset[int] = frozenset(),
+) -> tuple[float, list[int], int, bool]:
+    """Return overlap details, feature counts, and n-gram presence."""
     if ngram is None:
         h = _bloom_hash(paragraph)
         if h in drop_hashes:
-            return 0.0, []
-        return (1.0, [h]) if h in bf else (0.0, [])
-    ngrams = list(_extract_paragraph_features(paragraph, ngram.ngram_length, ngram.stride))
-    if not ngrams:
-        return 0.0, []
-    hashes = [_bloom_hash(ng) for ng in ngrams]
-    if drop_hashes:
-        hashes = [h for h in hashes if h not in drop_hashes]
-        if not hashes:
-            return 0.0, []
-    matched = [h for h in hashes if h in bf]
-    return len(matched) / len(hashes), matched
+            return 0.0, [], 0, False
+        return (1.0, [h], 1, False) if h in bf else (0.0, [], 1, False)
+
+    has_ngram_features = False
+    feature_count = 0
+    matched: list[int] = []
+    short_exact = _short_exact_feature(paragraph, ngram.ngram_length)
+    features: Iterator[str]
+    if short_exact is not None:
+        features = iter((short_exact,))
+    else:
+        features = _extract_ngrams(paragraph, ngram.ngram_length, ngram.stride)
+    for feature in features:
+        has_ngram_features = short_exact is None
+        hash_value = _bloom_hash(feature)
+        if hash_value in drop_hashes:
+            continue
+        feature_count += 1
+        if hash_value in bf:
+            matched.append(hash_value)
+    if feature_count == 0:
+        return 0.0, [], feature_count, has_ngram_features
+    return len(matched) / feature_count, matched, feature_count, has_ngram_features
+
+
+def _document_overlap_and_matches(
+    text: str,
+    bf: Container[int],
+    ngram: NGramConfig | None,
+    drop_hashes: frozenset[int] = frozenset(),
+) -> tuple[float, list[int]]:
+    """Return the highest overlap and the hashes that cause a document mark."""
+    minimum = ngram.min_matched_features if ngram is not None else 1
+    threshold = ngram.overlap_threshold if ngram is not None else 0.0
+    delimiter = ngram.paragraph_delimiter if ngram is not None else "\n"
+    paragraph_iter = iter(_iter_paragraphs(text, delimiter))
+    first_paragraph = next(paragraph_iter, None)
+    second_paragraph = next(paragraph_iter, None)
+    single_paragraph = first_paragraph is not None and second_paragraph is None
+    if first_paragraph is None:
+        paragraphs: Iterator[str] = iter(())
+    elif second_paragraph is None:
+        paragraphs = iter((first_paragraph,))
+    else:
+        paragraphs = chain((first_paragraph, second_paragraph), paragraph_iter)
+    max_score = 0.0
+    matched: set[int] = set()
+    has_paragraph_ngrams = False
+    document_ngram_feature_count = 0
+    document_ngram_hits: set[int] = set()
+
+    for paragraph in paragraphs:
+        score, hits, feature_count, paragraph_has_ngrams = _paragraph_overlap_matches_and_presence(
+            paragraph, bf, ngram, drop_hashes
+        )
+        if ngram is not None and paragraph_has_ngrams:
+            has_paragraph_ngrams = True
+            document_ngram_feature_count += feature_count
+            document_ngram_hits.update(hits)
+        max_score = max(max_score, score)
+        if not hits:
+            continue
+        if ngram is None:
+            matched.update(hits)
+            continue
+
+        complete_single_feature_document = single_paragraph and feature_count == 1 and score == 1.0
+        distinct_hits = len(set(hits))
+        if score >= threshold and (distinct_hits >= minimum or complete_single_feature_document):
+            matched.update(hits)
+
+    # A complete eval record can have one n-gram and short answer metadata. Keep
+    # the complete-record exception only when no other usable n-gram is present.
+    if ngram is not None and document_ngram_feature_count == 1 and document_ngram_hits:
+        matched.update(document_ngram_hits)
+
+    if ngram is not None and not has_paragraph_ngrams:
+        use_record_fallback = (
+            ngram.paragraph_delimiter == DEFAULT_PARAGRAPH_DELIMITER
+            or _short_exact_feature(text, ngram.ngram_length) is not None
+        )
+        if use_record_fallback:
+            score, hits, feature_count, _has_ngrams = _paragraph_overlap_matches_and_presence(
+                text, bf, ngram, drop_hashes
+            )
+            max_score = max(max_score, score)
+            distinct_hits = len(set(hits))
+            complete_single_feature_document = feature_count == 1 and score == 1.0
+            if score >= threshold and (distinct_hits >= minimum or complete_single_feature_document):
+                matched.update(hits)
+
+    return max_score, sorted(matched)
+
+
+def _record_feature_status(text: str, ngram: NGramConfig | None) -> tuple[bool, bool]:
+    """Return feature presence and exact self-match status for one record."""
+    feature_hashes = {_bloom_hash(feature) for feature in _extract_features(text, ngram)}
+    if not feature_hashes:
+        return False, False
+    _score, matched_hashes = _document_overlap_and_matches(text, feature_hashes, ngram)
+    return True, bool(matched_hashes)
 
 
 def _is_hidden_dir(root: str, resolved: str) -> bool:
@@ -338,6 +494,44 @@ def _discover_eval_files(eval_paths: list[str], exclude_dir_names: frozenset[str
 _INDEX_SCHEMA = pa.schema([pa.field("hash", pa.uint64()), pa.field("eval_id", pa.string())])
 
 
+@dataclass
+class _EvalIndexStats:
+    n_records: int = 0
+    n_index_rows: int = 0
+
+
+@dataclass(frozen=True)
+class _EvalIndexPart:
+    shard_idx: int
+    path: str
+    n_records: int
+    n_index_rows: int
+
+
+def _emit_eval_index_rows(
+    eval_paths: list[str],
+    text_field: str,
+    ngram: NGramConfig | None,
+    stats: _EvalIndexStats,
+) -> Iterator[dict[str, Any]]:
+    for path in eval_paths:
+        for idx, record in enumerate(load_file(path)):
+            text = record.get(text_field)
+            if not text:
+                continue
+            eval_id = str(record.get("id") or f"{path}::{idx}")
+            seen_in_record: set[int] = set()
+            for feature in _extract_features(str(text), ngram):
+                hash_value = _bloom_hash(feature)
+                if hash_value in seen_in_record:
+                    continue
+                seen_in_record.add(hash_value)
+                stats.n_index_rows += 1
+                yield {"hash": hash_value, "eval_id": eval_id}
+            if seen_in_record:
+                stats.n_records += 1
+
+
 def _build_filter(
     eval_paths: list[str],
     bloom_path: str,
@@ -358,35 +552,17 @@ def _build_filter(
     ``(hash, eval_id)`` pair, with the hash deduped *within* a single eval
     record). Inter-record duplicates are allowed; joins handle them naturally.
 
-    Single-process by design: the build is never the bottleneck (~seconds for a
-    full lm-eval-style suite, vs. hours for marking over a pretraining corpus).
-    If a very large eval suite ever forces this to dominate, parallelize via
-    Zephyr: per-shard ``dupekit.Bloom`` + shared shards of the sidecar Parquet,
-    merging blooms with ``bf.update(other)``. The mark side stays as-is.
+    This local path supports inline builds in :func:`decon_to_parquet`.
+    :func:`build_eval_bloom` uses Zephyr for reusable Bloom artifacts.
     """
     bf = dupekit.Bloom(estimated_doc_count, false_positive_rate)
-    stats = {"n_records": 0, "n_index_rows": 0}
+    stats = _EvalIndexStats()
 
     def emit_index_rows() -> Iterator[dict[str, Any]]:
-        for path in _discover_eval_files(eval_paths, exclude_dir_names):
-            for idx, record in enumerate(load_file(path)):
-                text = record.get(text_field)
-                if not text:
-                    continue
-                # Use the full path (not basename) so fallback IDs stay unique across
-                # nested or multi-source eval directories that share file basenames.
-                eval_id = str(record.get("id") or f"{path}::{idx}")
-                seen_in_record: set[int] = set()
-                for feat in _extract_features(str(text), ngram):
-                    h = _bloom_hash(feat)
-                    bf.add(h)
-                    if h in seen_in_record:
-                        continue
-                    seen_in_record.add(h)
-                    stats["n_index_rows"] += 1
-                    yield {"hash": h, "eval_id": eval_id}
-                if seen_in_record:
-                    stats["n_records"] += 1
+        files = list(_discover_eval_files(eval_paths, exclude_dir_names))
+        for row in _emit_eval_index_rows(files, text_field, ngram, stats):
+            bf.add(row["hash"])
+            yield row
 
     # Stream the index parquet; this iteration also fills the bloom.
     idx_dir = os.path.dirname(index_path)
@@ -402,12 +578,88 @@ def _build_filter(
 
     logger.info(
         "decon: built bloom + index from %d eval records (%d index rows) → bloom=%s, index=%s",
-        stats["n_records"],
-        stats["n_index_rows"],
+        stats.n_records,
+        stats.n_index_rows,
         bloom_path,
         index_path,
     )
-    return stats["n_records"]
+    return stats.n_records
+
+
+def _build_eval_index_part(
+    eval_paths: Iterator[str],
+    shard: ShardInfo,
+    *,
+    parts_dir: str,
+    text_field: str,
+    ngram: NGramConfig | None,
+) -> Iterator[_EvalIndexPart]:
+    stats = _EvalIndexStats()
+    path = prefix_join(parts_dir, f"part-{shard.shard_idx:05d}-of-{shard.total_shards:05d}.parquet")
+    write_parquet_file(
+        _emit_eval_index_rows(list(eval_paths), text_field, ngram, stats),
+        output_path=path,
+        schema=_INDEX_SCHEMA,
+    )
+    yield _EvalIndexPart(
+        shard_idx=shard.shard_idx,
+        path=path,
+        n_records=stats.n_records,
+        n_index_rows=stats.n_index_rows,
+    )
+
+
+def _merge_eval_index_parts(
+    parts: list[_EvalIndexPart],
+    *,
+    bloom_path: str,
+    index_path: str,
+    estimated_doc_count: int,
+    false_positive_rate: float,
+) -> int:
+    bf = dupekit.Bloom(estimated_doc_count, false_positive_rate)
+    StoragePath(os.path.dirname(index_path)).mkdirs()
+    with StoragePath(index_path).open("wb") as destination:
+        with pq.ParquetWriter(destination, _INDEX_SCHEMA) as writer:
+            for part in sorted(parts, key=lambda item: item.shard_idx):
+                with StoragePath(part.path).open("rb") as source:
+                    for batch in pq.ParquetFile(source).iter_batches():
+                        for hash_value in batch.column("hash").to_pylist():
+                            bf.add(hash_value)
+                        writer.write_batch(batch)
+
+    StoragePath(os.path.dirname(bloom_path)).mkdirs()
+    StoragePath(bloom_path).write_bytes(bf.save_bytes())
+    n_records = sum(part.n_records for part in parts)
+    n_index_rows = sum(part.n_index_rows for part in parts)
+    logger.info(
+        "decon: merged %d index shards from %d eval records (%d index rows) → bloom=%s, index=%s",
+        len(parts),
+        n_records,
+        n_index_rows,
+        bloom_path,
+        index_path,
+    )
+    return n_records
+
+
+def _merge_eval_index_shard(
+    parts: Iterator[_EvalIndexPart],
+    _shard: ShardInfo,
+    *,
+    bloom_path: str,
+    index_path: str,
+    estimated_doc_count: int,
+    false_positive_rate: float,
+) -> Iterator[int]:
+    n_records = _merge_eval_index_parts(
+        list(parts),
+        bloom_path=bloom_path,
+        index_path=index_path,
+        estimated_doc_count=estimated_doc_count,
+        false_positive_rate=false_positive_rate,
+    )
+    yield n_records
 
 
 # Flat attribute columns keep all Datakit sidecars directly selectable by name.
@@ -443,7 +695,7 @@ def _make_marker(
     """Return a ``map_shard`` function that processes one input parquet → one output parquet.
 
     *drop_hashes* is the source's common-ngram set, excluded from every
-    paragraph's overlap (see :func:`_paragraph_overlap_and_matches`).
+    paragraph's overlap score.
 
     *flagged_sample_size* > 0 reservoir-samples that many contaminated docs per
     shard — with their text and matched hashes — into
@@ -451,11 +703,6 @@ def _make_marker(
     doc, so this makes reports O(sample) instead of O(corpus): a viewer reads the
     small sidecar rather than rescanning the full attributes to find flags.
     """
-
-    # Threshold is only meaningful for n-gram mode; in exact-paragraph mode score is 0 or 1
-    # so any non-zero match is always recorded.
-    threshold = ngram.overlap_threshold if ngram is not None else 0.0
-    delimiter = ngram.paragraph_delimiter if ngram is not None else "\n"
 
     def mark_shard(paths: Iterator[str], shard: ShardInfo) -> Iterator[dict[str, Any]]:
         # Load bloom once per shard.
@@ -470,30 +717,8 @@ def _make_marker(
                 nonlocal n_flagged
                 for record in load_file(p):
                     text = str(record.get(text_field, "") or "")
-                    max_score = 0.0
-                    matched: set[int] = set()
-                    has_paragraph_features = False
-                    for para in text.split(delimiter):
-                        if not para:
-                            continue
-                        if (
-                            ngram is not None
-                            and next(_extract_paragraph_features(para, ngram.ngram_length, ngram.stride), None)
-                            is not None
-                        ):
-                            has_paragraph_features = True
-                        score, hits = _paragraph_overlap_and_matches(para, bf, ngram, drop_hashes)
-                        if score > max_score:
-                            max_score = score
-                        matched.update(hits)
-                    if ngram is not None and not has_paragraph_features:
-                        short_exact = _short_exact_feature(text, ngram.ngram_length)
-                        if short_exact is not None:
-                            short_hash = _bloom_hash(short_exact)
-                            if short_hash not in drop_hashes and short_hash in bf:
-                                max_score = 1.0
-                                matched.add(short_hash)
-                    contaminated = max_score > 0 and max_score >= threshold
+                    max_score, matched = _document_overlap_and_matches(text, bf, ngram, drop_hashes)
+                    contaminated = bool(matched)
                     counters.pipeline.update_counter("decon/contaminated" if contaminated else "decon/clean", 1)
                     if contaminated and flagged_sample_size:
                         n_flagged += 1
@@ -501,7 +726,7 @@ def _make_marker(
                             "id": record["id"],
                             "text": text,
                             "max_overlap": max_score,
-                            "matched_hashes": list(matched),
+                            "matched_hashes": matched,
                         }
                         if len(reservoir) < flagged_sample_size:
                             reservoir.append(row)
@@ -514,7 +739,7 @@ def _make_marker(
                         "partition_id": shard.shard_idx,
                         "contaminated": contaminated,
                         "max_overlap": max_score,
-                        "matched_hashes": list(matched),
+                        "matched_hashes": matched,
                     }
 
             # Follow the normalize job's output layout: main attributes under
@@ -585,7 +810,9 @@ def decon_to_parquet(
         text_field: Text column name in both input and eval records.
         ngram: Word-ngram matching config. ``None`` = exact whole-paragraph match.
             ``ngram.overlap_threshold`` gates which paragraphs are marked
-            contaminated; exact-paragraph mode records any non-zero match.
+            contaminated, and ``ngram.min_matched_features`` rejects marks with
+            too little distinct evidence. Exact-paragraph mode records any
+            non-zero match.
         drop_set_dirs: Optional directories of corpus-common ngram hashes.
             Ngrams from every directory are excluded from each paragraph
             overlap. :func:`decon_step` passes the source-local and global
@@ -669,6 +896,9 @@ def build_eval_bloom(
     required_eval_names: tuple[str, ...] = (),
     best_effort_eval_manifest_path: str | None = None,
     best_effort_eval_corpus_version: str | None = None,
+    worker_resources: ResourceConfig | None = None,
+    max_workers: int | None = None,
+    zephyr_context: ZephyrContext | None = None,
 ) -> EvalBloom:
     """Build a reusable bloom + hash-index sidecar from one or more eval sources.
 
@@ -708,6 +938,9 @@ def build_eval_bloom(
             manifest directory.
         best_effort_eval_corpus_version: Version that the best-effort manifest
             must report.
+        worker_resources: Resource request for each eval-file shard.
+        max_workers: Maximum Zephyr workers for the Bloom build.
+        zephyr_context: Optional shared Zephyr worker context.
 
     Returns:
         :class:`EvalBloom` artifact pointing at the produced files.
@@ -743,17 +976,54 @@ def build_eval_bloom(
             )
         )
 
+    eval_files = sorted(_discover_eval_files(eval_paths, exclude_eval_dirs))
     bloom_path, index_path = bloom_paths(output_path)
-    n_records = _build_filter(
-        eval_paths=eval_paths,
-        bloom_path=bloom_path,
-        index_path=index_path,
-        text_field=text_field,
-        ngram=ngram,
-        estimated_doc_count=estimated_doc_count,
-        false_positive_rate=false_positive_rate,
-        exclude_dir_names=exclude_eval_dirs,
-    )
+    parts_dir = prefix_join(output_path, "_bloom/_index_parts")
+    resources = worker_resources or ResourceConfig(cpu=2, ram="4g")
+    ctx_kwargs: dict[str, Any] = {"name": "decon-bloom", "resources": resources}
+    if max_workers is not None:
+        ctx_kwargs["max_workers"] = max_workers
+    ctx = zephyr_context or ZephyrContext(**ctx_kwargs)
+    if eval_files:
+        pipeline = (
+            Dataset.from_list(eval_files)
+            .map_shard(
+                lambda paths, shard: _build_eval_index_part(
+                    paths,
+                    shard,
+                    parts_dir=parts_dir,
+                    text_field=text_field,
+                    ngram=ngram,
+                )
+            )
+            .reshard(1)
+            .map_shard(
+                lambda parts, shard: _merge_eval_index_shard(
+                    parts,
+                    shard,
+                    bloom_path=bloom_path,
+                    index_path=index_path,
+                    estimated_doc_count=estimated_doc_count,
+                    false_positive_rate=false_positive_rate,
+                )
+            )
+        )
+        outcome = ctx.execute(
+            pipeline,
+            map_task_resources=resources,
+        )
+        if len(outcome.results) != 1:
+            raise RuntimeError(f"Bloom build returned {len(outcome.results)} merge results, expected one")
+        n_records = outcome.results[0]
+        StoragePath(parts_dir).rmtree()
+    else:
+        n_records = _merge_eval_index_parts(
+            [],
+            bloom_path=bloom_path,
+            index_path=index_path,
+            estimated_doc_count=estimated_doc_count,
+            false_positive_rate=false_positive_rate,
+        )
     return EvalBloom(
         bloom_dir=output_path,
         bloom_path=bloom_path,
@@ -782,8 +1052,7 @@ def _validate_required_eval_manifest(
         raise ValueError(f"required eval manifest must be an object: {manifest_path}")
     if manifest.get("corpus_version") != expected_corpus_version:
         raise ValueError(
-            f"required eval manifest version is {manifest.get('corpus_version')!r}, "
-            f"expected {expected_corpus_version!r}"
+            f"required eval manifest version is {manifest.get('corpus_version')!r}, expected {expected_corpus_version!r}"
         )
     if manifest.get("required") is not True:
         raise ValueError("required eval manifest does not mark the suite as required")
@@ -822,13 +1091,18 @@ def _validate_required_eval_manifest(
             texts = parquet.read(columns=[text_field]).column(text_field).to_pylist()
         if actual_records != expected_records:
             raise ValueError(f"{name}: manifest expects {expected_records} records, artifact contains {actual_records}")
-        records_with_features = sum(
-            bool(text) and next(_extract_features(str(text), ngram), None) is not None for text in texts
-        )
+        record_statuses = [_record_feature_status(str(text), ngram) if text else (False, False) for text in texts]
+        records_with_features = sum(has_features for has_features, _self_matches in record_statuses)
         if records_with_features != expected_records:
             raise ValueError(
                 f"{name}: {expected_records - records_with_features} of {expected_records} required eval records "
                 "produce no matchable features"
+            )
+        self_matching_records = sum(self_matches for _has_features, self_matches in record_statuses)
+        if self_matching_records != expected_records:
+            raise ValueError(
+                f"{name}: {expected_records - self_matching_records} of {expected_records} required eval records "
+                "do not match an exact copy under the mark policy"
             )
         paths.append(artifact_path)
     return paths
@@ -885,8 +1159,7 @@ def _validate_best_effort_eval_manifest(
             actual_records = pq.ParquetFile(source).metadata.num_rows
         if actual_records != expected_records:
             raise ValueError(
-                f"{task}: best-effort manifest expects {expected_records} records, "
-                f"artifact contains {actual_records}"
+                f"{task}: best-effort manifest expects {expected_records} records, artifact contains {actual_records}"
             )
         artifact_tasks.append(task)
         paths.append(artifact_path)
@@ -983,7 +1256,8 @@ def build_eval_bloom_step(
     text_field: str = "text",
     ngram_length: int | None = 13,
     overlap_threshold: float = 0.5,
-    paragraph_delimiter: str = "\n\n",
+    min_matched_features: int,
+    paragraph_delimiter: str = DEFAULT_PARAGRAPH_DELIMITER,
     estimated_doc_count: int = 1_000_000,
     false_positive_rate: float = 1e-9,
     exclude_eval_dirs: frozenset[str] = frozenset(),
@@ -992,6 +1266,9 @@ def build_eval_bloom_step(
     required_eval_names: tuple[str, ...] = (),
     best_effort_eval_manifest_path: str | None = None,
     best_effort_eval_corpus_version: str | None = None,
+    worker_resources: ResourceConfig | None = None,
+    max_workers: int | None = None,
+    zephyr_context: ZephyrContext | None = None,
     output_path_prefix: str | None = None,
     override_output_path: str | None = None,
 ) -> StepSpec:
@@ -1002,7 +1279,8 @@ def build_eval_bloom_step(
         eval_data_sources: Mix of raw paths (str) and upstream StepSpecs. Raw
             paths go into ``hash_attrs`` (so changing them invalidates the
             cache); StepSpec entries become DAG deps.
-        text_field, ngram_length, overlap_threshold, paragraph_delimiter: ngram
+        text_field, ngram_length, overlap_threshold, min_matched_features,
+            paragraph_delimiter: ngram
             config (see :class:`NGramConfig`). ``paragraph_delimiter`` MUST match
             the consuming :func:`decon_step` for the bloom to be reusable.
         estimated_doc_count, false_positive_rate: bloom sizing.
@@ -1016,6 +1294,9 @@ def build_eval_bloom_step(
         best_effort_eval_manifest_path, best_effort_eval_corpus_version:
             Optional best-effort suite. Only the exact artifacts below its
             immutable, versioned manifest directory enter the Bloom.
+        worker_resources: Resource request for each eval-file shard.
+        max_workers: Maximum Zephyr workers for the Bloom build.
+        zephyr_context: Optional shared Zephyr worker context.
         output_path_prefix, override_output_path: StepSpec routing.
     """
     raw_paths: list[str] = []
@@ -1029,7 +1310,10 @@ def build_eval_bloom_step(
 
     ngram: NGramConfig | None = (
         NGramConfig(
-            ngram_length=ngram_length, overlap_threshold=overlap_threshold, paragraph_delimiter=paragraph_delimiter
+            ngram_length=ngram_length,
+            overlap_threshold=overlap_threshold,
+            min_matched_features=min_matched_features,
+            paragraph_delimiter=paragraph_delimiter,
         )
         if ngram_length is not None
         else None
@@ -1039,8 +1323,10 @@ def build_eval_bloom_step(
         "text_field": text_field,
         "ngram_length": ngram_length,
         "overlap_threshold": overlap_threshold,
+        "min_matched_features": min_matched_features,
         "paragraph_delimiter": paragraph_delimiter,
         "feature_filter_version": FEATURE_FILTER_VERSION,
+        "bloom_build_version": BLOOM_BUILD_VERSION,
         "estimated_doc_count": estimated_doc_count,
         "false_positive_rate": false_positive_rate,
         # Raw paths aren't deps — fingerprint them so swapping a path
@@ -1067,6 +1353,9 @@ def build_eval_bloom_step(
             required_eval_names=required_eval_names,
             best_effort_eval_manifest_path=best_effort_eval_manifest_path,
             best_effort_eval_corpus_version=best_effort_eval_corpus_version,
+            worker_resources=worker_resources,
+            max_workers=max_workers,
+            zephyr_context=zephyr_context,
         ),
         deps=step_deps,
         hash_attrs=hash_attrs,
@@ -1233,28 +1522,221 @@ class DropSetSource:
     dependency: StepSpec | None = None
 
 
+class _SampleRange(NamedTuple):
+    path: str
+    row_start: int
+    row_end: int
+    local_row_count: int
+    row_count: int
+
+
+class _SampleShard(NamedTuple):
+    sample_shard_id: str
+    source: str
+    text_field: str
+    ranges: tuple[_SampleRange, ...]
+
+
+class _DropSetFrequency(NamedTuple):
+    source: str
+    hash: int | None
+    local_document_frequency: int
+    global_document_frequency: int
+    local_documents: int
+    global_documents: int
+
+
+class _GlobalFrequency(NamedTuple):
+    hash: int
+    document_frequency: int
+    source_frequency: int
+
+
+class _SourceDropSetReduction(NamedTuple):
+    drop: list[int]
+    global_frequencies: list[_GlobalFrequency]
+    local_documents: int
+    global_documents: int
+    threshold: int
+
+
+def _source_sample_shards(
+    source: tuple[str, str],
+    *,
+    text_field: str,
+    sample_docs: int,
+    global_sample_docs: int,
+) -> list[_SampleShard]:
+    """Plan balanced row-range samples for one normalized source."""
+    source_name, data_path = source
+    ranges: list[_SampleRange] = []
+    rows_planned = 0
+    files = sorted(str(path) for path in StoragePath(f"{data_path.rstrip('/')}/**/*.parquet").glob())
+    for path in files:
+        for row_start, row_end in compute_parquet_splits(path, DROP_SET_SAMPLE_SHARD_BYTES):
+            rows_remaining = global_sample_docs - rows_planned
+            if rows_remaining <= 0:
+                break
+            clipped_end = min(row_end, row_start + rows_remaining)
+            row_count = clipped_end - row_start
+            if row_count <= 0:
+                continue
+            local_row_count = min(row_count, max(0, sample_docs - rows_planned))
+            ranges.append(_SampleRange(path, row_start, clipped_end, local_row_count, row_count))
+            rows_planned += row_count
+        if rows_planned >= global_sample_docs:
+            break
+
+    num_shards = min(DROP_SET_SAMPLE_SHARDS_PER_SOURCE, len(ranges))
+    if num_shards == 0:
+        return [_SampleShard(f"{source_name}:0", source_name, text_field, ())]
+
+    buckets: list[list[_SampleRange]] = [[] for _ in range(num_shards)]
+    bucket_rows = [0] * num_shards
+    for sample_range in sorted(ranges, key=lambda item: item.row_count, reverse=True):
+        bucket_index = min(range(num_shards), key=bucket_rows.__getitem__)
+        buckets[bucket_index].append(sample_range)
+        bucket_rows[bucket_index] += sample_range.row_count
+    return [
+        _SampleShard(f"{source_name}:{bucket_index}", source_name, text_field, tuple(bucket))
+        for bucket_index, bucket in enumerate(buckets)
+    ]
+
+
+def _materialize_sample_shard(sample_shard_id: str, items: Iterator[_SampleShard]) -> _SampleShard:
+    iterator = iter(items)
+    sample_shard = next(iterator)
+    if next(iterator, None) is not None:
+        raise ValueError(f"duplicate decontamination sample shard: {sample_shard_id}")
+    return sample_shard
+
+
+def _sample_drop_set_shard(
+    sample_shards: Iterator[_SampleShard],
+    _shard: ShardInfo,
+    *,
+    bloom_path: str,
+    ngram: NGramConfig | None,
+) -> Iterator[_DropSetFrequency]:
+    """Count matching eval features in one group of source row ranges."""
+    sample_shards = iter(sample_shards)
+    first_sample_shard = next(sample_shards, None)
+    if first_sample_shard is None:
+        return
+    bf = dupekit.Bloom.load_bytes(StoragePath(bloom_path).read_bytes())
+    for sample_shard in chain((first_sample_shard,), sample_shards):
+        local_counts: Counter[int] = Counter()
+        global_counts: Counter[int] = Counter()
+        local_documents = 0
+        global_documents = 0
+        text_field = sample_shard.text_field
+        for sample_range in sample_shard.ranges:
+            spec = InputFileSpec(
+                path=sample_range.path,
+                columns=[text_field],
+                row_start=sample_range.row_start,
+                row_end=sample_range.row_end,
+            )
+            for row_index, record in enumerate(load_file(spec)):
+                text = record.get(text_field)
+                if not text:
+                    continue
+                hashes = {h for feature in _extract_features(str(text), ngram) if (h := _bloom_hash(feature)) in bf}
+                global_counts.update(hashes)
+                global_documents += 1
+                if row_index < sample_range.local_row_count:
+                    local_counts.update(hashes)
+                    local_documents += 1
+
+        counters.pipeline.update_counter("decon_drop/sample_shards", 1)
+        yield _DropSetFrequency(sample_shard.source, None, 0, 0, local_documents, global_documents)
+        for hash_value in local_counts.keys() | global_counts.keys():
+            yield _DropSetFrequency(
+                sample_shard.source,
+                hash_value,
+                local_counts[hash_value],
+                global_counts[hash_value],
+                0,
+                0,
+            )
+
+
+def _source_drop_set_reduction(
+    items: Iterator[_DropSetFrequency],
+    *,
+    common_frac: float,
+    common_min_abs: int,
+) -> _SourceDropSetReduction:
+    local_counts: Counter[int] = Counter()
+    global_counts: Counter[int] = Counter()
+    local_documents = 0
+    global_documents = 0
+    for item in items:
+        local_documents += item.local_documents
+        global_documents += item.global_documents
+        hash_value = item.hash
+        if hash_value is None:
+            continue
+        local_counts[hash_value] += item.local_document_frequency
+        global_counts[hash_value] += item.global_document_frequency
+
+    threshold = max(common_min_abs, int(common_frac * local_documents))
+    drop = [hash_value for hash_value, count in local_counts.items() if count >= threshold]
+    global_frequencies = [
+        _GlobalFrequency(hash_value, document_frequency, 1) for hash_value, document_frequency in global_counts.items()
+    ]
+    return _SourceDropSetReduction(drop, global_frequencies, local_documents, global_documents, threshold)
+
+
+def _reduce_source_drop_set(
+    source_name: str,
+    items: Iterator[_DropSetFrequency],
+    *,
+    output_path: str,
+    common_frac: float,
+    common_min_abs: int,
+) -> Iterator[_GlobalFrequency]:
+    reduction = _source_drop_set_reduction(
+        items,
+        common_frac=common_frac,
+        common_min_abs=common_min_abs,
+    )
+    drop = reduction.drop
+    _write_drop_set(f"{output_path.rstrip('/')}/{source_name}", drop)
+    counters.pipeline.update_counter("decon_drop/sources", 1)
+    counters.pipeline.update_counter("decon_drop/ngrams_dropped", len(drop))
+    counters.pipeline.update_counter("decon_drop/global_documents_sampled", reduction.global_documents)
+    counters.pipeline.update_counter("decon_drop/global_candidates", len(reduction.global_frequencies))
+    logger.info(
+        "decon drop-set %s: local=%d docs/%d ngrams (df>=%d), global=%d docs/%d candidates",
+        source_name,
+        reduction.local_documents,
+        len(drop),
+        reduction.threshold,
+        reduction.global_documents,
+        len(reduction.global_frequencies),
+    )
+    yield from reduction.global_frequencies
+
+
 def _global_drop_row(
     hash_value: int,
-    items: Iterator[dict[str, int]],
+    items: Iterator[_GlobalFrequency],
     *,
     common_min_abs: int,
     common_min_sources: int,
-) -> dict[str, int] | None:
+) -> _GlobalFrequency | None:
     document_frequency = 0
     source_frequency = 0
     for item in items:
-        document_frequency += item["document_frequency"]
-        source_frequency += item["source_frequency"]
+        document_frequency += item.document_frequency
+        source_frequency += item.source_frequency
     if document_frequency < common_min_abs or source_frequency < common_min_sources:
         return None
-    return {
-        "hash": hash_value,
-        "document_frequency": document_frequency,
-        "source_frequency": source_frequency,
-    }
+    return _GlobalFrequency(hash_value, document_frequency, source_frequency)
 
 
-def _write_global_drop_set(output_dir: str, rows: list[dict[str, int]]) -> str:
+def _write_global_drop_set(output_dir: str, rows: list[_GlobalFrequency]) -> str:
     StoragePath(output_dir).mkdirs()
     out_file = f"{output_dir.rstrip('/')}/drop.parquet"
     schema = pa.schema(
@@ -1264,7 +1746,7 @@ def _write_global_drop_set(output_dir: str, rows: list[dict[str, int]]) -> str:
             pa.field("source_frequency", pa.int64()),
         ]
     )
-    write_parquet_file(iter(rows), output_path=out_file, schema=schema)
+    write_parquet_file((row._asdict() for row in rows), output_path=out_file, schema=schema)
     return out_file
 
 
@@ -1287,11 +1769,12 @@ def build_all_source_drop_sets(
 ) -> AllSourceDropSets:
     """Build per-source and cross-source common eval-ngram drop sets.
 
-    One Zephyr map shard per source writes the source-local drop set and emits
-    document frequencies for matching eval ngrams. A distributed reduce sums
-    those counts across sources. A globally common ngram must meet both the
-    corpus document-frequency threshold and the distinct-source threshold, so
-    a repeated eval item concentrated in one source remains matchable.
+    Each source sample is divided into balanced Parquet row-range shards. A
+    source reduce writes the local drop set and emits its document frequencies.
+    A second distributed reduce sums those counts across sources. A globally
+    common ngram must meet both the corpus document-frequency threshold and the
+    distinct-source threshold, so a repeated eval item concentrated in one
+    source remains matchable.
     """
     if not sources:
         raise ValueError("sources must be non-empty")
@@ -1312,44 +1795,47 @@ def build_all_source_drop_sets(
         )
 
     bloom_path, _ = bloom_paths(prebuilt_bloom_dir)
-
-    def build_shard(items: Iterator[tuple[str, str]], _shard: ShardInfo) -> Iterator[dict[str, int]]:
-        bf = dupekit.Bloom.load_bytes(StoragePath(bloom_path).read_bytes())
-        for source_name, df_sample_dir in items:
-            drop, n, threshold = _drop_set_for_source(
-                df_sample_dir, bf, text_field, ngram, sample_docs, common_frac, common_min_abs
-            )
-            _write_drop_set(f"{output_path.rstrip('/')}/{source_name}", drop)
-            global_counts, n_global = _document_frequency_counts(
-                df_sample_dir, bf, text_field, ngram, global_sample_docs
-            )
-            counters.pipeline.update_counter("decon_drop/sources", 1)
-            counters.pipeline.update_counter("decon_drop/ngrams_dropped", len(drop))
-            counters.pipeline.update_counter("decon_drop/global_documents_sampled", n_global)
-            counters.pipeline.update_counter("decon_drop/global_candidates", len(global_counts))
-            logger.info(
-                "decon drop-set %s: local=%d docs/%d ngrams (df>=%d), global=%d docs/%d candidates",
-                source_name,
-                n,
-                len(drop),
-                threshold,
-                n_global,
-                len(global_counts),
-            )
-            for hash_value, document_frequency in global_counts.items():
-                yield {"hash": hash_value, "document_frequency": document_frequency, "source_frequency": 1}
+    sampling_partitions = min(
+        DROP_SET_STAGE_PARTITIONS_PER_SOURCE * len(sources),
+        max_workers * DROP_SET_STAGE_TASKS_PER_WORKER if max_workers is not None else DEFAULT_DROP_SET_STAGE_PARTITIONS,
+    )
 
     pipeline = (
         Dataset.from_list(sources)
-        .map_shard(build_shard)
+        .flat_map(
+            lambda source: _source_sample_shards(
+                source,
+                text_field=text_field,
+                sample_docs=sample_docs,
+                global_sample_docs=global_sample_docs,
+            )
+        )
         .group_by(
-            key=lambda row: row["hash"],
+            key=lambda row: row.sample_shard_id,
+            reducer=_materialize_sample_shard,
+            num_output_shards=sampling_partitions,
+        )
+        .map_shard(lambda items, shard: _sample_drop_set_shard(items, shard, bloom_path=bloom_path, ngram=ngram))
+        .group_by(
+            key=lambda row: row.source,
+            reducer=lambda source_name, items: _reduce_source_drop_set(
+                source_name,
+                items,
+                output_path=output_path,
+                common_frac=common_frac,
+                common_min_abs=common_min_abs,
+            ),
+            num_output_shards=len(sources),
+        )
+        .group_by(
+            key=lambda row: row.hash,
             reducer=lambda hash_value, items: _global_drop_row(
                 hash_value,
                 items,
                 common_min_abs=global_common_min_abs,
                 common_min_sources=global_common_min_sources,
             ),
+            num_output_shards=len(sources),
         )
         .filter(lambda row: row is not None)
     )
@@ -1390,7 +1876,7 @@ def all_source_drop_sets_step(
     prebuilt_bloom: StepSpec,
     text_field: str = "text",
     ngram_length: int | None = 13,
-    paragraph_delimiter: str = "\n\n",
+    paragraph_delimiter: str = DEFAULT_PARAGRAPH_DELIMITER,
     sample_docs: int,
     common_frac: float,
     common_min_abs: int,
@@ -1412,7 +1898,11 @@ def all_source_drop_sets_step(
     :func:`decon_step`.
     """
     ngram: NGramConfig | None = (
-        NGramConfig(ngram_length=ngram_length, paragraph_delimiter=paragraph_delimiter)
+        NGramConfig(
+            ngram_length=ngram_length,
+            min_matched_features=1,
+            paragraph_delimiter=paragraph_delimiter,
+        )
         if ngram_length is not None
         else None
     )
@@ -1441,6 +1931,7 @@ def all_source_drop_sets_step(
         "ngram_length": ngram_length,
         "paragraph_delimiter": paragraph_delimiter,
         "feature_filter_version": FEATURE_FILTER_VERSION,
+        "drop_set_build_version": DROP_SET_BUILD_VERSION,
         "sample_docs": sample_docs,
         "common_frac": common_frac,
         "common_min_abs": common_min_abs,
@@ -1485,7 +1976,8 @@ def decon_step(
     text_field: str = "text",
     ngram_length: int | None = 13,
     overlap_threshold: float = 0.5,
-    paragraph_delimiter: str = "\n\n",
+    min_matched_features: int,
+    paragraph_delimiter: str = DEFAULT_PARAGRAPH_DELIMITER,
     flagged_sample_size: int = 0,
     estimated_doc_count: int = 1_000_000,
     false_positive_rate: float = 1e-9,
@@ -1527,6 +2019,9 @@ def decon_step(
         ngram_length: Word ngram length. ``None`` = exact whole-paragraph match.
         overlap_threshold: Per-paragraph overlap fraction needed to mark a record
             contaminated. Ignored in exact-paragraph mode.
+        min_matched_features: Minimum distinct matches in one paragraph. A
+            complete document with one feature can still match. Ignored in
+            exact-paragraph mode.
         paragraph_delimiter: Paragraph split string (see :class:`NGramConfig`).
             When reusing a ``prebuilt_bloom``, MUST match the delimiter the bloom
             was built with, or the two feature sets won't line up.
@@ -1542,7 +2037,10 @@ def decon_step(
 
     ngram: NGramConfig | None = (
         NGramConfig(
-            ngram_length=ngram_length, overlap_threshold=overlap_threshold, paragraph_delimiter=paragraph_delimiter
+            ngram_length=ngram_length,
+            overlap_threshold=overlap_threshold,
+            min_matched_features=min_matched_features,
+            paragraph_delimiter=paragraph_delimiter,
         )
         if ngram_length is not None
         else None
@@ -1556,6 +2054,7 @@ def decon_step(
         "text_field": text_field,
         "ngram_length": ngram_length,
         "overlap_threshold": overlap_threshold,
+        "min_matched_features": min_matched_features,
         "paragraph_delimiter": paragraph_delimiter,
         "feature_filter_version": FEATURE_FILTER_VERSION,
         "attribute_schema_version": DECON_ATTRIBUTES_VERSION,
