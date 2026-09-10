@@ -23,7 +23,7 @@ permissions:
 jobs:
   grug-multislice-smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 195
     concurrency:
       group: grug-multislice-smoke
       cancel-in-progress: true
@@ -109,11 +109,12 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           GRUG_MULTISLICE_STEPS: ${{ inputs.steps || env.GRUG_MULTISLICE_STEPS }}
 
-      # Bound the wait below the job timeout (180) so a hung ferry fails this
-      # *step* (failure(), runner stays alive for Claude triage) instead of
-      # tripping the job timeout (cancelled(), which force-kills triage). See the
-      # same note in marin-canary-ferry.yaml. Healthy runs finish in ~20m, so 135
-      # leaves 45m for diagnostics + triage.
+      # Bound the wait below the job timeout so a hung ferry fails this step
+      # while the runner remains alive for diagnostics, live triage, and
+      # cancellation. Keep 135m because a healthy child has taken about 60m and
+      # scheduling shares this bound. The 195m job budget assigns 135m to the
+      # wait, 5m to diagnostics, 30m to triage, and 25m to setup and cleanup.
+      # Upload diagnostics only after cancellation so upload cannot delay cleanup.
       - name: Wait for Grug multislice smoke
         id: wait
         timeout-minutes: 135
@@ -142,6 +143,7 @@ jobs:
       - name: Capture failure diagnostics
         if: failure() || cancelled()
         continue-on-error: true
+        timeout-minutes: 5
         shell: bash -l {0}
         env:
           JOB_ID: ${{ steps.submit.outputs.job_id }}
@@ -158,15 +160,6 @@ jobs:
             --service-account "$IRIS_CONTROLLER_SERVICE_ACCOUNT" \
             --ssh-key ~/.ssh/google_compute_engine
 
-      - name: Upload diagnostics
-        if: failure() || cancelled()
-        uses: actions/upload-artifact@v7
-        with:
-          name: grug-multislice-diagnostics
-          path: grug-multislice-diagnostics/
-          retention-days: 14
-          if-no-files-found: ignore
-
       - name: Claude triage
         id: claude_triage
         if: (failure() || cancelled()) && github.event_name == 'schedule'
@@ -182,6 +175,26 @@ jobs:
           wandb-project: ${{ env.WANDB_PROJECT }}
           wandb-api-key: ${{ secrets.WANDB_API_KEY }}
           gha-run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+      - name: Cancel unfinished Iris job
+        if: >-
+          always() &&
+          steps.submit.outcome == 'success' &&
+          steps.wait.outcome != 'success' &&
+          steps.submit.outputs.job_id != ''
+        shell: bash -l {0}
+        run: |
+          .venv/bin/iris --config="$IRIS_CONFIG" job cancel --exact \
+            "${{ steps.submit.outputs.job_id }}"
+
+      - name: Upload diagnostics
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v7
+        with:
+          name: grug-multislice-diagnostics
+          path: grug-multislice-diagnostics/
+          retention-days: 14
+          if-no-files-found: ignore
 
       - name: Upload Slack message
         if: failure() || cancelled()
