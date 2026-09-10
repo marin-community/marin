@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 from tasktrove_verify.modes import pytest_report
-from tasktrove_verify.spec import PytestSpec, parse_spec
+from tasktrove_verify.spec import PytestSpec, ScriptSpec, parse_spec
 
 from experiments.post_training.tasktrove import verify
 from experiments.post_training.tasktrove.contract import VERIFIER_TOML
@@ -81,13 +81,62 @@ def test_verify_task_accepts_the_converted_binary():
     assert verify.verify_task(record.task_binary) is None
 
 
-def test_non_python_language_is_rejected():
+def _non_python_fixture(language: str = "go") -> bytes:
     task = read_task_binary(_fixture())
     config = json.loads(task.text("tests/config.json"))
-    config["language"] = "go"
+    config["language"] = language
     task.files["tests/config.json"] = json.dumps(config).encode()
+    return write_task_binary(task)
+
+
+def test_non_python_language_uses_fail_closed_script_fallback():
+    record = _convert(_non_python_fixture())
+    assert record.status == ConvertStatus.CONVERTED
+    assert record.mode == "script" and set(record.tags) >= {"go", "script-fallback"}
+
+    task = read_task_binary(record.task_binary)
+    spec = parse_spec(task.text(VERIFIER_TOML))
+    assert isinstance(spec, ScriptSpec)
+    assert spec.path == "legacy_test.sh" and spec.workspace == "/testbed"
+    assert "tests/legacy_test.sh" in task.files
+    assert "tests/test_state.py" in task.files
+    assert "tests/config.json" in task.files
+
+    legacy_test = task.text("tests/legacy_test.sh")
+    assert "/opt/tasktrove-legacy-grader/bin/python -m pytest" in legacy_test
+    assert '"$TASKTROVE_LOGS_DIR/reward.txt"' in legacy_test
+    assert "/logs/verifier/test_output.log" in legacy_test
+    assert "uv init --python 3.12" not in legacy_test
+
+    test_state = task.text("tests/test_state.py")
+    assert "if not resolved and not statuses:" not in test_state
+    assert "fallback_exit_code" not in test_state
+    assert "def _read_exit_code" not in test_state
+    assert 'evaluate_test_results("/logs/verifier/test_output.log")' in test_state
+    assert "pytest-json-ctrf==0.3.5" in task.text("environment/Dockerfile")
+
+
+def test_non_python_unknown_grader_shape_is_rejected():
+    task = read_task_binary(_non_python_fixture())
+    old = b"uv init --python 3.12"
+    new = b"uv init --python 3.11"
+    task.files["tests/test.sh"] = task.files["tests/test.sh"].replace(old, new)
     record = _convert(write_task_binary(task))
     assert record.status == ConvertStatus.UNSUPPORTED_VARIANT and record.task_binary is None
+
+
+def test_non_python_missing_grader_file_is_rejected():
+    task = read_task_binary(_non_python_fixture())
+    del task.files["tests/test_state.py"]
+    record = _convert(write_task_binary(task))
+    assert record.status == ConvertStatus.NULL_GRADER and record.task_binary is None
+
+
+def test_language_task_sets_with_unreliable_goldens_are_rejected():
+    for language in ("js", "ts"):
+        record = _convert(_non_python_fixture(language))
+        assert record.status == ConvertStatus.UNSUPPORTED_VARIANT
+        assert record.task_binary is None and "golden sample" in record.error
 
 
 def test_empty_fail_to_pass_is_rejected():

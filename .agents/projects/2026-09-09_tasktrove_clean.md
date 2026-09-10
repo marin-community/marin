@@ -37,7 +37,7 @@ raw → summaries → templates → converted → graded → clean
 19. [x] M1 cleanup: recover non-null TOML/XML/CSV structured-output tasks, add end-to-end converter tests, fix the root `reasoning-gym` dependency, merge current `origin/main`, and run the format-parity audit
 20. [x] M2 cleanup: leave non-letter MCQA golds, literal-newline prompt failures, and the broken `arc_agi`/`rearc` scorer rows rejected; their small recovery does not justify format-specific parsing or grading paths
 21. [x] M3 cleanup: audit the 25 dropped test sources; reinstate 10 self-contained Python sources through the pytest mode with a `kata` tag, and keep the 15 broken or infrastructure-dependent sources dropped
-22. [ ] M4 cleanup: validate kept Python SWE tasks and decide non-Python repository tasks without adding a new grading family or repairing repositories/toolchains
+22. [x] M4 cleanup: retain sound non-Python SWE repository tasks through the script fallback; drop the JavaScript and TypeScript task sets after their shipped goldens passed only 11/20 and 3/20
 23. [ ] M5 cleanup: sample kept and dropped judge sources against the answerability, rubric, leakage, triviality, and persona checklist
 24. [ ] M6 cleanup: measure near duplicates over instructions and hidden grading text before changing the exact within-source key
 25. [ ] M7 cleanup: rerun the full pipeline once after the cleanup decisions, regenerate the report and artifact, run the final Docker sample, and update PR #9061
@@ -85,6 +85,29 @@ graders with no local test function plus nine syntactically invalid test files. 
 sources remain dropped: four mixed-source trivial submissions passed, 28 sampled checks timed out,
 the Java oracle failed throughout, or recovery would require language-, repository-, or
 dependency-specific grading work. `source_verdicts.json` records the per-source decision.
+
+M4 inspected every row of `DCAgent__swe_rebench_v2_patched_oracle-v2`. All 12,421 non-Python rows
+carry the same self-contained `test_state.py` parser bundle and complete legacy test scripts, so
+the converter preserves that grader behind `ScriptSpec` instead of adding language-specific
+verification modes. Conversion installs the parser's Python dependencies in the image, routes its
+reward and test output through the standard verifier paths, and removes the source's fail-open
+branch that treated an unrecognized log as passing when the test command exited zero. An unknown
+grader shape, empty test patch, missing named tests, or missing grader file rejects the row.
+
+A deterministic Docker sample produced 20/20 empty zeros and 20/20 oracle ones for Go. The same
+sample produced 20/20 empty zeros but only 11/20 oracle ones for JavaScript and 3/20 for
+TypeScript. The failures include missing package dependencies and parsers that cannot resolve the
+named tests even when the underlying suite reports success. There is no sound archive-only
+predicate for those failures; testing every row would require running 4,333 repository clones and
+suites as part of conversion. The JavaScript and TypeScript task sets therefore remain rejected.
+Rust remains enabled by product decision after an incomplete advisory sample, and the smaller
+language pools remain enabled through the same structurally uniform fallback.
+
+Full-source accounting converts 13,563 of 18,319 rows: 5,475 Python tasks use `pytest`, and 8,088
+non-Python tasks use `script`. The 4,756 rejected rows are 423 malformed Python tasks plus 2,454
+JavaScript and 1,879 TypeScript tasks. The converted non-Python pool contains Go (4,087), Rust
+(1,837), Java (660), Julia (599), Kotlin (446), Swift (266), and 193 rows across nine smaller
+languages.
 
 ## Run 2026.09.10.5
 

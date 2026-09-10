@@ -6,17 +6,17 @@
 The old ``tests/test.sh`` restored ``trusted_test_paths.txt`` from the trusted commit, restored
 ``trusted_patch_paths.txt`` the same way and applied ``tests/test_patch.diff`` on top (adding or
 rewriting the hidden ``FAIL_TO_PASS``/``PASS_TO_PASS`` tests), then ran the repo's own test
-command and graded by test id. The ``pytest`` mode's ``setup`` hook reproduces the two restores
-with ``git archive`` against the agent's own (full, non-shallow) clone — the same clone
-``instruction.md`` tells the agent to make — followed by ``git apply``, instead of shipping the
-old scripts; ``paths`` narrows the run to the files the graded node ids live in.
+command and graded by test id. Python tasks use the normalized ``pytest`` mode. Retained
+non-Python languages use the source's self-contained parsers behind the ``script`` fallback, with
+its fail-open exit-code path removed and its grader dependencies installed in the image.
 """
 
 import json
 import re
 
-from tasktrove_verify.spec import PytestSpec
+from tasktrove_verify.spec import PytestSpec, ScriptSpec
 
+from experiments.post_training.tasktrove.contract import UV_IMAGE
 from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertedTask,
     Converter,
@@ -38,6 +38,63 @@ from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTI
 
 TEST_PATCH = "tests/test_patch.diff"
 TRUSTED_PATCH_PATHS = "tests/trusted_patch_paths.txt"
+TEST_STATE = "tests/test_state.py"
+LEGACY_TEST_SH = "tests/legacy_test.sh"
+REJECTED_SCRIPT_LANGUAGES = frozenset({"js", "ts"})
+# Their shipped goldens failed too often to retain without a row-level oracle gate.
+
+_LEGACY_GRADER_BLOCK = """cd /tests
+uv init --python 3.12 --no-progress >/dev/null 2>&1 || true
+uv add --no-progress pytest==8.4.1 pytest-json-ctrf==0.3.5 >/dev/null 2>&1
+uv run --no-progress pytest --ctrf /logs/verifier/ctrf.json test_state.py -rA
+"""
+_NORMALIZED_GRADER_BLOCK = """\
+/opt/tasktrove-legacy-grader/bin/python -m pytest -p no:cacheprovider \\
+    --ctrf /logs/verifier/ctrf.json "$TASKTROVE_TESTS_DIR/test_state.py" -rA
+"""
+_FAIL_OPEN_BLOCK = """    # Fallback: if parser found *no* tests at all (statuses empty) AND
+    # the test command exited 0 AND there were no FAIL_TO_PASS/PASS_TO_PASS
+    # markers we could match, trust the exit code. This unblocks tasks
+    # whose test output format the parser doesn't recognize but which
+    # really did pass (e.g. cmake-built C++ runners with non-gtest output,
+    # custom shell-driven test harnesses, etc.).
+    if not resolved and not statuses:
+        exit_code = _read_exit_code()
+        if exit_code == 0 and (f2p_total > 0 or p2p_total > 0):
+            # Trust the exit code: all named tests assumed passed.
+            report["FAIL_TO_PASS"]["success"] = list(fail_to_pass)
+            report["FAIL_TO_PASS"]["failure"] = []
+            report["PASS_TO_PASS"]["success"] = list(pass_to_pass)
+            report["PASS_TO_PASS"]["failure"] = []
+            resolved = True
+            report["fallback_exit_code"] = True
+
+"""
+_EXIT_CODE_READER = """def _read_exit_code(path="/logs/test_exit_code.txt"):
+    try:
+        return int(Path(path).read_text().strip())
+    except Exception:
+        return None
+
+
+"""
+_TEST_STATE_CALL = 'report = evaluate_test_results("/logs/test_output.log")'
+_NORMALIZED_TEST_STATE_CALL = 'report = evaluate_test_results("/logs/verifier/test_output.log")'
+_SOURCE_REWARD_PATH = "/logs/verifier/reward.txt"
+_NORMALIZED_REWARD_PATH = '"$TASKTROVE_LOGS_DIR/reward.txt"'
+_SOURCE_TEST_OUTPUT_PATH = "/logs/test_output.log"
+_NORMALIZED_TEST_OUTPUT_PATH = "/logs/verifier/test_output.log"
+_EXIT_CODE_COMMENT = """# We capture the exit status — it's used by test_state.py as a fallback
+# signal when the parser can't identify per-test names.
+"""
+_LEGACY_GRADER_DOCKERFILE = f"""\
+
+# Isolated runtime for the source's self-contained test-output parser.
+COPY --from={UV_IMAGE} /uv /usr/local/bin/uv
+RUN uv venv --python 3.12 /opt/tasktrove-legacy-grader \\
+    && uv pip install --python /opt/tasktrove-legacy-grader/bin/python \\
+        pytest==8.4.1 pytest-json-ctrf==0.3.5
+"""
 
 # The old ``tests/test.sh`` invokes ``install_trusted_test_patch.sh <repo> <patch> <trusted_commit>``;
 # the commit is the only per-task value we need out of that call, and it only exists embedded in
@@ -127,13 +184,67 @@ def _python_command(conda_lines: tuple[str, ...]) -> tuple[str, str]:
     return wrapper, heredoc
 
 
+def _legacy_script_task(
+    task: TaskFiles, language: str, fail_to_pass: list[str], test_sh: str
+) -> ConvertedTask | Rejected:
+    """Keep a non-Python source grader behind script mode after removing its fail-open path."""
+    required = {
+        TEST_STATE,
+        TEST_PATCH,
+        TRUSTED_TEST_PATHS,
+        TRUSTED_PATCH_PATHS,
+        "tests/install_trusted_test_patch.sh",
+        "tests/install_trusted_test_paths.sh",
+        f"{SOLUTION_DIR}solve.sh",
+    }
+    missing = sorted(required - task.files.keys())
+    if missing:
+        return Rejected(ConvertStatus.NULL_GRADER, f"legacy script grader is missing {missing}")
+    if not fail_to_pass:
+        return Rejected(ConvertStatus.TOO_FEW_CASES, "config.json has no FAIL_TO_PASS tests")
+    if not (task.get_text(TEST_PATCH) or "").strip():
+        return Rejected(ConvertStatus.NULL_GRADER, "tests/test_patch.diff is empty")
+    if _LEGACY_GRADER_BLOCK not in test_sh:
+        return Rejected(ConvertStatus.UNSUPPORTED_VARIANT, "tests/test.sh has an unknown grader bootstrap")
+
+    test_state = task.text(TEST_STATE)
+    expected_blocks = (_FAIL_OPEN_BLOCK, _EXIT_CODE_READER, _TEST_STATE_CALL)
+    if not all(block in test_state for block in expected_blocks):
+        return Rejected(ConvertStatus.UNSUPPORTED_VARIANT, "tests/test_state.py has an unknown fail-open implementation")
+
+    normalized_test_sh = test_sh.replace(_LEGACY_GRADER_BLOCK, _NORMALIZED_GRADER_BLOCK)
+    normalized_test_sh = normalized_test_sh.replace(_SOURCE_REWARD_PATH, _NORMALIZED_REWARD_PATH)
+    normalized_test_sh = normalized_test_sh.replace(_SOURCE_TEST_OUTPUT_PATH, _NORMALIZED_TEST_OUTPUT_PATH)
+    normalized_test_sh = normalized_test_sh.replace("echo $? > /logs/test_exit_code.txt\n", "")
+    normalized_test_sh = normalized_test_sh.replace(_EXIT_CODE_COMMENT, "")
+    normalized_test_state = (
+        test_state.replace(_FAIL_OPEN_BLOCK, "")
+        .replace(_EXIT_CODE_READER, "")
+        .replace(_TEST_STATE_CALL, _NORMALIZED_TEST_STATE_CALL)
+    )
+
+    data_files = task.under("tests/")
+    data_files.pop(TEST_SH)
+    data_files[LEGACY_TEST_SH] = normalized_test_sh.encode()
+    data_files[TEST_STATE] = normalized_test_state.encode()
+    return ConvertedTask(
+        instruction=task.text(INSTRUCTION),
+        spec=ScriptSpec(path=LEGACY_TEST_SH.removeprefix("tests/"), workspace=TESTBED),
+        dockerfile=task.text(DOCKERFILE) + _LEGACY_GRADER_DOCKERFILE,
+        tags=("code", "swe", "swe-repo", language, "patched", "script-fallback"),
+        language=language,
+        data_files=data_files,
+        solution_files=task.under(SOLUTION_DIR),
+    )
+
+
 def convert_swe_patched(task: TaskFiles) -> ConvertedTask | Rejected:
     """SWE-bench-shaped repos whose hidden ``FAIL_TO_PASS``/``PASS_TO_PASS`` tests arrive as a
     patch applied on top of the trusted commit, rather than already present at it.
 
-    Non-Python repos (Go, Rust, TypeScript, Elixir, Java, ...) are rejected: the old grader
-    dispatched on a language-specific log parser, but the ``pytest`` mode can only run and score
-    Python's own test node ids.
+    Retained non-Python repos keep their self-contained source parser through script mode. The
+    parser must resolve every named test; an unrecognized log can no longer pass merely because
+    the test command exited zero.
     """
     if CONFIG_JSON not in task.files:
         return Rejected(ConvertStatus.UNSUPPORTED_VARIANT, f"no {CONFIG_JSON}: not the FAIL_TO_PASS/PASS_TO_PASS shape")
@@ -145,11 +256,20 @@ def convert_swe_patched(task: TaskFiles) -> ConvertedTask | Rejected:
         )
 
     config = json.loads(task.text(CONFIG_JSON))
-    language = config.get("language")
-    if language is not None and language != "python":
-        return Rejected(ConvertStatus.UNSUPPORTED_VARIANT, f"language is {language!r}, not python")
-
+    language = config.get("language") or "python"
+    if not isinstance(language, str):
+        return Rejected(ConvertStatus.UNSUPPORTED_VARIANT, f"language is not a string: {type(language).__name__}")
     fail_to_pass, pass_to_pass = _fail_and_pass_to_pass(config)
+
+    test_sh = task.get_text(TEST_SH) or ""
+    if language != "python":
+        if language in REJECTED_SCRIPT_LANGUAGES:
+            return Rejected(
+                ConvertStatus.UNSUPPORTED_VARIANT,
+                f"{language} script graders failed the language-level golden sample",
+            )
+        return _legacy_script_task(task, language, fail_to_pass, test_sh)
+
     if not fail_to_pass:
         return Rejected(ConvertStatus.TOO_FEW_CASES, "config.json has no FAIL_TO_PASS tests")
     foreign = [node_id for node_id in fail_to_pass if uncollectable(node_id)]
@@ -167,7 +287,6 @@ def convert_swe_patched(task: TaskFiles) -> ConvertedTask | Rejected:
     if not test_patch.strip():
         return Rejected(ConvertStatus.NULL_GRADER, "tests/test_patch.diff is empty")
 
-    test_sh = task.get_text(TEST_SH) or ""
     match = _PATCH_INVOCATION_RE.search(test_sh)
     if match is None:
         return Rejected(ConvertStatus.UNSUPPORTED_VARIANT, "tests/test.sh does not call install_trusted_test_patch.sh")
