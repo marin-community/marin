@@ -542,3 +542,14 @@ author: benfeuer
 - Evidence: qk157 CruxEval completed 1,656 successful inference requests, then both directional graders returned no metrics. Every grading worker failed at `multiprocessing.Manager()` with `RuntimeError: os.fork is unsafe while filelock is changing descriptor ownership`; the outer thread pool had launched concurrent fork-based managers.
 - Fix: Evalchemy [#118](https://github.com/marin-community/evalchemy/pull/118) keeps one isolated child per generated program but uses the spawn context and a one-way pipe instead of a Manager and unsafe fork. Its regression runs concurrent grading in an interpreter whose audit hook rejects `os.fork`. The full suite passed with 456 tests and five skips, all CI lanes passed, and the PR merged at `9d108108094c2a417db935fedd9a3c4377e6aef6`.
 - Campaign pin: `config/update-external.py evalchemy` advanced the worktree from `1d6943d8` to `9d108108`; the exact-pin check passed. Existing multi-benchmark roots remain alive for their non-Crux stages. Next, commit the pin and run a one-source/two-direction RNO2A gate before releasing Crux-only replacements.
+
+## 2026-09-10 17:59 EDT — Custom suites isolated; DS-1000 build source corrected
+
+- MRCR: the qk157 shared custom root stopped when CruxEval failed, before reaching MRCR. Submitted isolated full MRCR roots qk157 `…-7aa5`, qk175 `…-8ad7`, skew2 `…-f4c5`, skew4 `…-9589`, and skew8 `…-d4f1`. The four remaining shared roots continue their current MMLU-Pro stages.
+- DS-1000: all five timeout-corrected replacements wrote 0/1,000 coverage after Daytona tried to pull `ds1000:latest` from Docker Hub and received `insufficient_scope`. The registry source commit declares that image in every task despite also shipping a complete Dockerfile. External `eval-configs/ds-1000.yaml` now sets `environment.force_build: true`; Harbor preflight confirms that flag and the existing agent-only 8× timeout multiplier.
+- Gate: submitted qk157 one-task root `…-2b85`. Full DS-1000 fan-out waits for this root to prove Dockerfile construction, agent execution, verification, and durable scoring.
+
+## 2026-09-10 18:05 EDT — CruxEval runtime gate passed
+
+- The merged Evalchemy #118 pin passed the one-source/two-direction RNO2A gate at `/benfeuer/eval-20260910-214737-snowball-final-qk157-base-86ad`. Input pass@1 was 1.0, output pass@1 was 0.0, and Evalchemy durably persisted exactly two directional samples for the single capped source.
+- Released isolated full CruxEval roots: qk157 `/benfeuer/eval-20260910-220314-snowball-final-qk157-base-5d9e`, qk175 `/benfeuer/eval-20260910-220314-snowball-final-qk175-base-2694`, skew2 `/benfeuer/eval-20260910-220314-snowball-final-qk175-skew2-base-246e`, skew4 `/benfeuer/eval-20260910-220314-snowball-final-qk175-skew4-base-1c71`, and skew8 `/benfeuer/eval-20260910-220315-snowball-final-qk175-skew8-base-d8b7`.
