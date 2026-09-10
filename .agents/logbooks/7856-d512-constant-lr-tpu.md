@@ -24,15 +24,23 @@ author: kaiyuew
 
 ## Current TL;DR
 
-- Twenty terminal constant-LR cells cover 30x through 300x. Every budget chose
-  the original `0.7x` lower boundary and all four loss curves are monotone over
-  `0.7x` through `1.4x`, so the sweep did not bracket the optimum.
-- A budget-fixed-effect log-quadratic fit predicts a shared optimum at `0.323x`;
-  leave-one-budget-out fits span `0.304x` to `0.363x`. The follow-up grid is
-  `0.10x / 0.20x / 0.32x / 0.45x / 0.70x`.
-- The five nonterminal 600x cells were intentionally stopped because this
-  reproduction writes no checkpoints. A unique 21-cell follow-up reuses the
-  completed `0.7x` points at 30x through 300x and reruns all five 600x points.
+- The bracketed follow-up is complete: 21 new cells plus the four reused
+  `0.70x` terminals cover all five budgets. Local log-quadratic optimum
+  multipliers are `0.425 / 0.345 / 0.284 / 0.275 / 0.259` at
+  `30x / 60x / 150x / 300x / 600x`.
+- The five-budget refit is
+  `LR* = 8.213774e-3 * (tokens / 1B)^(-0.5563134)` with log-space
+  `R² = 0.9921`. At 600x the directly bracketed local estimate is
+  `2.2677e-3`; it is 12.9% above the old 30x–300x extrapolation and 5.3% above
+  the new fitted curve.
+- Constant-LR and linear-decay best-loss exponents are nearly identical
+  (`0.3985` versus `0.3925`), but constant LR has a worse fitted asymptote and
+  remains `+0.1527` Paloma loss at 600x. The schedule penalty is an offset, not
+  evidence of shallower scaling over these five budgets.
+- The recovery parent and all requested artifacts succeeded in us-central2.
+  The final 600x/0.45x cell survived 11 preemptions by restoring checkpoints;
+  model, batch, seed, schedule, LR identity, TPU topology, and output paths did
+  not drift.
 
 ## Baseline
 
@@ -48,17 +56,7 @@ author: kaiyuew
 
 ### Active
 
-- `AUG-LRC-TPU-H1`: without decay, the high-LR noise floor will make terminal
-  Paloma loss improve more slowly at long token budgets than the historical
-  linear-decay curve. Minimum test: all five 1.0x cells; full test: the 25-cell
-  matrix. Falsifier: the constant-LR loss-versus-token slope is as steep or
-  steeper after fitting each budget at its LR optimum.
-- `AUG-LRC-TPU-H2`: the constant schedule will move the fitted peak-LR optimum
-  below the historical sweep's optimum, especially at 300x and 600x. Minimum
-  test: the five LR multipliers at 300x and 600x. Falsifier: fitted optima match
-  or exceed the historical multipliers within fit uncertainty. Current
-  evidence: supported but boundary-censored at 30x through 300x; next test is
-  the bracketed low-LR sweep.
+- None.
 
 ### Blocked
 
@@ -66,11 +64,16 @@ author: kaiyuew
 
 ### Falsified / Dead End
 
-- None.
+- `AUG-LRC-TPU-H1`: not supported. The fitted constant-LR loss exponent is
+  `0.3985`, versus `0.3925` for linear decay, so constant LR is not measurably
+  shallower in this five-budget comparison. Its disadvantage is instead a
+  persistent loss offset and worse fitted asymptote.
 
 ### Promoted
 
-- None.
+- `AUG-LRC-TPU-H2`: supported. The bracketed optimum multiplier falls from
+  `0.425x` at 30x to `0.259x` at 600x, well below the original issue #7856 LR
+  neighborhood. The five-budget power-law exponent is `-0.5563`.
 
 ## Background Research Brief
 
@@ -407,3 +410,113 @@ changes d512 token-budget scaling relative to issue #7856?
 - Next action: babysit at 15-minute cadence, combine the 21 new terminal Paloma
   results with the four reusable old `0.70x` results, then refit the optimum and
   compare the selected LR curve with the issue #7856 linear-decay baseline.
+
+### 2026-08-29 02:39 PDT - Completed the bracketed sweep and refit the scaling laws
+
+- Hypothesis: the completed `0.10x / 0.20x / 0.32x / 0.45x / 0.70x` curves
+  should bracket a budget-dependent constant-LR optimum and determine whether
+  constant LR changes the loss-scaling exponent or mainly adds a terminal-loss
+  offset relative to linear decay.
+- Commit Hash: source and experiment snapshot `ddaa55def`; the analysis
+  artifacts below are the terminal working-tree outputs.
+- Commands:
+  - queried the exact W&B group
+    `marin-community/marin_moe/issue-7856-d512-constant-lr-low-tpu` for all 21
+    expected identities and terminal Paloma metrics;
+  - verified the recovery parent, descendants, attempts, and recent logs with
+    Iris, then checked executor status and final `metadata.json` objects under
+    `gs://marin-us-central2/grug/AUG-LRC-LOW-*`;
+  - `uv run --with matplotlib python scratch/plot_optimal_lr_vs_tokens.py`;
+  - `uv run --with ruff ruff format scratch/plot_optimal_lr_vs_tokens.py`;
+  - `uv run --with ruff ruff check scratch/plot_optimal_lr_vs_tokens.py`.
+- Config: d512 MoE, batch 64, seed 0, 1% warmup followed by constant LR,
+  v4-8 in `us-central2-b`, and artifact version `2026.08.27`. The recovery
+  parent allowed only cells 006–021; cells 001–005 and the four old `0.70x`
+  terminals were reused rather than resubmitted.
+- Result: local log-quadratic fits in log LR give:
+
+  | budget | optimum multiplier | optimum LR | fitted constant Paloma | linear-decay Paloma | constant minus linear |
+  |---:|---:|---:|---:|---:|---:|
+  | 30x | 0.42496 | 0.0121434 | 4.096464 | 3.844418 | +0.252046 |
+  | 60x | 0.34516 | 0.00750221 | 3.884609 | 3.666233 | +0.218376 |
+  | 150x | 0.28373 | 0.00429401 | 3.684398 | 3.501984 | +0.182413 |
+  | 300x | 0.27518 | 0.00316726 | 3.572887 | 3.409257 | +0.163630 |
+  | 600x | 0.25908 | 0.00226774 | 3.488184 | 3.335515 | +0.152668 |
+
+- Result: fitting the five local optima in log space gives
+  `LR* = 8.213774e-3 * (tokens / 1B)^(-0.5563134)`, with `R² = 0.9921`,
+  exponent standard error `0.0287`, nominal OLS 95% interval
+  `[-0.6477, -0.4649]`, and leave-one-budget-out exponent range
+  `[-0.5872, -0.5150]`. The new curve predicts `2.1541e-3` at 600x. The
+  independently bracketed 600x optimum is `2.2677e-3`: 5.3% above the new
+  curve and 12.9% above the old 30x–300x extrapolation (`2.0088e-3`). The
+  directly tested 600x best grid point is `0.32x`, with Paloma `3.491543`;
+  `0.259x` and `3.488184` are local quadratic estimates from the
+  `0.20x / 0.32x / 0.45x` neighborhood.
+- Result: the three-parameter loss fits are
+  `L_constant = 3.22436 + 0.68923 * (tokens / 1B)^(-0.39847)` and
+  `L_linear = 3.11098 + 0.58111 * (tokens / 1B)^(-0.39251)`, with respective
+  `R²` values `0.999989` and `0.999905`. These fits use only five budget
+  optima, so their apparent precision does not include uncertainty from the
+  per-budget quadratic interpolation.
+- Operational result: all 21 new cells are terminal with valid Paloma metrics
+  and SUCCESS artifacts; the parent succeeded with exit code 0 and zero
+  failures. W&B shows 18 finished identities plus three historical `crashed`
+  identities left by the cancelled wrong-region tree; those three have valid
+  terminal metrics and reused SUCCESS artifacts. Cell 020 finished after 11
+  preemptions by restoring `step-20537`, then wrote non-temporary final
+  checkpoint `step-21150`. All outputs stayed in `gs://marin-us-central2`,
+  concurrency stayed at or below five, and no model, batch, seed, schedule,
+  W&B identity, TPU topology, or artifact-version drift was observed.
+- Interpretation: H2 is supported: optimal constant LR decreases roughly as
+  tokens^-0.556 and is substantially below the original LR neighborhood. H1
+  is not supported: constant LR does not exhibit a shallower fitted loss
+  exponent here. Its penalty is better described by a worse level/asymptote,
+  remaining +0.153 Paloma at 600x.
+- Artifacts:
+  - `scratch/20260829_optimal_lr_vs_tokens.png`;
+  - `scratch/20260829_optimal_lr_vs_tokens.csv`;
+  - `scratch/20260829_optimal_lr_power_law_fit.json`;
+  - `scratch/20260827-1043_7856_d512_constant_lr_low_monitoring_state.json`.
+- Next action: no further recovery work is required. Use the fitted constant-LR
+  law only within the observed 30x–600x range unless another budget is added;
+  a cooldown-from-checkpoint study would answer a different question about
+  recoverable optimization progress.
+
+### 2026-09-02 13:55 PDT - Fit the 600x optimal-grid loss curve by training step
+
+- Hypothesis: Paloma macro loss for the best directly tested 600x constant-LR
+  run can be summarized in-range by `L(T) = A + B T^(-alpha)`, where `T` is
+  the training step.
+- Commit Hash: experiment snapshot `ddaa55def`; analysis script and outputs are
+  working-tree artifacts.
+- Command:
+  `uv run --with matplotlib --with scipy python scratch/fit_600x_constant_lr_step_power_law.py`.
+- Config: W&B run
+  [`AUG-LRC-LOW-019-d512-600x-lr0.32`](https://wandb.ai/marin-community/marin_moe/runs/AUG-LRC-LOW-019-d512-600x-lr0.32),
+  metric `eval/paloma/macro_loss`, steps 1,000 through 21,149. The query
+  returned 43 rows; 21 exact duplicate rows from checkpoint restores were
+  removed, leaving 22 unique step-loss observations.
+- Result: nonlinear least squares over all 22 observations gives
+  `L(T) = 3.415303 + 1048.200 T^(-0.946974)`, equivalently
+  `L(T) = 3.415303 + 1.511892 (T / 1000)^(-0.946974)`. The in-range fit has
+  `R² = 0.999298`, RMSE `0.008436`, and maximum absolute residual `0.01715`.
+  Formal 95% nonlinear-OLS intervals are `A = [3.4021, 3.4285]`,
+  `B = [823.4, 1273.0]`, and `alpha = [0.9157, 0.9783]`. At the final step,
+  the fit predicts `3.49935` versus the observed `3.49154`.
+- Interpretation: the model is an excellent compact description of the full
+  observed curve, but `A` is an extrapolated asymptote, not an observed loss
+  floor. Fit-window sensitivity is substantial: starting at step 5,000 gives
+  `A = 3.3167` and `alpha = 0.5746`, despite low in-range RMSE. Sequential
+  evaluations are correlated, so the formal intervals are optimistic and
+  should not be used as long-horizon extrapolation bounds.
+- Artifacts:
+  - `scratch/fit_600x_constant_lr_step_power_law.py`;
+  - `scratch/20260902_600x_constant_lr_paloma_step_curve.csv`;
+  - `scratch/20260902_600x_constant_lr_step_power_law_fit.json`;
+  - `scratch/20260902_600x_constant_lr_step_power_law_fit.pdf`;
+  - `scratch/20260902_600x_constant_lr_step_power_law_fit.png`.
+- Next action: if the intended response variable was per-step training loss
+  rather than Paloma macro loss, repeat the same deduplicated fit on
+  `train/loss`; otherwise use the full-window fit only over the observed
+  1,000–21,149-step range.
