@@ -210,7 +210,7 @@ def test_preflight_digest_is_stable_across_hash_seeds(tmp_path, checked_policies
     assert all(result["digest"] == expected["digest"] for result in seeded)
 
 
-def test_preflight_reports_only_verifier_host_environment_dependencies(tmp_path):
+def test_preflight_reports_only_required_verifier_host_environment_dependencies(tmp_path):
     policy_path = tmp_path / "external-judge.yaml"
     policy_path.write_text(
         """
@@ -225,7 +225,7 @@ verifier:
   env:
     OPENAI_API_KEY: "${TOGETHER_API_KEY}"
     OPENAI_BASE_URL: "https://api.together.xyz/v1"
-    MODEL_NAME: "openai/gpt-oss-120b"
+    MODEL_NAME: "${JUDGE_MODEL:-openai/gpt-oss-120b}"
 """
     )
 
@@ -234,7 +234,7 @@ verifier:
 
     assert payload["verifier_env_keys"] == ["TOGETHER_API_KEY"]
     assert stable_policy["verifier"]["env"] == {
-        "MODEL_NAME": "openai/gpt-oss-120b",
+        "MODEL_NAME": "${JUDGE_MODEL:-openai/gpt-oss-120b}",
         "OPENAI_API_KEY": "${TOGETHER_API_KEY}",
         "OPENAI_BASE_URL": "https://api.together.xyz/v1",
     }

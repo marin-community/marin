@@ -366,7 +366,9 @@ def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict
         "dataset_revision": dataset_metadata.revision,
         "agent": agent_name,
         "environment": environment_name,
-        "verifier_env_keys": sorted({name for name, _default in get_required_host_vars(config.verifier.env)}),
+        "verifier_env_keys": sorted(
+            {name for name, default in get_required_host_vars(config.verifier.env) if default is None}
+        ),
     }
 
 
