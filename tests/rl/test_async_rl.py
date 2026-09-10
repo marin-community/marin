@@ -355,6 +355,7 @@ def test_scheduler_controls_share_fixtures_and_optimizer_semantics(scale):
     sync_yaml = yaml.safe_load(sync_config.config_yaml)
     async_yaml = yaml.safe_load(async_config.config_yaml)
     assert sync_yaml.pop("entrypoint") != async_yaml.pop("entrypoint")
+    assert async_yaml["trainer"]["fully_async"].pop("first_token_admission") is True
     assert sync_yaml == async_yaml
     assert asdict(sync_config.model) == asdict(async_config.model)
     assert sync_config.train_data == async_config.train_data
@@ -744,6 +745,7 @@ def test_qwen_screening_arms_change_only_requested_scheduler_controls():
     assert [config.pop("entrypoint") for config in configs] == ["standard"] + ["fully_async"] * 3
     for config, cadence, age in zip(configs, (1, 1, 2, 1), (1, 1, 1, 3), strict=True):
         trainer = config["trainer"]
+        assert trainer["fully_async"].pop("first_token_admission", False) is (config is not configs[0])
         assert trainer["fully_async"].pop("weight_sync_interval", 1) == cadence
         assert trainer["fully_async"].pop("max_staleness_steps") == age
         assert trainer["max_steps"] == trainer["eval_interval"] == 25
@@ -1018,7 +1020,8 @@ def test_pool_flag_preserves_default_preview_and_selects_verified_fixed_views():
     assert selected.run_id != baseline.run_id
     assert selected.config_yaml == baseline.config_yaml
     assert selected.train_data[0].relative_path == "qwen/train.parquet"
-    assert selected.validation_data[0].relative_path == BATTERY_PATH + "/qwen/dev.parquet"
+    assert selected.validation_data[0].relative_path == "dev.parquet"
+    assert selected.validation_data[0].uri.endswith(BATTERY_PATH + "/qwen")
     result = CliRunner().invoke(
         async_rl.main,
         ["--version", "2026.09.06.10", "--stage", "rl", "--completion", "metrics", "--pool-artifact", POOL_ARGUMENT],
@@ -1026,7 +1029,8 @@ def test_pool_flag_preserves_default_preview_and_selects_verified_fixed_views():
     assert result.exit_code == 0, result.output
     cli = json.loads(result.output)["request"]
     assert cli["train_data"][0]["relative_path"] == "qwen/train.parquet"
-    assert cli["validation_data"][0]["relative_path"] == BATTERY_PATH + "/qwen/dev.parquet"
+    assert cli["validation_data"][0]["relative_path"] == "dev.parquet"
+    assert cli["validation_data"][0]["uri"].endswith(BATTERY_PATH + "/qwen")
 
 
 @pytest.mark.parametrize("changes", [{"validation_offset": 128}, {"context_tokens": 1536}])

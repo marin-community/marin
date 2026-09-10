@@ -611,7 +611,7 @@ def build_experiment(
     eval_response_tokens: int | None = None,
     context_tokens: int | None = None,
     screening_steps: int | None = None,
-    minibatches: int = 1,
+    minibatches: int | None = None,
     updates: int | None = None,
     eval_updates: int | None = None,
     grad_cosine: bool | None = None,
@@ -650,6 +650,8 @@ def build_experiment(
         raise ValueError("A positive training deadline and nonnegative staleness are required")
     if completion not in ("model", "metrics"):
         raise ValueError(f"Unknown completion mode: {completion}")
+    if minibatches is None:
+        minibatches = 2 if scale is Scale.SCREENING and updates is not None and not kl_loss else 1
     if allow_cross_region_io and (cluster != "cw-rno2a" or scale is not Scale.SCREENING or completion != "metrics"):
         raise ValueError("Cross-region I/O is restricted to Qwen screening metrics jobs on cw-rno2a")
     if not 0 <= seed < 2**32:
@@ -895,7 +897,11 @@ def build_experiment(
     "--eval-response-tokens", type=click.IntRange(min=1), help="Internal evaluation cap; defaults to training."
 )
 @click.option("--context-tokens", type=click.IntRange(min=1), help="Engine context window; defaults to 2048.")
-@click.option("--minibatches", type=click.IntRange(min=1, max=16), default=1, show_default=True)
+@click.option(
+    "--minibatches",
+    type=click.IntRange(min=1, max=16),
+    help="Defaults to two for no-KL Qwen screens with explicit optimizer updates; one otherwise.",
+)
 @click.option(
     "--updates", type=click.IntRange(min=1), help="Total optimizer updates; explicit with multiple minibatches."
 )
@@ -945,7 +951,7 @@ def main(
     eval_response_tokens: int | None,
     context_tokens: int | None,
     screening_steps: int | None,
-    minibatches: int,
+    minibatches: int | None,
     updates: int | None,
     eval_updates: int | None,
     grad_cosine: bool | None,

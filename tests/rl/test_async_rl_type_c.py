@@ -140,3 +140,46 @@ def test_actual_cli_preserves_optimizer_budget_with_runner_specific_native_clock
     assert cfg["trainer"]["train_batch_size"] == 128
     assert cfg["trainer"]["policy_mini_batch_size"] == 64
     assert request["topology"]["role_plan"]["train_batch_size"] == 128
+
+
+@pytest.mark.parametrize("runner", ["sync", "async"])
+def test_new_screen_default_uses_two_partitions_without_changing_update_count(runner):
+    arguments = [
+        "--version",
+        "2026.09.10.1",
+        "--runner",
+        runner,
+        "--scale",
+        "screening",
+        "--stage",
+        "rl",
+        "--completion",
+        "metrics",
+        "--updates",
+        "8",
+        "--no-kl-loss",
+    ]
+    default = CliRunner().invoke(recipe.main, arguments)
+    explicit = CliRunner().invoke(recipe.main, [*arguments, "--minibatches", "2"])
+    historical = CliRunner().invoke(recipe.main, [*arguments, "--minibatches", "1"])
+    assert default.exit_code == explicit.exit_code == historical.exit_code == 0
+    request, control, old = [json.loads(result.output)["request"] for result in (default, explicit, historical)]
+    request.pop("attempt_id")
+    control.pop("attempt_id")
+    assert request == control
+    assert request["run_id"] != old["run_id"]
+    config = yaml.safe_load(request["config_yaml"])
+    assert config["trainer"]["train_batch_size"] == 128
+    assert config["trainer"]["max_steps"] == (4 if runner == "sync" else 8)
+
+
+@pytest.mark.parametrize("arguments", [[], ["--updates", "8"], ["--no-kl-loss"]])
+def test_legacy_screen_scopes_retain_single_partition_default(arguments):
+    base = ["--version", "2026.09.10.1", "--stage", "rl", "--completion", "metrics", *arguments]
+    default = CliRunner().invoke(recipe.main, base)
+    explicit = CliRunner().invoke(recipe.main, [*base, "--minibatches", "1"])
+    assert default.exit_code == explicit.exit_code == 0
+    request, control = [json.loads(result.output)["request"] for result in (default, explicit)]
+    request.pop("attempt_id")
+    control.pop("attempt_id")
+    assert request == control
