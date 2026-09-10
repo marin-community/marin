@@ -311,7 +311,7 @@ class LocalActorGroup:
     def __init__(self, handles: list[ActorHandle], jobs: list[LocalJobHandle]):
         self._handles = handles
         self._jobs = jobs
-        self._yielded = False
+        self._delivered_count = 0
 
     @property
     def ready_count(self) -> int:
@@ -322,15 +322,15 @@ class LocalActorGroup:
         """Return ready actor handles. Local actors are ready immediately."""
         if count is None:
             count = len(self._handles)
-        self._yielded = True
-        return self._handles[:count]
+        handles = self._handles[:count]
+        self._delivered_count = max(self._delivered_count, len(handles))
+        return handles
 
     def discover_new(self) -> list[ActorHandle]:
-        """Return handles not yet yielded. After wait_ready, returns empty."""
-        if self._yielded:
-            return []
-        self._yielded = True
-        return self._handles
+        """Return handles not previously delivered by this group."""
+        handles = self._handles[self._delivered_count :]
+        self._delivered_count = len(self._handles)
+        return handles
 
     def is_done(self) -> bool:
         """Local actors run in-process and don't independently fail."""

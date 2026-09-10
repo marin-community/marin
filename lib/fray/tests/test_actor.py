@@ -27,6 +27,14 @@ class Adder:
         return a + b
 
 
+class ActorIndex:
+    def __init__(self):
+        self._index = current_actor().index
+
+    def get(self) -> int:
+        return self._index
+
+
 class _ActorConstructionError(RuntimeError):
     pass
 
@@ -86,6 +94,18 @@ def test_actor_group_wait_ready_partial(client: LocalClient):
     group = client.create_actor_group(Counter, name="counters", count=5)
     handles = group.wait_ready(count=2)
     assert len(handles) == 2
+
+
+def test_actor_group_discover_new_returns_undelivered_handles(client: LocalClient):
+    group = client.create_actor_group(ActorIndex, name="indexed-actors", count=3)
+
+    first = group.wait_ready(count=1)
+    assert [handle.get() for handle in first] == [0]
+    assert [handle.get() for handle in group.wait_ready(count=1)] == [0]
+
+    remaining = group.discover_new()
+    assert [handle.get() for handle in remaining] == [1, 2]
+    assert group.discover_new() == []
 
 
 def test_actor_group_shutdown(client: LocalClient):
