@@ -12,62 +12,62 @@
  "DCAgent__exp_rle_adversarial-v6": {
   "verdict": "drop",
   "family": "unit-test-gen",
-  "reason": "Same generator as stack-pytest: implement a fake ddtrace/godot/mssqlcli module so LLM-written tests pass. Kata-grade fakes of real libraries."
+  "reason": "The legacy pytest grader performs source-specific Django discovery and loads extra plugins. Ten sampled empty and trivial submissions failed, but the source has no oracle and needs a custom environment adapter."
  },
  "DCAgent__exp_rpt_curriculum-easy": {
-  "verdict": "drop",
+  "verdict": "keep",
   "family": "unit-test-gen",
-  "reason": "Starter skeleton is a complete working solution."
+  "reason": "Self-contained pytest tasks. In a 10-task sample, empty and trivial submissions failed every task. Kept with the kata tag."
  },
  "DCAgent__exp_rpt_curriculum-medium-v2": {
-  "verdict": "drop",
+  "verdict": "keep",
   "family": "unit-test-gen",
-  "reason": "LLM-synthesized \"implement a mock cluster\" toys. Kata-grade."
+  "reason": "Self-contained pytest tasks. In a 10-task sample, empty and trivial submissions failed every task. Kept with the kata tag."
  },
  "DCAgent__exp_rpt_e2egit-large": {
-  "verdict": "drop",
+  "verdict": "keep",
   "family": "unit-test-gen",
-  "reason": "8 of 10 sampled tasks are the same Calculator class; metadata is inert boilerplate."
+  "reason": "Self-contained pytest tasks. Empty and trivial submissions failed all 10 sampled tasks; exact instruction dedup handles repeated katas."
  },
  "DCAgent__exp_rpt_e2egit-v2": {
-  "verdict": "drop",
+  "verdict": "keep",
   "family": "unit-test-gen",
-  "reason": "Same generator as e2egit-large at 487 rows."
+  "reason": "Self-contained pytest tasks. Empty and trivial submissions failed all 10 sampled tasks; exact instruction dedup handles overlap with the large cut."
  },
  "DCAgent__exp_rpt_multifile-v3": {
-  "verdict": "drop",
+  "verdict": "keep",
   "family": "unit-test-gen",
-  "reason": "LLM-synthesized three-module toys (text normalizer, 1D Kalman update). Kata-grade, the tier already dropped for pymethods2test and unitsyn."
+  "reason": "Self-contained multi-file pytest tasks. In a 10-task sample, empty and trivial submissions failed every task. Kept with the kata tag."
  },
  "DCAgent__exp_rpt_nemotron-cpp": {
   "verdict": "drop",
   "family": "unit-test-gen",
-  "reason": "GoogleTest grading, but the reference implementation is pasted inside the test file and some tests need doctest, which is not installed."
+  "reason": "GoogleTest tasks without shipped oracles. Sampled empty and trivial submissions failed, but some tests contain the reference implementation and others require an uninstalled doctest dependency."
  },
  "DCAgent__exp_rpt_pymethods2test-large-v2": {
-  "verdict": "drop",
-  "family": "competitive-programming",
-  "reason": "Single pure-function katas whose examples mirror the tests. Too easy to spend RL on."
+  "verdict": "keep",
+  "family": "unit-test-gen",
+  "reason": "Self-contained pytest katas with shipped Python oracles. All 10 sampled oracles passed, while empty and trivial submissions failed."
  },
  "DCAgent__exp_rpt_pymethods2test-v3": {
-  "verdict": "drop",
-  "family": "competitive-programming",
-  "reason": "500-row early cut of the same katas."
+  "verdict": "keep",
+  "family": "unit-test-gen",
+  "reason": "Self-contained pytest katas with shipped Python oracles. All 10 sampled oracles passed, while empty and trivial submissions failed."
  },
  "DCAgent__exp_rpt_stack-pytest-v2": {
-  "verdict": "drop",
+  "verdict": "keep",
   "family": "unit-test-gen",
-  "reason": "Pre-hardening version superseded by adversarial-v6 and pytest-large-v3."
+  "reason": "Self-contained pytest tasks. In a 10-task sample, empty and trivial submissions failed every task. Kept with the kata tag."
  },
  "DCAgent__exp_rpt_unitsyn-python-large-v2": {
-  "verdict": "drop",
+  "verdict": "keep",
   "family": "unit-test-gen",
-  "reason": "Single-function implementations from synthesized unittest; first-.py-file fallback. Kata-grade."
+  "reason": "Self-contained pytest katas with shipped Python oracles. All 10 sampled oracles passed, while empty and trivial submissions failed."
  },
  "DCAgent__exp_rpt_unitsyn-python-v4": {
-  "verdict": "drop",
+  "verdict": "keep",
   "family": "unit-test-gen",
-  "reason": "Small cut of the same."
+  "reason": "Self-contained pytest katas with shipped Python oracles. The standardized mode passed all 10 sampled oracles and rejected all 10 empty submissions."
  },
  "DCAgent__inferredbugs-sandboxes-verifier": {
   "verdict": "drop",
@@ -77,7 +77,7 @@
  "DCAgent__mix_h4_binary_easy": {
   "verdict": "drop",
   "family": "unit-test-gen",
-  "reason": "Mixture; crosscodeeval slice only checks import succeeds."
+  "reason": "Mixed verifier shapes: eight of 10 sampled empty and trivial checks timed out, and the crosscodeeval slice only checks that an import succeeds."
  },
  "DCAgent__selfinstruct-naive-sandboxes-2-verified-v3": {
   "verdict": "drop",
@@ -152,7 +152,7 @@
  "laion__exp_rpt_methods2test-large-v4": {
   "verdict": "drop",
   "family": "unit-test-gen",
-  "reason": "Single @Test pasted verbatim into the prompt; implement one known assertion."
+  "reason": "All 10 sampled shipped Java oracles failed because Maven could not resolve its plugins offline. Recovering the source requires rebuilding the Java grading environment."
  },
  "laion__exp_rpt_nemotron-junit-v6": {
   "verdict": "drop",
@@ -197,7 +197,7 @@
  "laion__exp_rpt_stack-pytest-large-v3": {
   "verdict": "drop",
   "family": "unit-test-gen",
-  "reason": "Sampled tests only assert truthiness of return values; a stub that returns a dict passes. Same stripped-repository shape as stack-go."
+  "reason": "Stripped-repository pytest tasks without shipped oracles. Two of 10 sampled empty and trivial checks timed out, and sampled tests include truthiness-only assertions that weak stubs can satisfy."
  },
  "laion__exp_rpt_stack-rspec-v4": {
   "verdict": "drop",
@@ -222,17 +222,17 @@
  "laion__mix_h10_reward_proportional-v2": {
   "verdict": "drop",
   "family": "unit-test-gen",
-  "reason": "Mixture; codereval slice tests a local mock rather than the solution."
+  "reason": "Four of 10 sampled trivial submissions received full credit because the codereval slice tests a local mock rather than the solution."
  },
  "laion__mix_h11_single_skill_only-v2": {
   "verdict": "drop",
   "family": "unit-test-gen",
-  "reason": "Mixture of other sources, including content-free crosscodeeval slices and a syntactically broken test file."
+  "reason": "Mixed verifier shapes: eight of 10 sampled empty and trivial checks timed out; the source also contains content-free crosscodeeval slices and syntactically invalid tests."
  },
  "laion__mix_h8_original_tests-v2": {
   "verdict": "drop",
   "family": "unit-test-gen",
-  "reason": "Mixture; import-only test files for three of ten sampled tasks."
+  "reason": "All 10 sampled empty and trivial checks timed out, and prior inspection found import-only test files in three of 10 tasks."
  },
  "laion__nemo-prism-math-v3": {
   "verdict": "keep",

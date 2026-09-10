@@ -36,7 +36,7 @@ raw → summaries → templates → converted → graded → clean
 18. [x] Fixes from the validity sample: pytest node ids rebased onto the workspace in the tool (a `tests/pytest.ini` rootdir made every id miss), failing pytest grades keep the output tail, truncated parametrized ids are dropped from PASS_TO_PASS and reject FAIL_TO_PASS (394 swe_rebench tasks); whole-directory uploads and per-task agent timeouts in the validity tooling
 19. [x] M1 cleanup: recover non-null TOML/XML/CSV structured-output tasks, add end-to-end converter tests, fix the root `reasoning-gym` dependency, merge current `origin/main`, and run the format-parity audit
 20. [x] M2 cleanup: leave non-letter MCQA golds, literal-newline prompt failures, and the broken `arc_agi`/`rearc` scorer rows rejected; their small recovery does not justify format-specific parsing or grading paths
-21. [ ] M3 cleanup: audit the 25 dropped test sources and reinstate only tasks supported by existing graders or small direct adapters; tag usable kata tasks instead of dropping them for ease
+21. [x] M3 cleanup: audit the 25 dropped test sources; reinstate 10 self-contained Python sources through the pytest mode with a `kata` tag, and keep the 15 broken or infrastructure-dependent sources dropped
 22. [ ] M4 cleanup: validate kept Python SWE tasks and decide non-Python repository tasks without adding a new grading family or repairing repositories/toolchains
 23. [ ] M5 cleanup: sample kept and dropped judge sources against the answerability, rubric, leakage, triviality, and persona checklist
 24. [ ] M6 cleanup: measure near duplicates over instructions and hidden grading text before changing the exact within-source key
@@ -70,6 +70,21 @@ answer fragments that do not identify one displayed option without stripping uni
 other content-specific syntax. The 1,463 literal-newline prompt failures and 282 reasoning-gym
 `arc_agi`/`rearc` rows could be special-cased, but together do not justify extra prompt rewriting
 or grid-grading behavior. These rows remain rejected rather than adding recovery heuristics.
+
+M3 sampled 10 deterministic rows from each of the 25 dropped unit-test sources and built all 17
+distinct source images. Under the legacy graders, 222 of 250 empty checks scored zero and 28 timed
+out; trivial submissions produced 218 zeros, four false passes, and the same 28 timeouts. Shipped
+oracles produced 39 passes and 11 failures: the 10 Java failures could not resolve Maven plugins,
+while one Python failure came from pytest trying to write its cache into the read-only tests mount.
+
+Ten self-contained Python sources now use `python_unit_tests`, which runs their single test file
+through the standard pytest mode in an isolated verifier environment and tags each survivor
+`kata`. A 10-task converted sample from every reinstated source produced 100 of 100 empty zeros and
+40 of 40 oracle passes. The source-wide conversion recovers 22,784 rows and rejects nine null
+graders with no local test function plus nine syntactically invalid test files. The other 15
+sources remain dropped: four mixed-source trivial submissions passed, 28 sampled checks timed out,
+the Java oracle failed throughout, or recovery would require language-, repository-, or
+dependency-specific grading work. `source_verdicts.json` records the per-source decision.
 
 ## Run 2026.09.10.5
 
