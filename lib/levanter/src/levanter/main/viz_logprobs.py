@@ -108,14 +108,16 @@ def main(config: VizLmConfig):
             )
         else:
             model = load_levanter_checkpoint(
-                config.model, config.checkpoint_path, Vocab=Vocab, axis_mapping=parameter_axis_mapping, key=key
+                config.model,
+                config.checkpoint_path,
+                Vocab=Vocab,
+                axis_mapping=parameter_axis_mapping,
+                key=key,
             )
         model = typing.cast(LmHeadModel, inference_mode(model, True))
 
-        comparison_model: LmHeadModel | None
-        if config.comparison_model_path is None:
-            comparison_model = None
-        else:
+        comparison_model: LmHeadModel | None = None
+        if config.comparison_model_path is not None:
             if config.comparison_is_hf:
                 comparison_model = load_hf_checkpoint(
                     config.model,
