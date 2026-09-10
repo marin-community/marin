@@ -73,7 +73,7 @@ _CE_BLOCK_SIZES = BlockSizes(b_block_size=_CE_TOKENS_PER_RANK, v_block_size=4096
 # The embedding is fully replicated for a local lookup. The language-model head
 # is sharded across the data, expert, context, and model axes.
 _EMBED_PARTITION_SPEC = P(None, None)
-# Context parallelism replicates activations across the `context` axis but must not replicate
+# Context parallelism must not replicate
 # parameters across it: at EP16 x CP4 the fp32 master plus Muon momentum would need roughly
 # 1072 GB per node against ~850 GB of host RAM. Parameters therefore shard over the composite
 # that includes `context`, and their master and optimizer state inherit that placement. At
@@ -122,15 +122,10 @@ def _batch_reshard(x: jax.Array) -> jax.Array:
 
 
 def _seq_axis(mesh: jax.sharding.AbstractMesh | None) -> str | None:
-    """The sequence-sharding (context-parallel) mesh axis, or ``None`` if the mesh lacks it.
-
-    Unlike ``_mesh_axis_size``, which treats a missing axis as a caller bug, this tolerates one:
-    the axis is new, and meshes built by tests and older tooling name only the axes they use. A
-    mesh without it simply has no sequence sharding to account for.
-    """
+    """Return the context axis only when it partitions the sequence."""
     if mesh is None or mesh.empty:
         return None
-    return _SEQ_AXIS_NAME if _SEQ_AXIS_NAME in mesh.shape else None
+    return _SEQ_AXIS_NAME if int(mesh.shape.get(_SEQ_AXIS_NAME, 1)) > 1 else None
 
 
 def _token_axes(mesh: jax.sharding.AbstractMesh | None) -> tuple[str, ...]:
@@ -202,18 +197,6 @@ def _partition_spec_of(x: jax.Array) -> P | None:
     if isinstance(sharding, NamedSharding):
         return sharding.spec
     return None
-
-
-def _seq_axis() -> str | None:
-    """Return the context-parallel sequence axis, or None when the mesh does not split the sequence.
-
-    A length-1 ``context`` axis is reported as absent so a non-CP mesh keeps the
-    fully sequence-replicated attention path.
-    """
-    mesh = get_abstract_mesh()
-    if mesh is None or mesh.empty:
-        return None
-    return _SEQ_AXIS_NAME if int(mesh.shape.get(_SEQ_AXIS_NAME, 1)) > 1 else None
 
 
 def _sequence_axis_of(x: jax.Array) -> str | None:
@@ -679,7 +662,7 @@ class CausalSelfAttention(eqx.Module):
         # Context parallelism: shard Q's sequence over "context" and all-gather K/V, so each
         # shard attends its own queries against the whole key sequence. The backends reject a
         # sharded K/V sequence, and the output returns to the residual stream's layout.
-        seq_axis = _seq_axis()
+        seq_axis = _seq_axis(get_abstract_mesh())
         residual_seq_axis = _sequence_axis_of(x)
         if seq_axis is not None:
             q = _reshard_sequence_axis(q, seq_axis)
@@ -1398,7 +1381,7 @@ class Transformer(eqx.Module):
         )
         # The bounds hold global key positions, so a context-parallel run splits them along
         # the sequence exactly like Q.
-        bounds_spec = P(_BATCH_AXES, _seq_axis())
+        bounds_spec = P(_BATCH_AXES, _seq_axis(get_abstract_mesh()))
         long_lower_bounds = reshard(long_lower_bounds, bounds_spec)
         short_lower_bounds = reshard(short_lower_bounds, bounds_spec)
         valid = reshard(valid, bounds_spec)

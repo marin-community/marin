@@ -491,11 +491,17 @@ def test_real_gpu_fa4_cute_attention_matches_reference_with_leading_padding(slid
     _assert_real_gpu_fa4_cute_matches_reference(q, k, v, mask, cotangent, valid_tokens=valid)
 
 
+@pytest.mark.parametrize("implementation", ["gpu_fa4_cute", "gpu_fa4_cute_wide"])
+@pytest.mark.parametrize("context_size", [2, 4])
 @pytest.mark.parametrize(("q_heads", "kv_heads", "head_dim"), [(4, 1, 64), (8, 2, 128), (4, 4, 128)])
-def test_real_gpu_fa4_cute_attention_matches_reference_with_context_sharded_queries(q_heads, kv_heads, head_dim):
+def test_real_gpu_fa4_cute_attention_matches_reference_with_context_sharded_queries(
+    q_heads, kv_heads, head_dim, context_size, implementation
+):
     if jax.default_backend() != "gpu":
         pytest.skip("FA4/CuTe correctness requires a GPU backend.")
-    if jax.device_count() < 2:
+    if implementation == "gpu_fa4_cute_wide" and (head_dim != 128 or fa4_cute.gpu_compute_capability() != 100):
+        pytest.skip("Wide tiles require sm100 and head_dim=128.")
+    if jax.device_count() < context_size:
         pytest.skip("Context-parallel FA4/CuTe needs at least two devices.")
     pytest.importorskip("cutlass")
     pytest.importorskip("cutlass.cute")
@@ -506,7 +512,7 @@ def test_real_gpu_fa4_cute_attention_matches_reference_with_context_sharded_quer
     # forward key-tile bound and the backward query-tile bound depend on it. head_dim 128
     # selects the tile configuration the hero runs.
     seq_len = 512
-    mesh = compact_grug_mesh(context_axis_size=2)
+    mesh = compact_grug_mesh(context_axis_size=context_size)
     batch_axes = ("replica_dcn", "data", "expert")
     # `data` absorbs every device the other axes leave free, so the batch has to cover the batch
     # axes: one sequence per batch coordinate. A fixed batch of 1 only shards on a two-device host.
@@ -532,6 +538,7 @@ def test_real_gpu_fa4_cute_attention_matches_reference_with_context_sharded_quer
             mask,
             jax.device_put(cotangent, q_sharding),
             valid_tokens=valid,
+            implementation=implementation,
         )
 
 

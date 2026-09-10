@@ -88,6 +88,25 @@ def test_diagnostic_run_without_shape_overrides_uses_the_selected_model():
     )
 
 
+def test_sequence_extension_preserves_optimizer_at_fixed_token_budget():
+    configs = []
+    for seq_len, batch_size, context, expert in [(4096, 1024, 1, 64), (262144, 16, 4, 16)]:
+        step = launch.build_diagnostic_run(
+            run_id=f"fixed-budget-{seq_len}",
+            dp_racks=1,
+            num_steps=100,
+            schedule_steps=4470000,
+            batch_size=batch_size,
+            max_seq_len=seq_len,
+            context_axis_size=context,
+            expert_axis_size=expert,
+            version="dev",
+        )
+        configs.append(step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps)))
+
+    assert configs[0].optimizer == configs[1].optimizer
+
+
 def _validated_trainer(step, device_count: int):
     """Run `TrainerConfig`'s own batch validation for `step` as if `device_count` devices existed.
 
@@ -447,7 +466,7 @@ def test_a_master_bearing_checkpoint_migrates_in_process_into_a_master_less_rest
     only checked the restore did not raise would pass against the bug this migration exists for.
     """
     cfg = _latent_config()
-    mesh = _explicit_mesh(1, 1, 1, 1)
+    mesh = _explicit_mesh(1, 1, 1, 1, 1)
     monkeypatch.setattr(train, "_tree_to_memory_kind", lambda tree, memory_kind: tree)
 
     def build(mp, key, master_param_mode):

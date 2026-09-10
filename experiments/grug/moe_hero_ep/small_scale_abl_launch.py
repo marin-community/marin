@@ -44,12 +44,12 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     HERO_EP_NODES,
     HERO_GPUS_PER_NODE,
     HeroThroughputResult,
-    validate_mesh_axes,
 )
 from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic
 from experiments.grug.moe_hero_ep.launch_diagnostics import (
     batch_axes_product as grug_batch_axes_product,
 )
+from experiments.grug.moe_hero_ep.launch_diagnostics import validate_mesh_axes
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, QbEstimator
 from experiments.grug.moe_hero_ep.train import (
     GrugEvalConfig,

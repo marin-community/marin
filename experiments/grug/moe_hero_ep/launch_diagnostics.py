@@ -44,7 +44,7 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     validation_datasets,
     with_transport_remat_mode,
 )
-from experiments.grug.moe_hero_ep.heuristic import build_hero_configs
+from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic
 from experiments.grug.moe_hero_ep.train import (
     RAGGED_MOE_IMPLEMENTATION,
     GrugEvalConfig,
@@ -60,6 +60,7 @@ from experiments.grug.moe_hero_ep.train import (
 
 DEFAULT_HERO_STEPS = 25
 HERO_CHECKPOINT_INTERVAL = timedelta(minutes=15)
+HERO_MODEL_AXIS_SIZE = 1
 
 
 def batch_axes_product(*, device_count: int, context_axis_size: int) -> int:
@@ -111,7 +112,7 @@ def validate_mesh_axes(
     if trainer_axis_size != batch_axes:
         raise ValueError(
             f"TrainerConfig would spread the batch over {trainer_axis_size} devices while grug's "
-            f"batch axes span {batch_axes_product}; its mesh config does not match the grug mesh at "
+            f"batch axes span {batch_axes}; its mesh config does not match the grug mesh at "
             f"context={context_axis_size}, expert={expert_axis_size}"
         )
 
@@ -129,6 +130,11 @@ def build_diagnostic_run(
     intermediate_dim: int | None = None,
     capacity_factor: float | None = None,
     latent_dim: int | None = None,
+    max_seq_len: int | None = None,
+    context_axis_size: int = 1,
+    expert_axis_size: int = HERO_EP_EXPERT_AXIS_SIZE,
+    qk_mult: float | None = None,
+    restore_from: str | None = None,
     moe_implementation: str | None = None,
     master_param_mode: MasterParamMode = HERO_MASTER_PARAM_MODE,
     processes_per_task: int = HERO_PROCESSES_PER_TASK,
@@ -180,10 +186,6 @@ def build_diagnostic_run(
     if schedule_steps is not None and schedule_steps < num_steps:
         raise ValueError(f"schedule_steps={schedule_steps} must be at least num_steps={num_steps}")
     total_schedule_steps = schedule_steps if schedule_steps is not None else num_steps
-    _, optimizer = build_hero_configs(
-        num_train_steps=total_schedule_steps,
-        batch_size=batch_size,
-    )
     model = HERO_MODEL_CONFIG
     overrides = {
         name: value
@@ -193,6 +195,8 @@ def build_diagnostic_run(
             ("intermediate_dim", intermediate_dim),
             ("capacity_factor", capacity_factor),
             ("latent_dim", latent_dim),
+            ("max_seq_len", max_seq_len),
+            ("qk_mult", qk_mult),
             ("moe_implementation", moe_implementation),
         )
         if value is not None
@@ -200,11 +204,26 @@ def build_diagnostic_run(
     if overrides:
         model = dataclasses.replace(model, **overrides)
     model = with_transport_remat_mode(model)
+    optimizer = MoeHeuristic().build_optimizer_config(
+        num_train_steps=total_schedule_steps,
+        batch_size=batch_size,
+        hidden_dim=model.hidden_dim,
+        seq_len=model.max_seq_len,
+    )
+    validate_mesh_axes(
+        device_count=HERO_EP_NODES * HERO_GPUS_PER_NODE * dp_racks,
+        dp_racks=dp_racks,
+        batch_size=batch_size,
+        context_axis_size=context_axis_size,
+        expert_axis_size=expert_axis_size,
+    )
+    if model.max_seq_len % context_axis_size:
+        raise ValueError(f"context_axis_size={context_axis_size} must divide max_seq_len={model.max_seq_len}")
     # A bank that is not divisible by the expert axis fails inside `moe_mlp`, which is after the rack
     # is already allocated and the workspace is built. Reject it here instead.
-    if model.num_experts % HERO_EP_EXPERT_AXIS_SIZE != 0:
-        raise ValueError(f"num_experts={model.num_experts} must be divisible by {HERO_EP_EXPERT_AXIS_SIZE}")
-    local_experts = model.num_experts // HERO_EP_EXPERT_AXIS_SIZE
+    if model.num_experts % expert_axis_size != 0:
+        raise ValueError(f"num_experts={model.num_experts} must be divisible by {expert_axis_size}")
+    local_experts = model.num_experts // expert_axis_size
     if local_experts % model.num_expert_waves != 0:
         raise ValueError(
             f"local expert count={local_experts} must be divisible by num_expert_waves={model.num_expert_waves}"
@@ -231,6 +250,9 @@ def build_diagnostic_run(
         watch_mode=watch_mode,
         save_checkpoints=save_checkpoints,
         master_param_mode=master_param_mode,
+    )
+    grug_trainer = dataclasses.replace(
+        grug_trainer, context_axis_size=context_axis_size, expert_axis_size=expert_axis_size
     )
     train_resources = ResourceConfig.with_gpu(
         "GB200",
@@ -267,7 +289,8 @@ def build_diagnostic_run(
                     enable_hlo_proto=True,
                 ),
             ),
-            mesh=grug_trainer_mesh_config(context_axis_size),
+            load_checkpoint_path=restore_from,
+            load_checkpoint=True if restore_from else None,
             tracker=WandbConfig(
                 entity="marin-community",
                 project=wandb_project,
@@ -304,6 +327,8 @@ def build_diagnostic_run(
                 debug=checkpoint_debug or CheckpointDebugConfig(),
             ),
         )
+        if context_axis_size > 1:
+            trainer = dataclasses.replace(trainer, mesh=grug_trainer_mesh_config(context_axis_size))
         data = harrier_mix_2026_08_18_data_config(
             ctx=ctx,
             total_steps=total_schedule_steps,
@@ -324,7 +349,10 @@ def build_diagnostic_run(
             eval=(
                 GrugEvalConfig(
                     steps_per_eval=eval_every,
-                    eval_batch_size=HERO_EP_EXPERT_AXIS_SIZE * dp_racks,
+                    eval_batch_size=batch_axes_product(
+                        device_count=HERO_EP_NODES * HERO_GPUS_PER_NODE * dp_racks,
+                        context_axis_size=context_axis_size,
+                    ),
                     eval_current=False,  # matches the ladder; see #8861
                     eval_ema=False,
                     compute_bpb=True,
@@ -390,7 +418,7 @@ def build_diagnostic_run(
     default=HERO_MODEL_CONFIG.num_experts,
     show_default=True,
     help=(
-        f"Override the routed expert count. The count must be divisible by {HERO_EP_EXPERT_AXIS_SIZE}, "
+        "Override the routed expert count. The count must be divisible by --expert-axis-size, "
         f"and the local expert count must support {HERO_MODEL_CONFIG.num_expert_waves} waves."
     ),
 )
@@ -513,6 +541,11 @@ def build_diagnostic_run(
     show_default=True,
     help="Override the pooled receiver capacity factor.",
 )
+@click.option("--seq-len", type=click.IntRange(min=1), default=None)
+@click.option("--context-axis-size", type=click.IntRange(min=1), default=1, show_default=True)
+@click.option("--expert-axis-size", type=click.IntRange(min=1), default=HERO_EP_EXPERT_AXIS_SIZE, show_default=True)
+@click.option("--qk-mult", type=click.FloatRange(min=0, min_open=True), default=None)
+@click.option("--restore-from", default=None, help="Checkpoint to restore; outputs use this run's own path.")
 @build_options
 def main(
     run_id: str,
@@ -539,6 +572,11 @@ def main(
     profile_steps: int,
     profile_start_step: int,
     training_data: str,
+    seq_len: int | None,
+    context_axis_size: int,
+    expert_axis_size: int,
+    qk_mult: float | None,
+    restore_from: str | None,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_diagnostic_run(
         run_id=run_id,
@@ -552,6 +590,11 @@ def main(
         intermediate_dim=intermediate_dim,
         capacity_factor=capacity_factor,
         latent_dim=latent_dim,
+        max_seq_len=seq_len,
+        context_axis_size=context_axis_size,
+        expert_axis_size=expert_axis_size,
+        qk_mult=qk_mult,
+        restore_from=restore_from,
         moe_implementation=moe_implementation,
         master_param_mode=MasterParamMode(master_params),
         processes_per_task=processes_per_task,
