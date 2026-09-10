@@ -93,10 +93,7 @@ class GcpControllerProvider:
         self,
         config: IrisClusterConfig,
         dry_run: bool = False,
-        label_prefix: str | None = None,
     ) -> list[str]:
-        # label_prefix is accepted for protocol compatibility but not yet wired to
-        # list_all_slices filtering; the worker_provider always uses its own prefix.
         return default_stop_all(
             list_all_slices=self.worker_provider.list_all_slices,
             stop_controller=lambda: self.stop_controller(config),

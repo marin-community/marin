@@ -32,7 +32,6 @@ from dataclasses import dataclass
 from functools import cached_property
 from typing import Callable, Iterator, List, Optional, Tuple, TypeVar, Union
 
-import equinox as eqx
 import haliax
 import jax
 import jax.numpy as jnp
@@ -43,7 +42,7 @@ from haliax import NamedArray
 from jax.sharding import PartitionSpec
 
 import levanter.tracker
-from levanter.compat.hf_checkpoints import HFCheckpointConverter, load_tokenizer
+from levanter.compat.hf_checkpoints import load_tokenizer
 from levanter.data.packing import (
     PromptCompletion,
     greedy_pack_prompt_completions,
@@ -83,12 +82,12 @@ from tqdm_loggable.auto import tqdm
 
 import levanter.config
 from levanter.callbacks import StepInfo
-from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
 from levanter.data.utils import batched
 from levanter.data.loader import stack_batches
+from levanter.model_loading import load_hf_checkpoint, load_levanter_checkpoint
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, split_activations
 from levanter.trainer import TrainerConfig
-from levanter.utils.jax_utils import broadcast_shard, parameter_count, use_cpu_device
+from levanter.utils.jax_utils import broadcast_shard, parameter_count
 from levanter.utils.py_utils import FailSafeJSONEncoder
 from levanter.utils.tree_utils import inference_mode
 
@@ -1445,29 +1444,21 @@ def run_eval_harness_main(config: EvalHarnessMainConfig):
 
         # initialize the model
         if config.checkpoint_is_hf:
-            model_config = config.model
-            converter: HFCheckpointConverter = model_config.hf_checkpoint_converter()
-            converter = converter.replaced(reference_checkpoint=config.checkpoint_path, tokenizer=tokenizer)
-            model = typing.cast(
-                LmHeadModel,
-                converter.load_pretrained(
-                    model_config.model_type,
-                    ref=config.checkpoint_path,
-                    dtype=config.trainer.mp.compute_dtype,  # type: ignore
-                    axis_mapping=parameter_axis_mapping,
-                ),
+            model = load_hf_checkpoint(
+                config.model,
+                config.checkpoint_path,
+                axis_mapping=parameter_axis_mapping,
+                tokenizer=tokenizer,
+                compute_dtype=config.trainer.mp.compute_dtype,
             )
         else:
-            with use_cpu_device():
-                model = eqx.filter_eval_shape(config.model.build, Vocab, key=key)
-                checkpoint_path = latest_checkpoint_path(config.checkpoint_path)
-                model = load_checkpoint(
-                    model,
-                    checkpoint_path,
-                    subpath="model",
-                    axis_mapping=parameter_axis_mapping,
-                )
-            model = hax.shard(model, parameter_axis_mapping)
+            model = load_levanter_checkpoint(
+                config.model,
+                config.checkpoint_path,
+                Vocab=Vocab,
+                axis_mapping=parameter_axis_mapping,
+                key=key,
+            )
 
         model = typing.cast(LmHeadModel, inference_mode(model, True))
 
