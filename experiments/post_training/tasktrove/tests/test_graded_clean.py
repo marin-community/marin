@@ -17,6 +17,7 @@ from experiments.post_training.tasktrove.convert import ConvertedRecord, convert
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
 from experiments.post_training.tasktrove.converters.registry import converter_index
 from experiments.post_training.tasktrove.dedup import DedupStatus
+from experiments.post_training.tasktrove.raw_tasks import WORKING_SHARDS
 from experiments.post_training.tasktrove.sources import SourceInfo, SourceVerdict
 from experiments.post_training.tasktrove.taskbinary import INSTRUCTION, TaskFiles, read_task_binary, write_task_binary
 from experiments.post_training.tasktrove.verify import grade_tasks
@@ -100,6 +101,8 @@ def test_clean_keeps_survivors_and_ledgers_the_rest(tmp_path):
     grade_tasks(str(converted), graded, max_tasks_per_source=None)
     build_clean(graded, clean, tool_ref="ref")
 
+    assert WORKING_SHARDS == 64
+    assert [path.name for path in (tmp_path / "clean" / "tasks").glob("*.parquet")] == ["part-00000.parquet"]
     tasks = _rows(tmp_path / "clean" / "tasks")
     assert set(tasks) == {"good.tar.gz"}
     assert tasks["good.tar.gz"]["mode"] == "mcq" and tasks["good.tar.gz"]["converter"] == "nemotron_mcqa"

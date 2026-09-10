@@ -14,10 +14,10 @@ TASKS_GLOB = "*/tasks.parquet"
 APPROX_SHARD_BYTES = 32 << 20
 """Parquet files split into shards of about this many uncompressed bytes, cut at row-group
 boundaries; a row group larger than this is one shard on its own."""
-RAW_SHARDS = 1024
-"""Loaded rows are shuffled by path into this many even shards before any per-task work, so a
-source that stores 54k tasks in one row group is not one worker's job downstream. (``reshard``
-cannot do this: it moves whole intermediate chunks, and one chunk holds up to 100k rows.)"""
+WORKING_SHARDS = 64
+"""Loaded rows are shuffled by path into this many even shards before per-task work. Sixty-four
+workers are enough for this few-gigabyte corpus while still splitting sources whose input is one
+large row group. (``reshard`` alone moves whole intermediate chunks rather than individual rows.)"""
 WORKER_RESOURCES = ResourceConfig(cpu=1, ram="4g")
 """One Zephyr worker per shard. Twenty sources store every task in a single row group, the largest
 about 400 MB uncompressed, and a worker holds one decoded row group plus its Python rows."""
@@ -52,5 +52,5 @@ def raw_rows(input_path: str) -> Dataset[dict]:
 
 
 def raw_tasks(input_path: str) -> Dataset[dict]:
-    """``raw_rows`` shuffled by path into ``RAW_SHARDS`` even shards, for stages with real per-task work."""
-    return raw_rows(input_path).group_by(key=_row_key, reducer=_one_row, num_output_shards=RAW_SHARDS)
+    """``raw_rows`` shuffled by path into even working shards for per-task stages."""
+    return raw_rows(input_path).group_by(key=_row_key, reducer=_one_row, num_output_shards=WORKING_SHARDS)

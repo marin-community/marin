@@ -122,6 +122,7 @@ def client(tmp_path: Path) -> TestClient:
     write_app(tmp_path / "apps", "unbuilt", built=False)
     config = config_for(tmp_path)
     (tmp_path / "data" / "tasktrove" / "sources.json").write_text('[{"source": "a"}]')
+    (tmp_path / "data" / "tasktrove" / "tasks.parquet").write_bytes(b"0123456789")
     with gzip.open(tmp_path / "data" / "tasktrove" / "labels.json.gz", "wt") as f:
         f.write("[1, 2]")
     return TestClient(create_app(config), client=("127.0.0.1", 40000))
@@ -419,6 +420,20 @@ def test_data_files_come_from_the_data_root(client: TestClient) -> None:
     assert compressed.headers["content-encoding"] == "gzip" and compressed.json() == [1, 2]
     assert client.get("/tasktrove/data/missing.json").status_code == 404
     assert client.get("/tasktrove/data/..%2Fother%2Fx").status_code == 404
+
+
+def test_data_files_support_head_and_byte_ranges(client: TestClient) -> None:
+    head = client.head("/tasktrove/data/tasks.parquet")
+    assert head.status_code == 200 and head.content == b""
+    assert head.headers["accept-ranges"] == "bytes" and head.headers["content-length"] == "10"
+
+    middle = client.get("/tasktrove/data/tasks.parquet", headers={"Range": "bytes=2-5"})
+    assert middle.status_code == 206 and middle.content == b"2345"
+    assert middle.headers["content-range"] == "bytes 2-5/10"
+
+    suffix = client.get("/tasktrove/data/tasks.parquet", headers={"Range": "bytes=-3"})
+    assert suffix.status_code == 206 and suffix.content == b"789"
+    assert client.get("/tasktrove/data/tasks.parquet", headers={"Range": "bytes=10-"}).status_code == 416
 
 
 def test_non_loopback_without_iap_is_denied(tmp_path: Path) -> None:

@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
-import { corpus, count, parquetUrl, shortRef, type Corpus } from '../corpus'
+import { count, manifest, shortRef, type Manifest } from '../corpus'
 
-const loaded = ref<Corpus>()
+const loaded = ref<Manifest>()
 const problem = ref('')
 
 onMounted(async () => {
   try {
-    loaded.value = await corpus()
+    loaded.value = await manifest()
   } catch (error) {
     problem.value = String(error)
   }
@@ -16,16 +16,16 @@ onMounted(async () => {
 
 const retained = computed(() => {
   if (!loaded.value) return 0
-  return Math.round((loaded.value.manifest.clean_tasks / loaded.value.manifest.input_tasks) * 100)
+  return Math.round((loaded.value.clean_tasks / loaded.value.input_tasks) * 100)
 })
 
-const modes = computed(() => Object.entries(loaded.value?.manifest.by_mode ?? {}).sort((a, b) => b[1] - a[1]))
-const environments = computed(() => Object.values(loaded.value?.manifest.dockerfiles ?? {}))
+const modes = computed(() => Object.entries(loaded.value?.by_mode ?? {}).sort((a, b) => b[1] - a[1]))
+const environments = computed(() => Object.values(loaded.value?.dockerfiles ?? {}))
 const keptSources = computed(
-  () => Object.values(loaded.value?.manifest.source_verdicts ?? {}).filter((source) => source.verdict === 'keep').length,
+  () => Object.values(loaded.value?.source_verdicts ?? {}).filter((source) => source.verdict === 'keep').length,
 )
 const rejectedSources = computed(
-  () => Object.values(loaded.value?.manifest.source_verdicts ?? {}).filter((source) => source.verdict === 'drop').length,
+  () => Object.values(loaded.value?.source_verdicts ?? {}).filter((source) => source.verdict === 'drop').length,
 )
 </script>
 
@@ -36,19 +36,18 @@ const rejectedSources = computed(
       <p class="eyebrow">TaskTrove Clean</p>
       <h1>A task collection with explicit, testable rewards</h1>
       <p class="lede">
-        We started with {{ count(loaded.manifest.input_tasks) }} heterogeneous agent tasks and kept
-        {{ count(loaded.manifest.clean_tasks) }} whose instructions, environments, and graders could be made sound
+        We started with {{ count(loaded.input_tasks) }} heterogeneous agent tasks and kept
+        {{ count(loaded.clean_tasks) }} whose instructions, environments, and graders could be made sound
         without guessing the intended answer.
       </p>
       <div class="hero-actions">
         <RouterLink class="button primary" to="/browse">Browse the clean Parquet</RouterLink>
-        <a class="button" :href="parquetUrl">Download viewer Parquet</a>
         <a class="button" href="https://github.com/marin-community/marin/pull/9061">Open the implementation PR</a>
       </div>
     </section>
 
     <section class="metrics" aria-label="Dataset summary">
-      <div><strong>{{ count(loaded.manifest.clean_tasks) }}</strong><span>clean tasks</span></div>
+      <div><strong>{{ count(loaded.clean_tasks) }}</strong><span>clean tasks</span></div>
       <div><strong>{{ retained }}%</strong><span>of input retained</span></div>
       <div><strong>{{ keptSources }}</strong><span>kept sources</span></div>
       <div><strong>{{ modes.length }}</strong><span>verifier modes</span></div>
@@ -141,9 +140,9 @@ const rejectedSources = computed(
         </div>
       </div>
       <p class="provenance">
-        Source <code>{{ loaded.manifest.tasktrove.hf_id }}</code> @
-        <code>{{ shortRef(loaded.manifest.tasktrove.revision) }}</code> · verifier
-        <code>{{ shortRef(loaded.manifest.verify_tool_ref) }}</code>
+        Source <code>{{ loaded.tasktrove.hf_id }}</code> @
+        <code>{{ shortRef(loaded.tasktrove.revision) }}</code> · verifier
+        <code>{{ shortRef(loaded.verify_tool_ref) }}</code>
       </p>
     </section>
   </template>

@@ -1,117 +1,84 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
-import { RouterLink, useRoute, useRouter } from 'vue-router'
-import { corpus, count, type CatalogTask, type Corpus } from '../corpus'
+import { computed, onMounted, ref } from 'vue'
+import { RouterLink } from 'vue-router'
+import { count, manifest, rowCount, tasks, type Manifest, type ParquetTask } from '../corpus'
 import { taskPath } from '../routes'
 
 const PAGE = 60
-const route = useRoute()
-const router = useRouter()
-const loaded = ref<Corpus>()
+const dataset = ref<Manifest>()
+const rows = ref<ParquetTask[]>([])
+const total = ref(0)
 const problem = ref('')
-const needle = ref(typeof route.query.q === 'string' ? route.query.q : '')
-const mode = ref(typeof route.query.mode === 'string' ? route.query.mode : '')
-const environment = ref(typeof route.query.env === 'string' ? route.query.env : '')
-const language = ref(typeof route.query.lang === 'string' ? route.query.lang : '')
-const visible = ref(PAGE)
+const working = ref(false)
+
+const modes = computed(() => Object.keys(dataset.value?.by_mode ?? {}).length)
+const environments = computed(() => Object.keys(dataset.value?.dockerfiles ?? {}).length)
+
+async function loadMore(): Promise<void> {
+  if (working.value || rows.value.length >= total.value) return
+  working.value = true
+  try {
+    const start = rows.value.length
+    rows.value.push(...(await tasks(start, Math.min(start + PAGE, total.value))))
+  } catch (error) {
+    problem.value = String(error)
+  } finally {
+    working.value = false
+  }
+}
 
 onMounted(async () => {
   try {
-    loaded.value = await corpus()
+    const [loadedManifest, loadedRows] = await Promise.all([manifest(), rowCount()])
+    dataset.value = loadedManifest
+    total.value = loadedRows
+    await loadMore()
   } catch (error) {
     problem.value = String(error)
   }
-})
-
-function distinct(pick: (task: CatalogTask) => string): string[] {
-  return [...new Set((loaded.value?.tasks ?? []).map(pick).filter(Boolean))].sort()
-}
-
-const modes = computed(() => distinct((task) => task.mode))
-const environments = computed(() => distinct((task) => task.environment))
-const languages = computed(() => distinct((task) => task.language))
-const filtered = computed(() => {
-  const query = needle.value.trim().toLowerCase()
-  return (loaded.value?.tasks ?? []).filter((task) => {
-    if (mode.value && task.mode !== mode.value) return false
-    if (environment.value && task.environment !== environment.value) return false
-    if (language.value && task.language !== language.value) return false
-    if (query && !`${task.path} ${task.source} ${task.converter} ${task.tags.join(' ')}`.toLowerCase().includes(query)) {
-      return false
-    }
-    return true
-  })
-})
-const shown = computed(() => filtered.value.slice(0, visible.value))
-
-watch([needle, mode, environment, language], () => {
-  visible.value = PAGE
-  router.replace({
-    query: {
-      ...(needle.value.trim() ? { q: needle.value.trim() } : {}),
-      ...(mode.value ? { mode: mode.value } : {}),
-      ...(environment.value ? { env: environment.value } : {}),
-      ...(language.value ? { lang: language.value } : {}),
-    },
-  })
 })
 </script>
 
 <template>
   <header class="browse-heading">
     <div>
-      <p class="eyebrow">Normalized examples</p>
-      <h1>Browse tasks</h1>
+      <p class="eyebrow">Final output</p>
+      <h1>Parquet viewer</h1>
       <p>
-        Scroll the rows of a generated clean Parquet sample covering every verifier-mode and Docker-environment pair.
-        Open any row to inspect the normalized task archive stored in its <code>task_binary</code> column.
+        Rows come directly from the final clean Parquet file. Open any row to inspect the normalized task archive stored
+        in its <code>task_binary</code> column.
       </p>
     </div>
-    <div class="coverage" v-if="loaded">
-      <b>{{ count(loaded.tasks.length) }}</b><span>sampled tasks</span>
-      <b>{{ modes.length }}</b><span>modes</span>
-      <b>{{ environments.length }}</b><span>environments</span>
+    <div class="coverage" v-if="dataset">
+      <b>{{ count(total) }}</b><span>Parquet rows</span>
+      <b>{{ modes }}</b><span>modes</span>
+      <b>{{ environments }}</b><span>environments</span>
     </div>
   </header>
 
   <p class="problem" v-if="problem">{{ problem }}</p>
-  <template v-if="loaded">
-    <div class="filters">
-      <input type="search" v-model="needle" placeholder="Search source, task, converter, or tag" />
-      <select v-model="mode" aria-label="Verifier mode">
-        <option value="">Every verifier mode</option>
-        <option v-for="value in modes" :key="value" :value="value">{{ value }}</option>
-      </select>
-      <select v-model="environment" aria-label="Docker environment">
-        <option value="">Every Docker environment</option>
-        <option v-for="value in environments" :key="value" :value="value">{{ value }}</option>
-      </select>
-      <select v-model="language" aria-label="Language">
-        <option value="">Every language</option>
-        <option v-for="value in languages" :key="value" :value="value">{{ value }}</option>
-      </select>
-      <span>{{ count(filtered.length) }} matches</span>
-    </div>
-
-    <div class="task-grid">
-      <RouterLink v-for="task in shown" :key="task.row" :to="taskPath(task.row)" class="task-card">
-        <div class="task-card-top">
-          <span class="mode">{{ task.mode }}</span>
-          <span class="language" v-if="task.language">{{ task.language }}</span>
-        </div>
-        <h2>{{ task.path }}</h2>
-        <p>{{ task.source }}</p>
-        <div class="task-meta">
-          <span>{{ task.environment }}</span>
-          <span>{{ task.converter }}</span>
-        </div>
-        <div class="tags"><span v-for="tag in task.tags.slice(0, 5)" :key="tag">{{ tag }}</span></div>
-      </RouterLink>
-    </div>
-    <p class="empty" v-if="shown.length === 0">No sampled task matches these filters.</p>
-    <div class="more" v-if="visible < filtered.length">
-      <button type="button" @click="visible += PAGE">Show {{ Math.min(PAGE, filtered.length - visible) }} more</button>
-    </div>
-  </template>
-  <p class="working" v-else-if="!problem">Reading task samples…</p>
+  <div class="parquet-position" v-if="rows.length">
+    Showing rows 1–{{ count(rows.length) }} of {{ count(total) }}
+  </div>
+  <div class="task-grid">
+    <RouterLink v-for="item in rows" :key="item.row" :to="taskPath(item.row)" class="task-card">
+      <div class="task-card-top">
+        <span class="mode">{{ item.mode }}</span>
+        <span class="language" v-if="item.language">{{ item.language }}</span>
+      </div>
+      <h2>{{ item.path }}</h2>
+      <p>{{ item.source }}</p>
+      <div class="task-meta">
+        <span>{{ item.environment }}</span>
+        <span>{{ item.converter }}</span>
+      </div>
+      <div class="tags"><span v-for="tag in item.tags.slice(0, 5)" :key="tag">{{ tag }}</span></div>
+    </RouterLink>
+  </div>
+  <div class="more" v-if="rows.length < total">
+    <button type="button" @click="loadMore" :disabled="working">
+      {{ working ? 'Reading Parquet…' : `Show next ${Math.min(PAGE, total - rows.length)} rows` }}
+    </button>
+  </div>
+  <p class="working" v-else-if="working">Reading the Parquet footer…</p>
 </template>

@@ -56,6 +56,7 @@ h3 { margin: 0; }
 .coverage { display: grid; grid-template-columns: auto auto; column-gap: 0.8rem; flex: none; }
 .coverage b { font: 600 1.05rem var(--mono); text-align: right; }
 .coverage span { color: var(--muted); font-size: 0.8rem; }
+.parquet-position { padding: 1rem 0 0; color: var(--muted); font: 0.8rem var(--mono); }
 .filters { position: sticky; top: 0; z-index: 4; display: flex; gap: 0.55rem; flex-wrap: wrap; align-items: center; padding: 1rem 0; background: var(--paper); border-bottom: 1px solid var(--edge); }
 .filters input[type='search'] { flex: 1; min-width: 18rem; }
 .filters select { max-width: 18rem; }

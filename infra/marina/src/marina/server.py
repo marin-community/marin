@@ -19,6 +19,7 @@ import html
 import mimetypes
 import os
 import posixpath
+import re
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -92,6 +93,7 @@ MCP_READ_PATH = "/api/marina/mcp/read"
 # routes are installed before any app's.
 KERNEL_PREFIXES = frozenset({"a", "api", "healthz"})
 DATA_CACHE_CONTROL = "private, max-age=300"
+BYTE_RANGE = re.compile(r"bytes=(\d*)-(\d*)$")
 
 
 @dataclass(frozen=True)
@@ -331,9 +333,10 @@ async def serve_data_file(
     app: AppManifest,
     data_root: str,
     path: str,
+    request: Request,
     connect_src: tuple[str, ...] | None = None,
 ) -> Response:
-    """A file from the app's data directory, gzip-encoded when only ``x.gz`` exists."""
+    """A file from the app's data directory, including byte ranges for large files."""
     relative = clean_relative_path(path)
     if relative is None:
         return JSONResponse({"error": "not found"}, status_code=404)
@@ -345,8 +348,34 @@ async def serve_data_file(
     }
     media_type = mimetypes.guess_type(relative)[0] or "application/octet-stream"
     if await run_in_threadpool(fs.isfile, target):
-        body = await run_in_threadpool(fs.cat_file, target)
-        return Response(body, media_type=media_type, headers=headers)
+        size = await run_in_threadpool(fs.size, target)
+        headers["Accept-Ranges"] = "bytes"
+        range_header = request.headers.get("range")
+        if range_header is None:
+            headers["Content-Length"] = str(size)
+            body = b"" if request.method == "HEAD" else await run_in_threadpool(fs.cat_file, target)
+            return Response(body, media_type=media_type, headers=headers)
+
+        match = BYTE_RANGE.fullmatch(range_header)
+        if match is None or not any(match.groups()):
+            return Response(status_code=416, headers={**headers, "Content-Range": f"bytes */{size}"})
+        first, last = match.groups()
+        if first:
+            start = int(first)
+            end = min(int(last) + 1, size) if last else size
+        else:
+            length = min(int(last), size)
+            start, end = size - length, size
+        if start >= size or start >= end:
+            return Response(status_code=416, headers={**headers, "Content-Range": f"bytes */{size}"})
+        headers.update(
+            {
+                "Content-Length": str(end - start),
+                "Content-Range": f"bytes {start}-{end - 1}/{size}",
+            }
+        )
+        body = b"" if request.method == "HEAD" else await run_in_threadpool(fs.cat_file, target, start, end)
+        return Response(body, status_code=206, media_type=media_type, headers=headers)
     if await run_in_threadpool(fs.isfile, target + PRECOMPRESSED_SUFFIX):
         body = await run_in_threadpool(fs.cat_file, target + PRECOMPRESSED_SUFFIX)
         return Response(body, media_type=media_type, headers={**headers, "Content-Encoding": "gzip"})
@@ -395,8 +424,8 @@ def install_app_routes(
 
     @api.api_route(prefix + "/" + DATA_PREFIX + "{path:path}", methods=["GET", "HEAD"], include_in_schema=False)
     @requires_auth
-    async def app_data(path: str) -> Response:
-        return await serve_data_file(app, data_root, path, connect_src)
+    async def app_data(path: str, request: Request) -> Response:
+        return await serve_data_file(app, data_root, path, request, connect_src)
 
     @api.api_route(prefix + "/{path:path}", methods=["GET", "HEAD"], include_in_schema=False)
     @requires_auth

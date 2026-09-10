@@ -14,9 +14,9 @@ def test_cleanup_report_explains_the_pipeline(journey: Journey) -> None:
     journey.widths("cleanup-report")
 
 
-def test_browser_filters_by_mode_and_opens_a_task(journey: Journey) -> None:
+def test_browser_reads_the_parquet_and_opens_a_task(journey: Journey) -> None:
     journey.visit("/").click("Browse the clean Parquet")
-    journey.select("Verifier mode", "script")
+    journey.sees("Parquet viewer")
     journey.sees("example-script-task").click("example-script-task")
     journey.sees("tests/verifier.toml").click("tests/verifier.toml")
     journey.sees('mode = "script"').shoot("script-task")

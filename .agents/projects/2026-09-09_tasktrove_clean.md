@@ -40,8 +40,9 @@ raw → summaries → templates → converted → graded → clean
 22. [x] M4 cleanup: retain sound non-Python SWE repository tasks through the script fallback; drop the JavaScript and TypeScript task sets after their shipped goldens passed only 11/20 and 3/20
 23. [x] M5 cleanup: sample kept and dropped judge sources against the answerability, rubric, leakage, triviality, and persona checklist; preserve the polarity of 151 negated multichallenge criteria
 24. [x] M6 cleanup skipped by product decision; retain the existing exact, within-source instruction deduplication without a near-duplicate study or key change
-25. [x] Replace the TaskTrove Marina app with a cleanup report and a direct viewer over a generated clean Parquet sample, covering every verifier-mode and Docker-environment pair
-26. [ ] Final cleanup: rerun the full pipeline once after the cleanup decisions, regenerate the report and artifact, run the final Docker sample, and update PR #9061
+25. [x] Replace the TaskTrove Marina app with a cleanup report and a paginated viewer over the final clean Parquet file itself
+26. [x] Reshard TaskTrove to 64 working shards and exactly one final clean Parquet shard
+27. [ ] Final cleanup: rerun the full pipeline once after the cleanup decisions, regenerate the report and artifact, run the final Docker sample, deploy Marina, and update PR #9061
 
 ## Cleanup extension
 
@@ -55,11 +56,10 @@ Near-duplicate analysis is out of scope for this cleanup. The graded stage conti
 byte-identical instructions within one source, with the lowest task path winning. No deduplication
 key or threshold changes in this PR.
 
-The Marina app now explains the cleanup method and reads a single generated Parquet viewer file.
-`prepare_data.py` deterministically samples each `(mode, dockerfile_id)` group from the clean output
-and writes those rows unchanged, including `task_binary`, into `tasks.parquet`. The browser uses
-Parquet column and row-range reads, then opens the selected normalized archive directly from that
-row. It does not maintain a JSON catalog or a second per-task storage layout.
+The final pipeline now uses 64 working shards for conversion and grading, then reshards the clean
+survivors to one `tasks/part-00000.parquet`. The Marina app reads that output file directly with
+Parquet footer, column, and row-range requests. It does not scan the corpus to create a sample,
+maintain a JSON catalog, or introduce a second per-task storage layout.
 
 M1 added TOML parsing to `json-schema` and the structural `xml-elements` and `csv-columns` modes.
 The complete structured-output source contains 4,166 TOML, 14,546 XML, and 4,151 CSV rows. The

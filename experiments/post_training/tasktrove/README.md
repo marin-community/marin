@@ -23,12 +23,13 @@ is part of every task's identity.
 | `templates` | `fingerprint.py` | `templates.json`, one exemplar per template with 20+ tasks, `coverage.json` per converter key |
 | `converted` | `convert.py` | route by `source_verdicts.json` and converter key; emit the new binary and selection columns |
 | `graded` | `verify.py` | `group_by` instruction within a source (lowest path wins; optional `--max-tasks-per-source`), then throw away tasks whose grader does not hold up; every row leaves with its final status |
-| `clean` | `clean.py` | `tasks/part-*.parquet` (survivors only, copied in parallel), `ledger.parquet`, `manifest.json`, `report.md` |
+| `clean` | `clean.py` | one `tasks/part-00000.parquet` (survivors only), `ledger.parquet`, `manifest.json`, `report.md` |
 
-The Zephyr stages load the source parquets with `load_parquet`, shuffle the rows into 1,024 even
-shards before any per-task work (twenty sources store every task in a single row group), and use
+The Zephyr stages load the source parquets with `load_parquet`, shuffle the rows into 64 even
+working shards before any per-task work (twenty sources store every task in a single row group), and use
 `group_by` for the template index and dedup. The `templates` step and the ledger and manifest of
-`clean` run on the coordinator over small columns only. `source_verdicts.json` keeps or drops each
+`clean` run on the coordinator over small columns only; the clean survivors are resharded once more
+into one final Parquet file. `source_verdicts.json` keeps or drops each
 source with a reason; every kept source has a converter in this tree.
 
 Output rows carry `source`, `family`, `template_id`, `converter`, `mode`, `dockerfile_id`,

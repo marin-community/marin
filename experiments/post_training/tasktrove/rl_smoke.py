@@ -67,11 +67,10 @@ RL_ARTIFACT_NAME = "checkpoints/tasktrove-rl-smoke"
 # The curriculum experiment's mirrored Qwen3-0.6B snapshot; reused rather than mirrored again.
 MODEL_VERSION = "2026.08.29"
 TASKS_SUBDIR = "tasks"
-# The clean output is hash-sharded into 1,024 parts, so the first shard is already a uniform
-# ~1/1024 sample of the corpus (~1,300 tasks over every kept converter). MarinSkyRL stages a
-# task-directory data source one object at a time, so the export is capped at SAMPLE_TASKS tasks
-# drawn round-robin across converters: enough for MAX_STEPS batches with every converter present.
-SAMPLE_SHARDS = 1
+# The clean output is one file whose row groups retain the hash-shuffled working-shard order. Read
+# one row group instead of materializing the full multi-gigabyte file, then cap the export because
+# MarinSkyRL stages a task-directory data source one object at a time.
+SAMPLE_ROW_GROUPS = 1
 SAMPLE_TASKS = 160
 CLUSTER = "cw-rno2a"
 GPU_VARIANT = "H100"
@@ -105,7 +104,7 @@ OVERRIDES = ("++trainer.hf_hub_repo_id=null",)
 class SampleConfig:
     clean_path: str
     output_path: str
-    shard_count: int
+    row_group_count: int
     task_count: int
 
 
@@ -119,17 +118,16 @@ def round_robin_sample(rows: list[dict], count: int) -> list[dict]:
 
 
 def export_sample(config: SampleConfig) -> None:
-    """Materialize a sample of the first ``shard_count`` clean shards as Harbor task directories.
+    """Materialize a sample of the first clean Parquet row groups as Harbor task directories.
 
     Every task lands under ``tasks/<source>__<path>/`` with its ``instruction.md``, ``task.toml``,
     ``environment/Dockerfile`` and ``tests/``; solutions stay out of the tree the policy sees.
     """
-    shards = sorted((StoragePath(config.clean_path) / TASKS_SUBDIR / "*.parquet").glob(), key=str)
-    shards = shards[: config.shard_count]
-    rows: list[dict] = []
-    for shard in shards:
-        with shard.open("rb") as handle:
-            rows.extend(pq.read_table(handle, columns=["source", "path", "converter", "task_binary"]).to_pylist())
+    clean_file = StoragePath(config.clean_path) / TASKS_SUBDIR / "part-00000.parquet"
+    with clean_file.open("rb") as handle:
+        parquet = pq.ParquetFile(handle)
+        row_groups = list(range(min(config.row_group_count, parquet.num_row_groups)))
+        rows = parquet.read_row_groups(row_groups, columns=["source", "path", "converter", "task_binary"]).to_pylist()
     sample = round_robin_sample(rows, config.task_count)
     with tempfile.TemporaryDirectory() as workdir:
         root = Path(workdir) / TASKS_SUBDIR
@@ -137,7 +135,13 @@ def export_sample(config: SampleConfig) -> None:
             read_task_binary(row["task_binary"]).write_to(root / f"{row['source']}__{row['path']}")
         destination = prefix_join(config.output_path, TASKS_SUBDIR)
         StoragePath(destination).upload_from(f"{root}/", recursive=True)
-    logger.info("Exported %d of %d tasks from %d shard(s) to %s", len(sample), len(rows), len(shards), destination)
+    logger.info(
+        "Exported %d of %d tasks from %d row group(s) to %s",
+        len(sample),
+        len(rows),
+        len(row_groups),
+        destination,
+    )
 
 
 def sample_step(clean: ArtifactStep) -> ArtifactStep[Artifact]:
@@ -150,7 +154,7 @@ def sample_step(clean: ArtifactStep) -> ArtifactStep[Artifact]:
         build_config=lambda ctx: SampleConfig(
             clean_path=ctx.artifact_path(clean),
             output_path=ctx.output_path,
-            shard_count=SAMPLE_SHARDS,
+            row_group_count=SAMPLE_ROW_GROUPS,
             task_count=SAMPLE_TASKS,
         ),
         deps=(clean,),

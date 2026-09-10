@@ -50,7 +50,7 @@ from experiments.post_training.tasktrove.contract import INSTALL_MARKER, OLD_GRA
 from experiments.post_training.tasktrove.convert import CONVERTED_GLOB, CONVERTED_SCHEMA
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
 from experiments.post_training.tasktrove.dedup import cap_rank, cap_source, dedup_key, dropped, keep_first
-from experiments.post_training.tasktrove.raw_tasks import APPROX_SHARD_BYTES, RAW_SHARDS, WORKER_RESOURCES
+from experiments.post_training.tasktrove.raw_tasks import APPROX_SHARD_BYTES, WORKER_RESOURCES, WORKING_SHARDS
 from experiments.post_training.tasktrove.taskbinary import (
     DOCKERFILE,
     INSTRUCTION,
@@ -237,13 +237,18 @@ def grade_tasks(converted_path: str, output_path: str, max_tasks_per_source: int
     """Zephyr stage: dedup the converted rows, grade every survivor, write each row with its final status."""
     files = Dataset.from_files(str(StoragePath(converted_path) / CONVERTED_GLOB))
     ds = files.load_parquet(approx_shard_bytes=APPROX_SHARD_BYTES)
-    ds = ds.group_by(key=dedup_key, reducer=keep_first, sort_by=lambda row: row["path"], num_output_shards=RAW_SHARDS)
+    ds = ds.group_by(
+        key=dedup_key,
+        reducer=keep_first,
+        sort_by=lambda row: row["path"],
+        num_output_shards=WORKING_SHARDS,
+    )
     if max_tasks_per_source is not None:
         ds = ds.group_by(
             key=lambda row: row["source"],
             reducer=lambda _source, rows: cap_source(rows, max_tasks_per_source),
             sort_by=lambda row: cap_rank(row["path"]),
-            num_output_shards=RAW_SHARDS,
+            num_output_shards=WORKING_SHARDS,
         )
     ds = ds.map_shard(lambda rows, _: verify_rows(rows))
     ds = ds.write_parquet(str(StoragePath(output_path) / "graded/part-{shard:05d}.parquet"), schema=CONVERTED_SCHEMA)

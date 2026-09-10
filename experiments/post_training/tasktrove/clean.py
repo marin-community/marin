@@ -3,7 +3,7 @@
 
 """Assemble TaskTrove Clean from the graded rows.
 
-    tasks/part-<n>.parquet   every surviving task with its selection columns
+    tasks/part-00000.parquet every surviving task with its selection columns
     ledger.parquet           one row per task that did not survive: its status and the reason
     manifest.json            revision, tool ref, counts per status, source, converter, mode, tag, check
                              and Dockerfile, plus every source's verdict
@@ -62,6 +62,7 @@ TASKS_SCHEMA = pa.schema([CONVERTED_SCHEMA.field(name) for name in TASK_COLUMNS]
 LEDGER_COLUMNS = ("source", "path", "status", "error")
 SUMMARY_COLUMNS = ("source", "path", "status", "error", "converter", "mode", "dockerfile_id", "tags")
 _READERS = 32
+FINAL_SHARDS = 1
 _FROM_LINE = re.compile(r"^FROM\s+(\S+)", re.MULTILINE | re.IGNORECASE)
 
 
@@ -70,7 +71,7 @@ def _survivors(graded_path: str, output_path: str) -> None:
     files = Dataset.from_files(str(StoragePath(graded_path) / GRADED_GLOB))
     ds = files.load_parquet(columns=[*TASK_COLUMNS, "status"], approx_shard_bytes=APPROX_SHARD_BYTES)
     ds = ds.filter(lambda row: row["status"] == ConvertStatus.CONVERTED)
-    ds = ds.map(lambda row: {name: row[name] for name in TASK_COLUMNS})
+    ds = ds.map(lambda row: {name: row[name] for name in TASK_COLUMNS}).reshard(FINAL_SHARDS)
     ds = ds.write_parquet(str(StoragePath(output_path) / "tasks/part-{shard:05d}.parquet"), schema=TASKS_SCHEMA)
     ZephyrContext(name="tasktrove-clean", resources=WORKER_RESOURCES).execute(ds)
 

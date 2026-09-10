@@ -2,13 +2,13 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import Prose from '@marina/Prose.vue'
-import { archive, corpus, count, type CatalogTask } from '../corpus'
+import { archive, count, task as parquetTask, type ParquetTask } from '../corpus'
 import { entries, gunzip, text, type Entry } from '../tar'
 
 const props = defineProps<{ id: string }>()
 const route = useRoute()
 const router = useRouter()
-const task = ref<CatalogTask>()
+const task = ref<ParquetTask>()
 const files = ref<Entry[]>([])
 const problem = ref('')
 const wrap = ref(true)
@@ -35,11 +35,10 @@ async function start(): Promise<void> {
   problem.value = ''
   files.value = []
   try {
-    const loaded = await corpus()
     const row = Number(props.id)
-    task.value = loaded.tasks.find((candidate) => candidate.row === row)
-    if (!task.value) throw new Error(`No Parquet row ${props.id}.`)
-    const packed = await archive(task.value)
+    if (!Number.isSafeInteger(row) || row < 0) throw new Error(`Invalid Parquet row ${props.id}.`)
+    task.value = await parquetTask(row)
+    const packed = await archive(row)
     files.value = entries(await gunzip(packed)).sort((a, b) => a.path.localeCompare(b.path))
   } catch (error) {
     problem.value = String(error)
