@@ -4,7 +4,9 @@
 """Tests for writers module."""
 
 import tempfile
+import threading
 import uuid
+from collections.abc import Iterable
 from pathlib import Path
 
 import fsspec
@@ -15,6 +17,7 @@ import pytest
 import vortex
 from pyarrow import fs as pa_fs
 from zephyr.writers import (
+    ThreadedBatchWriter,
     _pyarrow_filesystem,
     _s3_filesystem_kwargs,
     infer_arrow_schema,
@@ -25,6 +28,28 @@ from zephyr.writers import (
 
 # zstandard frame magic number: the first four bytes of any zstd-compressed stream.
 _ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
+
+
+@pytest.mark.timeout(5)
+def test_threaded_batch_writer_close_propagates_failure_with_full_queue():
+    writer_can_fail = threading.Event()
+    write_error = RuntimeError("background write failed")
+
+    def fail_after_release(_: Iterable) -> None:
+        assert writer_can_fail.wait(timeout=1)
+        raise write_error
+
+    writer = ThreadedBatchWriter(fail_after_release, maxsize=1)
+    writer.submit("queued")
+    writer_can_fail.set()
+
+    with pytest.raises(RuntimeError) as submit_error:
+        writer.submit("overflow")
+    assert submit_error.value is write_error
+
+    with pytest.raises(RuntimeError) as close_error:
+        writer.close()
+    assert close_error.value is write_error
 
 
 def test_write_vortex_file_basic():

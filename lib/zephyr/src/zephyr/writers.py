@@ -522,7 +522,12 @@ class ThreadedBatchWriter:
 
     def close(self) -> None:
         """Wait for all pending writes and propagate any error."""
-        self._queue.put(_SENTINEL)
+        while self._thread.is_alive() and self._error is None:
+            try:
+                self._queue.put(_SENTINEL, timeout=1.0)
+                break
+            except queue.Full:
+                continue
         self._thread.join()
         if self._error is not None:
             raise self._error
