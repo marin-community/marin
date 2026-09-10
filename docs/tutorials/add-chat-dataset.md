@@ -174,3 +174,43 @@ deduplication counts. Normalization fails if quarantined records exceed its 5%
 health limit; investigate unexpected drops instead of raising the limit. Run near
 the source data when using Iris to avoid cross-region reads. Formatting checks do
 not establish answer quality.
+
+## 6. Render for text processing
+
+`marin.datakit.chat_render.render_chat_step` renders a normalized chat source
+into Parquet containing only `id` and `text`:
+
+```python
+from marin.datakit.chat_render import render_chat_step
+from marin.datakit.sft_sources import all_sft_sources
+
+source = all_sft_sources()["superior-reasoning"]
+rendered = render_chat_step(
+    name="rendered/superior-reasoning-marin",
+    chat=source.normalized,
+)
+```
+
+The step reads the chat normalization step's `outputs/main` directory. Its
+output can be supplied as the `download` argument to the standard
+`normalize_step`. Rendering preserves input IDs and duplicate rows; standard
+normalization assigns content hashes afterward.
+
+Python prepares message bodies and a short Jinja template adds headers and
+separators, reproducing `MARIN_CHAT_TEMPLATE` in `experiments/marin_tokenizer.py`.
+The renderer joins
+adjacent assistant analysis and response messages into one turn, wraps analysis
+in think tokens, and renders function calls and named tool replies. Reasoning
+from earlier turns is retained, including records ending in analysis or unanswered
+tool calls. Supported per-record `chat_template_kwargs` are `tools` (a list of
+recorded function definitions), `enable_thinking` (a boolean), and
+`custom_instructions` (a string). `enable_thinking` adds a `/think` or `/nothink`
+system instruction; omitting it adds neither. It does not remove reasoning.
+
+All rendering helpers are in `marin.datakit.chat_render`.
+For an existing directory of normalized chat Parquet, use
+`render_chat_to_parquet(input_path=..., output_path=...)`. For a conversation in
+memory, `render_marin_chat(messages)` returns the rendered string. Bump
+`CHAT_RENDER_VERSION` when changing rendering so existing artifacts retain their
+original format. The inference-consistency tests live in
+`tests/test_marin_tokenizer.py`.
