@@ -879,11 +879,14 @@ impl ObjectTableStateStore {
 fn same_pointer_version(left: &ObjectVersion, right: &ObjectVersion) -> bool {
     match (&left.local_value, &right.local_value) {
         (Some(left), Some(right)) => left == right,
-        _ => {
-            left.e_tag == right.e_tag
-                && left.provider_version == right.provider_version
-                && left.byte_size == right.byte_size
-        }
+        _ if left.byte_size != right.byte_size => false,
+        _ => match (&left.e_tag, &right.e_tag) {
+            (Some(left), Some(right)) => left == right,
+            _ => matches!(
+                (&left.provider_version, &right.provider_version),
+                (Some(left), Some(right)) if left == right
+            ),
+        },
     }
 }
 
@@ -1088,6 +1091,30 @@ mod tests {
                 .unwrap();
 
         assert_eq!(catalog.direct_query_segments.len(), 1);
+    }
+
+    #[test]
+    fn pointer_version_accepts_a_read_that_omits_the_write_version_id() {
+        let written = ObjectVersion {
+            e_tag: Some("same-etag".to_string()),
+            provider_version: Some("write-version".to_string()),
+            byte_size: 267,
+            local_value: None,
+        };
+        let read = ObjectVersion {
+            e_tag: Some("same-etag".to_string()),
+            provider_version: None,
+            byte_size: 267,
+            local_value: None,
+        };
+
+        assert!(same_pointer_version(&written, &read));
+
+        let changed = ObjectVersion {
+            e_tag: Some("changed-etag".to_string()),
+            ..read
+        };
+        assert!(!same_pointer_version(&written, &changed));
     }
 
     #[tokio::test]
