@@ -39,8 +39,9 @@ raw → summaries → templates → converted → graded → clean
 21. [x] M3 cleanup: audit the 25 dropped test sources; reinstate 10 self-contained Python sources through the pytest mode with a `kata` tag, and keep the 15 broken or infrastructure-dependent sources dropped
 22. [x] M4 cleanup: retain sound non-Python SWE repository tasks through the script fallback; drop the JavaScript and TypeScript task sets after their shipped goldens passed only 11/20 and 3/20
 23. [x] M5 cleanup: sample kept and dropped judge sources against the answerability, rubric, leakage, triviality, and persona checklist; preserve the polarity of 151 negated multichallenge criteria
-24. [ ] M6 cleanup: measure near duplicates over instructions and hidden grading text before changing the exact within-source key
-25. [ ] M7 cleanup: rerun the full pipeline once after the cleanup decisions, regenerate the report and artifact, run the final Docker sample, and update PR #9061
+24. [x] M6 cleanup skipped by product decision; retain the existing exact, within-source instruction deduplication without a near-duplicate study or key change
+25. [x] Replace the TaskTrove Marina app with a cleanup report and a direct viewer over a generated clean Parquet sample, covering every verifier-mode and Docker-environment pair
+26. [ ] Final cleanup: rerun the full pipeline once after the cleanup decisions, regenerate the report and artifact, run the final Docker sample, and update PR #9061
 
 ## Cleanup extension
 
@@ -49,6 +50,16 @@ normalization with one interpretation, such as trimming surrounding whitespace, 
 newlines, or matching answer text to exactly one option. Rows stay dropped when recovery needs
 heuristic answer extraction, generated tests, repository reconstruction, a new language-specific
 grader, dependency archaeology, or a subjective guess.
+
+Near-duplicate analysis is out of scope for this cleanup. The graded stage continues to remove only
+byte-identical instructions within one source, with the lowest task path winning. No deduplication
+key or threshold changes in this PR.
+
+The Marina app now explains the cleanup method and reads a single generated Parquet viewer file.
+`prepare_data.py` deterministically samples each `(mode, dockerfile_id)` group from the clean output
+and writes those rows unchanged, including `task_binary`, into `tasks.parquet`. The browser uses
+Parquet column and row-range reads, then opens the selected normalized archive directly from that
+row. It does not maintain a JSON catalog or a second per-task storage layout.
 
 M1 added TOML parsing to `json-schema` and the structural `xml-elements` and `csv-columns` modes.
 The complete structured-output source contains 4,166 TOML, 14,546 XML, and 4,151 CSV rows. The

@@ -1,32 +1,25 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""A reader arrives at the sources, opens the audited sample, and looks for a task.
+"""A reader follows the cleanup report into the clean Parquet viewer."""
 
-Everything here reads from the corpus files under the data root; the datasets-server
-fetches that open one task are left to the person, since a journey should not depend on
-Hugging Face answering.
-"""
-
-import re
 from typing import Any, cast
 
 from marina.journeys import Journey
 
 
-def test_sources_are_listed_and_filterable(journey: Journey) -> None:
-    journey.visit("/").shoot("sources")
-    assert "input:Filter sources by name or description" in journey.offers()
-    journey.fill("Filter sources by name or description", "nl2bash")
-    journey.sees(re.compile(r"\d+ sources, [\d,]+ tasks"))
-    assert "DCAgent2__nl2bash-tasks-cleaned-oracle-v2" in journey.reads()
-    journey.shoot("sources-filtered")
+def test_cleanup_report_explains_the_pipeline(journey: Journey) -> None:
+    journey.visit("/").sees("A task collection with explicit, testable rewards")
+    journey.sees("From archive to training-ready task").sees("1,399,813").sees("clean tasks")
+    journey.widths("cleanup-report")
 
 
-def test_audited_sample_opens_from_the_shell_nav(journey: Journey) -> None:
-    journey.visit("/").click("Audited sample").shoot("sampled")
-    journey.widths("sampled")
-    assert journey.page.url.endswith("/tasktrove/sampled")
+def test_browser_filters_by_mode_and_opens_a_task(journey: Journey) -> None:
+    journey.visit("/").click("Browse the clean Parquet")
+    journey.select("Verifier mode", "script")
+    journey.sees("example-script-task").click("example-script-task")
+    journey.sees("tests/verifier.toml").click("tests/verifier.toml")
+    journey.sees('mode = "script"').shoot("script-task")
 
 
 def test_shell_knows_the_app_and_the_caller(journey: Journey) -> None:

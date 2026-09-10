@@ -1,84 +1,101 @@
 <script setup lang="ts">
-// One task: its files, out of the tar the dataset row holds.
 import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
-import { bytes, corpus, count, sourceOf, type Corpus } from '../corpus'
-import { task as readTask, type Task } from '../trove'
-import { sourcePath } from '../routes'
-import LabelCard from '../components/LabelCard.vue'
 import Prose from '@marina/Prose.vue'
+import { archive, corpus, count, type CatalogTask } from '../corpus'
+import { entries, gunzip, text, type Entry } from '../tar'
 
-const props = defineProps<{ row: number }>()
+const props = defineProps<{ id: string }>()
 const route = useRoute()
 const router = useRouter()
-
-const loaded = ref<Corpus>()
-const opened = ref<Task>()
+const task = ref<CatalogTask>()
+const files = ref<Entry[]>([])
 const problem = ref('')
 const wrap = ref(true)
 const rendered = ref(true)
 
-const source = computed(() => (loaded.value ? sourceOf(loaded.value.sources, props.row) : undefined))
-const label = computed(() => loaded.value?.labelled.get(props.row))
-
-const files = computed(() => opened.value?.files.filter((file) => !file.directory) ?? [])
 const selectedPath = computed(() => (typeof route.query.file === 'string' ? route.query.file : undefined))
-const selected = computed(() => files.value.find((file) => file.path === selectedPath.value) ?? files.value.find((file) => file.path === 'instruction.md') ?? files.value[0])
+const selected = computed(
+  () => files.value.find((file) => file.path === selectedPath.value) ?? files.value.find((file) => file.path === 'instruction.md') ?? files.value[0],
+)
+const selectedText = computed(() => (selected.value?.directory ? '' : text(selected.value?.bytes ?? new Uint8Array())))
 const markdown = computed(() => selected.value?.path.endsWith('.md') ?? false)
 
+function bytes(value: number): string {
+  if (value < 1_000) return `${value} B`
+  if (value < 1_000_000) return `${(value / 1_000).toFixed(1)} KB`
+  return `${(value / 1_000_000).toFixed(1)} MB`
+}
+
 function pick(path: string): void {
-  router.replace({ query: { ...route.query, file: path } })
+  router.replace({ query: { file: path } })
 }
 
 async function start(): Promise<void> {
-  opened.value = undefined
   problem.value = ''
+  files.value = []
   try {
-    loaded.value = await corpus()
-    opened.value = await readTask(props.row)
+    const loaded = await corpus()
+    const row = Number(props.id)
+    task.value = loaded.tasks.find((candidate) => candidate.row === row)
+    if (!task.value) throw new Error(`No Parquet row ${props.id}.`)
+    const packed = await archive(task.value)
+    files.value = entries(await gunzip(packed)).sort((a, b) => a.path.localeCompare(b.path))
   } catch (error) {
     problem.value = String(error)
   }
 }
 
 onMounted(start)
-watch(() => props.row, start)
+watch(() => props.id, start)
 </script>
 
 <template>
   <p class="problem" v-if="problem">{{ problem }}</p>
-  <p class="note" v-if="source">
-    <RouterLink :to="sourcePath(source.source)">{{ source.source }}</RouterLink>
-    · row {{ count(row) }}
-  </p>
-  <h2 v-if="opened">{{ opened.path }}</h2>
-  <h2 v-else>Task {{ count(row) }}</h2>
-
-  <LabelCard v-if="label" :label="label" />
-
-  <div class="task" v-if="opened" style="margin-top: 1rem">
-    <div>
-      <div class="viewer heading"><span>{{ files.length }} files</span><span class="num">{{ bytes(opened.size) }} packed</span></div>
-      <ul class="files">
-        <li v-for="file in files" :key="file.path">
-          <a href="#" @click.prevent="pick(file.path)" :aria-current="file === selected ? 'true' : undefined">
-            <span>{{ file.path }}</span><span class="num">{{ bytes(file.size) }}</span>
-          </a>
-        </li>
-      </ul>
-    </div>
-    <div class="viewer" v-if="selected">
-      <div class="heading">
-        <span>{{ selected.path }}</span>
-        <span>
-          <label v-if="markdown"><input type="checkbox" v-model="rendered" /> rendered</label>
-          <label v-if="!markdown || !rendered"><input type="checkbox" v-model="wrap" /> wrap</label>
-        </span>
+  <template v-if="task">
+    <RouterLink class="back" to="/browse">← Browse tasks</RouterLink>
+    <header class="task-heading">
+      <div>
+        <p class="eyebrow">{{ task.mode }} · {{ task.environment }}</p>
+        <h1>{{ task.path }}</h1>
+        <p>{{ task.source }}</p>
       </div>
-      <div class="panel" v-if="markdown && rendered && selected.text !== undefined"><Prose :text="selected.text" /></div>
-      <pre v-else-if="selected.text !== undefined" :data-wrap="wrap ? 'true' : 'false'">{{ selected.text }}</pre>
-      <p class="empty" v-else>Not text: {{ bytes(selected.size) }} of binary.</p>
+      <dl>
+        <dt>Converter</dt><dd>{{ task.converter }}</dd>
+        <dt>Language</dt><dd>{{ task.language || 'not specified' }}</dd>
+        <dt>Dockerfile</dt><dd><code>{{ task.dockerfile_id.slice(0, 12) }}</code></dd>
+        <dt>Parquet row</dt><dd>{{ count(task.row) }}</dd>
+        <dt>Oracle</dt><dd>{{ task.has_solution ? 'included separately' : 'none' }}</dd>
+      </dl>
+    </header>
+    <div class="tags"><span v-for="tag in task.tags" :key="tag">{{ tag }}</span></div>
+
+    <div class="task-viewer">
+      <aside>
+        <div class="file-count">{{ count(files.filter((file) => !file.directory).length) }} files</div>
+        <button
+          v-for="file in files.filter((candidate) => !candidate.directory)"
+          :key="file.path"
+          type="button"
+          :aria-current="file === selected ? 'true' : undefined"
+          @click="pick(file.path)"
+        >
+          <span>{{ file.path }}</span><small>{{ bytes(file.size) }}</small>
+        </button>
+      </aside>
+      <section class="file-view" v-if="selected">
+        <div class="file-toolbar">
+          <code>{{ selected.path }}</code>
+          <span>
+            <label v-if="markdown"><input type="checkbox" v-model="rendered" /> rendered</label>
+            <label v-if="!markdown || !rendered"><input type="checkbox" v-model="wrap" /> wrap</label>
+          </span>
+        </div>
+        <div class="rendered" v-if="markdown && rendered && selectedText !== undefined"><Prose :text="selectedText" /></div>
+        <pre v-else-if="selectedText !== undefined" :data-wrap="wrap ? 'true' : 'false'">{{ selectedText }}</pre>
+        <p class="empty" v-else>Binary file, {{ bytes(selected.size) }}</p>
+      </section>
     </div>
-  </div>
-  <p class="working" v-else-if="!problem">Fetching the task from Hugging Face…</p>
+  </template>
+  <p class="working" v-else-if="!problem">Reading task_binary from Parquet…</p>
 </template>

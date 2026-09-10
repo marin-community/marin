@@ -1,109 +1,122 @@
-// What this site carries of its own: the manifest of the dataset's files, the
-// audit's review of each source, and the audit's label for each sampled task.
-// The three JSON files come from the app's data directory, which the kernel
-// serves; the page reads and holds them once.
+import { asyncBufferFromUrl, parquetReadObjects, rowIndex, type AsyncBuffer, type ParquetRow } from 'hyparquet'
 
-/** The kernel serves this app's data directory here (`.data/tasktrove` locally, the bucket in production). */
-const CORPUS = '/tasktrove/data'
+const DATA = '/tasktrove/data'
+export const parquetUrl = `${DATA}/tasks.parquet`
 
-export type Source = {
-  source: string
-  file: string
-  size: number
-  rows: number
-  groups: number
-  group_rows: number
-  largest_group_bytes: number
-  /** The row of this source's first task in the dataset. */
-  offset: number
+export type Counts = Record<string, number>
+
+export type Dockerfile = {
+  base_image: string
+  tasks: number
+  converters: Counts
+  sources: Counts
 }
 
-export type Review = {
-  source: string
-  template_description: string
-  shellsim_verdict: 'yes' | 'partial' | 'no'
-  cheapest_unlock: string
-  unlock_notes: string
-  quality_notes: string
+export type Manifest = {
+  tasktrove: { hf_id: string; revision: string }
+  verify_tool_ref: string
+  input_tasks: number
+  clean_tasks: number
+  by_status: Counts
+  by_mode: Counts
+  by_tag: Counts
+  by_source: Record<string, Counts>
+  source_verdicts: Record<string, { verdict: 'keep' | 'drop'; family: string; reason: string }>
+  by_converter: Record<string, Counts>
+  dockerfiles: Record<string, Dockerfile>
 }
 
-export type Label = {
-  id: string
+export type CatalogTask = {
+  row: number
   source: string
   path: string
-  row: number
-  summary: string
-  task_kind: string
-  agent_needs: string[]
-  verifier_needs: string[]
-  verifier_mechanism: string
-  shellsim_now: 'yes' | 'partial' | 'no'
-  shellsim_with: string
-  verifier_portable: string
-  interesting: number
-  well_defined: number
-  hack_risk: number
-  hack_vector: string
-  defects: string
+  family: string
+  converter: string
+  mode: string
+  dockerfile_id: string
+  environment: string
+  language: string
+  tags: string[]
+  has_solution: boolean
 }
 
-export type Corpus = {
-  sources: Source[]
-  reviews: Map<string, Review>
-  labels: Label[]
-  /** Labels by dataset row, which is how a task page finds its own. */
-  labelled: Map<number, Label>
-  total: number
-}
+export type Corpus = { manifest: Manifest; tasks: CatalogTask[] }
+
+const METADATA_COLUMNS = [
+  'source',
+  'path',
+  'family',
+  'converter',
+  'mode',
+  'dockerfile_id',
+  'language',
+  'tags',
+  'has_solution',
+]
 
 async function json<T>(path: string): Promise<T> {
-  const response = await fetch(path)
+  const response = await fetch(`${DATA}/${path}`)
   if (!response.ok) throw new Error(`${path}: ${response.status}`)
   return response.json() as Promise<T>
+}
+
+let parquetFile: Promise<AsyncBuffer> | undefined
+
+function file(): Promise<AsyncBuffer> {
+  parquetFile ??= asyncBufferFromUrl({ url: parquetUrl })
+  return parquetFile
 }
 
 let loading: Promise<Corpus> | undefined
 
 export function corpus(): Promise<Corpus> {
-  loading ??= (async () => {
-    const [manifest, reviews, labels] = await Promise.all([
-      json<Omit<Source, 'offset'>[]>(`${CORPUS}/files.json`),
-      json<Review[]>(`${CORPUS}/sources.json`),
-      json<Label[]>(`${CORPUS}/labels.json`),
-    ])
-    let offset = 0
-    const sources = manifest.map((entry) => {
-      const source = { ...entry, offset }
-      offset += entry.rows
-      return source
-    })
-    return {
-      sources,
-      reviews: new Map(reviews.map((review) => [review.source, review])),
-      labels,
-      labelled: new Map(labels.map((label) => [label.row, label])),
-      total: offset,
-    }
-  })()
+  loading ??= Promise.all([
+    json<Manifest>('manifest.json'),
+    file().then((parquet) =>
+      parquetReadObjects({ file: parquet, columns: METADATA_COLUMNS, includeRowIndex: true })
+    ),
+  ]).then(([manifest, rows]) => ({
+    manifest,
+    tasks: rows.map((value: ParquetRow) => {
+      const position = value[rowIndex]
+      if (position === undefined) throw new Error('The Parquet reader did not return row positions.')
+      return {
+        row: position,
+        source: value.source,
+        path: value.path,
+        family: value.family,
+        converter: value.converter,
+        mode: value.mode,
+        dockerfile_id: value.dockerfile_id,
+        environment: manifest.dockerfiles[value.dockerfile_id]?.base_image ?? value.dockerfile_id,
+        language: value.language ?? '',
+        tags: value.tags ?? [],
+        has_solution: value.has_solution,
+      }
+    }),
+  }))
   return loading
 }
 
-export function sourceOf(sources: Source[], row: number): Source | undefined {
-  return sources.find((source) => row >= source.offset && row < source.offset + source.rows)
+export async function archive(task: CatalogTask): Promise<Uint8Array> {
+  const rows = await parquetReadObjects({
+    file: await file(),
+    columns: ['task_binary'],
+    rowStart: task.row,
+    rowEnd: task.row + 1,
+    utf8: false,
+  })
+  const binary = rows[0]?.task_binary
+  if (binary instanceof Uint8Array) return binary
+  if (binary instanceof ArrayBuffer) return new Uint8Array(binary)
+  if (ArrayBuffer.isView(binary)) return new Uint8Array(binary.buffer, binary.byteOffset, binary.byteLength)
+  throw new Error(`Row ${task.row} has no task_binary value.`)
 }
 
-const UNITS = ['B', 'KB', 'MB', 'GB']
-
-export function bytes(n: number): string {
-  let unit = 0
-  let value = n
-  while (value >= 1000 && unit < UNITS.length - 1) {
-    value /= 1000
-    unit++
-  }
-  return `${value < 10 && unit > 0 ? value.toFixed(1) : Math.round(value)} ${UNITS[unit]}`
+export function count(value: number): string {
+  return value.toLocaleString('en-US')
 }
 
-export function count(n: number): string {
-  return n.toLocaleString('en-US')
+export function shortRef(value: string): string {
+  return value.length > 12 ? value.slice(0, 12) : value
 }
