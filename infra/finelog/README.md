@@ -63,17 +63,17 @@ intended checkout; there is no rollout counter in Pulumi configuration.
 ## Forwarding relay lifecycle
 
 A deployment with `forwarding` configured runs relay maintenance. It preserves
-the table schema sent to the hub, but does not build local query indexes,
-projections, placement rewrites, or encoding rewrites. It still compacts when
-needed to bound file count while forwarding is unavailable.
+the table schema sent to the hub, but does not compact or build local query
+indexes, projections, placement rewrites, or encoding rewrites. Unsettled L0
+objects are the durable spool.
 
-The downstream cursor is the deletion boundary. Object-native maintenance may
-retire a whole segment only when its maximum sequence is at or below that
-cursor and the segment is at least 15 minutes old. A retryable forwarding
-failure does not advance the cursor, so elapsed time alone never deletes an
-unforwarded segment. Retiring a segment removes it from the relay's current
-table state; retained snapshots and the rollback window continue to reference
-the immutable object, and the ordinary orphan grace delays physical deletion.
+The downstream cursor is the logical deletion boundary. Each forwarding turn
+publishes the cursor and removes whole segments at or below the minimum cursor
+for all configured targets in one table-state mutation. A retryable forwarding
+failure does not advance the cursor, so it cannot delete an unforwarded segment.
+Settled segments leave the live relay snapshot immediately; pinned queries and
+rollback-visible table states retain their immutable objects until the exact
+release deadline expires. Unknown orphan uploads use a separate grace period.
 
 The cache storage selects write acknowledgement durability. A node-local cache
 acknowledges object-backed rows only after their objects and table-state HEAD are
