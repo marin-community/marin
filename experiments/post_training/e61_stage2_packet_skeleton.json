@@ -1,0 +1,167 @@
+{
+  "schema": "e61_stage2_prospective_skeleton_v1",
+  "status": "CPU_preparation_only_not_a_native_request",
+  "gpu_release": false,
+  "input_receipt_sha256": "7c17751cc1ed10fe4c35f008296a295c6df12b4a88ef095e066c99ea933d7867",
+  "input_objects": {
+    "s3://marin-us-east-02a/marin/users/ahmad/documents/async-rl-snowball-gsm8k/2026.09.06.13/train.parquet": {
+      "bytes": 173581,
+      "sha256": "0e85bf98e7d075ae6f4613c52b37fb76f256a003b2661e4cd73cadf7db089cbd"
+    },
+    "s3://marin-us-east-02a/marin/users/ahmad/documents/math-eval-pool/1.0.0-candidate1/batteries/mechanical-v1/snowball/provisional-dev.parquet": {
+      "bytes": 68844,
+      "sha256": "cb50e2b55a9cc12e9ca95e8e814c47a479d377ba720235e4784c81f267eb343a"
+    }
+  },
+  "design": {
+    "seed": 17,
+    "successful_optimizer_updates": 25,
+    "runner": "fully_async",
+    "policy_loss": "behavior_clip",
+    "minibatches": 1,
+    "weight_sync_interval": 2,
+    "max_staleness_steps": 1,
+    "policy_gpus": 32,
+    "inference_gpus": 8,
+    "prompt_groups_per_update": 32,
+    "responses_per_group": 4,
+    "learning_rate": 1e-06,
+    "response_tokens": 4096,
+    "context_tokens": 8192,
+    "dataloader_workers": 0,
+    "epoch_seeded_shuffle": true,
+    "kl_reward": false,
+    "kl_loss": false,
+    "eval_steps": [
+      0,
+      25
+    ],
+    "eval_rows": 256,
+    "completion": "metrics"
+  },
+  "common_overrides": {
+    "generator.non_agentic_parser_protocol": "post-thinking-native-v1",
+    "generator.max_turns": 1,
+    "generator.batched": false,
+    "generator.use_conversation_multi_turn": true,
+    "generator.sampling_params.max_generate_length": 4096,
+    "generator.sampling_params.stop_token_ids": [
+      128001,
+      128009
+    ],
+    "generator.max_input_length": 1024
+  },
+  "arms": [
+    {
+      "name": "parser_only",
+      "additional_overrides": {},
+      "endpoint_modes": [
+        "shared_common_off_and_package_on"
+      ]
+    },
+    {
+      "name": "force_close",
+      "additional_overrides": {
+        "generator.non_agentic_intervention": {
+          "protocol": "non-agentic-token-intervention-v1",
+          "kind": "force_close",
+          "thinking_end_id": 128003,
+          "eos_id": 128001,
+          "force_close_after": 3072,
+          "repetition_window": 256,
+          "repetition_ngram": 16,
+          "repetition_fraction": 0.5
+        }
+      },
+      "endpoint_modes": [
+        "common_off",
+        "package_on"
+      ]
+    },
+    {
+      "name": "soft_overlong",
+      "additional_overrides": {
+        "generator.trajectory_reward_shaping.enabled": true,
+        "generator.trajectory_reward_shaping.overlong.l_max": 4096,
+        "generator.trajectory_reward_shaping.overlong.l_cache": 512
+      },
+      "endpoint_modes": [
+        "shared_common_off_and_package_on"
+      ]
+    },
+    {
+      "name": "negative_truncation_advantage",
+      "additional_overrides": {
+        "trainer.algorithm.non_agentic_truncated_advantage_cap": -1.0
+      },
+      "endpoint_modes": [
+        "shared_common_off_and_package_on"
+      ]
+    },
+    {
+      "name": "repetition_stop",
+      "additional_overrides": {
+        "generator.non_agentic_intervention": {
+          "protocol": "non-agentic-token-intervention-v1",
+          "kind": "repetition_stop",
+          "thinking_end_id": 128003,
+          "eos_id": 128001,
+          "force_close_after": 3072,
+          "repetition_window": 256,
+          "repetition_ngram": 16,
+          "repetition_fraction": 0.5
+        }
+      },
+      "endpoint_modes": [
+        "common_off",
+        "package_on"
+      ]
+    }
+  ],
+  "score_contract": "verbatim native optimization reward after any shaping",
+  "contract_correct": "full-credit corrected_verifier_reward mapped by environment",
+  "score_contract_completed": "contract_correct * accepted_stop",
+  "selector": [
+    "highest package completed correctness at update 25",
+    "lowest total incomplete fraction",
+    "highest common-off completed correctness",
+    "simplest treatment; parser-only first"
+  ],
+  "required_before_native_freeze": [
+    "K16 actual GPU mechanical result and independent 64-row external audit",
+    "shared-source integration and full actual native Hydra/resource preview",
+    "versioned parser/intervention/mask/logprob/advantage dump checks",
+    "unique artifact families and exact absence plus root GPU release",
+    "Revalidate actual full-input receipt against final composed runtime/config",
+    "Native package/common-off evaluation before metrics-only weights are discarded; do not reuse package rows as off-mode results"
+  ],
+  "native_outcome_branches": {
+    "queued_or_startup_failure": "no scientific outcome; retain packet and failures, CPU preparation continues",
+    "mechanical_or_external_audit_failure": "retain initiating evidence; repair only identified primitive, refreeze and requalify",
+    "mechanical_and_external_audit_pass": "complete source integration and native stage-2 preview; first actual trainer dumps still require finalized mask/advantage audit"
+  },
+  "stage3": {
+    "not_M4_completion_requirement": true,
+    "winner_and_parser_control": true,
+    "updates": 100,
+    "seeds": 2,
+    "graduation": "truncation below 10% in both seeds plus completed-score margin 2 percentage points"
+  },
+  "E62_pool_adoption": "separate; original GSM study input is not adoption of new Bucket G bins",
+  "qualifications": {
+    "full_original_input_coverage_sha256": "b28dde55e30bd2ae1d6a405de51992817f459c88e578337cd18d34797cbbd7f7",
+    "full_original_input_coverage_uri": "s3://marin-us-east-02a/marin/users/ahmad/diagnostics/async-rl/e61-stage2-input-coverage-v1/receipt.json",
+    "input_rows": {
+      "train": 1024,
+      "dev": 256
+    },
+    "max_observed_prompt_tokens": {
+      "train": 261,
+      "dev": 700
+    },
+    "generic_filter_fix": "0cd9f74cc2cbd01b009d65b2813331c22cbef2c0",
+    "generic_filter_test_format_followup": "afb49ed5",
+    "native_K16_mechanical_result": null,
+    "native_K16_external_response_audit": null
+  }
+}
