@@ -75,7 +75,7 @@ def test_mcq_fifth_option_is_gradable_when_declared(tmp_path):
     assert mcq.grade(McqSpec(expected="E", options=5), tmp_path, tmp_path).reward == 1.0
 
 
-def test_cli_grades_an_mcq_task_and_writes_reward_json(tmp_path):
+def test_cli_grades_an_mcq_task_and_writes_the_verdict(tmp_path):
     tests_dir = tmp_path / "tests"
     tests_dir.mkdir()
     (tests_dir / "verifier.toml").write_text('mode = "mcq"\nexpected = "C"\noptions = 4\n')
@@ -83,9 +83,10 @@ def test_cli_grades_an_mcq_task_and_writes_reward_json(tmp_path):
     logs = tmp_path / "logs"
 
     assert main([str(tests_dir / "verifier.toml"), "--logs-dir", str(logs), "--workspace", str(tmp_path)]) == 0
-    assert json.loads((logs / "reward.json").read_text()) == {
+    assert json.loads((logs / "verdict.json").read_text()) == {
         "reward": 1.0,
         "status": "scored",
         "detail": {"extracted": "C", "expected": "C"},
     }
+    assert json.loads((logs / "reward.json").read_text()) == {"reward": 1.0}
     assert (logs / "reward.txt").read_text() == "1.0\n"

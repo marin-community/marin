@@ -26,7 +26,7 @@ from pathlib import Path
 
 import click
 from tasktrove_verify.cli import DEFAULT_LOGS_DIR
-from tasktrove_verify.reward import REWARD_JSON
+from tasktrove_verify.reward import VERDICT_JSON
 from tasktrove_verify.spec import DEFAULT_WORKSPACE
 from zephyr.readers import load_parquet
 
@@ -124,10 +124,10 @@ def run_check(image: str, task_dir: Path, check: str, timeout: float, network: s
         proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         return CheckResult(task_dir.name, check, None, "timeout", "")
-    reward_file = logs / REWARD_JSON
-    if not reward_file.is_file():
-        return CheckResult(task_dir.name, check, None, "no_reward", (proc.stderr or proc.stdout)[-2000:])
-    payload = json.loads(reward_file.read_text())
+    verdict_file = logs / VERDICT_JSON
+    if not verdict_file.is_file():
+        return CheckResult(task_dir.name, check, None, "no_verdict", (proc.stderr or proc.stdout)[-2000:])
+    payload = json.loads(verdict_file.read_text())
     return CheckResult(task_dir.name, check, payload["reward"], payload["status"], json.dumps(payload["detail"])[:500])
 
 

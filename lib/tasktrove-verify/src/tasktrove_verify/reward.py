@@ -8,8 +8,11 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
+# Harbor reads reward.json as a name-to-number map (and reward.txt as one number), so the
+# status and detail live in verdict.json beside them.
 REWARD_JSON = "reward.json"
 REWARD_TXT = "reward.txt"
+VERDICT_JSON = "verdict.json"
 
 
 class Status(StrEnum):
@@ -42,8 +45,15 @@ def infra_error(message: str) -> Reward:
 
 
 def write_reward(logs_dir: Path, reward: Reward) -> None:
-    """Write reward.json and Harbor's reward.txt. A non-scored status writes reward.txt as 0."""
+    """Write verdict.json always, and Harbor's reward.json and reward.txt only for a scored grade.
+
+    Leaving the reward files out for an invalid task or a grader crash makes Harbor raise its
+    reward-file-missing error, which a trainer masks instead of counting as a zero score.
+    """
     logs_dir.mkdir(parents=True, exist_ok=True)
-    payload = {"reward": reward.reward, "status": reward.status.value, "detail": reward.detail}
-    (logs_dir / REWARD_JSON).write_text(json.dumps(payload) + "\n")
-    (logs_dir / REWARD_TXT).write_text(f"{reward.reward if reward.status == Status.SCORED else 0.0}\n")
+    verdict = {"reward": reward.reward, "status": reward.status.value, "detail": reward.detail}
+    (logs_dir / VERDICT_JSON).write_text(json.dumps(verdict) + "\n")
+    if reward.status != Status.SCORED:
+        return
+    (logs_dir / REWARD_JSON).write_text(json.dumps({"reward": reward.reward}) + "\n")
+    (logs_dir / REWARD_TXT).write_text(f"{reward.reward}\n")

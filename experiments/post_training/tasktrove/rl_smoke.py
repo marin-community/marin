@@ -9,8 +9,8 @@ policy against ``instruction.md``, and ``tasktrove-verify`` inside the image pro
 
 Plan or run::
 
-    python -m experiments.post_training.tasktrove.rl_smoke --version 2026.09.10.1 --verify-tool-ref <sha>
-    python -m experiments.post_training.tasktrove.rl_smoke --version 2026.09.10.1 --verify-tool-ref <sha> --run
+    python -m experiments.post_training.tasktrove.rl_smoke --version 2026.09.10.2 --verify-tool-ref <sha>
+    python -m experiments.post_training.tasktrove.rl_smoke --version 2026.09.10.2 --verify-tool-ref <sha> --run
 
 Submit from a CPU coordinator on the GPU cluster. Coordinator pods carry no cloud credentials,
 so the Daytona key is resolved on the submit host and forwarded::
@@ -19,14 +19,16 @@ so the Daytona key is resolved on the submit host and forwarded::
       --enable-extra-resources --cpu 4 --memory 16GB --disk 64GB --timeout 43200 --extra cpu \\
       -e HF_TOKEN "$HF_TOKEN" \\
       -e DAYTONA_API_KEY "$(gcloud secrets versions access 1 --secret=DAYTONA_RL_API_KEY --project=hai-gcp-models)" \\
-      -- python -m experiments.post_training.tasktrove.rl_smoke --version 2026.09.10.1 --verify-tool-ref <sha> --run
+      -- python -m experiments.post_training.tasktrove.rl_smoke --version 2026.09.10.2 --verify-tool-ref <sha> --run
 """
 
 from __future__ import annotations
 
 import logging
 import tempfile
+from collections import defaultdict
 from dataclasses import dataclass
+from itertools import zip_longest
 from pathlib import Path
 
 import click
@@ -66,8 +68,11 @@ RL_ARTIFACT_NAME = "checkpoints/tasktrove-rl-smoke"
 MODEL_VERSION = "2026.08.29"
 TASKS_SUBDIR = "tasks"
 # The clean output is hash-sharded into 1,024 parts, so the first shard is already a uniform
-# ~1/1024 sample of the corpus (~1,300 tasks over every kept converter).
+# ~1/1024 sample of the corpus (~1,300 tasks over every kept converter). MarinSkyRL stages a
+# task-directory data source one object at a time, so the export is capped at SAMPLE_TASKS tasks
+# drawn round-robin across converters: enough for MAX_STEPS batches with every converter present.
 SAMPLE_SHARDS = 1
+SAMPLE_TASKS = 160
 CLUSTER = "cw-rno2a"
 GPU_VARIANT = "H100"
 GPUS_PER_NODE = 8
@@ -101,28 +106,38 @@ class SampleConfig:
     clean_path: str
     output_path: str
     shard_count: int
+    task_count: int
+
+
+def round_robin_sample(rows: list[dict], count: int) -> list[dict]:
+    """Pick up to ``count`` rows, cycling over converters so every one is represented."""
+    by_converter: dict[str, list[dict]] = defaultdict(list)
+    for row in sorted(rows, key=lambda r: (r["converter"], r["source"], r["path"])):
+        by_converter[row["converter"]].append(row)
+    interleaved = [row for group in zip_longest(*by_converter.values()) for row in group if row is not None]
+    return interleaved[:count]
 
 
 def export_sample(config: SampleConfig) -> None:
-    """Materialize the tasks of the first ``shard_count`` clean shards as Harbor task directories.
+    """Materialize a sample of the first ``shard_count`` clean shards as Harbor task directories.
 
     Every task lands under ``tasks/<source>__<path>/`` with its ``instruction.md``, ``task.toml``,
     ``environment/Dockerfile`` and ``tests/``; solutions stay out of the tree the policy sees.
     """
     shards = sorted((StoragePath(config.clean_path) / TASKS_SUBDIR / "*.parquet").glob(), key=str)
     shards = shards[: config.shard_count]
+    rows: list[dict] = []
+    for shard in shards:
+        with shard.open("rb") as handle:
+            rows.extend(pq.read_table(handle, columns=["source", "path", "converter", "task_binary"]).to_pylist())
+    sample = round_robin_sample(rows, config.task_count)
     with tempfile.TemporaryDirectory() as workdir:
         root = Path(workdir) / TASKS_SUBDIR
-        count = 0
-        for shard in shards:
-            with shard.open("rb") as handle:
-                table = pq.read_table(handle, columns=["source", "path", "task_binary"])
-            for row in table.to_pylist():
-                read_task_binary(row["task_binary"]).write_to(root / f"{row['source']}__{row['path']}")
-                count += 1
+        for row in sample:
+            read_task_binary(row["task_binary"]).write_to(root / f"{row['source']}__{row['path']}")
         destination = prefix_join(config.output_path, TASKS_SUBDIR)
         StoragePath(destination).upload_from(f"{root}/", recursive=True)
-    logger.info("Exported %d tasks from %d shard(s) to %s", count, len(shards), destination)
+    logger.info("Exported %d of %d tasks from %d shard(s) to %s", len(sample), len(rows), len(shards), destination)
 
 
 def sample_step(clean: ArtifactStep) -> ArtifactStep[Artifact]:
@@ -133,7 +148,10 @@ def sample_step(clean: ArtifactStep) -> ArtifactStep[Artifact]:
         artifact_type=Artifact,
         run=remote(export_sample, resources=ResourceConfig.with_cpu(cpu=4, ram="16g", disk="32g")),
         build_config=lambda ctx: SampleConfig(
-            clean_path=ctx.artifact_path(clean), output_path=ctx.output_path, shard_count=SAMPLE_SHARDS
+            clean_path=ctx.artifact_path(clean),
+            output_path=ctx.output_path,
+            shard_count=SAMPLE_SHARDS,
+            task_count=SAMPLE_TASKS,
         ),
         deps=(clean,),
     )
@@ -180,7 +198,9 @@ terminal_bench:
     n_concurrent_trials: 64
     log_level: INFO
     enable_reward_shaping: false
-    collect_rollout_details: true
+    # Harbor's exact-token continuation asks the inference server for /tokenize, which the SkyRL
+    # HTTP endpoint does not serve; without rollout details Harbor counts tokens locally instead.
+    collect_rollout_details: false
     enable_error_classification: true
     mask_exceptions:
       - DaytonaError

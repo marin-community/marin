@@ -7,16 +7,17 @@ naming one `mode` and that mode's parameters, and a three-line `tests/test.sh` t
 exec tasktrove-verify /tests/verifier.toml
 ```
 
-The tool grades the agent's work and writes `/logs/verifier/reward.json`:
+The tool grades the agent's work and writes `/logs/verifier/verdict.json`:
 
 ```json
 {"reward": 1.0, "status": "scored", "detail": {"extracted": "C"}}
 ```
 
-plus `reward.txt` beside it for Harbor. `status` is `scored`, `invalid_task` (the task itself is
-malformed) or `infra_error` (the grader crashed). A trainer keeps scored rewards and drops the rest.
-The process exits 0 whenever it managed to write a reward; nothing about the candidate can make
-it exit non-zero.
+`status` is `scored`, `invalid_task` (the task itself is malformed) or `infra_error` (the grader
+crashed). A scored grade also writes Harbor's `reward.json` (`{"reward": 1.0}`) and `reward.txt`
+beside it; the other two statuses leave those out, so Harbor reports a missing reward file and a
+trainer masks the trial instead of scoring it zero. The process exits 0 whenever it managed to
+write a verdict; nothing about the candidate can make it exit non-zero.
 
 ## Modes
 

@@ -24,27 +24,30 @@ raw → summaries → templates → converted → graded → clean
 6. [x] Verified step: spec, dockerfile, gold leak, empty, expected, perturbed, shape
 7. [x] Clean step: tasks/ per source, ledger/, manifest.json, report.md, export CLI, README
 8. [x] Full run on Iris `cw-us-east-02a` with the pushed SHA as tool ref; measured counts in the PR body; 100-task random sample inspected
-9. [ ] Run 2026.09.10.1 (`/power/iris-run-job-20260910-030245`, tool ref 105b4541): regenerate the tables, draw a fresh 100-task sample, Docker-check it, fix anything obvious it exposes and rerun if needed
-10. [ ] Delete superseded bucket artifacts: `tasktrove/{fingerprints,verified,deduped,template_summaries,templates,converted,graded,clean}/2026.09.09`, `tasktrove/*/2026.09.10`, `raw/tasktrove/2026.09.10` (duplicate download; the pipeline pins `raw/tasktrove/2026.09.09`); keep `raw/tasktrove/2026.09.09` and `tasktrove/*/2026.09.10.1`
+9. [x] Run 2026.09.10.1 (`/power/iris-run-job-20260910-030245`, tool ref 105b4541): its Docker sample exposed doctest-graded swesmith tasks and an uncompilable TACO oracle; both fixed in the converters and rerun as 2026.09.10.2, whose sample was clean
+10. [x] Delete superseded bucket artifacts: `tasktrove/*/{2026.09.09,2026.09.10,2026.09.10.1}` and `raw/tasktrove/2026.09.10` (duplicate download; the pipeline pins `raw/tasktrove/2026.09.09`) are gone; `raw/tasktrove/2026.09.09`, `tasktrove/*/2026.09.10.2` and the smoke's exported task directories remain
 11. [ ] Update this logbook's run section and the PR body with the final numbers; verify with `gh pr view --json title,body`
-12. [ ] Publish an artifact with the detailed analysis: source corpus before and after, kept and dropped sources with reasons, per-check rejections, how tasks were normalized (spec, Dockerfile, instruction edits, dedup), sample findings
+12. [x] Publish an artifact with the detailed analysis: https://claude.ai/code/artifact/22018f48-ca1f-4a55-9f5c-12108557d2ba (funnel, kept and dropped sources with reasons, per-check rejections, normalization, the four Docker samples, the smoke run)
 13. [ ] Smoke-train Qwen 0.6B on the clean dataset through marin skyrl, configured after the curriculum experiment; record the config and result here
 14. [ ] Final report to the user and PR monitoring per the commit skill
 
-## Run 2026.09.10.1
+## Run 2026.09.10.2
 
-Job `/power/iris-run-job-20260910-030245` on `cw-us-east-02a`, tool ref `105b4541b630c60750967cc736dc7bc3a781bfd4`,
+Job `/power/iris-run-job-20260910-034718` on `cw-us-east-02a`, tool ref `105b4541b630c60750967cc736dc7bc3a781bfd4`,
 25 minutes end to end (summaries 4 min, templates 4 min, converted 4 min, graded 4 min, clean 4 min; the raw
 download is pinned to `raw/tasktrove/2026.09.09` and was reused). Output at
-`s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.1`: `tasks/part-*.parquet` (1,025 shards, 3.17 GiB),
-`ledger.parquet` (one row per rejected task with its reason), `manifest.json`, `report.md`.
+`s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.2`: `tasks/part-*.parquet` (1,025 shards, 3.2 GiB),
+`ledger.parquet` (one row per rejected task with its reason), `manifest.json`, `report.md`. The bucket
+directories of runs 2026.09.09, 2026.09.10 and 2026.09.10.1 and the duplicate download `raw/tasktrove/2026.09.10`
+were deleted; the smoke run below drew its shard from clean 2026.09.10.1, whose only difference from this run is
+the 208 tasks the last two converter fixes reject, and its exported task directories are kept.
 
 | status | tasks | meaning |
 |---|---:|---|
-| converted | 1,294,537 | in the clean dataset |
+| converted | 1,294,332 | in the clean dataset |
 | dropped_source | 393,014 | source rejected in `source_verdicts.json` |
-| unsupported_variant | 42,261 | converter has no grading for this task shape (xml/toml/csv schemas, non-Python SWE repositories or test files, non-letter MCQ gold) |
-| gold_in_instruction | 4,861 | every hidden stdio case is a sample printed in the prompt |
+| unsupported_variant | 42,477 | converter has no grading for this task shape (xml/toml/csv schemas, non-Python SWE repositories or test files, doctest-graded SWE tasks, non-letter MCQ gold, TACO oracles that do not compile) |
+| gold_in_instruction | 4,850 | every hidden stdio case is a sample printed in the prompt |
 | verified:empty | 2,433 | grader cannot score even an empty output (unparseable expected value, options not detected) |
 | verified:gold_leak | 990 | expected value is visible in the instruction |
 | duplicate | 942 | same instruction as an earlier task in the source |
@@ -59,9 +62,9 @@ Clean tasks by mode:
 | math | 219,316 |
 | ifeval | 46,391 |
 | json-schema | 39,329 |
-| stdio | 37,077 |
+| stdio | 37,012 |
 | script | 21,142 |
-| pytest | 18,727 |
+| pytest | 18,587 |
 | reasoning-gym | 13,712 |
 | exact | 13,663 |
 
@@ -77,12 +80,12 @@ Kept sources (26):
 | laion__nemotron-gym-structured-outputs-v4 | other | 53,870 | 30,162 | 56% | unsupported_variant (23,386) |
 | laion__nemotron-gym-instruction-following-v3 | instruction-following | 46,391 | 46,391 | 100% |  (0) |
 | laion__nemotron-gym-math-openmathreasoning-v2 | math-answer | 42,636 | 42,506 | 100% | verified:empty (102) |
-| DCAgent__swe_rebench_v2_patched_oracle-v2 | swe-repo | 18,319 | 5,864 | 32% | unsupported_variant (12,453) |
+| DCAgent__swe_rebench_v2_patched_oracle-v2 | swe-repo | 18,319 | 5,867 | 32% | unsupported_variant (12,450) |
 | laion__nemotron-gym-competitive-coding-v2 | competitive-programming | 15,713 | 13,974 | 89% | gold_in_instruction (1,739) |
 | laion__nemotron-gym-reasoning-gym-v2 | other | 14,259 | 13,712 | 96% | unsupported_variant (282) |
-| laion__swesmith-oracle-filtered-v2 | swe-repo | 12,927 | 12,863 | 100% | unsupported_variant (64) |
+| laion__swesmith-oracle-filtered-v2 | swe-repo | 12,927 | 12,720 | 98% | unsupported_variant (207) |
 | laion__codeforces-v3 | competitive-programming | 10,000 | 9,697 | 97% | null_grader (240) |
-| laion__exp_rpt_taco-v2 | stdin-stdout | 10,000 | 5,182 | 52% | gold_in_instruction (2,603) |
+| laion__exp_rpt_taco-v2 | stdin-stdout | 10,000 | 5,117 | 51% | gold_in_instruction (2,592) |
 | laion__nemotron-gym-arc-agi-python-inductive-v2 | other | 10,000 | 10,000 | 100% |  (0) |
 | laion__nemotron-gym-arc-agi-transductive-v3 | other | 10,000 | 9,994 | 100% | verified:gold_leak (6) |
 | laion__nemotron-gym-instruction-following-structured-v3 | instruction-following | 9,437 | 9,167 | 97% | unsupported_variant (254) |
@@ -170,6 +173,31 @@ Dropped sources (67, 393,014 tasks); the full reason per source is in `source_ve
 
 kept sources: 26, dropped sources: 67, dropped tasks: 393,014
 
+By converter (clean, rejected inside the converter, distinct Dockerfiles):
+
+| converter | clean | rejected | dockerfiles |
+|---|---:|---:|---:|
+| agent_calendar | 2,699 | 0 | 1 |
+| all_puzzles | 6,719 | 207 | 2 |
+| code_contests | 8,224 | 0 | 1 |
+| codeforces | 9,697 | 48 | 1 |
+| nemotron_competitive | 13,974 | 0 | 1 |
+| nemotron_if_structured | 14,840 | 0 | 2 |
+| nemotron_ifeval | 46,391 | 0 | 1 |
+| nemotron_math | 216,266 | 1,377 | 2 |
+| nemotron_mcqa | 611,699 | 1,582 | 1 |
+| nemotron_multichallenge | 1,052 | 16 | 1 |
+| nemotron_openqa | 272,429 | 572 | 1 |
+| nemotron_reasoning | 33,706 | 271 | 3 |
+| nemotron_structured_outputs | 30,162 | 290 | 1 |
+| nl2bash | 1,498 | 0 | 1 |
+| prompt_injection | 1,272 | 0 | 1 |
+| swe_patched | 5,867 | 2 | 2 |
+| swe_trusted_paths | 12,720 | 0 | 2 |
+| taco | 5,117 | 0 | 1 |
+
+kept sources: 26, dropped sources: 67, dropped tasks: 393,014
+
 Largest rejection reasons inside kept sources: 22,863 structured-outputs tasks ask for xml, toml, or csv
 documents that the json-schema mode cannot validate; 12,453 swe_rebench tasks are Go, JavaScript, TypeScript, or
 Rust repositories the pytest converter does not handle; 4,846 TACO, competitive-coding, and code-contests tasks
@@ -178,16 +206,55 @@ letter; 1,463 MCQA prompts carry literal `\n` sequences instead of newlines so o
 854 math tasks have an expected value math-verify cannot parse (`floor(n^2/4)`, `(1, ∞)`, `f(x) = x + c`,
 `Symmetric`); 240 codeforces tasks ship no cases.
 
-Sample: 100 tasks drawn at random (seed 20260911), SAMPLE_MODES. Every instruction is answerable as written and names the file the grader reads; every Dockerfile
-pins the tool ref above. Under Docker, every task's empty workspace scored 0 and every oracle scored 1
-(DOCKER_RESULT). Earlier samples exposed four defects that this run fixes: half of the MCQA prompts ask for
-`Answer: \boxed{X}`, which the mcq mode rejected; nemotron-math-oracle prompts named `/app/solution.txt` while
-the grader read `/app/answer.txt`; some openqa references carried a leading `**`; and the voluptuous swesmith
-tasks failed pytest collection because the pytest mode clears `addopts` (dropping the repo's
-`--doctest-glob=*.md`), so FAIL_TO_PASS ids outside `.py` files are now rejected at conversion (64 tasks).
-Known quirks left in place: one MCQA prompt in the sample lists its options twice (once as `A)` and once as
-`A:`); SankalpKJ expected values are sometimes 30-digit decimals rather than closed forms; swesmith and
+Sample: 100 tasks drawn at random (seed 20260912): 58 mcq, 17 math, 14 judge, 3 pytest, 3 script, 2 json-schema, 1 reasoning-gym, 1 exact, 1 ifeval. Every instruction is answerable as written and
+names the file the grader reads; every Dockerfile pins the tool ref above. Under Docker the empty workspace must
+score 0 and the oracle 1: 180 of 180 checks over 9 images. The three earlier samples exposed six defects that this run fixes: half of
+the MCQA prompts ask for `Answer: \boxed{X}`, which the mcq mode rejected; nemotron-math-oracle prompts named
+`/app/solution.txt` while the grader read `/app/answer.txt`; some openqa references carried a leading `**`; the
+voluptuous swesmith tasks failed pytest collection because the pytest mode clears `addopts` (dropping the repo's
+`--doctest-glob=*.md`), so FAIL_TO_PASS ids outside `.py` files are rejected at conversion; parso's swesmith
+tasks graded doctest items (`parso/__init__.py::parso`) that the same cleared `addopts` never collects, so
+doctest node ids are rejected too (143 tasks) and dropped from PASS_TO_PASS (637 tasks); and 65 TACO oracles
+are function bodies pasted at module level (`return` or `nonlocal` outside a function), now rejected because
+they cannot compile. Known quirks left in place: one MCQA prompt lists its options twice (once as `A)` and once
+as `A:`); SankalpKJ expected values are sometimes 30-digit decimals rather than closed forms; swesmith and
 swe_rebench tasks clone their repository at agent time, so they need network access.
+
+## Smoke RL run (task 13)
+
+`experiments/post_training/tasktrove/rl_smoke.py` trains Qwen3-0.6B for two GRPO steps on a sample of the
+first clean shard through MarinSkyRL's `terminal_bench` entrypoint. The sample step reads shard 0 of the clean
+output (the output is hash-sharded, so one shard is a uniform 1/1024 sample of about 1,270 tasks over every
+kept converter), picks tasks round-robin across converters, and writes each as a Harbor task directory under
+`users/power/tasktrove/rl-smoke-tasks/<version>/tasks/<source>__<path>/`, solutions excluded. The RL step
+reuses the curriculum experiment's mirrored Qwen3-0.6B (`models/curriculum-rl-qwen3-0.6b/2026.08.29`) and runs
+on `cw-rno2a` with two H100 nodes: one FSDP2 policy node and eight single-GPU vLLM engines
+(`train_batch_size` 32, 4 samples per prompt, `micro_train_batch_size_per_gpu` 4, non-thinking chat template,
+16,384-token window, 2,048 new tokens per turn, 10 turns). Harbor's terminus-2 agent drives each task in a
+Daytona sandbox (1 CPU, 2 GB, 64 concurrent trials, `auto_snapshot` keyed by Dockerfile hash, well under the
+40-snapshot org quota) and `tasktrove-verify` inside the image produces the reward.
+
+Submitted from a CPU coordinator on `cw-rno2a`; the Daytona key is read from Secret Manager on the submit host
+and forwarded with `-e DAYTONA_API_KEY` because coordinator pods carry no GCP credentials (the launcher then
+skips its snapshot purge, since the daytona SDK is absent there). The judge tasks in the sample score 0 in this
+run because no `TASKTROVE_JUDGE_*` endpoint is configured in the sandbox; a training run that wants judge
+rewards has to set those three variables.
+
+Attempt 1 (`/power/iris-run-job-20260910-032906`, clean 2026.09.10.1, the whole shard of 1,273 tasks): MarinSkyRL
+materializes a task-directory data source one object at a time, so the 8,265 exported files held both GPU
+nodes for 58 minutes before Ray started. Both training steps then completed (128 trajectories each, checkpoint
+and HF export written), but every one of the 2,375 trials failed on its second turn with
+`404 Not Found` from `http://<head>:8000/tokenize`: Harbor's exact-token continuation (harbor#111/#117) asks
+vLLM's `/tokenize` for the next prompt, and the SkyRL inference HTTP endpoint only serves the chat and
+completion routes. The first turn worked in every trial (sandbox started, ~180 output tokens), so the
+Daytona, vLLM, trainer and export paths were exercised while the reward path was not; `reward/avg_raw_reward`
+was 0.0. Filed as marin-community/MarinSkyRL#538.
+
+Attempt 2 (`/power/iris-run-job-20260910-045146`, clean 2026.09.10.2): the export is capped at 160 tasks drawn
+round-robin across converters (about 1,000 objects, a few minutes of staging) and
+`collect_rollout_details: false` makes Harbor count tokens locally instead of calling `/tokenize` (allowed
+because the objective needs no behavior logprobs; it drops TIS/TITO evidence, which a real run would want back
+once #538 is fixed). SMOKE_RESULT
 
 ## Not in this PR
 
