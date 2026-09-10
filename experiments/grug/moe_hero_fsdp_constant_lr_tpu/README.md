@@ -73,16 +73,17 @@ uv run iris --cluster=marin job run \
 
 Follow-up W&B group: `issue-7856-d512-constant-lr-low-tpu`.
 
-## One-layer 600x-horizon sweep
+## One-layer learning-rate scaling sweep
 
-The one-layer comparison reruns the complete bracketed LR grid
-`0.10x / 0.20x / 0.32x / 0.45x / 0.70x`. Every cell preserves the 600x
-run's 21,150 training steps, batch 64, sequence length 8192, seed 0, constant
-post-warmup schedule, data, evaluation cadence, and v4-8 placement. It changes
-only `num_layers` from 6 to 1 and writes to separate artifacts and a separate
-W&B group. The `600x` label denotes the original six-layer run's training
-horizon; reducing model depth increases the actual tokens-per-active-parameter
-ratio.
+The one-layer comparison crosses all five token budgets
+`30x / 60x / 150x / 300x / 600x` with the complete bracketed LR grid
+`0.10x / 0.20x / 0.32x / 0.45x / 0.70x`, producing 25 cells. Every cell
+preserves its source sweep's training steps, batch 64, sequence length 8192,
+seed 0, constant post-warmup schedule, data, evaluation cadence, and v4-8
+placement. It changes only `num_layers` from 6 to 1 and writes to separate
+artifacts and a separate W&B group. The token-multiple labels denote the
+original six-layer run horizons; reducing model depth increases the actual
+tokens-per-active-parameter ratios.
 
 ```bash
 uv run iris --cluster=marin job run \
@@ -91,7 +92,7 @@ uv run iris --cluster=marin job run \
   --memory=2G \
   --extra=cpu \
   -e WANDB_API_KEY "${WANDB_API_KEY}" \
-  -- python -m experiments.grug.moe_hero_fsdp_constant_lr_tpu.launch_one_layer_600x
+  -- python -m experiments.grug.moe_hero_fsdp_constant_lr_tpu.launch_one_layer_lr_scaling
 ```
 
 W&B group: `issue-7856-d512-constant-lr-one-layer-tpu`.
