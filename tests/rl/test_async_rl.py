@@ -1460,3 +1460,128 @@ def test_first_token_cli_defaults_change_only_async_admission_identity(recipe, a
     configs = [yaml.safe_load(r["config_yaml"]) for r in (enabled, disabled)]
     assert [c["trainer"]["fully_async"].pop("first_token_admission") for c in configs] == [True, False]
     assert configs[0] == configs[1]
+
+
+@pytest.mark.parametrize("runner", list(async_rl.Runner))
+def test_fsdp2_cli_preserves_workload_and_binds_each_precision_arm(runner):
+    args = [
+        "--version",
+        "2026.09.10.25",
+        "--runner",
+        runner.value,
+        "--scale",
+        "screening",
+        "--stage",
+        "rl",
+        "--completion",
+        "metrics",
+        "--updates",
+        "100",
+        "--eval-updates",
+        "25",
+        "--minibatches",
+        "1",
+        "--no-kl-loss",
+    ]
+    requests = []
+    arms = [[], ["--backend", "megatron"], ["--backend", "fsdp2"]]
+    arms.extend(
+        ["--backend", "fsdp2", "--bf16-update-mode", mode, "--reduce-dtype", dtype]
+        for mode, dtype in [
+            ("fp32_master", "fp32"),
+            ("fp32_master", "bf16"),
+            ("stochastic", "fp32"),
+            ("kahan", "fp32"),
+            ("nearest", "fp32"),
+        ]
+    )
+    for flags in arms:
+        result = CliRunner().invoke(async_rl.main, args + flags)
+        assert result.exit_code == 0, (result.output, result.exception)
+        requests.append(json.loads(result.output)["request"])
+    native, explicit, default_fsdp, *fsdp = requests
+    assert native == explicit
+    assert default_fsdp == fsdp[0]
+    assert len({r["run_id"] for r in [native, *fsdp]}) == 6
+    for request in fsdp:
+        for field in ("model", "train_data", "validation_data", "topology", "seed", "completion_mode"):
+            assert request[field] == native[field]
+        assert request["runtime"]["profile"] == "fsdp"
+        before, after = [yaml.safe_load(r["config_yaml"]) for r in (native, request)]
+        trainer = after["trainer"]
+        assert trainer.pop("gradient_checkpointing_use_reentrant") is False
+        assert trainer["strategy"] == "fsdp2"
+        assert trainer["flash_attn"] is True
+        assert trainer["policy"].pop("fsdp_config") == {"cpu_offload": False, "reshard_after_forward": True}
+        assert trainer["policy"]["optimizer_config"].pop("optimizer") == "AdamW"
+        trainer["strategy"] = "megatron"
+        trainer["flash_attn"] = False
+        trainer["policy"]["megatron_config"] = before["trainer"]["policy"]["megatron_config"]
+        trainer["ref"] = before["trainer"]["ref"]
+        assert before == after
+
+
+@pytest.mark.parametrize(
+    "flags",
+    [
+        ["--backend", "megatron", "--reduce-dtype", "bf16"],
+        ["--backend", "megatron", "--bf16-update-mode", "kahan"],
+        ["--backend", "fsdp2", "--optimizer-precision", "bf16_grad_reduce"],
+        ["--backend", "fsdp2", "--runner", "async", "--minibatches", "2"],
+    ],
+)
+def test_backend_cli_rejects_precision_options_that_native_cannot_execute(flags):
+    result = CliRunner().invoke(
+        async_rl.main,
+        [
+            "--version",
+            "2026.09.10.25",
+            "--scale",
+            "screening",
+            "--stage",
+            "rl",
+            "--updates",
+            "100",
+            "--eval-updates",
+            "50",
+            "--no-kl-loss",
+            *flags,
+        ],
+    )
+    assert result.exit_code != 0
+    assert isinstance(result.exception, ValueError)
+    assert "require" in str(result.exception)
+
+
+def test_bf16_gradient_reduction_keeps_native_optimizer_and_other_training_settings():
+    options = dict(spans=True, staleness=0, optimizer_state_metrics=True)
+    native = yaml.safe_load(async_rl.training_config(async_rl.Runner.SYNC, async_rl.Scale.SCREENING, **options))
+    reduced = yaml.safe_load(
+        async_rl.training_config(
+            async_rl.Runner.SYNC,
+            async_rl.Scale.SCREENING,
+            **options,
+            optimizer_precision=async_rl.OptimizerPrecision.BF16_GRAD_REDUCE,
+        )
+    )
+    megatron = reduced["trainer"]["policy"]["megatron_config"]
+    assert megatron.pop("ddp_config") == {"grad_reduce_in_fp32": False}
+    assert "optimizer_config_kwargs" not in megatron
+    assert reduced == native
+
+
+@pytest.mark.parametrize("minibatches", [None, 2])
+def test_fsdp2_implicit_and_explicit_async_n2_reject_before_changing_training_design(minibatches):
+    with pytest.raises(ValueError, match="Async N2 requires backend megatron; use minibatches=1 for FSDP2"):
+        async_rl.build_experiment(
+            version="2026.09.10.25",
+            cluster="cw-us-east-02a",
+            runner=async_rl.Runner.ASYNC,
+            scale=async_rl.Scale.SCREENING,
+            completion="metrics",
+            updates=100,
+            eval_updates=50,
+            backend=async_rl.Backend.FSDP2,
+            kl_loss=False,
+            minibatches=minibatches,
+        )

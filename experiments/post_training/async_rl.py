@@ -128,12 +128,18 @@ def apply_correction(algorithm: dict, correction: Correction) -> None:
         }
 
 
+class Backend(StrEnum):
+    MEGATRON = "megatron"
+    FSDP2 = "fsdp2"
+
+
 class OptimizerPrecision(StrEnum):
     NATIVE = "native"
     AWARE_FP32 = "aware_fp32"
     BF16_FIRST = "bf16_first"
     BF16_BOTH = "bf16_both"
     FP32_REMAINDERS = "fp32_remainders"
+    BF16_GRAD_REDUCE = "bf16_grad_reduce"
 
 
 @dataclass(frozen=True)
@@ -266,6 +272,9 @@ def training_config(
     lr: float | None = None,
     max_num_seqs: int | None = None,
     training_ignore_eos: bool = False,
+    backend: Backend = Backend.MEGATRON,
+    bf16_update_mode: str | None = None,
+    reduce_dtype: str | None = None,
     optimizer_precision: OptimizerPrecision = OptimizerPrecision.NATIVE,
     optimizer_state_metrics: bool = False,
     eval_on_installed_weights: bool = False,
@@ -280,6 +289,18 @@ def training_config(
         raise ValueError("training_ignore_eos must be a boolean")
     if lr is not None and (type(lr) not in (int, float) or not math.isfinite(lr) or lr <= 0):
         raise ValueError("lr must be finite and positive")
+    backend = Backend(backend)
+    if backend is Backend.MEGATRON and (bf16_update_mode is not None or reduce_dtype is not None):
+        raise ValueError("FSDP update mode and reduction dtype require backend fsdp2")
+    if backend is Backend.FSDP2:
+        if optimizer_precision is not OptimizerPrecision.NATIVE:
+            raise ValueError("Megatron optimizer precision presets require backend megatron")
+        if bf16_update_mode not in (None, "fp32_master", "stochastic", "kahan", "nearest"):
+            raise ValueError("Unknown FSDP bf16 update mode")
+        if reduce_dtype not in (None, "fp32", "bf16"):
+            raise ValueError("FSDP reduction dtype must be fp32 or bf16")
+        if publication_stage_timing or weight_change_probe or serial_engine_startup:
+            raise ValueError("Publication timing, weight probes and serial startup require backend megatron")
     schedule = SCHEDULES[scale]
     if not isinstance(epoch_seeded_shuffle, bool):
         raise ValueError("epoch_seeded_shuffle must be a boolean")
@@ -295,6 +316,8 @@ def training_config(
         raise ValueError("Multiple minibatches require explicit total updates")
     if runner is Runner.ASYNC and minibatches not in (1, 2):
         raise ValueError("The asynchronous runner supports one or two minibatches per prepared cohort")
+    if runner is Runner.ASYNC and minibatches == 2 and backend is Backend.FSDP2:
+        raise ValueError("Async N2 requires backend megatron; use minibatches=1 for FSDP2")
     if runner is Runner.ASYNC and minibatches == 2 and kl_loss:
         raise ValueError("Async N2 currently requires explicit no-KL-loss screening settings")
     if updates is not None:
@@ -389,9 +412,14 @@ def training_config(
         "context_parallel_size": 1,
         "expert_model_parallel_size": 1,
     }
-    trainer["policy"].pop("fsdp_config")
-    trainer["policy"]["megatron_config"] = dict(megatron)
-    trainer["ref"] = {"megatron_config": dict(megatron)}
+    if backend is Backend.MEGATRON:
+        trainer["policy"].pop("fsdp_config")
+        trainer["policy"]["megatron_config"] = dict(megatron)
+        trainer["ref"] = {"megatron_config": dict(megatron)}
+    else:
+        trainer.update(strategy="fsdp2", flash_attn=True, gradient_checkpointing_use_reentrant=False)
+        trainer["policy"]["fsdp_config"].update(reshard_after_forward=True)
+        trainer["policy"]["optimizer_config"]["optimizer"] = "AdamW"
     if lr is not None:
         trainer["policy"]["optimizer_config"]["lr"] = float(lr)
     apply_optimizer_precision(trainer, scale=scale, precision=optimizer_precision, state_metrics=optimizer_state_metrics)
@@ -471,6 +499,9 @@ def apply_optimizer_precision(
     if precision == OptimizerPrecision.NATIVE:
         return
     config = trainer["policy"]["megatron_config"]
+    if precision is OptimizerPrecision.BF16_GRAD_REDUCE:
+        config["ddp_config"] = {"grad_reduce_in_fp32": False}
+        return
     config["ddp_config"] = {"grad_reduce_in_fp32": True}
     config["optimizer_config_kwargs"] = {
         "use_precision_aware_optimizer": True,
@@ -633,6 +664,9 @@ def build_experiment(
     lr: float | None = None,
     max_num_seqs: int | None = None,
     training_ignore_eos: bool = False,
+    backend: Backend = Backend.MEGATRON,
+    bf16_update_mode: str | None = None,
+    reduce_dtype: str | None = None,
     optimizer_precision: OptimizerPrecision = OptimizerPrecision.NATIVE,
     optimizer_state_metrics: bool = False,
     eval_on_installed_weights: bool = False,
@@ -694,6 +728,9 @@ def build_experiment(
         lr=lr,
         max_num_seqs=max_num_seqs,
         training_ignore_eos=training_ignore_eos,
+        backend=backend,
+        bf16_update_mode=bf16_update_mode,
+        reduce_dtype=reduce_dtype,
         optimizer_precision=optimizer_precision,
         optimizer_state_metrics=optimizer_state_metrics,
     )
@@ -744,6 +781,14 @@ def build_experiment(
             raise ValueError("The frozen pool requires a 1024-token prompt budget")
         train_source, validation_source = pool_inputs(pool_artifact)
         data = train_source.step
+    fsdp_overrides = (
+        (
+            f"++trainer.policy.fsdp_config.mixed_precision.reduce_dtype={reduce_dtype or 'fp32'}",
+            f"++trainer.policy.optimizer_config.bf16_update_mode={bf16_update_mode or 'fp32_master'}",
+        )
+        if Backend(backend) is Backend.FSDP2
+        else ()
+    )
     identity = fingerprint_hash(
         canonical_json(
             {
@@ -752,6 +797,7 @@ def build_experiment(
                 "data": data.fingerprint(),
                 "seed": seed,
                 "topology": topology,
+                **({"fsdp_overrides": fsdp_overrides} if fsdp_overrides else {}),
             }
         )
     )
@@ -760,14 +806,20 @@ def build_experiment(
         name=name,
         version=version,
         config_yaml=config,
-        runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
+        runtime=SkyRLRuntime(
+            profile=SkyRLRuntimeProfile.MEGATRON if Backend(backend) is Backend.MEGATRON else SkyRLRuntimeProfile.FSDP
+        ),
         model=ArtifactHfModel(model, QWEN3_MODEL, MODEL_REVISION, relative_path="hf"),
         train_data=(train_source,),
         validation_data=(validation_source,),
         topology=topology,
         retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
         seed=seed,
-        overrides=("++trainer.hf_hub_repo_id=null", "++generator.chat_template_kwargs.enable_thinking=false"),
+        overrides=(
+            "++trainer.hf_hub_repo_id=null",
+            "++generator.chat_template_kwargs.enable_thinking=false",
+            *fsdp_overrides,
+        ),
     )
     execution = IrisSkyRLExecution(
         cluster=cluster,
@@ -872,6 +924,9 @@ def build_experiment(
 @click.option("--inference-replicas", type=click.Choice(["8", "16"]), default="8", show_default=True)
 @click.option("--seed", type=click.IntRange(min=0, max=2**32 - 1), default=SEED, show_default=True)
 @click.option("--kl-loss/--no-kl-loss", default=True, show_default=True)
+@click.option("--backend", type=click.Choice([b.value for b in Backend]), default="megatron", show_default=True)
+@click.option("--bf16-update-mode", type=click.Choice(["fp32_master", "stochastic", "kahan", "nearest"]))
+@click.option("--reduce-dtype", type=click.Choice(["fp32", "bf16"]))
 @click.option(
     "--optimizer-precision",
     type=click.Choice([precision.value for precision in OptimizerPrecision]),
@@ -944,6 +999,9 @@ def main(
     inference_replicas: str,
     seed: int,
     kl_loss: bool,
+    backend: str,
+    bf16_update_mode: str | None,
+    reduce_dtype: str | None,
     optimizer_precision: str,
     optimizer_state_metrics: bool,
     correction: str,
@@ -1000,6 +1058,9 @@ def main(
         inference_replicas=int(inference_replicas),
         seed=seed,
         kl_loss=kl_loss,
+        backend=Backend(backend),
+        bf16_update_mode=bf16_update_mode,
+        reduce_dtype=reduce_dtype,
         optimizer_precision=OptimizerPrecision(optimizer_precision),
         optimizer_state_metrics=optimizer_state_metrics,
         correction=Correction(correction),
